@@ -174,11 +174,14 @@ hostPath volume (not the default local-path PVC, which can land on the 20 GB roo
 # deploys (a literal `-d newhub` would error today: the Hub isn't deployed yet):
 DBS=$(psql -tAqc "SELECT datname FROM pg_database WHERE datistemplate=false \
       AND datname NOT IN ('postgres','template0','template1')" \
-      -U postgres -h lurus-pg-rw.database.svc.cluster.local)
+      -U lurus -h lurus-pg-rw.database.svc.cluster.local)
 for DB in $DBS; do
-  pg_dump -Fc -U postgres -h lurus-pg-rw.database.svc.cluster.local \
+  pg_dump -Fc -U lurus -h lurus-pg-rw.database.svc.cluster.local \
     -d "$DB" -f "/backups/lurus-${DB}-$(date -u +%Y%m%d-%H%M%S).dump"
 done
+# auth = app role `lurus` (secret lurus-pg-credentials); the `postgres` superuser is
+#   NOT network-reachable (verified 2026-06-15). lurus owns 5/9 DBs → owner runs once
+#   for full coverage:  GRANT pg_read_all_data TO lurus;  (idempotent, read-only)
 # volume: hostPath /data/lurus-platform/backups + nodeSelector lurus.cn/vpn=true
 #   (node-local hostPath → pin both CronJobs to R6; NOT a local-path PVC)
 # then: ConfigMap lurus-platform-backup-config BACKUP_ENABLED=true
