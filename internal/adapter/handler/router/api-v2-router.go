@@ -366,16 +366,14 @@ func SetApiV2Router(router *gin.Engine) {
 		// ================================================================
 		// Lutu APP integration — server-side web search (Tavily proxy).
 		// Used by the Lutu Flutter APP to give chat models a `web_search`
-		// tool without exposing the Tavily API key to clients.
-		//
-		// TokenAuth() is REQUIRED, not optional: apiV2's group middleware is
-		// only CORS/RequestBodySizeLimit/OptionalZitaIdentity, and
-		// OptionalZitaIdentity never aborts an unauthenticated request — so
-		// without an explicit gate here anyone on the internet could burn the
-		// paid Tavily budget through this endpoint. TokenAuth validates the
-		// caller's sk- token (the "standard tenant bearer the APP attaches")
-		// and fails closed with 401 on a missing/invalid key.
+		// tool without exposing the Tavily API key to clients. Gated by
+		// RequireOIDCToken: the Lutu APP is a consumer OIDC identity (it
+		// authenticates against identity.lurus.cn, not with an sk- relay
+		// token), so a valid OIDC JWT is the bearer it already attaches —
+		// required here so the shared Tavily quota can't be drained
+		// anonymously. NOT OIDCAuth: Lutu users have no newhub tenant, so
+		// its tenant mapping would 500 / pollute the tenant tables.
 		// ================================================================
-		apiV2.POST("/lutu/search", middleware.TokenAuth(), handler.PostWebSearch)
+		apiV2.POST("/lutu/search", middleware.RequireOIDCToken(), handler.PostWebSearch)
 	}
 }

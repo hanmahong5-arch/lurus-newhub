@@ -864,6 +864,76 @@ func applyConfigurableClaims(tokenString string, claims *OIDCClaims) {
 	resolveOIDCClaims(claims, map[string]interface{}(raw))
 }
 
+// RequireOIDCToken is a lightweight authentication gate that verifies an
+// OIDC-issued JWT (signature via JWKS + issuer) and aborts 401 when it is
+// absent or invalid. Unlike OIDCAuth it deliberately does NOT map the
+// caller to a newhub tenant/user or touch the DB: Lutu APP users are consumer
+// OIDC identities with no newhub tenant, so OIDCAuth's tenant mapping
+// would 500 (or, with OIDC_AUTO_CREATE_* on, pollute the tenant/user
+// tables). This gate only answers "is this a valid logged-in Lurus user?",
+// which is all endpoints like /lutu/search need to protect a shared upstream
+// quota (Tavily). The verified subject is exposed as `oidc_user_id` for
+// optional per-user accounting downstream.
+func RequireOIDCToken() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !oidcEnabled {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"success": false,
+				"message": "OIDC authentication is not enabled",
+			})
+			c.Abort()
+			return
+		}
+
+		authHeader := c.GetHeader("Authorization")
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		tokenString = strings.TrimPrefix(tokenString, "bearer ")
+		if authHeader == "" || tokenString == authHeader {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "Authentication required: provide a Bearer token",
+			})
+			c.Abort()
+			return
+		}
+
+		// Signature is checked against JWKS; exp/nbf are validated inside
+		// jwt.ParseWithClaims (OIDCClaims embeds jwt.RegisteredClaims).
+		claims := &OIDCClaims{}
+		token, err := VerifyIDTokenWithJWKS(tokenString, claims)
+		if err != nil || !token.Valid {
+			common.SysLog(fmt.Sprintf("web_search JWT validation failed: %v", err))
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "Token 无效或已过期 / Invalid or expired token",
+			})
+			c.Abort()
+			return
+		}
+
+		// Issuer must be one of the accepted values (mirrors OIDCAuth — the
+		// rebrand window may admit more than one issuer concurrently).
+		issuerOK := false
+		for _, accepted := range oidcIssuers {
+			if claims.Issuer == accepted {
+				issuerOK = true
+				break
+			}
+		}
+		if !issuerOK {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("Invalid issuer: got %s", claims.Issuer),
+			})
+			c.Abort()
+			return
+		}
+
+		c.Set("oidc_user_id", claims.Subject)
+		c.Next()
+	}
+}
+
 // mapOIDCUserToLurus maps an OIDC user to a lurus user and tenant.
 // Auto-creates tenant and user if they don't exist.
 func mapOIDCUserToLurus(claims *OIDCClaims) (tenantID string, lurusUserID int, err error) {
