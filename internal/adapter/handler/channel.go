@@ -576,8 +576,11 @@ func GetChannel(c *gin.Context) {
 	return
 }
 
-// GetChannelKey 获取渠道密钥（需要通过安全验证中间件）
-// 此函数依赖 SecureVerificationRequired 中间件，确保用户已通过安全验证
+// GetChannelKey 获取渠道密钥。当前仅由路由上的 RootAuth(admin-only) + CriticalRateLimit
+// 门控(见 router/api-router.go)。
+// NOTE: SecureVerificationRequired 中间件存在但尚未挂载到本路由，其验证端点
+// (UniversalVerify/GetVerificationStatus)亦未注册;二次安全验证在 Zitadel re-auth
+// 集成落地前不生效，故本端点目前不受二次验证保护。
 func GetChannelKey(c *gin.Context) {
 	userId := c.GetInt("id")
 	channelId, err := strconv.Atoi(c.Param("id"))
