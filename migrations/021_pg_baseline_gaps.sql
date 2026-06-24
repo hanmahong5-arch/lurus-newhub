@@ -140,31 +140,52 @@ BEGIN
 END $$;
 
 -- ============================================================
--- §4  SEED DATA (ON CONFLICT DO NOTHING)
+-- §4  SEED DATA (idempotent, existing-default-tenant aware)
 -- created_at / updated_at are set explicitly because AutoMigrate-created
 -- timestamp columns may be NOT NULL without a DB default. The tenant_configs
 -- ON CONFLICT target is the unique index created in §2 (same transaction).
+--
+-- WHY NOT a plain INSERT ... ON CONFLICT (id): the default tenant may already
+-- exist under a NON-canonical id. STAGE was hand-seeded as id='lurus-default',
+-- slug='lurus'. INSERT id='default' does not collide on the (id) PK, so the row
+-- proceeds and then trips uni_tenants_slug = UNIQUE (slug) → SQLSTATE 23505,
+-- aborting the whole migration (this body runs in ONE tx) → boot FATAL loop.
+-- So resolve any existing default tenant by canonical id OR the reserved
+-- 'lurus' slug, create it only when truly absent, and seed configs against the
+-- resolved id (a fresh PG gets 'default'; STAGE keeps 'lurus-default').
 -- ============================================================
 
-INSERT INTO tenants (id, zitadel_org_id, slug, name, status, plan_type, max_users, max_quota, created_at, updated_at)
-VALUES ('default', 'ZITADEL_DEFAULT_ORG_ID_PLACEHOLDER', 'lurus', 'Lurus Platform', 1, 'enterprise', 10000, 1000000000, NOW(), NOW())
-ON CONFLICT (id) DO NOTHING;
+DO $$
+DECLARE
+    v_tenant_id text;
+BEGIN
+    SELECT id INTO v_tenant_id
+        FROM tenants
+        WHERE id = 'default' OR slug = 'lurus'
+        LIMIT 1;
 
-INSERT INTO tenant_configs (tenant_id, config_key, config_value, config_type, description, is_system, created_at, updated_at) VALUES
-    ('default', 'quota.new_user_quota',             '10000',   'int',    'Default quota for new users (in tokens)',   FALSE, NOW(), NOW()),
-    ('default', 'quota.max_user_quota',             '1000000', 'int',    'Maximum quota per user (in tokens)',        FALSE, NOW(), NOW()),
-    ('default', 'quota.quota_reset_enabled',        'false',   'bool',   'Enable monthly quota reset',                FALSE, NOW(), NOW()),
-    ('default', 'billing.currency',                 'CNY',     'string', 'Default currency for billing',              FALSE, NOW(), NOW()),
-    ('default', 'billing.tax_rate',                 '0.13',    'float',  'Tax rate (0.13 = 13%)',                     FALSE, NOW(), NOW()),
-    ('default', 'billing.min_topup_amount',         '1',       'int',    'Minimum top-up amount',                     FALSE, NOW(), NOW()),
-    ('default', 'features.enable_meilisearch',      'true',    'bool',   'Enable Meilisearch integration',            TRUE,  NOW(), NOW()),
-    ('default', 'features.enable_subscriptions',    'true',    'bool',   'Enable subscription system',                TRUE,  NOW(), NOW()),
-    ('default', 'features.enable_redemptions',      'true',    'bool',   'Enable redemption codes',                   TRUE,  NOW(), NOW()),
-    ('default', 'features.enable_oauth',            'true',    'bool',   'Enable OAuth login',                        TRUE,  NOW(), NOW()),
-    ('default', 'security.max_login_attempts',      '5',       'int',    'Maximum login attempts before lockout',     TRUE,  NOW(), NOW()),
-    ('default', 'security.session_timeout',         '86400',   'int',    'Session timeout in seconds (24 hours)',     TRUE,  NOW(), NOW()),
-    ('default', 'security.token_expiry',            '2592000', 'int',    'Access token expiry in seconds (30 days)',  TRUE,  NOW(), NOW()),
-    ('default', 'rate_limit.requests_per_minute',   '60',      'int',    'Maximum API requests per minute',           FALSE, NOW(), NOW()),
-    ('default', 'rate_limit.requests_per_day',      '10000',   'int',    'Maximum API requests per day',              FALSE, NOW(), NOW()),
-    ('default', 'notification.email_enabled',       'true',    'bool',   'Enable email notifications',                FALSE, NOW(), NOW())
-ON CONFLICT (tenant_id, config_key) DO NOTHING;
+    IF v_tenant_id IS NULL THEN
+        INSERT INTO tenants (id, zitadel_org_id, slug, name, status, plan_type, max_users, max_quota, created_at, updated_at)
+        VALUES ('default', 'ZITADEL_DEFAULT_ORG_ID_PLACEHOLDER', 'lurus', 'Lurus Platform', 1, 'enterprise', 10000, 1000000000, NOW(), NOW());
+        v_tenant_id := 'default';
+    END IF;
+
+    INSERT INTO tenant_configs (tenant_id, config_key, config_value, config_type, description, is_system, created_at, updated_at) VALUES
+        (v_tenant_id, 'quota.new_user_quota',           '10000',   'int',    'Default quota for new users (in tokens)',  FALSE, NOW(), NOW()),
+        (v_tenant_id, 'quota.max_user_quota',           '1000000', 'int',    'Maximum quota per user (in tokens)',       FALSE, NOW(), NOW()),
+        (v_tenant_id, 'quota.quota_reset_enabled',      'false',   'bool',   'Enable monthly quota reset',               FALSE, NOW(), NOW()),
+        (v_tenant_id, 'billing.currency',               'CNY',     'string', 'Default currency for billing',             FALSE, NOW(), NOW()),
+        (v_tenant_id, 'billing.tax_rate',               '0.13',    'float',  'Tax rate (0.13 = 13%)',                    FALSE, NOW(), NOW()),
+        (v_tenant_id, 'billing.min_topup_amount',       '1',       'int',    'Minimum top-up amount',                    FALSE, NOW(), NOW()),
+        (v_tenant_id, 'features.enable_meilisearch',    'true',    'bool',   'Enable Meilisearch integration',           TRUE,  NOW(), NOW()),
+        (v_tenant_id, 'features.enable_subscriptions',  'true',    'bool',   'Enable subscription system',               TRUE,  NOW(), NOW()),
+        (v_tenant_id, 'features.enable_redemptions',    'true',    'bool',   'Enable redemption codes',                  TRUE,  NOW(), NOW()),
+        (v_tenant_id, 'features.enable_oauth',          'true',    'bool',   'Enable OAuth login',                       TRUE,  NOW(), NOW()),
+        (v_tenant_id, 'security.max_login_attempts',    '5',       'int',    'Maximum login attempts before lockout',    TRUE,  NOW(), NOW()),
+        (v_tenant_id, 'security.session_timeout',       '86400',   'int',    'Session timeout in seconds (24 hours)',    TRUE,  NOW(), NOW()),
+        (v_tenant_id, 'security.token_expiry',          '2592000', 'int',    'Access token expiry in seconds (30 days)', TRUE,  NOW(), NOW()),
+        (v_tenant_id, 'rate_limit.requests_per_minute', '60',      'int',    'Maximum API requests per minute',          FALSE, NOW(), NOW()),
+        (v_tenant_id, 'rate_limit.requests_per_day',    '10000',   'int',    'Maximum API requests per day',             FALSE, NOW(), NOW()),
+        (v_tenant_id, 'notification.email_enabled',     'true',    'bool',   'Enable email notifications',               FALSE, NOW(), NOW())
+    ON CONFLICT (tenant_id, config_key) DO NOTHING;
+END $$;

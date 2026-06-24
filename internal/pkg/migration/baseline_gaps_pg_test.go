@@ -213,3 +213,57 @@ func TestIntegration021_ClosesGaps_AndIdempotent(t *testing.T) {
 		t.Errorf("after rerun tenant_configs rows = %d, want 16 (seed must not duplicate)", n)
 	}
 }
+
+// TestIntegration021_PreexistingNonCanonicalDefaultTenant reproduces the STAGE
+// boot-FATAL incident the §4 fix targets. The default tenant already existed
+// under a NON-canonical id ('lurus-default') but the reserved slug ('lurus').
+// The pre-fix §4 did `INSERT id='default' ... ON CONFLICT (id) DO NOTHING`,
+// which did not collide on the PK, proceeded, and then violated
+// uni_tenants_slug = UNIQUE(slug) → SQLSTATE 23505, aborting the single-tx
+// migration → crashloop. The fresh-PG _ClosesGaps test cannot catch this (the
+// pre-fix code is green there too); only a pre-seeded non-canonical tenant
+// discriminates the fix. The fix resolves the existing default tenant by id OR
+// the reserved slug before inserting, so this path must succeed and seed configs
+// against the EXISTING id, never creating a second 'default' tenant.
+func TestIntegration021_PreexistingNonCanonicalDefaultTenant(t *testing.T) {
+	db := setupPG(t)
+	autoMigratePrereqs(t, db)
+
+	// Reproduce STAGE: default tenant hand-seeded under id='lurus-default' with
+	// the reserved slug 'lurus' that 021's §4 seed also wants to claim.
+	if _, err := db.ExecContext(context.Background(),
+		`INSERT INTO tenants (id, zitadel_org_id, slug, name, status, plan_type, max_users, max_quota, created_at, updated_at)
+		 VALUES ('lurus-default', 'preexisting-org', 'lurus', 'Lurus Platform', 1, 'enterprise', 10000, 1000000000, NOW(), NOW())`); err != nil {
+		t.Fatalf("seed pre-existing non-canonical default tenant: %v", err)
+	}
+
+	r := &migration.Runner{
+		DB:              db,
+		FS:              migrations.FS,
+		BaselineThrough: "020_create_privacy_erasure_requests",
+	}
+	// Pre-fix, this Run aborts with SQLSTATE 23505 on uni_tenants_slug.
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run with pre-existing 'lurus-default'/'lurus' tenant (slug-clash regression): %v", err)
+	}
+
+	// The fix must reuse the existing row, never insert a second 'default'.
+	if n := scalarInt(t, db, `SELECT count(*) FROM tenants WHERE id = 'default'`); n != 0 {
+		t.Errorf("a 'default' tenant was created (=%d); fix must reuse the existing 'lurus-default' row", n)
+	}
+	if n := scalarInt(t, db, `SELECT count(*) FROM tenants WHERE slug = 'lurus'`); n != 1 {
+		t.Errorf("tenants with slug 'lurus' = %d, want exactly 1 (no duplicate)", n)
+	}
+	// Configs must be seeded against the RESOLVED existing id, not 'default'.
+	if n := scalarInt(t, db, `SELECT count(*) FROM tenant_configs WHERE tenant_id = 'lurus-default'`); n != 16 {
+		t.Errorf("tenant_configs for 'lurus-default' = %d, want 16 (seed must target the existing tenant)", n)
+	}
+
+	// Idempotency: a second pass stays a no-op (no extra tenant, no dup configs).
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if n := scalarInt(t, db, `SELECT count(*) FROM tenant_configs WHERE tenant_id = 'lurus-default'`); n != 16 {
+		t.Errorf("after rerun tenant_configs for 'lurus-default' = %d, want 16 (seed must not duplicate)", n)
+	}
+}
