@@ -92,7 +92,7 @@ func authHelper(c *gin.Context, minRole int) {
 			// Identity session token validated — resolve to local user via identity account lookup.
 			idMapping, _ := common.GetAccountByZitadelSub_ByAccountID(c.Request.Context(), accountID)
 			if idMapping != nil && idMapping.ZitadelSub != "" {
-				user, _, userErr := repo.GetUserByZitadelID(idMapping.ZitadelSub, "default")
+				user, _, userErr := repo.GetUserByIDPSubject(idMapping.ZitadelSub, "default")
 				if userErr == nil && user != nil {
 					username = user.Username
 					role = user.Role
@@ -238,7 +238,7 @@ func authHelper(c *gin.Context, minRole int) {
 
 	// Also set the structured TenantContext so v2 handlers (which call
 	// GetTenantContext) work for users authenticated via session/access-token,
-	// not only via Zitadel JWT.
+	// not only via OIDC JWT.
 	emailVal, _ := c.Get("email")
 	email, _ := emailVal.(string)
 	c.Set("tenant_context", &TenantContext{

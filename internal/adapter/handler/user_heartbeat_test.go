@@ -83,7 +83,7 @@ func setupHeartbeatTest(t *testing.T) *heartbeatTestCtx {
 		Name:         "HB Tenant",
 		Slug:         tenantSlug,
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: "org_hb_" + tenantSlug,
+		IDPOrgID: "org_hb_" + tenantSlug,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -372,7 +372,7 @@ func TestUserHeartbeat_TenantMismatch(t *testing.T) {
 		Name:         "Other",
 		Slug:         "hb-other",
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: "org_hb_other",
+		IDPOrgID: "org_hb_other",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}

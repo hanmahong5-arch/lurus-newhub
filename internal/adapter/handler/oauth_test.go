@@ -159,7 +159,7 @@ func TestOAuthState_MissingSignature(t *testing.T) {
 
 func TestOAuthCallback_MissingCode(t *testing.T) {
 	router := gin.New()
-	router.GET("/api/v2/oauth/callback", ZitadelCallback)
+	router.GET("/api/v2/oauth/callback", OIDCCallback)
 
 	// No code param
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/oauth/callback?state=somestate", nil)
@@ -181,7 +181,7 @@ func TestOAuthCallback_MissingCode(t *testing.T) {
 
 func TestOAuthCallback_MissingState(t *testing.T) {
 	router := gin.New()
-	router.GET("/api/v2/oauth/callback", ZitadelCallback)
+	router.GET("/api/v2/oauth/callback", OIDCCallback)
 
 	// No state param
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/oauth/callback?code=somecode", nil)
@@ -195,7 +195,7 @@ func TestOAuthCallback_MissingState(t *testing.T) {
 
 func TestOAuthCallback_MissingBoth(t *testing.T) {
 	router := gin.New()
-	router.GET("/api/v2/oauth/callback", ZitadelCallback)
+	router.GET("/api/v2/oauth/callback", OIDCCallback)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/oauth/callback", nil)
 	w := httptest.NewRecorder()
@@ -208,7 +208,7 @@ func TestOAuthCallback_MissingBoth(t *testing.T) {
 
 func TestOAuthCallback_InvalidState(t *testing.T) {
 	router := gin.New()
-	router.GET("/api/v2/oauth/callback", ZitadelCallback)
+	router.GET("/api/v2/oauth/callback", OIDCCallback)
 
 	// Provide code but an invalid (non-base64) state
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/oauth/callback?code=authcode123&state=!!!invalid!!!", nil)
@@ -230,7 +230,7 @@ func TestOAuthCallback_InvalidState(t *testing.T) {
 
 func TestOAuthCallback_ExpiredState(t *testing.T) {
 	router := gin.New()
-	router.GET("/api/v2/oauth/callback", ZitadelCallback)
+	router.GET("/api/v2/oauth/callback", OIDCCallback)
 
 	// Build a state that is expired (created 10 minutes ago)
 	stateData := OAuthStateData{

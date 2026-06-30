@@ -48,11 +48,11 @@ func InternalBackfillTokenAccountIDs(c *gin.Context) {
 		repo.DB.Where("lurus_user_id = ? AND is_active = ?", userID, true).Find(&mappings)
 
 		for _, m := range mappings {
-			if m.ZitadelUserID == "" {
+			if m.IDPSubject == "" {
 				continue
 			}
-			// Look up platform account by Zitadel sub
-			account, err := common.GetAccountByZitadelSub(c.Request.Context(), m.ZitadelUserID)
+			// Look up platform account by OIDC subject
+			account, err := common.GetAccountByZitadelSub(c.Request.Context(), m.IDPSubject)
 			if err != nil || account == nil {
 				continue
 			}

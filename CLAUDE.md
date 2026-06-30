@@ -11,7 +11,7 @@ AI 数据处理枢纽 — Platform 产品组核心成员。在 New API 开源基
 - **Namespace / Port**: `lurus-system` / pod:3000, svc:8850
 - **Image**: `ghcr.io/LurusTech/lurus-api:main` (runtime resource name preserved)
 - **DB**: PostgreSQL only（`lurus_api` schema，GORM auto-migrate + embedded migration runner；非 postgres:// DSN boot fast-fail，2026-06 起），Redis DB 0, Meilisearch (optional)
-- **Auth**: Zitadel OIDC (`auth.lurus.cn`), Passkey, session cookie/Redis
+- **Auth**: OIDC (vendor-neutral; issuer/clientId deploy-time owner-gated), Passkey, session cookie/Redis
 - **Product Group**: Platform (P0)
 
 ## Core Capabilities
@@ -100,11 +100,11 @@ ssh root@100.98.57.55 "kubectl describe pod -n lurus-system <pod>"
 | NO_PROXY | `*.svc,*.svc.cluster.local,*.lurus.cn,10.0.0.0/8,…` |
 | ALLOWED_ORIGINS | `https://www.lurus.cn,https://lucrum.lurus.cn` |
 | MODEL_SYNC_FREQUENCY | `60` (分钟) |
-| Secret | `lurus-api-secrets` (SESSION_SECRET, SQL_DSN, ZITADEL_CLIENT_ID, IDENTITY_SESSION_SECRET, IDENTITY_SERVICE_INTERNAL_KEY, ALIPAY_*) |
+| Secret | `lurus-api-secrets` (SESSION_SECRET, SQL_DSN, OIDC_CLIENT_ID, IDENTITY_SESSION_SECRET, IDENTITY_SERVICE_INTERNAL_KEY, ALIPAY_*) |
 
 ## Environment Variables
 
-env 详表（Required / platform Integration / Zitadel OIDC / Meilisearch / Runtime Tuning / Observability / Proxy / OAuth）见 **`.env.example`** 与 **`doc/claude-md-archive-2026-06-10.md`**。
+env 详表（Required / platform Integration / OIDC / Meilisearch / Runtime Tuning / Observability / Proxy / OAuth）见 **`.env.example`** 与 **`doc/claude-md-archive-2026-06-10.md`**。
 ⚠️ Observability: 监控栈已切 **Netdata 自托管**（lurus/CLAUDE.md HARD RULE）；旧 OTLP→jaeger-collector...:4318 collector 已停。服务继续暴露 Prometheus-format `/metrics` 由 go.d `prometheus` collector 主动抓，**禁为换栈改业务代码**。
 
 ## Internal API Scopes

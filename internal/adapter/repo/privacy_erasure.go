@@ -171,7 +171,7 @@ func HardDeleteUserTokens(ctx context.Context, userID int) (int64, error) {
 	return result.RowsAffected, nil
 }
 
-// HardDeleteUserIdentityMappings removes the Zitadel identity binding rows
+// HardDeleteUserIdentityMappings removes the OIDC identity binding rows
 // (email / display name / preferred username), including soft-deleted rows.
 func HardDeleteUserIdentityMappings(ctx context.Context, userID int) (int64, error) {
 	result := WithoutTenantIsolationCtx(ctx, DB).Unscoped().

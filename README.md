@@ -14,11 +14,11 @@
 
 **Lurus Hub** is an AI data processing hub built on top of a multi-tenant LLM relay. Beyond unified API access to every major model provider, it adds real-time usage analytics, cost optimization, per-product routing, and platform-grade billing — turning a relay into a data plane.
 
-基于 [New API](https://github.com/QuantumNous/new-api) / [One API](https://github.com/songquanpeng/one-api) 开源基座深度定制:实时用量分析、成本优化、按产品个性化路由,集成 Meilisearch 搜索、Zitadel OIDC 多租户认证、Prometheus/OpenTelemetry 可观测性,与 lurus-platform 通过 gRPC 完成计费打通。
+基于 [New API](https://github.com/QuantumNous/new-api) / [One API](https://github.com/songquanpeng/one-api) 开源基座深度定制:实时用量分析、成本优化、按产品个性化路由,集成 Meilisearch 搜索、OIDC 多租户认证（厂商中性）、Prometheus/OpenTelemetry 可观测性,与 lurus-platform 通过 gRPC 完成计费打通。
 
 ## Core Features
 
-- **Multi-Tenant**: Zitadel OIDC auth + tenant isolation (shared DB + GORM plugin auto-inject `tenant_id`); V2 API `/api/v2/:tenant_slug/*` with RBAC (admin/user/billing_manager); V1 backward-compat; platform-admin cross-tenant API.
+- **Multi-Tenant**: OIDC auth + tenant isolation (shared DB + GORM plugin auto-inject `tenant_id`); V2 API `/api/v2/:tenant_slug/*` with RBAC (admin/user/billing_manager); V1 backward-compat; platform-admin cross-tenant API.
 - **AI Gateway**: unified API for OpenAI/Claude/Gemini/DeepSeek/Qwen/GLM/Moonshot/+; format auto-conversion (OpenAI ↔ Claude ↔ Gemini); weighted LB + auto-retry + priority channel selection; embeddings/rerank/TTS/STT/image/video; OpenAI Realtime (WebSocket).
 - **Search & Performance**: Meilisearch (<50ms search across logs/users/channels); object pooling (BufferPool/IntSlicePool/MapPool); gateway overhead p95 <50ms (benchmark-verified); HA (2-replica rolling + PDB).
 - **Observability**: Prometheus `/metrics` (11 metric types); OpenTelemetry tracing + Jaeger + X-Trace-Id; 10 alerting rules; structured JSON logging (slog).
@@ -31,7 +31,7 @@
 | Backend | Go 1.25, Gin, GORM, PostgreSQL/SQLite |
 | Frontend | React 18, Vite, Semi UI, TailwindCSS (Bun) |
 | Search / Cache | Meilisearch v1.10+ / Redis |
-| Auth | Zitadel OIDC + JWT |
+| Auth | OIDC + JWT (vendor-neutral) |
 | Observability | Prometheus, OpenTelemetry, Jaeger |
 | Deployment | K3s, ArgoCD (GitOps), Docker; CI/CD: GitHub Actions → GHCR → ArgoCD sync |
 
@@ -40,7 +40,7 @@
 ```
 Lurus Hub Gateway (Hexagonal / Go+Gin)
   ├── V1 API (compat) · V2 API (multi-tenant) · Relay API (/v1/chat/*)
-  ├── Zitadel OIDC · PostgreSQL (tenant_id) · Meilisearch
+  ├── OIDC · PostgreSQL (tenant_id) · Meilisearch
   ├── Redis cache · Prometheus · Jaeger
   └── upstream: OpenAI/Azure · Claude/DeepSeek · Gemini/Qwen/GLM
 ```
@@ -78,7 +78,7 @@ ssh root@100.98.57.55 "kubectl rollout restart deployment/lurus-api -n lurus-sys
 
 ## API Endpoints
 
-- **V2 Multi-Tenant (Zitadel JWT)**: `GET /api/v2/:slug/auth/login`, `GET /api/v2/:slug/user/self`, `CRUD /api/v2/:slug/token/`, `CRUD /api/v2/:slug/channel/`, `GET /api/v2/:slug/log/`, `POST /api/v2/admin/tenants`.
+- **V2 Multi-Tenant (OIDC JWT)**: `GET /api/v2/:slug/auth/login`, `GET /api/v2/:slug/user/self`, `CRUD /api/v2/:slug/token/`, `CRUD /api/v2/:slug/channel/`, `GET /api/v2/:slug/log/`, `POST /api/v2/admin/tenants`.
 - **Relay (OpenAI-compatible)**: `POST /v1/chat/completions`, `POST /v1/messages` (Claude), `POST /v1/embeddings`, `POST /v1/images/generations`.
 - **V1 Legacy**: `POST /api/user/login`, `GET /api/user/self`, `CRUD /api/token/`, `GET /api/log/search` (Meilisearch).
 
@@ -93,14 +93,14 @@ Full API: [docs.lurus.cn](https://docs.lurus.cn/) · [OpenAPI Spec](./docs/opena
 | [Tenant Onboarding](./doc/runbook/tenant-onboarding.md) | New tenant setup |
 | [Incident Response](./doc/runbook/incident-response.md) | Triage, escalation, postmortem |
 | [HA Deployment](./doc/runbook/ha-deployment.md) | High availability guide |
-| [Zitadel Setup](./doc/zitadel-setup-guide.md) | OIDC auth configuration |
+| [OIDC Setup](./doc/oidc-setup-guide.md) | OIDC auth configuration (vendor-neutral) |
 | [Development Log](./doc/process.md) | Change history |
 
 ## Environment Variables
 
-Required: `SQL_DSN` (PostgreSQL), `SESSION_SECRET` (session encryption). Recommended: `REDIS_CONN_STRING`. Optional: `MEILISEARCH_ENABLED`/`MEILISEARCH_HOST`/`MEILISEARCH_API_KEY`, `ZITADEL_ISSUER`/`ZITADEL_CLIENT_ID`, `OTEL_TRACING_ENABLED`/`OTEL_EXPORTER_OTLP_ENDPOINT`.
+Required: `SQL_DSN` (PostgreSQL), `SESSION_SECRET` (session encryption). Recommended: `REDIS_CONN_STRING`. Optional: `MEILISEARCH_ENABLED`/`MEILISEARCH_HOST`/`MEILISEARCH_API_KEY`, `OIDC_ISSUER`/`OIDC_CLIENT_ID`, `OTEL_TRACING_ENABLED`/`OTEL_EXPORTER_OTLP_ENDPOINT`.
 
-Full config: [.env.meilisearch.example](./.env.meilisearch.example), [.env.zitadel.example](./.env.zitadel.example), and `2b-svc-newhub/CLAUDE.md` § Environment Variables.
+Full config: [.env.meilisearch.example](./.env.meilisearch.example), [.env.oidc.example](./.env.oidc.example), and `2b-svc-newhub/CLAUDE.md` § Environment Variables.
 
 ## License
 

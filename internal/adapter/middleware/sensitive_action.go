@@ -8,7 +8,7 @@ import (
 )
 
 // GetUserVerificationStatus returns the user's verification status.
-// Phone and 2FA are now delegated to Zitadel; this endpoint reports Zitadel-managed state.
+// Phone and 2FA are now delegated to the OIDC provider; this endpoint reports IdP-managed state.
 func GetUserVerificationStatus(c *gin.Context) {
 	userId := c.GetInt("id")
 	if userId == 0 {
@@ -34,8 +34,8 @@ func GetUserVerificationStatus(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"email_verified":                emailVerified,
-			"phone_verified":                false, // managed by Zitadel
-			"2fa_enabled":                   false, // managed by Zitadel
+			"phone_verified":                false, // managed by the OIDC provider
+			"2fa_enabled":                   false, // managed by the OIDC provider
 			"can_perform_sensitive_actions": true,
 		},
 	})

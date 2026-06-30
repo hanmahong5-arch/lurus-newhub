@@ -59,7 +59,7 @@ newhub 自身也只是 platform 的标准消费者——新产品接入成本 = 
 
 ### P1 — 企业成交关键（deal-breaker 级）
 
-- 双 issuer 支持（S3 地雷：rebrand 时全线 401）→ ✅ DONE（PR newhub#14 CI 全绿 2026-06-10：`ZITADEL_ISSUER` 逗号分隔,zitadel_auth/admin_jwt_auth/release_gate 三校验点共用 issuer set;oauth.go 回调有意不改——rebrand 前实例 issuer 未变;aud allow-list 仍未做）
+- 双 issuer 支持（S3 地雷：rebrand 时全线 401）→ ✅ DONE（PR newhub#14 CI 全绿 2026-06-10：`OIDC_ISSUER` 逗号分隔,zitadel_auth/admin_jwt_auth/release_gate 三校验点共用 issuer set;oauth.go 回调有意不改——rebrand 前实例 issuer 未变;aud allow-list 仍未做）
 - PIPL §47 级联删除 → ✅ newhub 侧 DONE（batch 3 2026-06-10：`POST /internal/v1/privacy/erase` 幂等端点 migration 020 + leader-only crash-resumable executor,处置表+诚实边界已登记 contracts.md;剩 platform 侧冷静期到期调用 worker ❌ 未动——newhub 不消费 NATS）
 - Org↔tenant 桥（消费 platform Organization API，替代自建）
 - 专票状态机（申请→审核→已开→邮寄）+ 对公转账核销 API —— **platform 职责**，newhub 不做

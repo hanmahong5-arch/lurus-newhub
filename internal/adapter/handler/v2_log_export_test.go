@@ -91,7 +91,7 @@ func setupLogExportRouter(t *testing.T) *logExportCtx {
 	now := time.Now()
 	if err := db.Create(&repo.Tenant{
 		Id: tenantID, Name: "Acme Export", Slug: tenantSlug,
-		Status: repo.TenantStatusEnabled, ZitadelOrgID: "org_acme_export",
+		Status: repo.TenantStatusEnabled, IDPOrgID: "org_acme_export",
 		CreatedAt: now, UpdatedAt: now,
 	}).Error; err != nil {
 		t.Fatalf("seed main tenant: %v", err)
@@ -99,7 +99,7 @@ func setupLogExportRouter(t *testing.T) *logExportCtx {
 
 	otherTenant := &repo.Tenant{
 		Id: "tenant-other-export", Name: "Other", Slug: "other-export",
-		Status: repo.TenantStatusEnabled, ZitadelOrgID: "org_other_export",
+		Status: repo.TenantStatusEnabled, IDPOrgID: "org_other_export",
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(otherTenant).Error; err != nil {
@@ -126,7 +126,7 @@ func setupLogExportRouter(t *testing.T) *logExportCtx {
 		c.Set("tenant_context", &middleware.TenantContext{
 			TenantID:      mockTID,
 			UserID:        mockUID,
-			ZitadelUserID: "zitadel_export_user",
+			IDPSubject: "zitadel_export_user",
 			Email:         "export@test.local",
 			Username:      "export-tester",
 		})

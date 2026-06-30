@@ -421,7 +421,7 @@ func setupNoAccountRouter(t *testing.T, ctx *V2TestContext) *gin.Engine {
 		tenantCtx := &middleware.TenantContext{
 			TenantID:      ctx.TenantID,
 			UserID:        ctx.UserID,
-			ZitadelUserID: "zitadel_test_user",
+			IDPSubject: "zitadel_test_user",
 			Email:         "test@test.local",
 			Username:      "testuser",
 		}

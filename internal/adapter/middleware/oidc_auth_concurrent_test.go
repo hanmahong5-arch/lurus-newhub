@@ -358,7 +358,7 @@ func TestJWKS_ServerTimeoutHandling(t *testing.T) {
 		minRefreshInterval: 0,
 	}
 
-	// This should timeout (using the global zitadelHTTPClient with 15s timeout)
+	// This should timeout (using the global oidcHTTPClient with 15s timeout)
 	start := time.Now()
 	err := mgr.refreshKeys()
 	elapsed := time.Since(start)

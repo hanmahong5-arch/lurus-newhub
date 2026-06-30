@@ -132,7 +132,7 @@ func TestErasureDispositions_SQLite(t *testing.T) {
 			}
 		}
 	}
-	if err := DB.Create(&UserIdentityMapping{LurusUserID: user.Id, ZitadelUserID: "z1", TenantID: "default"}).Error; err != nil {
+	if err := DB.Create(&UserIdentityMapping{LurusUserID: user.Id, IDPSubject: "z1", TenantID: "default"}).Error; err != nil {
 		t.Fatalf("seed mapping: %v", err)
 	}
 	for i := 0; i < 7; i++ {

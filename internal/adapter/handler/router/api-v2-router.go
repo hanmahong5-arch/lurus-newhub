@@ -9,7 +9,7 @@ import (
 )
 
 // SetApiV2Router sets up v2 API routes.
-// Admin operations use AdminJWTAuth; billing uses ZitadelAuth.
+// Admin operations use AdminJWTAuth; billing uses OIDCAuth.
 func SetApiV2Router(router *gin.Engine) {
 	apiV2 := router.Group("/api/v2")
 	// Non-blocking SDK identity injector: resolves the lurus_session cookie
@@ -20,18 +20,18 @@ func SetApiV2Router(router *gin.Engine) {
 	apiV2.Use(middleware.OptionalZitaIdentity())
 	{
 		// ================================================================
-		// OAuth / Zitadel Routes (public — handles redirects & callbacks)
+		// OAuth / OIDC Routes (public — handles redirects & callbacks)
 		// ================================================================
 
-		apiV2.GET("/:tenant_slug/auth/login", handler.ZitadelLoginRedirect)
-		apiV2.GET("/oauth/callback", handler.ZitadelCallback)
+		apiV2.GET("/:tenant_slug/auth/login", handler.OIDCLoginRedirect)
+		apiV2.GET("/oauth/callback", handler.OIDCCallback)
 		apiV2.GET("/auth/session-info", handler.GetSessionInfo)
-		apiV2.POST("/oauth/logout", handler.ZitadelLogout)
+		apiV2.POST("/oauth/logout", handler.OIDCLogout)
 		apiV2.POST("/oauth/refresh", handler.RefreshAccessToken)
 
 		// ----------------------------------------------------------------
 		// Zita SDK login path (ADR-0011 Layer C). Coexists with the
-		// legacy Zitadel-direct routes above during migration. Frontend
+		// legacy OIDC-direct routes above during migration. Frontend
 		// rewires to this URL in the next session; legacy deletion follows.
 		// ----------------------------------------------------------------
 
@@ -56,11 +56,11 @@ func SetApiV2Router(router *gin.Engine) {
 		// Tenant-scoped user endpoint (session auth — called by frontend in V2 mode)
 		apiV2.GET("/:tenant_slug/user/me", middleware.UserAuth(), handler.GetSelf)
 
-		// EndUser pool readback (Tier 1.2, 2026-05-19). ZitadelAuth →
+		// EndUser pool readback (Tier 1.2, 2026-05-19). OIDCAuth →
 		// tenantCtx.TenantID must match the URL slug; otherwise the handler
 		// returns 403 TENANT_MISMATCH. Whitelisted projection: only
 		// current_balance / max_balance / health are serialised.
-		apiV2.GET("/:tenant_slug/credit-pool/me", middleware.ZitadelAuth(), handler.GetCreditPoolForEndUser)
+		apiV2.GET("/:tenant_slug/credit-pool/me", middleware.OIDCAuth(), handler.GetCreditPoolForEndUser)
 
 		// Playground multi-model fan-out (2026-05-19). Session auth — runs
 		// the user's prompt against N models in parallel via in-process
@@ -219,11 +219,11 @@ func SetApiV2Router(router *gin.Engine) {
 		apiV2.GET("/tools/download-manifest", handler.GetToolDownloadManifest)
 
 		// ================================================================
-		// Platform User Routes (Zitadel JWT auth)
+		// Platform User Routes (OIDC JWT auth)
 		// ================================================================
 
 		platformUser := apiV2.Group("/user")
-		platformUser.Use(middleware.ZitadelAuth())
+		platformUser.Use(middleware.OIDCAuth())
 		{
 			platformUser.GET("/identity-overview", handler.GetIdentityOverview)
 

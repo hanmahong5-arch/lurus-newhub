@@ -27,7 +27,7 @@ ALIPAY_PRIVATE_KEY: |    # 从 Alipay 开发者控制台获取(如需支付)
   -----BEGIN RSA PRIVATE KEY-----
 ALIPAY_PUBLIC_KEY: |
   -----BEGIN PUBLIC KEY-----
-ZITADEL_CLIENT_ID: "358371335178617311@lurus-api"
+OIDC_CLIENT_ID: "358371335178617311@lurus-api"
 ```
 
 ```bash

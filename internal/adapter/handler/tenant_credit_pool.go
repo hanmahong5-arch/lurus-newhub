@@ -135,7 +135,7 @@ func poolHealthForEndUser(pool *repo.TenantCreditPool) string {
 
 // GetCreditPoolForEndUser returns the pool summary for the authenticated
 // EndUser. Route: GET /api/v2/:tenant_slug/credit-pool/me.
-// Auth:  ZitadelAuth — tenantCtx.TenantID is derived from the JWT.
+// Auth:  OIDCAuth — tenantCtx.TenantID is derived from the JWT.
 //
 // Tier 1.2 (2026-05-19): EndUsers were learning their pool was exhausted
 // only by hitting HTTP 402 from the relay gate. This endpoint lets them

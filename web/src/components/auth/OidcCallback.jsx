@@ -30,7 +30,7 @@ import {
 import { UserContext } from '../../context/User';
 import Loading from '../common/ui/Loading';
 
-const ZitadelCallback = () => {
+const OidcCallback = () => {
   const { t } = useTranslation();
   const [, userDispatch] = useContext(UserContext);
   const navigate = useNavigate();
@@ -89,4 +89,4 @@ const ZitadelCallback = () => {
   return <Loading />;
 };
 
-export default ZitadelCallback;
+export default OidcCallback;

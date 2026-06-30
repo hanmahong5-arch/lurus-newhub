@@ -108,7 +108,7 @@ const makeTenant = (overrides = {}) => ({
   plan_type: 'free',
   max_users: 100,
   max_quota: 0,
-  zitadel_org_id: 'zorg-1',
+  zitadel_org_id: 'zorg-1', // wire 物理列名,待 idp-migration
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
   ...overrides,

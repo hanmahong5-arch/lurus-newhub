@@ -21,7 +21,7 @@ import { API } from '../helpers';
 
 /**
  * Secure verification service.
- * 2FA and Passkey verification have been delegated to Zitadel.
+ * 2FA and Passkey verification have been delegated to the OIDC IdP.
  * Only session-based verification via /api/verify remains.
  */
 export class SecureVerificationService {

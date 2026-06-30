@@ -126,19 +126,19 @@ func TestTenantRepo_GetByZitadelOrgID(t *testing.T) {
 		Slug:         "zidslug",
 		Name:         "Zitadel Tenant",
 		Status:       TenantStatusEnabled,
-		ZitadelOrgID: "org_abc123",
+		IDPOrgID: "org_abc123",
 	}
 	DB.Create(ten)
 
-	got, err := GetTenantByZitadelOrgID("org_abc123")
+	got, err := GetTenantByIDPOrgID("org_abc123")
 	if err != nil {
-		t.Fatalf("GetTenantByZitadelOrgID: %v", err)
+		t.Fatalf("GetTenantByIDPOrgID: %v", err)
 	}
 	if got.Id != ten.Id {
 		t.Errorf("got id %q, want %q", got.Id, ten.Id)
 	}
 
-	_, err = GetTenantByZitadelOrgID("no-such-org")
+	_, err = GetTenantByIDPOrgID("no-such-org")
 	if err == nil {
 		t.Error("expected error for missing org ID, got nil")
 	}
@@ -2536,9 +2536,9 @@ func TestUserMappingRepo_CreateAndGet(t *testing.T) {
 		t.Errorf("LurusUserID = %d, want %d", mapping.LurusUserID, u.Id)
 	}
 
-	got, err := GetUserMappingByZitadelID("zitadel-sub-001", "tenant-mapping")
+	got, err := GetUserMappingByIDPSubject("zitadel-sub-001", "tenant-mapping")
 	if err != nil {
-		t.Fatalf("GetUserMappingByZitadelID: %v", err)
+		t.Fatalf("GetUserMappingByIDPSubject: %v", err)
 	}
 	if got.Id != mapping.Id {
 		t.Errorf("mapping id = %d, want %d", got.Id, mapping.Id)
@@ -3023,18 +3023,18 @@ func TestTenantRepo_CreateFromZitadel(t *testing.T) {
 	cleanup := setupSQLiteDB(t)
 	defer cleanup()
 
-	ten, err := CreateTenantFromZitadel("org-zitadel-001", "zitadel-domain.com", "Zitadel Org 001")
+	ten, err := CreateTenantFromIDP("org-zitadel-001", "zitadel-domain.com", "Zitadel Org 001")
 	if err != nil {
-		t.Fatalf("CreateTenantFromZitadel: %v", err)
+		t.Fatalf("CreateTenantFromIDP: %v", err)
 	}
-	if ten.ZitadelOrgID != "org-zitadel-001" {
-		t.Errorf("ZitadelOrgID = %q", ten.ZitadelOrgID)
+	if ten.IDPOrgID != "org-zitadel-001" {
+		t.Errorf("ZitadelOrgID = %q", ten.IDPOrgID)
 	}
 
 	// Verify we can look it up
-	got, err := GetTenantByZitadelOrgID("org-zitadel-001")
+	got, err := GetTenantByIDPOrgID("org-zitadel-001")
 	if err != nil {
-		t.Fatalf("GetTenantByZitadelOrgID: %v", err)
+		t.Fatalf("GetTenantByIDPOrgID: %v", err)
 	}
 	if got.Id != ten.Id {
 		t.Errorf("tenant id mismatch: got %q, want %q", got.Id, ten.Id)

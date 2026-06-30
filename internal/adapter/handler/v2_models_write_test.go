@@ -84,7 +84,7 @@ func setupModelsWriteRouter(t *testing.T) *modelsWriteTestCtx {
 		Slug:         "acme",
 		Name:         "Acme Corp",
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: fmt.Sprintf("org_mw_%d", n),
+		IDPOrgID: fmt.Sprintf("org_mw_%d", n),
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}

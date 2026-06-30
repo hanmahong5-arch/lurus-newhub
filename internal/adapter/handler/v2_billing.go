@@ -20,7 +20,7 @@ const (
 	maxTransferCNY = 10000.0
 )
 
-// getIdentityAccountID extracts the platform account ID set by ZitadelAuth middleware.
+// getIdentityAccountID extracts the platform account ID set by OIDCAuth middleware.
 // Returns 0 if not available (platform was unreachable during auth).
 func getIdentityAccountID(c *gin.Context) int64 {
 	v, ok := c.Get("identity_account_id")

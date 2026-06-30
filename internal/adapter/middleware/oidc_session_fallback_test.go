@@ -13,10 +13,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TestZitadelAuth_SessionFallback_TenantFromUserNotSlug is a regression test
+// TestOIDCAuth_SessionFallback_TenantFromUserNotSlug is a regression test
 // for a cross-tenant isolation bug in handleSessionFallback.
 //
-// Before the fix, the session-fallback branch of ZitadelAuth derived the
+// Before the fix, the session-fallback branch of OIDCAuth derived the
 // tenant from the URL :tenant_slug instead of the authenticated user's own
 // record. Because downstream guards compare tenantCtx.TenantID against that
 // same slug (e.g. GetCreditPoolForEndUser's TENANT_MISMATCH check), the slug
@@ -27,7 +27,7 @@ import (
 // Invariant under test: the session fallback MUST resolve the tenant to the
 // authenticated user's own tenant. Pre-fix this assertion fails (it resolved
 // to the victim's tenant, or to "default"); post-fix it holds.
-func TestZitadelAuth_SessionFallback_TenantFromUserNotSlug(t *testing.T) {
+func TestOIDCAuth_SessionFallback_TenantFromUserNotSlug(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
@@ -38,7 +38,7 @@ func TestZitadelAuth_SessionFallback_TenantFromUserNotSlug(t *testing.T) {
 		Name:         "Victim Tenant",
 		Slug:         "victim-tenant",
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: "org_victim",
+		IDPOrgID: "org_victim",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -48,7 +48,7 @@ func TestZitadelAuth_SessionFallback_TenantFromUserNotSlug(t *testing.T) {
 
 	// buildRouter establishes a session for ctx.User with a non-expired OAuth
 	// access token and NO Bearer header — exactly the condition that drives
-	// handleSessionFallback — then runs ZitadelAuth on a tenant-scoped route
+	// handleSessionFallback — then runs OIDCAuth on a tenant-scoped route
 	// and echoes the resolved tenant context.
 	buildRouter := func() *gin.Engine {
 		r := gin.New()
@@ -67,7 +67,7 @@ func TestZitadelAuth_SessionFallback_TenantFromUserNotSlug(t *testing.T) {
 			c.Next()
 		})
 
-		r.GET("/api/v2/:tenant_slug/probe", ZitadelAuth(), func(c *gin.Context) {
+		r.GET("/api/v2/:tenant_slug/probe", OIDCAuth(), func(c *gin.Context) {
 			tc, err := GetTenantContext(c)
 			if err != nil || tc == nil {
 				c.JSON(http.StatusUnauthorized, gin.H{"success": false})

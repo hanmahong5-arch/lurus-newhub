@@ -52,7 +52,7 @@ func TestPrivacyErasure_PG_CascadePrimitives(t *testing.T) {
 		}
 	}
 	if err := DB.Create(&UserIdentityMapping{
-		LurusUserID: user.Id, ZitadelUserID: "zit-pg-1", TenantID: "default",
+		LurusUserID: user.Id, IDPSubject: "zit-pg-1", TenantID: "default",
 		Email: "pg-victim@example.com", DisplayName: "PG Victim",
 	}).Error; err != nil {
 		t.Fatalf("seed mapping: %v", err)

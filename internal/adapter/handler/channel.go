@@ -579,7 +579,7 @@ func GetChannel(c *gin.Context) {
 // GetChannelKey 返回渠道的上游密钥。路由 POST /api/channel/:id/key 受
 // RootAuth(admin-only) + CriticalRateLimit + SecureVerificationRequired 保护:
 // 调用方须先 POST /api/verify 通过会话级二次验证(5 分钟有效),否则中间件返回
-// 403 VERIFICATION_REQUIRED。强认证因子(MFA)在 Zitadel 登录完成,本地二次验证
+// 403 VERIFICATION_REQUIRED。强认证因子(MFA)在 OIDC IdP 登录完成,本地二次验证
 // 为敏感操作的会话级再确认。
 func GetChannelKey(c *gin.Context) {
 	userId := c.GetInt("id")

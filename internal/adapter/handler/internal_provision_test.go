@@ -53,7 +53,7 @@ func TestProvision_Resolvable_LinksAndUnlimitsToken(t *testing.T) {
 	}
 	assertSuccess(t, parseResponse(t, w))
 
-	user, _, err := repo.GetUserByZitadelID(sub, "default")
+	user, _, err := repo.GetUserByIDPSubject(sub, "default")
 	if err != nil {
 		t.Fatalf("provisioned user not found: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestProvision_Unresolvable_CreatesUnlinkedNoError(t *testing.T) {
 	}
 	assertSuccess(t, parseResponse(t, w))
 
-	user, _, err := repo.GetUserByZitadelID(sub, "default")
+	user, _, err := repo.GetUserByIDPSubject(sub, "default")
 	if err != nil {
 		t.Fatalf("user not created: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestProvision_ResolverError_FailOpenUnlinked(t *testing.T) {
 	}
 	assertSuccess(t, parseResponse(t, w))
 
-	user, _, err := repo.GetUserByZitadelID(sub, "default")
+	user, _, err := repo.GetUserByIDPSubject(sub, "default")
 	if err != nil {
 		t.Fatalf("user not created on resolver error: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestProvision_Reprovision_SelfHealsLink(t *testing.T) {
 	}
 	now := time.Now()
 	if err := repo.DB.Create(&repo.UserIdentityMapping{
-		LurusUserID: u.Id, ZitadelUserID: sub, TenantID: "default",
+		LurusUserID: u.Id, IDPSubject: sub, TenantID: "default",
 		Email: u.Email, PreferredUsername: u.Username, IsActive: true,
 		LastSyncAt: &now, CreatedAt: now, UpdatedAt: now,
 	}).Error; err != nil {
@@ -269,14 +269,14 @@ func TestProvision_WithTenantPlugin(t *testing.T) {
 
 			// The user, mapping, and (optional) token must actually exist in the
 			// default tenant — a 201 with no row would be a hollow pass.
-			user, mapping, err := repo.GetUserByZitadelID(sub, "default")
+			user, mapping, err := repo.GetUserByIDPSubject(sub, "default")
 			if err != nil || user == nil {
 				t.Fatalf("provisioned user/mapping not found under tenant plugin: %v", err)
 			}
 			if user.TenantId != "default" {
 				t.Errorf("expected tenant_id 'default', got %q", user.TenantId)
 			}
-			if mapping == nil || mapping.ZitadelUserID != sub {
+			if mapping == nil || mapping.IDPSubject != sub {
 				t.Errorf("identity mapping not written for sub %q", sub)
 			}
 			if tc.createToken {

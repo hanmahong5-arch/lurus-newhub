@@ -10,8 +10,8 @@
 --     psql -U lurus -d newhub" < seed-default-tenant.sql
 --
 -- 幂等：ON CONFLICT DO NOTHING，重跑无副作用。
--- 后续：等 Zitadel confidential client 注册到位时，需把 zitadel_org_id
---       从占位值 'lurus-default-org' 改为真实 Zitadel organization ID。
+-- 后续：等 OIDC confidential client 注册到位时，需把 zitadel_org_id 列值
+--       从占位值 (lurus-default-org) 改为真实 OIDC organization ID（物理列名 zitadel_org_id 暂不改，待 migration）。
 
 INSERT INTO tenants (
   id, zitadel_org_id, slug, name,
@@ -19,7 +19,7 @@ INSERT INTO tenants (
   created_at, updated_at
 ) VALUES (
   'lurus-default',
-  'lurus-default-org',  -- TODO: replace with real Zitadel org ID after client registration
+  'lurus-default-org',  -- TODO: replace with real OIDC org ID after client registration
   'lurus',
   'Lurus',
   1,                    -- status: 1 = active

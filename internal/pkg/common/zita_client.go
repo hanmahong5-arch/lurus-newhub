@@ -9,7 +9,7 @@ import (
 // ZitaClient is the process-wide Lurus identity SDK client. nil when
 // IDENTITY_PUBLIC_URL or IDENTITY_SESSION_SECRET is unset — handlers
 // that need identity should guard with `if common.ZitaClient == nil`
-// and fall back to the legacy Zitadel direct path during the
+// and fall back to the legacy OIDC direct path during the
 // migration window (Layer C, ADR-0011).
 var ZitaClient *zita.Client
 

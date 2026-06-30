@@ -22,7 +22,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Loading from './components/common/ui/Loading';
 import User from './pages/User';
 import { AuthRedirect, PrivateRoute, AdminRoute } from './helpers';
-import ZitadelRedirect from './components/auth/ZitadelRedirect';
+import OidcRedirect from './components/auth/OidcRedirect';
 import NotFound from './pages/NotFound';
 import Forbidden from './pages/Forbidden';
 import Setting from './pages/Setting';
@@ -36,7 +36,7 @@ import Chat2Link from './pages/Chat2Link';
 import Midjourney from './pages/Midjourney';
 import Pricing from './pages/Pricing';
 import Task from './pages/Task';
-import ZitadelCallback from './components/auth/ZitadelCallback';
+import OidcCallback from './components/auth/OidcCallback';
 import PersonalSetting from './components/settings/PersonalSetting';
 import Setup from './pages/Setup';
 import SetupCheck from './components/layout/SetupCheck';
@@ -165,12 +165,12 @@ function App() {
             </AdminRoute>
           }
         />
-        {/* Legacy /user/reset and /login/password removed — auth delegated to Zitadel */}
+        {/* Legacy /user/reset and /login/password removed — auth delegated to OIDC IdP */}
         <Route
           path='/login/:tenantSlug'
           element={
             <AuthRedirect>
-              <ZitadelRedirect />
+              <OidcRedirect />
             </AuthRedirect>
           }
         />
@@ -178,25 +178,26 @@ function App() {
           path='/login'
           element={
             <AuthRedirect>
-              <ZitadelRedirect />
+              <OidcRedirect />
             </AuthRedirect>
           }
         />
-        {/* Legacy /register/password removed — registration delegated to Zitadel */}
+        {/* Legacy /register/password removed — registration delegated to OIDC IdP */}
         <Route
           path='/register'
           element={
             <AuthRedirect>
-              <ZitadelRedirect register />
+              <OidcRedirect register />
             </AuthRedirect>
           }
         />
-        {/* Legacy /reset and /oauth/{github,discord,oidc,linuxdo} removed — auth delegated to Zitadel */}
+        {/* Legacy /reset and /oauth/{github,discord,oidc,linuxdo} removed — auth delegated to OIDC IdP */}
+        {/* redirect URI /oauth/oidc 须在 IdP(Casdoor)Application 注册,owner-gated */}
         <Route
-          path='/oauth/zitadel'
+          path='/oauth/oidc'
           element={
             <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-              <ZitadelCallback />
+              <OidcCallback />
             </Suspense>
           }
         />

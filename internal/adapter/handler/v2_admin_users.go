@@ -24,7 +24,7 @@ import (
 // setting blob, remark, tenant linkage and soft-delete columns — only the
 // curated, safe-to-surface fields appear. Mirrors tokenView/channelView/logView.
 // (Note: the User entity has no created-time column — auth/timestamps live in
-// Zitadel — so none is projected here rather than fabricating one.)
+// the OIDC provider — so none is projected here rather than fabricating one.)
 type adminUserView struct {
 	Id           int    `json:"id"`
 	Username     string `json:"username"`

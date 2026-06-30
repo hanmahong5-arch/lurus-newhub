@@ -22,7 +22,7 @@ func TestListUserMappingsV2_RootOnly(t *testing.T) {
 	// Create some user mappings
 	mapping := &repo.UserIdentityMapping{
 		TenantID:      ctx.TenantID,
-		ZitadelUserID: "zitadel_user_123",
+		IDPSubject: "zitadel_user_123",
 		LurusUserID:   ctx.NormalUser.Id,
 		Email:         "mapped@test.local",
 		IsActive:      true,
@@ -64,7 +64,7 @@ func TestDeleteUserMappingV2_SoftDelete(t *testing.T) {
 	// Create a user mapping
 	mapping := &repo.UserIdentityMapping{
 		TenantID:      ctx.TenantID,
-		ZitadelUserID: "zitadel_soft_delete",
+		IDPSubject: "zitadel_soft_delete",
 		LurusUserID:   ctx.NormalUser.Id,
 		Email:         "softdelete@test.local",
 		IsActive:      true,
@@ -103,7 +103,7 @@ func TestDeleteUserMappingV2_HardDelete(t *testing.T) {
 	// Create a user mapping
 	mapping := &repo.UserIdentityMapping{
 		TenantID:      ctx.TenantID,
-		ZitadelUserID: "zitadel_hard_delete",
+		IDPSubject: "zitadel_hard_delete",
 		LurusUserID:   ctx.NormalUser.Id,
 		Email:         "harddelete@test.local",
 		IsActive:      true,
@@ -147,7 +147,7 @@ func TestGetSystemStatsV2_AllStats(t *testing.T) {
 	// Create a user mapping
 	mapping := &repo.UserIdentityMapping{
 		TenantID:      ctx.TenantID,
-		ZitadelUserID: "zitadel_stats_user",
+		IDPSubject: "zitadel_stats_user",
 		LurusUserID:   ctx.NormalUser.Id,
 		Email:         "stats@test.local",
 		IsActive:      true,
@@ -207,7 +207,7 @@ func TestGetUserMappingV2_Success(t *testing.T) {
 	// Create a user mapping
 	mapping := &repo.UserIdentityMapping{
 		TenantID:      ctx.TenantID,
-		ZitadelUserID: "zitadel_get_mapping",
+		IDPSubject: "zitadel_get_mapping",
 		LurusUserID:   ctx.NormalUser.Id,
 		Email:         "getmapping@test.local",
 		IsActive:      true,
@@ -260,7 +260,7 @@ func TestListUserMappingsV2_FilterByTenant(t *testing.T) {
 	// Create mappings in different tenants
 	mapping1 := &repo.UserIdentityMapping{
 		TenantID:      ctx.TenantID,
-		ZitadelUserID: "zitadel_tenant1",
+		IDPSubject: "zitadel_tenant1",
 		LurusUserID:   ctx.NormalUser.Id,
 		Email:         "tenant1@test.local",
 		IsActive:      true,
@@ -269,7 +269,7 @@ func TestListUserMappingsV2_FilterByTenant(t *testing.T) {
 	}
 	mapping2 := &repo.UserIdentityMapping{
 		TenantID:      "other-tenant-filter",
-		ZitadelUserID: "zitadel_tenant2",
+		IDPSubject: "zitadel_tenant2",
 		LurusUserID:   ctx.NormalUser.Id,
 		Email:         "tenant2@test.local",
 		IsActive:      true,
@@ -304,7 +304,7 @@ func TestListUserMappingsV2_Pagination(t *testing.T) {
 	for i := 0; i < 15; i++ {
 		mapping := &repo.UserIdentityMapping{
 			TenantID:      ctx.TenantID,
-			ZitadelUserID: fmt.Sprintf("zitadel_page_%d", i),
+			IDPSubject: fmt.Sprintf("zitadel_page_%d", i),
 			LurusUserID:   ctx.NormalUser.Id,
 			Email:         fmt.Sprintf("page%d@test.local", i),
 			IsActive:      true,
@@ -352,7 +352,7 @@ func TestListUserMappingsV2_FilterByZitadelUser(t *testing.T) {
 	// Create mappings with different zitadel user IDs
 	mapping1 := &repo.UserIdentityMapping{
 		TenantID:      ctx.TenantID,
-		ZitadelUserID: "zitadel_filter_target",
+		IDPSubject: "zitadel_filter_target",
 		LurusUserID:   ctx.NormalUser.Id,
 		Email:         "filter1@test.local",
 		IsActive:      true,
@@ -361,7 +361,7 @@ func TestListUserMappingsV2_FilterByZitadelUser(t *testing.T) {
 	}
 	mapping2 := &repo.UserIdentityMapping{
 		TenantID:      ctx.TenantID,
-		ZitadelUserID: "zitadel_other_user",
+		IDPSubject: "zitadel_other_user",
 		LurusUserID:   ctx.AdminUser.Id,
 		Email:         "filter2@test.local",
 		IsActive:      true,
@@ -438,7 +438,7 @@ func TestListUserMappingsV2_NoFilter(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		mapping := &repo.UserIdentityMapping{
 			TenantID:      ctx.TenantID,
-			ZitadelUserID: fmt.Sprintf("zitadel_nofilter_%d", i),
+			IDPSubject: fmt.Sprintf("zitadel_nofilter_%d", i),
 			LurusUserID:   ctx.NormalUser.Id,
 			Email:         fmt.Sprintf("nofilter%d@test.local", i),
 			IsActive:      true,

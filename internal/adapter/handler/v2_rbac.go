@@ -9,7 +9,7 @@ import (
 
 // requireTenantAdmin reports whether the caller holds tenant-admin privilege via
 // EITHER auth path: a session/access-token user whose integer role is >= RoleAdminUser,
-// OR a Zitadel-JWT user carrying the "admin"/"root" string role. It mirrors
+// OR a OIDC-JWT user carrying the "admin"/"root" string role. It mirrors
 // middleware.AdminJWTAuth's dual gate so that session-authenticated admins — whose
 // TenantContext.Roles is always empty (see middleware.authHelper) — are not locked out
 // when a v2 route is mounted under UserAuth() rather than a JWT admin middleware.
@@ -19,6 +19,6 @@ func requireTenantAdmin(c *gin.Context, tc *middleware.TenantContext) bool {
 	if c.GetInt("role") >= common.RoleAdminUser { // session / access-token path
 		return true
 	}
-	// Zitadel-JWT path: roles arrive as strings extracted from the token claims.
+	// OIDC-JWT path: roles arrive as strings extracted from the token claims.
 	return tc != nil && (hasRole(tc.Roles, "admin") || hasRole(tc.Roles, "root"))
 }

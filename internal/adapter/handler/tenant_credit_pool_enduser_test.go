@@ -77,21 +77,21 @@ func setupEndUserPoolRouter(t *testing.T) *endUserPoolCtx {
 	now := time.Now()
 	if err := db.Create(&repo.Tenant{
 		Id: tenantID, Name: "Acme", Slug: tenantSlug,
-		Status: repo.TenantStatusEnabled, ZitadelOrgID: "org_acme",
+		Status: repo.TenantStatusEnabled, IDPOrgID: "org_acme",
 		CreatedAt: now, UpdatedAt: now,
 	}).Error; err != nil {
 		t.Fatalf("seed acme: %v", err)
 	}
 	other := &repo.Tenant{
 		Id: "tenant-other", Name: "Other", Slug: "other",
-		Status: repo.TenantStatusEnabled, ZitadelOrgID: "org_other",
+		Status: repo.TenantStatusEnabled, IDPOrgID: "org_other",
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(other).Error; err != nil {
 		t.Fatalf("seed other: %v", err)
 	}
 
-	// Mock ZitadelAuth that injects a TenantContext keyed on a per-request
+	// Mock OIDCAuth that injects a TenantContext keyed on a per-request
 	// X-Mock-Tenant-ID header (default: tenantID).
 	mockAuth := func(c *gin.Context) {
 		mockTID := c.GetHeader("X-Mock-Tenant-ID")
@@ -101,7 +101,7 @@ func setupEndUserPoolRouter(t *testing.T) *endUserPoolCtx {
 		c.Set("tenant_context", &middleware.TenantContext{
 			TenantID:      mockTID,
 			UserID:        42,
-			ZitadelUserID: "zitadel_eu_42",
+			IDPSubject: "zitadel_eu_42",
 			Email:         "eu@test.local",
 			Username:      "enduser",
 		})

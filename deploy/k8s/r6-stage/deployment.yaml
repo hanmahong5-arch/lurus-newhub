@@ -74,7 +74,7 @@ spec:
               value: "redis://redis.lurus-system.svc.cluster.local:6379/2"
             - name: SESSION_COOKIE_DOMAIN
               value: "test-newhub.lurus.cn"
-            - name: ZITADEL_ENABLED
+            - name: OIDC_ENABLED
               value: "false"
             - name: MEILISEARCH_ENABLED
               value: "false"

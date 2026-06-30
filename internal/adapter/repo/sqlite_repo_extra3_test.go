@@ -2,7 +2,7 @@ package repo
 
 // sqlite_repo_extra3_test.go — third batch of coverage tests.
 // Covers: vendor_meta, ability-GetChannel, log-GetTenantLogsWithParams/GetUserLogStatByPeriod,
-// channel-EditChannelByTag/GetChannelForUpdate, user_mapping-CreateUserFromZitadelClaims,
+// channel-EditChannelByTag/GetChannelForUpdate, user_mapping-CreateUserFromIDPClaims,
 // task-ToOpenAIVideo/InitTask-partial.
 
 import (
@@ -299,9 +299,9 @@ func TestChannelRepo_GetChannelForUpdate(t *testing.T) {
 	}
 }
 
-// ─── UserMapping: CreateUserFromZitadelClaims ─────────────────────────────────
+// ─── UserMapping: CreateUserFromIDPClaims ─────────────────────────────────
 
-func TestUserMappingRepo_CreateUserFromZitadelClaims_EmailFallback(t *testing.T) {
+func TestUserMappingRepo_CreateUserFromIDPClaims_EmailFallback(t *testing.T) {
 	cleanup := setupSQLiteDB(t)
 	defer cleanup()
 
@@ -309,16 +309,16 @@ func TestUserMappingRepo_CreateUserFromZitadelClaims_EmailFallback(t *testing.T)
 	// Pre-existing user with the same email (legacy user before Zitadel migration)
 	existingUser := seedUser(t, "legacy-claims-user", "legacy@claims.local", common.RoleCommonUser, common.UserStatusEnabled, ten.Id)
 
-	claims := &ZitadelUserClaims{
+	claims := &OIDCUserClaims{
 		Sub:               "zit-claims-001",
 		Email:             existingUser.Email,
 		Name:              "Legacy User",
 		PreferredUsername: "legacy-user",
 	}
 
-	user, mapping, err := CreateUserFromZitadelClaims(claims, ten.Id)
+	user, mapping, err := CreateUserFromIDPClaims(claims, ten.Id)
 	if err != nil {
-		t.Fatalf("CreateUserFromZitadelClaims: %v", err)
+		t.Fatalf("CreateUserFromIDPClaims: %v", err)
 	}
 	if user == nil {
 		t.Error("expected non-nil user")
@@ -327,9 +327,9 @@ func TestUserMappingRepo_CreateUserFromZitadelClaims_EmailFallback(t *testing.T)
 		t.Error("expected non-nil mapping")
 	}
 	// Second call should return same result (mapping already exists)
-	user2, mapping2, err := CreateUserFromZitadelClaims(claims, ten.Id)
+	user2, mapping2, err := CreateUserFromIDPClaims(claims, ten.Id)
 	if err != nil {
-		t.Fatalf("CreateUserFromZitadelClaims (2nd): %v", err)
+		t.Fatalf("CreateUserFromIDPClaims (2nd): %v", err)
 	}
 	if user2.Id != user.Id {
 		t.Errorf("expected same user on second call: %d vs %d", user2.Id, user.Id)

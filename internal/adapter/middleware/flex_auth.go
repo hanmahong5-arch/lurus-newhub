@@ -11,11 +11,11 @@ import (
 )
 
 // FlexAuth is a dual-mode authentication middleware that accepts either:
-//   - Zitadel JWT (for browser-based product frontends)
+//   - OIDC JWT (for browser-based product frontends)
 //   - API Token sk-xxx (for server-side product backends / CLI tools)
 //
 // On success it always sets "id" (lurus user ID) in gin context.
-// Zitadel path additionally sets "tenant_context" and "identity_account_id".
+// The OIDC path additionally sets "tenant_context" and "identity_account_id".
 // Token path additionally sets "token_id", "token_name", etc.
 func FlexAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -35,7 +35,7 @@ func FlexAuth() gin.HandlerFunc {
 		}
 
 		// Heuristic: API tokens always start with "sk-".
-		// Everything else is treated as a Zitadel JWT.
+		// Everything else is treated as a OIDC JWT.
 		if strings.HasPrefix(bearer, "sk-") {
 			flexAuthViaToken(c, bearer)
 		} else {
@@ -87,14 +87,14 @@ func flexAuthViaToken(c *gin.Context, rawKey string) {
 	c.Next()
 }
 
-// flexAuthViaJWT delegates to the existing ZitadelAuth flow.
+// flexAuthViaJWT delegates to the existing OIDCAuth flow.
 // On success it sets "id" (user_id) so handlers can use c.GetInt("id").
 func flexAuthViaJWT(c *gin.Context) {
-	// Reuse the full ZitadelAuth middleware (it calls c.Next() or c.Abort()).
-	handler := ZitadelAuth()
+	// Reuse the full OIDCAuth middleware (it calls c.Next() or c.Abort()).
+	handler := OIDCAuth()
 	handler(c)
 
-	// If ZitadelAuth succeeded (did NOT abort), copy user_id to "id" for handler compatibility.
+	// If OIDCAuth succeeded (did NOT abort), copy user_id to "id" for handler compatibility.
 	if !c.IsAborted() {
 		if uid, exists := c.Get("user_id"); exists {
 			c.Set("id", uid)

@@ -19,12 +19,12 @@ import (
 // GET /api/v2/user/identity-overview?product_id=<pid>
 func GetIdentityOverview(c *gin.Context) {
 	tenantCtx, err := middleware.GetTenantContext(c)
-	if err != nil || tenantCtx.ZitadelUserID == "" {
+	if err != nil || tenantCtx.IDPSubject == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
 		return
 	}
 
-	im, err := common.GetAccountByZitadelSub(c.Request.Context(), tenantCtx.ZitadelUserID)
+	im, err := common.GetAccountByZitadelSub(c.Request.Context(), tenantCtx.IDPSubject)
 	if err != nil || im == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "identity account not found"})
 		return

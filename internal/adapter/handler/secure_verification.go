@@ -29,7 +29,7 @@ type VerificationStatusResponse struct {
 }
 
 // UniversalVerify marks the current session as securely verified.
-// Since MFA is delegated to Zitadel, this endpoint just records the verification timestamp.
+// Since MFA is delegated to the OIDC provider, this endpoint just records the verification timestamp.
 func UniversalVerify(c *gin.Context) {
 	userId := c.GetInt("id")
 	if userId == 0 {

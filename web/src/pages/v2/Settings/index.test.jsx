@@ -159,7 +159,7 @@ beforeEach(() => {
           {
             id: 'current',
             current: true,
-            auth_method: 'zitadel',
+            auth_method: 'oidc',
             active_tokens: 3,
             request_count: 42,
             last_seen: Math.floor(Date.now() / 1000) - 30,
@@ -203,7 +203,7 @@ describe('Settings page', () => {
     await waitFor(() => {
       // auth_method value rendered in the sessions table.
       expect(screen.getByTestId('sessions-table').textContent).toContain(
-        'zitadel',
+        'oidc',
       );
     });
   });

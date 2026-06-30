@@ -35,7 +35,7 @@ type V2TestContext struct {
 	AdminUser  *repo.User
 }
 
-// SetupV2TestRouter initializes router with mock ZitadelAuth for V2 API testing.
+// SetupV2TestRouter initializes router with mock OIDCAuth for V2 API testing.
 // Uses headers: X-Test-Tenant-ID, X-Test-User-ID, X-Test-Roles
 func SetupV2TestRouter(t *testing.T) *V2TestContext {
 	t.Helper()
@@ -104,7 +104,7 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 		Name:         "Test Tenant",
 		Slug:         fmt.Sprintf("test-tenant-%d", v2TestDBCounter.Load()),
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: "org_test_123",
+		IDPOrgID: "org_test_123",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -149,7 +149,7 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 	// Build router
 	router := gin.New()
 
-	// Mock ZitadelAuth middleware that reads from test headers
+	// Mock OIDCAuth middleware that reads from test headers
 	mockAuth := func(c *gin.Context) {
 		tenantID := c.GetHeader("X-Test-Tenant-ID")
 		if tenantID == "" {
@@ -173,7 +173,7 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 		tenantCtx := &middleware.TenantContext{
 			TenantID:      tenantID,
 			UserID:        userID,
-			ZitadelUserID: "zitadel_test_user",
+			IDPSubject: "zitadel_test_user",
 			Email:         "test@test.local",
 			Username:      "testuser",
 			Roles:         roles,

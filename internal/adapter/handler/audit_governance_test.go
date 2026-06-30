@@ -64,7 +64,7 @@ func setupAdminGovRouter(t *testing.T) *adminGovCtx {
 	mockAuth := func(c *gin.Context) {
 		c.Set("tenant_context", &middleware.TenantContext{
 			TenantID: "test-tenant", UserID: 1,
-			ZitadelUserID: "zita_admin", Email: "admin@test.local",
+			IDPSubject: "zita_admin", Email: "admin@test.local",
 			Username: "admin", Roles: []string{"admin"},
 		})
 		c.Set("role", common.RoleAdminUser)

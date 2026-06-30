@@ -17,7 +17,7 @@ import (
 )
 
 // ZitaBootstrap converts a platform-issued SDK session into a newhub
-// session. Replaces the legacy Zitadel OAuth callback path for the v2
+// session. Replaces the legacy OIDC OAuth callback path for the v2
 // frontend (ADR-0011 Layer C).
 //
 // Flow:

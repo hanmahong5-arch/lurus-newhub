@@ -88,29 +88,29 @@ spec:
                   optional: true
             - name: MEILISEARCH_INDEX_PREFIX
               value: "staging_"
-            # Zitadel OIDC (staging tenant)
-            - name: ZITADEL_ENABLED
+            # OIDC (staging tenant; values are deploy-time owner-gated)
+            - name: OIDC_ENABLED
               value: "true"
-            - name: ZITADEL_ISSUER
-              value: "https://auth.lurus.cn"
-            - name: ZITADEL_JWKS_URI
-              value: "https://auth.lurus.cn/oauth/v2/keys"
-            - name: ZITADEL_CLIENT_ID
+            - name: OIDC_ISSUER
+              value: "https://auth.lurus.cn"   # OIDC issuer (deploy-time; replace per IdP)
+            - name: OIDC_JWKS_URI
+              value: "https://auth.lurus.cn/oauth/v2/keys"   # JWKS (prefer discovery jwks_uri)
+            - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
                   name: lurus-newhub-staging-secrets
-                  key: ZITADEL_CLIENT_ID
-            - name: ZITADEL_REDIRECT_URI
+                  key: OIDC_CLIENT_ID
+            - name: OIDC_REDIRECT_URI
               value: "https://staging-api.lurus.cn/api/v2/oauth/callback"
-            - name: ZITADEL_POST_LOGOUT_REDIRECT_URI
+            - name: OIDC_POST_LOGOUT_REDIRECT_URI
               value: "https://staging-api.lurus.cn"
-            - name: ZITADEL_ENABLE_PKCE
+            - name: OIDC_ENABLE_PKCE
               value: "true"
-            - name: ZITADEL_AUTO_CREATE_TENANT
+            - name: OIDC_AUTO_CREATE_TENANT
               value: "true"
-            - name: ZITADEL_AUTO_CREATE_USER
+            - name: OIDC_AUTO_CREATE_USER
               value: "true"
-            - name: ZITADEL_ALLOWED_REDIRECT_DOMAINS
+            - name: OIDC_ALLOWED_REDIRECT_DOMAINS
               value: "lurus.cn,staging-api.lurus.cn"
             # E2E bridge token — gates POST /api/v2/bridge/exchange.
             # Empty in prod (route not registered); set in STAGE to enable

@@ -68,7 +68,7 @@ kubectl rollout restart deployment/lurus-api -n lurus-system                    
 | `SQL_DSN` | Secret | Yes (PostgreSQL) |
 | `SESSION_SECRET` | Secret | Yes |
 | `REDIS_CONN_STRING` | ConfigMap | Optional (in-memory if unset) |
-| `ZITADEL_CLIENT_ID` / `_SECRET` | Secret | For v2 auth |
+| `OIDC_CLIENT_ID` / `_SECRET` | Secret | For v2 auth |
 | `MEILI_API_KEY` | Secret | For search |
 | `NODE_TYPE` | Env | `master` (default) or `slave` |
 

@@ -37,7 +37,7 @@ kubectl exec -it lurus-pg-1 -n database -- psql -U lurus -c "CREATE DATABASE new
 kubectl -n lurus-staging create secret generic lurus-newhub-staging-secrets \
   --from-literal=SESSION_SECRET="$(openssl rand -hex 32)" \
   --from-literal=SQL_DSN='postgres://lurus:YOUR_PASSWORD@<PG_HOST>:<PORT>/newhub' \
-  --from-literal=ZITADEL_CLIENT_ID='YOUR_STAGING_CLIENT_ID'
+  --from-literal=OIDC_CLIENT_ID='YOUR_STAGING_CLIENT_ID'
 #  ⚠️VERIFY <PG_HOST>:<PORT> — older copy hard-coded 100.94.177.10:30543; the
 #  in-cluster PG is lurus-pg-1.database.svc. Use whichever the live DSN uses.
 

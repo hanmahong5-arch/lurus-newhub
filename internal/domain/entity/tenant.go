@@ -8,19 +8,25 @@ import (
 
 // Tenant represents a multi-tenant SaaS tenant
 type Tenant struct {
-	Id           string         `json:"id" gorm:"primaryKey;size:36"`
-	ZitadelOrgID string         `json:"zitadel_org_id" gorm:"column:zitadel_org_id;size:128;unique;not null;index"`
-	Slug         string         `json:"slug" gorm:"size:64;unique;not null;index"`
-	Name         string         `json:"name" gorm:"size:128;not null"`
-	Status       int            `json:"status" gorm:"type:int;default:1;index"`
-	PlanType     string         `json:"plan_type" gorm:"size:32;default:'free';index"`
-	MaxUsers     int            `json:"max_users" gorm:"type:int;default:100"`
+	Id string `json:"id" gorm:"primaryKey;size:36"`
+	// IDPOrgID is the upstream OIDC organization identifier this tenant maps to.
+	// TODO(idp-migration): the physical column (zitadel_org_id) is intentionally
+	// NOT renamed here — a column rename needs a reserved migration ID (ledger,
+	// owner-gated) + a live-DB rewrite. The gorm column tag and JSON wire field
+	// stay zitadel_org_id until that migration lands; only the Go field name and
+	// concept are vendor-neutralized.
+	IDPOrgID string `json:"zitadel_org_id" gorm:"column:zitadel_org_id;size:128;unique;not null;index"`
+	Slug     string `json:"slug" gorm:"size:64;unique;not null;index"`
+	Name     string `json:"name" gorm:"size:128;not null"`
+	Status   int    `json:"status" gorm:"type:int;default:1;index"`
+	PlanType string `json:"plan_type" gorm:"size:32;default:'free';index"`
+	MaxUsers int    `json:"max_users" gorm:"type:int;default:100"`
 	// Deprecated: superseded by tenant_credit_pools.max_balance in ADR 2026-05-18
 	// (Accepted §9 Q3). Kept for backward compatibility; removed in a Q4 migration.
-	MaxQuota     int64          `json:"max_quota" gorm:"type:bigint;default:1000000"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+	MaxQuota  int64          `json:"max_quota" gorm:"type:bigint;default:1000000"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // Tenant status constants

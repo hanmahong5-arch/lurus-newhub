@@ -44,7 +44,7 @@ type updatePricingResponse struct {
 
 // UpdatePricingV2 handles bulk pricing patches for a tenant's model catalogue.
 // Route (registered by Opus): POST /api/v2/:tenant_slug/pricing
-// Auth: UserAuth middleware (Zitadel JWT) — tenant admin only.
+// Auth: UserAuth middleware (OIDC JWT) — tenant admin only.
 //
 // Request body: JSON array of updatePricingRequest.
 // At least one item is required; model_name is mandatory per item; ratios must be > 0.

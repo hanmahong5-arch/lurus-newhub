@@ -317,16 +317,16 @@ func TestUserMappingRepo_ListByZitadelUser(t *testing.T) {
 		t.Fatalf("CreateUserMapping: %v", err)
 	}
 
-	mappings, err := ListUserMappingsByZitadelUser("zit-user-001")
+	mappings, err := ListUserMappingsByIDPSubject("zit-user-001")
 	if err != nil {
-		t.Fatalf("ListUserMappingsByZitadelUser: %v", err)
+		t.Fatalf("ListUserMappingsByIDPSubject: %v", err)
 	}
 	if len(mappings) < 1 {
 		t.Error("expected at least 1 mapping")
 	}
 }
 
-func TestUserMappingRepo_SyncUserDataFromZitadel(t *testing.T) {
+func TestUserMappingRepo_SyncUserDataFromIDP(t *testing.T) {
 	cleanup := setupSQLiteDB(t)
 	defer cleanup()
 
@@ -338,8 +338,8 @@ func TestUserMappingRepo_SyncUserDataFromZitadel(t *testing.T) {
 		t.Fatalf("CreateUserMapping: %v", err)
 	}
 
-	if err := SyncUserDataFromZitadel(mapping.Id, "new@test.local", "New Name", "new_username"); err != nil {
-		t.Fatalf("SyncUserDataFromZitadel: %v", err)
+	if err := SyncUserDataFromIDP(mapping.Id, "new@test.local", "New Name", "new_username"); err != nil {
+		t.Fatalf("SyncUserDataFromIDP: %v", err)
 	}
 
 	var fetched UserIdentityMapping
@@ -351,7 +351,7 @@ func TestUserMappingRepo_SyncUserDataFromZitadel(t *testing.T) {
 	}
 }
 
-func TestUserMappingRepo_GetUserByZitadelID(t *testing.T) {
+func TestUserMappingRepo_GetUserByIDPSubject(t *testing.T) {
 	cleanup := setupSQLiteDB(t)
 	defer cleanup()
 
@@ -363,9 +363,9 @@ func TestUserMappingRepo_GetUserByZitadelID(t *testing.T) {
 		t.Fatalf("CreateUserMapping: %v", err)
 	}
 
-	fetchedUser, fetchedMapping, err := GetUserByZitadelID("zit-get-003", ten.Id)
+	fetchedUser, fetchedMapping, err := GetUserByIDPSubject("zit-get-003", ten.Id)
 	if err != nil {
-		t.Fatalf("GetUserByZitadelID: %v", err)
+		t.Fatalf("GetUserByIDPSubject: %v", err)
 	}
 	if fetchedUser == nil {
 		t.Error("expected non-nil user")

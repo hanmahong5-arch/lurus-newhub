@@ -420,9 +420,9 @@ func TestBatchDeleteTokens_WithUser(t *testing.T) {
 	}
 }
 
-// ─── CreateUserFromZitadelClaims paths ───────────────────────────────────────
+// ─── CreateUserFromIDPClaims paths ───────────────────────────────────────
 
-func TestCreateUserFromZitadelClaims_ExistingMapping(t *testing.T) {
+func TestCreateUserFromIDPClaims_ExistingMapping(t *testing.T) {
 	setupSQLiteDB(t)
 
 	// seed a user and mapping first
@@ -439,7 +439,7 @@ func TestCreateUserFromZitadelClaims_ExistingMapping(t *testing.T) {
 	}
 	_ = mapping
 
-	claims := &ZitadelUserClaims{
+	claims := &OIDCUserClaims{
 		Sub:               "sub-existing-001",
 		Email:             "existing@ex.com",
 		Name:              "Existing",
@@ -447,9 +447,9 @@ func TestCreateUserFromZitadelClaims_ExistingMapping(t *testing.T) {
 	}
 
 	// Should return existing user without creating new
-	user, m, err := CreateUserFromZitadelClaims(claims, "default")
+	user, m, err := CreateUserFromIDPClaims(claims, "default")
 	if err != nil {
-		t.Fatalf("CreateUserFromZitadelClaims existing: %v", err)
+		t.Fatalf("CreateUserFromIDPClaims existing: %v", err)
 	}
 	if user.Id != u.Id {
 		t.Errorf("expected user id %d, got %d", u.Id, user.Id)
@@ -457,7 +457,7 @@ func TestCreateUserFromZitadelClaims_ExistingMapping(t *testing.T) {
 	_ = m
 }
 
-func TestCreateUserFromZitadelClaims_EmailFallback(t *testing.T) {
+func TestCreateUserFromIDPClaims_EmailFallback(t *testing.T) {
 	setupSQLiteDB(t)
 
 	// Seed a user without any mapping (simulates pre-Zitadel user)
@@ -473,16 +473,16 @@ func TestCreateUserFromZitadelClaims_EmailFallback(t *testing.T) {
 		t.Fatalf("create pre-zitadel user: %v", err)
 	}
 
-	claims := &ZitadelUserClaims{
+	claims := &OIDCUserClaims{
 		Sub:               "sub-email-fallback-001",
 		Email:             "pre-zitadel@ex.com",
 		Name:              "Pre Zitadel",
 		PreferredUsername: "prezit",
 	}
 
-	user, m, err := CreateUserFromZitadelClaims(claims, "default")
+	user, m, err := CreateUserFromIDPClaims(claims, "default")
 	if err != nil {
-		t.Fatalf("CreateUserFromZitadelClaims email fallback: %v", err)
+		t.Fatalf("CreateUserFromIDPClaims email fallback: %v", err)
 	}
 	if user.Id != existing.Id {
 		t.Errorf("expected existing user id %d, got %d", existing.Id, user.Id)

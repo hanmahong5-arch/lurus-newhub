@@ -30,7 +30,7 @@ func TestSecurityLogsAllRequiresAdmin(t *testing.T) {
 	w = V2RequestAsUser(ctx, ctx.AdminUser, http.MethodGet, path, nil, nil)
 	AssertV2Status(t, w, http.StatusOK)
 
-	// Zitadel-JWT string "admin" role must pass even for a common-role user.
+	// OIDC-JWT string "admin" role must pass even for a common-role user.
 	w = V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, path, nil, []string{"admin"})
 	AssertV2Status(t, w, http.StatusOK)
 }

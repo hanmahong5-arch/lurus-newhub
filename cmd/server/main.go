@@ -554,17 +554,17 @@ func InitResources(ctx context.Context) error {
 	}
 
 	// Initialize zita SDK client (Layer B/C of ADR-0011 — replaces
-	// direct Zitadel coupling per ADR-0005). Optional: nil ZitaClient
-	// when env not set, legacy Zitadel path remains as fallback.
+	// direct IdP coupling per ADR-0005). Optional: nil ZitaClient
+	// when env not set, legacy OIDC path remains as fallback.
 	common.InitZitaClient()
 
-	// Initialize Zitadel authentication (multi-tenant OAuth)
-	// 初始化 Zitadel 认证（多租户 OAuth）
-	err = middleware.InitZitadelAuth()
+	// Initialize OIDC authentication (multi-tenant OAuth)
+	// 初始化 OIDC 认证（多租户 OAuth）
+	err = middleware.InitOIDCAuth()
 	if err != nil {
-		common.SysError(fmt.Sprintf("Failed to initialize Zitadel authentication: %v", err))
-		// Don't return error - Zitadel is optional and can be enabled later
-		// 不返回错误 - Zitadel 是可选的，可以稍后启用
+		common.SysError(fmt.Sprintf("Failed to initialize OIDC authentication: %v", err))
+		// Do not return error - OIDC is optional and can be enabled later
+		// 不返回错误 - OIDC 是可选的，可以稍后启用
 	}
 
 	// Initialize OpenTelemetry tracing

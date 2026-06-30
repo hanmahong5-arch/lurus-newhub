@@ -247,7 +247,7 @@ const NAV_SECTIONS = [
 ];
 
 // Pull the bridged user identity directly from localStorage — set by
-// ZitadelRedirect/zita-bootstrap. The v2 hi-fi shell intentionally
+// OidcRedirect/zita-bootstrap. The v2 hi-fi shell intentionally
 // avoids the StatusContext/UserContext used by the legacy chrome (those
 // pull a chunk of v1 state we don't need here); a thin localStorage
 // read is enough to surface "who am I" + a logout escape hatch.

@@ -66,7 +66,7 @@ func ListSessionsV2(c *gin.Context) {
 		Where("user_id = ? AND tenant_id = ? AND created_at > ?", userID, tenant.Id, cutoff).
 		Count(&requestCount)
 
-	// auth_method: prefer Zitadel JWT indicator set by ZitadelAuth middleware;
+	// auth_method: prefer OIDC JWT indicator set by OIDCAuth middleware;
 	// fall back to "session" for cookie-based auth.
 	authMethod := "session"
 	if am, exists := c.Get("auth_method"); exists {

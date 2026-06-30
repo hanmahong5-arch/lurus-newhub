@@ -14,7 +14,7 @@ import (
 // completes the OIDC dance and bounces back to return_to with the
 // lurus_session cookie set on the parent .lurus.cn domain.
 //
-// SDK-native replacement for ZitadelLoginRedirect (ADR-0011 Layer C).
+// SDK-native replacement for OIDCLoginRedirect (ADR-0011 Layer C).
 // While migration is in flight both handlers exist; once user table has
 // lurus_account_id and the v2 frontend wires this URL, the legacy path
 // can be deleted.

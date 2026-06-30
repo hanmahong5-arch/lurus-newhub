@@ -127,7 +127,7 @@ func seedTenant(t *testing.T, id, slug, name string) *Tenant {
 		Slug:         slug,
 		Name:         name,
 		Status:       TenantStatusEnabled,
-		ZitadelOrgID: "org_" + id, // unique per seeded tenant
+		IDPOrgID: "org_" + id, // unique per seeded tenant
 	}
 	if err := DB.Create(ten).Error; err != nil {
 		t.Fatalf("seedTenant %q: %v", id, err)

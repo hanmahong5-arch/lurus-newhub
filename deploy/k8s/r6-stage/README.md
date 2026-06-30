@@ -15,7 +15,7 @@ There are two STAGE overlays and they are **NOT** interchangeable — they diffe
 
 | | `deploy/k8s/staging/` | `deploy/k8s/r6-stage/` (this dir) |
 |---|---|---|
-| Auth | Zitadel OIDC (`ZITADEL_ENABLED=true`) | platform-identity (`ZITADEL_ENABLED=false` + `IDENTITY_*`) |
+| Auth | OIDC (`OIDC_ENABLED=true`) | platform-identity (`OIDC_ENABLED=false` + `IDENTITY_*`) |
 | Image tag | `:staging` (CI-built) | `:main` (manual) |
 | Ingress | Traefik `IngressRoute`, ClusterIP | host-nginx → NodePort 30850 |
 | Replicas | 1 | 3 |
@@ -23,8 +23,8 @@ There are two STAGE overlays and they are **NOT** interchangeable — they diffe
 
 Both deploy Deployment/Service **`lurus-newhub`** into ns **`lurus-staging`**. Use
 **r6-stage/** for the host-nginx + platform-identity path validated in the Wave-1
-runbook; use **staging/** for the Traefik + Zitadel path. A full merge/delete is
-**deferred** until the Zitadel-vs-platform-identity choice is settled (ADR pending) —
+runbook; use **staging/** for the Traefik + OIDC path. A full merge/delete is
+**deferred** until the OIDC-vs-platform-identity choice is settled (ADR pending) —
 see the Wave-2 deferred list.
 
 ## First apply

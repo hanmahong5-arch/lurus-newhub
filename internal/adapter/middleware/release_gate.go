@@ -26,7 +26,7 @@ type ReleaseGateConfig struct {
 	// the release does not exist, so the gate defers to the handler's 404.
 	LookupProductID func(ctx context.Context, releaseID int64) (productID string, found bool)
 	// ResolveAccount best-effort resolves the caller's platform account id from a
-	// Zitadel JWT. ok=false when the caller is anonymous / token invalid.
+	// OIDC JWT. ok=false when the caller is anonymous / token invalid.
 	ResolveAccount func(c *gin.Context) (accountID int64, ok bool)
 	// CheckEntitled reports whether accountID may download productID. A non-nil
 	// error means the entitlement system could not give a definite answer; the
@@ -104,7 +104,7 @@ func ReleaseDownloadGateWith(cfg ReleaseGateConfig) gin.HandlerFunc {
 }
 
 // ReleaseDownloadGate wires ReleaseDownloadGateWith with the production
-// implementations (releases table, Zitadel JWT, platform entitlement API).
+// implementations (releases table, OIDC JWT, platform entitlement API).
 // Reads the gated-product set once at router-setup time.
 func ReleaseDownloadGate() gin.HandlerFunc {
 	raw := os.Getenv("RELEASE_GATED_PRODUCTS")
@@ -115,7 +115,7 @@ func ReleaseDownloadGate() gin.HandlerFunc {
 	return ReleaseDownloadGateWith(ReleaseGateConfig{
 		GatedProducts:   gated,
 		LookupProductID: lookupReleaseProductID,
-		ResolveAccount:  resolveZitadelAccountID,
+		ResolveAccount:  resolveOIDCAccountID,
 		CheckEntitled:   checkProductEntitlement,
 	})
 }
@@ -139,18 +139,18 @@ func lookupReleaseProductID(ctx context.Context, releaseID int64) (string, bool)
 	return rel.ProductId, true
 }
 
-// resolveZitadelAccountID best-effort validates a Zitadel JWT and returns the
-// caller's platform account id. Non-aborting (unlike ZitadelAuth) so the gate
-// owns the fail-closed response shape. Mirrors ZitadelAuth's
+// resolveOIDCAccountID best-effort validates a OIDC JWT and returns the
+// caller's platform account id. Non-aborting (unlike OIDCAuth) so the gate
+// owns the fail-closed response shape. Mirrors OIDCAuth's
 // verify-signature → issuer-check → UpsertAccountGRPC path without the
 // c.Next()/c.Abort() side effects.
-func resolveZitadelAccountID(c *gin.Context) (int64, bool) {
+func resolveOIDCAccountID(c *gin.Context) (int64, bool) {
 	if raw, ok := c.Get("identity_account_id"); ok {
 		if id, ok2 := raw.(int64); ok2 && id > 0 {
 			return id, true
 		}
 	}
-	if !zitadelEnabled {
+	if !oidcEnabled {
 		return 0, false
 	}
 	authHeader := c.GetHeader("Authorization")
@@ -159,13 +159,13 @@ func resolveZitadelAccountID(c *gin.Context) (int64, bool) {
 	if tokenString == "" || tokenString == authHeader {
 		return 0, false
 	}
-	claims := &ZitadelClaims{}
+	claims := &OIDCClaims{}
 	if _, err := VerifyIDTokenWithJWKS(tokenString, claims); err != nil {
 		return 0, false
 	}
-	// Same multi-issuer set as ZitadelAuth to cover the rebrand alias window.
+	// Same multi-issuer set as OIDCAuth to cover the rebrand alias window.
 	releaseIssuerOK := false
-	for _, accepted := range zitadelIssuers {
+	for _, accepted := range oidcIssuers {
 		if claims.Issuer == accepted {
 			releaseIssuerOK = true
 			break

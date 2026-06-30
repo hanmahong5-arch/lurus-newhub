@@ -476,8 +476,8 @@ func TestUserIdentityMapping_CRUD(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 
-	// GetUserMappingByZitadelID — not found
-	_, err := GetUserMappingByZitadelID("sub-999", "default")
+	// GetUserMappingByIDPSubject — not found
+	_, err := GetUserMappingByIDPSubject("sub-999", "default")
 	if err == nil {
 		t.Error("expected not-found error")
 	}
@@ -505,14 +505,14 @@ func TestUserIdentityMapping_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserMappingByLurusUserID: %v", err)
 	}
-	if foundByLurus.ZitadelUserID != "sub-999" {
-		t.Errorf("ZitadelUserID mismatch: %q", foundByLurus.ZitadelUserID)
+	if foundByLurus.IDPSubject != "sub-999" {
+		t.Errorf("ZitadelUserID mismatch: %q", foundByLurus.IDPSubject)
 	}
 
-	// GetUserByZitadelID
-	fetchedUser, fetchedMapping, err := GetUserByZitadelID("sub-999", "default")
+	// GetUserByIDPSubject
+	fetchedUser, fetchedMapping, err := GetUserByIDPSubject("sub-999", "default")
 	if err != nil {
-		t.Fatalf("GetUserByZitadelID: %v", err)
+		t.Fatalf("GetUserByIDPSubject: %v", err)
 	}
 	if fetchedUser.Id != u.Id {
 		t.Errorf("user id mismatch: got %d, want %d", fetchedUser.Id, u.Id)
@@ -524,9 +524,9 @@ func TestUserIdentityMapping_CRUD(t *testing.T) {
 		t.Fatalf("UpdateUserMapping: %v", err)
 	}
 
-	// SyncUserDataFromZitadel
-	if err := SyncUserDataFromZitadel(mapping.Id, "sync@ex.com", "Synced Name", "synceduser"); err != nil {
-		t.Fatalf("SyncUserDataFromZitadel: %v", err)
+	// SyncUserDataFromIDP
+	if err := SyncUserDataFromIDP(mapping.Id, "sync@ex.com", "Synced Name", "synceduser"); err != nil {
+		t.Fatalf("SyncUserDataFromIDP: %v", err)
 	}
 
 	// ListUserMappingsByTenant
@@ -539,10 +539,10 @@ func TestUserIdentityMapping_CRUD(t *testing.T) {
 	}
 	_ = mappings
 
-	// ListUserMappingsByZitadelUser
-	allMappings, err := ListUserMappingsByZitadelUser("sub-999")
+	// ListUserMappingsByIDPSubject
+	allMappings, err := ListUserMappingsByIDPSubject("sub-999")
 	if err != nil {
-		t.Fatalf("ListUserMappingsByZitadelUser: %v", err)
+		t.Fatalf("ListUserMappingsByIDPSubject: %v", err)
 	}
 	if len(allMappings) < 1 {
 		t.Errorf("expected >=1 mapping for zitadel sub, got %d", len(allMappings))

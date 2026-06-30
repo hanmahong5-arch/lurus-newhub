@@ -11,7 +11,7 @@ import (
 
 // GetPricingV2 returns the public pricing catalogue for a tenant's users.
 // Route (registered by Opus): GET /api/v2/:tenant_slug/pricing
-// Auth: UserAuth middleware (Zitadel JWT).
+// Auth: UserAuth middleware (OIDC JWT).
 //
 // Fields returned are an explicit whitelist — no admin-only fields such as
 // usable_group or auto_groups are exposed here.

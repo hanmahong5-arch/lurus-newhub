@@ -65,7 +65,7 @@ func setupPricingRouter(t *testing.T) *pricingCtx {
 		Slug: slug,
 		Name: "Acme Pricing Test",
 		// ZitadelOrgID must be unique; use a stable value per test DB
-		ZitadelOrgID: fmt.Sprintf("zitadel-pricing-%d", pricingTestDBCounter.Load()),
+		IDPOrgID: fmt.Sprintf("zitadel-pricing-%d", pricingTestDBCounter.Load()),
 		Status:       1,
 	}
 	if err := db.Create(tenant).Error; err != nil {

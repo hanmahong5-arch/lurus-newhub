@@ -84,7 +84,7 @@ func setupPricingWriteRouter(t *testing.T) *pricingWriteCtx {
 		Id:           "acme-write-id",
 		Slug:         slug,
 		Name:         "Acme Write Test",
-		ZitadelOrgID: fmt.Sprintf("zitadel-write-%d", pricingWriteTestDBCounter.Load()),
+		IDPOrgID: fmt.Sprintf("zitadel-write-%d", pricingWriteTestDBCounter.Load()),
 		Status:       1,
 	}
 	if err := db.Create(tenant).Error; err != nil {

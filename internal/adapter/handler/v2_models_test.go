@@ -68,7 +68,7 @@ func setupModelsRouter(t *testing.T) *modelsTestCtx {
 		Slug:         "acme",
 		Name:         "Acme Corp",
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: fmt.Sprintf("org_models_%d", dbNum),
+		IDPOrgID: fmt.Sprintf("org_models_%d", dbNum),
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}

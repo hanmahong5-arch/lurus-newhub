@@ -24,6 +24,8 @@ const VIOLATIONS = [
   '\\.maxUsers\\b',
   '\\.planType\\b',
   '\\.maxQuota\\b',
+  // wire 物理列名 zitadel_org_id (待 idp-migration); guards camelCase reads of
+  // the still-live snake_case JSON key — keep until the backend column renames.
   '\\.zitadelOrgId\\b',
   '\\.zitadelOrgID\\b',
 

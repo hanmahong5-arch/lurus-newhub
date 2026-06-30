@@ -22,29 +22,104 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// ZitadelClaims represents the JWT claims issued by Zitadel
-// Includes both standard OIDC claims and Zitadel-specific claims
-type ZitadelClaims struct {
+// OIDCClaims represents the JWT claims issued by the upstream OIDC provider.
+// Includes both standard OIDC claims and provider-specific "extra" claims (org
+// id / org domain / resource owner / project roles).
+//
+// The JSON struct tags below use vendor-NEUTRAL default keys (org_id, roles,
+// …). Different IdPs advertise tenant/role information under different (often
+// vendor-prefixed) claim keys, so the EFFECTIVE key is configurable per deploy
+// via OIDC_CLAIM_* env vars; resolveOIDCClaims overlays those onto the struct
+// after the standard JSON decode. The neutral tags keep the type usable in
+// tests and as a marshal target without leaking any vendor claim URN into code.
+type OIDCClaims struct {
 	jwt.RegisteredClaims
 	Email             string                 `json:"email"`
 	EmailVerified     bool                   `json:"email_verified"`
 	Name              string                 `json:"name"`
 	PreferredUsername string                 `json:"preferred_username"`
-	OrgID             string                 `json:"urn:zitadel:iam:org:id"`
-	OrgDomain         string                 `json:"urn:zitadel:iam:org:domain:primary"`
-	ResourceOwnerID   string                 `json:"urn:zitadel:iam:user:resourceowner:id"`
-	ResourceOwnerName string                 `json:"urn:zitadel:iam:user:resourceowner:name"`
-	Roles             map[string]interface{} `json:"urn:zitadel:iam:org:project:roles"`
+	OrgID             string                 `json:"org_id"`
+	OrgDomain         string                 `json:"org_domain"`
+	ResourceOwnerID   string                 `json:"resource_owner_id"`
+	ResourceOwnerName string                 `json:"resource_owner_name"`
+	Roles             map[string]interface{} `json:"roles"`
+}
+
+// claimKeySet holds the configurable JSON claim keys for the provider's
+// non-standard (tenant/role) claims. Resolved once at init from env.
+type claimKeySet struct {
+	OrgID             string
+	OrgDomain         string
+	ResourceOwnerID   string
+	ResourceOwnerName string
+	Roles             string
+}
+
+// oidcClaimKeys carries the deploy-configured claim keys. Defaults are
+// vendor-neutral; the actual keys an IdP advertises (which may be
+// vendor-prefixed URNs) are injected at deploy time via OIDC_CLAIM_* env vars
+// — the code itself carries no vendor-specific claim identifiers.
+var oidcClaimKeys = claimKeySet{
+	OrgID:             envOr("OIDC_CLAIM_ORG_ID", "org_id"),
+	OrgDomain:         envOr("OIDC_CLAIM_ORG_DOMAIN", "org_domain"),
+	ResourceOwnerID:   envOr("OIDC_CLAIM_RESOURCE_OWNER_ID", "resource_owner_id"),
+	ResourceOwnerName: envOr("OIDC_CLAIM_RESOURCE_OWNER_NAME", "resource_owner_name"),
+	Roles:             envOr("OIDC_CLAIM_ROLES", "roles"),
+}
+
+// envOr returns the env value for key, or fallback when unset/empty.
+func envOr(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// resolveOIDCClaims overlays the configurable extra claims (org/role) onto an
+// already-parsed OIDCClaims by re-reading the raw token claim map under the
+// deploy-configured keys. This is only needed when a deploy points OIDC_CLAIM_*
+// at non-default keys; when the keys equal the neutral struct-tag defaults the
+// standard JSON decode already populated the fields and this is a cheap no-op.
+// rawClaims is the full decoded claim set (map form) of the same token.
+func resolveOIDCClaims(c *OIDCClaims, rawClaims map[string]interface{}) {
+	if c == nil || rawClaims == nil {
+		return
+	}
+	if k := oidcClaimKeys.OrgID; k != "org_id" {
+		if v, ok := rawClaims[k].(string); ok {
+			c.OrgID = v
+		}
+	}
+	if k := oidcClaimKeys.OrgDomain; k != "org_domain" {
+		if v, ok := rawClaims[k].(string); ok {
+			c.OrgDomain = v
+		}
+	}
+	if k := oidcClaimKeys.ResourceOwnerID; k != "resource_owner_id" {
+		if v, ok := rawClaims[k].(string); ok {
+			c.ResourceOwnerID = v
+		}
+	}
+	if k := oidcClaimKeys.ResourceOwnerName; k != "resource_owner_name" {
+		if v, ok := rawClaims[k].(string); ok {
+			c.ResourceOwnerName = v
+		}
+	}
+	if k := oidcClaimKeys.Roles; k != "roles" {
+		if v, ok := rawClaims[k].(map[string]interface{}); ok {
+			c.Roles = v
+		}
+	}
 }
 
 // TenantContext represents the tenant context injected into Gin context
 type TenantContext struct {
-	TenantID      string   `json:"tenant_id"`       // Tenant ID
-	UserID        int      `json:"user_id"`         // Lurus user ID
-	ZitadelUserID string   `json:"zitadel_user_id"` // Zitadel user ID
-	Email         string   `json:"email"`           // User email
-	Username      string   `json:"username"`        // Username
-	Roles         []string `json:"roles"`           // User roles in this tenant
+	TenantID   string   `json:"tenant_id"`   // Tenant ID
+	UserID     int      `json:"user_id"`     // Lurus user ID
+	IDPSubject string   `json:"idp_subject"` // OIDC subject (idp_subject; canonical cross-service field)
+	Email      string   `json:"email"`       // User email
+	Username   string   `json:"username"`    // Username
+	Roles      []string `json:"roles"`       // User roles in this tenant
 }
 
 // JWK represents a JSON Web Key
@@ -62,8 +137,8 @@ type JWKSet struct {
 	Keys []JWK `json:"keys"`
 }
 
-// JWKSManager manages JSON Web Keys from Zitadel JWKS endpoint
-// Automatically refreshes keys periodically
+// JWKSManager manages JSON Web Keys from the OIDC provider's JWKS endpoint.
+// Automatically refreshes keys periodically.
 type JWKSManager struct {
 	jwksURI       string
 	publicKeys    map[string]*rsa.PublicKey
@@ -72,74 +147,78 @@ type JWKSManager struct {
 	updateFailed  bool
 	refreshTicker *time.Ticker
 	// refreshing prevents concurrent refresh attempts (race condition fix)
-	refreshing    bool
-	refreshMu     sync.Mutex
+	refreshing bool
+	refreshMu  sync.Mutex
 	// minRefreshInterval prevents too frequent refreshes on key not found
 	minRefreshInterval time.Duration
 }
 
-// zitadelHTTPClient is the HTTP client used for JWKS fetching.
+// oidcHTTPClient is the HTTP client used for JWKS fetching.
 // Using a dedicated client with timeout prevents indefinite hangs on network issues.
-var zitadelHTTPClient = &http.Client{
+var oidcHTTPClient = &http.Client{
 	Timeout: 15 * time.Second,
 }
 
 var (
-	jwksManager        *JWKSManager
-	jwksManagerOnce    sync.Once
-	// zitadelIssuers holds the parsed set of accepted issuer values.
-	// ZITADEL_ISSUER supports comma-separated values so that a rebrand
-	// (e.g. auth.lurus.cn → identity.lurus.cn) can be rolled out without
+	jwksManager     *JWKSManager
+	jwksManagerOnce sync.Once
+	// oidcIssuers holds the parsed set of accepted issuer values.
+	// OIDC_ISSUER supports comma-separated values so that a rebrand or IdP
+	// migration (e.g. one issuer domain → another) can be rolled out without
 	// a hard cutover: add the new issuer first, flip the IdP, then remove
 	// the old entry after the alias window expires (≥90 days per contract).
-	zitadelIssuers      []string
-	zitadelJwksURI     string
-	zitadelClientID    string
-	zitadelEnabled     bool
+	oidcIssuers         []string
+	oidcJwksURI         string
+	oidcClientID        string
+	oidcEnabled         bool
 	jwksRefreshInterval time.Duration = 1 * time.Hour
 )
 
-// InitZitadelAuth initializes Zitadel authentication system
-// Must be called during application startup
-func InitZitadelAuth() error {
-	// Load Zitadel configuration from environment variables
-	zitadelEnabled = os.Getenv("ZITADEL_ENABLED") == "true"
-	if !zitadelEnabled {
-		common.SysLog("Zitadel authentication is disabled")
+// InitOIDCAuth initializes the OIDC authentication system.
+// Must be called during application startup.
+func InitOIDCAuth() error {
+	// Load OIDC configuration from environment variables.
+	oidcEnabled = os.Getenv("OIDC_ENABLED") == "true"
+	if !oidcEnabled {
+		common.SysLog("OIDC authentication is disabled")
 		return nil
 	}
 
-	// ZITADEL_ISSUER accepts a comma-separated list so that two issuers
-	// can be valid concurrently during a domain rebrand window.
+	// OIDC_ISSUER accepts a comma-separated list so that two issuers
+	// can be valid concurrently during a domain rebrand / IdP migration window.
 	// Each value is trimmed; an all-whitespace entry is silently dropped.
-	rawIssuer := os.Getenv("ZITADEL_ISSUER")
+	rawIssuer := os.Getenv("OIDC_ISSUER")
 	for _, part := range strings.Split(rawIssuer, ",") {
 		if v := strings.TrimSpace(part); v != "" {
-			zitadelIssuers = append(zitadelIssuers, v)
+			oidcIssuers = append(oidcIssuers, v)
 		}
 	}
-	zitadelJwksURI = os.Getenv("ZITADEL_JWKS_URI")
-	zitadelClientID = os.Getenv("ZITADEL_CLIENT_ID")
+	// OIDC_JWKS_URI: the provider's JWKS endpoint. Best practice is to derive
+	// this from <issuer>/.well-known/openid-configuration (jwks_uri); kept as an
+	// explicit env so the value can be injected without an extra discovery hop
+	// and stays IdP-neutral. See doc/oidc-setup-guide.md.
+	oidcJwksURI = os.Getenv("OIDC_JWKS_URI")
+	oidcClientID = os.Getenv("OIDC_CLIENT_ID")
 
 	// Validate required environment variables
-	if len(zitadelIssuers) == 0 {
-		return errors.New("ZITADEL_ISSUER is not set")
+	if len(oidcIssuers) == 0 {
+		return errors.New("OIDC_ISSUER is not set")
 	}
-	if zitadelJwksURI == "" {
-		return errors.New("ZITADEL_JWKS_URI is not set")
+	if oidcJwksURI == "" {
+		return errors.New("OIDC_JWKS_URI is not set")
 	}
-	if zitadelClientID == "" {
-		return errors.New("ZITADEL_CLIENT_ID is not set")
+	if oidcClientID == "" {
+		return errors.New("OIDC_CLIENT_ID is not set")
 	}
 
 	// Initialize JWKS Manager
 	jwksManagerOnce.Do(func() {
-		jwksManager = NewJWKSManager(zitadelJwksURI)
+		jwksManager = NewJWKSManager(oidcJwksURI)
 	})
 
-	common.SysLog("Zitadel authentication initialized successfully")
-	common.SysLog(fmt.Sprintf("Zitadel Issuers: %v", zitadelIssuers))
-	common.SysLog(fmt.Sprintf("Zitadel JWKS URI: %s", zitadelJwksURI))
+	common.SysLog("OIDC authentication initialized successfully")
+	common.SysLog(fmt.Sprintf("OIDC Issuers: %v", oidcIssuers))
+	common.SysLog(fmt.Sprintf("OIDC JWKS URI: %s", oidcJwksURI))
 
 	return nil
 }
@@ -174,12 +253,12 @@ func NewJWKSManagerWithContext(ctx context.Context, jwksURI string) *JWKSManager
 	return m
 }
 
-// refreshKeys fetches public keys from Zitadel JWKS endpoint
+// refreshKeys fetches public keys from the OIDC provider's JWKS endpoint
 func (m *JWKSManager) refreshKeys() error {
 	common.SysLog(fmt.Sprintf("Fetching JWKS from: %s", m.jwksURI))
 
-	// Fetch JWKS from Zitadel
-	resp, err := zitadelHTTPClient.Get(m.jwksURI)
+	// Fetch JWKS from the OIDC provider
+	resp, err := oidcHTTPClient.Get(m.jwksURI)
 	if err != nil {
 		return fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
@@ -336,7 +415,7 @@ func (m *JWKSManager) getKeyWithRefresh(kid string) (*rsa.PublicKey, error) {
 // Returns the parsed jwt.Token with verified claims, or an error.
 func VerifyIDTokenWithJWKS(idToken string, claims jwt.Claims) (*jwt.Token, error) {
 	if jwksManager == nil {
-		return nil, errors.New("JWKS manager not initialized; is Zitadel enabled?")
+		return nil, errors.New("JWKS manager not initialized; is OIDC enabled?")
 	}
 
 	token, err := jwt.ParseWithClaims(idToken, claims, func(token *jwt.Token) (interface{}, error) {
@@ -438,12 +517,12 @@ func handleSessionFallback(c *gin.Context) bool {
 
 		// Construct tenant context from session
 		tenantCtx := &TenantContext{
-			TenantID:      tenantID,
-			UserID:        user.Id,
-			ZitadelUserID: "", // Not available in session
-			Email:         user.Email,
-			Username:      user.Username,
-			Roles:         []string{},
+			TenantID:   tenantID,
+			UserID:     user.Id,
+			IDPSubject: "", // Not available in session
+			Email:      user.Email,
+			Username:   user.Username,
+			Roles:      []string{},
 		}
 
 		// Inject into gin context
@@ -472,12 +551,12 @@ func handleSessionFallback(c *gin.Context) bool {
 		}
 
 		tenantCtx := &TenantContext{
-			TenantID:      tenantID,
-			UserID:        user.Id,
-			ZitadelUserID: "",
-			Email:         user.Email,
-			Username:      user.Username,
-			Roles:         []string{},
+			TenantID:   tenantID,
+			UserID:     user.Id,
+			IDPSubject: "",
+			Email:      user.Email,
+			Username:   user.Username,
+			Roles:      []string{},
 		}
 
 		c.Set("tenant_context", tenantCtx)
@@ -492,15 +571,15 @@ func handleSessionFallback(c *gin.Context) bool {
 	return false
 }
 
-// ZitadelAuth is the Gin middleware for Zitadel JWT authentication
-// Validates JWT tokens issued by Zitadel and injects tenant context
-func ZitadelAuth() gin.HandlerFunc {
+// OIDCAuth is the Gin middleware for OIDC JWT authentication.
+// Validates JWT tokens issued by the OIDC provider and injects tenant context.
+func OIDCAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Check if Zitadel is enabled
-		if !zitadelEnabled {
+		// Check if OIDC is enabled
+		if !oidcEnabled {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"success": false,
-				"message": "Zitadel authentication is not enabled",
+				"message": "OIDC authentication is not enabled",
 			})
 			c.Abort()
 			return
@@ -534,7 +613,7 @@ func ZitadelAuth() gin.HandlerFunc {
 		}
 
 		// Parse token to get Key ID (kid) from header
-		token, err := jwt.ParseWithClaims(tokenString, &ZitadelClaims{}, func(token *jwt.Token) (interface{}, error) {
+		token, err := jwt.ParseWithClaims(tokenString, &OIDCClaims{}, func(token *jwt.Token) (interface{}, error) {
 			// Validate signing method
 			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
@@ -567,7 +646,7 @@ func ZitadelAuth() gin.HandlerFunc {
 		}
 
 		// Extract claims
-		claims, ok := token.Claims.(*ZitadelClaims)
+		claims, ok := token.Claims.(*OIDCClaims)
 		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
@@ -577,13 +656,18 @@ func ZitadelAuth() gin.HandlerFunc {
 			return
 		}
 
+		// Overlay deploy-configured (possibly vendor-prefixed) org/role claim
+		// keys onto the standard-decoded claims. No-op when OIDC_CLAIM_* keys
+		// equal the neutral defaults already covered by the struct tags.
+		applyConfigurableClaims(tokenString, claims)
+
 		// Verify issuer against the accepted set.
-		// ZITADEL_JWKS_URI is an independent env — it does not derive from
+		// OIDC_JWKS_URI is an independent env — it does not derive from
 		// the issuer domain — so accepting multiple issuers does not require
 		// fetching from multiple JWKS endpoints; the signing keys are the same
 		// regardless of which domain the IdP advertises as its issuer.
 		issuerOK := false
-		for _, accepted := range zitadelIssuers {
+		for _, accepted := range oidcIssuers {
 			if claims.Issuer == accepted {
 				issuerOK = true
 				break
@@ -599,10 +683,10 @@ func ZitadelAuth() gin.HandlerFunc {
 		}
 
 		// Verify audience (optional, can include client ID validation)
-		// Note: Zitadel may use project ID as audience
+		// Note: the IdP may use a project/resource ID as audience.
 
-		// Map Zitadel user to lurus user and tenant
-		tenantID, lurusUserID, err := mapZitadelUserToLurus(claims)
+		// Map OIDC user to lurus user and tenant
+		tenantID, lurusUserID, err := mapOIDCUserToLurus(claims)
 		if err != nil {
 			common.SysError(fmt.Sprintf("User mapping failed: %v", err))
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -624,22 +708,22 @@ func ZitadelAuth() gin.HandlerFunc {
 
 		// Create tenant context
 		tenantCtx := &TenantContext{
-			TenantID:      tenantID,
-			UserID:        lurusUserID,
-			ZitadelUserID: claims.Subject,
-			Email:         claims.Email,
-			Username:      claims.PreferredUsername,
-			Roles:         roles,
+			TenantID:   tenantID,
+			UserID:     lurusUserID,
+			IDPSubject: claims.Subject,
+			Email:      claims.Email,
+			Username:   claims.PreferredUsername,
+			Roles:      roles,
 		}
 
 		// Inject tenant context into Gin context
 		c.Set("tenant_context", tenantCtx)
 		c.Set("tenant_id", tenantID)
 		c.Set("user_id", lurusUserID)
-		c.Set("zitadel_user_id", claims.Subject)
+		c.Set("idp_subject", claims.Subject)
 
 		// Log successful authentication (debug mode)
-		if os.Getenv("ZITADEL_DEBUG_LOGGING") == "true" {
+		if os.Getenv("OIDC_DEBUG_LOGGING") == "true" {
 			common.SysLog(fmt.Sprintf("User authenticated: tenant=%s, user=%d, email=%s, roles=%v",
 				tenantID, lurusUserID, claims.Email, roles))
 		}
@@ -648,20 +732,42 @@ func ZitadelAuth() gin.HandlerFunc {
 	}
 }
 
-// mapZitadelUserToLurus maps Zitadel user to lurus user and tenant
-// Auto-creates tenant and user if they don't exist
-func mapZitadelUserToLurus(claims *ZitadelClaims) (tenantID string, lurusUserID int, err error) {
-	// Step 1: Map tenant (Zitadel Org ID → lurus Tenant ID)
-	tenant, err := repo.GetTenantByZitadelOrgID(claims.OrgID)
+// applyConfigurableClaims overlays the deploy-configured org/role claim keys
+// onto claims. It only re-decodes the token's raw claim map when at least one
+// configured key differs from the neutral default — keeping the hot path
+// allocation-free in the common (neutral-key) deployment.
+func applyConfigurableClaims(tokenString string, claims *OIDCClaims) {
+	if oidcClaimKeys.OrgID == "org_id" &&
+		oidcClaimKeys.OrgDomain == "org_domain" &&
+		oidcClaimKeys.ResourceOwnerID == "resource_owner_id" &&
+		oidcClaimKeys.ResourceOwnerName == "resource_owner_name" &&
+		oidcClaimKeys.Roles == "roles" {
+		return // all keys are neutral defaults; struct tags already handled them
+	}
+	raw := jwt.MapClaims{}
+	// Parse without verification: signature was already verified upstream;
+	// here we only need the decoded claim map to read configurable keys.
+	parser := jwt.NewParser()
+	if _, _, err := parser.ParseUnverified(tokenString, raw); err != nil {
+		return
+	}
+	resolveOIDCClaims(claims, map[string]interface{}(raw))
+}
+
+// mapOIDCUserToLurus maps an OIDC user to a lurus user and tenant.
+// Auto-creates tenant and user if they don't exist.
+func mapOIDCUserToLurus(claims *OIDCClaims) (tenantID string, lurusUserID int, err error) {
+	// Step 1: Map tenant (OIDC Org ID → lurus Tenant ID)
+	tenant, err := repo.GetTenantByIDPOrgID(claims.OrgID)
 	if err != nil {
 		// Tenant doesn't exist, auto-create if enabled
-		if os.Getenv("ZITADEL_AUTO_CREATE_TENANT") == "true" {
-			tenant, err = repo.CreateTenantFromZitadel(claims.OrgID, claims.OrgDomain, claims.ResourceOwnerName)
+		if os.Getenv("OIDC_AUTO_CREATE_TENANT") == "true" {
+			tenant, err = repo.CreateTenantFromIDP(claims.OrgID, claims.OrgDomain, claims.ResourceOwnerName)
 			if err != nil {
 				return "", 0, fmt.Errorf("failed to create tenant: %w", err)
 			}
 			common.SysLog(fmt.Sprintf("Auto-created tenant: id=%s, org_id=%s, name=%s",
-				tenant.Id, tenant.ZitadelOrgID, tenant.Name))
+				tenant.Id, tenant.IDPOrgID, tenant.Name))
 
 			// Initialize default configs for new tenant
 			err = repo.InitializeDefaultTenantConfigs(tenant.Id)
@@ -669,7 +775,7 @@ func mapZitadelUserToLurus(claims *ZitadelClaims) (tenantID string, lurusUserID 
 				common.SysError(fmt.Sprintf("Failed to initialize tenant configs: %v", err))
 			}
 		} else {
-			return "", 0, fmt.Errorf("tenant not found for Zitadel Org ID: %s", claims.OrgID)
+			return "", 0, fmt.Errorf("tenant not found for OIDC Org ID: %s", claims.OrgID)
 		}
 	}
 
@@ -680,13 +786,13 @@ func mapZitadelUserToLurus(claims *ZitadelClaims) (tenantID string, lurusUserID 
 		return "", 0, fmt.Errorf("tenant is disabled or suspended: %s", tenantID)
 	}
 
-	// Step 2: Map user (Zitadel User ID → lurus User ID)
-	mapping, err := repo.GetUserMappingByZitadelID(claims.Subject, tenantID)
+	// Step 2: Map user (OIDC subject → lurus User ID)
+	mapping, err := repo.GetUserMappingByIDPSubject(claims.Subject, tenantID)
 	if err != nil {
 		// User mapping doesn't exist, auto-create if enabled
-		if os.Getenv("ZITADEL_AUTO_CREATE_USER") == "true" {
+		if os.Getenv("OIDC_AUTO_CREATE_USER") == "true" {
 			// Convert claims to model struct
-			userClaims := &repo.ZitadelUserClaims{
+			userClaims := &repo.OIDCUserClaims{
 				Sub:               claims.Subject,
 				Email:             claims.Email,
 				EmailVerified:     claims.EmailVerified,
@@ -697,22 +803,21 @@ func mapZitadelUserToLurus(claims *ZitadelClaims) (tenantID string, lurusUserID 
 			}
 
 			// Create user and mapping
-			user, _, err := repo.CreateUserFromZitadelClaims(userClaims, tenantID)
+			user, _, err := repo.CreateUserFromIDPClaims(userClaims, tenantID)
 			if err != nil {
 				return "", 0, fmt.Errorf("failed to create user: %w", err)
 			}
 
-			common.SysLog(fmt.Sprintf("Auto-created user: tenant=%s, lurus_user=%d, zitadel_user=%s, email=%s",
+			common.SysLog(fmt.Sprintf("Auto-created user: tenant=%s, lurus_user=%d, idp_subject=%s, email=%s",
 				tenantID, user.Id, claims.Subject, claims.Email))
 
 			return tenantID, user.Id, nil
-		} else {
-			return "", 0, fmt.Errorf("user mapping not found for Zitadel User ID: %s", claims.Subject)
 		}
+		return "", 0, fmt.Errorf("user mapping not found for OIDC subject: %s", claims.Subject)
 	}
 
-	// Sync user data from Zitadel (update email, display name, etc.)
-	err = repo.SyncUserDataFromZitadel(mapping.Id, claims.Email, claims.Name, claims.PreferredUsername)
+	// Sync user data from the IdP (update email, display name, etc.)
+	err = repo.SyncUserDataFromIDP(mapping.Id, claims.Email, claims.Name, claims.PreferredUsername)
 	if err != nil {
 		common.SysError(fmt.Sprintf("Failed to sync user data: %v", err))
 		// Non-fatal error, continue
@@ -721,11 +826,38 @@ func mapZitadelUserToLurus(claims *ZitadelClaims) (tenantID string, lurusUserID 
 	return tenantID, mapping.LurusUserID, nil
 }
 
-// extractRoles extracts role names from Zitadel roles claim
+// extractRoles extracts role names from the OIDC roles claim.
+// Accepts both shapes that IdPs commonly emit:
+//   - a map keyed by role name (project-roles style, e.g. project-roles-shaped tokens)
+//     → the map keys are the role names
+//   - a map whose values are role-name strings or []string (some IdPs surface a
+//     flat "roles" claim under the configured key) → those values are added too
+//
+// The actual claim key is configurable (oidcClaimKeys.Roles); this only
+// normalizes the decoded value into a flat, de-duplicated []string.
 func extractRoles(rolesMap map[string]interface{}) []string {
 	var roles []string
-	for role := range rolesMap {
-		roles = append(roles, role)
+	seen := map[string]bool{}
+	add := func(r string) {
+		if r != "" && !seen[r] {
+			seen[r] = true
+			roles = append(roles, r)
+		}
+	}
+	for key, val := range rolesMap {
+		// Shape 1: role name is the map key (project-roles style).
+		add(key)
+		// Shape 2: the value itself carries role name(s).
+		switch v := val.(type) {
+		case string:
+			add(v)
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					add(s)
+				}
+			}
+		}
 	}
 	return roles
 }

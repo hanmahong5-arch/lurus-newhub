@@ -111,12 +111,12 @@ func setupProvTestRouter(t *testing.T) *provTestCtx {
 
 	alpha := &repo.Tenant{
 		Id: "tenant-alpha", Name: "Alpha Org", Slug: "alpha",
-		Status: repo.TenantStatusEnabled, ZitadelOrgID: "org_alpha",
+		Status: repo.TenantStatusEnabled, IDPOrgID: "org_alpha",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	beta := &repo.Tenant{
 		Id: "tenant-beta", Name: "Beta Org", Slug: "beta",
-		Status: repo.TenantStatusEnabled, ZitadelOrgID: "org_beta",
+		Status: repo.TenantStatusEnabled, IDPOrgID: "org_beta",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	if err := db.Create(alpha).Error; err != nil {

@@ -19,7 +19,7 @@ import (
 )
 
 // ============================================================================
-// ZitadelAuth Integration Tests
+// OIDCAuth Integration Tests
 // Tests for the full authentication flow including JWT validation and user mapping
 // ============================================================================
 
@@ -96,7 +96,7 @@ func setupIntegrationTest(t *testing.T) *integrationTestContext {
 		Name:         "Integration Test Tenant",
 		Slug:         "integration-test",
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: "org_integration_test",
+		IDPOrgID: "org_integration_test",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -117,7 +117,7 @@ func setupIntegrationTest(t *testing.T) *integrationTestContext {
 	// Create user mapping
 	mapping := &repo.UserIdentityMapping{
 		TenantID:      tenant.Id,
-		ZitadelUserID: "zitadel_integration_user",
+		IDPSubject: "zitadel_integration_user",
 		LurusUserID:   user.Id,
 		Email:         user.Email,
 		IsActive:      true,
@@ -130,18 +130,18 @@ func setupIntegrationTest(t *testing.T) *integrationTestContext {
 	issuer := "https://zitadel.integration.test"
 	clientID := "integration-client-id"
 
-	os.Setenv("ZITADEL_ENABLED", "true")
-	os.Setenv("ZITADEL_ISSUER", issuer)
-	os.Setenv("ZITADEL_JWKS_URI", jwksServer.URL)
-	os.Setenv("ZITADEL_CLIENT_ID", clientID)
-	os.Setenv("ZITADEL_AUTO_CREATE_TENANT", "false")
-	os.Setenv("ZITADEL_AUTO_CREATE_USER", "false")
+	os.Setenv("OIDC_ENABLED", "true")
+	os.Setenv("OIDC_ISSUER", issuer)
+	os.Setenv("OIDC_JWKS_URI", jwksServer.URL)
+	os.Setenv("OIDC_CLIENT_ID", clientID)
+	os.Setenv("OIDC_AUTO_CREATE_TENANT", "false")
+	os.Setenv("OIDC_AUTO_CREATE_USER", "false")
 
 	// Initialize Zitadel auth
-	zitadelEnabled = true
-	zitadelIssuers = []string{issuer}
-	zitadelJwksURI = jwksServer.URL
-	zitadelClientID = clientID
+	oidcEnabled = true
+	oidcIssuers = []string{issuer}
+	oidcJwksURI = jwksServer.URL
+	oidcClientID = clientID
 
 	// Create JWKS manager
 	jwksManager = &JWKSManager{
@@ -153,7 +153,7 @@ func setupIntegrationTest(t *testing.T) *integrationTestContext {
 
 	// Setup router
 	router := gin.New()
-	router.GET("/protected", ZitadelAuth(), func(c *gin.Context) {
+	router.GET("/protected", OIDCAuth(), func(c *gin.Context) {
 		tenantCtx, _ := GetTenantContext(c)
 		c.JSON(http.StatusOK, gin.H{
 			"success":   true,
@@ -173,10 +173,10 @@ func setupIntegrationTest(t *testing.T) *integrationTestContext {
 		if sqlDB != nil {
 			sqlDB.Close()
 		}
-		os.Unsetenv("ZITADEL_ENABLED")
-		os.Unsetenv("ZITADEL_ISSUER")
-		os.Unsetenv("ZITADEL_JWKS_URI")
-		os.Unsetenv("ZITADEL_CLIENT_ID")
+		os.Unsetenv("OIDC_ENABLED")
+		os.Unsetenv("OIDC_ISSUER")
+		os.Unsetenv("OIDC_JWKS_URI")
+		os.Unsetenv("OIDC_CLIENT_ID")
 	}
 
 	return &integrationTestContext{
@@ -195,7 +195,7 @@ func setupIntegrationTest(t *testing.T) *integrationTestContext {
 }
 
 // createIntegrationJWT creates a signed JWT for testing
-func (ctx *integrationTestContext) createJWT(t *testing.T, claims ZitadelClaims) string {
+func (ctx *integrationTestContext) createJWT(t *testing.T, claims OIDCClaims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = "test-integration-kid"
@@ -207,12 +207,12 @@ func (ctx *integrationTestContext) createJWT(t *testing.T, claims ZitadelClaims)
 	return signed
 }
 
-func TestZitadelAuth_ValidToken_UserMapping(t *testing.T) {
+func TestOIDCAuth_ValidToken_UserMapping(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
 	// Create valid claims
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    ctx.Issuer,
 			Subject:   "zitadel_integration_user",
@@ -253,7 +253,7 @@ func TestZitadelAuth_ValidToken_UserMapping(t *testing.T) {
 	}
 }
 
-func TestZitadelAuth_DisabledTenant(t *testing.T) {
+func TestOIDCAuth_DisabledTenant(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
@@ -262,7 +262,7 @@ func TestZitadelAuth_DisabledTenant(t *testing.T) {
 	ctx.DB.Save(ctx.Tenant)
 
 	// Create valid claims
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    ctx.Issuer,
 			Subject:   "zitadel_integration_user",
@@ -287,7 +287,7 @@ func TestZitadelAuth_DisabledTenant(t *testing.T) {
 	}
 }
 
-func TestZitadelAuth_MissingHeader(t *testing.T) {
+func TestOIDCAuth_MissingHeader(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
@@ -302,12 +302,12 @@ func TestZitadelAuth_MissingHeader(t *testing.T) {
 	}
 }
 
-func TestZitadelAuth_ExpiredToken(t *testing.T) {
+func TestOIDCAuth_ExpiredToken(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
 	// Create expired claims
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    ctx.Issuer,
 			Subject:   "zitadel_integration_user",
@@ -331,7 +331,7 @@ func TestZitadelAuth_ExpiredToken(t *testing.T) {
 	}
 }
 
-func TestZitadelAuth_InvalidSignature(t *testing.T) {
+func TestOIDCAuth_InvalidSignature(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
@@ -339,7 +339,7 @@ func TestZitadelAuth_InvalidSignature(t *testing.T) {
 	differentKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 
 	// Create claims
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    ctx.Issuer,
 			Subject:   "zitadel_integration_user",
@@ -366,12 +366,12 @@ func TestZitadelAuth_InvalidSignature(t *testing.T) {
 	}
 }
 
-func TestZitadelAuth_WrongIssuer(t *testing.T) {
+func TestOIDCAuth_WrongIssuer(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
 	// Create claims with wrong issuer
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "https://wrong-issuer.example.com",
 			Subject:   "zitadel_integration_user",
@@ -395,7 +395,7 @@ func TestZitadelAuth_WrongIssuer(t *testing.T) {
 	}
 }
 
-func TestZitadelAuth_InvalidBearerFormat(t *testing.T) {
+func TestOIDCAuth_InvalidBearerFormat(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
@@ -424,7 +424,7 @@ func TestZitadelAuth_InvalidBearerFormat(t *testing.T) {
 	}
 }
 
-func TestZitadelAuth_MalformedToken(t *testing.T) {
+func TestOIDCAuth_MalformedToken(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
@@ -453,12 +453,12 @@ func TestZitadelAuth_MalformedToken(t *testing.T) {
 	}
 }
 
-func TestZitadelAuth_UserMappingNotFound(t *testing.T) {
+func TestOIDCAuth_UserMappingNotFound(t *testing.T) {
 	ctx := setupIntegrationTest(t)
 	defer ctx.Cleanup()
 
 	// Create claims for a user that doesn't have a mapping
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    ctx.Issuer,
 			Subject:   "unknown_zitadel_user", // No mapping for this user
@@ -488,12 +488,12 @@ func TestRequireRole_Success(t *testing.T) {
 	defer ctx.Cleanup()
 
 	// Add a protected route that requires admin role
-	ctx.Router.GET("/admin-only", ZitadelAuth(), RequireRole("admin"), func(c *gin.Context) {
+	ctx.Router.GET("/admin-only", OIDCAuth(), RequireRole("admin"), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 
 	// Create claims with admin role
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    ctx.Issuer,
 			Subject:   "zitadel_integration_user",
@@ -525,12 +525,12 @@ func TestRequireRole_Forbidden(t *testing.T) {
 	defer ctx.Cleanup()
 
 	// Add a protected route that requires admin role
-	ctx.Router.GET("/admin-only-forbidden", ZitadelAuth(), RequireRole("admin"), func(c *gin.Context) {
+	ctx.Router.GET("/admin-only-forbidden", OIDCAuth(), RequireRole("admin"), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 
 	// Create claims without admin role
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    ctx.Issuer,
 			Subject:   "zitadel_integration_user",
@@ -562,12 +562,12 @@ func TestRequireAnyRole_Success(t *testing.T) {
 	defer ctx.Cleanup()
 
 	// Add a protected route that requires admin or editor role
-	ctx.Router.GET("/any-role", ZitadelAuth(), RequireAnyRole("admin", "editor"), func(c *gin.Context) {
+	ctx.Router.GET("/any-role", OIDCAuth(), RequireAnyRole("admin", "editor"), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 
 	// Create claims with editor role (one of the required roles)
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    ctx.Issuer,
 			Subject:   "zitadel_integration_user",

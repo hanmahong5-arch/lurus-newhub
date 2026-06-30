@@ -14,7 +14,7 @@ func TestTenant_Create_Success(t *testing.T) {
 
 	tenant := &Tenant{
 		Id:           "t-create-001",
-		ZitadelOrgID: "zorg-create-001",
+		IDPOrgID: "zorg-create-001",
 		Slug:         "create-test",
 		Name:         "Create Test Tenant",
 		Status:       TenantStatusEnabled,
@@ -54,12 +54,12 @@ func TestTenant_Create_DuplicateSlug(t *testing.T) {
 	SetupTestDB(t)
 
 	t1 := &Tenant{
-		Id: "t-dup-1", ZitadelOrgID: "zorg-dup-1", Slug: "dup-slug",
+		Id: "t-dup-1", IDPOrgID: "zorg-dup-1", Slug: "dup-slug",
 		Name: "First", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	t2 := &Tenant{
-		Id: "t-dup-2", ZitadelOrgID: "zorg-dup-2", Slug: "dup-slug",
+		Id: "t-dup-2", IDPOrgID: "zorg-dup-2", Slug: "dup-slug",
 		Name: "Second", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -77,7 +77,7 @@ func TestTenant_GetBySlug(t *testing.T) {
 	SetupTestDB(t)
 
 	tenant := &Tenant{
-		Id: "t-slug-001", ZitadelOrgID: "zorg-slug-001", Slug: "slug-lookup",
+		Id: "t-slug-001", IDPOrgID: "zorg-slug-001", Slug: "slug-lookup",
 		Name: "Slug Lookup", Status: TenantStatusEnabled, PlanType: TenantPlanPro,
 		MaxUsers: 200, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -110,7 +110,7 @@ func TestTenant_GetByZitadelOrgId(t *testing.T) {
 	SetupTestDB(t)
 
 	tenant := &Tenant{
-		Id: "t-zorg-001", ZitadelOrgID: "zitadel-org-abc", Slug: "zorg-lookup",
+		Id: "t-zorg-001", IDPOrgID: "zitadel-org-abc", Slug: "zorg-lookup",
 		Name: "Zitadel Org Lookup", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -118,9 +118,9 @@ func TestTenant_GetByZitadelOrgId(t *testing.T) {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
 
-	fetched, err := GetTenantByZitadelOrgID("zitadel-org-abc")
+	fetched, err := GetTenantByIDPOrgID("zitadel-org-abc")
 	if err != nil {
-		t.Fatalf("GetTenantByZitadelOrgID() returned error: %v", err)
+		t.Fatalf("GetTenantByIDPOrgID() returned error: %v", err)
 	}
 	if fetched.Id != "t-zorg-001" {
 		t.Errorf("Id mismatch: got %q", fetched.Id)
@@ -130,7 +130,7 @@ func TestTenant_GetByZitadelOrgId(t *testing.T) {
 func TestTenant_GetByZitadelOrgId_NotFound(t *testing.T) {
 	SetupTestDB(t)
 
-	_, err := GetTenantByZitadelOrgID("nonexistent-org")
+	_, err := GetTenantByIDPOrgID("nonexistent-org")
 	if err == nil {
 		t.Fatal("expected error for nonexistent org ID")
 	}
@@ -139,12 +139,12 @@ func TestTenant_GetByZitadelOrgId_NotFound(t *testing.T) {
 func TestTenant_CreateFromZitadel(t *testing.T) {
 	SetupTestDB(t)
 
-	tenant, err := CreateTenantFromZitadel("zitadel-org-new", "neworg.example.com", "New Org")
+	tenant, err := CreateTenantFromIDP("zitadel-org-new", "neworg.example.com", "New Org")
 	if err != nil {
-		t.Fatalf("CreateTenantFromZitadel() returned error: %v", err)
+		t.Fatalf("CreateTenantFromIDP() returned error: %v", err)
 	}
-	if tenant.ZitadelOrgID != "zitadel-org-new" {
-		t.Errorf("ZitadelOrgID mismatch: got %q", tenant.ZitadelOrgID)
+	if tenant.IDPOrgID != "zitadel-org-new" {
+		t.Errorf("ZitadelOrgID mismatch: got %q", tenant.IDPOrgID)
 	}
 	if tenant.Slug != "neworg.example.com" {
 		t.Errorf("Slug mismatch: got %q", tenant.Slug)
@@ -163,14 +163,14 @@ func TestTenant_CreateFromZitadel(t *testing.T) {
 func TestTenant_CreateFromZitadel_Idempotent(t *testing.T) {
 	SetupTestDB(t)
 
-	t1, err := CreateTenantFromZitadel("zitadel-org-idem", "idem.example.com", "Idem Org")
+	t1, err := CreateTenantFromIDP("zitadel-org-idem", "idem.example.com", "Idem Org")
 	if err != nil {
-		t.Fatalf("first CreateTenantFromZitadel() failed: %v", err)
+		t.Fatalf("first CreateTenantFromIDP() failed: %v", err)
 	}
 
-	t2, err := CreateTenantFromZitadel("zitadel-org-idem", "idem.example.com", "Idem Org")
+	t2, err := CreateTenantFromIDP("zitadel-org-idem", "idem.example.com", "Idem Org")
 	if err != nil {
-		t.Fatalf("second CreateTenantFromZitadel() failed: %v", err)
+		t.Fatalf("second CreateTenantFromIDP() failed: %v", err)
 	}
 
 	if t1.Id != t2.Id {
@@ -182,7 +182,7 @@ func TestTenant_Disable(t *testing.T) {
 	SetupTestDB(t)
 
 	tenant := &Tenant{
-		Id: "t-disable-001", ZitadelOrgID: "zorg-dis-001", Slug: "disable-test",
+		Id: "t-disable-001", IDPOrgID: "zorg-dis-001", Slug: "disable-test",
 		Name: "Disable Test", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -214,7 +214,7 @@ func TestTenant_Enable(t *testing.T) {
 	SetupTestDB(t)
 
 	tenant := &Tenant{
-		Id: "t-enable-001", ZitadelOrgID: "zorg-en-001", Slug: "enable-test",
+		Id: "t-enable-001", IDPOrgID: "zorg-en-001", Slug: "enable-test",
 		Name: "Enable Test", Status: TenantStatusDisabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -243,7 +243,7 @@ func TestTenant_Delete(t *testing.T) {
 	SetupTestDB(t)
 
 	tenant := &Tenant{
-		Id: "t-del-001", ZitadelOrgID: "zorg-del-001", Slug: "delete-test",
+		Id: "t-del-001", IDPOrgID: "zorg-del-001", Slug: "delete-test",
 		Name: "Delete Test", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -277,7 +277,7 @@ func TestTenant_CanAddUser_WithinLimit(t *testing.T) {
 	SetupTestDB(t)
 
 	tenant := &Tenant{
-		Id: "t-canadd-001", ZitadelOrgID: "zorg-canadd-001", Slug: "canadd-test",
+		Id: "t-canadd-001", IDPOrgID: "zorg-canadd-001", Slug: "canadd-test",
 		Name: "CanAdd Test", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		MaxUsers: 10, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -304,7 +304,7 @@ func TestTenantConfig_SetAndGet(t *testing.T) {
 
 	tenantID := "t-config-001"
 	tenant := &Tenant{
-		Id: tenantID, ZitadelOrgID: "zorg-config-001", Slug: "config-test",
+		Id: tenantID, IDPOrgID: "zorg-config-001", Slug: "config-test",
 		Name: "Config Test", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -336,7 +336,7 @@ func TestTenantConfig_SetInt(t *testing.T) {
 
 	tenantID := "t-config-int"
 	tenant := &Tenant{
-		Id: tenantID, ZitadelOrgID: "zorg-config-int", Slug: "config-int-test",
+		Id: tenantID, IDPOrgID: "zorg-config-int", Slug: "config-int-test",
 		Name: "Config Int", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -358,7 +358,7 @@ func TestTenantConfig_SetBool(t *testing.T) {
 
 	tenantID := "t-config-bool"
 	tenant := &Tenant{
-		Id: tenantID, ZitadelOrgID: "zorg-config-bool", Slug: "config-bool-test",
+		Id: tenantID, IDPOrgID: "zorg-config-bool", Slug: "config-bool-test",
 		Name: "Config Bool", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -380,7 +380,7 @@ func TestTenantConfig_Update(t *testing.T) {
 
 	tenantID := "t-config-upd"
 	tenant := &Tenant{
-		Id: tenantID, ZitadelOrgID: "zorg-config-upd", Slug: "config-upd-test",
+		Id: tenantID, IDPOrgID: "zorg-config-upd", Slug: "config-upd-test",
 		Name: "Config Update", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -406,7 +406,7 @@ func TestTenantConfig_InitializeDefaults(t *testing.T) {
 
 	tenantID := "t-config-defaults"
 	tenant := &Tenant{
-		Id: tenantID, ZitadelOrgID: "zorg-config-def", Slug: "config-defaults",
+		Id: tenantID, IDPOrgID: "zorg-config-def", Slug: "config-defaults",
 		Name: "Defaults", Status: TenantStatusEnabled, PlanType: TenantPlanFree,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}

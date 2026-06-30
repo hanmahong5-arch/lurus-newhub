@@ -79,7 +79,7 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 	}
 
 	if err := db.Create(&entity.UserIdentityMapping{
-		LurusUserID: user.Id, ZitadelUserID: "zit-123", TenantID: "default",
+		LurusUserID: user.Id, IDPSubject: "zit-123", TenantID: "default",
 		Email: "victim@example.com", DisplayName: "Victim User",
 	}).Error; err != nil {
 		t.Fatalf("seed mapping: %v", err)

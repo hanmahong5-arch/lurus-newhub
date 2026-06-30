@@ -33,8 +33,8 @@ stringData:
     (从 Alipay 开发者控制台获取)
     -----END RSA PRIVATE KEY-----
 
-  # Zitadel Client ID（参考：重要信息.md → Zitadel 身份认证）
-  ZITADEL_CLIENT_ID: "358371335178617311@lurus-api"
+  # OIDC Client ID（参考：重要信息.md → 身份提供方）
+  OIDC_CLIENT_ID: "<deploy-time-client-id>"
 ```
 
 ### 3. 生成新的 Session Secret
@@ -133,7 +133,7 @@ SQL_DSN: "postgres://lurus:LurusOps2026@lurus-pg-rw.database.svc:5432/lurusapi?s
 - `SESSION_SECRET` - Session 加密密钥
 - `ALIPAY_PRIVATE_KEY` - 支付宝私钥
 - `ALIPAY_PUBLIC_KEY` - 支付宝公钥
-- `ZITADEL_CLIENT_ID` - Zitadel OAuth 客户端 ID
+- `OIDC_CLIENT_ID` - OIDC OAuth 客户端 ID（部署期注入）
 
 ### 从 ConfigMap/Environment 注入（公开配置）
 

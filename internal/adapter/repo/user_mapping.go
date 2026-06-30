@@ -11,12 +11,14 @@ import (
 
 // Type aliases pointing to entity package
 type UserIdentityMapping = entity.UserIdentityMapping
-type ZitadelUserClaims = entity.ZitadelUserClaims
+type OIDCUserClaims = entity.OIDCUserClaims
 
-// GetUserMappingByZitadelID retrieves user mapping by Zitadel User ID and Tenant ID
-func GetUserMappingByZitadelID(zitadelUserID string, tenantID string) (*UserIdentityMapping, error) {
+// GetUserMappingByIDPSubject retrieves user mapping by upstream OIDC subject and Tenant ID.
+// NOTE(idp-migration): the SQL/physical column stays zitadel_user_id until the
+// column-rename migration is reserved & applied (owner-gated).
+func GetUserMappingByIDPSubject(idpSubject string, tenantID string) (*UserIdentityMapping, error) {
 	var mapping UserIdentityMapping
-	err := DB.Where("zitadel_user_id = ? AND tenant_id = ? AND is_active = ?", zitadelUserID, tenantID, true).
+	err := DB.Where("zitadel_user_id = ? AND tenant_id = ? AND is_active = ?", idpSubject, tenantID, true).
 		First(&mapping).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -42,9 +44,9 @@ func GetUserMappingByLurusUserID(lurusUserID int, tenantID string) (*UserIdentit
 }
 
 // CreateUserMapping creates a new user identity mapping
-func CreateUserMapping(lurusUserID int, zitadelUserID string, tenantID string, email string, displayName string, preferredUsername string) (*UserIdentityMapping, error) {
+func CreateUserMapping(lurusUserID int, idpSubject string, tenantID string, email string, displayName string, preferredUsername string) (*UserIdentityMapping, error) {
 	// Check if mapping already exists
-	existingMapping, _ := GetUserMappingByZitadelID(zitadelUserID, tenantID)
+	existingMapping, _ := GetUserMappingByIDPSubject(idpSubject, tenantID)
 	if existingMapping != nil {
 		// Update last sync time
 		now := time.Now()
@@ -60,7 +62,7 @@ func CreateUserMapping(lurusUserID int, zitadelUserID string, tenantID string, e
 	now := time.Now()
 	mapping := &UserIdentityMapping{
 		LurusUserID:       lurusUserID,
-		ZitadelUserID:     zitadelUserID,
+		IDPSubject:        idpSubject,
 		TenantID:          tenantID,
 		Email:             email,
 		DisplayName:       displayName,
@@ -119,17 +121,17 @@ func ListUserMappingsByTenant(tenantID string, offset int, limit int) ([]*UserId
 	return mappings, total, nil
 }
 
-// ListUserMappingsByZitadelUser retrieves all mappings for a Zitadel user across tenants
-func ListUserMappingsByZitadelUser(zitadelUserID string) ([]*UserIdentityMapping, error) {
+// ListUserMappingsByIDPSubject retrieves all mappings for an OIDC subject across tenants.
+func ListUserMappingsByIDPSubject(idpSubject string) ([]*UserIdentityMapping, error) {
 	var mappings []*UserIdentityMapping
-	err := DB.Where("zitadel_user_id = ? AND is_active = ?", zitadelUserID, true).
+	err := DB.Where("zitadel_user_id = ? AND is_active = ?", idpSubject, true).
 		Order("created_at DESC").
 		Find(&mappings).Error
 	return mappings, err
 }
 
-// SyncUserDataFromZitadel syncs user data from Zitadel claims to mapping
-func SyncUserDataFromZitadel(mappingID int, email string, displayName string, preferredUsername string) error {
+// SyncUserDataFromIDP syncs user data from OIDC claims to mapping.
+func SyncUserDataFromIDP(mappingID int, email string, displayName string, preferredUsername string) error {
 	now := time.Now()
 	return UpdateUserMapping(mappingID, map[string]interface{}{
 		"email":              email,
@@ -139,11 +141,11 @@ func SyncUserDataFromZitadel(mappingID int, email string, displayName string, pr
 	})
 }
 
-// GetUserByZitadelID retrieves lurus user by Zitadel user ID and tenant
-// This is a helper function that combines mapping lookup and user retrieval
-func GetUserByZitadelID(zitadelUserID string, tenantID string) (*User, *UserIdentityMapping, error) {
+// GetUserByIDPSubject retrieves lurus user by OIDC subject and tenant.
+// This is a helper function that combines mapping lookup and user retrieval.
+func GetUserByIDPSubject(idpSubject string, tenantID string) (*User, *UserIdentityMapping, error) {
 	// Get mapping
-	mapping, err := GetUserMappingByZitadelID(zitadelUserID, tenantID)
+	mapping, err := GetUserMappingByIDPSubject(idpSubject, tenantID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -157,16 +159,16 @@ func GetUserByZitadelID(zitadelUserID string, tenantID string) (*User, *UserIden
 	return user, mapping, nil
 }
 
-// CreateUserFromZitadelClaims creates a new lurus user from Zitadel JWT claims
+// CreateUserFromIDPClaims creates a new lurus user from upstream OIDC JWT claims
 // and establishes the identity mapping.
 //
 // Lookup order:
-//  1. Exact mapping match (zitadel_user_id + tenant_id)
-//  2. Email fallback — matches pre-Zitadel users across all tenants, auto-creates mapping
-//  3. Auto-create new user (if ZITADEL_AUTO_CREATE_USER=true)
-func CreateUserFromZitadelClaims(claims *ZitadelUserClaims, tenantID string) (*User, *UserIdentityMapping, error) {
+//  1. Exact mapping match (idp subject column + tenant_id)
+//  2. Email fallback — matches pre-OIDC users across all tenants, auto-creates mapping
+//  3. Auto-create new user (if OIDC_AUTO_CREATE_USER=true)
+func CreateUserFromIDPClaims(claims *OIDCUserClaims, tenantID string) (*User, *UserIdentityMapping, error) {
 	// Step 1: Check if mapping already exists
-	existingMapping, _ := GetUserMappingByZitadelID(claims.Sub, tenantID)
+	existingMapping, _ := GetUserMappingByIDPSubject(claims.Sub, tenantID)
 	if existingMapping != nil {
 		user, err := GetUserById(existingMapping.LurusUserID, false)
 		if err != nil {
@@ -175,7 +177,7 @@ func CreateUserFromZitadelClaims(claims *ZitadelUserClaims, tenantID string) (*U
 		return user, existingMapping, nil
 	}
 
-	// Step 2: Email fallback — link pre-existing users who haven't migrated to Zitadel yet.
+	// Step 2: Email fallback — link pre-existing users who haven't migrated to OIDC yet.
 	// Search across all tenants (legacy users may have tenant_id="default").
 	if claims.Email != "" {
 		var existingUser User
@@ -274,4 +276,3 @@ func ensureUniqueUsername(baseUsername string, tenantID string) string {
 		username = baseUsername + fmt.Sprintf("_%d", suffix)
 	}
 }
-

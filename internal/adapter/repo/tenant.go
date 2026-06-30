@@ -59,24 +59,27 @@ func GetTenantBySlug(slug string) (*Tenant, error) {
 	return &tenant, nil
 }
 
-// GetTenantByZitadelOrgID retrieves a tenant by Zitadel Organization ID
-func GetTenantByZitadelOrgID(orgID string) (*Tenant, error) {
+// GetTenantByIDPOrgID retrieves a tenant by upstream OIDC Organization ID.
+// NOTE(idp-migration): the SQL/physical column stays zitadel_org_id until the
+// column-rename migration is reserved & applied (owner-gated). Only the Go
+// function name is vendor-neutralized.
+func GetTenantByIDPOrgID(orgID string) (*Tenant, error) {
 	var tenant Tenant
 	err := DB.Where("zitadel_org_id = ?", orgID).First(&tenant).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("tenant not found for Zitadel Org ID")
+			return nil, errors.New("tenant not found for OIDC Org ID")
 		}
 		return nil, err
 	}
 	return &tenant, nil
 }
 
-// CreateTenantFromZitadel creates a new tenant from Zitadel Organization data
-// Auto-called when a user from a new Zitadel Organization logs in
-func CreateTenantFromZitadel(orgID string, orgDomain string, orgName string) (*Tenant, error) {
+// CreateTenantFromIDP creates a new tenant from upstream OIDC Organization data.
+// Auto-called when a user from a new OIDC Organization logs in.
+func CreateTenantFromIDP(orgID string, orgDomain string, orgName string) (*Tenant, error) {
 	// Check if tenant already exists
-	existingTenant, _ := GetTenantByZitadelOrgID(orgID)
+	existingTenant, _ := GetTenantByIDPOrgID(orgID)
 	if existingTenant != nil {
 		return existingTenant, nil
 	}
@@ -85,16 +88,16 @@ func CreateTenantFromZitadel(orgID string, orgDomain string, orgName string) (*T
 	tenantID := GenerateID() // You can implement this function or use orgID directly
 
 	tenant := &Tenant{
-		Id:           tenantID,
-		ZitadelOrgID: orgID,
-		Slug:         orgDomain, // Use Zitadel org domain as slug
-		Name:         orgName,
-		Status:       TenantStatusEnabled,
-		PlanType:     TenantPlanFree, // Default to free plan
-		MaxUsers:     100,
-		MaxQuota:     1000000, // 1M tokens
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		Id:        tenantID,
+		IDPOrgID:  orgID,
+		Slug:      orgDomain, // Use OIDC org domain as slug
+		Name:      orgName,
+		Status:    TenantStatusEnabled,
+		PlanType:  TenantPlanFree, // Default to free plan
+		MaxUsers:  100,
+		MaxQuota:  1000000, // 1M tokens
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 
 	err := DB.Create(tenant).Error
@@ -264,7 +267,6 @@ func GetTenantQuotaStats(tenantID string) (usedQuota int64, remainingQuota int64
 
 	return result.UsedQuota, result.RemainQuota, err
 }
-
 
 // GetTenantMonthlyQuotaUsed returns the sum of quota consumed by a tenant within
 // the given billing period (format "YYYY-MM"). It queries the log table so no

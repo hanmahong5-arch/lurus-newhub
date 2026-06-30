@@ -81,7 +81,7 @@ func TestZitadelClient_InvalidJSON(t *testing.T) {
 }
 
 func TestZitadelClient_Timeout(t *testing.T) {
-	// Server delays response; after bug fix, zitadelHTTPClient has a timeout
+	// Server delays response; after bug fix, oidcHTTPClient has a timeout
 	done := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -96,11 +96,11 @@ func TestZitadelClient_Timeout(t *testing.T) {
 	}()
 
 	// Save and restore the package-level client
-	origClient := zitadelHTTPClient
-	defer func() { zitadelHTTPClient = origClient }()
+	origClient := oidcHTTPClient
+	defer func() { oidcHTTPClient = origClient }()
 
 	// Use a client with a very short timeout for testing
-	zitadelHTTPClient = &http.Client{Timeout: 100 * time.Millisecond}
+	oidcHTTPClient = &http.Client{Timeout: 100 * time.Millisecond}
 
 	m := &JWKSManager{
 		jwksURI:    srv.URL,

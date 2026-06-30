@@ -58,7 +58,7 @@ func createTestJWKSServer(t *testing.T, jwks JWKSet) *httptest.Server {
 }
 
 // createSignedJWT creates a signed JWT string using the given private key, kid, and claims.
-func createSignedJWT(t *testing.T, privateKey *rsa.PrivateKey, kid string, claims ZitadelClaims) string {
+func createSignedJWT(t *testing.T, privateKey *rsa.PrivateKey, kid string, claims OIDCClaims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = kid
@@ -327,11 +327,11 @@ func TestJWKToRSAPublicKey_InvalidExponent(t *testing.T) {
 }
 
 // ============================================================================
-// ZitadelClaims struct tests
+// OIDCClaims struct tests
 // ============================================================================
 
 func TestClaims_ParseOrgId(t *testing.T) {
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		OrgID: "org-12345",
 	}
 	if claims.OrgID != "org-12345" {
@@ -344,7 +344,7 @@ func TestClaims_ParseRoles(t *testing.T) {
 		"admin":  map[string]interface{}{"org_id": "org-1"},
 		"editor": map[string]interface{}{"org_id": "org-1"},
 	}
-	claims := ZitadelClaims{Roles: roles}
+	claims := OIDCClaims{Roles: roles}
 
 	if len(claims.Roles) != 2 {
 		t.Errorf("expected 2 roles, got %d", len(claims.Roles))
@@ -355,7 +355,7 @@ func TestClaims_ParseRoles(t *testing.T) {
 }
 
 func TestClaims_ParseEmail(t *testing.T) {
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		Email:         "user@example.com",
 		EmailVerified: true,
 	}
@@ -368,7 +368,7 @@ func TestClaims_ParseEmail(t *testing.T) {
 }
 
 func TestClaims_JSONRoundTrip(t *testing.T) {
-	original := ZitadelClaims{
+	original := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:  "https://zitadel.example.com",
 			Subject: "user-abc-123",
@@ -390,7 +390,7 @@ func TestClaims_JSONRoundTrip(t *testing.T) {
 		t.Fatalf("json.Marshal failed: %v", err)
 	}
 
-	var decoded ZitadelClaims
+	var decoded OIDCClaims
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("json.Unmarshal failed: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestJWT_ValidToken(t *testing.T) {
 	priv, pub := generateTestRSAKeyPair(t)
 	kid := "valid-kid"
 
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "https://zitadel.example.com",
 			Subject:   "user-001",
@@ -431,7 +431,7 @@ func TestJWT_ValidToken(t *testing.T) {
 	tokenStr := createSignedJWT(t, priv, kid, claims)
 
 	// Parse with the matching public key
-	parsed, err := jwt.ParseWithClaims(tokenStr, &ZitadelClaims{}, func(token *jwt.Token) (interface{}, error) {
+	parsed, err := jwt.ParseWithClaims(tokenStr, &OIDCClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return pub, nil
 	})
 	if err != nil {
@@ -441,9 +441,9 @@ func TestJWT_ValidToken(t *testing.T) {
 		t.Fatal("expected token to be valid")
 	}
 
-	parsedClaims, ok := parsed.Claims.(*ZitadelClaims)
+	parsedClaims, ok := parsed.Claims.(*OIDCClaims)
 	if !ok {
-		t.Fatal("failed to cast claims to ZitadelClaims")
+		t.Fatal("failed to cast claims to OIDCClaims")
 	}
 	if parsedClaims.Email != "valid@example.com" {
 		t.Errorf("email mismatch: got %q", parsedClaims.Email)
@@ -459,7 +459,7 @@ func TestJWT_ValidToken(t *testing.T) {
 func TestJWT_ExpiredToken(t *testing.T) {
 	priv, pub := generateTestRSAKeyPair(t)
 
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "https://zitadel.example.com",
 			Subject:   "user-expired",
@@ -471,7 +471,7 @@ func TestJWT_ExpiredToken(t *testing.T) {
 
 	tokenStr := createSignedJWT(t, priv, "expired-kid", claims)
 
-	_, err := jwt.ParseWithClaims(tokenStr, &ZitadelClaims{}, func(token *jwt.Token) (interface{}, error) {
+	_, err := jwt.ParseWithClaims(tokenStr, &OIDCClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return pub, nil
 	})
 	if err == nil {
@@ -483,7 +483,7 @@ func TestJWT_InvalidSignature(t *testing.T) {
 	priv1, _ := generateTestRSAKeyPair(t)
 	_, pub2 := generateTestRSAKeyPair(t) // different key pair
 
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "https://zitadel.example.com",
 			Subject:   "user-badsig",
@@ -496,7 +496,7 @@ func TestJWT_InvalidSignature(t *testing.T) {
 	// Sign with priv1, validate with pub2
 	tokenStr := createSignedJWT(t, priv1, "sig-kid", claims)
 
-	_, err := jwt.ParseWithClaims(tokenStr, &ZitadelClaims{}, func(token *jwt.Token) (interface{}, error) {
+	_, err := jwt.ParseWithClaims(tokenStr, &OIDCClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return pub2, nil
 	})
 	if err == nil {
@@ -507,7 +507,7 @@ func TestJWT_InvalidSignature(t *testing.T) {
 func TestJWT_WrongIssuer(t *testing.T) {
 	priv, pub := generateTestRSAKeyPair(t)
 
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "https://wrong-issuer.example.com",
 			Subject:   "user-wrong-iss",
@@ -521,7 +521,7 @@ func TestJWT_WrongIssuer(t *testing.T) {
 
 	// Parse with issuer validation
 	expectedIssuer := "https://zitadel.example.com"
-	_, err := jwt.ParseWithClaims(tokenStr, &ZitadelClaims{}, func(token *jwt.Token) (interface{}, error) {
+	_, err := jwt.ParseWithClaims(tokenStr, &OIDCClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return pub, nil
 	}, jwt.WithIssuer(expectedIssuer))
 	if err == nil {
@@ -532,7 +532,7 @@ func TestJWT_WrongIssuer(t *testing.T) {
 func TestJWT_NotYetValid(t *testing.T) {
 	priv, pub := generateTestRSAKeyPair(t)
 
-	claims := ZitadelClaims{
+	claims := OIDCClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "https://zitadel.example.com",
 			Subject:   "user-future",
@@ -545,7 +545,7 @@ func TestJWT_NotYetValid(t *testing.T) {
 
 	tokenStr := createSignedJWT(t, priv, "nbf-kid", claims)
 
-	_, err := jwt.ParseWithClaims(tokenStr, &ZitadelClaims{}, func(token *jwt.Token) (interface{}, error) {
+	_, err := jwt.ParseWithClaims(tokenStr, &OIDCClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return pub, nil
 	})
 	if err == nil {
@@ -556,14 +556,14 @@ func TestJWT_NotYetValid(t *testing.T) {
 // ============================================================================
 // Multi-issuer acceptance tests
 //
-// These tests exercise the issuer-set logic directly (parseZitadelIssuers +
+// These tests exercise the issuer-set logic directly (parseOIDCIssuers +
 // issuerInSet) without spinning up a full Gin stack or a DB, so they stay
 // in the -short tier.
 // ============================================================================
 
-// parseZitadelIssuers mirrors the production parsing logic so that the test
-// does not reach into package-level state or call InitZitadelAuth.
-func parseZitadelIssuers(raw string) []string {
+// parseOIDCIssuers mirrors the production parsing logic so that the test
+// does not reach into package-level state or call InitOIDCAuth.
+func parseOIDCIssuers(raw string) []string {
 	var result []string
 	for _, part := range strings.Split(raw, ",") {
 		if v := strings.TrimSpace(part); v != "" {
@@ -583,7 +583,7 @@ func issuerInSet(iss string, accepted []string) bool {
 	return false
 }
 
-func TestZitadelIssuer_MultiIssuer(t *testing.T) {
+func TestOIDCIssuer_MultiIssuer(t *testing.T) {
 	const (
 		oldIssuer = "https://auth.lurus.cn"
 		newIssuer = "https://identity.lurus.cn"
@@ -592,7 +592,7 @@ func TestZitadelIssuer_MultiIssuer(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		envValue   string // raw ZITADEL_ISSUER env string
+		envValue   string // raw OIDC_ISSUER env string
 		tokenIssuer string
 		wantOK     bool
 	}{
@@ -642,7 +642,7 @@ func TestZitadelIssuer_MultiIssuer(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			issuers := parseZitadelIssuers(tc.envValue)
+			issuers := parseOIDCIssuers(tc.envValue)
 			got := issuerInSet(tc.tokenIssuer, issuers)
 			if got != tc.wantOK {
 				t.Errorf("issuerInSet(%q, parsed(%q)) = %v, want %v",
@@ -652,16 +652,16 @@ func TestZitadelIssuer_MultiIssuer(t *testing.T) {
 	}
 }
 
-func TestZitadelIssuer_ParseEmptyEnv(t *testing.T) {
+func TestOIDCIssuer_ParseEmptyEnv(t *testing.T) {
 	// Empty env must yield zero issuers — preserves fast-fail semantics.
-	issuers := parseZitadelIssuers("")
+	issuers := parseOIDCIssuers("")
 	if len(issuers) != 0 {
 		t.Errorf("expected 0 issuers from empty string, got %d: %v", len(issuers), issuers)
 	}
 }
 
-func TestZitadelIssuer_ParseWhitespaceOnlyEnv(t *testing.T) {
-	issuers := parseZitadelIssuers("   ,  ,  ")
+func TestOIDCIssuer_ParseWhitespaceOnlyEnv(t *testing.T) {
+	issuers := parseOIDCIssuers("   ,  ,  ")
 	if len(issuers) != 0 {
 		t.Errorf("expected 0 issuers from whitespace-only string, got %d: %v", len(issuers), issuers)
 	}
@@ -709,7 +709,7 @@ func TestTenantContext_Fields(t *testing.T) {
 	ctx := &TenantContext{
 		TenantID:      "tenant-abc",
 		UserID:        42,
-		ZitadelUserID: "zitadel-user-xyz",
+		IDPSubject: "zitadel-user-xyz",
 		Email:         "ctx@example.com",
 		Username:      "ctxuser",
 		Roles:         []string{"admin", "viewer"},

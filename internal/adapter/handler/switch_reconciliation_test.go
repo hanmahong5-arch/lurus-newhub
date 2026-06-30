@@ -71,7 +71,7 @@ func setupReconcileTest(t *testing.T) *reconcileTestCtx {
 		Name:         "Recon Tenant",
 		Slug:         tenantSlug,
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: "org_recon_" + tenantSlug,
+		IDPOrgID: "org_recon_" + tenantSlug,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}

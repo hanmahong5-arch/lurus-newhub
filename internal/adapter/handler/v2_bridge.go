@@ -25,7 +25,7 @@ func BridgeEnabled() bool {
 // BridgeExchange swaps a static, env-gated token for a real newhub session
 // cookie. Exists only for Playwright e2e tests — the Zita SDK cookie flow
 // can't be driven from a headless browser without a real platform login,
-// and we don't want to teach the e2e harness about Zitadel either.
+// and we don't want to teach the e2e harness about the OIDC provider either.
 //
 // Route: POST /api/v2/bridge/exchange?token=<E2E_BRIDGE_TOKEN>&user_id=<int>
 // Registered ONLY when env E2E_BRIDGE_TOKEN is non-empty (prod is safe by

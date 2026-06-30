@@ -72,7 +72,7 @@ func setupFundRouter(t *testing.T) (*gin.Engine, func(), *repo.Tenant, *repo.Ten
 		Name:         "Fund Test Tenant",
 		Slug:         "fund-test",
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: "org_fund_test_unique",
+		IDPOrgID: "org_fund_test_unique",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -361,7 +361,7 @@ func TestInternalFundCreditPool_NoPool(t *testing.T) {
 		Name:         "No Pool Tenant",
 		Slug:         "no-pool",
 		Status:       repo.TenantStatusEnabled,
-		ZitadelOrgID: "org_no_pool_unique",
+		IDPOrgID: "org_no_pool_unique",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}

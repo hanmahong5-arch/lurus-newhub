@@ -20,7 +20,7 @@ import (
 //
 // Switch EndUser mode (white-label desktop client) needs to exchange an
 // activation code for a usable LLM gateway token without going through
-// Zitadel OIDC. The flow:
+// OIDC. The flow:
 //
 //   1. Caller POSTs { code, fingerprint, app_version? }.
 //   2. Hub looks up the redemption row by Key.

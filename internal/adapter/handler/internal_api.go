@@ -88,7 +88,7 @@ func InternalGetUserByEmail(c *gin.Context) {
 }
 
 // InternalGetUserByPhone returns 410 Gone — phone-based lookup is no longer supported.
-// Phone auth is delegated to Zitadel.
+// Phone auth is delegated to the OIDC provider.
 // GET /internal/user/by-phone/:phone
 func InternalGetUserByPhone(c *gin.Context) {
 	c.JSON(http.StatusGone, gin.H{

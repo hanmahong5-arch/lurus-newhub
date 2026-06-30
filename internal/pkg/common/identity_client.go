@@ -43,14 +43,40 @@ var identityClient = &http.Client{
 
 // IdentityMapping represents the unified user identity mapping returned by lurus-platform.
 type IdentityMapping struct {
-	ID          int64     `json:"id"`
-	LurusID     string    `json:"lurus_id"`
-	ZitadelSub  string    `json:"zitadel_sub"`
+	ID      int64  `json:"id"`
+	LurusID string `json:"lurus_id"`
+	// ZitadelSub decodes the OIDC subject from platform responses. platform now
+	// emits idp_subject (canonical) alongside the deprecated zitadel_sub; this
+	// field accepts either so the Go name can stay stable while the wire migrates.
+	// TODO(idp-migration): rename the Go field to IDPSubject once all platform
+	// responses have dropped the legacy zitadel_sub key.
+	ZitadelSub  string    `json:"idp_subject"`
 	Email       string    `json:"email"`
 	DisplayName string    `json:"display_name"`
 	AvatarURL   string    `json:"avatar_url,omitempty"`
 	Status      int16     `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// UnmarshalJSON decodes IdentityMapping accepting BOTH the canonical
+// idp_subject and the deprecated zitadel_sub subject keys (platform double-writes
+// during the migration window). idp_subject wins when both are present.
+func (m *IdentityMapping) UnmarshalJSON(data []byte) error {
+	type alias IdentityMapping
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*m = IdentityMapping(a)
+	if m.ZitadelSub == "" {
+		var legacy struct {
+			ZitadelSub string `json:"zitadel_sub"`
+		}
+		if err := json.Unmarshal(data, &legacy); err == nil && legacy.ZitadelSub != "" {
+			m.ZitadelSub = legacy.ZitadelSub
+		}
+	}
+	return nil
 }
 
 // Entitlements is a key→value map describing an account's product permissions.
@@ -90,7 +116,10 @@ func (e Entitlements) GetBool(key string, defaultVal bool) bool {
 	}
 }
 
-// GetAccountByZitadelSub retrieves account info from lurus-platform by Zitadel OIDC sub.
+// GetAccountByZitadelSub retrieves account info from lurus-platform by OIDC sub.
+// It calls platform's canonical /by-idp-sub/ route (platform serves both
+// /by-idp-sub/ and the deprecated /by-zitadel-sub/ on the same handler).
+// The Go name is kept stable while the underlying route/wire migrates.
 // Returns nil on not-found or network errors (callers degrade gracefully).
 func GetAccountByZitadelSub(ctx context.Context, sub string) (*IdentityMapping, error) {
 	if IdentityServiceURL == "" {
@@ -98,7 +127,7 @@ func GetAccountByZitadelSub(ctx context.Context, sub string) (*IdentityMapping, 
 	}
 	req, err := http.NewRequestWithContext(ctx,
 		http.MethodGet,
-		IdentityServiceURL+"/internal/v1/accounts/by-zitadel-sub/"+sub,
+		IdentityServiceURL+"/internal/v1/accounts/by-idp-sub/"+sub,
 		nil,
 	)
 	if err != nil {
@@ -128,12 +157,15 @@ func GetAccountByZitadelSub(ctx context.Context, sub string) (*IdentityMapping, 
 }
 
 // UpsertAccount creates or updates an account in lurus-platform (called on OIDC login).
+// The body uses the canonical idp_subject field (platform accepts idp_subject or
+// the deprecated zitadel_sub — see platform UpsertAccountRequest). The Go param
+// name is kept for caller stability.
 func UpsertAccount(ctx context.Context, zitadelSub, email, displayName, avatarURL string) (*IdentityMapping, error) {
 	if IdentityServiceURL == "" {
 		return nil, nil
 	}
 	body, _ := json.Marshal(map[string]string{
-		"zitadel_sub":  zitadelSub,
+		"idp_subject":  zitadelSub,
 		"email":        email,
 		"display_name": displayName,
 		"avatar_url":   avatarURL,
@@ -359,24 +391,31 @@ func GetAccountByZitadelSub_ByAccountID(ctx context.Context, accountID int64) (*
 		return nil, nil
 	}
 	// The overview endpoint returns a nested structure; extract the account part.
+	// Accept both idp_subject (canonical) and zitadel_sub (deprecated) for the
+	// subject during the platform migration window.
 	var ov struct {
 		Account struct {
-			ID         int64  `json:"id"`
-			LurusID    string `json:"lurus_id"`
-			ZitadelSub string `json:"zitadel_sub"`
-			Email      string `json:"email"`
+			ID          int64  `json:"id"`
+			LurusID     string `json:"lurus_id"`
+			IDPSubject  string `json:"idp_subject"`
+			ZitadelSub  string `json:"zitadel_sub"`
+			Email       string `json:"email"`
 			DisplayName string `json:"display_name"`
-			AvatarURL  string `json:"avatar_url"`
-			Status     int16  `json:"status"`
+			AvatarURL   string `json:"avatar_url"`
+			Status      int16  `json:"status"`
 		} `json:"account"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&ov); err != nil {
 		return nil, nil
 	}
+	subject := ov.Account.IDPSubject
+	if subject == "" {
+		subject = ov.Account.ZitadelSub
+	}
 	return &IdentityMapping{
 		ID:          ov.Account.ID,
 		LurusID:     ov.Account.LurusID,
-		ZitadelSub:  ov.Account.ZitadelSub,
+		ZitadelSub:  subject,
 		Email:       ov.Account.Email,
 		DisplayName: ov.Account.DisplayName,
 		AvatarURL:   ov.Account.AvatarURL,
@@ -514,7 +553,9 @@ func CreateCheckout(ctx context.Context, accountID int64, amountCNY float64, pay
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		var errResp struct{ Error string `json:"error"` }
+		var errResp struct {
+			Error string `json:"error"`
+		}
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
 		return nil, fmt.Errorf("checkout failed: %s (status %d)", errResp.Error, resp.StatusCode)
 	}
@@ -527,12 +568,12 @@ func CreateCheckout(ctx context.Context, accountID int64, amountCNY float64, pay
 
 // CheckoutStatus holds the polling response for a checkout order.
 type CheckoutStatus struct {
-	OrderNo   string   `json:"order_no"`
-	Status    string   `json:"status"`
-	AmountCNY float64  `json:"amount_cny"`
-	PayURL    string   `json:"pay_url"`
-	PaidAt    *string  `json:"paid_at"`
-	ExpiresAt *string  `json:"expires_at"`
+	OrderNo   string  `json:"order_no"`
+	Status    string  `json:"status"`
+	AmountCNY float64 `json:"amount_cny"`
+	PayURL    string  `json:"pay_url"`
+	PaidAt    *string `json:"paid_at"`
+	ExpiresAt *string `json:"expires_at"`
 }
 
 // GetCheckoutStatus polls the status of a checkout order on lurus-platform.
@@ -733,4 +774,3 @@ func ReportLLMUsage(ctx context.Context, accountID int64, amountCNY float64) {
 	}
 	resp.Body.Close()
 }
-

@@ -176,7 +176,7 @@ func TestDisabledTenant_AccessDenied(t *testing.T) {
 		Name:         "Disabled Tenant",
 		Slug:         "disabled-tenant",
 		Status:       TenantStatusDisabled, // Disabled
-		ZitadelOrgID: "org_disabled_123",
+		IDPOrgID: "org_disabled_123",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -206,7 +206,7 @@ func TestTenant_StatusTransitions(t *testing.T) {
 		Name:         "Status Test Tenant",
 		Slug:         "status-test",
 		Status:       TenantStatusEnabled,
-		ZitadelOrgID: "org_status_123",
+		IDPOrgID: "org_status_123",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -253,7 +253,7 @@ func TestTenant_IsolatedData(t *testing.T) {
 		Name:         "Data Isolation Tenant 1",
 		Slug:         "data-iso-1",
 		Status:       TenantStatusEnabled,
-		ZitadelOrgID: "org_data_1",
+		IDPOrgID: "org_data_1",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -262,7 +262,7 @@ func TestTenant_IsolatedData(t *testing.T) {
 		Name:         "Data Isolation Tenant 2",
 		Slug:         "data-iso-2",
 		Status:       TenantStatusEnabled,
-		ZitadelOrgID: "org_data_2",
+		IDPOrgID: "org_data_2",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -344,7 +344,7 @@ func TestUserIdentityMapping_TenantIsolation(t *testing.T) {
 	// Create identity mappings for different tenants
 	mapping1 := &UserIdentityMapping{
 		TenantID:      tenant1,
-		ZitadelUserID: "zitadel_user_1",
+		IDPSubject: "zitadel_user_1",
 		LurusUserID:   normal.Id,
 		Email:         "user1@tenant1.test",
 		IsActive:      true,
@@ -353,7 +353,7 @@ func TestUserIdentityMapping_TenantIsolation(t *testing.T) {
 	}
 	mapping2 := &UserIdentityMapping{
 		TenantID:      tenant2,
-		ZitadelUserID: "zitadel_user_1", // Same Zitadel user, different tenant
+		IDPSubject: "zitadel_user_1", // Same Zitadel user, different tenant
 		LurusUserID:   normal.Id + 1,    // Different Lurus user
 		Email:         "user1@tenant2.test",
 		IsActive:      true,

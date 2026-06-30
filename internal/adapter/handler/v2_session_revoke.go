@@ -37,7 +37,7 @@ import (
 // caller is expected to navigate to /console/v2/login after receiving the
 // redirect field.
 //
-// Why this is enough: both UserAuth (v1 session) and the Zitadel bridge read
+// Why this is enough: both UserAuth (v1 session) and the OIDC bridge read
 // the session from the same cookie. Clearing it makes every subsequent
 // authenticated endpoint return 401 until the user logs in again.
 func RevokeCurrentSessionV2(c *gin.Context) {

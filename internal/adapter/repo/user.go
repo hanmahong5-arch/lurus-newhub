@@ -19,7 +19,7 @@ import (
 // Subtypes aliased from the canonical definition in domain/entity/user.go
 type DailyQuotaInfo = entity.DailyQuotaInfo
 
-// User is the core user entity. Auth is delegated to Zitadel; billing is delegated to lurus-platform.
+// User is the core user entity. Auth is delegated to the OIDC provider; billing is delegated to lurus-platform.
 type User struct {
 	Id             int            `json:"id"`
 	TenantId       string         `json:"tenant_id" gorm:"type:varchar(36);index;default:'default'"` // Tenant isolation

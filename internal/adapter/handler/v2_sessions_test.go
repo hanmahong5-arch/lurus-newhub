@@ -64,7 +64,7 @@ func setupSessionsRouter(t *testing.T) *sessionsCtx {
 	tenantID := fmt.Sprintf("tid-%04d", n)
 	tenant := &repo.Tenant{
 		Id:           tenantID,
-		ZitadelOrgID: fmt.Sprintf("zorg-%04d", n),
+		IDPOrgID: fmt.Sprintf("zorg-%04d", n),
 		Slug:         fmt.Sprintf("test-tenant-%04d", n),
 		Name:         "Test Tenant",
 		Status:       repo.TenantStatusEnabled,
@@ -203,7 +203,7 @@ func TestV2Sessions_TenantIsolation(t *testing.T) {
 	// Seed a second tenant — needs a unique Id and ZitadelOrgID.
 	tenantB := &repo.Tenant{
 		Id:           "tid-b-isolation",
-		ZitadelOrgID: "zorg-b-isolation",
+		IDPOrgID: "zorg-b-isolation",
 		Slug:         "tenant-b-isolation",
 		Name:         "Tenant B",
 		Status:       repo.TenantStatusEnabled,

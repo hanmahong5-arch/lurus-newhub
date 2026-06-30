@@ -49,8 +49,8 @@ spec:
           labelSelector:
             matchLabels:
               app: lurus-api
-      # Resolve auth.lurus.cn to Traefik ClusterIP inside the pod.
-      # Avoids hairpin NAT issue when exchanging OIDC tokens with Zitadel.
+      # Resolve the OIDC issuer host to Traefik ClusterIP inside the pod.
+      # Avoids hairpin NAT issue when exchanging OIDC tokens with the IdP.
       hostAliases:
         - ip: "10.43.175.138"  # traefik.kube-system.svc ClusterIP
           hostnames:
@@ -106,29 +106,29 @@ spec:
               value: "1000"
             - name: MEILISEARCH_WORKER_COUNT
               value: "2"
-            # Zitadel OIDC Configuration
-            - name: ZITADEL_ENABLED
+            # OIDC Configuration (issuer/jwks are deploy-time, owner-gated)
+            - name: OIDC_ENABLED
               value: "true"
-            - name: ZITADEL_ISSUER
+            - name: OIDC_ISSUER
               value: "https://auth.lurus.cn"
-            - name: ZITADEL_JWKS_URI
+            - name: OIDC_JWKS_URI
               value: "https://auth.lurus.cn/oauth/v2/keys"
-            - name: ZITADEL_CLIENT_ID
+            - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
                   name: lurus-api-secrets
-                  key: ZITADEL_CLIENT_ID
-            - name: ZITADEL_REDIRECT_URI
+                  key: OIDC_CLIENT_ID
+            - name: OIDC_REDIRECT_URI
               value: "https://api.lurus.cn/api/v2/oauth/callback"
-            - name: ZITADEL_POST_LOGOUT_REDIRECT_URI
+            - name: OIDC_POST_LOGOUT_REDIRECT_URI
               value: "https://api.lurus.cn"
-            - name: ZITADEL_ENABLE_PKCE
+            - name: OIDC_ENABLE_PKCE
               value: "true"
-            - name: ZITADEL_AUTO_CREATE_TENANT
+            - name: OIDC_AUTO_CREATE_TENANT
               value: "true"
-            - name: ZITADEL_AUTO_CREATE_USER
+            - name: OIDC_AUTO_CREATE_USER
               value: "true"
-            - name: ZITADEL_ALLOWED_REDIRECT_DOMAINS
+            - name: OIDC_ALLOWED_REDIRECT_DOMAINS
               value: "lurus.cn,api.lurus.cn"
             # OpenTelemetry Tracing Configuration
             - name: OTEL_TRACING_ENABLED

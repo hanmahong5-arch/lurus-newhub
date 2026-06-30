@@ -58,7 +58,7 @@ func disableUser(t *testing.T, userId int) {
 // ============================================================
 
 // TestInteg_Login_Deprecated verifies that /internal/auth/login returns 410 Gone
-// since password-based auth is deprecated in favor of Zitadel OIDC.
+// since password-based auth is deprecated in favor of OIDC.
 func TestInteg_Login_Deprecated(t *testing.T) {
 	router, cleanup := SetupIntegrationRouter(t)
 	t.Cleanup(cleanup)

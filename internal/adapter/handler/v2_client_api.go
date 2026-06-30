@@ -12,7 +12,7 @@ import (
 
 // ============================================================================
 // Client API — Platform-wide endpoints for other Lurus products.
-// Auth: FlexAuth (Zitadel JWT or API Token sk-xxx)
+// Auth: FlexAuth (OIDC JWT or API Token sk-xxx)
 // Base path: /api/v2/client/*
 // ============================================================================
 
@@ -54,19 +54,19 @@ func ClientGetProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"id":              user.Id,
-			"username":        user.Username,
-			"display_name":    user.DisplayName,
-			"email":           user.Email,
-			"role":            user.Role,
-			"status":          user.Status,
-			"group":           user.Group,
-			"quota":           user.Quota,
-			"used_quota":      user.UsedQuota,
-			"remaining_quota": user.Quota - user.UsedQuota,
-			"request_count":   user.RequestCount,
-			"token_count":     tokenCount,
-			"daily_quota":     dailyQuota,
+			"id":               user.Id,
+			"username":         user.Username,
+			"display_name":     user.DisplayName,
+			"email":            user.Email,
+			"role":             user.Role,
+			"status":           user.Status,
+			"group":            user.Group,
+			"quota":            user.Quota,
+			"used_quota":       user.UsedQuota,
+			"remaining_quota":  user.Quota - user.UsedQuota,
+			"request_count":    user.RequestCount,
+			"token_count":      tokenCount,
+			"daily_quota":      dailyQuota,
 			"display_currency": displayType,
 			"display_amount":   calculateDisplayAmount(user.Quota - user.UsedQuota),
 		},
@@ -236,10 +236,10 @@ func ClientGetUsageDaily(c *gin.Context) {
 		dateStr := d.Format("2006-01-02")
 		ds := dayMap[dateStr]
 		entry := gin.H{
-			"date":      dateStr,
-			"quota":     0,
+			"date":       dateStr,
+			"quota":      0,
 			"token_used": 0,
-			"count":     0,
+			"count":      0,
 		}
 		if ds != nil {
 			entry["quota"] = ds.Quota
@@ -292,15 +292,15 @@ func ClientGetTokens(c *gin.Context) {
 			expiredAt = 0 // -1 means never expires
 		}
 		items = append(items, gin.H{
-			"id":               t.Id,
-			"name":             t.Name,
-			"status":           t.Status,
-			"created_time":     t.CreatedTime,
-			"accessed_time":    t.AccessedTime,
-			"expired_time":     expiredAt,
-			"remain_quota":     t.RemainQuota,
-			"used_quota":       t.UsedQuota,
-			"unlimited_quota":  t.UnlimitedQuota,
+			"id":                   t.Id,
+			"name":                 t.Name,
+			"status":               t.Status,
+			"created_time":         t.CreatedTime,
+			"accessed_time":        t.AccessedTime,
+			"expired_time":         expiredAt,
+			"remain_quota":         t.RemainQuota,
+			"used_quota":           t.UsedQuota,
+			"unlimited_quota":      t.UnlimitedQuota,
 			"model_limits_enabled": t.ModelLimitsEnabled,
 		})
 	}
@@ -317,7 +317,7 @@ func ClientGetTokens(c *gin.Context) {
 }
 
 // ClientGetSessions returns the current user's active session information.
-// This is lurus-api's own session state, not Zitadel's.
+// This is lurus-api's own session state, not the OIDC provider's.
 // GET /api/v2/client/sessions
 func ClientGetSessions(c *gin.Context) {
 	userID := c.GetInt("id")
@@ -338,12 +338,12 @@ func ClientGetSessions(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"user_id":        user.Id,
-			"username":       user.Username,
-			"status":         user.Status,
-			"auth_method":    authMethod,
-			"active_tokens":  activeTokens,
-			"request_count":  user.RequestCount,
+			"user_id":       user.Id,
+			"username":      user.Username,
+			"status":        user.Status,
+			"auth_method":   authMethod,
+			"active_tokens": activeTokens,
+			"request_count": user.RequestCount,
 		},
 	})
 }

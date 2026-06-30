@@ -27,7 +27,7 @@ import { setTenantSlug } from '../../helpers/apiMode';
 // so the same redirect target serves both flows. tenantSlug routing
 // dropped — Layer C of ADR-0011 routes login through identity, which
 // resolves the account globally rather than per-tenant.
-const ZitadelRedirect = (_props) => {
+const OidcRedirect = (_props) => {
   const [showFallback, setShowFallback] = useState(false);
 
   useEffect(() => {
@@ -111,4 +111,4 @@ const ZitadelRedirect = (_props) => {
   );
 };
 
-export default ZitadelRedirect;
+export default OidcRedirect;
