@@ -200,6 +200,7 @@ func TestDoResponse_ReadBodyError(t *testing.T) {
 	resp := &http.Response{
 		Body: io.NopCloser(&errReader{}),
 	}
+	defer func() { _ = resp.Body.Close() }()
 	taskID, data, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
 	if taskErr == nil {
 		t.Fatalf("expected taskErr, got nil")
@@ -221,6 +222,7 @@ func TestDoResponse_UnmarshalError(t *testing.T) {
 	resp := &http.Response{
 		Body: io.NopCloser(bytes.NewBufferString("not json")),
 	}
+	defer func() { _ = resp.Body.Close() }()
 	taskID, data, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
 	if taskErr == nil {
 		t.Fatalf("expected taskErr for bad json")
@@ -238,6 +240,7 @@ func TestDoResponse_StatusError(t *testing.T) {
 		BaseResp: BaseResp{StatusCode: StatusAuthFailed, StatusMsg: "auth failed"},
 	})
 	resp := &http.Response{Body: io.NopCloser(bytes.NewBuffer(body))}
+	defer func() { _ = resp.Body.Close() }()
 	taskID, data, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
 	if taskErr == nil {
 		t.Fatalf("expected taskErr for non-success status")
@@ -258,6 +261,7 @@ func TestDoResponse_Success(t *testing.T) {
 		BaseResp: BaseResp{StatusCode: StatusSuccess, StatusMsg: "ok"},
 	})
 	resp := &http.Response{Body: io.NopCloser(bytes.NewBuffer(body))}
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{OriginModelName: "T2V-01"}
 	taskID, data, taskErr := a.DoResponse(c, resp, info)
 	if taskErr != nil {
@@ -287,6 +291,9 @@ func TestDoResponse_Success(t *testing.T) {
 func TestFetchTask_InvalidTaskID(t *testing.T) {
 	a := &TaskAdaptor{}
 	resp, err := a.FetchTask("https://api.minimaxi.com", "key", map[string]any{}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil || err.Error() != "invalid task_id" {
 		t.Fatalf("expected 'invalid task_id' error, got %v", err)
 	}
@@ -298,6 +305,9 @@ func TestFetchTask_InvalidTaskID(t *testing.T) {
 func TestFetchTask_ProxyClientError(t *testing.T) {
 	a := &TaskAdaptor{}
 	resp, err := a.FetchTask("https://api.minimaxi.com", "key", map[string]any{"task_id": "abc"}, "://bad-proxy")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil {
 		t.Fatalf("expected error building proxy http client")
 	}

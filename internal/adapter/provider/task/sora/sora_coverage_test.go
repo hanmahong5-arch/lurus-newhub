@@ -210,6 +210,7 @@ func TestSora_FetchTask_InvalidTaskID(t *testing.T) {
 	a := &TaskAdaptor{}
 	resp, err := a.FetchTask("https://api.example.com", "key", map[string]any{}, "")
 	if resp != nil {
+		_ = resp.Body.Close()
 		t.Fatalf("expected nil response, got %+v", resp)
 	}
 	if err == nil || err.Error() != "invalid task_id" {
@@ -223,6 +224,7 @@ func TestSora_FetchTask_InvalidProxyURL(t *testing.T) {
 	a := &TaskAdaptor{}
 	resp, err := a.FetchTask("https://api.example.com", "key", map[string]any{"task_id": "v1"}, "://bad-proxy")
 	if resp != nil {
+		_ = resp.Body.Close()
 		t.Fatalf("expected nil response, got %+v", resp)
 	}
 	if err == nil {

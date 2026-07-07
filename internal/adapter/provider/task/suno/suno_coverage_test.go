@@ -418,6 +418,7 @@ func (e *erroringReader) Read([]byte) (int, error) {
 func TestDoResponse_UnmarshalError(t *testing.T) {
 	c, _ := newTestContext(t, http.MethodPost, "/x", "", "")
 	resp := newHTTPResponse(t, "not json", http.StatusOK)
+	defer func() { _ = resp.Body.Close() }()
 
 	a := &TaskAdaptor{}
 	taskID, taskData, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
@@ -438,6 +439,7 @@ func TestDoResponse_UnmarshalError(t *testing.T) {
 func TestDoResponse_UpstreamFailureCode(t *testing.T) {
 	c, _ := newTestContext(t, http.MethodPost, "/x", "", "")
 	resp := newHTTPResponse(t, `{"code":"failed","message":"upstream rejected the task"}`, http.StatusOK)
+	defer func() { _ = resp.Body.Close() }()
 
 	a := &TaskAdaptor{}
 	taskID, taskData, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
@@ -461,6 +463,7 @@ func TestDoResponse_UpstreamFailureCode(t *testing.T) {
 func TestDoResponse_Success(t *testing.T) {
 	c, w := newTestContext(t, http.MethodPost, "/x", "", "")
 	resp := newHTTPResponse(t, `{"code":"success","message":"ok","data":"task-xyz"}`, http.StatusCreated)
+	defer func() { _ = resp.Body.Close() }()
 
 	a := &TaskAdaptor{}
 	taskID, taskData, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
@@ -499,6 +502,7 @@ func TestFetchTask_MarshalAndURLConstruction(t *testing.T) {
 	a := &TaskAdaptor{}
 	resp, err := a.FetchTask("http://127.0.0.1:0", "test-key", map[string]any{"ids": []string{"t1"}}, "")
 	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
 		t.Errorf("FetchTask() resp = %v, want nil for unroutable address", resp)
 	}
 	if err == nil {
@@ -513,6 +517,7 @@ func TestFetchTask_MarshalError(t *testing.T) {
 	body := map[string]any{"bad": make(chan int)}
 	resp, err := a.FetchTask("http://example.com", "test-key", body, "")
 	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
 		t.Errorf("FetchTask() resp = %v, want nil on marshal error", resp)
 	}
 	if err == nil {

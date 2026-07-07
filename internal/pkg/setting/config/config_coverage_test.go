@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -398,7 +399,7 @@ func TestConfigManager_SaveToDB_UpdateFuncError(t *testing.T) {
 	err := cm.SaveToDB(func(key, value string) error {
 		return wantErr
 	})
-	if err != wantErr {
+	if !errors.Is(err, wantErr) {
 		t.Errorf("SaveToDB error = %v, want %v", err, wantErr)
 	}
 }

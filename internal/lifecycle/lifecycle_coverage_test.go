@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,15 +55,36 @@ func withLeaderStateReset(t *testing.T) {
 	t.Cleanup(func() { common.SetLeader(prev) })
 }
 
+// syncBuffer is a bytes.Buffer guarded by a mutex. The privacy-erasure and
+// secret-rotation executors spawn a background goroutine that logs via
+// gin.DefaultWriter; without this guard that goroutine's Write races the test's
+// String() read under -race. Only Write and String are exercised here.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // captureSysLog redirects gin.DefaultWriter (used by common.SysLog) into a
-// buffer for the duration of the test and restores it on cleanup.
-func captureSysLog(t *testing.T) *bytes.Buffer {
+// mutex-guarded buffer for the duration of the test and restores it on cleanup.
+func captureSysLog(t *testing.T) *syncBuffer {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &syncBuffer{}
 	prev := gin.DefaultWriter
-	gin.DefaultWriter = &buf
+	gin.DefaultWriter = buf
 	t.Cleanup(func() { gin.DefaultWriter = prev })
-	return &buf
+	return buf
 }
 
 func TestNewLeaderManager_ConstructsExpectedFields(t *testing.T) {

@@ -498,6 +498,7 @@ func TestDoResponse_UnmarshalError(t *testing.T) {
 func TestDoResponse_UpstreamErrorCode(t *testing.T) {
 	a := &TaskAdaptor{}
 	resp := makeRespBody(t, map[string]any{"code": 1001, "message": "boom"})
+	defer func() { _ = resp.Body.Close() }()
 	c, _ := newGinCtx(t, http.MethodPost, "/", nil)
 	_, _, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
 	if taskErr == nil {
@@ -520,6 +521,7 @@ func TestDoResponse_Success(t *testing.T) {
 		"code": 0,
 		"data": map[string]any{"task_id": "task-123", "task_status": "submitted"},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	c, w := newGinCtx(t, http.MethodPost, "/", nil)
 	info := &relaycommon.RelayInfo{OriginModelName: "kling-v1"}
 	taskID, body, taskErr := a.DoResponse(c, resp, info)
@@ -553,7 +555,10 @@ func TestDoResponse_Success(t *testing.T) {
 
 func TestFetchTask_MissingTaskID(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://base", "ak|sk", map[string]any{"action": pkgconstant.TaskActionGenerate}, "")
+	resp, err := a.FetchTask("https://base", "ak|sk", map[string]any{"action": pkgconstant.TaskActionGenerate}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil || err.Error() != "invalid task_id" {
 		t.Errorf("err = %v, want 'invalid task_id'", err)
 	}
@@ -561,7 +566,10 @@ func TestFetchTask_MissingTaskID(t *testing.T) {
 
 func TestFetchTask_MissingAction(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://base", "ak|sk", map[string]any{"task_id": "t1"}, "")
+	resp, err := a.FetchTask("https://base", "ak|sk", map[string]any{"task_id": "t1"}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil || err.Error() != "invalid action" {
 		t.Errorf("err = %v, want 'invalid action'", err)
 	}
@@ -582,10 +590,13 @@ func TestFetchTask_BadRequestURL(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &TaskAdaptor{}
-			_, err := a.FetchTask("https://bad\nhost", tc.apiKey, map[string]any{
+			resp, err := a.FetchTask("https://bad\nhost", tc.apiKey, map[string]any{
 				"task_id": "t1",
 				"action":  tc.action,
 			}, "")
+			if resp != nil {
+				defer func() { _ = resp.Body.Close() }()
+			}
 			if err == nil {
 				t.Fatal("expected error building request from malformed URL")
 			}
@@ -598,10 +609,13 @@ func TestFetchTask_BadRequestURL(t *testing.T) {
 // failure — this happens before client.Do, so no network I/O occurs.
 func TestFetchTask_ProxyClientError(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://base", "myaccess|mysecret", map[string]any{
+	resp, err := a.FetchTask("https://base", "myaccess|mysecret", map[string]any{
 		"task_id": "t1",
 		"action":  pkgconstant.TaskActionGenerate,
 	}, "http://bad\nproxy")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil || !strings.Contains(err.Error(), "new proxy http client failed") {
 		t.Errorf("err = %v, want to contain 'new proxy http client failed'", err)
 	}

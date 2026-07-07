@@ -281,6 +281,7 @@ func TestDoResponse_UnmarshalFails(t *testing.T) {
 	a := &TaskAdaptor{}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	resp := httptest.NewRecorder().Result()
+	defer func() { _ = resp.Body.Close() }()
 	resp.Body = readCloser("not json")
 	_, _, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
 	if taskErr == nil {
@@ -292,6 +293,7 @@ func TestDoResponse_MissingName(t *testing.T) {
 	a := &TaskAdaptor{}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	resp := httptest.NewRecorder().Result()
+	defer func() { _ = resp.Body.Close() }()
 	resp.Body = readCloser(`{"name":""}`)
 	_, _, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
 	if taskErr == nil {
@@ -305,6 +307,7 @@ func TestDoResponse_Success(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	name := "projects/proj-1/locations/us-central1/publishers/google/models/veo-3.0-generate-001/operations/op-1"
 	resp := httptest.NewRecorder().Result()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := json.Marshal(submitResponse{Name: name})
 	resp.Body = readCloser(string(body))
 	taskID, taskData, taskErr := a.DoResponse(c, resp, &relaycommon.RelayInfo{})
@@ -343,7 +346,10 @@ func TestGetModelListAndChannelName(t *testing.T) {
 
 func TestFetchTask_InvalidTaskID(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("", "", map[string]any{}, "")
+	resp, err := a.FetchTask("", "", map[string]any{}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil || err.Error() != "invalid task_id" {
 		t.Fatalf("expected invalid task_id error, got %v", err)
 	}
@@ -351,7 +357,10 @@ func TestFetchTask_InvalidTaskID(t *testing.T) {
 
 func TestFetchTask_DecodeFails(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("", "", map[string]any{"task_id": "not-base64-!!!"}, "")
+	resp, err := a.FetchTask("", "", map[string]any{"task_id": "not-base64-!!!"}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil || !strings.Contains(err.Error(), "decode task_id failed") {
 		t.Fatalf("expected decode task_id failed error, got %v", err)
 	}
@@ -360,7 +369,10 @@ func TestFetchTask_DecodeFails(t *testing.T) {
 func TestFetchTask_CannotExtractProjectOrModel(t *testing.T) {
 	a := &TaskAdaptor{}
 	localID := encodeLocalTaskID("operations/op-without-project-or-model")
-	_, err := a.FetchTask("", "", map[string]any{"task_id": localID}, "")
+	resp, err := a.FetchTask("", "", map[string]any{"task_id": localID}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil || err.Error() != "cannot extract project/model from operation name" {
 		t.Fatalf("expected extraction error, got %v", err)
 	}
@@ -370,7 +382,10 @@ func TestFetchTask_BadCredentials(t *testing.T) {
 	a := &TaskAdaptor{}
 	name := "projects/proj-1/locations/us-central1/publishers/google/models/veo-3.0-generate-001/operations/op-1"
 	localID := encodeLocalTaskID(name)
-	_, err := a.FetchTask("", "not-json", map[string]any{"task_id": localID}, "")
+	resp, err := a.FetchTask("", "not-json", map[string]any{"task_id": localID}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil || !strings.Contains(err.Error(), "failed to decode credentials") {
 		t.Fatalf("expected decode credentials error, got %v", err)
 	}
@@ -384,7 +399,10 @@ func TestFetchTask_GlobalRegionDefaultAndTokenAcquisitionFails(t *testing.T) {
 	name := "projects/proj-1/locations/global/publishers/google/models/veo-3.0-generate-001/operations/op-1"
 	localID := encodeLocalTaskID(name)
 	key := `{"project_id":"proj-1","client_email":"a@b.com","private_key":""}`
-	_, err := a.FetchTask("", key, map[string]any{"task_id": localID}, "")
+	resp, err := a.FetchTask("", key, map[string]any{"task_id": localID}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil || !strings.Contains(err.Error(), "failed to acquire access token") {
 		t.Fatalf("expected acquire access token error, got %v", err)
 	}

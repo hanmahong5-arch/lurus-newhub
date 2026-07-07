@@ -273,6 +273,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = io.NopCloser(newStringReader(`{"id":"task-123"}`))
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr != nil {
@@ -295,6 +296,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = io.NopCloser(newStringReader(`not-json`))
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr == nil {
@@ -317,6 +319,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = io.NopCloser(newStringReader(`{"id":""}`))
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, _, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr == nil {
@@ -337,6 +340,7 @@ func TestFetchTask(t *testing.T) {
 	t.Run("missing task_id", func(t *testing.T) {
 		resp, err := a.FetchTask("https://ark.example.com", "sk-key", map[string]any{}, "")
 		if resp != nil {
+			defer func() { _ = resp.Body.Close() }()
 			t.Errorf("resp = %v, want nil", resp)
 		}
 		if err == nil || err.Error() != "invalid task_id" {
@@ -347,6 +351,7 @@ func TestFetchTask(t *testing.T) {
 	t.Run("task_id wrong type", func(t *testing.T) {
 		resp, err := a.FetchTask("https://ark.example.com", "sk-key", map[string]any{"task_id": 123}, "")
 		if resp != nil {
+			defer func() { _ = resp.Body.Close() }()
 			t.Errorf("resp = %v, want nil", resp)
 		}
 		if err == nil || err.Error() != "invalid task_id" {
@@ -357,6 +362,7 @@ func TestFetchTask(t *testing.T) {
 	t.Run("invalid proxy causes client creation failure", func(t *testing.T) {
 		resp, err := a.FetchTask("https://ark.example.com", "sk-key", map[string]any{"task_id": "t1"}, "://bad-proxy")
 		if resp != nil {
+			defer func() { _ = resp.Body.Close() }()
 			t.Errorf("resp = %v, want nil", resp)
 		}
 		if err == nil {
@@ -369,14 +375,14 @@ func TestParseTaskResult(t *testing.T) {
 	a := &TaskAdaptor{}
 
 	tests := []struct {
-		name             string
-		body             string
-		wantStatus       repo.TaskStatus
-		wantProgress     string
-		wantURL          string
-		wantReason       string
-		wantCompletion   int
-		wantTotal        int
+		name           string
+		body           string
+		wantStatus     repo.TaskStatus
+		wantProgress   string
+		wantURL        string
+		wantReason     string
+		wantCompletion int
+		wantTotal      int
 	}{
 		{name: "pending", body: `{"status":"pending"}`, wantStatus: repo.TaskStatusQueued, wantProgress: "10%"},
 		{name: "queued", body: `{"status":"queued"}`, wantStatus: repo.TaskStatusQueued, wantProgress: "10%"},

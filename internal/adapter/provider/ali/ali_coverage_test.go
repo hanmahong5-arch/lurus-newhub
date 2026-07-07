@@ -796,8 +796,8 @@ func TestGetImageBase64sFromForm(t *testing.T) {
 		buf := &bytes.Buffer{}
 		w := multipart.NewWriter(buf)
 		fw, _ := w.CreateFormFile("image[]", "a.png")
-		fw.Write([]byte("hello"))
-		w.Close()
+		_, _ = fw.Write([]byte("hello"))
+		_ = w.Close()
 		c, _ := newTestGinContext(t, http.MethodPost, "/", buf)
 		c.Request.Header.Set("Content-Type", w.FormDataContentType())
 
@@ -814,8 +814,8 @@ func TestGetImageBase64sFromForm(t *testing.T) {
 		buf := &bytes.Buffer{}
 		w := multipart.NewWriter(buf)
 		fw, _ := w.CreateFormFile("image[0]", "a.png")
-		fw.Write([]byte("hello"))
-		w.Close()
+		_, _ = fw.Write([]byte("hello"))
+		_ = w.Close()
 		c, _ := newTestGinContext(t, http.MethodPost, "/", buf)
 		c.Request.Header.Set("Content-Type", w.FormDataContentType())
 
@@ -831,8 +831,8 @@ func TestGetImageBase64sFromForm(t *testing.T) {
 	t.Run("no image field errors", func(t *testing.T) {
 		buf := &bytes.Buffer{}
 		w := multipart.NewWriter(buf)
-		w.WriteField("other", "value")
-		w.Close()
+		_ = w.WriteField("other", "value")
+		_ = w.Close()
 		c, _ := newTestGinContext(t, http.MethodPost, "/", buf)
 		c.Request.Header.Set("Content-Type", w.FormDataContentType())
 
@@ -854,7 +854,9 @@ func TestOaiFormEdit2WanxImageEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create form file: %v", err)
 	}
-	fw.Write([]byte("fakeimagebytes"))
+	if _, err := fw.Write([]byte("fakeimagebytes")); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
 	if err := w.WriteField("negative_prompt", "no blur"); err != nil {
 		t.Fatalf("write field: %v", err)
 	}
@@ -892,8 +894,8 @@ func TestOaiFormEdit2WanxImageEdit(t *testing.T) {
 func TestOaiFormEdit2WanxImageEdit_MissingImageErrors(t *testing.T) {
 	buf := &bytes.Buffer{}
 	w := multipart.NewWriter(buf)
-	w.WriteField("negative_prompt", "no blur")
-	w.Close()
+	_ = w.WriteField("negative_prompt", "no blur")
+	_ = w.Close()
 	c, _ := newTestGinContext(t, http.MethodPost, "/", buf)
 	c.Request.Header.Set("Content-Type", w.FormDataContentType())
 

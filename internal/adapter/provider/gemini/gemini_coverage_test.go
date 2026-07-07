@@ -1014,8 +1014,8 @@ func TestCovertOpenAI2Gemini_ExtraBodyErrorParamNames(t *testing.T) {
 		wantError string
 	}{
 		{
-			name: "camelCase thinkingConfig rejected",
-			body: map[string]interface{}{"google": map[string]interface{}{"thinkingConfig": map[string]interface{}{}}},
+			name:      "camelCase thinkingConfig rejected",
+			body:      map[string]interface{}{"google": map[string]interface{}{"thinkingConfig": map[string]interface{}{}}},
 			wantError: "extra_body.google.thinkingConfig is not supported",
 		},
 		{
@@ -1450,8 +1450,8 @@ func TestResponseGeminiChat2OpenAI(t *testing.T) {
 		if got.Choices[0].FinishReason != "stop" {
 			t.Errorf("FinishReason = %q", got.Choices[0].FinishReason)
 		}
-		if got.Choices[0].Message.StringContent() != "hello" {
-			t.Errorf("content = %q, want hello (blank lines filtered)", got.Choices[0].Message.StringContent())
+		if got.Choices[0].StringContent() != "hello" {
+			t.Errorf("content = %q, want hello (blank lines filtered)", got.Choices[0].StringContent())
 		}
 	})
 
@@ -1488,7 +1488,7 @@ func TestResponseGeminiChat2OpenAI(t *testing.T) {
 		if got.Choices[0].FinishReason != "tool_calls" {
 			t.Errorf("FinishReason = %q, want tool_calls", got.Choices[0].FinishReason)
 		}
-		if got.Choices[0].Message.ToolCalls == nil {
+		if got.Choices[0].ToolCalls == nil {
 			t.Error("expected ToolCalls to be set")
 		}
 	})
@@ -1501,8 +1501,8 @@ func TestResponseGeminiChat2OpenAI(t *testing.T) {
 			}},
 		}
 		got := responseGeminiChat2OpenAI(c, resp)
-		if got.Choices[0].Message.ReasoningContent != "thinking..." {
-			t.Errorf("ReasoningContent = %q", got.Choices[0].Message.ReasoningContent)
+		if got.Choices[0].ReasoningContent != "thinking..." {
+			t.Errorf("ReasoningContent = %q", got.Choices[0].ReasoningContent)
 		}
 	})
 
@@ -1514,8 +1514,8 @@ func TestResponseGeminiChat2OpenAI(t *testing.T) {
 			}},
 		}
 		got := responseGeminiChat2OpenAI(c, resp)
-		if !strings.Contains(got.Choices[0].Message.StringContent(), "![image](data:image/png;base64,AAA)") {
-			t.Errorf("content = %q", got.Choices[0].Message.StringContent())
+		if !strings.Contains(got.Choices[0].StringContent(), "![image](data:image/png;base64,AAA)") {
+			t.Errorf("content = %q", got.Choices[0].StringContent())
 		}
 	})
 
@@ -1527,8 +1527,8 @@ func TestResponseGeminiChat2OpenAI(t *testing.T) {
 			}},
 		}
 		got := responseGeminiChat2OpenAI(c, resp)
-		if !strings.Contains(got.Choices[0].Message.StringContent(), "[media](data:audio/wav;base64,BBB)") {
-			t.Errorf("content = %q", got.Choices[0].Message.StringContent())
+		if !strings.Contains(got.Choices[0].StringContent(), "[media](data:audio/wav;base64,BBB)") {
+			t.Errorf("content = %q", got.Choices[0].StringContent())
 		}
 	})
 
@@ -1543,7 +1543,7 @@ func TestResponseGeminiChat2OpenAI(t *testing.T) {
 			}},
 		}
 		got := responseGeminiChat2OpenAI(c, resp)
-		content := got.Choices[0].Message.StringContent()
+		content := got.Choices[0].StringContent()
 		if !strings.Contains(content, "```python\nprint(1)\n```") {
 			t.Errorf("content missing code block: %q", content)
 		}
@@ -1658,7 +1658,9 @@ func TestGeminiTextGenerationHandler(t *testing.T) {
 	body, _ := json.Marshal(dto.GeminiChatResponse{
 		UsageMetadata: dto.GeminiUsageMetadata{PromptTokenCount: 10, CandidatesTokenCount: 5, TotalTokenCount: 15},
 	})
-	usage, apiErr := GeminiTextGenerationHandler(c, &relaycommon.RelayInfo{}, fakeResponse(string(body)))
+	resp := fakeResponse(string(body))
+	defer func() { _ = resp.Body.Close() }()
+	usage, apiErr := GeminiTextGenerationHandler(c, &relaycommon.RelayInfo{}, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -1672,7 +1674,9 @@ func TestGeminiTextGenerationHandler(t *testing.T) {
 
 func TestGeminiTextGenerationHandler_BadJSON(t *testing.T) {
 	c, _ := newGeminiTestContext()
-	_, apiErr := GeminiTextGenerationHandler(c, &relaycommon.RelayInfo{}, fakeResponse("not json"))
+	resp := fakeResponse("not json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := GeminiTextGenerationHandler(c, &relaycommon.RelayInfo{}, resp)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed JSON body")
 	}
@@ -1683,7 +1687,9 @@ func TestNativeGeminiEmbeddingHandler(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		body, _ := json.Marshal(dto.GeminiBatchEmbeddingResponse{Embeddings: []*dto.ContentEmbedding{{Values: []float64{0.1, 0.2}}}})
 		info := &relaycommon.RelayInfo{IsGeminiBatchEmbedding: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "embedding-001"}}
-		usage, apiErr := NativeGeminiEmbeddingHandler(c, fakeResponse(string(body)), info)
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		usage, apiErr := NativeGeminiEmbeddingHandler(c, resp, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -1696,7 +1702,9 @@ func TestNativeGeminiEmbeddingHandler(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		body, _ := json.Marshal(dto.GeminiEmbeddingResponse{Embedding: dto.ContentEmbedding{Values: []float64{0.3}}})
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "embedding-001"}}
-		usage, apiErr := NativeGeminiEmbeddingHandler(c, fakeResponse(string(body)), info)
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		usage, apiErr := NativeGeminiEmbeddingHandler(c, resp, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -1708,7 +1716,9 @@ func TestNativeGeminiEmbeddingHandler(t *testing.T) {
 	t.Run("bad JSON in batch mode", func(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		info := &relaycommon.RelayInfo{IsGeminiBatchEmbedding: true, ChannelMeta: &relaycommon.ChannelMeta{}}
-		_, apiErr := NativeGeminiEmbeddingHandler(c, fakeResponse("not json"), info)
+		resp := fakeResponse("not json")
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := NativeGeminiEmbeddingHandler(c, resp, info)
 		if apiErr == nil {
 			t.Fatal("expected error for malformed JSON body")
 		}
@@ -1722,7 +1732,9 @@ func TestGeminiEmbeddingHandler(t *testing.T) {
 		{Values: []float64{3, 4}},
 	}})
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "text-embedding-004"}}
-	usage, apiErr := GeminiEmbeddingHandler(c, info, fakeResponse(string(body)))
+	resp := fakeResponse(string(body))
+	defer func() { _ = resp.Body.Close() }()
+	usage, apiErr := GeminiEmbeddingHandler(c, info, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -1744,7 +1756,9 @@ func TestGeminiEmbeddingHandler(t *testing.T) {
 func TestGeminiEmbeddingHandler_BadJSON(t *testing.T) {
 	c, _ := newGeminiTestContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-	_, apiErr := GeminiEmbeddingHandler(c, info, fakeResponse("not json"))
+	resp := fakeResponse("not json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := GeminiEmbeddingHandler(c, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed JSON body")
 	}
@@ -1756,7 +1770,9 @@ func TestGeminiImageHandler(t *testing.T) {
 		{BytesBase64Encoded: "AAA"},
 		{BytesBase64Encoded: "BBB", RaiFilteredReason: "unsafe"}, // filtered out
 	}})
-	usage, apiErr := GeminiImageHandler(c, &relaycommon.RelayInfo{}, fakeResponse(string(body)))
+	resp := fakeResponse(string(body))
+	defer func() { _ = resp.Body.Close() }()
+	usage, apiErr := GeminiImageHandler(c, &relaycommon.RelayInfo{}, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -1775,7 +1791,9 @@ func TestGeminiImageHandler(t *testing.T) {
 func TestGeminiImageHandler_NoImagesReturnsError(t *testing.T) {
 	c, _ := newGeminiTestContext()
 	body, _ := json.Marshal(dto.GeminiImageResponse{Predictions: nil})
-	_, apiErr := GeminiImageHandler(c, &relaycommon.RelayInfo{}, fakeResponse(string(body)))
+	resp := fakeResponse(string(body))
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := GeminiImageHandler(c, &relaycommon.RelayInfo{}, resp)
 	if apiErr == nil || !strings.Contains(apiErr.Error(), "no images generated") {
 		t.Fatalf("apiErr = %v", apiErr)
 	}
@@ -1783,7 +1801,9 @@ func TestGeminiImageHandler_NoImagesReturnsError(t *testing.T) {
 
 func TestGeminiImageHandler_BadJSON(t *testing.T) {
 	c, _ := newGeminiTestContext()
-	_, apiErr := GeminiImageHandler(c, &relaycommon.RelayInfo{}, fakeResponse("not json"))
+	resp := fakeResponse("not json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := GeminiImageHandler(c, &relaycommon.RelayInfo{}, resp)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed JSON body")
 	}
@@ -1795,14 +1815,16 @@ func TestGeminiChatHandler(t *testing.T) {
 	t.Run("valid response with RelayFormatOpenAI", func(t *testing.T) {
 		c, w := newGeminiTestContext()
 		body, _ := json.Marshal(dto.GeminiChatResponse{
-			Candidates: []dto.GeminiChatCandidate{{FinishReason: &stop, Content: dto.GeminiChatContent{Parts: []dto.GeminiPart{{Text: "hi"}}}}},
+			Candidates:    []dto.GeminiChatCandidate{{FinishReason: &stop, Content: dto.GeminiChatContent{Parts: []dto.GeminiPart{{Text: "hi"}}}}},
 			UsageMetadata: dto.GeminiUsageMetadata{PromptTokenCount: 3, TotalTokenCount: 8},
 		})
 		info := &relaycommon.RelayInfo{
 			RelayFormat: types.RelayFormatOpenAI,
 			ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.0-flash"},
 		}
-		usage, apiErr := GeminiChatHandler(c, info, fakeResponse(string(body)))
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		usage, apiErr := GeminiChatHandler(c, info, resp)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -1824,7 +1846,9 @@ func TestGeminiChatHandler(t *testing.T) {
 			RelayFormat: types.RelayFormatClaude,
 			ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.0-flash"},
 		}
-		usage, apiErr := GeminiChatHandler(c, info, fakeResponse(string(body)))
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		usage, apiErr := GeminiChatHandler(c, info, resp)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -1847,7 +1871,9 @@ func TestGeminiChatHandler(t *testing.T) {
 			RelayFormat: types.RelayFormatGemini,
 			ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.0-flash"},
 		}
-		usage, apiErr := GeminiChatHandler(c, info, fakeResponse(string(body)))
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		usage, apiErr := GeminiChatHandler(c, info, resp)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -1865,7 +1891,9 @@ func TestGeminiChatHandler(t *testing.T) {
 		body, _ := json.Marshal(dto.GeminiChatResponse{
 			PromptFeedback: &dto.GeminiChatPromptFeedback{BlockReason: &blockReason},
 		})
-		_, apiErr := GeminiChatHandler(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}, fakeResponse(string(body)))
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := GeminiChatHandler(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}, resp)
 		if apiErr == nil || !strings.Contains(apiErr.Error(), "request blocked by Gemini API") {
 			t.Fatalf("apiErr = %v", apiErr)
 		}
@@ -1874,7 +1902,9 @@ func TestGeminiChatHandler(t *testing.T) {
 	t.Run("empty candidates without block reason", func(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		body, _ := json.Marshal(dto.GeminiChatResponse{})
-		_, apiErr := GeminiChatHandler(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}, fakeResponse(string(body)))
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := GeminiChatHandler(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}, resp)
 		if apiErr == nil || !strings.Contains(apiErr.Error(), "empty response from Gemini API") {
 			t.Fatalf("apiErr = %v", apiErr)
 		}
@@ -1882,7 +1912,9 @@ func TestGeminiChatHandler(t *testing.T) {
 
 	t.Run("bad JSON body", func(t *testing.T) {
 		c, _ := newGeminiTestContext()
-		_, apiErr := GeminiChatHandler(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}, fakeResponse("not json"))
+		resp := fakeResponse("not json")
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := GeminiChatHandler(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}, resp)
 		if apiErr == nil {
 			t.Fatal("expected error for malformed JSON body")
 		}
@@ -1897,6 +1929,7 @@ func TestGeminiTTSHandler(t *testing.T) {
 	t.Run("upstream error status", func(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		resp := &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(bytes.NewReader([]byte("boom")))}
+		defer func() { _ = resp.Body.Close() }()
 		_, apiErr := GeminiTTSHandler(c, &relaycommon.RelayInfo{}, resp)
 		if apiErr == nil || !strings.Contains(apiErr.Error(), "gemini TTS upstream error") {
 			t.Fatalf("apiErr = %v", apiErr)
@@ -1905,7 +1938,9 @@ func TestGeminiTTSHandler(t *testing.T) {
 
 	t.Run("bad JSON body", func(t *testing.T) {
 		c, _ := newGeminiTestContext()
-		_, apiErr := GeminiTTSHandler(c, &relaycommon.RelayInfo{}, fakeResponse("not json"))
+		resp := fakeResponse("not json")
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := GeminiTTSHandler(c, &relaycommon.RelayInfo{}, resp)
 		if apiErr == nil {
 			t.Fatal("expected error for malformed JSON body")
 		}
@@ -1914,7 +1949,9 @@ func TestGeminiTTSHandler(t *testing.T) {
 	t.Run("gemini error object surfaced", func(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		body := `{"error":{"message":"quota exceeded","code":429}}`
-		_, apiErr := GeminiTTSHandler(c, &relaycommon.RelayInfo{}, fakeResponse(body))
+		resp := fakeResponse(body)
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := GeminiTTSHandler(c, &relaycommon.RelayInfo{}, resp)
 		if apiErr == nil || !strings.Contains(apiErr.Error(), "quota exceeded") {
 			t.Fatalf("apiErr = %v", apiErr)
 		}
@@ -1923,7 +1960,9 @@ func TestGeminiTTSHandler(t *testing.T) {
 	t.Run("no audio in response", func(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		body := `{"candidates":[{"content":{"parts":[{}]},"finishReason":"OTHER"}]}`
-		_, apiErr := GeminiTTSHandler(c, &relaycommon.RelayInfo{}, fakeResponse(body))
+		resp := fakeResponse(body)
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := GeminiTTSHandler(c, &relaycommon.RelayInfo{}, resp)
 		if apiErr == nil || !strings.Contains(apiErr.Error(), "no audio") {
 			t.Fatalf("apiErr = %v", apiErr)
 		}
@@ -1932,7 +1971,9 @@ func TestGeminiTTSHandler(t *testing.T) {
 	t.Run("audio decoded and written", func(t *testing.T) {
 		c, w := newGeminiTestContext()
 		body := `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"audio/wav","data":"aGVsbG8="}}]},"finishReason":"STOP"}]}`
-		usage, apiErr := GeminiTTSHandler(c, &relaycommon.RelayInfo{}, fakeResponse(body))
+		resp := fakeResponse(body)
+		defer func() { _ = resp.Body.Close() }()
+		usage, apiErr := GeminiTTSHandler(c, &relaycommon.RelayInfo{}, resp)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -2046,7 +2087,9 @@ func TestGeminiChatStreamHandler(t *testing.T) {
 	})
 
 	stream := "data: " + string(chunk1) + "\n\n" + "data: " + string(chunk2) + "\n\n"
-	usage, apiErr := GeminiChatStreamHandler(c, info, fakeResponse(stream))
+	resp := fakeResponse(stream)
+	defer func() { _ = resp.Body.Close() }()
+	usage, apiErr := GeminiChatStreamHandler(c, info, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -2080,7 +2123,9 @@ func TestGeminiChatStreamHandler_ToolCallInFirstChunk(t *testing.T) {
 		UsageMetadata: dto.GeminiUsageMetadata{PromptTokenCount: 3, TotalTokenCount: 10},
 	})
 	stream := "data: " + string(chunk) + "\n\n"
-	usage, apiErr := GeminiChatStreamHandler(c, info, fakeResponse(stream))
+	resp := fakeResponse(stream)
+	defer func() { _ = resp.Body.Close() }()
+	usage, apiErr := GeminiChatStreamHandler(c, info, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -2103,7 +2148,9 @@ func TestGeminiChatStreamHandler_MalformedChunkPropagatesError(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.0-flash"},
 	}
 	stream := "data: not-json-at-all\n\n"
-	_, apiErr := GeminiChatStreamHandler(c, info, fakeResponse(stream))
+	resp := fakeResponse(stream)
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := GeminiChatStreamHandler(c, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected error from malformed SSE JSON chunk")
 	}
@@ -2118,7 +2165,9 @@ func TestGeminiTextGenerationStreamHandler(t *testing.T) {
 		UsageMetadata: dto.GeminiUsageMetadata{PromptTokenCount: 1, TotalTokenCount: 4},
 	})
 	stream := "data: " + string(chunk) + "\n\n"
-	usage, apiErr := GeminiTextGenerationStreamHandler(c, info, fakeResponse(stream))
+	resp := fakeResponse(stream)
+	defer func() { _ = resp.Body.Close() }()
+	usage, apiErr := GeminiTextGenerationStreamHandler(c, info, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -2148,7 +2197,9 @@ func TestAdaptor_DoResponse_Dispatch(t *testing.T) {
 			RequestURLPath: "/v1beta/models/embedding-001:embedContent",
 			ChannelMeta:    &relaycommon.ChannelMeta{UpstreamModelName: "embedding-001"},
 		}
-		_, apiErr := a.DoResponse(c, fakeResponse(string(body)), info)
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := a.DoResponse(c, resp, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -2158,7 +2209,9 @@ func TestAdaptor_DoResponse_Dispatch(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		body, _ := json.Marshal(dto.GeminiImageResponse{Predictions: []dto.GeminiImagePrediction{{BytesBase64Encoded: "AAA"}}})
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "imagen-3.0-generate-002"}}
-		_, apiErr := a.DoResponse(c, fakeResponse(string(body)), info)
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := a.DoResponse(c, resp, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -2168,7 +2221,9 @@ func TestAdaptor_DoResponse_Dispatch(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		body := `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"audio/wav","data":"aGk="}}]},"finishReason":"STOP"}]}`
 		info := &relaycommon.RelayInfo{RelayMode: constant.RelayModeAudioSpeech, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-tts"}}
-		_, apiErr := a.DoResponse(c, fakeResponse(body), info)
+		resp := fakeResponse(body)
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := a.DoResponse(c, resp, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -2178,7 +2233,9 @@ func TestAdaptor_DoResponse_Dispatch(t *testing.T) {
 		c, _ := newGeminiTestContext()
 		body, _ := json.Marshal(dto.GeminiBatchEmbeddingResponse{Embeddings: []*dto.ContentEmbedding{{Values: []float64{1}}}})
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "text-embedding-004"}}
-		_, apiErr := a.DoResponse(c, fakeResponse(string(body)), info)
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := a.DoResponse(c, resp, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -2194,7 +2251,9 @@ func TestAdaptor_DoResponse_Dispatch(t *testing.T) {
 			RelayFormat: types.RelayFormatOpenAI,
 			ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.0-flash"},
 		}
-		_, apiErr := a.DoResponse(c, fakeResponse(string(body)), info)
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := a.DoResponse(c, resp, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -2210,7 +2269,9 @@ func TestAdaptor_DoResponse_Dispatch(t *testing.T) {
 			RelayFormat: types.RelayFormatOpenAI,
 			ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.0-flash"},
 		}
-		_, apiErr := a.DoResponse(c, fakeResponse(stream), info)
+		resp := fakeResponse(stream)
+		defer func() { _ = resp.Body.Close() }()
+		_, apiErr := a.DoResponse(c, resp, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -2226,7 +2287,9 @@ func TestAdaptor_DoResponse_Dispatch(t *testing.T) {
 			RequestURLPath: "/v1beta/models/gemini-2.0-flash:generateContent",
 			ChannelMeta:    &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.0-flash"},
 		}
-		usage, apiErr := a.DoResponse(c, fakeResponse(string(body)), info)
+		resp := fakeResponse(string(body))
+		defer func() { _ = resp.Body.Close() }()
+		usage, apiErr := a.DoResponse(c, resp, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}

@@ -297,7 +297,9 @@ func TestBuildRequestBody(t *testing.T) {
 		}{})
 		_ = data
 		buf := new(bytes.Buffer)
-		buf.ReadFrom(r)
+		if _, err := buf.ReadFrom(r); err != nil {
+			t.Fatalf("read built body: %v", err)
+		}
 		var got requestPayload
 		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 			t.Fatalf("unmarshal built body: %v", err)
@@ -330,7 +332,9 @@ func TestBuildRequestBody(t *testing.T) {
 			t.Errorf("Action = %q, want %q", info.Action, constant.TaskActionGenerate)
 		}
 		buf := new(bytes.Buffer)
-		buf.ReadFrom(r)
+		if _, err := buf.ReadFrom(r); err != nil {
+			t.Fatalf("read built body: %v", err)
+		}
 		var got requestPayload
 		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 			t.Fatalf("unmarshal built body: %v", err)
@@ -343,12 +347,21 @@ func TestBuildRequestBody(t *testing.T) {
 	t.Run("multipart multiple files sets FirstTailGenerate action", func(t *testing.T) {
 		var buf bytes.Buffer
 		w := multipart.NewWriter(&buf)
-		w.WriteField("prompt", "p")
-		for _, name := range []string{"a.png", "b.png"} {
-			fw, _ := w.CreateFormFile("input_reference", name)
-			fw.Write([]byte("data-" + name))
+		if err := w.WriteField("prompt", "p"); err != nil {
+			t.Fatalf("WriteField: %v", err)
 		}
-		w.Close()
+		for _, name := range []string{"a.png", "b.png"} {
+			fw, err := w.CreateFormFile("input_reference", name)
+			if err != nil {
+				t.Fatalf("CreateFormFile: %v", err)
+			}
+			if _, err := fw.Write([]byte("data-" + name)); err != nil {
+				t.Fatalf("write file content: %v", err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close multipart writer: %v", err)
+		}
 		req := httptest.NewRequest(http.MethodPost, "/v1/videos", &buf)
 		req.Header.Set("Content-Type", w.FormDataContentType())
 		wr := httptest.NewRecorder()
@@ -393,9 +406,13 @@ func TestBuildRequestBody(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		buf := new(bytes.Buffer)
-		buf.ReadFrom(r)
+		if _, err := buf.ReadFrom(r); err != nil {
+			t.Fatalf("read built body: %v", err)
+		}
 		var got requestPayload
-		json.Unmarshal(buf.Bytes(), &got)
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatalf("unmarshal built body: %v", err)
+		}
 		if got.ReqKey != "jimeng_ti2v_v30_pro" {
 			t.Errorf("ReqKey = %q, want jimeng_ti2v_v30_pro", got.ReqKey)
 		}
@@ -410,9 +427,13 @@ func TestBuildRequestBody(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		buf := new(bytes.Buffer)
-		buf.ReadFrom(r)
+		if _, err := buf.ReadFrom(r); err != nil {
+			t.Fatalf("read built body: %v", err)
+		}
 		var got requestPayload
-		json.Unmarshal(buf.Bytes(), &got)
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatalf("unmarshal built body: %v", err)
+		}
 		if got.ReqKey != "jimeng_i2v_first_v30" {
 			t.Errorf("ReqKey = %q, want jimeng_i2v_first_v30", got.ReqKey)
 		}
@@ -430,9 +451,13 @@ func TestBuildRequestBody(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		buf := new(bytes.Buffer)
-		buf.ReadFrom(r)
+		if _, err := buf.ReadFrom(r); err != nil {
+			t.Fatalf("read built body: %v", err)
+		}
 		var got requestPayload
-		json.Unmarshal(buf.Bytes(), &got)
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatalf("unmarshal built body: %v", err)
+		}
 		if got.ReqKey != "jimeng_i2v_first_tail_v30" {
 			t.Errorf("ReqKey = %q, want jimeng_i2v_first_tail_v30", got.ReqKey)
 		}
@@ -450,9 +475,13 @@ func TestBuildRequestBody(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		buf := new(bytes.Buffer)
-		buf.ReadFrom(r)
+		if _, err := buf.ReadFrom(r); err != nil {
+			t.Fatalf("read built body: %v", err)
+		}
 		var got requestPayload
-		json.Unmarshal(buf.Bytes(), &got)
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatalf("unmarshal built body: %v", err)
+		}
 		if got.ReqKey != "jimeng_t2v_v30p" {
 			t.Errorf("ReqKey = %q, want jimeng_t2v_v30p", got.ReqKey)
 		}
@@ -467,9 +496,13 @@ func TestBuildRequestBody(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		buf := new(bytes.Buffer)
-		buf.ReadFrom(r)
+		if _, err := buf.ReadFrom(r); err != nil {
+			t.Fatalf("read built body: %v", err)
+		}
 		var got requestPayload
-		json.Unmarshal(buf.Bytes(), &got)
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatalf("unmarshal built body: %v", err)
+		}
 		if got.Frames != 121 {
 			t.Errorf("Frames = %d, want 121", got.Frames)
 		}
@@ -573,14 +606,20 @@ func TestFetchTask(t *testing.T) {
 	a := &TaskAdaptor{baseURL: "https://visual.volcengineapi.com"}
 
 	t.Run("missing task_id returns error before any network call", func(t *testing.T) {
-		_, err := a.FetchTask("https://visual.volcengineapi.com", "sk-abc", map[string]any{}, "")
+		resp, err := a.FetchTask("https://visual.volcengineapi.com", "sk-abc", map[string]any{}, "")
+		if resp != nil {
+			defer func() { _ = resp.Body.Close() }()
+		}
 		if err == nil || err.Error() != "invalid task_id" {
 			t.Fatalf("err = %v, want 'invalid task_id'", err)
 		}
 	})
 
 	t.Run("non-newapi key with malformed ak|sk format returns error before signing", func(t *testing.T) {
-		_, err := a.FetchTask("https://visual.volcengineapi.com", "not-a-valid-key", map[string]any{"task_id": "t1"}, "")
+		resp, err := a.FetchTask("https://visual.volcengineapi.com", "not-a-valid-key", map[string]any{"task_id": "t1"}, "")
+		if resp != nil {
+			defer func() { _ = resp.Body.Close() }()
+		}
 		if err == nil {
 			t.Fatal("expected error for malformed api key")
 		}
@@ -598,7 +637,9 @@ func TestFetchTask(t *testing.T) {
 				t.Errorf("Authorization = %q, want Bearer sk-abc", got)
 			}
 			var payload map[string]string
-			json.NewDecoder(r.Body).Decode(&payload)
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode request body: %v", err)
+			}
 			if payload["task_id"] != "t-99" {
 				t.Errorf("task_id in payload = %q, want t-99", payload["task_id"])
 			}
@@ -606,7 +647,9 @@ func TestFetchTask(t *testing.T) {
 				t.Errorf("req_key in payload = %q, want jimeng_vgfm_t2v_l20", payload["req_key"])
 			}
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"code":10000}`))
+			if _, err := w.Write([]byte(`{"code":10000}`)); err != nil {
+				t.Errorf("write response: %v", err)
+			}
 		}))
 		defer srv.Close()
 
@@ -615,7 +658,7 @@ func TestFetchTask(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("status = %d, want 200", resp.StatusCode)
 		}
@@ -630,7 +673,9 @@ func TestFetchTask(t *testing.T) {
 				t.Error("expected X-Date header to be set")
 			}
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"code":10000}`))
+			if _, err := w.Write([]byte(`{"code":10000}`)); err != nil {
+				t.Errorf("write response: %v", err)
+			}
 		}))
 		defer srv.Close()
 
@@ -639,7 +684,7 @@ func TestFetchTask(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	})
 }
 

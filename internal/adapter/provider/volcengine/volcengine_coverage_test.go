@@ -902,7 +902,7 @@ func wsTTSServer(t *testing.T, frames [][]byte, closeCode int) *httptest.Server 
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		// Drain the client's initial FullClientRequest frame.
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return
@@ -1501,7 +1501,7 @@ func TestFullClientRequest_And_ReceiveMessage_RoundTrip(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		msg, err := ReceiveMessage(conn)
 		if err != nil {
 			return
@@ -1513,12 +1513,12 @@ func TestFullClientRequest_And_ReceiveMessage_RoundTrip(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if resp != nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	payload := []byte(`{"req":"full-client"}`)
 	if err := FullClientRequest(conn, payload); err != nil {
@@ -1545,19 +1545,19 @@ func TestFullClientRequest_ErrorsOnClosedConnection(t *testing.T) {
 		if err != nil {
 			return
 		}
-		conn.Close()
+		_ = conn.Close()
 	}))
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if resp != nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	conn.Close() // close the client side too, so WriteMessage fails immediately.
+	_ = conn.Close() // close the client side too, so WriteMessage fails immediately.
 
 	if err := FullClientRequest(conn, []byte("payload")); err == nil {
 		t.Fatalf("expected WriteMessage error on closed connection")
@@ -1572,7 +1572,7 @@ func TestReceiveMessage_UnexpectedFrameTooShortErrors(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		// Send a too-short binary frame; the client's ReceiveMessage should
 		// surface NewMessageFromBytes's "data too short" error.
 		_ = conn.WriteMessage(websocket.BinaryMessage, []byte{0x01, 0x02})
@@ -1583,12 +1583,12 @@ func TestReceiveMessage_UnexpectedFrameTooShortErrors(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if resp != nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	go func() {
 		_, err := ReceiveMessage(conn)

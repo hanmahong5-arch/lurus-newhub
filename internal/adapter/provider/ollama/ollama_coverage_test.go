@@ -830,8 +830,8 @@ func TestOllamaChatHandler(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("failed to unmarshal written body: %v", err)
 		}
-		if got.Choices[0].Message.Content != nil {
-			t.Errorf("Content = %v, want nil", got.Choices[0].Message.Content)
+		if got.Choices[0].Content != nil {
+			t.Errorf("Content = %v, want nil", got.Choices[0].Content)
 		}
 	})
 
@@ -880,11 +880,11 @@ func TestOllamaChatHandler(t *testing.T) {
 		}
 		// thinking:123 is not a JSON string, so the raw "123" is used verbatim
 		// (fallback branch) as the reasoning content.
-		if got.Choices[0].Message.ReasoningContent != "123" {
-			t.Errorf("ReasoningContent = %q, want %q", got.Choices[0].Message.ReasoningContent, "123")
+		if got.Choices[0].ReasoningContent != "123" {
+			t.Errorf("ReasoningContent = %q, want %q", got.Choices[0].ReasoningContent, "123")
 		}
-		if s, ok := got.Choices[0].Message.Content.(string); !ok || s != "hi" {
-			t.Errorf("Content = %v, want %q", got.Choices[0].Message.Content, "hi")
+		if s, ok := got.Choices[0].Content.(string); !ok || s != "hi" {
+			t.Errorf("Content = %v, want %q", got.Choices[0].Content, "hi")
 		}
 	})
 }

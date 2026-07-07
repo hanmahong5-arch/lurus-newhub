@@ -166,7 +166,7 @@ func TestGetMonitorSetting_NoEnv_Coverage(t *testing.T) {
 	orig := monitorSetting
 	t.Cleanup(func() { monitorSetting = orig })
 
-	os.Unsetenv("CHANNEL_TEST_FREQUENCY")
+	_ = os.Unsetenv("CHANNEL_TEST_FREQUENCY")
 	monitorSetting = MonitorSetting{AutoTestChannelEnabled: false, AutoTestChannelMinutes: 10}
 
 	got := GetMonitorSetting()

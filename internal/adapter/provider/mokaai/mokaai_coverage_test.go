@@ -309,7 +309,7 @@ func TestEmbeddingResponseMoka2OpenAI(t *testing.T) {
 	if got.Model != "baidu-embedding" {
 		t.Errorf("Model = %q, want %q", got.Model, "baidu-embedding")
 	}
-	if got.Usage.PromptTokens != 3 || got.Usage.TotalTokens != 3 {
+	if got.PromptTokens != 3 || got.TotalTokens != 3 {
 		t.Errorf("Usage = %+v, want prompt=3 total=3", got.Usage)
 	}
 	if len(got.Data) != 2 {

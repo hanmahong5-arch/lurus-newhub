@@ -391,6 +391,7 @@ func TestCohereHandler(t *testing.T) {
 			Body:       httpNopCloser(body),
 			Header:     make(http.Header),
 		}
+		defer func() { _ = resp.Body.Close() }()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "command-r"}}
 
 		usage, apiErr := cohereHandler(c, info, resp)
@@ -410,7 +411,7 @@ func TestCohereHandler(t *testing.T) {
 		if got.Id != "resp-1" || got.Model != "command-r" || got.Object != "chat.completion" {
 			t.Errorf("unexpected written response: %+v", got)
 		}
-		if len(got.Choices) != 1 || got.Choices[0].FinishReason != "stop" || got.Choices[0].Message.Content != "hello world" {
+		if len(got.Choices) != 1 || got.Choices[0].FinishReason != "stop" || got.Choices[0].Content != "hello world" {
 			t.Errorf("unexpected choices: %+v", got.Choices)
 		}
 	})
@@ -422,6 +423,7 @@ func TestCohereHandler(t *testing.T) {
 			Body:       httpNopCloser("not json"),
 			Header:     make(http.Header),
 		}
+		defer func() { _ = resp.Body.Close() }()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 		usage, apiErr := cohereHandler(c, info, resp)
 		if apiErr == nil {
@@ -446,6 +448,7 @@ func TestCohereRerankHandler(t *testing.T) {
 			Body:       httpNopCloser(body),
 			Header:     make(http.Header),
 		}
+		defer func() { _ = resp.Body.Close() }()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 		usage, apiErr := cohereRerankHandler(c, resp, info)
 		if apiErr != nil {
@@ -467,6 +470,7 @@ func TestCohereRerankHandler(t *testing.T) {
 			Body:       httpNopCloser(body),
 			Header:     make(http.Header),
 		}
+		defer func() { _ = resp.Body.Close() }()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 		info.SetEstimatePromptTokens(42)
 		usage, apiErr := cohereRerankHandler(c, resp, info)
@@ -485,6 +489,7 @@ func TestCohereRerankHandler(t *testing.T) {
 			Body:       httpNopCloser("not json"),
 			Header:     make(http.Header),
 		}
+		defer func() { _ = resp.Body.Close() }()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 		usage, apiErr := cohereRerankHandler(c, resp, info)
 		if apiErr == nil {
@@ -513,6 +518,7 @@ func TestCohereStreamHandler(t *testing.T) {
 			Body:       httpNopCloser(strings.Join(lines, "\n")),
 			Header:     make(http.Header),
 		}
+		defer func() { _ = resp.Body.Close() }()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "command-r"}}
 
 		usage, apiErr := cohereStreamHandler(c, info, resp)
@@ -548,6 +554,7 @@ func TestCohereStreamHandler(t *testing.T) {
 			Body:       httpNopCloser(strings.Join(lines, "\n")),
 			Header:     make(http.Header),
 		}
+		defer func() { _ = resp.Body.Close() }()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "command-r"}}
 
 		usage, apiErr := cohereStreamHandler(c, info, resp)
@@ -581,6 +588,7 @@ func TestCohereStreamHandler(t *testing.T) {
 			Body:       httpNopCloser(strings.Join(lines, "\n")),
 			Header:     make(http.Header),
 		}
+		defer func() { _ = resp.Body.Close() }()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "command-r"}}
 
 		usage, apiErr := cohereStreamHandler(c, info, resp)
@@ -608,4 +616,4 @@ type nopReadCloser struct {
 }
 
 func (n *nopReadCloser) Read(p []byte) (int, error) { return n.r.Read(p) }
-func (n *nopReadCloser) Close() error                { return nil }
+func (n *nopReadCloser) Close() error               { return nil }

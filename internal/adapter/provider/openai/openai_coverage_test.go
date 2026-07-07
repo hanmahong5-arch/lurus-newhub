@@ -897,7 +897,9 @@ func TestOpenaiHandler_Success(t *testing.T) {
 		RelayFormat: types.RelayFormatOpenAI,
 	}
 	body := `{"id":"chatcmpl-1","model":"gpt-4o","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`
-	usage, apiErr := OpenaiHandler(c, info, newFakeUpstreamResponse(body))
+	resp := newFakeUpstreamResponse(body)
+	defer func() { _ = resp.Body.Close() }()
+	usage, apiErr := OpenaiHandler(c, info, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -918,7 +920,9 @@ func TestOpenaiHandler_BadJSON(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI},
 		RelayFormat: types.RelayFormatOpenAI,
 	}
-	_, apiErr := OpenaiHandler(c, info, newFakeUpstreamResponse("{not json"))
+	resp := newFakeUpstreamResponse("{not json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := OpenaiHandler(c, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected error for invalid json response body")
 	}
@@ -931,7 +935,9 @@ func TestOpenaiHandler_OpenAIErrorInBody(t *testing.T) {
 		RelayFormat: types.RelayFormatOpenAI,
 	}
 	body := `{"error":{"type":"invalid_request_error","message":"bad request"}}`
-	_, apiErr := OpenaiHandler(c, info, newFakeUpstreamResponse(body))
+	resp := newFakeUpstreamResponse(body)
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := OpenaiHandler(c, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected error when upstream body contains an OpenAI error object")
 	}
@@ -947,7 +953,9 @@ func TestOpenaiHandlerWithUsage_Success(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI},
 	}
 	body := `{"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`
-	usage, apiErr := OpenaiHandlerWithUsage(c, info, newFakeUpstreamResponse(body))
+	resp := newFakeUpstreamResponse(body)
+	defer func() { _ = resp.Body.Close() }()
+	usage, apiErr := OpenaiHandlerWithUsage(c, info, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -961,7 +969,9 @@ func TestOpenaiHandlerWithUsage_BadJSON(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI},
 	}
-	_, apiErr := OpenaiHandlerWithUsage(c, info, newFakeUpstreamResponse("{not json"))
+	resp := newFakeUpstreamResponse("{not json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := OpenaiHandlerWithUsage(c, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected error for invalid json response body")
 	}
@@ -976,10 +986,10 @@ func TestAdaptor_Init_ThinkingToContent(t *testing.T) {
 		},
 	}
 	a.Init(info)
-	if !info.ThinkingContentInfo.IsFirstThinkingContent {
+	if !info.IsFirstThinkingContent {
 		t.Error("expected IsFirstThinkingContent = true after Init with ThinkingToContent enabled")
 	}
-	if info.ThinkingContentInfo.HasSentThinkingContent {
+	if info.HasSentThinkingContent {
 		t.Error("expected HasSentThinkingContent = false after Init")
 	}
 }

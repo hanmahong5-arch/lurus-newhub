@@ -1057,7 +1057,9 @@ func TestDoResponse_NonStream_ClaudeBranch(t *testing.T) {
 	c, _ := newTestGinContext()
 	a := &Adaptor{RequestMode: RequestModeClaude}
 	info := &relaycommon.RelayInfo{IsStream: false, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-3-opus@20240229"}}
-	_, apiErr := a.DoResponse(c, fakeResponse("not valid json"), info)
+	resp := fakeResponse("not valid json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := a.DoResponse(c, resp, info)
 	if apiErr == nil {
 		t.Fatalf("expected a parse error surfaced through the claude branch, got nil")
 	}
@@ -1073,7 +1075,9 @@ func TestDoResponse_NonStream_GeminiNativeBranch(t *testing.T) {
 			UpstreamModelName: "gemini-2.0-flash",
 		},
 	}
-	_, apiErr := a.DoResponse(c, fakeResponse("not valid json"), info)
+	resp := fakeResponse("not valid json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := a.DoResponse(c, resp, info)
 	if apiErr == nil {
 		t.Fatalf("expected a parse error surfaced through the gemini-native branch, got nil")
 	}
@@ -1089,7 +1093,9 @@ func TestDoResponse_NonStream_GeminiChatBranch(t *testing.T) {
 			UpstreamModelName: "gemini-2.0-flash",
 		},
 	}
-	_, apiErr := a.DoResponse(c, fakeResponse("not valid json"), info)
+	resp := fakeResponse("not valid json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := a.DoResponse(c, resp, info)
 	if apiErr == nil {
 		t.Fatalf("expected a parse error surfaced through the gemini-chat branch, got nil")
 	}
@@ -1105,7 +1111,9 @@ func TestDoResponse_NonStream_GeminiImagenBranch(t *testing.T) {
 			UpstreamModelName: "imagen-3.0",
 		},
 	}
-	_, apiErr := a.DoResponse(c, fakeResponse("not valid json"), info)
+	resp := fakeResponse("not valid json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := a.DoResponse(c, resp, info)
 	if apiErr == nil {
 		t.Fatalf("expected a parse error surfaced through the gemini-imagen branch, got nil")
 	}
@@ -1115,7 +1123,9 @@ func TestDoResponse_NonStream_LlamaBranch(t *testing.T) {
 	c, _ := newTestGinContext()
 	a := &Adaptor{RequestMode: RequestModeLlama}
 	info := &relaycommon.RelayInfo{IsStream: false, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "meta/llama3-405b-instruct-maas"}}
-	_, apiErr := a.DoResponse(c, fakeResponse("not valid json"), info)
+	resp := fakeResponse("not valid json")
+	defer func() { _ = resp.Body.Close() }()
+	_, apiErr := a.DoResponse(c, resp, info)
 	if apiErr == nil {
 		t.Fatalf("expected a parse error surfaced through the llama/openai branch, got nil")
 	}

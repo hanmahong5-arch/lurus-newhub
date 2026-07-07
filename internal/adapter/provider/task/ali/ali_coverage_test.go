@@ -610,6 +610,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = newBodyResponse(`{"output":{"task_id":"task-1","task_status":"PENDING"},"request_id":"r1"}`)
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{OriginModelName: "wan2.5-i2v-preview"})
 		if taskErr != nil {
@@ -632,6 +633,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = newBodyResponse(`not-json`)
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr == nil {
@@ -651,6 +653,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{Code: 400}
 		httpResp := resp.Result()
 		httpResp.Body = newBodyResponse(`{"code":"InvalidParameter","message":"bad param"}`)
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, _, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr == nil {
@@ -670,6 +673,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = newBodyResponse(`{"output":{"task_id":""}}`)
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, _, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr == nil {
@@ -690,6 +694,7 @@ func TestFetchTask(t *testing.T) {
 	t.Run("missing task_id", func(t *testing.T) {
 		resp, err := a.FetchTask("https://ali.example.com", "sk-key", map[string]any{}, "")
 		if resp != nil {
+			defer func() { _ = resp.Body.Close() }()
 			t.Errorf("resp = %v, want nil", resp)
 		}
 		if err == nil || err.Error() != "invalid task_id" {
@@ -700,6 +705,7 @@ func TestFetchTask(t *testing.T) {
 	t.Run("task_id wrong type", func(t *testing.T) {
 		resp, err := a.FetchTask("https://ali.example.com", "sk-key", map[string]any{"task_id": 123}, "")
 		if resp != nil {
+			defer func() { _ = resp.Body.Close() }()
 			t.Errorf("resp = %v, want nil", resp)
 		}
 		if err == nil || err.Error() != "invalid task_id" {
@@ -710,6 +716,7 @@ func TestFetchTask(t *testing.T) {
 	t.Run("invalid proxy causes client creation failure", func(t *testing.T) {
 		resp, err := a.FetchTask("https://ali.example.com", "sk-key", map[string]any{"task_id": "t1"}, "://bad-proxy")
 		if resp != nil {
+			defer func() { _ = resp.Body.Close() }()
 			t.Errorf("resp = %v, want nil", resp)
 		}
 		if err == nil {

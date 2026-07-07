@@ -220,6 +220,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = io.NopCloser(newStringReader(`{"name":"models/veo-3.0-generate-001/operations/op-123"}`))
+		defer httpResp.Body.Close()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{OriginModelName: "veo-3.0-generate-001"})
 		if taskErr != nil {
@@ -243,6 +244,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = io.NopCloser(newStringReader(`not-json`))
+		defer httpResp.Body.Close()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr == nil {
@@ -265,6 +267,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = io.NopCloser(newStringReader(`{"name":"  "}`))
+		defer httpResp.Body.Close()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr == nil {

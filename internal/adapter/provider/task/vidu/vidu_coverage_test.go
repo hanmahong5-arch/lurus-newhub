@@ -402,6 +402,7 @@ func TestDoResponse_ReadBodyError(t *testing.T) {
 	a := &TaskAdaptor{}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	resp := &http.Response{Body: io.NopCloser(&errorReader{})}
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{}
 
 	_, _, taskErr := a.DoResponse(c, resp, info)
@@ -417,6 +418,7 @@ func TestDoResponse_UnmarshalError(t *testing.T) {
 	a := &TaskAdaptor{}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader("not json"))}
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{}
 
 	_, _, taskErr := a.DoResponse(c, resp, info)
@@ -433,6 +435,7 @@ func TestDoResponse_TaskFailed(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	body := `{"task_id":"t1","state":"failed"}`
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{}
 
 	_, _, taskErr := a.DoResponse(c, resp, info)
@@ -450,6 +453,7 @@ func TestDoResponse_Success(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	body := `{"task_id":"task-123","state":"created"}`
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{OriginModelName: "vidu-model"}
 
 	taskID, taskData, taskErr := a.DoResponse(c, resp, info)
@@ -495,7 +499,10 @@ func (e *errorReader) Read(p []byte) (int, error) {
 
 func TestFetchTask_MissingTaskID(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://base", "key", map[string]any{}, "")
+	resp, err := a.FetchTask("https://base", "key", map[string]any{}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil {
 		t.Fatal("expected error for missing task_id")
 	}
@@ -506,7 +513,10 @@ func TestFetchTask_MissingTaskID(t *testing.T) {
 
 func TestFetchTask_WrongTypeTaskID(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://base", "key", map[string]any{"task_id": 12345}, "")
+	resp, err := a.FetchTask("https://base", "key", map[string]any{"task_id": 12345}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil {
 		t.Fatal("expected error for non-string task_id")
 	}
@@ -519,7 +529,10 @@ func TestFetchTask_InvalidURLFromBaseUrl(t *testing.T) {
 	a := &TaskAdaptor{}
 	// control character makes the constructed URL invalid for http.NewRequest,
 	// letting us exercise the http.NewRequest error branch without any network I/O.
-	_, err := a.FetchTask("https://base\x7f", "key", map[string]any{"task_id": "abc"}, "")
+	resp, err := a.FetchTask("https://base\x7f", "key", map[string]any{"task_id": "abc"}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil {
 		t.Fatal("expected error building request from invalid base URL")
 	}
