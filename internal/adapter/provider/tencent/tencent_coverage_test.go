@@ -300,14 +300,14 @@ func TestResponseTencent2OpenAI(t *testing.T) {
 		if got.Id != "resp-1" || got.Object != "chat.completion" {
 			t.Errorf("unexpected envelope: %+v", got)
 		}
-		if got.Usage.TotalTokens != 8 || got.Usage.PromptTokens != 3 || got.Usage.CompletionTokens != 5 {
+		if got.TotalTokens != 8 || got.PromptTokens != 3 || got.CompletionTokens != 5 {
 			t.Errorf("Usage = %+v, want 3/5/8", got.Usage)
 		}
 		if len(got.Choices) != 1 {
 			t.Fatalf("Choices length = %d, want 1", len(got.Choices))
 		}
 		choice := got.Choices[0]
-		if choice.Message.Role != "assistant" || choice.Message.Content != "the reply" || choice.FinishReason != "stop" {
+		if choice.Role != "assistant" || choice.Content != "the reply" || choice.FinishReason != "stop" {
 			t.Errorf("choice = %+v, want assistant/the reply/stop", choice)
 		}
 	})

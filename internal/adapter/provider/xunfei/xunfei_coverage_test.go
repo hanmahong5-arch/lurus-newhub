@@ -327,11 +327,11 @@ func TestResponseXunfei2OpenAI(t *testing.T) {
 		if len(got.Choices) != 1 {
 			t.Fatalf("Choices len = %d, want 1", len(got.Choices))
 		}
-		if got.Choices[0].Message.Content != "" {
-			t.Errorf("Content = %v, want empty", got.Choices[0].Message.Content)
+		if got.Choices[0].Content != "" {
+			t.Errorf("Content = %v, want empty", got.Choices[0].Content)
 		}
-		if got.Choices[0].Message.Role != "assistant" {
-			t.Errorf("Role = %q, want %q", got.Choices[0].Message.Role, "assistant")
+		if got.Choices[0].Role != "assistant" {
+			t.Errorf("Role = %q, want %q", got.Choices[0].Role, "assistant")
 		}
 		if got.Object != "chat.completion" {
 			t.Errorf("Object = %q, want %q", got.Object, "chat.completion")
@@ -344,8 +344,8 @@ func TestResponseXunfei2OpenAI(t *testing.T) {
 			{Content: "hello world", Role: "assistant"},
 		}
 		got := responseXunfei2OpenAI(resp)
-		if got.Choices[0].Message.Content != "hello world" {
-			t.Errorf("Content = %v, want %q", got.Choices[0].Message.Content, "hello world")
+		if got.Choices[0].Content != "hello world" {
+			t.Errorf("Content = %v, want %q", got.Choices[0].Content, "hello world")
 		}
 		if got.Choices[0].FinishReason != "stop" {
 			t.Errorf("FinishReason = %q, want %q", got.Choices[0].FinishReason, "stop")

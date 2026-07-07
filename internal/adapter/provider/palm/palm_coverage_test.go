@@ -183,11 +183,11 @@ func TestResponsePaLM2OpenAI(t *testing.T) {
 			if got.Choices[i].Index != i {
 				t.Errorf("Choices[%d].Index = %d, want %d", i, got.Choices[i].Index, i)
 			}
-			if got.Choices[i].Message.Role != "assistant" {
-				t.Errorf("Choices[%d].Message.Role = %q, want %q", i, got.Choices[i].Message.Role, "assistant")
+			if got.Choices[i].Role != "assistant" {
+				t.Errorf("Choices[%d].Message.Role = %q, want %q", i, got.Choices[i].Role, "assistant")
 			}
-			if got.Choices[i].Message.Content != want {
-				t.Errorf("Choices[%d].Message.Content = %v, want %q", i, got.Choices[i].Message.Content, want)
+			if got.Choices[i].Content != want {
+				t.Errorf("Choices[%d].Message.Content = %v, want %q", i, got.Choices[i].Content, want)
 			}
 			if got.Choices[i].FinishReason != "stop" {
 				t.Errorf("Choices[%d].FinishReason = %q, want %q", i, got.Choices[i].FinishReason, "stop")

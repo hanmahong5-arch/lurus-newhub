@@ -331,14 +331,14 @@ func TestResponseZhipu2OpenAI(t *testing.T) {
 	if len(got.Choices) != 2 {
 		t.Fatalf("Choices length = %d, want 2", len(got.Choices))
 	}
-	if got.Choices[0].Index != 0 || got.Choices[0].Message.Content != "first" || got.Choices[0].FinishReason != "" {
+	if got.Choices[0].Index != 0 || got.Choices[0].Content != "first" || got.Choices[0].FinishReason != "" {
 		t.Errorf("Choices[0] = %+v, want Index=0 Content=first FinishReason=empty", got.Choices[0])
 	}
-	if got.Choices[1].Index != 1 || got.Choices[1].Message.Content != "second" || got.Choices[1].FinishReason != "stop" {
+	if got.Choices[1].Index != 1 || got.Choices[1].Content != "second" || got.Choices[1].FinishReason != "stop" {
 		t.Errorf("Choices[1] = %+v, want Index=1 Content=second FinishReason=stop", got.Choices[1])
 	}
-	if got.Usage.TotalTokens != 10 {
-		t.Errorf("Usage.TotalTokens = %d, want 10", got.Usage.TotalTokens)
+	if got.TotalTokens != 10 {
+		t.Errorf("Usage.TotalTokens = %d, want 10", got.TotalTokens)
 	}
 }
 
