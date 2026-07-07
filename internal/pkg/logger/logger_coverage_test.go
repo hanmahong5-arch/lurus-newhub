@@ -11,6 +11,16 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 )
 
+// TestMain replaces asyncGo with a no-op so checkLogRotation's fire-and-forget
+// SetupLogger dispatch cannot leave a goroutine that races the unlocked
+// logCount/setupLogWorking globals in later tests under -race. checkLogRotation's
+// own synchronous effects stay observable; SetupLogger is covered directly by
+// TestSetupLogger_*.
+func TestMain(m *testing.M) {
+	asyncGo = func(func()) {}
+	os.Exit(m.Run())
+}
+
 // snapshotGeneralSetting saves/restores the mutable package-level GeneralSetting
 // so this test stays -count=1 safe and doesn't leak state to other tests.
 func snapshotGeneralSetting(t *testing.T) {

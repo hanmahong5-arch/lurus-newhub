@@ -24,6 +24,12 @@ var logCount int
 var setupLogLock sync.Mutex
 var setupLogWorking bool
 
+// asyncGo dispatches checkLogRotation's fire-and-forget SetupLogger call. It is
+// a package var only so tests can replace it with a no-op, keeping that detached
+// goroutine from outliving a test and racing the (intentionally unlocked)
+// logCount/setupLogWorking globals under -race. Production behaviour is unchanged.
+var asyncGo = gopool.Go
+
 // SetupLogger configures file-based logging with rotation
 func SetupLogger() {
 	defer func() {
@@ -89,7 +95,7 @@ func checkLogRotation() {
 	if logCount > maxLogCount && !setupLogWorking {
 		logCount = 0
 		setupLogWorking = true
-		gopool.Go(func() {
+		asyncGo(func() {
 			SetupLogger()
 		})
 	}
