@@ -220,7 +220,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = io.NopCloser(newStringReader(`{"name":"models/veo-3.0-generate-001/operations/op-123"}`))
-		defer httpResp.Body.Close()
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{OriginModelName: "veo-3.0-generate-001"})
 		if taskErr != nil {
@@ -244,7 +244,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = io.NopCloser(newStringReader(`not-json`))
-		defer httpResp.Body.Close()
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr == nil {
@@ -267,7 +267,7 @@ func TestDoResponse(t *testing.T) {
 		resp := &httptest.ResponseRecorder{}
 		httpResp := resp.Result()
 		httpResp.Body = io.NopCloser(newStringReader(`{"name":"  "}`))
-		defer httpResp.Body.Close()
+		defer func() { _ = httpResp.Body.Close() }()
 
 		taskID, taskData, taskErr := a.DoResponse(c, httpResp, &relaycommon.RelayInfo{})
 		if taskErr == nil {
@@ -290,6 +290,11 @@ func TestFetchTask(t *testing.T) {
 
 	t.Run("missing task_id", func(t *testing.T) {
 		resp, err := a.FetchTask("https://gemini.example.com", "sk-key", map[string]any{}, "")
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 		if resp != nil {
 			t.Errorf("resp = %v, want nil", resp)
 		}
@@ -300,6 +305,11 @@ func TestFetchTask(t *testing.T) {
 
 	t.Run("task_id wrong type", func(t *testing.T) {
 		resp, err := a.FetchTask("https://gemini.example.com", "sk-key", map[string]any{"task_id": 123}, "")
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 		if resp != nil {
 			t.Errorf("resp = %v, want nil", resp)
 		}
@@ -310,6 +320,11 @@ func TestFetchTask(t *testing.T) {
 
 	t.Run("task_id fails base64 decode", func(t *testing.T) {
 		resp, err := a.FetchTask("https://gemini.example.com", "sk-key", map[string]any{"task_id": "not!!valid!!base64"}, "")
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 		if resp != nil {
 			t.Errorf("resp = %v, want nil", resp)
 		}
@@ -321,6 +336,11 @@ func TestFetchTask(t *testing.T) {
 	t.Run("invalid proxy causes client creation failure", func(t *testing.T) {
 		validTaskID := encodeLocalTaskID("operations/op-1")
 		resp, err := a.FetchTask("https://gemini.example.com", "sk-key", map[string]any{"task_id": validTaskID}, "://bad-proxy")
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 		if resp != nil {
 			t.Errorf("resp = %v, want nil", resp)
 		}
