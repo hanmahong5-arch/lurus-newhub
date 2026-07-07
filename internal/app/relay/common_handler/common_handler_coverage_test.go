@@ -82,6 +82,7 @@ func TestRerankHandler_XinferenceBadJSON(t *testing.T) {
 	c, _ := newTestGinContext()
 	info := newRerankInfo(constant.ChannelTypeXinference, false, nil)
 	resp := newHTTPResponse("not-json{{{")
+	defer func() { _ = resp.Body.Close() }()
 
 	usage, apiErr := RerankHandler(c, info, resp)
 
@@ -105,6 +106,7 @@ func TestRerankHandler_DefaultBadJSON(t *testing.T) {
 	c, _ := newTestGinContext()
 	info := newRerankInfo(constant.ChannelTypeOpenAI, false, nil)
 	resp := newHTTPResponse("not-json{{{")
+	defer func() { _ = resp.Body.Close() }()
 
 	usage, apiErr := RerankHandler(c, info, resp)
 
@@ -127,6 +129,7 @@ func TestRerankHandler_Default_HappyPath(t *testing.T) {
 	info := newRerankInfo(constant.ChannelTypeOpenAI, false, nil)
 	body := `{"results":[{"index":0,"relevance_score":0.75}],"usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":42}}`
 	resp := newHTTPResponse(body)
+	defer func() { _ = resp.Body.Close() }()
 
 	usage, apiErr := RerankHandler(c, info, resp)
 
@@ -165,6 +168,7 @@ func TestRerankHandler_Xinference_ReturnDocuments_EmptyStringFallsBackToInput(t 
 	info := newRerankInfo(constant.ChannelTypeXinference, true, []any{"first-doc", "second-doc"})
 	body := `{"results":[{"index":0,"relevance_score":0.9,"document":""},{"index":1,"relevance_score":0.5,"document":"actual-doc"}]}`
 	resp := newHTTPResponse(body)
+	defer func() { _ = resp.Body.Close() }()
 
 	usage, apiErr := RerankHandler(c, info, resp)
 
@@ -198,6 +202,7 @@ func TestRerankHandler_Xinference_ReturnDocuments_NonStringDocument(t *testing.T
 	info := newRerankInfo(constant.ChannelTypeXinference, true, nil)
 	body := `{"results":[{"index":0,"relevance_score":0.3,"document":{"text":"nested"}}]}`
 	resp := newHTTPResponse(body)
+	defer func() { _ = resp.Body.Close() }()
 
 	usage, apiErr := RerankHandler(c, info, resp)
 
@@ -220,6 +225,7 @@ func TestRerankHandler_Xinference_ReturnDocumentsFalse(t *testing.T) {
 	info := newRerankInfo(constant.ChannelTypeXinference, false, nil)
 	body := `{"results":[{"index":0,"relevance_score":0.6,"document":"should-be-dropped"}]}`
 	resp := newHTTPResponse(body)
+	defer func() { _ = resp.Body.Close() }()
 
 	usage, apiErr := RerankHandler(c, info, resp)
 
@@ -242,6 +248,7 @@ func TestRerankHandler_Xinference_NilDocument(t *testing.T) {
 	info := newRerankInfo(constant.ChannelTypeXinference, true, nil)
 	body := `{"results":[{"index":0,"relevance_score":0.1}]}`
 	resp := newHTTPResponse(body)
+	defer func() { _ = resp.Body.Close() }()
 
 	usage, apiErr := RerankHandler(c, info, resp)
 
@@ -264,6 +271,7 @@ func TestRerankHandler_Xinference_MultipleResultsPreserveOrderAndIndex(t *testin
 	info := newRerankInfo(constant.ChannelTypeXinference, false, nil)
 	body := `{"results":[{"index":2,"relevance_score":0.2},{"index":0,"relevance_score":0.9},{"index":1,"relevance_score":0.5}]}`
 	resp := newHTTPResponse(body)
+	defer func() { _ = resp.Body.Close() }()
 
 	usage, apiErr := RerankHandler(c, info, resp)
 	if apiErr != nil {

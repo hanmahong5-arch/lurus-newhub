@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,10 +56,15 @@ func withLeaderStateReset(t *testing.T) {
 	t.Cleanup(func() { common.SetLeader(prev) })
 }
 
-// syncBuffer is a bytes.Buffer guarded by a mutex. The privacy-erasure and
-// secret-rotation executors spawn a background goroutine that logs via
-// gin.DefaultWriter; without this guard that goroutine's Write races the test's
-// String() read under -race. Only Write and String are exercised here.
+// syncBuffer is a bytes.Buffer guarded by a mutex. common.SysLog writes to the
+// process-global gin.DefaultWriter, and the privacy-erasure / secret-rotation
+// executors log from a detached (SafeGoWithContext, no join) background goroutine
+// that can outlive the spawning test. Two -race hazards follow: (1) the leaked
+// goroutine's buffer Write races a test's String()/Reset(); (2) if each test
+// swapped gin.DefaultWriter, the leaked goroutine's *read* of that global would
+// race the next test's *write* of it. Both are solved by installing ONE shared
+// syncBuffer as gin.DefaultWriter exactly once in TestMain (never swapped again)
+// and serialising all buffer access through the mutex.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -76,15 +82,32 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// captureSysLog redirects gin.DefaultWriter (used by common.SysLog) into a
-// mutex-guarded buffer for the duration of the test and restores it on cleanup.
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+// sharedLogBuf is wired to gin.DefaultWriter once (TestMain) and never rebound,
+// so no test writes the gin.DefaultWriter global after startup — the leaked
+// executor goroutine only ever reads it, which is safe on a read-only-after-init
+// global.
+var sharedLogBuf = &syncBuffer{}
+
+func TestMain(m *testing.M) {
+	gin.DefaultWriter = sharedLogBuf
+	os.Exit(m.Run())
+}
+
+// captureSysLog resets the shared mutex-guarded log buffer and returns it. It
+// deliberately does NOT swap gin.DefaultWriter (that would race the leaked
+// executor goroutine that reads it) — the buffer is already wired via TestMain.
+// Stray lines a leaked goroutine appends from a prior test are harmless: each
+// assertion uses strings.Contains on its own distinct message.
 func captureSysLog(t *testing.T) *syncBuffer {
 	t.Helper()
-	buf := &syncBuffer{}
-	prev := gin.DefaultWriter
-	gin.DefaultWriter = buf
-	t.Cleanup(func() { gin.DefaultWriter = prev })
-	return buf
+	sharedLogBuf.Reset()
+	return sharedLogBuf
 }
 
 func TestNewLeaderManager_ConstructsExpectedFields(t *testing.T) {

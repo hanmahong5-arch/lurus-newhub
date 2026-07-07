@@ -844,7 +844,7 @@ func TestGenRelayInfoVariants(t *testing.T) {
 		if !info.IsClaudeBetaQuery {
 			t.Error("expected IsClaudeBetaQuery true when beta=true query present")
 		}
-		if info.ClaudeConvertInfo == nil || info.ClaudeConvertInfo.LastMessagesType != LastMessageTypeNone {
+		if info.ClaudeConvertInfo == nil || info.LastMessagesType != LastMessageTypeNone {
 			t.Errorf("expected initialized ClaudeConvertInfo, got %+v", info.ClaudeConvertInfo)
 		}
 	})
@@ -868,7 +868,7 @@ func TestGenRelayInfoVariants(t *testing.T) {
 		if info.RelayMode != relayconstant.RelayModeRerank {
 			t.Errorf("RelayMode = %d, want RelayModeRerank", info.RelayMode)
 		}
-		if len(info.RerankerInfo.Documents) != 2 || !info.RerankerInfo.ReturnDocuments {
+		if len(info.Documents) != 2 || !info.ReturnDocuments {
 			t.Errorf("unexpected RerankerInfo: %+v", info.RerankerInfo)
 		}
 	})
@@ -934,9 +934,9 @@ func TestGenRelayInfoVariants(t *testing.T) {
 		if info.RelayMode != relayconstant.RelayModeResponses {
 			t.Errorf("RelayMode = %d, want RelayModeResponses", info.RelayMode)
 		}
-		tool, ok := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]
+		tool, ok := info.BuiltInTools[dto.BuildInToolWebSearchPreview]
 		if !ok {
-			t.Fatalf("expected web_search_preview tool tracked, got %+v", info.ResponsesUsageInfo.BuiltInTools)
+			t.Fatalf("expected web_search_preview tool tracked, got %+v", info.BuiltInTools)
 		}
 		if tool.SearchContextSize != "medium" {
 			t.Errorf("SearchContextSize = %q, want default medium", tool.SearchContextSize)
@@ -949,7 +949,7 @@ func TestGenRelayInfoVariants(t *testing.T) {
 			Tools: []byte(`[{"type":"web_search_preview","search_context_size":"large"}]`),
 		}
 		info := GenRelayInfoResponses(c, req)
-		tool := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]
+		tool := info.BuiltInTools[dto.BuildInToolWebSearchPreview]
 		if tool.SearchContextSize != "large" {
 			t.Errorf("SearchContextSize = %q, want large", tool.SearchContextSize)
 		}
@@ -959,8 +959,8 @@ func TestGenRelayInfoVariants(t *testing.T) {
 		c := newRelayGinContext(t, http.MethodPost, "/v1/responses")
 		req := &dto.OpenAIResponsesRequest{}
 		info := GenRelayInfoResponses(c, req)
-		if len(info.ResponsesUsageInfo.BuiltInTools) != 0 {
-			t.Errorf("expected empty BuiltInTools, got %+v", info.ResponsesUsageInfo.BuiltInTools)
+		if len(info.BuiltInTools) != 0 {
+			t.Errorf("expected empty BuiltInTools, got %+v", info.BuiltInTools)
 		}
 	})
 }

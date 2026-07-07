@@ -487,6 +487,7 @@ func respWithBody(status int, body string) *http.Response {
 func TestZhipu4vImageHandlerUnmarshalError(t *testing.T) {
 	c := newTestGinContext()
 	resp := respWithBody(http.StatusOK, "not-json")
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{StartTime: time.Now()}
 
 	usage, apiErr := zhipu4vImageHandler(c, resp, info)
@@ -502,6 +503,7 @@ func TestZhipu4vImageHandlerUpstreamError(t *testing.T) {
 	c := newTestGinContext()
 	body := `{"error":{"code":"1234","message":"upstream failed"}}`
 	resp := respWithBody(http.StatusBadRequest, body)
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{StartTime: time.Now()}
 
 	usage, apiErr := zhipu4vImageHandler(c, resp, info)
@@ -520,6 +522,7 @@ func TestZhipu4vImageHandlerB64JsonSuccess(t *testing.T) {
 	c := newTestGinContext()
 	body := `{"created":1234567890,"data":[{"url":"https://img.example.com/a.png","b64_json":"AAAA"}]}`
 	resp := respWithBody(http.StatusOK, body)
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{StartTime: time.Now()}
 
 	usage, apiErr := zhipu4vImageHandler(c, resp, info)
@@ -535,6 +538,7 @@ func TestZhipu4vImageHandlerB64ImageSuccess(t *testing.T) {
 	c := newTestGinContext()
 	body := `{"data":[{"image_url":"https://img.example.com/b.png","b64_image":"BBBB"}]}`
 	resp := respWithBody(http.StatusOK, body)
+	defer func() { _ = resp.Body.Close() }()
 	start := time.Now()
 	info := &relaycommon.RelayInfo{StartTime: start}
 
@@ -552,6 +556,7 @@ func TestZhipu4vImageHandlerMissingURLSkipsItem(t *testing.T) {
 	// item has neither url nor image_url -> logged and skipped; no download attempted.
 	body := `{"data":[{"b64_json":"CCCC"}]}`
 	resp := respWithBody(http.StatusOK, body)
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{StartTime: time.Now()}
 
 	usage, apiErr := zhipu4vImageHandler(c, resp, info)
@@ -567,6 +572,7 @@ func TestZhipu4vImageHandlerEmptyDataList(t *testing.T) {
 	c := newTestGinContext()
 	body := `{"created":42,"data":[]}`
 	resp := respWithBody(http.StatusOK, body)
+	defer func() { _ = resp.Body.Close() }()
 	info := &relaycommon.RelayInfo{StartTime: time.Now()}
 
 	usage, apiErr := zhipu4vImageHandler(c, resp, info)

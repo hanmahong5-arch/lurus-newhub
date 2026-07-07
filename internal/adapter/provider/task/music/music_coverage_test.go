@@ -410,7 +410,10 @@ func TestParseTaskResult(t *testing.T) {
 // any live network I/O.
 func TestFetchTaskRequestConstructionError(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("://bad-url", "key", map[string]any{"ids": []string{"1"}}, "")
+	resp, err := a.FetchTask("://bad-url", "key", map[string]any{"ids": []string{"1"}}, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil {
 		t.Fatalf("expected error for malformed base URL, got nil")
 	}
@@ -421,7 +424,10 @@ func TestFetchTaskRequestConstructionError(t *testing.T) {
 func TestFetchTaskMarshalError(t *testing.T) {
 	a := &TaskAdaptor{}
 	body := map[string]any{"bad": make(chan int)}
-	_, err := a.FetchTask("https://upstream.example.com", "key", body, "")
+	resp, err := a.FetchTask("https://upstream.example.com", "key", body, "")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil {
 		t.Fatalf("expected marshal error, got nil")
 	}
@@ -432,7 +438,10 @@ func TestFetchTaskMarshalError(t *testing.T) {
 func TestFetchTaskProxyClientError(t *testing.T) {
 	a := &TaskAdaptor{}
 	body := map[string]any{"ids": []string{"1"}}
-	_, err := a.FetchTask("https://upstream.example.com", "key", body, "://bad-proxy")
+	resp, err := a.FetchTask("https://upstream.example.com", "key", body, "://bad-proxy")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err == nil {
 		t.Fatalf("expected proxy client error, got nil")
 	}

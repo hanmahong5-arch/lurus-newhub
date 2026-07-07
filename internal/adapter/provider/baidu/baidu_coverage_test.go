@@ -406,11 +406,11 @@ func TestResponseBaidu2OpenAI(t *testing.T) {
 		t.Fatalf("Choices length = %d, want 1", len(got.Choices))
 	}
 	choice := got.Choices[0]
-	if choice.Message.Role != "assistant" || choice.Message.Content != "the reply" || choice.FinishReason != "stop" {
+	if choice.Role != "assistant" || choice.Content != "the reply" || choice.FinishReason != "stop" {
 		t.Errorf("choice = %+v, want assistant/the reply/stop", choice)
 	}
-	if got.Usage.TotalTokens != 10 {
-		t.Errorf("Usage.TotalTokens = %d, want 10", got.Usage.TotalTokens)
+	if got.TotalTokens != 10 {
+		t.Errorf("Usage.TotalTokens = %d, want 10", got.TotalTokens)
 	}
 }
 
@@ -463,8 +463,8 @@ func TestEmbeddingResponseBaidu2OpenAI(t *testing.T) {
 	if got.Data[1].Index != 1 || got.Data[1].Embedding[0] != 0.3 {
 		t.Errorf("Data[1] = %+v, want Index=1 Embedding[0]=0.3", got.Data[1])
 	}
-	if got.Usage.TotalTokens != 5 {
-		t.Errorf("Usage.TotalTokens = %d, want 5", got.Usage.TotalTokens)
+	if got.TotalTokens != 5 {
+		t.Errorf("Usage.TotalTokens = %d, want 5", got.TotalTokens)
 	}
 }
 

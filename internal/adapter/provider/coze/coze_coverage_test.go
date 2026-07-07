@@ -288,9 +288,9 @@ func TestCozeChatHandler_Success(t *testing.T) {
 	if got.Choices[0].FinishReason != "stop" {
 		t.Errorf("FinishReason = %q, want %q", got.Choices[0].FinishReason, "stop")
 	}
-	content, ok := got.Choices[0].Message.Content.(string)
+	content, ok := got.Choices[0].Content.(string)
 	if !ok || content != "final answer" {
-		t.Errorf("Message.Content = %v, want %q", got.Choices[0].Message.Content, "final answer")
+		t.Errorf("Message.Content = %v, want %q", got.Choices[0].Content, "final answer")
 	}
 	if w.Header().Get("Content-Type") != "application/json" {
 		t.Errorf("Content-Type = %q, want %q", w.Header().Get("Content-Type"), "application/json")
