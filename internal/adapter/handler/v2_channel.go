@@ -487,14 +487,18 @@ func UpdateChannelV2(c *gin.Context) {
 		return
 	}
 
-	// SSRF guard: re-validate egress on every mutation (base_url or proxy may
-	// have changed) so an internal target cannot be smuggled in via update.
-	if err := validateChannelEgress(existingChannel); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
+	// SSRF guard: re-validate egress only when this update actually touches the
+	// egress fields. Validating unconditionally would trap a channel that became
+	// non-compliant after a policy tightening — the admin could no longer disable
+	// or rename it (every mutation would 400), leaving delete as the only escape.
+	if updateReq.BaseURL != nil || updateReq.Setting != nil {
+		if err := validateChannelEgress(existingChannel); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	}
 
 	// Save channel

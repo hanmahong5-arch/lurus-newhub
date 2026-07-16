@@ -36,3 +36,27 @@ func TestValidateChannelEgress(t *testing.T) {
 		t.Errorf("channel with public base_url should pass, got %v", err)
 	}
 }
+
+// TestValidateChannel_V1_RejectsInternalEgress proves the v1 write path
+// (AddChannel/UpdateChannel funnel through validateChannel) now enforces the
+// same SSRF gate as the v2 handlers — the fix was previously v2-only.
+func TestValidateChannel_V1_RejectsInternalEgress(t *testing.T) {
+	fs := system_setting.GetFetchSetting()
+	prev := *fs
+	fs.EnableSSRFProtection = true
+	fs.AllowPrivateIp = false
+	t.Cleanup(func() { *fs = prev })
+
+	strPtr := func(s string) *string { return &s }
+	// A well-formed channel (passes key/model checks) but with an internal
+	// base_url — must be rejected by the egress gate inside validateChannel.
+	ch := &repo.Channel{Name: "x", Key: "sk-x", Models: "gpt-4", BaseURL: strPtr("http://169.254.169.254")}
+	if err := validateChannel(ch, true); err == nil {
+		t.Error("v1 validateChannel must reject an internal base_url")
+	}
+	// The same channel pointed at a public host passes.
+	ch.BaseURL = strPtr("https://8.8.8.8")
+	if err := validateChannel(ch, true); err != nil {
+		t.Errorf("v1 validateChannel should accept a public base_url, got %v", err)
+	}
+}

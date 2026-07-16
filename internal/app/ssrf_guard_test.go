@@ -31,6 +31,9 @@ func TestValidateOutboundURL_BlocksInternalTargets(t *testing.T) {
 		"http://169.254.169.254", // cloud metadata / link-local
 		"http://192.168.1.1",     // RFC1918
 		"http://172.16.0.9",      // RFC1918
+		"http://0.0.0.0:3000",    // unspecified — kernel routes to localhost
+		"http://100.64.1.1",      // CGNAT / Tailscale range (this cluster's nodes)
+		"http://100.122.83.20",   // R6 STAGE node via Tailscale
 	}
 	for _, u := range blocked {
 		if err := ValidateOutboundURL(u); err == nil {
@@ -91,5 +94,13 @@ func TestValidateOutboundProxy_BlocksInternalHostRegardlessOfScheme(t *testing.T
 	// Public proxy host on an allowed port passes.
 	if err := ValidateOutboundProxy("socks5://8.8.8.8:8080"); err != nil {
 		t.Errorf("socks5 proxy to a public host should pass, got %v", err)
+	}
+	// Bare host:port (no scheme) must still be vetted, not silently trusted:
+	// internal blocked, public allowed.
+	if err := ValidateOutboundProxy("10.0.0.5:1080"); err == nil {
+		t.Error("scheme-less proxy to a private host should be blocked")
+	}
+	if err := ValidateOutboundProxy("8.8.8.8:1080"); err != nil {
+		t.Errorf("scheme-less proxy to a public host should pass, got %v", err)
 	}
 }

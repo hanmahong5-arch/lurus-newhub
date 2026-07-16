@@ -167,13 +167,13 @@
     },
 
     {
-      "title": "Quota consumption rate (per user, top 10)",
+      "title": "Quota consumption rate (per tenant, top 10)",
       "type": "timeseries",
       "gridPos": { "x": 0, "y": 28, "w": 12, "h": 8 },
       "targets": [
         {
-          "expr": "topk(10, sum(rate(lurus_gateway_quota_consumed_total[5m])) by (user_id))",
-          "legendFormat": "user={{user_id}}"
+          "expr": "topk(10, sum(rate(lurus_gateway_quota_consumed_total[5m])) by (tenant_id))",
+          "legendFormat": "tenant={{tenant_id}}"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "short" } }

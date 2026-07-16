@@ -680,7 +680,6 @@ func GetChannelKey(c *gin.Context) {
 	})
 }
 
-
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *repo.Channel, isAdd bool) error {
 	// 校验 channel settings
@@ -718,6 +717,13 @@ func validateChannel(channel *repo.Channel, isAdd bool) error {
 		}
 	}
 
+	// SSRF guard: the v1 channel write paths (AddChannel/UpdateChannel) funnel
+	// through here, mirroring the v2 handlers. A tenant admin must not persist a
+	// channel whose base_url/proxy points at an internal address.
+	if err := validateChannelEgress(channel); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -725,7 +731,7 @@ type AddChannelRequest struct {
 	Mode                      string                `json:"mode"`
 	MultiKeyMode              constant.MultiKeyMode `json:"multi_key_mode"`
 	BatchAddSetKeyPrefix2Name bool                  `json:"batch_add_set_key_prefix_2_name"`
-	Channel                   *repo.Channel        `json:"channel"`
+	Channel                   *repo.Channel         `json:"channel"`
 }
 
 func getVertexArrayKeys(keys string) ([]string, error) {
@@ -1258,6 +1264,16 @@ func FetchModels(c *gin.Context) {
 	baseURL := req.BaseURL
 	if baseURL == "" {
 		baseURL = constant.ChannelBaseURLs[req.Type]
+	}
+
+	// SSRF guard: base_url comes straight from the request body and the upstream
+	// response is reflected to the caller — a read-SSRF reflector if unchecked.
+	if err := app.ValidateOutboundURL(baseURL); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "base_url rejected: " + err.Error(),
+		})
+		return
 	}
 
 	// remove line breaks and extra spaces.
