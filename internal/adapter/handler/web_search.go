@@ -78,10 +78,11 @@ type WebSearchResponse struct {
 // pass-through to Tavily so the API key stays server-side — the Lutu
 // APP never sees the Tavily credential.
 //
-// Auth: this endpoint currently relies on the existing Lutu-tenant
-// bearer the APP attaches to all gateway calls. (Wired in
-// internal/adapter/handler/router/api-v2-router.go alongside the
-// existing per-tenant routes.)
+// Auth: enforced by middleware.RequireOIDCToken in the router — a
+// valid OIDC JWT (the bearer the Lutu APP already attaches) is
+// required, so the shared Tavily quota can't be drained anonymously.
+// The verified subject is available as `oidc_user_id` in the gin
+// context for optional per-user accounting.
 func PostWebSearch(c *gin.Context) {
 	var req WebSearchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
