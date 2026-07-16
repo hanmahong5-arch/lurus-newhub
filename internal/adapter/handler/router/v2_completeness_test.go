@@ -98,8 +98,8 @@ func TestV2IDOR_Completeness(t *testing.T) {
 
 		// ---- pure external proxy: no stored resource, no ownership concept ----
 		"POST /api/v2/lutu/search": "PostWebSearch is a stateless proxy to Tavily search keyed only by the request body's free-text query; there is no stored per-tenant resource to leak cross-tenant via an id. " +
-			"Now gated by an explicit middleware.TokenAuth() on the route (api-v2-router.go) — it previously registered with no effective auth (group OptionalZitaIdentity never aborts), which let any caller burn the " +
-			"paid Tavily budget; TokenAuth fails closed with 401 on a missing/invalid sk- token.",
+			"Gated by an explicit middleware.RequireOIDCToken() on the route (api-v2-router.go) — it previously registered with no effective auth (group OptionalZitaIdentity never aborts), which let any caller burn the " +
+			"paid Tavily budget. The Lutu APP is a consumer OIDC identity (authenticates against identity.lurus.cn, no newhub tenant), so RequireOIDCToken — not TokenAuth or OIDCAuth — is the correct gate; see lutu_search_auth_test.go.",
 
 		// ---- platform admin surface: RootJWTAuth-gated (single global root role, not tenant-scoped) ----
 		// Root manages every tenant/user/mapping/option/audit record by design —
