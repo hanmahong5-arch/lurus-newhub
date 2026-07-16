@@ -25,9 +25,22 @@ import (
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
 )
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
+
+// allowLoopbackEgress lets a plumbing test point a channel at its in-process
+// httptest upstream (127.0.0.1). The SSRF egress guard blocks private targets
+// by default, which is correct for production; these tests opt in to reach the
+// mock, exercising the request/response plumbing rather than the SSRF policy.
+func allowLoopbackEgress(t *testing.T) {
+	t.Helper()
+	fs := system_setting.GetFetchSetting()
+	prev := fs.AllowPrivateIp
+	fs.AllowPrivateIp = true
+	t.Cleanup(func() { fs.AllowPrivateIp = prev })
+}
 
 func seedChannelWithBase(t *testing.T, ctx *V2TestContext, name, baseURL string) *repo.Channel {
 	t.Helper()
@@ -52,6 +65,7 @@ func seedChannelWithBase(t *testing.T, ctx *V2TestContext, name, baseURL string)
 // ─── TestChannelV2 ────────────────────────────────────────────────────────────
 
 func TestV2ChannelTest_Happy(t *testing.T) {
+	allowLoopbackEgress(t)
 	// Mock upstream that returns a valid chat completion.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -115,6 +129,7 @@ func TestV2ChannelTest_TenantMismatch_NoAdmin(t *testing.T) {
 // ─── FetchUpstreamModelsV2 ────────────────────────────────────────────────────
 
 func TestV2UpstreamModels_Happy(t *testing.T) {
+	allowLoopbackEgress(t)
 	// Mock /v1/models that returns a list with one new model and one missing.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -179,6 +194,7 @@ func TestV2UpstreamModels_Happy(t *testing.T) {
 }
 
 func TestV2UpstreamModels_UpstreamError(t *testing.T) {
+	allowLoopbackEgress(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":{"message":"invalid api key"}}`))
@@ -230,6 +246,7 @@ func TestExtractJSONError(t *testing.T) {
 // ─── response shape regression ────────────────────────────────────────────────
 
 func TestV2ChannelTest_ResponseShape(t *testing.T) {
+	allowLoopbackEgress(t)
 	// Upstream returns an error payload (HTTP 200 but error in body).
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

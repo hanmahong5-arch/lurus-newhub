@@ -330,6 +330,16 @@ func CreateChannelV2(c *gin.Context) {
 		return
 	}
 
+	// SSRF guard: a tenant admin must not point the channel egress at an
+	// internal address to make the gateway relay/reflect internal responses.
+	if err := validateChannelEgress(&channel); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
 	// Insert channel
 	if err := channel.Insert(); err != nil {
 		common.SysError("Failed to create channel: " + err.Error())
@@ -470,6 +480,16 @@ func UpdateChannelV2(c *gin.Context) {
 
 	// Validate settings
 	if err := existingChannel.ValidateSettings(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// SSRF guard: re-validate egress on every mutation (base_url or proxy may
+	// have changed) so an internal target cannot be smuggled in via update.
+	if err := validateChannelEgress(existingChannel); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": err.Error(),

@@ -36,11 +36,28 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
 )
+
+// validateChannelEgress is the single SSRF gate for a channel's outbound
+// targets — its base_url and its optional proxy. Every write path
+// (CreateChannelV2/UpdateChannelV2) and every outbound sink (TestChannelV2/
+// FetchUpstreamModelsV2) funnels through here, so a tenant admin cannot point
+// channel egress at an internal address and make the gateway relay or reflect
+// in-cluster responses.
+func validateChannelEgress(channel *repo.Channel) error {
+	if err := app.ValidateOutboundURL(channel.GetBaseURL()); err != nil {
+		return fmt.Errorf("channel base_url rejected: %v", err)
+	}
+	if err := app.ValidateOutboundProxy(channel.GetSetting().Proxy); err != nil {
+		return fmt.Errorf("channel proxy rejected: %v", err)
+	}
+	return nil
+}
 
 // channelTestHTTPClient is a package-level client so tests can swap in a
 // mock transport. Uses the same 120 s budget as playgroundHTTPClient.
@@ -96,6 +113,13 @@ func TestChannelV2(c *gin.Context) {
 		return
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
+
+	// SSRF guard (defense in depth for channels persisted before the write-time
+	// gate): never let a one-click test probe an internal address.
+	if err := validateChannelEgress(channel); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 
 	// Pick the first configured model as test model when available.
 	testReqBody := testChannelRequestBody
@@ -225,6 +249,14 @@ func FetchUpstreamModelsV2(c *gin.Context) {
 		return
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
+
+	// SSRF guard (defense in depth): the upstream-models probe reflects the
+	// upstream body back to the caller — the cleanest read-SSRF vector — so it
+	// must never reach an internal address.
+	if err := validateChannelEgress(channel); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 
 	endpoint := baseURL + "/v1/models"
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, endpoint, nil)
