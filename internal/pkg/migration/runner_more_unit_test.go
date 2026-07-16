@@ -220,20 +220,28 @@ func TestEmbeddedFS_PostBaselineAreExecutable(t *testing.T) {
 	}
 }
 
+// migrationCountFloor is a ratchet: the number of embedded migrations only ever
+// grows. The contiguity check below catches deletion of any MIDDLE migration
+// (it leaves a gap), but deleting the HIGHEST-numbered file leaves 1..N-1 still
+// contiguous — invisible to both contiguity and the FS-derived count assertions
+// (which shrink to match). This floor is the one place that catches a dropped
+// tail migration. Bump it by one when you add a migration.
+const migrationCountFloor = 28
+
 // TestEmbeddedFS_VersionsAreContiguous pins the migration file set structurally
-// without hard-coding its size: the numeric prefixes must be exactly
-// 1, 2, …, N with no gap and no duplicate. This is the safety net for the
-// SSOT-derived count assertions in the pg tests — deriving "want" from the FS
-// makes those tests silently pass if a *.sql file is accidentally deleted (the
-// derived want simply shrinks to match), whereas a deletion here shows up as a
-// gap and fails. Adding migration NNN needs no edit; deleting one breaks it.
+// without hard-coding its exact size in 8 places: the numeric prefixes must be
+// exactly 1, 2, …, N with no gap and no duplicate, and there must be at least
+// migrationCountFloor of them. Together these catch a *.sql accidentally
+// deleted anywhere (middle → gap; tail → below floor) — the FS-derived count
+// assertions in the pg tests alone would silently pass on a deletion because
+// their "want" shrinks to match. Adding migration NNN needs only the floor bump.
 func TestEmbeddedFS_VersionsAreContiguous(t *testing.T) {
 	versions, err := migration.DiscoverVersions(migrations.FS)
 	if err != nil {
 		t.Fatalf("DiscoverVersions(migrations.FS): %v", err)
 	}
-	if len(versions) == 0 {
-		t.Fatal("embedded FS is empty")
+	if len(versions) < migrationCountFloor {
+		t.Fatalf("embedded migrations = %d, want >= %d — a tail migration was deleted (or bump migrationCountFloor if you removed one intentionally)", len(versions), migrationCountFloor)
 	}
 	for i, v := range versions {
 		prefix, _, ok := strings.Cut(v, "_")

@@ -34,6 +34,11 @@ func isPrivateIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return true
 	}
+	// Unspecified addresses (0.0.0.0, ::) — the kernel routes 0.0.0.0 to
+	// localhost, so they are an SSRF vector that IsLoopback does not catch.
+	if ip.IsUnspecified() {
+		return true
+	}
 
 	// 检查私有网段
 	private := []net.IPNet{
@@ -42,6 +47,7 @@ func isPrivateIP(ip net.IP) bool {
 		{IP: net.IPv4(192, 168, 0, 0), Mask: net.CIDRMask(16, 32)}, // 192.168.0.0/16
 		{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)},    // 127.0.0.0/8
 		{IP: net.IPv4(169, 254, 0, 0), Mask: net.CIDRMask(16, 32)}, // 169.254.0.0/16 (链路本地)
+		{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)},  // 100.64.0.0/10 (CGNAT; Tailscale 使用此段, 集群节点经此可达)
 		{IP: net.IPv4(224, 0, 0, 0), Mask: net.CIDRMask(4, 32)},    // 224.0.0.0/4 (组播)
 		{IP: net.IPv4(240, 0, 0, 0), Mask: net.CIDRMask(4, 32)},    // 240.0.0.0/4 (保留)
 	}

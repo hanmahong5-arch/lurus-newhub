@@ -18,14 +18,19 @@ import (
 var panicLogSink atomic.Pointer[func(string)]
 
 func logGoroutinePanic(msg string) {
-	// Count every recovered goroutine panic before the test log-sink short
-	// circuit, so the metric reflects production reality regardless of test hooks.
-	metrics.RecordPanic("goroutine")
 	if h := panicLogSink.Load(); h != nil {
 		(*h)(msg)
 		return
 	}
 	SysError(msg)
+}
+
+// recordAndLogPanic counts a recovered goroutine panic and logs it. Called only
+// from the actual recover() sites — NOT from the "exceeded max retries" summary,
+// which is not itself a panic and would otherwise over-report panics_recovered.
+func recordAndLogPanic(msg string) {
+	metrics.RecordPanic("goroutine")
+	logGoroutinePanic(msg)
 }
 
 // SafeGo starts a goroutine with panic recovery.
@@ -35,7 +40,7 @@ func SafeGo(f func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logGoroutinePanic(fmt.Sprintf("panic in SafeGo: %v\n%s", r, debug.Stack()))
+				recordAndLogPanic(fmt.Sprintf("panic in SafeGo: %v\n%s", r, debug.Stack()))
 			}
 		}()
 		f()
@@ -48,7 +53,7 @@ func SafeGoWithContext(ctx context.Context, f func(ctx context.Context)) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logGoroutinePanic(fmt.Sprintf("panic in SafeGoWithContext: %v\n%s", r, debug.Stack()))
+				recordAndLogPanic(fmt.Sprintf("panic in SafeGoWithContext: %v\n%s", r, debug.Stack()))
 			}
 		}()
 		f(ctx)
@@ -61,7 +66,7 @@ func SafeGoNamed(name string, f func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logGoroutinePanic(fmt.Sprintf("panic in SafeGo[%s]: %v\n%s", name, r, debug.Stack()))
+				recordAndLogPanic(fmt.Sprintf("panic in SafeGo[%s]: %v\n%s", name, r, debug.Stack()))
 			}
 		}()
 		f()
@@ -79,7 +84,7 @@ func MustGo(f func(), maxRetries int) {
 				defer func() {
 					if r := recover(); r != nil {
 						retries++
-						logGoroutinePanic(fmt.Sprintf("panic in MustGo (retry %d): %v\n%s", retries, r, debug.Stack()))
+						recordAndLogPanic(fmt.Sprintf("panic in MustGo (retry %d): %v\n%s", retries, r, debug.Stack()))
 					}
 				}()
 				f()
