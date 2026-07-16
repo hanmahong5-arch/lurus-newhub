@@ -97,6 +97,7 @@ func ClientGetUsageSummary(c *gin.Context) {
 	}
 
 	stat := repo.SumUsedQuota(
+		repo.ForTenant(user.TenantId),
 		repo.LogTypeConsume, startTS, endTS,
 		"", user.Username, "", 0, "",
 	)

@@ -269,6 +269,11 @@ func run(ctx context.Context, startTime time.Time) error {
 		// PIPL §47 erasure cascade executor. Leader-gated internally; the
 		// cascade is idempotent + crash-resumable via the per-request step cursor.
 		lifecycle.StartPrivacyErasureWithContext(ctx)
+		// Stranded credit-pool topup reconcile: compensates wallet debits whose
+		// pool credit + revert both failed. Leader-gated per tick; each event is
+		// settled at most once via a conditional-UPDATE claim (money-safe even
+		// if two sweeps overlap). Interval: CREDIT_POOL_RECONCILE_INTERVAL_SECONDS.
+		app.StartCreditPoolReconcileWithContext(ctx)
 	}
 
 	// pprof server

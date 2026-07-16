@@ -72,4 +72,49 @@ var (
 		},
 		[]string{"outcome"},
 	)
+
+	// BillingAdvisoryBypassTotal counts local-ledger gates that were skipped
+	// for a platform-governed request while LOCAL_LEDGER_ADVISORY is on
+	// (Track A). Labeled by which gate would have blocked:
+	//   user_balance_402 — local user quota would have 402'd the request
+	//   pre_deduct       — local pre-consume write failed, relay continued
+	BillingAdvisoryBypassTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "billing",
+			Name:      "advisory_bypass_total",
+			Help:      "Local-ledger gates bypassed for platform-governed requests under LOCAL_LEDGER_ADVISORY, by gate (user_balance_402/pre_deduct)",
+		},
+		[]string{"gate"},
+	)
+
+	// BillingAdvisoryMeterLost counts shadow-ledger writes that failed while
+	// LOCAL_LEDGER_ADVISORY is on — the request/settle proceeded (platform is
+	// the ledger of record) but the local mirror lost this data point, so the
+	// daily drift reconciliation will show a corresponding gap. Labeled by
+	// which write was lost (user_quota/token_quota).
+	BillingAdvisoryMeterLost = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "billing",
+			Name:      "advisory_meter_lost_total",
+			Help:      "Shadow local-ledger writes lost under LOCAL_LEDGER_ADVISORY (settle proceeded), by write (user_quota/token_quota)",
+		},
+		[]string{"write"},
+	)
+
+	// BillingUsageMirrorTotal counts usage-event mirror reports to the
+	// platform (POST /internal/v1/usage/events, metric=llm_relay) by status
+	// (success/error). The mirror feeds the Track A drift reconciliation;
+	// error only means this data point is missing from usage_events, never
+	// that money moved or was lost.
+	BillingUsageMirrorTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "billing",
+			Name:      "usage_mirror_total",
+			Help:      "Usage-event mirror reports to the platform by status (success/error)",
+		},
+		[]string{"status"},
+	)
 )

@@ -123,8 +123,14 @@ probe to the 3-replica PROD without P1-2 (correlation-outage risk).
 
 > **CORRECTED 2026-06-12 after verifying the actual artifacts** — the original
 > "BACKUP_ENABLED=false ⇒ RPO=∞, just flip it" framing was an oversimplification.
-> Ground truth (from `2l-svc-platform/deploy/k8s/cronjobs/pg-backup.yaml` +
-> `2l-svc-platform/doc/audit/2026-05-19-pg-backup-incident.md`):
+> Ground truth (from `2l-svc-platform/deploy/k8s/cronjobs/pg-backup.yaml` + the live
+> cluster deep-dive 2026-06-13 in the 🔴 block below — **corrected ref:** there is **no**
+> `2l-svc-platform/doc/audit/2026-05-19-pg-backup-incident.md`; that path is stale, never
+> committed (verified 2026-06-15: the repo has no `doc/audit/` dir). The verified
+> restore-drill DR record is `2l-svc-platform/docs/runbooks/dr-drill-2026-05-20.md`
+> — **NB** that 2026-05-21 drill ran against a since-removed `identity`-only CronJob deployment,
+> so it proves the restore *procedure / RTO precedent*, **not** that a backup exists now; as of
+> the 2026-06-13 deep-dive the CronJob is gone (`No resources found`), hence today's zero coverage):
 >   - **WAL archiving is WORKING** (≈5900 WAL files, ~5 min fresh) → continuous
 >     PITR stream exists; it is NOT a clean RPO=∞.
 >   - **CNPG base backups are BROKEN** since ~2026-03-01 (cross-node overlay bug,
@@ -162,18 +168,28 @@ probe to the 3-replica PROD without P1-2 (correlation-outage risk).
 ### Turnkey remediation (two tracks; both touch platform infra/storage → owner executes)
 
 **Track A — immediate logical-dump floor (fast, independent of the CNPG networking bug).**
-Deploy a pg_dump CronJob that dumps **both** DBs to **`/data`** via a hostPath volume (not the default
-local-path PVC, which lands on the 20 GB root):
+Deploy a pg_dump CronJob that dumps **every non-system** DB to **`/data`** via a node-local
+hostPath volume (not the default local-path PVC, which can land on the 20 GB root):
 
 ```sh
-# in the pg-dump container command, loop both DBs:
-for DB in identity newhub; do
-  pg_dump -Fc -U postgres -h lurus-pg-rw.database.svc.cluster.local \
+# in the pg-dump container command, enumerate every non-system DB — covers
+# identity/newapi/zitadel/lucrum/tally/… now, and `newhub` automatically once it
+# deploys (a literal `-d newhub` would error today: the Hub isn't deployed yet):
+DBS=$(psql -tAqc "SELECT datname FROM pg_database WHERE datistemplate=false \
+      AND datname NOT IN ('postgres','template0','template1')" \
+      -U lurus -h lurus-pg-rw.database.svc.cluster.local)
+for DB in $DBS; do
+  pg_dump -Fc -U lurus -h lurus-pg-rw.database.svc.cluster.local \
     -d "$DB" -f "/backups/lurus-${DB}-$(date -u +%Y%m%d-%H%M%S).dump"
 done
-# volume: hostPath /data/lurus-platform/backups  (NOT a local-path PVC)
+# auth = app role `lurus` (secret lurus-pg-credentials); the `postgres` superuser is
+#   NOT network-reachable (verified 2026-06-15). lurus owns 5/9 DBs → owner runs once
+#   for full coverage:  GRANT pg_read_all_data TO lurus;  (idempotent, read-only)
+# volume: hostPath /data/lurus-platform/backups + nodeSelector lurus.cn/vpn=true
+#   (node-local hostPath → pin both CronJobs to R6; NOT a local-path PVC)
 # then: ConfigMap lurus-platform-backup-config BACKUP_ENABLED=true
-# MinIO (pg-backups-v3 @ 100.79.24.40:9000) is up for the weekly off-node copy.
+# MinIO (pg-backups-v2 @ 100.79.24.40:9000) for the weekly off-node copy.
+# ⇒ IMPLEMENTED in 2l-svc-platform/deploy/k8s/cronjobs/pg-backup.yaml (the floor).
 ```
 
 **Track B — durable fix (restore PITR).** Fix the PG pod → K8s API (`10.43.0.1:443`) reachability (CNI/
@@ -197,40 +213,59 @@ ssh root@100.98.57.55 "kubectl -n database get cronjob -o wide"   # daily-pg-dum
 
 ### (b) Enable + cover newhub (owner)
 
-- **Confirmed: pg_dump covers only `identity`.** Extend the CronJob (platform repo
-  `deploy/k8s/cronjobs/pg-backup.yaml`, config diff — not platform *code*) to also dump
-  newhub's `newhub` DB — add a second dump line in the same job (datname **`newhub`**,
-  owner-confirmed 2026-06-14; the schema inside it is `lurus_api`):
+- **Done in `2l-svc-platform/deploy/k8s/cronjobs/pg-backup.yaml` (PR, 2026-06-15):** the
+  CronJob now enumerates every non-system DB at run time (no hardcoded DB list), so the
+  `newhub` DB (datname **`newhub`**, owner-confirmed 2026-06-14; schema `lurus_api`) is
+  covered automatically once the Hub deploys — no second dump line to hand-add later.
+  Then enable **in this order** (the grant is a non-skippable precondition, NOT an optional last step):
+  1. **GRANT first** — `kubectl -n database exec lurus-pg-1 -c postgres -- psql -U postgres -c 'GRANT pg_read_all_data TO lurus;'` (idempotent, read-only). `lurus` owns only 5/9 DBs; **skipping this leaves tally/webgame/zitadel/agentdrq_test UNBACKED — including auth-critical `zitadel`.**
+  2. set ConfigMap `BACKUP_ENABLED=true`.
+  3. **verify** — trigger one manual job and confirm zero failures: `kubectl -n database create job --from=cronjob/daily-pg-dump pg-dump-check-001` then `kubectl -n database logs -f job/pg-dump-check-001` must end with `failed: none`.
 
-  ```sh
-  # alongside the existing `pg_dump -Fc -d identity -f .../lurus-identity-${TS}.dump`:
-  pg_dump -Fc -U postgres -h lurus-pg-rw.database.svc.cluster.local \
-    -d newhub -f "/backups/newhub-${TS}.dump"
-  ```
-  Then set ConfigMap `BACKUP_ENABLED=true`. (Flipping the flag alone backs up only `identity`.)
+  (The dump is no longer single-DB; the old `-d identity` hardcode is gone.) A partial run
+  still exits 1 and logs the failed set, but **nothing alerts on it** — step 3's manual check
+  is the only guardrail until backup-failure alerting is wired.
 - For full-cluster PITR: fix the CNPG base-backup overlay-network root cause
-  (incident doc §2.3/§5) and confirm `barmanObjectStore` archives resume — this is
+  (per the 🔴 deep-dive above: the PG pod can't reach the K8s API `10.43.0.1:443`,
+  statusCode 500) and confirm `barmanObjectStore` archives resume — this is
   the durable fix; the pg_dump is the interim floor. Storage stays on R6 `/data`
   (295G SSD) / MinIO `pg-backups-v2` per the disk HARD RULE.
 
 ### (c) Restore drill — reuse the existing script (no new tooling)
 
-`2l-svc-platform/scripts/drills/backup-restore.sh` (quarterly; spins an ephemeral
-`postgres:16` Docker, **never prod**) + this repo's `doc/runbook/pg-restore.md`.
-The gap is a **drill record for newhub's DB**, not tooling.
+`2l-svc-platform/scripts/drills/restore-drill.sh --backup-file <path>` (spins an ephemeral
+`postgres:16` Docker, **never prod**; writes a dated record under `doc/incidents/`).
+⚠️ Its built-in asserts validate ONLY the `identity` dump end-to-end (they are identity-schema
+shaped); for every other DB the verdict is untrustworthy (see the ⚠️ note below). So the gap is
+**both** a trustworthy drill for the 8 non-`identity` DBs **and** a drill record per DB.
 
 ```bash
-# Fetch latest dump from R6 and restore into a sandbox, then diff row counts:
-bash 2l-svc-platform/scripts/drills/backup-restore.sh --R6_HOST 100.122.83.20
-# Ensure the drill targets a newhub dump (per (a)); verify schema_migrations=20
-# and key table counts against a known checkpoint, then record below.
+# Pull the latest dump off R6, then restore into a sandbox + assert row counts.
+# restore-drill.sh takes --backup-file (it does NOT auto-fetch; there is no --R6_HOST flag):
+scp root@100.122.83.20:/data/lurus-platform/backups/lurus-<db>-<ts>.dump /tmp/
+bash 2l-svc-platform/scripts/drills/restore-drill.sh --backup-file /tmp/lurus-<db>-<ts>.dump
+# ⚠️ restore-drill.sh's pass/fail asserts are HARDWIRED to ONE schema (identity's
+# accounts/wallets + a schema_migrations count), so its PASS is meaningful ONLY for the
+# dump whose DB matches them. For EVERY other DB — newapi/zitadel/lucrum/webmail/lurus/
+# tally/webgame and newhub — it can report PASS having asserted ZERO tables (hollow green)
+# OR FAIL a perfectly good dump (foreign schema_migrations count). Do NOT trust its verdict
+# for a non-identity dump: run a manual `pg_restore -d <db>` + `\dt` / row spot-check in the
+# same sandbox. (Fix tracked: add a `--db` flag to restore-drill.sh so the sandbox DB +
+# asserts match the dump under test — see CR-1 in the 2026-06-16 audit.)
 ```
 
 ### (d) RPO/RTO target doc (fill after the drill)
 
+Track A is **whole-cluster** (9 non-system DBs), so this table must record ALL of them, not
+just newhub:
+
 | Objective | Target | Measured (drill) |
 |---|---|---|
-| newhub DB (`newhub`) covered by a backup? | **YES (target)** | **NO — zero coverage, verified 2026-06-13** |
+| All 9 non-system DBs covered by a dump? (list any FAILED) | **YES — all 9** | **NO — zero coverage, verified 2026-06-13** |
+| `GRANT pg_read_all_data TO lurus;` applied? (**precondition** for full coverage) | **YES, before enable** | _TBD_ |
+| First manual job exited 0 with `failed: none`? | **YES** | _TBD_ |
+| DBs verified-restorable (drill) | `identity` end-to-end; other 8 manual spot-check | _TBD_ |
+| newhub DB (`newhub`) covered? (auto once Hub deploys) | **YES** | **NO — Hub not deployed yet** |
 | RPO (max data loss) | ≤ 6h | _TBD_ |
 | RTO (time to restore) | ≤ 1h | _TBD_ |
 | Drill date / operator | — | _TBD_ |

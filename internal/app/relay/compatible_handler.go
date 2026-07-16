@@ -408,11 +408,13 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 		))
 	}
 
-	if quotaDelta != 0 {
-		err := app.PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
-		if err != nil {
-			logger.LogError(ctx, "error consuming token remain quota: "+err.Error())
-		}
+	// Always settle, even when quotaDelta == 0 (exact estimate, e.g. fixed-price
+	// models) — see the same note in app.PostClaudeConsumeQuota. Skipping the
+	// call on a zero delta also skipped the tenant-pool debit and the platform
+	// pre-auth settlement, letting the pre-auth TTL expire and release revenue.
+	err := app.PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+	if err != nil {
+		logger.LogError(ctx, "error consuming token remain quota: "+err.Error())
 	}
 
 	logModel := modelName

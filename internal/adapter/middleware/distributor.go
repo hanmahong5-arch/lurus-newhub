@@ -50,6 +50,27 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, "该渠道已被禁用")
 				return
 			}
+			// TI (round-3 #1): the sk-<key>-<channelId> override lets an admin pin
+			// ANY channel by id — GetChannelById above is intentionally un-scoped.
+			// Without an ownership check that lets a tenant-admin relay through,
+			// and exfiltrate the upstream key/base_url of, a channel owned by
+			// another tenant. Confine the pinned channel to the caller's tenant; a
+			// root operator (flag set in SetupContextForToken) keeps the
+			// cross-tenant override. When the caller's tenant can't be resolved
+			// (only possible off the normal TokenAuth path, which always injects
+			// it) fail OPEN so this never breaks legitimate relay traffic.
+			if !common.GetContextKeyBool(c, constant.ContextKeyTokenSpecificChannelRootOverride) {
+				if callerTenant, terr := GetTenantContext(c); terr == nil && callerTenant != nil && callerTenant.TenantID != "" {
+					channelTenant := channel.TenantId
+					if channelTenant == "" {
+						channelTenant = "default"
+					}
+					if channelTenant != callerTenant.TenantID {
+						abortWithOpenAiMessage(c, http.StatusForbidden, "无权使用其他租户的渠道")
+						return
+					}
+				}
+			}
 		} else {
 			// Select a channel for the user
 			// check token model mapping
@@ -124,7 +145,10 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		if newAPIError := SetupContextForSelectedChannel(c, channel, modelRequest.Model); newAPIError != nil {
+			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, newAPIError.Error(), string(newAPIError.GetErrorCode()))
+			return
+		}
 		c.Next()
 	}
 }

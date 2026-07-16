@@ -223,6 +223,17 @@ func GetChannelV2(c *gin.Context) {
 		return
 	}
 
+	// Verify tenant ownership
+	if channel.TenantId != tenantCtx.TenantID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Access denied"})
+		return
+	}
+
+	// Mask the upstream provider key — this is the single-channel read path
+	// and must never return the plaintext credential (see channelView in
+	// ListChannelsV2, which already masks it for the list path).
+	channel.Key = maskKey(channel.Key)
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    channel,
@@ -386,6 +397,12 @@ func UpdateChannelV2(c *gin.Context) {
 		return
 	}
 
+	// Verify tenant ownership
+	if existingChannel.TenantId != tenantCtx.TenantID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Access denied"})
+		return
+	}
+
 	// Parse request body
 	var updateReq repo.Channel
 	if err := c.ShouldBindJSON(&updateReq); err != nil {
@@ -524,6 +541,12 @@ func DeleteChannelV2(c *gin.Context) {
 			"success": false,
 			"message": "Channel not found",
 		})
+		return
+	}
+
+	// Verify tenant ownership
+	if channel.TenantId != tenantCtx.TenantID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Access denied"})
 		return
 	}
 

@@ -268,6 +268,26 @@ func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uin
 	return DB.Model(&Ability{}).Where("tag = ?", tag).Updates(ability).Error
 }
 
+// UpdateAbilityByChannelIds mirrors UpdateAbilityByTag but scopes the update to a
+// fixed set of channel ids. Tenant-scoped tag edits use it because the abilities
+// table has no tenant_id column — channel_id is the tenant boundary.
+func UpdateAbilityByChannelIds(ids []int, newTag *string, priority *int64, weight *uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	ability := Ability{}
+	if newTag != nil {
+		ability.Tag = newTag
+	}
+	if priority != nil {
+		ability.Priority = priority
+	}
+	if weight != nil {
+		ability.Weight = *weight
+	}
+	return DB.Model(&Ability{}).Where("channel_id in (?)", ids).Updates(ability).Error
+}
+
 var fixLock = sync.Mutex{}
 
 func FixAbility() (int, int, error) {

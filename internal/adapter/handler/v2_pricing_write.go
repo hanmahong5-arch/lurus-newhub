@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -66,6 +67,16 @@ func UpdatePricingV2(c *gin.Context) {
 			"message":    "Tenant not found",
 			"error_code": "TENANT_NOT_FOUND",
 		})
+		return
+	}
+
+	tenantCtx, ctxErr := middleware.GetTenantContext(c)
+	if ctxErr != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Tenant context not found"})
+		return
+	}
+	if !requireTenantAdmin(c, tenantCtx) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Admin role required"})
 		return
 	}
 

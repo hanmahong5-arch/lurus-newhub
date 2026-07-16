@@ -1,5 +1,6 @@
 # Egress allow-list for newhub pods on R6 STAGE.
-# - 100.120.110.73:14222 = NATS bridge on R5 (LLM_EVENTS stream)
+# - in-cluster NATS (ns messaging, 4222) — LLM_EVENTS stream + notification consumer
+#   (replaces the dead R5 bridge 100.120.110.73:14222)
 # - kube-dns for cluster DNS
 # - PG in `database` namespace
 # - lurus-system + lurus-platform (Redis, platform-core gRPC/HTTP)
@@ -10,7 +11,7 @@ metadata:
   name: newhub-nats-egress
   namespace: lurus-newhub
   annotations:
-    description: Allow newhub egress to NATS bridge on R5 (100.120.110.73:14222) + cluster DNS + cluster services
+    description: Allow newhub egress to in-cluster NATS (ns messaging, 4222) + cluster DNS + cluster services
 spec:
   podSelector:
     matchLabels:
@@ -19,10 +20,11 @@ spec:
     - Egress
   egress:
     - to:
-        - ipBlock:
-            cidr: 100.120.110.73/32
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: messaging
       ports:
-        - port: 14222
+        - port: 4222
           protocol: TCP
     - to:
         - namespaceSelector: {}

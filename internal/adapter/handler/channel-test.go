@@ -517,6 +517,9 @@ func TestChannel(c *gin.Context) {
 			return
 		}
 	}
+	if enforceTenantScope(c, channel.TenantId) {
+		return
+	}
 	//defer func() {
 	//	if channel.ChannelInfo.IsMultiKey {
 	//		go func() { _ = channel.SaveChannelInfo() }()

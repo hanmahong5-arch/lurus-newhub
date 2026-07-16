@@ -32,6 +32,7 @@ import { useTranslation } from 'react-i18next';
 import UserInfoHeader from './personal/components/UserInfoHeader';
 import AccountManagement from './personal/cards/AccountManagement';
 import NotificationSettings from './personal/cards/NotificationSettings';
+import TwoFactorAuth from './personal/cards/TwoFactorAuth';
 
 const PersonalSetting = () => {
   const [userState, userDispatch] = useContext(UserContext);
@@ -191,6 +192,8 @@ const PersonalSetting = () => {
               handleNotificationSettingChange={handleNotificationSettingChange}
               saveNotificationSettings={saveNotificationSettings}
             />
+
+            <TwoFactorAuth t={t} />
           </div>
         </div>
       </div>

@@ -17,6 +17,11 @@ const (
 	// later is almost certainly a unit mistake (e.g. milliseconds sent as
 	// seconds) and would silently behave like "never expires", so reject it.
 	MaxTokenExpiredTime = 32503680000
+	// MaxRateLimitPerMinute bounds rpm_limit / tpm_limit (token AND tenant
+	// dimensions). 10^9 per minute is far beyond any real workload — anything
+	// larger is a unit mistake, and the cap keeps window arithmetic (int64
+	// sums of int values) trivially overflow-free.
+	MaxRateLimitPerMinute = 1_000_000_000
 )
 
 // ValidateTokenName checks that the token name does not exceed the maximum length.
@@ -49,6 +54,19 @@ func ValidateTokenQuota(remainQuota int, unlimitedQuota bool) error {
 func ValidateTokenExpiredTime(expiredTime int64) error {
 	if expiredTime > MaxTokenExpiredTime {
 		return errors.New("过期时间无效，不能晚于公元 3000 年，永不过期请使用 -1")
+	}
+	return nil
+}
+
+// ValidateRateLimits checks per-minute rate-limit values (RPM/TPM, token or
+// tenant dimension): non-negative and at most MaxRateLimitPerMinute. 0 means
+// unlimited and is always valid.
+func ValidateRateLimits(rpm, tpm int) error {
+	if rpm < 0 || tpm < 0 {
+		return errors.New("速率限制不能为负数（0 表示不限制）")
+	}
+	if rpm > MaxRateLimitPerMinute || tpm > MaxRateLimitPerMinute {
+		return fmt.Errorf("速率限制超出有效范围，最大值为 %d", MaxRateLimitPerMinute)
 	}
 	return nil
 }
@@ -127,6 +145,8 @@ func BuildCleanToken(userId int, tenantId string, token *repo.Token, key string)
 		Group:              token.Group,
 		CrossGroupRetry:    token.CrossGroupRetry,
 		Scopes:             token.Scopes,
+		RateLimitRPM:       token.RateLimitRPM,
+		RateLimitTPM:       token.RateLimitTPM,
 	}
 }
 
@@ -143,4 +163,6 @@ func ApplyTokenUpdate(target *repo.Token, source *repo.Token) {
 	target.Group = source.Group
 	target.CrossGroupRetry = source.CrossGroupRetry
 	target.Scopes = source.Scopes
+	target.RateLimitRPM = source.RateLimitRPM
+	target.RateLimitTPM = source.RateLimitTPM
 }

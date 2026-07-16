@@ -96,10 +96,9 @@ func GetLogsV2(c *gin.Context) {
 
 	offset := (page - 1) * pageSize
 
-	// Build log query params
+	// Build log query params (tenant isolation via the explicit scope arg)
 	params := &repo.LogQueryParams{
 		UserID:     tenantCtx.UserID,
-		TenantID:   tenantCtx.TenantID,
 		LogType:    logType,
 		ModelName:  modelName,
 		StartTime:  startTime,
@@ -111,7 +110,7 @@ func GetLogsV2(c *gin.Context) {
 	}
 
 	// Get logs
-	logs, total, err := repo.GetUserLogsWithParams(params)
+	logs, total, err := repo.GetUserLogsWithParams(repo.ForTenant(tenantCtx.TenantID), params)
 	if err != nil {
 		common.SysError("Failed to get logs: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -175,9 +174,9 @@ func GetAllLogsV2(c *gin.Context) {
 
 	offset := (page - 1) * pageSize
 
-	// Build log query params (no user filter for all logs)
+	// Build log query params (no user filter for all logs; tenant isolation
+	// via the explicit scope arg)
 	params := &repo.LogQueryParams{
-		TenantID:   tenantCtx.TenantID,
 		LogType:    logType,
 		ModelName:  modelName,
 		StartTime:  startTime,
@@ -189,7 +188,7 @@ func GetAllLogsV2(c *gin.Context) {
 	}
 
 	// Get all logs for tenant
-	logs, total, err := repo.GetTenantLogsWithParams(params)
+	logs, total, err := repo.GetTenantLogsWithParams(repo.ForTenant(tenantCtx.TenantID), params)
 	if err != nil {
 		common.SysError("Failed to get logs: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{

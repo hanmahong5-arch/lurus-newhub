@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 
 	"github.com/gin-gonic/gin"
@@ -60,6 +61,16 @@ func CreateModelV2(c *gin.Context) {
 			"message":    "tenant not found",
 			"error_code": "TENANT_NOT_FOUND",
 		})
+		return
+	}
+
+	tenantCtx, ctxErr := middleware.GetTenantContext(c)
+	if ctxErr != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Tenant context not found"})
+		return
+	}
+	if !requireTenantAdmin(c, tenantCtx) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Admin role required"})
 		return
 	}
 
@@ -144,6 +155,16 @@ func DeleteModelV2(c *gin.Context) {
 			"message":    "tenant not found",
 			"error_code": "TENANT_NOT_FOUND",
 		})
+		return
+	}
+
+	tenantCtx, ctxErr := middleware.GetTenantContext(c)
+	if ctxErr != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Tenant context not found"})
+		return
+	}
+	if !requireTenantAdmin(c, tenantCtx) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Admin role required"})
 		return
 	}
 

@@ -137,6 +137,10 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
     unlimited: true,
     models: '',
     limitModels: false,
+    // Per-token rate limits. JSON keys mirror entity/token.go tags
+    // (rate_limit_rpm / rate_limit_tpm); 0 = unlimited.
+    rpm: '',
+    tpm: '',
   });
   const [saving, setSaving] = useState(false);
   const nameRef = useRef(null);
@@ -161,6 +165,8 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
         model_limits_enabled: form.limitModels && !!form.models.trim(),
         model_limits: form.models.trim(),
         expired_time: -1,
+        rate_limit_rpm: Math.max(0, parseInt(form.rpm, 10) || 0),
+        rate_limit_tpm: Math.max(0, parseInt(form.tpm, 10) || 0),
       });
       if (res?.data?.success) {
         const { key } = res.data.data;
@@ -317,6 +323,44 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
             />
           </label>
         )}
+
+        {/* Per-token rate limits — 0 / empty = unlimited. */}
+        <div
+          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}
+        >
+          {[
+            ['rpm', tr('console.token.field_rpm', 'rpm limit')],
+            ['tpm', tr('console.token.field_tpm', 'tpm limit')],
+          ].map(([k, label]) => (
+            <label
+              key={k}
+              style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
+            >
+              <span className='lbl'>{label}</span>
+              <input
+                style={{
+                  fontFamily: 'var(--hf-mono)',
+                  fontSize: 12,
+                  padding: '5px 8px',
+                  border: '1px solid var(--hf-rule)',
+                  background: 'var(--hf-sunken)',
+                  color: 'var(--hf-ink)',
+                  borderRadius: 2,
+                  outline: 'none',
+                  width: '100%',
+                }}
+                type='number'
+                min='0'
+                step='1'
+                placeholder={tr('console.token.ph_rate_limit', '0 = unlimited')}
+                value={form[k]}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, [k]: e.target.value }))
+                }
+              />
+            </label>
+          ))}
+        </div>
 
         <div
           style={{
@@ -582,6 +626,13 @@ const HFToken = () => {
           : Math.floor(new Date(rawValue).getTime() / 1000);
     } else if (field === 'ips') {
       body.allow_ips = rawValue === 'any' ? '' : rawValue;
+    } else if (field === 'rpm' || field === 'tpm') {
+      // JSON keys mirror entity/token.go tags; 0 = unlimited ('∞' parses
+      // to NaN → 0, so clearing back to unlimited just works).
+      body[field === 'rpm' ? 'rate_limit_rpm' : 'rate_limit_tpm'] = Math.max(
+        0,
+        parseInt(rawValue, 10) || 0,
+      );
     }
     if (Object.keys(body).length === 0) return;
     setSaving(true);
@@ -646,6 +697,16 @@ const HFToken = () => {
           tr('console.token.allowed_ips', 'allowed ips'),
           fmtIPs(token.allow_ips),
           'ips',
+        ],
+        [
+          tr('console.token.rate_limit_rpm', 'rate limit · rpm'),
+          token.rate_limit_rpm > 0 ? String(token.rate_limit_rpm) : '∞',
+          'rpm',
+        ],
+        [
+          tr('console.token.rate_limit_tpm', 'rate limit · tpm'),
+          token.rate_limit_tpm > 0 ? String(token.rate_limit_tpm) : '∞',
+          'tpm',
         ],
       ]
     : [];

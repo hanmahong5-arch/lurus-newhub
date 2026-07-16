@@ -156,7 +156,6 @@ func ExportLogsV2(c *gin.Context) {
 
 		params := &repo.LogQueryParams{
 			UserID:    tenantCtx.UserID,
-			TenantID:  tenantCtx.TenantID,
 			LogType:   logType,
 			ModelName: modelName,
 			StartTime: startTime,
@@ -166,7 +165,7 @@ func ExportLogsV2(c *gin.Context) {
 			Limit:     batchLimit,
 		}
 
-		logs, _, err := repo.GetUserLogsWithParams(params)
+		logs, _, err := repo.GetUserLogsWithParams(repo.ForTenant(tenantCtx.TenantID), params)
 		if err != nil {
 			common.SysError("ExportLogsV2: query failed: " + err.Error())
 			return

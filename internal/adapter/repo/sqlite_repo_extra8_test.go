@@ -337,7 +337,7 @@ func TestLog_GetAllLogs_WithChannel(t *testing.T) {
 	l := seedLog(t, u.Id, LogTypeTopup, "gpt-4", "default")
 	DB.Model(l).Update("channel_id", 999)
 
-	logs, _, err := GetAllLogs(LogTypeUnknown, 0, 0, "", "", "", 0, 100, 999, "")
+	logs, _, err := GetAllLogs(AllTenantsForAdmin(), LogTypeUnknown, 0, 0, "", "", "", 0, 100, 999, "")
 	if err != nil {
 		t.Fatalf("GetAllLogs with channel: %v", err)
 	}

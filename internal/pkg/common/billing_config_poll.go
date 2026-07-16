@@ -20,6 +20,10 @@ const (
 // billingConfigResponse mirrors the fields we read from the platform billing-config endpoint.
 type billingConfigResponse struct {
 	UnifiedBillingEnabled bool `json:"unified_billing_enabled"`
+	// LocalLedgerAdvisory is a pointer so a platform that predates the field
+	// (absent key) keeps the current value instead of force-resetting to false
+	// every poll — deploy-order safe during the Track A rollout.
+	LocalLedgerAdvisory *bool `json:"local_ledger_advisory"`
 }
 
 // StartBillingConfigPoller launches a background goroutine that polls the platform
@@ -87,4 +91,7 @@ func fetchAndApplyBillingConfig(ctx context.Context) {
 	}
 
 	SetBillingUnifiedEnabled(cfg.UnifiedBillingEnabled)
+	if cfg.LocalLedgerAdvisory != nil {
+		SetLocalLedgerAdvisory(*cfg.LocalLedgerAdvisory)
+	}
 }

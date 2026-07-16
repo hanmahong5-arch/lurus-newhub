@@ -59,7 +59,8 @@ const SecureVerificationModal = ({
   const [isAnimating, setIsAnimating] = useState(false);
   const [verifySuccess, setVerifySuccess] = useState(false);
 
-  const { has2FA, hasPasskey, passkeySupported } = verificationMethods;
+  const { has2FA, hasPasskey, passkeySupported, hasSession } =
+    verificationMethods;
   const { method, loading, code } = verificationState;
 
   useEffect(() => {
@@ -81,7 +82,7 @@ const SecureVerificationModal = ({
   };
 
   // 如果用户没有启用任何验证方式
-  if (visible && !has2FA && !hasPasskey) {
+  if (visible && !has2FA && !hasPasskey && !hasSession) {
     return (
       <Modal
         title={title || t('安全验证')}
@@ -164,11 +165,11 @@ const SecureVerificationModal = ({
               <div style={{ paddingTop: '20px' }}>
                 <div style={{ marginBottom: '12px' }}>
                   <Input
-                    placeholder={t('请输入6位验证码或8位备用码')}
+                    placeholder={t('请输入6位验证码')}
                     value={code}
                     onChange={onCodeChange}
                     size='large'
-                    maxLength={8}
+                    maxLength={6}
                     onKeyDown={handleKeyDown}
                     autoFocus={method === '2fa'}
                     disabled={loading}
@@ -204,7 +205,7 @@ const SecureVerificationModal = ({
                     lineHeight: '1.5',
                   }}
                 >
-                  {t('从认证器应用中获取验证码，或使用备用码')}
+                  {t('从认证器应用中获取当前验证码')}
                 </Typography.Text>
 
                 <div
@@ -226,6 +227,48 @@ const SecureVerificationModal = ({
                     onClick={() => onVerify(method, code)}
                   >
                     {t('验证')}
+                  </Button>
+                </div>
+              </div>
+            </TabPane>
+          )}
+
+          {!has2FA && hasSession && (
+            <TabPane tab={t('会话确认')} itemKey='session'>
+              <div style={{ paddingTop: '20px' }}>
+                <Typography.Text
+                  type='tertiary'
+                  size='small'
+                  style={{
+                    display: 'block',
+                    marginBottom: '20px',
+                    fontSize: '13px',
+                    lineHeight: '1.5',
+                  }}
+                >
+                  {t(
+                    '点击确认以验证当前登录会话。启用两步验证可获得更高安全性。',
+                  )}
+                </Typography.Text>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    gap: '8px',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <Button onClick={onCancel} disabled={loading}>
+                    {t('取消')}
+                  </Button>
+                  <Button
+                    theme='solid'
+                    type='primary'
+                    loading={loading}
+                    disabled={loading}
+                    onClick={() => onVerify('session')}
+                  >
+                    {t('确认')}
                   </Button>
                 </div>
               </div>

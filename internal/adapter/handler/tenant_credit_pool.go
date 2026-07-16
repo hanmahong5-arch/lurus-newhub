@@ -7,11 +7,21 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+)
+
+// Wallet call seams — package-level vars so hermetic tests can inject
+// "debit succeeded / revert failed" without a live platform gRPC endpoint
+// (same seam convention as app.AsyncGo). Production always uses the real
+// common.* clients.
+var (
+	debitWallet  = common.DebitWalletGRPC
+	creditWallet = common.CreditWalletGRPC
 )
 
 // Reseller-facing admin handlers for tenant credit pools.
@@ -222,10 +232,18 @@ func GetCreditPoolForEndUser(c *gin.Context) {
 //  1. Lookup pool (must exist).
 //  2. DebitWalletGRPC(amount) — if it fails, return 402.
 //  3. TopupPool(amount) — if it fails (ErrPoolWouldExceedCeiling), call
-//     CreditWalletGRPC for revert; if revert also fails, log STRANDED for ops.
+//     CreditWalletGRPC for revert; if revert ALSO fails the debit is stranded:
+//     it is persisted as an open credit_pool_fund_events row (source =
+//     "topup_stranded") that the background reconcile sweep compensates
+//     (app.ReconcileStrandedTopups), and the STRANDED log line remains as
+//     operator context.
 //
 // The two-step is necessarily non-atomic across services, so we accept a
-// narrow stranded-debit risk and surface it loudly rather than absorbing it.
+// narrow stranded-debit window — but every stranded debit is now durable,
+// metered (newhub_credit_pool_stranded_*) and auto-compensated, not log-only.
+// A retried request with the same Idempotency-Key settles its own stranded
+// event via the claim protocol instead of double-crediting (see
+// app.TryFinalizeStrandedTopup).
 func TopupCreditPool(c *gin.Context) {
 	tenantID := c.Param("id")
 
@@ -276,7 +294,7 @@ func TopupCreditPool(c *gin.Context) {
 	if idemKey == "" {
 		idemKey = "pool-topup:" + uuid.NewString()
 	}
-	debit, derr := common.DebitWalletGRPC(
+	debit, derr := debitWallet(
 		c.Request.Context(), accountID, walletAmount,
 		"pool_topup", "Credit pool topup for tenant "+tenantID, "newhub", idemKey,
 	)
@@ -289,17 +307,55 @@ func TopupCreditPool(c *gin.Context) {
 		return
 	}
 
+	// Retry of a previously-stranded intent (same Idempotency-Key): the debit
+	// above was deduped upstream, so the money was only taken once. Settle the
+	// stranded event via its claim protocol instead of running a fresh
+	// TopupPool — a blind second credit here plus the background reconcile
+	// sweep would double-credit a single debit.
+	if evt, handled, ferr := app.TryFinalizeStrandedTopup(c.Request.Context(), idemKey, tenantID); handled {
+		if ferr != nil {
+			status := http.StatusInternalServerError
+			code := "POOL_TOPUP_FAILED"
+			if errors.Is(ferr, repo.ErrPoolWouldExceedCeiling) {
+				status = http.StatusConflict
+				code = "POOL_CEILING_EXCEEDED"
+			}
+			c.JSON(status, gin.H{"success": false, "message": ferr.Error(), "error_code": code})
+			return
+		}
+		metrics.CreditPoolBalance.WithLabelValues(tenantID).Set(float64(evt.NewBalance))
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"tenant_id":   tenantID,
+				"new_balance": evt.NewBalance,
+				"max_balance": pool.MaxBalance,
+				"reconciled":  true,
+			},
+		})
+		return
+	}
+
 	newBalance, terr := repo.TopupPool(pool.ID, tenantID, req.Amount, actorID, req.Reason)
 	if terr != nil {
 		// Revert the wallet — best effort.
-		if rerr := common.CreditWalletGRPC(
+		if rerr := creditWallet(
 			c.Request.Context(), accountID, walletAmount,
 			"pool_topup_revert",
 			"Revert: pool topup failed for tenant "+tenantID,
 			"newhub", idemKey+":revert",
 		); rerr != nil {
+			// Stranded debit: money left the wallet, pool was not credited,
+			// revert failed too. Persist an open fund event so the background
+			// reconcile sweep (app.ReconcileStrandedTopups) compensates it —
+			// the log line is context for operators, no longer the only trace.
+			if serr := app.RecordStrandedTopup(c.Request.Context(), idemKey, tenantID, pool.ID, req.Amount); serr != nil {
+				common.SysError("failed to persist stranded topup event (log is the only trace!) " +
+					"event_id=" + idemKey + " err=" + serr.Error())
+			}
 			common.SysError("STRANDED wallet debit — pool topup AND revert both failed. " +
-				"account=" + strconv.FormatInt(accountID, 10) +
+				"event_id=" + idemKey +
+				" account=" + strconv.FormatInt(accountID, 10) +
 				" tenant=" + tenantID +
 				" amount=" + strconv.FormatInt(req.Amount, 10) +
 				" pool_err=" + terr.Error() + " revert_err=" + rerr.Error())

@@ -21,7 +21,15 @@ import (
 
 func GetAllUsers(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := repo.GetAllUsers(pageInfo)
+	var users []*repo.User
+	var total int64
+	var err error
+	// Non-root callers see only their own tenant's users.
+	if c.GetInt("role") >= common.RoleRootUser {
+		users, total, err = repo.GetAllUsers(pageInfo)
+	} else {
+		users, total, err = repo.GetUsersByTenant(c.GetString("tenant_id"), pageInfo)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -39,6 +47,9 @@ func SearchUsers(c *gin.Context) {
 	group := c.Query("group")
 	pageInfo := common.GetPageQuery(c)
 
+	isRoot := c.GetInt("role") >= common.RoleRootUser
+	callerTenant := c.GetString("tenant_id")
+
 	// Parse status parameter
 	status := 0
 	if statusStr := c.Query("status"); statusStr != "" {
@@ -47,8 +58,10 @@ func SearchUsers(c *gin.Context) {
 		}
 	}
 
-	// Try Meilisearch first if enabled
-	if search.IsEnabled() {
+	// Try Meilisearch first if enabled. Root/platform-operator only: the
+	// Meilisearch index is not tenant-filtered, so non-root callers fall through
+	// to the tenant-scoped DB query below.
+	if isRoot && search.IsEnabled() {
 		page := (pageInfo.GetStartIdx() / pageInfo.GetPageSize()) + 1
 		if page < 1 {
 			page = 1
@@ -98,7 +111,14 @@ func SearchUsers(c *gin.Context) {
 		common.SysLog(fmt.Sprintf("Meilisearch search failed, falling back to database: %v", err))
 	}
 
-	users, total, err := repo.SearchUsers(keyword, group, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	var users []*repo.User
+	var total int64
+	var err error
+	if isRoot {
+		users, total, err = repo.SearchUsers(keyword, group, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	} else {
+		users, total, err = repo.SearchUsersByTenant(callerTenant, keyword, group, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -127,6 +147,9 @@ func GetUser(c *gin.Context) {
 			"success": false,
 			"message": "无权获取同级或更高等级用户的信息",
 		})
+		return
+	}
+	if enforceTenantScope(c, user.TenantId) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -344,6 +367,9 @@ func UpdateUser(c *gin.Context) {
 	originUser, err := repo.GetUserById(updatedUser.Id, false)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if enforceTenantScope(c, originUser.TenantId) {
 		return
 	}
 	myRole := c.GetInt("role")

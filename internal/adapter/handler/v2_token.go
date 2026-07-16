@@ -143,6 +143,8 @@ func CreateTokenV2(c *gin.Context) {
 		AllowIps           string   `json:"allow_ips"`            // Comma-separated allowed IPs
 		Group              string   `json:"group"`                // Token group
 		Scopes             []string `json:"scopes"`               // Relay scope allowlist (empty = unrestricted)
+		RateLimitRPM       int      `json:"rate_limit_rpm"`       // Requests/min ceiling (0 = unlimited)
+		RateLimitTPM       int      `json:"rate_limit_tpm"`       // Tokens/min ceiling (0 = unlimited)
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -174,6 +176,15 @@ func CreateTokenV2(c *gin.Context) {
 
 	// Validate expiry upper bound (unit mistakes would mean "never expires")
 	if err := app.ValidateTokenExpiredTime(req.ExpiredTime); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Validate per-minute rate limits (0 = unlimited)
+	if err := app.ValidateRateLimits(req.RateLimitRPM, req.RateLimitTPM); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": err.Error(),
@@ -231,6 +242,8 @@ func CreateTokenV2(c *gin.Context) {
 		AllowIps:           allowIps,
 		Group:              req.Group,
 		Scopes:             scopesNormalized,
+		RateLimitRPM:       req.RateLimitRPM,
+		RateLimitTPM:       req.RateLimitTPM,
 	}
 
 	err = token.Insert()
@@ -310,7 +323,9 @@ func UpdateTokenV2(c *gin.Context) {
 		AllowIps           string    `json:"allow_ips"`
 		Group              string    `json:"group"`
 		Status             *int      `json:"status"`
-		Scopes             *[]string `json:"scopes"` // nil = no change; non-nil (incl. []) = replace allowlist
+		Scopes             *[]string `json:"scopes"`         // nil = no change; non-nil (incl. []) = replace allowlist
+		RateLimitRPM       *int      `json:"rate_limit_rpm"` // nil = no change; 0 resets to unlimited
+		RateLimitTPM       *int      `json:"rate_limit_tpm"` // nil = no change; 0 resets to unlimited
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -387,6 +402,26 @@ func UpdateTokenV2(c *gin.Context) {
 			}
 		}
 		token.Status = *req.Status
+	}
+
+	// Rate limits: nil = unchanged, explicit 0 resets to unlimited.
+	if req.RateLimitRPM != nil || req.RateLimitTPM != nil {
+		rpm, tpm := token.RateLimitRPM, token.RateLimitTPM
+		if req.RateLimitRPM != nil {
+			rpm = *req.RateLimitRPM
+		}
+		if req.RateLimitTPM != nil {
+			tpm = *req.RateLimitTPM
+		}
+		if err := app.ValidateRateLimits(rpm, tpm); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+		token.RateLimitRPM = rpm
+		token.RateLimitTPM = tpm
 	}
 
 	// Scopes replacement is opt-in: nil = unchanged, non-nil = full replace.

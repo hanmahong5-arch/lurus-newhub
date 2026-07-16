@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/ollama"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -66,6 +67,28 @@ func clearChannelInfo(channel *repo.Channel) {
 	}
 }
 
+// enforceTenantScope guards the legacy v1 admin console handlers against
+// cross-tenant IDOR. AdminAuth() only checks role >= RoleAdminUser (10), which
+// is also the v2 per-tenant admin role — so without this a tenant admin could
+// read, mutate or delete another tenant's resource just by guessing its numeric
+// id. Root operators (role >= RoleRootUser) keep global cross-tenant access;
+// every other caller may only touch a resource whose tenant matches their own.
+// Returns true (after writing a 403) when access must be denied, so the caller
+// can simply `return`.
+func enforceTenantScope(c *gin.Context, resourceTenantID string) bool {
+	if c.GetInt("role") >= common.RoleRootUser {
+		return false
+	}
+	if resourceTenantID != c.GetString("tenant_id") {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "无权访问其它租户的资源",
+		})
+		return true
+	}
+	return false
+}
+
 func GetAllChannels(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*repo.Channel, 0)
@@ -82,6 +105,11 @@ func GetAllChannels(c *gin.Context) {
 			typeFilter = t
 		}
 	}
+
+	// Non-root callers see only their own tenant's channels; root (the platform
+	// operator) keeps the global view.
+	isRoot := c.GetInt("role") >= common.RoleRootUser
+	callerTenant := c.GetString("tenant_id")
 
 	var total int64
 
@@ -101,6 +129,9 @@ func GetAllChannels(c *gin.Context) {
 			}
 			filtered := make([]*repo.Channel, 0)
 			for _, ch := range tagChannels {
+				if !isRoot && ch.TenantId != callerTenant {
+					continue
+				}
 				if statusFilter == common.ChannelStatusEnabled && ch.Status != common.ChannelStatusEnabled {
 					continue
 				}
@@ -117,6 +148,9 @@ func GetAllChannels(c *gin.Context) {
 		total, _ = repo.CountAllTags()
 	} else {
 		baseQuery := repo.DB.Model(&repo.Channel{})
+		if !isRoot {
+			baseQuery = baseQuery.Where("tenant_id = ?", callerTenant)
+		}
 		if typeFilter >= 0 {
 			baseQuery = baseQuery.Where("type = ?", typeFilter)
 		}
@@ -145,6 +179,9 @@ func GetAllChannels(c *gin.Context) {
 	}
 
 	countQuery := repo.DB.Model(&repo.Channel{})
+	if !isRoot {
+		countQuery = countQuery.Where("tenant_id = ?", callerTenant)
+	}
 	if statusFilter == common.ChannelStatusEnabled {
 		countQuery = countQuery.Where("status = ?", common.ChannelStatusEnabled)
 	} else if statusFilter == 0 {
@@ -203,6 +240,9 @@ func FetchUpstreamModels(c *gin.Context) {
 	channel, err := repo.GetChannelById(id, true)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if enforceTenantScope(c, channel.TenantId) {
 		return
 	}
 
@@ -364,6 +404,8 @@ func SearchChannels(c *gin.Context) {
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	channelData := make([]*repo.Channel, 0)
+	isRoot := c.GetInt("role") >= common.RoleRootUser
+	callerTenant := c.GetString("tenant_id")
 	if enableTagMode {
 		tags, err := repo.SearchTags(keyword, group, modelKeyword, idSort)
 		if err != nil {
@@ -384,7 +426,9 @@ func SearchChannels(c *gin.Context) {
 	} else {
 		// Try Meilisearch first if enabled and simple search
 		// 如果启用了 Meilisearch 且是简单搜索，优先使用
-		if search.IsEnabled() && statusFilter != 0 {
+		// Root/platform-operator only: the Meilisearch index is not tenant
+		// filtered, so non-root callers use the tenant-scoped DB search below.
+		if isRoot && search.IsEnabled() && statusFilter != 0 {
 			// Parse status for Meilisearch
 			// 为 Meilisearch 解析状态
 			status := 0
@@ -467,7 +511,13 @@ func SearchChannels(c *gin.Context) {
 		} else {
 			// Fallback to database search
 			// 降级到数据库搜索
-			channels, err := repo.SearchChannels(keyword, group, modelKeyword, idSort)
+			var channels []*repo.Channel
+			var err error
+			if isRoot {
+				channels, err = repo.SearchChannels(keyword, group, modelKeyword, idSort)
+			} else {
+				channels, err = repo.SearchChannelsByTenant(callerTenant, keyword, group, modelKeyword, idSort)
+			}
 			if err != nil {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
@@ -477,6 +527,19 @@ func SearchChannels(c *gin.Context) {
 			}
 			channelData = channels
 		}
+	}
+
+	// Defence in depth: drop any channel outside the caller's tenant. Covers the
+	// tag-mode path (repo.GetChannelsByTag is not tenant-scoped); the DB search
+	// path is already scoped and the Meilisearch path is root-only.
+	if !isRoot {
+		scoped := make([]*repo.Channel, 0, len(channelData))
+		for _, ch := range channelData {
+			if ch.TenantId == callerTenant {
+				scoped = append(scoped, ch)
+			}
+		}
+		channelData = scoped
 	}
 
 	if statusFilter == common.ChannelStatusEnabled || statusFilter == 0 {
@@ -563,6 +626,9 @@ func GetChannel(c *gin.Context) {
 	channel, err := repo.GetChannelById(id, false)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if enforceTenantScope(c, channel.TenantId) {
 		return
 	}
 	if channel != nil {
@@ -811,8 +877,16 @@ func AddChannel(c *gin.Context) {
 
 func DeleteChannel(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	existing, err := repo.GetChannelById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if enforceTenantScope(c, existing.TenantId) {
+		return
+	}
 	channel := repo.Channel{Id: id}
-	err := channel.Delete()
+	err = channel.Delete()
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -828,7 +902,15 @@ func DeleteChannel(c *gin.Context) {
 }
 
 func DeleteDisabledChannel(c *gin.Context) {
-	rows, err := repo.DeleteDisabledChannel()
+	// AdminAuth is satisfied by a per-tenant admin too, so a non-root prune must
+	// stay inside the caller's tenant; root keeps the global sweep.
+	var rows int64
+	var err error
+	if c.GetInt("role") >= common.RoleRootUser {
+		rows, err = repo.DeleteDisabledChannel()
+	} else {
+		rows, err = repo.DeleteDisabledChannelByTenant(c.GetString("tenant_id"))
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -864,7 +946,13 @@ func DisableTagChannels(c *gin.Context) {
 		})
 		return
 	}
-	err = repo.DisableChannelByTag(channelTag.Tag)
+	// A per-tenant admin (also passes AdminAuth) may only disable channels sharing
+	// this tag within its own tenant; root disables the tag across every tenant.
+	if c.GetInt("role") >= common.RoleRootUser {
+		err = repo.DisableChannelByTag(channelTag.Tag)
+	} else {
+		err = repo.DisableChannelByTagAndTenant(c.GetString("tenant_id"), channelTag.Tag)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -890,7 +978,13 @@ func EnableTagChannels(c *gin.Context) {
 		})
 		return
 	}
-	err = repo.EnableChannelByTag(channelTag.Tag)
+	// A per-tenant admin (also passes AdminAuth) may only enable channels sharing
+	// this tag within its own tenant; root enables the tag across every tenant.
+	if c.GetInt("role") >= common.RoleRootUser {
+		err = repo.EnableChannelByTag(channelTag.Tag)
+	} else {
+		err = repo.EnableChannelByTagAndTenant(c.GetString("tenant_id"), channelTag.Tag)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -942,7 +1036,13 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
 	}
-	err = repo.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	// A per-tenant admin (also passes AdminAuth) may only edit channels sharing
+	// this tag within its own tenant; root edits the tag across every tenant.
+	if c.GetInt("role") >= common.RoleRootUser {
+		err = repo.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	} else {
+		err = repo.EditChannelByTagAndTenant(c.GetString("tenant_id"), channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -960,6 +1060,31 @@ type ChannelBatch struct {
 	Tag *string `json:"tag"`
 }
 
+// filterChannelIdsByTenant returns the subset of ids whose channel belongs to
+// tenantID. The bulk id-array handlers (DeleteChannelBatch, BatchSetChannelTag)
+// run under AdminAuth, which a per-tenant admin also satisfies, so the id array
+// is attacker-controlled; this keeps a non-root bulk op from reaching across the
+// tenant boundary. Consistent with the list handlers, cross-tenant ids are
+// silently dropped — the response count then reflects only the caller's own
+// channels — rather than 403'd, so a caller cannot probe which ids exist
+// elsewhere. On a lookup error it fails closed (touch nothing).
+func filterChannelIdsByTenant(ids []int, tenantID string) []int {
+	if len(ids) == 0 {
+		return ids
+	}
+	channels, err := repo.GetChannelsByIds(ids)
+	if err != nil {
+		return nil
+	}
+	scoped := make([]int, 0, len(channels))
+	for _, ch := range channels {
+		if ch.TenantId == tenantID {
+			scoped = append(scoped, ch.Id)
+		}
+	}
+	return scoped
+}
+
 func DeleteChannelBatch(c *gin.Context) {
 	channelBatch := ChannelBatch{}
 	err := c.ShouldBindJSON(&channelBatch)
@@ -969,6 +1094,10 @@ func DeleteChannelBatch(c *gin.Context) {
 			"message": "参数错误",
 		})
 		return
+	}
+	// Non-root callers may only delete channels within their own tenant.
+	if c.GetInt("role") < common.RoleRootUser {
+		channelBatch.Ids = filterChannelIdsByTenant(channelBatch.Ids, c.GetString("tenant_id"))
 	}
 	err = repo.BatchDeleteChannels(channelBatch.Ids)
 	if err != nil {
@@ -1016,6 +1145,9 @@ func UpdateChannel(c *gin.Context) {
 			"success": false,
 			"message": err.Error(),
 		})
+		return
+	}
+	if enforceTenantScope(c, originChannel.TenantId) {
 		return
 	}
 
@@ -1154,10 +1286,10 @@ func FetchModels(c *gin.Context) {
 		return
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 120 * time.Second}
 	url := fmt.Sprintf("%s/v1/models", baseURL)
 
-	request, err := http.NewRequest("GET", url, nil)
+	request, err := http.NewRequestWithContext(c.Request.Context(), "GET", url, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -1220,6 +1352,10 @@ func BatchSetChannelTag(c *gin.Context) {
 			"message": "参数错误",
 		})
 		return
+	}
+	// Non-root callers may only retag channels within their own tenant.
+	if c.GetInt("role") < common.RoleRootUser {
+		channelBatch.Ids = filterChannelIdsByTenant(channelBatch.Ids, c.GetString("tenant_id"))
 	}
 	err = repo.BatchSetChannelTag(channelBatch.Ids, channelBatch.Tag)
 	if err != nil {
@@ -1303,6 +1439,9 @@ func CopyChannel(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	if enforceTenantScope(c, origin.TenantId) {
+		return
+	}
 
 	// clone channel
 	clone := *origin // shallow copy is sufficient as we will overwrite primitives
@@ -1373,6 +1512,9 @@ func ManageMultiKeys(c *gin.Context) {
 			"success": false,
 			"message": "渠道不存在",
 		})
+		return
+	}
+	if enforceTenantScope(c, channel.TenantId) {
 		return
 	}
 
@@ -1864,6 +2006,10 @@ func OllamaPullModel(c *gin.Context) {
 		baseURL = channel.GetBaseURL()
 	}
 
+	if enforceTenantScope(c, channel.TenantId) {
+		return
+	}
+
 	key := strings.Split(channel.Key, "\n")[0]
 	err = ollama.PullOllamaModel(baseURL, key, req.ModelName)
 	if err != nil {
@@ -1925,6 +2071,10 @@ func OllamaPullModelStream(c *gin.Context) {
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
+	}
+
+	if enforceTenantScope(c, channel.TenantId) {
+		return
 	}
 
 	// 设置 SSE 头部
@@ -2009,6 +2159,10 @@ func OllamaDeleteModel(c *gin.Context) {
 		baseURL = channel.GetBaseURL()
 	}
 
+	if enforceTenantScope(c, channel.TenantId) {
+		return
+	}
+
 	key := strings.Split(channel.Key, "\n")[0]
 	err = ollama.DeleteOllamaModel(baseURL, key, req.ModelName)
 	if err != nil {
@@ -2042,6 +2196,9 @@ func OllamaVersion(c *gin.Context) {
 			"success": false,
 			"message": "Channel not found",
 		})
+		return
+	}
+	if enforceTenantScope(c, channel.TenantId) {
 		return
 	}
 

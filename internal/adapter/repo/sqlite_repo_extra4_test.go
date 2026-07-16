@@ -687,7 +687,7 @@ func TestLog_GetAllLogs_NoFilter(t *testing.T) {
 	seedLog(t, u.Id, LogTypeTopup, "gpt-4", "default")
 	seedLog(t, u.Id, LogTypeTopup, "gpt-3.5", "default")
 
-	logs, total, err := GetAllLogs(LogTypeUnknown, 0, 0, "", "", "", 0, 100, 0, "")
+	logs, total, err := GetAllLogs(AllTenantsForAdmin(), LogTypeUnknown, 0, 0, "", "", "", 0, 100, 0, "")
 	if err != nil {
 		t.Fatalf("GetAllLogs: %v", err)
 	}
@@ -705,7 +705,7 @@ func TestLog_GetAllLogs_ByType(t *testing.T) {
 	seedLog(t, u.Id, LogTypeTopup, "gpt-4", "default")
 	seedLog(t, u.Id, LogTypeSystem, "gpt-3.5", "default")
 
-	logs, total, err := GetAllLogs(LogTypeTopup, 0, 0, "", "", "", 0, 100, 0, "")
+	logs, total, err := GetAllLogs(AllTenantsForAdmin(), LogTypeTopup, 0, 0, "", "", "", 0, 100, 0, "")
 	if err != nil {
 		t.Fatalf("GetAllLogs by type: %v", err)
 	}
@@ -725,7 +725,7 @@ func TestLog_GetAllLogs_ByModel(t *testing.T) {
 	seedLog(t, u.Id, LogTypeTopup, "gpt-4", "default")
 	seedLog(t, u.Id, LogTypeTopup, "claude-3", "default")
 
-	logs, _, err := GetAllLogs(LogTypeUnknown, 0, 0, "gpt-4", "", "", 0, 100, 0, "")
+	logs, _, err := GetAllLogs(AllTenantsForAdmin(), LogTypeUnknown, 0, 0, "gpt-4", "", "", 0, 100, 0, "")
 	if err != nil {
 		t.Fatalf("GetAllLogs by model: %v", err)
 	}
@@ -744,7 +744,7 @@ func TestLog_GetAllLogs_ByUsername(t *testing.T) {
 	l := seedLog(t, u.Id, LogTypeTopup, "gpt-4", "default")
 	DB.Model(l).Update("username", "log_user4")
 
-	logs, _, err := GetAllLogs(LogTypeUnknown, 0, 0, "", "log_user4", "", 0, 100, 0, "")
+	logs, _, err := GetAllLogs(AllTenantsForAdmin(), LogTypeUnknown, 0, 0, "", "log_user4", "", 0, 100, 0, "")
 	if err != nil {
 		t.Fatalf("GetAllLogs by username: %v", err)
 	}
@@ -759,7 +759,7 @@ func TestLog_GetAllLogs_ByTimeRange(t *testing.T) {
 	seedLog(t, u.Id, LogTypeTopup, "gpt-4", "default")
 
 	now := common.GetTimestamp()
-	logs, _, err := GetAllLogs(LogTypeUnknown, now-10000, now+10000, "", "", "", 0, 100, 0, "")
+	logs, _, err := GetAllLogs(AllTenantsForAdmin(), LogTypeUnknown, now-10000, now+10000, "", "", "", 0, 100, 0, "")
 	if err != nil {
 		t.Fatalf("GetAllLogs by time range: %v", err)
 	}

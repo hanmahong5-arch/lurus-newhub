@@ -13,6 +13,13 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
 	apiRouter.Use(middleware.CORS())
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
+	// DecompressRequestMiddleware (the only other body-size cap in this repo)
+	// is wired onto the relay router only, which SetRelayRouter registers on
+	// the engine AFTER this group is already built — gin snapshots a group's
+	// middleware chain at Group() call time, so that later engine-level Use()
+	// never reaches /api. Without this, any ShouldBindJSON endpoint here would
+	// accept an unbounded body (OOM DoS). See body_size_limit.go.
+	apiRouter.Use(middleware.RequestBodySizeLimit())
 	{
 		// ================================================================
 		// Public routes (no authentication)
@@ -59,6 +66,14 @@ func SetApiRouter(router *gin.Engine) {
 		// as channel-key reveal. Frontend contract: web/src/services/secureVerification.js.
 		apiRouter.POST("/verify", middleware.UserAuth(), handler.UniversalVerify)
 		apiRouter.GET("/verify/status", middleware.UserAuth(), handler.GetVerificationStatus)
+
+		// -- TOTP step-up factor management --
+		// Enrolled users must present a valid TOTP code to POST /api/verify;
+		// disable is itself gated behind a fresh step-up verification.
+		apiRouter.GET("/user/totp/status", middleware.UserAuth(), handler.GetTotpStatus)
+		apiRouter.POST("/user/totp/enroll", middleware.UserAuth(), middleware.CriticalRateLimit(), handler.TotpEnroll)
+		apiRouter.POST("/user/totp/confirm", middleware.UserAuth(), middleware.CriticalRateLimit(), handler.TotpConfirm)
+		apiRouter.POST("/user/totp/disable", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), handler.TotpDisable)
 
 		// -- Platform wallet integration --
 		apiRouter.GET("/wallet/info", middleware.UserAuth(), handler.GetWalletInfo)
@@ -167,12 +182,14 @@ func SetApiRouter(router *gin.Engine) {
 		openrouterSyncRoute := apiRouter.Group("/openrouter-sync")
 		openrouterSyncRoute.Use(middleware.AdminAuth())
 		{
+			// Sync jobs mutate the GLOBAL free-model catalog for all tenants;
+			// job reads stay at admin, but create/update/delete/run are root.
 			openrouterSyncRoute.GET("/jobs", handler.ListOpenRouterSyncJobs)
-			openrouterSyncRoute.POST("/jobs", handler.CreateOpenRouterSyncJob)
-			openrouterSyncRoute.PUT("/jobs/:id", handler.UpdateOpenRouterSyncJob)
-			openrouterSyncRoute.DELETE("/jobs/:id", handler.DeleteOpenRouterSyncJob)
-			openrouterSyncRoute.POST("/jobs/:id/run", handler.RunOpenRouterSyncJob)
-			openrouterSyncRoute.POST("/run-all", handler.RunAllOpenRouterSyncJobs)
+			openrouterSyncRoute.POST("/jobs", middleware.RootAuth(), handler.CreateOpenRouterSyncJob)
+			openrouterSyncRoute.PUT("/jobs/:id", middleware.RootAuth(), handler.UpdateOpenRouterSyncJob)
+			openrouterSyncRoute.DELETE("/jobs/:id", middleware.RootAuth(), handler.DeleteOpenRouterSyncJob)
+			openrouterSyncRoute.POST("/jobs/:id/run", middleware.RootAuth(), handler.RunOpenRouterSyncJob)
+			openrouterSyncRoute.POST("/run-all", middleware.RootAuth(), handler.RunAllOpenRouterSyncJobs)
 			openrouterSyncRoute.GET("/jobs/:id/preview", handler.PreviewOpenRouterSyncJob)
 			openrouterSyncRoute.GET("/categories", handler.ListOpenRouterSyncCategories)
 			openrouterSyncRoute.GET("/last-status", handler.GetOpenRouterSyncLastStatus)
@@ -201,10 +218,12 @@ func SetApiRouter(router *gin.Engine) {
 		prefillGroupRoute := apiRouter.Group("/prefill_group")
 		prefillGroupRoute.Use(middleware.AdminAuth())
 		{
+			// Prefill groups are global console presets; reads stay at admin,
+			// mutations are operator-only.
 			prefillGroupRoute.GET("/", handler.GetPrefillGroups)
-			prefillGroupRoute.POST("/", handler.CreatePrefillGroup)
-			prefillGroupRoute.PUT("/", handler.UpdatePrefillGroup)
-			prefillGroupRoute.DELETE("/:id", handler.DeletePrefillGroup)
+			prefillGroupRoute.POST("/", middleware.RootAuth(), handler.CreatePrefillGroup)
+			prefillGroupRoute.PUT("/", middleware.RootAuth(), handler.UpdatePrefillGroup)
+			prefillGroupRoute.DELETE("/:id", middleware.RootAuth(), handler.DeletePrefillGroup)
 		}
 
 		// User management (admin only)
@@ -217,31 +236,38 @@ func SetApiRouter(router *gin.Engine) {
 			userRoute.PUT("/", handler.UpdateUser)
 		}
 
+		// The vendor catalog is GLOBAL (not tenant-scoped): a mutation here is
+		// visible to every tenant. Reads stay at admin so tenant admins can
+		// populate channel/pricing pickers, but writes are operator-only (root)
+		// — otherwise a role-10 tenant admin could rewrite platform-wide vendors.
 		vendorRoute := apiRouter.Group("/vendors")
 		vendorRoute.Use(middleware.AdminAuth())
 		{
 			vendorRoute.GET("/", handler.GetAllVendors)
 			vendorRoute.GET("/search", handler.SearchVendors)
 			vendorRoute.GET("/:id", handler.GetVendorMeta)
-			vendorRoute.POST("/", handler.CreateVendorMeta)
-			vendorRoute.PUT("/", handler.UpdateVendorMeta)
-			vendorRoute.DELETE("/:id", handler.DeleteVendorMeta)
+			vendorRoute.POST("/", middleware.RootAuth(), handler.CreateVendorMeta)
+			vendorRoute.PUT("/", middleware.RootAuth(), handler.UpdateVendorMeta)
+			vendorRoute.DELETE("/:id", middleware.RootAuth(), handler.DeleteVendorMeta)
 		}
 
+		// Global model catalog: reads feed every tenant's console (pricing,
+		// missing-model hints), so they stay at admin. Catalog mutation and
+		// upstream/channel sync are platform-wide side effects → operator-only.
 		modelsRoute := apiRouter.Group("/models")
 		modelsRoute.Use(middleware.AdminAuth())
 		{
 			modelsRoute.GET("/sync_upstream/preview", handler.SyncUpstreamPreview)
-			modelsRoute.POST("/sync_upstream", handler.SyncUpstreamModels)
-			modelsRoute.POST("/sync_channels", handler.SyncAllChannelsNow)
+			modelsRoute.POST("/sync_upstream", middleware.RootAuth(), handler.SyncUpstreamModels)
+			modelsRoute.POST("/sync_channels", middleware.RootAuth(), handler.SyncAllChannelsNow)
 			modelsRoute.GET("/pricing_info", handler.GetModelsPricingInfo)
 			modelsRoute.GET("/missing", handler.GetMissingModels)
 			modelsRoute.GET("/", handler.GetAllModelsMeta)
 			modelsRoute.GET("/search", handler.SearchModelsMeta)
 			modelsRoute.GET("/:id", handler.GetModelMeta)
-			modelsRoute.POST("/", handler.CreateModelMeta)
-			modelsRoute.PUT("/", handler.UpdateModelMeta)
-			modelsRoute.DELETE("/:id", handler.DeleteModelMeta)
+			modelsRoute.POST("/", middleware.RootAuth(), handler.CreateModelMeta)
+			modelsRoute.PUT("/", middleware.RootAuth(), handler.UpdateModelMeta)
+			modelsRoute.DELETE("/:id", middleware.RootAuth(), handler.DeleteModelMeta)
 		}
 
 		deploymentsRoute := apiRouter.Group("/deployments")
@@ -257,19 +283,25 @@ func SetApiRouter(router *gin.Engine) {
 			deploymentsRoute.GET("/available-replicas", handler.GetAvailableReplicas)
 			deploymentsRoute.POST("/price-estimation", handler.GetPriceEstimation)
 			deploymentsRoute.GET("/check-name", handler.CheckClusterNameAvailability)
-			deploymentsRoute.POST("/", handler.CreateDeployment)
+			// Deployment lifecycle spends real money on external GPU infra
+			// (io.net) and is not tenant-scoped — provisioning is operator-only.
+			deploymentsRoute.POST("/", middleware.RootAuth(), handler.CreateDeployment)
 			deploymentsRoute.GET("/:id", handler.GetDeployment)
 			deploymentsRoute.GET("/:id/logs", handler.GetDeploymentLogs)
 			deploymentsRoute.GET("/:id/containers", handler.ListDeploymentContainers)
 			deploymentsRoute.GET("/:id/containers/:container_id", handler.GetContainerDetails)
-			deploymentsRoute.PUT("/:id", handler.UpdateDeployment)
-			deploymentsRoute.PUT("/:id/name", handler.UpdateDeploymentName)
-			deploymentsRoute.POST("/:id/extend", handler.ExtendDeployment)
-			deploymentsRoute.DELETE("/:id", handler.DeleteDeployment)
+			deploymentsRoute.PUT("/:id", middleware.RootAuth(), handler.UpdateDeployment)
+			deploymentsRoute.PUT("/:id/name", middleware.RootAuth(), handler.UpdateDeploymentName)
+			deploymentsRoute.POST("/:id/extend", middleware.RootAuth(), handler.ExtendDeployment)
+			deploymentsRoute.DELETE("/:id", middleware.RootAuth(), handler.DeleteDeployment)
 		}
 
+		// Internal-scope API keys grant cross-tenant access to the /internal
+		// surface (quota/balance write, user read across tenants). Even LISTING
+		// them exposes the platform's trust boundary, so the whole group —
+		// read included — is operator-only (root), not tenant-admin.
 		apiKeyRoute := apiRouter.Group("/api-keys")
-		apiKeyRoute.Use(middleware.AdminAuth())
+		apiKeyRoute.Use(middleware.RootAuth())
 		{
 			apiKeyRoute.GET("/", handler.AdminListApiKeys)
 			apiKeyRoute.GET("/scopes", handler.AdminGetApiKeyScopes)

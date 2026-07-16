@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -218,15 +219,15 @@ func InitDB() (err error) {
 		if !common.IsMasterNode {
 			return nil
 		}
-		// HA boot gate: with multiple master-capable replicas, only the lease
-		// holder runs migrations so concurrent AutoMigrate cannot race on
-		// PostgreSQL. Bootstrap the lease table itself first (idempotent), then
-		// contend for the boot lease using this node's stable holder id — the
-		// same id the lifecycle LeaderManager later renews, so the migrating
-		// node keeps leadership seamlessly. Losers skip (mirroring the prior
-		// slave-skips-migration behavior); on a first-ever cold start of a
-		// fresh multi-replica DB, non-winners briefly serve before the winner
-		// finishes — see ADR 2026-05-29 leader-election.
+		// HA boot: multiple master-capable replicas contend for the long-lived
+		// leadership lease here, but — unlike the original design — the lease
+		// no longer gates boot migrations. The surviving leader holds the lease
+		// for its whole lifetime, so lease-gated migrations were silently
+		// skipped on every multi-replica rolling update (2026-07-15 incident:
+		// prod schema stuck at 022 while shipped code expected 026). Boot
+		// migrations now run on EVERY master-capable replica, serialized by a
+		// dedicated pg_advisory_lock (AutoMigrate) plus the runner's own lock;
+		// both phases are idempotent no-ops when nothing is pending.
 		if e := DB.AutoMigrate(&entity.LeaderElection{}); e != nil {
 			// A concurrent cold-start replica may be creating the same table.
 			// Tolerate the race only if the table actually exists afterward —
@@ -235,47 +236,94 @@ func InitDB() (err error) {
 				return fmt.Errorf("bootstrap leader_elections table: %w", e)
 			}
 		}
-		// Use the longer boot TTL so a slow cold-start migration cannot lapse
-		// the lease mid-flight and let another replica start a racing migration.
 		gotLease, lerr := TryAcquireOrRenew(entity.LeaderElectionName, common.NodeHolderID(), entity.LeaderBootLeaseTTLSeconds, common.GetTimestamp())
 		if lerr != nil {
 			return fmt.Errorf("acquire boot migration lease: %w", lerr)
 		}
-		if !gotLease {
-			common.SysLog("database migration skipped: another replica holds the boot lease")
-			return nil
+		if gotLease {
+			// We hold leadership from boot. Reflect it immediately so leader-gated
+			// startup catch-up runs (reaper / aggregator / audit cleanup) fire on
+			// this node now, instead of being skipped until the LeaderManager's
+			// first asynchronous renew flips the flag.
+			common.SetLeader(true)
+		} else {
+			common.SysLog("boot lease held by another replica — leadership deferred; boot migrations still run under advisory lock")
 		}
-		// We hold leadership from boot. Reflect it immediately so leader-gated
-		// startup catch-up runs (reaper / aggregator / audit cleanup) fire on
-		// this node now, instead of being skipped until the LeaderManager's
-		// first asynchronous renew flips the flag.
-		common.SetLeader(true)
-		common.SysLog("database migration started")
-		if err = migrateDB(); err != nil {
-			return err
-		}
-		// Embedded SQL migration runner (ported from platform): runs in
-		// the lease-winner branch after AutoMigrate, so the boot lease
-		// stays the primary serializer; the runner's own pg_advisory_lock
-		// additionally guards against a future migrate subcommand or
-		// hand-run binary racing a booting pod.
-		if !migrationsAutoRunEnabled() {
-			common.SysLog("embedded SQL migrations skipped: MIGRATIONS_AUTO_RUN is disabled")
-			return nil
-		}
-		runner := &migration.Runner{
-			DB:              sqlDB,
-			FS:              migrations.FS,
-			BaselineThrough: migrationBaselineThrough,
-		}
-		if err := runner.Run(context.Background()); err != nil {
-			return fmt.Errorf("run embedded SQL migrations: %w", err)
-		}
-		return nil
+		return runBootMigrations(sqlDB)
 	} else {
 		common.FatalLog(err)
 	}
 	return err
+}
+
+// bootAutoMigrateLockID serializes GORM AutoMigrate across concurrently
+// booting replicas: the ASCII bytes of "LurusHbA" packed big-endian —
+// deliberately distinct from the SQL runner's AdvisoryLockID so the two
+// phases cannot self-deadlock across pooled connections.
+const bootAutoMigrateLockID int64 = 0x4C75727573486241
+
+// runBootMigrations applies GORM AutoMigrate and the embedded SQL runner on
+// every master-capable boot. AutoMigrate is serialized with a session-scoped
+// advisory lock (acquired and released on the SAME connection); the runner
+// serializes itself. Running both on every replica — not just the lease
+// winner — is what guarantees a rolling update actually applies new DDL.
+func runBootMigrations(sqlDB *sql.DB) error {
+	common.SysLog("database migration started")
+	if err := withPGAdvisoryLock(context.Background(), sqlDB, bootAutoMigrateLockID, migrateDB); err != nil {
+		return err
+	}
+	if !migrationsAutoRunEnabled() {
+		common.SysLog("embedded SQL migrations skipped: MIGRATIONS_AUTO_RUN is disabled")
+		return nil
+	}
+	runner := &migration.Runner{
+		DB:              sqlDB,
+		FS:              migrations.FS,
+		BaselineThrough: migrationBaselineThrough,
+	}
+	if err := runner.Run(context.Background()); err != nil {
+		return fmt.Errorf("run embedded SQL migrations: %w", err)
+	}
+	return nil
+}
+
+// withPGAdvisoryLock runs fn while holding pg_advisory_lock(key) on one
+// dedicated connection, so the unlock is guaranteed to hit the session that
+// owns the lock (a pool-level Exec could unlock on a different session and
+// leave the lock stranded until the owning connection is recycled).
+func withPGAdvisoryLock(ctx context.Context, sqlDB *sql.DB, key int64, fn func() error) error {
+	conn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("advisory lock conn: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	// The lock wait must outlive the DSN-injected statement_timeout (P1-1):
+	// replicas booting together wait here for as long as the holder's
+	// AutoMigrate takes, and Postgres cancelling that wait fatals the pod
+	// (STAGE crash-loop 2026-07-15). SET LOCAL lifts the caps for the wait
+	// only — the session-scoped lock survives commit, and the connection
+	// returns to the pool with its DSN defaults intact.
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("advisory lock tx: %w", err)
+	}
+	for _, q := range []string{`SET LOCAL statement_timeout = 0`, `SET LOCAL lock_timeout = 0`} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("%s: %w", q, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, key); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("acquire advisory lock %d: %w", key, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit advisory lock acquire %d: %w", key, err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, key)
+	}()
+	return fn()
 }
 
 // migrationsAutoRunEnabled gates the embedded SQL migration runner.
@@ -366,12 +414,20 @@ func migrateDB() error {
 		// was missing here, so a fresh PG never created the table; migration 021
 		// also creates it IF NOT EXISTS for DR restores that skip AutoMigrate.
 		&entity.CreditPoolFundEvent{},
+		// Distributor batch redemption issuance ledger (idempotency, migration 027)
+		&entity.ProvisionedRedemptionBatch{},
 		// Playground named presets (Wave 3 Phase 1)
 		&PlaygroundPreset{},
 		// HA leader-election lease (H1.3)
 		&entity.LeaderElection{},
 		// PIPL §47 erasure intent / progress / evidence (migration 020)
 		&entity.PrivacyErasureRequest{},
+		// Per-model rate limits (migration 026) — model dimension of the
+		// business rate limiter (middleware.BusinessModelRateLimit)
+		&entity.ModelRateLimit{},
+		// v2 checkout order ownership (migration 028) — order_no -> account_id
+		// binding that gates GET .../checkout/:order_no/status against IDOR
+		&entity.BillingCheckoutOrder{},
 	)
 	if err != nil {
 		return err

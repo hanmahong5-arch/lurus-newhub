@@ -21,7 +21,13 @@ func GetAllLogs(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	logs, total, err := repo.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group)
+	// Root (platform operator) sees every tenant's logs; a tenant admin is
+	// constrained to their own tenant. AdminAuth() alone does not enforce this.
+	scope := repo.AllTenantsForAdmin()
+	if c.GetInt("role") < common.RoleRootUser {
+		scope = repo.ForTenant(c.GetString("tenant_id"))
+	}
+	logs, total, err := repo.GetAllLogs(scope, logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -64,6 +70,27 @@ func SearchAllLogs(c *gin.Context) {
 	group := c.Query("group")
 	page, _ := strconv.Atoi(c.Query("page"))
 	pageSize, _ := strconv.Atoi(c.Query("page_size"))
+
+	// A tenant admin must never see another tenant's logs. Both the Meilisearch
+	// index and the app.SearchLogs admin fallback are cross-tenant, so scope
+	// non-root callers directly to the tenant-filtered DB search.
+	if c.GetInt("role") < common.RoleRootUser {
+		logs, err := repo.SearchAllLogs(repo.ForTenant(c.GetString("tenant_id")), keyword)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+			"data": gin.H{
+				"items": logs,
+				"total": len(logs),
+				"page":  page,
+			},
+		})
+		return
+	}
 
 	result, err := app.SearchLogs(app.LogSearchParams{
 		Keyword:        keyword,
@@ -160,8 +187,13 @@ func GetLogsStat(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	stat := repo.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
-	//tokenNum := repo.SumUsedToken(logType, startTimestamp, endTimestamp, modelName, username, "")
+	// Root sees platform-wide stats; a tenant admin is scoped to their tenant.
+	scope := repo.AllTenantsForAdmin()
+	if c.GetInt("role") < common.RoleRootUser {
+		scope = repo.ForTenant(c.GetString("tenant_id"))
+	}
+	stat := repo.SumUsedQuota(scope, logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	//tokenNum := repo.SumUsedToken(repo.AllTenantsForAdmin(), logType, startTimestamp, endTimestamp, modelName, username, "")
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -183,8 +215,11 @@ func GetLogsSelfStat(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	quotaNum := repo.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
-	//tokenNum := repo.SumUsedToken(logType, startTimestamp, endTimestamp, modelName, username, tokenName)
+	// Self stat: scope to the caller's tenant (set by authHelper for every
+	// session/access-token request). The username filter alone is not an
+	// isolation boundary once usernames are only unique per tenant.
+	quotaNum := repo.SumUsedQuota(repo.ForTenant(c.GetString("tenant_id")), logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	//tokenNum := repo.SumUsedToken(repo.ForTenant(c.GetString("tenant_id")), logType, startTimestamp, endTimestamp, modelName, username, tokenName)
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
@@ -207,7 +242,13 @@ func DeleteHistoryLogs(c *gin.Context) {
 		})
 		return
 	}
-	count, err := repo.DeleteOldLog(c.Request.Context(), targetTimestamp, 100)
+	// Root performs platform-wide retention cleanup; a tenant admin may only
+	// delete their own tenant's logs — never another tenant's history.
+	scope := repo.AllTenantsForAdmin()
+	if c.GetInt("role") < common.RoleRootUser {
+		scope = repo.ForTenant(c.GetString("tenant_id"))
+	}
+	count, err := repo.DeleteOldLog(c.Request.Context(), scope, targetTimestamp, 100)
 	if err != nil {
 		common.ApiError(c, err)
 		return

@@ -32,12 +32,44 @@ func SetBillingUnifiedEnabled(v bool) {
 	atomic.StoreInt32(&billingUnifiedEnabled, n)
 }
 
+// localLedgerAdvisory is an atomic flag demoting the LOCAL user-quota ledger
+// to shadow bookkeeping for platform-governed requests (Track A single-ledger
+// convergence). When true AND the request was admitted by the platform wallet
+// (RelayInfo.PlatformGoverned), the local user-balance 402 gate is skipped and
+// local pre/post-deduct failures log-and-continue instead of blocking the
+// relay/settle — the platform wallet is the sole source of truth; local writes
+// still happen so the shadow ledger keeps feeding drift reconciliation.
+// Requests the platform never admitted (legacy tokens, unlinked users, flag-off
+// windows) keep the full local gate — advisory NEVER opens the door for
+// traffic the platform hasn't vouched for.
+// Use LocalLedgerAdvisory() to read and SetLocalLedgerAdvisory() to write.
+// 1 = advisory, 0 = enforcing (default).
+var localLedgerAdvisory int32
+
+// LocalLedgerAdvisory reports whether the local quota ledger is advisory
+// (shadow) for platform-governed requests. Safe for concurrent use.
+func LocalLedgerAdvisory() bool {
+	return atomic.LoadInt32(&localLedgerAdvisory) == 1
+}
+
+// SetLocalLedgerAdvisory updates the local-ledger-advisory flag atomically.
+// Called at init time (from env) and by the platform config poller, so an
+// operator flip on the platform propagates fleet-wide within one poll cycle.
+func SetLocalLedgerAdvisory(v bool) {
+	var n int32
+	if v {
+		n = 1
+	}
+	atomic.StoreInt32(&localLedgerAdvisory, n)
+}
+
 func init() {
 	// Safe default only: package init runs BEFORE main() loads .env, so a
 	// .env-only BILLING_UNIFIED_ENABLED=true would not be visible here yet.
 	// The authoritative read happens in RefreshIdentityClientEnv (identity_client.go),
 	// called post-.env from InitResources.
 	SetBillingUnifiedEnabled(os.Getenv("BILLING_UNIFIED_ENABLED") == "true")
+	SetLocalLedgerAdvisory(os.Getenv("LOCAL_LEDGER_ADVISORY") == "true")
 }
 
 // PreAuthResult holds the response from a wallet pre-authorization call.

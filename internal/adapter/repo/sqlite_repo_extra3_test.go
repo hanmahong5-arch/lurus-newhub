@@ -216,11 +216,10 @@ func TestLogRepo_GetTenantLogsWithParams(t *testing.T) {
 	}
 
 	params := &LogQueryParams{
-		TenantID: ten.Id,
-		Offset:   0,
-		Limit:    10,
+		Offset: 0,
+		Limit:  10,
 	}
-	logs, total, err := GetTenantLogsWithParams(params)
+	logs, total, err := GetTenantLogsWithParams(ForTenant(ten.Id), params)
 	if err != nil {
 		t.Fatalf("GetTenantLogsWithParams: %v", err)
 	}

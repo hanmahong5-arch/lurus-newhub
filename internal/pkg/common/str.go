@@ -1,15 +1,15 @@
 package common
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"unsafe"
-
-	"github.com/samber/lo"
 )
 
 var (
@@ -25,11 +25,33 @@ func GetStringIfEmpty(str string, defaultValue string) string {
 	return str
 }
 
+// randomStringCharset is the alphanumeric charset used by GetRandomString.
+// Its length (62) is not a power of two, so mapping a random value onto it
+// naively (e.g. `b % len(charset)`) would introduce modulo bias; crypto/rand's
+// Int uses rejection sampling internally to avoid that.
+const randomStringCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+// GetRandomString returns a cryptographically secure random string of the
+// given length drawn from an alphanumeric charset. Several callers use it to
+// mint security-sensitive secrets (redemption codes, internal API keys), so
+// it must use a CSPRNG (crypto/rand) rather than math/rand.
 func GetRandomString(length int) string {
 	if length <= 0 {
 		return ""
 	}
-	return lo.RandomString(length, lo.AlphanumericCharset)
+	charsetLen := big.NewInt(int64(len(randomStringCharset)))
+	b := make([]byte, length)
+	for i := range b {
+		n, err := rand.Int(rand.Reader, charsetLen)
+		if err != nil {
+			// crypto/rand.Reader failing means the OS entropy source is
+			// unavailable/broken; there is no safe degraded fallback for a
+			// function whose whole purpose is producing secrets, so fail loudly.
+			panic("common.GetRandomString: crypto/rand unavailable: " + err.Error())
+		}
+		b[i] = randomStringCharset[n.Int64()]
+	}
+	return string(b)
 }
 
 func MapToJsonStr(m map[string]interface{}) string {

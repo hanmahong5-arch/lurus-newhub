@@ -206,6 +206,13 @@ func setupIntegrationTest(t *testing.T) *integrationTestContext {
 // createIntegrationJWT creates a signed JWT for testing
 func (ctx *integrationTestContext) createJWT(t *testing.T, claims OIDCClaims) string {
 	t.Helper()
+	// A legitimately-issued token for this client always carries the client_id
+	// as an audience; stamp it when a test didn't set one explicitly so the
+	// harness mints realistic tokens that satisfy checkAudience. Tests that set
+	// a custom aud (e.g. the audience-mismatch cases) are left untouched.
+	if len(claims.Audience) == 0 {
+		claims.Audience = jwt.ClaimStrings{ctx.ClientID}
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = "test-integration-kid"
 
@@ -259,6 +266,74 @@ func TestOIDCAuth_ValidToken_UserMapping(t *testing.T) {
 	}
 	if resp["user_id"].(float64) != float64(ctx.User.Id) {
 		t.Errorf("expected user_id=%d, got %v", ctx.User.Id, resp["user_id"])
+	}
+}
+
+// SECURITY (audience): a validly-signed token from the trusted issuer but minted
+// for a DIFFERENT client (aud != OIDC_CLIENT_ID), with no OIDC_ALLOWED_AUDIENCES
+// configured, must be rejected. Before the audience fix this returned 200 — any
+// same-issuer token was accepted regardless of its aud.
+func TestOIDCAuth_ForeignAudience_Rejected(t *testing.T) {
+	ctx := setupIntegrationTest(t)
+	defer ctx.Cleanup()
+
+	prev := oidcAllowedAudiences
+	oidcAllowedAudiences = nil // no extra allow-list configured
+	defer func() { oidcAllowedAudiences = prev }()
+
+	claims := OIDCClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    ctx.Issuer,
+			Subject:   "zitadel_integration_user",
+			Audience:  jwt.ClaimStrings{"some-other-client"}, // not ctx.ClientID
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+		Email: "integration@test.local",
+		OrgID: "org_integration_test",
+	}
+	token := ctx.createJWT(t, claims) // explicit aud → harness injection skipped
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	ctx.Router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401 for foreign-audience token, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A token whose aud is exactly OIDC_CLIENT_ID is a legitimate newhub token and
+// must still authenticate — the audience fix must not lock out valid users.
+func TestOIDCAuth_ClientIDAudience_Passes(t *testing.T) {
+	ctx := setupIntegrationTest(t)
+	defer ctx.Cleanup()
+
+	prev := oidcAllowedAudiences
+	oidcAllowedAudiences = nil // rely solely on client_id acceptance
+	defer func() { oidcAllowedAudiences = prev }()
+
+	claims := OIDCClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    ctx.Issuer,
+			Subject:   "zitadel_integration_user",
+			Audience:  jwt.ClaimStrings{ctx.ClientID},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+		Email: "integration@test.local",
+		OrgID: "org_integration_test",
+	}
+	token := ctx.createJWT(t, claims)
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	ctx.Router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200 for client_id-audience token, got %d; body=%s", w.Code, w.Body.String())
 	}
 }
 

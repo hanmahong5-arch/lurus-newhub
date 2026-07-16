@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -382,5 +383,115 @@ func TestSwitchRedeemAnonymous_RaceOnSameCode(t *testing.T) {
 	env = parseEnvelope(t, w)
 	if success, _ := env["success"].(bool); success {
 		t.Fatalf("second fingerprint should fail, body: %s", w.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Defect #9: repo.Redeem wraps every transaction failure as
+// "兑换失败，<inner>". <inner> is normally one of a small set of known
+// sentinel strings, but a genuine DB/driver failure inside the transaction
+// (e.g. a constraint violation on the Update/Save calls) returns raw error
+// text instead. sanitizeRedeemError must only pass through the known
+// sentinels and replace anything else with a generic message.
+// ---------------------------------------------------------------------------
+
+// TestSanitizeRedeemError_KnownSentinelsPassThrough exhaustively covers every
+// inner message repo.Redeem can produce (internal/adapter/repo/redemption.go
+// Redeem(), each wrapped with its "兑换失败，" prefix here to match what the
+// handler actually receives) and asserts they come back unchanged — this is
+// the "no regression on the sentinel path" guarantee.
+func TestSanitizeRedeemError_KnownSentinelsPassThrough(t *testing.T) {
+	sentinels := []string{
+		"无效的兑换码",
+		"该兑换码已被使用",
+		"该兑换码已过期",
+		"用户不存在",
+		"该兑换码不属于当前租户",
+	}
+	for _, s := range sentinels {
+		wrapped := errors.New("兑换失败，" + s)
+		got := sanitizeRedeemError(wrapped)
+		if got != s {
+			t.Errorf("sentinel %q: expected passthrough, got %q", s, got)
+		}
+	}
+}
+
+// TestSanitizeRedeemError_UnknownErrorReplaced asserts any error that isn't
+// one of the known sentinels (in particular, raw driver/GORM error text
+// containing schema details like constraint or column names) is replaced
+// with the generic message and never leaks a recognizable substring of the
+// original.
+func TestSanitizeRedeemError_UnknownErrorReplaced(t *testing.T) {
+	cases := []string{
+		`兑换失败，pq: duplicate key value violates unique constraint "idx_redemptions_key"`,
+		`兑换失败，no such column: quota`,
+		`兑换失败，dial tcp 10.0.0.5:5432: connect: connection refused`,
+	}
+	const generic = "服务暂不可用，请稍后重试"
+	for _, raw := range cases {
+		got := sanitizeRedeemError(errors.New(raw))
+		if got != generic {
+			t.Errorf("input %q: expected generic message %q, got leaked text %q", raw, generic, got)
+		}
+	}
+}
+
+// TestSwitchRedeemAnonymous_RawDBErrorSanitized drives the full HTTP handler
+// with a redemption whose backing transaction fails on a raw SQL error (the
+// users.quota column is dropped so repo.Redeem's `UPDATE users SET quota =
+// quota + ?` fails with a genuine driver error, not one of its sentinel
+// strings) and asserts the client only ever sees the generic message.
+func TestSwitchRedeemAnonymous_RawDBErrorSanitized(t *testing.T) {
+	ctx, r := setupSwitchRedeemRouter(t)
+	defer ctx.Cleanup()
+
+	key := common.GetRandomString(32)
+	seedSwitchRedemption(t, ctx, key, common.RedemptionCodeStatusEnabled, 0, 100000)
+
+	// Pre-provision the switch end-user with the exact username
+	// findOrCreateSwitchEndUser derives from this fingerprint, so the
+	// handler takes the "existing user" branch (a plain lookup) instead of
+	// calling user.Insert() itself — Insert() would also write the quota
+	// column and fail before the request ever reaches repo.Redeem.
+	fingerprint := "dropcolfp0001"
+	username := switchEndUserUsernamePrefix + fingerprint
+	user := &repo.User{
+		Username:    username,
+		DisplayName: "Switch EndUser",
+		Role:        common.RoleCommonUser,
+		Status:      common.UserStatusEnabled,
+		TenantId:    ctx.TenantID,
+		Group:       "default",
+	}
+	if err := repo.WithoutTenantIsolation(ctx.DB).Create(user).Error; err != nil {
+		t.Fatalf("seed switch user: %v", err)
+	}
+
+	// Break users.quota so repo.Redeem's Update fails with a raw driver
+	// error instead of a known sentinel.
+	if err := ctx.DB.Exec(`ALTER TABLE users DROP COLUMN quota`).Error; err != nil {
+		t.Fatalf("drop quota column: %v", err)
+	}
+
+	w := postSwitchRedeem(t, r, map[string]string{
+		"code":        key,
+		"fingerprint": fingerprint,
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (envelope), got %d, body: %s", w.Code, w.Body.String())
+	}
+	env := parseEnvelope(t, w)
+	if success, _ := env["success"].(bool); success {
+		t.Fatalf("expected success=false for a raw DB error, got: %s", w.Body.String())
+	}
+	msg, _ := env["message"].(string)
+	if msg != "服务暂不可用，请稍后重试" {
+		t.Errorf("expected generic message, got: %q", msg)
+	}
+	lower := strings.ToLower(msg)
+	if strings.Contains(msg, "quota") || strings.Contains(lower, "column") || strings.Contains(lower, "sql") {
+		t.Errorf("message leaks raw DB error text: %q", msg)
 	}
 }

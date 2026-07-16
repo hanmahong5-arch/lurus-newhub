@@ -20,8 +20,11 @@ type AuditWriter interface {
 var auditWriterRef atomic.Pointer[AuditWriter]
 
 // SetAuditWriter sets the global audit event writer (called once during startup).
+// It also wires the entity-level audit-chain fallback logger so fail-open
+// chain degradations (entity.AuditEvent.BeforeCreate) surface in the system log.
 func SetAuditWriter(w AuditWriter) {
 	auditWriterRef.Store(&w)
+	entity.SetAuditChainLogger(common.SysError)
 }
 
 // RecordAuditEvent asynchronously persists an audit event.

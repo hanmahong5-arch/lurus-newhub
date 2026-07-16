@@ -67,7 +67,7 @@ func TestSearchLogs_KeywordNotBoundToIntegerType(t *testing.T) {
 				err  error
 			)
 			if tc.userID == 0 {
-				logs, err = SearchAllLogs(tc.keyword)
+				logs, err = SearchAllLogs(AllTenantsForAdmin(), tc.keyword)
 			} else {
 				logs, err = SearchUserLogs(tc.userID, tc.keyword)
 			}

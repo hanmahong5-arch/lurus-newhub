@@ -36,6 +36,14 @@ type Token struct {
 	// LastUsedAt is updated on relay hit for Provisioning-issued keys. Unix
 	// seconds. 0 = never used. See ADR 2026-05-18 §3.3.
 	LastUsedAt    int64          `json:"last_used_at" gorm:"default:0"`
+	// RateLimitRPM caps this token's relay requests per minute (sliding window,
+	// enforced by middleware.BusinessRateLimit). 0 = unlimited — every row that
+	// predates migration 023 keeps its unthrottled behavior.
+	RateLimitRPM int `json:"rate_limit_rpm" gorm:"column:rpm_limit;default:0"`
+	// RateLimitTPM caps this token's LLM tokens per minute. The column exists
+	// (migration 023) but is NOT yet enforced — see the TPM TODO in
+	// middleware/business_rate_limit.go. 0 = unlimited.
+	RateLimitTPM int `json:"rate_limit_tpm" gorm:"column:tpm_limit;default:0"`
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
 

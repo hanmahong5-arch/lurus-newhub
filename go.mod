@@ -38,6 +38,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.99
 	github.com/nats-io/nats.go v1.38.0
 	github.com/pkg/errors v0.9.1
+	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.17.3
 	github.com/samber/lo v1.52.0
@@ -63,6 +64,7 @@ require (
 )
 
 require (
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect

@@ -248,16 +248,35 @@ func ScrubAuditEventsBatch(ctx context.Context, userID int, batchSize int) (int6
 		return 0, nil
 	}
 
-	result := DB.WithContext(ctx).Model(&entity.AuditEvent{}).
-		Where("id IN ?", ids).
-		Updates(map[string]interface{}{
-			"ip":      "",
-			"details": ErasedMarker,
-		})
-	if result.Error != nil {
-		return 0, fmt.Errorf("scrub audit events update: %w", result.Error)
+	// Migration 024 makes audit_events append-only at the DB level; this PIPL
+	// scrub is the ONE sanctioned UPDATE path and must announce itself via the
+	// transaction-scoped GUC app.audit_redaction (set_config(..., true) is
+	// transaction-local, so the gate closes again at COMMIT/ROLLBACK). The
+	// trigger additionally verifies only ip/details change — the hash-chain
+	// columns stay immutable, so redaction does not break chain verification.
+	var affected int64
+	err = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if common.UsingPostgreSQL {
+			if gucErr := tx.Exec(`SELECT set_config('app.audit_redaction', 'on', true)`).Error; gucErr != nil {
+				return fmt.Errorf("enable audit redaction gate: %w", gucErr)
+			}
+		}
+		result := tx.Model(&entity.AuditEvent{}).
+			Where("id IN ?", ids).
+			Updates(map[string]interface{}{
+				"ip":      "",
+				"details": ErasedMarker,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		affected = result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("scrub audit events update: %w", err)
 	}
-	return result.RowsAffected, nil
+	return affected, nil
 }
 
 // AnonymizeUserRow rewrites the user's personal fields in place, severs the

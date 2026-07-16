@@ -339,11 +339,14 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		))
 	}
 
-	if quotaDelta != 0 {
-		err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
-		if err != nil {
-			logger.LogError(ctx, "error consuming token remain quota: "+err.Error())
-		}
+	// Always settle, even when quotaDelta == 0 (exact estimate, e.g. fixed-price
+	// models). Skipping the call on a zero delta also skipped the tenant-pool
+	// debit and the platform pre-auth settlement, letting the pre-auth TTL
+	// expire and release paid-for revenue. PostConsumeQuota handles quota == 0
+	// safely (the +0 local writes are no-ops; pool + settle key on totalQuota).
+	err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+	if err != nil {
+		logger.LogError(ctx, "error consuming token remain quota: "+err.Error())
 	}
 
 	other := GenerateClaudeOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio,
@@ -465,11 +468,12 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		))
 	}
 
-	if quotaDelta != 0 {
-		err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
-		if err != nil {
-			logger.LogError(ctx, "error consuming token remain quota: "+err.Error())
-		}
+	// Always settle, even when quotaDelta == 0 (exact estimate) — see the same
+	// note in PostClaudeConsumeQuota. Skipping a zero delta skipped the pool
+	// debit and the platform pre-auth settlement.
+	err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+	if err != nil {
+		logger.LogError(ctx, "error consuming token remain quota: "+err.Error())
 	}
 
 	logModel := relayInfo.OriginModelName
@@ -496,6 +500,12 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	repo.RecordConsumeLog(ctx, relayInfo.UserId, logParams)
 }
 
+// ErrTokenQuotaInsufficient marks the per-key spending cap rejection inside
+// PreConsumeTokenQuota. Distinguished from DB errors so LOCAL_LEDGER_ADVISORY
+// can keep enforcing the cap (a user-set limit, not ledger state) while
+// treating write failures as shadow-bookkeeping loss.
+var ErrTokenQuotaInsufficient = errors.New("token quota is not enough")
+
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
@@ -503,19 +513,31 @@ func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 	if relayInfo.IsPlayground {
 		return nil
 	}
-	//if relayInfo.TokenUnlimited {
-	//	return nil
-	//}
-	token, err := repo.GetTokenByKey(relayInfo.TokenKey, false)
+	if relayInfo.TokenUnlimited {
+		// Unlimited tokens have no per-key spending cap: keep the existing
+		// unconditional debit (used_quota accounting only; remain_quota is not a
+		// gate for them). Behavior unchanged.
+		return repo.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)
+	}
+	// Limited token: atomic check-and-debit closes the read/compare/debit TOCTOU.
+	// ok==false means the row lacked enough remain_quota — the same rejection the
+	// old `token.RemainQuota < quota` comparison produced. It carries
+	// ErrTokenQuotaInsufficient so PreConsumeQuota's advisory path still tells a
+	// cap rejection (enforced even under advisory) apart from a shadow-write
+	// failure.
+	ok, err := repo.DecreaseTokenQuotaIfEnough(relayInfo.TokenId, relayInfo.TokenKey, quota)
 	if err != nil {
 		return err
 	}
-	if !relayInfo.TokenUnlimited && token.RemainQuota < quota {
-		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
-	}
-	err = repo.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)
-	if err != nil {
-		return err
+	if !ok {
+		// Best-effort re-read only for the error message's remaining figure — the
+		// atomic UPDATE already rejected; this read does not gate anything.
+		remain := 0
+		if tok, gErr := repo.GetTokenByKey(relayInfo.TokenKey, false); gErr == nil && tok != nil {
+			remain = tok.RemainQuota
+		}
+		return fmt.Errorf("%w, token remain quota: %s, need quota: %s",
+			ErrTokenQuotaInsufficient, logger.FormatQuota(remain), logger.FormatQuota(quota))
 	}
 	return nil
 }
@@ -610,6 +632,12 @@ func debitTenantPool(relayInfo *relaycommon.RelayInfo, quota int) {
 }
 
 func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int, sendEmail bool) (err error) {
+	// Track A: for platform-governed requests under LOCAL_LEDGER_ADVISORY the
+	// local ledger is a shadow meter — its write failures are recorded as
+	// meter loss (metrics + drift gap) but never block the platform
+	// settlement, which is the ledger of record.
+	advisory := common.LocalLedgerAdvisory() && relayInfo.PlatformGoverned
+
 	// Phase 1: Update local user quota
 	if quota > 0 {
 		err = repo.DecreaseUserQuota(relayInfo.UserId, quota)
@@ -617,7 +645,13 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 		err = repo.IncreaseUserQuota(relayInfo.UserId, -quota, false)
 	}
 	if err != nil {
-		return err
+		if !advisory {
+			return err
+		}
+		metrics.BillingAdvisoryMeterLost.WithLabelValues("user_quota").Inc()
+		common.SysLog(fmt.Sprintf("advisory: user quota shadow write lost (settle proceeds): userId=%d, quota=%d, err=%s",
+			relayInfo.UserId, quota, err.Error()))
+		err = nil
 	}
 
 	// Phase 2: Update daily quota (non-critical, best-effort)
@@ -631,8 +665,15 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	// semantics 2026-06-10). Never fails the user-facing response, but the
 	// debit itself is no longer best-effort: exhaustion falls back to an
 	// overdraft draw so the ledger stays conserved.
-	if quota > 0 && relayInfo.TokenId > 0 {
-		debitTenantPool(relayInfo, quota)
+	//
+	// The pool is NOT touched during pre-consume, so it must be debited the
+	// request's ACTUAL COST (delta + preConsumed = totalQuota), not just the
+	// post-consume delta `quota`. Using the delta under-charged every pooled
+	// request by the pre-consumed amount and dropped the debit entirely when
+	// the estimate met or exceeded the actual cost (quota <= 0).
+	poolDebit := quota + preConsumedQuota
+	if poolDebit > 0 && relayInfo.TokenId > 0 {
+		debitTenantPool(relayInfo, poolDebit)
 	}
 
 	// Phase 3: Update token quota with compensation on failure.
@@ -647,6 +688,9 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 		}
 		if err != nil {
 			localQuotaConsistent = false
+			if advisory {
+				metrics.BillingAdvisoryMeterLost.WithLabelValues("token_quota").Inc()
+			}
 			common.SysLog(fmt.Sprintf("token quota update failed, compensating: userId=%d, quota=%d, err=%s",
 				relayInfo.UserId, quota, err.Error()))
 			if quota > 0 {
@@ -674,19 +718,52 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	// because the pre-auth was created under the flag state at request start.
 	// This prevents orphaned pre-auths when the flag is toggled mid-flight.
 	totalQuota := quota + preConsumedQuota
+
+	// Business TPM window recording — the usage side of
+	// middleware.BusinessRateLimit's tokens-per-minute dimension
+	// (business_tpm.go). Deliberately OUTSIDE the platform-wallet gate below:
+	// tpm_limit must bite for local-quota tenants too, not only
+	// wallet-bridged accounts. Same fire-and-forget fail-soft contract as
+	// RecordCostSpikeWindow: recording never fails or slows the settlement.
+	// The recorded measure is the settled quota (ratio-weighted token
+	// equivalents) — the settled dto.Usage never reaches this funnel (the
+	// relay pipeline converts it to quota before calling here), and it is the
+	// same per-request usage measure the cost-spike window records. The
+	// tenant is resolved synchronously (one PK SELECT, the weight class
+	// debitTenantPool already pays above) so the async closure stays DB-free.
+	if totalQuota > 0 && relayInfo.TokenId > 0 {
+		tpmTokenID := relayInfo.TokenId
+		tpmTenantID := bizTPMTenantOf(tpmTokenID)
+		// Model dimension keys on the CLIENT-requested name (OriginModelName)
+		// — the same value BusinessModelRateLimit reads from the gin context —
+		// not the upstream-mapped name, so limit and usage always agree.
+		tpmModel := relayInfo.OriginModelName
+		AsyncGo(func() {
+			RecordBusinessTPMUsage(tpmTokenID, tpmTenantID, totalQuota)
+			RecordBusinessTPMModelUsage(tpmTenantID, tpmModel, totalQuota)
+		})
+	}
+
 	if relayInfo.IdentityAccountID > 0 && totalQuota > 0 {
 		accountID := relayInfo.IdentityAccountID
 		amountLB := float64(totalQuota) / common.QuotaPerUnit
 
 		if relayInfo.PlatformPreAuthID > 0 {
-			if !localQuotaConsistent {
+			preAuthID := relayInfo.PlatformPreAuthID
+			charged := false
+			if !localQuotaConsistent && !advisory {
 				// Local quota is inconsistent — release pre-auth instead of settling,
 				// to avoid charging the wallet for a request that wasn't properly recorded locally.
 				releasePlatformPreAuth(relayInfo)
 			} else {
+				// Advisory mode settles even when the local shadow write was
+				// inconsistent: the platform wallet is the ledger of record and
+				// the meter loss was already counted above — dropping revenue
+				// over a shadow-bookkeeping failure would invert the hierarchy.
 				settleCtx, settleCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				_, settleErr := common.SettleWithBreaker(settleCtx, relayInfo.PlatformPreAuthID, amountLB)
 				settleCancel()
+				charged = true
 
 				if settleErr != nil {
 					metrics.BillingSettleTotal.WithLabelValues("error").Inc()
@@ -713,30 +790,66 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				common.ReportLLMUsageGRPC(rptCtx, accountID, amountLB)
 				reportQuotaThreshold(rptCtx, relayInfo, totalQuota)
 				RecordCostSpikeWindow(relayInfo.UserId, totalQuota)
+				if charged {
+					// Track A mirror metering: one usage_events row per charged
+					// relay, joined against wallet_transactions by the daily
+					// drift reconciliation. Keyed on the pre-auth id so a
+					// re-report is deduped platform-side.
+					mirrorUsageEvent(rptCtx, relayInfo, accountID, totalQuota, amountLB,
+						fmt.Sprintf("llm-relay:settle:%d", preAuthID), preAuthID)
+				}
 			})
 		} else {
 			// Legacy path: fire-and-forget debit (no pre-auth)
+			refID := "llm-usage:" + uuid.NewString()
 			AsyncGo(func() {
 				debitCtx, debitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer debitCancel()
 				if _, debitErr := common.DebitWalletGRPC(debitCtx, accountID, amountLB, "llm_usage",
 					fmt.Sprintf("relay userId=%d", relayInfo.UserId), sourceProductOf(relayInfo),
-					"llm-usage:"+uuid.NewString()); debitErr != nil {
+					refID); debitErr != nil {
 					common.SysLog(fmt.Sprintf("legacy wallet debit failed: accountID=%d, amount=%.4f LB, err=%s",
 						accountID, amountLB, debitErr.Error()))
 				}
 				common.ReportLLMUsageGRPC(debitCtx, accountID, amountLB)
 				reportQuotaThreshold(debitCtx, relayInfo, totalQuota)
 				RecordCostSpikeWindow(relayInfo.UserId, totalQuota)
+				// Mirror the legacy debit too (shared refID joins the pair):
+				// wallet>usage here would hide double charges from the drift SQL.
+				mirrorUsageEvent(debitCtx, relayInfo, accountID, totalQuota, amountLB, refID, 0)
 			})
 		}
 	}
 
 	// Return the original token quota error if local state was inconsistent
-	if !localQuotaConsistent {
+	// (advisory mode already counted it as shadow meter loss and settled).
+	if !localQuotaConsistent && !advisory {
 		return err
 	}
 	return nil
+}
+
+// mirrorUsageEvent posts one charged relay into the platform's
+// billing.usage_events (metric=llm_relay) — the metering half the Track A
+// drift reconciliation joins against wallet_transactions. Fire-and-forget:
+// failure only loses this reconciliation data point (counted), never money.
+func mirrorUsageEvent(ctx context.Context, relayInfo *relaycommon.RelayInfo, accountID int64, totalQuota int, amountLB float64, idemKey string, preAuthID int64) {
+	meta := map[string]any{
+		"amount_cny": amountLB,
+		"model":      relayInfo.OriginModelName,
+		"user_id":    relayInfo.UserId,
+	}
+	if preAuthID > 0 {
+		meta["preauth_id"] = preAuthID
+	}
+	if rptErr := common.ReportUsageEvent(ctx, accountID, sourceProductOf(relayInfo), "llm_relay",
+		int64(totalQuota), idemKey, meta); rptErr != nil {
+		metrics.BillingUsageMirrorTotal.WithLabelValues("error").Inc()
+		common.SysLog(fmt.Sprintf("usage mirror failed (drift data point lost): account=%d, key=%s, err=%s",
+			accountID, idemKey, rptErr.Error()))
+		return
+	}
+	metrics.BillingUsageMirrorTotal.WithLabelValues("success").Inc()
 }
 
 // reportQuotaThreshold fetches the user's current quota state from DB and

@@ -794,6 +794,34 @@ func DisableChannelByTag(tag string) error {
 	return err
 }
 
+// EnableChannelByTagAndTenant is the tenant-scoped sibling of EnableChannelByTag.
+// A tenant admin's bulk enable must never touch another tenant's channels even
+// when both tenants reuse the same tag string. The abilities table carries no
+// tenant_id column, so it is scoped by the channel ids that belong to
+// (tenant, tag) rather than by the tag alone.
+func EnableChannelByTagAndTenant(tenantID string, tag string) error {
+	return setChannelStatusByTagAndTenant(tenantID, tag, common.ChannelStatusEnabled, true)
+}
+
+// DisableChannelByTagAndTenant is the tenant-scoped sibling of DisableChannelByTag.
+func DisableChannelByTagAndTenant(tenantID string, tag string) error {
+	return setChannelStatusByTagAndTenant(tenantID, tag, common.ChannelStatusManuallyDisabled, false)
+}
+
+func setChannelStatusByTagAndTenant(tenantID string, tag string, status int, abilityEnabled bool) error {
+	var ids []int
+	if err := DB.Model(&Channel{}).Where("tag = ? AND tenant_id = ?", tag, tenantID).Pluck("id", &ids).Error; err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := DB.Model(&Channel{}).Where("id in (?)", ids).Update("status", status).Error; err != nil {
+		return err
+	}
+	return DB.Model(&Ability{}).Where("channel_id in (?)", ids).Select("enabled").Update("enabled", abilityEnabled).Error
+}
+
 func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
 	updateData := Channel{}
 	shouldReCreateAbilities := false
@@ -850,6 +878,69 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	return nil
 }
 
+// EditChannelByTagAndTenant is the tenant-scoped sibling of EditChannelByTag.
+// Both the channel update and the abilities update are confined to the channel
+// ids belonging to (tenant, tag); the abilities table has no tenant_id column,
+// so channel_id is the only safe boundary when two tenants share a tag string.
+func EditChannelByTagAndTenant(tenantID string, tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+	// Pin the tenant's channel ids for this tag up-front so both the channel
+	// update and the abilities update stay scoped, regardless of the tag rename.
+	var ids []int
+	if err := DB.Model(&Channel{}).Where("tag = ? AND tenant_id = ?", tag, tenantID).Pluck("id", &ids).Error; err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	updateData := Channel{}
+	shouldReCreateAbilities := false
+	updatedTag := tag
+	if newTag != nil && *newTag != tag {
+		updateData.Tag = newTag
+		updatedTag = *newTag
+	}
+	if modelMapping != nil && *modelMapping != "" {
+		updateData.ModelMapping = modelMapping
+	}
+	if models != nil && *models != "" {
+		shouldReCreateAbilities = true
+		updateData.Models = *models
+	}
+	if group != nil && *group != "" {
+		shouldReCreateAbilities = true
+		updateData.Group = *group
+	}
+	if priority != nil {
+		updateData.Priority = priority
+	}
+	if weight != nil {
+		updateData.Weight = weight
+	}
+	if paramOverride != nil {
+		updateData.ParamOverride = paramOverride
+	}
+	if headerOverride != nil {
+		updateData.HeaderOverride = headerOverride
+	}
+
+	if err := DB.Model(&Channel{}).Where("id in (?)", ids).Updates(updateData).Error; err != nil {
+		return err
+	}
+	if shouldReCreateAbilities {
+		channels, err := GetChannelsByTagAndTenant(tenantID, updatedTag, false)
+		if err == nil {
+			for _, channel := range channels {
+				if err = channel.UpdateAbilities(nil); err != nil {
+					common.SysLog(fmt.Sprintf("failed to update abilities: channel_id=%d, tag=%s, error=%v", channel.Id, channel.GetTag(), err))
+				}
+			}
+		}
+		return nil
+	}
+	return UpdateAbilityByChannelIds(ids, newTag, priority, weight)
+}
+
 func UpdateChannelUsedQuota(id int, quota int) {
 	if common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeChannelUsedQuota, id, quota)
@@ -872,6 +963,15 @@ func DeleteChannelByStatus(status int64) (int64, error) {
 
 func DeleteDisabledChannel() (int64, error) {
 	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
+	return result.RowsAffected, result.Error
+}
+
+// DeleteDisabledChannelByTenant is the tenant-scoped sibling of
+// DeleteDisabledChannel: a tenant admin's prune only removes its own disabled
+// channels. Mirrors the original by not touching the abilities table.
+func DeleteDisabledChannelByTenant(tenantID string) (int64, error) {
+	result := DB.Where("(status = ? or status = ?) AND tenant_id = ?",
+		common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled, tenantID).Delete(&Channel{})
 	return result.RowsAffected, result.Error
 }
 
@@ -1026,9 +1126,12 @@ func BatchSetChannelTag(ids []int, tag *string) error {
 		return err
 	}
 
-	// update ability status
-	channels, err := GetChannelsByIds(ids)
-	if err != nil {
+	// update ability status — read through the tx (not the global DB handle) so
+	// the query runs on the transaction's own connection. A global-handle read
+	// while this write tx is open deadlocks the single-writer SQLite test tier,
+	// and in production it would read stale, pre-update rows (wrong ability tag).
+	var channels []*Channel
+	if err = tx.Where("id in (?)", ids).Find(&channels).Error; err != nil {
 		tx.Rollback()
 		return err
 	}

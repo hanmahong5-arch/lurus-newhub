@@ -405,7 +405,7 @@ func TestLog_SumUsedQuota_NoFilter(t *testing.T) {
 	defer cleanup()
 
 	// Just verify it runs without panic
-	stat := SumUsedQuota(LogTypeUnknown, 0, 0, "", "", "", 0, "")
+	stat := SumUsedQuota(AllTenantsForAdmin(), LogTypeUnknown, 0, 0, "", "", "", 0, "")
 	_ = stat
 }
 
@@ -414,7 +414,7 @@ func TestLog_SumUsedToken_NoFilter(t *testing.T) {
 	defer cleanup()
 
 	// Just verify it runs without panic
-	total := SumUsedToken(LogTypeUnknown, 0, 0, "", "", "")
+	total := SumUsedToken(AllTenantsForAdmin(), LogTypeUnknown, 0, 0, "", "", "")
 	_ = total
 }
 
@@ -426,7 +426,7 @@ func TestLog_SumUsedQuota_WithFilters(t *testing.T) {
 	seedLog(t, u.Id, LogTypeTopup, "gpt-4", "default")
 
 	now := common.GetTimestamp()
-	stat := SumUsedQuota(LogTypeConsume, now-10000, now+10000, "gpt-4", "sum_user", "", 0, "")
+	stat := SumUsedQuota(AllTenantsForAdmin(), LogTypeConsume, now-10000, now+10000, "gpt-4", "sum_user", "", 0, "")
 	_ = stat
 }
 
@@ -438,7 +438,7 @@ func TestLog_SumUsedToken_WithFilters(t *testing.T) {
 	seedLog(t, u.Id, LogTypeTopup, "gpt-4", "default")
 
 	now := common.GetTimestamp()
-	total := SumUsedToken(LogTypeConsume, now-10000, now+10000, "gpt-4", "sumtok_user", "")
+	total := SumUsedToken(AllTenantsForAdmin(), LogTypeConsume, now-10000, now+10000, "gpt-4", "sumtok_user", "")
 	_ = total
 }
 
@@ -463,7 +463,7 @@ func TestLog_DeleteOldLog(t *testing.T) {
 
 	// Delete logs older than now
 	futureTs := common.GetTimestamp() + 1
-	deleted, err := DeleteOldLog(context.Background(), futureTs, 100)
+	deleted, err := DeleteOldLog(context.Background(), AllTenantsForAdmin(), futureTs, 100)
 	if err != nil {
 		t.Fatalf("DeleteOldLog: %v", err)
 	}

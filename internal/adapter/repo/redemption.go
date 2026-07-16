@@ -227,3 +227,14 @@ func DeleteInvalidRedemptions() (int64, error) {
 	result := DB.Where("status IN ? OR (status = ? AND expired_time != 0 AND expired_time < ?)", []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Delete(&Redemption{})
 	return result.RowsAffected, result.Error
 }
+
+// DeleteInvalidRedemptionsByTenant is the tenant-scoped sibling of
+// DeleteInvalidRedemptions: AdminAuth is satisfied by a per-tenant admin, so a
+// non-root prune of spent/expired codes must stay inside the caller's tenant.
+// Root uses the unscoped variant for a global sweep. Mirrors
+// DeleteDisabledChannelByTenant.
+func DeleteInvalidRedemptionsByTenant(tenantID string) (int64, error) {
+	now := common.GetTimestamp()
+	result := DB.Where("tenant_id = ? AND (status IN ? OR (status = ? AND expired_time != 0 AND expired_time < ?))", tenantID, []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Delete(&Redemption{})
+	return result.RowsAffected, result.Error
+}

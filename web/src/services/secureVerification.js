@@ -21,30 +21,76 @@ import { API } from '../helpers';
 
 /**
  * Secure verification service.
- * 2FA and Passkey verification have been delegated to the OIDC IdP.
- * Only session-based verification via /api/verify remains, and the backend
- * (UniversalVerify) accepts method "session" for any authenticated, enabled
- * user — so it must always be reported as available or the step-up flow
- * dead-ends before ever calling /api/verify.
+ * The backend (UniversalVerify) accepts method "session" only for users
+ * WITHOUT an active TOTP enrollment; enrolled users must present a valid
+ * TOTP code (method "totp"). GET /api/verify/status reports totp_enrolled
+ * so the modal can offer the right factor. Session stays reported as
+ * available for unenrolled users or the step-up flow dead-ends before ever
+ * calling /api/verify.
  */
 export class SecureVerificationService {
   static async checkAvailableVerificationMethods() {
+    let totpEnrolled = false;
+    try {
+      const res = await API.get('/api/verify/status');
+      totpEnrolled = !!res.data?.data?.totp_enrolled;
+    } catch (e) {
+      // Status probe failure: fall back to session so the flow can proceed;
+      // the backend still enforces TOTP for enrolled users.
+    }
     return {
-      has2FA: false,
+      has2FA: totpEnrolled,
       hasPasskey: false,
       passkeySupported: false,
-      hasSession: true,
+      hasSession: !totpEnrolled,
     };
   }
 
   static async verify(method, code = '') {
+    // UI method key '2fa' maps to the backend factor name 'totp'.
+    const apiMethod = method === '2fa' ? 'totp' : method;
     const verifyResponse = await API.post('/api/verify', {
-      method,
+      method: apiMethod,
       code: code?.trim() || '',
     });
     if (!verifyResponse.data?.success) {
       throw new Error(verifyResponse.data?.message || 'Verification failed');
     }
+  }
+}
+
+/**
+ * TOTP enrollment management (personal settings → security).
+ */
+export class TotpService {
+  static async getStatus() {
+    const res = await API.get('/api/user/totp/status');
+    if (!res.data?.success) {
+      throw new Error(res.data?.message || 'Failed to load TOTP status');
+    }
+    return res.data.data; // { enrolled, pending }
+  }
+
+  static async enroll() {
+    const res = await API.post('/api/user/totp/enroll', {});
+    if (!res.data?.success) {
+      throw new Error(res.data?.message || 'Failed to start TOTP enrollment');
+    }
+    return res.data.data; // { secret, otpauth_url }
+  }
+
+  static async confirm(code) {
+    const res = await API.post('/api/user/totp/confirm', {
+      code: code?.trim() || '',
+    });
+    if (!res.data?.success) {
+      throw new Error(res.data?.message || 'Failed to confirm TOTP code');
+    }
+  }
+
+  static async disable() {
+    const res = await API.post('/api/user/totp/disable', {});
+    return res.data;
   }
 }
 

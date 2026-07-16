@@ -11,9 +11,15 @@ import (
 
 // User is the core user entity. Auth is delegated to the OIDC provider; billing is delegated to lurus-platform.
 type User struct {
-	Id             int            `json:"id"`
-	TenantId       string         `json:"tenant_id" gorm:"type:varchar(36);index;default:'default'"` // Tenant isolation
-	Username       string         `json:"username" gorm:"unique;index" validate:"max=20"`
+	Id       int    `json:"id"`
+	TenantId string `json:"tenant_id" gorm:"type:varchar(36);index;uniqueIndex:uk_users_tenant_username,priority:1;default:'default'"` // Tenant isolation
+	// Username is unique PER TENANT (composite uk_users_tenant_username with
+	// TenantId, migration 025) — auth is OIDC-sub based, so no lookup needs a
+	// global username. The tag must stay in sync with the repo-local User
+	// struct (adapter/repo/user.go): AutoMigrate runs over BOTH, and a stray
+	// single-column `unique` tag on either side would re-create the dropped
+	// global unique every boot.
+	Username       string         `json:"username" gorm:"index;uniqueIndex:uk_users_tenant_username,priority:2" validate:"max=20"`
 	DisplayName    string         `json:"display_name" gorm:"index" validate:"max=20"`
 	Role           int            `json:"role" gorm:"type:int;default:1"`   // admin, common
 	Status         int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled

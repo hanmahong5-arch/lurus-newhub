@@ -1434,7 +1434,7 @@ func TestLogRepo_GetAllLogs(t *testing.T) {
 	RecordLog(u.Id, LogTypeTopup, "topup B")
 	RecordLog(u.Id, LogTypeSystem, "system msg")
 
-	logs, total, err := GetAllLogs(LogTypeTopup, 0, 0, "", "", "", 0, 10, 0, "")
+	logs, total, err := GetAllLogs(AllTenantsForAdmin(), LogTypeTopup, 0, 0, "", "", "", 0, 10, 0, "")
 	if err != nil {
 		t.Fatalf("GetAllLogs: %v", err)
 	}
@@ -1488,7 +1488,7 @@ func TestLogRepo_DeleteOldLog(t *testing.T) {
 
 	// Delete logs older than now
 	cutoff := common.GetTimestamp()
-	deleted, err := DeleteOldLog(context.Background(), int64(cutoff), 100)
+	deleted, err := DeleteOldLog(context.Background(), AllTenantsForAdmin(), int64(cutoff), 100)
 	if err != nil {
 		t.Fatalf("DeleteOldLog: %v", err)
 	}
@@ -1504,7 +1504,7 @@ func TestLogRepo_SumUsedQuota(t *testing.T) {
 	u := seedUser(t, "logsum-user", "logsum@test.local", common.RoleCommonUser, common.UserStatusEnabled, "tenant-logsum")
 	RecordLog(u.Id, LogTypeTopup, "topup for sum")
 
-	stat := SumUsedQuota(LogTypeTopup, 0, 0, "", "", "", 0, "")
+	stat := SumUsedQuota(AllTenantsForAdmin(), LogTypeTopup, 0, 0, "", "", "", 0, "")
 	_ = stat // just verify no panic
 }
 
@@ -1539,7 +1539,9 @@ func TestLogRepo_GetUserLogsWithParams(t *testing.T) {
 		Offset:  0,
 		Limit:   10,
 	}
-	logs, total, err := GetUserLogsWithParams(params)
+	// RecordLog stamps the row with the user's tenant (resolveLogTenantID),
+	// so the tenant-scoped read must find it.
+	logs, total, err := GetUserLogsWithParams(ForTenant(u.TenantId), params)
 	if err != nil {
 		t.Fatalf("GetUserLogsWithParams: %v", err)
 	}
@@ -3101,7 +3103,7 @@ func TestLogRepo_SearchAllLogs(t *testing.T) {
 	u := seedUser(t, "searchlog-user", "searchlog@test.local", common.RoleCommonUser, common.UserStatusEnabled, "tenant-searchlog")
 	RecordLog(u.Id, LogTypeTopup, "unique-searchable-content-xyz")
 
-	logs, err := SearchAllLogs("unique-searchable")
+	logs, err := SearchAllLogs(AllTenantsForAdmin(), "unique-searchable")
 	if err != nil {
 		t.Fatalf("SearchAllLogs: %v", err)
 	}
@@ -3129,7 +3131,7 @@ func TestLogRepo_SumUsedToken(t *testing.T) {
 	u := seedUser(t, "sumtoken-user", "sumtoken@test.local", common.RoleCommonUser, common.UserStatusEnabled, "tenant-sumtoken")
 	RecordLog(u.Id, LogTypeTopup, "token sum test")
 
-	total := SumUsedToken(LogTypeTopup, 0, 0, "", "", "")
+	total := SumUsedToken(AllTenantsForAdmin(), LogTypeTopup, 0, 0, "", "", "")
 	_ = total // just verify no panic
 }
 

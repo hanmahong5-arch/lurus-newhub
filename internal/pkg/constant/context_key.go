@@ -16,6 +16,11 @@ const (
 	ContextKeyTokenId                ContextKey = "token_id"
 	ContextKeyTokenGroup             ContextKey = "token_group"
 	ContextKeyTokenSpecificChannelId ContextKey = "specific_channel_id"
+	// ContextKeyTokenSpecificChannelRootOverride marks that the sk-<key>-<channelId>
+	// override was issued by a root (cross-tenant) operator, so middleware.Distribute
+	// lets it target a channel owned by any tenant. Absent/false = a mere
+	// tenant-admin override, which Distribute confines to the caller's own tenant.
+	ContextKeyTokenSpecificChannelRootOverride ContextKey = "specific_channel_root_override"
 	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"

@@ -368,6 +368,31 @@ func TestDistribute_SpecificChannel_EnabledPasses(t *testing.T) {
 	}
 }
 
+// Distribute must abort (not c.Next()) when SetupContextForSelectedChannel
+// fails to obtain a usable key (e.g. a multi-key channel with an empty key
+// list). Previously the error was discarded and the request proceeded to the
+// relay with no ContextKeyChannelKey/ContextKeyChannelBaseUrl set.
+func TestDistribute_SpecificChannel_NoKeysAvailable_Aborts(t *testing.T) {
+	db, cleanup := setupCoverDB(t)
+	defer cleanup()
+
+	ch := &repo.Channel{Id: 13, Name: "no-keys", TenantId: "default", Key: "", Status: common.ChannelStatusEnabled, Models: "gpt-4o", Group: "default"}
+	ch.ChannelInfo.IsMultiKey = true
+	if err := db.Create(ch).Error; err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	r := mountDistribute(func(c *gin.Context) {
+		common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, "13")
+	})
+	w := doDistribute(r, `{"model":"gpt-4o"}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 when channel has no available keys; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Errorf("downstream handler ran despite SetupContextForSelectedChannel error; body=%s", w.Body.String())
+	}
+}
+
 func TestDistribute_ModelLimit_NoLimitMap_Rejects(t *testing.T) {
 	_, cleanup := setupCoverDB(t)
 	defer cleanup()

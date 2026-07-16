@@ -164,11 +164,13 @@ func InternalCreateUser(c *gin.Context) {
 	}
 
 	if err := db.Create(user).Error; err != nil {
-		// The existingCount pre-check above is tenant-scoped, but users.username
-		// carries a GLOBAL unique index — two tenants racing to provision the same
-		// username both pass the pre-check and one loses here. Surface that as the
-		// same clean 409 the pre-check would have returned instead of a raw 500
-		// with leaked DB error text.
+		// The existingCount pre-check above is tenant-scoped, and users.username
+		// is unique per (tenant_id, username) since migration 025. This handler
+		// always writes into the resolved default tenant, so two requests racing
+		// to provision the same username both pass the pre-check and one loses on
+		// the composite unique here. Surface that as the same clean 409 the
+		// pre-check would have returned instead of a raw 500 with leaked DB
+		// error text.
 		if isUsernameUniqueViolation(err) {
 			c.JSON(http.StatusConflict, gin.H{
 				"success":    false,

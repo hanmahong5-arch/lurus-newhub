@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
@@ -90,6 +91,10 @@ func CreateTenant(c *gin.Context) {
 		PlanType string `json:"plan_type"`
 		MaxUsers int    `json:"max_users"`
 		MaxQuota int64  `json:"max_quota"`
+		// Aggregate per-minute request / LLM-token caps across all the
+		// tenant's tokens (middleware.BusinessRateLimit). 0 = unlimited.
+		RateLimitRPM int `json:"rate_limit_rpm"`
+		RateLimitTPM int `json:"rate_limit_tpm"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -97,6 +102,14 @@ func CreateTenant(c *gin.Context) {
 			"success": false,
 			"message": "Invalid request parameters",
 			"error":   err.Error(),
+		})
+		return
+	}
+
+	if err := app.ValidateRateLimits(req.RateLimitRPM, req.RateLimitTPM); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
 		})
 		return
 	}
@@ -129,6 +142,8 @@ func CreateTenant(c *gin.Context) {
 		"plan_type": req.PlanType,
 		"max_users": req.MaxUsers,
 		"max_quota": req.MaxQuota,
+		"rpm_limit": req.RateLimitRPM,
+		"tpm_limit": req.RateLimitTPM,
 	})
 	if err != nil {
 		common.SysError("Failed to update tenant: " + err.Error())
@@ -138,6 +153,8 @@ func CreateTenant(c *gin.Context) {
 		tenant.PlanType = req.PlanType
 		tenant.MaxUsers = req.MaxUsers
 		tenant.MaxQuota = req.MaxQuota //nolint:staticcheck // SA1019: legacy field stays part of the create API until its Q4 removal (ADR 2026-05-18)
+		tenant.RateLimitRPM = req.RateLimitRPM
+		tenant.RateLimitTPM = req.RateLimitTPM
 	}
 
 	// Initialize default configs for new tenant
@@ -168,6 +185,11 @@ func UpdateTenant(c *gin.Context) {
 		PlanType string `json:"plan_type"`
 		MaxUsers int    `json:"max_users"`
 		MaxQuota int64  `json:"max_quota"`
+		// Pointers, unlike the legacy fields above: an explicit 0 must be
+		// distinguishable from "field omitted" so admins can RESET a limit
+		// back to unlimited (0) — the non-zero-only map pattern can't.
+		RateLimitRPM *int `json:"rate_limit_rpm"`
+		RateLimitTPM *int `json:"rate_limit_tpm"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -177,6 +199,23 @@ func UpdateTenant(c *gin.Context) {
 			"error":   err.Error(),
 		})
 		return
+	}
+
+	if req.RateLimitRPM != nil || req.RateLimitTPM != nil {
+		rpm, tpm := 0, 0
+		if req.RateLimitRPM != nil {
+			rpm = *req.RateLimitRPM
+		}
+		if req.RateLimitTPM != nil {
+			tpm = *req.RateLimitTPM
+		}
+		if err := app.ValidateRateLimits(rpm, tpm); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	}
 
 	// Build updates map (only include non-zero fields)
@@ -195,6 +234,12 @@ func UpdateTenant(c *gin.Context) {
 	}
 	if req.MaxQuota > 0 {
 		updates["max_quota"] = req.MaxQuota
+	}
+	if req.RateLimitRPM != nil {
+		updates["rpm_limit"] = *req.RateLimitRPM
+	}
+	if req.RateLimitTPM != nil {
+		updates["tpm_limit"] = *req.RateLimitTPM
 	}
 
 	if len(updates) == 0 {

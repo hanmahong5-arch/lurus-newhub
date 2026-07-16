@@ -184,13 +184,17 @@ func SwitchRedeemAnonymous(c *gin.Context) {
 	quotaAdded, err := repo.Redeem(code, user.Id)
 	if err != nil {
 		// repo.Redeem wraps the underlying message as "兑换失败，<inner>".
-		// We pass the inner text through to the client unchanged so the
-		// Switch classifier still sees its substring markers.
-		message := err.Error()
-		message = strings.TrimPrefix(message, "兑换失败，")
+		// <inner> is usually one of a small set of known sentinel strings,
+		// but on a genuine transaction failure (e.g. a constraint violation
+		// on the Save/Update calls) it can also be a raw driver/GORM error.
+		// Never echo that raw text to this anonymous, unauthenticated
+		// caller — only the known sentinels are safe to pass through so
+		// the Switch classifier still sees its substring markers; anything
+		// else is replaced with a generic message and logged server-side.
+		common.SysError("switch redeem: redeem failed: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": message,
+			"message": sanitizeRedeemError(err),
 		})
 		return
 	}
@@ -243,7 +247,11 @@ func findRedemptionByKey(key string) (*repo.Redemption, error) {
 // in the given tenant, creating it on first sight. The username is
 // derived deterministically from the fingerprint so repeated redeems by
 // the same machine accumulate on one account (subject to the 20-char
-// username cap; we truncate the fingerprint to fit).
+// username cap; we truncate the fingerprint to fit). The lookup is
+// tenant-scoped — username is per-tenant unique since migration 025, so the
+// same fingerprint redeeming codes of two different tenants gets one
+// account per tenant (previously the cross-tenant redeem failed on the
+// global unique + repo.Redeem's tenant-ownership check).
 func findOrCreateSwitchEndUser(fingerprint, tenantID string) (*repo.User, error) {
 	// Username layout: "sw-eu-" + first 14 hex chars of fingerprint.
 	// Total 20 chars — matches User.Username validate:"max=20".
@@ -254,7 +262,7 @@ func findOrCreateSwitchEndUser(fingerprint, tenantID string) (*repo.User, error)
 	username := switchEndUserUsernamePrefix + fpTrim
 
 	var existing repo.User
-	err := repo.WithoutTenantIsolation(repo.DB).Where("username = ?", username).First(&existing).Error
+	err := repo.WithoutTenantIsolation(repo.DB).Where("username = ? AND tenant_id = ?", username, tenantID).First(&existing).Error
 	if err == nil {
 		return &existing, nil
 	}
@@ -277,7 +285,7 @@ func findOrCreateSwitchEndUser(fingerprint, tenantID string) (*repo.User, error)
 	// Insert() resolves Id via gorm's RETURNING / LastInsertId. Re-fetch by
 	// username just in case Insert() didn't repopulate the receiver.
 	if user.Id == 0 {
-		if err := repo.WithoutTenantIsolation(repo.DB).Where("username = ?", username).First(user).Error; err != nil {
+		if err := repo.WithoutTenantIsolation(repo.DB).Where("username = ? AND tenant_id = ?", username, tenantID).First(user).Error; err != nil {
 			return nil, fmt.Errorf("refetch user: %w", err)
 		}
 	}
@@ -313,4 +321,35 @@ func provisionSwitchEndUserToken(userID int, tenantID string, quota int) (*repo.
 		return nil, fmt.Errorf("insert token: %w", err)
 	}
 	return token, nil
+}
+
+// switchRedeemKnownErrors is the exact set of inner messages
+// repo.Redeem (internal/adapter/repo/redemption.go) can wrap as
+// "兑换失败，<inner>". These are controlled, translated strings the Switch
+// client's classifyRedeemFailure() greps substrings out of ("已使用" /
+// "过期" / "禁用" / "不存在") — they are safe to return to an unauthenticated
+// caller verbatim. Anything else reaching this set (e.g. a raw
+// driver/GORM error from the transaction's Update/Save calls) is not a
+// known sentinel and must not be echoed back; see sanitizeRedeemError.
+var switchRedeemKnownErrors = map[string]bool{
+	"无效的兑换码":       true,
+	"该兑换码已被使用":     true,
+	"该兑换码已过期":      true,
+	"用户不存在":        true,
+	"该兑换码不属于当前租户": true,
+}
+
+// sanitizeRedeemError strips repo.Redeem's "兑换失败，" wrapper and returns
+// the inner message unchanged if it's one of the known sentinel strings.
+// Any other error — including raw driver/GORM error text such as
+// constraint or column names — is replaced with a generic message so it
+// never reaches this endpoint's anonymous, unauthenticated caller. The
+// caller of this function is responsible for logging the real error
+// server-side before calling it.
+func sanitizeRedeemError(err error) string {
+	message := strings.TrimPrefix(err.Error(), "兑换失败，")
+	if switchRedeemKnownErrors[message] {
+		return message
+	}
+	return "服务暂不可用，请稍后重试"
 }

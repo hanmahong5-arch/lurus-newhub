@@ -45,6 +45,100 @@ func TestGetRandomString(t *testing.T) {
 	}
 }
 
+// TestGetRandomString_CharsetAndLength is a regression test for the
+// math/rand -> crypto/rand fix (security defect #6: security-sensitive
+// secrets such as redemption codes / internal API keys, generated via
+// common.GetRandomString, must not use a non-CSPRNG). It asserts the
+// public contract GetRandomString callers rely on (length, charset) held
+// after switching the underlying RNG — i.e. the interface didn't change,
+// only the entropy source did.
+//
+// NOTE: this does NOT and cannot prove cryptographic randomness. It only
+// checks: (1) length/charset correctness is preserved, (2) the character
+// distribution over a large sample looks sane (no gross bias such as a
+// modulo-bias bug would produce), which is a sanity check, not a proof.
+func TestGetRandomString_CharsetAndLength(t *testing.T) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	allowed := make(map[rune]bool, len(charset))
+	for _, r := range charset {
+		allowed[r] = true
+	}
+
+	for _, length := range []int{1, 2, 5, 16, 32, 48, 100} {
+		s := GetRandomString(length)
+		if len(s) != length {
+			t.Fatalf("length %d: got len %d (%q)", length, len(s), s)
+		}
+		for _, r := range s {
+			if !allowed[r] {
+				t.Fatalf("length %d: output %q contains char %q outside expected charset", length, s, r)
+			}
+		}
+	}
+}
+
+// TestGetRandomString_DistributionSanity draws a large sample and checks
+// every charset character appears with roughly the expected frequency.
+// This is a coarse statistical sanity check (loose bounds, not a
+// randomness/entropy proof) aimed at catching an implementation bug like
+// modulo bias (e.g. `charsetIndex := b % 62`, which would skew towards the
+// low end of a 256-value byte range since 256 is not a multiple of 62).
+func TestGetRandomString_DistributionSanity(t *testing.T) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	const sampleLen = 20000
+
+	counts := make(map[rune]int, len(charset))
+	for _, r := range charset {
+		counts[r] = 0
+	}
+
+	s := GetRandomString(sampleLen)
+	if len(s) != sampleLen {
+		t.Fatalf("expected sample length %d, got %d", sampleLen, len(s))
+	}
+	for _, r := range s {
+		if _, ok := counts[r]; !ok {
+			t.Fatalf("unexpected char %q outside charset", r)
+		}
+		counts[r]++
+	}
+
+	expected := float64(sampleLen) / float64(len(charset))
+	// Loose bound: unbiased sampling should land each char within ~40% of
+	// the expected frequency at this sample size; a biased/broken RNG
+	// (e.g. modulo bias, or a charset subset never reached) would blow
+	// past this easily.
+	lowerBound := expected * 0.6
+	upperBound := expected * 1.4
+	for _, r := range charset {
+		c := counts[r]
+		if float64(c) < lowerBound || float64(c) > upperBound {
+			t.Errorf("char %q count %d outside sane bound [%.0f, %.0f] (expected ~%.0f)", r, c, lowerBound, upperBound, expected)
+		}
+	}
+}
+
+// TestGetRandomString_SecretCallSitesUseIt documents (and pins) the real
+// production call sites this fix targets. GetRandomString was fixed in
+// place (Option A) rather than adding a parallel GetSecureRandomString,
+// so any caller — including the two security-sensitive ones below — now
+// gets crypto/rand automatically. This test can't reach into other
+// packages' unexported code paths, so it re-asserts the property those
+// call sites depend on: fixed length, no panic, alphanumeric-only output.
+// Call sites (verified by source read, not executed here):
+//   - internal/adapter/repo/internal_api_key.go: key := "lurus_ik_" + common.GetRandomString(32)
+//   - internal/adapter/handler/v2_redemption.go: key := common.GetRandomString(32)
+func TestGetRandomString_SecretCallSitesUseIt(t *testing.T) {
+	key := "lurus_ik_" + GetRandomString(32)
+	if len(key) != len("lurus_ik_")+32 {
+		t.Fatalf("internal API key shape changed: got %q (len %d)", key, len(key))
+	}
+	redemptionKey := GetRandomString(32)
+	if len(redemptionKey) != 32 {
+		t.Fatalf("redemption key shape changed: got %q (len %d)", redemptionKey, len(redemptionKey))
+	}
+}
+
 func TestMapToJsonStrAndStrToMap(t *testing.T) {
 	m := map[string]interface{}{"a": "1", "b": "2"}
 	js := MapToJsonStr(m)
@@ -637,6 +731,25 @@ func TestGetPageQuery(t *testing.T) {
 	c4 := newQueryContext(t, "/?p=2&size=15")
 	if got := GetPageQuery(c4); got.PageSize != 15 {
 		t.Errorf("legacy size param not honored: %d", got.PageSize)
+	}
+}
+
+// TestGetPageQuery_NegativePageSizeClamped: MEDIUM — a negative page_size is
+// neither == 0 (so it skips the default-fill branch) nor > 100 (so it skips
+// the upper clamp), and previously passed through untouched straight into
+// GORM's .Limit(negative), which omits the LIMIT clause entirely and dumps
+// the full table. GetPageQuery must clamp any PageSize < 1 back into
+// [1, 100].
+func TestGetPageQuery_NegativePageSizeClamped(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	c := newQueryContext(t, "/?p=1&page_size=-1")
+	pi := GetPageQuery(c)
+	if pi.PageSize < 1 || pi.PageSize > 100 {
+		t.Fatalf("page_size=-1 not clamped into [1,100]: got %d", pi.PageSize)
+	}
+	if pi.PageSize != ItemsPerPage {
+		t.Errorf("page_size=-1 should clamp to ItemsPerPage (%d), got %d", ItemsPerPage, pi.PageSize)
 	}
 }
 

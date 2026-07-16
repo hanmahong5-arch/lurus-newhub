@@ -34,6 +34,7 @@ func seedChannelWithBase(t *testing.T, ctx *V2TestContext, name, baseURL string)
 	u := baseURL
 	ch := &repo.Channel{
 		Name:        name,
+		TenantId:    ctx.TenantID,
 		Key:         "sk-test-actions-key",
 		Status:      1,
 		Type:        1,
@@ -134,6 +135,7 @@ func TestV2UpstreamModels_Happy(t *testing.T) {
 	baseURL := upstream.URL
 	ch := &repo.Channel{
 		Name:        "Sync Channel",
+		TenantId:    ctx.TenantID,
 		Key:         "sk-sync-key",
 		Status:      1,
 		Type:        1,

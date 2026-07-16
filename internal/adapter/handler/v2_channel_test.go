@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -253,6 +254,39 @@ func TestGetChannelV2_Success(t *testing.T) {
 	data := resp["data"].(map[string]interface{})
 	if data["name"] != "Test Channel" {
 		t.Errorf("expected name='Test Channel', got %v", data["name"])
+	}
+}
+
+// TestGetChannelV2_KeyMasked: HIGH — GetChannelById(id, true) returns the
+// plaintext upstream provider key; GetChannelV2 must mask it (like
+// channelView already does for ListChannelsV2) before serialising the
+// channel, otherwise any tenant admin reading a single channel gets the raw
+// credential in the response body.
+func TestGetChannelV2_KeyMasked(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	channel := SeedV2Channel(t, ctx, "Key Masking Target")
+	originalKey := channel.Key
+
+	path := fmt.Sprintf("/api/v2/test-tenant/channels/%d", channel.Id)
+	w := V2RequestAsUser(ctx, ctx.AdminUser, http.MethodGet, path, nil, []string{"admin"})
+
+	AssertV2Status(t, w, http.StatusOK)
+
+	if strings.Contains(w.Body.String(), originalKey) {
+		t.Fatalf("raw channel key leaked in GetChannelV2 response body: %s", w.Body.String())
+	}
+
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	gotKey, _ := data["key"].(string)
+	wantKey := maskKey(originalKey)
+	if gotKey != wantKey {
+		t.Errorf("key = %q, want masked %q (original %q)", gotKey, wantKey, originalKey)
+	}
+	if gotKey == originalKey {
+		t.Error("key must not equal the original raw key")
 	}
 }
 

@@ -79,7 +79,9 @@ func SearchLogs(params LogSearchParams) (*LogSearchResult, error) {
 		return &LogSearchResult{Items: logs, Total: int64(len(logs))}, nil
 	}
 
-	logs, err := repo.SearchAllLogs(params.Keyword)
+	// Only the v1 platform-admin search path reaches here (the user path
+	// returned above): deliberately cross-tenant.
+	logs, err := repo.SearchAllLogs(repo.AllTenantsForAdmin(), params.Keyword)
 	if err != nil {
 		return nil, err
 	}

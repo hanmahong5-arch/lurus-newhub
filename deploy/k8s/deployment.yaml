@@ -146,7 +146,7 @@ spec:
               value: "production"
             # CORS allowed origins (comma-separated)
             - name: ALLOWED_ORIGINS
-              value: "https://www.lurus.cn,https://lucrum.lurus.cn,https://webmail.lurus.cn"
+              value: "https://www.lurus.cn,https://lucrum.lurus.cn,https://webmail.lurus.cn,https://identity.lurus.cn"
             # MinIO object storage for release artifacts
             - name: MINIO_ENDPOINT
               value: "minio-api.storage.svc:9000"

@@ -422,6 +422,45 @@ func TokenAuth() func(c *gin.Context) {
 
 		repo.UserBaseWriteContext(userCache, c)
 
+		// TI (round-3 #2 + #3): resolve the token's owning tenant and enforce
+		// tenant-level gates on the relay hot path.
+		//
+		//   #2 A token whose tenant was disabled/suspended must stop relaying.
+		//      Previously only the USER status was checked here, so an
+		//      admin-suspended tenant's keys kept working. Mirrors authHelper
+		//      (session path) and TenantSlugGuard (v2). The bootstrap/system
+		//      tenant ("default") predates the tenants table on some deployments
+		//      and is never lockable from here; a transient lookup error fails
+		//      OPEN so a DB hiccup cannot 403 all relay traffic.
+		//
+		//   #3 Inject tenant_context so the downstream PoolBalanceCheck gate
+		//      (which reads GetTenantContext) is no longer dead code on the token
+		//      path, and v2 relay handlers that call GetTenantContext work for
+		//      token-authenticated requests. The tenant is the TOKEN's tenant —
+		//      the same tenant the post-consume pool debit bills
+		//      (app.debitTenantPool uses token.TenantId) — so gate and debit agree.
+		tokenTenantId := token.TenantId
+		if tokenTenantId == "" {
+			tokenTenantId = "default"
+		}
+		if tokenTenantId != "default" {
+			if tenant, tErr := repo.GetTenantByID(tokenTenantId); tErr == nil && tenant != nil && tenant.IsDisabled() {
+				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorToken, token.UserId,
+					governance.ActionAuthFailed, governance.ResourceToken, token.Id,
+					fmt.Sprintf(`{"reason":"tenant_disabled","tenant_id":%q}`, tokenTenantId)))
+				abortWithOpenAiMessage(c, http.StatusForbidden, "所属租户已被禁用或暂停")
+				return
+			}
+		}
+		repo.InjectTenantContext(c, tokenTenantId, token.UserId)
+		c.Set("tenant_context", &TenantContext{
+			TenantID: tokenTenantId,
+			UserID:   token.UserId,
+			Email:    userCache.Email,
+			Username: userCache.Username,
+			Roles:    []string{},
+		})
+
 		// Propagate user_id to context.Context for structured log correlation.
 		c.Request = c.Request.WithContext(common.WithUserID(c.Request.Context(), fmt.Sprintf("%d", token.UserId)))
 
@@ -481,6 +520,15 @@ func SetupContextForToken(c *gin.Context, token *repo.Token, parts ...string) er
 	if len(parts) > 1 {
 		if repo.IsAdmin(token.UserId) {
 			c.Set("specific_channel_id", parts[1])
+			// TI (round-3 #1): a root (cross-tenant) operator may pin ANY
+			// tenant's channel; a mere tenant-admin may not — Distribute rejects
+			// an override that points at another tenant's channel so a tenant
+			// admin can't relay through, and exfiltrate the upstream key of, a
+			// channel it doesn't own. Record the root distinction here where the
+			// token identity is known.
+			if repo.IsRoot(token.UserId) {
+				common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelRootOverride, true)
+			}
 		} else {
 			abortWithOpenAiMessage(c, http.StatusForbidden, "普通用户不支持指定渠道")
 			return fmt.Errorf("普通用户不支持指定渠道")

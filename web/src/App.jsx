@@ -71,6 +71,12 @@ const V2AdminSettings = lazy(() => import('./pages/v2/Admin/Settings'));
 const V2CostIntelligence = lazy(
   () => import('./pages/v2/Admin/CostIntelligence'),
 );
+const V2ModelPerformance = lazy(
+  () => import('./pages/v2/Admin/ModelPerformance'),
+);
+const V2ModelRateLimits = lazy(
+  () => import('./pages/v2/Admin/ModelRateLimits'),
+);
 
 function App() {
   const location = useLocation();
@@ -358,6 +364,8 @@ function App() {
           ['admin/users', V2AdminUsers],
           ['admin/settings', V2AdminSettings],
           ['admin/cost-intelligence', V2CostIntelligence],
+          ['admin/model-performance', V2ModelPerformance],
+          ['admin/model-limits', V2ModelRateLimits],
         ].map(([slug, Component]) => (
           <Route
             key={slug}

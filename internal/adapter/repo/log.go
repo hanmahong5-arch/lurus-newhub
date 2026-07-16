@@ -39,6 +39,77 @@ const (
 	LogTypeRefund  = entity.LogTypeRefund
 )
 
+// ============================================================================
+// Tenant scoping — structural enforcement for the logs table
+// ============================================================================
+//
+// The logs table is deliberately NOT covered by TenantPlugin auto-scoping
+// (see hasTenantIDColumn in tenant_plugin.go):
+//   - the plugin only engages on tenant-bound context handles (WithTenantID /
+//     GetTenantDB), which no log call site uses, so listing "logs" there would
+//     add zero read protection;
+//   - its beforeCreate callback errors when the tenant context is missing,
+//     which would break every bare-handle log write (RecordLog /
+//     RecordConsumeLog / RecordErrorLog — the relay hot path);
+//   - the plugin is registered on DB only (repo/main.go), while LOG_DB may be
+//     a separate database (LOG_SQL_DSN) that never has the plugin at all.
+//
+// Isolation for logs is therefore enforced HERE, structurally: every exported
+// query function in this file is either principal-scoped (filtered by user_id
+// / token_id / token key — globally unique principals that cannot cross
+// tenants) or requires an explicit TenantScope argument. Forgetting the
+// tenant decision is a compile error, not a silent cross-tenant leak.
+
+// TenantScope is the mandatory tenant decision for cross-user log queries.
+// Construct it with ForTenant or AllTenantsForAdmin — the zero value is
+// fail-closed (matches no rows).
+type TenantScope struct {
+	tenantID   string
+	allTenants bool
+}
+
+// ForTenant scopes a log query to a single tenant. An empty tenantID matches
+// no rows (every log row carries a non-empty tenant_id, default 'default'),
+// so a missing tenant fails closed instead of leaking all tenants.
+func ForTenant(tenantID string) TenantScope {
+	return TenantScope{tenantID: tenantID}
+}
+
+// AllTenantsForAdmin deliberately spans every tenant. Reserve it for
+// platform-admin surfaces (v1 admin console, root analytics) and system
+// tasks (retention cleanup) — never for caller-facing views.
+func AllTenantsForAdmin() TenantScope {
+	return TenantScope{allTenants: true}
+}
+
+// apply adds the scope's tenant filter to a logs query.
+func (s TenantScope) apply(tx *gorm.DB) *gorm.DB {
+	if s.allTenants {
+		return tx
+	}
+	return tx.Where("tenant_id = ?", s.tenantID)
+}
+
+// resolveLogTenantID picks the tenant to stamp on a log row being written:
+// the gin context's tenant_id when present (v1 session auth and the v2
+// tenant-slug middleware both set it), otherwise the owning user's tenant.
+// The fallback matters on the plain /v1 relay path: TokenAuth injects no
+// tenant context, so before this fallback every such row was silently
+// stamped 'default' even when the token belonged to another tenant —
+// polluting the default tenant's log views and hiding the rows from the
+// owning tenant's. System rows (userId 0) keep the 'default' stamp.
+func resolveLogTenantID(ginTenantID string, userId int) string {
+	if ginTenantID != "" {
+		return ginTenantID
+	}
+	if userId > 0 {
+		if uc, err := GetUserCache(userId); err == nil && uc.TenantId != "" {
+			return uc.TenantId
+		}
+	}
+	return "default"
+}
+
 func formatUserLogs(logs []*Log) {
 	for i := range logs {
 		logs[i].ChannelName = ""
@@ -108,6 +179,7 @@ func recordLogTx(tx *gorm.DB, userId int, logType int, content string) {
 	username, _ := GetUsernameById(userId, false)
 	l := &Log{
 		UserId:    userId,
+		TenantId:  resolveLogTenantID("", userId),
 		Username:  username,
 		CreatedAt: common.GetTimestamp(),
 		Type:      logType,
@@ -131,6 +203,7 @@ func RecordLog(userId int, logType int, content string) {
 	username, _ := GetUsernameById(userId, false)
 	log := &Log{
 		UserId:    userId,
+		TenantId:  resolveLogTenantID("", userId),
 		Username:  username,
 		CreatedAt: common.GetTimestamp(),
 		Type:      logType,
@@ -212,10 +285,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	}
 	// Extract governance fields from context for error logs.
 	channelType := c.GetInt("channel_type")
-	tenantId := c.GetString("tenant_id")
-	if tenantId == "" {
-		tenantId = "default"
-	}
+	tenantId := resolveLogTenantID(c.GetString("tenant_id"), userId)
 	log := &Log{
 		UserId:           userId,
 		TenantId:         tenantId,
@@ -257,10 +327,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	// through — BEFORE the log-config guards, so token/quota series are recorded
 	// even when consume-log writes are disabled. Provider is derived from the
 	// channel type so RecordTokens' (provider, model) labels are populated.
-	metricTenant := c.GetString("tenant_id")
-	if metricTenant == "" {
-		metricTenant = "default"
-	}
+	metricTenant := resolveLogTenantID(c.GetString("tenant_id"), userId)
 	metrics.RecordTokens(constant.GetChannelTypeName(params.ChannelType), params.ModelName,
 		params.PromptTokens, params.CompletionTokens)
 	if params.Quota > 0 {
@@ -288,13 +355,9 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			needRecordIp = true
 		}
 	}
-	tenantId := c.GetString("tenant_id")
-	if tenantId == "" {
-		tenantId = "default"
-	}
 	log := &Log{
 		UserId:           userId,
-		TenantId:         tenantId,
+		TenantId:         metricTenant,
 		Username:         username,
 		CreatedAt:        common.GetTimestamp(),
 		Type:             LogTypeConsume,
@@ -337,12 +400,15 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string) (logs []*Log, total int64, err error) {
+// GetAllLogs lists logs across users. scope is the explicit tenant decision:
+// the v1 platform-admin console passes AllTenantsForAdmin(); tenant-facing
+// callers must pass ForTenant.
+func GetAllLogs(scope TenantScope, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
-		tx = LOG_DB
+		tx = scope.apply(LOG_DB)
 	} else {
-		tx = LOG_DB.Where("logs.type = ?", logType)
+		tx = scope.apply(LOG_DB.Where("logs.type = ?", logType))
 	}
 
 	if modelName != "" {
@@ -450,8 +516,10 @@ func logKeywordCondition(tx *gorm.DB, keyword string) *gorm.DB {
 	return tx.Where("content LIKE ?", keyword+"%")
 }
 
-func SearchAllLogs(keyword string) (logs []*Log, err error) {
-	err = logKeywordCondition(LOG_DB, keyword).Order("id desc").Limit(common.MaxRecentItems).Find(&logs).Error
+// SearchAllLogs searches logs across users. scope is the explicit tenant
+// decision (see GetAllLogs).
+func SearchAllLogs(scope TenantScope, keyword string) (logs []*Log, err error) {
+	err = logKeywordCondition(scope.apply(LOG_DB), keyword).Order("id desc").Limit(common.MaxRecentItems).Find(&logs).Error
 	return logs, err
 }
 
@@ -461,11 +529,14 @@ func SearchUserLogs(userId int, keyword string) (logs []*Log, err error) {
 	return logs, err
 }
 
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat) {
-	tx := LOG_DB.Table("logs").Select("sum(quota) quota")
+// SumUsedQuota aggregates quota/rpm/tpm across users. scope is the explicit
+// tenant decision — the username filter alone is NOT an isolation boundary
+// (usernames are not guaranteed unique across tenants).
+func SumUsedQuota(scope TenantScope, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat) {
+	tx := scope.apply(LOG_DB.Table("logs")).Select("sum(quota) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
+	rpmTpmQuery := scope.apply(LOG_DB.Table("logs")).Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
 
 	if username != "" {
 		tx = tx.Where("username = ?", username)
@@ -501,14 +572,22 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
 
 	// 执行查询
+	// Scan rpm/tpm into a separate struct: GORM's Scan resets the whole
+	// destination struct per call, so scanning both queries into `stat`
+	// zeroed Quota on the second scan (quota was always returned as 0).
 	tx.Scan(&stat)
-	rpmTpmQuery.Scan(&stat)
+	var rate Stat
+	rpmTpmQuery.Scan(&rate)
+	stat.Rpm = rate.Rpm
+	stat.Tpm = rate.Tpm
 
 	return stat
 }
 
-func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := LOG_DB.Table("logs").Select("ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0)")
+// SumUsedToken aggregates token counts across users. scope is the explicit
+// tenant decision (see SumUsedQuota).
+func SumUsedToken(scope TenantScope, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
+	tx := scope.apply(LOG_DB.Table("logs")).Select("ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0)")
 	if username != "" {
 		tx = tx.Where("username = ?", username)
 	}
@@ -528,7 +607,10 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return token
 }
 
-func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+// DeleteOldLog batch-deletes logs older than targetTimestamp. scope is the
+// explicit tenant decision: retention cleanup (platform-admin) passes
+// AllTenantsForAdmin(); a tenant-facing purge must pass ForTenant.
+func DeleteOldLog(ctx context.Context, scope TenantScope, targetTimestamp int64, limit int) (int64, error) {
 	var total int64 = 0
 
 	for {
@@ -536,7 +618,7 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 			return total, ctx.Err()
 		}
 
-		result := LOG_DB.Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
+		result := scope.apply(LOG_DB.Where("created_at < ?", targetTimestamp)).Limit(limit).Delete(&Log{})
 		if nil != result.Error {
 			return total, result.Error
 		}
@@ -555,14 +637,11 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 // V2 API Log Query Functions with Tenant Support
 // ============================================================================
 
-// GetUserLogsWithParams retrieves logs for a user with tenant isolation
-func GetUserLogsWithParams(params *LogQueryParams) (logs []*Log, total int64, err error) {
-	tx := LOG_DB.Model(&Log{})
-
-	// Apply tenant filter (required for isolation)
-	if params.TenantID != "" {
-		tx = tx.Where("tenant_id = ?", params.TenantID)
-	}
+// GetUserLogsWithParams retrieves logs for a user with tenant isolation.
+// scope replaces the former params.TenantID soft filter (an empty TenantID
+// silently meant "all tenants" — fail-open); params.TenantID is now ignored.
+func GetUserLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []*Log, total int64, err error) {
+	tx := scope.apply(LOG_DB.Model(&Log{}))
 
 	// Apply user filter
 	if params.UserID > 0 {
@@ -609,14 +688,11 @@ func GetUserLogsWithParams(params *LogQueryParams) (logs []*Log, total int64, er
 	return logs, total, err
 }
 
-// GetTenantLogsWithParams retrieves all logs for a tenant (admin view)
-func GetTenantLogsWithParams(params *LogQueryParams) (logs []*Log, total int64, err error) {
-	tx := LOG_DB.Model(&Log{})
-
-	// Apply tenant filter (required for isolation)
-	if params.TenantID != "" {
-		tx = tx.Where("tenant_id = ?", params.TenantID)
-	}
+// GetTenantLogsWithParams retrieves all logs for a tenant (tenant-admin view).
+// scope replaces the former params.TenantID soft filter (an empty TenantID
+// silently meant "all tenants" — fail-open); params.TenantID is now ignored.
+func GetTenantLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []*Log, total int64, err error) {
+	tx := scope.apply(LOG_DB.Model(&Log{}))
 
 	// Apply type filter
 	if params.LogType > 0 {

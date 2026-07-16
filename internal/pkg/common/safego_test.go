@@ -2,40 +2,62 @@ package common
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestSafeGo_NormalExecution(t *testing.T) {
-	var executed atomic.Bool
+// hookPanicLog installs a test sink for the panic-recovery log lines and
+// returns the channel they arrive on. Waiting on the channel guarantees the
+// detached goroutine has finished its logging before the test returns, so no
+// leaked SysError call can race later tests that reset the global slog logger
+// or read their private log buffers.
+func hookPanicLog(t *testing.T) <-chan string {
+	t.Helper()
+	ch := make(chan string, 16)
+	hook := func(msg string) { ch <- msg }
+	panicLogSink.Store(&hook)
+	t.Cleanup(func() { panicLogSink.Store(nil) })
+	return ch
+}
 
-	SafeGo(func() {
-		executed.Store(true)
-	})
-
-	// Wait for goroutine to complete
-	time.Sleep(50 * time.Millisecond)
-
-	if !executed.Load() {
-		t.Error("SafeGo did not execute the function")
+// waitFor receives one value from ch or fails the test after a generous timeout.
+func waitFor[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		panic("unreachable")
 	}
 }
 
+func TestSafeGo_NormalExecution(t *testing.T) {
+	done := make(chan struct{})
+
+	SafeGo(func() {
+		close(done)
+	})
+
+	waitFor(t, done, "SafeGo function to execute")
+}
+
 func TestSafeGo_PanicRecovery(t *testing.T) {
-	var completed atomic.Bool
+	logged := hookPanicLog(t)
+	completed := make(chan struct{})
 
 	// This should not crash the test
 	SafeGo(func() {
-		defer func() { completed.Store(true) }()
+		defer close(completed)
 		panic("test panic")
 	})
 
-	// Wait for goroutine to complete
-	time.Sleep(50 * time.Millisecond)
-
-	if !completed.Load() {
-		t.Error("SafeGo did not recover from panic")
+	waitFor(t, completed, "SafeGo function defer to run")
+	msg := waitFor(t, logged, "SafeGo panic to be logged")
+	if !strings.Contains(msg, "panic in SafeGo") || !strings.Contains(msg, "test panic") {
+		t.Errorf("unexpected panic log: %q", msg)
 	}
 }
 
@@ -43,115 +65,97 @@ func TestSafeGoWithContext_NormalExecution(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var executed atomic.Bool
+	done := make(chan struct{})
 
 	SafeGoWithContext(ctx, func(c context.Context) {
-		executed.Store(true)
+		close(done)
 	})
 
-	time.Sleep(50 * time.Millisecond)
-
-	if !executed.Load() {
-		t.Error("SafeGoWithContext did not execute the function")
-	}
+	waitFor(t, done, "SafeGoWithContext function to execute")
 }
 
 func TestSafeGoWithContext_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	var started atomic.Bool
-	var stopped atomic.Bool
+	started := make(chan struct{})
+	stopped := make(chan struct{})
 
 	SafeGoWithContext(ctx, func(c context.Context) {
-		started.Store(true)
+		close(started)
 		<-c.Done()
-		stopped.Store(true)
+		close(stopped)
 	})
 
-	time.Sleep(50 * time.Millisecond)
-	if !started.Load() {
-		t.Error("function did not start")
-	}
-
+	waitFor(t, started, "function to start")
 	cancel()
-	time.Sleep(50 * time.Millisecond)
-
-	if !stopped.Load() {
-		t.Error("function did not respond to context cancellation")
-	}
+	waitFor(t, stopped, "function to respond to context cancellation")
 }
 
 func TestSafeGoWithContext_PanicRecovery(t *testing.T) {
-	ctx := context.Background()
-	var completed atomic.Bool
+	logged := hookPanicLog(t)
+	completed := make(chan struct{})
 
-	SafeGoWithContext(ctx, func(c context.Context) {
-		defer func() { completed.Store(true) }()
+	SafeGoWithContext(context.Background(), func(c context.Context) {
+		defer close(completed)
 		panic("test panic")
 	})
 
-	time.Sleep(50 * time.Millisecond)
-
-	if !completed.Load() {
-		t.Error("SafeGoWithContext did not recover from panic")
+	waitFor(t, completed, "SafeGoWithContext function defer to run")
+	msg := waitFor(t, logged, "SafeGoWithContext panic to be logged")
+	if !strings.Contains(msg, "panic in SafeGoWithContext") {
+		t.Errorf("unexpected panic log: %q", msg)
 	}
 }
 
 func TestSafeGoNamed_NormalExecution(t *testing.T) {
-	var executed atomic.Bool
+	done := make(chan struct{})
 
 	SafeGoNamed("test-task", func() {
-		executed.Store(true)
+		close(done)
 	})
 
-	time.Sleep(50 * time.Millisecond)
-
-	if !executed.Load() {
-		t.Error("SafeGoNamed did not execute the function")
-	}
+	waitFor(t, done, "SafeGoNamed function to execute")
 }
 
 func TestSafeGoNamed_PanicRecovery(t *testing.T) {
-	var completed atomic.Bool
+	logged := hookPanicLog(t)
+	completed := make(chan struct{})
 
 	SafeGoNamed("panic-task", func() {
-		defer func() { completed.Store(true) }()
+		defer close(completed)
 		panic("test panic")
 	})
 
-	time.Sleep(50 * time.Millisecond)
-
-	if !completed.Load() {
-		t.Error("SafeGoNamed did not recover from panic")
+	waitFor(t, completed, "SafeGoNamed function defer to run")
+	msg := waitFor(t, logged, "SafeGoNamed panic to be logged")
+	if !strings.Contains(msg, "panic in SafeGo[panic-task]") {
+		t.Errorf("unexpected panic log: %q", msg)
 	}
 }
 
 func TestMustGo_NormalExecution(t *testing.T) {
-	var executed atomic.Bool
+	done := make(chan struct{})
 
 	MustGo(func() {
-		executed.Store(true)
+		close(done)
 	}, 3)
 
-	time.Sleep(50 * time.Millisecond)
-
-	if !executed.Load() {
-		t.Error("MustGo did not execute the function")
-	}
+	waitFor(t, done, "MustGo function to execute")
 }
 
 func TestMustGo_PanicRecovery(t *testing.T) {
-	var completed atomic.Bool
+	logged := hookPanicLog(t)
+	completed := make(chan struct{})
 
 	MustGo(func() {
-		defer func() { completed.Store(true) }()
+		defer close(completed)
 		panic("test panic")
 	}, 3)
 
-	time.Sleep(100 * time.Millisecond)
-
-	if !completed.Load() {
-		t.Error("MustGo did not complete after panic")
+	waitFor(t, completed, "MustGo function defer to run")
+	msg := waitFor(t, logged, "MustGo panic to be logged")
+	if !strings.Contains(msg, "panic in MustGo (retry 1)") {
+		t.Errorf("unexpected panic log: %q", msg)
 	}
 }
 
@@ -163,16 +167,18 @@ func TestSafeGo_ConcurrentExecution(t *testing.T) {
 
 	const numGoroutines = 100
 	var completed atomic.Int32
+	done := make(chan struct{}, numGoroutines)
 
 	for i := 0; i < numGoroutines; i++ {
 		SafeGo(func() {
-			time.Sleep(10 * time.Millisecond)
 			completed.Add(1)
+			done <- struct{}{}
 		})
 	}
 
-	// Wait for all goroutines to complete
-	time.Sleep(200 * time.Millisecond)
+	for i := 0; i < numGoroutines; i++ {
+		waitFor(t, done, "concurrent SafeGo goroutine to complete")
+	}
 
 	if completed.Load() != numGoroutines {
 		t.Errorf("expected %d completions, got %d", numGoroutines, completed.Load())

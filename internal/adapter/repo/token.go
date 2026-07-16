@@ -47,8 +47,15 @@ type Token struct {
 	// RotatedAt is the unix-second time of the last automatic rotation; 0 means
 	// never auto-rotated (the rotation interval is then measured from
 	// CreatedTime).
-	RotatedAt int64          `json:"rotated_at" gorm:"default:0"`
-	DeletedAt gorm.DeletedAt `gorm:"index"`
+	RotatedAt int64 `json:"rotated_at" gorm:"default:0"`
+	// RateLimitRPM / RateLimitTPM mirror domain/entity/token.go (canonical
+	// docs live there): per-minute request / LLM-token caps enforced by
+	// middleware.BusinessRateLimit, 0 = unlimited (migration 023 columns).
+	// Duplicated here because the token create/update handlers bind and
+	// persist through this independent struct.
+	RateLimitRPM int            `json:"rate_limit_rpm" gorm:"column:rpm_limit;default:0"`
+	RateLimitTPM int            `json:"rate_limit_tpm" gorm:"column:tpm_limit;default:0"`
+	DeletedAt    gorm.DeletedAt `gorm:"index"`
 }
 
 func (token *Token) Clean() {
@@ -270,7 +277,8 @@ func (token *Token) Update() (err error) {
 		}
 	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "scopes").Updates(token).Error
+		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "scopes",
+		"rpm_limit", "tpm_limit").Updates(token).Error
 	return err
 }
 
@@ -450,6 +458,60 @@ func decreaseTokenQuota(id int, quota int) (err error) {
 		},
 	).Error
 	return err
+}
+
+// DecreaseTokenQuotaIfEnough atomically debits a token's remain_quota ONLY when
+// the row still holds at least `quota`, mirroring DebitPoolInTx's conditional
+// UPDATE (WHERE ... >= ?) + RowsAffected guard. It is the pre-consume gate's
+// race-safe replacement for the read-compare-then-DecreaseTokenQuota sequence
+// (the token-gate TOCTOU): N concurrent pre-consume calls can no longer all
+// read the same remain_quota, all pass a Go-level check, and all debit past
+// zero.
+//
+// Returns ok=false (NOT err) when the balance was insufficient (RowsAffected
+// == 0) — the caller maps that to the existing insufficient-quota rejection.
+// A real DB failure returns err.
+//
+// This is intentionally NOT a drop-in for the general DecreaseTokenQuota, which
+// stays unconditional because PostConsumeQuota's settlement/compensation must
+// debit the ACTUAL cost even past a cap (overdraft is recorded, never refused).
+//
+// Cache / batch scope (honest):
+//   - The conditional UPDATE always runs directly on the DB, even when
+//     BatchUpdateEnabled — a batch-buffered decrement has no committed row to
+//     guard, so buffering it would defeat the atomicity. Decrements still
+//     pending in the batch buffer are invisible to the WHERE clause, the same
+//     staleness the pre-batch read already carried; BatchUpdateEnabled is off
+//     by default for this money path.
+//   - Under Redis the cache is decremented on success to stay consistent with
+//     the DB; a concurrent caller's cache read may be momentarily stale, but
+//     the DB conditional UPDATE is the authoritative guard that keeps
+//     remain_quota from going negative regardless.
+func DecreaseTokenQuotaIfEnough(id int, key string, quota int) (ok bool, err error) {
+	if quota < 0 {
+		return false, errors.New("quota 不能为负数！")
+	}
+	result := DB.Model(&Token{}).
+		Where("id = ? AND remain_quota >= ?", id, quota).
+		Updates(map[string]interface{}{
+			"remain_quota":  gorm.Expr("remain_quota - ?", quota),
+			"used_quota":    gorm.Expr("used_quota + ?", quota),
+			"accessed_time": common.GetTimestamp(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	if common.RedisEnabled {
+		gopool.Go(func() {
+			if cErr := cacheDecrTokenQuota(key, int64(quota)); cErr != nil {
+				common.SysLog("failed to decrease token quota cache: " + cErr.Error())
+			}
+		})
+	}
+	return true, nil
 }
 
 // CountUserTokens returns total number of tokens for the given user, used for pagination

@@ -79,10 +79,13 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.CostSpikeLimit())
 	relayV1Router.Use(middleware.EntitlementCheck())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
+	relayV1Router.Use(middleware.BusinessRateLimit())
 	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")
-		wsRouter.Use(middleware.Distribute())
+		// Per-model dimension after Distribute — the requested model name only
+		// enters the context there (business_model_rate_limit.go).
+		wsRouter.Use(middleware.Distribute(), middleware.BusinessModelRateLimit())
 		wsRouter.GET("/realtime", func(c *gin.Context) {
 			handler.Relay(c, types.RelayFormatOpenAIRealtime)
 		})
@@ -90,7 +93,8 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		//http router
 		httpRouter := relayV1Router.Group("")
-		httpRouter.Use(middleware.Distribute())
+		// Per-model dimension after Distribute (see wsRouter note above).
+		httpRouter.Use(middleware.Distribute(), middleware.BusinessModelRateLimit())
 
 		// claude related routes
 		httpRouter.POST("/messages", func(c *gin.Context) {

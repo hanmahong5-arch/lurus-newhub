@@ -241,7 +241,7 @@ func TestR2Chan_GetAllChannels(t *testing.T) {
 	r2chanSeedChannel(t, ctx, "chan-a", constant.ChannelTypeOpenAI, common.ChannelStatusEnabled)
 	r2chanSeedChannel(t, ctx, "chan-b", constant.ChannelTypeAnthropic, 2) // disabled
 
-	c, w := r2chanNewCtx(http.MethodGet, "/api/channel/?p=1&page_size=10", nil)
+	c, w := r2chanAdminCtx(ctx, http.MethodGet, "/api/channel/?p=1&page_size=10", nil)
 	GetAllChannels(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
@@ -256,7 +256,7 @@ func TestR2Chan_GetAllChannels(t *testing.T) {
 	}
 
 	// status=enabled filter should exclude the disabled channel from total.
-	c2, w2 := r2chanNewCtx(http.MethodGet, "/api/channel/?status=enabled", nil)
+	c2, w2 := r2chanAdminCtx(ctx, http.MethodGet, "/api/channel/?status=enabled", nil)
 	GetAllChannels(c2)
 	resp2 := r2chanParseBody(t, w2)
 	data2 := resp2["data"].(map[string]interface{})
@@ -270,7 +270,7 @@ func TestR2Chan_SearchChannels(t *testing.T) {
 	defer ctx.Cleanup()
 	r2chanSeedChannel(t, ctx, "searchable-unique", constant.ChannelTypeOpenAI, common.ChannelStatusEnabled)
 
-	c, w := r2chanNewCtx(http.MethodGet, "/api/channel/search?keyword=searchable-unique", nil)
+	c, w := r2chanAdminCtx(ctx, http.MethodGet, "/api/channel/search?keyword=searchable-unique", nil)
 	SearchChannels(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
@@ -292,7 +292,7 @@ func TestR2Chan_GetChannel(t *testing.T) {
 	ch := r2chanSeedChannel(t, ctx, "get-me", constant.ChannelTypeOpenAI, common.ChannelStatusEnabled)
 
 	// success
-	c, w := r2chanNewCtx(http.MethodGet, "/", nil)
+	c, w := r2chanAdminCtx(ctx, http.MethodGet, "/", nil)
 	c.Params = gin.Params{{Key: "id", Value: intToStr(ch.Id)}}
 	GetChannel(c)
 	if w.Code != http.StatusOK {
@@ -587,7 +587,7 @@ func TestR2Chan_UpdateChannelBalanceHandler(t *testing.T) {
 
 	// Azure channel → "尚未实现" surfaced as an error
 	azure := r2chanSeedChannel(t, ctx, "azure", constant.ChannelTypeAzure, common.ChannelStatusEnabled)
-	c, w = r2chanNewCtx(http.MethodGet, "/", nil)
+	c, w = r2chanAdminCtx(ctx, http.MethodGet, "/", nil)
 	c.Params = gin.Params{{Key: "id", Value: intToStr(azure.Id)}}
 	UpdateChannelBalance(c)
 	if r2chanParseBody(t, w)["success"] == true {

@@ -83,6 +83,12 @@ func TestChannelV2(c *gin.Context) {
 		return
 	}
 
+	// Verify tenant ownership
+	if channel.TenantId != tenantCtx.TenantID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Access denied"})
+		return
+	}
+
 	// Resolve the upstream endpoint.
 	baseURL := channel.GetBaseURL()
 	if baseURL == "" {
@@ -204,6 +210,12 @@ func FetchUpstreamModelsV2(c *gin.Context) {
 	channel, err := repo.GetChannelById(channelID, true)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "Channel not found"})
+		return
+	}
+
+	// Verify tenant ownership
+	if channel.TenantId != tenantCtx.TenantID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Access denied"})
 		return
 	}
 

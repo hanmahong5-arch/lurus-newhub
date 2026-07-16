@@ -74,6 +74,10 @@ func GetPageQuery(c *gin.Context) *PageInfo {
 		}
 	}
 
+	if pageInfo.PageSize < 1 {
+		pageInfo.PageSize = ItemsPerPage
+	}
+
 	if pageInfo.PageSize > 100 {
 		pageInfo.PageSize = 100
 	}

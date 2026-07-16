@@ -134,22 +134,50 @@ func TestVerifyIDTokenWithJWKS_BadToken(t *testing.T) {
 }
 
 func TestCheckAudience(t *testing.T) {
-	prev := oidcAllowedAudiences
-	defer func() { oidcAllowedAudiences = prev }()
+	prevAud := oidcAllowedAudiences
+	prevClient := oidcClientID
+	defer func() {
+		oidcAllowedAudiences = prevAud
+		oidcClientID = prevClient
+	}()
 
-	// Empty allowlist → enforcement disabled → always true.
+	oidcClientID = "svc-client"
+
+	// This service's own client_id is always an accepted audience, even with no
+	// extra allow-list configured — a legitimate newhub token still passes.
 	oidcAllowedAudiences = nil
-	if !checkAudience(jwt.ClaimStrings{"anything"}) {
-		t.Errorf("empty audience allowlist must accept any audience")
+	if !checkAudience(jwt.ClaimStrings{"svc-client"}) {
+		t.Errorf("client_id audience must be accepted without any allow-list")
+	}
+	// SECURITY: a token minted for a DIFFERENT client under the same issuer,
+	// with no allow-list configured, must be rejected (regression guard for the
+	// default-open audience bypass).
+	if checkAudience(jwt.ClaimStrings{"other-client"}) {
+		t.Errorf("foreign audience must be rejected when no allow-list is set")
+	}
+	// A token carrying no audience at all is rejected.
+	if checkAudience(jwt.ClaimStrings{}) {
+		t.Errorf("empty audience must be rejected")
 	}
 
-	// With an allowlist, only listed audiences pass.
-	oidcAllowedAudiences = []string{"client-a", "client-b"}
-	if !checkAudience(jwt.ClaimStrings{"client-b"}) {
-		t.Errorf("listed audience must be accepted")
+	// With an extra allow-list, both the client_id and listed audiences pass;
+	// anything else is rejected.
+	oidcAllowedAudiences = []string{"aud-a", "aud-b"}
+	if !checkAudience(jwt.ClaimStrings{"aud-b"}) {
+		t.Errorf("allow-listed audience must be accepted")
 	}
-	if checkAudience(jwt.ClaimStrings{"client-x"}) {
-		t.Errorf("unlisted audience must be rejected")
+	if !checkAudience(jwt.ClaimStrings{"svc-client"}) {
+		t.Errorf("client_id must still be accepted alongside an allow-list")
+	}
+	if checkAudience(jwt.ClaimStrings{"aud-x"}) {
+		t.Errorf("audience matching neither client_id nor allow-list must be rejected")
+	}
+
+	// Defensive: an empty client_id must not degrade into silent accept-all.
+	oidcClientID = ""
+	oidcAllowedAudiences = nil
+	if checkAudience(jwt.ClaimStrings{"anything"}) {
+		t.Errorf("empty client_id + empty allow-list must fail closed, not accept all")
 	}
 }
 

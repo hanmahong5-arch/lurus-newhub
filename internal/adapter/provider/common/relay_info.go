@@ -123,6 +123,12 @@ type RelayInfo struct {
 	IsClaudeBetaQuery      bool  // /v1/messages?beta=true
 	IdentityAccountID      int64 // lurus-platform account ID for wallet bridging (0 = not available)
 	PlatformPreAuthID      int64 // Pre-authorization ID from platform wallet (0 = not using pre-auth)
+	// PlatformGoverned marks a request the platform wallet ADMITTED — set on
+	// every platformPreAuthorize admit path (real pre-auth, high-balance skip,
+	// degraded-cache admit). LOCAL_LEDGER_ADVISORY only relaxes the local
+	// quota gate for governed requests; unlinked/legacy traffic keeps the full
+	// local gate so advisory mode can never open a free-ride door.
+	PlatformGoverned       bool
 
 	PriceData types.PriceData
 

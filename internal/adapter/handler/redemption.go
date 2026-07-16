@@ -16,7 +16,15 @@ import (
 
 func GetAllRedemptions(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	redemptions, total, err := repo.GetAllRedemptions(pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	var redemptions []*repo.Redemption
+	var total int64
+	var err error
+	// Non-root callers see only their own tenant's redemption codes.
+	if c.GetInt("role") >= common.RoleRootUser {
+		redemptions, total, err = repo.GetAllRedemptions(pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	} else {
+		redemptions, total, err = repo.GetRedemptionsByTenant(c.GetString("tenant_id"), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -30,7 +38,14 @@ func GetAllRedemptions(c *gin.Context) {
 func SearchRedemptions(c *gin.Context) {
 	keyword := c.Query("keyword")
 	pageInfo := common.GetPageQuery(c)
-	redemptions, total, err := repo.SearchRedemptions(keyword, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	var redemptions []*repo.Redemption
+	var total int64
+	var err error
+	if c.GetInt("role") >= common.RoleRootUser {
+		redemptions, total, err = repo.SearchRedemptions(keyword, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	} else {
+		redemptions, total, err = repo.SearchRedemptionsByTenant(c.GetString("tenant_id"), keyword, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -50,6 +65,9 @@ func GetRedemption(c *gin.Context) {
 	redemption, err := repo.GetRedemptionById(id)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if enforceTenantScope(c, redemption.TenantId) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -134,7 +152,15 @@ func AddRedemption(c *gin.Context) {
 
 func DeleteRedemption(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	err := repo.DeleteRedemptionById(id)
+	existing, err := repo.GetRedemptionById(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if enforceTenantScope(c, existing.TenantId) {
+		return
+	}
+	err = repo.DeleteRedemptionById(id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -159,6 +185,9 @@ func UpdateRedemption(c *gin.Context) {
 	cleanRedemption, err := repo.GetRedemptionById(redemption.Id)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if enforceTenantScope(c, cleanRedemption.TenantId) {
 		return
 	}
 	if statusOnly == "" {
@@ -191,7 +220,16 @@ func UpdateRedemption(c *gin.Context) {
 }
 
 func DeleteInvalidRedemption(c *gin.Context) {
-	rows, err := repo.DeleteInvalidRedemptions()
+	// AdminAuth is satisfied by a per-tenant admin too, so a non-root prune must
+	// stay inside the caller's tenant; root keeps the global sweep. Without this
+	// split a role-10 tenant admin purged every tenant's spent/expired codes.
+	var rows int64
+	var err error
+	if c.GetInt("role") >= common.RoleRootUser {
+		rows, err = repo.DeleteInvalidRedemptions()
+	} else {
+		rows, err = repo.DeleteInvalidRedemptionsByTenant(c.GetString("tenant_id"))
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return

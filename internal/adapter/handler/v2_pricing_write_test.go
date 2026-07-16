@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
@@ -92,7 +93,22 @@ func setupPricingWriteRouter(t *testing.T) *pricingWriteCtx {
 	}
 
 	router := gin.New()
-	mockAuth := func(c *gin.Context) { c.Next() }
+	// mockAuth defaults to an authenticated tenant-admin — this mirrors the
+	// real UserAuth()+TenantSlugGuard() chain, which always populates
+	// tenant_context before the handler runs. The admin-gate tests below
+	// override this via the X-Test-Role header to exercise the 403 path.
+	mockAuth := func(c *gin.Context) {
+		role := common.RoleAdminUser
+		if c.GetHeader("X-Test-Role") == "user" {
+			role = common.RoleCommonUser
+		}
+		c.Set("role", role)
+		c.Set("tenant_context", &middleware.TenantContext{
+			TenantID: tenant.Id,
+			UserID:   1,
+		})
+		c.Next()
+	}
 	router.POST("/api/v2/:tenant_slug/pricing", mockAuth, UpdatePricingV2)
 
 	ctx := &pricingWriteCtx{
@@ -114,11 +130,16 @@ func setupPricingWriteRouter(t *testing.T) *pricingWriteCtx {
 	return ctx
 }
 
-func postPricing(ctx *pricingWriteCtx, slug string, body interface{}) *httptest.ResponseRecorder {
+func postPricing(ctx *pricingWriteCtx, slug string, body interface{}, headers ...map[string]string) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	_ = json.NewEncoder(&buf).Encode(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/"+slug+"/pricing", &buf)
 	req.Header.Set("Content-Type", "application/json")
+	for _, h := range headers {
+		for k, v := range h {
+			req.Header.Set(k, v)
+		}
+	}
 	w := httptest.NewRecorder()
 	ctx.router.ServeHTTP(w, req)
 	return w
@@ -215,4 +236,34 @@ func TestV2PricingWrite_MissingModelName(t *testing.T) {
 	if resp["error_code"] != "MISSING_MODEL_NAME" {
 		t.Errorf("error_code = %v, want MISSING_MODEL_NAME", resp["error_code"])
 	}
+}
+
+// 5. AdminGate — CRITICAL: UpdatePricingV2 mutates global ratio maps and must
+// reject non-admin callers with 403 before any write occurs; an admin caller
+// for the same tenant/batch must still succeed (200), guarding against
+// over-tightening.
+func TestV2PricingWrite_AdminGate(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+
+	batch := []map[string]interface{}{
+		{"model_name": "gpt-4o", "model_ratio": 1.0},
+	}
+
+	t.Run("non_admin_forbidden", func(t *testing.T) {
+		w := postPricing(ctx, ctx.tenantSlug, batch, map[string]string{"X-Test-Role": "user"})
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403, body: %s", w.Code, w.Body.String())
+		}
+		resp := parsePricingWrite(t, w)
+		if msg, _ := resp["message"].(string); msg != "Admin role required" {
+			t.Errorf("message = %q, want %q", msg, "Admin role required")
+		}
+	})
+
+	t.Run("admin_allowed", func(t *testing.T) {
+		w := postPricing(ctx, ctx.tenantSlug, batch)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for admin caller, body: %s", w.Code, w.Body.String())
+		}
+	})
 }

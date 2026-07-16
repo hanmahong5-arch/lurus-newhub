@@ -8,8 +8,8 @@ AI 数据处理枢纽 — Platform 产品组核心成员。在 New API 开源基
 **与 NewAPI 的关系**: lurus-newapi 是稳定开源中转基座（定期同步上游），Hub 在其上增加数据处理能力和公司定制逻辑。
 
 - **Module**: `github.com/LurusTech/lurus-hub`
-- **Namespace / Port**: `lurus-system` / pod:3000, svc:8850
-- **Image**: `ghcr.io/LurusTech/lurus-api:main` (runtime resource name preserved)
+- **Namespace / Port**: `lurus-newhub`(R6;2026-07-15 live 核实,旧记载 `lurus-system` 已 rot)/ pod:3000, svc:8850(NodePort 30850)
+- **Image**: `ghcr.io/hanmahong5-arch/lurus-newhub`(digest 钉版,imagePullPolicy=IfNotPresent;`:main` 由 Publish workflow 更新)
 - **DB**: PostgreSQL only（`lurus_api` schema，GORM auto-migrate + embedded migration runner；非 postgres:// DSN boot fast-fail，2026-06 起），Redis DB 0, Meilisearch (optional)
 - **Auth**: OIDC (vendor-neutral; issuer/clientId deploy-time owner-gated), Passkey, session cookie/Redis
 - **Product Group**: Platform (P0)
@@ -79,11 +79,15 @@ go test -v ./internal/adapter/handler/...  # 指定包
 go test -run Integration ./...             # 仅集成测试
 go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
 
-# --- K8s ---
-ssh root@100.98.57.55 "kubectl get pods -n lurus-system"
-ssh root@100.98.57.55 "kubectl rollout restart deployment/lurus-api -n lurus-system"
-ssh root@100.98.57.55 "kubectl logs -n lurus-system -l app=lurus-api --tail=100"
-ssh root@100.98.57.55 "kubectl describe pod -n lurus-system <pod>"
+# --- K8s (hub.lurus.cn 生产 = R6, ns lurus-newhub;2026-07-15 live 核实——
+# 旧记载 100.98.57.55/lurus-system 已 rot,该处 ns 为空) ---
+ssh root@100.122.83.20 "kubectl get pods -n lurus-newhub"                # R6 Tailscale;备用 ssh -p 12222 root@43.226.45.87
+ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=100"
+# 部署 = merge → Publish workflow 出新 :main 镜像 → 取 digest 后钉版:
+#   kubectl set image deployment/lurus-newhub lurus-newhub=ghcr.io/hanmahong5-arch/lurus-newhub@sha256:<新digest> -n lurus-newhub
+# ⚠️ 多副本滚动会静默跳过 migration(boot-lease 被存活 leader 持有;2026-07-15
+# prod 曾因此停在 022)。带 migration 的部署后必须核 schema_migrations,或
+# scale 0→3 强制无锁首启;根修(lease 获得时补跑)待做。
 ```
 
 ## K8s Deployment Facts

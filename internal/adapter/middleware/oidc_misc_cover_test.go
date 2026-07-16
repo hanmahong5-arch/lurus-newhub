@@ -253,6 +253,65 @@ func TestMapOIDCUserToLurus_MappingNotFound(t *testing.T) {
 	}
 }
 
+// SECURITY (cross-tenant isolation): a blank org_id must never resolve to a
+// tenant. Even with auto-create enabled, mapping must fail and must NOT create
+// a tenant keyed on an empty zitadel_org_id — otherwise every org_id-less user
+// from any unrelated IdP would be folded into one shared tenant.
+func TestMapOIDCUserToLurus_EmptyOrgID_Rejected(t *testing.T) {
+	_, cleanup := setupCoverDB(t)
+	defer cleanup()
+
+	_ = os.Setenv("OIDC_AUTO_CREATE_TENANT", "true")
+	_ = os.Setenv("OIDC_AUTO_CREATE_USER", "true")
+	defer func() {
+		_ = os.Unsetenv("OIDC_AUTO_CREATE_TENANT")
+		_ = os.Unsetenv("OIDC_AUTO_CREATE_USER")
+	}()
+
+	for _, org := range []string{"", "   "} {
+		claims := &OIDCClaims{
+			RegisteredClaims: jwt.RegisteredClaims{Subject: "blank-org-sub"},
+			OrgID:            org,
+			Email:            "blank@nowhere.test",
+		}
+		if _, _, err := mapOIDCUserToLurus(claims); err == nil {
+			t.Errorf("OrgID=%q: expected mapping error, got nil", org)
+		}
+	}
+
+	// No tenant may have been created for a blank org_id.
+	var count int64
+	if err := repo.DB.Model(&entity.Tenant{}).
+		Where("zitadel_org_id = ? OR zitadel_org_id = ?", "", "   ").
+		Count(&count).Error; err != nil {
+		t.Fatalf("count tenants: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("blank org_id created %d tenant(s), want 0", count)
+	}
+}
+
+// Regression guard: a non-empty org_id still maps successfully — the empty-org
+// rejection must not over-tighten and lock out legitimate tenants.
+func TestMapOIDCUserToLurus_NonEmptyOrgID_StillMaps(t *testing.T) {
+	_, cleanup := setupCoverDB(t)
+	defer cleanup()
+	uid := seedTenantWithMapping(t, "org-ok", "tenant-ok", "sub-ok", entity.TenantStatusEnabled)
+
+	claims := &OIDCClaims{
+		RegisteredClaims: jwt.RegisteredClaims{Subject: "sub-ok"},
+		OrgID:            "org-ok",
+		Email:            "sub-ok@local",
+	}
+	tid, gotUID, err := mapOIDCUserToLurus(claims)
+	if err != nil {
+		t.Fatalf("non-empty org must still map: %v", err)
+	}
+	if tid != "tenant-ok" || gotUID != uid {
+		t.Errorf("got (%s,%d), want (tenant-ok,%d)", tid, gotUID, uid)
+	}
+}
+
 // -------------------- misc: abortWithMidjourneyMessage --------------------
 
 func TestAbortWithMidjourneyMessage(t *testing.T) {

@@ -16,6 +16,11 @@ func SetApiV2Router(router *gin.Engine) {
 	// missing it, so browser cross-origin calls (console SPA, Switch app) had
 	// no Access-Control-* response headers and silently failed preflight.
 	apiV2.Use(middleware.CORS())
+	// Same rationale as api-router.go: DecompressRequestMiddleware only lands
+	// on the relay router, which main.go wires up AFTER this group already
+	// snapshotted its middleware chain, so it never reaches /api/v2. Cap the
+	// body directly on this group. See body_size_limit.go.
+	apiV2.Use(middleware.RequestBodySizeLimit())
 	// Non-blocking SDK identity injector: resolves the lurus_session cookie
 	// (set by the platform SDK bridge) into the context so middleware.UserAuth
 	// / AdminAuth can admit SDK-authenticated console users whose only
@@ -153,6 +158,13 @@ func SetApiV2Router(router *gin.Engine) {
 		}
 		apiV2.POST("/:tenant_slug/redeem", middleware.UserAuth(), middleware.TenantSlugGuard(), handler.RedeemCodeV2)
 
+		// P4 unified provisioning: exchange a platform entitlement token
+		// (verified OFFLINE against the platform JWKS) for a bounded relay
+		// token. Public — the entitlement token is the credential; same
+		// rate-limit bucket as zita-bootstrap (structurally identical
+		// credential exchange).
+		apiV2.POST("/:tenant_slug/provision", middleware.BootstrapRateLimit(), handler.ProvisionV2)
+
 		tenantSessions := apiV2.Group("/:tenant_slug/sessions")
 		tenantSessions.Use(middleware.UserAuth())
 		tenantSessions.Use(middleware.TenantSlugGuard())
@@ -223,7 +235,22 @@ func SetApiV2Router(router *gin.Engine) {
 			switchGroup.GET("/pricing", handler.GetSwitchPricing)
 			// Wave 1 W1.2: usage reconciliation (inline raw-token auth).
 			switchGroup.POST("/reconciliation", handler.SwitchReconciliation)
+			// Quota/identity snapshot for the token owner (inline raw-token
+			// auth) — backs the Switch billing quota card.
+			switchGroup.GET("/user/info", handler.GetSwitchUserInfo)
+			// Redemption-code topup for the token owner (inline raw-token
+			// auth) — lets a Switch client credit its own account without
+			// an OIDC session (middleware.UserAuth() would reject it).
+			switchGroup.POST("/user/topup", handler.SwitchUserTopup)
+			// CN-survivable self-update mirror: latest Switch desktop release
+			// (admin-published via switch_app.* options; 404 = unpublished,
+			// client falls back to GitHub Releases).
+			switchGroup.GET("/app/releases/latest", handler.GetSwitchAppRelease)
 		}
+
+		// Admin-published relay recommendations for Switch clients (public,
+		// options-driven; bare-array contract, see GetRecommendedRelays).
+		apiV2.GET("/relays/recommended", handler.GetRecommendedRelays)
 
 		// Phase D Track 2.2: tenant-scoped heartbeat — sibling of /:tenant_slug/user/me.
 		// No middleware: UserHeartbeat does inline raw-token (Token.Key) auth,
@@ -268,6 +295,13 @@ func SetApiV2Router(router *gin.Engine) {
 				tenantMgmt.POST("/:id/disable", handler.DisableTenant)
 				tenantMgmt.POST("/:id/suspend", handler.SuspendTenant)
 				tenantMgmt.GET("/:id/stats", handler.GetTenantStats)
+
+				// Per-model rate limits (migration 026). DELETE takes the
+				// model as ?model= — model names contain '/' (vendor/model),
+				// which a path parameter cannot carry.
+				tenantMgmt.GET("/:id/model-limits", handler.ListTenantModelLimits)
+				tenantMgmt.PUT("/:id/model-limits", handler.UpsertTenantModelLimit)
+				tenantMgmt.DELETE("/:id/model-limits", handler.DeleteTenantModelLimit)
 
 				// Reseller credit-pool admin (ADR 2026-05-18 §4.1)
 				tenantMgmt.POST("/:id/credit-pool", handler.CreateCreditPool)
@@ -320,14 +354,26 @@ func SetApiV2Router(router *gin.Engine) {
 			adminRoute.GET("/audit/events", middleware.CriticalRateLimit(), handler.GetAuditEvents)
 			adminRoute.GET("/audit/actions", handler.ListAuditActionsV2)
 			adminRoute.GET("/audit/export", middleware.CriticalRateLimit(), handler.ExportAuditEventsV2)
+			// Tamper-evidence hash-chain verification (migration 024).
+			adminRoute.GET("/audit/chain-verify", middleware.CriticalRateLimit(), handler.VerifyAuditChainV2)
+
+			// Model performance analytics + platform-wide usage-log CSV export
+			// (rate-limited: heavy aggregation / bulk row scans over logs).
+			adminRoute.GET("/analytics/model-performance", middleware.CriticalRateLimit(), handler.GetModelPerformanceV2)
+			adminRoute.GET("/logs/export", middleware.CriticalRateLimit(), handler.ExportAdminLogsV2)
 		}
 
 		// ================================================================
 		// Lutu APP integration — server-side web search (Tavily proxy).
 		// Used by the Lutu Flutter APP to give chat models a `web_search`
-		// tool without exposing the Tavily API key to clients. Auth is
-		// the standard tenant bearer the APP already attaches.
+		// tool without exposing the Tavily API key to clients. Gated by
+		// RequireOIDCToken: the Lutu APP is a consumer OIDC identity (it
+		// authenticates against identity.lurus.cn, not with an sk- relay
+		// token), so a valid OIDC JWT is the bearer it already attaches —
+		// required here so the shared Tavily quota can't be drained
+		// anonymously. NOT OIDCAuth: Lutu users have no newhub tenant, so
+		// its tenant mapping would 500 / pollute the tenant tables.
 		// ================================================================
-		apiV2.POST("/lutu/search", handler.PostWebSearch)
+		apiV2.POST("/lutu/search", middleware.RequireOIDCToken(), handler.PostWebSearch)
 	}
 }

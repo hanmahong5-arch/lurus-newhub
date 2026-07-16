@@ -37,6 +37,7 @@ func RefreshIdentityClientEnv() {
 	IdentityAuthRedirect = os.Getenv("IDENTITY_AUTH_REDIRECT") == "true"
 	IdentitySessionSecret = os.Getenv("IDENTITY_SESSION_SECRET")
 	SetBillingUnifiedEnabled(os.Getenv("BILLING_UNIFIED_ENABLED") == "true")
+	SetLocalLedgerAdvisory(os.Getenv("LOCAL_LEDGER_ADVISORY") == "true")
 }
 
 // IdentityPublicURL is the external-facing URL for lurus-platform (used in redirect responses).

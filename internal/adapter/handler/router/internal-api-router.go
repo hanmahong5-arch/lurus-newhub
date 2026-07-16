@@ -166,6 +166,10 @@ func SetInternalApiRouter(router *gin.Engine) {
 		provisioningGroup.POST("/tenants/:slug/keys", handler.CreateProvisionedKey)
 		provisioningGroup.GET("/tenants/:slug/keys", handler.ListProvisionedKeys)
 		provisioningGroup.DELETE("/tenants/:slug/keys/:key_id", handler.RevokeProvisionedKey)
+		// Distributor batch redemption-code issuance / revoke — idempotent via
+		// UNIQUE(event_id) in provisioned_redemption_batches (migration 027).
+		provisioningGroup.POST("/tenants/:slug/redemptions", handler.InternalProvisionRedemptions)
+		provisioningGroup.POST("/tenants/:slug/redemptions/revoke", handler.InternalRevokeProvisionedRedemptions)
 	}
 
 	// Platform BillingOutbox supply endpoint — SEAM S1 model (b).

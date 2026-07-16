@@ -270,6 +270,106 @@ func TestConcurrentVerification(t *testing.T) {
 	}
 }
 
+// TestConsumeCodeWithKey tests the atomic verify-and-delete primitive
+func TestConsumeCodeWithKey(t *testing.T) {
+	tests := []struct {
+		name          string
+		register      bool
+		code          string
+		consumeCode   string
+		validMinutes  int // 0 = leave default (10)
+		expectSuccess bool
+		expectDeleted bool
+	}{
+		{
+			name:     "correct_code_consumed",
+			register: true, code: "123456", consumeCode: "123456",
+			expectSuccess: true, expectDeleted: true,
+		},
+		{
+			name:     "wrong_code_not_consumed",
+			register: true, code: "123456", consumeCode: "654321",
+			expectSuccess: false, expectDeleted: false,
+		},
+		{
+			name:     "missing_key_fails",
+			register: false, consumeCode: "123456",
+			expectSuccess: false, expectDeleted: true,
+		},
+		{
+			name:     "expired_code_fails",
+			register: true, code: "123456", consumeCode: "123456",
+			validMinutes:  -1, // everything is instantly expired
+			expectSuccess: false, expectDeleted: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := "consume-" + tt.name
+			purpose := PhoneLoginPurpose
+
+			if tt.validMinutes != 0 {
+				original := VerificationValidMinutes
+				VerificationValidMinutes = tt.validMinutes
+				defer func() { VerificationValidMinutes = original }()
+			}
+
+			if tt.register {
+				RegisterVerificationCodeWithKey(key, tt.code, purpose)
+				defer DeleteKey(key, purpose)
+			}
+
+			got := ConsumeCodeWithKey(key, tt.consumeCode, purpose)
+			if got != tt.expectSuccess {
+				t.Errorf("ConsumeCodeWithKey() = %v, want %v", got, tt.expectSuccess)
+			}
+
+			// A successful consume must delete the code; a failed one must
+			// leave a still-valid registered code in place.
+			verificationMutex.Lock()
+			_, stillThere := verificationMap[purpose+key]
+			verificationMutex.Unlock()
+			if stillThere == tt.expectDeleted {
+				t.Errorf("code presence after consume = %v, want deleted=%v", stillThere, tt.expectDeleted)
+			}
+		})
+	}
+}
+
+// TestConsumeCodeWithKey_Concurrent asserts one-time-use under heavy
+// concurrency: N goroutines racing on the same code, exactly 1 may succeed.
+func TestConsumeCodeWithKey_Concurrent(t *testing.T) {
+	const concurrency = 100
+	key := "consume-concurrent"
+	code := "424242"
+	purpose := PhoneLoginPurpose
+
+	RegisterVerificationCodeWithKey(key, code, purpose)
+
+	var wg sync.WaitGroup
+	var successCount atomic.Int32
+	start := make(chan struct{})
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // barrier: maximize simultaneous entry
+			if ConsumeCodeWithKey(key, code, purpose) {
+				successCount.Add(1)
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	if successCount.Load() != 1 {
+		t.Errorf("expected exactly 1 successful consume, got %d", successCount.Load())
+	}
+}
+
 // TestConcurrentRegistration tests that concurrent registration is safe
 func TestConcurrentRegistration(t *testing.T) {
 	phone := "13955555555"

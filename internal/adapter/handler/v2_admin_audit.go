@@ -96,6 +96,45 @@ func ExportAuditEventsV2(c *gin.Context) {
 	})
 }
 
+// VerifyAuditChainV2 recomputes the audit tamper-evidence hash chain
+// (migration 024) over an id-ordered window and reports breaks.
+//
+// GET /api/v2/admin/audit/chain-verify?tenant_id=&after_id=&limit=&start_time=&end_time=
+//
+// Response data: {checked, legacy_rows, hash_breaks, first_break:{id,expected,
+// actual}|null, link_breaks, first_link_break|null, link_checks_skipped,
+// next_cursor}. legacy_rows are pre-chain (or fail-open) empty-hash rows —
+// reported, never failed. Pass next_cursor back as after_id to page; limit is
+// capped server-side so one call can never full-table-scan.
+//
+// Root-only (router applies RootJWTAuth on the /api/v2/admin/* group).
+func VerifyAuditChainV2(c *gin.Context) {
+	afterID, _ := strconv.ParseInt(c.Query("after_id"), 10, 64)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "1000"))
+	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
+	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
+
+	result, err := governance.VerifyAuditChain(repo.DB, governance.ChainVerifyParams{
+		TenantID:  c.Query("tenant_id"),
+		AfterID:   afterID,
+		Limit:     limit,
+		StartTime: startTime,
+		EndTime:   endTime,
+	})
+	if err != nil {
+		common.SysError(fmt.Sprintf("audit chain verify failed: %v", err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "failed to verify audit chain",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    result,
+	})
+}
+
 // writeAuditEventsCSV serializes events as CSV. Header order matches the
 // SQL column order. We never embed raw newlines in `Details` (they get
 // CSV-quoted by encoding/csv), so consumers can split by line safely on

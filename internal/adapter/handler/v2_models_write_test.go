@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
@@ -103,8 +104,21 @@ func setupModelsWriteRouter(t *testing.T) *modelsWriteTestCtx {
 	}
 
 	router := gin.New()
+	// mockAuth defaults to an authenticated tenant-admin — this mirrors the
+	// real UserAuth()+TenantSlugGuard() chain, which always populates
+	// tenant_context before the handler runs. The admin-gate tests below
+	// override this via the X-Test-Role header to exercise the 403 path.
 	mockAuth := func(c *gin.Context) {
 		c.Set("id", user.Id)
+		role := common.RoleAdminUser
+		if c.GetHeader("X-Test-Role") == "user" {
+			role = common.RoleCommonUser
+		}
+		c.Set("role", role)
+		c.Set("tenant_context", &middleware.TenantContext{
+			TenantID: tenant.Id,
+			UserID:   user.Id,
+		})
 		c.Next()
 	}
 	router.POST("/api/v2/:tenant_slug/models", mockAuth, CreateModelV2)
@@ -129,18 +143,28 @@ func setupModelsWriteRouter(t *testing.T) *modelsWriteTestCtx {
 	return ctx
 }
 
-func postModel(ctx *modelsWriteTestCtx, body interface{}) *httptest.ResponseRecorder {
+func postModel(ctx *modelsWriteTestCtx, body interface{}, headers ...map[string]string) *httptest.ResponseRecorder {
 	data, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/"+ctx.tenantSlug+"/models", bytes.NewReader(data))
 	req.Header.Set("Content-Type", "application/json")
+	for _, h := range headers {
+		for k, v := range h {
+			req.Header.Set(k, v)
+		}
+	}
 	w := httptest.NewRecorder()
 	ctx.router.ServeHTTP(w, req)
 	return w
 }
 
-func deleteModel(ctx *modelsWriteTestCtx, id interface{}) *httptest.ResponseRecorder {
+func deleteModel(ctx *modelsWriteTestCtx, id interface{}, headers ...map[string]string) *httptest.ResponseRecorder {
 	url := fmt.Sprintf("/api/v2/%s/models/%v", ctx.tenantSlug, id)
 	req := httptest.NewRequest(http.MethodDelete, url, nil)
+	for _, h := range headers {
+		for k, v := range h {
+			req.Header.Set(k, v)
+		}
+	}
 	w := httptest.NewRecorder()
 	ctx.router.ServeHTTP(w, req)
 	return w
@@ -261,4 +285,53 @@ func TestV2ModelsWrite_DeleteNotFound(t *testing.T) {
 	if out["error_code"] != "MODEL_NOT_FOUND" {
 		t.Errorf("expected error_code MODEL_NOT_FOUND, got %v", out["error_code"])
 	}
+}
+
+// 6. AdminGate (Create) — HIGH: CreateModelV2 must reject a non-admin caller
+// with 403 before any catalogue mutation; an admin caller must still succeed.
+func TestV2ModelsWrite_CreateAdminGate(t *testing.T) {
+	ctx := setupModelsWriteRouter(t)
+
+	t.Run("non_admin_forbidden", func(t *testing.T) {
+		w := postModel(ctx, map[string]interface{}{"model_name": "gate-test-model"}, map[string]string{"X-Test-Role": "user"})
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d — body: %s", w.Code, w.Body.String())
+		}
+		out := parseWriteResp(t, w)
+		if msg, _ := out["message"].(string); msg != "Admin role required" {
+			t.Errorf("message = %q, want %q", msg, "Admin role required")
+		}
+	})
+
+	t.Run("admin_allowed", func(t *testing.T) {
+		w := postModel(ctx, map[string]interface{}{"model_name": "gate-test-model"})
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for admin caller, got %d — body: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// 7. AdminGate (Delete) — HIGH: DeleteModelV2 must reject a non-admin caller
+// with 403 before any catalogue mutation; an admin caller must still succeed.
+func TestV2ModelsWrite_DeleteAdminGate(t *testing.T) {
+	ctx := setupModelsWriteRouter(t)
+
+	m := &repo.Model{ModelName: "gate-delete-model", Status: 1}
+	if err := ctx.db.Create(m).Error; err != nil {
+		t.Fatalf("seed model: %v", err)
+	}
+
+	t.Run("non_admin_forbidden", func(t *testing.T) {
+		w := deleteModel(ctx, m.Id, map[string]string{"X-Test-Role": "user"})
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d — body: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("admin_allowed", func(t *testing.T) {
+		w := deleteModel(ctx, m.Id)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for admin caller, got %d — body: %s", w.Code, w.Body.String())
+		}
+	})
 }
