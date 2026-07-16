@@ -342,34 +342,36 @@ const HFDesignSystem = () => (
         </div>
       </div>
       <div className='panel'>
-        <table className='t'>
-          <thead>
-            <tr>
-              <th>timestamp</th>
-              <th>model</th>
-              <th>status</th>
-              <th>cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[
-              ['14:02:11', 'gpt-4o-mini', 200, 0.0042],
-              ['14:02:09', 'claude-3.5', 200, 0.009],
-              ['14:02:07', 'gpt-4o', 504, 0],
-            ].map((r, i) => (
-              <tr key={i}>
-                <td className='mono muted'>{r[0]}</td>
-                <td className='strong'>{r[1]}</td>
-                <td>
-                  <span className={'tag ' + (r[2] >= 500 ? 'err' : 'ok')}>
-                    {r[2]}
-                  </span>
-                </td>
-                <td className='mono'>{r[3] ? '$' + r[3].toFixed(4) : '—'}</td>
+        <div className='hf-table-scroll'>
+          <table className='t'>
+            <thead>
+              <tr>
+                <th>timestamp</th>
+                <th>model</th>
+                <th>status</th>
+                <th>cost</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {[
+                ['14:02:11', 'gpt-4o-mini', 200, 0.0042],
+                ['14:02:09', 'claude-3.5', 200, 0.009],
+                ['14:02:07', 'gpt-4o', 504, 0],
+              ].map((r, i) => (
+                <tr key={i}>
+                  <td className='mono muted'>{r[0]}</td>
+                  <td className='strong'>{r[1]}</td>
+                  <td>
+                    <span className={'tag ' + (r[2] >= 500 ? 'err' : 'ok')}>
+                      {r[2]}
+                    </span>
+                  </td>
+                  <td className='mono'>{r[3] ? '$' + r[3].toFixed(4) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>

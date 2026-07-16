@@ -28,6 +28,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import NotAvailable from '../../../components/hifi/NotAvailable';
+import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, showSuccess } from '../../../helpers';
 
 // Bounded concurrency for the "test all enabled" sweep — never fan out an
@@ -1491,8 +1492,8 @@ const HFChannel = () => {
 
       {/* Table */}
       {loading ? (
-        <div className='muted' style={{ padding: '24px 28px', fontSize: 12 }}>
-          {t('console.common.loading', 'Loading…')}
+        <div style={{ padding: '14px 28px' }}>
+          <HfSkeletonRows rows={6} />
         </div>
       ) : visibleChannels.length === 0 ? (
         <div className='muted' style={{ padding: '24px 28px', fontSize: 12 }}>
@@ -1507,302 +1508,363 @@ const HFChannel = () => {
               )}
         </div>
       ) : (
-        <table className='t'>
-          <thead>
-            <tr>
-              <th style={{ width: 32 }}></th>
-              <th>{t('console.channel.th_channel', 'channel')}</th>
-              <th>{t('console.channel.th_type', 'type')}</th>
-              <th>{t('console.channel.th_models', 'models')}</th>
-              <th>{t('console.channel.th_qps', 'qps · 1h trend')}</th>
-              <th>{t('console.channel.th_latency', 'p50 / p95')}</th>
-              <th>{t('console.channel.th_success', 'success')}</th>
-              <th>{t('console.channel.th_cost', 'cost · 1h')}</th>
-              <th>{t('console.channel.th_status', 'status')}</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleChannels.map((ch, i) => {
-              const st = channelStatus(ch);
-              const isOpen = open === ch.id;
+        <div className='hf-table-scroll'>
+          <table className='t'>
+            <thead>
+              <tr>
+                <th style={{ width: 32 }}></th>
+                <th>{t('console.channel.th_channel', 'channel')}</th>
+                <th>{t('console.channel.th_type', 'type')}</th>
+                <th>{t('console.channel.th_models', 'models')}</th>
+                <th>{t('console.channel.th_qps', 'qps · 1h trend')}</th>
+                <th>{t('console.channel.th_latency', 'p50 / p95')}</th>
+                <th>{t('console.channel.th_success', 'success')}</th>
+                <th>{t('console.channel.th_cost', 'cost · 1h')}</th>
+                <th>{t('console.channel.th_status', 'status')}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleChannels.map((ch, i) => {
+                const st = channelStatus(ch);
+                const isOpen = open === ch.id;
+                // Row-expand cells below are <td onClick> with no keyboard
+                // path (fixPlan #5) — this shared handler gives every one of
+                // them Enter/Space parity with the click, without changing
+                // what the click itself does.
+                const handleExpandKeyDown = (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setOpen(isOpen ? null : ch.id);
+                  }
+                };
 
-              const modelsList = (() => {
-                if (!ch.models) return [];
-                if (Array.isArray(ch.models)) return ch.models;
-                return ch.models
-                  .split(',')
-                  .map((m) => m.trim())
-                  .filter(Boolean);
-              })();
+                const modelsList = (() => {
+                  if (!ch.models) return [];
+                  if (Array.isArray(ch.models)) return ch.models;
+                  return ch.models
+                    .split(',')
+                    .map((m) => m.trim())
+                    .filter(Boolean);
+                })();
 
-              return (
-                <Fragment key={ch.id ?? i}>
-                  <tr
-                    style={{
-                      background: sel.has(ch.id)
-                        ? 'rgba(255,93,31,0.08)'
-                        : undefined,
-                      borderLeft: sel.has(ch.id)
-                        ? '2px solid var(--hf-accent)'
-                        : '2px solid transparent',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {/* Checkbox */}
-                    <td onClick={() => toggle(ch.id)}>
-                      <input
-                        type='checkbox'
-                        checked={sel.has(ch.id)}
-                        readOnly
-                      />
-                    </td>
+                return (
+                  <Fragment key={ch.id ?? i}>
+                    <tr
+                      style={{
+                        background: sel.has(ch.id)
+                          ? 'rgba(255,93,31,0.08)'
+                          : undefined,
+                        borderLeft: sel.has(ch.id)
+                          ? '2px solid var(--hf-accent)'
+                          : '2px solid transparent',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {/* Checkbox — native input carries its own keyboard
+                        support (Tab + Space), no role/tabIndex needed. */}
+                      <td>
+                        <input
+                          type='checkbox'
+                          checked={sel.has(ch.id)}
+                          onChange={() => toggle(ch.id)}
+                          aria-label={t(
+                            'console.channel.select_channel',
+                            'select channel',
+                          )}
+                        />
+                      </td>
 
-                    {/* Name + group */}
-                    <td onClick={() => setOpen(isOpen ? null : ch.id)}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                        }}
+                      {/* Name + group */}
+                      <td
+                        onClick={() => setOpen(isOpen ? null : ch.id)}
+                        onKeyDown={handleExpandKeyDown}
+                        role='button'
+                        tabIndex={0}
+                        aria-expanded={isOpen}
                       >
-                        <span className={statusDot(st)} />
-                        <div>
-                          <div className='strong'>{ch.name}</div>
-                          <div className='faint mono' style={{ fontSize: 9 }}>
-                            {ch.group || 'default'}
-                            {ch.tag ? ` · ${ch.tag}` : ''}
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* Type */}
-                    <td
-                      className='mono muted'
-                      style={{ fontSize: 11 }}
-                      onClick={() => setOpen(isOpen ? null : ch.id)}
-                    >
-                      {ch.type ?? '—'}
-                    </td>
-
-                    {/* Model count */}
-                    <td
-                      className='mono'
-                      onClick={() => setOpen(isOpen ? null : ch.id)}
-                    >
-                      {modelsList.length > 0 ? modelsList.length : '—'}
-                    </td>
-
-                    {/* QPS — no metrics backend (no per-channel aggregation) */}
-                    <td
-                      className='muted'
-                      style={{ fontSize: 11 }}
-                      onClick={() => setOpen(isOpen ? null : ch.id)}
-                    >
-                      <NotAvailable
-                        reason={t(
-                          'console.channel.na_qps',
-                          'no metrics backend: per-channel QPS is not aggregated',
-                        )}
-                      />
-                    </td>
-
-                    {/* Latency p50/p95 — no metrics backend */}
-                    <td
-                      className='muted'
-                      style={{ fontSize: 11 }}
-                      onClick={() => setOpen(isOpen ? null : ch.id)}
-                    >
-                      <NotAvailable
-                        reason={t(
-                          'console.channel.na_latency',
-                          'no metrics backend: per-channel latency percentiles are not aggregated',
-                        )}
-                      />
-                    </td>
-
-                    {/* Success rate */}
-                    <td onClick={() => setOpen(isOpen ? null : ch.id)}>
-                      {ch.success_rate != null && ch.success_rate > 0 ? (
                         <div
                           style={{
                             display: 'flex',
                             alignItems: 'center',
-                            gap: 8,
+                            gap: 10,
                           }}
                         >
+                          <span className={statusDot(st)} />
+                          <div>
+                            <div className='strong'>{ch.name}</div>
+                            <div className='faint mono' style={{ fontSize: 9 }}>
+                              {ch.group || 'default'}
+                              {ch.tag ? ` · ${ch.tag}` : ''}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Type */}
+                      <td
+                        className='mono muted'
+                        style={{ fontSize: 11 }}
+                        onClick={() => setOpen(isOpen ? null : ch.id)}
+                        onKeyDown={handleExpandKeyDown}
+                        role='button'
+                        tabIndex={0}
+                        aria-expanded={isOpen}
+                      >
+                        {ch.type ?? '—'}
+                      </td>
+
+                      {/* Model count */}
+                      <td
+                        className='mono'
+                        onClick={() => setOpen(isOpen ? null : ch.id)}
+                        onKeyDown={handleExpandKeyDown}
+                        role='button'
+                        tabIndex={0}
+                        aria-expanded={isOpen}
+                      >
+                        {modelsList.length > 0 ? modelsList.length : '—'}
+                      </td>
+
+                      {/* QPS — no metrics backend (no per-channel aggregation) */}
+                      <td
+                        className='muted'
+                        style={{ fontSize: 11 }}
+                        onClick={() => setOpen(isOpen ? null : ch.id)}
+                        onKeyDown={handleExpandKeyDown}
+                        role='button'
+                        tabIndex={0}
+                        aria-expanded={isOpen}
+                      >
+                        <NotAvailable
+                          reason={t(
+                            'console.channel.na_qps',
+                            'no metrics backend: per-channel QPS is not aggregated',
+                          )}
+                        />
+                      </td>
+
+                      {/* Latency p50/p95 — no metrics backend */}
+                      <td
+                        className='muted'
+                        style={{ fontSize: 11 }}
+                        onClick={() => setOpen(isOpen ? null : ch.id)}
+                        onKeyDown={handleExpandKeyDown}
+                        role='button'
+                        tabIndex={0}
+                        aria-expanded={isOpen}
+                      >
+                        <NotAvailable
+                          reason={t(
+                            'console.channel.na_latency',
+                            'no metrics backend: per-channel latency percentiles are not aggregated',
+                          )}
+                        />
+                      </td>
+
+                      {/* Success rate */}
+                      <td
+                        onClick={() => setOpen(isOpen ? null : ch.id)}
+                        onKeyDown={handleExpandKeyDown}
+                        role='button'
+                        tabIndex={0}
+                        aria-expanded={isOpen}
+                      >
+                        {ch.success_rate != null && ch.success_rate > 0 ? (
                           <div
                             style={{
-                              width: 60,
-                              height: 4,
-                              background: 'var(--hf-sunken)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
                             }}
                           >
                             <div
                               style={{
-                                width: `${Math.min(ch.success_rate, 100)}%`,
-                                height: '100%',
-                                background:
+                                width: 60,
+                                height: 4,
+                                background: 'var(--hf-sunken)',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${Math.min(ch.success_rate, 100)}%`,
+                                  height: '100%',
+                                  background:
+                                    ch.success_rate >= 99
+                                      ? 'var(--hf-ok)'
+                                      : ch.success_rate >= 95
+                                        ? 'var(--hf-warn)'
+                                        : 'var(--hf-err)',
+                                }}
+                              />
+                            </div>
+                            <span
+                              className='mono'
+                              style={{
+                                fontSize: 11,
+                                color:
                                   ch.success_rate >= 99
                                     ? 'var(--hf-ok)'
                                     : ch.success_rate >= 95
                                       ? 'var(--hf-warn)'
                                       : 'var(--hf-err)',
                               }}
-                            />
+                            >
+                              {Number(ch.success_rate).toFixed(1)}%
+                            </span>
                           </div>
-                          <span
-                            className='mono'
-                            style={{
-                              fontSize: 11,
-                              color:
-                                ch.success_rate >= 99
-                                  ? 'var(--hf-ok)'
-                                  : ch.success_rate >= 95
-                                    ? 'var(--hf-warn)'
-                                    : 'var(--hf-err)',
-                            }}
-                          >
-                            {Number(ch.success_rate).toFixed(1)}%
+                        ) : (
+                          <span className='muted' style={{ fontSize: 11 }}>
+                            —
                           </span>
-                        </div>
-                      ) : (
-                        <span className='muted' style={{ fontSize: 11 }}>
-                          —
-                        </span>
-                      )}
-                    </td>
-
-                    {/* Cost · 1h — no metrics backend */}
-                    <td
-                      className='muted'
-                      style={{ fontSize: 11 }}
-                      onClick={() => setOpen(isOpen ? null : ch.id)}
-                    >
-                      <NotAvailable
-                        reason={t(
-                          'console.channel.na_cost',
-                          'no metrics backend: per-channel hourly cost is not aggregated',
                         )}
-                      />
-                    </td>
+                      </td>
 
-                    {/* Status badge */}
-                    <td onClick={() => setOpen(isOpen ? null : ch.id)}>
-                      <span className={statusTag(st)}>
-                        {t(`console.channel.status_${st}`, st)}
-                      </span>
-                    </td>
-
-                    {/* Row actions: test + expand */}
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      {(() => {
-                        const ts = testState[ch.id];
-                        const isTesting = ts === 'testing';
-                        const testLabel = isTesting
-                          ? t('console.channel.testing', 'testing…')
-                          : t('console.channel.test_channel', 'test channel');
-                        const testColor =
-                          ts && ts !== 'testing'
-                            ? ts.success
-                              ? 'var(--hf-ok)'
-                              : 'var(--hf-err)'
-                            : undefined;
-                        return (
-                          <button
-                            type='button'
-                            className='btn ghost sm'
-                            data-testid={`test-btn-${ch.id}`}
-                            disabled={isTesting}
-                            style={
-                              testColor
-                                ? { color: testColor, borderColor: testColor }
-                                : undefined
-                            }
-                            onClick={(e) => handleTestChannel(e, ch)}
-                          >
-                            {testLabel}
-                          </button>
-                        );
-                      })()}
-                      <button
-                        type='button'
-                        className='btn ghost'
-                        style={{ marginLeft: 4 }}
-                        onClick={() => setOpen(isOpen ? null : ch.id)}
-                      >
-                        {isOpen ? '▾' : '▸'}
-                      </button>
-                    </td>
-                  </tr>
-
-                  {/* Expanded detail row */}
-                  {isOpen && (
-                    <tr>
+                      {/* Cost · 1h — no metrics backend */}
                       <td
-                        colSpan={10}
-                        style={{
-                          padding: 0,
-                          background: 'var(--hf-paper)',
-                          borderLeft: '2px solid var(--hf-accent)',
-                        }}
+                        className='muted'
+                        style={{ fontSize: 11 }}
+                        onClick={() => setOpen(isOpen ? null : ch.id)}
+                        onKeyDown={handleExpandKeyDown}
+                        role='button'
+                        tabIndex={0}
+                        aria-expanded={isOpen}
                       >
-                        <ExpandedRow
-                          channel={ch}
-                          tenantSlug={tenantSlug}
-                          onRefresh={applyChannelFilters}
+                        <NotAvailable
+                          reason={t(
+                            'console.channel.na_cost',
+                            'no metrics backend: per-channel hourly cost is not aggregated',
+                          )}
                         />
-                        <div
-                          style={{
-                            padding: '0 20px 14px',
-                            display: 'flex',
-                            gap: 8,
-                          }}
+                      </td>
+
+                      {/* Status badge */}
+                      <td
+                        onClick={() => setOpen(isOpen ? null : ch.id)}
+                        onKeyDown={handleExpandKeyDown}
+                        role='button'
+                        tabIndex={0}
+                        aria-expanded={isOpen}
+                      >
+                        <span className={statusTag(st)}>
+                          {t(`console.channel.status_${st}`, st)}
+                        </span>
+                      </td>
+
+                      {/* Row actions: test + expand */}
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {(() => {
+                          const ts = testState[ch.id];
+                          const isTesting = ts === 'testing';
+                          const testLabel = isTesting
+                            ? t('console.channel.testing', 'testing…')
+                            : t('console.channel.test_channel', 'test channel');
+                          const testColor =
+                            ts && ts !== 'testing'
+                              ? ts.success
+                                ? 'var(--hf-ok)'
+                                : 'var(--hf-err)'
+                              : undefined;
+                          return (
+                            <button
+                              type='button'
+                              className='btn ghost sm'
+                              data-testid={`test-btn-${ch.id}`}
+                              disabled={isTesting}
+                              style={
+                                testColor
+                                  ? { color: testColor, borderColor: testColor }
+                                  : undefined
+                              }
+                              onClick={(e) => handleTestChannel(e, ch)}
+                            >
+                              {testLabel}
+                            </button>
+                          );
+                        })()}
+                        <button
+                          type='button'
+                          className='btn ghost'
+                          style={{ marginLeft: 4 }}
+                          onClick={() => setOpen(isOpen ? null : ch.id)}
+                          aria-label={
+                            isOpen
+                              ? t('console.channel.collapse_row', 'collapse')
+                              : t('console.channel.expand_row', 'expand')
+                          }
+                          aria-expanded={isOpen}
                         >
-                          <button
-                            type='button'
-                            className='btn sm'
-                            onClick={() => setEditing(ch)}
-                          >
-                            {t('console.channel.edit_all', 'edit all fields')}
-                          </button>
-                          <button
-                            type='button'
-                            className='btn sm'
-                            data-testid={`clone-btn-${ch.id}`}
-                            onClick={() => setCloning(ch)}
-                            title={t(
-                              'console.channel.clone_title',
-                              'create a new channel pre-filled from this one (key not copied)',
-                            )}
-                          >
-                            {t(
-                              'console.channel.clone_channel',
-                              'clone channel',
-                            )}
-                          </button>
-                          <button
-                            type='button'
-                            className='btn sm'
-                            data-testid={`sync-btn-${ch.id}`}
-                            onClick={() => setSyncTarget(ch)}
-                          >
-                            {t(
-                              'console.channel.sync_title',
-                              'Sync upstream models',
-                            )}
-                          </button>
-                        </div>
+                          {isOpen ? '▾' : '▸'}
+                        </button>
                       </td>
                     </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
+
+                    {/* Expanded detail row */}
+                    {isOpen && (
+                      <tr>
+                        <td
+                          colSpan={10}
+                          style={{
+                            padding: 0,
+                            background: 'var(--hf-paper)',
+                            borderLeft: '2px solid var(--hf-accent)',
+                          }}
+                        >
+                          <ExpandedRow
+                            channel={ch}
+                            tenantSlug={tenantSlug}
+                            onRefresh={applyChannelFilters}
+                          />
+                          <div
+                            style={{
+                              padding: '0 20px 14px',
+                              display: 'flex',
+                              gap: 8,
+                            }}
+                          >
+                            <button
+                              type='button'
+                              className='btn sm'
+                              onClick={() => setEditing(ch)}
+                            >
+                              {t('console.channel.edit_all', 'edit all fields')}
+                            </button>
+                            <button
+                              type='button'
+                              className='btn sm'
+                              data-testid={`clone-btn-${ch.id}`}
+                              onClick={() => setCloning(ch)}
+                              title={t(
+                                'console.channel.clone_title',
+                                'create a new channel pre-filled from this one (key not copied)',
+                              )}
+                            >
+                              {t(
+                                'console.channel.clone_channel',
+                                'clone channel',
+                              )}
+                            </button>
+                            <button
+                              type='button'
+                              className='btn sm'
+                              data-testid={`sync-btn-${ch.id}`}
+                              onClick={() => setSyncTarget(ch)}
+                            >
+                              {t(
+                                'console.channel.sync_title',
+                                'Sync upstream models',
+                              )}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* Create modal */}

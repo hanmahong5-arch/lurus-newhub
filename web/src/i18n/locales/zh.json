@@ -52,32 +52,8 @@
         "settings": "设置",
         "cost_intelligence": "成本智能",
         "model_performance": "模型性能",
-        "model_limits": "模型限流",
         "admin_users": "用户（管理）",
         "admin_settings": "管理设置"
-      },
-      "model_limits": {
-        "crumb": "模型限流",
-        "sub": "按租户 · 按模型的 RPM / TPM 上限 · 0 = 不限",
-        "count": "{{count}} 条模型限流",
-        "new": "+ 新建模型限流",
-        "col_model": "模型",
-        "col_rpm": "RPM 上限",
-        "col_tpm": "TPM 上限",
-        "empty": "该租户尚未设置任何按模型限流。",
-        "modal_new": "新建模型限流",
-        "modal_edit": "编辑模型限流",
-        "field_model": "模型名",
-        "field_model_hint": "客户端请求的精确模型名（如 gpt-4o），不支持通配符。",
-        "field_rpm": "RPM 上限",
-        "field_tpm": "TPM 上限",
-        "limits_hint": "该租户下此模型的每分钟上限。0 = 不限。",
-        "unlimited": "不限",
-        "toast_saved": "模型限流已保存",
-        "toast_deleted": "模型限流已删除",
-        "delete_confirm": "确认删除该租户的 {{model}} 限流？",
-        "admin_required": "需要管理员权限",
-        "admin_required_body": "你没有管理模型限流的权限，请联系平台管理员。"
       },
       "shell": {
         "tagline": "数据处理层",
@@ -86,6 +62,7 @@
         "login": "登录",
         "toggle_language": "切换语言",
         "toggle_theme": "切换主题",
+        "toggle_nav": "切换导航",
         "theme_to_light": "切换到浅色",
         "theme_to_dark": "切换到深色"
       },
@@ -97,6 +74,10 @@
         "title": "⚠ 开发中 —— 内容仅为设计稿占位",
         "reason_label": "原因：",
         "todo_label": "待办："
+      },
+      "legacy_bridge": {
+        "notice": "这是旧版控制台，新控制台已有这个页面的重新设计版本。",
+        "cta": "在新控制台中打开 →"
       },
       "dashboard": {
         "at_a_glance": "概览",
@@ -283,6 +264,9 @@
         "tip": "提示 · 勾选行进行批量操作 · 或点击任意行展开",
         "empty": "还没有渠道，添加一个开始使用。",
         "empty_filtered": "没有匹配当前筛选条件的渠道。",
+        "select_channel": "选择渠道",
+        "expand_row": "展开",
+        "collapse_row": "收起",
         "th_channel": "渠道",
         "th_type": "类型",
         "th_models": "模型",

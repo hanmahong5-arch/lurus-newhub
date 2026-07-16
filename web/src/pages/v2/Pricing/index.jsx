@@ -239,142 +239,147 @@ const PricingPage = () => {
               })}
             </span>
           </div>
-          <table className='t' data-testid='pricing-table'>
-            <thead>
-              <tr>
-                <th>{tr('console.pricing.th_model_name', 'model name')}</th>
-                <th>{tr('console.pricing.th_vendor', 'vendor')}</th>
-                <th>{tr('console.pricing.th_quota_type', 'billing type')}</th>
-                <th>{tr('console.pricing.th_model_ratio', 'model ratio')}</th>
-                <th>
-                  {tr(
-                    'console.pricing.th_completion_ratio',
-                    'completion ratio',
-                  )}
-                </th>
-                <th>{tr('console.pricing.th_model_price', 'model price')}</th>
-                <th>
-                  {tr('console.pricing.th_enable_groups', 'enabled groups')}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredPricing.map((row, i) => (
-                <tr key={row.model_name ?? i}>
-                  <td className='strong mono' style={{ fontSize: 12 }}>
-                    {row.model_name}
-                  </td>
-                  <td>{row.vendor ?? '—'}</td>
-                  <td>
-                    <span className='tag'>
-                      {row.quota_type === 1
-                        ? tr(
-                            'console.pricing.quota_type_price',
-                            'per-call price',
-                          )
-                        : tr('console.pricing.quota_type_ratio', 'ratio-based')}
-                    </span>
-                  </td>
-                  <td>
-                    {row.quota_type === 0 ? (
-                      <input
-                        type='number'
-                        className='field'
-                        step='0.0001'
-                        min='0.0001'
-                        value={
-                          edits[row.model_name]?.model_ratio ??
-                          row.model_ratio ??
-                          ''
-                        }
-                        onChange={(e) =>
-                          handleFieldChange(
-                            row.model_name,
-                            'model_ratio',
-                            e.target.value,
-                          )
-                        }
-                        style={{ width: 90, height: 24, fontSize: 11 }}
-                        data-testid={`field-model_ratio-${row.model_name}`}
-                      />
-                    ) : (
-                      <span className='mono muted'>—</span>
-                    )}
-                  </td>
-                  <td>
-                    {row.quota_type === 0 ? (
-                      <input
-                        type='number'
-                        className='field'
-                        step='0.0001'
-                        min='0.0001'
-                        value={
-                          edits[row.model_name]?.completion_ratio ??
-                          row.completion_ratio ??
-                          ''
-                        }
-                        onChange={(e) =>
-                          handleFieldChange(
-                            row.model_name,
-                            'completion_ratio',
-                            e.target.value,
-                          )
-                        }
-                        style={{ width: 90, height: 24, fontSize: 11 }}
-                        data-testid={`field-completion_ratio-${row.model_name}`}
-                      />
-                    ) : (
-                      <span className='mono muted'>—</span>
-                    )}
-                  </td>
-                  <td>
-                    {row.quota_type === 1 ? (
-                      <input
-                        type='number'
-                        className='field'
-                        step='0.000001'
-                        min='0.000001'
-                        value={
-                          edits[row.model_name]?.model_price ??
-                          row.model_price ??
-                          ''
-                        }
-                        onChange={(e) =>
-                          handleFieldChange(
-                            row.model_name,
-                            'model_price',
-                            e.target.value,
-                          )
-                        }
-                        style={{ width: 90, height: 24, fontSize: 11 }}
-                        data-testid={`field-model_price-${row.model_name}`}
-                      />
-                    ) : (
-                      <span className='mono muted'>—</span>
-                    )}
-                  </td>
-                  <td>
-                    <span className='muted' style={{ fontSize: 11 }}>
-                      {Array.isArray(row.enable_groups)
-                        ? row.enable_groups.join(', ') || '—'
-                        : '—'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-              {filteredPricing.length === 0 && !loading && (
+          <div className='hf-table-scroll'>
+            <table className='t' data-testid='pricing-table'>
+              <thead>
                 <tr>
-                  <td
-                    colSpan={7}
-                    className='muted'
-                    style={{ textAlign: 'center', padding: 24 }}
-                  >
-                    {tr('console.common.no_data', 'no data')}
-                  </td>
+                  <th>{tr('console.pricing.th_model_name', 'model name')}</th>
+                  <th>{tr('console.pricing.th_vendor', 'vendor')}</th>
+                  <th>{tr('console.pricing.th_quota_type', 'billing type')}</th>
+                  <th>{tr('console.pricing.th_model_ratio', 'model ratio')}</th>
+                  <th>
+                    {tr(
+                      'console.pricing.th_completion_ratio',
+                      'completion ratio',
+                    )}
+                  </th>
+                  <th>{tr('console.pricing.th_model_price', 'model price')}</th>
+                  <th>
+                    {tr('console.pricing.th_enable_groups', 'enabled groups')}
+                  </th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {filteredPricing.map((row, i) => (
+                  <tr key={row.model_name ?? i}>
+                    <td className='strong mono' style={{ fontSize: 12 }}>
+                      {row.model_name}
+                    </td>
+                    <td>{row.vendor ?? '—'}</td>
+                    <td>
+                      <span className='tag'>
+                        {row.quota_type === 1
+                          ? tr(
+                              'console.pricing.quota_type_price',
+                              'per-call price',
+                            )
+                          : tr(
+                              'console.pricing.quota_type_ratio',
+                              'ratio-based',
+                            )}
+                      </span>
+                    </td>
+                    <td>
+                      {row.quota_type === 0 ? (
+                        <input
+                          type='number'
+                          className='field'
+                          step='0.0001'
+                          min='0.0001'
+                          value={
+                            edits[row.model_name]?.model_ratio ??
+                            row.model_ratio ??
+                            ''
+                          }
+                          onChange={(e) =>
+                            handleFieldChange(
+                              row.model_name,
+                              'model_ratio',
+                              e.target.value,
+                            )
+                          }
+                          style={{ width: 90, height: 24, fontSize: 11 }}
+                          data-testid={`field-model_ratio-${row.model_name}`}
+                        />
+                      ) : (
+                        <span className='mono muted'>—</span>
+                      )}
+                    </td>
+                    <td>
+                      {row.quota_type === 0 ? (
+                        <input
+                          type='number'
+                          className='field'
+                          step='0.0001'
+                          min='0.0001'
+                          value={
+                            edits[row.model_name]?.completion_ratio ??
+                            row.completion_ratio ??
+                            ''
+                          }
+                          onChange={(e) =>
+                            handleFieldChange(
+                              row.model_name,
+                              'completion_ratio',
+                              e.target.value,
+                            )
+                          }
+                          style={{ width: 90, height: 24, fontSize: 11 }}
+                          data-testid={`field-completion_ratio-${row.model_name}`}
+                        />
+                      ) : (
+                        <span className='mono muted'>—</span>
+                      )}
+                    </td>
+                    <td>
+                      {row.quota_type === 1 ? (
+                        <input
+                          type='number'
+                          className='field'
+                          step='0.000001'
+                          min='0.000001'
+                          value={
+                            edits[row.model_name]?.model_price ??
+                            row.model_price ??
+                            ''
+                          }
+                          onChange={(e) =>
+                            handleFieldChange(
+                              row.model_name,
+                              'model_price',
+                              e.target.value,
+                            )
+                          }
+                          style={{ width: 90, height: 24, fontSize: 11 }}
+                          data-testid={`field-model_price-${row.model_name}`}
+                        />
+                      ) : (
+                        <span className='mono muted'>—</span>
+                      )}
+                    </td>
+                    <td>
+                      <span className='muted' style={{ fontSize: 11 }}>
+                        {Array.isArray(row.enable_groups)
+                          ? row.enable_groups.join(', ') || '—'
+                          : '—'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {filteredPricing.length === 0 && !loading && (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className='muted'
+                      style={{ textAlign: 'center', padding: 24 }}
+                    >
+                      {tr('console.common.no_data', 'no data')}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Group ratio — readonly display */}

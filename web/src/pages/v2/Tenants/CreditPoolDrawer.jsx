@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import React, { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
 
@@ -101,6 +102,7 @@ const panelStyle = {
 };
 
 const CreditPoolDrawer = ({ tenantId, tenantName, onClose }) => {
+  const { t } = useTranslation();
   const [pool, setPool] = useState(null);
   const [draws, setDraws] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -251,7 +253,12 @@ const CreditPoolDrawer = ({ tenantId, tenantName, onClose }) => {
           <div className='strong' style={{ fontSize: 15 }}>
             {tenantName || tenantId} · credit pool
           </div>
-          <button type='button' className='btn ghost sm' onClick={onClose}>
+          <button
+            type='button'
+            className='btn ghost sm'
+            onClick={onClose}
+            aria-label={t('console.common.close', 'close')}
+          >
             ✕
           </button>
         </div>
@@ -298,8 +305,8 @@ const CreditPoolDrawer = ({ tenantId, tenantName, onClose }) => {
                     style={{
                       fontSize: 11,
                       padding: '4px 8px',
-                      borderLeft: '2px solid var(--hf-amber, #d97706)',
-                      background: 'var(--hf-amber-bg, rgba(217, 119, 6, 0.08))',
+                      borderLeft: '2px solid var(--hf-warn)',
+                      background: 'var(--hf-warn-bg)',
                     }}
                     data-testid='ceiling-restored-banner'
                   >
@@ -384,8 +391,8 @@ const CreditPoolDrawer = ({ tenantId, tenantName, onClose }) => {
                   style={{
                     fontSize: 11,
                     padding: '4px 8px',
-                    borderLeft: '2px solid var(--hf-amber, #d97706)',
-                    background: 'var(--hf-amber-bg, rgba(217, 119, 6, 0.08))',
+                    borderLeft: '2px solid var(--hf-warn)',
+                    background: 'var(--hf-warn-bg)',
                   }}
                   data-testid='topup-restored-banner'
                 >

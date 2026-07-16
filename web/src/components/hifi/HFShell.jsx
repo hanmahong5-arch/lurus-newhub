@@ -19,9 +19,31 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import {
+  LuActivity,
+  LuBoxes,
+  LuFlaskConical,
+  LuImage,
+  LuKeyRound,
+  LuLayoutDashboard,
+  LuMenu,
+  LuMessageSquare,
+  LuRadioTower,
+  LuScrollText,
+  LuSearch,
+  LuSettings,
+  LuSlidersHorizontal,
+  LuTag,
+  LuTicket,
+  LuTrendingDown,
+  LuUserCog,
+  LuUsers,
+  LuWallet,
+} from 'react-icons/lu';
 import TenantSwitcher from './TenantSwitcher';
 import { API } from '../../helpers';
 import { clearAllDrafts } from '../../hooks/common/useFormDraft';
+import { HfToastHost } from './HfToast';
 
 // Single source of truth: pathname suffix → nav item id.
 // HFShell uses this to auto-highlight the active item when caller doesn't
@@ -98,7 +120,7 @@ const NAV_SECTIONS = [
       {
         id: 'dashboard',
         href: '/console/v2/dashboard',
-        glyph: '▣',
+        glyph: LuLayoutDashboard,
         label: 'Dashboard',
         key: 'console.nav.dashboard',
         badge: '',
@@ -106,7 +128,7 @@ const NAV_SECTIONS = [
       {
         id: 'playground',
         href: '/console/v2/playground',
-        glyph: '◇',
+        glyph: LuFlaskConical,
         label: 'Playground',
         key: 'console.nav.playground',
         badge: '',
@@ -114,7 +136,7 @@ const NAV_SECTIONS = [
       {
         id: 'chat',
         href: '/console/v2/chat',
-        glyph: '◌',
+        glyph: LuMessageSquare,
         label: 'Chat',
         key: 'console.nav.chat',
         badge: '',
@@ -128,7 +150,7 @@ const NAV_SECTIONS = [
       {
         id: 'tokens',
         href: '/console/v2/token',
-        glyph: '⚿',
+        glyph: LuKeyRound,
         label: 'Tokens',
         key: 'console.nav.tokens',
         badge: '5',
@@ -136,7 +158,7 @@ const NAV_SECTIONS = [
       {
         id: 'logs',
         href: '/console/v2/log',
-        glyph: '≣',
+        glyph: LuScrollText,
         label: 'Usage & logs',
         key: 'console.nav.logs',
         badge: '',
@@ -146,7 +168,7 @@ const NAV_SECTIONS = [
       {
         id: 'mj-logs',
         href: null,
-        glyph: '◷',
+        glyph: LuImage,
         label: 'MJ / Task logs',
         key: 'console.nav.mj_logs',
         badge: '',
@@ -157,7 +179,7 @@ const NAV_SECTIONS = [
       {
         id: 'billing',
         href: '/console/v2/billing',
-        glyph: '$',
+        glyph: LuWallet,
         label: 'Billing',
         key: 'console.nav.billing',
         badge: '$241',
@@ -171,7 +193,7 @@ const NAV_SECTIONS = [
       {
         id: 'channels',
         href: '/console/v2/channel',
-        glyph: '⏚',
+        glyph: LuRadioTower,
         label: 'Channels',
         key: 'console.nav.channels',
         badge: '8',
@@ -179,7 +201,7 @@ const NAV_SECTIONS = [
       {
         id: 'models',
         href: '/console/v2/models',
-        glyph: '◧',
+        glyph: LuBoxes,
         label: 'Models',
         key: 'console.nav.models',
         badge: '54',
@@ -187,7 +209,7 @@ const NAV_SECTIONS = [
       {
         id: 'users',
         href: '/console/v2/tenants',
-        glyph: '◍',
+        glyph: LuUsers,
         label: 'Tenants',
         key: 'console.nav.tenants',
         badge: '',
@@ -195,7 +217,7 @@ const NAV_SECTIONS = [
       {
         id: 'pricing',
         href: '/console/v2/pricing',
-        glyph: '▥',
+        glyph: LuTag,
         label: 'Pricing',
         key: 'console.nav.pricing',
         badge: '',
@@ -203,7 +225,7 @@ const NAV_SECTIONS = [
       {
         id: 'redemption',
         href: '/console/v2/redemption',
-        glyph: '◈',
+        glyph: LuTicket,
         label: 'Redemption',
         key: 'console.nav.redemption',
         badge: '',
@@ -211,7 +233,7 @@ const NAV_SECTIONS = [
       {
         id: 'settings',
         href: '/console/v2/settings',
-        glyph: '✱',
+        glyph: LuSettings,
         label: 'Settings',
         key: 'console.nav.settings',
         badge: '',
@@ -220,7 +242,7 @@ const NAV_SECTIONS = [
       {
         id: 'admin-cost',
         href: '/console/v2/admin/cost-intelligence',
-        glyph: '◮',
+        glyph: LuTrendingDown,
         label: 'Cost intelligence',
         key: 'console.nav.cost_intelligence',
         badge: '',
@@ -229,25 +251,16 @@ const NAV_SECTIONS = [
       {
         id: 'admin-analytics',
         href: '/console/v2/admin/model-performance',
-        glyph: '∿',
+        glyph: LuActivity,
         label: 'Model performance',
         key: 'console.nav.model_performance',
-        badge: '',
-      },
-      // Per-(tenant, model) RPM/TPM rate-limit config (migration 026).
-      {
-        id: 'admin-model-limits',
-        href: '/console/v2/admin/model-limits',
-        glyph: '⏲',
-        label: 'Model limits',
-        key: 'console.nav.model_limits',
         badge: '',
       },
       // Admin surfaces (deferred backlog round 2) — now wired.
       {
         id: 'admin-users',
         href: '/console/v2/admin/users',
-        glyph: '◍',
+        glyph: LuUserCog,
         label: 'Users (admin)',
         key: 'console.nav.admin_users',
         badge: '',
@@ -255,7 +268,7 @@ const NAV_SECTIONS = [
       {
         id: 'admin-settings',
         href: '/console/v2/admin/settings',
-        glyph: '⚙',
+        glyph: LuSlidersHorizontal,
         label: 'Admin settings',
         key: 'console.nav.admin_settings',
         badge: '',
@@ -402,12 +415,16 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
     (tenants && tenants.find((t) => t.id === currentSlug)) ||
     (tenants && tenants[0]) ||
     null;
+  const [navOpen, setNavOpen] = useState(false);
+  const closeNav = () => setNavOpen(false);
   return (
-    <div className='hf hf-shell'>
+    <div className={'hf hf-shell' + (navOpen ? ' nav-open' : '')}>
+      <HfToastHost />
+      <div className='hf-nav-backdrop' onClick={closeNav} aria-hidden='true' />
       <aside className='hf-side'>
         <div className='brand'>
           <div className='brand-mark' />
-          <div>
+          <div className='brand-text'>
             <div className='brand-name'>Lurus Hub</div>
             <div className='brand-tag'>
               {t('console.shell.tagline', 'data processing layer')}
@@ -418,16 +435,18 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
         <button
           type='button'
           className='btn'
+          aria-label={t('console.shell.search', 'search anything')}
           style={{
             width: '100%',
             justifyContent: 'space-between',
             marginBottom: 14,
           }}
         >
-          <span style={{ color: 'var(--hf-ink-3)' }}>
-            ⌕ {t('console.shell.search', 'search anything')}
+          <span className='search-label' style={{ color: 'var(--hf-ink-3)' }}>
+            <LuSearch size={12} aria-hidden='true' />{' '}
+            {t('console.shell.search', 'search anything')}
           </span>
-          <span>
+          <span className='kbd-group'>
             <span className='kbd'>⌘</span>
             <span className='kbd'>K</span>
           </span>
@@ -438,10 +457,13 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
             <div className='nav-h'>{t(s.hKey, s.h)}</div>
             {s.items.map((it) => {
               const className = 'nav-i' + (activeId === it.id ? ' active' : '');
+              const Glyph = it.glyph;
               const inner = (
                 <>
-                  <span className='nav-glyph'>{it.glyph}</span>
-                  <span>{t(it.key, it.label)}</span>
+                  <span className='nav-glyph' aria-hidden='true'>
+                    <Glyph size={14} />
+                  </span>
+                  <span className='nav-label'>{t(it.key, it.label)}</span>
                   {it.badge && <span className='nav-badge'>{it.badge}</span>}
                 </>
               );
@@ -465,7 +487,12 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
                 );
               }
               return it.href ? (
-                <Link key={it.id} to={it.href} className={className}>
+                <Link
+                  key={it.id}
+                  to={it.href}
+                  className={className}
+                  onClick={closeNav}
+                >
                   {inner}
                 </Link>
               ) : (
@@ -493,6 +520,16 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
 
       <div className='hf-main'>
         <div className='hf-top'>
+          <button
+            type='button'
+            className='btn ghost hf-nav-toggle'
+            onClick={() => setNavOpen((o) => !o)}
+            aria-label={t('console.shell.toggle_nav', 'toggle navigation')}
+            aria-expanded={navOpen}
+            style={{ fontSize: 14, padding: '0 8px', marginRight: 4 }}
+          >
+            <LuMenu size={16} aria-hidden='true' />
+          </button>
           <div className='crumb'>
             {crumbs.map((c, i) => (
               <React.Fragment key={i}>

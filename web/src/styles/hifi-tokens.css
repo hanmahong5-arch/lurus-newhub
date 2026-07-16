@@ -16,13 +16,30 @@
   --hf-rule-strong: #b8b09a;
   --hf-ink: #1a1812;
   --hf-ink-2: #4a463c;
-  --hf-ink-3: #807a6a;
-  --hf-ink-4: #b3ad9c;
+  /* ink-3/ink-4 darkened from #807a6a/#b3ad9c (measured 3.79:1 / 1.99:1
+   * against --hf-bg, below WCAG AA) — WCAG relative-luminance recomputed:
+   * ink-3 ≈ 6.10:1 (passes 4.5:1 body-text threshold), ink-4 ≈ 4.20:1
+   * (passes the ≥3:1 large-text/decorative threshold ink-4 is used for). */
+  --hf-ink-3: #5f5a4d;
+  --hf-ink-4: #79735f;
 
   --hf-accent: #ff5d1f;
+  /* Text-only accent variant — #ff5d1f measured 2.72:1 against --hf-bg,
+   * below AA. `--hf-accent` itself stays untouched (buttons/dots/borders
+   * keep the brand hue); only `.hf .acc` (accent used as body text) reads
+   * this darker value, recomputed ≈ 4.87:1. */
+  --hf-accent-text: #b8420f;
+  /* Soft accent-tinted panel background — Dashboard's onboarding banner
+   * previously hardcoded `rgba(201,122,62,0.06)` directly. */
+  --hf-accent-bg: rgba(255, 93, 31, 0.06);
   --hf-accent-2: #2d4a8a;
   --hf-ok: #1f7a4f;
   --hf-warn: #b06b00;
+  /* Soft warn-tinted panel background — previously 3 call sites hardcoded
+   * `var(--hf-amber, #d97706)` / `var(--hf-amber-bg, rgba(217,119,6,.08))`,
+   * a token that was never defined anywhere, so the fallback hex always
+   * won and never flipped with [data-theme='dark']. */
+  --hf-warn-bg: rgba(176, 107, 0, 0.08);
   --hf-err: #b3392b;
   --hf-info: #2c5fb0;
 
@@ -54,6 +71,15 @@
   --hf-sp-5: 20px;
   --hf-sp-6: 24px;
   --hf-sp-7: 32px;
+
+  /* Terminal/code-snippet surface (Dashboard onboarding `<pre>` block) —
+   * intentionally does NOT redefine under [data-theme='dark']: it's a
+   * fixed "always-dark readout" the same way a code editor gutter usually
+   * stays dark regardless of the app chrome's theme. Named as a token
+   * (rather than the previous bare `#0a0908`/`#e8e3d4` literals) so it's
+   * documented and passes the "no literal hex in pages/v2/**" grep gate. */
+  --hf-code-bg: #0a0908;
+  --hf-code-ink: #e8e3d4;
 }
 
 [data-theme='dark'] {
@@ -66,12 +92,19 @@
   --hf-ink: #f4f1e8;
   --hf-ink-2: #cfcbbd;
   --hf-ink-3: #8a8576;
-  --hf-ink-4: #56514a;
+  /* ink-4 dark was #56514a ≈ 2.53:1 against dark --hf-bg (below the ≥3:1
+   * decorative floor) — recomputed lighter value ≈ 3.40:1. */
+  --hf-ink-4: #6b6459;
 
   --hf-accent: #ff7a3a;
+  /* Dark-theme accent already clears AA for text (≈7.67:1 against the
+   * near-black dark bg), so the text-only variant mirrors --hf-accent. */
+  --hf-accent-text: #ff7a3a;
+  --hf-accent-bg: rgba(255, 122, 58, 0.08);
   --hf-accent-2: #6e9aff;
   --hf-ok: #5acc92;
   --hf-warn: #e0a040;
+  --hf-warn-bg: rgba(224, 160, 64, 0.12);
   --hf-err: #ee6f5e;
   --hf-info: #7aaef5;
 
@@ -114,7 +147,7 @@
   color: var(--hf-ink);
 }
 .hf .acc {
-  color: var(--hf-accent);
+  color: var(--hf-accent-text);
 }
 
 .hf .btn {
@@ -165,7 +198,8 @@
   filter: brightness(1.05);
 }
 .hf .btn.sm {
-  height: 22px;
+  /* Was 22px — below the WCAG 2.5.8 24px minimum touch target. */
+  height: 28px;
   padding: 0 8px;
   font-size: 10px;
 }
@@ -296,6 +330,12 @@
   border-radius: 2px;
 }
 
+/* Wraps every `table.t` so wide tables scroll horizontally instead of
+ * blowing out the page on narrow viewports (no breakpoint previously
+ * protected these). */
+.hf-table-scroll {
+  overflow-x: auto;
+}
 .hf table.t {
   width: 100%;
   border-collapse: collapse;
@@ -624,10 +664,242 @@
   color: #fff;
 }
 
+/* ── Skeleton shimmer ────────────────────────────────────────────────────
+ * Shared loading placeholder for table/panel rows — replaces plain
+ * "Loading…" text so forced-wait states don't cause a content jump when
+ * the real rows mount. Pure CSS, respects prefers-reduced-motion below. */
+.hf .hf-skeleton {
+  display: block;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--hf-sunken) 25%,
+    var(--hf-rule) 37%,
+    var(--hf-sunken) 63%
+  );
+  background-size: 400% 100%;
+  animation: hf-skeleton-shimmer 1.4s ease infinite;
+}
+@keyframes hf-skeleton-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+.hf .hf-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: var(--hf-sp-4);
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--hf-rule);
+}
+.hf .hf-skeleton-row .hf-skeleton {
+  height: 12px;
+}
+
+/* ── Toast primitive ─────────────────────────────────────────────────────
+ * `.hf` scope replacement for the Semi UI Toast (see HfToast.jsx) — keeps
+ * the editorial aesthetic instead of an ant-design-flavoured popup. */
+.hf-toast-host {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.hf-toast-host .hf-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  font-family: var(--hf-sans);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--hf-ink);
+  background: var(--hf-elev);
+  border: 1px solid var(--hf-rule);
+  border-left: 3px solid var(--hf-ink-4);
+  border-radius: 2px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  animation: hf-toast-in 0.15s ease;
+}
+.hf-toast-host .hf-toast.ok {
+  border-left-color: var(--hf-ok);
+}
+.hf-toast-host .hf-toast.err {
+  border-left-color: var(--hf-err);
+}
+.hf-toast-host .hf-toast.warn {
+  border-left-color: var(--hf-warn);
+}
+.hf-toast-host .hf-toast.info {
+  border-left-color: var(--hf-info);
+}
+.hf-toast-host .hf-toast .msg {
+  flex: 1;
+  word-break: break-word;
+}
+.hf-toast-host .hf-toast .close {
+  border: none;
+  background: transparent;
+  color: var(--hf-ink-3);
+  cursor: pointer;
+  font-family: var(--hf-mono);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px;
+  min-width: 20px;
+  min-height: 20px;
+}
+.hf-toast-host .hf-toast .close:hover {
+  color: var(--hf-ink);
+}
+@keyframes hf-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Minimal Suspense fallback (v2 route group) ──────────────────────────
+ * Distinct from the app-wide Loading.jsx (Semi Spin) so code-split v2
+ * chunks don't flash non-hi-fi chrome while loading. */
+.hf-route-fallback {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--hf-bg);
+  color: var(--hf-ink-3);
+  font-family: var(--hf-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+/* ── Responsive breakpoints ──────────────────────────────────────────────
+ * `.hf-shell` previously had a single fixed 224px-sidebar/100vh layout with
+ * zero breakpoints, so tablet/narrow windows mis-rendered (sidebar never
+ * yields, no horizontal-scroll escape for wide tables — the latter is
+ * handled above by `.hf-table-scroll`). Two tiers:
+ *   641–960px — sidebar collapses to an icon-only rail (56px)
+ *   ≤ 640px   — sidebar becomes an off-canvas drawer, toggled by the
+ *               `.hf-nav-toggle` hamburger button rendered in the topbar */
+.hf-nav-toggle {
+  display: none;
+}
+.hf-nav-backdrop {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .hf-shell {
+    grid-template-columns: 56px 1fr;
+  }
+  .hf-side {
+    padding: 14px 6px;
+    overflow-y: auto;
+  }
+  .hf-side .brand {
+    justify-content: center;
+    padding: 4px 0 16px;
+  }
+  .hf-side .brand-text,
+  .hf-side .nav-h,
+  .hf-side .nav-label,
+  .hf-side .nav-i .nav-badge,
+  .hf-side .search-label,
+  .hf-side .kbd,
+  .hf-side .footer {
+    display: none;
+  }
+  .hf-side .nav-i {
+    justify-content: center;
+    padding: 8px 0;
+  }
+  .hf-side .nav-i .nav-glyph {
+    width: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .hf-shell {
+    grid-template-columns: 1fr;
+  }
+  .hf-nav-toggle {
+    display: inline-flex;
+  }
+  .hf-side {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 224px;
+    z-index: 41;
+    transform: translateX(-100%);
+    transition: transform 0.18s ease;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.28);
+  }
+  .hf-shell.nav-open .hf-side {
+    transform: translateX(0);
+  }
+  .hf-shell.nav-open .hf-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 40;
+  }
+  /* Re-show the labels the ≤960px tier hid — the drawer is full-width so
+   * there is room again. */
+  .hf-side .brand {
+    justify-content: flex-start;
+    padding: 4px 4px 16px;
+  }
+  .hf-side .brand-text,
+  .hf-side .nav-h,
+  .hf-side .nav-label,
+  .hf-side .nav-i .nav-badge,
+  .hf-side .search-label,
+  .hf-side .kbd,
+  .hf-side .footer {
+    display: block;
+  }
+  .hf-side .nav-i {
+    justify-content: flex-start;
+    padding: 5px 8px;
+  }
+  .hf-page-head {
+    padding: 18px 16px 14px;
+  }
+  .hf-page-head h1 {
+    font-size: 26px;
+  }
+  .hf-page-body {
+    padding: var(--hf-sp-4) var(--hf-sp-4);
+  }
+}
+
 /* Respect users who ask for reduced motion — the live pulse becomes a static
  * dot and transitions are neutralized. */
 @media (prefers-reduced-motion: reduce) {
   .hf .live-dot {
+    animation: none;
+  }
+  .hf .hf-skeleton {
+    animation: none;
+  }
+  .hf-toast-host .hf-toast {
     animation: none;
   }
   .hf *,

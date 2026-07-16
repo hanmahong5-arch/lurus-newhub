@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { lazy, Suspense, useContext, useMemo } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Loading from './components/common/ui/Loading';
+import HfRouteFallback from './components/hifi/HfRouteFallback';
 import User from './pages/User';
 import { AuthRedirect, PrivateRoute, AdminRoute } from './helpers';
 import OidcRedirect from './components/auth/OidcRedirect';
@@ -73,9 +74,6 @@ const V2CostIntelligence = lazy(
 );
 const V2ModelPerformance = lazy(
   () => import('./pages/v2/Admin/ModelPerformance'),
-);
-const V2ModelRateLimits = lazy(
-  () => import('./pages/v2/Admin/ModelRateLimits'),
 );
 
 function App() {
@@ -338,7 +336,7 @@ function App() {
         <Route
           path='/console/v2/account-disabled'
           element={
-            <Suspense fallback={<Loading />}>
+            <Suspense fallback={<HfRouteFallback />}>
               <V2AccountDisabled />
             </Suspense>
           }
@@ -365,14 +363,16 @@ function App() {
           ['admin/settings', V2AdminSettings],
           ['admin/cost-intelligence', V2CostIntelligence],
           ['admin/model-performance', V2ModelPerformance],
-          ['admin/model-limits', V2ModelRateLimits],
         ].map(([slug, Component]) => (
           <Route
             key={slug}
             path={`/console/v2/${slug}`}
             element={
               <PrivateRoute>
-                <Suspense fallback={<Loading />} key={location.pathname}>
+                <Suspense
+                  fallback={<HfRouteFallback />}
+                  key={location.pathname}
+                >
                   <Component />
                 </Suspense>
               </PrivateRoute>
