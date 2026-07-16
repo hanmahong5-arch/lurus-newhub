@@ -297,8 +297,28 @@ func withPGAdvisoryLock(ctx context.Context, sqlDB *sql.DB, key int64, fn func()
 		return fmt.Errorf("advisory lock conn: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, key); err != nil {
+	// The lock wait must outlive the DSN-injected statement_timeout (P1-1):
+	// replicas booting together wait here for as long as the holder's
+	// AutoMigrate takes, and Postgres cancelling that wait fatals the pod
+	// (STAGE crash-loop 2026-07-15). SET LOCAL lifts the caps for the wait
+	// only — the session-scoped lock survives commit, and the connection
+	// returns to the pool with its DSN defaults intact.
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("advisory lock tx: %w", err)
+	}
+	for _, q := range []string{`SET LOCAL statement_timeout = 0`, `SET LOCAL lock_timeout = 0`} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("%s: %w", q, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, key); err != nil {
+		_ = tx.Rollback()
 		return fmt.Errorf("acquire advisory lock %d: %w", key, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit advisory lock acquire %d: %w", key, err)
 	}
 	defer func() {
 		_, _ = conn.ExecContext(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, key)

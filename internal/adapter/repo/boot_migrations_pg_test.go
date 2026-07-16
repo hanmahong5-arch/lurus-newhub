@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -91,6 +92,72 @@ func TestWithPGAdvisoryLock_ReleasesOnSameSession(t *testing.T) {
 	}
 	if _, err := conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, key); err != nil {
 		t.Fatalf("cleanup unlock: %v", err)
+	}
+}
+
+// TestWithPGAdvisoryLock_LockWaitOutlivesStatementTimeout reproduces the
+// 2026-07-15 STAGE crash-loop: every pooled connection carries a
+// DSN-injected statement_timeout (P1-1, withStatementTimeout), and a replica
+// waiting on the boot advisory lock longer than that cap was killed by
+// Postgres and died FATAL. The lock wait must survive a cap far shorter than
+// the holder's critical section.
+func TestWithPGAdvisoryLock_LockWaitOutlivesStatementTimeout(t *testing.T) {
+	base := os.Getenv("TEST_POSTGRES_DSN")
+	if base == "" {
+		t.Skip("TEST_POSTGRES_DSN not set; skipping PostgreSQL integration test")
+	}
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		t.Skipf("TEST_POSTGRES_DSN is not URL-form; cannot inject statement_timeout (%v)", err)
+	}
+	q := u.Query()
+	q.Set("statement_timeout", "150")
+	u.RawQuery = q.Encode()
+	db, err := sql.Open("pgx", u.String())
+	if err != nil {
+		t.Fatalf("open capped pool: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Ping(); err != nil {
+		t.Fatalf("ping capped pool: %v", err)
+	}
+
+	// The cap must actually bite on this pool — otherwise the assertions
+	// below pass without exercising the exemption at all.
+	if _, err := db.Exec(`SELECT pg_sleep(0.5)`); err == nil {
+		t.Fatal("statement_timeout=150ms did not cancel pg_sleep(0.5) — harness is not reproducing the boot DSN shape")
+	}
+
+	const key = int64(0x4C486274546D6F73) // "LHbtTmos" — test-only key
+	hold := make(chan struct{})
+	held := make(chan struct{})
+	holderErr := make(chan error, 1)
+	go func() {
+		holderErr <- withPGAdvisoryLock(context.Background(), db, key, func() error {
+			close(held)
+			<-hold
+			return nil
+		})
+	}()
+	<-held
+
+	waiterErr := make(chan error, 1)
+	go func() {
+		waiterErr <- withPGAdvisoryLock(context.Background(), db, key, func() error { return nil })
+	}()
+	// 600ms = 4x the cap; the pre-fix code was already dead at 150ms with
+	// "canceling statement due to statement timeout".
+	select {
+	case err := <-waiterErr:
+		t.Fatalf("waiter returned while lock still held: %v", err)
+	case <-time.After(600 * time.Millisecond):
+	}
+	close(hold)
+	if err := <-holderErr; err != nil {
+		t.Fatalf("holder: %v", err)
+	}
+	if err := <-waiterErr; err != nil {
+		t.Fatalf("lock wait did not survive statement_timeout: %v", err)
 	}
 }
 
