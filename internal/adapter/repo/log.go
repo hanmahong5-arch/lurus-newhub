@@ -332,7 +332,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		params.PromptTokens, params.CompletionTokens)
 	if params.Quota > 0 {
 		// Counter.Add panics on negatives; refund/zero rows must not be recorded.
-		metrics.RecordQuotaConsumed(metricTenant, strconv.Itoa(userId), int64(params.Quota))
+		metrics.RecordQuotaConsumed(metricTenant, int64(params.Quota))
 	}
 
 	if !common.LogConsumeEnabled {

@@ -27,6 +27,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/config"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	hubnats "github.com/LurusTech/lurus-hub/internal/pkg/nats"
 	"github.com/LurusTech/lurus-hub/internal/pkg/search"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
@@ -305,6 +306,7 @@ func run(ctx context.Context, startTime time.Time) error {
 	// Initialize Gin HTTP server
 	engine := gin.New()
 	engine.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
+		metrics.RecordPanic("http")
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{

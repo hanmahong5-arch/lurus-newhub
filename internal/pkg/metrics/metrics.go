@@ -80,15 +80,19 @@ var (
 		[]string{"provider", "model", "type"}, // type: input, output
 	)
 
-	// QuotaConsumed tracks quota consumption
+	// QuotaConsumed tracks quota consumption. Labeled by tenant only: a per-user
+	// label would make the series count grow with the (never-shrinking) user
+	// population × tenants, which unbounds Prometheus cardinality on the relay
+	// hot path. Per-user quota detail lives in the consumption log and audit
+	// trail, not in a metric label.
 	QuotaConsumed = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "quota_consumed_total",
-			Help:      "Total quota consumed",
+			Help:      "Total quota consumed, by tenant",
 		},
-		[]string{"tenant_id", "user_id"},
+		[]string{"tenant_id"},
 	)
 
 	// RetryAttempts counts retry attempts
@@ -397,9 +401,10 @@ func RecordTokens(provider, model string, inputTokens, outputTokens int) {
 	}
 }
 
-// RecordQuotaConsumed records quota consumption
-func RecordQuotaConsumed(tenantID, userID string, quota int64) {
-	QuotaConsumed.WithLabelValues(tenantID, userID).Add(float64(quota))
+// RecordQuotaConsumed records quota consumption for a tenant. Per-user
+// attribution is intentionally not a metric label (see QuotaConsumed).
+func RecordQuotaConsumed(tenantID string, quota int64) {
+	QuotaConsumed.WithLabelValues(tenantID).Add(float64(quota))
 }
 
 // RecordCacheHit records a cache hit or miss for the given cache type. Used to
