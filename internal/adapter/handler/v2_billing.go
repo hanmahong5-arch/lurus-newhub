@@ -129,6 +129,20 @@ func CreateBillingCheckout(c *gin.Context) {
 		return
 	}
 
+	// Record local ownership (order_no -> account_id) so the status poll can
+	// prove the caller owns the order: the platform's status endpoint is
+	// keyed only by order_no and takes no account parameter, so this is the
+	// only place the binding can be captured. A failure here must not fail
+	// the checkout the user already paid to start — log and continue; the
+	// status poll fails closed on a missing record, so the worst case is a
+	// re-poll after the row lands, not a lost order.
+	if result != nil && result.OrderNo != "" {
+		if err := repo.RecordCheckoutOrder(result.OrderNo, accountID, req.AmountCNY, common.GetTimestamp()); err != nil {
+			logger.LogError(c, fmt.Sprintf("record checkout order ownership failed (order_no=%s account=%d): %v",
+				result.OrderNo, accountID, err))
+		}
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
 		"data":    result,
@@ -143,6 +157,36 @@ func GetBillingCheckoutStatus(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": "order_no is required",
+		})
+		return
+	}
+
+	// Ownership gate: the platform status endpoint is keyed only by order_no,
+	// so without this check any authenticated caller could poll another
+	// account's order (amount_cny/status/paid_at) by knowing or enumerating
+	// its order_no. Resolve the caller's linked platform account, then require
+	// a local ownership record that matches. Fail closed when the account is
+	// unlinked or no record exists.
+	accountID := getIdentityAccountID(c)
+	if accountID == 0 {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"message": "platform account not linked",
+		})
+		return
+	}
+	owner, found, err := repo.CheckoutOrderAccount(orderNo)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"message": "checkout status unavailable",
+		})
+		return
+	}
+	if !found || owner != accountID {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "order not found for this account",
 		})
 		return
 	}

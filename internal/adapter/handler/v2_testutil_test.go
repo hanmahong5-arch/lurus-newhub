@@ -208,6 +208,7 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 		v2.POST("/tokens/batch-delete", DeleteTokensV2)
 		v2.PUT("/tokens/:id", UpdateTokenV2)
 		v2.DELETE("/tokens/:id", DeleteTokenV2)
+		v2.POST("/tokens/:id/rotate", RotateTokenV2)
 
 		// Channel routes
 		v2.GET("/channels", ListChannelsV2)
