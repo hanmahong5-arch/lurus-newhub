@@ -39,9 +39,11 @@ func TestRecordTokens(t *testing.T) {
 }
 
 func TestRecordQuotaConsumed(t *testing.T) {
-	RecordQuotaConsumed("tenant1", "user1", 1000)
+	// Tenant-only label: WithLabelValues panics on wrong arity, so this call
+	// also locks the cardinality fix — re-adding a user_id label turns it red.
+	RecordQuotaConsumed("tenant1", 1000)
 
-	quota := testutil.ToFloat64(QuotaConsumed.WithLabelValues("tenant1", "user1"))
+	quota := testutil.ToFloat64(QuotaConsumed.WithLabelValues("tenant1"))
 	if quota != 1000 {
 		t.Errorf("expected quota 1000, got %f", quota)
 	}

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync/atomic"
+
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 )
 
 // panicLogSink is the sink for panic-recovery log lines emitted by the
@@ -16,6 +18,9 @@ import (
 var panicLogSink atomic.Pointer[func(string)]
 
 func logGoroutinePanic(msg string) {
+	// Count every recovered goroutine panic before the test log-sink short
+	// circuit, so the metric reflects production reality regardless of test hooks.
+	metrics.RecordPanic("goroutine")
 	if h := panicLogSink.Load(); h != nil {
 		(*h)(msg)
 		return

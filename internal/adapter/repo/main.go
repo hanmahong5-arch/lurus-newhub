@@ -16,6 +16,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/migration"
 	"github.com/LurusTech/lurus-hub/migrations"
 
@@ -216,6 +217,10 @@ func InitDB() (err error) {
 		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
+		// Expose main-pool saturation (wait_count/wait_duration) on /metrics so
+		// pool exhaustion is alertable instead of surfacing only as latency.
+		metrics.RegisterDBStats("newhub", sqlDB)
+
 		if !common.IsMasterNode {
 			return nil
 		}
@@ -360,6 +365,10 @@ func InitLogDB() (err error) {
 		sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100))
 		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
+
+		// Log-DB pool telemetry under a distinct db_name so it is separable from
+		// the main pool on /metrics.
+		metrics.RegisterDBStats("newhub_log", sqlDB)
 
 		if !common.IsMasterNode {
 			return nil
