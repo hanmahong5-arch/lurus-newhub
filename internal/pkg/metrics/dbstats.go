@@ -21,12 +21,9 @@ func RegisterDBStats(name string, db *sql.DB) {
 	if db == nil {
 		return
 	}
-	c := collectors.NewDBStatsCollector(db, name)
-	if err := prometheus.Register(c); err != nil {
-		if _, dup := err.(prometheus.AlreadyRegisteredError); !dup {
-			// Registration failed for a reason other than "already registered".
-			// DB telemetry is best-effort observability; never fail boot for it.
-			_ = err
-		}
-	}
+	// Best-effort telemetry: re-registering an identical collector (InitDB twice
+	// in a test process) returns AlreadyRegisteredError, and any other failure is
+	// likewise non-fatal — DB telemetry must never fail boot. Both outcomes are
+	// ignored, so no error branching is needed.
+	_ = prometheus.Register(collectors.NewDBStatsCollector(db, name))
 }
