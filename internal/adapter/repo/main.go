@@ -425,6 +425,9 @@ func migrateDB() error {
 		// Per-model rate limits (migration 026) — model dimension of the
 		// business rate limiter (middleware.BusinessModelRateLimit)
 		&entity.ModelRateLimit{},
+		// v2 checkout order ownership (migration 028) — order_no -> account_id
+		// binding that gates GET .../checkout/:order_no/status against IDOR
+		&entity.BillingCheckoutOrder{},
 	)
 	if err != nil {
 		return err
