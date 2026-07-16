@@ -18,6 +18,8 @@ package migration_test
 // and asserts the mirror would pass even if Run()'s real predicate regressed.
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -200,11 +202,12 @@ func TestEmbeddedFS_FirstVersionIsBaseline(t *testing.T) {
 	}
 }
 
-// TestEmbeddedFS_NoPostBaseline documents current state: as of writing
-// there are no 021+ migrations yet (the runner is ready but none shipped).
-// It is a soft documentation checkpoint (t.Logf, never fails) — a forcing
-// function to review the baseline contract when the first 021 lands.
-func TestEmbeddedFS_NoPostBaseline(t *testing.T) {
+// TestEmbeddedFS_PostBaselineAreExecutable is a soft checkpoint (t.Logf, never
+// fails) that lists the post-baseline (021+) migrations — the ones the Runner
+// actually executes. It is a forcing function to eyeball the executable set
+// when reviewing a migration change; the hard contract lives in
+// TestEmbeddedFS_VersionsAreContiguous and the pg-integration count tests.
+func TestEmbeddedFS_PostBaselineAreExecutable(t *testing.T) {
 	versions, err := migration.DiscoverVersions(migrations.FS)
 	if err != nil {
 		t.Fatalf("DiscoverVersions(migrations.FS): %v", err)
@@ -212,7 +215,37 @@ func TestEmbeddedFS_NoPostBaseline(t *testing.T) {
 	const threshold = "020_create_privacy_erasure_requests"
 	for _, v := range versions {
 		if v > threshold {
-			t.Logf("NOTE: post-baseline migration %q exists — update this test and review baseline contract", v)
+			t.Logf("executable post-baseline migration: %q", v)
+		}
+	}
+}
+
+// TestEmbeddedFS_VersionsAreContiguous pins the migration file set structurally
+// without hard-coding its size: the numeric prefixes must be exactly
+// 1, 2, …, N with no gap and no duplicate. This is the safety net for the
+// SSOT-derived count assertions in the pg tests — deriving "want" from the FS
+// makes those tests silently pass if a *.sql file is accidentally deleted (the
+// derived want simply shrinks to match), whereas a deletion here shows up as a
+// gap and fails. Adding migration NNN needs no edit; deleting one breaks it.
+func TestEmbeddedFS_VersionsAreContiguous(t *testing.T) {
+	versions, err := migration.DiscoverVersions(migrations.FS)
+	if err != nil {
+		t.Fatalf("DiscoverVersions(migrations.FS): %v", err)
+	}
+	if len(versions) == 0 {
+		t.Fatal("embedded FS is empty")
+	}
+	for i, v := range versions {
+		prefix, _, ok := strings.Cut(v, "_")
+		if !ok {
+			t.Fatalf("version %q has no NNN_ numeric prefix", v)
+		}
+		n, err := strconv.Atoi(prefix)
+		if err != nil {
+			t.Fatalf("version %q prefix %q is not numeric: %v", v, prefix, err)
+		}
+		if want := i + 1; n != want {
+			t.Fatalf("migration versions are not contiguous at index %d: got %03d (%q), want %03d — a *.sql file is missing or misnumbered", i, n, v, want)
 		}
 	}
 }

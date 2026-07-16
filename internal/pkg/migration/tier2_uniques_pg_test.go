@@ -73,8 +73,8 @@ func TestIntegration025_LegacyGlobalUnique_ConvergesToPerTenant(t *testing.T) {
 	runOnly025(t, db)
 
 	// 24 baselined (001-024) + 025..026 executed = 26.
-	if got := countApplied(t, db); got != 28 {
-		t.Errorf("schema_migrations = %d, want 28 (24 baseline + 025..028)", got)
+	if want, got := expectedFullMigrationCount(t), countApplied(t, db); got != want {
+		t.Errorf("schema_migrations = %d, want %d (all embedded migrations recorded)", got, want)
 	}
 
 	// Both legacy single-column uniques are gone; the composite exists.
@@ -104,8 +104,8 @@ func TestIntegration025_LegacyGlobalUnique_ConvergesToPerTenant(t *testing.T) {
 
 	// Idempotency 1 — a second Runner pass re-records and re-executes nothing.
 	runOnly025(t, db)
-	if got := countApplied(t, db); got != 28 {
-		t.Errorf("after rerun schema_migrations = %d, want 28", got)
+	if want, got := expectedFullMigrationCount(t), countApplied(t, db); got != want {
+		t.Errorf("after rerun schema_migrations = %d, want %d", got, want)
 	}
 
 	// Idempotency 2 — executing the SQL body itself again is a clean no-op
@@ -129,8 +129,8 @@ func TestIntegration025_EmptyDBGuard(t *testing.T) {
 	if tableExists(t, db, "users") {
 		t.Error("025 must not create users (AutoMigrate owns it)")
 	}
-	if got := countApplied(t, db); got != 28 {
-		t.Errorf("schema_migrations = %d, want 28", got)
+	if want, got := expectedFullMigrationCount(t), countApplied(t, db); got != want {
+		t.Errorf("schema_migrations = %d, want %d", got, want)
 	}
 }
 
@@ -150,7 +150,7 @@ func TestIntegration025_PartialUsersTable_ColumnGuardSkips(t *testing.T) {
 	if hasUniqueOnColumns(t, db, "users", "tenant_id", "username") {
 		t.Error("025 must skip a users table without a username column")
 	}
-	if got := countApplied(t, db); got != 28 {
-		t.Errorf("schema_migrations = %d, want 28", got)
+	if want, got := expectedFullMigrationCount(t), countApplied(t, db); got != want {
+		t.Errorf("schema_migrations = %d, want %d", got, want)
 	}
 }
