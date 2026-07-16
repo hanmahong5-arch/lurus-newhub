@@ -95,6 +95,15 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	defer func() { _ = conn.Close() }()
 
+	// Lift the DSN statement_timeout for the whole critical section on this
+	// connection; restored before it returns to the pool. reset is deferred
+	// before lock so it runs after unlock but before conn.Close().
+	reset, err := exemptFromStatementTimeout(ctx, conn)
+	if err != nil {
+		return err
+	}
+	defer reset()
+
 	if err := r.lock(ctx, conn); err != nil {
 		return err
 	}
@@ -162,6 +171,11 @@ func (r *Runner) MarkApplied(ctx context.Context, versions []string) error {
 		return fmt.Errorf("migration: acquire connection: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	reset, err := exemptFromStatementTimeout(ctx, conn)
+	if err != nil {
+		return err
+	}
+	defer reset()
 	if err := r.lock(ctx, conn); err != nil {
 		return err
 	}
@@ -215,31 +229,42 @@ func DiscoverVersions(fsys fs.FS) ([]string, error) {
 	return versions, nil
 }
 
-// lock takes the runner's advisory lock on conn. The wait runs inside a
-// transaction with SET LOCAL statement_timeout/lock_timeout = 0: the boot
-// DSN injects a statement_timeout on every pooled connection (P1-1), and a
-// multi-replica rolling boot routinely waits on this lock longer than that
-// cap — Postgres then cancels the wait and the pod dies FATAL (STAGE
-// crash-loop 2026-07-15). SET LOCAL reverts at commit while the
-// session-scoped advisory lock survives it, so the connection keeps its
-// DSN-injected caps for everything after the wait.
-func (r *Runner) lock(ctx context.Context, conn *sql.Conn) error {
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin lock tx: %w", err)
-	}
-	for _, q := range []string{`SET LOCAL statement_timeout = 0`, `SET LOCAL lock_timeout = 0`} {
-		if _, err := tx.ExecContext(ctx, q); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("%s: %w", q, err)
+// exemptFromStatementTimeout lifts the DSN-injected statement_timeout and
+// lock_timeout (P1-1) on a single dedicated connection for the whole boot
+// migration critical section, returning a reset that restores the DSN
+// defaults before the connection returns to the pool.
+//
+// Boot migrations are not request-path queries and must not be subject to the
+// request-path cap: (1) a replica waits on the advisory lock for as long as a
+// sibling replica's migration takes, which routinely exceeds the cap during a
+// rolling boot and made Postgres cancel the wait -> pod FATAL (STAGE
+// crash-loop 2026-07-15); (2) a legitimate heavy migration (int->BIGINT table
+// rewrite) can exceed it; (3) even the bookkeeping DDL/queries can exceed a
+// tight cap on a slow, contended node. Session-level SET (not SET LOCAL)
+// covers every statement on the connection — lock wait, tracker DDL, applied
+// scan, and each migration tx — and reset() (RESET, run WithoutCancel) returns
+// the connection to the pool with the DSN caps intact so no other borrower is
+// affected.
+func exemptFromStatementTimeout(ctx context.Context, conn *sql.Conn) (reset func(), err error) {
+	for _, q := range []string{`SET statement_timeout = 0`, `SET lock_timeout = 0`} {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			return nil, fmt.Errorf("%s: %w", q, err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, AdvisoryLockID); err != nil {
-		_ = tx.Rollback()
+	return func() {
+		for _, q := range []string{`RESET statement_timeout`, `RESET lock_timeout`} {
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), q)
+		}
+	}, nil
+}
+
+// lock takes the runner's session-scoped advisory lock on conn. The wait is
+// unbounded because the connection has already been exempted from the DSN
+// statement_timeout (see exemptFromStatementTimeout) — a holder that crashes
+// releases the lock when its session ends, so there is no deadlock risk.
+func (r *Runner) lock(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, AdvisoryLockID); err != nil {
 		return fmt.Errorf("acquire advisory lock: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit lock acquire: %w", err)
 	}
 	return nil
 }
@@ -291,19 +316,16 @@ func (r *Runner) applyOne(ctx context.Context, logger *slog.Logger, conn *sql.Co
 		return fmt.Errorf("read %s.sql: %w", version, err)
 	}
 
+	// Runs on the run's dedicated connection, already exempted from the DSN
+	// statement_timeout for the whole critical section (see
+	// exemptFromStatementTimeout) — so a heavy migration (int->BIGINT table
+	// rewrite) is not cancelled mid-rollout. The tx inherits the connection's
+	// session setting.
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-
-	// Migration DDL is exempted from the DSN-injected statement_timeout for
-	// this transaction only: a legitimate heavy migration (e.g. an
-	// int→BIGINT table rewrite) can exceed the cap, and a cancelled DDL
-	// here means a crash-looping rollout.
-	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = 0`); err != nil {
-		return fmt.Errorf("lift statement_timeout: %w", err)
-	}
 
 	if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 		return fmt.Errorf("exec sql: %w", err)

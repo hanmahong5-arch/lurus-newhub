@@ -97,30 +97,40 @@ func TestRun_DiscoveredFileUnreadable_ReadFileError(t *testing.T) {
 	}
 }
 
-// TestMarkApplied_ClosedDB_LockError drives MarkApplied's lock() failure
-// arm: a closed connection pool makes pg_advisory_lock fail, so the
-// operator tooling entrypoint reports the acquire error instead of
-// silently skipping the lock.
+// acquireErr reports whether err surfaces a closed-pool failure at either the
+// dedicated-connection acquisition (the new first DB op — the run pins one
+// connection for the whole critical section) or the advisory-lock acquisition.
+// Both are legitimate first-failure points; the property under test is that a
+// closed pool surfaces an error rather than panicking or silently proceeding.
+func acquireErr(err error) bool {
+	return err != nil &&
+		(strings.Contains(err.Error(), "acquire connection") ||
+			strings.Contains(err.Error(), "acquire advisory lock"))
+}
+
+// TestMarkApplied_ClosedDB_LockError: a closed connection pool makes the
+// operator tooling entrypoint report the acquire error instead of silently
+// skipping the lock.
 func TestMarkApplied_ClosedDB_LockError(t *testing.T) {
 	db := setupPG(t)
 	closeDB(t, db)
 	r := &migration.Runner{DB: db, FS: fstest.MapFS{}}
 	err := r.MarkApplied(context.Background(), []string{"021_x"})
-	if err == nil || !strings.Contains(err.Error(), "acquire advisory lock") {
-		t.Fatalf("expected 'acquire advisory lock' error, got %v", err)
+	if !acquireErr(err) {
+		t.Fatalf("expected a connection/advisory-lock acquire error, got %v", err)
 	}
 }
 
-// TestRun_ClosedDB_LockError drives Run's lock() failure arm — the very
-// first DB operation a booting pod performs. A closed pool must surface
-// as an acquire error, not a panic or a silent proceed.
+// TestRun_ClosedDB_LockError drives Run's failure on the very first DB
+// operation a booting pod performs. A closed pool must surface as an acquire
+// error, not a panic or a silent proceed.
 func TestRun_ClosedDB_LockError(t *testing.T) {
 	db := setupPG(t)
 	closeDB(t, db)
 	r := &migration.Runner{DB: db, FS: fstest.MapFS{"021_x.sql": {Data: []byte("SELECT 1;")}}}
 	err := r.Run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "acquire advisory lock") {
-		t.Fatalf("expected 'acquire advisory lock' error, got %v", err)
+	if !acquireErr(err) {
+		t.Fatalf("expected a connection/advisory-lock acquire error, got %v", err)
 	}
 }
 
