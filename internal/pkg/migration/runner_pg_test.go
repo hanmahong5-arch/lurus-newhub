@@ -84,6 +84,20 @@ func countApplied(t *testing.T, db *sql.DB) int {
 	return n
 }
 
+// expectedFullMigrationCount is the number of schema_migrations rows after a
+// full r.Run() against the real embedded FS: one row per discovered *.sql
+// (baseline recorded + 021+ executed). Deriving it from migrations.FS is the
+// single source of truth — adding migration NNN no longer means hunting down
+// every hard-coded "want N" literal across the pg tests (there were 8).
+func expectedFullMigrationCount(t *testing.T) int {
+	t.Helper()
+	versions, err := migration.DiscoverVersions(migrations.FS)
+	if err != nil {
+		t.Fatalf("discover embedded migrations: %v", err)
+	}
+	return len(versions)
+}
+
 func tableExists(t *testing.T, db *sql.DB, name string) bool {
 	t.Helper()
 	var exists bool
