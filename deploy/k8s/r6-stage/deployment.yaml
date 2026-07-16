@@ -38,12 +38,13 @@ spec:
       containers:
         - name: lurus-newhub
           # Pinned to an immutable digest (was floating "main"). Digest resolved
-          # 2026-07-07 from the registry :main built off main@d7626f42 (PR #38
-          # merge) — repoDigest confirmed via `crictl inspecti` on the R6 node,
-          # and this is exactly what the 3 live STAGE pods now run.
+          # 2026-07-16 from the registry :main built off main@b6d96c91 (PRs #49
+          # boot-lock + #50 isolation guards) — repoDigest confirmed via
+          # `crictl inspecti` on the R6 node. Carries the boot advisory-lock
+          # statement_timeout fix, so a rolling update no longer crash-loops.
           # To roll forward: repull :main, re-resolve the digest, update here.
           # GHCR repository name follows the GitHub repo name (hanmahong5-arch/lurus-newhub).
-          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:ada9ca9386d5c37c75e44dc0cee560c279d94c36429e51cce46f5896bd0ef251
+          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:718f31f7e022ed52ee2e9f389e6f053fe693ff778126dd598b53ed662bc2deab
           imagePullPolicy: IfNotPresent
           # Container hardening (parity with base): no priv-escalation, read-only
           # root FS (writes go to the /data + /tmp emptyDirs below), drop all caps.
@@ -104,7 +105,9 @@ spec:
                   name: lurus-newhub-secrets
                   key: LURUS_WHITELABEL_MASTER_SECRET
             - name: ALLOWED_ORIGINS
-              value: "https://test-newhub.lurus.cn"
+              # identity.lurus.cn is the OIDC issuer (IDENTITY_PUBLIC_URL); its
+              # origin must be allowed for the SSO callback/CORS to work.
+              value: "https://test-newhub.lurus.cn,https://identity.lurus.cn"
             - name: LLM_QUOTA_NATS_ENABLED
               value: "true"
             - name: NATS_URL
