@@ -51,10 +51,10 @@ import (
 // in-cluster responses.
 func validateChannelEgress(channel *repo.Channel) error {
 	if err := app.ValidateOutboundURL(channel.GetBaseURL()); err != nil {
-		return fmt.Errorf("channel base_url rejected: %v", err)
+		return fmt.Errorf("channel base_url rejected: %w", err)
 	}
 	if err := app.ValidateOutboundProxy(channel.GetSetting().Proxy); err != nil {
-		return fmt.Errorf("channel proxy rejected: %v", err)
+		return fmt.Errorf("channel proxy rejected: %w", err)
 	}
 	return nil
 }
