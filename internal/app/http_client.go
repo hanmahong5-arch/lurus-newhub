@@ -123,6 +123,13 @@ func InitHttpClient() {
 		ForceAttemptHTTP2:   true,
 		Proxy:               http.ProxyFromEnvironment, // Support HTTP_PROXY, HTTPS_PROXY, NO_PROXY env vars
 	}
+	// Transport-layer SSRF guard (hardening plan R1): validate the resolved
+	// destination at dial time so a rebinding or NO_PROXY-direct internal target
+	// cannot be reached even though the relay hot path does not re-validate per
+	// request. Set before applyRelayTransportTimeouts so the latter keeps this
+	// DialContext (it only installs its own when DialContext is nil); the dialer
+	// wrapped here already carries RelayDialTimeout.
+	transport.DialContext = newRelayGuardedDialContext(&net.Dialer{Timeout: common.RelayDialTimeout})
 	applyRelayTransportTimeouts(transport)
 
 	if common.RelayTimeout == 0 {

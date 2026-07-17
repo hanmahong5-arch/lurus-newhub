@@ -19,22 +19,35 @@ Effort: S ≤ half a day, M ≤ two days, L larger.
 | #54 | security | SSRF gate on tenant-admin channel egress (`base_url` + proxy) at write time and at the test/fetch sinks; corrected the misleading `#nosec` on the relay path |
 | #55 | observability / scale | dropped the unbounded `user_id` label from `quota_consumed_total`; added DB connection-pool telemetry (`go_sql_*`) and `panics_recovered_total{source}` |
 | #56 | maintainability | single source of truth for the `schema_migrations` count (was 8 hard-coded literals); added a migration-file contiguity guard |
+| #58 | security / obs | max-review self-fixes: closed SSRF bypasses in #54 (`isPrivateIP` missed `0.0.0.0`/`::`/`100.64.0.0/10`; v1 write paths + `FetchModels` unguarded; DNS fail-open; IP-whitelist-mode break; `UpdateChannelV2` lockout; bare-proxy); Grafana `user_id`→`tenant_id`; panic over-count; migration SSOT gaps |
+| #59 | correctness / money | row locks silently dropped — `tx.Set("gorm:query_option","FOR UPDATE")` is a GORM v2 no-op, so `Redeem` (redemption codes) and `GetChannelForUpdate` never locked; switched to `clause.Locking`, added a hermetic DryRun regression test |
+| #60 | security | **R1 shipped** (see below) — transport-layer SSRF dial guard on the default relay/egress client |
 
 ---
 
 ## Roadmap — ranked by leverage
 
-### R1 — SSRF transport-layer dial guard (defeats DNS rebinding) · security · M · leverage 5
-PR #54 validates channel egress at write time and at the admin test/fetch
-sinks, but the relay hot path (`internal/adapter/provider/api_request.go:295`)
-does not re-resolve per request, so a TTL-based DNS-rebinding target that passes
-write-time validation can still be reached at relay time. The robust fix is a
-custom `DialContext` on the shared outbound client that validates the *resolved*
-IP at connection time — this protects every current and future sink at the
-transport layer and cannot be forgotten. Care required: the K8s deployment uses
-`ProxyFromEnvironment` with an egress proxy, so a naive dial-time IP filter would
-validate the proxy's own (private) IP; the guard must be proxy-aware
-(validate the CONNECT target, or only when no proxy applies per `NO_PROXY`).
+### R1 — SSRF transport-layer dial guard (defeats DNS rebinding) · security · M · leverage 5 · ✅ SHIPPED (#60)
+Shipped in `internal/app/relay_dial_guard.go`: the default relay/egress client's
+`DialContext` re-resolves the destination at connection time and refuses internal
+addresses (`common.IsPrivateOrInternalIP`), so a NO_PROXY-direct internal target
+or an already-in-effect DNS rebind is blocked even though the relay hot path does
+not re-validate per request. Proxy-aware as required: the env egress proxy(es) and
+the operator worker (`system_setting.WorkerUrl`) are exempted — a dial to the
+proxy/worker is the egress control point, not the relay destination. Gated on the
+operator's existing `EnableSSRFProtection` policy and honors `AllowPrivateIp`, so
+it enforces exactly the write-time policy at dial time and adds no new failure
+mode relative to the currently-effective config.
+
+Residuals (deliberately not band-aided): (a) explicit per-channel proxy clients
+(http/socks5) are not dial-guarded — their proxy address is validated at write
+time and the proxy is the egress point; (b) non-pinning resolve→dial leaves a
+narrow TOCTOU window vs. a rebind landing between this resolve and the OS dial
+resolve — write-time validation remains the primary gate. Behavior note for the
+owner before deploy: user-configured **notification** sinks (webhook/bark/gotify)
+also ride the default client, so with SSRF protection on (default) a notification
+to an internal address that does NOT route through the operator worker is now
+blocked; the escape hatch is `AllowPrivateIp` or routing via the worker.
 
 ### R2 — Config surface unification · maintainability · L (or S for the rule only) · leverage 3
 Configuration is read three ways: the `config.Config` struct, package-level
