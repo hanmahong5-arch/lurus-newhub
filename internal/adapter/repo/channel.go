@@ -16,6 +16,7 @@ import (
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ChannelInfo is aliased from the canonical definition in domain/entity/channel.go
@@ -430,11 +431,13 @@ func UpdateChannelModels(channelId int, models string) error {
 }
 
 // GetChannelForUpdate fetches a channel within a transaction with row-level lock.
-// On PostgreSQL/MySQL this issues SELECT ... FOR UPDATE; on SQLite it's a no-op
-// but the surrounding transaction still serializes writers.
+// On PostgreSQL this issues SELECT ... FOR UPDATE via clause.Locking (the GORM v2
+// idiom); on SQLite (hermetic test tier) it's a no-op but the surrounding
+// transaction still serializes writers. The legacy tx.Set("gorm:query_option",
+// "FOR UPDATE") form is a silent no-op in GORM v2 and must not be reintroduced.
 func GetChannelForUpdate(tx *gorm.DB, channelId int) (*Channel, error) {
 	var c Channel
-	err := tx.Set("gorm:query_option", "FOR UPDATE").Where("id = ?", channelId).First(&c).Error
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", channelId).First(&c).Error
 	if err != nil {
 		return nil, err
 	}

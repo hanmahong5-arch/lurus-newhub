@@ -10,6 +10,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Redemption = entity.Redemption
@@ -153,7 +154,11 @@ func Redeem(key string, userId int) (quota int, err error) {
 	common.RandomSleep()
 	// Use WithoutTenantIsolation because this function does its own explicit tenant check
 	err = WithoutTenantIsolation(DB).Transaction(func(tx *gorm.DB) error {
-		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(keyCol+" = ?", key).First(redemption).Error
+		// clause.Locking is the GORM v2 idiom for SELECT ... FOR UPDATE. The
+		// legacy tx.Set("gorm:query_option", "FOR UPDATE") is a silent no-op in
+		// v2 (no callback consumes that setting), so the row was never locked
+		// and concurrent redeems of the same code could double-credit quota.
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(keyCol+" = ?", key).First(redemption).Error
 		if err != nil {
 			return errors.New("无效的兑换码")
 		}
