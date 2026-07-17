@@ -122,7 +122,10 @@ func checkRelayEgress(ctx context.Context, addr string, proxyHosts map[string]st
 
 	ips, err := relayEgressLookupIPAddr(ctx, host)
 	if err != nil {
-		return nil // fail-open on resolver error; see doc comment above
+		// Deliberate fail-open: a resolver error means the dial will fail on its
+		// own, and write-time validation is the primary gate; refusing here would
+		// turn transient DNS hiccups into hard relay failures on the hot path.
+		return nil //nolint:nilerr // fail-open on resolver error (see comment above)
 	}
 	for _, ipa := range ips {
 		if common.IsPrivateOrInternalIP(ipa.IP) {
