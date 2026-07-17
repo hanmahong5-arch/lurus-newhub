@@ -294,10 +294,11 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 
 	// #nosec G704 — the request URL derives from channel.BaseURL, which a tenant
 	// admin can set. It is SSRF-validated at write time (CreateChannelV2/
-	// UpdateChannelV2) and at the admin test/fetch sinks; the relay hot path
-	// relies on that gate rather than re-resolving per request. Transport-layer
-	// dial-time IP validation (to also defeat TTL DNS rebinding) is tracked in
-	// the hardening plan.
+	// UpdateChannelV2) and at the admin test/fetch sinks. For channels with no
+	// explicit proxy, the default relay client additionally enforces the SSRF
+	// private-IP policy at dial time (app/relay_dial_guard.go): it re-resolves the
+	// destination and refuses internal addresses, defeating NO_PROXY-direct
+	// internal targets and already-in-effect DNS rebinding.
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
