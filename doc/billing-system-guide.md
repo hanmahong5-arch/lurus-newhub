@@ -42,7 +42,7 @@
 1. **订单防重放**: 唯一 `trade_no = fmt.Sprintf("USR%dNO%s%d", userId, RandomString(6), Unix())`;Webhook 校验 `topup.Status != TopUpStatusPending` 则忽略 (幂等)。
 2. **签名验证**: Stripe `webhook.ConstructEvent(body, signature, secret)`;易支付 `client.Verify(params)`;Creem HMAC-SHA256。
 3. **租户隔离**: Webhook 校验 `user.TenantId == topup.TenantId`。
-4. **行级锁**: `tx.Set("gorm:query_option","FOR UPDATE").Where("trade_no=?",tradeNo).First(&topUp)`。
+4. **行级锁**: `tx.Clauses(clause.Locking{Strength:"UPDATE"}).Where("trade_no=?",tradeNo).First(&topUp)`（GORM v2 惯用法;旧的 `Set("gorm:query_option","FOR UPDATE")` 在 v2 下静默失效不发锁,禁用）。
 
 ## 多产品计费能力评估
 
