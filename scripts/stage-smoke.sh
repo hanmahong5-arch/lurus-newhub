@@ -288,6 +288,65 @@ else
   fail "story-9-1-tier3-audit-drill.sh not found at $DRILL" "Item 4 file missing"
 fi
 
+# --- 10. batch-2 hardening (#54–#61) — channel egress SSRF + validation -----
+
+hdr "batch-2 hardening (#54–#61) — channel egress SSRF + v1/v2 validation"
+# Each case exercises the REJECT path of the v1 admin channel create
+# (POST /api/channel/), so nothing is persisted when the guard fires. NOTE the
+# v1 contract: a validation failure returns HTTP 200 with body success:false
+# (not a 4xx), so we assert the body, not the status code.
+if require_env ADMIN_TOKEN; then
+  _create_channel() {
+    curl -sS --max-time "$CURL_TIMEOUT" \
+      -H "Authorization: Bearer $ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      "$HUB_BASE/api/channel/" -d "$1" 2>/dev/null || echo ""
+  }
+  _is_rejected() {
+    if command -v jq >/dev/null 2>&1; then
+      echo "$1" | jq -e '.success == false' >/dev/null 2>&1
+    else
+      echo "$1" | grep -q '"success":false'
+    fi
+  }
+
+  # #54/#58 — SSRF egress guard: an internal base_url must be refused. The key is
+  # deliberately invalid so that even if SSRF protection were disabled (channel
+  # created), it cannot relay; an accepted create is itself a finding.
+  resp=$(_create_channel '{"channel":{"name":"SMOKE-SSRF-DELETE-ME","key":"sk-smoke-invalid","models":"gpt-4","base_url":"http://169.254.169.254"}}')
+  if _is_rejected "$resp"; then
+    ok "channel with internal base_url (169.254.169.254) refused — SSRF egress guard"
+  else
+    fail "internal base_url was NOT refused" "SSRF protection may be disabled; resp=$(echo "$resp" | head -c 200)"
+  fi
+
+  # #61 (R3) — model-name length: a >255-char model must be refused by the
+  # shared validateChannelContent.
+  long_model=$(head -c 256 /dev/zero | tr '\0' 'm')
+  resp=$(_create_channel "{\"channel\":{\"name\":\"SMOKE-MLEN\",\"key\":\"sk-smoke-invalid\",\"models\":\"$long_model\"}}")
+  if _is_rejected "$resp" && echo "$resp" | grep -q '模型名称过长'; then
+    ok "over-long model name refused — v1/v2 shared validateChannelContent"
+  elif _is_rejected "$resp"; then
+    ok "over-long model name refused (success:false; exact message not matched)"
+  else
+    fail "over-long model name was NOT refused" "resp=$(echo "$resp" | head -c 200)"
+  fi
+
+  # #61 (R3) — VertexAI region: type=41 with no region must be refused. This
+  # rule was v1-only before R3; the smoke proves it is enforced on the current
+  # build's create path.
+  resp=$(_create_channel '{"channel":{"name":"SMOKE-VERTEX","key":"sk-smoke-invalid","models":"gemini-pro","type":41}}')
+  if _is_rejected "$resp" && echo "$resp" | grep -q '部署地区'; then
+    ok "region-less VertexAI channel refused — R3 validation unification"
+  elif _is_rejected "$resp"; then
+    ok "region-less VertexAI channel refused (success:false; exact message not matched)"
+  else
+    fail "region-less VertexAI channel was NOT refused" "resp=$(echo "$resp" | head -c 200)"
+  fi
+else
+  skip "batch-2 hardening (#54–#61)" "ADMIN_TOKEN missing"
+fi
+
 # --- summary --------------------------------------------------------------
 
 echo ""
