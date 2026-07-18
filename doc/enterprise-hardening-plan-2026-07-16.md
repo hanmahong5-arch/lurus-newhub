@@ -59,39 +59,65 @@ adopt the rule "new config goes through `config.Config`" and fold the three
 existing clusters (identity / billing / oidc) opportunistically. The S slice is
 just the lint/review rule + a documented inventory.
 
-### R3 — v1/v2 channel validation divergence · correctness · M · leverage 4
-`CreateChannelV2` (`internal/adapter/handler/v2_channel.go`) inlines its own
-required-field/name-length checks and never calls the v1 `validateChannel`
-(`internal/adapter/handler/channel.go`), whose model-name and VertexAI-region
-rules the v2 path therefore lacks — the two paths already disagree on what a
-valid channel is. Have the v2 handler call the shared `validateChannel` and only
-wrap tenant-scope/RBAC differences around it, so a validation fix lands in one
-place. (The SSRF egress gate added in #54 is already shared via
-`validateChannelEgress` — use the same pattern.)
+### R3 — v1/v2 channel validation divergence · correctness · M · leverage 4 · ✅ SHIPPED (#61)
+Shipped: extracted `validateChannelContent(channel, isAdd)` (settings format,
+model-name length on add, VertexAI region) as the single source; v1
+`validateChannel` = `validateChannelContent` + `validateChannelEgress`
+(behavior-identical) and `CreateChannelV2` calls the same helper, so the v2
+create path now enforces model-length + VertexAI region like v1. Scoped to
+create: `UpdateChannelV2` keeps its merge + gated-egress shape (adding the
+VertexAI check unconditionally on update would re-introduce the #58 lockout for
+a grandfathered channel, and the region field is not updatable via v2 update).
+Egress stays out of the shared helper so each caller keeps its own gate.
 
-### R4 — Decompose the two largest hot-path functions · clarity · M · leverage 4
-`ManageMultiKeys` (`internal/adapter/handler/channel.go`, ~462 lines) mixes
-add/delete/update/reorder with batch validation and cache refresh; its branches
-cannot be unit-tested in isolation. `PostConsumeQuota`
-(`internal/app/quota.go`, ~202 lines) is the settlement path — changing one
-branch means reading the whole function. Split each along its natural seams
-(per-action for the former, compute → persist → notify → audit for the latter)
-with a unit test per seam. Highest editing-risk code, so highest clarity payoff.
+### R4 — Decompose the two largest hot-path functions · clarity · M · leverage 4 · ⏸ DEFERRED (poor risk/reward)
+`ManageMultiKeys` (~462 lines) and `PostConsumeQuota` (~202 lines, settlement).
+Re-assessed 2026-07-18: `PostConsumeQuota` threads state (`err`,
+`localQuotaConsistent`, `advisory`, `totalQuota`) across its phases, so a
+"mechanical" seam split is NOT low-risk — a subtle change on the settlement path
+is a money bug. And the payoff a decomposition usually buys (per-seam
+testability) is already realized: the money path has dedicated tests
+(`post_consume_actual_cost_test.go`, `post_consume_compensation_test.go`,
+`post_consume_settle_test.go`, `advisory_ledger_test.go`, `quota_consume_test.go`).
+A blind refactor here is churn with regression risk for marginal clarity gain —
+do it only when a real edit to these functions is needed, test-first.
 
-### R5 — Error-response taxonomy for handlers · clarity / DX · L · leverage 3
-Handlers emit ~1000 bare `c.JSON(http.Status…)` responses across ~87 files with
-inconsistent body shapes (`success` / `message` / `error` keys vary). The relay
-layer already proves a single error constructor works
-(`internal/app/relay/helper`). Add `common.ApiErrorCode(c, status, code, msg)`
-as the standard shape, lint new bare 4xx/5xx `c.JSON`, and migrate existing
-sites in batches. Improves frontend consumption and support triage.
+### R5 — Error-response taxonomy for handlers · clarity / DX · L · leverage 3 · ⏸ DEFERRED (API-contract risk)
+~1000 bare `c.JSON` sites with varying body shapes. Re-assessed 2026-07-18: this
+is not just churn — changing the error body shape of live endpoints is an
+API-contract change that can break existing consumers (frontend + any API
+clients). Worth doing behind an explicit shape decision + a compatibility pass,
+not as an incidental refactor. Introduce `common.ApiErrorCode` and adopt it for
+NEW handlers first; migrate existing sites only with consumer sign-off.
 
-### R6 — `user_cache.go` debt burndown · reliability · S (inventory) · leverage 2
-`internal/adapter/repo/user_cache.go` concentrates ~15 TODOs on cache
-consistency/invalidation — the highest-risk file to change and the most
-under-documented. Convert the TODOs into tracked tickets and decide each
-(fix vs. accept). Most provider-adapter TODOs elsewhere are vendor-API
-limitations and are low value; do not sweep them in.
+### R6 — `user_cache.go` "debt" · ❌ NOT REAL (roadmap misread, corrected 2026-07-18)
+Re-verified: the "~15 TODOs" in `internal/adapter/repo/user_cache.go` are all
+`context.TODO()` — the Go placeholder-context idiom passed to Redis calls, NOT
+`// TODO` work items. The original grep matched the substring. There is no cache
+consistency/invalidation debt backlog here. Threading a real request-scoped
+context through these helpers (to propagate cancellation to Redis) is a broad
+signature change across many call sites for low value; not worth it. Item closed.
+
+### D5 — Data-analytics depth · ✅ AT CEILING (verified 2026-07-18)
+The uplift plan's R5.1 (per-model/per-tenant p50/p95 latency + error rate) is
+already shipped: `repo.GetModelPerformance` / `GetModelPerformanceV2` returns
+`P50LatencyMs`, `P95LatencyMs`, `ErrorRate`, request/error counts, per-model and
+per-tenant. The only theoretical gap is TTFT (time-to-first-token), which needs
+relay-layer streaming instrumentation + a migration — a feature, not a hardening
+tweak — and p50/p95 total latency is the standard SLO metric. Do not manufacture
+a half-measured TTFT to pad the score.
+
+---
+
+## Loop status (2026-07-18) — code-controllable ceiling reached
+
+Score-driven iteration to date: `#54–#61` shipped the high-leverage
+code-controllable work. Composite enterprise-readiness ≈ **7.2 → ~9.2**. Every
+remaining roadmap item has been re-verified against HEAD: R1/R3 shipped, D5 at
+ceiling, R6 not real, R4/R5 are risky/contract-changing and deliberately
+deferred. The **code-only ceiling is ~9.5** — the residual gap to 10 is
+owner-gated (D4 backup/PG-HA/CD, D6 PROD-ization), below. Pushing the code
+further would be metric-gaming, not product improvement.
 
 ---
 
