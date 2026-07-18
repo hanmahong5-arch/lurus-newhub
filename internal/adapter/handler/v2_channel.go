@@ -321,8 +321,13 @@ func CreateChannelV2(c *gin.Context) {
 		channel.TenantId = "default"
 	}
 
-	// Validate settings if provided
-	if err := channel.ValidateSettings(); err != nil {
+	// Shared vendor/config validation (settings format, model-name length,
+	// VertexAI deployment region) — the same rules the v1 write path enforces via
+	// validateChannel, so the v2 create path no longer diverges (previously it
+	// only checked settings and would accept an over-long model name or a
+	// VertexAI channel with no/invalid region). Egress (SSRF) is validated
+	// separately below; see validateChannelContent for why it is kept out.
+	if err := validateChannelContent(&channel, true); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": err.Error(),

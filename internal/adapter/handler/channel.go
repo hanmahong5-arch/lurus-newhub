@@ -680,8 +680,16 @@ func GetChannelKey(c *gin.Context) {
 	})
 }
 
-// validateChannel 通用的渠道校验函数
-func validateChannel(channel *repo.Channel, isAdd bool) error {
+// validateChannelContent runs the vendor/config validations shared by the v1 and
+// v2 channel write paths: channel-setting format, model-name length (on add), and
+// the VertexAI deployment-region rules. It deliberately EXCLUDES the SSRF egress
+// check (validateChannelEgress): the v2 update path gates egress re-validation to
+// only fire when base_url/proxy actually change, so that a channel which became
+// non-compliant after a policy tightening can still be disabled or renamed rather
+// than being trapped (400 on every mutation). Keeping egress out of this shared
+// helper lets each caller apply the egress gate that fits its update semantics
+// while the content rules stay single-sourced.
+func validateChannelContent(channel *repo.Channel, isAdd bool) error {
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
@@ -715,6 +723,16 @@ func validateChannel(channel *repo.Channel, isAdd bool) error {
 		if regionMap["default"] == nil {
 			return fmt.Errorf("部署地区必须包含default字段")
 		}
+	}
+
+	return nil
+}
+
+// validateChannel 通用的渠道校验函数 (v1 AddChannel/UpdateChannel)。内容校验与
+// v2 handler 共享 validateChannelContent；此处叠加无条件 egress 校验，保持 v1 既有行为。
+func validateChannel(channel *repo.Channel, isAdd bool) error {
+	if err := validateChannelContent(channel, isAdd); err != nil {
+		return err
 	}
 
 	// SSRF guard: the v1 channel write paths (AddChannel/UpdateChannel) funnel
