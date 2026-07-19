@@ -201,6 +201,26 @@ func UpdateRedemption(c *gin.Context) {
 		cleanRedemption.ExpiredTime = redemption.ExpiredTime
 	}
 	if statusOnly != "" {
+		// A used code is terminal. Allowing its status to be reset back to a
+		// redeemable state would let a tenant admin replay it via Redeem() to
+		// mint unlimited quota.
+		if cleanRedemption.Status == common.RedemptionCodeStatusUsed {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "已使用的兑换码状态不可修改",
+			})
+			return
+		}
+		// Only enabled/disabled are settable here; reject unknown values so a
+		// code can never be forced into an out-of-band state.
+		if redemption.Status != common.RedemptionCodeStatusEnabled &&
+			redemption.Status != common.RedemptionCodeStatusDisabled {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "无效的兑换码状态",
+			})
+			return
+		}
 		cleanRedemption.Status = redemption.Status
 	}
 	err = repo.RedemptionUpdate(cleanRedemption)
