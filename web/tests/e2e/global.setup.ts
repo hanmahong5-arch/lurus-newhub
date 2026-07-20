@@ -22,16 +22,21 @@ setup('authenticate via bridge', async ({ page }) => {
   ).toBe(200);
   const user = (await res.json())?.data ?? {};
 
-  // Seed the SPA's client-side auth state on the app origin. Force the routable
-  // slug `lurus` (the bridge reports cosmetic "default").
-  await page.goto('/');
-  await page.evaluate(
+  // Seed the SPA's client-side auth state BEFORE the app boots. Using
+  // addInitScript (not goto-then-evaluate) avoids a race: a fresh SPA at `/`
+  // redirects to /login the instant it sees no `user` in localStorage, which
+  // destroys the execution context out from under a post-navigation evaluate.
+  // Injecting here guarantees the keys exist before any app script runs. Force
+  // the routable slug `lurus` (the bridge reports cosmetic "default").
+  await page.addInitScript(
     ([u, slug]) => {
       window.localStorage.setItem('user', JSON.stringify(u));
       window.localStorage.setItem('tenant_slug', slug as string);
     },
     [user, TENANT_SLUG] as const,
   );
+  await page.goto('/');
+  await page.waitForLoadState('domcontentloaded');
 
   await page.context().storageState({ path: STORAGE_STATE });
 });
