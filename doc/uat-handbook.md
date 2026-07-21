@@ -27,7 +27,7 @@ DoD items enumerated from the Wave-UAT plan. Status as of Sε completion.
 | α6 | Race detector: `go test -race ./...` passes | Audit doc: `_bmad-output/planning-artifacts/test-debt-findings.md` | PASS (Linux CI only) |
 | α7 | internal/app coverage baseline tracked | Baseline captured; gate threshold deferred to α9 | DEFERRED |
 | α8 | Race audit doc committed | `_bmad-output/planning-artifacts/test-debt-findings.md` | PASS |
-| α9 | Coverage gate threshold calibrated | `go-ci.yml` coverage-gate job (18/58/19 at α9; ratcheted to 25/59/19 on 2026-05-31) | PASS |
+| α9 | Coverage gate threshold calibrated | `go-ci.yml` coverage-gate job (18/58/19 at α9; ratcheted to 25/59/19 on 2026-05-31; handler → 48 on 2026-07-20 after measuring hermetic 52.8%) | PASS |
 | β1 | Frontend casing scanner catches camelCase | `web/scripts/check-casing.mjs` (all 18 pages pass) | PASS |
 | β2 | 14 v2 page test files all pass `bun run test` | `web/src/pages/v2/**/*.test.jsx` | PASS |
 | δ1 | Stage rollback script functional | `scripts/stage-rollback.sh` | PASS |
@@ -86,7 +86,7 @@ curl -sf https://test-newhub.lurus.cn/v1/models \
 |------|--------|
 | α7: `internal/app` coverage 19.3% (target 80%) | Target not reachable hermetically — needs a real PG + Redis integration harness. Deferred to a future Wave. |
 | α8: race detector on Windows dev host | GCC unavailable; race detector requires CGO. Run on Linux CI only. |
-| α9: coverage gate thresholds (25/59/19, ratcheted from 18/58/19 on 2026-05-31) | Baseline thresholds, not aspirational; ratchet upward as coverage grows — done 2026-05-31 after measuring app 27.0% / repo 60.9% / handler 20.0%. |
+| α9: coverage gate thresholds (25/59/48, ratcheted from 18/58/19) | Baseline thresholds, not aspirational; ratchet upward as coverage grows. 2026-05-31: app 27.0% / repo 60.9% / handler 20.0% → 25/59/19. 2026-07-20: handler hermetic re-measured at 52.8% (the "20.0%" was ~32pt stale after intervening test growth) + lifted via cover_uplift handler tests → handler gate 19→48. |
 | Sγ: Playwright e2e suite | Deferred — depends on `STAGING_KUBECONFIG` secret being configured and STAGE pod green. |
 | bun audit 404 on local host | npm audit registry unreachable from dev Windows host. Will resolve in CI (ubuntu-latest has network access to npm). |
 | bun audit: 87 transitive-dep CVEs (1 crit / 26 high / 55 mod / 5 low) | Need dep-bump PR (picomatch via vitest/vite/tailwind, mermaid via @lobehub/ui, immutable, react-router, protocol-buffers-schema). CI step is informational (`continue-on-error: true`) until cleanup PR ratchets the level back up. |

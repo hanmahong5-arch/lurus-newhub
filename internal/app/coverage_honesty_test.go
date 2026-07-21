@@ -76,12 +76,14 @@ func TestAppCoverageGate_HonestBaseline(t *testing.T) {
 		t.Fatal("no check_pkg gate lines found in go-ci.yml — coverage gate may have been removed")
 	}
 
-	// Values track go-ci.yml as ratcheted on main 2026-05-31 (actuals
-	// 27.0% / 60.9% / 20.0% per the check_pkg comments there).
+	// Values track go-ci.yml. app/repo ratcheted on main 2026-05-31 (actuals
+	// 27.0% / 60.9%). handler ratcheted 2026-07-20 from 19->48 after measuring
+	// hermetic 52.8% on this base (was ~32pt stale at "20.0%/19"); lifted by the
+	// cover_uplift_{analytics,presets,internal} handler tests.
 	want := map[string]int{
 		"internal/app":             25,
 		"internal/adapter/repo":    59,
-		"internal/adapter/handler": 19,
+		"internal/adapter/handler": 48,
 	}
 	for pkg, w := range want {
 		got, ok := gates[pkg]

@@ -178,7 +178,7 @@ jobs:
 
           check_pkg "internal/app"             25 "internal/app"             # actual 27.0% (2026-05-31); +2pt buffer
           check_pkg "internal/adapter/repo"    59 "internal/adapter/repo"    # actual 60.9%; +1.9pt buffer
-          check_pkg "internal/adapter/handler" 19 "internal/adapter/handler" # actual 20.0%; keep — raising removes margin, lowering forbidden
+          check_pkg "internal/adapter/handler" 48 "internal/adapter/handler" # actual 52.8% (2026-07-20, hermetic -short no-DSN, measured on origin/main base). Prior "20.0%/19" was ~32pt stale below reality; +cover_uplift_{analytics,presets,internal}_test.go lifted 51.1%->52.8% (log/usedata/pricing/prefill/secure-verify/internal-log). 48 = 52.8-4.8pt buffer.
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""
