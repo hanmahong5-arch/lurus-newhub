@@ -21,7 +21,9 @@ test.describe('matrix — admin user management + options + stats', () => {
   test.skip(!BRIDGE_TOKEN, BRIDGE_SKIP);
 
   test('admin users list contains the root seed user', async ({ page }) => {
-    const res = await page.request.get('/api/v2/admin/users?page=1&page_size=20');
+    const res = await page.request.get(
+      '/api/v2/admin/users?page=1&page_size=20',
+    );
     expect(res.ok(), `HTTP ${res.status()}`).toBeTruthy();
     const body = await res.json();
     expect(Array.isArray(body?.data?.users)).toBe(true);
@@ -49,7 +51,9 @@ test.describe('matrix — admin user management + options + stats', () => {
   test('update quota + group round-trip (self), restored afterward', async ({
     page,
   }) => {
-    const before = await page.request.get('/api/v2/admin/users?page=1&page_size=20');
+    const before = await page.request.get(
+      '/api/v2/admin/users?page=1&page_size=20',
+    );
     const beforeUser = ((await before.json())?.data?.users as any[]).find(
       (u) => u.id === 1,
     );
@@ -61,7 +65,10 @@ test.describe('matrix — admin user management + options + stats', () => {
     const put = await page.request.put('/api/v2/admin/users/1', {
       data: { quota: newQuota, group: 'vip' },
     });
-    expect(put.ok(), `PUT: HTTP ${put.status()} ${await put.text()}`).toBeTruthy();
+    expect(
+      put.ok(),
+      `PUT: HTTP ${put.status()} ${await put.text()}`,
+    ).toBeTruthy();
     const updated = (await put.json())?.data;
     expect(updated?.quota).toBe(newQuota);
     expect(updated?.group).toBe('vip');
@@ -86,7 +93,9 @@ test.describe('matrix — admin user management + options + stats', () => {
     expect(body?.success).toBe(false);
     expect(body?.message).toContain('不能降低自己的权限等级');
 
-    const check = await page.request.get('/api/v2/admin/users?page=1&page_size=20');
+    const check = await page.request.get(
+      '/api/v2/admin/users?page=1&page_size=20',
+    );
     const root = ((await check.json())?.data?.users as any[]).find(
       (u) => u.id === 1,
     );
@@ -136,14 +145,19 @@ test.describe('matrix — admin user management + options + stats', () => {
     const put = await page.request.put('/api/v2/admin/options', {
       data: { key: 'ExposeRatioEnabled', value: flipped },
     });
-    expect(put.ok(), `PUT options: HTTP ${put.status()} ${await put.text()}`).toBeTruthy();
+    expect(
+      put.ok(),
+      `PUT options: HTTP ${put.status()} ${await put.text()}`,
+    ).toBeTruthy();
     expect((await put.json())?.success).toBe(true);
 
     const after = await page.request.get('/api/v2/admin/options');
-    const afterFlag = ((await after.json())?.data as Array<{
-      key: string;
-      value: string;
-    }>).find((o) => o.key === 'ExposeRatioEnabled');
+    const afterFlag = (
+      (await after.json())?.data as Array<{
+        key: string;
+        value: string;
+      }>
+    ).find((o) => o.key === 'ExposeRatioEnabled');
     expect(afterFlag?.value).toBe(String(flipped));
 
     // Restore.
@@ -152,10 +166,12 @@ test.describe('matrix — admin user management + options + stats', () => {
     });
     expect(restore.ok()).toBeTruthy();
     const restoreCheck = await page.request.get('/api/v2/admin/options');
-    const restoredFlag = ((await restoreCheck.json())?.data as Array<{
-      key: string;
-      value: string;
-    }>).find((o) => o.key === 'ExposeRatioEnabled');
+    const restoredFlag = (
+      (await restoreCheck.json())?.data as Array<{
+        key: string;
+        value: string;
+      }>
+    ).find((o) => o.key === 'ExposeRatioEnabled');
     expect(restoredFlag?.value).toBe(originalValue);
   });
 
