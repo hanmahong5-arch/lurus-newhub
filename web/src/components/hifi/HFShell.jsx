@@ -252,6 +252,24 @@ const NAV_SECTIONS = [
         key: 'console.nav.admin_users',
         badge: '',
       },
+      // Live circuit-breaker state per channel (this replica).
+      {
+        id: 'admin-gateway',
+        href: '/console/v2/admin/gateway',
+        glyph: '⚡',
+        label: 'Gateway health',
+        key: 'console.nav.admin_gateway',
+        badge: '',
+      },
+      // Audit trail + tamper-evidence chain verifier (migration 024 backend).
+      {
+        id: 'admin-audit',
+        href: '/console/v2/admin/audit',
+        glyph: '⛓',
+        label: 'Audit trail',
+        key: 'console.nav.admin_audit',
+        badge: '',
+      },
       {
         id: 'admin-settings',
         href: '/console/v2/admin/settings',

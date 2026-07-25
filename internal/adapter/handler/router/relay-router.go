@@ -80,6 +80,10 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.EntitlementCheck())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
 	relayV1Router.Use(middleware.BusinessRateLimit())
+	// Occupancy cap (in-flight), complementing the per-minute limits above:
+	// holds a lease for the whole request, so it must wrap everything after it.
+	// Disabled unless RELAY_MAX_CONCURRENT_PER_TOKEN/_PER_TENANT is set.
+	relayV1Router.Use(middleware.RelayConcurrencyLimit())
 	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")
@@ -100,6 +104,9 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/messages", func(c *gin.Context) {
 			handler.Relay(c, types.RelayFormatClaude)
 		})
+		// Free, unmetered size query — same auth/routing/rate-limit chain as
+		// /v1/messages, but never billed (see handler.RelayClaudeCountTokens).
+		httpRouter.POST("/messages/count_tokens", handler.RelayClaudeCountTokens)
 
 		// chat related routes
 		httpRouter.POST("/completions", func(c *gin.Context) {

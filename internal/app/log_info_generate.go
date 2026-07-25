@@ -68,6 +68,14 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		adminInfo["local_count_tokens"] = isLocalCountTokens
 	}
 
+	// Only attach the routing trace when the request actually bounced. A
+	// single-attempt request is already fully described by channel_id, so
+	// writing the trace for all of them would inflate every log row for the
+	// ~99% case that never needs it.
+	if attempts := GetRouteAttempts(ctx); len(attempts) > 1 {
+		adminInfo["route_attempts"] = attempts
+	}
+
 	other["admin_info"] = adminInfo
 	appendRequestPath(ctx, relayInfo, other)
 	return other

@@ -247,6 +247,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	governance.EnrichContext(c, relayInfo.TokenId, relayInfo.OriginModelName)
 
+	// Derive the conversation binding once, after the body is parsed and the
+	// token/group context is populated, so channel selection (and every retry's
+	// re-pin) can read it without re-parsing anything.
+	if affinityKey := app.DeriveSessionAffinityKey(c, request); affinityKey != "" {
+		common.SetContextKey(c, constant.ContextKeySessionAffinity, affinityKey)
+	}
+
 	// Workstream 0: resolve the cross-product attribution tag once, here, so it
 	// reaches both the wallet (PostConsumeQuota, which has no gin.Context) and
 	// the log row (EnrichLogParams). Unknown/absent header → default product.
@@ -334,6 +341,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			metrics.RecordCircuitBreakerRejection(fmt.Sprintf("%d", channel.Id))
 			// O2 (B3): skipping an Open-breaker channel is a failover event.
 			metrics.RecordRelayFailover(constant.GetChannelTypeName(channel.Type), "breaker_open")
+			app.RecordRouteAttempt(c, app.RouteAttempt{
+				ChannelID:   channel.Id,
+				ChannelName: channel.Name,
+				Provider:    constant.GetChannelTypeName(channel.Type),
+				Outcome:     app.RouteAttemptOutcomeBreakerOpen,
+			})
 			logger.LogDebug(c, "circuit breaker open for channel #%d, skipping", channel.Id)
 			continue
 		}
@@ -391,6 +404,25 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			tracing.SetGenAIAttributes(llmSpan,
 				relayInfo.GetEstimatePromptTokens(), 0,
 				costCNY, nil, relayErr)
+		}
+
+		// Trace this attempt on the request's log row: on success it names the
+		// channel that actually served it, on failure it preserves why we moved on
+		// (which is otherwise lost the moment the next attempt starts).
+		{
+			attempt := app.RouteAttempt{
+				ChannelID:   channel.Id,
+				ChannelName: channel.Name,
+				Provider:    providerName,
+				Outcome:     app.RouteAttemptOutcomeSuccess,
+				DurationMs:  time.Since(relayStart).Milliseconds(),
+			}
+			if newAPIError != nil {
+				attempt.Outcome = app.RouteAttemptOutcomeUpstreamErr
+				attempt.ErrorCode = string(newAPIError.GetErrorCode())
+				attempt.StatusCode = newAPIError.StatusCode
+			}
+			app.RecordRouteAttempt(c, attempt)
 		}
 
 		if newAPIError == nil {
@@ -510,6 +542,22 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *app.Ret
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
 	if openaiErr == nil {
+		return false
+	}
+	// Streaming safety gate — MUST stay ahead of every other rule, including the
+	// unconditional channel-error retry below.
+	//
+	// The retry loop in RelayHandler hands the SAME gin.ResponseWriter to each
+	// attempt. Once any byte has been flushed, a retry appends a second complete
+	// response to the client's stream: the consumer sees duplicated/interleaved
+	// SSE frames it cannot un-mix, and the user is billed for both attempts.
+	// The partial output has already left the process, so no upstream can resume
+	// it — the only correct move is to stop and let the caller's error path
+	// surface the failure in-band (see the c.Writer.Written() branch in
+	// RelayHandler's deferred error renderer).
+	if c != nil && c.Writer != nil && c.Writer.Written() {
+		metrics.RecordFailoverSuppressed("stream_already_started")
+		logger.LogDebug(c, "response already streamed (%d bytes); suppressing failover", c.Writer.Size())
 		return false
 	}
 	if types.IsChannelError(openaiErr) {
@@ -747,6 +795,14 @@ func taskRelayHandler(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dto.Tas
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError, retryTimes int) bool {
 	if taskErr == nil {
+		return false
+	}
+	// Same streaming-safety gate as shouldRetry: the async-task relay shares the
+	// single-ResponseWriter retry loop, so a retry after a partial write would
+	// concatenate a second body onto the client's response.
+	if c != nil && c.Writer != nil && c.Writer.Written() {
+		metrics.RecordFailoverSuppressed("stream_already_started")
+		logger.LogDebug(c, "task response already written (%d bytes); suppressing failover", c.Writer.Size())
 		return false
 	}
 	if retryTimes <= 0 {

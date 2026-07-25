@@ -357,6 +357,10 @@ func SetApiV2Router(router *gin.Engine) {
 			// Tamper-evidence hash-chain verification (migration 024).
 			adminRoute.GET("/audit/chain-verify", middleware.CriticalRateLimit(), handler.VerifyAuditChainV2)
 
+			// Live routing health: per-channel circuit-breaker state as this
+			// replica sees it. Read-only and side-effect free.
+			adminRoute.GET("/gateway/health", handler.GetGatewayHealthV2)
+
 			// Model performance analytics + platform-wide usage-log CSV export
 			// (rate-limited: heavy aggregation / bulk row scans over logs).
 			adminRoute.GET("/analytics/model-performance", middleware.CriticalRateLimit(), handler.GetModelPerformanceV2)

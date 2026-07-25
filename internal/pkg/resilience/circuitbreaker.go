@@ -4,6 +4,7 @@ package resilience
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -213,4 +214,61 @@ func (r *Registry) Cleanup(activeChannelIDs map[int]struct{}) {
 			delete(r.breakers, id)
 		}
 	}
+}
+
+// BreakerSnapshot is a read-only view of one channel's breaker, for operator
+// surfaces (admin API / console) that need to answer "which upstreams is the
+// gateway currently refusing to send traffic to, and why".
+type BreakerSnapshot struct {
+	ChannelID int    `json:"channel_id"`
+	State     string `json:"state"`
+	// ConsecutiveFails is the current run of failures; it resets on success.
+	ConsecutiveFails int `json:"consecutive_fails"`
+	// Threshold is the run length that trips the breaker, so a reader can show
+	// "3/5" without knowing the server's configuration.
+	Threshold int `json:"threshold"`
+	// LastFailUnix is 0 when the breaker has never recorded a failure.
+	LastFailUnix int64 `json:"last_fail_unix"`
+	// ProbeEligibleUnix is when an Open breaker becomes eligible for its
+	// half-open probe. NOTE the state field reports the LAST RECORDED state:
+	// an Open breaker past this instant has not transitioned yet — the switch
+	// to HalfOpen happens on the next admission check, because performing it
+	// here would consume the single probe slot for a mere status read.
+	// Zero unless State is "open".
+	ProbeEligibleUnix int64 `json:"probe_eligible_unix,omitempty"`
+}
+
+// Snapshot returns the current state of every known breaker. Side-effect free:
+// it never creates a breaker and never advances a state machine, so polling it
+// cannot change routing behaviour.
+func (r *Registry) Snapshot() []BreakerSnapshot {
+	r.mu.RLock()
+	ids := make([]int, 0, len(r.breakers))
+	brs := make([]*breaker, 0, len(r.breakers))
+	for id, b := range r.breakers {
+		ids = append(ids, id)
+		brs = append(brs, b)
+	}
+	r.mu.RUnlock()
+
+	out := make([]BreakerSnapshot, 0, len(ids))
+	for i, b := range brs {
+		b.mu.Lock()
+		snap := BreakerSnapshot{
+			ChannelID:        ids[i],
+			State:            b.state.String(),
+			ConsecutiveFails: b.consecutiveFails,
+			Threshold:        b.threshold,
+		}
+		if !b.lastFailTime.IsZero() {
+			snap.LastFailUnix = b.lastFailTime.Unix()
+			if b.state == StateOpen {
+				snap.ProbeEligibleUnix = b.lastFailTime.Add(b.timeout).Unix()
+			}
+		}
+		b.mu.Unlock()
+		out = append(out, snap)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ChannelID < out[j].ChannelID })
+	return out
 }
