@@ -60,4 +60,12 @@ const (
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 
 	ContextKeySystemPromptOverride ContextKey = "system_prompt_override"
+
+	// ContextKeySessionAffinity carries the hashed conversation identifier used
+	// to pin multi-turn traffic to one channel. Empty for one-shot requests.
+	ContextKeySessionAffinity ContextKey = "session_affinity_key"
+
+	// ContextKeyRouteAttempts carries the per-attempt routing trace
+	// ([]app.RouteAttempt) assembled during retries and written to the log row.
+	ContextKeyRouteAttempts ContextKey = "route_attempts"
 )

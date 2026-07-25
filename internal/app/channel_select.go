@@ -86,6 +86,24 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
 
+	// Session affinity, first attempt only. A retry means the pinned channel (or
+	// another) just failed us, so the binding has lost its claim — fall straight
+	// through to weighted selection and let the tail of this function re-pin
+	// whatever actually works.
+	affinityKey := common.GetContextKeyString(param.Ctx, constant.ContextKeySessionAffinity)
+	if affinityKey != "" && param.GetRetry() == 0 {
+		if pinned, group := lookupAffinityChannel(param, affinityKey); pinned != nil {
+			return pinned, group, nil
+		}
+	}
+	defer func() {
+		// Re-pin on every successful selection, including after a failover: the
+		// conversation's cache now lives on whichever channel actually served it.
+		if affinityKey != "" && channel != nil && err == nil {
+			affinityStore(param.Ctx, affinityKey, affinityRecord{ChannelID: channel.Id, Group: selectGroup})
+		}
+	}()
+
 	if param.TokenGroup == "auto" {
 		if len(setting.GetAutoGroups()) == 0 {
 			return nil, selectGroup, errors.New("auto groups is not enabled")

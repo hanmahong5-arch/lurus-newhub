@@ -139,6 +139,43 @@ var (
 		[]string{"provider", "reason"},
 	)
 
+	// FailoverSuppressedTotal counts retries that were deliberately NOT attempted
+	// because failing over would have corrupted the client's response. The only
+	// reason today is stream_already_started: bytes were already flushed, so a
+	// second attempt would concatenate a duplicate body onto the same writer.
+	//
+	// Operationally this is a demand signal, not an error: a rising rate means
+	// upstreams are dropping requests MID-STREAM, which retries cannot paper over
+	// and which relay_failover_total structurally cannot show (those requests
+	// never reach a second channel). No provider label — the counter is read as a
+	// gateway-wide rate, and the per-channel attribution already lives on
+	// relay_errors_total.
+	FailoverSuppressedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "relay_failover_suppressed_total",
+			Help:      "Retries suppressed to protect an already-started client response, by reason",
+		},
+		[]string{"reason"},
+	)
+
+	// SessionAffinityTotal tracks conversation-to-channel pinning outcomes.
+	// result: hit (pinned channel reused), miss (no binding yet), stale (binding
+	// existed but the channel is no longer eligible → fell back to weighted
+	// selection). A hit rate that collapses toward zero means bindings are
+	// expiring faster than conversations turn, i.e. the upstream prompt cache is
+	// being paid for repeatedly.
+	SessionAffinityTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "session_affinity_total",
+			Help:      "Session-affinity channel pinning outcomes by result (hit/miss/stale)",
+		},
+		[]string{"result"},
+	)
+
 	// ActiveConnections tracks current active connections
 	ActiveConnections = promauto.NewGauge(
 		prometheus.GaugeOpts{
@@ -389,6 +426,19 @@ func RecordRelayError(provider, model, errorType string) {
 // channel after an upstream failure).
 func RecordRelayFailover(provider, reason string) {
 	RelayFailoverTotal.WithLabelValues(provider, reason).Inc()
+}
+
+// RecordFailoverSuppressed records a retry that was withheld to keep an
+// already-started client response intact. reason is "stream_already_started".
+func RecordFailoverSuppressed(reason string) {
+	FailoverSuppressedTotal.WithLabelValues(reason).Inc()
+}
+
+// RecordSessionAffinity records one affinity lookup outcome: "hit", "miss" or
+// "stale". Called once per first-attempt channel selection that carried a
+// session key.
+func RecordSessionAffinity(result string) {
+	SessionAffinityTotal.WithLabelValues(result).Inc()
 }
 
 // RecordTokens records token usage
