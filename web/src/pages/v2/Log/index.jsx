@@ -46,6 +46,29 @@ const outcomeTag = (r) =>
     ? { cls: 'tag error', label: 'error' }
     : { cls: 'tag ok', label: 'ok' };
 
+// Per-attempt routing trace, written by the relay only when a request bounced
+// across channels (single-attempt requests carry none). It lives under
+// other.admin_info, which the API strips for non-admin callers — so an empty
+// list here means "not applicable or not visible to you", never an error.
+const parseRouteAttempts = (row) => {
+  if (!row?.other) return [];
+  try {
+    const other =
+      typeof row.other === 'string' ? JSON.parse(row.other) : row.other;
+    const attempts = other?.admin_info?.route_attempts;
+    return Array.isArray(attempts) ? attempts : [];
+  } catch (_) {
+    return [];
+  }
+};
+
+const attemptTagClass = (outcome) =>
+  outcome === 'success'
+    ? 'tag ok'
+    : outcome === 'breaker_open'
+      ? 'tag'
+      : 'tag error';
+
 const useTenantSlug = () => {
   const [slug, setSlug] = useState('default');
   useEffect(() => {
@@ -784,6 +807,69 @@ const HFLog = () => {
                       )}
                     </div>
                   </div>
+
+                  {/* Routing trace — only present when the request failed over
+                      between channels. Answers "this request was slow/failed,
+                      what did the gateway actually try?", which the single
+                      channel column cannot. */}
+                  {parseRouteAttempts(selectedLog).length > 0 && (
+                    <div
+                      style={{ padding: '0 20px 20px' }}
+                      data-testid='log-route-attempts'
+                    >
+                      <div className='lbl' style={{ marginBottom: 8 }}>
+                        {tr('console.log.routing', 'routing')}
+                      </div>
+                      <div
+                        className='panel-paper'
+                        style={{
+                          padding: 12,
+                          fontFamily: 'var(--hf-mono)',
+                          fontSize: 11,
+                          lineHeight: 1.7,
+                        }}
+                      >
+                        {parseRouteAttempts(selectedLog).map((a, i) => (
+                          <div
+                            key={`${a.channel_id}-${i}`}
+                            data-testid={`route-attempt-${i}`}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              flexWrap: 'wrap',
+                            }}
+                          >
+                            <span className='muted'>{i + 1}.</span>
+                            <span className='strong'>
+                              #{a.channel_id}
+                              {a.channel_name ? ` ${a.channel_name}` : ''}
+                            </span>
+                            {a.provider && (
+                              <span className='muted'>{a.provider}</span>
+                            )}
+                            <span className={attemptTagClass(a.outcome)}>
+                              {tr(
+                                `console.log.attempt_${a.outcome}`,
+                                a.outcome || 'unknown',
+                              )}
+                            </span>
+                            {a.status_code ? (
+                              <span className='muted'>{a.status_code}</span>
+                            ) : null}
+                            {a.error_code ? (
+                              <span className='faint'>{a.error_code}</span>
+                            ) : null}
+                            <span className='muted'>
+                              {a.duration_ms != null
+                                ? `${a.duration_ms}ms`
+                                : ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 !loading && (

@@ -443,4 +443,97 @@ describe('Log page', () => {
     // upstream column shows "#7" because log.channel is present.
     expect(screen.getByText('#7')).toBeTruthy();
   });
+
+  // ── Routing trace (other.admin_info.route_attempts) ───────────────────────
+  //
+  // The relay writes this only when a request bounced between channels, and the
+  // API strips admin_info for non-admin callers — so the panel must appear for
+  // an admin looking at a failed-over request and stay silent in every other
+  // case, including malformed payloads.
+
+  const logWithOther = (other) => ({
+    id: 1,
+    model_name: 'gpt-4o',
+    token_name: 'tk',
+    prompt_tokens: 10,
+    completion_tokens: 5,
+    quota: 1000,
+    created_at: Math.floor(Date.now() / 1000),
+    channel: 7,
+    type: 1,
+    other,
+  });
+
+  const renderWithLog = (log) => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/logs/stat')) {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { logs: [log], total: 1 } },
+      });
+    });
+    render(<HFLog />);
+  };
+
+  it('renders the routing trace for a request that failed over', async () => {
+    renderWithLog(
+      logWithOther(
+        JSON.stringify({
+          admin_info: {
+            route_attempts: [
+              {
+                channel_id: 3,
+                channel_name: 'primary',
+                provider: 'openai',
+                outcome: 'upstream_error',
+                error_code: 'channel:timeout',
+                status_code: 504,
+                duration_ms: 30000,
+              },
+              {
+                channel_id: 8,
+                channel_name: 'backup',
+                provider: 'openai',
+                outcome: 'success',
+                duration_ms: 910,
+              },
+            ],
+          },
+        }),
+      ),
+    );
+
+    await waitFor(() => screen.getByTestId('log-route-attempts'));
+
+    // The abandoned channel and WHY it was abandoned must both be visible —
+    // that is the entire reason the trace exists.
+    const first = screen.getByTestId('route-attempt-0');
+    expect(first.textContent).toContain('#3');
+    expect(first.textContent).toContain('channel:timeout');
+    expect(first.textContent).toContain('504');
+    expect(first.textContent).toContain('30000ms');
+
+    const second = screen.getByTestId('route-attempt-1');
+    expect(second.textContent).toContain('#8');
+    expect(second.textContent).toContain('910ms');
+  });
+
+  it('omits the routing trace when admin_info is stripped for non-admins', async () => {
+    renderWithLog(logWithOther(JSON.stringify({ model_ratio: 1, frt: 120 })));
+
+    await waitFor(() =>
+      expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByTestId('log-route-attempts')).toBeNull();
+  });
+
+  it('survives a malformed other payload without rendering a trace', async () => {
+    renderWithLog(logWithOther('{not json'));
+
+    await waitFor(() =>
+      expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByTestId('log-route-attempts')).toBeNull();
+  });
 });
