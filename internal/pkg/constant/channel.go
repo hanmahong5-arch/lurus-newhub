@@ -54,7 +54,17 @@ const (
 	ChannelTypeDoubaoVideo    = 54
 	ChannelTypeSora           = 55
 	ChannelTypeReplicate      = 56
-	ChannelTypeDummy          // this one is only for count, do not add any channel after this
+	// ChannelTypePrivateEndpoint is a customer-hosted inference endpoint inside
+	// their own network, speaking the standard OpenAI-compatible API. It is not
+	// a vendor: it is a *posture*. Unlike ChannelTypeCustom (a generic
+	// any-base_url escape hatch), a channel of this type is contractually
+	// forbidden from egressing to a publicly routable address — enforced by
+	// internal/pkg/privateendpoint at both config time and dispatch time. That
+	// enforcement is the whole point of giving it its own type instead of
+	// reusing Custom: "the prompt never leaves your network" becomes a
+	// mechanism the code refuses to violate, not a deployment convention.
+	ChannelTypePrivateEndpoint = 57
+	ChannelTypeDummy           // this one is only for count, do not add any channel after this
 
 )
 
@@ -116,6 +126,10 @@ var ChannelBaseURLs = []string{
 	"https://ark.cn-beijing.volces.com",         //54
 	"https://api.openai.com",                    //55
 	"https://api.replicate.com",                 //56
+	// 57 — private endpoint: intentionally EMPTY. There is no sane public
+	// default for a customer's intranet inference host, and shipping one would
+	// invite a channel that silently points off-premise.
+	"", //57
 }
 
 var ChannelTypeNames = map[int]string{
@@ -172,6 +186,9 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeDoubaoVideo:    "DoubaoVideo",
 	ChannelTypeSora:           "Sora",
 	ChannelTypeReplicate:      "Replicate",
+	// Named for what the buyer cares about (where the data goes), not for a
+	// vendor — this string is what the console badge and audit log show.
+	ChannelTypePrivateEndpoint: "PrivateEndpoint",
 }
 
 func GetChannelTypeName(channelType int) string {

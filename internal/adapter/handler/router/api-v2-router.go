@@ -123,6 +123,18 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantChannels.GET("/:id/upstream-models", handler.FetchUpstreamModelsV2)
 		}
 
+		// Private-routing status — summarises the channel table above into the
+		// one answer a buyer asks ("does our data leave our network?"). Same
+		// admin gate as the channels it reads; registered as a sibling group
+		// rather than inside tenantChannels so the ":id" wildcard above cannot
+		// swallow the path.
+		tenantPrivateRouting := apiV2.Group("/:tenant_slug/private-routing")
+		tenantPrivateRouting.Use(middleware.AdminAuth())
+		tenantPrivateRouting.Use(middleware.TenantSlugGuard())
+		{
+			tenantPrivateRouting.GET("", handler.GetPrivateRoutingStatus)
+		}
+
 		// ================================================================
 		// Tenant-scoped Logs (session auth)
 		// ================================================================

@@ -15,6 +15,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
+	"github.com/LurusTech/lurus-hub/internal/pkg/privateendpoint"
 	"github.com/LurusTech/lurus-hub/internal/pkg/search"
 
 	"github.com/gin-gonic/gin"
@@ -715,6 +716,16 @@ func validateChannel(channel *repo.Channel, isAdd bool) error {
 
 		if regionMap["default"] == nil {
 			return fmt.Errorf("部署地区必须包含default字段")
+		}
+	}
+
+	// 私有推理端点校验：该类型的承诺是"数据不出内网"，因此 base_url 必须指向
+	// 内网地址。公网地址在这里就被拒绝（可操作的错误信息），而不是等到请求
+	// 已经把 prompt 发出去之后才发现配置错了。dispatch 时还有一道 fail-closed
+	// 校验（见 privateendpoint 包注释），因为直接改库可以绕过本函数。
+	if channel.Type == constant.ChannelTypePrivateEndpoint {
+		if err := privateendpoint.ValidateBaseURL(channel.GetBaseURL()); err != nil {
+			return fmt.Errorf("私有推理端点[PrivateEndpoint]配置无效：%w", err)
 		}
 	}
 

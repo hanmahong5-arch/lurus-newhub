@@ -73,6 +73,15 @@ func ChannelType2APIType(channelType int) (int, bool) {
 		apiType = constant.APITypeMiniMax
 	case constant.ChannelTypeReplicate:
 		apiType = constant.APITypeReplicate
+	case constant.ChannelTypePrivateEndpoint:
+		// A customer-hosted endpoint speaks the standard OpenAI-compatible API,
+		// so it reuses the OpenAI adaptor verbatim — same precedent as
+		// ChannelTypeXinference. Mapping it EXPLICITLY (rather than relying on
+		// the `apiType == -1` fallback below) is deliberate: the fallback also
+		// returns success=false, which callers like handler/model.go use to skip
+		// a channel type entirely. An explicit mapping makes the private
+		// endpoint a first-class type that shows up in the model catalogue.
+		apiType = constant.APITypeOpenAI
 	}
 	if apiType == -1 {
 		return constant.APITypeOpenAI, false

@@ -184,6 +184,15 @@ export const CHANNEL_OPTIONS = [
     color: 'blue',
     label: 'Replicate',
   },
+  {
+    // ChannelTypePrivateEndpoint (internal/pkg/constant/channel.go). Not a
+    // vendor — a posture: the customer's own intranet inference server. The
+    // backend refuses to dispatch this channel type to any publicly routable
+    // address, so the label states where the data goes, not who built it.
+    value: 57,
+    color: 'green',
+    label: '私有推理端点（内网自托管）',
+  },
 ];
 
 export const CHANNEL_PRESETS = {
@@ -238,5 +247,12 @@ export const CHANNEL_PRESETS = {
     tip: 'preset_tip_siliconcloud',
   },
 };
+// NOTE: type 57 (private endpoint) intentionally has NO CHANNEL_PRESETS entry.
+// A preset's `tip` is an i18n key, and the locale files are being edited by
+// another session right now — adding a key here without its translation would
+// render the raw key string in the UI. The type still appears in
+// CHANNEL_OPTIONS above (literal label, no i18n dependency), which is what the
+// channel list and the create-channel dropdown read. There is also no useful
+// default base_url to preset: it must be the customer's own intranet host.
 
 export const MODEL_TABLE_PAGE_SIZE = 10;

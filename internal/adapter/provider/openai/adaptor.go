@@ -16,6 +16,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
+	"github.com/LurusTech/lurus-hub/internal/pkg/privateendpoint"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/ai360"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/lingyiwanwu"
@@ -166,6 +167,26 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, requestURL, info.ChannelType), nil
 	//case constant.ChannelTypeMiniMax:
 	//	return minimax.GetRequestURL(info)
+	case constant.ChannelTypePrivateEndpoint:
+		// Dispatch-time egress guard — the load-bearing half of the private
+		// endpoint's promise. Config validation (handler.validateChannel) can be
+		// bypassed by writing the channel row straight into the database (seed
+		// SQL, a DBA, a restored backup), so the check is repeated here on the
+		// path every single request must traverse. Fail CLOSED: if the base URL
+		// is not provably intranet, no request is emitted at all.
+		// Returning an error (rather than logging here) is deliberate: this
+		// method has no request context, and the relay layer already logs and
+		// surfaces adaptor errors. The message names the channel so the
+		// operator can find the offending row.
+		if err := privateendpoint.ValidateBaseURL(info.ChannelBaseUrl); err != nil {
+			return "", fmt.Errorf(
+				"private-endpoint channel %d blocked before dispatch, no request was sent: %w",
+				info.ChannelId, err,
+			)
+		}
+		// A customer-hosted endpoint is a standard OpenAI-compatible server, so
+		// the request path is passed through verbatim — same shape as `default`.
+		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, info.RequestURLPath, info.ChannelType), nil
 	case constant.ChannelTypeCustom:
 		url := info.ChannelBaseUrl
 		url = strings.Replace(url, "{model}", info.UpstreamModelName, -1)
