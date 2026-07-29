@@ -48,6 +48,13 @@ var csvHeader = []string{
 	"log_type",
 	"model_name",
 	"token_name",
+	// Cost attribution (migration 029). Both the id AND the resolved name are
+	// exported: the id is the stable join key for a spreadsheet pivot, while
+	// the name is what a finance reader actually reads — and a project that
+	// gets renamed or retired later would otherwise make an archived export
+	// unreadable. Empty name = the "unassigned" bucket (project_id 0).
+	"project_id",
+	"project_name",
 	"prompt_tokens",
 	"completion_tokens",
 	"quota",
@@ -118,6 +125,8 @@ func ExportLogsV2(c *gin.Context) {
 	tokenName := c.Query("token_name")
 	startTime, _ := strconv.ParseInt(c.DefaultQuery("start_time", "0"), 10, 64)
 	endTime, _ := strconv.ParseInt(c.DefaultQuery("end_time", "0"), 10, 64)
+	// Cost-attribution filter (migration 029); 0 = no filter.
+	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
 
 	maxRows, _ := strconv.Atoi(c.DefaultQuery("max_rows", strconv.Itoa(exportDefaultMaxRows)))
 	if maxRows <= 0 {
@@ -161,6 +170,7 @@ func ExportLogsV2(c *gin.Context) {
 			StartTime: startTime,
 			EndTime:   endTime,
 			TokenName: tokenName,
+			ProjectID: projectID,
 			Offset:    offset,
 			Limit:     batchLimit,
 		}
@@ -174,6 +184,24 @@ func ExportLogsV2(c *gin.Context) {
 			break
 		}
 
+		// Resolve this batch's project names in one tenant-scoped query.
+		// ResolveProjectNames reads through Unscoped(), so rows attributed to
+		// a since-retired project still export with a readable name instead of
+		// silently degrading to a bare integer.
+		projectIDs := make([]int, 0, len(logs))
+		for _, l := range logs {
+			if l.ProjectId > 0 {
+				projectIDs = append(projectIDs, l.ProjectId)
+			}
+		}
+		projectNames, nameErr := repo.ResolveProjectNames(tenantCtx.TenantID, projectIDs)
+		if nameErr != nil {
+			// Non-fatal: the export is still correct and complete without the
+			// human-readable column, and project_id keeps every row joinable.
+			common.SysError("ExportLogsV2: resolve project names: " + nameErr.Error())
+			projectNames = map[int]string{}
+		}
+
 		for _, l := range logs {
 			createdAt := time.Unix(l.CreatedAt, 0).UTC().Format(time.RFC3339)
 			row := []string{
@@ -181,6 +209,8 @@ func ExportLogsV2(c *gin.Context) {
 				strconv.Itoa(l.Type),
 				l.ModelName,
 				l.TokenName,
+				strconv.Itoa(l.ProjectId),
+				projectNames[l.ProjectId],
 				strconv.Itoa(l.PromptTokens),
 				strconv.Itoa(l.CompletionTokens),
 				strconv.Itoa(l.Quota),

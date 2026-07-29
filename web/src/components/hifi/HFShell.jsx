@@ -38,6 +38,7 @@ const PATH_TO_ID = {
   tenants: 'users',
   pricing: 'pricing',
   redemption: 'redemption',
+  projects: 'projects',
   settings: 'settings',
   flows: 'channels',
   states: 'logs',
@@ -206,6 +207,17 @@ const NAV_SECTIONS = [
         glyph: '◈',
         label: 'Redemption',
         key: 'console.nav.redemption',
+        badge: '',
+      },
+      // Cost-attribution projects (migration 029). Lives in the admin section
+      // because creating/renaming/deleting one is tenant-admin gated — reading
+      // the list is open to every member (the Token page's picker needs it).
+      {
+        id: 'projects',
+        href: '/console/v2/projects',
+        glyph: '◫',
+        label: 'Projects',
+        key: 'console.nav.projects',
         badge: '',
       },
       {

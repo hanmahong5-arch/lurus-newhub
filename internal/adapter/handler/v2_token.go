@@ -36,6 +36,10 @@ type tokenView struct {
 	AllowIps           *string  `json:"allow_ips"`
 	Group              string   `json:"group"`
 	Scopes             []string `json:"scopes"` // empty array = no scope restriction (backward compat)
+	// ProjectId is the cost-attribution label (migration 029); 0 = unassigned.
+	// Safe to expose to the token owner: it is not a privilege, and the
+	// project list itself is readable by every user in the tenant.
+	ProjectId int `json:"project_id"`
 }
 
 func toTokenViews(tokens []*repo.Token) []tokenView {
@@ -61,6 +65,7 @@ func toTokenViews(tokens []*repo.Token) []tokenView {
 			AllowIps:           t.AllowIps,
 			Group:              t.Group,
 			Scopes:             scopes,
+			ProjectId:          t.ProjectId,
 		})
 	}
 	return items
@@ -145,6 +150,7 @@ func CreateTokenV2(c *gin.Context) {
 		Scopes             []string `json:"scopes"`               // Relay scope allowlist (empty = unrestricted)
 		RateLimitRPM       int      `json:"rate_limit_rpm"`       // Requests/min ceiling (0 = unlimited)
 		RateLimitTPM       int      `json:"rate_limit_tpm"`       // Tokens/min ceiling (0 = unlimited)
+		ProjectId          int      `json:"project_id"`           // Cost-attribution project (0 = unassigned)
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -202,6 +208,15 @@ func CreateTokenV2(c *gin.Context) {
 		return
 	}
 
+	// Cost attribution (migration 029): the project must belong to the
+	// CALLER'S OWN tenant. Without this check a member could stamp their
+	// spend onto another tenant's project id — there is no foreign key, so
+	// the database would happily store it and the other tenant's report would
+	// silently gain rows it cannot explain.
+	if !validateTokenProject(c, tenantCtx.TenantID, req.ProjectId) {
+		return
+	}
+
 	// Generate token key
 	key, err := app.GenerateTokenKey()
 	if err != nil {
@@ -244,6 +259,7 @@ func CreateTokenV2(c *gin.Context) {
 		Scopes:             scopesNormalized,
 		RateLimitRPM:       req.RateLimitRPM,
 		RateLimitTPM:       req.RateLimitTPM,
+		ProjectId:          req.ProjectId,
 	}
 
 	err = token.Insert()
@@ -326,6 +342,9 @@ func UpdateTokenV2(c *gin.Context) {
 		Scopes             *[]string `json:"scopes"`         // nil = no change; non-nil (incl. []) = replace allowlist
 		RateLimitRPM       *int      `json:"rate_limit_rpm"` // nil = no change; 0 resets to unlimited
 		RateLimitTPM       *int      `json:"rate_limit_tpm"` // nil = no change; 0 resets to unlimited
+		// ProjectId: nil = no change; 0 unassigns. A pointer, not a plain int,
+		// because 0 is a meaningful value here (unassign) rather than "absent".
+		ProjectId *int `json:"project_id"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -422,6 +441,15 @@ func UpdateTokenV2(c *gin.Context) {
 		}
 		token.RateLimitRPM = rpm
 		token.RateLimitTPM = tpm
+	}
+
+	// Cost attribution (migration 029): nil = unchanged, 0 = unassign, and any
+	// other value must resolve inside the CALLER'S OWN tenant.
+	if req.ProjectId != nil {
+		if !validateTokenProject(c, tenantCtx.TenantID, *req.ProjectId) {
+			return
+		}
+		token.ProjectId = *req.ProjectId
 	}
 
 	// Scopes replacement is opt-in: nil = unchanged, non-nil = full replace.

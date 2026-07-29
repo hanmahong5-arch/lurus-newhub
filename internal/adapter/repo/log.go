@@ -687,6 +687,14 @@ func GetUserLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []*L
 		tx = tx.Where("id > ?", params.AfterID)
 	}
 
+	// Cost-attribution filter (migration 029). > 0 only: 0 means "no filter".
+	// NOTE: logs.project_id carries no index by design — see the field comment
+	// in entity/log.go. This filter always runs alongside the tenant/user
+	// clauses, which are indexed, so it narrows an already-bounded scan.
+	if params.ProjectID > 0 {
+		tx = tx.Where("project_id = ?", params.ProjectID)
+	}
+
 	// Count total matching records
 	err = tx.Count(&total).Error
 	if err != nil {
@@ -730,6 +738,11 @@ func GetTenantLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []
 	// Apply username filter
 	if params.Username != "" {
 		tx = tx.Where("username = ?", params.Username)
+	}
+
+	// Cost-attribution filter (migration 029). > 0 only: 0 means "no filter".
+	if params.ProjectID > 0 {
+		tx = tx.Where("project_id = ?", params.ProjectID)
 	}
 
 	// Count total matching records

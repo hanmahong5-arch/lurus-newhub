@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/gin-gonic/gin"
@@ -61,6 +62,11 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 		&repo.Ability{},
 		&repo.Redemption{},
 		&repo.QuotaData{},
+		// Cost-attribution projects (migration 029). AutoMigrate cannot create
+		// the partial unique index (`WHERE deleted_at IS NULL`), so uniqueness
+		// here rests on CreateProject's explicit pre-check — the DDL itself is
+		// proven in internal/pkg/migration/projects_pg_test.go.
+		&entity.Project{},
 	}
 	for _, tbl := range tables {
 		if err := db.AutoMigrate(tbl); err != nil {
@@ -218,6 +224,18 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 		v2.DELETE("/channels/:id", DeleteChannelV2)
 		v2.POST("/channels/:id/test", TestChannelV2)
 		v2.GET("/channels/:id/upstream-models", FetchUpstreamModelsV2)
+
+		// Project routes (cost attribution, migration 029). Route shapes must
+		// mirror api-v2-router.go: /projects/spend is a STATIC sibling of
+		// /projects/:id, so registering them in a different order here would
+		// test a route table production does not have.
+		v2.GET("/projects", ListProjectsV2)
+		v2.GET("/projects/spend", GetProjectSpendV2)
+		v2.GET("/projects/:id", GetProjectV2)
+		v2.POST("/projects", CreateProjectV2)
+		v2.PUT("/projects/:id", UpdateProjectV2)
+		v2.DELETE("/projects/:id", DeleteProjectV2)
+		v2.POST("/projects/:id/restore", RestoreProjectV2)
 
 		// Redemption routes
 		v2.POST("/redeem", RedeemCodeV2)
