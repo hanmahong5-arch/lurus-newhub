@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -92,6 +93,13 @@ func SetupTestDB(t *testing.T) func() {
 		&Task{},
 		&QuotaData{},
 		&Redemption{},
+		// NOTE: AutoMigrate creates `projects` WITHOUT the partial unique
+		// index — GORM cannot express `WHERE deleted_at IS NULL`, so that
+		// index exists only in migration 029. Uniqueness behaviour is proven
+		// against the real DDL in internal/pkg/migration/projects_pg_test.go;
+		// what CreateProject guarantees on every dialect (its explicit
+		// pre-check) is what these repo tests exercise.
+		&entity.Project{},
 	}
 	if err := db.AutoMigrate(tables...); err != nil {
 		t.Fatalf("failed to auto-migrate: %v", err)

@@ -73,6 +73,23 @@ func EnrichLogParams(c *gin.Context, info *relaycommon.RelayInfo, params *entity
 	// Total latency from request start to now.
 	params.TotalLatencyMs = int(time.Since(info.StartTime).Milliseconds())
 
+	// Cost attribution (migration 029): stamp the token's project onto the log
+	// row. This function is THE chokepoint — every RecordConsumeLog call site
+	// in the repo (app/quota.go, relay/compatible_handler.go,
+	// relay/relay_task.go, relay/mjproxy_handler.go) calls it first — so the
+	// attribution is wired in one place rather than six.
+	//
+	// RelayInfo is the primary source because settlement has no gin.Context;
+	// the context read is the fallback for relay paths that assemble a
+	// RelayInfo without genBaseRelayInfo. 0 means unassigned either way, and
+	// unassigned is a legitimate first-class value — never "fix" it to
+	// something non-zero here or the per-project figures stop summing to the
+	// tenant total.
+	params.ProjectId = info.ProjectId
+	if params.ProjectId == 0 && c != nil {
+		params.ProjectId = common.GetContextKeyInt(c, constant.ContextKeyProjectId)
+	}
+
 	// Apply log detail level from user setting.
 	logLevel := info.UserSetting.LogDetailLevel
 	params.LogDetailLevel = logLevel

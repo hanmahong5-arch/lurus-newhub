@@ -44,6 +44,14 @@ type Token struct {
 	// (migration 023) but is NOT yet enforced — see the TPM TODO in
 	// middleware/business_rate_limit.go. 0 = unlimited.
 	RateLimitTPM int `json:"rate_limit_tpm" gorm:"column:tpm_limit;default:0"`
+	// ProjectId attributes this token's spend to a Project (migration 029).
+	// 0 = unassigned (entity.ProjectUnassigned). It is a cost-attribution
+	// label, not an access-control field — see entity/project.go.
+	//
+	// The tag MUST stay byte-identical to repo.Token.ProjectId: both structs
+	// are AutoMigrated, so a divergence makes the two boots fight over the
+	// column definition.
+	ProjectId          int            `json:"project_id" gorm:"not null;default:0"`
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
 

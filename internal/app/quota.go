@@ -676,6 +676,16 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 		debitTenantPool(relayInfo, poolDebit)
 	}
 
+	// PHASE B SEAM (project budget enforcement / chargeback) — NOT IMPLEMENTED.
+	// This is where the post-settlement budget check belongs: after the tenant
+	// pool debit and before Phase 3, with relayInfo.ProjectId (migration 029)
+	// already in scope and poolDebit being the request's actual cost. The
+	// paired pre-request rejection belongs in a middleware.ProjectBudgetGate()
+	// mounted after TokenAuth. Migration 029 deliberately ships NO budget
+	// column: showback (per-project reporting) is what exists today.
+
+
+
 	// Phase 3: Update token quota with compensation on failure.
 	// If token quota update fails, we release the platform pre-auth rather than
 	// settling — prevents double-debit when local state is inconsistent.

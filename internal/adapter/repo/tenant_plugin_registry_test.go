@@ -58,6 +58,8 @@ var registeredModels = []interface{}{
 	&entity.LeaderElection{},
 	&entity.PrivacyErasureRequest{},
 	&entity.ModelRateLimit{},
+	&entity.BillingCheckoutOrder{},
+	&entity.Project{},
 }
 
 // tenantColumnExempt maps a GORM-derived table name (not on
@@ -100,6 +102,11 @@ var tenantColumnExempt = map[string]string{
 		"never used as a query filter",
 	"model_rate_limits": "every read/write in model_rate_limit.go uses an " +
 		`explicit .Where("tenant_id = ?", …) filter — never WithTenantID/GetTenantDB`,
+	"projects": "every read/write in project.go takes tenantID as a mandatory " +
+		`argument and applies it as an explicit .Where("tenant_id = ?", …) ` +
+		"filter (including ResolveProjectNames, whose Unscoped() read would " +
+		"otherwise resolve another tenant's project NAME from a stray id) — " +
+		"no call site routes this table through WithTenantID/GetTenantDB",
 }
 
 // TestTenantPlugin_AllowListCoversEveryRegisteredTenantColumn is the

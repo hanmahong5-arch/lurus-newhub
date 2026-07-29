@@ -53,9 +53,14 @@ type Token struct {
 	// middleware.BusinessRateLimit, 0 = unlimited (migration 023 columns).
 	// Duplicated here because the token create/update handlers bind and
 	// persist through this independent struct.
-	RateLimitRPM int            `json:"rate_limit_rpm" gorm:"column:rpm_limit;default:0"`
-	RateLimitTPM int            `json:"rate_limit_tpm" gorm:"column:tpm_limit;default:0"`
-	DeletedAt    gorm.DeletedAt `gorm:"index"`
+	RateLimitRPM int `json:"rate_limit_rpm" gorm:"column:rpm_limit;default:0"`
+	RateLimitTPM int `json:"rate_limit_tpm" gorm:"column:tpm_limit;default:0"`
+	// ProjectId mirrors domain/entity/token.go (canonical docs live there):
+	// cost-attribution label, 0 = unassigned (migration 029). Duplicated here
+	// because the token create/update handlers bind and persist through this
+	// independent struct — the tag MUST stay byte-identical to the entity one.
+	ProjectId int            `json:"project_id" gorm:"not null;default:0"`
+	DeletedAt gorm.DeletedAt `gorm:"index"`
 }
 
 func (token *Token) Clean() {
@@ -276,9 +281,15 @@ func (token *Token) Update() (err error) {
 			})
 		}
 	}()
+	// NOTE: "project_id" MUST stay in this allow-list. Omitting it does not
+	// fail — it silently drops the write, while the deferred cacheSetToken
+	// above still pushes the NEW value into Redis. The relay would then
+	// attribute spend to the new project until the cache entry expires and
+	// then flip back to the stale DB value: non-deterministic attribution
+	// drift that is close to unreproducible.
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
 		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "scopes",
-		"rpm_limit", "tpm_limit").Updates(token).Error
+		"rpm_limit", "tpm_limit", "project_id").Updates(token).Error
 	return err
 }
 

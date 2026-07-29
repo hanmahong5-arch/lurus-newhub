@@ -437,6 +437,9 @@ func migrateDB() error {
 		// v2 checkout order ownership (migration 028) — order_no -> account_id
 		// binding that gates GET .../checkout/:order_no/status against IDOR
 		&entity.BillingCheckoutOrder{},
+		// Cost-attribution projects (migration 029) — the tenant -> project ->
+		// token dimension. A label, not a permission boundary (entity/project.go)
+		&entity.Project{},
 	)
 	if err != nil {
 		return err

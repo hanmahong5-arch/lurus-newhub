@@ -128,6 +128,14 @@ func GenerateTokenKey() (string, error) {
 }
 
 // BuildCleanToken creates a sanitized Token struct for insertion.
+//
+// ProjectId is DELIBERATELY ABSENT from this allow-list, and must stay absent.
+// Project assignment is v2-only: the v2 handler validates the id against the
+// caller's own tenant before persisting it. The v1 handlers (handler/token.go
+// AddToken / UpdateToken) bind the WHOLE request body into a repo.Token with
+// no tenant validation whatsoever — this allow-list is the only thing keeping
+// an attacker-supplied field out of the row. "Completing" the list here would
+// open an unvalidated cross-tenant project assignment.
 func BuildCleanToken(userId int, tenantId string, token *repo.Token, key string) repo.Token {
 	return repo.Token{
 		UserId:             userId,
@@ -152,6 +160,10 @@ func BuildCleanToken(userId int, tenantId string, token *repo.Token, key string)
 
 // ApplyTokenUpdate copies update fields from the source token to the target.
 // Returns the updated target token.
+//
+// ProjectId is DELIBERATELY ABSENT here for the same reason as in
+// BuildCleanToken above: the v1 update path performs no tenant validation on
+// the bound body, so project re-assignment stays v2-only.
 func ApplyTokenUpdate(target *repo.Token, source *repo.Token) {
 	target.Name = source.Name
 	target.ExpiredTime = source.ExpiredTime

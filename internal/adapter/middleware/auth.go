@@ -487,6 +487,12 @@ func TokenAuth() func(c *gin.Context) {
 		if err != nil {
 			return
 		}
+		// PHASE B SEAM (project budget enforcement / chargeback) — NOT
+		// IMPLEMENTED. The pre-request rejection belongs in a separate
+		// middleware.ProjectBudgetGate() mounted AFTER TokenAuth on the relay
+		// routes, reading constant.ContextKeyProjectId set just above; the
+		// paired post-settlement check is marked in app.PostConsumeQuota.
+		// Migration 029 is showback only and ships no budget column.
 		c.Next()
 	}
 }
@@ -511,6 +517,12 @@ func SetupContextForToken(c *gin.Context, token *repo.Token, parts ...string) er
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
+	// Cost attribution (migration 029): carry the token's project into the
+	// request so every consume-log row this request produces can be stamped
+	// with it. 0 = unassigned. This is the ONLY place project attribution
+	// enters the relay path — a log row that misses it is permanently
+	// unattributable, so it must not be conditional on anything.
+	common.SetContextKey(c, constant.ContextKeyProjectId, token.ProjectId)
 	// Carry identity account ID from token for platform billing (if not already set by session auth).
 	if token.IdentityAccountID > 0 {
 		if _, exists := c.Get("identity_account_id"); !exists {

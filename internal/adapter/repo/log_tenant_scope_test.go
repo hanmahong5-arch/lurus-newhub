@@ -466,3 +466,77 @@ func TestLogWrite_StampsOwnerTenant(t *testing.T) {
 		}
 	})
 }
+
+// TestLogWrite_StampsProjectAttribution guards the last hop of the cost-
+// attribution chain (migration 029):
+//
+//	tokens.project_id -> SetupContextForToken -> RelayInfo.ProjectId ->
+//	governance.EnrichLogParams -> RecordConsumeLogParams.ProjectId -> THIS
+//
+// Attribution is write-once: a consume row persisted without its project_id
+// can never be repaired, because nothing else in the row identifies which
+// project the token belonged to AT THE TIME of the request. So the write is
+// asserted directly rather than inferred from the params struct.
+func TestLogWrite_StampsProjectAttribution(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+	f := seedLogScopeFixture(t)
+
+	prevConsume := common.LogConsumeEnabled
+	prevExport := common.DataExportEnabled
+	common.LogConsumeEnabled = true
+	common.DataExportEnabled = false
+	defer func() {
+		common.LogConsumeEnabled = prevConsume
+		common.DataExportEnabled = prevExport
+	}()
+
+	base := RecordConsumeLogParams{
+		ChannelId: 1, PromptTokens: 1, CompletionTokens: 1, ModelName: "model-a",
+		TokenName: "tok-a", TokenId: f.tokenA.Id, Quota: 5, ChannelType: 1,
+	}
+
+	t.Run("tagged token stamps its project on the row", func(t *testing.T) {
+		c := newTenantScopeGinCtx(f.userA.Username, f.tenantA.Id)
+		p := base
+		p.Content = "consume tagged"
+		p.ProjectId = 4242
+		RecordConsumeLog(c, f.userA.Id, p)
+
+		var lg Log
+		if err := LOG_DB.Where("user_id = ? AND content = ?", f.userA.Id, "consume tagged").
+			Order("id desc").First(&lg).Error; err != nil {
+			t.Fatalf("consume log not written: %v", err)
+		}
+		if lg.ProjectId != 4242 {
+			t.Errorf("logs.project_id = %d, want 4242 — attribution cannot be backfilled, "+
+				"so a row written without it is lost forever", lg.ProjectId)
+		}
+	})
+
+	t.Run("untagged token stores 0 (unassigned), never NULL", func(t *testing.T) {
+		c := newTenantScopeGinCtx(f.userA.Username, f.tenantA.Id)
+		p := base
+		p.Content = "consume untagged"
+		RecordConsumeLog(c, f.userA.Id, p)
+
+		var lg Log
+		if err := LOG_DB.Where("user_id = ? AND content = ?", f.userA.Id, "consume untagged").
+			Order("id desc").First(&lg).Error; err != nil {
+			t.Fatalf("consume log not written: %v", err)
+		}
+		if lg.ProjectId != 0 {
+			t.Errorf("logs.project_id = %d, want 0 for an unassigned token", lg.ProjectId)
+		}
+	})
+
+	t.Run("search document carries the project id", func(t *testing.T) {
+		// A field missing from convertLogToSearchLog makes a future
+		// "filter logs by project" return nothing rather than error — a
+		// silent-empty failure with no clue where it came from.
+		doc := convertLogToSearchLog(&Log{Id: 1, ProjectId: 99})
+		if doc.ProjectId != 99 {
+			t.Errorf("search doc ProjectId = %d, want 99", doc.ProjectId)
+		}
+	})
+}

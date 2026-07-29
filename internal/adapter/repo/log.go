@@ -268,6 +268,11 @@ func convertLogToSearchLog(log *Log) *search.Log {
 		RelayMode:        log.RelayMode,
 		UpstreamModel:    log.UpstreamModel,
 		TotalLatencyMs:   log.TotalLatencyMs,
+		// Keep in sync with the DB row: a field missing here makes the
+		// corresponding Meilisearch filter silently return nothing rather
+		// than error, so "search logs by project" would look broken with no
+		// clue why.
+		ProjectId: log.ProjectId,
 	}
 }
 
@@ -384,6 +389,11 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		RequestFingerprint: params.RequestFingerprint,
 		UpstreamModel:      params.UpstreamModel,
 		TotalLatencyMs:     params.TotalLatencyMs,
+		// Cost attribution (migration 029), filled by
+		// governance.EnrichLogParams. 0 = unassigned. This value can never be
+		// backfilled: whatever is written here is the row's attribution
+		// forever.
+		ProjectId: params.ProjectId,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
