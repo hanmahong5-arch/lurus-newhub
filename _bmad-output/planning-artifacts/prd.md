@@ -59,8 +59,8 @@ Lurus API 是一个**多租户 LLM API 网关**，提供统一的 OpenAI 兼容�
 | SC-3 | Supported LLM providers | 30+ | 35+ | Channel type count |
 | SC-4 | Multi-tenant support | Code complete | Production | End-to-end test pass |
 | SC-5 | v2 API endpoint coverage | 26 endpoints | 30+ endpoints | Route count |
-| SC-6 | Test coverage (app/) | ~70% | ≥ 80% | `go test -cover` |
-| SC-7 | Test coverage (adapter/handler/) | ~50% | ≥ 50% | `go test -cover` |
+| SC-6 | Test coverage (app/) | **86.2% ✅ MET** | ≥ 80% | `go test -cover` (CI coverage-gate, main run 30152927620, 2026-07-25) |
+| SC-7 | Test coverage (adapter/handler/) | **52.6% ✅ MET** | ≥ 50% | `go test -cover` (same run) |
 | SC-8 | Active tenants | 1 (default) | 5+ | Tenant table count |
 
 ---

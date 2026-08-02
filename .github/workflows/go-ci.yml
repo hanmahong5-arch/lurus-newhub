@@ -107,12 +107,20 @@ jobs:
   coverage-gate:
     name: coverage gate (app/repo/handler baselines)
     runs-on: ubuntu-latest
-    # Thresholds are CURRENT BASELINE (ratcheted 2026-05-31) — not aspirational.
+    # Thresholds are CURRENT BASELINE (re-ratcheted 2026-08-02) — not aspirational.
     # They prevent regression. Raise them in the same PR that lifts the underlying
     # coverage (ratchet upward, never downward), with a measured before/after in
     # the commit. Each check_pkg line carries the measured actual + its buffer.
     # See Wave-UAT ADR for why the plan's 80/60/50 targets aren't reachable in
     # hermetic tests today.
+    #
+    # A ratchet only protects the gap it actually covers. Before 2026-08-02 the
+    # internal/app line still read 25 against a comment claiming "actual 27.0%"
+    # from 2026-05-31 — but the package had measured 86.2% for months, so
+    # coverage there could have collapsed by SIXTY-ONE points and this job would
+    # still have printed PASS. That is the package holding the quota/billing
+    # money path. All three numbers below are re-derived from CI's own output
+    # (not a local run) so the buffer is honest about cross-platform drift.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -176,9 +184,9 @@ jobs:
             fi
           }
 
-          check_pkg "internal/app"             25 "internal/app"             # actual 27.0% (2026-05-31); +2pt buffer
-          check_pkg "internal/adapter/repo"    59 "internal/adapter/repo"    # actual 60.9%; +1.9pt buffer
-          check_pkg "internal/adapter/handler" 48 "internal/adapter/handler" # actual 52.8% (2026-07-20, hermetic -short no-DSN, measured on origin/main base). Prior "20.0%/19" was ~32pt stale below reality; +cover_uplift_{analytics,presets,internal}_test.go lifted 51.1%->52.8% (log/usedata/pricing/prefill/secure-verify/internal-log). 48 = 52.8-4.8pt buffer.
+          check_pkg "internal/app"             84 "internal/app"             # actual 86.2% on main (CI run 30152927620, 2026-07-25) and 86.2% on PR #67 (run 30447541676); 84 = 86.2-2.2pt buffer. Was 25 with a stale "actual 27.0%" comment — a 61pt hole over the money path.
+          check_pkg "internal/adapter/repo"    62 "internal/adapter/repo"    # actual 63.8% on main (run 30152927620) / 64.3% on PR #67; 62 = 63.8-1.8pt buffer against the LOWER (main) figure. Was 59.
+          check_pkg "internal/adapter/handler" 50 "internal/adapter/handler" # actual 52.6% on main (run 30152927620) and on PR #67; 50 = 52.6-2.6pt buffer. Kept wider than the other two because of the baseline OAuth/JWKS test debt noted on the handler-audit job. Was 48.
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""

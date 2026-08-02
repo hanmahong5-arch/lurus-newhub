@@ -154,7 +154,7 @@ const total = new FinancialAmount(price).multiply(quantity);
 ```
 Requirement → Write Tests (RED) → Write Code (GREEN) → Refactor → Commit
 ```
-- Coverage: app/ ≥ 80%, adapter/repo/ ≥ 60%, adapter/handler/ ≥ 50%
+- Coverage: app/ ≥ 80%, adapter/repo/ ≥ 60%, adapter/handler/ ≥ 50% — **all three MET as of 2026-08-02** (86.2% / 63.8% / 52.6%, CI coverage-gate run 30152927620) and now enforced by `go-ci.yml` thresholds 84/62/50 plus the `TestAppCoverageGate_HonestBaseline` lock
 - Test naming: `Test<Subject>_<Method>_<Behavior>`
 - FORBIDDEN: Writing code before tests
 - Current achievement: backtest engine 85%+ coverage (680+ tests)

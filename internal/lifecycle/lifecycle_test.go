@@ -343,24 +343,30 @@ func TestTickerTask_ErrorInFunction(t *testing.T) {
 func TestTickerTask_ZeroInterval(t *testing.T) {
 	t.Parallel()
 
-	// Zero interval should panic or behave predictably
-	defer func() {
-		if r := recover(); r != nil {
-			// Expected - ticker panics on zero duration
-		}
-	}()
-
-	var counter atomic.Int32
+	// Run builds its ticker straight from the interval with no guard
+	// (lifecycle.go:98) and time.NewTicker panics on a non-positive duration,
+	// so a zero interval is a DETERMINISTIC panic — not "panics, or maybe
+	// doesn't". The previous version of this test accepted either outcome and
+	// therefore passed unconditionally, asserting nothing.
+	//
+	// Pinning the panic is what gives the test value: if Run later grows a
+	// guard that silently substitutes a default interval, a caller that passed
+	// 0 by mistake would get a task quietly running at some other rate instead
+	// of a loud failure. This test forces that to be a deliberate change.
 	task := NewTickerTask("zero-task", 0, func(ctx context.Context) error {
-		counter.Add(1)
 		return nil
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected TickerTask.Run to panic on a zero interval, got no panic")
+		}
+	}()
+
 	_ = task.Run(ctx)
-	// If we get here without panic, that's also acceptable
 }
 
 // Benchmark tests

@@ -8,12 +8,20 @@ package app
 //	"newhub SC-6 test coverage app/ target ≥80% (current ~70%)."
 //	"α9 CI thresholds 18/58/19 in go-ci.yml."
 //
-// CLAUDE.md §4.1①/⑥: the ≥80% figure is ASPIRATIONAL — it is not the gate that
-// actually runs in CI, and go-ci.yml says so in a comment ("the plan's 80/60/50
-// targets aren't reachable in hermetic tests today"). The number that gates a
-// merge is 18 (app) / 58 (repo) / 19 (handler). This test reads the real
-// workflow file and locks those values, so the doc can be reconciled to the
-// gate rather than the gate being silently raised to match a doc.
+// HISTORY — the direction of this lock has been INVERTED (2026-08-02):
+//
+// It was written when ≥80% was aspirational and unreachable hermetically, to
+// stop anyone raising the gate to match a doc without lifting real coverage.
+// That job is done. CI has measured internal/app at 86.2% on main (run
+// 30152927620) and on PR #67 (run 30447541676) — SC-6's ≥80% is MET, as are
+// NFR-6.1's repo ≥60% (63.8%) and handler ≥50% (52.6%).
+//
+// The failure mode worth guarding therefore flipped. It is no longer "gate
+// raised past reality"; it is "reality quietly falls back below the gate".
+// Until 2026-08-02 the app line read 25 against a comment claiming 27.0% from
+// 2026-05-31, so coverage on the package holding the quota/billing money path
+// could have dropped SIXTY-ONE points with CI still printing PASS. The
+// assertion below now holds the gate AT OR ABOVE 80 instead of below it.
 //
 // This is a doc/CI consistency lock. Its subject is the committed
 // .github/workflows/go-ci.yml; its assertion is the literal check_pkg lines.
@@ -58,8 +66,8 @@ func findGoCIWorkflow(t *testing.T) string {
 var checkPkgRe = regexp.MustCompile(`check_pkg\s+"([^"]+)"\s+(\d+)\s+"[^"]+"`)
 
 // TestAppCoverageGate_HonestBaseline asserts the REAL gate values configured in
-// CI, not the aspirational 80. If anyone bumps the gate toward 80 without
-// lifting actual coverage, this lock breaks and forces a conversation.
+// CI. Changing a threshold in go-ci.yml without coming here — and without a
+// measured before/after — breaks this lock and forces a conversation.
 func TestAppCoverageGate_HonestBaseline(t *testing.T) {
 	wf := findGoCIWorkflow(t)
 
@@ -76,14 +84,14 @@ func TestAppCoverageGate_HonestBaseline(t *testing.T) {
 		t.Fatal("no check_pkg gate lines found in go-ci.yml — coverage gate may have been removed")
 	}
 
-	// Values track go-ci.yml. app/repo ratcheted on main 2026-05-31 (actuals
-	// 27.0% / 60.9%). handler ratcheted 2026-07-20 from 19->48 after measuring
-	// hermetic 52.8% on this base (was ~32pt stale at "20.0%/19"); lifted by the
-	// cover_uplift_{analytics,presets,internal} handler tests.
+	// Values track go-ci.yml. Re-ratcheted 2026-08-02 from 25/59/48 against
+	// CI-measured actuals — app 86.2%, repo 63.8%, handler 52.6% (run
+	// 30152927620 on main). Buffers: app -2.2pt, repo -1.8pt, handler -2.6pt
+	// (handler kept widest for the baseline OAuth/JWKS test debt).
 	want := map[string]int{
-		"internal/app":             25,
-		"internal/adapter/repo":    59,
-		"internal/adapter/handler": 48,
+		"internal/app":             84,
+		"internal/adapter/repo":    62,
+		"internal/adapter/handler": 50,
 	}
 	for pkg, w := range want {
 		got, ok := gates[pkg]
@@ -96,12 +104,21 @@ func TestAppCoverageGate_HonestBaseline(t *testing.T) {
 		}
 	}
 
-	// §4.1①: the aspirational 80 is NOT the real app gate. Lock the inequality
-	// so the divergence is explicit and cannot be papered over.
-	const aspirationalSC6 = 80
-	if gates["internal/app"] >= aspirationalSC6 {
-		t.Errorf("app CI gate is %d, which already meets the aspirational %d — update this lock + the SC-6 doc to stop calling 80 'aspirational'",
-			gates["internal/app"], aspirationalSC6)
+	// SC-6 / NFR-6.1 targets, now MET and locked so they cannot be given back.
+	// The old form of this check asserted the opposite (app gate must stay
+	// BELOW 80, because 80 was aspirational); see the inversion note in the
+	// file header for why it flipped.
+	sc6Targets := map[string]int{
+		"internal/app":             80, // SC-6 / NFR-6.1
+		"internal/adapter/repo":    60, // project-context.md coverage line
+		"internal/adapter/handler": 50, // project-context.md coverage line
+	}
+	for pkg, target := range sc6Targets {
+		if gates[pkg] < target {
+			t.Errorf("CI gate for %q is %d, below the %d target that project-context.md records as MET — "+
+				"lowering it silently re-opens a closed commitment; if coverage genuinely regressed, say so in the PR body",
+				pkg, gates[pkg], target)
+		}
 	}
 
 	// Sanity: the workflow must still self-describe these as baselines, not

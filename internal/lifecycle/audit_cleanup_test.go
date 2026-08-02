@@ -49,7 +49,7 @@ func TestRunAuditCleanup_DeletesExpired(t *testing.T) {
 	// Seed retention_until well in the past for "expired" rows and well
 	// in the future for "survives".
 	past := int64(1_000_000) // far past
-	future := int64(1<<62)   // far future
+	future := int64(1 << 62) // far future
 
 	seeds := []entity.AuditEvent{
 		{Action: "expired-a", Timestamp: past - 100, RetentionUntil: past, TenantID: "default"},
