@@ -79,16 +79,89 @@ jobs:
 
       - name: Run Security Tests
         run: |
+          set -uo pipefail
+
+          # ANTI-HOLLOW GUARD — do not remove.
+          #
+          # This whole job selects tests by name with -run. `go test -run <pat>`
+          # exits 0 when the pattern matches NOTHING, so a single rename in any
+          # of these suites silently turns this green while testing nothing.
+          # Same failure class the pg-integration job guards with its
+          # TestIntegrationPGHarness_RealPostgres sentinel.
+          #
+          # Each ALTERNATIVE inside a pattern is asserted separately, which is
+          # the part that actually matters: "JWKS|Zitadel" would still match 22
+          # tests via JWKS alone if every Zitadel test disappeared, so a
+          # whole-pattern count cannot detect a half-dead selector.
+          run_suite() {
+            local pkgs="$1" pattern="$2" label="$3"
+            local alt n total=0
+
+            local old_ifs="$IFS"
+            IFS='|'
+            # shellcheck disable=SC2086 -- word-splitting on | is the point here
+            set -- $pattern
+            IFS="$old_ifs"
+
+            for alt in "$@"; do
+              n=$(go test $pkgs -list "$alt" 2>/dev/null | grep -c '^Test')
+              if [ "$n" -eq 0 ]; then
+                echo "::error::Security suite '${label}': -run alternative '${alt}' matches 0 tests."
+                echo "  go test exits 0 on an empty match, so this job would have reported PASS"
+                echo "  while running nothing for that category. A test was most likely renamed."
+                echo "  Fix the pattern — do not delete this guard."
+                exit 1
+              fi
+              echo "  ${alt}: ${n} tests"
+              total=$((total + n))
+            done
+
+            echo "=== ${label}: ${total} tests matched, running ==="
+            go test -v $pkgs -run "$pattern" -count=1 -timeout=5m || exit 1
+          }
+
           echo "=== Running Security Test Suite ==="
-          go test -v ./internal/adapter/... -run Security -count=1 -timeout=5m
-          go test -v ./internal/adapter/repo/... -run Tenant -count=1 -timeout=5m
-          go test -v ./internal/adapter/handler/... -run Security -count=1 -timeout=5m
-          go test -v ./internal/adapter/middleware/... -run "JWKS|Zitadel" -count=1 -timeout=5m
+          run_suite "./internal/adapter/..."            "Security"        "adapter security"
+          run_suite "./internal/adapter/repo/..."       "Tenant"          "repo tenant isolation"
+          run_suite "./internal/adapter/handler/..."    "Security"        "handler security"
+          run_suite "./internal/adapter/middleware/..." "JWKS|Zitadel"    "middleware key rotation"
 
       - name: Run OAuth Security Tests
         run: |
+          set -uo pipefail
+
+          # Same anti-hollow guard as the step above; see the comment there.
+          # This pattern has five alternatives, so it is the one most likely to
+          # rot silently one name at a time.
+          run_suite() {
+            local pkgs="$1" pattern="$2" label="$3"
+            local alt n total=0
+
+            local old_ifs="$IFS"
+            IFS='|'
+            # shellcheck disable=SC2086 -- word-splitting on | is the point here
+            set -- $pattern
+            IFS="$old_ifs"
+
+            for alt in "$@"; do
+              n=$(go test $pkgs -list "$alt" 2>/dev/null | grep -c '^Test')
+              if [ "$n" -eq 0 ]; then
+                echo "::error::OAuth suite '${label}': -run alternative '${alt}' matches 0 tests."
+                echo "  This job would have reported PASS while running nothing for that category."
+                echo "  Fix the pattern — do not delete this guard."
+                exit 1
+              fi
+              echo "  ${alt}: ${n} tests"
+              total=$((total + n))
+            done
+
+            echo "=== ${label}: ${total} tests matched, running ==="
+            go test -v $pkgs -run "$pattern" -count=1 || exit 1
+          }
+
           echo "=== Running OAuth Security Tests ==="
-          go test -v ./internal/adapter/handler/... -run "PKCE|IDToken|TenantSlug|RedirectURL|OAuthState" -count=1
+          run_suite "./internal/adapter/handler/..." \
+            "PKCE|IDToken|TenantSlug|RedirectURL|OAuthState" "oauth/pkce"
 
       - name: Summary
         if: always()
