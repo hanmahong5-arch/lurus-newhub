@@ -74,21 +74,39 @@ jobs:
         # @douyinfe/semi 2.99, marked 18, i18next 26) were deliberately deferred —
         # they break the build/eslint config and need their own focused stories.
         #
-        # RATCHETED 2026-08-02: `--audit-level critical` -> `high`, which is what
-        # the note here has asked for since the H1 cleanup. Only the 7 moderate
-        # transitives were ever meant to be tolerated (@douyinfe/vite-plugin-semi,
-        # ajv, esbuild, js-yaml, mdast-util-to-hast, uuid, vite — all
-        # upgrade-pending upstream); at `critical` a brand-new HIGH advisory in
-        # any of ~1246 packages merged silently, which is a wide door for a
-        # browser-facing bundle.
+        # RATCHETED 2026-08-02: `--audit-level critical` -> `high`, which this
+        # note has asked for since the H1 cleanup.
         #
-        # CI is the measurement here, deliberately: `bun audit` cannot be run on
-        # the Windows dev host (its endpoint returns 404 there), and the
-        # "0 crit / 0 high" figure above was measured on 2026-05-26 and is far
-        # too stale to ratchet on. If this step goes red, a HIGH advisory has
-        # appeared since then — bump or override the offending package, do NOT
-        # quietly put the level back to critical.
-        run: bun audit --audit-level high
+        # Running it at `high` for the first time found 15 HIGH advisories that
+        # `critical` had been passing silently. 14 were fixable inside the
+        # current majors and are fixed in the same commit, via package.json
+        # overrides (brace-expansion 5.0.9, postcss 8.5.25, undici 7.29.0,
+        # flatted 3.4.4, js-yaml 4.3.1, form-data 4.0.6, immutable 5.1.5->5.1.9)
+        # plus a same-major axios bump 1.16.1 -> 1.19.0.
+        #
+        # Scope, so nobody over- or under-reacts to this list later: every one of
+        # the 15 reached the tree through a BUILD/DEV/TEST path (eslint, vitest,
+        # jsdom, tailwind, sass, prettier, vite), not through the shipped bundle.
+        # Even the two axios-family ones are in its Node HTTP adapter, which the
+        # browser build does not use. The exposure was the build host and the
+        # supply chain, not end users.
+        #
+        # The one exception below is GHSA-fx2h-pf6j-xcff (vite `server.fs.deny`
+        # bypass on Windows alternate paths). It is NOT fixable in vite 5: the
+        # 5.x line ends at 5.4.21 with no backport, and the fix starts at 6.4.3.
+        # A vite 5 -> 6 major bump belongs in its own story with its own build
+        # verification, exactly as the deferred-majors note above says. It is
+        # also the least alarming item on the list — it affects `vite dev` only,
+        # and production here is a Go binary serving the embedded web/dist, so
+        # the dev server never runs in any deployed environment.
+        #
+        # Do NOT widen this to a blanket level change. One documented, scoped
+        # exception is the point; going back to `critical` re-hides the other 14.
+        #
+        # CI is the measurement, deliberately: `bun audit` cannot run on the
+        # Windows dev host (its endpoint 404s there), so this step is the only
+        # place the real number is knowable.
+        run: bun audit --audit-level high --ignore GHSA-fx2h-pf6j-xcff
       - name: gitleaks (secret scanning)
         uses: gitleaks/gitleaks-action@v2
         env:
