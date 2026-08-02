@@ -8,6 +8,10 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
+      # This workflow must be in its own trigger list, or a PR that touches
+      # nothing but this file never runs the job it is editing — including an
+      # edit that breaks or hollows it out. go-ci.yml already lists itself.
+      - '.github/workflows/security-tests.yml'
   pull_request:
     branches:
       - main
@@ -15,6 +19,7 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
+      - '.github/workflows/security-tests.yml'
   schedule:
     # Run daily at 2:00 AM UTC
     - cron: '0 2 * * *'
