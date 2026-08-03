@@ -154,6 +154,100 @@ and the script fails loudly. Verified this session: refused with HTTP 500,
 `private-endpoint channel 3 blocked before dispatch, no request was sent`, and
 the mock hit counter did not move.
 
+## Proving it against a real model — the second command
+
+The proof above has a structural weakness that is not a bug: its "on-prem
+endpoint" is a mock written by the same hand as the guard it exercises.
+Same-source evidence can demonstrate plumbing, never the product claim. A canned
+responder would satisfy every assertion in that script while proving nothing
+about whether a model can actually serve the tenant.
+
+```bash
+bash demo/private-inference/verify-real-engine.sh
+```
+
+This second script routes the same tenant, through the same type-57 channel
+machinery, to an OpenAI-compatible inference server already running on the
+operator's own machine with real quantized weights on local disk. It refuses to
+trust any endpoint it has not first proven is a real model:
+
+| Anti-mock test | Why a canned responder fails it |
+|---|---|
+| Two different prompts must yield two **different** answers | A mock returns one constant string |
+| Each answer must be **independently correct** (an arithmetic question and a geography question) | A mock cannot answer either |
+| `prompt_tokens` must **track the input** | A mock reports a fixed count |
+
+Discovery and validation are fused: the script sweeps loopback ports and only
+accepts one that passes all three. That is how the demo mock on `:11434` is
+auto-rejected rather than silently accepted.
+
+That auto-rejection is itself verified, not assumed — a detector never observed
+rejecting anything is not a detector:
+
+```
+$ PRIVATE_ENGINE_PORTS=11434 bash demo/private-inference/verify-real-engine.sh
+== 1/6 locate a real inference engine and prove it is not a canned responder
+   probing http://127.0.0.1:11434 ...
+     rejected: identical answer to two different prompts (canned responder)
+FAIL no real inference engine found on: http://127.0.0.1:11434
+$ echo $?
+1
+```
+
+Two further assertions become possible once a real engine is present, and
+neither has any meaning with a mock:
+
+- **The engine binds loopback only and holds zero non-loopback outbound TCP
+  connections** — so it is serving weights from this disk, not quietly proxying
+  to a remote provider. Without this, "the request reached my endpoint" says
+  nothing about where inference actually happened.
+- **The egress canary stays refused with a real model sitting next to it** in
+  the same tenant, so the guard is not merely rejecting everything.
+
+Measured this session (8B-class open-weights chat model, ~4.7 GB quantized, CPU):
+
+```
+Q: What is 17 multiplied by 23? Reply with the number only.
+A: 391                                       (prompt_tokens=26)
+Q: Name the capital city of Japan. One word only.
+A: Tokyo                                     (prompt_tokens=22)
+
+stream  → 4 SSE frames, reassembled answer 391, terminated with [DONE]
+
+gateway PID 44632 — zero non-loopback outbound TCP
+engine  PID  2076 — zero non-loopback outbound TCP, bound 127.0.0.1:11400 only
+canary  → HTTP 500 "blocked before dispatch, no request was sent"
+canary, streamed → HTTP 500, and NOT ONE SSE frame emitted first
+console → verdict all_traffic_stays_on_prem, real engine listed as intranet
+```
+
+### Why the streaming canary is the assertion that matters
+
+Streaming is where a "check then dispatch" guard most plausibly degrades into
+"dispatch then check": open the upstream connection, start relaying, and only
+then notice the target was public. In that shape the prompt is already on the
+wire when the 500 arrives, and a refusal is indistinguishable from a leak from
+the client's point of view. So the assertion is not merely *refused* — it is
+**refused before a single SSE frame was emitted**.
+
+### Why both scripts are kept
+
+They answer different questions and neither subsumes the other:
+
+| Script | Question | Needs weights? | CI-able |
+|---|---|---|---|
+| `verify-private-endpoint-type.sh` | Does the **guard** work? | no | yes |
+| `verify-real-engine.sh` | Does the **product claim** hold? | yes | no |
+
+The mock-based script stays deterministic and runnable on a build agent with no
+model on disk. The real-engine script cannot run there, and buying CI-ability by
+deleting it would trade the only same-source-free evidence for convenience.
+
+The tenant-facing model name is an **alias** (`onprem-chat-8b`), decoupled from
+whichever upstream build is installed, so the customer's model catalogue does
+not churn when the operator swaps the underlying weights. Override discovery
+with `PRIVATE_ENGINE_URL` / `PRIVATE_ENGINE_MODEL` / `PRIVATE_ENGINE_PORTS`.
+
 ## Files
 
 | File | Role | New? |
@@ -172,18 +266,38 @@ the mock hit counter did not move.
 | `demo/private-inference/seed-private-endpoint-type.sql` | Tenant + intranet channel + egress canary | new |
 | `demo/private-inference/seed-strict-console-viewer.sql` | role=10 viewer for the admin-gated status API | new |
 | `demo/private-inference/shot-private-routing.mjs` | Console panel screenshot (run with `node`, not `bun`) | new |
-| `demo/private-inference/verify-private-endpoint-type.sh` | The one-command proof | new |
+| `demo/private-inference/verify-private-endpoint-type.sh` | The one-command proof, mock endpoint (guard-level, CI-able) | new |
+| `demo/private-inference/seed-real-engine.sql` | Points the strict tenant at a real local engine; `-v engine_base_url` / `-v engine_model` | new |
+| `demo/private-inference/verify-real-engine.sh` | The one-command proof against a real model (product-level, needs weights) | new |
 
 ## What this does not cover
 
 - **Private RAG / vector-store recall** — a separate egress surface, untouched.
-- **Streaming and non-chat routes** were not individually exercised in this
-  session; the guard sits in `GetRequestURL`, which every OpenAI-adaptor route
-  traverses, so it applies by construction, but only `/v1/chat/completions` has
-  a live end-to-end proof here.
+- **Non-chat routes** (embeddings, images, websocket) are covered by
+  construction, not by a live run. All three dispatch entry points —
+  `DoApiRequest`, `DoFormRequest`, `DoWssRequest` in
+  `internal/adapter/provider/api_request.go` — resolve the URL through
+  `GetRequestURL` *before* building the request, so a refusal there stops every
+  one of them. Streaming used to be listed here too; it now has its own live
+  proof (see below), because "by construction" is worth spending one run to
+  check.
 - **Model-name mapping / pricing** for private endpoints uses the standard
   channel machinery; nothing bespoke was added.
 - No TLS/mTLS requirement is imposed on the private endpoint. Plain `http://`
   to an intranet host is accepted deliberately (self-hosted inference servers
   commonly run without certificates), so confidentiality *inside* the network is
   the customer's own segmentation problem, not something this type asserts.
+- **The real-engine run is single-host.** The gateway and the engine sit on the
+  same machine, on loopback. A customer deployment puts the engine on a separate
+  intranet host; the classifier accepts those RFC1918/ULA/tailnet shapes and is
+  unit-tested on them, but there is no live cross-host run in this repo.
+- **Model quality is not asserted.** The two checkable answers are an anti-mock
+  oracle, not a benchmark — they establish that a model reasoned over the prompt,
+  and say nothing about whether it is good enough for a given workload.
+- **The inference engine is operator-supplied.** Nothing here installs, pins or
+  manages it; the demo only proves the gateway routes to whatever is running and
+  refuses everything that is not on-prem.
+- **Zero-egress is sampled, not captured.** The assertions read the OS TCP table
+  at defined points, so a connection opened and closed entirely between two
+  samples would not appear. The dispatch-time guard is what makes the claim
+  structural; the connection-table check is corroboration, not the proof.

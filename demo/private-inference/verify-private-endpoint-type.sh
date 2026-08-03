@@ -113,10 +113,15 @@ docker exec -i "$PG_CONTAINER" psql -U postgres -d newhub -q -f - < "$DEMO_DIR/s
   || die "seed-private-endpoint-type.sql failed"
 docker exec -i "$PG_CONTAINER" psql -U postgres -d newhub -q -f - < "$DEMO_DIR/seed-strict-console-viewer.sql" >/dev/null \
   || die "seed-strict-console-viewer.sql failed"
+# Assert the two channels THIS script depends on, by name. A bare count would
+# also be satisfied by two wrong rows, and would break whenever a sibling demo
+# (verify-real-engine.sh) adds its own type-57 channel to the same tenant —
+# which is a legitimate state, not a seeding failure.
 seeded=$(docker exec "$PG_CONTAINER" psql -U postgres -d newhub -tAc \
-  "SELECT count(*) FROM channels WHERE tenant_id='$TENANT' AND type=57")
-[ "$(echo "$seeded" | tr -d '[:space:]')" = "2" ] || die "expected 2 type-57 channels, got $seeded"
-ok "2 type-57 channels seeded (1 intranet + 1 egress canary)"
+  "SELECT count(*) FROM channels WHERE tenant_id='$TENANT' AND type=57
+     AND name IN ('Private Inference (strict · intranet)', 'EGRESS CANARY (must never dispatch)')")
+[ "$(echo "$seeded" | tr -d '[:space:]')" = "2" ] || die "expected the intranet channel and the egress canary as type-57 rows, found $seeded of 2"
+ok "intranet channel + egress canary present as type-57 (pure config)"
 
 # --- 4) mock private endpoint ----------------------------------------------
 step "4/6 mock on-prem inference endpoint (bun, loopback-only :$MOCK_PORT)"
