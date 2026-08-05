@@ -24,7 +24,14 @@ defaults:
 
 jobs:
   test:
-    name: Lint + Typecheck + Vitest
+    # Named for what the steps below actually run. It used to say
+    # "Lint + Typecheck + Vitest" while running no typecheck at all — there is
+    # no typecheck script and nothing to typecheck (web/ is plain JS, 421
+    # .js/.jsx and zero .ts, and jsconfig.json does not enable checkJs). A
+    # reviewer reading a green "Typecheck" was being told a check had run that
+    # never existed. The Vite build job is what actually catches
+    # module-resolution and import errors.
+    name: Lint + Vitest + casing
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

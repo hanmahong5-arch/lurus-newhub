@@ -31,8 +31,12 @@ go test -bench=BenchmarkSyncAllChannelModels ./internal/adapter/handler/
 ### Frontend
 
 ```bash
-cd web && bun run test           # + test:watch, typecheck, lint, lint:fix
+cd web && bun run test           # + test:watch, lint, lint:fix, eslint, check:casing
 ```
+
+There is no `typecheck` script and nothing to typecheck: `web/` is plain JS
+(421 `.js`/`.jsx`, zero `.ts`) and `jsconfig.json` does not enable `checkJs`.
+`bun run build` is the gate that catches module-resolution and import errors.
 
 ## Coverage targets (from CLAUDE.md)
 
@@ -50,7 +54,7 @@ Current (2026-02-13): handler ~45% (14 test files, ~60 tests); app ~30% (2 files
 go test -short -cover ./...          # 1. unit + coverage
 go test -race -short ./...           # 2. race
 go test -run Integration ./...       # 3. integration (env: SQL_DSN)
-cd web && bun run test && bun run typecheck && bun run lint   # 4. frontend
+cd web && bun run test && bun run lint && bun run eslint && bun run build   # 4. frontend
 ```
 
 GitHub Actions: setup-go 1.25 → unit tests → race → integration (with services via `SQL_DSN` secret).

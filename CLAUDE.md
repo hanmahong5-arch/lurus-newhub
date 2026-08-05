@@ -67,9 +67,13 @@ cd web && bun install && bun run dev        # 前端 port 5173 (代理到 3000)
 # --- Build (production) ---
 CGO_ENABLED=0 go build -ldflags "-s -w -X 'github.com/LurusTech/lurus-hub/internal/pkg/common.Version=$(cat VERSION)'" -o lurus-api ./cmd/server
 
-# --- Frontend ---
-cd web && bun run typecheck
-cd web && bun run lint
+# --- Frontend --- (web/ 是纯 JS,421 个 .js/.jsx、0 个 .ts;jsconfig 未开 checkJs
+#     → 没有 typecheck 脚本,也没有可跑的类型检查。`bun run build` 才是真门控:
+#     模块解析/导入错误在这一步暴露。详见 doc/local-e2e-report-2026-06-20.md §5)
+cd web && bun run lint          # prettier --check
+cd web && bun run eslint
+cd web && bun run test          # vitest
+cd web && bun run check:casing
 cd web && bun run build
 
 # --- Test ---
