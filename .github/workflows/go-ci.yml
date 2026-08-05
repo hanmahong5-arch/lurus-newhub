@@ -268,7 +268,19 @@ jobs:
           go-version: '1.25.x'
           cache: true
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        # PINNED. This was `@latest`, the only unpinned tool install left in any
+        # workflow here — golangci-lint is held at v2.12.2 two jobs down, and
+        # every action is on a fixed tag. Two reasons it mattered more for this
+        # one than most: an unpinned `go install` makes a green build
+        # unreproducible (a rule added upstream turns CI red on a commit that
+        # changed nothing), and the unpinned binary is a security scanner, so
+        # `@latest` hands the gate itself to whatever the next release contains.
+        #
+        # v2.28.0 is not a guess: it is exactly what `@latest` resolved to on
+        # the last green run of this workflow, so pinning changes no behaviour
+        # today. Bump it deliberately, and note in the PR whether the new
+        # version adds findings.
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
       - name: Run gosec (HIGH severity, MEDIUM+ confidence)
         # Scans only the main module dirs; excludes .claude worktrees (other agent branches).
         # All existing HIGH findings are suppressed with #nosec + justification comments.
