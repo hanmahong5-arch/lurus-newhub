@@ -5,6 +5,38 @@
 # v1 binaries (last release v1.64.8) are built with go 1.24 and cannot load this
 # module's `go 1.25.1` directive, so v2 is mandatory here.
 # Run locally with:  golangci-lint run ./internal/... ./cmd/...
+#
+# ---------------------------------------------------------------------------
+# Why CI gates on --new-from-rev=origin/main and not on a clean run
+# ---------------------------------------------------------------------------
+# A full run reports ~744 issues (measured 2026-08-02: staticcheck 320,
+# errcheck 217, errorlint 84, bodyclose 36, contextcheck 36, unused 26,
+# ineffassign 20, nilerr 5). That number looks like a backlog waiting to be
+# burned down. It is not, and the attempt has already been made and rejected
+# once — so before anyone opens "chore: fix all lint issues", read this.
+#
+# 1. Almost none of it is a bug. Sampling the correctness-class findings in
+#    2026-08-02: bodyclose had ZERO hits outside the vendored provider tree;
+#    the single nilerr hit is a deliberate best-effort Ogg duration parse that
+#    returns what it managed to read; and all five "ineffectual assignment to
+#    err" hits are a `var err error = nil` initialiser being overwritten on
+#    the next line — no error is swallowed anywhere.
+#
+# 2. Most of it is New API base code, wherever it happens to sit. Splitting
+#    "ours" from "upstream" by directory is misleading: internal/adapter/repo,
+#    internal/adapter/handler and internal/pkg/common all carry substantial
+#    upstream code. Concretely, model_sync.go's unused constants point at
+#    basellm.github.io/llm-metadata/api/newapi/*.json; channel-billing.go's
+#    unused funcs are reachable only from an upstream commented-out switch
+#    case; custom-event.go's fieldReplacer is upstream's SSE writer; and
+#    repo/main.go's commonTrueVal/commonFalseVal are unused precisely BECAUSE
+#    newhub is PG-only while upstream branches on dialect there — the
+#    UPSTREAM-MERGE NOTE right above them says to keep them on conflicts.
+#
+# Deleting that code trades a cosmetic count for permanent merge friction on
+# every upstream sync. The ratchet is therefore the design, not a stopgap:
+# new code must be clean, inherited code is left alone. If you do fix
+# something in the backlog, fix it because it is a bug you can describe.
 version: "2"
 
 run:
