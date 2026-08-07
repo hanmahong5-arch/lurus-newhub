@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/pkg/privateendpoint"
 
 	common2 "github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/config"
@@ -66,13 +70,75 @@ func processHeaderOverride(info *common.RelayInfo) (map[string]string, error) {
 	return headerOverride, nil
 }
 
-func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+// resolveRequestURL is the single funnel through which every dispatch resolves
+// its upstream URL. All three entry points below (HTTP, form, websocket) go
+// through it so that a guard's refusal is recorded exactly once, in one place,
+// no matter which transport the request would have used — rather than three
+// copies of the same audit call drifting apart.
+func resolveRequestURL(a Adaptor, c *gin.Context, info *common.RelayInfo) (string, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
-		return nil, fmt.Errorf("get request url failed: %w", err)
+		recordDispatchBlocked(c, info, err)
+		return "", fmt.Errorf("get request url failed: %w", err)
 	}
 	if common2.DebugEnabled {
 		println("fullRequestURL:", fullRequestURL)
+	}
+	return fullRequestURL, nil
+}
+
+// recordDispatchBlocked writes an audit event when a channel guard refused to
+// produce a URL because the target was outside the customer's network.
+//
+// Deliberately narrow: only *privateendpoint.BlockedError qualifies. Ordinary
+// adaptor URL errors (a malformed base URL, an unsupported route) are
+// configuration faults, not attempted egress, and logging them under a security
+// action would make the trail useless for the question it exists to answer.
+//
+// The attempted host is recorded, not the full base URL: a base URL may carry
+// embedded credentials (http://user:pass@host), and the host is the whole of
+// the security-relevant fact.
+func recordDispatchBlocked(c *gin.Context, info *common.RelayInfo, err error) {
+	var blocked *privateendpoint.BlockedError
+	if !errors.As(err, &blocked) {
+		return
+	}
+	// ChannelMeta is an embedded POINTER and is nil until InitChannelMeta runs
+	// (relay_info.go). The private-endpoint guard reads ChannelBaseUrl from it,
+	// so it is non-nil on this path today — but this function sits on the relay
+	// hot path for every adaptor, and turning a clean refusal into a nil-pointer
+	// panic would be a far worse failure than an audit row missing an id.
+	channelID, channelType := 0, 0
+	if info.ChannelMeta != nil {
+		channelID, channelType = info.ChannelId, info.ChannelType
+	}
+	details, mErr := json.Marshal(map[string]any{
+		"channel_id":     channelID,
+		"channel_type":   channelType,
+		"attempted_host": blocked.Verdict.Host,
+		"reason":         blocked.Verdict.Reason,
+		"model":          info.OriginModelName,
+		"token_id":       info.TokenId,
+		"request_sent":   false,
+	})
+	if mErr != nil {
+		details = []byte(`{"reason":"details marshal failed"}`)
+	}
+	governance.RecordAuditEvent(governance.NewAuditEvent(
+		c,
+		governance.ActorToken,
+		info.UserId,
+		governance.ActionEgressBlocked,
+		governance.ResourceChannel,
+		channelID,
+		string(details),
+	))
+}
+
+func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	fullRequestURL, err := resolveRequestURL(a, c, info)
+	if err != nil {
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
@@ -98,12 +164,9 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 }
 
 func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
-	fullRequestURL, err := a.GetRequestURL(info)
+	fullRequestURL, err := resolveRequestURL(a, c, info)
 	if err != nil {
-		return nil, fmt.Errorf("get request url failed: %w", err)
-	}
-	if common2.DebugEnabled {
-		println("fullRequestURL:", fullRequestURL)
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
@@ -131,9 +194,9 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 }
 
 func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*websocket.Conn, error) {
-	fullRequestURL, err := a.GetRequestURL(info)
+	fullRequestURL, err := resolveRequestURL(a, c, info)
 	if err != nil {
-		return nil, fmt.Errorf("get request url failed: %w", err)
+		return nil, err
 	}
 	targetHeader := http.Header{}
 	headerOverride, err := processHeaderOverride(info)

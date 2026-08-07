@@ -76,6 +76,42 @@ re-open the hole. The console attributes a pass to the allow-list explicitly
 (`reason: explicitly allowed via PRIVATE_ENDPOINT_EXTRA_HOSTS`) so an auditor
 can see which channels rely on operator assertion rather than address maths.
 
+## The refusal is on the record
+
+A fail-closed guard that leaves no trace is unauditable: an empty log is
+indistinguishable from a guard that never ran. Every refused dispatch now writes
+one `security.egress_blocked` audit event.
+
+| Field | Value |
+|---|---|
+| `action` | `security.egress_blocked` |
+| `tenant_id` | the tenant whose relay token made the call, from the auth context |
+| `resource` / `resource_id` | `channel` / the offending channel id |
+| actor | `token`, plus the calling user id |
+| `details` | `attempted_host`, `reason`, `channel_type`, `model`, `token_id`, `request_sent: false` |
+
+Three design points worth keeping:
+
+1. **Recorded once, at one funnel.** All three dispatch entry points
+   (`DoApiRequest`, `DoFormRequest`, `DoWssRequest`) resolve their upstream URL
+   through a single `resolveRequestURL` helper in
+   `internal/adapter/provider/api_request.go`, so a refusal is recorded in one
+   place whatever the transport — instead of three copies of the same audit call
+   drifting apart.
+2. **The host, not the base URL.** A base URL may embed credentials
+   (`http://user:pass@host`), and the host is the whole of the security-relevant
+   fact. A test asserts an embedded password never reaches the audit details.
+3. **Narrow on purpose.** Only a public-target refusal qualifies
+   (`*privateendpoint.BlockedError`, recovered with `errors.As`). A malformed
+   base URL is a configuration typo, not an attempted egress; filing it under a
+   security action would dilute the trail into uselessness.
+
+The event is linked into the existing per-tenant tamper-evidence hash chain
+(`audit_events.row_hash`). The demo asserts `row_hash <> ''`: a security event
+stored outside the chain is weaker evidence than one inside it, and the chain
+writer is deliberately fail-open, so "it went in unchained" is a real outcome
+worth failing on rather than assuming away.
+
 ## Console: one badge, one truth source
 
 `GET /api/v2/:tenant_slug/private-routing` (admin-gated, same as the channel
@@ -218,6 +254,9 @@ gateway PID 44632 — zero non-loopback outbound TCP
 engine  PID  2076 — zero non-loopback outbound TCP, bound 127.0.0.1:11400 only
 canary  → HTTP 500 "blocked before dispatch, no request was sent"
 canary, streamed → HTTP 500, and NOT ONE SSE frame emitted first
+audit   → security.egress_blocked, tenant privacy-strict: 0 -> 2 events,
+          details {"attempted_host":"...","request_sent":false,...},
+          row_hash set (inside the tamper-evidence chain)
 console → verdict all_traffic_stays_on_prem, real engine listed as intranet
 ```
 
@@ -259,6 +298,10 @@ with `PRIVATE_ENGINE_URL` / `PRIVATE_ENGINE_MODEL` / `PRIVATE_ENGINE_PORTS`.
 | `internal/adapter/handler/channel.go` | Config-time guard, beside the existing VertexAI special case | edited (2 hunks) |
 | `internal/adapter/provider/openai/adaptor.go` | Dispatch-time fail-closed guard + standard OpenAI path | edited (2 hunks) |
 | `internal/adapter/provider/openai/adaptor_private_endpoint_test.go` | Dispatch guard + first-class-registration tests | new |
+| `internal/pkg/privateendpoint/guard.go` (again) | `BlockedError` carries the Verdict so callers can audit *why*, not just *that* | edited |
+| `internal/app/governance/audit_action.go` | `security.egress_blocked` action + registry entry | edited (2 hunks) |
+| `internal/adapter/provider/api_request.go` | `resolveRequestURL` funnel + `recordDispatchBlocked` | edited (4 hunks) |
+| `internal/adapter/provider/egress_audit_test.go` | Tenant attribution, credential redaction, narrowness, nil-ChannelMeta survival | new |
 | `internal/adapter/handler/v2_private_routing.go` | `GET /api/v2/:tenant/private-routing` | new |
 | `internal/adapter/handler/v2_private_routing_test.go` | Verdict derivation (incl. "blocked ≠ on-prem") | new |
 | `internal/adapter/handler/router/api-v2-router.go` | Route registration | edited (1 hunk) |

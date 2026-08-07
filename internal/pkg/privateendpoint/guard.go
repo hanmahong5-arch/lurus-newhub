@@ -172,15 +172,35 @@ func classifyAddr(host string, addr netip.Addr) Verdict {
 	}
 }
 
+// BlockedError is returned by ValidateBaseURL when the address classifies as
+// publicly routable. It carries the Verdict so a caller can record WHY the
+// dispatch was refused without re-parsing a message string — an audit trail
+// should be able to say "publicly routable IPv4", not merely "rejected".
+//
+// Only a *public target* produces this type. A malformed base URL (empty, bad
+// scheme, no host) is a configuration mistake rather than an attempted egress,
+// and stays a plain error so the security audit trail is not diluted with
+// typos.
+type BlockedError struct {
+	Verdict Verdict
+}
+
+// Error keeps the exact wording the guard has always emitted; operators and
+// the demo assertions both match on it.
+func (e *BlockedError) Error() string {
+	return "private-inference endpoint rejected: " + e.Verdict.Reason
+}
+
 // ValidateBaseURL is the fail-closed gate: nil error means the URL provably
-// stays inside the customer's network.
+// stays inside the customer's network. A public target yields *BlockedError,
+// recoverable with errors.As.
 func ValidateBaseURL(rawURL string) error {
 	verdict, err := ClassifyBaseURL(rawURL)
 	if err != nil {
 		return err
 	}
 	if !verdict.Intranet {
-		return fmt.Errorf("private-inference endpoint rejected: %s", verdict.Reason)
+		return &BlockedError{Verdict: verdict}
 	}
 	return nil
 }

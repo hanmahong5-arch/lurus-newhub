@@ -262,6 +262,13 @@ grep -q '391' <<<"$stream_txt" \
   || { echo "$stream_out" | head -10; die "streamed answer is wrong ('$stream_txt') — the deltas did not come from the model"; }
 ok "$chunks SSE frames, reassembled answer '$stream_txt', terminated with [DONE]"
 
+audit_blocked_count() {
+  docker exec "$PG_CONTAINER" psql -U postgres -d newhub -tAc \
+    "SELECT count(*) FROM audit_events WHERE tenant_id='$TENANT' AND action='security.egress_blocked'" 2>/dev/null | tr -d '[:space:]'
+}
+audit_before=$(audit_blocked_count)
+[ -n "$audit_before" ] || die "audit_events table not reachable — cannot verify the blocked-egress trail"
+
 step "5d/6 NEGATIVE — egress canary (public base_url, DB-inserted past config validation)"
 can=$(curl -s -m 30 -w $'\n%{http_code}' "http://localhost:$BACKEND_PORT/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
@@ -291,7 +298,37 @@ printf '%s' "$cs_msg" | grep -q '^data:' \
   && { echo "$cs_msg"; die "streaming canary emitted SSE frames — the response began before the guard refused it"; }
 ok "streaming canary refused (HTTP $cs_code) before a single SSE frame was emitted"
 
-step "5f/6 NO EGRESS — gateway AND engine, after real inference has run"
+step "5f/6 AUDIT — the two refusals must be on the record, tenant-attributed"
+# A fail-closed guard that leaves no trace is unauditable: an empty log is
+# indistinguishable from a guard that never ran. The write is async, so poll.
+audit_after=""
+for _ in $(seq 1 20); do
+  audit_after=$(audit_blocked_count)
+  [ -n "$audit_after" ] && [ "$audit_after" -ge $((audit_before + 2)) ] && break
+  sleep 1
+done
+[ -n "$audit_after" ] && [ "$audit_after" -ge $((audit_before + 2)) ] \
+  || die "expected 2 more security.egress_blocked events for $TENANT (before=$audit_before after=${audit_after:-none})"
+ok "security.egress_blocked recorded for both refusals (before=$audit_before after=$audit_after)"
+
+audit_row=$(docker exec "$PG_CONTAINER" psql -U postgres -d newhub -tAc \
+  "SELECT details FROM audit_events WHERE tenant_id='$TENANT' AND action='security.egress_blocked' ORDER BY id DESC LIMIT 1")
+printf '%s' "$audit_row" | grep -q '"request_sent":false' \
+  || { echo "$audit_row"; die "audit row does not record that no request was sent"; }
+printf '%s' "$audit_row" | grep -q '"attempted_host"' \
+  || { echo "$audit_row"; die "audit row does not name the attempted host"; }
+ok "details name the attempted host and assert request_sent=false"
+info "$audit_row"
+
+# The audit table carries a per-tenant tamper-evidence hash chain; a security
+# event that lands outside it is weaker evidence than one inside it.
+chained=$(docker exec "$PG_CONTAINER" psql -U postgres -d newhub -tAc \
+  "SELECT row_hash <> '' FROM audit_events WHERE tenant_id='$TENANT' AND action='security.egress_blocked' ORDER BY id DESC LIMIT 1" | tr -d '[:space:]')
+[ "$chained" = "t" ] \
+  || die "the blocked-egress event was stored outside the audit hash chain (row_hash empty) — it is not tamper-evident"
+ok "event is linked into the per-tenant tamper-evidence hash chain"
+
+step "5g/6 NO EGRESS — gateway AND engine, after real inference has run"
 gw_leaks=$(outbound_public "$BACKEND_PID")
 [ -z "$gw_leaks" ] || { echo "$gw_leaks" | sed 's/^/   /'; die "gateway holds non-loopback outbound connections"; }
 eng_leaks=$(outbound_public "$ENGINE_PID")

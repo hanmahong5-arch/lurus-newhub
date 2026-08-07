@@ -76,6 +76,13 @@ const (
 	// Security incidents.
 	ActionSensitiveBlocked        = "security.sensitive_blocked"
 	ActionWhitelabelKeyAccessed   = "security.whitelabel_key_accessed"
+	// ActionEgressBlocked records a private-inference channel (type 57) that
+	// tried to dispatch to a publicly routable address and was refused BEFORE
+	// any connection was opened. The guard already fails closed; this makes the
+	// refusal durable. "No prompt left the customer network" is only auditable
+	// if the attempts that were stopped are on the record — an empty log is
+	// otherwise indistinguishable from a guard that never ran.
+	ActionEgressBlocked = "security.egress_blocked"
 
 	// Billing events. Mirror gRPC platform-side WalletDebit / WalletCredit /
 	// quota consumption so a single audit trail is searchable end-to-end.
@@ -163,6 +170,7 @@ var validAuditActions = map[string]struct{}{
 	ActionTenantBrandUpdated:       {},
 	ActionSensitiveBlocked:         {},
 	ActionWhitelabelKeyAccessed:    {},
+	ActionEgressBlocked:            {},
 	ActionBillingDebit:             {},
 	ActionBillingCredit:            {},
 	ActionBillingQuotaConsumed:     {},
