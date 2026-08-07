@@ -20,6 +20,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import NotAvailable from '../../../components/hifi/NotAvailable';
+import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError } from '../../../helpers';
 
 /* Wave 2: Cluster tab wired. Round 2: Live tail wired via cursor-poll. */
@@ -581,11 +582,8 @@ const HFLog = () => {
               }}
             >
               {loading && (
-                <div
-                  className='muted'
-                  style={{ padding: '20px 22px', fontSize: 12 }}
-                >
-                  {tr('console.common.loading', 'Loading…')}
+                <div style={{ padding: '10px 22px' }}>
+                  <HfSkeletonRows rows={6} />
                 </div>
               )}
 
@@ -599,84 +597,91 @@ const HFLog = () => {
               )}
 
               {!loading && logs.length > 0 && (
-                <table className='t'>
-                  <thead>
-                    <tr>
-                      <th>{tr('console.log.th_timestamp', 'timestamp')}</th>
-                      <th>{tr('console.log.th_dur', 'dur')}</th>
-                      <th>{tr('console.log.th_ttft', 'ttft')}</th>
-                      <th>{tr('console.log.th_model', 'model')}</th>
-                      <th>{tr('console.log.th_upstream', 'upstream')}</th>
-                      <th>{tr('console.log.th_token', 'token')}</th>
-                      <th>{tr('console.log.th_tok', 'tok')}</th>
-                      <th>$</th>
-                      <th>{tr('console.log.th_code', 'code')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {logs.map((r, i) => (
-                      <tr
-                        key={r.id ?? i}
-                        onClick={() => setSelRow(i)}
-                        style={{
-                          background:
-                            selRow === i ? 'var(--hf-sunken)' : undefined,
-                          cursor: 'pointer',
-                          borderLeft:
-                            selRow === i
-                              ? '2px solid var(--hf-accent)'
-                              : '2px solid transparent',
-                        }}
-                      >
-                        <td className='mono muted'>{fmtTime(r.created_at)}</td>
-                        <td className='mono'>
-                          {r.total_latency_ms ?? '—'}
-                          {r.total_latency_ms != null && (
-                            <span className='faint'>ms</span>
-                          )}
-                        </td>
-                        <td className='mono'>
-                          <NotAvailable
-                            reason={tr(
-                              'console.log.ttft_na_reason',
-                              'TTFT not stored: the log schema has no time-to-first-token column',
+                <div className='hf-table-scroll'>
+                  <table className='t'>
+                    <thead>
+                      <tr>
+                        <th>{tr('console.log.th_timestamp', 'timestamp')}</th>
+                        <th>{tr('console.log.th_dur', 'dur')}</th>
+                        <th>{tr('console.log.th_ttft', 'ttft')}</th>
+                        <th>{tr('console.log.th_model', 'model')}</th>
+                        <th>{tr('console.log.th_upstream', 'upstream')}</th>
+                        <th>{tr('console.log.th_token', 'token')}</th>
+                        <th>{tr('console.log.th_tok', 'tok')}</th>
+                        <th>$</th>
+                        <th>{tr('console.log.th_code', 'code')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {logs.map((r, i) => (
+                        <tr
+                          key={r.id ?? i}
+                          onClick={() => setSelRow(i)}
+                          style={{
+                            background:
+                              selRow === i ? 'var(--hf-sunken)' : undefined,
+                            cursor: 'pointer',
+                            borderLeft:
+                              selRow === i
+                                ? '2px solid var(--hf-accent)'
+                                : '2px solid transparent',
+                          }}
+                        >
+                          <td className='mono muted'>
+                            {fmtTime(r.created_at)}
+                          </td>
+                          <td className='mono'>
+                            {r.total_latency_ms ?? '—'}
+                            {r.total_latency_ms != null && (
+                              <span className='faint'>ms</span>
                             )}
-                          />
-                        </td>
-                        <td className='strong'>{r.model_name || '—'}</td>
-                        <td className='mono muted'>
-                          {r.channel_name ? (
-                            r.channel_name
-                          ) : r.channel ? (
-                            `#${r.channel}`
-                          ) : (
+                          </td>
+                          <td className='mono'>
                             <NotAvailable
                               reason={tr(
-                                'console.log.upstream_na_reason',
-                                'upstream channel id not recorded on this log row',
+                                'console.log.ttft_na_reason',
+                                'TTFT not stored: the log schema has no time-to-first-token column',
                               )}
                             />
-                          )}
-                        </td>
-                        <td className='mono muted'>{r.token_name || '—'}</td>
-                        <td className='mono muted'>
-                          {fmtTok(r.prompt_tokens, r.completion_tokens)}
-                        </td>
-                        <td className='mono'>{fmtCost(r.quota)}</td>
-                        <td>
-                          {(() => {
-                            const o = outcomeTag(r);
-                            return (
-                              <span className={o.cls}>
-                                {tr(`console.log.outcome_${o.label}`, o.label)}
-                              </span>
-                            );
-                          })()}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                          </td>
+                          <td className='strong'>{r.model_name || '—'}</td>
+                          <td className='mono muted'>
+                            {r.channel_name ? (
+                              r.channel_name
+                            ) : r.channel ? (
+                              `#${r.channel}`
+                            ) : (
+                              <NotAvailable
+                                reason={tr(
+                                  'console.log.upstream_na_reason',
+                                  'upstream channel id not recorded on this log row',
+                                )}
+                              />
+                            )}
+                          </td>
+                          <td className='mono muted'>{r.token_name || '—'}</td>
+                          <td className='mono muted'>
+                            {fmtTok(r.prompt_tokens, r.completion_tokens)}
+                          </td>
+                          <td className='mono'>{fmtCost(r.quota)}</td>
+                          <td>
+                            {(() => {
+                              const o = outcomeTag(r);
+                              return (
+                                <span className={o.cls}>
+                                  {tr(
+                                    `console.log.outcome_${o.label}`,
+                                    o.label,
+                                  )}
+                                </span>
+                              );
+                            })()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
 
@@ -983,45 +988,47 @@ const HFLog = () => {
           )}
 
           {clusterItems.length > 0 && (
-            <table className='t' data-testid='cluster-table'>
-              <thead>
-                <tr>
-                  <th>{tr('console.log.th_model', 'model')}</th>
-                  <th>{tr('console.log.th_error_code', 'error code')}</th>
-                  <th>{tr('console.log.th_bucket', 'bucket')}</th>
-                  <th>{tr('console.log.th_count', 'count')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clusterItems.map((row, i) => {
-                  const code = row.error_code || '';
-                  const is5xx = /^5/.test(code);
-                  const is4xx = /^4/.test(code);
-                  return (
-                    <tr key={i}>
-                      <td className='strong'>{row.model_name || '—'}</td>
-                      <td>
-                        {code ? (
-                          <span
-                            className={
-                              is5xx ? 'tag error' : is4xx ? 'tag warn' : 'tag'
-                            }
-                          >
-                            {code}
-                          </span>
-                        ) : (
-                          <span className='muted'>—</span>
-                        )}
-                      </td>
-                      <td className='mono muted' style={{ fontSize: 10 }}>
-                        {row.bucket}
-                      </td>
-                      <td className='mono'>{row.count}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div className='hf-table-scroll'>
+              <table className='t' data-testid='cluster-table'>
+                <thead>
+                  <tr>
+                    <th>{tr('console.log.th_model', 'model')}</th>
+                    <th>{tr('console.log.th_error_code', 'error code')}</th>
+                    <th>{tr('console.log.th_bucket', 'bucket')}</th>
+                    <th>{tr('console.log.th_count', 'count')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {clusterItems.map((row, i) => {
+                    const code = row.error_code || '';
+                    const is5xx = /^5/.test(code);
+                    const is4xx = /^4/.test(code);
+                    return (
+                      <tr key={i}>
+                        <td className='strong'>{row.model_name || '—'}</td>
+                        <td>
+                          {code ? (
+                            <span
+                              className={
+                                is5xx ? 'tag error' : is4xx ? 'tag warn' : 'tag'
+                              }
+                            >
+                              {code}
+                            </span>
+                          ) : (
+                            <span className='muted'>—</span>
+                          )}
+                        </td>
+                        <td className='mono muted' style={{ fontSize: 10 }}>
+                          {row.bucket}
+                        </td>
+                        <td className='mono'>{row.count}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -1088,70 +1095,74 @@ const HFLog = () => {
                     )}
               </div>
             ) : (
-              <table className='t' data-testid='live-table'>
-                <thead>
-                  <tr>
-                    <th>{tr('console.log.th_timestamp', 'timestamp')}</th>
-                    <th>{tr('console.log.th_dur', 'dur')}</th>
-                    <th>{tr('console.log.th_ttft', 'ttft')}</th>
-                    <th>{tr('console.log.th_model', 'model')}</th>
-                    <th>{tr('console.log.th_upstream', 'upstream')}</th>
-                    <th>{tr('console.log.th_token', 'token')}</th>
-                    <th>{tr('console.log.th_tok', 'tok')}</th>
-                    <th>$</th>
-                    <th>{tr('console.log.th_code', 'code')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {liveRows.map((r, i) => {
-                    const o = outcomeTag(r);
-                    return (
-                      <tr key={r.id ?? i}>
-                        <td className='mono muted'>{fmtTime(r.created_at)}</td>
-                        <td className='mono'>
-                          {r.total_latency_ms ?? '—'}
-                          {r.total_latency_ms != null && (
-                            <span className='faint'>ms</span>
-                          )}
-                        </td>
-                        <td className='mono'>
-                          <NotAvailable
-                            reason={tr(
-                              'console.log.ttft_na_reason',
-                              'TTFT not stored: the log schema has no time-to-first-token column',
+              <div className='hf-table-scroll'>
+                <table className='t' data-testid='live-table'>
+                  <thead>
+                    <tr>
+                      <th>{tr('console.log.th_timestamp', 'timestamp')}</th>
+                      <th>{tr('console.log.th_dur', 'dur')}</th>
+                      <th>{tr('console.log.th_ttft', 'ttft')}</th>
+                      <th>{tr('console.log.th_model', 'model')}</th>
+                      <th>{tr('console.log.th_upstream', 'upstream')}</th>
+                      <th>{tr('console.log.th_token', 'token')}</th>
+                      <th>{tr('console.log.th_tok', 'tok')}</th>
+                      <th>$</th>
+                      <th>{tr('console.log.th_code', 'code')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {liveRows.map((r, i) => {
+                      const o = outcomeTag(r);
+                      return (
+                        <tr key={r.id ?? i}>
+                          <td className='mono muted'>
+                            {fmtTime(r.created_at)}
+                          </td>
+                          <td className='mono'>
+                            {r.total_latency_ms ?? '—'}
+                            {r.total_latency_ms != null && (
+                              <span className='faint'>ms</span>
                             )}
-                          />
-                        </td>
-                        <td className='strong'>{r.model_name || '—'}</td>
-                        <td className='mono muted'>
-                          {r.channel_name ? (
-                            r.channel_name
-                          ) : r.channel ? (
-                            `#${r.channel}`
-                          ) : (
+                          </td>
+                          <td className='mono'>
                             <NotAvailable
                               reason={tr(
-                                'console.log.upstream_na_reason',
-                                'upstream channel id not recorded on this log row',
+                                'console.log.ttft_na_reason',
+                                'TTFT not stored: the log schema has no time-to-first-token column',
                               )}
                             />
-                          )}
-                        </td>
-                        <td className='mono muted'>{r.token_name || '—'}</td>
-                        <td className='mono muted'>
-                          {fmtTok(r.prompt_tokens, r.completion_tokens)}
-                        </td>
-                        <td className='mono'>{fmtCost(r.quota)}</td>
-                        <td>
-                          <span className={o.cls}>
-                            {tr(`console.log.outcome_${o.label}`, o.label)}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                          </td>
+                          <td className='strong'>{r.model_name || '—'}</td>
+                          <td className='mono muted'>
+                            {r.channel_name ? (
+                              r.channel_name
+                            ) : r.channel ? (
+                              `#${r.channel}`
+                            ) : (
+                              <NotAvailable
+                                reason={tr(
+                                  'console.log.upstream_na_reason',
+                                  'upstream channel id not recorded on this log row',
+                                )}
+                              />
+                            )}
+                          </td>
+                          <td className='mono muted'>{r.token_name || '—'}</td>
+                          <td className='mono muted'>
+                            {fmtTok(r.prompt_tokens, r.completion_tokens)}
+                          </td>
+                          <td className='mono'>{fmtCost(r.quota)}</td>
+                          <td>
+                            <span className={o.cls}>
+                              {tr(`console.log.outcome_${o.label}`, o.label)}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>

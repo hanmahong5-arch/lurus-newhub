@@ -286,43 +286,45 @@ const NewChannelStep = ({ step }) => {
           )}
         </div>
         <div className='panel'>
-          <table className='t'>
-            <thead>
-              <tr>
-                <th></th>
-                <th>{tr('console.flows.th_vendor_model', 'vendor model')}</th>
-                <th></th>
-                <th>{tr('console.flows.th_your_alias', 'your alias')}</th>
-                <th>{tr('console.flows.th_auto', 'auto')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  <td>
-                    <input type='checkbox' defaultChecked={r[2]} />
-                  </td>
-                  <td className='mono strong'>{r[0]}</td>
-                  <td className='faint'>→</td>
-                  <td>
-                    <div
-                      className='field'
-                      style={{ width: 200, height: 24, fontSize: 11 }}
-                    >
-                      {r[1]}
-                    </div>
-                  </td>
-                  <td>
-                    {r[2] && (
-                      <span className='tag info'>
-                        {tr('console.flows.tag_auto', 'auto')}
-                      </span>
-                    )}
-                  </td>
+          <div className='hf-table-scroll'>
+            <table className='t'>
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>{tr('console.flows.th_vendor_model', 'vendor model')}</th>
+                  <th></th>
+                  <th>{tr('console.flows.th_your_alias', 'your alias')}</th>
+                  <th>{tr('console.flows.th_auto', 'auto')}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td>
+                      <input type='checkbox' defaultChecked={r[2]} />
+                    </td>
+                    <td className='mono strong'>{r[0]}</td>
+                    <td className='faint'>→</td>
+                    <td>
+                      <div
+                        className='field'
+                        style={{ width: 200, height: 24, fontSize: 11 }}
+                      >
+                        {r[1]}
+                      </div>
+                    </td>
+                    <td>
+                      {r[2] && (
+                        <span className='tag info'>
+                          {tr('console.flows.tag_auto', 'auto')}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );

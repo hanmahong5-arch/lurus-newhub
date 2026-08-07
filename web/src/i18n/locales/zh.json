@@ -91,8 +91,11 @@
         "login": "登录",
         "toggle_language": "切换语言",
         "toggle_theme": "切换主题",
+        "toggle_nav": "切换导航",
         "theme_to_light": "切换到浅色",
-        "theme_to_dark": "切换到深色"
+        "theme_to_dark": "切换到深色",
+        "docs": "文档",
+        "support": "支持"
       },
       "not_available": {
         "label": "暂无"
@@ -102,6 +105,10 @@
         "title": "⚠ 开发中 —— 内容仅为设计稿占位",
         "reason_label": "原因：",
         "todo_label": "待办："
+      },
+      "legacy_bridge": {
+        "notice": "这是旧版控制台，新控制台已有这个页面的重新设计版本。",
+        "cta": "在新控制台中打开 →"
       },
       "dashboard": {
         "at_a_glance": "概览",
@@ -288,6 +295,9 @@
         "tip": "提示 · 勾选行进行批量操作 · 或点击任意行展开",
         "empty": "还没有渠道，添加一个开始使用。",
         "empty_filtered": "没有匹配当前筛选条件的渠道。",
+        "select_channel": "选择渠道",
+        "expand_row": "展开",
+        "collapse_row": "收起",
         "th_channel": "渠道",
         "th_type": "类型",
         "th_models": "模型",

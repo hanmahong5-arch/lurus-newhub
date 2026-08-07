@@ -20,6 +20,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
+import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, showSuccess } from '../../../helpers';
 import CreditPoolDrawer from './CreditPoolDrawer';
 
@@ -286,7 +287,12 @@ const StatsDrawer = ({ tenant, onClose }) => {
           <div className='strong' style={{ fontSize: 15 }}>
             {tenant.name} · {tr('console.tenant.stats_title', 'stats')}
           </div>
-          <button type='button' className='btn ghost sm' onClick={onClose}>
+          <button
+            type='button'
+            className='btn ghost sm'
+            onClick={onClose}
+            aria-label={tr('console.common.close', 'close')}
+          >
             ✕
           </button>
         </div>
@@ -659,11 +665,8 @@ const HFTenants = () => {
 
           <div className='panel'>
             {loading ? (
-              <div
-                className='muted'
-                style={{ padding: '20px 24px', fontSize: 12 }}
-              >
-                {tr('console.common.loading', 'Loading…')}
+              <div style={{ padding: '10px 24px' }}>
+                <HfSkeletonRows rows={5} />
               </div>
             ) : tenants.length === 0 ? (
               <div
@@ -681,220 +684,228 @@ const HFTenants = () => {
                     )}
               </div>
             ) : (
-              <table className='t'>
-                <thead>
-                  <tr>
-                    <th>{tr('console.tenant.th_tenant', 'tenant')}</th>
-                    <th>{tr('console.tenant.th_plan', 'plan')}</th>
-                    <th>{tr('console.tenant.th_status', 'status')}</th>
-                    <th>{tr('console.tenant.th_users', 'users')}</th>
-                    <th>{tr('console.tenant.th_used', 'used')}</th>
-                    <th>{tr('console.tenant.th_quota_cap', 'quota cap')}</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tenants.map((t) => {
-                    const usedUSD = parseFloat(quotaToUSD(t.used_quota || 0));
-                    const capUSD =
-                      t.max_quota > 0
-                        ? parseFloat(quotaToUSD(t.max_quota))
-                        : null;
-                    const pct = capUSD ? Math.min(usedUSD / capUSD, 1) : 0;
-                    const isActioning = actioning === t.id;
+              <div className='hf-table-scroll'>
+                <table className='t'>
+                  <thead>
+                    <tr>
+                      <th>{tr('console.tenant.th_tenant', 'tenant')}</th>
+                      <th>{tr('console.tenant.th_plan', 'plan')}</th>
+                      <th>{tr('console.tenant.th_status', 'status')}</th>
+                      <th>{tr('console.tenant.th_users', 'users')}</th>
+                      <th>{tr('console.tenant.th_used', 'used')}</th>
+                      <th>{tr('console.tenant.th_quota_cap', 'quota cap')}</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tenants.map((t) => {
+                      const usedUSD = parseFloat(quotaToUSD(t.used_quota || 0));
+                      const capUSD =
+                        t.max_quota > 0
+                          ? parseFloat(quotaToUSD(t.max_quota))
+                          : null;
+                      const pct = capUSD ? Math.min(usedUSD / capUSD, 1) : 0;
+                      const isActioning = actioning === t.id;
 
-                    return (
-                      <tr key={t.id} data-testid={`tenant-row-${t.id}`}>
-                        <td>
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 10,
-                            }}
-                          >
-                            <div
-                              style={{
-                                width: 28,
-                                height: 28,
-                                background: 'var(--hf-sunken)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontFamily: 'var(--hf-display)',
-                                fontWeight: 600,
-                                color: 'var(--hf-ink)',
-                                flexShrink: 0,
-                              }}
-                            >
-                              {(t.name || t.slug || '?')[0].toUpperCase()}
-                            </div>
-                            <div>
-                              <div className='strong'>{t.name}</div>
-                              <div
-                                className='faint mono'
-                                style={{ fontSize: 10 }}
-                              >
-                                {t.slug}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-
-                        <td>
-                          <span className={planTagClass(t.plan_type)}>
-                            {t.plan_type || '—'}
-                          </span>
-                        </td>
-
-                        <td>
-                          <span
-                            data-testid={`tenant-status-${t.id}`}
-                            className={tenantStatusClass(t.status)}
-                          >
-                            {tr(
-                              `console.tenant.status_${tenantStatusLabel(t.status)}`,
-                              tenantStatusLabel(t.status),
-                            )}
-                          </span>
-                        </td>
-
-                        <td className='mono'>{t.user_count ?? '—'}</td>
-
-                        <td>
-                          <span className='display' style={{ fontSize: 15 }}>
-                            ${quotaToUSD(t.used_quota || 0)}
-                          </span>
-                        </td>
-
-                        <td>
-                          {capUSD ? (
+                      return (
+                        <tr key={t.id} data-testid={`tenant-row-${t.id}`}>
+                          <td>
                             <div
                               style={{
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: 8,
+                                gap: 10,
                               }}
                             >
                               <div
                                 style={{
-                                  width: 80,
-                                  height: 4,
+                                  width: 28,
+                                  height: 28,
                                   background: 'var(--hf-sunken)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontFamily: 'var(--hf-display)',
+                                  fontWeight: 600,
+                                  color: 'var(--hf-ink)',
                                   flexShrink: 0,
+                                }}
+                              >
+                                {(t.name || t.slug || '?')[0].toUpperCase()}
+                              </div>
+                              <div>
+                                <div className='strong'>{t.name}</div>
+                                <div
+                                  className='faint mono'
+                                  style={{ fontSize: 10 }}
+                                >
+                                  {t.slug}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td>
+                            <span className={planTagClass(t.plan_type)}>
+                              {t.plan_type || '—'}
+                            </span>
+                          </td>
+
+                          <td>
+                            <span
+                              data-testid={`tenant-status-${t.id}`}
+                              className={tenantStatusClass(t.status)}
+                            >
+                              {tr(
+                                `console.tenant.status_${tenantStatusLabel(t.status)}`,
+                                tenantStatusLabel(t.status),
+                              )}
+                            </span>
+                          </td>
+
+                          <td className='mono'>{t.user_count ?? '—'}</td>
+
+                          <td>
+                            <span className='display' style={{ fontSize: 15 }}>
+                              ${quotaToUSD(t.used_quota || 0)}
+                            </span>
+                          </td>
+
+                          <td>
+                            {capUSD ? (
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 8,
                                 }}
                               >
                                 <div
                                   style={{
-                                    width: `${pct * 100}%`,
-                                    height: '100%',
-                                    background:
-                                      pct > 0.9
-                                        ? 'var(--hf-err)'
-                                        : pct > 0.75
-                                          ? 'var(--hf-warn)'
-                                          : 'var(--hf-ok)',
+                                    width: 80,
+                                    height: 4,
+                                    background: 'var(--hf-sunken)',
+                                    flexShrink: 0,
                                   }}
-                                />
+                                >
+                                  <div
+                                    style={{
+                                      width: `${pct * 100}%`,
+                                      height: '100%',
+                                      background:
+                                        pct > 0.9
+                                          ? 'var(--hf-err)'
+                                          : pct > 0.75
+                                            ? 'var(--hf-warn)'
+                                            : 'var(--hf-ok)',
+                                    }}
+                                  />
+                                </div>
+                                <span
+                                  className='mono muted'
+                                  style={{ fontSize: 10 }}
+                                >
+                                  ${quotaToUSD(t.max_quota)}
+                                </span>
                               </div>
+                            ) : (
                               <span
                                 className='mono muted'
-                                style={{ fontSize: 10 }}
+                                style={{ fontSize: 11 }}
                               >
-                                ${quotaToUSD(t.max_quota)}
+                                ∞
                               </span>
-                            </div>
-                          ) : (
-                            <span
-                              className='mono muted'
-                              style={{ fontSize: 11 }}
-                            >
-                              ∞
-                            </span>
-                          )}
-                        </td>
+                            )}
+                          </td>
 
-                        <td>
-                          <div
-                            style={{
-                              display: 'flex',
-                              gap: 6,
-                              alignItems: 'center',
-                            }}
-                          >
-                            <button
-                              type='button'
-                              className='btn ghost sm'
-                              data-testid={`tenant-stats-btn-${t.id}`}
-                              disabled={isActioning}
-                              onClick={() => setStatsTarget(t)}
+                          <td>
+                            <div
+                              style={{
+                                display: 'flex',
+                                gap: 6,
+                                alignItems: 'center',
+                              }}
                             >
-                              {tr('console.tenant.btn_stats', 'stats')}
-                            </button>
-                            <button
-                              type='button'
-                              className='btn ghost sm'
-                              disabled={isActioning}
-                              onClick={() => setPoolTarget(t)}
-                            >
-                              {tr('console.tenant.btn_pool', 'pool')}
-                            </button>
-                            <button
-                              type='button'
-                              className='btn ghost sm'
-                              data-testid={`tenant-limits-btn-${t.id}`}
-                              disabled={isActioning}
-                              onClick={() => setLimitsTarget(t)}
-                            >
-                              {tr('console.tenant.btn_limits', 'limits')}
-                            </button>
-                            {t.status !== 1 && (
                               <button
                                 type='button'
                                 className='btn ghost sm'
-                                data-testid={`tenant-enable-btn-${t.id}`}
+                                data-testid={`tenant-stats-btn-${t.id}`}
                                 disabled={isActioning}
-                                onClick={() => handleAction(t, 'enable')}
+                                onClick={() => setStatsTarget(t)}
                               >
-                                {isActioning
-                                  ? '…'
-                                  : tr('console.tenant.btn_enable', 'enable')}
+                                {tr('console.tenant.btn_stats', 'stats')}
                               </button>
-                            )}
-                            {t.status === 1 && (
                               <button
                                 type='button'
                                 className='btn ghost sm'
-                                data-testid={`tenant-disable-btn-${t.id}`}
                                 disabled={isActioning}
-                                onClick={() => handleAction(t, 'disable')}
+                                onClick={() => setPoolTarget(t)}
                               >
-                                {isActioning
-                                  ? '…'
-                                  : tr('console.tenant.btn_disable', 'disable')}
+                                {tr('console.tenant.btn_pool', 'pool')}
                               </button>
-                            )}
-                            {t.status !== 3 && (
                               <button
                                 type='button'
                                 className='btn ghost sm'
-                                data-testid={`tenant-suspend-btn-${t.id}`}
+                                data-testid={`tenant-limits-btn-${t.id}`}
                                 disabled={isActioning}
-                                style={{ color: 'var(--hf-warn)' }}
-                                onClick={() => handleAction(t, 'suspend')}
+                                onClick={() => setLimitsTarget(t)}
                               >
-                                {isActioning
-                                  ? '…'
-                                  : tr('console.tenant.btn_suspend', 'suspend')}
+                                {tr('console.tenant.btn_limits', 'limits')}
                               </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                              {t.status !== 1 && (
+                                <button
+                                  type='button'
+                                  className='btn ghost sm'
+                                  data-testid={`tenant-enable-btn-${t.id}`}
+                                  disabled={isActioning}
+                                  onClick={() => handleAction(t, 'enable')}
+                                >
+                                  {isActioning
+                                    ? '…'
+                                    : tr('console.tenant.btn_enable', 'enable')}
+                                </button>
+                              )}
+                              {t.status === 1 && (
+                                <button
+                                  type='button'
+                                  className='btn ghost sm'
+                                  data-testid={`tenant-disable-btn-${t.id}`}
+                                  disabled={isActioning}
+                                  onClick={() => handleAction(t, 'disable')}
+                                >
+                                  {isActioning
+                                    ? '…'
+                                    : tr(
+                                        'console.tenant.btn_disable',
+                                        'disable',
+                                      )}
+                                </button>
+                              )}
+                              {t.status !== 3 && (
+                                <button
+                                  type='button'
+                                  className='btn ghost sm'
+                                  data-testid={`tenant-suspend-btn-${t.id}`}
+                                  disabled={isActioning}
+                                  style={{ color: 'var(--hf-warn)' }}
+                                  onClick={() => handleAction(t, 'suspend')}
+                                >
+                                  {isActioning
+                                    ? '…'
+                                    : tr(
+                                        'console.tenant.btn_suspend',
+                                        'suspend',
+                                      )}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>

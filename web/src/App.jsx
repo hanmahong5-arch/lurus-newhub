@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { lazy, Suspense, useContext, useMemo } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Loading from './components/common/ui/Loading';
+import HfRouteFallback from './components/hifi/HfRouteFallback';
 import User from './pages/User';
 import { AuthRedirect, PrivateRoute, AdminRoute } from './helpers';
 import OidcRedirect from './components/auth/OidcRedirect';
@@ -340,7 +341,7 @@ function App() {
         <Route
           path='/console/v2/account-disabled'
           element={
-            <Suspense fallback={<Loading />}>
+            <Suspense fallback={<HfRouteFallback />}>
               <V2AccountDisabled />
             </Suspense>
           }
@@ -376,7 +377,10 @@ function App() {
             path={`/console/v2/${slug}`}
             element={
               <PrivateRoute>
-                <Suspense fallback={<Loading />} key={location.pathname}>
+                <Suspense
+                  fallback={<HfRouteFallback />}
+                  key={location.pathname}
+                >
                   <Component />
                 </Suspense>
               </PrivateRoute>

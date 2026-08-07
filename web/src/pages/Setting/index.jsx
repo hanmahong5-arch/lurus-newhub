@@ -23,6 +23,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 
 import SettingsSidebar from './SettingsSidebar';
 import { isRoot } from '../../helpers';
+import LegacyBridgeBanner from '../../components/hifi/LegacyBridgeBanner';
 
 import GeneralSettingPage from '../../components/settings/GeneralSettingPage';
 import BrandingSettingPage from '../../components/settings/BrandingSettingPage';
@@ -118,6 +119,7 @@ const Setting = () => {
 
   return (
     <div className='px-2'>
+      <LegacyBridgeBanner to='/console/v2/admin/settings' />
       <Layout>
         <Layout.Content>
           <div className='flex flex-col md:flex-row gap-4 mt-2'>

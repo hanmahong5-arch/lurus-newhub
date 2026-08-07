@@ -17,17 +17,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+// `.hf` scope Suspense fallback for the /console/v2/* route group.
+// components/common/ui/Loading.jsx (Semi `<Spin>` + Tailwind) is shared by
+// every React.lazy route in App.jsx, including v2 — so every hi-fi code
+// chunk load used to flash a non-hi-fi spinner first. This keeps the same
+// full-viewport centering but renders inside `.hf` so it reads as part of
+// the editorial console, not a foreign loading screen.
 import React from 'react';
-import UsersTable from '../../components/table/users';
-import LegacyBridgeBanner from '../../components/hifi/LegacyBridgeBanner';
 
-const User = () => {
-  return (
-    <div className='px-2'>
-      <LegacyBridgeBanner to='/console/v2/admin/users' />
-      <UsersTable />
-    </div>
-  );
-};
+const HfRouteFallback = () => (
+  <div className='hf hf-route-fallback' role='status' aria-live='polite'>
+    <span className='dot idle' />
+    <span>loading…</span>
+  </div>
+);
 
-export default User;
+export default HfRouteFallback;

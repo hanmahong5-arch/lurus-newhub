@@ -531,8 +531,8 @@ const HFPlayground = () => {
                 marginTop: 10,
                 fontSize: 11,
                 padding: '4px 10px',
-                borderLeft: '2px solid var(--hf-amber, #d97706)',
-                background: 'var(--hf-amber-bg, rgba(217, 119, 6, 0.08))',
+                borderLeft: '2px solid var(--hf-warn)',
+                background: 'var(--hf-warn-bg)',
                 color: 'var(--hf-ink-2)',
               }}
               data-testid='playground-restored-banner'
