@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 )
@@ -79,12 +80,17 @@ func TestMaybeMarkCooldown_ZeroStatusCode_NoOp(t *testing.T) {
 }
 
 // TestMaybeMarkCooldown_AllGuardsPassed_RequiresDB documents the one path that
-// reaches repo.MarkMultiKeyCooldown. Skipped in short mode because it needs a
-// live database (calling it on a nil DB would panic, same pattern as neighbors
-// use for integration-only paths).
+// reaches repo.MarkMultiKeyCooldown. It needs a live database: the repo call
+// dereferences the package-level GORM handle, so an uninitialised repo.DB
+// panics. `testing.Short()` alone is not that condition — a plain
+// `go test ./...` is neither short nor DB-initialised — so gate on the handle
+// itself and treat short mode as an additional skip.
 func TestMaybeMarkCooldown_AllGuardsPassed_RequiresDB(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires live database; skip in short mode")
+	}
+	if repo.DB == nil {
+		t.Skip("requires an initialised repo.DB; skipping the repo-reaching path")
 	}
 	// Under a real DB this would succeed or fail gracefully.
 	// Without DB the call panics on the GORM nil-pointer — hence the skip above.
