@@ -315,8 +315,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		resp.Body = app.WrapNonStreamReadDeadline(resp.Body)
 	}
 
-	_ = req.Body.Close()
-	_ = c.Request.Body.Close()
+	// A bodyless upstream request (http.NewRequest*(..., nil)) leaves req.Body
+	// nil; closing it unguarded would panic on an otherwise successful call.
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	if c.Request.Body != nil {
+		_ = c.Request.Body.Close()
+	}
 	return resp, nil
 }
 

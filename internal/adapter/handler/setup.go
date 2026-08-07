@@ -2,6 +2,7 @@ package handler
 
 import (
 	"time"
+	"unicode/utf8"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
@@ -81,7 +82,9 @@ func PostSetup(c *gin.Context) {
 
 	// If root doesn't exist, create the initial admin account
 	if !rootExists {
-		if len(req.Username) == 0 || len(req.Username) > 12 {
+		// 按字符（rune）计数，与提示语的“1-12 个字符”一致；len() 数的是
+		// UTF-8 字节，5 个汉字（15 字节）会被误判超长。
+		if n := utf8.RuneCountInString(req.Username); n == 0 || n > 12 {
 			c.JSON(200, gin.H{
 				"success": false,
 				"message": "用户名长度必须在1-12个字符之间",

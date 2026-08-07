@@ -244,22 +244,28 @@ func getBoolEnv(key string, defaultValue bool) bool {
 // RetryWithBackoff executes a function with exponential backoff retry logic
 // 使用指数退避重试逻辑执行函数
 func RetryWithBackoff(fn func() error) error {
+	// RetryCount 由运维配置（MEILISEARCH_RETRY_COUNT），<1 时归一化为 1，
+	// 保证 fn 至少执行一次，否则操作会被整个跳过且返回无意义的错误
+	attempts := RetryCount
+	if attempts < 1 {
+		attempts = 1
+	}
 	var err error
-	for i := 0; i < RetryCount; i++ {
+	for i := 0; i < attempts; i++ {
 		err = fn()
 		if err == nil {
 			return nil
 		}
 
-		if i < RetryCount-1 {
+		if i < attempts-1 {
 			delay := time.Duration(RetryDelay*(i+1)) * time.Millisecond
 			if Debug {
-				common.SysLog(fmt.Sprintf("Retry %d/%d failed, waiting %v: %v", i+1, RetryCount, delay, err))
+				common.SysLog(fmt.Sprintf("Retry %d/%d failed, waiting %v: %v", i+1, attempts, delay, err))
 			}
 			time.Sleep(delay)
 		}
 	}
-	return fmt.Errorf("failed after %d retries: %w", RetryCount, err)
+	return fmt.Errorf("failed after %d retries: %w", attempts, err)
 }
 
 // GetIndexName returns the full index name with prefix

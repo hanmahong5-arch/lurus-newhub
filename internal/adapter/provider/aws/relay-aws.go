@@ -117,6 +117,7 @@ func doAwsClientRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor,
 			return nil, types.NewError(errors.Wrap(err, "marshal nova request"), types.ErrorCodeBadResponseBody)
 		}
 		awsReq.Body = reqBody
+		a.AwsReq = awsReq
 		return nil, nil
 	} else {
 		awsClaudeReq, err := formatRequest(c.Request.Context(), requestBody, requestHeader)
@@ -200,8 +201,12 @@ func getAwsModelID(requestModel string) string {
 }
 
 func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
+	invokeReq, ok := a.AwsReq.(*bedrockruntime.InvokeModelInput)
+	if !ok {
+		return types.NewError(errors.New("aws request not prepared"), types.ErrorCodeChannelAwsClientError), nil
+	}
 
-	awsResp, err := a.AwsClient.InvokeModel(c.Request.Context(), a.AwsReq.(*bedrockruntime.InvokeModelInput))
+	awsResp, err := a.AwsClient.InvokeModel(c.Request.Context(), invokeReq)
 	if err != nil {
 		statusCode := getAwsErrorStatusCode(err)
 		return types.NewOpenAIError(errors.Wrap(err, "InvokeModel"), types.ErrorCodeAwsInvokeError, statusCode), nil
@@ -228,7 +233,11 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 }
 
 func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
-	awsResp, err := a.AwsClient.InvokeModelWithResponseStream(c.Request.Context(), a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput))
+	streamReq, ok := a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput)
+	if !ok {
+		return types.NewError(errors.New("aws request not prepared"), types.ErrorCodeChannelAwsClientError), nil
+	}
+	awsResp, err := a.AwsClient.InvokeModelWithResponseStream(c.Request.Context(), streamReq)
 	if err != nil {
 		statusCode := getAwsErrorStatusCode(err)
 		return types.NewOpenAIError(errors.Wrap(err, "InvokeModelWithResponseStream"), types.ErrorCodeAwsInvokeError, statusCode), nil
@@ -267,8 +276,12 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 
 // Nova模型处理函数
 func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
+	invokeReq, ok := a.AwsReq.(*bedrockruntime.InvokeModelInput)
+	if !ok {
+		return types.NewError(errors.New("aws request not prepared"), types.ErrorCodeChannelAwsClientError), nil
+	}
 
-	awsResp, err := a.AwsClient.InvokeModel(c.Request.Context(), a.AwsReq.(*bedrockruntime.InvokeModelInput))
+	awsResp, err := a.AwsClient.InvokeModel(c.Request.Context(), invokeReq)
 	if err != nil {
 		statusCode := getAwsErrorStatusCode(err)
 		return types.NewOpenAIError(errors.Wrap(err, "InvokeModel"), types.ErrorCodeAwsInvokeError, statusCode), nil

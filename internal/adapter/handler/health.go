@@ -50,6 +50,10 @@ func GetHealthDetailed(c *gin.Context) {
 		} else {
 			checks["redis"] = "ok"
 		}
+	} else if common.RedisEnabled {
+		// Enabled but no client: a broken wiring, not the intentional off
+		// state — give the operator a distinct label instead of "disabled".
+		checks["redis"] = "not_configured"
 	} else {
 		checks["redis"] = "disabled"
 	}

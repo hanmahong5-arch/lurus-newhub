@@ -26,9 +26,13 @@ func init() {
 func GetMonitorSetting() *MonitorSetting {
 	if os.Getenv("CHANNEL_TEST_FREQUENCY") != "" {
 		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_TEST_FREQUENCY"))
-		if err == nil && frequency > 0 {
-			monitorSetting.AutoTestChannelEnabled = true
-			monitorSetting.AutoTestChannelMinutes = float64(frequency)
+		if err == nil {
+			// 能解析出来的值一律生效：<= 0 表示显式关闭自动测试，
+			// 否则会保留之前的状态导致无法关掉。
+			monitorSetting.AutoTestChannelEnabled = frequency > 0
+			if frequency > 0 {
+				monitorSetting.AutoTestChannelMinutes = float64(frequency)
+			}
 		}
 	}
 	return &monitorSetting

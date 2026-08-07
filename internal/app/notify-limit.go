@@ -24,8 +24,17 @@ type limitCount struct {
 	Timestamp time.Time
 }
 
+// defaultNotifyLimitDurationMinute 与 NOTIFICATION_LIMIT_DURATION_MINUTE 的
+// 默认值一致，用于兜住非法配置。
+const defaultNotifyLimitDurationMinute = 10
+
 func getDuration() time.Duration {
 	minute := constant.NotificationLimitDurationMinute
+	if minute <= 0 {
+		// 窗口配置为 0/负数时不能直接使用：Redis 计数键会被写成永不过期，
+		// 内存计数也会被判定为立即过期，两条路径的限流都会静默失效。
+		minute = defaultNotifyLimitDurationMinute
+	}
 	return time.Duration(minute) * time.Minute
 }
 

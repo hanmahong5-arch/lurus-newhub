@@ -1,13 +1,19 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/gin-gonic/gin"
 )
+
+// downloadLogTimeout bounds the detached download bookkeeping started by
+// DownloadArtifact.
+const downloadLogTimeout = 5 * time.Second
 
 // Package-level release service (initialized in main.go)
 var releaseService *app.ReleaseService
@@ -172,13 +178,20 @@ func DownloadArtifact(c *gin.Context) {
 		return
 	}
 
-	// Log download (async, non-blocking)
+	// Log download (async, non-blocking). Everything the goroutine needs is
+	// resolved here, before it is started: it outlives the handler, and once the
+	// handler returns the request context is cancelled and gin recycles the
+	// Context (and its Request) for the next request. Touching either from the
+	// goroutine would drop the download bookkeeping and race the reuse.
 	ipAddress := c.ClientIP()
 	userAgent := c.GetHeader("User-Agent")
 	referer := c.GetHeader("Referer")
 
+	svc := releaseService
 	go func() {
-		_ = releaseService.HandleDownload(c.Request.Context(), artifactId, ipAddress, userAgent, referer)
+		logCtx, cancel := context.WithTimeout(context.Background(), downloadLogTimeout)
+		defer cancel()
+		_ = svc.HandleDownload(logCtx, artifactId, ipAddress, userAgent, referer)
 	}()
 
 	// Generate download URL

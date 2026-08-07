@@ -55,7 +55,9 @@ func Playground(c *gin.Context) {
 
 	useAccessToken := c.GetBool("use_access_token")
 	if useAccessToken {
-		newAPIError = types.NewError(errors.New("暂不支持使用 access token"), types.ErrorCodeAccessDenied, types.ErrOptionWithSkipRetry())
+		// 纯权限拒绝：显式给 403，否则 NewError 默认落到 500，客户端和告警
+		// 无法把它与真正的服务端故障区分开。
+		newAPIError = types.NewErrorWithStatusCode(errors.New("暂不支持使用 access token"), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
 		return
 	}
 
