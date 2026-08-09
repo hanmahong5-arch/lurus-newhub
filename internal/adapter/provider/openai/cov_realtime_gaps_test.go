@@ -1,20 +1,14 @@
 package openai
 
-// Business-acceptance tests for the two Realtime-mode helpers that don't
-// need a live websocket to exercise their own logic: preConsumeUsage's
-// running-total accumulation (the numbers billed for a realtime session) and
-// streamTTSResponse's raw byte relay to the client.
+// Business-acceptance tests for the Realtime-mode helper that doesn't need a
+// live websocket to exercise its own logic: preConsumeUsage's running-total
+// accumulation (the numbers billed for a realtime session).
 //
-// FINDING: internal/adapter/provider/openai/relay-openai.go:328 -
-// streamTTSResponse is unreferenced anywhere in the module (grep across
-// internal/ turns up only its own definition) - it is dead code, not wired
-// into OpenaiTTSHandler or any other caller. Not fixed here per the "tests
-// only" constraint; flagged for owner triage (either wire it in for a
-// streaming-TTS path or delete it).
+// The streamTTSResponse tests that used to live here are gone: that helper had
+// no production caller and was deleted as dead code, and
+// fix_dead_tts_stream_test.go now fails if it reappears unreferenced.
 
 import (
-	"io"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -92,33 +86,3 @@ func TestPreConsumeUsage_SecondCallAddsOntoRunningTotal(t *testing.T) {
 		t.Errorf("TotalTokens after two calls = %d, want 7 (3+4, proving accumulation not overwrite)", total.TotalTokens)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// streamTTSResponse
-// ---------------------------------------------------------------------------
-
-func TestStreamTTSResponse_CopiesBodyBytesToClient(t *testing.T) {
-	w := newRecorderCtx(t)
-	body := io.NopCloser(strings.NewReader("RIFF-fake-audio-bytes"))
-	resp := &http.Response{StatusCode: 200, Body: body}
-	streamTTSResponse(w.ctx, resp)
-	if got := w.rec.Body.String(); got != "RIFF-fake-audio-bytes" {
-		t.Errorf("relayed body = %q, want the upstream audio bytes copied verbatim", got)
-	}
-}
-
-func TestStreamTTSResponse_EmptyBody_WritesNothing(t *testing.T) {
-	w := newRecorderCtx(t)
-	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(""))}
-	streamTTSResponse(w.ctx, resp)
-	if got := w.rec.Body.String(); got != "" {
-		t.Errorf("relayed body = %q, want empty for an empty upstream body", got)
-	}
-}
-
-// NOTE: the `!ok` fallback branch inside streamTTSResponse (io.Copy path for
-// a writer that doesn't implement http.Flusher) is unreachable through
-// gin.Context: gin.ResponseWriter's interface itself embeds http.Flusher, so
-// any value assignable to c.Writer already satisfies the type assertion.
-// Not exercised here rather than constructing a contrived double that
-// wouldn't reflect a real call path.

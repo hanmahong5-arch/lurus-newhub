@@ -197,52 +197,9 @@ func TestCoreAppBootCheckRedisLimit_DispatchedFromCheckNotificationLimit(t *test
 // TestCoreAppBootCheckRedisLimit_ZeroDurationNeverBlocks_FINDING locks in a
 // real latent bug at the checkRedisLimit / common.RedisIncr boundary.
 //
-// FINDING: common.RedisIncr (internal/pkg/common/redis.go) only issues the
-// INCR when the key's current TTL is > 0 ("只有在 key 存在且有 TTL 时才需要特殊处理"
-// — if ttl<=0 it silently returns nil without incrementing anything). If an
-// operator ever sets NOTIFICATION_LIMIT_DURATION_MINUTE=0 (e.g. intending
-// "no expiry"/misconfiguration, or a future config validation gap lets 0
-// through), checkRedisLimit's initializing RedisSet writes the counter key
-// with no TTL. Every subsequent call then reads count="1" forever — INCR
-// never fires — so currentCount never reaches NotifyLimitCount and the
-// Redis-backed notification rate limit is permanently bypassed (unlimited
-// notifications) instead of blocking, for as long as that key exists (its
-// natural key rollover is hourly via the "2006010215" suffix, so this leaks
-// NotifyLimitCount-many *extra* allowed notifications every single hour, not
-// just once). This test asserts the CURRENT observable behavior (never
-// blocks) rather than papering over it — if RedisIncr's guard is fixed to
-// increment even on TTL<=0 keys, this test should be updated to expect
-// blocking again.
-func TestCoreAppBootCheckRedisLimit_ZeroDurationNeverBlocks_FINDING(t *testing.T) {
-	withMiniRedisTPM(t)
-
-	oldLimit, oldDuration := constant.NotifyLimitCount, constant.NotificationLimitDurationMinute
-	constant.NotifyLimitCount = 2
-	constant.NotificationLimitDurationMinute = 0 // triggers the TTL<=0 RedisIncr no-op
-	t.Cleanup(func() {
-		constant.NotifyLimitCount = oldLimit
-		constant.NotificationLimitDurationMinute = oldDuration
-	})
-
-	ctx := context.Background()
-	userId := 990005
-	notifyType := "cov-redis-limit-zero-duration"
-
-	for i := 0; i < 10; i++ {
-		allowed, err := checkRedisLimit(ctx, userId, notifyType)
-		if err != nil {
-			t.Fatalf("call %d: unexpected error: %v", i, err)
-		}
-		if !allowed {
-			t.Fatalf("call %d: FINDING behavior changed — expected every call to stay allowed under duration=0 (see FINDING comment), but this one was blocked", i)
-		}
-	}
-
-	got, err := common.RedisGet(ctx, "notify_limit:990005:cov-redis-limit-zero-duration:"+time.Now().Format("2006010215"))
-	if err != nil {
-		t.Fatalf("recheck counter: %v", err)
-	}
-	if got != "1" {
-		t.Fatalf("counter = %q, want %q — confirms RedisIncr never fired because the key has no TTL (FINDING)", got, "1")
-	}
-}
+// NOTE: NOTIFICATION_LIMIT_DURATION_MINUTE=0 used to write a TTL-less counter
+// key that common.RedisIncr then refused to increment, permanently bypassing the
+// notification rate limit. Covered by TestFixNotifyLimit_ZeroWindowStillLimitsRedis
+// in fix_notify_limit_duration_test.go (plus the memory-path and getDuration
+// siblings there), which asserts the counter really climbs, the key carries an
+// expiry, and the over-limit call is rejected.

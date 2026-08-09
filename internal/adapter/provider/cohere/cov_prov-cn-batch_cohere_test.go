@@ -96,27 +96,11 @@ func TestAdaptor_SetupRequestHeader(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Adaptor.ConvertOpenAIRequest — FINDING: nil request is not guarded
-// ---------------------------------------------------------------------------
-
-func TestAdaptor_ConvertOpenAIRequest_NilRequestPanics(t *testing.T) {
-	// FINDING: unlike sibling CN adapters (baidu, tencent, xunfei) which all
-	// nil-check `request` before use, cohere's ConvertOpenAIRequest calls
-	// requestOpenAI2Cohere(*request) unconditionally. A nil request (e.g. a
-	// malformed/empty relay call) crashes the whole request goroutine instead
-	// of returning a clean business error. This test locks in the current
-	// (buggy) crash as an explicit regression baseline rather than silently
-	// tolerating it.
-	a := &Adaptor{}
-	c, _ := prov_cn_batch_cohereGinContext()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic dereferencing nil *dto.GeneralOpenAIRequest; if this no longer panics the FINDING has been fixed and this test must be updated to assert the new graceful error instead")
-		}
-	}()
-	_, _ = a.ConvertOpenAIRequest(c, &relaycommon.RelayInfo{}, nil)
-}
+// NOTE: cohere's ConvertOpenAIRequest used to dereference a nil request without
+// the guard its sibling adapters all have. Covered by
+// TestFixCohereConvertOpenAIRequest_NilRequestReturnsError in
+// fix_nil_request_test.go, which asserts both the returned error and that the
+// non-nil path still converts.
 
 func TestAdaptor_ConvertOpenAIRequest_ValidRequest(t *testing.T) {
 	old := common.CohereSafetySetting

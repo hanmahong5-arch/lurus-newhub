@@ -324,18 +324,16 @@ func TestAdaptor_StubConverters(t *testing.T) {
 		t.Error("ConvertOpenAIResponsesRequest: expected not-implemented error, got nil")
 	}
 
-	// FINDING: ConvertRerankRequest silently returns (nil, nil) instead of a
-	// "not implemented" error like every sibling stub above. A caller that
-	// forwards a rerank request to the vertex adaptor gets no error and a nil
-	// payload, which -- unless every call site special-cases nil -- risks
-	// marshaling into an empty/garbage upstream request body instead of
-	// failing fast. Locking in the current (surprising) behavior below.
+	// ConvertRerankRequest used to return (nil, nil) instead of the
+	// not-implemented error every sibling stub above returns, so the rerank
+	// relay path marshalled the nil into a literal "null" body and posted it
+	// upstream. It must fail fast like the rest.
 	result, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{Model: "m", Query: "q"})
-	if err != nil {
-		t.Fatalf("ConvertRerankRequest currently never errors; got %v", err)
+	if err == nil {
+		t.Error("ConvertRerankRequest: expected not-implemented error, got nil")
 	}
 	if result != nil {
-		t.Errorf("ConvertRerankRequest result = %v, want nil (current, inconsistent-with-siblings behavior)", result)
+		t.Errorf("ConvertRerankRequest result = %v, want nil", result)
 	}
 }
 

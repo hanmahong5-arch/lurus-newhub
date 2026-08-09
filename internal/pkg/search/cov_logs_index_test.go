@@ -53,36 +53,11 @@ func TestConvertLogToDocument(t *testing.T) {
 	}
 }
 
-// FINDING: internal/pkg/search/logs_index.go:99-120 ConvertDocumentToLog drops
-// the "governance" fields (ChannelType, RelayMode, UpstreamModel,
-// TotalLatencyMs) and Other even though both LogDocument and Log carry them.
-// Repro: round-trip a document produced by ConvertLogToDocument back through
-// ConvertDocumentToLog (as SearchLogs does for every search hit) — the
-// returned Log always reports ChannelType=0, RelayMode=0, UpstreamModel="",
-// TotalLatencyMs=0 regardless of what was indexed/searched.
-// Expected: SearchLogs results should preserve those fields like every other
-// field on the document. Actual: they are silently zeroed on every search.
-func TestConvertDocumentToLog_DropsGovernanceFields(t *testing.T) {
-	original := sampleLog()
-	doc := ConvertLogToDocument(original)
-	roundTripped := ConvertDocumentToLog(doc)
-
-	// Fields that DO survive the round trip.
-	if roundTripped.Id != original.Id || roundTripped.Username != original.Username ||
-		roundTripped.Content != original.Content || roundTripped.ChannelName != original.ChannelName {
-		t.Fatalf("expected core fields preserved, got %+v from %+v", roundTripped, original)
-	}
-
-	// Fields the current implementation loses (see FINDING above). This
-	// assertion documents the actual (buggy) behavior: it must go red the
-	// moment someone starts copying these fields without also fixing the
-	// callers that may depend on the current zero-value behavior.
-	if roundTripped.ChannelType != 0 || roundTripped.RelayMode != 0 ||
-		roundTripped.UpstreamModel != "" || roundTripped.TotalLatencyMs != 0 {
-		t.Fatalf("ConvertDocumentToLog unexpectedly preserved governance fields (%+v); "+
-			"update the FINDING comment if this was intentionally fixed", roundTripped)
-	}
-}
+// NOTE: ConvertDocumentToLog used to drop the governance fields
+// (ChannelType/RelayMode/UpstreamModel/TotalLatencyMs), zeroing them on every
+// search hit. Covered by fix_logs_index_roundtrip_test.go, whose
+// TestConvertLogToDocumentRoundTrip_LosslessForIndexedFields asserts the whole
+// Log -> LogDocument -> Log round trip field-for-field.
 
 func TestEscapeFilterString(t *testing.T) {
 	bs := "\\" // one literal backslash

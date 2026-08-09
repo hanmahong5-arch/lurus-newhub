@@ -160,42 +160,11 @@ func TestFormatClaudeResponseInfo_UnknownType_ReturnsFalse(t *testing.T) {
 	}
 }
 
-// FINDING: internal/adapter/provider/claude/relay-claude.go:596-605 (message_start
-// branch of FormatClaudeResponseInfo) unconditionally dereferences
-// claudeResponse.Message and claudeResponse.Message.Usage:
-//
-//	claudeInfo.ResponseId = claudeResponse.Message.Id
-//	...
-//	claudeInfo.Usage.PromptTokens = claudeResponse.Message.Usage.InputTokens
-//
-// dto.ClaudeResponse.Message is `*ClaudeMediaMessage` and ClaudeMediaMessage.Usage
-// is `*ClaudeUsage`, both optional per the `omitempty` json tags. A malformed or
-// truncated upstream "message_start" SSE event that omits "message" (or omits
-// "usage" within it) makes this a nil-pointer panic instead of a handled parse
-// error. Expected: a defensive nil check with a bad_response_body-style error
-// (as GetClaudeError already does for the sibling "error" event type). Actual:
-// panic. This function has no guard; the panic in this test is recovered
-// locally only to prove the defect without crashing the test binary — in
-// production (ClaudeStreamHandler's SafeGo wrapper) it silently aborts the
-// individual SSE data-handler goroutine, stalling that stream.
-func TestFormatClaudeResponseInfo_MessageStart_NilMessage_Panics(t *testing.T) {
-	info := newClaudeInfo()
-	claudeResp := &dto.ClaudeResponse{Type: "message_start", Message: nil}
-
-	panicked := false
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				panicked = true
-			}
-		}()
-		FormatClaudeResponseInfo(RequestModeMessage, claudeResp, nil, info)
-	}()
-
-	if !panicked {
-		t.Fatal("expected a nil-pointer panic for message_start with Message==nil (see FINDING above); if this no longer panics, the nil-guard has been added — please update/remove this regression test")
-	}
-}
+// NOTE: message_start events that omit "message" (or "usage" within it) used to
+// nil-deref inside SafeGo and silently stall the SSE stream. That guard is
+// covered by TestFixClaudeFormatResponseInfo_MessageStartMissingFields in
+// fix_claude_relay_guards_test.go, which asserts the return value and that the
+// usage counters stay at zero rather than merely asserting "it panicked".
 
 // ---------------------------------------------------------------------------
 // HandleClaudeResponseData
@@ -236,49 +205,11 @@ func TestHandleClaudeResponseData_CompletionMode_ClaudePassthrough(t *testing.T)
 	}
 }
 
-// FINDING: internal/adapter/provider/claude/relay-claude.go:762 —
-//
-//	if claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
-//
-// runs UNCONDITIONALLY after the requestMode switch, for BOTH RequestModeCompletion
-// and RequestModeMessage. For RequestModeCompletion, claudeInfo.Usage is computed
-// from claudeResponse.Completion via the text estimator — claudeResponse.Usage
-// (the raw upstream *ClaudeUsage pointer) is never populated by that branch. The
-// legacy Anthropic /v1/complete API (used for claude-2.x / claude-instant models,
-// RequestModeCompletion — see Adaptor.Init) does not return a top-level "usage"
-// object at all, so claudeResponse.Usage is nil and this line unconditionally
-// nil-derefs on every real non-streaming completion-mode response. Expected: a
-// nil check (`claudeResponse.Usage != nil && ...`) matching the optional/
-// `omitempty` nature of the field. Actual: guaranteed panic for the mainline
-// completion-mode success path. Recovered locally here only to document the
-// defect without crashing the suite.
-func TestHandleClaudeResponseData_CompletionMode_NoUsageField_Panics(t *testing.T) {
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/v1/complete", nil)
-
-	// This is the real shape of a legacy /v1/complete response: no "usage" key.
-	raw := []byte(`{"completion":" hi there","stop_reason":"stop_sequence","model":"claude-2.1"}`)
-	info := &relaycommon.RelayInfo{
-		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-2.1"},
-		RelayFormat: types.RelayFormatClaude,
-	}
-	claudeInfo := newClaudeInfo()
-	httpResp := &http.Response{StatusCode: 200, Header: http.Header{}}
-
-	panicked := false
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				panicked = true
-			}
-		}()
-		_ = HandleClaudeResponseData(c, info, claudeInfo, httpResp, raw, RequestModeCompletion)
-	}()
-	if !panicked {
-		t.Fatal("expected a nil-pointer panic for a realistic /v1/complete response with no top-level usage field (see FINDING above); if this no longer panics, the nil-guard has been added — please update/remove this regression test")
-	}
-}
+// NOTE: the legacy /v1/complete shape (no top-level "usage") used to nil-deref
+// on relay-claude.go's unconditional ServerToolUse check. Covered by
+// TestFixClaudeHandleResponseData_CompletionModeWithoutUsage and its
+// OpenAI-output-format sibling in fix_claude_relay_guards_test.go, which assert
+// the estimated token counts and the written body instead of just "it panicked".
 
 func TestHandleClaudeResponseData_MessageMode_OpenAIConversion(t *testing.T) {
 	w := httptest.NewRecorder()
@@ -381,47 +312,11 @@ func TestHandleClaudeResponseData_WebSearchRequestsSetOnContext(t *testing.T) {
 	}
 }
 
-// FINDING: internal/adapter/provider/claude/relay-claude.go:740-747
-// (HandleClaudeResponseData, non-completion branch) dereferences
-// claudeResponse.Usage unconditionally:
-//
-//	claudeInfo.Usage.PromptTokens = claudeResponse.Usage.InputTokens
-//
-// dto.ClaudeResponse.Usage is `*ClaudeUsage` (`json:"usage,omitempty"`). The
-// preceding GetClaudeError() check only protects the case where the upstream
-// response has an explicit "error" field; a response that is neither a valid
-// success payload (with "usage") nor an explicit Claude error (e.g. a
-// truncated/malformed-but-JSON-valid body, or a non-conformant proxy in
-// front of the real Claude API) produces a nil-pointer panic here instead of
-// a handled bad_response_body error. Expected: graceful error. Actual: panic
-// (recovered locally in this test only to document the defect without
-// crashing the suite; in ClaudeHandler's real call path there is no local
-// recover, so it propagates up to the global RelayPanicRecover middleware and
-// surfaces as an ungraceful 500 for what could have been a clean upstream
-// error response).
-func TestHandleClaudeResponseData_MessageMode_MissingUsageAndError_Panics(t *testing.T) {
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
-
-	raw := []byte(`{"id":"msg_bad","type":"message","content":[{"type":"text","text":"partial"}],"stop_reason":"end_turn","model":"claude-3-opus-20240229"}`)
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-3-opus-20240229"}}
-	claudeInfo := newClaudeInfo()
-	httpResp := &http.Response{StatusCode: 200, Header: http.Header{}}
-
-	panicked := false
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				panicked = true
-			}
-		}()
-		_ = HandleClaudeResponseData(c, info, claudeInfo, httpResp, raw, RequestModeMessage)
-	}()
-	if !panicked {
-		t.Fatal("expected a nil-pointer panic when usage is absent and there is no error field (see FINDING above); if this no longer panics, the nil-guard has been added — please update/remove this regression test")
-	}
-}
+// NOTE: a success-shaped Claude response that carries neither "usage" nor an
+// "error" field used to nil-deref past the GetClaudeError check. Covered by
+// TestFixClaudeHandleResponseData_MessageModeMissingUsage in
+// fix_claude_relay_guards_test.go, which asserts the returned bad_response_body
+// error code rather than the panic.
 
 // ---------------------------------------------------------------------------
 // ClaudeHandler

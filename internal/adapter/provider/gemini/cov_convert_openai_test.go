@@ -443,45 +443,11 @@ func TestCovertOpenAI2Gemini_ToolCalls_ThoughtSignatureNotAttachedOnOtherChannel
 // CovertOpenAI2Gemini: markdown-embedded images inside text parts
 // ---------------------------------------------------------------------------
 
-// FINDING: relay-gemini.go CovertOpenAI2Gemini's markdown-image scanning loop
-// (around line 462, the `for { ... text = text[closeIdx+1:] }` block) never
-// appends the text that trails the *last* markdown image in a message: after
-// the loop exits (no more "![" found) there is no code path that emits the
-// leftover `text` variable as a final part -- it's only appended via the
-// `if !hasMarkdownImage` branch, which is false once any image was found.
-// Repro: a user message "before ![pic](data:image/png;base64,XXXX) after"
-// produces exactly 2 parts (text-before, image); the " after" text is
-// silently dropped instead of becoming a 3rd text part. Expected: trailing
-// text after the last markdown image should be preserved.
-func TestCovertOpenAI2Gemini_MarkdownImage_SplitsTextAndImage(t *testing.T) {
-	withGeminiVisionMax(t, 16)
-	c, _ := newTestContext()
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-
-	imgB64 := base64.StdEncoding.EncodeToString([]byte("fake-bytes"))
-	text := "before ![pic](data:image/png;base64," + imgB64 + ") after"
-	req := dto.GeneralOpenAIRequest{
-		Messages: []dto.Message{{Role: "user", Content: text}},
-	}
-	got, err := CovertOpenAI2Gemini(c, req, info)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	parts := got.Contents[0].Parts
-	// documents the actual (buggy) behavior: trailing " after" text is lost.
-	if len(parts) != 2 {
-		t.Fatalf("len(Parts) = %d, want 2 (text-before, image) per FINDING above; got %+v", len(parts), parts)
-	}
-	if parts[0].Text != "before " {
-		t.Errorf("Parts[0].Text = %q, want %q", parts[0].Text, "before ")
-	}
-	if parts[1].InlineData == nil || parts[1].InlineData.MimeType != "image/png" {
-		t.Errorf("Parts[1].InlineData = %+v, want mimeType image/png", parts[1].InlineData)
-	}
-	if parts[1].InlineData.Data != imgB64 {
-		t.Errorf("Parts[1].InlineData.Data = %q, want %q", parts[1].InlineData.Data, imgB64)
-	}
-}
+// NOTE: the split of "before ![pic](...) after" into text/image/trailing-text
+// is covered by TestCovertOpenAI2Gemini_MarkdownImage_KeepsTrailingText in
+// fix_markdown_image_tail_test.go — the trailing text used to be dropped by the
+// scanning loop, and that file also covers the early-break and no-regression
+// variants of the same loop.
 
 // The markdown-image branch's base64 decode error is only reachable when the
 // data URL has NO ";" between the mime type and the comma (see

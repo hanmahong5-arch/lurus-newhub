@@ -12,8 +12,8 @@ import (
 	"context"
 	"errors"
 	"os"
-	"strings"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -54,24 +54,21 @@ func core_app_boot_findSpan(recorder *tracetest.SpanRecorder, name string) sdktr
 	return nil
 }
 
-// TestCoreAppBootTracing_Init_EnabledCurrentlyFailsOnSchemaConflict exercises
-// Init's enabled path (sampler selection across all three branches, exporter
-// construction, resource build).
+// TestCoreAppBootTracing_Init_EnabledWiresAllSamplerBranches exercises Init's
+// enabled path across all three sampler branches (tracing.go:91-98):
+// AlwaysSample, NeverSample and TraceIDRatioBased. fix_tracing_init_test.go
+// only drives SampleRate=1.0, so without this the ratio and never branches go
+// uncovered.
 //
-// FINDING: with the go.mod-pinned go.opentelemetry.io/otel/sdk (whose
-// resource.Default() now advertises the newer embedded semconv schema URL,
-// e.g. 1.40.0) against tracing.go's explicit `semconv "...v1.26.0"` import
-// used in resource.NewWithAttributes, resource.Merge deterministically
-// returns "conflicting Schema URL" — every single time, for any Config with
-// Enabled=true, independent of network/environment. So today, setting
-// OTEL_TRACING_ENABLED=true does NOT enable tracing: Init returns a non-nil
-// error, run()/main.go's caller (cmd/server) treats that as a bootstrap
-// failure only if it checks the error (main.go's InitResources chain does
-// propagate it — worth an owner follow-up to bump the semconv import to
-// match the sdk's embedded schema, or drop the explicit SchemaURL arg).
-// This test locks in the CURRENT observable behavior rather than the
-// intended one, per the "don't paper over a real bug" rule.
-func TestCoreAppBootTracing_Init_EnabledCurrentlyFailsOnSchemaConflict(t *testing.T) {
+// Init used to fail unconditionally on a "conflicting Schema URL" from
+// resource.Merge (the SDK's embedded semconv vs the explicitly pinned one), so
+// OTEL_TRACING_ENABLED=true silently produced no tracing at all.
+//
+// No network is involved: the OTLP HTTP exporter connects lazily. Each case
+// shuts the provider down again — a successful Init installs a live batch span
+// processor on the package global, and leaving it running would leak a
+// background goroutine into every later test in this package.
+func TestCoreAppBootTracing_Init_EnabledWiresAllSamplerBranches(t *testing.T) {
 	tests := []struct {
 		name       string
 		sampleRate float64
@@ -84,6 +81,11 @@ func TestCoreAppBootTracing_Init_EnabledCurrentlyFailsOnSchemaConflict(t *testin
 		t.Run(tc.name, func(t *testing.T) {
 			core_app_boot_resetTracingGlobals(t)
 			tracer, tracerProvider, enabled = nil, nil, false
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = Shutdown(ctx)
+			})
 
 			cfg := Config{
 				Enabled:     true,
@@ -92,26 +94,20 @@ func TestCoreAppBootTracing_Init_EnabledCurrentlyFailsOnSchemaConflict(t *testin
 				SampleRate:  tc.sampleRate,
 				Environment: "test",
 			}
-			err := Init(context.Background(), cfg)
-			if err == nil {
-				t.Fatal("expected Init to currently fail with a schema URL conflict (see FINDING) — got nil error instead; if this now passes, the dependency mismatch was fixed and this test should be updated to assert success")
+			if err := Init(context.Background(), cfg); err != nil {
+				t.Fatalf("Init(SampleRate=%v) = %v, want nil", tc.sampleRate, err)
 			}
-			if !strings.Contains(err.Error(), "Schema URL") {
-				t.Fatalf("expected the known schema-URL-conflict error, got a different error: %v", err)
+			if !enabled {
+				t.Error("enabled = false after a successful Init")
 			}
-			// Because Init returns before reaching the tracerProvider assignment,
-			// the package stays fully unwired — tracing silently never turns on.
-			if enabled {
-				t.Error("expected enabled to remain false when Init errors before completing")
+			if tracer == nil {
+				t.Error("tracer is nil after a successful Init")
 			}
-			if tracer != nil {
-				t.Error("expected tracer to remain nil when Init errors before completing")
+			if tracerProvider == nil {
+				t.Error("tracerProvider is nil after a successful Init")
 			}
-			if tracerProvider != nil {
-				t.Error("expected tracerProvider to remain nil when Init errors before completing")
-			}
-			if IsEnabled() {
-				t.Error("IsEnabled() must stay false when Init failed")
+			if !IsEnabled() {
+				t.Error("IsEnabled() = false after a successful Init")
 			}
 		})
 	}

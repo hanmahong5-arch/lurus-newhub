@@ -296,17 +296,17 @@ func TestCovHandlerPricing_UpdateOption_UnknownKeyPersistsGenerically(t *testing
 	}
 }
 
-// FINDING: UpdateModelRatioByJSONString (called transitively from
-// repo.UpdateOption for key "ModelRatio") unconditionally resets the live
-// in-memory modelRatioMap to an EMPTY map *before* attempting to parse the
-// caller-supplied JSON. When that JSON is malformed, the parse fails and the
-// handler correctly reports success:false to the caller — but by then the
-// real, previously-configured model ratios have already been wiped from
-// memory. A single malformed admin request zeroes every model's billing
-// ratio while telling the operator the write failed (implying nothing
-// changed). This test locks in the CURRENT (buggy) behavior so a future fix
-// is a visible test change, not a silent regression.
-func TestCovHandlerPricing_UpdateOption_ModelRatio_MalformedJSON_WipesLiveState(t *testing.T) {
+// UpdateModelRatioByJSONString (reached transitively from repo.UpdateOption for
+// key "ModelRatio") used to reset the live in-memory modelRatioMap to an EMPTY
+// map *before* parsing the caller-supplied JSON, so one malformed admin request
+// zeroed every model's billing ratio while reporting success:false — implying
+// nothing had changed. A failed update must be a no-op.
+//
+// fix_ratio_bad_json_test.go pins that contract by calling ratio_setting
+// directly; this test keeps the whole admin round trip
+// (POST /option -> handler.UpdateOption -> repo.UpdateOption -> ratio_setting)
+// under coverage, because that is the path an operator actually takes.
+func TestCovHandlerPricing_UpdateOption_ModelRatio_MalformedJSON_KeepsLiveState(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
@@ -337,11 +337,12 @@ func TestCovHandlerPricing_UpdateOption_ModelRatio_MalformedJSON_WipesLiveState(
 	}
 
 	after := ratio_setting.GetModelRatioCopy()
-	if _, stillPresent := after[knownModel]; stillPresent {
-		t.Fatalf("FINDING did not reproduce: expected the known model ratio to survive a failed update, but current code wipes it")
+	got, stillPresent := after[knownModel]
+	if !stillPresent {
+		t.Fatalf("the seeded model ratio was wiped by a failed update — a malformed admin payload must not zero live billing ratios")
 	}
-	if len(after) != 0 {
-		t.Fatalf("expected the entire model ratio map to be wiped to empty on malformed input (current buggy behavior), got %d entries", len(after))
+	if got != 7.5 {
+		t.Fatalf("model ratio for %s = %v, want the pre-update 7.5", knownModel, got)
 	}
 }
 
@@ -1002,23 +1003,22 @@ func TestCovHandlerPricing_CreateModelV2_DuplicateCheckDBError(t *testing.T) {
 	}
 }
 
-// FINDING: createModelV2Req accepts model_ratio / completion_ratio /
-// model_price / enable_groups from the caller, but CreateModelV2 never
-// stores them anywhere — repo.Model (the entity actually persisted) has no
-// such fields, and the response's modelV2View never echoes them either. A
-// tenant admin who POSTs a custom price at model-creation time will get a
-// 201 that silently discards their pricing intent with no error, no
-// warning, and no field in the response hinting it was dropped.
-func TestCovHandlerPricing_CreateModelV2_PricingFieldsSilentlyDropped(t *testing.T) {
+// Submitted pricing used to be accepted and then silently discarded (repo.Model
+// has no ratio columns); it now lands in ratio_setting — see
+// fix_v2_models_pricing_test.go, which pins where each field goes. What is
+// asserted here instead is the shape of the response: modelV2View is a
+// catalogue view with no pricing fields, so a 201 must not echo the submitted
+// ratios back as if the view carried them, and enable_groups (derived from the
+// serving channels, never writable) must come back null.
+func TestCovHandlerPricing_CreateModelV2_PricingNotEchoedInCatalogueView(t *testing.T) {
+	fixPricingIsolateRatioState(t)
 	ctx, tenant := handlerPricingModelsSetup(t)
 	defer ctx.Cleanup()
 
 	c, w := handlerPricingAdminModelCtx(http.MethodPost, "/models", map[string]interface{}{
-		"model_name":       "cov-pricing-dropped-fields-model",
+		"model_name":       "cov-pricing-view-shape-model",
 		"model_ratio":      999.5,
 		"completion_ratio": 2.5,
-		"model_price":      3.3,
-		"enable_groups":    []string{"default", "vip"},
 	}, tenant)
 	CreateModelV2(c)
 
@@ -1026,30 +1026,26 @@ func TestCovHandlerPricing_CreateModelV2_PricingFieldsSilentlyDropped(t *testing
 		t.Fatalf("expected 201, got %d body=%s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	// model_ratio / completion_ratio / model_price have no field in
-	// modelV2View at all — they must not appear as keys anywhere.
+	// modelV2View has no pricing fields at all — they must not appear as keys.
 	for _, forbidden := range []string{"model_ratio", "completion_ratio", "model_price"} {
 		if strings.Contains(body, forbidden) {
-			t.Fatalf("FINDING did not reproduce: response unexpectedly echoes %q — the field may now be persisted, re-check the finding. body=%s", forbidden, body)
+			t.Fatalf("response echoes %q, which modelV2View does not carry — the view contract changed, update this test and the console accordingly. body=%s", forbidden, body)
 		}
 	}
 
 	resp := handlerPricingParseBody(t, w)
 	data := resp["data"].(map[string]interface{})
-	// enable_groups DOES have a field in modelV2View, but CreateModelV2 never
-	// copies req.EnableGroups into the persisted repo.Model — so it always
-	// comes back null/empty regardless of what the caller submitted.
+	// enable_groups exists in the view but is derived from the channels serving
+	// the model, so a freshly created model has none.
 	if eg, present := data["enable_groups"]; !present || eg != nil {
-		t.Fatalf("FINDING did not reproduce: expected enable_groups=null (never wired from the request), got present=%v value=%v", present, eg)
+		t.Fatalf("expected enable_groups=null on a freshly created model, got present=%v value=%v", present, eg)
 	}
 	id := int(data["id"].(float64))
 	var stored repo.Model
 	if err := ctx.DB.First(&stored, id).Error; err != nil {
 		t.Fatalf("reload created model: %v", err)
 	}
-	// The pricing fields never had anywhere to land — reload proves the row
-	// carries nothing beyond the whitelisted catalogue fields.
-	if stored.ModelName != "cov-pricing-dropped-fields-model" {
+	if stored.ModelName != "cov-pricing-view-shape-model" {
 		t.Fatalf("unexpected stored model_name: %q", stored.ModelName)
 	}
 }
@@ -1219,22 +1215,16 @@ func TestCovHandlerPricing_DeletePrefillGroup_DBError(t *testing.T) {
 }
 
 // ===========================================================================
-// pricing.go — ResetModelRatio: repo.UpdateOption's DB-write errors are
-// silently swallowed
+// pricing.go — ResetModelRatio: repo.UpdateOption's DB-write errors must
+// reach the caller
 // ===========================================================================
 
-// FINDING: repo.UpdateOption (called by ResetModelRatio and by option.go's
-// UpdateOption handler for every non-specially-parsed key) ignores the
-// *gorm.DB errors from both FirstOrCreate and Save — their return values are
-// discarded entirely. The function's only possible error comes from
-// updateOptionMap's key-specific JSON parsing, never from the DB write
-// itself. Consequence: if the options table write fails for any reason (this
-// test simulates it by dropping the table outright), ResetModelRatio still
-// reports "重置模型倍率成功"/success=true to the caller even though nothing
-// was persisted to the database — only the in-memory ratio_setting map
-// changed. An admin resetting model ratios during a DB outage would see a
-// green checkmark while the change silently fails to survive a restart.
-func TestCovHandlerPricing_ResetModelRatio_DBWriteFailureSilentlySwallowed(t *testing.T) {
+// repo.UpdateOption used to discard the *gorm.DB errors from FirstOrCreate and
+// Save, so an admin resetting model ratios during a DB outage got a green
+// "重置模型倍率成功" while nothing was persisted. fix_option_write_error_test.go
+// pins the repo-level contract; this test covers ResetModelRatio's own error
+// branch (pricing.go:55-61), which only exists because the error now propagates.
+func TestCovHandlerPricing_ResetModelRatio_DBWriteFailureReported(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
@@ -1250,13 +1240,14 @@ func TestCovHandlerPricing_ResetModelRatio_DBWriteFailureSilentlySwallowed(t *te
 	w := V2Request(r, http.MethodPost, "/reset", nil, nil)
 	resp := handlerPricingParseBody(t, w)
 
-	// This assertion documents the CURRENT (buggy) behavior: success=true
-	// despite the options table being entirely absent. If this ever starts
-	// failing because someone fixed repo.UpdateOption to propagate DB errors,
-	// that's a genuine improvement — update this test to match.
-	if resp["success"] != true {
-		t.Fatalf("FINDING did not reproduce: expected success=true (DB failure silently swallowed) per current repo.UpdateOption behavior, got %v body=%s", resp["success"], w.Body.String())
+	if resp["success"] != false {
+		t.Fatalf("a reset that could not be persisted reported success=%v — the DB write error was swallowed again. body=%s", resp["success"], w.Body.String())
 	}
+	if msg, _ := resp["message"].(string); msg == "" || msg == "重置模型倍率成功" {
+		t.Errorf("message = %q, want the underlying DB error", msg)
+	}
+	// The envelope is still HTTP 200 with success=false — that is this API's
+	// established error shape, and the console keys off `success`.
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}

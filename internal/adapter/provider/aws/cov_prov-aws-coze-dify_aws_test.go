@@ -730,20 +730,17 @@ func TestAdaptor_DoRequest_AKSKMode_ClaudeStreamBuildsStreamInput(t *testing.T) 
 	}
 }
 
-// FINDING: doAwsClientRequest's Nova branch (relay-aws.go) builds a local
-// `awsReq := &bedrockruntime.InvokeModelInput{...}` and marshals the Nova
-// body into it, but -- unlike the Claude stream/non-stream branches right
-// below it, which both do `a.AwsReq = awsReq` -- it never assigns the built
-// request onto the adaptor. `a.AwsReq` is left at its zero value (nil).
-// Business impact: any AWS Bedrock channel configured with AK/SK auth
-// (ClientModeAKSK) serving a "nova-*" model builds a request that is silently
-// discarded; the subsequent DoResponse -> handleNovaRequest then does
-// `a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))`
-// against a nil `any`, which panics the request goroutine (a production
-// outage for that traffic class), rather than returning a clean error.
-// This test locks in the current (buggy) behavior as a regression baseline
-// rather than silently fixing adaptor.go, per task instructions.
-func TestAdaptor_DoRequest_AKSKMode_NovaModelDoesNotPersistAwsReq_FINDING(t *testing.T) {
+// doAwsClientRequest's Nova branch (relay-aws.go) used to build a local
+// `awsReq := &bedrockruntime.InvokeModelInput{...}` and drop it on the floor —
+// unlike the Claude stream/non-stream branches right below it, it never did
+// `a.AwsReq = awsReq`. Every AK/SK Bedrock channel serving a "nova-*" model
+// therefore reached DoResponse with a nil a.AwsReq, and the single-return type
+// assertion in handleNovaRequest panicked the request goroutine.
+//
+// fix_nova_awsreq_test.go pins the persisted request's contents and calls
+// handleNovaRequest directly; this test keeps the DoResponse dispatch itself
+// under coverage — that is the layer where the panic actually surfaced.
+func TestAdaptor_DoRequest_AKSKMode_NovaModelPersistsAwsReq(t *testing.T) {
 	a := &Adaptor{ClientMode: ClientModeAKSK}
 	c, _ := prov_aws_coze_dify_newTestContext()
 	info := &relaycommon.RelayInfo{
@@ -754,21 +751,20 @@ func TestAdaptor_DoRequest_AKSKMode_NovaModelDoesNotPersistAwsReq_FINDING(t *tes
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if a.AwsReq != nil {
-		t.Fatalf("a.AwsReq = %#v, want nil (documents the missing `a.AwsReq = awsReq` assignment in the Nova branch of doAwsClientRequest)", a.AwsReq)
+	if _, ok := a.AwsReq.(*bedrockruntime.InvokeModelInput); !ok {
+		t.Fatalf("a.AwsReq = %#v, want a *bedrockruntime.InvokeModelInput built by the Nova branch", a.AwsReq)
 	}
 
-	// Downstream consequence: DoResponse's Nova path type-asserts a.AwsReq
-	// directly (single-return form), which panics on a nil interface instead
-	// of failing cleanly.
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected handleNovaRequest to panic on a.AwsReq==nil (documents the real crash risk); if this no longer panics, the upstream bug was fixed and this test should be updated")
-		}
-	}()
-	a.IsNova = true
-	_, _ = a.DoResponse(c, nil, info)
+	// An adaptor that never went through DoRequest still must not panic when
+	// DoResponse dispatches into the Nova path — it must fail cleanly.
+	unprepared := &Adaptor{ClientMode: ClientModeAKSK, IsNova: true}
+	// DoResponse's usage return is `any`, so the typed nil *dto.Usage that
+	// handleNovaRequest returns on the error path arrives as a non-nil
+	// interface — assert on the error, which is the part that matters here.
+	_, apiErr := unprepared.DoResponse(c, nil, info)
+	if apiErr == nil {
+		t.Fatal("DoResponse with an unprepared a.AwsReq returned no error — the Nova path must fail cleanly, not panic")
+	}
 }
 
 func TestAdaptor_DoRequest_AKSKMode_NovaMalformedBodyErrors(t *testing.T) {

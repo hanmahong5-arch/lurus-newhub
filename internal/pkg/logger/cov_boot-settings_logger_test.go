@@ -331,81 +331,52 @@ func TestSetupLogger_ConcurrentCallSkipsWhenLocked(t *testing.T) {
 
 // --- checkLogRotation (unexported, internal test) ---
 
+// TestCheckLogRotation_TriggersResetAtThreshold is the only test covering the
+// dispatch branch of checkLogRotation (logger.go:93-99): counter reset, the
+// CompareAndSwap that elects the single rotating caller, the gopool.Go
+// dispatch, and SetupLogger's deferred flag release. The fix_log_rotation
+// tests all preset setupLogWorking=true (or stay below the threshold), so they
+// deliberately never reach it.
 func TestCheckLogRotation_TriggersResetAtThreshold(t *testing.T) {
-	origCount := logCount
-	origWorking := setupLogWorking
+	origCount := logCount.Load()
+	origWorking := setupLogWorking.Load()
 	origDir := *common.LogDir
 	*common.LogDir = "" // keep the async SetupLogger cheap/no-op
 	t.Cleanup(func() {
-		logCount = origCount
-		setupLogWorking = origWorking
+		logCount.Store(origCount)
+		setupLogWorking.Store(origWorking)
 		*common.LogDir = origDir
 	})
 
-	logCount = maxLogCount // one increment away from tripping the threshold
-	setupLogWorking = false
+	logCount.Store(maxLogCount) // one increment away from tripping the threshold
+	setupLogWorking.Store(false)
 
 	checkLogRotation() // logCount becomes maxLogCount+1 > maxLogCount -> resets
 
 	// The reset happens synchronously before the async SetupLogger goroutine
 	// is dispatched, so logCount must already be 0 here.
-	if logCount != 0 {
-		t.Fatalf("expected logCount reset to 0 after crossing threshold, got %d", logCount)
+	if got := logCount.Load(); got != 0 {
+		t.Fatalf("expected logCount reset to 0 after crossing threshold, got %d", got)
 	}
 
-	// setupLogWorking is flipped true synchronously, then the dispatched
-	// goroutine's SetupLogger defer flips it back to false; poll briefly.
+	// setupLogWorking is flipped true synchronously by the CompareAndSwap, then
+	// the dispatched goroutine's SetupLogger defer flips it back to false; poll
+	// briefly. The poll only exits after SetupLogger has finished reading
+	// *common.LogDir, so the Cleanup restore above cannot race it.
 	deadline := time.Now().Add(2 * time.Second)
-	for setupLogWorking && time.Now().Before(deadline) {
+	for setupLogWorking.Load() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if setupLogWorking {
+	if setupLogWorking.Load() {
 		t.Fatalf("expected setupLogWorking to settle back to false once the async rotation completes")
 	}
 }
 
-func TestCheckLogRotation_NoTriggerBelowThreshold(t *testing.T) {
-	origCount := logCount
-	origWorking := setupLogWorking
-	t.Cleanup(func() {
-		logCount = origCount
-		setupLogWorking = origWorking
-	})
-
-	logCount = 5
-	setupLogWorking = false
-
-	checkLogRotation()
-
-	if logCount != 6 {
-		t.Fatalf("expected logCount incremented to 6, got %d", logCount)
-	}
-	if setupLogWorking {
-		t.Fatalf("expected no rotation triggered below threshold")
-	}
-}
-
-func TestCheckLogRotation_SuppressedWhileAlreadyWorking(t *testing.T) {
-	origCount := logCount
-	origWorking := setupLogWorking
-	t.Cleanup(func() {
-		logCount = origCount
-		setupLogWorking = origWorking
-	})
-
-	logCount = maxLogCount + 5
-	setupLogWorking = true // rotation already in flight
-
-	checkLogRotation()
-
-	// FINDING: while setupLogWorking is true, checkLogRotation does not reset
-	// logCount (only the `logCount > maxLogCount && !setupLogWorking` branch
-	// resets it) — so logCount keeps growing unbounded until the in-flight
-	// rotation completes. This test locks that observed behavior.
-	if logCount != maxLogCount+6 {
-		t.Fatalf("expected logCount to keep incrementing while a rotation is in flight, got %d", logCount)
-	}
-}
+// NOTE: the below-threshold and rotation-in-flight cases that used to live here
+// are covered line-for-line by TestFixCheckLogRotation_BelowThresholdJustCounts
+// and TestFixCheckLogRotation_CounterBoundedWhileRotating in
+// fix_log_rotation_test.go — the latter of which asserts the counter now stays
+// bounded, which is the opposite of what the old test locked in.
 
 // --- concurrent writers (business requirement: logging must be goroutine-safe) ---
 

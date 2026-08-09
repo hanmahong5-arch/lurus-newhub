@@ -310,55 +310,10 @@ func TestInternalBackfillTokenAccountIDs_SuccessfulMatch(t *testing.T) {
 	}
 }
 
-// TestInternalBackfillTokenAccountIDs_ZeroAccountIDNotApplied: FINDING —
-// the handler counts a resolved-but-zero account ID toward users_matched
-// (the map key exists) yet correctly refuses to write it to the token
-// (accountID <= 0 guard in the update loop). This asserts the CURRENT
-// behavior: users_matched=1 (map has the entry) but tokens_updated=0 (the
-// guard skips the write). A dashboard reading users_matched alone would
-// over-report match success for this edge case.
-func TestInternalBackfillTokenAccountIDs_ZeroAccountIDNotApplied(t *testing.T) {
-	ctx := handlerMoneySetupBackfillRouter(t)
-	defer ctx.cleanup()
-
-	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id": 0, "idp_subject": "sub-zero"}`))
-	}))
-	defer fake.Close()
-	common.IdentityServiceURL = fake.URL
-
-	tok := &repo.Token{UserId: 505, Key: "zero-account-key", Status: common.TokenStatusEnabled}
-	if err := ctx.db.Create(tok).Error; err != nil {
-		t.Fatalf("seed token: %v", err)
-	}
-	mapping := &repo.UserIdentityMapping{
-		LurusUserID: 505, IDPSubject: "sub-zero", TenantID: "default", IsActive: true,
-	}
-	if err := ctx.db.Create(mapping).Error; err != nil {
-		t.Fatalf("seed mapping: %v", err)
-	}
-
-	w := handlerMoneyPostBackfill(ctx.router)
-	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	// FINDING: see doc comment above — locking in current (slightly
-	// misleading but not unsafe) behavior, not proposing a code change.
-	if int(resp["users_matched"].(float64)) != 1 {
-		t.Errorf("users_matched = %v, want 1 (map entry exists even for accountID=0)", resp["users_matched"])
-	}
-	if int(resp["tokens_updated"].(float64)) != 0 {
-		t.Errorf("tokens_updated = %v, want 0 (accountID<=0 guard must block the write)", resp["tokens_updated"])
-	}
-
-	var reloaded repo.Token
-	if err := ctx.db.First(&reloaded, tok.Id).Error; err != nil {
-		t.Fatalf("reload token: %v", err)
-	}
-	if reloaded.IdentityAccountID != 0 {
-		t.Errorf("IdentityAccountID = %d, want unchanged 0 (never write a non-positive account id)", reloaded.IdentityAccountID)
-	}
-}
+// NOTE: the degenerate-account-id case (platform answers id=0) is covered by
+// TestFixBackfillZeroAccountIDNotCountedAsMatch in fix_backfill_account_test.go,
+// which asserts the same three facts through the same handler with the corrected
+// expectation — users_matched must be 0, not 1.
 
 // TestInternalBackfillTokenAccountIDs_MultipleTokensSameUser: two tokens for
 // the same user must both get updated from the single resolved account

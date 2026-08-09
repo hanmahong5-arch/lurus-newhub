@@ -414,19 +414,22 @@ func TestZhipu4vImageHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("missing url on a data item is skipped, not fatal", func(t *testing.T) {
+	t.Run("url-less entry keeps its inline b64, fully empty entry is skipped", func(t *testing.T) {
 		c, w := prov_cn_batch_zhipu4vGinContext()
+		// The first item carries usable image bytes but no url; the handler used
+		// to take the `url == ""` branch and drop it, billing the tenant for a
+		// generation and returning an empty data array. The second item has
+		// neither url nor bytes and is genuinely unusable.
 		body := `{"created":1,"data":[{"b64_json":"AAA"},{}]}`
-		// FINDING: the first item has no url/image_url at all, so the handler
-		// takes the `url == ""` branch and `continue`s -- it silently drops a
-		// valid b64_json payload just because the (unused) url field was
-		// empty. Documenting the current (surprising) drop behavior.
 		_, apiErr := zhipu4vImageHandler(c, prov_cn_batch_zhipu4vRespFromBody(body), &relaycommon.RelayInfo{})
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
-		if strings.Contains(w.Body.String(), "AAA") {
-			t.Errorf("expected the url-less entry's b64_json to be dropped per current handler logic, but found it in output: %s", w.Body.String())
+		if !strings.Contains(w.Body.String(), "AAA") {
+			t.Errorf("the url-less entry's inline b64_json was dropped: %s", w.Body.String())
+		}
+		if n := strings.Count(w.Body.String(), "b64_json"); n != 1 {
+			t.Errorf("b64_json occurrences = %d, want 1 — the entry with neither url nor bytes must still be skipped: %s", n, w.Body.String())
 		}
 	})
 

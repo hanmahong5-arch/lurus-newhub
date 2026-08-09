@@ -181,26 +181,12 @@ func TestGetMonitorSetting_InvalidEnvIgnored(t *testing.T) {
 	}
 }
 
-func TestGetMonitorSetting_ZeroOrNegativeFrequencyIgnored(t *testing.T) {
-	boot_settings_resetMonitorSetting(t)
-
-	// FINDING: the code only enables auto-test when frequency > 0; "0" (a
-	// plausible attempt to mean "disabled") and negative values are silently
-	// ignored rather than explicitly disabling — locking current behavior.
-	monitorSetting = MonitorSetting{AutoTestChannelEnabled: true, AutoTestChannelMinutes: 99}
-	os.Setenv("CHANNEL_TEST_FREQUENCY", "0")
-	s := GetMonitorSetting()
-	if !s.AutoTestChannelEnabled || s.AutoTestChannelMinutes != 99 {
-		t.Fatalf("expected zero frequency to leave prior state untouched, got %+v", s)
-	}
-
-	monitorSetting = MonitorSetting{AutoTestChannelEnabled: false, AutoTestChannelMinutes: 10}
-	os.Setenv("CHANNEL_TEST_FREQUENCY", "-5")
-	s2 := GetMonitorSetting()
-	if s2.AutoTestChannelEnabled || s2.AutoTestChannelMinutes != 10 {
-		t.Fatalf("expected negative frequency to leave defaults untouched, got %+v", s2)
-	}
-}
+// NOTE: CHANNEL_TEST_FREQUENCY=0 (and negative values) used to be silently
+// ignored instead of disabling the automatic channel test, so a deployment that
+// had ever enabled it could not turn it off through the environment. Covered by
+// fix_monitor_setting_test.go, which pins the zero, negative, positive,
+// unparsable and unset cases and also asserts the period is left alone when
+// disabling.
 
 // --- operation_setting.go ---
 

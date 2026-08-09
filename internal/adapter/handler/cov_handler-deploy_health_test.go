@@ -146,11 +146,13 @@ func TestGetHealthDetailed_RedisDisabled(t *testing.T) {
 	}
 }
 
-func TestGetHealthDetailed_RedisEnabledButClientNil_ReportsDisabled(t *testing.T) {
-	// FINDING (documented, not fixed): RedisEnabled=true with a nil RDB is
-	// indistinguishable from "disabled" in the response, even though it is
-	// really a mis-initialized client — an operator reading /api/health would
-	// see "disabled" and not suspect a broken Redis wiring bug.
+// The mis-wired case (RedisEnabled=true, RDB=nil) used to collapse into the
+// same "disabled" label as a deliberate opt-out, hiding a broken client from
+// whoever reads /api/health; it now reports "not_configured". This drives the
+// full router round trip (fix_health_redis_label_test.go calls
+// GetHealthDetailed directly) and additionally pins that the redis check never
+// flips the HTTP status — a soft dependency must not turn the endpoint 503.
+func TestGetHealthDetailed_RedisEnabledButClientNil_ReportsNotConfigured(t *testing.T) {
 	handlerDeployHealthSnapshot(t)
 	repo.DB = nil
 	common.RedisEnabled = true
@@ -161,8 +163,8 @@ func TestGetHealthDetailed_RedisEnabledButClientNil_ReportsDisabled(t *testing.T
 		t.Fatalf("status = %d, want 200 (redis check never flips HTTP status)", w.Code)
 	}
 	checks, _ := body["checks"].(map[string]interface{})
-	if checks["redis"] != "disabled" {
-		t.Errorf("checks.redis = %v, want disabled (RedisEnabled=true + nil RDB collapses to the disabled label)", checks["redis"])
+	if checks["redis"] != "not_configured" {
+		t.Errorf("checks.redis = %v, want not_configured (RedisEnabled=true + nil RDB is a wiring fault, not an opt-out)", checks["redis"])
 	}
 }
 

@@ -544,16 +544,13 @@ func TestHandlerRelay_WriteClaudeCountTokensError_ZeroStatusDefaultsTo500(t *tes
 
 // ─── Playground ──────────────────────────────────────────────────────────
 
-// TestHandlerRelay_Playground_AccessTokenDenied pins the current behaviour of
-// the access-token guard.
-//
-// FINDING: the handler builds this error with types.NewError(...,
-// ErrorCodeAccessDenied, types.ErrOptionWithSkipRetry()) and never attaches a
-// status code, so NewError falls back to its default http.StatusInternalServerError
-// (500) instead of a client-error status such as 403/401. A caller cannot
-// distinguish "you're not allowed to use an access token here" from a genuine
-// server fault by status code alone. Locking in the actual behaviour so a
-// future status-code fix is a visible, deliberate diff.
+// TestHandlerRelay_Playground_AccessTokenDenied pins the access-token guard's
+// status code. The error used to be built without a status code, so
+// types.NewError fell back to 500 and a pure permission refusal was
+// indistinguishable from a server fault (and counted into the error rate); it
+// is now 403. fix_playground_access_denied_test.go pins the status and the
+// presence of the error envelope — this one also pins that the message names
+// the actual cause.
 func TestHandlerRelay_Playground_AccessTokenDenied(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -563,8 +560,8 @@ func TestHandlerRelay_Playground_AccessTokenDenied(t *testing.T) {
 
 	Playground(c)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (see FINDING in this test) — body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (a permission refusal must not be reported as a server fault) — body: %s", w.Code, w.Body.String())
 	}
 	resp := parseResponse(t, w)
 	errObj, ok := resp["error"].(map[string]interface{})

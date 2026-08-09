@@ -4,13 +4,10 @@ package openai
 // coverage pass: the Realtime websocket relay (the money path that counts
 // and bills tokens for live voice/text sessions), the Claude/Gemini output
 // branches of OpenaiHandler (non-OpenAI clients talking through an OpenAI
-// channel), the OpenRouter-enterprise malformed-envelope error path, and
-// streamTTSResponse's non-EOF upstream read error path.
+// channel), and the OpenRouter-enterprise malformed-envelope error path.
 
 import (
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -257,38 +254,6 @@ func TestOpenaiHandler_OpenRouterEnterprise_MalformedEnvelope_Errors(t *testing.
 	}
 }
 
-// ---------------------------------------------------------------------------
-// streamTTSResponse: the non-EOF upstream read-error branch.
-// ---------------------------------------------------------------------------
-
-// prov2ndPassOpenaiErrReader returns a few bytes and then a non-EOF error,
-// simulating a dropped upstream TCP connection mid-stream.
-type prov2ndPassOpenaiErrReader struct {
-	data   []byte
-	served bool
-}
-
-func (r *prov2ndPassOpenaiErrReader) Read(p []byte) (int, error) {
-	if !r.served {
-		r.served = true
-		n := copy(p, r.data)
-		return n, nil
-	}
-	return 0, fmt.Errorf("connection reset by peer")
-}
-
-func (r *prov2ndPassOpenaiErrReader) Close() error { return nil }
-
-func TestStreamTTSResponse_NonEOFReadError_StopsAfterPartialBytes(t *testing.T) {
-	w := newRecorderCtx(t)
-	resp := &http.Response{StatusCode: 200, Body: &prov2ndPassOpenaiErrReader{data: []byte("partial-audio")}}
-	streamTTSResponse(w.ctx, resp)
-	// The bytes read before the error must still have been flushed to the
-	// client - a dropped connection shouldn't silently discard already-read
-	// audio data.
-	if got := w.rec.Body.String(); got != "partial-audio" {
-		t.Errorf("relayed body = %q, want the bytes read before the error", got)
-	}
-}
-
-var _ io.ReadCloser = (*prov2ndPassOpenaiErrReader)(nil)
+// NOTE: this file used to carry a streamTTSResponse non-EOF read-error test.
+// That helper had no production caller and was deleted; fix_dead_tts_stream_test.go
+// now fails if it ever reappears unreferenced, so the test went with it.

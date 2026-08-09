@@ -574,20 +574,15 @@ func TestGeneralOpenAIRequest_GetTokenCountMeta(t *testing.T) {
 		}
 	})
 
-	t.Run("message name only counted when content non-nil", func(t *testing.T) {
+	t.Run("message name counted even when content is nil", func(t *testing.T) {
 		name := "alice"
-		// FINDING: internal/pkg/dto/openai_request.go around GetTokenCountMeta -
-		// the `if message.Name != nil` block that increments NameCount is nested
-		// INSIDE `if message.Content != nil`. A message with a Name but a nil
-		// Content (e.g. a tool-role message whose content was stripped) silently
-		// fails to be counted in NameCount/CombineText even though the Name is
-		// semantically present. Expected: Name should be counted independent of
-		// Content nilness. Actual: NameCount stays 0 and the name text is dropped
-		// from CombineText for token/billing estimation purposes.
+		// The NameCount increment used to sit inside the `if message.Content != nil`
+		// guard, so a message whose content was stripped had its name dropped from
+		// both NameCount and CombineText even though it is still sent upstream.
 		r := &GeneralOpenAIRequest{Messages: []Message{{Role: "user", Name: &name, Content: nil}}}
 		meta := r.GetTokenCountMeta()
-		if meta.NameCount != 0 {
-			t.Fatalf("NameCount = %d, want 0 (documents current nil-content-skips-name behavior)", meta.NameCount)
+		if meta.NameCount != 1 {
+			t.Fatalf("NameCount = %d, want 1 — a name-only message is still billed for its name", meta.NameCount)
 		}
 	})
 
@@ -809,22 +804,19 @@ func TestOpenAIResponsesRequest_ParseInput(t *testing.T) {
 
 func TestOpenAIResponsesRequest_GetTokenCountMeta(t *testing.T) {
 	t.Run("input_image with url contributes file meta not text", func(t *testing.T) {
-		// FINDING: internal/pkg/dto/openai_request.go ParseInput() "input_image"
-		// case never reads item["detail"] into MediaInput.Detail, even though
-		// MediaInput has a Detail field and GetTokenCountMeta() later reads
-		// input.Detail to populate FileMeta.Detail. Expected: a client-supplied
-		// "detail":"high" on a Responses-API input_image part should propagate
-		// through to FileMeta.Detail (used for image token/price-ratio tiering).
-		// Actual: Detail is always "" for Responses-API image inputs, silently
-		// discarding the client's requested detail level.
+		// ParseInput's "input_image" case used to drop item["detail"], so every
+		// Responses-API image was estimated at the default tier regardless of what
+		// the client asked for. fix_token_count_meta_test.go covers the detail
+		// placements; this case also pins OriginData and the MaxOutputTokens ->
+		// MaxTokens mapping.
 		raw := `[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"http://img","detail":"high"}]}]`
 		r := &OpenAIResponsesRequest{Input: json.RawMessage(raw), MaxOutputTokens: 500}
 		meta := r.GetTokenCountMeta()
 		if len(meta.Files) != 1 || meta.Files[0].OriginData != "http://img" {
 			t.Fatalf("Files = %+v", meta.Files)
 		}
-		if meta.Files[0].Detail != "" {
-			t.Fatalf("Detail = %q, want empty (documents dropped-detail finding above)", meta.Files[0].Detail)
+		if meta.Files[0].Detail != "high" {
+			t.Fatalf("Detail = %q, want \"high\" — the client-supplied detail must reach the image estimate", meta.Files[0].Detail)
 		}
 		if meta.MaxTokens != 500 {
 			t.Fatalf("MaxTokens = %d, want 500", meta.MaxTokens)

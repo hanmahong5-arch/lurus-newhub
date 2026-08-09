@@ -378,44 +378,11 @@ func TestRequestOpenAI2ClaudeMessage_NilContentBecomesEllipsis(t *testing.T) {
 	}
 }
 
-// FINDING: internal/adapter/provider/claude/relay-claude.go:250-253 intends to
-// default an empty message.Role to "user":
-//
-//	for i, message := range textRequest.Messages {
-//	    if message.Role == "" {
-//	        textRequest.Messages[i].Role = "user"
-//	    }
-//	    fmtMessage := dto.Message{Role: message.Role, ...}
-//
-// but `message` is the per-iteration range COPY taken before the mutation;
-// writing to `textRequest.Messages[i].Role` does not update `message.Role`,
-// so `fmtMessage.Role` is built from the still-empty string. The normalization
-// is a no-op: an empty-role input message survives as Role="" all the way
-// into the outgoing dto.ClaudeMessage sent upstream, instead of "user" as the
-// comment/intent implies. Expected: single message with Role="user".
-// Actual: two messages emitted — an injected placeholder user block (because
-// "" != "user" trips the first-message fix-up) plus a second message whose
-// Role is still "".
-func TestRequestOpenAI2ClaudeMessage_EmptyRoleDefaultsToUser(t *testing.T) {
-	c := newTestGinContext()
-	req := dto.GeneralOpenAIRequest{
-		Model:    "claude-3-opus-20240229",
-		Messages: []dto.Message{{Role: "", Content: "hi"}},
-	}
-	result, err := RequestOpenAI2ClaudeMessage(c, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(result.Messages) != 2 {
-		t.Fatalf("expected 2 messages (documents the empty-role normalization bug), got %d: %+v", len(result.Messages), result.Messages)
-	}
-	if result.Messages[0].Role != "user" {
-		t.Errorf("Messages[0].Role = %q, want %q (injected placeholder)", result.Messages[0].Role, "user")
-	}
-	if result.Messages[1].Role != "" {
-		t.Errorf("Messages[1].Role = %q, want %q — if this now reads 'user' the empty-role normalization bug (relay-claude.go:250-253) has been fixed; update this test to assert 1 message with Role=user", result.Messages[1].Role, "")
-	}
-}
+// NOTE: the empty-role normalization (relay-claude.go:250-253 wrote back to
+// textRequest.Messages[i] but built the outgoing message from the range copy)
+// is covered by TestFixClaudeRequestOpenAI2ClaudeMessage_EmptyRoleDefaultsToUser
+// in fix_claude_relay_guards_test.go, which additionally checks the content and
+// the mutated source message.
 
 func TestRequestOpenAI2ClaudeMessage_ImageBase64Block(t *testing.T) {
 	c := newTestGinContext()

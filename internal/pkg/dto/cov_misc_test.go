@@ -152,19 +152,14 @@ func TestGeneralErrorResponse_ToMessage(t *testing.T) {
 		}
 	})
 
-	t.Run("error as JSON null is treated as non-empty raw bytes, masking fallback fields", func(t *testing.T) {
-		// FINDING: internal/pkg/dto/error.go ToMessage() — json.RawMessage captures
-		// the literal 4 bytes "null" for a JSON null error field, so
-		// `len(e.Error) > 0` is true and GetJsonType returns "null", which falls
-		// into the `default: return string(e.Error)` branch. Expected: an
-		// explicitly-null "error" field should be treated the same as an absent
-		// one, falling through to check e.Message/e.Msg/etc. Actual: callers get
-		// back the literal string "null" instead of the real fallback message,
-		// which is confusing/wrong if surfaced to end users or logs.
+	t.Run("error as JSON null falls through to the message field", func(t *testing.T) {
+		// json.RawMessage keeps the literal 4 bytes "null", so `len(e.Error) > 0`
+		// passes and the type switch used to hit `default: return string(e.Error)`
+		// and hand callers the literal string "null" instead of the real message.
+		// An explicitly-null "error" must behave like an absent one.
 		e := GeneralErrorResponse{Error: json.RawMessage(`null`), Message: "real message"}
-		got := e.ToMessage()
-		if got != "null" {
-			t.Fatalf("got %q, want literal \"null\" (documents current masking behavior)", got)
+		if got := e.ToMessage(); got != "real message" {
+			t.Fatalf("got %q, want the fallback Message", got)
 		}
 	})
 

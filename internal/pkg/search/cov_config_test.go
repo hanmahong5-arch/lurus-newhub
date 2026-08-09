@@ -310,41 +310,12 @@ func TestGetStats(t *testing.T) {
 	})
 }
 
-// FINDING: internal/pkg/search/config.go:246-263 RetryWithBackoff loops
-// `for i := 0; i < RetryCount; i++`. If RetryCount is 0 — which is exactly
-// what the package var's zero value is before InitMeilisearch/loadConfig has
-// ever run, or what MEILISEARCH_RETRY_COUNT=0 gives an operator trying to
-// say "no retries, just try once" — the loop body never executes at all, so
-// `fn` (the actual index/search operation) is never attempted. RetryWithBackoff
-// then falls through to `fmt.Errorf("failed after %d retries: %w", RetryCount, err)`
-// with `err` still nil, producing a malformed, misleading message
-// ("failed after 0 retries: %!w(<nil>)") instead of either running the
-// operation once or returning a clear configuration error.
-// Expected: RetryCount<=0 should behave like "try exactly once", or fail
-// fast with an explicit configuration error — not silently skip the
-// operation while returning a garbled wrapped-nil error message.
-// Actual: zero attempts, and an error string containing the fmt.Errorf verb
-// artifact "%!w(<nil>)".
-func TestRetryWithBackoff_ZeroRetryCountNeverCallsFnAndReturnsGarbledError(t *testing.T) {
-	snap := snapshotGlobals()
-	t.Cleanup(snap.restore)
-	RetryCount = 0
-
-	calls := 0
-	err := RetryWithBackoff(func() error {
-		calls++
-		return fmt.Errorf("should never even be attempted")
-	})
-	if calls != 0 {
-		t.Fatalf("fn called %d times with RetryCount=0, want 0 (documents the bug: the operation is silently skipped)", calls)
-	}
-	if err == nil {
-		t.Fatal("RetryWithBackoff() with RetryCount=0 error = nil, want a (malformed) error")
-	}
-	if !strings.Contains(err.Error(), "%!w(<nil>)") {
-		t.Fatalf("RetryWithBackoff() with RetryCount=0 error = %q, want it to contain the fmt %%w-of-nil artifact documenting the bug", err.Error())
-	}
-}
+// NOTE: RetryWithBackoff's `for i := 0; i < RetryCount; i++` skipped the
+// operation entirely when RetryCount was 0 (the package var's zero value before
+// loadConfig has run, and what MEILISEARCH_RETRY_COUNT=0 gives an operator who
+// means "try once"), returning a wrapped-nil error. Covered by
+// fix_retry_backoff_test.go, which pins the 0 and -3 cases on both the success
+// and failure paths plus the unchanged positive-count behaviour.
 
 func TestRetryWithBackoff(t *testing.T) {
 	t.Run("succeeds on first attempt without extra calls", func(t *testing.T) {

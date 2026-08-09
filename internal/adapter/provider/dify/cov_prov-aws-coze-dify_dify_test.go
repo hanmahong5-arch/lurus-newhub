@@ -220,31 +220,35 @@ func TestRequestOpenAI2Dify_UserTextContentArray(t *testing.T) {
 	}
 }
 
-func TestRequestOpenAI2Dify_UserRemoteImage_FINDING_NilPointerPanic(t *testing.T) {
-	// FINDING: requestOpenAI2Dify's image-handling branch for a remote image
-	// declares `var file *DifyFile` (nil) and then, when
-	// media.IsRemoteImage() is true, writes directly through it:
-	//   file.Type = media.MimeType; file.TransferMode = "remote_url"; file.URL = media.Url
-	// without ever allocating `file = &DifyFile{}` first. Any user message
-	// containing an http(s) image_url content block on a Dify channel
-	// currently crashes the request goroutine with a nil-pointer
-	// dereference, instead of building the DifyFile.
-	// This test locks in the current (buggy) crash as a regression baseline
-	// rather than silently fixing relay-dify.go, per task instructions.
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected a nil-pointer panic for a remote image_url content block; if this no longer panics, the upstream bug was fixed and this test should be updated")
-		}
-	}()
-
+// requestOpenAI2Dify's remote-image branch declared `var file *DifyFile` and
+// then wrote through it without allocating, so any user message carrying an
+// http(s) image_url on a Dify channel crashed the request goroutine.
+//
+// fix_remote_image_test.go builds the message from a raw []any content slice
+// and a populated MimeType; this test comes in through SetMediaContent with no
+// MimeType, which is the shape a plain OpenAI-format client produces.
+func TestRequestOpenAI2Dify_UserRemoteImage_BuildsRemoteFile(t *testing.T) {
 	c, _ := prov_aws_coze_dify_dify_newTestContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	msg := dto.Message{Role: "user"}
 	msg.SetMediaContent([]dto.MediaContent{
 		{Type: dto.ContentTypeImageURL, ImageUrl: &dto.MessageImageUrl{Url: "https://example.com/pic.png"}},
 	})
-	_ = requestOpenAI2Dify(c, info, dto.GeneralOpenAIRequest{Messages: []dto.Message{msg}})
+	got := requestOpenAI2Dify(c, info, dto.GeneralOpenAIRequest{Messages: []dto.Message{msg}})
+
+	if len(got.Files) != 1 {
+		t.Fatalf("Files = %+v, want exactly one remote file", got.Files)
+	}
+	file := got.Files[0]
+	if file.TransferMode != "remote_url" {
+		t.Errorf("TransferMode = %q, want remote_url", file.TransferMode)
+	}
+	if file.URL != "https://example.com/pic.png" {
+		t.Errorf("URL = %q, want the remote image url carried over verbatim", file.URL)
+	}
+	if file.UploadFileId != "" {
+		t.Errorf("UploadFileId = %q, want empty — a remote image is never uploaded", file.UploadFileId)
+	}
 }
 
 func TestRequestOpenAI2Dify_UserLocalImage_UploadsAndAttachesFile(t *testing.T) {

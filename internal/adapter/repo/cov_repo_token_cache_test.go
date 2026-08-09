@@ -209,12 +209,14 @@ func TestCacheGetTokenByKey_RedisDisabledErrors(t *testing.T) {
 	}
 }
 
-// TestCacheSetToken_ZeroSyncFrequencyLeavesEntryWithoutTTL locks the interaction
-// between RedisKeyCacheSeconds()==0 (SyncFrequency unset) and RedisHSetObj's
-// "only set TTL if expiration>0" guard: the hash IS written (readable via
-// cacheGetTokenByKey) but subsequent incr/field-update calls silently no-op
-// because they gate on the key already carrying a TTL.
-func TestCacheSetToken_ZeroSyncFrequencyLeavesEntryWithoutTTL(t *testing.T) {
+// TestCacheSetToken_ZeroSyncFrequencyStillMutable covers RedisKeyCacheSeconds()==0
+// (SyncFrequency unset): RedisHSetObj writes the hash with no TTL, and quota
+// updates against that TTL-less hash must still apply. They used to be gated on
+// the key already carrying a TTL and were silently dropped, so a token's cached
+// RemainQuota never moved and the exhaustion gate never tripped.
+// fix_token_cache_quota_ttl_test.go pins decrement + field update on the same
+// shape; this keeps the set/read round trip under coverage.
+func TestCacheSetToken_ZeroSyncFrequencyStillMutable(t *testing.T) {
 	repoWithMiniRedis(t)
 	prevFreq := common.SyncFrequency
 	common.SyncFrequency = 0
@@ -225,7 +227,6 @@ func TestCacheSetToken_ZeroSyncFrequencyLeavesEntryWithoutTTL(t *testing.T) {
 		t.Fatalf("set: %v", err)
 	}
 
-	// The hash itself is readable...
 	got, err := cacheGetTokenByKey(rawKey)
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -234,7 +235,6 @@ func TestCacheSetToken_ZeroSyncFrequencyLeavesEntryWithoutTTL(t *testing.T) {
 		t.Fatalf("RemainQuota=%d want 42", got.RemainQuota)
 	}
 
-	// ...but with no TTL set, an incr against it is a silent no-op.
 	if err := cacheIncrTokenQuota(rawKey, 8); err != nil {
 		t.Fatalf("incr: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestCacheSetToken_ZeroSyncFrequencyLeavesEntryWithoutTTL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get after incr: %v", err)
 	}
-	if got.RemainQuota != 42 {
-		t.Fatalf("RemainQuota=%d want still 42 (incr on a TTL-less key must no-op), got a mutation", got.RemainQuota)
+	if got.RemainQuota != 50 {
+		t.Fatalf("RemainQuota=%d want 50 — the incr against a TTL-less hash was dropped", got.RemainQuota)
 	}
 }

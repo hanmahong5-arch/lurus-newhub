@@ -550,20 +550,16 @@ func TestDoRequest_ExportedWrapperDelegatesToInternal(t *testing.T) {
 	}
 }
 
-// FINDING: doRequest (api_request.go, success path after client.Do) calls
-// req.Body.Close() unconditionally with no nil check. A request built the
-// idiomatic client-side way for a bodyless GET —
-// http.NewRequestWithContext(ctx, method, url, nil) — leaves req.Body == nil,
-// so a request that otherwise succeeds panics instead of returning a clean
-// error. This is reachable from any adaptor that calls provider.DoRequest (or
-// DoApiRequest/DoFormRequest/DoTaskApiRequest with a nil requestBody) for a
-// GET-style upstream call, e.g. jimeng's Adaptor.DoRequest builds its request
-// via http.NewRequest(c.Request.Method, url, requestBody) and forwards
-// whatever requestBody its caller supplies. Locked here as a regression
-// baseline: if this test starts failing because DoRequest now returns a
-// clean error instead of panicking, that's the bug being fixed for real —
-// update/remove this test then, don't "fix" it by tolerating the panic.
-func TestDoRequest_NilRequestBodyPanicsOnSuccess_Finding(t *testing.T) {
+// doRequest's success path (api_request.go, after client.Do) used to call
+// req.Body.Close() with no nil check, so a bodyless GET built the idiomatic
+// way — http.NewRequestWithContext(ctx, method, url, nil) leaves req.Body nil —
+// panicked instead of returning cleanly. Reachable from any adaptor that hands
+// provider.DoRequest a nil requestBody for a GET-style upstream call.
+//
+// fix_nil_body_close_test.go covers both nil-body shapes through the channel
+// proxy transport; this one drives the direct (dial-guarded) transport, which
+// is a different branch of doRequest's client selection.
+func TestDoRequest_NilRequestBodyIsTolerated(t *testing.T) {
 	app.InitHttpClient()
 	provReqCovAllowPrivateIP(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -581,14 +577,14 @@ func TestDoRequest_NilRequestBodyPanicsOnSuccess_Finding(t *testing.T) {
 	}
 	info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{}}
 
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected DoRequest to panic on nil req.Body.Close() (regression baseline for the FINDING above)")
-		}
-	}()
-	_, _ = DoRequest(c, req, info)
-	t.Fatal("unreachable: DoRequest should have panicked before returning")
+	resp, err := DoRequest(c, req, info)
+	if err != nil {
+		t.Fatalf("DoRequest() with a nil req.Body error = %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
 }
 
 func TestDoRequest_ProxyClientConstructionError(t *testing.T) {

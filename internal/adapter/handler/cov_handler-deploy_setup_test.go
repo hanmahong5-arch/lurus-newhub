@@ -246,43 +246,55 @@ func TestPostSetup_MalformedJSON_RevertsClaimForRetry(t *testing.T) {
 	}
 }
 
-// TestPostSetup_UsernameLength_ByteLengthNotRuneLength documents the ACTUAL
-// current behaviour: the 1-12 bound is applied to len(req.Username) — Go's
-// byte length, not a rune/character count. A 5-character Chinese username is
-// 15 UTF-8 bytes and gets rejected even though "5 characters" reads as well
-// within a "1-12 characters" limit to a human.
-//
-// FINDING: this is very likely a business-logic bug for CJK usernames (the
-// Chinese error message "长度必须在1-12个字符之间" literally promises a
-// character count, not a byte count), but per instructions we do not modify
-// the handler — this test locks in the CURRENT behaviour as a regression
-// baseline pending an owner decision.
-func TestPostSetup_UsernameLength_ByteLengthNotRuneLength(t *testing.T) {
-	f := handlerDeploySetupNewFixture(t)
-	constant.SetSetup(false)
-
+// TestPostSetup_UsernameLength_CountedInRunesNotBytes drives the 1-12 bound
+// through the full router (fix_setup_username_runes_test.go calls PostSetup
+// directly) and covers both sides of the boundary in one place: a 5-character
+// CJK name is 15 UTF-8 bytes and must be accepted, a 13-character one must be
+// rejected — and the rejection must release the setup claim, or a legitimate
+// retry would be locked out forever.
+func TestPostSetup_UsernameLength_CountedInRunesNotBytes(t *testing.T) {
 	fiveCJKChars := "你好世界啊" // 5 runes, 15 UTF-8 bytes
-	if len([]rune(fiveCJKChars)) != 5 {
-		t.Fatalf("test fixture invariant broken: want 5 runes, got %d", len([]rune(fiveCJKChars)))
-	}
-	if len(fiveCJKChars) != 15 {
-		t.Fatalf("test fixture invariant broken: want 15 bytes, got %d", len(fiveCJKChars))
+	if len([]rune(fiveCJKChars)) != 5 || len(fiveCJKChars) != 15 {
+		t.Fatalf("test fixture invariant broken: want 5 runes / 15 bytes, got %d/%d",
+			len([]rune(fiveCJKChars)), len(fiveCJKChars))
 	}
 
-	w := handlerDeploySetupDo(f, http.MethodPost, "/setup",
-		[]byte(fmt.Sprintf(`{"username":%q}`, fiveCJKChars)))
-	resp := handlerDeploySetupParse(t, w)
+	t.Run("within_bound_accepted", func(t *testing.T) {
+		f := handlerDeploySetupNewFixture(t)
+		constant.SetSetup(false)
 
-	if resp["success"] != false {
-		t.Fatalf("FINDING regression: a 5-character CJK username now passes validation (got success=%v) — "+
-			"if this is intentional, this test should be updated; if not, deployment.go/setup.go still uses byte length", resp["success"])
-	}
-	if resp["message"] != "用户名长度必须在1-12个字符之间" {
-		t.Errorf("message = %v, want the length-bound rejection message", resp["message"])
-	}
-	if constant.IsSetup() {
-		t.Errorf("claim was not reverted after username-length rejection")
-	}
+		w := handlerDeploySetupDo(f, http.MethodPost, "/setup",
+			[]byte(fmt.Sprintf(`{"username":%q}`, fiveCJKChars)))
+		resp := handlerDeploySetupParse(t, w)
+
+		if resp["success"] != true {
+			t.Fatalf("a 5-character CJK username was rejected (message=%v) — the 1-12 bound is counting bytes again", resp["message"])
+		}
+		var got repo.User
+		if err := f.db.Where("username = ?", fiveCJKChars).First(&got).Error; err != nil {
+			t.Fatalf("root user not persisted: %v", err)
+		}
+	})
+
+	t.Run("over_bound_rejected_and_claim_released", func(t *testing.T) {
+		f := handlerDeploySetupNewFixture(t)
+		constant.SetSetup(false)
+
+		thirteenCJKChars := "一二三四五六七八九十甲乙丙" // 13 runes
+		w := handlerDeploySetupDo(f, http.MethodPost, "/setup",
+			[]byte(fmt.Sprintf(`{"username":%q}`, thirteenCJKChars)))
+		resp := handlerDeploySetupParse(t, w)
+
+		if resp["success"] != false {
+			t.Fatalf("a 13-character username passed the 1-12 bound (success=%v)", resp["success"])
+		}
+		if resp["message"] != "用户名长度必须在1-12个字符之间" {
+			t.Errorf("message = %v, want the length-bound rejection message", resp["message"])
+		}
+		if constant.IsSetup() {
+			t.Errorf("claim was not reverted after username-length rejection")
+		}
+	})
 }
 
 func TestPostSetup_EmptyUsername_Rejected(t *testing.T) {
