@@ -533,3 +533,37 @@ the gate's own comment requires a measured before/after; raising a ratchet from 
 projection is exactly what `coverage_honesty_test.go` exists to prevent. Raising
 them is a separate, roughly 4-line change once this lands, and it has to move the
 workflow, the lock's `want` map, and the SC-6 doc claim together.
+
+### What `-race` actually found (CI, first run)
+
+`-race` was flagged above as the one gate this machine cannot run, and it was the
+right thing to worry about. On the first CI run it failed in four packages, and
+the pg-integration job failed in a fifth — a 28th assertion that the local
+`-short` run could never have surfaced because `SetupTestDB` skips without
+`TEST_POSTGRES_DSN`.
+
+Three of the four races were test-side, all the same shape: a goroutine writing
+state that the test body polls without synchronisation.
+
+| Package | Race | Fix |
+|---|---|---|
+| `adapter/provider` | ping keep-alive tests polled `httptest.ResponseRecorder.Body` (a plain `bytes.Buffer`) while the pinger wrote to it; a `t.Cleanup` also restored `common.DebugEnabled` while the goroutine still read it — `stop()` cancels the pinger's context but does not join it | mutex-guarded `ResponseWriter`; stop flipping the debug global (it only gates `println`) |
+| `pkg/common` | gopool panic-handler tests installed a plain `bytes.Buffer` as the process-wide `gin.DefaultErrorWriter` and polled it while the pool goroutine logged into it | mutex-guarded buffer |
+| `pkg/search` | `InitSyncWithContext` starts `ScheduledSyncWithContext` as a bare goroutine reading the package globals with no join point, and pool tasks read `Client`/`RetryCount`/`IndexPrefix`; the cleanup restored those globals underneath both | wait for the goroutine's own "scheduled sync stopped" line through a **mutex-guarded** `gin.DefaultWriter` (the mutex is what makes it a happens-before edge rather than a sleep), then drain the pool with `WorkerCount` sentinels — sound because the queue is FIFO |
+
+The fourth was **not a test bug**. `TestCoreAppBootStreamScannerHandler_ClientAlreadyDisconnected`
+is the first test ever to drive `StreamScannerHandler` with an already-cancelled
+request context, and it exposed a real race in `stream_scanner.go`: both the ping
+and the scanner goroutine ran `wg.Done()` first in their deferred cleanup and
+only then `common.SafeSendBool(stopChan, true)`, while the outer cleanup does
+`wg.Wait()` then `close(stopChan)`. Releasing the counter before the send lets
+the close interleave with it — a send on a closed channel. `SafeSendBool`
+recovers that panic, which is exactly why it has been silent in production.
+Fixed by promoting `wg.Done()` to its own `defer` registered first, so it runs
+last.
+
+That is the argument for landing a corpus like this even two weeks late: the
+value is not the percentage, it is that a previously unexercised teardown path
+got exercised.
+
+Second CI run: **10/10 green**, `-race` and pg-integration included.
