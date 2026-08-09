@@ -386,3 +386,184 @@ the top. It is a test file.
 4. **Measure against the real database.** The `char(32)` overflow and the
    `RequiresDB` nil-panic were both invisible to the SQLite tier and to `-short`.
 
+
+---
+
+## Appendix: reconciliation with PR #70 (2026-08-09)
+
+The corpus described above sat unmerged for two weeks on
+`test/coverage-uplift-2026-07-25` (`8b8e9d3c`). It was cherry-picked onto main
+after **PR #70** landed (`787935b3`), which fixed 29 of the defects this loop had
+merely *recorded*. That is the whole difficulty: the loop's convention was to
+write a `// FINDING:` comment and then assert the **wrong** behaviour, so a
+future fix would surface as a visible test diff. Once #70 landed, those
+assertions asserted backwards.
+
+### How the work list was derived
+
+Not from a prepared inventory. The compile fixes went in first, then
+`go test -short -count=1 ./...` ran against the salvage commit **before any
+assertion was touched**, and its output was the authority: **27 failing
+top-level tests across 15 packages**. (Two pre-flight estimates had said 21 and
+33.) `go vet ./...`, not `go build`, is what compiles `_test.go` files, so it is
+the real gate for a corpus like this.
+
+### Compile-level fixes (2 packages)
+
+| Package | Cause | Resolution |
+|---|---|---|
+| `provider/openai` | #70 deleted the unreferenced `streamTTSResponse` | 3 tests deleted, not ported — `fix_dead_tts_stream_test.go` is an AST scan that fails if the symbol reappears with no production caller, so porting them would resurrect the dead code. Zero coverage lost: the function had no caller. |
+| `pkg/logger` | `logCount` became `atomic.Int64`, `setupLogWorking` became `atomic.Bool` | 2 tests deleted (covered by `fix_log_rotation_test.go`), **1 ported**: `TestCheckLogRotation_TriggersResetAtThreshold` is the only test that reaches the dispatch branch (`CompareAndSwap` then `gopool.Go(SetupLogger)` then the deferred release) — both fix tests preset `setupLogWorking=true` precisely to avoid it. |
+
+### Delete vs rewrite
+
+The unit of judgement is the **assertion block**, never the file: a cov file
+holds 20-60 tests of which one or two assert backwards. A block was deleted only
+where a `fix_*_test.go` covers every line and branch it touches *and* asserts no
+less. Otherwise it was rewritten. Result: **16 rewritten, 11 deleted.**
+
+Rewrites won wherever the cov test had extra reach or extra assertions:
+
+- `cov_handler-pricing_edge_test.go` — keeps the full admin round trip
+  (`POST /option` to `handler.UpdateOption` to `repo.UpdateOption` to
+  `ratio_setting`); only the assertion flips from "ratio table wiped" to "ratio
+  table survives". The fix test calls `ratio_setting` directly and never crosses
+  `option.go`.
+- `cov_core-app-boot_tracing_internals_test.go` — `fix_tracing_init_test.go`
+  drives only `SampleRate: 1.0`; this one covers all three sampler branches
+  (1.5 / -1 / 0.25), so deleting it would drop `NeverSample()` and
+  `TraceIDRatioBased()`. It also acquired a leak by starting to pass: `Init` now
+  succeeds, so the test must `Shutdown` or it leaves a live batch span processor
+  on the package global for every later test in the package.
+- `cov_prov-ali-repl-vertex_convert_test.go` — only the `ConvertRerankRequest`
+  block flipped; the parent test also covers `ConvertAudioRequest` and
+  `ConvertOpenAIResponsesRequest`, which nothing else touches.
+
+`cov_handler-deploy_provisioning_test.go:296` needed no edit at all: it was
+written as an adaptive two-branch test (200 logs the finding, 403 asserts the
+correct contract) and takes the 403 arm on its own post-#70.
+
+### Proving the deletions cost nothing
+
+A package total is not evidence — a deleted test covering `foo.go:120-140` whose
+replacement covers only `120-130` leaves `131-140` dark while the total barely
+moves. So three states were measured per affected package and diffed **per
+function**:
+
+- **P1** — #70 alone (what CI saw before this branch)
+- **P3** — compile fixes only, with all 27 treated as rewrites (nothing deleted)
+- **P2** — the shipped state (P3 plus the real deletions)
+
+`go tool cover -func` for P3 vs P2 flagged exactly one production function as
+lower in P2: `internal/app/tokenizer.go:26 getTokenEncoder` (100.0% to 93.3%).
+It is a double-checked-locking cache whose "another goroutine already created
+it" branch is only reached when concurrent tests race, and **re-running the
+identical P2 tree produced 93.3, 93.3, 100.0** across three runs. Measurement
+nondeterminism, not a deletion cost. Every other function is identical, and
+every package's P2 is at or above its P1:
+
+| Package | P1 | P2 |
+|---|---|---|
+| `internal/adapter/handler` | 53.1% | 67.3% |
+| `internal/adapter/provider` | 22.9% | 85.6% |
+| `internal/adapter/provider/aws` | 20.6% | 91.7% |
+| `internal/adapter/provider/claude` | 50.2% | 95.3% |
+| `internal/adapter/provider/cohere` | 7.8% | 92.2% |
+| `internal/adapter/provider/dify` | 14.5% | 91.3% |
+| `internal/adapter/provider/gemini` | 16.4% | 93.1% |
+| `internal/adapter/provider/openai` | 5.0% | 89.3% |
+| `internal/adapter/provider/vertex` | 0.7% | 86.0% |
+| `internal/adapter/provider/zhipu_4v` | 26.0% | 94.0% |
+| `internal/adapter/repo` | 64.2% | 64.5% |
+| `internal/app` | 88.1% | 90.0% |
+| `internal/pkg/dto` | 12.4% | 99.6% |
+| `internal/pkg/logger` | 4.9% | 91.4% |
+| `internal/pkg/search` | 2.7% | 90.6% |
+| `internal/pkg/setting/operation_setting` | 16.4% | 98.5% |
+| `internal/pkg/tracing` | 43.7% | 96.7% |
+
+`internal/adapter/repo` barely moves because most of its suite needs a real
+Postgres and skips without `TEST_POSTGRES_DSN`. Related caveat worth carrying
+forward: `cov_repo-deep_option_findings_test.go` uses `SetupTestDB` and so
+contributes 0 to any local measurement, while its replacement
+`fix_option_write_error_test.go` is hermetic sqlite — a *strict increase* in
+hermetic coverage that is invisible locally and only observable in CI's
+pg-integration job.
+
+### The lint bill nobody had paid
+
+These 232 files had never been through `golangci-lint`. Against
+`--new-from-rev=origin/main` they are all "new", and they came to **409 issues**:
+185 `bodyclose`, 131 `errcheck`, 86 `staticcheck` (all QF1008), 3 `unused`,
+3 `contextcheck`, 1 `errorlint`. Every one of them was in a `cov_*` file; zero in
+production code or in #70's files. This is a blocking gate, so it had to be
+cleared, and it is worth knowing that a coverage campaign whose acceptance
+criteria are "build / vet / test" leaves this entire bill unpaid and invisible
+until CI.
+
+One trap is worth recording. The mechanical `bodyclose` fix — bind the response,
+`defer` a close — **nil-panics on error-path tests**, where the call under test
+returns `(nil, err)` by design. Thirteen tests went red on the first pass. The
+close has to be nil-guarded:
+
+    defer func() {
+        if resp != nil {
+            _ = resp.Body.Close()
+        }
+    }()
+
+`gosec -severity high -confidence medium` found **0** issues, so the `sk-`-shaped
+fixture literals never tripped G101.
+
+### Verification of the reconciled branch
+
+| Gate | Result |
+|---|---|
+| `go build ./...` | exit 0 |
+| `go vet ./...` | exit 0 |
+| `go test -short -count=1 ./...` | 87 packages ok, 0 failures |
+| `internal/adapter/handler` x4 consecutive | 4/4 green — the ~50% panic rate this loop recorded for that package does not reproduce |
+| `golangci-lint run --new-from-rev=origin/main` (v2.12.2) | 0 issues |
+| `gosec -severity high -confidence medium` | 0 findings |
+| CI coverage gate, replicated locally | `internal/app` 88.4% (gate 25) / `internal/adapter/repo` 64.5% (gate 59) / `internal/adapter/handler` 69.1% (gate 48) |
+
+The coverage-gate thresholds in `go-ci.yml` are deliberately **left alone** here.
+Numbers measured on an unmerged base are not the numbers main will produce, and
+the gate's own comment requires a measured before/after; raising a ratchet from a
+projection is exactly what `coverage_honesty_test.go` exists to prevent. Raising
+them is a separate, roughly 4-line change once this lands, and it has to move the
+workflow, the lock's `want` map, and the SC-6 doc claim together.
+
+### What `-race` actually found (CI, first run)
+
+`-race` was flagged above as the one gate this machine cannot run, and it was the
+right thing to worry about. On the first CI run it failed in four packages, and
+the pg-integration job failed in a fifth — a 28th assertion that the local
+`-short` run could never have surfaced because `SetupTestDB` skips without
+`TEST_POSTGRES_DSN`.
+
+Three of the four races were test-side, all the same shape: a goroutine writing
+state that the test body polls without synchronisation.
+
+| Package | Race | Fix |
+|---|---|---|
+| `adapter/provider` | ping keep-alive tests polled `httptest.ResponseRecorder.Body` (a plain `bytes.Buffer`) while the pinger wrote to it; a `t.Cleanup` also restored `common.DebugEnabled` while the goroutine still read it — `stop()` cancels the pinger's context but does not join it | mutex-guarded `ResponseWriter`; stop flipping the debug global (it only gates `println`) |
+| `pkg/common` | gopool panic-handler tests installed a plain `bytes.Buffer` as the process-wide `gin.DefaultErrorWriter` and polled it while the pool goroutine logged into it | mutex-guarded buffer |
+| `pkg/search` | `InitSyncWithContext` starts `ScheduledSyncWithContext` as a bare goroutine reading the package globals with no join point, and pool tasks read `Client`/`RetryCount`/`IndexPrefix`; the cleanup restored those globals underneath both | wait for the goroutine's own "scheduled sync stopped" line through a **mutex-guarded** `gin.DefaultWriter` (the mutex is what makes it a happens-before edge rather than a sleep), then drain the pool with `WorkerCount` sentinels — sound because the queue is FIFO |
+
+The fourth was **not a test bug**. `TestCoreAppBootStreamScannerHandler_ClientAlreadyDisconnected`
+is the first test ever to drive `StreamScannerHandler` with an already-cancelled
+request context, and it exposed a real race in `stream_scanner.go`: both the ping
+and the scanner goroutine ran `wg.Done()` first in their deferred cleanup and
+only then `common.SafeSendBool(stopChan, true)`, while the outer cleanup does
+`wg.Wait()` then `close(stopChan)`. Releasing the counter before the send lets
+the close interleave with it — a send on a closed channel. `SafeSendBool`
+recovers that panic, which is exactly why it has been silent in production.
+Fixed by promoting `wg.Done()` to its own `defer` registered first, so it runs
+last.
+
+That is the argument for landing a corpus like this even two weeks late: the
+value is not the percentage, it is that a previously unexercised teardown path
+got exercised.
+
+Second CI run: **10/10 green**, `-race` and pg-integration included.
