@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/gin-gonic/gin"
 )
@@ -56,6 +58,19 @@ func GetHealthDetailed(c *gin.Context) {
 		checks["redis"] = "not_configured"
 	} else {
 		checks["redis"] = "disabled"
+	}
+
+	// Schema-migration drift. Reported, never fatal: during a rolling update an
+	// old pod legitimately sees pending migrations for the duration of the roll,
+	// and failing readiness there would stall the very deploy that applies them.
+	// The value is the snapshot published at boot, so this costs no DB round trip
+	// on a probe that runs every few seconds.
+	if pending, known := metrics.PendingSchemaMigrations(); !known {
+		checks["schema_migrations"] = "unknown"
+	} else if pending > 0 {
+		checks["schema_migrations"] = fmt.Sprintf("pending:%d", pending)
+	} else {
+		checks["schema_migrations"] = "ok"
 	}
 
 	// Platform billing service check (via circuit breaker state)
