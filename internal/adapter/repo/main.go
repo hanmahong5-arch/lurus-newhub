@@ -221,6 +221,11 @@ func InitDB() (err error) {
 		// pool exhaustion is alertable instead of surfacing only as latency.
 		metrics.RegisterDBStats("newhub", sqlDB)
 
+		// Publish the schema level BEFORE the master-node early return: a replica
+		// set with no master-capable pod never reaches runBootMigrations at all,
+		// and that is precisely the drift this gauge has to make visible.
+		publishMigrationState(sqlDB)
+
 		if !common.IsMasterNode {
 			return nil
 		}
@@ -289,8 +294,35 @@ func runBootMigrations(sqlDB *sql.DB) error {
 	if err := runner.Run(context.Background()); err != nil {
 		return fmt.Errorf("run embedded SQL migrations: %w", err)
 	}
+	// Re-publish so the gauge reflects the post-migration level rather than the
+	// snapshot taken on the way in.
+	publishMigrationState(sqlDB)
 	return nil
 }
+
+// publishMigrationState reads the schema-migration bookkeeping and publishes it
+// to /metrics (and to the health endpoint's cached snapshot). Purely
+// observational: it takes no lock, writes nothing, and never fails boot — a pod
+// that cannot read the tracker still serves traffic, it just reports no
+// migration state instead of a wrong one.
+func publishMigrationState(sqlDB *sql.DB) {
+	ctx, cancel := context.WithTimeout(context.Background(), migrationStateProbeTimeout)
+	defer cancel()
+
+	pending, applied, err := migration.PendingVersions(ctx, sqlDB, migrations.FS, migrationBaselineThrough)
+	if err != nil {
+		common.SysLog("migration state probe failed (metrics only, boot continues): " + err.Error())
+		return
+	}
+	metrics.SetSchemaMigrations(len(pending), applied)
+	if len(pending) > 0 {
+		common.SysLog(fmt.Sprintf("schema migrations pending: %d (%v) — applied=%d", len(pending), pending, applied))
+	}
+}
+
+// migrationStateProbeTimeout bounds the observability probe so a struggling
+// database delays boot by seconds, not indefinitely.
+const migrationStateProbeTimeout = 5 * time.Second
 
 // withPGAdvisoryLock runs fn while holding pg_advisory_lock(key) on one
 // dedicated connection, so the unlock is guaranteed to hit the session that
