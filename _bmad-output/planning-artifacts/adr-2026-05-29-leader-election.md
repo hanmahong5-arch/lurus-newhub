@@ -95,6 +95,18 @@ no automatic "un-rotate"; that is a deliberate security choice.
 
 ## 6. Known Tradeoff — multi-replica cold start
 
+> **SUPERSEDED 2026-07-14 by `57e22c8a`.** Lease-gated migrations turned out to
+> fail in the opposite direction: the surviving leader holds the lease for its
+> whole lifetime, so on every *rolling update* the new pods lost the lease and
+> skipped migrations entirely — 2026-07-15 prod sat at schema 022 while the
+> shipped code expected 026. Boot migrations now run on **every** master-capable
+> replica (`repo.runBootMigrations`, called outside the `if gotLease` branch),
+> serialized by `bootAutoMigrateLockID` for AutoMigrate plus the runner's own
+> `migration.AdvisoryLockID`; both phases are idempotent no-ops when nothing is
+> pending. The concurrent-AutoMigrate race this section cites is what that first
+> advisory lock exists to prevent. The replicas=1-first rollout mitigation below
+> is no longer needed.
+
 On a **first-ever** cold start of a fresh multi-replica DB, only the boot-lease
 winner runs migrations; the losers skip (mirroring the prior slave-skips-
 migration behavior) and may briefly serve before tables exist. Mitigation:
@@ -127,3 +139,9 @@ deployment. No ServiceAccount/RBAC required.
 - **Per-task leases**: over-engineered; one lease guards all master-only work.
 - **Keep static NODE_TYPE**: no failover; multi-replica duplicates work.
 - **Postgres advisory lock for migrations**: PG-only (breaks SQLite dev parity).
+  > **SUPERSEDED 2026-07-14.** The SQLite dev tier was removed in 2026-06
+  > (`SQL_DSN` must be `postgres://` or boot fast-fails; glebarez SQLite survives
+  > only in the hermetic unit-test tier), which removed the parity objection —
+  > and that is exactly what unblocked `57e22c8a`. Advisory locks are now the
+  > mechanism: `bootAutoMigrateLockID` around AutoMigrate and
+  > `migration.AdvisoryLockID` inside the runner.
