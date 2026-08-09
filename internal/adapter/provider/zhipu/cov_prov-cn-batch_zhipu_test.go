@@ -246,13 +246,13 @@ func TestResponseZhipu2OpenAI(t *testing.T) {
 			},
 		},
 	}
-	resp.Data.Usage.TotalTokens = 9
+	resp.Data.TotalTokens = 9
 	out := responseZhipu2OpenAI(resp)
 	if len(out.Choices) != 2 {
 		t.Fatalf("expected 2 choices, got %d", len(out.Choices))
 	}
-	if out.Choices[0].Message.Content != "first" {
-		t.Errorf("choice[0] content = %v, want quotes stripped -> first", out.Choices[0].Message.Content)
+	if out.Choices[0].Content != "first" {
+		t.Errorf("choice[0] content = %v, want quotes stripped -> first", out.Choices[0].Content)
 	}
 	if out.Choices[0].FinishReason != "" {
 		t.Errorf("only the LAST choice should carry finish_reason=stop; choice[0] got %q", out.Choices[0].FinishReason)
@@ -260,8 +260,8 @@ func TestResponseZhipu2OpenAI(t *testing.T) {
 	if out.Choices[1].FinishReason != "stop" {
 		t.Errorf("last choice finish_reason = %q, want stop", out.Choices[1].FinishReason)
 	}
-	if out.Usage.TotalTokens != 9 {
-		t.Errorf("usage.TotalTokens = %d, want 9 (billing extraction)", out.Usage.TotalTokens)
+	if out.TotalTokens != 9 {
+		t.Errorf("usage.TotalTokens = %d, want 9 (billing extraction)", out.TotalTokens)
 	}
 }
 
@@ -289,9 +289,9 @@ func TestStreamResponseZhipu2OpenAI(t *testing.T) {
 
 func TestStreamMetaResponseZhipu2OpenAI(t *testing.T) {
 	meta := &ZhipuStreamMetaResponse{RequestId: "req-9"}
-	meta.Usage.PromptTokens = 3
-	meta.Usage.CompletionTokens = 7
-	meta.Usage.TotalTokens = 10
+	meta.PromptTokens = 3
+	meta.CompletionTokens = 7
+	meta.TotalTokens = 10
 	resp, usage := streamMetaResponseZhipu2OpenAI(meta)
 	if resp.Choices[0].FinishReason == nil || *resp.Choices[0].FinishReason != "stop" {
 		t.Errorf("meta chunk must always carry finish_reason=stop, got %v", resp.Choices[0].FinishReason)
@@ -312,7 +312,13 @@ func TestZhipuHandler(t *testing.T) {
 	t.Run("success response translated with usage extracted", func(t *testing.T) {
 		c, w := prov_cn_batch_zhipuGinContext()
 		body := `{"code":200,"msg":"ok","success":true,"data":{"task_id":"t1","choices":[{"role":"assistant","content":"\"hi there\""}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}}`
-		usage, apiErr := zhipuHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_zhipuRespFromBody(body))
+		bcResp6 := prov_cn_batch_zhipuRespFromBody(body)
+		defer func() {
+			if bcResp6 != nil {
+				_ = bcResp6.Body.Close()
+			}
+		}()
+		usage, apiErr := zhipuHandler(c, &relaycommon.RelayInfo{}, bcResp6)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -327,7 +333,13 @@ func TestZhipuHandler(t *testing.T) {
 	t.Run("success=false surfaces classified upstream error, not silent 200", func(t *testing.T) {
 		c, _ := prov_cn_batch_zhipuGinContext()
 		body := `{"code":1234,"msg":"invalid parameter","success":false,"data":{}}`
-		usage, apiErr := zhipuHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_zhipuRespFromBody(body))
+		bcResp5 := prov_cn_batch_zhipuRespFromBody(body)
+		defer func() {
+			if bcResp5 != nil {
+				_ = bcResp5.Body.Close()
+			}
+		}()
+		usage, apiErr := zhipuHandler(c, &relaycommon.RelayInfo{}, bcResp5)
 		if apiErr == nil {
 			t.Fatal("expected error when success=false")
 		}
@@ -338,7 +350,13 @@ func TestZhipuHandler(t *testing.T) {
 
 	t.Run("malformed JSON classified as bad response body", func(t *testing.T) {
 		c, _ := prov_cn_batch_zhipuGinContext()
-		_, apiErr := zhipuHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_zhipuRespFromBody("{not json"))
+		bcResp4 := prov_cn_batch_zhipuRespFromBody("{not json")
+		defer func() {
+			if bcResp4 != nil {
+				_ = bcResp4.Body.Close()
+			}
+		}()
+		_, apiErr := zhipuHandler(c, &relaycommon.RelayInfo{}, bcResp4)
 		if apiErr == nil {
 			t.Fatal("expected error for malformed JSON")
 		}
@@ -348,7 +366,13 @@ func TestZhipuHandler(t *testing.T) {
 func TestZhipuStreamHandler_DataAndMetaFrames(t *testing.T) {
 	c, w := prov_cn_batch_zhipuGinContext()
 	body := "data:He\n" + "data:llo\n" + `meta:{"request_id":"r1","usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}` + "\n"
-	usage, apiErr := zhipuStreamHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_zhipuRespFromBody(body))
+	bcResp3 := prov_cn_batch_zhipuRespFromBody(body)
+	defer func() {
+		if bcResp3 != nil {
+			_ = bcResp3.Body.Close()
+		}
+	}()
+	usage, apiErr := zhipuStreamHandler(c, &relaycommon.RelayInfo{}, bcResp3)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -375,7 +399,13 @@ func TestZhipuStreamHandler_NoMetaFrame_UsageStaysNil(t *testing.T) {
 	// Locking in the current behavior as a regression baseline.
 	c, w := prov_cn_batch_zhipuGinContext()
 	body := "data:only data, no meta\n"
-	usage, apiErr := zhipuStreamHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_zhipuRespFromBody(body))
+	bcResp2 := prov_cn_batch_zhipuRespFromBody(body)
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
+	usage, apiErr := zhipuStreamHandler(c, &relaycommon.RelayInfo{}, bcResp2)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -392,7 +422,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 	t.Run("non-stream routes to zhipuHandler", func(t *testing.T) {
 		c, w := prov_cn_batch_zhipuGinContext()
 		body := `{"code":200,"msg":"ok","success":true,"data":{"choices":[{"role":"assistant","content":"non-stream"}]}}`
-		_, apiErr := a.DoResponse(c, prov_cn_batch_zhipuRespFromBody(body), &relaycommon.RelayInfo{})
+		bcResp1 := prov_cn_batch_zhipuRespFromBody(body)
+		defer func() {
+			if bcResp1 != nil {
+				_ = bcResp1.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp1, &relaycommon.RelayInfo{})
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -405,7 +441,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_zhipuGinContext()
 		body := "data:stream-chunk\n"
 		info := &relaycommon.RelayInfo{IsStream: true}
-		_, apiErr := a.DoResponse(c, prov_cn_batch_zhipuRespFromBody(body), info)
+		bcResp0 := prov_cn_batch_zhipuRespFromBody(body)
+		defer func() {
+			if bcResp0 != nil {
+				_ = bcResp0.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp0, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}

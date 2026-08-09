@@ -499,14 +499,26 @@ func TestJimeng_DoResponse(t *testing.T) {
 func TestJimeng_FetchTask(t *testing.T) {
 	t.Run("missing task_id in body map is rejected before any network call", func(t *testing.T) {
 		a := &TaskAdaptor{}
-		if _, err := a.FetchTask("https://x", "sk-x", map[string]any{}, ""); err == nil {
+		bcResp1, err := a.FetchTask("https://x", "sk-x", map[string]any{}, "")
+		defer func() {
+			if bcResp1 != nil {
+				_ = bcResp1.Body.Close()
+			}
+		}()
+		if err == nil {
 			t.Fatalf("expected error for missing task_id")
 		}
 	})
 
 	t.Run("direct vendor key with malformed ak|sk format is rejected", func(t *testing.T) {
 		a := &TaskAdaptor{}
-		if _, err := a.FetchTask("https://x", "not-ak-sk-format", map[string]any{"task_id": "t1"}, ""); err == nil {
+		bcResp0, err := a.FetchTask("https://x", "not-ak-sk-format", map[string]any{"task_id": "t1"}, "")
+		defer func() {
+			if bcResp0 != nil {
+				_ = bcResp0.Body.Close()
+			}
+		}()
+		if err == nil {
 			t.Fatalf("expected error for malformed direct-vendor key")
 		}
 	})
@@ -530,7 +542,11 @@ func TestJimeng_FetchTask(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 
 		if gotPath != "/jimeng/" {
 			t.Fatalf("expected new-api relay to poll /jimeng/ subpath, got %q", gotPath)
@@ -567,7 +583,11 @@ func TestJimeng_FetchTask(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 		if !strings.HasPrefix(gotAuth, "HMAC-SHA256 Credential=AK1/") {
 			t.Fatalf("expected HMAC-signed poll request for direct vendor key, got %q", gotAuth)
 		}

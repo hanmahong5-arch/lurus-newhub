@@ -89,7 +89,11 @@ func TestProv2ndPass_Ali_DoRequest_HitsUpstreamWithAuth(t *testing.T) {
 	if !ok || httpResp == nil {
 		t.Fatalf("resp type = %T, want *http.Response", resp)
 	}
-	defer httpResp.Body.Close()
+	defer func() {
+		if httpResp != nil {
+			_ = httpResp.Body.Close()
+		}
+	}()
 
 	if gotPath != "/compatible-mode/v1/chat/completions" {
 		t.Errorf("upstream path = %q, want /compatible-mode/v1/chat/completions", gotPath)

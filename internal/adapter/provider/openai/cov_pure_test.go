@@ -596,13 +596,13 @@ func TestAdaptor_Init_ThinkingToContentSetup(t *testing.T) {
 		},
 	}
 	a.Init(info)
-	if !info.ThinkingContentInfo.IsFirstThinkingContent {
+	if !info.IsFirstThinkingContent {
 		t.Error("IsFirstThinkingContent should be true after Init with ThinkingToContent enabled")
 	}
-	if info.ThinkingContentInfo.SendLastThinkingContent {
+	if info.SendLastThinkingContent {
 		t.Error("SendLastThinkingContent should start false")
 	}
-	if info.ThinkingContentInfo.HasSentThinkingContent {
+	if info.HasSentThinkingContent {
 		t.Error("HasSentThinkingContent should start false")
 	}
 }
@@ -615,7 +615,7 @@ func TestAdaptor_Init_WithoutThinkingToContent(t *testing.T) {
 	a.Init(info)
 	// zero-value ThinkingContentInfo: IsFirstThinkingContent must stay false
 	// since the Init code path that flips it on was never entered.
-	if info.ThinkingContentInfo.IsFirstThinkingContent {
+	if info.IsFirstThinkingContent {
 		t.Error("IsFirstThinkingContent should remain false when ThinkingToContent disabled")
 	}
 }

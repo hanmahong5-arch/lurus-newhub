@@ -76,7 +76,11 @@ func TestXaiLt1_DoRequest_Success(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *http.Response, got %T", resp)
 	}
-	defer httpResp.Body.Close()
+	defer func() {
+		if httpResp != nil {
+			_ = httpResp.Body.Close()
+		}
+	}()
 	if httpResp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", httpResp.StatusCode)
 	}
@@ -119,6 +123,11 @@ func TestXaiLt1_DoResponse_ImagesGeneration_DelegatesToOpenAIImageHandler(t *tes
 	}
 	body := `{"created":1700000000,"data":[{"url":"https://x/img.png"}]}`
 	resp := xaiSSEBody(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage, apiErr := a.DoResponse(xc.ctx, resp, info)
 	if apiErr != nil {
@@ -181,6 +190,11 @@ func TestXaiLt1_DoResponse_Stream_SkipsMalformedChunk(t *testing.T) {
 		`data: {"id":"c1","model":"grok-3","choices":[{"delta":{"content":"ok"}}]}` + "\n\n" +
 		"data: [DONE]\n\n"
 	resp := xaiSSEBody(sse)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage, apiErr := a.DoResponse(xc.ctx, resp, info)
 	if apiErr != nil {

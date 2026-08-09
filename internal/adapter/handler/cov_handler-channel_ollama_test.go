@@ -207,8 +207,8 @@ func TestOllamaPullModelStream_EmitsSSEProgressAndDone(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"downloading"}` + "\n"))
-		w.Write([]byte(`{"status":"success"}` + "\n"))
+		_, _ = w.Write([]byte(`{"status":"downloading"}` + "\n"))
+		_, _ = w.Write([]byte(`{"status":"success"}` + "\n"))
 	}))
 	defer srv.Close()
 
@@ -397,7 +397,7 @@ func TestOllamaVersion_SuccessAndFailure(t *testing.T) {
 
 	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"version":"0.5.1"}`))
+		_, _ = w.Write([]byte(`{"version":"0.5.1"}`))
 	}))
 	defer okSrv.Close()
 	ch := handler_channel_seedTypedChannel(t, ctx, constant.ChannelTypeOllama, okSrv.URL, "k")

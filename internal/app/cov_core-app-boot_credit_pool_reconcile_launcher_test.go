@@ -30,12 +30,12 @@ func TestCoreAppBootStartCreditPoolReconcileWithContext_LeaderCompensatesOnTick(
 	}
 
 	prevEnv, hadEnv := os.LookupEnv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS")
-	os.Setenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS", "1")
+	_ = os.Setenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS", "1")
 	t.Cleanup(func() {
 		if hadEnv {
-			os.Setenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS", prevEnv)
+			_ = os.Setenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS", prevEnv)
 		} else {
-			os.Unsetenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS")
+			_ = os.Unsetenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS")
 		}
 	})
 
@@ -74,12 +74,12 @@ func TestCoreAppBootStartCreditPoolReconcileWithContext_NonLeaderDoesNotCompensa
 	}
 
 	prevEnv, hadEnv := os.LookupEnv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS")
-	os.Setenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS", "1")
+	_ = os.Setenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS", "1")
 	t.Cleanup(func() {
 		if hadEnv {
-			os.Setenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS", prevEnv)
+			_ = os.Setenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS", prevEnv)
 		} else {
-			os.Unsetenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS")
+			_ = os.Unsetenv("CREDIT_POOL_RECONCILE_INTERVAL_SECONDS")
 		}
 	})
 

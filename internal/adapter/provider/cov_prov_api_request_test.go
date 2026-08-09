@@ -246,7 +246,11 @@ func TestDoApiRequest_SuccessAppliesHeaderOverrideAndAdaptorHeaders(t *testing.T
 	if err != nil {
 		t.Fatalf("DoApiRequest() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -276,6 +280,11 @@ func TestDoApiRequest_GetRequestURLError(t *testing.T) {
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
 	resp, err := DoApiRequest(adaptor, c, info, nil)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp != nil {
 		t.Errorf("resp = %v, want nil", resp)
 	}
@@ -295,6 +304,11 @@ func TestDoApiRequest_HeaderOverrideInvalidValueError(t *testing.T) {
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
 	resp, err := DoApiRequest(adaptor, c, info, nil)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp != nil {
 		t.Errorf("resp = %v, want nil", resp)
 	}
@@ -310,6 +324,11 @@ func TestDoApiRequest_SetupRequestHeaderError(t *testing.T) {
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
 	resp, err := DoApiRequest(adaptor, c, info, nil)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp != nil {
 		t.Errorf("resp = %v, want nil", resp)
 	}
@@ -327,6 +346,11 @@ func TestDoApiRequest_NetworkErrorWrapsDoRequestFailed(t *testing.T) {
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
 	resp, err := DoApiRequest(adaptor, c, info, nil)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp != nil {
 		t.Errorf("resp = %v, want nil", resp)
 	}
@@ -361,7 +385,11 @@ func TestDoFormRequest_SuccessSetsFormContentType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoFormRequest() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
 	}
@@ -384,7 +412,12 @@ func TestDoFormRequest_GetRequestURLError(t *testing.T) {
 	info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{}}
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
-	_, err := DoFormRequest(adaptor, c, info, nil)
+	bcResp7, err := DoFormRequest(adaptor, c, info, nil)
+	defer func() {
+		if bcResp7 != nil {
+			_ = bcResp7.Body.Close()
+		}
+	}()
 	if err == nil || !strings.Contains(err.Error(), "get request url failed") {
 		t.Fatalf("err = %v, want wrapped 'get request url failed'", err)
 	}
@@ -400,7 +433,12 @@ func TestDoFormRequest_HeaderOverrideInvalidValueError(t *testing.T) {
 	}
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
-	_, err := DoFormRequest(adaptor, c, info, nil)
+	bcResp6, err := DoFormRequest(adaptor, c, info, nil)
+	defer func() {
+		if bcResp6 != nil {
+			_ = bcResp6.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error for non-string header override value")
 	}
@@ -412,7 +450,12 @@ func TestDoFormRequest_SetupRequestHeaderError(t *testing.T) {
 	info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{}}
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
-	_, err := DoFormRequest(adaptor, c, info, nil)
+	bcResp5, err := DoFormRequest(adaptor, c, info, nil)
+	defer func() {
+		if bcResp5 != nil {
+			_ = bcResp5.Body.Close()
+		}
+	}()
 	if err == nil || !strings.Contains(err.Error(), "setup request header failed") {
 		t.Fatalf("err = %v, want wrapped 'setup request header failed'", err)
 	}
@@ -426,7 +469,12 @@ func TestDoFormRequest_NetworkErrorWrapsDoRequestFailed(t *testing.T) {
 	info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{}}
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
-	_, err := DoFormRequest(adaptor, c, info, nil)
+	bcResp4, err := DoFormRequest(adaptor, c, info, nil)
+	defer func() {
+		if bcResp4 != nil {
+			_ = bcResp4.Body.Close()
+		}
+	}()
 	if err == nil || !strings.Contains(err.Error(), "do request failed") {
 		t.Fatalf("err = %v, want wrapped 'do request failed'", err)
 	}
@@ -439,7 +487,7 @@ func TestDoWssRequest_SuccessEstablishesDuplexConnection(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return
@@ -458,7 +506,7 @@ func TestDoWssRequest_SuccessEstablishesDuplexConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoWssRequest() error = %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("hi")); err != nil {
 		t.Fatalf("WriteMessage() error = %v", err)
@@ -544,7 +592,11 @@ func TestDoRequest_ExportedWrapperDelegatesToInternal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoRequest() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != http.StatusTeapot {
 		t.Errorf("status = %d, want %d (proves the exported wrapper actually round-trips through doRequest)", resp.StatusCode, http.StatusTeapot)
 	}
@@ -581,7 +633,11 @@ func TestDoRequest_NilRequestBodyIsTolerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoRequest() with a nil req.Body error = %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
@@ -600,7 +656,12 @@ func TestDoRequest_ProxyClientConstructionError(t *testing.T) {
 		},
 	}
 
-	_, err = DoRequest(c, req, info)
+	bcResp3, err := DoRequest(c, req, info)
+	defer func() {
+		if bcResp3 != nil {
+			_ = bcResp3.Body.Close()
+		}
+	}()
 	if err == nil || !strings.Contains(err.Error(), "new proxy http client failed") {
 		t.Fatalf("err = %v, want wrapped 'new proxy http client failed'", err)
 	}
@@ -625,7 +686,11 @@ func TestDoRequest_NonStreamBodyIsReadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoRequest() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("reading wrapped non-stream body: %v", err)
@@ -658,7 +723,11 @@ func TestDoTaskApiRequest_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoTaskApiRequest() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -677,7 +746,12 @@ func TestDoTaskApiRequest_BuildRequestURLErrorIsUnwrapped(t *testing.T) {
 	info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{}}
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
-	_, err := DoTaskApiRequest(adaptor, c, info, nil)
+	bcResp2, err := DoTaskApiRequest(adaptor, c, info, nil)
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
 	// Business note: unlike DoApiRequest, DoTaskApiRequest returns the
 	// BuildRequestURL error verbatim (no fmt.Errorf wrap) — callers relying on
 	// errors.Is against the sentinel must keep working.
@@ -692,7 +766,12 @@ func TestDoTaskApiRequest_BuildRequestHeaderError(t *testing.T) {
 	info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{}}
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
-	_, err := DoTaskApiRequest(adaptor, c, info, nil)
+	bcResp1, err := DoTaskApiRequest(adaptor, c, info, nil)
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
 	if err == nil || !strings.Contains(err.Error(), "setup request header failed") {
 		t.Fatalf("err = %v, want wrapped 'setup request header failed'", err)
 	}
@@ -706,7 +785,12 @@ func TestDoTaskApiRequest_NetworkErrorWrapsDoRequestFailed(t *testing.T) {
 	info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{}}
 	c, _ := provReqCovNewGinContext(t, http.MethodPost, "/x", nil)
 
-	_, err := DoTaskApiRequest(adaptor, c, info, nil)
+	bcResp0, err := DoTaskApiRequest(adaptor, c, info, nil)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err == nil || !strings.Contains(err.Error(), "do request failed") {
 		t.Fatalf("err = %v, want wrapped 'do request failed'", err)
 	}

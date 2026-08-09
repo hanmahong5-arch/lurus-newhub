@@ -42,6 +42,11 @@ func TestProvOllamaVolc_OllamaChatHandler_SingleJSONObject_UsageAndContent(t *te
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/chat/completions", "")
 	body := `{"model":"llama3","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"hello there"},"done":true,"done_reason":"stop","prompt_eval_count":10,"eval_count":5}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3"}}
 
 	usage, apiErr := ollamaChatHandler(c, info, resp)
@@ -73,6 +78,11 @@ func TestProvOllamaVolc_OllamaChatHandler_GenerateEndpoint_UsesResponseField(t *
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/completions", "")
 	body := `{"model":"llama3","response":"the answer is 4","done":true,"prompt_eval_count":3,"eval_count":2}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3"}}
 
 	usage, apiErr := ollamaChatHandler(c, info, resp)
@@ -93,6 +103,11 @@ func TestProvOllamaVolc_OllamaChatHandler_MissingUsageFields_DegradesGracefullyT
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/chat/completions", "")
 	body := `{"model":"llama3","message":{"role":"assistant","content":"hi"},"done":true}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3"}}
 
 	usage, apiErr := ollamaChatHandler(c, info, resp)
@@ -115,6 +130,11 @@ func TestProvOllamaVolc_OllamaChatHandler_MultiLineNDJSON_AggregatesContentAndUs
 		`{"model":"llama3","message":{"role":"assistant","content":"lo!"},"done":true,"done_reason":"stop","prompt_eval_count":7,"eval_count":3}`,
 	}, "\n")
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3"}}
 
 	usage, apiErr := ollamaChatHandler(c, info, resp)
@@ -133,6 +153,11 @@ func TestProvOllamaVolc_OllamaChatHandler_ReasoningThinkingField_Aggregated(t *t
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/chat/completions", "")
 	body := `{"model":"llama3","message":{"role":"assistant","content":"answer","thinking":"\"step by step\""},"done":true}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3"}}
 
 	_, apiErr := ollamaChatHandler(c, info, resp)
@@ -147,6 +172,11 @@ func TestProvOllamaVolc_OllamaChatHandler_ReasoningThinkingField_Aggregated(t *t
 func TestProvOllamaVolc_OllamaChatHandler_MalformedJSON_ReturnsError(t *testing.T) {
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/chat/completions", "")
 	resp := prov_ollama_volc_mkResp(`{not-json`)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	usage, apiErr := ollamaChatHandler(c, info, resp)
@@ -165,6 +195,11 @@ func TestProvOllamaVolc_OllamaChatHandler_MalformedJSON_ReturnsError(t *testing.
 func TestProvOllamaVolc_OllamaChatHandler_EmptyBody_ReturnsError(t *testing.T) {
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/chat/completions", "")
 	resp := prov_ollama_volc_mkResp("")
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3"}}
 
 	usage, apiErr := ollamaChatHandler(c, info, resp)
@@ -181,6 +216,11 @@ func TestProvOllamaVolc_OllamaChatHandler_ModelFallsBackToUpstreamModelName(t *t
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/chat/completions", "")
 	body := `{"message":{"role":"assistant","content":"hi"},"done":true}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3-fallback"}}
 
 	_, apiErr := ollamaChatHandler(c, info, resp)
@@ -457,6 +497,11 @@ func TestProvOllamaVolc_OllamaEmbeddingHandler_Success(t *testing.T) {
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/embeddings", "")
 	body := `{"model":"nomic-embed-text","embeddings":[[0.1,0.2],[0.3,0.4]],"prompt_eval_count":6}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "nomic-embed-text"}}
 
 	usage, apiErr := ollamaEmbeddingHandler(c, info, resp)
@@ -482,6 +527,11 @@ func TestProvOllamaVolc_OllamaEmbeddingHandler_UpstreamErrorField(t *testing.T) 
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/embeddings", "")
 	body := `{"error":"model not found"}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	usage, apiErr := ollamaEmbeddingHandler(c, info, resp)
@@ -501,6 +551,11 @@ func TestProvOllamaVolc_OllamaEmbeddingHandler_EmptyEmbeddingsArray(t *testing.T
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/embeddings", "")
 	body := `{"model":"m","embeddings":[],"prompt_eval_count":0}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	usage, apiErr := ollamaEmbeddingHandler(c, info, resp)
@@ -518,6 +573,11 @@ func TestProvOllamaVolc_OllamaEmbeddingHandler_EmptyEmbeddingsArray(t *testing.T
 func TestProvOllamaVolc_OllamaEmbeddingHandler_MalformedJSON(t *testing.T) {
 	_, c := prov_ollama_volc_newTestCtx("POST", "/v1/embeddings", "")
 	resp := prov_ollama_volc_mkResp(`{not-json`)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	_, apiErr := ollamaEmbeddingHandler(c, info, resp)
@@ -538,6 +598,11 @@ func TestProvOllamaVolc_Adaptor_DoResponse_DispatchesEmbeddings(t *testing.T) {
 	_, c := prov_ollama_volc_newTestCtx("POST", "/v1/embeddings", "")
 	body := `{"model":"m","embeddings":[[1.0]],"prompt_eval_count":1}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeEmbeddings, ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	usage, apiErr := a.DoResponse(c, resp, info)
@@ -554,6 +619,11 @@ func TestProvOllamaVolc_Adaptor_DoResponse_DispatchesNonStreamChat(t *testing.T)
 	_, c := prov_ollama_volc_newTestCtx("POST", "/v1/chat/completions", "")
 	body := `{"model":"llama3","message":{"role":"assistant","content":"hi"},"done":true,"prompt_eval_count":1,"eval_count":1}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeChatCompletions, IsStream: false, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3"}}
 
 	usage, apiErr := a.DoResponse(c, resp, info)

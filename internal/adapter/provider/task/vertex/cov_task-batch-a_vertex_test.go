@@ -310,14 +310,26 @@ func TestVertex_DoResponse(t *testing.T) {
 func TestVertex_FetchTask(t *testing.T) {
 	t.Run("missing task_id is rejected", func(t *testing.T) {
 		a := &TaskAdaptor{}
-		if _, err := a.FetchTask("https://x", fakeCreds, map[string]any{}, ""); err == nil {
+		bcResp4, err := a.FetchTask("https://x", fakeCreds, map[string]any{}, "")
+		defer func() {
+			if bcResp4 != nil {
+				_ = bcResp4.Body.Close()
+			}
+		}()
+		if err == nil {
 			t.Fatalf("expected error for missing task_id")
 		}
 	})
 
 	t.Run("non-base64 task_id fails to decode into an operation name", func(t *testing.T) {
 		a := &TaskAdaptor{}
-		if _, err := a.FetchTask("https://x", fakeCreds, map[string]any{"task_id": "not!base64!"}, ""); err == nil {
+		bcResp3, err := a.FetchTask("https://x", fakeCreds, map[string]any{"task_id": "not!base64!"}, "")
+		defer func() {
+			if bcResp3 != nil {
+				_ = bcResp3.Body.Close()
+			}
+		}()
+		if err == nil {
 			t.Fatalf("expected decode error for malformed local task id")
 		}
 	})
@@ -325,7 +337,13 @@ func TestVertex_FetchTask(t *testing.T) {
 	t.Run("operation name missing project/model is rejected before any credential/network work", func(t *testing.T) {
 		a := &TaskAdaptor{}
 		localID := encodeLocalTaskID("garbage-operation-name-with-no-fields")
-		if _, err := a.FetchTask("https://x", fakeCreds, map[string]any{"task_id": localID}, ""); err == nil {
+		bcResp2, err := a.FetchTask("https://x", fakeCreds, map[string]any{"task_id": localID}, "")
+		defer func() {
+			if bcResp2 != nil {
+				_ = bcResp2.Body.Close()
+			}
+		}()
+		if err == nil {
 			t.Fatalf("expected error when project/model cannot be extracted")
 		}
 	})
@@ -334,7 +352,13 @@ func TestVertex_FetchTask(t *testing.T) {
 		a := &TaskAdaptor{}
 		opName := "projects/proj-1/locations/us-central1/publishers/google/models/veo-3.0-generate-001/operations/op-1"
 		localID := encodeLocalTaskID(opName)
-		if _, err := a.FetchTask("https://x", "not json", map[string]any{"task_id": localID}, ""); err == nil {
+		bcResp1, err := a.FetchTask("https://x", "not json", map[string]any{"task_id": localID}, "")
+		defer func() {
+			if bcResp1 != nil {
+				_ = bcResp1.Body.Close()
+			}
+		}()
+		if err == nil {
 			t.Fatalf("expected error for invalid credentials json")
 		}
 	})
@@ -343,7 +367,12 @@ func TestVertex_FetchTask(t *testing.T) {
 		a := &TaskAdaptor{}
 		opName := "projects/proj-1/locations/us-central1/publishers/google/models/veo-3.0-generate-001/operations/op-1"
 		localID := encodeLocalTaskID(opName)
-		_, err := a.FetchTask("https://x", fakeCreds, map[string]any{"task_id": localID}, "")
+		bcResp0, err := a.FetchTask("https://x", fakeCreds, map[string]any{"task_id": localID}, "")
+		defer func() {
+			if bcResp0 != nil {
+				_ = bcResp0.Body.Close()
+			}
+		}()
 		if err == nil {
 			t.Fatalf("expected error for unparseable private key")
 		}

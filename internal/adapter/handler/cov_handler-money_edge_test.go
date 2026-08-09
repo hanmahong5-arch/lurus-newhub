@@ -132,7 +132,7 @@ func TestInternalBackfillTokenAccountIDs_NoTokens(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["message"] != "no tokens to backfill" {
 		t.Errorf("expected 'no tokens to backfill', got %v", resp["message"])
 	}
@@ -159,7 +159,7 @@ func TestInternalBackfillTokenAccountIDs_NoMapping(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if int(resp["total_tokens"].(float64)) != 1 {
 		t.Errorf("total_tokens = %v, want 1", resp["total_tokens"])
 	}
@@ -207,7 +207,7 @@ func TestInternalBackfillTokenAccountIDs_InactiveMappingExcluded(t *testing.T) {
 
 	w := handlerMoneyPostBackfill(ctx.router)
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if int(resp["users_matched"].(float64)) != 0 {
 		t.Errorf("users_matched = %v, want 0 (mapping is inactive)", resp["users_matched"])
 	}
@@ -237,7 +237,7 @@ func TestInternalBackfillTokenAccountIDs_EmptySubjectSkipped(t *testing.T) {
 
 	w := handlerMoneyPostBackfill(ctx.router)
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if int(resp["users_matched"].(float64)) != 0 {
 		t.Errorf("users_matched = %v, want 0 (empty subject must be skipped)", resp["users_matched"])
 	}
@@ -285,7 +285,7 @@ func TestInternalBackfillTokenAccountIDs_SuccessfulMatch(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if int(resp["users_matched"].(float64)) != 1 {
 		t.Fatalf("users_matched = %v, want 1", resp["users_matched"])
 	}
@@ -304,7 +304,7 @@ func TestInternalBackfillTokenAccountIDs_SuccessfulMatch(t *testing.T) {
 	// Idempotency: a second run must find nothing left to backfill.
 	w2 := handlerMoneyPostBackfill(ctx.router)
 	var resp2 map[string]interface{}
-	json.Unmarshal(w2.Body.Bytes(), &resp2)
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp2)
 	if resp2["message"] != "no tokens to backfill" {
 		t.Errorf("second run: expected no-op, got %v", resp2["message"])
 	}
@@ -346,7 +346,7 @@ func TestInternalBackfillTokenAccountIDs_MultipleTokensSameUser(t *testing.T) {
 
 	w := handlerMoneyPostBackfill(ctx.router)
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if int(resp["unique_users"].(float64)) != 1 {
 		t.Errorf("unique_users = %v, want 1", resp["unique_users"])
 	}
@@ -573,7 +573,7 @@ func TestListInvoicesV2_NoTenantContext(t *testing.T) {
 		t.Fatalf("expected 401 without tenant context, got %d body=%s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["success"] != false {
 		t.Errorf("expected success=false, got %v", resp["success"])
 	}
@@ -637,7 +637,7 @@ func TestSwitchReconciliation_TenantSlugMismatchForbidden(t *testing.T) {
 		t.Fatalf("expected 403 for cross-tenant token, got %d body=%s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["success"] != false {
 		t.Errorf("expected success=false, got %v", resp["success"])
 	}
@@ -714,7 +714,7 @@ func TestInternalFundCreditPool_MalformedJSONBody(t *testing.T) {
 		t.Fatalf("expected 400 for malformed body, got %d body=%s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["error_code"] != "INVALID_REQUEST" {
 		t.Errorf("expected error_code=INVALID_REQUEST, got %v", resp["error_code"])
 	}
@@ -741,7 +741,7 @@ func TestInternalFundCreditPool_MissingSlug(t *testing.T) {
 		t.Fatalf("expected 400 for empty slug, got %d body=%s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["error_code"] != "MISSING_TENANT_SLUG" {
 		t.Errorf("expected error_code=MISSING_TENANT_SLUG, got %v", resp["error_code"])
 	}

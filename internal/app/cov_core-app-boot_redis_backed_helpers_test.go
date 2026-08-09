@@ -38,7 +38,7 @@ func TestCoreAppBootWrapRedis_NilClientReturnsNil(t *testing.T) {
 func TestCoreAppBootWrapRedis_SetNXBool_FirstThenDuplicate(t *testing.T) {
 	mr := withMiniRedisTPM(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	rdb := wrapRedis(client)
 	if rdb == nil {

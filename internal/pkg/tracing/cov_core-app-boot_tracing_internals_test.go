@@ -258,10 +258,10 @@ func TestCoreAppBootTracing_GetEnvFloat(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			os.Unsetenv(key)
+			_ = os.Unsetenv(key)
 			if !tc.unset {
-				os.Setenv(key, tc.envVal)
-				t.Cleanup(func() { os.Unsetenv(key) })
+				_ = os.Setenv(key, tc.envVal)
+				t.Cleanup(func() { _ = os.Unsetenv(key) })
 			}
 			got := getEnvFloat(key, 0.75)
 			if got != tc.want {
@@ -275,13 +275,13 @@ func TestCoreAppBootTracing_GetEnvFloat(t *testing.T) {
 // branches.
 func TestCoreAppBootTracing_GetEnvOrDefault(t *testing.T) {
 	const key = "COV_CORE_APP_BOOT_TRACING_ENDPOINT"
-	os.Unsetenv(key)
+	_ = os.Unsetenv(key)
 	if got := getEnvOrDefault(key, "fallback-endpoint"); got != "fallback-endpoint" {
 		t.Errorf("expected default when unset, got %q", got)
 	}
 
-	os.Setenv(key, "custom-endpoint:4318")
-	t.Cleanup(func() { os.Unsetenv(key) })
+	_ = os.Setenv(key, "custom-endpoint:4318")
+	t.Cleanup(func() { _ = os.Unsetenv(key) })
 	if got := getEnvOrDefault(key, "fallback-endpoint"); got != "custom-endpoint:4318" {
 		t.Errorf("expected env override, got %q", got)
 	}

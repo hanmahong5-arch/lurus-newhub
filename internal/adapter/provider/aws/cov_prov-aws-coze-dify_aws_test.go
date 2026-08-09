@@ -941,7 +941,7 @@ func TestHandleNovaRequest_ExtractsUsageAndBuildsOpenAIResponse(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("response body not valid JSON: %v (%s)", err, w.Body.String())
 	}
-	if len(out.Choices) != 1 || out.Choices[0].Message.Content != "nova says hi" {
+	if len(out.Choices) != 1 || out.Choices[0].Content != "nova says hi" {
 		t.Errorf("Choices = %+v, want single choice with Nova's answer text translated to OpenAI shape", out.Choices)
 	}
 }

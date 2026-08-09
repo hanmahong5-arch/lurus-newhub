@@ -143,7 +143,13 @@ func TestGeminiTTSHandler_Success(t *testing.T) {
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	audioB64 := "aGVsbG8=" // base64("hello")
 	body := `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"audio/wav","data":"` + audioB64 + `"}}]},"finishReason":"STOP"}]}`
-	usage, apiErr := GeminiTTSHandler(c, info, respFromBody(200, body))
+	bcResp6 := respFromBody(200, body)
+	defer func() {
+		if bcResp6 != nil {
+			_ = bcResp6.Body.Close()
+		}
+	}()
+	usage, apiErr := GeminiTTSHandler(c, info, bcResp6)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -165,7 +171,13 @@ func TestGeminiTTSHandler_Success(t *testing.T) {
 func TestGeminiTTSHandler_UpstreamNon200_Errors(t *testing.T) {
 	c, _ := newTestContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-	_, apiErr := GeminiTTSHandler(c, info, respFromBody(429, `rate limited`))
+	bcResp5 := respFromBody(429, `rate limited`)
+	defer func() {
+		if bcResp5 != nil {
+			_ = bcResp5.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiTTSHandler(c, info, bcResp5)
 	if apiErr == nil {
 		t.Fatal("expected error for non-200 upstream status")
 	}
@@ -180,7 +192,13 @@ func TestGeminiTTSHandler_UpstreamNon200_Errors(t *testing.T) {
 func TestGeminiTTSHandler_MalformedJSON_Errors(t *testing.T) {
 	c, _ := newTestContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-	_, apiErr := GeminiTTSHandler(c, info, respFromBody(200, `not json`))
+	bcResp4 := respFromBody(200, `not json`)
+	defer func() {
+		if bcResp4 != nil {
+			_ = bcResp4.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiTTSHandler(c, info, bcResp4)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed JSON")
 	}
@@ -193,7 +211,13 @@ func TestGeminiTTSHandler_UpstreamErrorField_Errors(t *testing.T) {
 	c, _ := newTestContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := `{"error":{"message":"quota exceeded","code":403}}`
-	_, apiErr := GeminiTTSHandler(c, info, respFromBody(200, body))
+	bcResp3 := respFromBody(200, body)
+	defer func() {
+		if bcResp3 != nil {
+			_ = bcResp3.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiTTSHandler(c, info, bcResp3)
 	if apiErr == nil {
 		t.Fatal("expected error when response body carries an 'error' field")
 	}
@@ -206,7 +230,13 @@ func TestGeminiTTSHandler_NoAudioInResponse_Errors(t *testing.T) {
 	c, _ := newTestContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := `{"candidates":[{"content":{"parts":[{"inlineData":null}]},"finishReason":"OTHER"}]}`
-	_, apiErr := GeminiTTSHandler(c, info, respFromBody(200, body))
+	bcResp2 := respFromBody(200, body)
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiTTSHandler(c, info, bcResp2)
 	if apiErr == nil {
 		t.Fatal("expected error when no audio data is present")
 	}
@@ -219,7 +249,13 @@ func TestGeminiTTSHandler_MalformedInlineBase64_SkipsAndErrors(t *testing.T) {
 	c, _ := newTestContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"audio/wav","data":"not-valid-base64!!!"}}]},"finishReason":"STOP"}]}`
-	_, apiErr := GeminiTTSHandler(c, info, respFromBody(200, body))
+	bcResp1 := respFromBody(200, body)
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiTTSHandler(c, info, bcResp1)
 	if apiErr == nil {
 		t.Fatal("expected error: malformed base64 audio data must be skipped, yielding 'no audio'")
 	}
@@ -231,7 +267,13 @@ func TestGeminiTTSHandler_MalformedInlineBase64_SkipsAndErrors(t *testing.T) {
 func TestGeminiTTSHandler_EmptyCandidates_NoAudioError(t *testing.T) {
 	c, _ := newTestContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-	_, apiErr := GeminiTTSHandler(c, info, respFromBody(200, `{"candidates":[]}`))
+	bcResp0 := respFromBody(200, `{"candidates":[]}`)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiTTSHandler(c, info, bcResp0)
 	if apiErr == nil {
 		t.Fatal("expected error for empty candidates")
 	}

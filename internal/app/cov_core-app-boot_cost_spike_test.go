@@ -54,15 +54,18 @@ func TestCoreAppBootRecordCostSpikeWindow_NoOpBranches(t *testing.T) {
 	withMiniRedisTPM(t)
 	core_app_boot_saveCostSpikeProtection(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
+	// RecordCostSpikeWindow takes no context (it is fire-and-forget from the
+	// billing path), so each subtest records first and only then derives the
+	// context its QueryCostSpikeWindow read needs — keeping a context in scope
+	// across the recording call would just be misleading.
 	t.Run("protection_disabled", func(t *testing.T) {
 		common.CostSpikeProtectionEnabled = false
 		userID := 881002
 		RecordCostSpikeWindow(userID, 1000)
 		common.CostSpikeProtectionEnabled = true
 
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 		total, err := QueryCostSpikeWindow(ctx, common.RDB, userID)
 		if err != nil {
 			t.Fatalf("query: %v", err)
@@ -78,6 +81,8 @@ func TestCoreAppBootRecordCostSpikeWindow_NoOpBranches(t *testing.T) {
 		RecordCostSpikeWindow(userID, 0)
 		RecordCostSpikeWindow(userID, -50)
 
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 		total, err := QueryCostSpikeWindow(ctx, common.RDB, userID)
 		if err != nil {
 			t.Fatalf("query: %v", err)

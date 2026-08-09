@@ -130,7 +130,11 @@ func TestSF_DoRequest_DelegatesToOpenAIApiRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("result type = %T, want *http.Response", result)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != 200 {
 		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
 	}

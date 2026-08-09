@@ -54,7 +54,13 @@ func TestGeminiChatHandler_ValidResponse_OpenAIFormat(t *testing.T) {
 		"candidates": [{"content": {"parts":[{"text":"hi there"}]}, "finishReason":"STOP", "index":0}],
 		"usageMetadata": {"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}
 	}`
-	usage, apiErr := GeminiChatHandler(c, info, respFromBody(200, body))
+	bcResp23 := respFromBody(200, body)
+	defer func() {
+		if bcResp23 != nil {
+			_ = bcResp23.Body.Close()
+		}
+	}()
+	usage, apiErr := GeminiChatHandler(c, info, bcResp23)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -68,7 +74,7 @@ func TestGeminiChatHandler_ValidResponse_OpenAIFormat(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("response body not valid OpenAI JSON: %v (%s)", err, w.Body.String())
 	}
-	if len(got.Choices) != 1 || got.Choices[0].Message.StringContent() != "hi there" {
+	if len(got.Choices) != 1 || got.Choices[0].StringContent() != "hi there" {
 		t.Errorf("Choices = %+v, want single 'hi there' choice", got.Choices)
 	}
 	if got.Model != "gemini-2.0-flash" {
@@ -80,7 +86,13 @@ func TestGeminiChatHandler_EmptyCandidates_BlockReason(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := `{"candidates":[], "promptFeedback":{"blockReason":"SAFETY"}}`
-	_, apiErr := GeminiChatHandler(c, info, respFromBody(200, body))
+	bcResp22 := respFromBody(200, body)
+	defer func() {
+		if bcResp22 != nil {
+			_ = bcResp22.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiChatHandler(c, info, bcResp22)
 	if apiErr == nil {
 		t.Fatal("expected error for blocked prompt")
 	}
@@ -96,7 +108,13 @@ func TestGeminiChatHandler_EmptyCandidates_NoFeedback(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := `{"candidates":[]}`
-	_, apiErr := GeminiChatHandler(c, info, respFromBody(200, body))
+	bcResp21 := respFromBody(200, body)
+	defer func() {
+		if bcResp21 != nil {
+			_ = bcResp21.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiChatHandler(c, info, bcResp21)
 	if apiErr == nil {
 		t.Fatal("expected error for empty response")
 	}
@@ -108,7 +126,13 @@ func TestGeminiChatHandler_EmptyCandidates_NoFeedback(t *testing.T) {
 func TestGeminiChatHandler_MalformedJSON(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-	_, apiErr := GeminiChatHandler(c, info, respFromBody(200, `{not json`))
+	bcResp20 := respFromBody(200, `{not json`)
+	defer func() {
+		if bcResp20 != nil {
+			_ = bcResp20.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiChatHandler(c, info, bcResp20)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed JSON")
 	}
@@ -124,7 +148,13 @@ func TestGeminiChatHandler_RelayFormatGemini_PassesThroughRawBody(t *testing.T) 
 		RelayFormat: types.RelayFormatGemini,
 	}
 	body := `{"candidates":[{"content":{"parts":[{"text":"raw"}]},"index":0,"finishReason":null}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`
-	_, apiErr := GeminiChatHandler(c, info, respFromBody(200, body))
+	bcResp19 := respFromBody(200, body)
+	defer func() {
+		if bcResp19 != nil {
+			_ = bcResp19.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiChatHandler(c, info, bcResp19)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -150,7 +180,13 @@ func TestGeminiChatHandler_RelayFormatClaude_Converts(t *testing.T) {
 		RelayFormat: types.RelayFormatClaude,
 	}
 	body := `{"candidates":[{"content":{"parts":[{"text":"claude-ify me"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5}}`
-	_, apiErr := GeminiChatHandler(c, info, respFromBody(200, body))
+	bcResp18 := respFromBody(200, body)
+	defer func() {
+		if bcResp18 != nil {
+			_ = bcResp18.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiChatHandler(c, info, bcResp18)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -171,7 +207,13 @@ func TestGeminiTextGenerationHandler_PassesThroughAndComputesUsage(t *testing.T)
 	c, w := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := `{"candidates":[{"content":{"parts":[{"text":"native"}]},"index":0,"finishReason":null}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":3,"totalTokenCount":10}}`
-	usage, apiErr := GeminiTextGenerationHandler(c, info, respFromBody(200, body))
+	bcResp17 := respFromBody(200, body)
+	defer func() {
+		if bcResp17 != nil {
+			_ = bcResp17.Body.Close()
+		}
+	}()
+	usage, apiErr := GeminiTextGenerationHandler(c, info, bcResp17)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -186,7 +228,13 @@ func TestGeminiTextGenerationHandler_PassesThroughAndComputesUsage(t *testing.T)
 func TestGeminiTextGenerationHandler_MalformedJSON(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-	_, apiErr := GeminiTextGenerationHandler(c, info, respFromBody(200, `not json`))
+	bcResp16 := respFromBody(200, `not json`)
+	defer func() {
+		if bcResp16 != nil {
+			_ = bcResp16.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiTextGenerationHandler(c, info, bcResp16)
 	if apiErr == nil {
 		t.Fatal("expected error")
 	}
@@ -203,7 +251,13 @@ func TestGeminiEmbeddingHandler_Success(t *testing.T) {
 	c, w := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "text-embedding-004"}}
 	body := `{"embeddings":[{"values":[0.1,0.2,0.3]},{"values":[0.4,0.5]}]}`
-	usage, apiErr := GeminiEmbeddingHandler(c, info, respFromBody(200, body))
+	bcResp15 := respFromBody(200, body)
+	defer func() {
+		if bcResp15 != nil {
+			_ = bcResp15.Body.Close()
+		}
+	}()
+	usage, apiErr := GeminiEmbeddingHandler(c, info, bcResp15)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -229,7 +283,13 @@ func TestGeminiEmbeddingHandler_EmptyEmbeddings(t *testing.T) {
 	c, w := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := `{"embeddings":[]}`
-	_, apiErr := GeminiEmbeddingHandler(c, info, respFromBody(200, body))
+	bcResp14 := respFromBody(200, body)
+	defer func() {
+		if bcResp14 != nil {
+			_ = bcResp14.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiEmbeddingHandler(c, info, bcResp14)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -243,7 +303,13 @@ func TestGeminiEmbeddingHandler_EmptyEmbeddings(t *testing.T) {
 func TestGeminiEmbeddingHandler_MalformedJSON(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-	_, apiErr := GeminiEmbeddingHandler(c, info, respFromBody(200, `{bad`))
+	bcResp13 := respFromBody(200, `{bad`)
+	defer func() {
+		if bcResp13 != nil {
+			_ = bcResp13.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiEmbeddingHandler(c, info, bcResp13)
 	if apiErr == nil {
 		t.Fatal("expected error")
 	}
@@ -263,7 +329,13 @@ func TestNativeGeminiEmbeddingHandler_BatchMode(t *testing.T) {
 		IsGeminiBatchEmbedding: true,
 	}
 	body := `{"embeddings":[{"values":[1,2]}]}`
-	usage, apiErr := NativeGeminiEmbeddingHandler(c, respFromBody(200, body), info)
+	bcResp12 := respFromBody(200, body)
+	defer func() {
+		if bcResp12 != nil {
+			_ = bcResp12.Body.Close()
+		}
+	}()
+	usage, apiErr := NativeGeminiEmbeddingHandler(c, bcResp12, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -278,7 +350,13 @@ func TestNativeGeminiEmbeddingHandler_BatchMode(t *testing.T) {
 func TestNativeGeminiEmbeddingHandler_BatchMode_MalformedJSON(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, IsGeminiBatchEmbedding: true}
-	_, apiErr := NativeGeminiEmbeddingHandler(c, respFromBody(200, `{bad`), info)
+	bcResp11 := respFromBody(200, `{bad`)
+	defer func() {
+		if bcResp11 != nil {
+			_ = bcResp11.Body.Close()
+		}
+	}()
+	_, apiErr := NativeGeminiEmbeddingHandler(c, bcResp11, info)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed batch embedding JSON")
 	}
@@ -288,7 +366,13 @@ func TestNativeGeminiEmbeddingHandler_SingleMode(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, IsGeminiBatchEmbedding: false}
 	body := `{"embedding":{"values":[1,2,3]}}`
-	usage, apiErr := NativeGeminiEmbeddingHandler(c, respFromBody(200, body), info)
+	bcResp10 := respFromBody(200, body)
+	defer func() {
+		if bcResp10 != nil {
+			_ = bcResp10.Body.Close()
+		}
+	}()
+	usage, apiErr := NativeGeminiEmbeddingHandler(c, bcResp10, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -300,7 +384,13 @@ func TestNativeGeminiEmbeddingHandler_SingleMode(t *testing.T) {
 func TestNativeGeminiEmbeddingHandler_SingleMode_MalformedJSON(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, IsGeminiBatchEmbedding: false}
-	_, apiErr := NativeGeminiEmbeddingHandler(c, respFromBody(200, `{bad`), info)
+	bcResp9 := respFromBody(200, `{bad`)
+	defer func() {
+		if bcResp9 != nil {
+			_ = bcResp9.Body.Close()
+		}
+	}()
+	_, apiErr := NativeGeminiEmbeddingHandler(c, bcResp9, info)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed single embedding JSON")
 	}
@@ -314,7 +404,13 @@ func TestGeminiImageHandler_Success(t *testing.T) {
 	c, w := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := `{"predictions":[{"bytesBase64Encoded":"aaaa"},{"bytesBase64Encoded":"bbbb"}]}`
-	usage, apiErr := GeminiImageHandler(c, info, respFromBody(200, body))
+	bcResp8 := respFromBody(200, body)
+	defer func() {
+		if bcResp8 != nil {
+			_ = bcResp8.Body.Close()
+		}
+	}()
+	usage, apiErr := GeminiImageHandler(c, info, bcResp8)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -338,7 +434,13 @@ func TestGeminiImageHandler_FiltersRaiFilteredPredictions(t *testing.T) {
 	c, w := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := `{"predictions":[{"bytesBase64Encoded":"aaaa"},{"raiFilteredReason":"blocked"}]}`
-	usage, apiErr := GeminiImageHandler(c, info, respFromBody(200, body))
+	bcResp7 := respFromBody(200, body)
+	defer func() {
+		if bcResp7 != nil {
+			_ = bcResp7.Body.Close()
+		}
+	}()
+	usage, apiErr := GeminiImageHandler(c, info, bcResp7)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -355,7 +457,13 @@ func TestGeminiImageHandler_FiltersRaiFilteredPredictions(t *testing.T) {
 func TestGeminiImageHandler_NoPredictions_Errors(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-	_, apiErr := GeminiImageHandler(c, info, respFromBody(200, `{"predictions":[]}`))
+	bcResp6 := respFromBody(200, `{"predictions":[]}`)
+	defer func() {
+		if bcResp6 != nil {
+			_ = bcResp6.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiImageHandler(c, info, bcResp6)
 	if apiErr == nil {
 		t.Fatal("expected error for zero predictions")
 	}
@@ -367,7 +475,13 @@ func TestGeminiImageHandler_NoPredictions_Errors(t *testing.T) {
 func TestGeminiImageHandler_MalformedJSON(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-	_, apiErr := GeminiImageHandler(c, info, respFromBody(200, `not json`))
+	bcResp5 := respFromBody(200, `not json`)
+	defer func() {
+		if bcResp5 != nil {
+			_ = bcResp5.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiImageHandler(c, info, bcResp5)
 	if apiErr == nil {
 		t.Fatal("expected error")
 	}
@@ -400,7 +514,13 @@ func TestGeminiChatStreamHandler_TextDeltas(t *testing.T) {
 		`{"candidates":[{"content":{"parts":[{"text":"Hel"}]},"index":0}]}`,
 		`{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":2,"totalTokenCount":4}}`,
 	)
-	usage, apiErr := GeminiChatStreamHandler(c, info, respFromBody(200, body))
+	bcResp4 := respFromBody(200, body)
+	defer func() {
+		if bcResp4 != nil {
+			_ = bcResp4.Body.Close()
+		}
+	}()
+	usage, apiErr := GeminiChatStreamHandler(c, info, bcResp4)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -420,7 +540,13 @@ func TestGeminiChatStreamHandler_MalformedFrame_PropagatesError(t *testing.T) {
 	c, _ := newHandlerContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, RelayFormat: types.RelayFormatOpenAI}
 	body := sseBody(`{not valid json`)
-	_, apiErr := GeminiChatStreamHandler(c, info, respFromBody(200, body))
+	bcResp3 := respFromBody(200, body)
+	defer func() {
+		if bcResp3 != nil {
+			_ = bcResp3.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiChatStreamHandler(c, info, bcResp3)
 	if apiErr == nil {
 		t.Fatal("expected error: malformed stream frame must propagate as a real error, not be silently dropped")
 	}
@@ -435,7 +561,13 @@ func TestGeminiChatStreamHandler_ToolCallDelta_EmitsToolCallsFinish(t *testing.T
 	body := sseBody(
 		`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"f","args":{}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
 	)
-	_, apiErr := GeminiChatStreamHandler(c, info, respFromBody(200, body))
+	bcResp2 := respFromBody(200, body)
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
+	_, apiErr := GeminiChatStreamHandler(c, info, bcResp2)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -453,7 +585,13 @@ func TestGeminiChatStreamHandler_ImageOnly_EstimatesCompletionTokens(t *testing.
 	body := sseBody(
 		`{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"aaaa"}}]},"finishReason":"STOP","index":0}]}`,
 	)
-	usage, apiErr := GeminiChatStreamHandler(c, info, respFromBody(200, body))
+	bcResp1 := respFromBody(200, body)
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
+	usage, apiErr := GeminiChatStreamHandler(c, info, bcResp1)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -469,7 +607,13 @@ func TestGeminiTextGenerationStreamHandler_ForwardsRawFramesAndCountsResponses(t
 		`{"candidates":[{"content":{"parts":[{"text":"a"}]},"index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
 		`{"candidates":[{"content":{"parts":[{"text":"b"}]},"index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}`,
 	)
-	usage, apiErr := GeminiTextGenerationStreamHandler(c, info, respFromBody(200, body))
+	bcResp0 := respFromBody(200, body)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
+	usage, apiErr := GeminiTextGenerationStreamHandler(c, info, bcResp0)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}

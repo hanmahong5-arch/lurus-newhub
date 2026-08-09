@@ -485,8 +485,6 @@ func TestExportLogsV2_QueryDBError(t *testing.T) {
 // v2_log_export_admin.go
 // ============================================================================
 
-var handlerDeepBAdminExportDBCounter atomic.Int64
-
 type handlerDeepBAdminExportCtx struct {
 	router *gin.Engine
 	db     *gorm.DB

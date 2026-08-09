@@ -88,10 +88,10 @@ func TestSendStreamData_ThinkToContent_FullLifecycle(t *testing.T) {
 	if err := sendStreamData(w.ctx, info, step1, false, true); err != nil {
 		t.Fatalf("step1: unexpected error: %v", err)
 	}
-	if info.ThinkingContentInfo.IsFirstThinkingContent {
+	if info.IsFirstThinkingContent {
 		t.Error("step1: IsFirstThinkingContent should flip false after first thinking chunk")
 	}
-	if !info.ThinkingContentInfo.HasSentThinkingContent {
+	if !info.HasSentThinkingContent {
 		t.Error("step1: HasSentThinkingContent should be true after first thinking chunk")
 	}
 	// encoding/json HTML-escapes '<' and '>' to < / > by default,
@@ -122,7 +122,7 @@ func TestSendStreamData_ThinkToContent_FullLifecycle(t *testing.T) {
 	if err := sendStreamData(w.ctx, info, step3, false, true); err != nil {
 		t.Fatalf("step3: unexpected error: %v", err)
 	}
-	if !info.ThinkingContentInfo.SendLastThinkingContent {
+	if !info.SendLastThinkingContent {
 		t.Error("step3: SendLastThinkingContent should be true after the closing tag was sent")
 	}
 	body3 := w.rec.Body.String()

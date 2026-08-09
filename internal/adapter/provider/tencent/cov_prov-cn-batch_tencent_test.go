@@ -236,14 +236,14 @@ func TestResponseTencent2OpenAI(t *testing.T) {
 		}
 		resp.Usage = TencentUsage{PromptTokens: 4, CompletionTokens: 2, TotalTokens: 6}
 		out := responseTencent2OpenAI(resp)
-		if out.Choices[0].Message.Content != "hello" {
-			t.Errorf("content = %v, want hello", out.Choices[0].Message.Content)
+		if out.Choices[0].Content != "hello" {
+			t.Errorf("content = %v, want hello", out.Choices[0].Content)
 		}
 		if out.Choices[0].FinishReason != "stop" {
 			t.Errorf("finish reason = %q, want stop", out.Choices[0].FinishReason)
 		}
-		if out.Usage.TotalTokens != 6 {
-			t.Errorf("usage.TotalTokens = %d, want 6 (billing extraction)", out.Usage.TotalTokens)
+		if out.TotalTokens != 6 {
+			t.Errorf("usage.TotalTokens = %d, want 6 (billing extraction)", out.TotalTokens)
 		}
 	})
 
@@ -301,7 +301,13 @@ func TestTencentHandler(t *testing.T) {
 	t.Run("valid response extracts usage and writes translated body", func(t *testing.T) {
 		c, w := prov_cn_batch_tencentGinContext()
 		body := `{"Response":{"Id":"r1","Choices":[{"FinishReason":"stop","Message":{"Role":"assistant","Content":"hi there"}}],"Usage":{"PromptTokens":3,"CompletionTokens":2,"TotalTokens":5}}}`
-		usage, apiErr := tencentHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_tencentRespFromBody(body))
+		bcResp5 := prov_cn_batch_tencentRespFromBody(body)
+		defer func() {
+			if bcResp5 != nil {
+				_ = bcResp5.Body.Close()
+			}
+		}()
+		usage, apiErr := tencentHandler(c, &relaycommon.RelayInfo{}, bcResp5)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -316,7 +322,13 @@ func TestTencentHandler(t *testing.T) {
 	t.Run("upstream error code surfaces as classified error, not silent 200", func(t *testing.T) {
 		c, _ := prov_cn_batch_tencentGinContext()
 		body := `{"Response":{"Error":{"Code":1002,"Message":"InvalidParameter"}}}`
-		usage, apiErr := tencentHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_tencentRespFromBody(body))
+		bcResp4 := prov_cn_batch_tencentRespFromBody(body)
+		defer func() {
+			if bcResp4 != nil {
+				_ = bcResp4.Body.Close()
+			}
+		}()
+		usage, apiErr := tencentHandler(c, &relaycommon.RelayInfo{}, bcResp4)
 		if apiErr == nil {
 			t.Fatal("expected error for non-zero upstream error code")
 		}
@@ -327,7 +339,13 @@ func TestTencentHandler(t *testing.T) {
 
 	t.Run("malformed JSON body classified as bad response body", func(t *testing.T) {
 		c, _ := prov_cn_batch_tencentGinContext()
-		_, apiErr := tencentHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_tencentRespFromBody("{not json"))
+		bcResp3 := prov_cn_batch_tencentRespFromBody("{not json")
+		defer func() {
+			if bcResp3 != nil {
+				_ = bcResp3.Body.Close()
+			}
+		}()
+		_, apiErr := tencentHandler(c, &relaycommon.RelayInfo{}, bcResp3)
 		if apiErr == nil {
 			t.Fatal("expected error for malformed JSON")
 		}
@@ -340,7 +358,13 @@ func TestTencentStreamHandler(t *testing.T) {
 		"data:" + `{"Choices":[{"Delta":{"Content":"llo"},"FinishReason":"stop"}]}` + "\n" +
 		"data:[DONE]\n"
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "hunyuan-lite"}}
-	usage, apiErr := tencentStreamHandler(c, info, prov_cn_batch_tencentRespFromBody(body))
+	bcResp2 := prov_cn_batch_tencentRespFromBody(body)
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
+	usage, apiErr := tencentStreamHandler(c, info, bcResp2)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -358,7 +382,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 	t.Run("non-stream routes to tencentHandler", func(t *testing.T) {
 		c, w := prov_cn_batch_tencentGinContext()
 		body := `{"Response":{"Id":"r1","Choices":[{"FinishReason":"stop","Message":{"Role":"assistant","Content":"non-stream reply"}}]}}`
-		_, apiErr := a.DoResponse(c, prov_cn_batch_tencentRespFromBody(body), &relaycommon.RelayInfo{})
+		bcResp1 := prov_cn_batch_tencentRespFromBody(body)
+		defer func() {
+			if bcResp1 != nil {
+				_ = bcResp1.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp1, &relaycommon.RelayInfo{})
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -371,7 +401,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_tencentGinContext()
 		body := "data:" + `{"Choices":[{"Delta":{"Content":"stream reply"},"FinishReason":"stop"}]}` + "\n"
 		info := &relaycommon.RelayInfo{IsStream: true, ChannelMeta: &relaycommon.ChannelMeta{}}
-		_, apiErr := a.DoResponse(c, prov_cn_batch_tencentRespFromBody(body), info)
+		bcResp0 := prov_cn_batch_tencentRespFromBody(body)
+		defer func() {
+			if bcResp0 != nil {
+				_ = bcResp0.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp0, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}

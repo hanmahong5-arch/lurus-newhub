@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -295,7 +296,7 @@ func TestConfigManager_SaveToDB_PropagatesUpdateFuncError(t *testing.T) {
 	err := cm.SaveToDB(func(key, value string) error {
 		return boom
 	})
-	if err != boom {
+	if !errors.Is(err, boom) {
 		t.Fatalf("expected SaveToDB to propagate updateFunc error, got %v", err)
 	}
 }

@@ -21,8 +21,6 @@ func prov_cn_batch_xunfeiGinContext(method, target string) (*gin.Context, *httpt
 	return c, w
 }
 
-func ptrFloat64(v float64) *float64 { return &v }
-
 // ---------------------------------------------------------------------------
 // requestOpenAI2Xunfei — request translation: system role handling, params
 // ---------------------------------------------------------------------------
@@ -152,16 +150,16 @@ func TestResponseXunfei2OpenAI(t *testing.T) {
 		if len(out.Choices) != 1 {
 			t.Fatalf("expected 1 choice, got %d", len(out.Choices))
 		}
-		if out.Choices[0].Message.Content != "hello world" {
-			t.Errorf("content = %v, want hello world", out.Choices[0].Message.Content)
+		if out.Choices[0].Content != "hello world" {
+			t.Errorf("content = %v, want hello world", out.Choices[0].Content)
 		}
-		if out.Choices[0].Message.Role != "assistant" {
-			t.Errorf("role = %q, want assistant", out.Choices[0].Message.Role)
+		if out.Choices[0].Role != "assistant" {
+			t.Errorf("role = %q, want assistant", out.Choices[0].Role)
 		}
 		if out.Choices[0].FinishReason != constant.FinishReasonStop {
 			t.Errorf("finish reason = %q, want %q", out.Choices[0].FinishReason, constant.FinishReasonStop)
 		}
-		if out.Usage.PromptTokens != 10 || out.Usage.CompletionTokens != 5 || out.Usage.TotalTokens != 15 {
+		if out.PromptTokens != 10 || out.CompletionTokens != 5 || out.TotalTokens != 15 {
 			t.Errorf("usage not preserved for billing: got %+v", out.Usage)
 		}
 	})
@@ -172,8 +170,8 @@ func TestResponseXunfei2OpenAI(t *testing.T) {
 		if len(out.Choices) != 1 {
 			t.Fatalf("expected default single choice, got %d", len(out.Choices))
 		}
-		if out.Choices[0].Message.Content != "" {
-			t.Errorf("expected empty content fallback, got %v", out.Choices[0].Message.Content)
+		if out.Choices[0].Content != "" {
+			t.Errorf("expected empty content fallback, got %v", out.Choices[0].Content)
 		}
 	})
 }

@@ -267,13 +267,13 @@ func TestResponseBaidu2OpenAI_UsageAndContent(t *testing.T) {
 	resp.Usage.CompletionTokens = 3
 	resp.Usage.TotalTokens = 10
 	out := responseBaidu2OpenAI(resp)
-	if out.Choices[0].Message.Content != "the answer" {
-		t.Errorf("content = %v, want 'the answer'", out.Choices[0].Message.Content)
+	if out.Choices[0].Content != "the answer" {
+		t.Errorf("content = %v, want 'the answer'", out.Choices[0].Content)
 	}
 	if out.Choices[0].FinishReason != "stop" {
 		t.Errorf("finish reason = %q, want stop", out.Choices[0].FinishReason)
 	}
-	if out.Usage.TotalTokens != 10 || out.Usage.PromptTokens != 7 {
+	if out.TotalTokens != 10 || out.PromptTokens != 7 {
 		t.Errorf("usage not preserved for billing: got %+v", out.Usage)
 	}
 }
@@ -314,8 +314,8 @@ func TestEmbeddingResponseBaidu2OpenAI(t *testing.T) {
 	if out.Data[0].Embedding[0] != 0.1 {
 		t.Errorf("embedding vector not preserved, got %v", out.Data[0].Embedding)
 	}
-	if out.Usage.TotalTokens != 4 {
-		t.Errorf("usage.TotalTokens = %d, want 4 (billing must survive translation)", out.Usage.TotalTokens)
+	if out.TotalTokens != 4 {
+		t.Errorf("usage.TotalTokens = %d, want 4 (billing must survive translation)", out.TotalTokens)
 	}
 }
 
@@ -327,7 +327,13 @@ func TestBaiduHandler_NonStreaming(t *testing.T) {
 	t.Run("valid response written to client and usage extracted", func(t *testing.T) {
 		c, w := prov_cn_batch_baiduGinContext()
 		body := `{"id":"x1","result":"hi there","created":1,"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`
-		apiErr, usage := baiduHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_baiduRespFromBody(body))
+		bcResp8 := prov_cn_batch_baiduRespFromBody(body)
+		defer func() {
+			if bcResp8 != nil {
+				_ = bcResp8.Body.Close()
+			}
+		}()
+		apiErr, usage := baiduHandler(c, &relaycommon.RelayInfo{}, bcResp8)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -342,7 +348,13 @@ func TestBaiduHandler_NonStreaming(t *testing.T) {
 	t.Run("upstream error_msg surfaces as error, not silently 200'd", func(t *testing.T) {
 		c, _ := prov_cn_batch_baiduGinContext()
 		body := `{"error_code":17,"error_msg":"open api daily request limit reached"}`
-		apiErr, usage := baiduHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_baiduRespFromBody(body))
+		bcResp7 := prov_cn_batch_baiduRespFromBody(body)
+		defer func() {
+			if bcResp7 != nil {
+				_ = bcResp7.Body.Close()
+			}
+		}()
+		apiErr, usage := baiduHandler(c, &relaycommon.RelayInfo{}, bcResp7)
 		if apiErr == nil {
 			t.Fatal("expected error when upstream returns error_msg")
 		}
@@ -353,7 +365,13 @@ func TestBaiduHandler_NonStreaming(t *testing.T) {
 
 	t.Run("malformed JSON body classified as bad response body", func(t *testing.T) {
 		c, _ := prov_cn_batch_baiduGinContext()
-		apiErr, _ := baiduHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_baiduRespFromBody("{not json"))
+		bcResp6 := prov_cn_batch_baiduRespFromBody("{not json")
+		defer func() {
+			if bcResp6 != nil {
+				_ = bcResp6.Body.Close()
+			}
+		}()
+		apiErr, _ := baiduHandler(c, &relaycommon.RelayInfo{}, bcResp6)
 		if apiErr == nil {
 			t.Fatal("expected error for malformed JSON body")
 		}
@@ -364,7 +382,13 @@ func TestBaiduEmbeddingHandler(t *testing.T) {
 	t.Run("valid embedding response", func(t *testing.T) {
 		c, w := prov_cn_batch_baiduGinContext()
 		body := `{"id":"e1","data":[{"object":"embedding","index":0,"embedding":[0.5,0.6]}],"usage":{"total_tokens":8}}`
-		apiErr, usage := baiduEmbeddingHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_baiduRespFromBody(body))
+		bcResp5 := prov_cn_batch_baiduRespFromBody(body)
+		defer func() {
+			if bcResp5 != nil {
+				_ = bcResp5.Body.Close()
+			}
+		}()
+		apiErr, usage := baiduEmbeddingHandler(c, &relaycommon.RelayInfo{}, bcResp5)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -379,7 +403,13 @@ func TestBaiduEmbeddingHandler(t *testing.T) {
 	t.Run("upstream error surfaces", func(t *testing.T) {
 		c, _ := prov_cn_batch_baiduGinContext()
 		body := `{"error_code":1,"error_msg":"invalid request"}`
-		apiErr, usage := baiduEmbeddingHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_baiduRespFromBody(body))
+		bcResp4 := prov_cn_batch_baiduRespFromBody(body)
+		defer func() {
+			if bcResp4 != nil {
+				_ = bcResp4.Body.Close()
+			}
+		}()
+		apiErr, usage := baiduEmbeddingHandler(c, &relaycommon.RelayInfo{}, bcResp4)
 		if apiErr == nil {
 			t.Fatal("expected error for upstream error_msg")
 		}
@@ -393,7 +423,13 @@ func TestBaiduStreamHandler_AccumulatesUsageAndForwardsChunks(t *testing.T) {
 	c, w := prov_cn_batch_baiduGinContext()
 	body := "data: " + `{"id":"s1","result":"He","is_end":false}` + "\n\n" +
 		"data: " + `{"id":"s1","result":"llo","is_end":true,"usage":{"prompt_tokens":1,"total_tokens":3}}` + "\n\n"
-	apiErr, usage := baiduStreamHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_baiduRespFromBody(body))
+	bcResp3 := prov_cn_batch_baiduRespFromBody(body)
+	defer func() {
+		if bcResp3 != nil {
+			_ = bcResp3.Body.Close()
+		}
+	}()
+	apiErr, usage := baiduStreamHandler(c, &relaycommon.RelayInfo{}, bcResp3)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -420,7 +456,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_baiduGinContext()
 		info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeEmbeddings}
 		body := `{"id":"e1","data":[{"object":"embedding","index":0,"embedding":[0.1]}]}`
-		_, apiErr := a.DoResponse(c, prov_cn_batch_baiduRespFromBody(body), info)
+		bcResp2 := prov_cn_batch_baiduRespFromBody(body)
+		defer func() {
+			if bcResp2 != nil {
+				_ = bcResp2.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp2, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -433,7 +475,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_baiduGinContext()
 		info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeChatCompletions}
 		body := `{"id":"c1","result":"chat reply","usage":{"total_tokens":1}}`
-		_, apiErr := a.DoResponse(c, prov_cn_batch_baiduRespFromBody(body), info)
+		bcResp1 := prov_cn_batch_baiduRespFromBody(body)
+		defer func() {
+			if bcResp1 != nil {
+				_ = bcResp1.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp1, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -446,7 +494,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_baiduGinContext()
 		info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeChatCompletions, IsStream: true}
 		body := "data: " + `{"id":"s1","result":"stream reply","is_end":true}` + "\n\n"
-		_, apiErr := a.DoResponse(c, prov_cn_batch_baiduRespFromBody(body), info)
+		bcResp0 := prov_cn_batch_baiduRespFromBody(body)
+		defer func() {
+			if bcResp0 != nil {
+				_ = bcResp0.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp0, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}

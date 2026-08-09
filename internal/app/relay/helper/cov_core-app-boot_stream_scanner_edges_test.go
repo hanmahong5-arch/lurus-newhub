@@ -40,7 +40,11 @@ func TestCoreAppBootStreamScannerHandler_ClientAlreadyDisconnected(t *testing.T)
 	info := &relaycommon.RelayInfo{}
 	body := "data: {\"a\":1}\n\ndata: [DONE]\n\n"
 	resp := respFromString(body)
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	var (
 		mu        sync.Mutex
@@ -85,7 +89,11 @@ func TestCoreAppBootStreamScannerHandler_PingEnabled_NormalStreamCompletes(t *te
 
 	body := "data: {\"a\":1}\n\ndata: [DONE]\n\n"
 	resp := respFromString(body)
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	var (
 		mu        sync.Mutex
@@ -125,7 +133,11 @@ func TestCoreAppBootStreamScannerHandler_PingDisabledPerToken_OverridesGlobal(t 
 
 	body := "data: {\"x\":9}\n\ndata: [DONE]\n\n"
 	resp := respFromString(body)
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	var (
 		mu        sync.Mutex

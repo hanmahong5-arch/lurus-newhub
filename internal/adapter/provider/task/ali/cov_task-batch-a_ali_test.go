@@ -593,7 +593,12 @@ func TestAli_DoResponse(t *testing.T) {
 func TestAli_FetchTask(t *testing.T) {
 	t.Run("missing task_id in body map is rejected before any network call", func(t *testing.T) {
 		a := &TaskAdaptor{}
-		_, err := a.FetchTask("https://dashscope.aliyuncs.com", "sk-x", map[string]any{}, "")
+		bcResp0, err := a.FetchTask("https://dashscope.aliyuncs.com", "sk-x", map[string]any{}, "")
+		defer func() {
+			if bcResp0 != nil {
+				_ = bcResp0.Body.Close()
+			}
+		}()
 		if err == nil {
 			t.Fatalf("expected error for missing task_id")
 		}
@@ -615,7 +620,11 @@ func TestAli_FetchTask(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 
 		if gotPath != "/api/v1/tasks/t1" {
 			t.Fatalf("expected polling path /api/v1/tasks/t1, got %q", gotPath)

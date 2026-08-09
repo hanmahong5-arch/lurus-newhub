@@ -137,7 +137,11 @@ func TestDoRequest_RoundTripsThroughLoopbackServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoRequest() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	if resp.StatusCode != http.StatusCreated {
 		t.Errorf("status = %d, want 201", resp.StatusCode)
@@ -176,7 +180,12 @@ func TestDoResponse_BodyReadFailureReturnsTaskError(t *testing.T) {
 
 func TestFetchTask_InvalidBaseURLFailsToBuildRequest(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("http://example.com/\x7f", "key", map[string]any{"task_id": "t1"}, "")
+	bcResp1, err := a.FetchTask("http://example.com/\x7f", "key", map[string]any{"task_id": "t1"}, "")
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error for malformed base URL, must not panic")
 	}
@@ -184,7 +193,12 @@ func TestFetchTask_InvalidBaseURLFailsToBuildRequest(t *testing.T) {
 
 func TestFetchTask_InvalidProxyFailsClientConstruction(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://example.com", "key", map[string]any{"task_id": "t1"}, "://not-a-valid-proxy-url")
+	bcResp0, err := a.FetchTask("https://example.com", "key", map[string]any{"task_id": "t1"}, "://not-a-valid-proxy-url")
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error when proxy URL cannot be parsed")
 	}

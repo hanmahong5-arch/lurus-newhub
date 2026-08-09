@@ -233,7 +233,11 @@ func TestAdaptor_DoRequest_Dispatch(t *testing.T) {
 		if !ok {
 			t.Fatalf("result type = %T, want *http.Response", result)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 		if resp.StatusCode != 200 {
 			t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
 		}
@@ -264,7 +268,11 @@ func TestAdaptor_DoRequest_Dispatch(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		resp := result.(*http.Response)
-		defer resp.Body.Close()
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 		if !strings.HasPrefix(gotContentType, "multipart/form-data") {
 			t.Errorf("upstream Content-Type = %q, want multipart/form-data (proves DoFormRequest branch, not DoApiRequest)", gotContentType)
 		}

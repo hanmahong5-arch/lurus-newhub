@@ -94,7 +94,11 @@ func TestProvOllamaVolc_Adaptor_DoRequest_SendsAuthHeaderAndHitsChatEndpoint(t *
 	if !ok {
 		t.Fatalf("expected *http.Response, got %T", resp)
 	}
-	defer httpResp.Body.Close()
+	defer func() {
+		if httpResp != nil {
+			_ = httpResp.Body.Close()
+		}
+	}()
 	if httpResp.StatusCode != 200 {
 		t.Errorf("StatusCode = %d, want 200", httpResp.StatusCode)
 	}
@@ -189,6 +193,11 @@ func TestProvOllamaVolc_OllamaChatHandler_DebugEnabled_DoesNotBreakSuccess(t *te
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/chat/completions", "")
 	body := `{"model":"llama3","message":{"role":"assistant","content":"debug ok"},"done":true,"prompt_eval_count":1,"eval_count":1}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3"}}
 
 	usage, apiErr := ollamaChatHandler(c, info, resp)
@@ -213,6 +222,11 @@ func TestProvOllamaVolc_OllamaChatHandler_EmptyCompletionContent_OmitsContentFie
 	w, c := prov_ollama_volc_newTestCtx("POST", "/v1/chat/completions", "")
 	body := `{"model":"llama3","message":{"role":"assistant","content":""},"done":true,"done_reason":"tool_calls","prompt_eval_count":1,"eval_count":0}`
 	resp := prov_ollama_volc_mkResp(body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3"}}
 
 	_, apiErr := ollamaChatHandler(c, info, resp)

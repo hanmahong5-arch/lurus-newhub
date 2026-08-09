@@ -374,7 +374,13 @@ func TestZhipu4vImageHandler(t *testing.T) {
 		created := int64(1700000000)
 		info := &relaycommon.RelayInfo{}
 		body := `{"created":1700000000,"data":[{"url":"https://cdn.example/img.png","b64_json":"QUJD"}]}`
-		usage, apiErr := zhipu4vImageHandler(c, prov_cn_batch_zhipu4vRespFromBody(body), info)
+		bcResp10 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp10 != nil {
+				_ = bcResp10.Body.Close()
+			}
+		}()
+		usage, apiErr := zhipu4vImageHandler(c, bcResp10, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -393,7 +399,13 @@ func TestZhipu4vImageHandler(t *testing.T) {
 	t.Run("b64_image alternate field name also honored", func(t *testing.T) {
 		c, w := prov_cn_batch_zhipu4vGinContext()
 		body := `{"created":1,"data":[{"url":"https://cdn.example/img.png","b64_image":"WFla"}]}`
-		_, apiErr := zhipu4vImageHandler(c, prov_cn_batch_zhipu4vRespFromBody(body), &relaycommon.RelayInfo{})
+		bcResp9 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp9 != nil {
+				_ = bcResp9.Body.Close()
+			}
+		}()
+		_, apiErr := zhipu4vImageHandler(c, bcResp9, &relaycommon.RelayInfo{})
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -405,7 +417,13 @@ func TestZhipu4vImageHandler(t *testing.T) {
 	t.Run("upstream error surfaces classified, not silent success", func(t *testing.T) {
 		c, _ := prov_cn_batch_zhipu4vGinContext()
 		body := `{"error":{"code":"1234","message":"content moderation rejected"}}`
-		usage, apiErr := zhipu4vImageHandler(c, prov_cn_batch_zhipu4vRespFromBody(body), &relaycommon.RelayInfo{})
+		bcResp8 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp8 != nil {
+				_ = bcResp8.Body.Close()
+			}
+		}()
+		usage, apiErr := zhipu4vImageHandler(c, bcResp8, &relaycommon.RelayInfo{})
 		if apiErr == nil {
 			t.Fatal("expected error for upstream error payload")
 		}
@@ -421,7 +439,13 @@ func TestZhipu4vImageHandler(t *testing.T) {
 		// generation and returning an empty data array. The second item has
 		// neither url nor bytes and is genuinely unusable.
 		body := `{"created":1,"data":[{"b64_json":"AAA"},{}]}`
-		_, apiErr := zhipu4vImageHandler(c, prov_cn_batch_zhipu4vRespFromBody(body), &relaycommon.RelayInfo{})
+		bcResp7 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp7 != nil {
+				_ = bcResp7.Body.Close()
+			}
+		}()
+		_, apiErr := zhipu4vImageHandler(c, bcResp7, &relaycommon.RelayInfo{})
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -438,7 +462,13 @@ func TestZhipu4vImageHandler(t *testing.T) {
 		start := time.Unix(1650000000, 0)
 		info := &relaycommon.RelayInfo{StartTime: start}
 		body := `{"data":[{"url":"https://cdn.example/img.png","b64_json":"ZZZ"}]}`
-		_, apiErr := zhipu4vImageHandler(c, prov_cn_batch_zhipu4vRespFromBody(body), info)
+		bcResp6 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp6 != nil {
+				_ = bcResp6.Body.Close()
+			}
+		}()
+		_, apiErr := zhipu4vImageHandler(c, bcResp6, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -449,7 +479,13 @@ func TestZhipu4vImageHandler(t *testing.T) {
 
 	t.Run("malformed JSON classified as bad response body", func(t *testing.T) {
 		c, _ := prov_cn_batch_zhipu4vGinContext()
-		_, apiErr := zhipu4vImageHandler(c, prov_cn_batch_zhipu4vRespFromBody("{not json"), &relaycommon.RelayInfo{})
+		bcResp5 := prov_cn_batch_zhipu4vRespFromBody("{not json")
+		defer func() {
+			if bcResp5 != nil {
+				_ = bcResp5.Body.Close()
+			}
+		}()
+		_, apiErr := zhipu4vImageHandler(c, bcResp5, &relaycommon.RelayInfo{})
 		if apiErr == nil {
 			t.Fatal("expected error for malformed JSON")
 		}
@@ -461,7 +497,13 @@ func TestZhipu4vImageHandler(t *testing.T) {
 		// refused / SSRF-blocked), and the handler must skip the entry rather
 		// than propagate the download error as a hard failure.
 		body := `{"created":1,"data":[{"url":"http://127.0.0.1:1/no-such-image.png"}]}`
-		usage, apiErr := zhipu4vImageHandler(c, prov_cn_batch_zhipu4vRespFromBody(body), &relaycommon.RelayInfo{})
+		bcResp4 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp4 != nil {
+				_ = bcResp4.Body.Close()
+			}
+		}()
+		usage, apiErr := zhipu4vImageHandler(c, bcResp4, &relaycommon.RelayInfo{})
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -512,7 +554,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 			ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "glm-4v"},
 			RelayFormat: types.RelayFormatClaude,
 		}
-		usage, apiErr := a.DoResponse(c, prov_cn_batch_zhipu4vRespFromBody(body), info)
+		bcResp3 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp3 != nil {
+				_ = bcResp3.Body.Close()
+			}
+		}()
+		usage, apiErr := a.DoResponse(c, bcResp3, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -536,7 +584,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 			RelayFormat: types.RelayFormatClaude,
 			IsStream:    true,
 		}
-		_, apiErr := a.DoResponse(c, prov_cn_batch_zhipu4vRespFromBody(body), info)
+		bcResp2 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp2 != nil {
+				_ = bcResp2.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp2, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -549,7 +603,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_zhipu4vGinContext()
 		info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesGenerations}
 		body := `{"created":1,"data":[{"url":"https://cdn.example/img.png","b64_json":"routed-image-bytes"}]}`
-		_, apiErr := a.DoResponse(c, prov_cn_batch_zhipu4vRespFromBody(body), info)
+		bcResp1 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp1 != nil {
+				_ = bcResp1.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp1, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -565,7 +625,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 			RelayFormat: "openai",
 		}
 		body := `{"id":"c1","model":"glm-4v","choices":[{"index":0,"message":{"role":"assistant","content":"default route reply"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`
-		usage, apiErr := a.DoResponse(c, prov_cn_batch_zhipu4vRespFromBody(body), info)
+		bcResp0 := prov_cn_batch_zhipu4vRespFromBody(body)
+		defer func() {
+			if bcResp0 != nil {
+				_ = bcResp0.Body.Close()
+			}
+		}()
+		usage, apiErr := a.DoResponse(c, bcResp0, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}

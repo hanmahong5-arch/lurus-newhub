@@ -911,11 +911,6 @@ func TestCovHandlerPricing_DeleteTenantModelLimit_DBError(t *testing.T) {
 // v2_models_write.go — CreateModelV2 / DeleteModelV2 edge cases
 // ===========================================================================
 
-type handlerPricingModelsCtx struct {
-	db      *repo.Tenant
-	cleanup func()
-}
-
 // handlerPricingModelsSetup mirrors v2_models_write_test.go's setupModelsWriteRouter
 // but returns raw ingredients (no router) so tests can drive the handlers
 // directly via gin.CreateTestContext with hand-picked context state.

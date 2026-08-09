@@ -114,7 +114,11 @@ func TestTaskB_DoRequest_RoundTripsThroughUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
@@ -154,9 +158,14 @@ func TestTaskB_DoResponse_BodyReadError(t *testing.T) {
 func TestTaskB_FetchTask_InvalidProxyErrors(t *testing.T) {
 	a := &TaskAdaptor{}
 	localID := encodeLocalTaskID("operations/xyz")
-	_, err := a.FetchTask("https://generativelanguage.googleapis.com", "goog-key", map[string]any{
+	bcResp0, err := a.FetchTask("https://generativelanguage.googleapis.com", "goog-key", map[string]any{
 		"task_id": localID,
 	}, "://malformed-proxy")
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error for malformed channel proxy configuration")
 	}

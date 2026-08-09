@@ -34,6 +34,11 @@ func TestOpenaiTTSHandler_NonStream_FallsBackToSizeEstimateOnUndecodableAudio(t 
 	}
 	info.SetEstimatePromptTokens(4)
 	resp := ttsResponse(200, "audio/mpeg", "this-is-not-a-real-mp3-file-but-has-some-bytes")
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage := OpenaiTTSHandler(w.ctx, resp, info)
 	if usage == nil {
@@ -63,6 +68,11 @@ func TestOpenaiTTSHandler_NonStream_PCMFormat_DeterministicDuration(t *testing.T
 	// 48000 bytes -> exactly 1.0 second -> ceil(1)/60*1000 = 16.666 -> round -> 17 tokens.
 	pcmBytes := strings.Repeat("x", 48000)
 	resp := ttsResponse(200, "audio/pcm", pcmBytes)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage := OpenaiTTSHandler(w.ctx, resp, info)
 	if usage.CompletionTokens != 17 {
@@ -80,6 +90,11 @@ func TestOpenaiTTSHandler_Stream_ExtractsUsageFromSSEChunk(t *testing.T) {
 	body := `data: {"type":"speech.audio.delta","audio":"AAAA"}` + "\n\n" +
 		`data: {"type":"speech.audio.done","usage":{"input_tokens":3,"output_tokens":9,"total_tokens":12}}` + "\n\n"
 	resp := ttsResponse(200, "text/event-stream", body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage := OpenaiTTSHandler(w.ctx, resp, info)
 	if usage.TotalTokens != 12 {
@@ -102,6 +117,11 @@ func TestOpenaiTTSHandler_Stream_NoUsageChunk_KeepsEstimateBaseline(t *testing.T
 	info.SetEstimatePromptTokens(6)
 	body := `data: {"type":"speech.audio.delta","audio":"AAAA"}` + "\n\n"
 	resp := ttsResponse(200, "text/event-stream", body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage := OpenaiTTSHandler(w.ctx, resp, info)
 	if usage.PromptTokens != 6 {
@@ -121,6 +141,11 @@ func TestOpenaiSTTHandler_UsagePresent_FallsBackToInputOutputWhenPromptCompletio
 	info := &relaycommon.RelayInfo{}
 	body := `{"text":"hello world","usage":{"total_tokens":9,"input_tokens":3,"output_tokens":6}}`
 	resp := ttsResponse(200, "application/json", body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	apiErr, usage := OpenaiSTTHandler(w.ctx, resp, info, "json")
 	if apiErr != nil {
@@ -143,6 +168,11 @@ func TestOpenaiSTTHandler_UsageMissing_UsesEstimateBaseline(t *testing.T) {
 	info.SetEstimatePromptTokens(11)
 	body := `hello world` // some STT response formats (plain text) return no usage at all
 	resp := ttsResponse(200, "text/plain", body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	apiErr, usage := OpenaiSTTHandler(w.ctx, resp, info, "text")
 	if apiErr != nil {
@@ -164,6 +194,11 @@ func TestOpenaiSTTHandler_UsageWithZeroTotal_TreatedAsMissing(t *testing.T) {
 	// the same as "no usage" (falls back to estimate), not billed as free.
 	body := `{"text":"x","usage":{"total_tokens":0}}`
 	resp := ttsResponse(200, "application/json", body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	apiErr, usage := OpenaiSTTHandler(w.ctx, resp, info, "json")
 	if apiErr != nil {

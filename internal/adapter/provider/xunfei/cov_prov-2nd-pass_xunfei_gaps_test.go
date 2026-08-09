@@ -44,7 +44,7 @@ func TestProv2ndPass_Xunfei_MakeRequest_StreamsUntilTerminalStatusThenStops(t *t
 			t.Errorf("server upgrade failed: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		var req XunfeiChatRequest
 		if err := conn.ReadJSON(&req); err != nil {
@@ -117,7 +117,7 @@ func TestProv2ndPass_Xunfei_MakeRequest_MalformedFrameBreaksLoopAndStillSignalsS
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var req XunfeiChatRequest
 		if err := conn.ReadJSON(&req); err != nil {
 			return

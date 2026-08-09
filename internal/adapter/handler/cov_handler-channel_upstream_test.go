@@ -158,7 +158,7 @@ func TestFetchUpstreamModels_OllamaVendor(t *testing.T) {
 			t.Errorf("unexpected ollama path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"models":[{"name":"llama3","size":123}]}`))
+		_, _ = w.Write([]byte(`{"models":[{"name":"llama3","size":123}]}`))
 	}))
 	defer okSrv.Close()
 
@@ -208,7 +208,7 @@ func TestFetchUpstreamModels_GeminiStripsModelPrefix(t *testing.T) {
 			t.Errorf("unexpected gemini path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"data":[{"id":"models/gemini-pro"},{"id":"models/gemini-flash"}],"success":true}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"models/gemini-pro"},{"id":"models/gemini-flash"}],"success":true}`))
 	}))
 	defer srv.Close()
 
@@ -253,7 +253,7 @@ func TestFetchUpstreamModels_VendorURLShapes(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotPath = r.URL.Path
 				w.Header().Set("Content-Type", "application/json")
-				w.Write([]byte(`{"data":[{"id":"m1"}],"success":true}`))
+				_, _ = w.Write([]byte(`{"data":[{"id":"m1"}],"success":true}`))
 			}))
 			defer srv.Close()
 
@@ -278,7 +278,7 @@ func TestFetchUpstreamModels_MalformedUpstreamJSON(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not json at all"))
+		_, _ = w.Write([]byte("not json at all"))
 	}))
 	defer srv.Close()
 	ch := handler_channel_seedTypedChannel(t, ctx, constant.ChannelTypeOpenAI, srv.URL, "k")
@@ -361,7 +361,7 @@ func TestFetchModels_Ollama(t *testing.T) {
 	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"models":[{"name":"phi3"}]}`))
+		_, _ = w.Write([]byte(`{"models":[{"name":"phi3"}]}`))
 	}))
 	defer srv.Close()
 
@@ -395,7 +395,7 @@ func TestFetchModels_GenericSuccess(t *testing.T) {
 			t.Errorf("expected bearer auth, got %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"data":[{"id":"gpt-4"},{"id":"gpt-3.5-turbo"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4"},{"id":"gpt-3.5-turbo"}]}`))
 	}))
 	defer srv.Close()
 
@@ -446,7 +446,7 @@ func TestFetchModels_MalformedUpstreamJSON(t *testing.T) {
 		fs.EnableSSRFProtection = false
 	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("<<not json>>"))
+		_, _ = w.Write([]byte("<<not json>>"))
 	}))
 	defer srv.Close()
 	w := httptest.NewRecorder()

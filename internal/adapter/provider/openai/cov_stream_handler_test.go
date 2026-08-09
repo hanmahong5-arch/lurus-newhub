@@ -57,7 +57,13 @@ func TestOaiStreamHandler_NormalCompletion_AccumulatesAndSignalsDone(t *testing.
 		`data: {"id":"c1","model":"gpt-3.5-turbo","choices":[{"delta":{"content":"world"},"finish_reason":"stop"}]}` + "\n\n" +
 		"data: [DONE]\n\n"
 
-	usage, apiErr := OaiStreamHandler(w.ctx, info, sseResponse(body))
+	bcResp4 := sseResponse(body)
+	defer func() {
+		if bcResp4 != nil {
+			_ = bcResp4.Body.Close()
+		}
+	}()
+	usage, apiErr := OaiStreamHandler(w.ctx, info, bcResp4)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr.Error())
 	}
@@ -88,7 +94,13 @@ func TestOaiStreamHandler_UpstreamUsagePresent_TakesPrecedenceOverEstimate(t *te
 		`data: {"id":"c1","model":"gpt-3.5-turbo","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}` + "\n\n" +
 		"data: [DONE]\n\n"
 
-	usage, apiErr := OaiStreamHandler(w.ctx, info, sseResponse(body))
+	bcResp3 := sseResponse(body)
+	defer func() {
+		if bcResp3 != nil {
+			_ = bcResp3.Body.Close()
+		}
+	}()
+	usage, apiErr := OaiStreamHandler(w.ctx, info, bcResp3)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr.Error())
 	}
@@ -109,7 +121,13 @@ func TestOaiStreamHandler_AbnormalTermination_NoBilling(t *testing.T) {
 	// client cancel / upstream connection reset).
 	body := `data: {"id":"c1","model":"gpt-3.5-turbo","choices":[{"delta":{"content":"partial content that would otherwise bill"}}]}` + "\n\n"
 
-	usage, apiErr := OaiStreamHandler(w.ctx, info, sseResponse(body))
+	bcResp2 := sseResponse(body)
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
+	usage, apiErr := OaiStreamHandler(w.ctx, info, bcResp2)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr.Error())
 	}
@@ -133,7 +151,13 @@ func TestOaiStreamHandler_AudioModel_ExtractsUsageFromSecondLastChunk(t *testing
 		`data: {"id":"c1","model":"gpt-4o-audio-preview","choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
 		"data: [DONE]\n\n"
 
-	usage, apiErr := OaiStreamHandler(w.ctx, info, sseResponse(body))
+	bcResp1 := sseResponse(body)
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
+	usage, apiErr := OaiStreamHandler(w.ctx, info, bcResp1)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr.Error())
 	}
@@ -158,7 +182,13 @@ func TestOaiStreamHandler_MalformedMidStreamChunk_DoesNotPanicAndStillCompletes(
 		`data: {"id":"c1","model":"gpt-3.5-turbo","choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
 		"data: [DONE]\n\n"
 
-	usage, apiErr := OaiStreamHandler(w.ctx, info, sseResponse(body))
+	bcResp0 := sseResponse(body)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
+	usage, apiErr := OaiStreamHandler(w.ctx, info, bcResp0)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr.Error())
 	}

@@ -82,7 +82,11 @@ func TestProvOllamaVolc_VE_DoRequest_AudioSpeechNonStreamCustomBase_HitsRESTUpst
 	if !ok || httpResp == nil {
 		t.Fatalf("expected *http.Response for a non-stream audio request on a custom base, got %T", resp)
 	}
-	defer httpResp.Body.Close()
+	defer func() {
+		if httpResp != nil {
+			_ = httpResp.Body.Close()
+		}
+	}()
 	if gotPath != "/v1/audio/speech" {
 		t.Errorf("upstream received path = %q, want /v1/audio/speech", gotPath)
 	}
@@ -122,7 +126,11 @@ func TestProvOllamaVolc_VE_DoRequest_ChatCompletions_HitsChatUpstream(t *testing
 		t.Fatalf("unexpected error: %v", err)
 	}
 	httpResp := resp.(*http.Response)
-	defer httpResp.Body.Close()
+	defer func() {
+		if httpResp != nil {
+			_ = httpResp.Body.Close()
+		}
+	}()
 	if gotPath != "/api/v3/chat/completions" {
 		t.Errorf("upstream received path = %q, want /api/v3/chat/completions", gotPath)
 	}

@@ -350,7 +350,13 @@ func TestDoResponse_EmptyBody(t *testing.T) {
 
 func TestFetchTask_MissingTaskID(t *testing.T) {
 	a := &TaskAdaptor{}
-	if _, err := a.FetchTask("https://x", "key", map[string]any{}, ""); err == nil {
+	bcResp0, err := a.FetchTask("https://x", "key", map[string]any{}, "")
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
+	if err == nil {
 		t.Fatal("expected error when task_id missing")
 	}
 }
@@ -370,7 +376,11 @@ func TestFetchTask_URLAndAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if gotPath != "/ent/v2/tasks/abc/creations" {
 		t.Errorf("path = %q, want /ent/v2/tasks/abc/creations", gotPath)
 	}

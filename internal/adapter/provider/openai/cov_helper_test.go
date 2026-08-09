@@ -268,10 +268,10 @@ func TestHandleFinalResponse_ClaudeFormat_MarksDone(t *testing.T) {
 	usage := &dto.Usage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2}
 	lastData := `{"id":"c1","choices":[{"delta":{},"finish_reason":"stop"}]}`
 	HandleFinalResponse(c, info, lastData, "c1", 1700000000, "gpt-4o", "fp", usage, false)
-	if !info.ClaudeConvertInfo.Done {
+	if !info.Done {
 		t.Error("ClaudeConvertInfo.Done should be set true after final claude-format response")
 	}
-	if info.ClaudeConvertInfo.Usage != usage {
+	if info.Usage != usage {
 		t.Error("ClaudeConvertInfo.Usage should be set to the passed-in usage pointer")
 	}
 }
@@ -286,7 +286,7 @@ func TestHandleFinalResponse_ClaudeFormat_MalformedDataReturnsEarly(t *testing.T
 	}
 	usage := &dto.Usage{TotalTokens: 1}
 	HandleFinalResponse(c, info, `{not-json`, "c1", 0, "gpt-4o", "fp", usage, false)
-	if info.ClaudeConvertInfo.Done {
+	if info.Done {
 		t.Error("Done should NOT be set when the last stream data fails to unmarshal (early return)")
 	}
 }

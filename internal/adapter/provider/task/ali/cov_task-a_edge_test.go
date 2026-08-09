@@ -113,7 +113,12 @@ func TestAli_TaskA_DoResponse_BodyReadError(t *testing.T) {
 
 func TestAli_TaskA_FetchTask_ProxyClientError(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://dashscope.aliyuncs.com", "sk-x", map[string]any{"task_id": "t1"}, "://not-a-proxy")
+	bcResp1, err := a.FetchTask("https://dashscope.aliyuncs.com", "sk-x", map[string]any{"task_id": "t1"}, "://not-a-proxy")
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatalf("expected error for malformed proxy URL")
 	}
@@ -126,7 +131,12 @@ func TestAli_TaskA_FetchTask_NewRequestError(t *testing.T) {
 	// into the poll URL path. A task_id containing a raw control character
 	// makes http.NewRequest reject the URI instead of the code
 	// panicking/mangling the request.
-	_, err := a.FetchTask("https://dashscope.aliyuncs.com", "sk-x", map[string]any{"task_id": "bad\x7fid"}, "")
+	bcResp0, err := a.FetchTask("https://dashscope.aliyuncs.com", "sk-x", map[string]any{"task_id": "bad\x7fid"}, "")
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatalf("expected error for task_id containing an invalid control character")
 	}

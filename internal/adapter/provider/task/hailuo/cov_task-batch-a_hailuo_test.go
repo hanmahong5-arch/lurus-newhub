@@ -302,7 +302,13 @@ func TestHailuo_DoResponse(t *testing.T) {
 func TestHailuo_FetchTask(t *testing.T) {
 	t.Run("missing task_id is rejected before any network call", func(t *testing.T) {
 		a := &TaskAdaptor{}
-		if _, err := a.FetchTask("https://x", "k", map[string]any{}, ""); err == nil {
+		bcResp0, err := a.FetchTask("https://x", "k", map[string]any{}, "")
+		defer func() {
+			if bcResp0 != nil {
+				_ = bcResp0.Body.Close()
+			}
+		}()
+		if err == nil {
 			t.Fatalf("expected error for missing task_id")
 		}
 	})
@@ -324,7 +330,11 @@ func TestHailuo_FetchTask(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
 
 		if gotPath != QueryTaskEndpoint {
 			t.Fatalf("expected polling path %q, got %q", QueryTaskEndpoint, gotPath)

@@ -148,15 +148,15 @@ func TestHandlerRelay_ResolvePlaygroundBaseURL(t *testing.T) {
 	t.Cleanup(func() {
 		playgroundUpstreamBaseURL = prevOverride
 		if hadPort {
-			os.Setenv("PORT", prevPort)
+			_ = os.Setenv("PORT", prevPort)
 		} else {
-			os.Unsetenv("PORT")
+			_ = os.Unsetenv("PORT")
 		}
 	})
 
 	t.Run("override_wins_over_env", func(t *testing.T) {
 		playgroundUpstreamBaseURL = "http://mock-upstream:9999"
-		os.Setenv("PORT", "5555")
+		_ = os.Setenv("PORT", "5555")
 		if got := resolvePlaygroundBaseURL(); got != "http://mock-upstream:9999" {
 			t.Errorf("resolvePlaygroundBaseURL() = %q, want override to win", got)
 		}
@@ -164,7 +164,7 @@ func TestHandlerRelay_ResolvePlaygroundBaseURL(t *testing.T) {
 
 	t.Run("env_port_used_when_no_override", func(t *testing.T) {
 		playgroundUpstreamBaseURL = ""
-		os.Setenv("PORT", "8123")
+		_ = os.Setenv("PORT", "8123")
 		if got := resolvePlaygroundBaseURL(); got != "http://127.0.0.1:8123" {
 			t.Errorf("resolvePlaygroundBaseURL() = %q, want http://127.0.0.1:8123", got)
 		}
@@ -172,7 +172,7 @@ func TestHandlerRelay_ResolvePlaygroundBaseURL(t *testing.T) {
 
 	t.Run("default_3000_when_nothing_set", func(t *testing.T) {
 		playgroundUpstreamBaseURL = ""
-		os.Unsetenv("PORT")
+		_ = os.Unsetenv("PORT")
 		if got := resolvePlaygroundBaseURL(); got != "http://127.0.0.1:3000" {
 			t.Errorf("resolvePlaygroundBaseURL() = %q, want http://127.0.0.1:3000 default", got)
 		}
@@ -656,7 +656,7 @@ func TestHandlerRelay_RunOnePlaygroundModel_RelayFailed(t *testing.T) {
 func TestHandlerRelay_RunOnePlaygroundModel_ParseFailedTruncatesLongBody(t *testing.T) {
 	longGarbage := strings.Repeat("X", 800)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(longGarbage))
+		_, _ = w.Write([]byte(longGarbage))
 	}))
 	defer srv.Close()
 
@@ -681,7 +681,7 @@ func TestHandlerRelay_RunOnePlaygroundModel_ParseFailedTruncatesLongBody(t *test
 func TestHandlerRelay_RunOnePlaygroundModel_UpstreamErrorDefaultCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"error":{"message":"no code field here"}}`))
+		_, _ = w.Write([]byte(`{"error":{"message":"no code field here"}}`))
 	}))
 	defer srv.Close()
 
@@ -714,7 +714,7 @@ func TestHandlerRelay_RunChatTurn_MarshalFailure(t *testing.T) {
 
 func TestHandlerRelay_RunChatTurn_ParseFailedShortBodyNotTruncated(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not json at all"))
+		_, _ = w.Write([]byte("not json at all"))
 	}))
 	defer srv.Close()
 
@@ -732,7 +732,7 @@ func TestHandlerRelay_RunChatTurn_ParseFailedShortBodyNotTruncated(t *testing.T)
 func TestHandlerRelay_RunChatTurn_HappyPathTokenUsageForwarded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"choices":[{"message":{"content":"pong"}}],"usage":{"prompt_tokens":3,"completion_tokens":7}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"pong"}}],"usage":{"prompt_tokens":3,"completion_tokens":7}}`))
 	}))
 	defer srv.Close()
 

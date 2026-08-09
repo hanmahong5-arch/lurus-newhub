@@ -50,11 +50,11 @@ func TestResponseGeminiChat2OpenAI_PlainTextCandidate(t *testing.T) {
 	if choice.FinishReason != constant.FinishReasonStop {
 		t.Errorf("FinishReason = %q, want %q", choice.FinishReason, constant.FinishReasonStop)
 	}
-	if choice.Message.Role != "assistant" {
-		t.Errorf("Role = %q, want assistant", choice.Message.Role)
+	if choice.Role != "assistant" {
+		t.Errorf("Role = %q, want assistant", choice.Role)
 	}
-	if choice.Message.StringContent() != "Hello there" {
-		t.Errorf("Content = %q, want %q", choice.Message.StringContent(), "Hello there")
+	if choice.StringContent() != "Hello there" {
+		t.Errorf("Content = %q, want %q", choice.StringContent(), "Hello there")
 	}
 }
 
@@ -111,7 +111,7 @@ func TestResponseGeminiChat2OpenAI_InlineDataImage(t *testing.T) {
 		},
 	}
 	got := responseGeminiChat2OpenAI(c, resp)
-	content := got.Choices[0].Message.StringContent()
+	content := got.Choices[0].StringContent()
 	want := "![image](data:image/png;base64,abc123)"
 	if content != want {
 		t.Errorf("Content = %q, want %q", content, want)
@@ -129,7 +129,7 @@ func TestResponseGeminiChat2OpenAI_InlineDataNonImageMedia(t *testing.T) {
 		},
 	}
 	got := responseGeminiChat2OpenAI(c, resp)
-	content := got.Choices[0].Message.StringContent()
+	content := got.Choices[0].StringContent()
 	want := "[media](data:audio/wav;base64,zzz)"
 	if content != want {
 		t.Errorf("Content = %q, want %q", content, want)
@@ -155,7 +155,7 @@ func TestResponseGeminiChat2OpenAI_FunctionCall_SetsToolCallsAndFinishReason(t *
 	if choice.FinishReason != constant.FinishReasonToolCalls {
 		t.Errorf("FinishReason = %q, want %q (tool call must override STOP)", choice.FinishReason, constant.FinishReasonToolCalls)
 	}
-	toolCalls := choice.Message.ParseToolCalls()
+	toolCalls := choice.ParseToolCalls()
 	if len(toolCalls) != 1 || toolCalls[0].Function.Name != "search" {
 		t.Errorf("ToolCalls = %+v, want single 'search' call", toolCalls)
 	}
@@ -172,11 +172,11 @@ func TestResponseGeminiChat2OpenAI_ThoughtPart_SetsReasoningContent(t *testing.T
 		},
 	}
 	got := responseGeminiChat2OpenAI(c, resp)
-	if got.Choices[0].Message.ReasoningContent != "because X causes Y" {
-		t.Errorf("ReasoningContent = %q, want %q", got.Choices[0].Message.ReasoningContent, "because X causes Y")
+	if got.Choices[0].ReasoningContent != "because X causes Y" {
+		t.Errorf("ReasoningContent = %q, want %q", got.Choices[0].ReasoningContent, "because X causes Y")
 	}
-	if got.Choices[0].Message.StringContent() != "" {
-		t.Errorf("Content = %q, want empty (thought text must not leak into content)", got.Choices[0].Message.StringContent())
+	if got.Choices[0].StringContent() != "" {
+		t.Errorf("Content = %q, want empty (thought text must not leak into content)", got.Choices[0].StringContent())
 	}
 }
 
@@ -192,7 +192,7 @@ func TestResponseGeminiChat2OpenAI_ExecutableCodeAndResult(t *testing.T) {
 		},
 	}
 	got := responseGeminiChat2OpenAI(c, resp)
-	content := got.Choices[0].Message.StringContent()
+	content := got.Choices[0].StringContent()
 	wantCode := "```python\nprint(1)\n```"
 	wantOutput := "```output\n1\n```"
 	if content != wantCode+"\n"+wantOutput {
@@ -213,7 +213,7 @@ func TestResponseGeminiChat2OpenAI_FiltersLoneNewlineText(t *testing.T) {
 		},
 	}
 	got := responseGeminiChat2OpenAI(c, resp)
-	content := got.Choices[0].Message.StringContent()
+	content := got.Choices[0].StringContent()
 	if content != "line1\nline2" {
 		t.Errorf("Content = %q, want %q (lone-newline part filtered, joined with \\n)", content, "line1\nline2")
 	}

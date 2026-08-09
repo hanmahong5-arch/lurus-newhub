@@ -47,11 +47,11 @@ func TestHandleClaudeFormat_CapturesUsageOntoClaudeConvertInfo(t *testing.T) {
 	if err := HandleStreamFormat(w.ctx, info, data, false, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if info.ClaudeConvertInfo.Usage == nil {
+	if info.Usage == nil {
 		t.Fatal("expected ClaudeConvertInfo.Usage to be populated from the chunk's usage field")
 	}
-	if info.ClaudeConvertInfo.Usage.TotalTokens != 7 {
-		t.Errorf("ClaudeConvertInfo.Usage.TotalTokens = %d, want 7", info.ClaudeConvertInfo.Usage.TotalTokens)
+	if info.Usage.TotalTokens != 7 {
+		t.Errorf("ClaudeConvertInfo.Usage.TotalTokens = %d, want 7", info.Usage.TotalTokens)
 	}
 }
 

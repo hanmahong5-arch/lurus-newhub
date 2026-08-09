@@ -88,7 +88,11 @@ func TestCloudflareLt1_DoRequest_Success(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *http.Response, got %T", resp)
 	}
-	defer httpResp.Body.Close()
+	defer func() {
+		if httpResp != nil {
+			_ = httpResp.Body.Close()
+		}
+	}()
 	if httpResp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", httpResp.StatusCode)
 	}

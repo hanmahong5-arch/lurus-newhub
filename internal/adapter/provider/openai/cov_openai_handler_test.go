@@ -33,6 +33,11 @@ func TestOpenaiHandler_HappyPath_UsageAlreadyPresent(t *testing.T) {
 	}
 	body := `{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`
 	resp := fakeHTTPResponse(200, body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr != nil {
@@ -57,6 +62,11 @@ func TestOpenaiHandler_EstimatesUsageWhenMissing(t *testing.T) {
 	// message content via CountTextToken and synthesize the usage block.
 	body := `{"id":"chatcmpl-2","model":"gpt-3.5-turbo","choices":[{"index":0,"message":{"role":"assistant","content":"hello world"},"finish_reason":"stop"}]}`
 	resp := fakeHTTPResponse(200, body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr != nil {
@@ -85,6 +95,11 @@ func TestOpenaiHandler_UpstreamErrorBody_Classified(t *testing.T) {
 	}
 	body := `{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`
 	resp := fakeHTTPResponse(401, body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr == nil {
@@ -105,6 +120,11 @@ func TestOpenaiHandler_MalformedJSON_Errors(t *testing.T) {
 		RelayFormat: "openai",
 	}
 	resp := fakeHTTPResponse(200, `{not-json`)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	_, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed JSON body")
@@ -122,6 +142,11 @@ func TestOpenaiHandler_ForceFormat_ReMarshalsStruct(t *testing.T) {
 	}
 	body := `{"id":"chatcmpl-3","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
 	resp := fakeHTTPResponse(200, body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	_, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr != nil {
@@ -151,6 +176,11 @@ func TestOpenaiHandler_OpenRouterEnterprise_UnwrapsSuccessData(t *testing.T) {
 		t.Fatalf("test fixture itself is invalid JSON: %v", err)
 	}
 	resp := fakeHTTPResponse(200, wrapped)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr != nil {
@@ -172,6 +202,11 @@ func TestOpenaiHandler_OpenRouterEnterprise_SuccessFalse_Errors(t *testing.T) {
 		RelayFormat: "openai",
 	}
 	resp := fakeHTTPResponse(200, `{"success":false,"data":"eyJlcnJvciI6InJlZGFjdGVkIn0="}`)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	_, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected error when openrouter enterprise envelope reports success=false")
@@ -187,6 +222,11 @@ func TestOpenaiHandlerWithUsage_SumsInputOutputIntoPromptCompletion(t *testing.T
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI}}
 	body := `{"usage":{"input_tokens":10,"output_tokens":20,"input_tokens_details":{"image_tokens":3,"text_tokens":7}}}`
 	resp := fakeHTTPResponse(200, body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage, apiErr := OpenaiHandlerWithUsage(w.ctx, info, resp)
 	if apiErr != nil {
@@ -207,6 +247,11 @@ func TestOpenaiHandlerWithUsage_MalformedJSON_Errors(t *testing.T) {
 	w := newRecorderCtx(t)
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI}}
 	resp := fakeHTTPResponse(200, `{not-json`)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	_, apiErr := OpenaiHandlerWithUsage(w.ctx, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed JSON body")
@@ -218,6 +263,11 @@ func TestOpenaiHandlerWithUsage_WritesBodyThroughRegardlessOfParsing(t *testing.
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI}}
 	body := `{"usage":{"input_tokens":1,"output_tokens":1}}`
 	resp := fakeHTTPResponse(200, body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	_, apiErr := OpenaiHandlerWithUsage(w.ctx, info, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr.Error())

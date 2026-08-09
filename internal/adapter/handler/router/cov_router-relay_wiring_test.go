@@ -100,10 +100,10 @@ func TestSetRouter_MetricsEndpoint_RejectsPublicScraper(t *testing.T) {
 	common.IsMasterNode = false
 	defer func() { common.IsMasterNode = prevMaster }()
 	prevEnv, hadEnv := os.LookupEnv("FRONTEND_BASE_URL")
-	os.Unsetenv("FRONTEND_BASE_URL")
+	_ = os.Unsetenv("FRONTEND_BASE_URL")
 	defer func() {
 		if hadEnv {
-			os.Setenv("FRONTEND_BASE_URL", prevEnv)
+			_ = os.Setenv("FRONTEND_BASE_URL", prevEnv)
 		}
 	}()
 
@@ -149,10 +149,10 @@ func TestSetRouter_NoRoute_SPAFallbackVsAPINotFound(t *testing.T) {
 	common.IsMasterNode = false
 	defer func() { common.IsMasterNode = prevMaster }()
 	prevEnv, hadEnv := os.LookupEnv("FRONTEND_BASE_URL")
-	os.Unsetenv("FRONTEND_BASE_URL")
+	_ = os.Unsetenv("FRONTEND_BASE_URL")
 	defer func() {
 		if hadEnv {
-			os.Setenv("FRONTEND_BASE_URL", prevEnv)
+			_ = os.Setenv("FRONTEND_BASE_URL", prevEnv)
 		}
 	}()
 
@@ -193,12 +193,12 @@ func TestSetRouter_FrontendBaseURL_RedirectsUnmatchedPaths(t *testing.T) {
 	common.IsMasterNode = false
 	defer func() { common.IsMasterNode = prevMaster }()
 	prevEnv, hadEnv := os.LookupEnv("FRONTEND_BASE_URL")
-	os.Setenv("FRONTEND_BASE_URL", "https://external-frontend.example.com/")
+	_ = os.Setenv("FRONTEND_BASE_URL", "https://external-frontend.example.com/")
 	defer func() {
 		if hadEnv {
-			os.Setenv("FRONTEND_BASE_URL", prevEnv)
+			_ = os.Setenv("FRONTEND_BASE_URL", prevEnv)
 		} else {
-			os.Unsetenv("FRONTEND_BASE_URL")
+			_ = os.Unsetenv("FRONTEND_BASE_URL")
 		}
 	}()
 
@@ -230,12 +230,12 @@ func TestSetRouter_FrontendBaseURL_IgnoredOnMasterNode(t *testing.T) {
 	common.IsMasterNode = true
 	defer func() { common.IsMasterNode = prevMaster }()
 	prevEnv, hadEnv := os.LookupEnv("FRONTEND_BASE_URL")
-	os.Setenv("FRONTEND_BASE_URL", "https://external-frontend.example.com/")
+	_ = os.Setenv("FRONTEND_BASE_URL", "https://external-frontend.example.com/")
 	defer func() {
 		if hadEnv {
-			os.Setenv("FRONTEND_BASE_URL", prevEnv)
+			_ = os.Setenv("FRONTEND_BASE_URL", prevEnv)
 		} else {
-			os.Unsetenv("FRONTEND_BASE_URL")
+			_ = os.Unsetenv("FRONTEND_BASE_URL")
 		}
 	}()
 

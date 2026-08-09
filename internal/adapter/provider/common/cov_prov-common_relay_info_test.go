@@ -154,7 +154,7 @@ func TestGenRelayInfoClaude(t *testing.T) {
 	if info.ShouldIncludeUsage {
 		t.Error("expected ShouldIncludeUsage = false for Claude format")
 	}
-	if info.ClaudeConvertInfo == nil || info.ClaudeConvertInfo.LastMessagesType != LastMessageTypeNone {
+	if info.ClaudeConvertInfo == nil || info.LastMessagesType != LastMessageTypeNone {
 		t.Errorf("ClaudeConvertInfo.LastMessagesType = %+v, want %q", info.ClaudeConvertInfo, LastMessageTypeNone)
 	}
 	if info.IsClaudeBetaQuery {
@@ -187,10 +187,10 @@ func TestGenRelayInfoRerank(t *testing.T) {
 	if info.RelayFormat != types.RelayFormatRerank {
 		t.Errorf("RelayFormat = %q, want %q", info.RelayFormat, types.RelayFormatRerank)
 	}
-	if info.RerankerInfo == nil || len(info.RerankerInfo.Documents) != 2 {
+	if info.RerankerInfo == nil || len(info.Documents) != 2 {
 		t.Fatalf("RerankerInfo.Documents = %+v, want 2 documents carried through", info.RerankerInfo)
 	}
-	if !info.RerankerInfo.ReturnDocuments {
+	if !info.ReturnDocuments {
 		t.Error("expected ReturnDocuments = true to be carried from the request")
 	}
 }
@@ -242,7 +242,7 @@ func TestGenRelayInfoResponses_NoTools(t *testing.T) {
 	if info.RelayMode != relayconstant.RelayModeResponses {
 		t.Errorf("RelayMode = %d, want RelayModeResponses", info.RelayMode)
 	}
-	if info.ResponsesUsageInfo == nil || len(info.ResponsesUsageInfo.BuiltInTools) != 0 {
+	if info.ResponsesUsageInfo == nil || len(info.BuiltInTools) != 0 {
 		t.Errorf("BuiltInTools = %+v, want empty map for a tool-less request", info.ResponsesUsageInfo)
 	}
 }
@@ -254,9 +254,9 @@ func TestGenRelayInfoResponses_WebSearchToolDefaultsMediumContextSize(t *testing
 
 	info := GenRelayInfoResponses(c, req)
 
-	tool, ok := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]
+	tool, ok := info.BuiltInTools[dto.BuildInToolWebSearchPreview]
 	if !ok {
-		t.Fatalf("expected %q tool registered, got %+v", dto.BuildInToolWebSearchPreview, info.ResponsesUsageInfo.BuiltInTools)
+		t.Fatalf("expected %q tool registered, got %+v", dto.BuildInToolWebSearchPreview, info.BuiltInTools)
 	}
 	if tool.SearchContextSize != "medium" {
 		t.Errorf("SearchContextSize = %q, want default %q", tool.SearchContextSize, "medium")
@@ -272,7 +272,7 @@ func TestGenRelayInfoResponses_WebSearchToolExplicitContextSizePreserved(t *test
 	req := &dto.OpenAIResponsesRequest{Model: "gpt-4o", Tools: toolsJSON}
 
 	info := GenRelayInfoResponses(c, req)
-	tool := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]
+	tool := info.BuiltInTools[dto.BuildInToolWebSearchPreview]
 	if tool == nil || tool.SearchContextSize != "high" {
 		t.Errorf("SearchContextSize = %+v, want explicit %q preserved", tool, "high")
 	}
@@ -357,22 +357,22 @@ func TestInitChannelMeta_PopulatesFromContext(t *testing.T) {
 	if info.ChannelMeta == nil {
 		t.Fatal("expected ChannelMeta to be populated")
 	}
-	if info.ChannelMeta.ChannelId != 7 {
-		t.Errorf("ChannelId = %d, want 7", info.ChannelMeta.ChannelId)
+	if info.ChannelId != 7 {
+		t.Errorf("ChannelId = %d, want 7", info.ChannelId)
 	}
-	if info.ChannelMeta.ChannelBaseUrl != "https://api.openai.com" {
-		t.Errorf("ChannelBaseUrl = %q, want %q", info.ChannelMeta.ChannelBaseUrl, "https://api.openai.com")
+	if info.ChannelBaseUrl != "https://api.openai.com" {
+		t.Errorf("ChannelBaseUrl = %q, want %q", info.ChannelBaseUrl, "https://api.openai.com")
 	}
-	if info.ChannelMeta.ApiKey != "sk-secret" {
-		t.Errorf("ApiKey = %q, want %q", info.ChannelMeta.ApiKey, "sk-secret")
+	if info.ApiKey != "sk-secret" {
+		t.Errorf("ApiKey = %q, want %q", info.ApiKey, "sk-secret")
 	}
 	// Business rule: UpstreamModelName is read from the ContextKeyOriginalModel
 	// value set by earlier middleware.
-	if info.ChannelMeta.UpstreamModelName != "gpt-4o" {
-		t.Errorf("UpstreamModelName = %q, want %q", info.ChannelMeta.UpstreamModelName, "gpt-4o")
+	if info.UpstreamModelName != "gpt-4o" {
+		t.Errorf("UpstreamModelName = %q, want %q", info.UpstreamModelName, "gpt-4o")
 	}
 	// Business rule: SupportStreamOptions must be enabled for OpenAI channels.
-	if !info.ChannelMeta.SupportStreamOptions {
+	if !info.SupportStreamOptions {
 		t.Error("expected SupportStreamOptions = true for ChannelTypeOpenAI")
 	}
 	// Business rule: the outgoing request's model name is reset to
@@ -389,7 +389,7 @@ func TestInitChannelMeta_UnsupportedStreamChannelLeavesFlagFalse(t *testing.T) {
 	info := &RelayInfo{}
 	info.InitChannelMeta(c)
 
-	if info.ChannelMeta.SupportStreamOptions {
+	if info.SupportStreamOptions {
 		t.Error("expected SupportStreamOptions = false for a channel type not in the stream-supported allowlist")
 	}
 }
@@ -401,8 +401,8 @@ func TestInitChannelMeta_AzureUsesQueryAPIVersion(t *testing.T) {
 	info := &RelayInfo{}
 	info.InitChannelMeta(c)
 
-	if info.ChannelMeta.ApiVersion != "2024-02-01" {
-		t.Errorf("ApiVersion = %q, want the Azure query api-version to be picked up", info.ChannelMeta.ApiVersion)
+	if info.ApiVersion != "2024-02-01" {
+		t.Errorf("ApiVersion = %q, want the Azure query api-version to be picked up", info.ApiVersion)
 	}
 }
 
@@ -414,8 +414,8 @@ func TestInitChannelMeta_VertexUsesRegion(t *testing.T) {
 	info := &RelayInfo{}
 	info.InitChannelMeta(c)
 
-	if info.ChannelMeta.ApiVersion != "us-central1" {
-		t.Errorf("ApiVersion = %q, want Vertex region %q", info.ChannelMeta.ApiVersion, "us-central1")
+	if info.ApiVersion != "us-central1" {
+		t.Errorf("ApiVersion = %q, want Vertex region %q", info.ApiVersion, "us-central1")
 	}
 }
 
@@ -427,10 +427,10 @@ func TestInitChannelMeta_ChannelSettingsCarriedWhenTypeMatches(t *testing.T) {
 	info := &RelayInfo{}
 	info.InitChannelMeta(c)
 
-	if info.ChannelMeta.ChannelSetting.Proxy != "http://proxy.local:8080" {
-		t.Errorf("ChannelSetting.Proxy = %q, want carried through from context", info.ChannelMeta.ChannelSetting.Proxy)
+	if info.ChannelSetting.Proxy != "http://proxy.local:8080" {
+		t.Errorf("ChannelSetting.Proxy = %q, want carried through from context", info.ChannelSetting.Proxy)
 	}
-	if !info.ChannelMeta.ChannelOtherSettings.AllowServiceTier {
+	if !info.ChannelOtherSettings.AllowServiceTier {
 		t.Error("expected ChannelOtherSettings.AllowServiceTier = true to be carried through")
 	}
 }

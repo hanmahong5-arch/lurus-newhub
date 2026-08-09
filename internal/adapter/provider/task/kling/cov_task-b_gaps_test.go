@@ -135,7 +135,11 @@ func TestTaskB_DoRequest_RoundTripsThroughUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
@@ -179,7 +183,11 @@ func TestTaskB_DoRequest_ContextActionOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if info.Action != constant.TaskActionTextGenerate {
 		t.Errorf("info.Action = %q, want textGenerate to be applied from gin context", info.Action)
 	}
@@ -198,7 +206,13 @@ func TestTaskB_DoRequest_HeaderBuildFailurePropagates(t *testing.T) {
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: constant.TaskActionGenerate},
 		ChannelMeta:   &relaycommon.ChannelMeta{ApiKey: "no-pipe-here"},
 	}
-	if _, err := a.DoRequest(c, info, strings.NewReader(`{}`)); err == nil {
+	bcResp1, err := a.DoRequest(c, info, strings.NewReader(`{}`))
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
+	if err == nil {
 		t.Fatal("expected error when request header construction fails")
 	}
 }
@@ -241,7 +255,11 @@ func TestTaskB_FetchTask_JWTFailureFallsBackToRawKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if gotAuth != "Bearer malformed-key-no-pipe" {
 		t.Errorf("Authorization = %q, want raw-key fallback when JWT signing fails", gotAuth)
 	}
@@ -249,10 +267,15 @@ func TestTaskB_FetchTask_JWTFailureFallsBackToRawKey(t *testing.T) {
 
 func TestTaskB_FetchTask_InvalidProxyErrors(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://api.kling.example", "sk-key", map[string]any{
+	bcResp0, err := a.FetchTask("https://api.kling.example", "sk-key", map[string]any{
 		"task_id": "t1",
 		"action":  constant.TaskActionGenerate,
 	}, "://malformed-proxy")
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error for malformed channel proxy configuration")
 	}

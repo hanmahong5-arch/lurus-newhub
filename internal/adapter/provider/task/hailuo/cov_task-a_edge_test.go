@@ -79,7 +79,12 @@ func TestHailuo_TaskA_DoResponse_BodyReadError(t *testing.T) {
 
 func TestHailuo_TaskA_FetchTask_ProxyClientError(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://api.minimax.chat", "k", map[string]any{"task_id": "t1"}, "://not-a-proxy")
+	bcResp1, err := a.FetchTask("https://api.minimax.chat", "k", map[string]any{"task_id": "t1"}, "://not-a-proxy")
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatalf("expected error for malformed proxy URL")
 	}
@@ -91,7 +96,12 @@ func TestHailuo_TaskA_FetchTask_NewRequestError(t *testing.T) {
 	// directly into the poll query string. A task_id containing a raw
 	// control character makes http.NewRequest reject the URI instead of
 	// the code panicking/mangling the request.
-	_, err := a.FetchTask("https://api.minimax.chat", "k", map[string]any{"task_id": "bad\x7fid"}, "")
+	bcResp0, err := a.FetchTask("https://api.minimax.chat", "k", map[string]any{"task_id": "bad\x7fid"}, "")
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatalf("expected error for task_id containing an invalid control character")
 	}
@@ -142,7 +152,7 @@ func TestHailuo_TaskA_BuildVideoURL_TruncatedBody(t *testing.T) {
 		if err != nil {
 			t.Fatalf("hijack failed: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nshort")
 		_ = buf.Flush()
 	}))

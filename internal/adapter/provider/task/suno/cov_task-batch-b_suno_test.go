@@ -272,7 +272,11 @@ func TestFetchTask_PostsBodyAndAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if gotMethod != http.MethodPost {
 		t.Errorf("method = %q, want POST", gotMethod)
 	}

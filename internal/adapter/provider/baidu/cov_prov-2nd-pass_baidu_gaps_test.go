@@ -73,7 +73,11 @@ func TestProv2ndPass_Baidu_DoRequest_HitsUpstreamWithAccessTokenQueryParam(t *te
 	if !ok || httpResp == nil {
 		t.Fatalf("resp type = %T, want *http.Response", resp)
 	}
-	defer httpResp.Body.Close()
+	defer func() {
+		if httpResp != nil {
+			_ = httpResp.Body.Close()
+		}
+	}()
 
 	if gotPath != "/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions" {
 		t.Errorf("upstream path = %q, want the ERNIE-Bot chat/completions suffix", gotPath)

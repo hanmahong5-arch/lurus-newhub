@@ -304,7 +304,7 @@ func provOllamaVolcWsTestServer(t *testing.T, handler func(conn *websocket.Conn)
 			t.Errorf("upgrade failed: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		handler(conn)
 	}))
 	wsURL = "ws" + strings.TrimPrefix(srv.URL, "http")
@@ -330,11 +330,16 @@ func TestProvOllamaVolc_FullClientRequest_And_ReceiveMessage_RoundTrip(t *testin
 	})
 	defer closeFn()
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, bcResp1, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
 	if err != nil {
 		t.Fatalf("client dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := FullClientRequest(conn, []byte(`{"request":"payload"}`)); err != nil {
 		t.Fatalf("FullClientRequest() error = %v", err)
@@ -365,11 +370,16 @@ func TestProvOllamaVolc_ReceiveMessage_UnexpectedFrameType_Errors(t *testing.T) 
 	})
 	defer closeFn()
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, bcResp0, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err != nil {
 		t.Fatalf("client dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// A close frame is neither BinaryMessage nor TextMessage from ReadMessage's
 	// perspective — closing triggers a close error, exercising the err != nil

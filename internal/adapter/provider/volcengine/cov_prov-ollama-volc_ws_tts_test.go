@@ -45,7 +45,7 @@ func TestProvOllamaVolc_HandleTTSWebSocketResponse_StreamsAudioChunksAndEndsOnNe
 			t.Errorf("server upgrade failed: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		if _, err := ReceiveMessage(conn); err != nil {
 			t.Errorf("server failed to receive FullClientRequest: %v", err)
@@ -111,7 +111,7 @@ func TestProvOllamaVolc_HandleTTSWebSocketResponse_GracefulCloseWithoutFinalChun
 			t.Errorf("server upgrade failed: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, err := ReceiveMessage(conn); err != nil {
 			t.Errorf("server failed to receive FullClientRequest: %v", err)
 			return
@@ -157,7 +157,7 @@ func TestProvOllamaVolc_HandleTTSWebSocketResponse_ServerErrorMessage_Propagates
 			t.Errorf("server upgrade failed: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, err := ReceiveMessage(conn); err != nil {
 			t.Errorf("server failed to receive FullClientRequest: %v", err)
 			return
@@ -274,7 +274,7 @@ func TestProvOllamaVolc_HandleTTSWebSocketResponse_ClientWriteFailure_ReturnsErr
 			t.Errorf("server upgrade failed: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, err := ReceiveMessage(conn); err != nil {
 			t.Errorf("server failed to receive FullClientRequest: %v", err)
 			return

@@ -141,9 +141,9 @@ func boot_settings_resetMonitorSetting(t *testing.T) {
 	t.Cleanup(func() {
 		monitorSetting = orig
 		if hadEnv {
-			os.Setenv("CHANNEL_TEST_FREQUENCY", origEnv)
+			_ = os.Setenv("CHANNEL_TEST_FREQUENCY", origEnv)
 		} else {
-			os.Unsetenv("CHANNEL_TEST_FREQUENCY")
+			_ = os.Unsetenv("CHANNEL_TEST_FREQUENCY")
 		}
 	})
 }
@@ -151,7 +151,7 @@ func boot_settings_resetMonitorSetting(t *testing.T) {
 func TestGetMonitorSetting_EnvOverridesEnableAutoTest(t *testing.T) {
 	boot_settings_resetMonitorSetting(t)
 	monitorSetting = MonitorSetting{AutoTestChannelEnabled: false, AutoTestChannelMinutes: 10}
-	os.Setenv("CHANNEL_TEST_FREQUENCY", "30")
+	_ = os.Setenv("CHANNEL_TEST_FREQUENCY", "30")
 
 	s := GetMonitorSetting()
 	if !s.AutoTestChannelEnabled || s.AutoTestChannelMinutes != 30 {
@@ -162,7 +162,7 @@ func TestGetMonitorSetting_EnvOverridesEnableAutoTest(t *testing.T) {
 func TestGetMonitorSetting_EmptyEnvLeavesDefaults(t *testing.T) {
 	boot_settings_resetMonitorSetting(t)
 	monitorSetting = MonitorSetting{AutoTestChannelEnabled: false, AutoTestChannelMinutes: 10}
-	os.Unsetenv("CHANNEL_TEST_FREQUENCY")
+	_ = os.Unsetenv("CHANNEL_TEST_FREQUENCY")
 
 	s := GetMonitorSetting()
 	if s.AutoTestChannelEnabled || s.AutoTestChannelMinutes != 10 {
@@ -173,7 +173,7 @@ func TestGetMonitorSetting_EmptyEnvLeavesDefaults(t *testing.T) {
 func TestGetMonitorSetting_InvalidEnvIgnored(t *testing.T) {
 	boot_settings_resetMonitorSetting(t)
 	monitorSetting = MonitorSetting{AutoTestChannelEnabled: false, AutoTestChannelMinutes: 10}
-	os.Setenv("CHANNEL_TEST_FREQUENCY", "not-a-number")
+	_ = os.Setenv("CHANNEL_TEST_FREQUENCY", "not-a-number")
 
 	s := GetMonitorSetting()
 	if s.AutoTestChannelEnabled || s.AutoTestChannelMinutes != 10 {

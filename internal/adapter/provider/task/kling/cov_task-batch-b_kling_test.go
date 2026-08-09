@@ -387,7 +387,12 @@ func TestDoResponse_EmptyBody(t *testing.T) {
 
 func TestFetchTask_MissingTaskID(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://x", "sk-key", map[string]any{"action": constant.TaskActionGenerate}, "")
+	bcResp2, err := a.FetchTask("https://x", "sk-key", map[string]any{"action": constant.TaskActionGenerate}, "")
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error when task_id missing from body")
 	}
@@ -395,7 +400,12 @@ func TestFetchTask_MissingTaskID(t *testing.T) {
 
 func TestFetchTask_MissingAction(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://x", "sk-key", map[string]any{"task_id": "abc"}, "")
+	bcResp1, err := a.FetchTask("https://x", "sk-key", map[string]any{"task_id": "abc"}, "")
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error when action missing from body")
 	}
@@ -421,7 +431,11 @@ func TestFetchTask_BuildsCorrectURLAndAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
@@ -446,10 +460,15 @@ func TestFetchTask_TextGeneratePath(t *testing.T) {
 	defer srv.Close()
 
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask(srv.URL, "ak|sk", map[string]any{
+	bcResp0, err := a.FetchTask(srv.URL, "ak|sk", map[string]any{
 		"task_id": "t9",
 		"action":  constant.TaskActionTextGenerate,
 	}, "")
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

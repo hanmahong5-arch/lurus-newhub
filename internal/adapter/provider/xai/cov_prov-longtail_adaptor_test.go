@@ -364,7 +364,13 @@ func TestXai_DoResponse_Stream_UpstreamUsagePresent(t *testing.T) {
 		`data: {"id":"c1","model":"grok-4","choices":[],"usage":{"prompt_tokens":9,"total_tokens":15}}` + "\n\n" +
 		"data: [DONE]\n\n"
 
-	usage, apiErr := a.DoResponse(w.ctx, xaiSSEBody(body), info)
+	bcResp1 := xaiSSEBody(body)
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
+	usage, apiErr := a.DoResponse(w.ctx, bcResp1, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr.Error())
 	}
@@ -389,7 +395,13 @@ func TestXai_DoResponse_Stream_NoUpstreamUsage_FallsBackToEstimate(t *testing.T)
 	body := `data: {"id":"c1","model":"grok-4","choices":[{"delta":{"content":"hello there"}}]}` + "\n\n" +
 		"data: [DONE]\n\n"
 
-	usage, apiErr := a.DoResponse(w.ctx, xaiSSEBody(body), info)
+	bcResp0 := xaiSSEBody(body)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
+	usage, apiErr := a.DoResponse(w.ctx, bcResp0, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr.Error())
 	}

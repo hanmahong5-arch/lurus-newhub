@@ -149,8 +149,8 @@ func TestCozeChatHandler_HappyPath_ExtractsAnswerAndUsage(t *testing.T) {
 	if len(out.Choices) != 1 {
 		t.Fatalf("Choices = %+v, want 1", out.Choices)
 	}
-	if s, ok := out.Choices[0].Message.Content.(string); !ok || s != "the final answer" {
-		t.Errorf("Content = %v (%T), want the 'answer'-typed message %q, not follow_up", out.Choices[0].Message.Content, out.Choices[0].Message.Content, "the final answer")
+	if s, ok := out.Choices[0].Content.(string); !ok || s != "the final answer" {
+		t.Errorf("Content = %v (%T), want the 'answer'-typed message %q, not follow_up", out.Choices[0].Content, out.Choices[0].Content, "the final answer")
 	}
 	if out.Model != "gpt-4-coze" {
 		t.Errorf("Model = %q, want propagated upstream model name %q", out.Model, "gpt-4-coze")
@@ -405,7 +405,11 @@ func TestGetChatDetail_ReturnsUpstreamResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != 200 {
 		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
 	}
@@ -456,7 +460,11 @@ func TestAdaptor_DoRequest_NonStream_PollsUntilCompleteThenFetchesDetail(t *test
 	if !ok {
 		t.Fatalf("result type = %T, want *http.Response (from getChatDetail)", result)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if !sawDetailFetch {
 		t.Error("expected DoRequest to poll to completion then fetch the message detail")
 	}
@@ -535,7 +543,11 @@ func TestAdaptor_DoRequest_StreamModeShortCircuitsToDoApiRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("result type = %T, want *http.Response", result)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if gotPath != "/v3/chat" {
 		t.Errorf("upstream path = %q, want /v3/chat (a single direct call, not the create/poll/fetch dance)", gotPath)
 	}
@@ -765,7 +777,12 @@ func TestGetChatDetail_InvalidProxyErrors(t *testing.T) {
 			ChannelSetting: dto.ChannelSettings{Proxy: "://not-a-valid-proxy-url"},
 		},
 	}
-	_, err := getChatDetail(a, c, info)
+	bcResp0, err := getChatDetail(a, c, info)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error for a malformed proxy URL")
 	}
@@ -811,7 +828,11 @@ func TestAdaptor_DoRequest_NonStream_PollingLoopIteratesOnceBeforeCompleting(t *
 		t.Fatalf("unexpected error: %v", err)
 	}
 	resp := result.(*http.Response)
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if retrieveCalls < 2 {
 		t.Errorf("retrieveCalls = %d, want >= 2 (proves the poll loop actually retried after an in_progress status)", retrieveCalls)
 	}

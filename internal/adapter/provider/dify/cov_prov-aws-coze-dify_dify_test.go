@@ -547,7 +547,7 @@ func TestDifyHandler_HappyPath(t *testing.T) {
 	if out.Id != "conv-1" {
 		t.Errorf("Id = %q, want the Dify conversation_id", out.Id)
 	}
-	if len(out.Choices) != 1 || out.Choices[0].Message.Content != "the answer" {
+	if len(out.Choices) != 1 || out.Choices[0].Content != "the answer" {
 		t.Errorf("Choices = %+v, want single choice with the Dify answer text", out.Choices)
 	}
 }
@@ -590,7 +590,11 @@ func TestAdaptor_DoRequest_RealHTTPRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("result type = %T, want *http.Response", result)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if gotPath != "/v1/chat-messages" {
 		t.Errorf("upstream path = %q, want /v1/chat-messages for BotTypeChatFlow", gotPath)
 	}

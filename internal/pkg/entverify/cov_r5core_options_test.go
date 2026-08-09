@@ -129,11 +129,11 @@ func TestParseJWKS_DropsWeakAndMalformedEntries(t *testing.T) {
 
 	doc, _ := json.Marshal(map[string]any{
 		"keys": []map[string]string{
-			{"kty": "RSA", "kid": "strong", "n": r5coreB64(strong.PublicKey.N.Bytes()), "e": r5coreB64(big.NewInt(int64(strong.PublicKey.E)).Bytes())},
-			{"kty": "RSA", "kid": "weak", "n": r5coreB64(weak.PublicKey.N.Bytes()), "e": r5coreB64(big.NewInt(int64(weak.PublicKey.E)).Bytes())},
-			{"kty": "EC", "kid": "wrong-kty", "n": r5coreB64(strong.PublicKey.N.Bytes()), "e": "AQAB"},
+			{"kty": "RSA", "kid": "strong", "n": r5coreB64(strong.N.Bytes()), "e": r5coreB64(big.NewInt(int64(strong.PublicKey.E)).Bytes())},
+			{"kty": "RSA", "kid": "weak", "n": r5coreB64(weak.N.Bytes()), "e": r5coreB64(big.NewInt(int64(weak.PublicKey.E)).Bytes())},
+			{"kty": "EC", "kid": "wrong-kty", "n": r5coreB64(strong.N.Bytes()), "e": "AQAB"},
 			{"kty": "RSA", "kid": "bad-n", "n": "not-base64url!!", "e": "AQAB"},
-			{"kty": "RSA", "kid": "missing-e", "n": r5coreB64(strong.PublicKey.N.Bytes()), "e": ""},
+			{"kty": "RSA", "kid": "missing-e", "n": r5coreB64(strong.N.Bytes()), "e": ""},
 		},
 	})
 
@@ -161,7 +161,7 @@ func TestParseJWKS_AllWeakYieldsNoUsableKeysError(t *testing.T) {
 	weak := r5coreGenKey(t, 1024)
 	doc, _ := json.Marshal(map[string]any{
 		"keys": []map[string]string{
-			{"kty": "RSA", "kid": "weak", "n": r5coreB64(weak.PublicKey.N.Bytes()), "e": r5coreB64(big.NewInt(int64(weak.PublicKey.E)).Bytes())},
+			{"kty": "RSA", "kid": "weak", "n": r5coreB64(weak.N.Bytes()), "e": r5coreB64(big.NewInt(int64(weak.PublicKey.E)).Bytes())},
 		},
 	})
 	_, err := parseJWKS(doc)
@@ -197,7 +197,7 @@ func TestWithSkew_NarrowsClockToleranceForNotYetValid(t *testing.T) {
 	token := r5coreSignRS256(t, key, "k1", claims)
 
 	doc, _ := json.Marshal(map[string]any{"keys": []map[string]string{
-		{"kty": "RSA", "kid": "k1", "n": r5coreB64(key.PublicKey.N.Bytes()), "e": r5coreB64(big.NewInt(int64(key.PublicKey.E)).Bytes())},
+		{"kty": "RSA", "kid": "k1", "n": r5coreB64(key.N.Bytes()), "e": r5coreB64(big.NewInt(int64(key.PublicKey.E)).Bytes())},
 	}})
 
 	v := New("https://jwks.invalid/", WithSeedJWKS(doc), WithClock(func() time.Time { return now }), WithSkew(1*time.Second))
@@ -230,7 +230,7 @@ func TestWithGrace_ShortensOfflineGraceWindow(t *testing.T) {
 	token := r5coreSignRS256(t, key, "k1", claims)
 
 	doc, _ := json.Marshal(map[string]any{"keys": []map[string]string{
-		{"kty": "RSA", "kid": "k1", "n": r5coreB64(key.PublicKey.N.Bytes()), "e": r5coreB64(big.NewInt(int64(key.PublicKey.E)).Bytes())},
+		{"kty": "RSA", "kid": "k1", "n": r5coreB64(key.N.Bytes()), "e": r5coreB64(big.NewInt(int64(key.PublicKey.E)).Bytes())},
 	}})
 
 	// Grace shorter than the 1h-past-exp gap: must hard-fail as expired.

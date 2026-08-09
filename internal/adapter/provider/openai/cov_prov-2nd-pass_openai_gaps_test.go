@@ -54,7 +54,12 @@ func prov2ndPassOpenaiWsServer(t *testing.T) (url string, connCh chan *websocket
 
 func prov2ndPassOpenaiDial(t *testing.T, url string) *websocket.Conn {
 	t.Helper()
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, bcResp0, err := websocket.DefaultDialer.Dial(url, nil)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err != nil {
 		t.Fatalf("dial %s: %v", url, err)
 	}
@@ -70,15 +75,15 @@ func TestOpenaiRealtimeHandler_FullDuplexRelay_BillsUsageFromResponseDone(t *tes
 	// testBrowser simulates the real end user's browser; testVendor
 	// simulates the upstream (e.g. OpenAI) realtime endpoint.
 	testBrowser := prov2ndPassOpenaiDial(t, clientURL)
-	defer testBrowser.Close()
+	defer func() { _ = testBrowser.Close() }()
 	testVendor := prov2ndPassOpenaiDial(t, targetURL)
-	defer testVendor.Close()
+	defer func() { _ = testVendor.Close() }()
 
 	// These are the connections OpenaiRealtimeHandler will actually use.
 	handlerClientConn := <-clientConnCh
 	handlerTargetConn := <-targetConnCh
-	defer handlerClientConn.Close()
-	defer handlerTargetConn.Close()
+	defer func() { _ = handlerClientConn.Close() }()
+	defer func() { _ = handlerTargetConn.Close() }()
 
 	w := newRecorderCtx(t)
 	info := &relaycommon.RelayInfo{
@@ -104,7 +109,7 @@ func TestOpenaiRealtimeHandler_FullDuplexRelay_BillsUsageFromResponseDone(t *tes
 	if err := testBrowser.WriteMessage(websocket.TextMessage, []byte(sessionUpdate)); err != nil {
 		t.Fatalf("browser write: %v", err)
 	}
-	testVendor.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = testVendor.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, forwarded, err := testVendor.ReadMessage()
 	if err != nil {
 		t.Fatalf("vendor did not receive forwarded session.update: %v", err)
@@ -120,7 +125,7 @@ func TestOpenaiRealtimeHandler_FullDuplexRelay_BillsUsageFromResponseDone(t *tes
 	if err := testVendor.WriteMessage(websocket.TextMessage, []byte(responseDone)); err != nil {
 		t.Fatalf("vendor write: %v", err)
 	}
-	testBrowser.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = testBrowser.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, echoed, err := testBrowser.ReadMessage()
 	if err != nil {
 		t.Fatalf("browser did not receive the relayed response.done: %v", err)
@@ -133,7 +138,7 @@ func TestOpenaiRealtimeHandler_FullDuplexRelay_BillsUsageFromResponseDone(t *tes
 	// should exit and the handler should return with the accumulated usage.
 	_ = testBrowser.WriteControl(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	testBrowser.Close()
+	_ = testBrowser.Close()
 
 	select {
 	case res := <-resultCh:
@@ -182,6 +187,11 @@ func TestOpenaiHandler_RelayFormatClaude_ConvertsResponseToClaudeShape(t *testin
 	}
 	body := `{"id":"chatcmpl-c1","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hi from claude format"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}`
 	resp := fakeHTTPResponse(200, body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr != nil {
@@ -213,6 +223,11 @@ func TestOpenaiHandler_RelayFormatGemini_ConvertsResponseToGeminiShape(t *testin
 	}
 	body := `{"id":"chatcmpl-g1","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hi from gemini format"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":6,"total_tokens":11}}`
 	resp := fakeHTTPResponse(200, body)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	usage, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr != nil {
@@ -245,6 +260,11 @@ func TestOpenaiHandler_OpenRouterEnterprise_MalformedEnvelope_Errors(t *testing.
 	}
 	// Not valid JSON at all - the enterprise-envelope Unmarshal itself must fail.
 	resp := fakeHTTPResponse(200, `not-json-at-all`)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	usage, apiErr := OpenaiHandler(w.ctx, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected error for a malformed openrouter enterprise envelope")

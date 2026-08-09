@@ -499,7 +499,13 @@ func TestAdaptor_DoResponse_NativeGeminiNonStream(t *testing.T) {
 		RelayMode:   relayconstant.RelayModeGemini,
 	}
 	body := `{"candidates":[{"content":{"parts":[{"text":"native"}]},"index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`
-	_, apiErr := a.DoResponse(c, respFromBody(200, body), info)
+	bcResp6 := respFromBody(200, body)
+	defer func() {
+		if bcResp6 != nil {
+			_ = bcResp6.Body.Close()
+		}
+	}()
+	_, apiErr := a.DoResponse(c, bcResp6, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -518,7 +524,13 @@ func TestAdaptor_DoResponse_NativeGeminiEmbedContentPath(t *testing.T) {
 		RequestURLPath: "/v1beta/models/text-embedding-004:embedContent",
 	}
 	body := `{"embedding":{"values":[1,2,3]}}`
-	_, apiErr := a.DoResponse(c, respFromBody(200, body), info)
+	bcResp5 := respFromBody(200, body)
+	defer func() {
+		if bcResp5 != nil {
+			_ = bcResp5.Body.Close()
+		}
+	}()
+	_, apiErr := a.DoResponse(c, bcResp5, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -534,7 +546,13 @@ func TestAdaptor_DoResponse_ImagenModel(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "imagen-3.0-generate-002"},
 	}
 	body := `{"predictions":[{"bytesBase64Encoded":"aaaa"}]}`
-	usage, apiErr := a.DoResponse(c, respFromBody(200, body), info)
+	bcResp4 := respFromBody(200, body)
+	defer func() {
+		if bcResp4 != nil {
+			_ = bcResp4.Body.Close()
+		}
+	}()
+	usage, apiErr := a.DoResponse(c, bcResp4, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -553,7 +571,13 @@ func TestAdaptor_DoResponse_AudioSpeechMode(t *testing.T) {
 	}
 	// TTS handler surfaces upstream errors distinctly, proving it (not the
 	// chat/embedding handler) was the one invoked.
-	_, apiErr := a.DoResponse(c, respFromBody(500, `boom`), info)
+	bcResp3 := respFromBody(500, `boom`)
+	defer func() {
+		if bcResp3 != nil {
+			_ = bcResp3.Body.Close()
+		}
+	}()
+	_, apiErr := a.DoResponse(c, bcResp3, info)
 	if apiErr == nil {
 		t.Fatal("expected error routed through GeminiTTSHandler for non-200 upstream")
 	}
@@ -566,7 +590,13 @@ func TestAdaptor_DoResponse_EmbeddingModelPrefix(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "embedding-001"},
 	}
 	body := `{"embeddings":[{"values":[1,2]}]}`
-	_, apiErr := a.DoResponse(c, respFromBody(200, body), info)
+	bcResp2 := respFromBody(200, body)
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
+	_, apiErr := a.DoResponse(c, bcResp2, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -587,7 +617,13 @@ func TestAdaptor_DoResponse_DefaultChatNonStream(t *testing.T) {
 		RelayFormat: types.RelayFormatOpenAI,
 	}
 	body := `{"candidates":[{"content":{"parts":[{"text":"chat"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`
-	_, apiErr := a.DoResponse(c, respFromBody(200, body), info)
+	bcResp1 := respFromBody(200, body)
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
+	_, apiErr := a.DoResponse(c, bcResp1, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -605,7 +641,13 @@ func TestAdaptor_DoResponse_DefaultChatStream(t *testing.T) {
 		IsStream:    true,
 	}
 	body := sseBody(`{"candidates":[{"content":{"parts":[{"text":"s"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`)
-	_, apiErr := a.DoResponse(c, respFromBody(200, body), info)
+	bcResp0 := respFromBody(200, body)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
+	_, apiErr := a.DoResponse(c, bcResp0, info)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}

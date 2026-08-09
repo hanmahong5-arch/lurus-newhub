@@ -48,7 +48,12 @@ func TestJimeng_TaskA_FetchTask_ProxyClientError(t *testing.T) {
 	// A malformed proxy URL (missing scheme) makes url.Parse fail inside
 	// GetHttpClientWithProxy before any network I/O is attempted. This
 	// models a misconfigured channel-level proxy setting.
-	_, err := a.FetchTask("https://x", "sk-relay", map[string]any{"task_id": "t1"}, "://not-a-proxy")
+	bcResp1, err := a.FetchTask("https://x", "sk-relay", map[string]any{"task_id": "t1"}, "://not-a-proxy")
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatalf("expected error for malformed proxy URL")
 	}
@@ -63,7 +68,12 @@ func TestJimeng_TaskA_FetchTask_NewRequestError(t *testing.T) {
 	// constructed URI (net/url: invalid control character in URL), which
 	// models a corrupted/garbage channel base_url value.
 	badBaseURL := "https://x/\x7f"
-	_, err := a.FetchTask(badBaseURL, "AK1|SK1", map[string]any{"task_id": "t1"}, "")
+	bcResp0, err := a.FetchTask(badBaseURL, "AK1|SK1", map[string]any{"task_id": "t1"}, "")
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatalf("expected error for base URL containing an invalid control character")
 	}

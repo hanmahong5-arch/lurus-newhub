@@ -262,7 +262,13 @@ func TestCohereHandler(t *testing.T) {
 		c, w := prov_cn_batch_cohereGinContext()
 		body := `{"response_id":"r1","text":"the answer","finish_reason":"COMPLETE","meta":{"billed_units":{"input_tokens":5,"output_tokens":3}}}`
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "command-r"}}
-		usage, apiErr := cohereHandler(c, info, prov_cn_batch_cohereRespFromBody(body))
+		bcResp9 := prov_cn_batch_cohereRespFromBody(body)
+		defer func() {
+			if bcResp9 != nil {
+				_ = bcResp9.Body.Close()
+			}
+		}()
+		usage, apiErr := cohereHandler(c, info, bcResp9)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -279,7 +285,13 @@ func TestCohereHandler(t *testing.T) {
 
 	t.Run("malformed JSON classified as bad response body", func(t *testing.T) {
 		c, _ := prov_cn_batch_cohereGinContext()
-		_, apiErr := cohereHandler(c, &relaycommon.RelayInfo{}, prov_cn_batch_cohereRespFromBody("{not json"))
+		bcResp8 := prov_cn_batch_cohereRespFromBody("{not json")
+		defer func() {
+			if bcResp8 != nil {
+				_ = bcResp8.Body.Close()
+			}
+		}()
+		_, apiErr := cohereHandler(c, &relaycommon.RelayInfo{}, bcResp8)
 		if apiErr == nil {
 			t.Fatal("expected error for malformed JSON")
 		}
@@ -290,7 +302,13 @@ func TestCohereRerankHandler(t *testing.T) {
 	t.Run("billed units present used directly for usage", func(t *testing.T) {
 		c, w := prov_cn_batch_cohereGinContext()
 		body := `{"results":[{"index":0,"relevance_score":0.9}],"meta":{"billed_units":{"input_tokens":9,"output_tokens":0}}}`
-		usage, apiErr := cohereRerankHandler(c, prov_cn_batch_cohereRespFromBody(body), &relaycommon.RelayInfo{})
+		bcResp7 := prov_cn_batch_cohereRespFromBody(body)
+		defer func() {
+			if bcResp7 != nil {
+				_ = bcResp7.Body.Close()
+			}
+		}()
+		usage, apiErr := cohereRerankHandler(c, bcResp7, &relaycommon.RelayInfo{})
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -307,7 +325,13 @@ func TestCohereRerankHandler(t *testing.T) {
 		body := `{"results":[],"meta":{"billed_units":{"input_tokens":0,"output_tokens":0}}}`
 		info := &relaycommon.RelayInfo{}
 		info.SetEstimatePromptTokens(42)
-		usage, apiErr := cohereRerankHandler(c, prov_cn_batch_cohereRespFromBody(body), info)
+		bcResp6 := prov_cn_batch_cohereRespFromBody(body)
+		defer func() {
+			if bcResp6 != nil {
+				_ = bcResp6.Body.Close()
+			}
+		}()
+		usage, apiErr := cohereRerankHandler(c, bcResp6, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -318,7 +342,13 @@ func TestCohereRerankHandler(t *testing.T) {
 
 	t.Run("malformed JSON classified as bad response body", func(t *testing.T) {
 		c, _ := prov_cn_batch_cohereGinContext()
-		_, apiErr := cohereRerankHandler(c, prov_cn_batch_cohereRespFromBody("{not json"), &relaycommon.RelayInfo{})
+		bcResp5 := prov_cn_batch_cohereRespFromBody("{not json")
+		defer func() {
+			if bcResp5 != nil {
+				_ = bcResp5.Body.Close()
+			}
+		}()
+		_, apiErr := cohereRerankHandler(c, bcResp5, &relaycommon.RelayInfo{})
 		if apiErr == nil {
 			t.Fatal("expected error for malformed JSON")
 		}
@@ -335,7 +365,13 @@ func TestCohereStreamHandler(t *testing.T) {
 		`{"event_type":"text-generation","text":"llo","is_finished":false}` + "\n" +
 		`{"event_type":"stream-end","is_finished":true,"finish_reason":"COMPLETE","response":{"meta":{"billed_units":{"input_tokens":2,"output_tokens":4}}}}` + "\n"
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "command-r"}}
-	usage, apiErr := cohereStreamHandler(c, info, prov_cn_batch_cohereRespFromBody(body))
+	bcResp4 := prov_cn_batch_cohereRespFromBody(body)
+	defer func() {
+		if bcResp4 != nil {
+			_ = bcResp4.Body.Close()
+		}
+	}()
+	usage, apiErr := cohereStreamHandler(c, info, bcResp4)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -359,7 +395,13 @@ func TestCohereStreamHandler_NoBilledUnits_FallsBackToEstimate(t *testing.T) {
 	body := `{"event_type":"text-generation","text":"hi","is_finished":false}` + "\n" +
 		`{"event_type":"stream-end","is_finished":true,"finish_reason":"COMPLETE"}` + "\n"
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "command-r"}}
-	usage, apiErr := cohereStreamHandler(c, info, prov_cn_batch_cohereRespFromBody(body))
+	bcResp3 := prov_cn_batch_cohereRespFromBody(body)
+	defer func() {
+		if bcResp3 != nil {
+			_ = bcResp3.Body.Close()
+		}
+	}()
+	usage, apiErr := cohereStreamHandler(c, info, bcResp3)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -379,7 +421,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_cohereGinContext()
 		info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeRerank}
 		body := `{"results":[{"index":0,"relevance_score":0.5}],"meta":{"billed_units":{"input_tokens":1}}}`
-		_, apiErr := a.DoResponse(c, prov_cn_batch_cohereRespFromBody(body), info)
+		bcResp2 := prov_cn_batch_cohereRespFromBody(body)
+		defer func() {
+			if bcResp2 != nil {
+				_ = bcResp2.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp2, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -392,7 +440,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_cohereGinContext()
 		info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeChatCompletions, ChannelMeta: &relaycommon.ChannelMeta{}}
 		body := `{"response_id":"r1","text":"chat reply","finish_reason":"COMPLETE"}`
-		_, apiErr := a.DoResponse(c, prov_cn_batch_cohereRespFromBody(body), info)
+		bcResp1 := prov_cn_batch_cohereRespFromBody(body)
+		defer func() {
+			if bcResp1 != nil {
+				_ = bcResp1.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp1, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}
@@ -405,7 +459,13 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_cohereGinContext()
 		info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeChatCompletions, IsStream: true, ChannelMeta: &relaycommon.ChannelMeta{}}
 		body := `{"event_type":"stream-end","is_finished":true,"finish_reason":"COMPLETE"}` + "\n"
-		_, apiErr := a.DoResponse(c, prov_cn_batch_cohereRespFromBody(body), info)
+		bcResp0 := prov_cn_batch_cohereRespFromBody(body)
+		defer func() {
+			if bcResp0 != nil {
+				_ = bcResp0.Body.Close()
+			}
+		}()
+		_, apiErr := a.DoResponse(c, bcResp0, info)
 		if apiErr != nil {
 			t.Fatalf("unexpected error: %v", apiErr)
 		}

@@ -78,7 +78,11 @@ func TestDoRequest_RoundTripsThroughLoopbackServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoRequest() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	if resp.StatusCode != http.StatusAccepted {
 		t.Errorf("status = %d, want 202", resp.StatusCode)
@@ -143,7 +147,12 @@ func TestFetchTask_BodyMarshalFailureReturnsError(t *testing.T) {
 	// A channel value is not JSON-marshalable; this exercises the real
 	// json.Marshal error-return branch inside FetchTask without needing any
 	// network I/O.
-	_, err := a.FetchTask("https://example.com", "key", map[string]any{"bad": make(chan int)}, "")
+	bcResp2, err := a.FetchTask("https://example.com", "key", map[string]any{"bad": make(chan int)}, "")
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error when task body cannot be marshalled to JSON")
 	}
@@ -153,7 +162,12 @@ func TestFetchTask_InvalidBaseURLFailsToBuildRequest(t *testing.T) {
 	a := &TaskAdaptor{}
 	// A control character in the base URL makes url.Parse (inside
 	// http.NewRequest) reject it outright.
-	_, err := a.FetchTask("http://example.com/\x7f", "key", map[string]any{}, "")
+	bcResp1, err := a.FetchTask("http://example.com/\x7f", "key", map[string]any{}, "")
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error for malformed base URL, must not panic")
 	}
@@ -161,7 +175,12 @@ func TestFetchTask_InvalidBaseURLFailsToBuildRequest(t *testing.T) {
 
 func TestFetchTask_InvalidProxyFailsClientConstruction(t *testing.T) {
 	a := &TaskAdaptor{}
-	_, err := a.FetchTask("https://example.com", "key", map[string]any{}, "://not-a-valid-proxy-url")
+	bcResp0, err := a.FetchTask("https://example.com", "key", map[string]any{}, "://not-a-valid-proxy-url")
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err == nil {
 		t.Fatal("expected error when proxy URL cannot be parsed")
 	}

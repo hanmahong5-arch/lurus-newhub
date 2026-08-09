@@ -256,7 +256,11 @@ func TestFetchTask_PostsToSunoFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	if gotPath != "/suno/fetch" {
 		t.Errorf("path = %q, want /suno/fetch", gotPath)
 	}

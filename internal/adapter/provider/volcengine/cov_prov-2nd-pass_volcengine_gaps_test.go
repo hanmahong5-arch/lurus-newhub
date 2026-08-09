@@ -326,21 +326,26 @@ func TestProv2ndPassVolc_FullClientRequest_WriteToClosedConn_Errors(t *testing.T
 		if err != nil {
 			return
 		}
-		conn.Close() // close immediately server-side
+		_ = conn.Close() // close immediately server-side
 	}))
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, bcResp0, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Give the server time to close its side so the client write observes
 	// a broken pipe rather than racing the close.
 	time.Sleep(100 * time.Millisecond)
-	conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	// Send enough frames that at least one hits the broken connection - a
 	// single write can occasionally still succeed into the OS buffer before
 	// the RST is observed.

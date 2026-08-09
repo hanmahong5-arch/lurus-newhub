@@ -64,7 +64,13 @@ func TestRerankHandler_JinaPath_UsageAndResultsPassThrough(t *testing.T) {
 		RerankerInfo: &relaycommon.RerankerInfo{ReturnDocuments: true},
 	}
 
-	usage, apiErr := RerankHandler(c, info, routerRelayUpstreamResp(upstreamBody))
+	bcResp5 := routerRelayUpstreamResp(upstreamBody)
+	defer func() {
+		if bcResp5 != nil {
+			_ = bcResp5.Body.Close()
+		}
+	}()
+	usage, apiErr := RerankHandler(c, info, bcResp5)
 	if apiErr != nil {
 		t.Fatalf("unexpected error from Jina-compatible rerank response: %v", apiErr)
 	}
@@ -123,7 +129,13 @@ func TestRerankHandler_XinferencePath_BackfillsMissingDocumentFromRequest(t *tes
 	}
 	info.SetEstimatePromptTokens(13)
 
-	usage, apiErr := RerankHandler(c, info, routerRelayUpstreamResp(upstreamBody))
+	bcResp4 := routerRelayUpstreamResp(upstreamBody)
+	defer func() {
+		if bcResp4 != nil {
+			_ = bcResp4.Body.Close()
+		}
+	}()
+	usage, apiErr := RerankHandler(c, info, bcResp4)
 	if apiErr != nil {
 		t.Fatalf("unexpected error from Xinference rerank response: %v", apiErr)
 	}
@@ -170,7 +182,13 @@ func TestRerankHandler_XinferencePath_ReturnDocumentsFalse_OmitsDocument(t *test
 		},
 	}
 
-	usage, apiErr := RerankHandler(c, info, routerRelayUpstreamResp(upstreamBody))
+	bcResp3 := routerRelayUpstreamResp(upstreamBody)
+	defer func() {
+		if bcResp3 != nil {
+			_ = bcResp3.Body.Close()
+		}
+	}()
+	usage, apiErr := RerankHandler(c, info, bcResp3)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
@@ -200,7 +218,13 @@ func TestRerankHandler_JinaPath_MalformedJSON_ReturnsBadResponseError(t *testing
 		RerankerInfo: &relaycommon.RerankerInfo{},
 	}
 
-	usage, apiErr := RerankHandler(c, info, routerRelayUpstreamResp(`{not-json`))
+	bcResp2 := routerRelayUpstreamResp(`{not-json`)
+	defer func() {
+		if bcResp2 != nil {
+			_ = bcResp2.Body.Close()
+		}
+	}()
+	usage, apiErr := RerankHandler(c, info, bcResp2)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed upstream JSON, got nil")
 	}
@@ -228,7 +252,13 @@ func TestRerankHandler_XinferencePath_MalformedJSON_ReturnsBadResponseError(t *t
 		RerankerInfo: &relaycommon.RerankerInfo{},
 	}
 
-	usage, apiErr := RerankHandler(c, info, routerRelayUpstreamResp(`not even close to json`))
+	bcResp1 := routerRelayUpstreamResp(`not even close to json`)
+	defer func() {
+		if bcResp1 != nil {
+			_ = bcResp1.Body.Close()
+		}
+	}()
+	usage, apiErr := RerankHandler(c, info, bcResp1)
 	if apiErr == nil {
 		t.Fatal("expected error for malformed Xinference JSON, got nil")
 	}
@@ -282,7 +312,13 @@ func TestRerankHandler_XinferencePath_EmptyResults(t *testing.T) {
 		RerankerInfo: &relaycommon.RerankerInfo{ReturnDocuments: true, Documents: []any{}},
 	}
 
-	usage, apiErr := RerankHandler(c, info, routerRelayUpstreamResp(`{"results": []}`))
+	bcResp0 := routerRelayUpstreamResp(`{"results": []}`)
+	defer func() {
+		if bcResp0 != nil {
+			_ = bcResp0.Body.Close()
+		}
+	}()
+	usage, apiErr := RerankHandler(c, info, bcResp0)
 	if apiErr != nil {
 		t.Fatalf("unexpected error on empty results: %v", apiErr)
 	}
