@@ -10,13 +10,10 @@ package lifecycle
 // re-declaring fixtures.
 
 import (
-	"bytes"
 	"context"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gin-gonic/gin"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -108,19 +105,18 @@ func TestCoreAppBootStartPrivacyErasureWithContext_NotLeaderSkipsPass(t *testing
 // ticker itself fires on a 24h cadence (secretRotationInterval, unexported
 // const) so its tick body is not practically reachable from a unit test;
 // NewLeaderTask/LeaderTask.Run's gating logic is already covered directly by
-// leader_election_test.go. No t.Parallel() in this test, so swapping
-// gin.DefaultWriter here cannot race with other package tests (parallel
-// tests in this package only start executing after every sequential test,
-// this one included, has returned).
+// leader_election_test.go.
+//
+// Log output is read from the package-wide sink installed by TestMain rather
+// than by swapping gin.DefaultWriter here: launcher goroutines from earlier
+// tests are still calling common.SysLog, and that read races any write to the
+// global (see cov_logsink_test.go).
 func TestCoreAppBootStartSecretRotationWithContext_NonBlockingLauncher(t *testing.T) {
 	prevLeader := common.IsLeader()
 	common.SetLeader(false)
 	t.Cleanup(func() { common.SetLeader(prevLeader) })
 
-	prevWriter := gin.DefaultWriter
-	var buf bytes.Buffer
-	gin.DefaultWriter = &buf
-	t.Cleanup(func() { gin.DefaultWriter = prevWriter })
+	mark := covLogSink.mark()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancelled so the spawned goroutine's select returns immediately, never touching app.RotateDueTokens
@@ -132,8 +128,8 @@ func TestCoreAppBootStartSecretRotationWithContext_NonBlockingLauncher(t *testin
 	if elapsed > 200*time.Millisecond {
 		t.Errorf("StartSecretRotationWithContext blocked the caller for %v; expected an async fire-and-forget launch", elapsed)
 	}
-	if !strings.Contains(buf.String(), "secret rotation started, interval=24h0m0s") {
-		t.Errorf("expected the real startup log line (interval=24h0m0s) to be written, got %q", buf.String())
+	if logged := covLogSink.since(mark); !strings.Contains(logged, "secret rotation started, interval=24h0m0s") {
+		t.Errorf("expected the real startup log line (interval=24h0m0s) to be written, got %q", logged)
 	}
 }
 
