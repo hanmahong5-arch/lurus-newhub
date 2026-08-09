@@ -126,8 +126,14 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	if pingEnabled && pingTicker != nil {
 		wg.Add(1)
 		gopool.Go(func() {
+			// wg.Done() must be the LAST thing this defer does: the cleanup
+			// goroutine closes stopChan as soon as wg.Wait() returns, so
+			// releasing the counter before the SafeSendBool below lets the close
+			// interleave with the send. SafeSendBool recovers the resulting
+			// panic, which is why this was silent in production, but it is a
+			// real data race and -race fails on it.
+			defer wg.Done()
 			defer func() {
-				wg.Done()
 				if r := recover(); r != nil {
 					logger.LogError(c, fmt.Sprintf("ping goroutine panic: %v", r))
 					common.SafeSendBool(stopChan, true)
@@ -189,8 +195,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	// Scanner goroutine with improved error handling
 	wg.Add(1)
 	common.RelayCtxGo(ctx, func() {
+		// Same ordering requirement as the ping goroutine above: the counter is
+		// released only after the stopChan send, or the cleanup's
+		// wg.Wait()/close(stopChan) races this send.
+		defer wg.Done()
 		defer func() {
-			wg.Done()
 			if r := recover(); r != nil {
 				logger.LogError(c, fmt.Sprintf("scanner goroutine panic: %v", r))
 			}

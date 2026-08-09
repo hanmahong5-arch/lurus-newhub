@@ -23,20 +23,18 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 )
 
-// ─── FINDING: UpdateOption drops FirstOrCreate/Save errors ──────────────────
+// ─── UpdateOption must surface FirstOrCreate/Save errors ────────────────────
 
-// TestUpdateOption_SilentlySwallowsDBWriteError_FINDING proves that when the
-// underlying persistence call fails, UpdateOption still reports success
-// (err == nil) while the value is never actually durable in the database —
-// only the in-memory common.OptionMap reflects the write. A caller has no way
-// to detect the partial failure from the return value alone.
+// TestUpdateOption_ReportsDBWriteError covers the contract UpdateOption used to
+// break: it discarded both persistence errors and returned only
+// updateOptionMap's result, so a failed write looked like success to the caller
+// while taking effect in memory only — silently reverting on restart or on the
+// next replica's loadOptionsFromDatabase.
 //
-// Self-check: if UpdateOption's body were replaced by a zero-value stub
-// (`return nil`), the in-memory OptionMap would never be set to
-// "should-not-persist" by this call (since a real stub wouldn't touch it via
-// updateOptionMap either) — the OptionMap assertion below would fail, so this
-// is not a hollow err==nil-only check.
-func TestUpdateOption_SilentlySwallowsDBWriteError_FINDING(t *testing.T) {
+// fix_option_write_error_test.go pins the same contract on hermetic sqlite; this
+// one runs against a real PostgreSQL (the CI pg-integration tier) and also
+// verifies, by recreating the table afterwards, that nothing was persisted.
+func TestUpdateOption_ReportsDBWriteError(t *testing.T) {
 	cleanup := SetupTestDB(t)
 	defer cleanup()
 
@@ -52,36 +50,29 @@ func TestUpdateOption_SilentlySwallowsDBWriteError_FINDING(t *testing.T) {
 		t.Fatalf("baseline value = %q, want v1", baseline.Value)
 	}
 
-	// Now break the persistence path underneath UpdateOption without closing
-	// the connection (so updateOptionMap's own DB-free logic keeps working):
-	// drop the options table. FirstOrCreate/Save will both fail with "relation
-	// does not exist", but option.go discards both errors.
+	// Break the persistence path underneath UpdateOption without closing the
+	// connection (so updateOptionMap's own DB-free logic keeps working): drop
+	// the options table, so FirstOrCreate/Save both fail with "relation does
+	// not exist".
 	if err := DB.Migrator().DropTable(&Option{}); err != nil {
 		t.Fatalf("drop options table: %v", err)
 	}
 
 	err := UpdateOption("cov_finding_should_not_persist", "should-not-persist")
-
-	// FINDING: current code returns nil here even though the write failed.
-	if err != nil {
-		t.Fatalf("FINDING regression: UpdateOption now propagates the DB error (err=%v) — "+
-			"if option.go was intentionally fixed, update this test to match the new contract "+
-			"instead of silently deleting the finding", err)
+	if err == nil {
+		t.Fatal("UpdateOption returned nil for a write that could not be persisted")
 	}
 
-	// The in-memory map WAS updated (this is the real, substantive assertion —
-	// not just err==nil) — proving the caller-visible "success" is genuinely
-	// backed by nothing durable.
+	// The in-memory map must not advertise a value the database never took.
 	common.OptionMapRWMutex.RLock()
 	gotMapValue, ok := common.OptionMap["cov_finding_should_not_persist"]
 	common.OptionMapRWMutex.RUnlock()
-	if !ok || gotMapValue != "should-not-persist" {
-		t.Fatalf("expected in-memory OptionMap to be updated to %q despite DB failure, got %q (ok=%v)",
-			"should-not-persist", gotMapValue, ok)
+	if ok && gotMapValue == "should-not-persist" {
+		t.Fatalf("in-memory OptionMap was updated to %q despite the failed write — "+
+			"a restart or the next replica's sync would silently revert it", gotMapValue)
 	}
 
-	// Recreate the table and confirm nothing was ever persisted for this key —
-	// the silent failure really did lose the write.
+	// Recreate the table and confirm nothing was persisted for this key.
 	if err := DB.Migrator().AutoMigrate(&Option{}); err != nil {
 		t.Fatalf("recreate options table: %v", err)
 	}
@@ -90,8 +81,7 @@ func TestUpdateOption_SilentlySwallowsDBWriteError_FINDING(t *testing.T) {
 		t.Fatalf("count after recreate: %v", err)
 	}
 	if count != 0 {
-		t.Fatalf("FINDING regression: expected 0 persisted rows for the failed write, got %d — "+
-			"UpdateOption may have started actually persisting despite the earlier table drop", count)
+		t.Fatalf("expected 0 persisted rows for the failed write, got %d", count)
 	}
 }
 

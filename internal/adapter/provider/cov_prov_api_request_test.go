@@ -798,12 +798,60 @@ func TestDoTaskApiRequest_NetworkErrorWrapsDoRequestFailed(t *testing.T) {
 
 // -- ping keep-alive machinery --
 
-func TestStartPingKeepAlive_WritesPingsThenStops(t *testing.T) {
-	origDebug := common2.DebugEnabled
-	common2.DebugEnabled = true
-	t.Cleanup(func() { common2.DebugEnabled = origDebug })
+// provReqCovSyncRecorder is an http.ResponseWriter whose buffer is safe to read
+// while a writer goroutine is still running. httptest.ResponseRecorder.Body is a
+// plain bytes.Buffer, so polling it from the test while the pinger writes to it
+// is a genuine data race, not a detector artifact.
+type provReqCovSyncRecorder struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	header http.Header
+	code   int
+}
 
-	c, w := provReqCovNewGinContext(t, http.MethodGet, "/x", nil)
+func newProvReqCovSyncRecorder() *provReqCovSyncRecorder {
+	return &provReqCovSyncRecorder{header: make(http.Header), code: http.StatusOK}
+}
+
+func (r *provReqCovSyncRecorder) Header() http.Header { return r.header }
+
+func (r *provReqCovSyncRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.Write(p)
+}
+
+func (r *provReqCovSyncRecorder) WriteHeader(code int) { r.code = code }
+
+// Flush is required: gin's ResponseWriter type-asserts the wrapped writer to
+// http.Flusher, and the SSE ping path flushes after every frame.
+func (r *provReqCovSyncRecorder) Flush() {}
+
+func (r *provReqCovSyncRecorder) body() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.String()
+}
+
+func (r *provReqCovSyncRecorder) length() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.Len()
+}
+
+func provReqCovPingContext(method, target string) (*gin.Context, *provReqCovSyncRecorder) {
+	gin.SetMode(gin.TestMode)
+	rec := newProvReqCovSyncRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(method, target, nil)
+	return c, rec
+}
+
+func TestStartPingKeepAlive_WritesPingsThenStops(t *testing.T) {
+	// Deliberately does NOT flip common2.DebugEnabled: stop() cancels the
+	// pinger's context but does not wait for the goroutine to exit, so a
+	// t.Cleanup restoring that global races the goroutine's own debug reads.
+	c, rec := provReqCovPingContext(http.MethodGet, "/x")
 
 	stop := startPingKeepAlive(c, 15*time.Millisecond)
 
@@ -811,25 +859,26 @@ func TestStartPingKeepAlive_WritesPingsThenStops(t *testing.T) {
 	// hang if the ticker mechanism regresses.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(w.Body.String(), "PING") {
+		if strings.Contains(rec.body(), "PING") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(w.Body.String(), "PING") {
+	if !strings.Contains(rec.body(), "PING") {
 		t.Fatal("expected at least one SSE ping frame to be written before timeout")
 	}
 
 	stop()
-	lenAfterStop := w.Body.Len()
 	time.Sleep(50 * time.Millisecond)
-	if w.Body.Len() != lenAfterStop {
+	lenAfterStop := rec.length()
+	time.Sleep(50 * time.Millisecond)
+	if rec.length() != lenAfterStop {
 		t.Error("expected no further writes after stopPinger() is called")
 	}
 }
 
 func TestStartPingKeepAlive_StopsOnRequestContextDone(t *testing.T) {
-	c, w := provReqCovNewGinContext(t, http.MethodGet, "/x", nil)
+	c, rec := provReqCovPingContext(http.MethodGet, "/x")
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	c.Request = c.Request.WithContext(ctx)
 
@@ -838,19 +887,20 @@ func TestStartPingKeepAlive_StopsOnRequestContextDone(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(w.Body.String(), "PING") {
+		if strings.Contains(rec.body(), "PING") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(w.Body.String(), "PING") {
+	if !strings.Contains(rec.body(), "PING") {
 		t.Fatal("expected at least one ping before cancelling request context")
 	}
 
 	cancel()
-	lenAfterCancel := w.Body.Len()
 	time.Sleep(60 * time.Millisecond)
-	if w.Body.Len() != lenAfterCancel {
+	lenAfterCancel := rec.length()
+	time.Sleep(60 * time.Millisecond)
+	if rec.length() != lenAfterCancel {
 		t.Error("expected the ping goroutine to stop writing once the request context is cancelled")
 	}
 }

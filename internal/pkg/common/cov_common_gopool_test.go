@@ -4,11 +4,33 @@ import (
 	"bytes"
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+// covGopoolSyncBuffer is a bytes.Buffer that is safe to read while a pool
+// goroutine is still writing to it. gin.DefaultErrorWriter is process-wide and
+// the panic handler logs from the pool goroutine, so polling a plain
+// bytes.Buffer from the test body is a real data race.
+type covGopoolSyncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *covGopoolSyncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *covGopoolSyncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // TestRelayCtxGo_PanicHandlerSignalsStopChanAndLogs drives the process-wide
 // relayGoPool's panic handler (installed once in gopool.go's init()) by
@@ -19,8 +41,8 @@ import (
 // buffer unchanged.
 func TestRelayCtxGo_PanicHandlerSignalsStopChanAndLogs(t *testing.T) {
 	origOut, origErr := gin.DefaultWriter, gin.DefaultErrorWriter
-	errBuf := &bytes.Buffer{}
-	gin.DefaultWriter, gin.DefaultErrorWriter = &bytes.Buffer{}, errBuf
+	errBuf := &covGopoolSyncBuffer{}
+	gin.DefaultWriter, gin.DefaultErrorWriter = &covGopoolSyncBuffer{}, errBuf
 	t.Cleanup(func() { gin.DefaultWriter, gin.DefaultErrorWriter = origOut, origErr })
 
 	stopChan := make(chan bool, 1)
@@ -62,8 +84,8 @@ func TestRelayCtxGo_PanicHandlerSignalsStopChanAndLogs(t *testing.T) {
 // logging.
 func TestRelayCtxGo_WithoutStopChan_DoesNotPanicCaller(t *testing.T) {
 	origOut, origErr := gin.DefaultWriter, gin.DefaultErrorWriter
-	errBuf := &bytes.Buffer{}
-	gin.DefaultWriter, gin.DefaultErrorWriter = &bytes.Buffer{}, errBuf
+	errBuf := &covGopoolSyncBuffer{}
+	gin.DefaultWriter, gin.DefaultErrorWriter = &covGopoolSyncBuffer{}, errBuf
 	t.Cleanup(func() { gin.DefaultWriter, gin.DefaultErrorWriter = origOut, origErr })
 
 	done := make(chan struct{})

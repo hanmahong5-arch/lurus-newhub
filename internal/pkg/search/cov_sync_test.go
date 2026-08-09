@@ -1,25 +1,91 @@
 package search
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // resetSyncGlobals isolates the package-level async worker pool / scheduled
 // sync context/cancel across tests, restoring (and, if the test left a
 // goroutine running, cancelling it) on cleanup.
+// covSyncLogBuffer is a mutex-guarded sink for gin.DefaultWriter. The mutex is
+// load-bearing, not defensive: reading it after the scheduled-sync goroutine has
+// written its exit line is what establishes a happens-before edge with that
+// goroutine, which is otherwise unjoinable.
+type covSyncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *covSyncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *covSyncLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// drainAsyncPool blocks until every task submitted so far has finished. The
+// pool's queue is FIFO, so once WorkerCount sentinels have run, no worker can
+// still be inside an earlier task. Without this the workers keep reading
+// Client/RetryCount/IndexPrefix while the test's cleanup restores them.
+func drainAsyncPool(workers int) {
+	if asyncPool == nil {
+		return
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		asyncPool.Go(wg.Done)
+	}
+	wg.Wait()
+}
+
 func resetSyncGlobals(t *testing.T) {
 	t.Helper()
 	prevPool, prevCtx, prevCancel := asyncPool, syncCtx, syncCancel
 	asyncPool, syncCtx, syncCancel = nil, nil, nil
+
+	// InitSyncWithContext starts ScheduledSyncWithContext as a bare goroutine
+	// that reads the package globals (Client / Enabled / SyncEnabled / Debug)
+	// and offers no join point, so restoring those globals underneath it is a
+	// genuine data race. Its exit log line is the only observable signal, so
+	// gin.DefaultWriter is routed through a mutex-guarded buffer for the
+	// duration and the cleanup waits for that line before restoring.
+	prevWriter := gin.DefaultWriter
+	logBuf := &covSyncLogBuffer{}
+	gin.DefaultWriter = logBuf
+
 	t.Cleanup(func() {
+		workers := WorkerCount
 		if syncCancel != nil {
 			syncCancel()
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) &&
+				!strings.Contains(logBuf.String(), "scheduled sync stopped") {
+				time.Sleep(5 * time.Millisecond)
+			}
+			if !strings.Contains(logBuf.String(), "scheduled sync stopped") {
+				t.Error("scheduled sync goroutine did not stop within 5s of cancellation")
+			}
 		}
+		drainAsyncPool(workers)
+		gin.DefaultWriter = prevWriter
 		asyncPool, syncCtx, syncCancel = prevPool, prevCtx, prevCancel
 	})
 }
