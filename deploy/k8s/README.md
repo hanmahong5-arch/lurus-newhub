@@ -22,16 +22,14 @@ vi secrets.prod.yaml
 ```yaml
 stringData:
   # 数据库连接（参考：重要信息.md → 数据库 PostgreSQL）
-  SQL_DSN: "postgres://lurus:LurusOps2026@100.94.177.10:30543/lurusapi?sslmode=disable"
+  SQL_DSN: "postgres://lurus:<PG_PASSWORD,见 重要信息.md>@100.94.177.10:30543/lurusapi?sslmode=disable"
 
   # 生成新的 Session Secret（⚠️ 不要使用泄露的旧值）
   SESSION_SECRET: "$(openssl rand -base64 32)"
 
   # Alipay 密钥（联系支付团队获取）
   ALIPAY_PRIVATE_KEY: |
-    -----BEGIN RSA PRIVATE KEY-----
-    (从 Alipay 开发者控制台获取)
-    -----END RSA PRIVATE KEY-----
+    <粘贴完整 PEM 私钥内容,从 Alipay 开发者控制台获取>
 
   # OIDC Client ID（参考：重要信息.md → 身份提供方）
   OIDC_CLIENT_ID: "<deploy-time-client-id>"
@@ -82,7 +80,7 @@ kubectl logs -f deployment/lurus-api -n lurus-system
 
 3. **数据库密码保持公司标准**
    - 使用 `重要信息.md` 中的统一密码
-   - 密码: `LurusOps2026`（PostgreSQL lurus 用户）
+   - 密码: `<PG_PASSWORD,见 重要信息.md>`（PostgreSQL lurus 用户）
 
 ### 📖 凭证参考
 
@@ -104,7 +102,7 @@ lurus/
 ### 选项 1: 通过 NodePort（推荐，外部访问）
 
 ```yaml
-SQL_DSN: "postgres://lurus:LurusOps2026@100.94.177.10:30543/lurusapi?sslmode=disable"
+SQL_DSN: "postgres://lurus:<PG_PASSWORD,见 重要信息.md>@100.94.177.10:30543/lurusapi?sslmode=disable"
 ```
 
 - **Host**: `100.94.177.10` (database 服务器 Tailscale IP)
@@ -114,7 +112,7 @@ SQL_DSN: "postgres://lurus:LurusOps2026@100.94.177.10:30543/lurusapi?sslmode=dis
 ### 选项 2: 通过 ClusterIP（生产推荐）
 
 ```yaml
-SQL_DSN: "postgres://lurus:LurusOps2026@lurus-pg-rw.database.svc:5432/lurusapi?sslmode=disable"
+SQL_DSN: "postgres://lurus:<PG_PASSWORD,见 重要信息.md>@lurus-pg-rw.database.svc:5432/lurusapi?sslmode=disable"
 ```
 
 - **Host**: `lurus-pg-rw.database.svc` (K8s Service DNS)
@@ -172,7 +170,7 @@ kubectl exec -it <pod-name> -n lurus-system -- /bin/sh
 nc -zv 100.94.177.10 30543
 
 # 或使用 psql（如果镜像包含）
-psql "postgres://lurus:LurusOps2026@100.94.177.10:30543/lurusapi?sslmode=disable" -c "SELECT 1"
+psql "postgres://lurus:<PG_PASSWORD,见 重要信息.md>@100.94.177.10:30543/lurusapi?sslmode=disable" -c "SELECT 1"
 ```
 
 ### Secret 更新不生效

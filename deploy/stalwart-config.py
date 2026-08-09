@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """Generate Stalwart config and create k8s ConfigMap."""
 
+import os
+
+# Stalwart's [authentication.fallback-admin] password. Real value lives in
+# 重要信息.md / the lurus-newhub K8s Secret. No default — fail loud rather
+# than ever bake the shared ops password into a generated config again.
+FALLBACK_ADMIN_SECRET = os.environ.get("STALWART_FALLBACK_ADMIN_SECRET")
+if not FALLBACK_ADMIN_SECRET:
+    raise SystemExit(
+        "STALWART_FALLBACK_ADMIN_SECRET is not set. Real value is in "
+        "重要信息.md / the lurus-newhub K8s Secret — refusing to generate "
+        "a Stalwart config with no fallback-admin secret."
+    )
+
 config = """[server]
 hostname = "mail.lurus.cn"
 
@@ -58,7 +71,7 @@ enable = true
 
 [authentication.fallback-admin]
 user = "admin"
-secret = "Lurus@ops"
+secret = "__FALLBACK_ADMIN_SECRET__"
 
 [server.http]
 url = "https://mail.lurus.cn"
@@ -71,7 +84,7 @@ directory = [{if = "listener != 'smtp'", then = "'internal'"}, {else = false}]
 require = [{if = "listener != 'smtp'", then = true}, {else = false}]
 must-match-sender = false
 allow-plain-text = false
-"""
+""".replace("__FALLBACK_ADMIN_SECRET__", FALLBACK_ADMIN_SECRET)
 
 with open('/tmp/stalwart-config.toml', 'w') as f:
     f.write(config)

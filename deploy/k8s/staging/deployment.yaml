@@ -95,9 +95,9 @@ spec:
             - name: OIDC_ENABLED
               value: "true"
             - name: OIDC_ISSUER
-              value: "https://auth.lurus.cn"   # OIDC issuer (deploy-time; replace per IdP)
+              value: "https://identity.lurus.cn"   # OIDC issuer (deploy-time; replace per IdP)
             - name: OIDC_JWKS_URI
-              value: "https://auth.lurus.cn/oauth/v2/keys"   # JWKS (prefer discovery jwks_uri)
+              value: "https://identity.lurus.cn/oauth/v2/keys"   # JWKS (prefer discovery jwks_uri)
             - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:

@@ -51,10 +51,20 @@ spec:
               app: lurus-api
       # Resolve the OIDC issuer host to Traefik ClusterIP inside the pod.
       # Avoids hairpin NAT issue when exchanging OIDC tokens with the IdP.
+      # IP re-verified live 2026-08-08 on R1: kube-system/traefik ClusterIP is
+      # still 10.43.175.138, so the rename below needs no IP change.
+      # ⚠️ OWNER-GATED (do not silently trust this alias): R1 Traefik's
+      # Host(`identity.lurus.cn`) route is lurus-platform/platform-core-route →
+      # platform-core:18104, and ns lurus-platform has had no workloads and no
+      # platform-core Service since the shadow stack was retired 2026-06-23 —
+      # the route is dangling. The real identity.lurus.cn IdP answers on R6
+      # behind host nginx, not behind R1 Traefik. Before flipping OIDC_ENABLED
+      # on for real, confirm this alias reaches something that actually serves
+      # /.well-known/openid-configuration, or delete the hostAliases block.
       hostAliases:
-        - ip: "10.43.175.138"  # traefik.kube-system.svc ClusterIP
+        - ip: "10.43.175.138"  # traefik.kube-system.svc ClusterIP (R1, verified 2026-08-08)
           hostnames:
-            - "auth.lurus.cn"
+            - "identity.lurus.cn"
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -113,9 +123,9 @@ spec:
             - name: OIDC_ENABLED
               value: "true"
             - name: OIDC_ISSUER
-              value: "https://auth.lurus.cn"
+              value: "https://identity.lurus.cn"
             - name: OIDC_JWKS_URI
-              value: "https://auth.lurus.cn/oauth/v2/keys"
+              value: "https://identity.lurus.cn/oauth/v2/keys"
             - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:

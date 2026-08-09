@@ -1,0 +1,175 @@
+# gitleaks configuration for 2b-svc-newhub
+#
+# Base = 2c-svc-lucrum's ruleset (internal API key / shared ops password /
+# k8s literal password) fused with 2b-svc-newapi's DSN-with-credentials rule,
+# per the platform-wide 2026-08 secret-scanning rollout. Extends the upstream
+# default ruleset (generic API keys, cloud provider creds, private keys, JWTs).
+#
+# Rotation runbook for the already-leaked values: doc/runbook/credential-rotation.md
+# (root lurus repo) once rotation is scheduled — see the two open findings
+# called out in the rollout report; this file intentionally does NOT
+# allowlist them (DEPLOY.md / deploy/k8s/README.md / doc/runbook/database.md
+# document the live `LurusOps2026` PG password; deploy/stalwart-config.py
+# hardcodes the shared `Lurus@ops` mail admin fallback secret).
+#
+# Run locally:  gitleaks detect --no-git --config .gitleaks.toml --redact -v
+# Staged only:  gitleaks protect --staged --config .gitleaks.toml --redact -v
+
+title = "newhub secret scanning"
+
+[extend]
+useDefault = true
+
+# --- Rule 1: cross-service internal API key (64-hex) ------------------------
+[[rules]]
+id = "lurus-internal-api-key"
+description = "Lurus cross-service internal API key (64-hex) committed in plaintext"
+regex = '''(?i)(lurus[_-]?identity[_-]?internal[_-]?key|internal[_-]?api[_-]?key|lurus[_-]?api[_-]?key)["'\s]*[:=]["'\s]*([a-f0-9]{64})'''
+secretGroup = 2
+keywords = [
+  "lurus_identity_internal_key",
+  "internal_api_key",
+  "lurus_api_key",
+  "lurus-identity-internal-key",
+]
+[rules.allowlist]
+regexes = [
+  '''(?i)(changeme|placeholder|replace[_-]?me|example|dummy|<[^>]+>|\$\{[^}]+\}|\$\([^)]+\)|base64-encoded)''',
+  '''^0{64}$''',
+  '''^f{64}$''',
+]
+
+# --- Rule 2: shared Lurus ops password -------------------------------------
+# Catches raw `Lurus@ops` and the URL-encoded `Lurus%40ops` form. See
+# deploy/stalwart-config.py:61 (real hit, reported not fixed — see rollout report).
+[[rules]]
+id = "lurus-shared-ops-password"
+description = "Shared Lurus infrastructure password (cluster PG / Zitadel admin / Mail) in plaintext"
+regex = '''Lurus(@|%40|%2540)ops'''
+keywords = ["lurus@ops", "lurus%40ops"]
+
+# --- Rule 3: literal password values in k8s Secret / env assignments --------
+[[rules]]
+id = "k8s-literal-password"
+description = "Literal password value assigned to a *_PASSWORD / *_SECRET / *_TOKEN key"
+regex = '''(?i)\b([a-z0-9_-]*(?:password|passwd|secret|token))["'\s]*[:=][ \t]*["']([^"'\s$<{][^"'\n]{7,})["']'''
+secretGroup = 2
+keywords = ["password", "passwd", "secret", "token"]
+[rules.allowlist]
+regexes = [
+  '''(?i)(changeme|placeholder|replace[_-]?me|example|dummy|sample|test[_-]?only|your[_-]|xxx+|redacted|\*{4,})''',
+  '''(\$\{[^}]+\}|\$\([^)]+\)|\{\{[^}]+\}\}|<[^>]+>|base64-encoded)''',
+  '''(?i)(secretKeyRef|valueFrom|secretName|configMapKeyRef)''',
+  # Slug/identifier-shaped values (storage-key names, test fixtures) are not
+  # credentials; real infra passwords carry punctuation and still fire.
+  '''^[A-Za-z0-9_.-]+$''',
+  # Route paths ("/console/token") get caught because the key name contains
+  # "token" — a literal `/`-leading value is a URL path, never a secret.
+  '''^/''',
+]
+
+# --- Rule 4: connection string / DSN with embedded credentials --------------
+# Catches: SQL_DSN: "postgres://lurus:LurusOps2026@100.94.177.10:30543/..."
+[[rules]]
+id = "lurus-dsn-with-credentials"
+description = "Connection string / DSN carrying an embedded username:password"
+regex = '''(?i)\b[a-z][a-z0-9+.-]*://[a-z0-9_.-]+:([^@\s"'/]{6,})@[a-z0-9_.-]+(:[0-9]+)?/'''
+secretGroup = 1
+keywords = [
+  "postgres://", "postgresql://", "mysql://", "redis://", "mongodb://", "amqp://",
+]
+[rules.allowlist]
+regexes = [
+  '''(?i)(changeme|placeholder|replace[_-]?me|replace[_-]?\w*|example|dummy|user|password|localhost|127\.0\.0\.1|<[^>]+>|\$\{[^}]+\}|\$\([^)]+\))''',
+]
+
+# --- Rule 5: relay-style API key (sk- + long alnum / Langfuse pk-lf-/sk-lf-) -
+# Closes the blind spot found 2026-08: a real newapi relay key (sk- + 48
+# alnum) sat in a sibling repo and neither the default ruleset nor rules 1-4
+# above matched it.
+[[rules]]
+id = "lurus-relay-key"
+description = "Lurus newapi/relay style API key (sk- + long alnum) or Langfuse key pair"
+regex = '''\bsk-[A-Za-z0-9]{30,}\b|\b[ps]k-lf-[a-z0-9-]{16,}\b'''
+keywords = ["sk-", "pk-lf-"]
+[rules.allowlist]
+regexes = [
+  # Zero-padded throwaway keys in handler tests (sk-nonexistentkey000...,
+  # sk-doesnotexist000..., sk-enabled000...) — belt-and-suspenders on top of
+  # the global *_test.go path allowlist.
+  '''sk-[A-Za-z]+0{6,}''',
+]
+
+# --- Global allowlist -------------------------------------------------------
+[allowlist]
+description = "Paths / values that never contain live credentials"
+paths = [
+  # dependency / build artifacts
+  '''(^|/)node_modules/''',
+  '''(^|/)\.next/''',
+  '''(^|/)dist/''',
+  '''(^|/)build/''',
+  '''(^|/)coverage/''',
+  '''(^|/)target/''',
+  '''(^|/)html/''',
+  '''\.lock$''',
+  '''(^|/)bun\.lock(b)?$''',
+  '''(^|/)package-lock\.json$''',
+  '''\.(png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot|pdf)$''',
+  # this config necessarily names the patterns it hunts for
+  '''(^|/)\.gitleaks\.toml$''',
+  '''(^|/)gitleaks\.sarif$''',
+  '''(^|/)gitleaks-report\.json$''',
+  # git internals / operator scratch worktrees — not source, huge + slow to walk
+  '''(^|/)\.git/''',
+  '''(^|/)\.claude/worktrees/''',
+  # Test fixtures: assertions need literal throwaway credentials.
+  '''(^|/)__tests__/''',
+  '''(^|/)tests?/''',
+  '''(^|/)e2e/''',
+  '''\.(test|spec)\.[jt]sx?$''',
+  '''(^|/)test_[^/]+\.py$''',
+  '''[^/]+_test\.(go|py)$''',
+  '''(^|/)playwright-report/''',
+  '''(^|/)test-results/''',
+  # UI translation strings — key/value pairs like "Discord Client Secret":
+  # "Discord Client Secret" are i18n labels, not credentials.
+  '''(^|/)web/src/i18n/locales/''',
+  # local/dev-only env files with fixed weak dev passwords (root:123456 etc);
+  # real production creds live in the gitignored root 重要信息.md, never here.
+  '''(^|/)\.env$''',
+  '''(^|/)\.env\.dev$''',
+  '''(^|/)\.env\.demo$''',
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.env\.meilisearch\.example$''',
+  '''(^|/)\.env\.oidc\.example$''',
+  # local/CI orchestration fixtures — bare docker-network service DNS names
+  # ("postgres", not a routable host) with fixed dev-only passwords.
+  '''(^|/)docker-compose[\w.-]*\.yml$''',
+  '''(^|/)\.github/workflows/''',
+  # generic MySQL->Postgres migration tool docs — vendor example DSNs,
+  # no Lurus infra referenced (all localhost / "user:pass" placeholders).
+  '''(^|/)scripts/migrate/''',
+  # demo showcase script, not a deployed service
+  '''(^|/)demo/''',
+  # planning/decision docs: commit hashes and image-tag fragments read as
+  # high-entropy "generic-api-key" false positives; real creds are never
+  # sourced from here per repo convention (see 重要信息.md).
+  '''(^|/)_bmad-output/''',
+  '''(^|/)doc/decisions/''',
+  '''(^|/)doc/contracts/''',
+  # PEM-marker string manipulation utility (strips headers from a caller-
+  # supplied Vertex AI service-account JSON) — no embedded key material.
+  '''(^|/)internal/adapter/provider/vertex/service_account\.go$''',
+  # GitHub's own private-vulnerability-reporting issue template boilerplate
+  # ships a signed example JWT — not a Lurus secret.
+  '''(^|/)\.github/ISSUE_TEMPLATE/''',
+]
+regexes = [
+  '''(?i)placeholder''',
+  '''example\.com''',
+  # jimeng model-id enum values (e.g. "jimeng_vgfm_t2v_l20"), not secrets
+  '''^jimeng_[a-z0-9_]+$''',
+  # sequential charset used to *generate* random keys, not a key itself
+  '''^0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$''',
+]

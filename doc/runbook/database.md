@@ -1,6 +1,6 @@
 # Database Runbook
 
-> PostgreSQL 15 · Host `100.94.177.10:30543` · DB `lurusapi` · DSN `postgres://lurus:LurusOps2026@100.94.177.10:30543/lurusapi?sslmode=disable`
+> PostgreSQL 15 · Host `100.94.177.10:30543` · DB `lurusapi` · DSN `postgres://lurus:<PG_PASSWORD,见 重要信息.md>@100.94.177.10:30543/lurusapi?sslmode=disable`
 
 ## Connection
 
