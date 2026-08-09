@@ -94,11 +94,17 @@ func GroupRatio2JSONString() string {
 }
 
 func UpdateGroupRatioByJSONString(jsonStr string) error {
+	// 同 UpdateModelRatioByJSONString：解析失败不得破坏已生效的分组倍率。
+	tmp := make(map[string]float64)
+	if err := json.Unmarshal([]byte(jsonStr), &tmp); err != nil {
+		return err
+	}
+
 	groupRatioMutex.Lock()
 	defer groupRatioMutex.Unlock()
 
-	groupRatio = make(map[string]float64)
-	return json.Unmarshal([]byte(jsonStr), &groupRatio)
+	groupRatio = tmp
+	return nil
 }
 
 func GetGroupRatio(name string) float64 {
@@ -140,11 +146,17 @@ func GroupGroupRatio2JSONString() string {
 }
 
 func UpdateGroupGroupRatioByJSONString(jsonStr string) error {
+	// 同 UpdateModelRatioByJSONString：解析失败不得破坏已生效的分组间倍率。
+	tmp := make(map[string]map[string]float64)
+	if err := json.Unmarshal([]byte(jsonStr), &tmp); err != nil {
+		return err
+	}
+
 	groupGroupRatioMutex.Lock()
 	defer groupGroupRatioMutex.Unlock()
 
-	GroupGroupRatio = make(map[string]map[string]float64)
-	return json.Unmarshal([]byte(jsonStr), &GroupGroupRatio)
+	GroupGroupRatio = tmp
+	return nil
 }
 
 func CheckGroupRatio(jsonStr string) error {

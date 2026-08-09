@@ -16,6 +16,11 @@ import (
 var RDB *redis.Client
 var RedisEnabled = true
 
+// redisTTLNoExpire 是 TTL 命令对「key 存在但没有过期时间」的返回值（-2 表示 key
+// 不存在）。这类 key 仍必须照常写入，只是不需要重设过期时间；否则对持久化 key
+// 的自增/写入会被静默丢弃（限流计数、配额缓存等因此失效）。
+const redisTTLNoExpire = time.Duration(-1)
+
 func RedisKeyCacheSeconds() int {
 	return SyncFrequency
 }
@@ -272,6 +277,11 @@ func RedisIncr(ctx context.Context, key string, delta int64) error {
 		_, err = txn.Exec(ctx)
 		return err
 	}
+
+	// key 存在但没有过期时间：直接自增，不需要事务重设 TTL
+	if ttl == redisTTLNoExpire {
+		return RDB.IncrBy(ctx, key, delta).Err()
+	}
 	return nil
 }
 
@@ -298,6 +308,11 @@ func RedisHIncrBy(ctx context.Context, key, field string, delta int64) error {
 		_, err = txn.Exec(ctx)
 		return err
 	}
+
+	// key 存在但没有过期时间：直接自增，不需要事务重设 TTL
+	if ttl == redisTTLNoExpire {
+		return RDB.HIncrBy(ctx, key, field, delta).Err()
+	}
 	return nil
 }
 
@@ -323,6 +338,11 @@ func RedisHSetField(ctx context.Context, key, field string, value interface{}) e
 
 		_, err = txn.Exec(ctx)
 		return err
+	}
+
+	// key 存在但没有过期时间：直接写入字段，不需要事务重设 TTL
+	if ttl == redisTTLNoExpire {
+		return RDB.HSet(ctx, key, field, value).Err()
 	}
 	return nil
 }

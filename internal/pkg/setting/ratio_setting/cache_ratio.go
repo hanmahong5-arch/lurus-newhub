@@ -107,14 +107,16 @@ func CacheRatio2JSONString() string {
 
 // UpdateCacheRatioByJSONString updates the cache ratio map from a JSON string
 func UpdateCacheRatioByJSONString(jsonStr string) error {
-	cacheRatioMapMutex.Lock()
-	defer cacheRatioMapMutex.Unlock()
-	cacheRatioMap = make(map[string]float64)
-	err := json.Unmarshal([]byte(jsonStr), &cacheRatioMap)
-	if err == nil {
-		InvalidateExposedDataCache()
+	// 同 UpdateModelRatioByJSONString：解析失败不得破坏已生效的缓存倍率。
+	tmp := make(map[string]float64)
+	if err := json.Unmarshal([]byte(jsonStr), &tmp); err != nil {
+		return err
 	}
-	return err
+	cacheRatioMapMutex.Lock()
+	cacheRatioMap = tmp
+	cacheRatioMapMutex.Unlock()
+	InvalidateExposedDataCache()
+	return nil
 }
 
 // GetCacheRatio returns the cache ratio for a model

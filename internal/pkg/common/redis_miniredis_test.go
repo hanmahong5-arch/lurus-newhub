@@ -88,15 +88,17 @@ func TestRedisIncr_PreservesTTL(t *testing.T) {
 		t.Errorf("TTL not preserved: %v", ttl)
 	}
 
-	// A key with no TTL (persistent) takes the no-op branch: value unchanged.
+	// A key with no TTL (persistent) is still incremented — it just keeps having
+	// no expiry (see fix_redis_incr_ttl_test.go: skipping it silently dropped
+	// the write).
 	if err := RDB.Set(ctx, "ctr2", 3, 0).Err(); err != nil {
 		t.Fatalf("seed2: %v", err)
 	}
 	if err := RedisIncr(ctx, "ctr2", 5); err != nil {
 		t.Fatalf("RedisIncr no-ttl: %v", err)
 	}
-	if v, _ := RDB.Get(ctx, "ctr2").Int64(); v != 3 {
-		t.Errorf("no-ttl key should be untouched, got %d", v)
+	if v, _ := RDB.Get(ctx, "ctr2").Int64(); v != 8 {
+		t.Errorf("no-ttl key should be incremented, got %d", v)
 	}
 }
 

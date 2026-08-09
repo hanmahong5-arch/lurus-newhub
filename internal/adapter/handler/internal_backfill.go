@@ -56,6 +56,11 @@ func InternalBackfillTokenAccountIDs(c *gin.Context) {
 			if err != nil || account == nil {
 				continue
 			}
+			// 账号 ID <= 0 是无法写入 token 的退化结果（下方更新循环同样拒绝），
+			// 不能计入 users_matched，否则匹配数与实际回填数失真。
+			if account.ID <= 0 {
+				continue
+			}
 			userToAccount[userID] = account.ID
 			break
 		}

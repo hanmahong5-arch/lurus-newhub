@@ -479,6 +479,8 @@
         "quota_type_token": "pay-as-you-go (token)",
         "quota_type_times": "pay-per-call",
         "field_ratio": "model ratio",
+        "field_price": "price per call",
+        "price_required": "Price per call is required for pay-per-call billing",
         "adding": "adding…",
         "add": "add"
       },

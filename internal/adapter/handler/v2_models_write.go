@@ -19,13 +19,23 @@ For commercial licensing, please contact support@quantumnous.com
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
+)
+
+// Billing type of a catalogue model. It is not stored on the model row: it is
+// derived by repo.GetPricing from whether the model has a per-call price entry
+// (price present => 1, otherwise the token ratio applies => 0).
+const (
+	createModelQuotaTypePerToken = 0
+	createModelQuotaTypePerCall  = 1
 )
 
 // createModelV2Req is the whitelist input struct for POST /api/v2/:tenant_slug/models.
@@ -84,6 +94,45 @@ func CreateModelV2(c *gin.Context) {
 		return
 	}
 
+	// Pricing validation — reject anything that cannot be honoured instead of
+	// accepting it and dropping it on the floor (the caller would then believe
+	// the model bills at the submitted rate while it falls back to the global
+	// default). Zero means "not supplied".
+	if req.ModelRatio < 0 || req.CompletionRatio < 0 || req.ModelPrice < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "model_ratio, completion_ratio and model_price must be > 0",
+			"error_code": "INVALID_RATIO",
+		})
+		return
+	}
+	if req.QuotaType != createModelQuotaTypePerToken && req.QuotaType != createModelQuotaTypePerCall {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "quota_type must be 0 (per token) or 1 (per call)",
+			"error_code": "INVALID_QUOTA_TYPE",
+		})
+		return
+	}
+	if req.QuotaType == createModelQuotaTypePerCall && req.ModelPrice <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "model_price is required when quota_type is 1 (per call)",
+			"error_code": "MISSING_MODEL_PRICE",
+		})
+		return
+	}
+	// enable_groups is derived from the channels that serve the model, it has no
+	// write path here — accepting it silently would be a lie.
+	if len(req.EnableGroups) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "enable_groups cannot be set on model creation; it is derived from the channels serving the model",
+			"error_code": "ENABLE_GROUPS_UNSUPPORTED",
+		})
+		return
+	}
+
 	// Duplicate name check — model names are globally unique (not per-tenant).
 	if dup, err := repo.IsModelNameDuplicated(0, req.ModelName); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -123,6 +172,20 @@ func CreateModelV2(c *gin.Context) {
 		return
 	}
 
+	// Persist the submitted pricing. The model row has no ratio/price columns —
+	// pricing lives in the ratio settings, keyed by model name.
+	if err := persistCreatedModelPricing(&req); err != nil {
+		// Roll back the catalogue row so the caller can retry the whole create
+		// instead of being left with a model billing at the global default.
+		_ = repo.ModelDelete(m)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success":    false,
+			"message":    "failed to persist model pricing: " + err.Error(),
+			"error_code": "PRICING_PERSIST_FAILED",
+		})
+		return
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
 		"data": modelV2View{
@@ -133,6 +196,45 @@ func CreateModelV2(c *gin.Context) {
 			CreatedTime: m.CreatedTime,
 		},
 	})
+}
+
+// persistCreatedModelPricing stores the pricing submitted alongside a model
+// creation. entity.Model has no ratio/price columns — pricing lives in the
+// ratio settings keyed by model name. Fields left at zero keep the platform
+// default (family markup / self-use fallback).
+func persistCreatedModelPricing(req *createModelV2Req) error {
+	if req.ModelRatio > 0 {
+		ratios := ratio_setting.GetModelRatioCopy()
+		ratios[req.ModelName] = req.ModelRatio
+		if err := saveCreatedModelRatioOption("ModelRatio", ratios); err != nil {
+			return err
+		}
+	}
+	if req.CompletionRatio > 0 {
+		ratios := ratio_setting.GetCompletionRatioCopy()
+		ratios[req.ModelName] = req.CompletionRatio
+		if err := saveCreatedModelRatioOption("CompletionRatio", ratios); err != nil {
+			return err
+		}
+	}
+	if req.ModelPrice > 0 {
+		prices := ratio_setting.GetModelPriceCopy()
+		prices[req.ModelName] = req.ModelPrice
+		if err := saveCreatedModelRatioOption("ModelPrice", prices); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// saveCreatedModelRatioOption persists one ratio map. repo.UpdateOption writes
+// the option row and refreshes the matching in-memory ratio map.
+func saveCreatedModelRatioOption(optionKey string, ratioMap map[string]float64) error {
+	jsonBytes, err := json.Marshal(ratioMap)
+	if err != nil {
+		return err
+	}
+	return repo.UpdateOption(optionKey, string(jsonBytes))
 }
 
 // DeleteModelV2 handles DELETE /api/v2/:tenant_slug/models/:id.

@@ -516,6 +516,12 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 					parts = append(parts, dto.GeminiPart{
 						Text: part.Text,
 					})
+				} else if text != "" {
+					// 最后一张图片之后的尾部文本（或提前 break 时未处理的剩余文本）
+					// 必须保留，否则会静默截断用户提示词
+					parts = append(parts, dto.GeminiPart{
+						Text: text,
+					})
 				}
 			} else if part.Type == dto.ContentTypeImageURL {
 				imageNum += 1

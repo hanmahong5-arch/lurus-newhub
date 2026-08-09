@@ -479,6 +479,8 @@
         "quota_type_token": "按量 (token)",
         "quota_type_times": "按次",
         "field_ratio": "模型倍率",
+        "field_price": "按次单价",
+        "price_required": "按次计费必须填写单价",
         "adding": "添加中…",
         "add": "添加"
       },

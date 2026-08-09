@@ -116,6 +116,10 @@ func ConvertDocumentToLog(doc *LogDocument) *Log {
 		ChannelName:      doc.ChannelName,
 		Group:            doc.Group,
 		Ip:               doc.IP,
+		ChannelType:      doc.ChannelType,
+		RelayMode:        doc.RelayMode,
+		UpstreamModel:    doc.UpstreamModel,
+		TotalLatencyMs:   doc.TotalLatencyMs,
 	}
 }
 
