@@ -107,12 +107,13 @@ jobs:
   coverage-gate:
     name: coverage gate (app/repo/handler baselines)
     runs-on: ubuntu-latest
-    # Thresholds are CURRENT BASELINE (ratcheted 2026-05-31) — not aspirational.
+    # Thresholds are CURRENT BASELINE (ratcheted 2026-08-09) — not aspirational.
     # They prevent regression. Raise them in the same PR that lifts the underlying
     # coverage (ratchet upward, never downward), with a measured before/after in
     # the commit. Each check_pkg line carries the measured actual + its buffer.
-    # See Wave-UAT ADR for why the plan's 80/60/50 targets aren't reachable in
-    # hermetic tests today.
+    # The Wave-UAT ADR's "80/60/50 aren't reachable in hermetic tests" no longer
+    # holds: the 2026-07-25 coverage corpus (PR #72) put all three past it
+    # hermetically. Reconciled here and in doc/uat-handbook.md §4 on 2026-08-09.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -176,9 +177,15 @@ jobs:
             fi
           }
 
-          check_pkg "internal/app"             25 "internal/app"             # actual 27.0% (2026-05-31); +2pt buffer
-          check_pkg "internal/adapter/repo"    59 "internal/adapter/repo"    # actual 60.9%; +1.9pt buffer
-          check_pkg "internal/adapter/handler" 48 "internal/adapter/handler" # actual 52.8% (2026-07-20, hermetic -short no-DSN, measured on origin/main base). Prior "20.0%/19" was ~32pt stale below reality; +cover_uplift_{analytics,presets,internal}_test.go lifted 51.1%->52.8% (log/usedata/pricing/prefill/secure-verify/internal-log). 48 = 52.8-4.8pt buffer.
+          # 2026-08-09 ratchet. Actuals measured by THIS job on the tree that
+          # became main 7c23ec7f (run 31304357298, job 93222205583 — the #72
+          # merge-with-main run), not projected from a feature branch:
+          #   internal/app 88.4% · internal/adapter/repo 64.3% · internal/adapter/handler 69.1%
+          # Lifted by the 232-file 2026-07-25 coverage corpus (#72) landing on
+          # top of the #70 defect fixes. Before: 25 / 59 / 48.
+          check_pkg "internal/app"             84 "internal/app"             # actual 88.4% (2026-08-09); 84 = 88.4-4.4pt buffer. Was 25 vs an actual 27.0% from 2026-05-31 — a 61pt dead zone once the corpus landed.
+          check_pkg "internal/adapter/repo"    62 "internal/adapter/repo"    # actual 64.3% (2026-08-09); 62 = 64.3-2.3pt buffer. Smallest lift of the three: repo's hermetic ceiling is low because the PG-only tests skip without TEST_POSTGRES_DSN in this job (they run in the pg-integration job instead, which is not coverage-gated).
+          check_pkg "internal/adapter/handler" 64 "internal/adapter/handler" # actual 69.1% (2026-08-09); 64 = 69.1-5.1pt buffer, keeping the wider buffer this package has carried since 2026-07-20 (it has the most cross-test global state). Prior: 48 from a 52.8% measurement.
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""
