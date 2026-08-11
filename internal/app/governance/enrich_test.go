@@ -226,3 +226,65 @@ func TestEnrichLogParams_NoClientIPInOther(t *testing.T) {
 		t.Error("client_ip should NOT be in Other map (privacy: controlled by RecordIpLog setting)")
 	}
 }
+
+// ── Cost attribution (migration 029) ─────────────────────────────────────────
+//
+// EnrichLogParams is the single chokepoint every RecordConsumeLog call site
+// passes through, so it is the only place project attribution has to be wired.
+// A log row that leaves here without its project is permanently unattributable
+// — attribution cannot be backfilled.
+
+func TestEnrichLogParams_ProjectIdFromRelayInfo(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{
+		StartTime: time.Now(),
+		ProjectId: 42,
+	}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if params.ProjectId != 42 {
+		t.Errorf("ProjectId = %d, want 42 (RelayInfo is the primary source — settlement has no gin.Context)", params.ProjectId)
+	}
+}
+
+func TestEnrichLogParams_ProjectIdFallsBackToContext(t *testing.T) {
+	c := newTestContext()
+	// Relay paths that assemble a RelayInfo without genBaseRelayInfo leave
+	// ProjectId at 0; the gin context set by SetupContextForToken is the
+	// fallback.
+	c.Set(string(constant.ContextKeyProjectId), 7)
+	info := &relaycommon.RelayInfo{StartTime: time.Now()}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if params.ProjectId != 7 {
+		t.Errorf("ProjectId = %d, want 7 (context fallback)", params.ProjectId)
+	}
+}
+
+func TestEnrichLogParams_ProjectIdRelayInfoWinsOverContext(t *testing.T) {
+	c := newTestContext()
+	c.Set(string(constant.ContextKeyProjectId), 7)
+	info := &relaycommon.RelayInfo{StartTime: time.Now(), ProjectId: 42}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if params.ProjectId != 42 {
+		t.Errorf("ProjectId = %d, want 42 (RelayInfo must win — it is the settlement-path source of truth)", params.ProjectId)
+	}
+}
+
+func TestEnrichLogParams_ProjectIdUnassignedStaysZero(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now()}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	// 0 is a legitimate first-class value ("unassigned"). Substituting
+	// anything else would break the invariant that per-project spend sums to
+	// the tenant total — unlike SourceProduct, which DOES have a default.
+	if params.ProjectId != 0 {
+		t.Errorf("ProjectId = %d, want 0 — unassigned must stay unassigned, not be defaulted", params.ProjectId)
+	}
+}

@@ -55,6 +55,13 @@ func setupSQLiteDB(t *testing.T) func() {
 		&PlaygroundPreset{},
 		&Vendor{},
 		&OpenRouterSyncJob{},
+		// NOTE: AutoMigrate creates `projects` WITHOUT the partial unique
+		// index — GORM cannot express `WHERE deleted_at IS NULL`, so that
+		// index exists only in migration 029. The uniqueness DDL is proven in
+		// internal/pkg/migration/projects_pg_test.go; what these tests
+		// exercise is CreateProject's explicit pre-check, which is what
+		// guarantees the behaviour on every dialect.
+		&entity.Project{},
 	}
 	for _, tbl := range tables {
 		if err := db.AutoMigrate(tbl); err != nil {

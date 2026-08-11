@@ -103,6 +103,12 @@ type RelayInfo struct {
 	// fall back to the default product id). Carried here because the wallet
 	// settlement path (PostConsumeQuota) has no gin.Context.
 	SourceProduct          string
+	// ProjectId is the cost-attribution project of the authenticated token
+	// (migration 029); 0 = unassigned. Carried here for the same reason as
+	// SourceProduct above: the settlement path (PostConsumeQuota ->
+	// EnrichLogParams -> RecordConsumeLog) has no gin.Context to read from.
+	// It is a label, never an authorization input.
+	ProjectId              int
 	RequestURLPath         string
 	ShouldIncludeUsage     bool
 	DisablePing            bool // 是否禁止向下游发送自定义 Ping
@@ -430,6 +436,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		TokenKey:       common.GetContextKeyString(c, constant.ContextKeyTokenKey),
 		TokenUnlimited: common.GetContextKeyBool(c, constant.ContextKeyTokenUnlimited),
 		TokenGroup:     tokenGroup,
+		ProjectId:      common.GetContextKeyInt(c, constant.ContextKeyProjectId),
 
 		isFirstResponse: true,
 		RelayMode:       relayconstant.Path2RelayMode(c.Request.URL.Path),

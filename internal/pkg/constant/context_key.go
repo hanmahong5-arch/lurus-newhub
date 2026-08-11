@@ -24,6 +24,11 @@ const (
 	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
+	// ContextKeyProjectId carries the authenticated token's cost-attribution
+	// project (migration 029). 0 = unassigned. Set by SetupContextForToken and
+	// copied into RelayInfo.ProjectId, because the settlement path has no
+	// gin.Context. A label, not an authorization claim — never gate on it.
+	ContextKeyProjectId ContextKey = "project_id"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"

@@ -1,26 +1,57 @@
 package app
 
 import (
+	"fmt"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
-	"github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
+
+// serviceTestDBCounter gives every setupServiceTestDB call its own named
+// database, matching the idiom already used by openChainDB in
+// internal/app/governance and by the handler-package helpers.
+var serviceTestDBCounter atomic.Int64
 
 // setupServiceTestDB creates an in-memory SQLite database with all required
 // tables for service-layer tests that need DB access. It wires the global
 // repo.DB and repo.LOG_DB, and restores them on cleanup.
+//
+// The DSN is a NAMED shared-cache database, not a bare ":memory:", and the
+// pool is pinned to a single connection. Both matter:
+//
+// A bare ":memory:" gives every CONNECTION its own private, empty database.
+// database/sql hands out a pool, so a test could seed its rows on one
+// connection and then have the code under test open a second one and find no
+// tables at all — "SQL logic error: no such table: release_artifacts" from a
+// test that had just successfully inserted into release_artifacts. It only
+// bites when the pool actually grows, which is why it read as an unrelated
+// flake and surfaced under -race (different timing, more concurrent work) far
+// more often than in a plain run.
+//
+// mode=memory&cache=shared makes all connections address the same database;
+// the unique counter keeps tests from colliding with each other; and
+// SetMaxOpenConns(1) serialises access so shared-cache cannot return
+// SQLITE_BUSY to the async writers some of these services spawn.
 func setupServiceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:appservice%d?mode=memory&cache=shared", serviceTestDBCounter.Add(1))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open in-memory sqlite: %v", err)
 	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("failed to get sql.DB handle: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 
 	err = db.AutoMigrate(
 		&repo.User{},

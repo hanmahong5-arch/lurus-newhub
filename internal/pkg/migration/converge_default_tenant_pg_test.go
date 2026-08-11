@@ -237,8 +237,14 @@ func TestIntegration022_FreshPG_NoOp(t *testing.T) {
 
 	runOnly022(t, db)
 
-	if n := scalarInt(t, db, `SELECT count(*) FROM tenants`); n != 1 {
-		t.Errorf("tenants rows = %d, want 1 (no-op must not add rows)", n)
+	// Scoped to the ids 022 can produce, NOT `count(*) FROM tenants`: runOnly022
+	// runs every migration from 022 up, and 030 legitimately seeds an unrelated
+	// `switch` tenant. An unqualified count silently turns "022 stayed a no-op"
+	// into "no later migration ever inserts a tenant", which is not this test's
+	// claim and breaks the next time anything seeds one.
+	if n := scalarInt(t, db,
+		`SELECT count(*) FROM tenants WHERE id IN ('default', 'lurus', 'lurus-default')`); n != 1 {
+		t.Errorf("bootstrap tenant rows = %d, want 1 (no-op must not add rows)", n)
 	}
 	if n := scalarInt(t, db, `SELECT count(*) FROM tenants WHERE id = 'default'`); n != 1 {
 		t.Errorf("canonical tenant rows = %d, want 1", n)

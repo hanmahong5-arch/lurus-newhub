@@ -27,6 +27,22 @@ type Log struct {
 	RequestFingerprint string `json:"request_fingerprint" gorm:"type:varchar(16);default:'';index:idx_gov_fingerprint"`
 	UpstreamModel      string `json:"upstream_model" gorm:"type:varchar(128);default:''"`
 	TotalLatencyMs     int    `json:"total_latency_ms" gorm:"default:0"`
+	// ProjectId is the cost-attribution dimension between tenant and token
+	// (migration 029), copied from the token that produced this row.
+	// 0 = unassigned (entity.ProjectUnassigned) — never NULL, so per-project
+	// aggregates need no COALESCE and always sum to the tenant total.
+	//
+	// NO `index:` tag, deliberately. GORM emits a plain CREATE INDEX (never
+	// CONCURRENTLY) during AutoMigrate; on the largest table in the schema
+	// that takes a ShareLock and blocks every INSERT — including the relay's
+	// own consume-log writes — and it runs inside
+	// withPGAdvisoryLock(bootAutoMigrateLockID, migrateDB) on every
+	// master-capable replica of every rolling update. CREATE INDEX
+	// CONCURRENTLY is structurally impossible in the embedded runner too
+	// (applyOne wraps each file body in one transaction; PG rejects CIC
+	// inside a transaction). Adding this index later is therefore an
+	// operational step under MIGRATIONS_AUTO_RUN=false, not a struct tag.
+	ProjectId int `json:"project_id" gorm:"not null;default:0"`
 }
 
 // don't use iota, avoid change log type value
@@ -58,7 +74,11 @@ type RecordConsumeLogParams struct {
 	RequestFingerprint string                 `json:"request_fingerprint"`
 	UpstreamModel      string                 `json:"upstream_model"`
 	TotalLatencyMs     int                    `json:"total_latency_ms"`
-	LogDetailLevel     string                 `json:"-"` // Governance: "none" skips logging, "full" adds prompt preview
+	// ProjectId carries the token's project attribution to the log row.
+	// Filled by governance.EnrichLogParams — the single chokepoint every
+	// RecordConsumeLog call site passes through. 0 = unassigned.
+	ProjectId      int    `json:"project_id"`
+	LogDetailLevel string `json:"-"` // Governance: "none" skips logging, "full" adds prompt preview
 }
 
 // LogQueryParams contains parameters for log queries
