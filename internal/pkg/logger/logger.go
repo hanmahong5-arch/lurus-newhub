@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -20,14 +21,14 @@ import (
 
 const maxLogCount = 1000000
 
-var logCount int
+var logCount atomic.Int64
 var setupLogLock sync.Mutex
-var setupLogWorking bool
+var setupLogWorking atomic.Bool
 
 // SetupLogger configures file-based logging with rotation
 func SetupLogger() {
 	defer func() {
-		setupLogWorking = false
+		setupLogWorking.Store(false)
 	}()
 	if *common.LogDir != "" {
 		ok := setupLogLock.TryLock()
@@ -85,10 +86,13 @@ func LogDebug(ctx context.Context, msg string, args ...any) {
 
 // checkLogRotation checks if log rotation is needed
 func checkLogRotation() {
-	logCount++ // we don't need accurate count, so no lock here
-	if logCount > maxLogCount && !setupLogWorking {
-		logCount = 0
-		setupLogWorking = true
+	if logCount.Add(1) <= maxLogCount {
+		return
+	}
+	// 越过阈值就归零：轮转已在进行时若不归零，计数会随每条日志无界增长。
+	logCount.Store(0)
+	// 只有抢到标志位的调用方才启动轮转，避免并发重复触发。
+	if setupLogWorking.CompareAndSwap(false, true) {
 		gopool.Go(func() {
 			SetupLogger()
 		})

@@ -135,11 +135,13 @@ func (r *GeneralOpenAIRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	for _, message := range r.Messages {
 		tokenCountMeta.MessagesCount++
 		texts = append(texts, message.Role)
+		// Name is billed independently of Content — a message may carry a name
+		// with no content at all, and those tokens still reach the upstream.
+		if message.Name != nil {
+			tokenCountMeta.NameCount++
+			texts = append(texts, *message.Name)
+		}
 		if message.Content != nil {
-			if message.Name != nil {
-				tokenCountMeta.NameCount++
-				texts = append(texts, *message.Name)
-			}
 			arrayContent := message.ParseContent()
 			for _, m := range arrayContent {
 				if m.Type == ContentTypeImageURL {
@@ -977,6 +979,9 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 					case "input_image":
 						// image_url may be string or object with url field
 						var imageUrl string
+						// detail may sit on the item itself (Responses API shape)
+						// or inside the image_url object (chat-completions shape)
+						var detail string
 						switch v := item["image_url"].(type) {
 						case string:
 							imageUrl = v
@@ -984,8 +989,15 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 							if url, ok := v["url"].(string); ok {
 								imageUrl = url
 							}
+							if d, ok := v["detail"].(string); ok {
+								detail = d
+							}
 						}
-						mediaInputs = append(mediaInputs, MediaInput{Type: "input_image", ImageUrl: imageUrl})
+						// item-level detail is the canonical Responses API field, it wins
+						if d, ok := item["detail"].(string); ok {
+							detail = d
+						}
+						mediaInputs = append(mediaInputs, MediaInput{Type: "input_image", ImageUrl: imageUrl, Detail: detail})
 					case "input_file":
 						// file_url may be string or object with url field
 						var fileUrl string

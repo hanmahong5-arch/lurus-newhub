@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -249,7 +250,9 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	}
 	for i, message := range textRequest.Messages {
 		if message.Role == "" {
-			textRequest.Messages[i].Role = "user"
+			// message 是 range 拷贝，两侧都要写，否则下游拿到的仍是空 role
+			message.Role = "user"
+			textRequest.Messages[i].Role = message.Role
 		}
 		fmtMessage := dto.Message{
 			Role:    message.Role,
@@ -437,6 +440,9 @@ func StreamResponseClaude2OpenAI(reqMode int, claudeResponse *dto.ClaudeResponse
 		}
 	} else {
 		if claudeResponse.Type == "message_start" {
+			if claudeResponse.Message == nil {
+				return nil
+			}
 			response.Id = claudeResponse.Message.Id
 			response.Model = claudeResponse.Message.Model
 			//claudeUsage = &claudeResponse.Message.Usage
@@ -593,6 +599,10 @@ func FormatClaudeResponseInfo(requestMode int, claudeResponse *dto.ClaudeRespons
 		claudeInfo.ResponseText.WriteString(claudeResponse.Completion)
 	} else {
 		if claudeResponse.Type == "message_start" {
+			// message / usage 都是 omitempty 可选字段，缺失时按未知事件处理
+			if claudeResponse.Message == nil || claudeResponse.Message.Usage == nil {
+				return false
+			}
 			claudeInfo.ResponseId = claudeResponse.Message.Id
 			claudeInfo.Model = claudeResponse.Message.Model
 
@@ -604,6 +614,9 @@ func FormatClaudeResponseInfo(requestMode int, claudeResponse *dto.ClaudeRespons
 			claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Message.Usage.GetCacheCreation1hTokens()
 			claudeInfo.Usage.CompletionTokens = claudeResponse.Message.Usage.OutputTokens
 		} else if claudeResponse.Type == "content_block_delta" {
+			if claudeResponse.Delta == nil {
+				return false
+			}
 			if claudeResponse.Delta.Text != nil {
 				claudeInfo.ResponseText.WriteString(*claudeResponse.Delta.Text)
 			}
@@ -612,12 +625,14 @@ func FormatClaudeResponseInfo(requestMode int, claudeResponse *dto.ClaudeRespons
 			}
 		} else if claudeResponse.Type == "message_delta" {
 			// 最终的usage获取
-			if claudeResponse.Usage.InputTokens > 0 {
-				// 不叠加，只取最新的
-				claudeInfo.Usage.PromptTokens = claudeResponse.Usage.InputTokens
+			if usage := claudeResponse.Usage; usage != nil {
+				if usage.InputTokens > 0 {
+					// 不叠加，只取最新的
+					claudeInfo.Usage.PromptTokens = usage.InputTokens
+				}
+				claudeInfo.Usage.CompletionTokens = usage.OutputTokens
+				claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
 			}
-			claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
-			claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
 
 			// 判断是否完整
 			claudeInfo.Done = true
@@ -651,7 +666,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		} else {
 			if claudeResponse.Type == "message_start" {
 				// message_start, 获取usage
-				info.UpstreamModelName = claudeResponse.Message.Model
+				if claudeResponse.Message != nil {
+					info.UpstreamModelName = claudeResponse.Message.Model
+				}
 			} else if claudeResponse.Type == "content_block_delta" {
 			} else if claudeResponse.Type == "message_delta" {
 			}
@@ -738,13 +755,18 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if requestMode == RequestModeCompletion {
 		claudeInfo.Usage = app.ResponseText2Usage(c, claudeResponse.Completion, info.UpstreamModelName, info.GetEstimatePromptTokens())
 	} else {
-		claudeInfo.Usage.PromptTokens = claudeResponse.Usage.InputTokens
-		claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
-		claudeInfo.Usage.TotalTokens = claudeResponse.Usage.InputTokens + claudeResponse.Usage.OutputTokens
-		claudeInfo.Usage.PromptTokensDetails.CachedTokens = claudeResponse.Usage.CacheReadInputTokens
-		claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
-		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
-		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
+		// usage 是 omitempty 可选字段，上游返回成功结构但缺 usage 时不能直接解引用
+		usage := claudeResponse.Usage
+		if usage == nil {
+			return types.NewError(errors.New("upstream response missing usage"), types.ErrorCodeBadResponseBody)
+		}
+		claudeInfo.Usage.PromptTokens = usage.InputTokens
+		claudeInfo.Usage.CompletionTokens = usage.OutputTokens
+		claudeInfo.Usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+		claudeInfo.Usage.PromptTokensDetails.CachedTokens = usage.CacheReadInputTokens
+		claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = usage.CacheCreationInputTokens
+		claudeInfo.Usage.ClaudeCacheCreation5mTokens = usage.GetCacheCreation5mTokens()
+		claudeInfo.Usage.ClaudeCacheCreation1hTokens = usage.GetCacheCreation1hTokens()
 	}
 	var responseData []byte
 	switch info.RelayFormat {
@@ -759,8 +781,9 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		responseData = data
 	}
 
-	if claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
-		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
+	// completion 模式下上游不返回顶层 usage，此处必须判空
+	if usage := claudeResponse.Usage; usage != nil && usage.ServerToolUse != nil && usage.ServerToolUse.WebSearchRequests > 0 {
+		c.Set("claude_web_search_requests", usage.ServerToolUse.WebSearchRequests)
 	}
 
 	app.IOCopyBytesGracefully(c, httpResp, responseData)

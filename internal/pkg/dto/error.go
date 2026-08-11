@@ -63,6 +63,8 @@ func (e GeneralErrorResponse) ToMessage() string {
 			if err == nil && msg != "" {
 				return msg
 			}
+		case "null", "unknown":
+			// 显式 null / 空白 error 字段等同于缺失，继续走下面的兜底字段
 		default:
 			return string(e.Error)
 		}

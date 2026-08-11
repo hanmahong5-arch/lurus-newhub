@@ -8,12 +8,19 @@ package app
 //	"newhub SC-6 test coverage app/ target ≥80% (current ~70%)."
 //	"α9 CI thresholds 18/58/19 in go-ci.yml."
 //
-// CLAUDE.md §4.1①/⑥: the ≥80% figure is ASPIRATIONAL — it is not the gate that
-// actually runs in CI, and go-ci.yml says so in a comment ("the plan's 80/60/50
-// targets aren't reachable in hermetic tests today"). The number that gates a
-// merge is 18 (app) / 58 (repo) / 19 (handler). This test reads the real
-// workflow file and locks those values, so the doc can be reconciled to the
+// CLAUDE.md §4.1①/⑥: the ≥80% figure used to be ASPIRATIONAL — it was not the
+// gate that actually ran in CI, and go-ci.yml said so ("the plan's 80/60/50
+// targets aren't reachable in hermetic tests today"). This test reads the real
+// workflow file and locks the literal values, so the doc gets reconciled to the
 // gate rather than the gate being silently raised to match a doc.
+//
+// 2026-08-09: the divergence closed in the honest direction. The 2026-07-25
+// coverage corpus (PR #72) landed and CI measured app 88.4% / repo 64.3% /
+// handler 69.1% on the merge tree, so the gates were ratcheted 25/59/48 →
+// 84/62/64 and the SC-6 doc claims were corrected in the same commit. The
+// inequality below therefore flipped: the lock now guards against someone
+// dropping the app gate back under 80 while the docs keep claiming the target
+// is met.
 //
 // This is a doc/CI consistency lock. Its subject is the committed
 // .github/workflows/go-ci.yml; its assertion is the literal check_pkg lines.
@@ -76,14 +83,14 @@ func TestAppCoverageGate_HonestBaseline(t *testing.T) {
 		t.Fatal("no check_pkg gate lines found in go-ci.yml — coverage gate may have been removed")
 	}
 
-	// Values track go-ci.yml. app/repo ratcheted on main 2026-05-31 (actuals
-	// 27.0% / 60.9%). handler ratcheted 2026-07-20 from 19->48 after measuring
-	// hermetic 52.8% on this base (was ~32pt stale at "20.0%/19"); lifted by the
-	// cover_uplift_{analytics,presets,internal} handler tests.
+	// Values track go-ci.yml. Ratcheted 2026-08-09 from 25/59/48 against actuals
+	// CI itself printed on the tree that became main 7c23ec7f (run 31304357298):
+	// app 88.4% / repo 64.3% / handler 69.1%, minus a 4.4 / 2.3 / 5.1pt buffer.
+	// History: 18/58/19 at α9 → 25/59/19 (2026-05-31) → handler 48 (2026-07-20).
 	want := map[string]int{
-		"internal/app":             25,
-		"internal/adapter/repo":    59,
-		"internal/adapter/handler": 48,
+		"internal/app":             84,
+		"internal/adapter/repo":    62,
+		"internal/adapter/handler": 64,
 	}
 	for pkg, w := range want {
 		got, ok := gates[pkg]
@@ -96,12 +103,15 @@ func TestAppCoverageGate_HonestBaseline(t *testing.T) {
 		}
 	}
 
-	// §4.1①: the aspirational 80 is NOT the real app gate. Lock the inequality
-	// so the divergence is explicit and cannot be papered over.
-	const aspirationalSC6 = 80
-	if gates["internal/app"] >= aspirationalSC6 {
-		t.Errorf("app CI gate is %d, which already meets the aspirational %d — update this lock + the SC-6 doc to stop calling 80 'aspirational'",
-			gates["internal/app"], aspirationalSC6)
+	// §4.1①, inverted 2026-08-09: SC-6's ≥80% is now the *enforced* app gate,
+	// not an aspiration the CI quietly undershot. prd.md SC-6 and
+	// doc/uat-handbook.md §3/§4 were updated to say "met" in the same commit, so
+	// dropping the gate back under 80 without reverting those claims re-opens
+	// exactly the doc/CI divergence this file exists to prevent.
+	const targetSC6 = 80
+	if gates["internal/app"] < targetSC6 {
+		t.Errorf("app CI gate is %d, below the SC-6 target %d that prd.md and doc/uat-handbook.md now record as MET — either restore the gate or revert those doc claims in the same change",
+			gates["internal/app"], targetSC6)
 	}
 
 	// Sanity: the workflow must still self-describe these as baselines, not
