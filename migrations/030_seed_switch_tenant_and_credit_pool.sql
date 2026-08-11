@@ -32,8 +32,18 @@
 --
 -- 幂等：两条都是 ON CONFLICT DO NOTHING，重复执行安全（本仓 initContainer /
 -- migration runner 每次启动会重放）。
-
-BEGIN;
+--
+-- ── 无显式 BEGIN;/COMMIT; ────────────────────────────────────────────────────
+-- runner 已经把每个 migration 包在自己的事务里（internal/pkg/migration/runner.go:324
+-- BeginTx → exec body → 记 schema_migrations → Commit），021–029 也一律不写。
+-- 文件里再写一个 COMMIT; 会把 runner 的事务提前提交，让「执行」与「记账」不再原子。
+--
+-- ── 两个 DO 块的守卫 ────────────────────────────────────────────────────────
+-- `tenants` / `tenant_credit_pools` 由 boot 时的 GORM AutoMigrate 建（AutoMigrate
+-- 先于本 runner 跑，见 repo/main.go runBootMigrations），SQL 血统里 001–020 是
+-- 只记账不执行的 baseline。所以只按 SQL 建起来的库（migration 包自己的 PG 测试）
+-- 根本没有这两张表 —— 无守卫的 INSERT 会让整个 runner 报错。按 025 的既有惯例
+-- to_regclass + information_schema 守卫后跳过（RAISE WARNING，不失败）。
 
 -- ---------------------------------------------------------------------------
 -- 1. switch 租户
@@ -47,20 +57,29 @@ BEGIN;
 --    OIDC 登录链路不可用。注资链**不**依赖它（只按 slug 查），所以占位符不阻塞
 --    钱路，但也不要当成已完成。替换方式：
 --        UPDATE tenants SET zitadel_org_id = '<real-org-id>' WHERE id = 'switch';
-INSERT INTO tenants (
-    id, zitadel_org_id, slug, name, status, plan_type, max_users, max_quota
-)
-VALUES (
-    'switch',
-    'SWITCH_ORG_ID_PLACEHOLDER',   -- 🔴 owner: 建好 IdP Organization 后替换
-    'switch',
-    'Lurus Switch (分销渠道)',
-    1,                             -- enabled
-    'enterprise',
-    10000,
-    1000000000
-)
-ON CONFLICT (id) DO NOTHING;
+DO $mig$
+BEGIN
+    IF to_regclass('public.tenants') IS NULL THEN
+        RAISE WARNING '030_seed_switch_tenant_and_credit_pool: tenants absent (AutoMigrate creates it at boot); skipping';
+        RETURN;
+    END IF;
+
+    INSERT INTO tenants (
+        id, zitadel_org_id, slug, name, status, plan_type, max_users, max_quota
+    )
+    VALUES (
+        'switch',
+        'SWITCH_ORG_ID_PLACEHOLDER',   -- 🔴 owner: 建好 IdP Organization 后替换
+        'switch',
+        'Lurus Switch (分销渠道)',
+        1,                             -- enabled
+        'enterprise',
+        10000,
+        1000000000
+    )
+    ON CONFLICT (id) DO NOTHING;
+END
+$mig$;
 
 -- ---------------------------------------------------------------------------
 -- 2. switch 的额度池
@@ -75,21 +94,38 @@ ON CONFLICT (id) DO NOTHING;
 --
 -- current_balance 从 0 起 —— 余额只应由真实注资事件写入，
 -- 绝不在 migration 里预置任何非零余额（那等于凭空铸币）。
-INSERT INTO tenant_credit_pools (
-    tenant_id, created_by_user_id, current_balance, max_balance,
-    reset_period, alert_threshold_pct
-)
-VALUES (
-    'switch',
-    1,        -- 系统/root 用户；该列无 FK，仅作审计标注
-    0,        -- 只能由真实注资事件增长
-    -1,       -- 无天花板
-    'none',   -- 🔴 不可改成 monthly，见上
-    80
-)
-ON CONFLICT (tenant_id) DO NOTHING;
+DO $mig$
+BEGIN
+    IF to_regclass('public.tenant_credit_pools') IS NULL THEN
+        RAISE WARNING '030_seed_switch_tenant_and_credit_pool: tenant_credit_pools absent (AutoMigrate creates it at boot); skipping pool seed';
+        RETURN;
+    END IF;
+    -- created_by_user_id exists only in the GORM struct (entity/tenant_credit_pool.go);
+    -- no SQL migration in 001–029 adds it, so a database built from the SQL
+    -- lineage alone (the migration package's own PG tests) does not have it.
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema = 'public'
+                     AND table_name = 'tenant_credit_pools'
+                     AND column_name = 'created_by_user_id') THEN
+        RAISE WARNING '030_seed_switch_tenant_and_credit_pool: tenant_credit_pools lacks created_by_user_id (partial schema; AutoMigrate adds it at boot); skipping pool seed';
+        RETURN;
+    END IF;
 
-COMMIT;
+    INSERT INTO tenant_credit_pools (
+        tenant_id, created_by_user_id, current_balance, max_balance,
+        reset_period, alert_threshold_pct
+    )
+    VALUES (
+        'switch',
+        1,        -- 系统/root 用户；该列无 FK，仅作审计标注
+        0,        -- 只能由真实注资事件增长
+        -1,       -- 无天花板
+        'none',   -- 🔴 不可改成 monthly，见上
+        80
+    )
+    ON CONFLICT (tenant_id) DO NOTHING;
+END
+$mig$;
 
 -- ── 验收（apply 后跑）──────────────────────────────────────────────────────
 --   SELECT id, slug, status FROM tenants WHERE slug = 'switch';
