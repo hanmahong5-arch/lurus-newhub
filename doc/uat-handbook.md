@@ -23,11 +23,11 @@ DoD items enumerated from the Wave-UAT plan. Status as of Sε completion.
 | α2 | Repo layer ≥60% coverage | `go test -coverprofile=cov.out ./internal/adapter/repo/...` → 60.1% | PASS |
 | α3 | Cross-tenant isolation tests | `internal/adapter/repo/tenant_isolation_test.go` (10 tests) | PASS |
 | α4 | 5 security projection structs (view-only on list/get endpoints) | `internal/adapter/handler/{token,channel,log,billing,billing_invoice}_view.go` | PASS |
-| α5 | app layer ≥80% coverage | Internal-app coverage 19.3% — target not reachable hermetically | DEFERRED (α9) |
+| α5 | app layer ≥80% coverage | CI coverage-gate job measured `internal/app` **88.4%** hermetically on 2026-08-09 (run 31304357298); the "19.3% — not reachable hermetically" verdict below was superseded by the 2026-07-25 coverage corpus (PR #72). Gate raised 25 → 84. | PASS |
 | α6 | Race detector: `go test -race ./...` passes | Audit doc: `_bmad-output/planning-artifacts/test-debt-findings.md` | PASS (Linux CI only) |
-| α7 | internal/app coverage baseline tracked | Baseline captured; gate threshold deferred to α9 | DEFERRED |
+| α7 | internal/app coverage baseline tracked | Baseline captured and now gated at 84 (actual 88.4%) — no longer deferred | PASS |
 | α8 | Race audit doc committed | `_bmad-output/planning-artifacts/test-debt-findings.md` | PASS |
-| α9 | Coverage gate threshold calibrated | `go-ci.yml` coverage-gate job (18/58/19 at α9; ratcheted to 25/59/19 on 2026-05-31; handler → 48 on 2026-07-20 after measuring hermetic 52.8%) | PASS |
+| α9 | Coverage gate threshold calibrated | `go-ci.yml` coverage-gate job (18/58/19 at α9; ratcheted to 25/59/19 on 2026-05-31; handler → 48 on 2026-07-20 after measuring hermetic 52.8%; **84/62/64 on 2026-08-09** after CI measured 88.4/64.3/69.1) | PASS |
 | β1 | Frontend casing scanner catches camelCase | `web/scripts/check-casing.mjs` (all 18 pages pass) | PASS |
 | β2 | 14 v2 page test files all pass `bun run test` | `web/src/pages/v2/**/*.test.jsx` | PASS |
 | δ1 | Stage rollback script functional | `scripts/stage-rollback.sh` | PASS |
@@ -84,9 +84,9 @@ curl -sf https://test-newhub.lurus.cn/v1/models \
 
 | Item | Reason |
 |------|--------|
-| α7: `internal/app` coverage 19.3% (target 80%) | Target not reachable hermetically — needs a real PG + Redis integration harness. Deferred to a future Wave. |
-| α8: race detector on Windows dev host | GCC unavailable; race detector requires CGO. Run on Linux CI only. |
-| α9: coverage gate thresholds (25/59/48, ratcheted from 18/58/19) | Baseline thresholds, not aspirational; ratchet upward as coverage grows. 2026-05-31: app 27.0% / repo 60.9% / handler 20.0% → 25/59/19. 2026-07-20: handler hermetic re-measured at 52.8% (the "20.0%" was ~32pt stale after intervening test growth) + lifted via cover_uplift handler tests → handler gate 19→48. |
+| ~~α7: `internal/app` coverage 19.3% (target 80%)~~ **RESOLVED 2026-08-09** | The stated reason ("not reachable hermetically — needs a real PG + Redis integration harness") was wrong. The 2026-07-25 coverage corpus reached **88.4% hermetically**, with no PG and no Redis: what was missing was tests, not infrastructure. Kept here rather than deleted because the mis-diagnosis is the lesson — "not reachable" was inferred from a low number, never tested. |
+| α8: race detector on Windows dev host | GCC unavailable; race detector requires CGO. Run on Linux CI only. **2026-08-09**: this gap has now cost real defects — CI's `-race` caught a genuine production race in `internal/app/relay/helper/stream_scanner.go` (`wg.Done()` released before `SafeSendBool`, letting `close(stopChan)` interleave with the send) that no local run could see. |
+| α9: coverage gate thresholds (**84/62/64**, ratcheted from 18/58/19) | Baseline thresholds, not aspirational; ratchet upward as coverage grows. 2026-05-31: app 27.0% / repo 60.9% / handler 20.0% → 25/59/19. 2026-07-20: handler hermetic re-measured at 52.8% (the "20.0%" was ~32pt stale after intervening test growth) + lifted via cover_uplift handler tests → handler gate 19→48. 2026-08-09: corpus landed (#72), CI measured app 88.4% / repo 64.3% / handler 69.1% → 84/62/64 (buffers 4.4 / 2.3 / 5.1pt). The 25 had been ~61pt below reality, i.e. the fund-handling `internal/app` code was effectively ungated. |
 | Sγ: Playwright e2e suite | Deferred — depends on `STAGING_KUBECONFIG` secret being configured and STAGE pod green. |
 | bun audit 404 on local host | npm audit registry unreachable from dev Windows host. Will resolve in CI (ubuntu-latest has network access to npm). |
 | bun audit: 87 transitive-dep CVEs (1 crit / 26 high / 55 mod / 5 low) | Need dep-bump PR (picomatch via vitest/vite/tailwind, mermaid via @lobehub/ui, immutable, react-router, protocol-buffers-schema). CI step is informational (`continue-on-error: true`) until cleanup PR ratchets the level back up. |

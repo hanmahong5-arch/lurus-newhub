@@ -407,6 +407,41 @@ var (
 		},
 		[]string{"tenant_id"},
 	)
+
+	// CreditPoolNotConfiguredTotal counts relay requests that hit a missing
+	// tenant credit pool row under the CREDIT_POOL_REQUIRED gradual-enforcement
+	// flag (internal/pkg/setting.GetCreditPoolRequired). Labeled by tenant_id
+	// and the action actually taken: "log" (bypassed but counted) or
+	// "enforce" (rejected 402). "off" is intentionally never counted here — it
+	// is the legacy no-signal bypass and must stay byte-identical to
+	// pre-flag behaviour.
+	CreditPoolNotConfiguredTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "credit_pool_not_configured_total",
+			Help:      "Relay requests hitting a missing tenant credit pool row, by tenant and CREDIT_POOL_REQUIRED action (log/enforce)",
+		},
+		[]string{"tenant_id", "action"},
+	)
+
+	// ConsumerAudienceMismatchTotal counts requests reaching the consumer OIDC
+	// gate (middleware.RequireOIDCToken) with an "aud" claim that matches
+	// neither OIDC_CLIENT_ID, OIDC_ALLOWED_AUDIENCES nor
+	// OIDC_CONSUMER_AUDIENCES, labeled by the action actually taken: "log"
+	// (admitted but counted) or "enforce" (rejected 401). Deliberately not
+	// labeled by audience — "aud" is attacker-controlled on a rejected token
+	// and would let an unauthenticated caller mint unbounded label values.
+	// "off" is never counted: it is the pre-flag issuer-only behaviour.
+	ConsumerAudienceMismatchTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "consumer_audience_mismatch_total",
+			Help:      "Consumer-gate requests whose JWT audience is not allow-listed, by OIDC_CONSUMER_AUD_REQUIRED action (log/enforce)",
+		},
+		[]string{"action"},
+	)
 )
 
 // RecordRelayRequest records a relay request with its outcome
@@ -525,4 +560,16 @@ func RecordPoolExhaustedRejection(tenantID, poolKind string) {
 // tenantID may be empty for requests not linked to a tenant (recorded under "").
 func RecordBillingDebit(tenantID string, amountCNY float64) {
 	BillingDebitAmountCNY.WithLabelValues(tenantID).Observe(amountCNY)
+}
+
+// RecordPoolNotConfigured increments CreditPoolNotConfiguredTotal for a
+// tenant/action pair. action must be "log" or "enforce" — never "off".
+func RecordPoolNotConfigured(tenantID, action string) {
+	CreditPoolNotConfiguredTotal.WithLabelValues(tenantID, action).Inc()
+}
+
+// RecordConsumerAudienceMismatch increments ConsumerAudienceMismatchTotal.
+// action must be "log" or "enforce" — never "off".
+func RecordConsumerAudienceMismatch(action string) {
+	ConsumerAudienceMismatchTotal.WithLabelValues(action).Inc()
 }

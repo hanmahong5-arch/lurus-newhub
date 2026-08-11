@@ -21,12 +21,12 @@ cd deploy/k8s && cp secrets.yaml secrets.prod.yaml && vi secrets.prod.yaml
 `secrets.prod.yaml` stringData 关键字段:
 
 ```yaml
-SQL_DSN: "postgres://lurus:LurusOps2026@100.94.177.10:30543/lurusapi?sslmode=disable"
+SQL_DSN: "postgres://lurus:<PG_PASSWORD,见 重要信息.md>@100.94.177.10:30543/lurusapi?sslmode=disable"
 SESSION_SECRET: "<openssl rand -base64 32 输出>"
 ALIPAY_PRIVATE_KEY: |    # 从 Alipay 开发者控制台获取(如需支付)
-  -----BEGIN RSA PRIVATE KEY-----
+  <粘贴完整 PEM 私钥内容>
 ALIPAY_PUBLIC_KEY: |
-  -----BEGIN PUBLIC KEY-----
+  <粘贴完整 PEM 公钥内容>
 OIDC_CLIENT_ID: "358371335178617311@lurus-api"
 ```
 
@@ -45,7 +45,7 @@ curl https://api.lurus.cn/bind/alipay?code=test                                 
 
 ## 凭证说明
 
-- **数据库密码** `LurusOps2026` — **无需更换**(内部统一标准,虽曾在 git 历史泄露但已清理,见 `doc/code-review/README.md` P0-1)。
+- **数据库密码** `<PG_PASSWORD,见 重要信息.md>` — **无需更换**(内部统一标准,虽曾在 git 历史泄露但已清理,见 `doc/code-review/README.md` P0-1)。
 - **Session Secret** — **必须更换**;旧值 `LurusApiSessionSecret2026Secure!` 已泄露。`openssl rand -base64 32` 生成。Secret 更新后**必须** `kubectl rollout restart` 才生效。
 - **Alipay 密钥** — 联系支付团队获取 App ID + RSA2 私钥/公钥。
 
@@ -55,7 +55,7 @@ curl https://api.lurus.cn/bind/alipay?code=test                                 
 kubectl describe pod <pod> -n lurus-system          # 常见:Secret YAML 缩进 / SQL_DSN 格式 / GHCR 认证
 kubectl logs <pod> -n lurus-system
 kubectl exec -it <pod> -n lurus-system -- nc -zv 100.94.177.10 30543   # DB 连通性
-psql "postgres://lurus:LurusOps2026@100.94.177.10:30543/lurusapi?sslmode=disable" -c "SELECT version()"
+psql "postgres://lurus:<PG_PASSWORD,见 重要信息.md>@100.94.177.10:30543/lurusapi?sslmode=disable" -c "SELECT version()"
 ```
 
 ## 回滚

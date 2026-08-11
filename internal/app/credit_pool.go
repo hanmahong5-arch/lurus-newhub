@@ -23,3 +23,11 @@ func RecordPoolExhausted(tenantID, poolKind string) {
 func RecordDebitSuccess(tenantID string, amountCNY float64) {
 	metrics.RecordBillingDebit(tenantID, amountCNY)
 }
+
+// RecordPoolNotConfigured increments CreditPoolNotConfiguredTotal for a given
+// tenant/action. Called by pool_balance_check middleware when
+// CREDIT_POOL_REQUIRED is "log" (bypass-but-counted) or "enforce" (402) and
+// the tenant has no credit pool row at all.
+func RecordPoolNotConfigured(tenantID, action string) {
+	metrics.RecordPoolNotConfigured(tenantID, action)
+}

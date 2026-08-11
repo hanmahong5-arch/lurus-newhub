@@ -32,17 +32,27 @@
 }
 
 /* ==================== 全局基础样式 ==================== */
-/* ==================== Lurus Hub brand tokens ==================== */
+/* ==================== Lurus Hub brand tokens ====================
+ * Second hand-copy of the brand palette (the first is hifi-tokens.css). All
+ * nine values happened to still match the source of truth, so they are now
+ * references to the vendored --lt-* tokens (pulled in by hifi-tokens.css
+ * above) instead of literals — same computed values, but an upstream brand
+ * change can no longer leave this block behind.
+ *
+ * NOTE: these unprefixed names currently have zero consumers (`var(--ink)`
+ * etc. matches nothing in web/). They are kept rather than deleted because
+ * unprefixed custom properties are exactly what third-party CSS may read;
+ * removing them is a separate decision. Prefer --hf-* in new code. */
 :root {
-  --paper: #f5f2e8;
-  --bg: #e8e4d6;
-  --ink: #14130f;
-  --rule: #d6d2c2;
-  --accent: #ff5d1f;
-  --ok: #1f7a4f;
-  --warn: #b8821f;
-  --err: #b3392b;
-  --info: #2d4a8a;
+  --paper: var(--lt-paper);
+  --bg: var(--lt-bg);
+  --ink: var(--lt-ink);
+  --rule: var(--lt-rule);
+  --accent: var(--lt-accent);
+  --ok: var(--lt-ok);
+  --warn: var(--lt-warn);
+  --err: var(--lt-err);
+  --info: var(--lt-info);
 }
 
 /* ==================== Layout variables ==================== */

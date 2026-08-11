@@ -19,10 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import UsersTable from '../../components/table/users';
+import LegacyBridgeBanner from '../../components/hifi/LegacyBridgeBanner';
 
 const User = () => {
   return (
     <div className='px-2'>
+      <LegacyBridgeBanner to='/console/v2/admin/users' />
       <UsersTable />
     </div>
   );

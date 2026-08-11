@@ -85,17 +85,19 @@ func zhipu4vImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		if url == "" {
 			url = data.ImageUrl
 		}
-		if url == "" {
-			logger.LogWarn(c, "zhipu_image_missing_url")
-			continue
-		}
 
+		// Inline base64 wins over the url: an entry may legitimately carry the
+		// image bytes with no url at all, and dropping it would return an empty
+		// data array for a generation the tenant already paid for.
 		var b64 string
 		switch {
 		case data.B64Json != "":
 			b64 = data.B64Json
 		case data.B64Image != "":
 			b64 = data.B64Image
+		case url == "":
+			logger.LogWarn(c, "zhipu_image_missing_url")
+			continue
 		default:
 			_, downloaded, err := app.GetImageFromUrl(url)
 			if err != nil {

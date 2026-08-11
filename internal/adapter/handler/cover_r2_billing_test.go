@@ -935,6 +935,10 @@ func TestR2Bill_RevokeProvisionedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load tenant: %v", err)
 	}
+	// Revoke enforces the same (api_key, tenant) whitelist as Create/List, so
+	// the calls that get past the tenant lookup need an authorized key on the
+	// context — the router's auth middleware puts it there in production.
+	adminKey := &repo.InternalApiKey{Id: 94, Name: "revoke-admin", Scopes: `["*"]`, Enabled: true}
 
 	// invalid key_id → 400
 	c, w := r2chanNewCtx(http.MethodDelete, "/", nil)
@@ -952,9 +956,20 @@ func TestR2Bill_RevokeProvisionedKey(t *testing.T) {
 		t.Errorf("expected 404 for missing tenant, got %d", w.Code)
 	}
 
+	// narrow key not authorized for this tenant → 403
+	narrow := &repo.InternalApiKey{Id: 95, Name: "narrow-revoke", Scopes: `["provisioning"]`, Enabled: true}
+	c, w = r2chanNewCtx(http.MethodDelete, "/", nil)
+	c.Params = gin.Params{{Key: "slug", Value: tenant.Slug}, {Key: "key_id", Value: "888888"}}
+	c.Set("internal_api_key", narrow)
+	RevokeProvisionedKey(c)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for narrow key, got %d", w.Code)
+	}
+
 	// token not found in tenant → 404
 	c, w = r2chanNewCtx(http.MethodDelete, "/", nil)
 	c.Params = gin.Params{{Key: "slug", Value: tenant.Slug}, {Key: "key_id", Value: "888888"}}
+	c.Set("internal_api_key", adminKey)
 	RevokeProvisionedKey(c)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for missing token, got %d", w.Code)
@@ -971,6 +986,7 @@ func TestR2Bill_RevokeProvisionedKey(t *testing.T) {
 	}
 	c, w = r2chanNewCtx(http.MethodDelete, "/", nil)
 	c.Params = gin.Params{{Key: "slug", Value: tenant.Slug}, {Key: "key_id", Value: intToStr(provTok.Id)}}
+	c.Set("internal_api_key", adminKey)
 	RevokeProvisionedKey(c)
 	if w.Code != http.StatusOK || r2chanParseBody(t, w)["success"] != true {
 		t.Fatalf("revoke failed: %s", w.Body.String())

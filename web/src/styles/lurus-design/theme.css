@@ -1,0 +1,29 @@
+/* AUTO-GENERATED from shared/lurus-design — DO NOT EDIT; run scripts/design-sync.sh */
+
+/**
+ * @lurus/design — Tailwind v4 @theme mapping (optional layer)
+ *
+ * v4 consumers: import tokens.css first, then this file, to expose the
+ * brand tokens as Tailwind utility classes (bg-paper, text-ink, font-display, ...).
+ * v3 consumers should use ./tailwind-preset.cjs instead — @theme is v4-only syntax.
+ *
+ * Left-hand names are Tailwind's theme namespace (they decide the utility
+ * class names, e.g. --color-paper → bg-paper/text-paper) and stay unprefixed.
+ * Right-hand names are our brand tokens and are always --lt-*.
+ */
+@theme inline {
+  --color-paper:    var(--lt-paper);
+  --color-bg:       var(--lt-bg);
+  --color-ink:      var(--lt-ink);
+  --color-rule:     var(--lt-rule);
+  --color-ok:       var(--lt-ok);
+  --color-warn:     var(--lt-warn);
+  --color-err:      var(--lt-err);
+  --color-info:     var(--lt-info);
+  --color-accent:   var(--lt-accent);
+  --color-accent-2: var(--lt-accent-2);
+
+  --font-display: var(--lt-font-display);
+  --font-sans:    var(--lt-font-sans);
+  --font-mono:    var(--lt-font-mono);
+}

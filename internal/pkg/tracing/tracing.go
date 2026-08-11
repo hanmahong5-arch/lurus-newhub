@@ -69,17 +69,21 @@ func Init(ctx context.Context, cfg Config) error {
 		return err
 	}
 
-	// Create resource with service info
+	// Create resource with service info.
+	// The attribute set is intentionally schemaless: resource.Default() carries
+	// the schema URL embedded in the SDK, and pinning a second (different)
+	// schema URL here makes resource.Merge fail with a schema conflict, which
+	// would abort Init and leave tracing silently off.
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+		resource.NewSchemaless(
 			semconv.ServiceName(ServiceName),
 			semconv.ServiceVersion(ServiceVersion),
 			attribute.String("environment", cfg.Environment),
 		),
 	)
 	if err != nil {
+		_ = exporter.Shutdown(ctx)
 		return err
 	}
 

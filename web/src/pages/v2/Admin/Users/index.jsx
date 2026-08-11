@@ -434,72 +434,76 @@ const HFAdminUsers = () => {
                   : tr('console.admin.users.empty', 'No users yet.')}
               </div>
             ) : (
-              <table className='t'>
-                <thead>
-                  <tr>
-                    <th>{tr('console.admin.users.th_user', 'user')}</th>
-                    <th>{tr('console.admin.users.th_role', 'role')}</th>
-                    <th>{tr('console.admin.users.th_status', 'status')}</th>
-                    <th>{tr('console.admin.users.th_group', 'group')}</th>
-                    <th>
-                      {tr('console.admin.users.th_quota', 'quota used · cap')}
-                    </th>
-                    <th>{tr('console.admin.users.th_requests', 'requests')}</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map((u) => (
-                    <tr key={u.id} data-testid={`user-row-${u.id}`}>
-                      <td>
-                        <div className='strong'>
-                          {u.display_name || u.username}
-                        </div>
-                        <div className='faint mono' style={{ fontSize: 10 }}>
-                          {u.email || u.username}
-                        </div>
-                      </td>
-                      <td>
-                        <span className='tag'>{roleLabel(tr, u.role)}</span>
-                      </td>
-                      <td>
-                        <span
-                          data-testid={`user-status-${u.id}`}
-                          className={statusClass(u.status)}
-                        >
-                          {statusLabel(tr, u.status)}
-                        </span>
-                      </td>
-                      <td className='mono muted'>{u.group || 'default'}</td>
-                      <td className='mono'>
-                        ${quotaToUSD(u.used_quota)} / ${quotaToUSD(u.quota)}
-                      </td>
-                      <td className='mono muted'>{u.request_count ?? 0}</td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <button
-                            type='button'
-                            className='btn ghost sm'
-                            data-testid={`user-edit-btn-${u.id}`}
-                            onClick={() => setEditing(u)}
-                          >
-                            {tr('console.common.edit', 'edit')}
-                          </button>
-                          <button
-                            type='button'
-                            className='btn ghost sm'
-                            data-testid={`user-delete-btn-${u.id}`}
-                            style={{ color: 'var(--hf-err)' }}
-                            onClick={() => setDeleting(u)}
-                          >
-                            {tr('console.common.delete', 'delete')}
-                          </button>
-                        </div>
-                      </td>
+              <div className='hf-table-scroll'>
+                <table className='t'>
+                  <thead>
+                    <tr>
+                      <th>{tr('console.admin.users.th_user', 'user')}</th>
+                      <th>{tr('console.admin.users.th_role', 'role')}</th>
+                      <th>{tr('console.admin.users.th_status', 'status')}</th>
+                      <th>{tr('console.admin.users.th_group', 'group')}</th>
+                      <th>
+                        {tr('console.admin.users.th_quota', 'quota used · cap')}
+                      </th>
+                      <th>
+                        {tr('console.admin.users.th_requests', 'requests')}
+                      </th>
+                      <th></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {users.map((u) => (
+                      <tr key={u.id} data-testid={`user-row-${u.id}`}>
+                        <td>
+                          <div className='strong'>
+                            {u.display_name || u.username}
+                          </div>
+                          <div className='faint mono' style={{ fontSize: 10 }}>
+                            {u.email || u.username}
+                          </div>
+                        </td>
+                        <td>
+                          <span className='tag'>{roleLabel(tr, u.role)}</span>
+                        </td>
+                        <td>
+                          <span
+                            data-testid={`user-status-${u.id}`}
+                            className={statusClass(u.status)}
+                          >
+                            {statusLabel(tr, u.status)}
+                          </span>
+                        </td>
+                        <td className='mono muted'>{u.group || 'default'}</td>
+                        <td className='mono'>
+                          ${quotaToUSD(u.used_quota)} / ${quotaToUSD(u.quota)}
+                        </td>
+                        <td className='mono muted'>{u.request_count ?? 0}</td>
+                        <td>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              type='button'
+                              className='btn ghost sm'
+                              data-testid={`user-edit-btn-${u.id}`}
+                              onClick={() => setEditing(u)}
+                            >
+                              {tr('console.common.edit', 'edit')}
+                            </button>
+                            <button
+                              type='button'
+                              className='btn ghost sm'
+                              data-testid={`user-delete-btn-${u.id}`}
+                              style={{ color: 'var(--hf-err)' }}
+                              onClick={() => setDeleting(u)}
+                            >
+                              {tr('console.common.delete', 'delete')}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>

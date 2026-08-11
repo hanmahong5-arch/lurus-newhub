@@ -56,6 +56,7 @@ const DRAFT_INITIAL = {
   vendor: '',
   model_ratio: 1,
   quota_type: 0,
+  model_price: '',
 };
 
 const useTenantSlug = () => {
@@ -166,6 +167,18 @@ const HFModels = () => {
       );
       return;
     }
+    const perCall = Number(form.quota_type) === 1;
+    const modelPrice = Number(form.model_price);
+    // 按次计费必须带单价：后端会拒绝无价的按次模型，避免它静默按默认价计费。
+    if (perCall && !(modelPrice > 0)) {
+      showError(
+        tr(
+          'console.models.price_required',
+          'Price per call is required for pay-per-call billing',
+        ),
+      );
+      return;
+    }
     setAdding(true);
     try {
       await API.post(`/api/v2/${tenantSlug}/models`, {
@@ -173,6 +186,7 @@ const HFModels = () => {
         vendor: form.vendor,
         model_ratio: Number(form.model_ratio) || 1,
         quota_type: Number(form.quota_type),
+        ...(perCall ? { model_price: modelPrice } : {}),
       });
       showSuccess(tr('console.models.toast_added', 'Model added'));
       clearDraft();
@@ -519,6 +533,37 @@ const HFModels = () => {
                 }}
               />
             </label>
+
+            {Number(form.quota_type) === 1 && (
+              <label>
+                <span
+                  className='lbl'
+                  style={{ display: 'block', marginBottom: 4 }}
+                >
+                  {tr('console.models.field_price', 'price per call')}
+                </span>
+                <input
+                  data-testid='add-model-price'
+                  type='number'
+                  min='0'
+                  step='0.001'
+                  value={form.model_price}
+                  onChange={(e) =>
+                    setForm({ ...form, model_price: e.target.value })
+                  }
+                  style={{
+                    width: '100%',
+                    padding: '6px 10px',
+                    border: '1px solid var(--hf-rule)',
+                    background: 'var(--hf-sunken)',
+                    color: 'var(--hf-ink)',
+                    borderRadius: 2,
+                    fontFamily: 'var(--hf-mono)',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </label>
+            )}
           </div>
 
           <div

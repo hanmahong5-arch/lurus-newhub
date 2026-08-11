@@ -92,3 +92,29 @@ describe('HFShell deferred-surface nav placeholders', () => {
     );
   });
 });
+
+describe('HFShell help escape hatches', () => {
+  it('sidebar footer exposes docs and support links', () => {
+    renderShell();
+
+    const docs = screen.getByTestId('shell-docs-link');
+    expect(docs.getAttribute('href')).toBe('https://docs.lurus.cn');
+    // External target must not hand the opener window to the doc site.
+    expect(docs.getAttribute('target')).toBe('_blank');
+    expect(docs.getAttribute('rel')).toContain('noopener');
+
+    const support = screen.getByTestId('shell-support-link');
+    expect(support.getAttribute('href')).toBe('mailto:support@lurus.cn');
+  });
+
+  it('both links carry a visible label (i18n key resolves to a default)', () => {
+    renderShell();
+
+    expect(
+      screen.getByTestId('shell-docs-link').textContent.trim().length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByTestId('shell-support-link').textContent.trim().length,
+    ).toBeGreaterThan(0);
+  });
+});

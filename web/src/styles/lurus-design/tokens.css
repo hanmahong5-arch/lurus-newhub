@@ -1,0 +1,77 @@
+/* AUTO-GENERATED from shared/lurus-design — DO NOT EDIT; run scripts/design-sync.sh */
+
+/**
+ * @lurus/design — Brand Design Tokens (single source of truth)
+ * SoT: doc/design/brand-spec.md
+ *
+ * This file is generated/maintained as the canonical token source.
+ * Do NOT edit doc/design/brand-tokens.css values directly — edit here instead.
+ * doc/design/brand-tokens.css is kept as a mirror for offline/manual reference.
+ *
+ * Naming: every token is prefixed --lt-* (LurusTech). Unprefixed names like
+ * --bg / --accent collide with host app + third-party component CSS; the
+ * prefix is also what the existing hand-copied adopters already use, so the
+ * package and the field converge on one spelling.
+ *
+ * Tokens-only: no fonts @import, no base resets, no component selectors.
+ * Consumers are responsible for loading web fonts themselves if desired.
+ *
+ * Exception: lucrum (2c-svc-lucrum) uses its own dark-first DESIGN_SYSTEM.md.
+ *   Do NOT apply light theme tokens to lucrum. Lucrum uses bg-void/#09090b.
+ */
+
+/* ─── Light Theme (default) ─── */
+:root {
+  /* Surface */
+  --lt-paper: #F5F2E8;   /* page background */
+  --lt-bg:    #E8E4D6;   /* section/card background */
+  --lt-ink:   #14130F;   /* primary text */
+  --lt-rule:  #D6D2C2;   /* dividers, borders */
+
+  /* Semantic */
+  --lt-ok:    #1F7A4F;   /* success, positive */
+  --lt-warn:  #B8821F;   /* warning */
+  --lt-err:   #B3392B;   /* error, destructive */
+  --lt-info:  #2D4A8A;   /* informational */
+
+  /* Accent (product-level, default = Lurus Hub) */
+  --lt-accent:   #FF5D1F; /* CTA btn / selected / logo inner — ≤5% of screen area */
+  --lt-accent-2: #2D4A8A; /* secondary accent (Lurus Hub only) */
+
+  /* Typography scale */
+  --lt-font-display: 'Fraunces', 'Noto Serif SC', serif;
+  --lt-font-sans:    'Inter Tight', 'Noto Sans SC', system-ui, sans-serif;
+  --lt-font-mono:    'JetBrains Mono', monospace;
+
+  --lt-font-h1:    clamp(36px, 5vw, 56px);
+  --lt-font-h2:    clamp(22px, 3vw, 28px);
+  --lt-font-body:  13px;
+  --lt-font-label: 10px;  /* JetBrains Mono, UPPERCASE, +0.16em tracking */
+  --lt-font-code:  11px;
+
+  /* Spacing (base 4px grid) */
+  --lt-sp-1: 4px;
+  --lt-sp-2: 8px;
+  --lt-sp-3: 12px;
+  --lt-sp-4: 16px;
+  --lt-sp-6: 24px;
+  --lt-sp-8: 32px;
+}
+
+/* ─── Dark Theme ─── */
+[data-theme="dark"],
+.dark {
+  --lt-paper: #14130F;
+  --lt-bg:    #0A0908;
+  --lt-ink:   #F0EDE4;
+  --lt-rule:  #25221C;
+
+  --lt-ok:    #3FA876;
+  --lt-warn:  #E0A040;
+  --lt-err:   #EE6F5E;
+  --lt-info:  #5A7BC7;
+
+  /* accent stays same in dark */
+  --lt-accent:   #FF5D1F;
+  --lt-accent-2: #5A7BC7;
+}

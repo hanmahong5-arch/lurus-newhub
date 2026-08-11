@@ -121,6 +121,36 @@ further would be metric-gaming, not product improvement.
 
 ---
 
+## Loop status update (2026-08-07) — the ceiling claim was about *this roadmap*, not the codebase
+
+The 2026-07-18 note above is still accurate for the R1–R6/D5 roadmap, but it
+was NOT a statement that the code had no defects left. A separate source — the
+coverage loop of 2026-07-25 — had produced `doc/prod-defect-findings-2026-07-25.md`,
+33 reported production defects that were never triaged into this plan (the
+report itself sat uncommitted in a worktree for 13 days).
+
+Closed in PR #70: all 33 re-verified against HEAD by symbol (not by the
+report's stale line numbers) — **29 confirmed and fixed, 4 were misreports**
+(passkey `Origins` is never consumed by auth code; volcengine audio header;
+`TASK_PRICE_PATCH`; redemption `TenantId`). Highest-severity three: a missing
+tenant guard on `RevokeProvisionedKey` (cross-tenant token revocation), the
+clear-before-parse pattern in five `ratio_setting.Update*ByJSONString`
+functions (one malformed admin JSON = platform-wide billing failure), and
+dropped write errors in `repo.UpdateOption`.
+
+82 regression tests added; each fix was checked by reverting its production
+file and confirming the test goes red (30/30). PR #70 CI 13/13 green including
+`-race` and pg-integration. The same PR bumps `golang.org/x/text` to 0.39.0,
+clearing the Trivy HIGH (CVE-2026-56852) that had been failing the image build
+on every PR.
+
+Method note for the next pass: a "no remaining work" conclusion is only as
+broad as the inventory it was drawn from. Before declaring a ceiling, list the
+defect sources that exist (audit docs, coverage-loop findings, open PRs) and
+say which ones were checked.
+
+---
+
 ## Owner-gated (deploy / promote) — unchanged from the promote runbook
 
 See `doc/stage-prod-promote-runbook.md`. Summary: STAGE→PROD promote (R1 is a

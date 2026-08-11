@@ -284,6 +284,7 @@ func ListProvisionedKeys(c *gin.Context) {
 //
 // 404 when the token does not exist or belongs to a different tenant. This
 // prevents one Reseller from revoking another Reseller's keys via spoofed slugs.
+// 403 when the calling API key is not whitelisted for the addressed tenant.
 func RevokeProvisionedKey(c *gin.Context) {
 	slug := c.Param("slug")
 	keyIDStr := c.Param("key_id")
@@ -302,6 +303,30 @@ func RevokeProvisionedKey(c *gin.Context) {
 			"success":    false,
 			"message":    "Tenant not found",
 			"error_code": "TENANT_NOT_FOUND",
+		})
+		return
+	}
+
+	keyInterface, _ := c.Get("internal_api_key")
+	apiKey, _ := keyInterface.(*repo.InternalApiKey)
+
+	// SECURITY: same tenant guard as CreateProvisionedKey / ListProvisionedKeys.
+	// The token.TenantId check below only proves the key_id belongs to the slug
+	// in the URL — it does not bound which tenants the calling key may act on.
+	// Without this gate a narrow Reseller key whitelisted for tenant A could
+	// enumerate key_ids and revoke live tokens under tenant B. ScopeAll ("*")
+	// bypasses; missing whitelist row → 403 (fail-closed).
+	if !repo.InternalKeyAllowedForTenant(apiKey, tenant.Id) {
+		apiKeyID := 0
+		if apiKey != nil {
+			apiKeyID = apiKey.Id
+		}
+		common.SysLog(fmt.Sprintf("Provisioning: cross-tenant revoke denied key=%d tenant=%s",
+			apiKeyID, tenant.Id))
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "API key not authorized for this tenant",
+			"error_code": "TENANT_NOT_AUTHORIZED",
 		})
 		return
 	}

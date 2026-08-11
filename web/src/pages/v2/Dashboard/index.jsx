@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API } from '../../../helpers';
 import { QUOTA_PER_USD, quotaToUSD } from '../../../helpers/formatting';
 import {
@@ -88,9 +89,9 @@ const OnboardingCurlBlock = ({ username, tenantSlug }) => {
       style={{
         margin: '14px 24px 0',
         padding: '18px 22px',
-        border: '1px solid var(--hf-accent, #c97a3e)',
+        border: '1px solid var(--hf-accent)',
         borderRadius: 2,
-        background: 'rgba(201,122,62,0.06)',
+        background: 'var(--hf-accent-bg)',
       }}
     >
       <div
@@ -133,8 +134,8 @@ const OnboardingCurlBlock = ({ username, tenantSlug }) => {
       </div>
       <pre
         style={{
-          background: '#0a0908',
-          color: '#e8e3d4',
+          background: 'var(--hf-code-bg)',
+          color: 'var(--hf-code-ink)',
           padding: 14,
           margin: 0,
           fontSize: 11,
@@ -411,7 +412,7 @@ const HFDashboard = () => {
           >
             {[
               ['p50', p50, 'var(--hf-ok)'],
-              ['p95', p95, 'var(--hf-warn, #c08a3e)'],
+              ['p95', p95, 'var(--hf-warn)'],
               ['p99', p99, 'var(--hf-err)'],
             ].map(([label, val, color]) => (
               <div key={label}>
@@ -570,9 +571,7 @@ const HFDashboard = () => {
                             height: '100%',
                             width: pct + '%',
                             background:
-                              i === 0
-                                ? 'var(--hf-accent)'
-                                : 'var(--hf-info, #2c5fb0)',
+                              i === 0 ? 'var(--hf-accent)' : 'var(--hf-info)',
                             transition: 'width 0.4s ease',
                           }}
                         />
@@ -590,11 +589,7 @@ const HFDashboard = () => {
           <div className='lbl' style={{ marginBottom: 10 }}>
             {t('console.dashboard.recent_activity')}
           </div>
-          {loading && (
-            <div className='muted' style={{ fontSize: 12 }}>
-              {t('console.common.loading')}
-            </div>
-          )}
+          {loading && <HfSkeletonRows rows={4} />}
           {!loading && recentLogs.length === 0 && (
             <div className='muted' style={{ fontSize: 12 }}>
               {t('console.dashboard.no_recent')}

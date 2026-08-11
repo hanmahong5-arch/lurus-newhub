@@ -91,8 +91,11 @@
         "login": "login",
         "toggle_language": "switch language",
         "toggle_theme": "toggle theme",
+        "toggle_nav": "toggle navigation",
         "theme_to_light": "switch to light",
-        "theme_to_dark": "switch to dark"
+        "theme_to_dark": "switch to dark",
+        "docs": "Docs",
+        "support": "Support"
       },
       "not_available": {
         "label": "n/a"
@@ -102,6 +105,10 @@
         "title": "⚠ WORK IN PROGRESS — content is design-mock only",
         "reason_label": "Reason:",
         "todo_label": "TODO:"
+      },
+      "legacy_bridge": {
+        "notice": "This is the legacy console. The new console has a redesigned version of this page.",
+        "cta": "Open in new console →"
       },
       "dashboard": {
         "at_a_glance": "at a glance",
@@ -288,6 +295,9 @@
         "tip": "tip · select rows for batch operations · or click any row to expand",
         "empty": "No channels yet. Add one to get started.",
         "empty_filtered": "No channels match the current filters.",
+        "select_channel": "select channel",
+        "expand_row": "expand",
+        "collapse_row": "collapse",
         "th_channel": "channel",
         "th_type": "type",
         "th_models": "models",
@@ -469,6 +479,8 @@
         "quota_type_token": "pay-as-you-go (token)",
         "quota_type_times": "pay-per-call",
         "field_ratio": "model ratio",
+        "field_price": "price per call",
+        "price_required": "Price per call is required for pay-per-call billing",
         "adding": "adding…",
         "add": "add"
       },

@@ -141,3 +141,22 @@ cd web && rg "@douyinfe/semi-ui" src/pages/v2 -g '!*.test.jsx'
 
 **期望输出:空**(无任何匹配)。本 PR 之前有 2 个匹配(`Pricing`、`AccountDisabled`);
 修复后应为零。新增 / 修改 v2 生产页时此不变量必须保持。
+
+### 4.1 helper 层间接依赖(2026-07-09 补,ui-industrial-audit fixPlan #2)
+
+上面的 grep 只查页面**直接** import `@douyinfe/semi-ui` —— 漏掉了 `helpers/utils.jsx`
+的 `showError`/`showSuccess`/`showWarning`/`showInfo`/`showNotice`。这些是全站唯一的
+toast 反馈函数,`helpers/utils.jsx:20` 本身仍 `import { Toast } from '@douyinfe/semi-ui'`
+(legacy `/console/*` v1 页面继续用它),但当调用方 `window.location.pathname` 落在
+`/console/v2/*` 时会改走 `.hf` scope 的 `components/hifi/HfToast.jsx`(`hfToast.*`),
+不再弹出 Semi UI 的 ant-design 风格 toast。
+
+核验这条不变量不能只 grep import,要连带确认路由分支仍然存在:
+
+```bash
+cd web && rg "isV2Route\(\)" src/helpers/utils.jsx
+```
+
+**期望输出**:`showError`/`showWarning`/`showSuccess`/`showNotice` 每个分支都有一次
+`isV2Route()` 判断包住 `Toast.*` 调用。若未来有人把某个 show\* 函数改回无条件调用
+`Toast.xxx`,这条 grep 会因命中数下降而失败——这就是本条不变量的核验口径。

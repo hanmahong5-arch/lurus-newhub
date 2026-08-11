@@ -26,6 +26,7 @@ alert / signal comes from), **Triggered by** (the literal condition),
 | [database](database.md) | DB shape, common queries, GORM auto-migrate gotchas |
 | [pg-restore](pg-restore.md) | Restoring PostgreSQL from backup |
 | [incident-response](incident-response.md) | General incident response framework |
+| [oidc-enable-activation](oidc-enable-activation.md) | Turning `OIDC_ENABLED` on (Lutu search is dark without it) — blast radius across four auth paths, and the order that keeps `/api/v2/admin/**` reachable |
 
 ## When to add a runbook
 

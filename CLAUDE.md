@@ -85,9 +85,12 @@ ssh root@100.122.83.20 "kubectl get pods -n lurus-newhub"                # R6 Ta
 ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=100"
 # 部署 = merge → Publish workflow 出新 :main 镜像 → 取 digest 后钉版:
 #   kubectl set image deployment/lurus-newhub lurus-newhub=ghcr.io/hanmahong5-arch/lurus-newhub@sha256:<新digest> -n lurus-newhub
-# ⚠️ 多副本滚动会静默跳过 migration(boot-lease 被存活 leader 持有;2026-07-15
-# prod 曾因此停在 022)。带 migration 的部署后必须核 schema_migrations,或
-# scale 0→3 强制无锁首启;根修(lease 获得时补跑)待做。
+# migration 已与 leadership lease 解耦(57e22c8a,2026-07-14):每个 master-capable
+# 副本启动都跑,由 bootAutoMigrateLockID + runner 自己的 AdvisoryLockID 两把
+# advisory lock 串行化,滚动更新不再漏跑(2026-07-15 prod 停在 022 是解耦前的旧行为,
+# 无需再做 scale 0→3 仪式)。带 migration 的部署后仍建议核 schema_migrations;
+# 漂移信号见 /metrics 的 lurus_gateway_schema_migrations_pending 与
+# /api/health 的 checks.schema_migrations。
 ```
 
 ## K8s Deployment Facts
@@ -128,7 +131,7 @@ env 详表（Required / platform Integration / OIDC / Meilisearch / Runtime Tuni
 
 ## Key Runtime Notes
 
-- **DB 自动迁移**: 启动时 GORM 自动建表（Go 结构体驱动）+ embedded SQL migration runner（`internal/pkg/migration`，boot lease winner 上自动跑，`MIGRATIONS_AUTO_RUN=false` 可关）。**Baseline 契约**: `migrations/` 001–020 只记账永不执行（001–004 是 MySQL 方言）；021 起必须 PG-only + 幂等，ID 先在 root `doc/coord/migration-ledger.md` 预留
+- **DB 自动迁移**: 启动时 GORM 自动建表（Go 结构体驱动）+ embedded SQL migration runner（`internal/pkg/migration`，**每个 master 副本**上自动跑并由 advisory lock 串行化，`MIGRATIONS_AUTO_RUN=false` 可关）。**Baseline 契约**: `migrations/` 001–020 只记账永不执行（001–004 是 MySQL 方言）；021 起必须 PG-only + 幂等，ID 先在 root `doc/coord/migration-ledger.md` 预留
 - **PG-only (2026-06)**: `SQL_DSN` 必须 `postgres://`/`postgresql://`，否则 boot fast-fail；MySQL 与 SQLite dev fallback 已删（glebarez SQLite 仅存于 hermetic 单测 tier）
 - **渠道缓存**: Redis 存在时自动启用内存缓存，`SYNC_FREQUENCY` 控制同步周期
 - **Background tasks**: `lifecycle.Manager` 管理，`TickerTask` 封装定时任务

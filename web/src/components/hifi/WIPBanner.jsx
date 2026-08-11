@@ -39,9 +39,9 @@ const WIPBanner = ({ reason, todo }) => {
       style={{
         margin: '14px 24px 0',
         padding: '10px 14px',
-        border: '1px dashed var(--hf-warn, #c08a3e)',
+        border: '1px dashed var(--hf-warn)',
         borderRadius: 2,
-        background: 'rgba(192,138,62,0.08)',
+        background: 'var(--hf-warn-bg)',
         color: 'var(--hf-ink-2)',
         fontFamily: 'var(--hf-mono)',
         fontSize: 11,

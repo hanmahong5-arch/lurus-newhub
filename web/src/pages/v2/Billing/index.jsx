@@ -305,51 +305,55 @@ const HFBilling = () => {
               {tr('console.billing.no_invoices', 'no invoice data')}
             </div>
           ) : (
-            <table className='t'>
-              <thead>
-                <tr>
-                  <th>{tr('console.billing.th_period', 'period')}</th>
-                  <th>{tr('console.billing.th_amount_cny', 'amount (CNY)')}</th>
-                  <th>{tr('console.billing.th_quota_used', 'quota used')}</th>
-                  <th>{tr('console.billing.th_requests', 'requests')}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {invoices.map((inv, i) => (
-                  <tr key={i}>
-                    <td className='mono strong'>{inv.month}</td>
-                    <td>
-                      <span className='display' style={{ fontSize: 16 }}>
-                        {fmtCNY(inv.amount_cny)}
-                      </span>
-                    </td>
-                    <td className='mono muted'>
-                      {fmtQuota(
-                        inv.quota,
-                        tr('console.billing.usd_eq', 'USD eq.'),
-                      )}
-                    </td>
-                    <td className='mono muted'>{inv.request_count ?? '—'}</td>
-                    <td>
-                      {/* Download PDF — deferred to Phase 2 */}
-                      <button
-                        type='button'
-                        className='btn ghost sm'
-                        data-testid={`billing-download-${i}`}
-                        disabled
-                        title={tr(
-                          'console.billing.pdf_deferred',
-                          'invoice PDF generation deferred — see Phase 2 backlog',
-                        )}
-                      >
-                        PDF
-                      </button>
-                    </td>
+            <div className='hf-table-scroll'>
+              <table className='t'>
+                <thead>
+                  <tr>
+                    <th>{tr('console.billing.th_period', 'period')}</th>
+                    <th>
+                      {tr('console.billing.th_amount_cny', 'amount (CNY)')}
+                    </th>
+                    <th>{tr('console.billing.th_quota_used', 'quota used')}</th>
+                    <th>{tr('console.billing.th_requests', 'requests')}</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {invoices.map((inv, i) => (
+                    <tr key={i}>
+                      <td className='mono strong'>{inv.month}</td>
+                      <td>
+                        <span className='display' style={{ fontSize: 16 }}>
+                          {fmtCNY(inv.amount_cny)}
+                        </span>
+                      </td>
+                      <td className='mono muted'>
+                        {fmtQuota(
+                          inv.quota,
+                          tr('console.billing.usd_eq', 'USD eq.'),
+                        )}
+                      </td>
+                      <td className='mono muted'>{inv.request_count ?? '—'}</td>
+                      <td>
+                        {/* Download PDF — deferred to Phase 2 */}
+                        <button
+                          type='button'
+                          className='btn ghost sm'
+                          data-testid={`billing-download-${i}`}
+                          disabled
+                          title={tr(
+                            'console.billing.pdf_deferred',
+                            'invoice PDF generation deferred — see Phase 2 backlog',
+                          )}
+                        >
+                          PDF
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 

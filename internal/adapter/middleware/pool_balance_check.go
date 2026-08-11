@@ -2,12 +2,15 @@ package middleware
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,12 +22,22 @@ import (
 //
 // Behaviour (ADR 2026-05-18 (tenant-credit-pool) §5 enforcement order):
 //
-//	no pool row        → bypass (treated as unlimited; back-compat default)
+//	no pool row        → gated by CREDIT_POOL_REQUIRED (setting.GetCreditPoolRequired):
+//	                       off (default) → bypass, byte-identical to the
+//	                         original back-compat default (treated as unlimited)
+//	                       log           → bypass + counter + structured log,
+//	                         so ops can size the blast radius pre-rollout
+//	                       enforce       → HTTP 402 pool_not_configured, abort chain
 //	unlimited pool     → bypass (MaxBalance == -1 sentinel)
 //	exhausted pool     → HTTP 402 with structured body, abort chain
 //	any DB error       → log and bypass (fail-open; don't break traffic on
 //	                     transient repo issues — schema dedup at debit time
-//	                     remains the safety net for over-consumption)
+//	                     remains the safety net for over-consumption).
+//	                     Deliberate residual: this stays fail-open even when
+//	                     CREDIT_POOL_REQUIRED=enforce — a DB blip must not 402
+//	                     the entire tenant base just because the pool-required
+//	                     rollout is on; only a genuinely-absent pool row is
+//	                     enforced.
 //
 // Position in chain: AFTER TokenAuth, BEFORE CostSpikeLimit. Inserted on
 // every relay group that can spend tenant credit: /v1 (chat), /mj
@@ -47,11 +60,40 @@ func PoolBalanceCheck() gin.HandlerFunc {
 		pool, err := repo.GetTenantCreditPool(tenantID)
 		if err != nil {
 			if errors.Is(err, repo.ErrPoolNotFound) {
-				// ADR §5: absence of a row = unlimited. Bypass.
-				c.Next()
-				return
+				// ADR §5 default: absence of a row = unlimited, bypass. The
+				// CREDIT_POOL_REQUIRED flag lets ops gradually turn this into a
+				// hard block (Phase 0 of the pool-required rollout). Unknown flag
+				// values already degrade to "off" inside GetCreditPoolRequired —
+				// this switch never fail-opens to enforce on its own.
+				switch setting.GetCreditPoolRequired() {
+				case setting.CreditPoolRequiredEnforce:
+					app.RecordPoolNotConfigured(tenantID, "enforce")
+					c.JSON(http.StatusPaymentRequired, gin.H{
+						"error": gin.H{
+							"code":      "pool_not_configured",
+							"message":   "Tenant credit pool is not configured",
+							"tenant_id": tenantID,
+						},
+					})
+					c.Abort()
+					return
+				case setting.CreditPoolRequiredLog:
+					group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+					app.RecordPoolNotConfigured(tenantID, "log")
+					common.SysLog(fmt.Sprintf(
+						`{"event":"pool_required_miss","who":"tenant:%s","group":"%s","what":"relay admitted request with no credit pool row","result":"bypass (CREDIT_POOL_REQUIRED=log)"}`,
+						tenantID, group))
+					c.Next()
+					return
+				default:
+					// "off" — byte-identical to pre-flag behaviour.
+					c.Next()
+					return
+				}
 			}
-			// Transient DB issue → fail open, but log so ops see it.
+			// Transient DB issue → fail open, but log so ops see it. This stays
+			// fail-open even under CREDIT_POOL_REQUIRED=enforce — see the
+			// "Deliberate residual" note in the godoc above.
 			common.SysError("pool_balance_check: tenant=" + tenantID + " err=" + err.Error())
 			c.Next()
 			return

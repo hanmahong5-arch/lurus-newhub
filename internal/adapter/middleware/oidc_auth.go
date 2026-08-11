@@ -16,6 +16,8 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -176,6 +178,11 @@ var (
 	// values (OIDC_ALLOWED_AUDIENCES, comma-separated). oidcClientID is always
 	// an accepted audience regardless of this list (see checkAudience).
 	oidcAllowedAudiences []string
+	// oidcConsumerAudiences holds the client_ids of first-party CONSUMER apps
+	// (OIDC_CONSUMER_AUDIENCES, comma-separated) accepted by RequireOIDCToken
+	// only. These are deliberately NOT accepted by OIDCAuth: a consumer app
+	// token carries no org_id and must never resolve to a newhub tenant.
+	oidcConsumerAudiences []string
 )
 
 // InitOIDCAuth initializes the OIDC authentication system.
@@ -228,6 +235,20 @@ func InitOIDCAuth() error {
 	for _, part := range strings.Split(rawAudiences, ",") {
 		if v := strings.TrimSpace(part); v != "" {
 			oidcAllowedAudiences = append(oidcAllowedAudiences, v)
+		}
+	}
+
+	// OIDC_CONSUMER_AUDIENCES: comma-separated client_ids of first-party
+	// CONSUMER apps (e.g. the Lutu APP) permitted on the consumer gate
+	// RequireOIDCToken. Such an app holds its own client_id, so its tokens
+	// never carry newhub's OIDC_CLIENT_ID in "aud" — see
+	// setting.GetConsumerAudRequired for the rollout flag that governs whether
+	// a non-matching audience is merely logged or rejected.
+	oidcConsumerAudiences = nil
+	rawConsumerAudiences := os.Getenv("OIDC_CONSUMER_AUDIENCES")
+	for _, part := range strings.Split(rawConsumerAudiences, ",") {
+		if v := strings.TrimSpace(part); v != "" {
+			oidcConsumerAudiences = append(oidcConsumerAudiences, v)
 		}
 	}
 
@@ -929,9 +950,56 @@ func RequireOIDCToken() gin.HandlerFunc {
 			return
 		}
 
+		// Audience: a valid issuer alone does not say the token was minted FOR
+		// this service. Without this check any token from any client under the
+		// same issuer — every other Lurus product — can be replayed here and
+		// spend the shared upstream quota this gate exists to protect.
+		// Consumer apps hold their own client_id, so the accepted set is wider
+		// than OIDCAuth's; see setting.GetConsumerAudRequired for why this is
+		// staged rather than enforced outright.
+		if !checkConsumerAudience(claims.Audience) {
+			mode := setting.GetConsumerAudRequired()
+			if mode == setting.ConsumerAudRequiredEnforce {
+				metrics.RecordConsumerAudienceMismatch("enforce")
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"success": false,
+					"message": fmt.Sprintf("Invalid audience: got %v", []string(claims.Audience)),
+				})
+				c.Abort()
+				return
+			}
+			if mode == setting.ConsumerAudRequiredLog {
+				metrics.RecordConsumerAudienceMismatch("log")
+				common.SysLog(fmt.Sprintf(
+					"consumer gate audience mismatch (admitted; OIDC_CONSUMER_AUD_REQUIRED=log): aud=%v sub=%s — add this aud to OIDC_CONSUMER_AUDIENCES before switching to enforce",
+					[]string(claims.Audience), claims.Subject))
+			}
+		}
+
 		c.Set("oidc_user_id", claims.Subject)
 		c.Next()
 	}
+}
+
+// checkConsumerAudience validates "aud" for the consumer gate
+// (RequireOIDCToken). It accepts everything checkAudience accepts — this
+// service's own OIDC_CLIENT_ID plus OIDC_ALLOWED_AUDIENCES — and additionally
+// the first-party consumer client_ids in OIDC_CONSUMER_AUDIENCES.
+//
+// A token with no "aud" at all never passes: an audience-less token is exactly
+// the shape this check exists to stop.
+func checkConsumerAudience(aud jwt.ClaimStrings) bool {
+	if checkAudience(aud) {
+		return true
+	}
+	for _, a := range aud {
+		for _, want := range oidcConsumerAudiences {
+			if a == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // mapOIDCUserToLurus maps an OIDC user to a lurus user and tenant.

@@ -32,6 +32,20 @@ import {
   isHardUnauthorized,
   shouldEmit,
 } from './errorMessages';
+import { hfToast } from '../components/hifi/HfToast';
+
+// showError/showSuccess/showWarning/showInfo are the single funnel used by
+// ~30 v1 + v2 call sites. On /console/v2/* they must render through the
+// `.hf` scope HfToast primitive instead of the Semi UI Toast — Semi's
+// ant-design-flavoured popup visually clashes with the hi-fi editorial
+// aesthetic (see doc/coord/ui-industrial-audit-2026-07-07.md fixPlan #2).
+// Legacy /console/* v1 pages are unaffected and keep the Semi Toast.
+function isV2Route() {
+  return (
+    typeof window !== 'undefined' &&
+    window.location?.pathname?.startsWith('/console/v2')
+  );
+}
 
 const HTMLToastContent = ({ htmlContent }) => {
   return <div dangerouslySetInnerHTML={{ __html: htmlContent }} />;
@@ -161,7 +175,9 @@ export function showError(error) {
 
   // Plain string passed in by a caller (e.g. showError('Copy failed')).
   if (typeof error === 'string') {
-    if (shouldEmit(error)) Toast.error(error);
+    if (shouldEmit(error)) {
+      isV2Route() ? hfToast.error(error) : Toast.error(error);
+    }
     return;
   }
 
@@ -172,27 +188,27 @@ export function showError(error) {
 
   const message = resolveErrorMessage(error);
   if (shouldEmit(message)) {
-    Toast.error(message);
+    isV2Route() ? hfToast.error(message) : Toast.error(message);
   }
 }
 
 export function showWarning(message) {
-  Toast.warning(message);
+  isV2Route() ? hfToast.warning(message) : Toast.warning(message);
 }
 
 export function showSuccess(message) {
-  Toast.success(message);
+  isV2Route() ? hfToast.success(message) : Toast.success(message);
 }
 
 export function showInfo(message) {
-  Toast.info(message);
+  isV2Route() ? hfToast.info(message) : Toast.info(message);
 }
 
 export function showNotice(message, isHTML = false) {
   if (isHTML) {
     toast(<HTMLToastContent htmlContent={message} />, showNoticeOptions);
   } else {
-    Toast.info(message);
+    isV2Route() ? hfToast.info(message) : Toast.info(message);
   }
 }
 
