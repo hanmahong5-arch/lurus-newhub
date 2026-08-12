@@ -4,16 +4,26 @@ on:
   push:
     branches:
       - main
-  pull_request:
-    types: [closed]
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       reason:
         description: "Deployment reason"
         required: false
         default: "Manual deployment"
+
+# NOTE: the `pull_request: types: [closed]` trigger that used to sit here was
+# removed 2026-08-11. Every PR merge into main already produces a `push` event
+# on main (GitHub creates the merge commit and pushes it), so the two triggers
+# fired for the SAME commit at the SAME time on every merge. That made this
+# workflow run "Build Staging Image" twice concurrently for one commit, and
+# both copies raced to write the same default `type=gha` buildx cache scope —
+# confirmed via `gh run view --log-failed` on 5/5 sampled failures, all
+# pull_request-triggered, all: "buildx failed with: ERROR: failed to build:
+# failed to solve: error writing layer blob: failed to reserve cache", each
+# paired with a same-second push-triggered run of the identical commit that
+# succeeded. Removing the redundant trigger removes the race by construction
+# (one run per commit) without losing any coverage — direct pushes to main
+# (no PR) were never covered by the removed trigger anyway.
 
 # Prevent concurrent deployments
 concurrency:
@@ -25,8 +35,6 @@ jobs:
   build:
     name: Build Staging Image
     runs-on: ubuntu-latest
-    # Only run on push to main or merged PR
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     permissions:
       packages: write
       contents: read

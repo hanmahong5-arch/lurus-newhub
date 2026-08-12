@@ -1,7 +1,23 @@
 name: Publish Docker image (main branch)
 
+# 2026-08-11: absorbed the former separate "Build and Push Docker Image"
+# workflow (build.yaml, now deleted). That workflow triggered on the same
+# `push: branches:[main]` event and built the identical Dockerfile/context,
+# and its `docker/metadata-action` config (`type=ref,event=branch`) produced
+# the SAME `:main` tag this workflow already pushes — i.e. on every merge to
+# main, two independent builds raced to push ghcr.io/…/lurus-newhub:main,
+# and whichever finished last silently won (registry last-write-wins on a
+# tag), so the digest the deploy runbook tells you to pin was
+# non-deterministic based on build-runner scheduling. Its only non-duplicate
+# value was the Trivy HIGH/CRITICAL vulnerability gate (on push AND on PR,
+# pre-merge) — that gate is folded in below, now scanning the actual
+# `:main`/`:main-<date>-<sha>` artifact instead of a throwaway look-alike
+# build that was never the one actually deployed.
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
   workflow_dispatch:
@@ -56,6 +72,10 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
+        # Skip on PR: PRs don't push, so no registry credentials are needed
+        # (and PRs from forks wouldn't have a usable GITHUB_TOKEN for pushing
+        # anyway). Mirrors the guard the old build.yaml PR job used.
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -74,7 +94,11 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          push: true
+          # On PRs: build only, load into the local daemon so Trivy can scan
+          # it, don't push (no `:main`/version tag should ever be published
+          # from unmerged code). push/load are mutually exclusive.
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: |
             ghcr.io/${{ env.GHCR_REPOSITORY }}:main
             ghcr.io/${{ env.GHCR_REPOSITORY }}:${{ steps.version.outputs.value }}
@@ -83,3 +107,19 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
+
+      - name: Scan image for HIGH/CRITICAL vulnerabilities (Trivy)
+        # BLOCKING gate, absorbed from the deleted build.yaml. ignore-unfixed
+        # drops CVEs with no upstream fix yet so the gate stays actionable.
+        # Scans the exact tag just built above (pushed on push/dispatch,
+        # locally loaded on PR) — i.e. the real artifact, not a parallel
+        # throwaway build, so a red run here means the image that would
+        # actually reach `:main` has a fixable HIGH/CRITICAL CVE.
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ env.GHCR_REPOSITORY }}:${{ steps.version.outputs.value }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          exit-code: '1'
