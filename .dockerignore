@@ -7,4 +7,12 @@ Makefile
 docs
 .eslintcache
 .gocache
-/web/node_modules
+# Was `/web/node_modules`. Anchored to one path, so a second dependency tree
+# anywhere else (electron/, tooling) still shipped. `**/` is layout-independent.
+**/node_modules
+
+# Runtime log output. Measured 2026-08-11 with a probe image
+# (`COPY . /ctx` + `du`): 171.5M of a 215.7M build context — 80% — for an
+# image that never reads them. gitignored, so CI's fresh checkout never had
+# them and this only ever hurt local / manual R6 builds.
+logs/
