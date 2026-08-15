@@ -28,15 +28,46 @@ runbook; use **staging/** for the Traefik + OIDC path. A full merge/delete is
 **deferred** until the OIDC-vs-platform-identity choice is settled (ADR pending) —
 see the Wave-2 deferred list.
 
+## Resource inventory (live-verified 2026-08-15)
+
+`kubectl -n lurus-newhub get deploy,svc,cm,ingress,hpa,pdb` on R6 returns exactly:
+Deployment `lurus-newhub` (rev 38, 3/3 ready) + Service `lurus-newhub` (NodePort) +
+the auto-generated `kube-root-ca.crt` ConfigMap every namespace gets for free.
+**No Ingress, HPA, or PodDisruptionBudget objects exist in this namespace** — there
+is nothing to export for those kinds; do not add empty placeholder manifests for
+them. Ingress-equivalent routing is done by R6 host nginx (`deploy/r6-host-nginx/`),
+not a K8s Ingress object.
+
+Secret `lurus-newhub-secrets` carries exactly 6 keys (verified via
+`kubectl get secret lurus-newhub-secrets -n lurus-newhub -o go-template` printing
+key names only, values never read/stored — see `secret-template.yaml`).
+
+`deployment.yaml` / `service.yaml` in this directory were diffed field-by-field
+(minus `status`/`metadata.{uid,resourceVersion,creationTimestamp,generation}`/
+`kubectl.kubernetes.io/last-applied-configuration`) against the live objects on
+2026-08-15 and match exactly — no drift.
+
+### Relationship to the docker-compose `lurus-api` instance
+
+This K8s Deployment is unrelated to the `lurus-api` container defined by the
+root `docker-compose.yml` / `lurus-api.service`. That compose instance is a
+**frozen legacy artifact** (up 2+ months on R6 outside this namespace, untouched
+since; do not `docker-compose up`/restart/edit it as part of any K8s work here).
+The live product traffic (`test-newhub.lurus.cn`) is served exclusively by the
+`lurus-newhub` Deployment in this directory.
+
 ## First apply
 
 ```bash
-# 1. Seed the secret with real values (NEVER commit them):
+# 1. Seed the secret with real values (NEVER commit them; see secret-template.yaml
+#    for the full key list incl. optional TAVILY_API_KEY):
 kubectl -n lurus-newhub create secret generic lurus-newhub-secrets \
   --from-literal=SESSION_SECRET='<real>' \
   --from-literal=SQL_DSN='<real>' \
   --from-literal=IDENTITY_SERVICE_INTERNAL_KEY='<real>' \
-  --from-literal=IDENTITY_SESSION_SECRET='<real>'
+  --from-literal=IDENTITY_SESSION_SECRET='<real>' \
+  --from-literal=LURUS_WHITELABEL_MASTER_SECRET='<real>' \
+  --from-literal=TAVILY_API_KEY='<real, optional>'
 
 # 2. Apply the rest (kustomize will try to apply secret-template.yaml too;
 #    it is harmless because the keys above already exist — stringData is merged).
