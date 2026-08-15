@@ -6,7 +6,8 @@ Live deployment of `2b-svc-newhub` on the R6 STAGE cluster, fronted by R6 host n
 - Namespace: `lurus-newhub` — the ns the live Deployment/Service actually run in. (An earlier revision moved this to `lurus-staging` believing PG's `pg-access-control` netpol required it; that netpol no longer exists — `kubectl get netpol -n database` is empty — so the manifests were reverted to `lurus-newhub` to match the live cluster, 2026-07-07.)
 - Domain: https://test-newhub.lurus.cn
 - Service: NodePort 30850 -> container port 3000
-- Image: `ghcr.io/hanmahong5-arch/lurus-newhub@sha256:f97c72b4…` (pinned digest, `imagePullPolicy: IfNotPresent`) — resolved 2026-07-03 from the live R6 pod imageID and registry `:main` (they agree). Roll forward by re-resolving `:main` and updating `deployment.yaml`.
+- Image: `ghcr.io/hanmahong5-arch/lurus-newhub@sha256:c5ab7938…` (pinned digest, `imagePullPolicy: IfNotPresent`) — reconciled 2026-08-15 to the live cluster digest (= tag `main-20260811-d12acb2`, built from `main@d12acb24`). Roll forward by re-resolving `:main`, updating `deployment.yaml`, and syncing the ArgoCD app (below); rolling the cluster without bumping this file recreates the drift this reconcile just closed.
+- GitOps: ArgoCD Application `lurus-newhub-r6-stage` (ns `argocd`) tracks this directory with **manual** sync — it reports Synced/OutOfSync but never mutates the cluster on its own. See `argocd-application.yaml` for the registration rationale and the removal one-liner.
 
 ## Which overlay when (staging/ vs r6-stage/)
 

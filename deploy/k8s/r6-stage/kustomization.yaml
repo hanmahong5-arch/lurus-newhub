@@ -8,7 +8,13 @@ namespace: lurus-newhub
 
 resources:
   - namespace.yaml
-  - secret-template.yaml
+  # secret-template.yaml is deliberately NOT a resource: it carries
+  # placeholder values only, so including it made every `apply -k` (and any
+  # future ArgoCD sync) overwrite the real lurus-newhub-secrets with
+  # '<set-via-kubectl>' literals. The template stays in-tree as the schema
+  # doc; create/rotate the real Secret with the kubectl one-liner in its
+  # header. (Removed 2026-08-15 after `kubectl diff -k` showed the live
+  # secret as the only delta.)
   - deployment.yaml
   - service.yaml
   - netpol-nats-egress.yaml

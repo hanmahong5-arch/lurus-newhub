@@ -38,13 +38,16 @@ spec:
       containers:
         - name: lurus-newhub
           # Pinned to an immutable digest (was floating "main"). Digest resolved
-          # 2026-07-16 from the registry :main built off main@b6d96c91 (PRs #49
-          # boot-lock + #50 isolation guards) — repoDigest confirmed via
-          # `crictl inspecti` on the R6 node. Carries the boot advisory-lock
-          # statement_timeout fix, so a rolling update no longer crash-loops.
+          # 2026-08-15 to match the LIVE deployment (rolled 2026-08-11, rollout
+          # revision 38): image tag main-20260811-d12acb2, built from
+          # main@d12acb24 by the "Publish Docker image" run 31468773481 —
+          # provenance confirmed from that run's push log ("pushing manifest
+          # ... main-20260811-d12acb2@sha256:c5ab79…"). Previous pin (718f31f7,
+          # main@b6d96c91, 2026-07-16) had drifted behind the cluster because
+          # rolls were applied to the cluster without bumping this file.
           # To roll forward: repull :main, re-resolve the digest, update here.
           # GHCR repository name follows the GitHub repo name (hanmahong5-arch/lurus-newhub).
-          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:718f31f7e022ed52ee2e9f389e6f053fe693ff778126dd598b53ed662bc2deab
+          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:c5ab7938360a9cfadf575e30cf3506239fad86b7e2ef5cc08bb347a99a030a0b
           imagePullPolicy: IfNotPresent
           # Container hardening (parity with base): no priv-escalation, read-only
           # root FS (writes go to the /data + /tmp emptyDirs below), drop all caps.
