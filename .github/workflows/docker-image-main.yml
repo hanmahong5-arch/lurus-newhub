@@ -26,6 +26,15 @@ on:
         description: "reason"
         required: false
 
+# Serialize runs per ref. Without this, two quick merges to main race their
+# `:main` tag pushes (registry last-write-wins — the exact non-determinism
+# documented above for the deleted build.yaml, just intra-workflow) AND their
+# bump_r6_manifest commits could pin digests out of build order. Queued runs
+# collapse to the newest pending one, which is the convergent end state anyway.
+concurrency:
+  group: docker-main-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build_and_push:
     name: Build & push (amd64)
@@ -33,6 +42,9 @@ jobs:
     permissions:
       packages: write
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -90,6 +102,7 @@ jobs:
             ghcr.io/${{ env.GHCR_REPOSITORY }}
 
       - name: Build & push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -123,3 +136,64 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
           exit-code: '1'
+
+  # Close the "cluster rolled without bumping the manifest" process gap the
+  # other way around: after every successful :main build (which also passed
+  # the Trivy gate above — this job is skipped when the scan fails), rewrite
+  # deploy/k8s/r6-stage/deployment.yaml's digest pin to the image just pushed.
+  # Git thereby always names the newest gate-passing image (desired state);
+  # the cluster catches up on the next deliberate manual ArgoCD sync/apply,
+  # never automatically. The bump commit carries [skip ci] so it triggers no
+  # workflows (no rebuild loop; a rebuild of identical source would produce a
+  # new digest and ping-pong forever without it).
+  bump_r6_manifest:
+    name: Auto-pin r6-stage manifest
+    needs: build_and_push
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build_and_push.outputs.version }}
+      DIGEST: ${{ needs.build_and_push.outputs.digest }}
+      FILE: deploy/k8s/r6-stage/deployment.yaml
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Rewrite digest pin
+        run: |
+          # Content predicates first — refuse to write garbage into the manifest.
+          case "$DIGEST" in
+            sha256:*) : ;;
+            *) echo "::error::build job emitted no usable digest ('$DIGEST') — aborting bump"; exit 1 ;;
+          esac
+          test -n "$VERSION" || { echo "::error::empty version output"; exit 1; }
+          sed -i -E "s|^(\s*)# pin: .*$|\1# pin: ${VERSION} run=${{ github.run_id }}|" "$FILE"
+          sed -i -E "/image: ghcr\.io\/hanmahong5-arch\/lurus-newhub@/ s|@sha256:[0-9a-f]+|@${DIGEST}|" "$FILE"
+          # Post-write predicate: the new digest must actually be in the file.
+          grep -F "image: ghcr.io/hanmahong5-arch/lurus-newhub@${DIGEST}" "$FILE"
+
+      - name: Commit & push ([skip ci])
+        run: |
+          if git diff --quiet; then
+            echo "digest unchanged — nothing to bump"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FILE"
+          git commit -m "chore(deploy): r6-stage auto-pin ${VERSION} [skip ci]"
+          # Rebase-retry: another merge (or another build's bump) may land
+          # between our checkout and push.
+          for i in 1 2 3; do
+            git push origin HEAD:main && exit 0
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort; echo "::error::bump commit no longer applies after rebase"; exit 1; }
+            sleep $((i * 5))
+          done
+          echo "::error::could not push bump commit after 3 attempts"
+          exit 1

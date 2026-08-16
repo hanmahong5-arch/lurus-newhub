@@ -6,7 +6,7 @@ Live deployment of `2b-svc-newhub` on the R6 STAGE cluster, fronted by R6 host n
 - Namespace: `lurus-newhub` — the ns the live Deployment/Service actually run in. (An earlier revision moved this to `lurus-staging` believing PG's `pg-access-control` netpol required it; that netpol no longer exists — `kubectl get netpol -n database` is empty — so the manifests were reverted to `lurus-newhub` to match the live cluster, 2026-07-07.)
 - Domain: https://test-newhub.lurus.cn
 - Service: NodePort 30850 -> container port 3000
-- Image: `ghcr.io/hanmahong5-arch/lurus-newhub@sha256:c5ab7938…` (pinned digest, `imagePullPolicy: IfNotPresent`) — reconciled 2026-08-15 to the live cluster digest (= tag `main-20260811-d12acb2`, built from `main@d12acb24`). Roll forward by re-resolving `:main`, updating `deployment.yaml`, and syncing the ArgoCD app (below); rolling the cluster without bumping this file recreates the drift this reconcile just closed.
+- Image: `ghcr.io/hanmahong5-arch/lurus-newhub@sha256:…` (pinned digest, `imagePullPolicy: IfNotPresent`). The pin is **auto-written by CI**: after every gate-passing `:main` build, the `bump_r6_manifest` job in `docker-image-main.yml` rewrites `deployment.yaml`'s `# pin:`/`image:` lines to the pushed digest (`[skip ci]` commit). Roll forward = just sync the ArgoCD app / `apply -k` — never `kubectl set image` (that recreates the manifest-behind-cluster drift closed on 2026-08-15).
 - GitOps: ArgoCD Application `lurus-newhub-r6-stage` (ns `argocd`) tracks this directory with **manual** sync — it reports Synced/OutOfSync but never mutates the cluster on its own. See `argocd-application.yaml` for the registration rationale and the removal one-liner.
 
 ## Which overlay when (staging/ vs r6-stage/)
@@ -69,8 +69,10 @@ kubectl -n lurus-newhub create secret generic lurus-newhub-secrets \
   --from-literal=LURUS_WHITELABEL_MASTER_SECRET='<real>' \
   --from-literal=TAVILY_API_KEY='<real, optional>'
 
-# 2. Apply the rest (kustomize will try to apply secret-template.yaml too;
-#    it is harmless because the keys above already exist — stringData is merged).
+# 2. Apply the rest. secret-template.yaml is intentionally NOT in the kustomize
+#    resources (see kustomization.yaml): kubectl apply REPLACES Secret data
+#    per-key rather than merging, so rendering the placeholder template would
+#    clobber the real values seeded above. `apply -k` leaves the Secret alone.
 kubectl apply -k deploy/k8s/r6-stage/
 
 # 3. (Optional/legacy) Seed the default tenant (slug='lurus') by hand — migration
