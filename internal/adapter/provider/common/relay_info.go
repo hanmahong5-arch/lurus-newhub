@@ -632,6 +632,7 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 	var data map[string]interface{}
 	if err := common.Unmarshal(jsonData, &data); err != nil {
 		common.SysError("RemoveDisabledFields Unmarshal error :" + err.Error())
+		//nolint:nilerr // by design: the body is returned unchanged, not a zero value. A non-object body has no top-level field to strip, so passthrough is the correct answer; propagating would reject a request the callers would otherwise relay fine.
 		return jsonData, nil
 	}
 
@@ -659,6 +660,7 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 	jsonDataAfter, err := common.Marshal(data)
 	if err != nil {
 		common.SysError("RemoveDisabledFields Marshal error :" + err.Error())
+		//nolint:nilerr // by design: data came from Unmarshal above so it only holds JSON-native values and cannot fail to marshal; the original body stays a valid request, so returning it is a safe degrade rather than failing the relay.
 		return jsonData, nil
 	}
 	return jsonDataAfter, nil
@@ -674,6 +676,7 @@ func RemoveGeminiDisabledFields(jsonData []byte) ([]byte, error) {
 	var data map[string]interface{}
 	if err := common.Unmarshal(jsonData, &data); err != nil {
 		common.SysError("RemoveGeminiDisabledFields Unmarshal error: " + err.Error())
+		//nolint:nilerr // by design, same contract as RemoveDisabledFields above: an unparsable body has no functionResponse.id to strip, so it is returned unchanged instead of failing the request.
 		return jsonData, nil
 	}
 
@@ -703,6 +706,7 @@ func RemoveGeminiDisabledFields(jsonData []byte) ([]byte, error) {
 	jsonDataAfter, err := common.Marshal(data)
 	if err != nil {
 		common.SysError("RemoveGeminiDisabledFields Marshal error: " + err.Error())
+		//nolint:nilerr // by design: data round-tripped through Unmarshal so Marshal cannot fail here; the untouched original body is still a valid request.
 		return jsonData, nil
 	}
 	return jsonDataAfter, nil

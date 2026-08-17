@@ -378,12 +378,6 @@ func (m *JWKSManager) autoRefreshWithContext(ctx context.Context) {
 	}
 }
 
-// autoRefresh periodically refreshes JWKS keys
-// Deprecated: Use autoRefreshWithContext instead.
-func (m *JWKSManager) autoRefresh() {
-	m.autoRefreshWithContext(context.Background())
-}
-
 // getKey retrieves an RSA public key by Key ID (kid)
 func (m *JWKSManager) getKey(kid string) (*rsa.PublicKey, error) {
 	m.mu.RLock()

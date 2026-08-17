@@ -65,7 +65,7 @@ func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dt
 // DoRequest implements provider.Adaptor.
 func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (any, error) {
 	if info.IsStream {
-		return provider.DoApiRequest(a, c, info, requestBody)
+		return provider.DoApiRequest(a, c, info, requestBody) //nolint:bodyclose // resp is handed to the relay layer, which owns closing it (DoResponse -> app.CloseResponseBodyGracefully); closing here would cut streaming bodies.
 	}
 	// 首先发送创建消息请求，成功后再发送获取消息请求
 	// 发送创建消息请求
@@ -76,6 +76,15 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 	// 解析 resp
 	var cozeResponse CozeChatResponse
 	respBody, err := io.ReadAll(resp.Body)
+	// This create-chat response is consumed here and never handed to the relay
+	// layer, so this function owns closing it — on the read-error path too.
+	// Closed right after the read rather than by defer: the poll loop below can
+	// run for many seconds, and a deferred close would keep the body (and the
+	// read-deadline timer WrapNonStreamReadDeadline armed on it) alive for that
+	// whole time.
+	if resp.Body != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +107,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 		time.Sleep(time.Second * 1)
 	}
 	// 发送获取消息请求
-	return getChatDetail(a, c, info)
+	return getChatDetail(a, c, info) //nolint:bodyclose // getChatDetail's resp is handed to the relay layer, which owns closing it.
 }
 
 // DoResponse implements provider.Adaptor.

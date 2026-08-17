@@ -410,7 +410,7 @@ func searchChannelsScoped(tenantID string, keyword string, group string, model s
 
 func GetChannelById(id int, selectAll bool) (*Channel, error) {
 	channel := &Channel{Id: id}
-	var err error = nil
+	var err error
 	if selectAll {
 		err = DB.First(channel, "id = ?", id).Error
 	} else {

@@ -577,11 +577,11 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 	if info.RelayMode == relayconstant.RelayModeAudioTranscription ||
 		info.RelayMode == relayconstant.RelayModeAudioTranslation ||
 		info.RelayMode == relayconstant.RelayModeImagesEdits {
-		return provider.DoFormRequest(a, c, info, requestBody)
+		return provider.DoFormRequest(a, c, info, requestBody) //nolint:bodyclose // resp is handed to the relay layer, which owns closing it (DoResponse -> app.CloseResponseBodyGracefully); closing here would cut streaming bodies.
 	} else if info.RelayMode == relayconstant.RelayModeRealtime {
 		return provider.DoWssRequest(a, c, info, requestBody)
 	} else {
-		return provider.DoApiRequest(a, c, info, requestBody)
+		return provider.DoApiRequest(a, c, info, requestBody) //nolint:bodyclose // resp is handed to the relay layer, which owns closing it (DoResponse -> app.CloseResponseBodyGracefully); closing here would cut streaming bodies.
 	}
 }
 
