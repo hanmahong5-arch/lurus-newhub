@@ -94,7 +94,7 @@ func configToMap(config interface{}) (map[string]string, error) {
 	result := make(map[string]string)
 
 	val := reflect.ValueOf(config)
-	if val.Kind() == reflect.Ptr {
+	if val.Kind() == reflect.Pointer {
 		val = val.Elem()
 	}
 
@@ -131,7 +131,7 @@ func configToMap(config interface{}) (map[string]string, error) {
 			strValue = strconv.FormatUint(field.Uint(), 10)
 		case reflect.Float32, reflect.Float64:
 			strValue = strconv.FormatFloat(field.Float(), 'f', -1, 64)
-		case reflect.Ptr:
+		case reflect.Pointer:
 			// 处理指针类型：如果非 nil，序列化指向的值
 			if !field.IsNil() {
 				bytes, err := json.Marshal(field.Interface())
@@ -164,7 +164,7 @@ func configToMap(config interface{}) (map[string]string, error) {
 // 辅助函数：从map更新配置对象
 func updateConfigFromMap(config interface{}, configMap map[string]string) error {
 	val := reflect.ValueOf(config)
-	if val.Kind() != reflect.Ptr {
+	if val.Kind() != reflect.Pointer {
 		return nil
 	}
 	val = val.Elem()
@@ -227,7 +227,7 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 				continue
 			}
 			field.SetFloat(floatValue)
-		case reflect.Ptr:
+		case reflect.Pointer:
 			// 处理指针类型
 			if strValue == "null" {
 				field.Set(reflect.Zero(field.Type()))

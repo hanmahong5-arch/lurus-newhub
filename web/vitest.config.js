@@ -43,6 +43,19 @@ export default defineConfig({
         'src/main.jsx',
         'src/i18n/**',
       ],
+      // Ratchet floor — 2026-08-17 measured baseline over 35 test files /
+      // 254 tests: statements 11.46-11.47, branches 12.86, functions
+      // 11.52-11.54, lines 11.12 (ranges are real run-to-run jitter observed
+      // across three consecutive runs). Floors are rounded down below that
+      // jitter so ordering alone can never turn CI red. These numbers only
+      // ever go UP: when a change raises the measured value, raise the floor
+      // with it in the same PR. Never lower them to make a red build pass.
+      thresholds: {
+        statements: 10,
+        branches: 11,
+        functions: 10,
+        lines: 10,
+      },
     },
   },
 });

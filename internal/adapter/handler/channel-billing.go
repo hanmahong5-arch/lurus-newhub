@@ -166,6 +166,14 @@ func GetResponseBody(method, url string, channel *repo.Channel, headers http.Hea
 	return body, nil
 }
 
+// Parked upstream provider helper: this fork no longer ships the channel type
+// that reached it (no ChannelTypeCloseAI constant exists), so updateChannelBalance
+// has no case for it. Kept verbatim rather than deleted — this file tracks the
+// upstream provider-balance set and every helper here follows the same shape, so
+// dropping one (plus the exported OpenAICreditGrants it solely owns) buys nothing
+// at runtime and diverges the file most exposed to upstream cherry-picks.
+//
+//nolint:unused // parked upstream provider helper; see comment above
 func updateChannelCloseAIBalance(channel *repo.Channel) (float64, error) {
 	url := fmt.Sprintf("%s/dashboard/billing/credit_grants", channel.GetBaseURL())
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
@@ -182,6 +190,12 @@ func updateChannelCloseAIBalance(channel *repo.Channel) (float64, error) {
 	return response.TotalAvailable, nil
 }
 
+// Parked upstream provider helper — its call site is deliberately preserved as
+// the commented-out ChannelTypeOpenAISB case in updateChannelBalance below, and
+// it solely owns the exported OpenAISBUsageResponse. Kept, not deleted, for the
+// same upstream-sync reason as updateChannelCloseAIBalance above.
+//
+//nolint:unused // parked upstream provider helper; call site preserved as a comment in updateChannelBalance
 func updateChannelOpenAISBBalance(channel *repo.Channel) (float64, error) {
 	url := fmt.Sprintf("https://api.openai-sb.com/sb-api/user/status?api_key=%s", channel.Key)
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))

@@ -145,7 +145,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
 	if a.ClientMode == ClientModeApiKey {
-		return provider.DoApiRequest(a, c, info, requestBody)
+		return provider.DoApiRequest(a, c, info, requestBody) //nolint:bodyclose // resp is handed to the relay layer, which owns closing it (DoResponse -> app.CloseResponseBodyGracefully); closing here would cut streaming bodies.
 	} else {
 		return doAwsClientRequest(c, info, a, requestBody)
 	}

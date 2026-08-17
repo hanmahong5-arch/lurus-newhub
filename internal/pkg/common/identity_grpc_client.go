@@ -29,7 +29,6 @@ func getIdentityGRPCAddr() string {
 var (
 	grpcClientOnce sync.Once
 	grpcClient     identityv1.IdentityServiceClient
-	grpcConn       *grpc.ClientConn
 )
 
 // getGRPCClient returns a singleton gRPC client. Returns nil if connection fails
@@ -47,7 +46,6 @@ func getGRPCClient() identityv1.IdentityServiceClient {
 			slog.Error("identity grpc client: failed to connect", "addr", identityGRPCAddr, "err", err)
 			return
 		}
-		grpcConn = conn
 		grpcClient = identityv1.NewIdentityServiceClient(conn)
 		slog.Info("identity grpc client connected", "addr", identityGRPCAddr)
 	})

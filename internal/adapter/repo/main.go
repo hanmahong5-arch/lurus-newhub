@@ -34,8 +34,6 @@ const migrationBaselineThrough = "020_create_privacy_erasure_requests"
 
 var commonGroupCol string
 var commonKeyCol string
-var commonTrueVal string
-var commonFalseVal string
 
 var logKeyCol string
 var logGroupCol string
@@ -48,14 +46,15 @@ func InitCol() {
 
 func initCol() {
 	// Runtime is PostgreSQL-only (2026-06). The hermetic glebarez SQLite
-	// unit-test tier also accepts double-quoted identifiers and true/false
-	// boolean literals, so these constants are unconditional.
+	// unit-test tier also accepts double-quoted identifiers, so these
+	// constants are unconditional.
 	// UPSTREAM-MERGE NOTE: new-api branches on MySQL/SQLite dialect here;
-	// newhub is PG-only, keep the PG constants on conflicts.
+	// newhub is PG-only, keep the PG constants on conflicts. Boolean-literal
+	// companions (commonTrueVal/commonFalseVal) were also set here but had no
+	// reader anywhere in the repo, so they were dropped; if an upstream merge
+	// reintroduces them, keep them only together with a call site.
 	commonGroupCol = `"group"`
 	commonKeyCol = `"key"`
-	commonTrueVal = "true"
-	commonFalseVal = "false"
 	logGroupCol = commonGroupCol
 	logKeyCol = commonKeyCol
 }
@@ -485,69 +484,6 @@ func migrateDB() error {
 	}
 	common.SysLog("Tenant context manager initialized successfully")
 
-	return nil
-}
-
-func migrateDBFast() error {
-
-	var wg sync.WaitGroup
-
-	migrations := []struct {
-		model interface{}
-		name  string
-	}{
-		{&Channel{}, "Channel"},
-		{&Token{}, "Token"},
-		{&User{}, "User"},
-		{&Option{}, "Option"},
-		{&Redemption{}, "Redemption"},
-		{&Ability{}, "Ability"},
-		{&Log{}, "Log"},
-		{&Midjourney{}, "Midjourney"},
-		{&QuotaData{}, "QuotaData"},
-		{&Task{}, "Task"},
-		{&Model{}, "Model"},
-		{&Vendor{}, "Vendor"},
-		{&PrefillGroup{}, "PrefillGroup"},
-		{&Setup{}, "Setup"},
-		{&InternalApiKey{}, "InternalApiKey"},
-		// Release/download management
-		{&entity.Release{}, "Release"},
-		{&entity.ReleaseArtifact{}, "ReleaseArtifact"},
-		{&entity.DownloadLog{}, "DownloadLog"},
-		// Governance audit trail
-		{&entity.AuditEvent{}, "AuditEvent"},
-		// OpenRouter free-model sync
-		{&entity.OpenRouterSyncJob{}, "OpenRouterSyncJob"},
-		{&entity.ModelUsageStat{}, "ModelUsageStat"},
-		// Tenant credit pools (Reseller mode, ADR 2026-05-18)
-		{&entity.TenantCreditPool{}, "TenantCreditPool"},
-		{&entity.TenantCreditPoolDraw{}, "TenantCreditPoolDraw"},
-	}
-	// 动态计算migration数量，确保errChan缓冲区足够大
-	errChan := make(chan error, len(migrations))
-
-	for _, m := range migrations {
-		wg.Add(1)
-		go func(model interface{}, name string) {
-			defer wg.Done()
-			if err := DB.AutoMigrate(model); err != nil {
-				errChan <- fmt.Errorf("failed to migrate %s: %v", name, err)
-			}
-		}(m.model, m.name)
-	}
-
-	// Wait for all migrations to complete
-	wg.Wait()
-	close(errChan)
-
-	// Check for any errors
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-	common.SysLog("database migrated")
 	return nil
 }
 

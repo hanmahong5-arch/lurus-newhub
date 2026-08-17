@@ -249,6 +249,14 @@ func getOpusDuration(r io.ReadSeeker) (float64, error) {
 		}
 	}
 
+	// 扫描一页有效 granule position 都没拿到（不是 OGG 容器 / 流被截断 / 只有头部页）
+	// 时不能报成功：调用方只在 err != nil 时才走兜底（TTS 按响应体积估算 token、
+	// STT 直接拒绝请求），(0, nil) 会被当成"这段音频就是 0 秒"而静默计 0 token。
+	// 与 getAACDuration 的 "no valid aac frames found" 保持同一约定。
+	if totalGranulePos <= 0 {
+		return 0, errors.New("no valid ogg/opus page with a granule position found")
+	}
+
 	// Opus 的采样率固定为 48000 Hz
 	duration := float64(totalGranulePos) / 48000.0
 	return duration, nil

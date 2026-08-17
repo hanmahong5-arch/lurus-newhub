@@ -336,6 +336,21 @@ func sunoFetchRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dto.Ta
 		Code: "success",
 		Data: tasks,
 	})
+	// Dropping this error returned (nil, nil), which RelayTaskFetch then serves
+	// as a 200 with a literal `{"code":"success","data":null}` — a query failure
+	// disguised as an empty result. Reported the same way as the video and music
+	// builders below.
+	//
+	// Known consequence: 500 puts this on the retry path
+	// (handler.shouldRetryTaskRelay treats any 5xx as retryable, and it tests
+	// StatusCode before LocalError), so a row whose Data is unmarshalable will
+	// retry up to RetryTimes on a failure that is local and deterministic. That
+	// is wasted work, not a correctness bug, and it is the behaviour the video
+	// and music builders already had — narrowing it means reordering the retry
+	// policy, which is a separate change.
+	if err != nil {
+		taskResp = app.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
+	}
 	return
 }
 
@@ -357,6 +372,9 @@ func sunoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dt
 		Code: "success",
 		Data: TaskModel2Dto(originTask),
 	})
+	if err != nil {
+		taskResp = app.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
+	}
 	return
 }
 

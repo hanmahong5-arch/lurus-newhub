@@ -116,7 +116,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
-	resp, err := provider.DoRequest(c, req, info)
+	resp, err := provider.DoRequest(c, req, info) //nolint:bodyclose // resp is handed to the relay layer, which owns closing it (DoResponse -> app.CloseResponseBodyGracefully); closing here would cut streaming bodies.
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}

@@ -148,7 +148,7 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
-	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader) //nolint:bodyclose // gorilla/websocket documents this handshake response as not needing Close: its Body is always a NopCloser over an in-memory buffer, and the net.Conn is owned by the returned Conn (or closed by Dial's own defer when the handshake fails).
 	if err != nil {
 		return nil, fmt.Errorf("dial failed to %s: %w", fullRequestURL, err)
 	}
