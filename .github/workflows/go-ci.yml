@@ -124,26 +124,30 @@ jobs:
     #
     # Measured 2026-08-17 by running THIS job's script twice against a pristine
     # checkout of main ff19c348 — same tree, same tests, the only difference
-    # being whether TEST_POSTGRES_DSN was set:
+    # being whether TEST_POSTGRES_DSN was set, and then confirmed by this job's
+    # own first CI run on the branch (run 32052999168):
     #
-    #                              no DSN     real PG    threshold
-    #   internal/app                88.4%  ->  89.4%        84
-    #   internal/adapter/repo       64.8%  ->  80.2%        62
-    #   internal/adapter/handler    69.1%  ->  69.1%        64   (see note below)
+    #                              no DSN     real PG    old gate -> new
+    #   internal/app                88.4%  ->  89.4%        84   ->  86
+    #   internal/adapter/repo       64.8%  ->  80.5%        62   ->  77
+    #   internal/adapter/handler    69.1%  ->  69.1%        64   ->  64
     #
     # The 88.4% reproduces this job's own 2026-08-09 CI measurement exactly,
-    # which is what makes the paired 89.4/80.2 trustworthy. Individual packages
+    # which is what makes the paired figures trustworthy. Individual packages
     # underneath show the effect far more starkly than the gated aggregates do:
     #
     #   internal/pkg/migration      13.2%  ->  90.6%
     #   internal/app/openrouter_pool 48.2% ->  96.4%
     #
-    # Attaching PG can only move a package's percentage up: the denominator is
-    # the package's statement count either way, and the DSN only ever un-skips
-    # tests. So this change cannot turn the gate red on its own — it just makes
-    # the measured number mean what it claims to mean. The thresholds are
-    # deliberately NOT touched in this change; they are ratcheted separately,
-    # with a measured before/after, once the new actuals are confirmed in CI.
+    # internal/pkg/migration is the sharpest case: ~2400 lines of *_pg_test.go
+    # over the runner, advisory locking, the 022 convergence and the 030 seed,
+    # and the repo had been recording it as a 13% package.
+    #
+    # Attaching PG can only move a percentage up: the denominator is the
+    # package's statement count either way, and the DSN only ever un-skips
+    # tests. So this cannot turn the gate red on its own — it makes the measured
+    # number mean what it claims to mean, and the ratchet below then removes the
+    # dead zone that was hiding underneath it.
     services:
       # Copied from the pg-integration job below (same image/creds/health gate)
       # so both jobs exercise the same PostgreSQL major version. Keep them in
@@ -246,14 +250,21 @@ jobs:
           #   internal/app 88.4% · internal/adapter/repo 64.3% · internal/adapter/handler 69.1%
           # Lifted by the 232-file 2026-07-25 coverage corpus (#72) landing on
           # top of the #70 defect fixes. Before: 25 / 59 / 48.
-          # 2026-08-17: the three thresholds below are UNCHANGED, but what they
-          # measure changed — this job now supplies a real PostgreSQL, so the
-          # PG-gated tests no longer skip. All three still clear, with more room
-          # than before, so nothing goes red. Raising them is a separate change
-          # that must cite CI-measured actuals; do not ratchet from this note alone.
-          check_pkg "internal/app"             84 "internal/app"             # 88.4% hermetic -> 89.4% with PG (both measured on ff19c348, 2026-08-17); 84 = 88.4-4.4pt buffer. Was 25 vs an actual 27.0% from 2026-05-31 — a 61pt dead zone once the corpus landed.
-          check_pkg "internal/adapter/repo"    62 "internal/adapter/repo"    # 64.8% hermetic -> 80.2% with PG (2026-08-17; ±0.1pt run-to-run); 62 = 64.3-2.3pt buffer from the 2026-08-09 CI number. That old ceiling WAS the skip: repo's PG-only tests never ran in this job, hiding ~15pt. Biggest headroom of the three for the next ratchet.
-          check_pkg "internal/adapter/handler" 64 "internal/adapter/handler" # 69.1% either way (2026-08-17). It does have a PG-gated test (cov_handler-deep-b_logs_test.go:258 skips without TEST_POSTGRES_DSN) and that test now runs, but it exercises so few statements that the package total is unchanged at one decimal — so "unchanged" here means measured-and-unchanged, not not-applicable. 64 = 69.1-5.1pt buffer, keeping the wider buffer this package has carried since 2026-07-20 (it has the most cross-test global state). Prior: 48 from a 52.8% measurement.
+          # 2026-08-17 ratchet, and it is the whole point of attaching PostgreSQL
+          # above. Actuals printed by THIS job on this branch's first CI run
+          # (run 32052999168, job 95456641281) — CI-measured, not local:
+          #   internal/app 89.4% · internal/adapter/repo 80.5% · internal/adapter/handler 69.1%
+          # Against the prior gates of 84 / 62 / 64 that is a 5.4 / 18.5 / 5.1pt
+          # spread. The repo one is the reason this mattered: 62 was derived from
+          # a 64.3% "hermetic ceiling" that was really just the PG tests skipping,
+          # so the package could have lost 18 points of real coverage without the
+          # gate noticing. Buffers kept at 3.4 / 3.5 / 5.1pt.
+          #
+          # Keep internal/app/coverage_honesty_test.go's `want` map in step with
+          # these three numbers — it reads this file and fails if they diverge.
+          check_pkg "internal/app"             86 "internal/app"             # 88.4% hermetic -> 89.4% with PG. 86 = 89.4-3.4pt buffer. Prior gate 84 (from the 88.4 hermetic number). Was 25 vs an actual 27.0% in 2026-05-31 — a 61pt dead zone once the 2026-07-25 corpus landed.
+          check_pkg "internal/adapter/repo"    77 "internal/adapter/repo"    # 64.8% hermetic -> 80.5% with PG. 77 = 80.5-3.5pt buffer. Prior gate 62, i.e. an 18.5pt dead zone, and the old 64.3 "hermetic ceiling" WAS the skip: this package's PG-only tests never ran in this job. Largest single correction in this ratchet.
+          check_pkg "internal/adapter/handler" 64 "internal/adapter/handler" # 69.1% either way — unchanged, so its gate is unchanged. It does have a PG-gated test (cov_handler-deep-b_logs_test.go:258 skips without TEST_POSTGRES_DSN) and that test now runs, but it exercises too few statements to move the package total at one decimal; "unchanged" here means measured-and-unchanged, not not-applicable. 64 = 69.1-5.1pt, keeping the wider buffer this package has carried since 2026-07-20 (it has the most cross-test global state). Prior: 48 from a 52.8% measurement.
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""
@@ -599,26 +610,31 @@ jobs:
           #     staticcheck 538 · errcheck 208 · errorlint 84 · contextcheck 36
           #     bodyclose 36 · ineffassign 20 · unused 16 · govet 7 · nilerr 5
           #
-          #   this branch (2026-08-17, after the fixes it carries)   873
-          #     staticcheck 526 · errcheck 208 · errorlint 83 · contextcheck 36
-          #     ineffassign 13 · bodyclose 4 · unused 3 · govet 0 · nilerr 0
-          #     (573 production / 300 _test.go)
+          #   this branch, measured BY THIS JOB (run 32052999168)   666
+          #     staticcheck 320 · errcheck 208 · errorlint 83 · contextcheck 36
+          #     ineffassign 13 · unused 3 · bodyclose 3 · govet 0 · nilerr 0
+          #     (573 production / 93 _test.go)
           #
-          # The delta is -77 and it reconciles per-linter against the fixes in
-          # this branch, so the ceiling is set at the branch value, not the main
-          # value: leaving it at 950 would hand back 77 points of silent room.
+          # ⚠️ Read this before trusting a local count. The same command on a
+          # Windows dev box reported 873 for this same tree — 573 production
+          # (identical) and 300 test-file findings, against CI's 93. The entire
+          # spread is staticcheck, 526 local vs 320 here. Cause: that machine's
+          # golangci-lint binary was built with a newer Go toolchain than
+          # setup-go installs, and staticcheck's analysis moves with it. The
+          # per-linter table is what exposed it; a bare total would have looked
+          # like ordinary drift.
           #
-          # ⚠️ 873 was measured on Windows. This job runs on ubuntu-latest, and
-          # a per-platform difference of a few findings is possible. The step
-          # prints the count it actually observed — if CI's number differs,
-          # correct THIS constant to CI's number (and say so in the commit); do
+          # So: CI's number is the only one this constant may be set from. A
+          # local run is useful for direction, never for the value. The step
+          # prints what it observed on every run — if it disagrees with CEILING,
+          # correct CEILING to the printed number and say so in the commit; do
           # not widen it to whatever makes the build green.
           #
           # This number is expected to keep falling as the debt is paid down;
           # lower it as that happens so the ceiling keeps its grip. It is a cap
           # on regression, NOT a budget to spend up to.
           # ---------------------------------------------------------------
-          CEILING=873
+          CEILING=666
 
           REPORT=/tmp/lint-debt.json
           rm -f "$REPORT"

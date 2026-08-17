@@ -1,8 +1,10 @@
 # Key-metric uplift — 2026-08-17
 
-Baseline taken on `main ff19c348`. Every number below was measured on this
-machine with the tool CI uses; none is projected. Where a claim could not be
-verified locally it is marked as such rather than asserted.
+Baseline taken on `main ff19c348`. Every number below was measured with the tool
+CI uses; none is projected. Numbers are labelled local or CI, because this round
+produced a case where the two disagreed by 207 findings (§2) — where they
+disagree, CI wins for anything CI enforces. Where a claim could not be verified
+at all it says so rather than being asserted.
 
 Local harness for this round: a real PostgreSQL 16 (installed in WSL, reachable
 from the Windows side at `127.0.0.1:5432`), golangci-lint v2.12.2 and gosec off
@@ -44,9 +46,24 @@ Attaching PG can only move a percentage **up** (the denominator is the
 statement count either way; a DSN only un-skips tests), so this cannot turn the
 gate red on its own.
 
-**Thresholds were deliberately not raised in this change.** The gate's own rule
-is that a ratchet cites CI-measured actuals, and these are local. The first CI
-run on this branch prints the real numbers; ratchet then, in its own change.
+The gate's own rule is that a ratchet cites CI-measured actuals, so the
+thresholds were held until this branch's first CI run produced them
+(run 32052999168):
+
+| package | CI with PG | old gate | new gate | dead zone closed |
+|---|---|---|---|---|
+| `internal/app` | 89.4% | 84 | **86** | 5.4pt |
+| `internal/adapter/repo` | 80.5% | 62 | **77** | **18.5pt** |
+| `internal/adapter/handler` | 69.1% | 64 | 64 | — |
+
+The repo one is why this mattered: 62 was derived from a 64.3% "hermetic
+ceiling" that was really just the PG tests skipping, so that package could have
+shed 18 points of real coverage without the gate saying a word. The repo has
+been burned by exactly this before — `internal/app` sat at a gate of 25 against
+an actual 88.4% for months, a 61pt dead zone.
+
+`internal/app/coverage_honesty_test.go` reads `go-ci.yml` and fails if its
+`want` map diverges from the gate lines, so it moved in the same change.
 
 Also fixed while attaching PG: `check_pkg` hard-coded `-timeout=120s`, and
 `internal/adapter/repo` takes ~220s once its PG tests actually run. Left alone,
@@ -61,23 +78,42 @@ issues. The standing debt was never counted, so it could grow silently.
 Whole-repo count over `./internal/... ./cmd/...`, golangci-lint v2.12.2 with
 this repo's `.golangci.yml`:
 
-| | main `ff19c348` | this branch |
-|---|---|---|
-| total | 950 | **873** |
-| production files | 639 | 573 |
-| `_test.go` | 311 | 300 |
-| staticcheck | 538 | 526 |
-| errcheck | 208 | 208 |
-| errorlint | 84 | 83 |
-| contextcheck | 36 | 36 |
-| bodyclose | 36 | **4** |
-| ineffassign | 20 | **13** |
-| unused | 16 | **3** |
-| govet | 7 | **0** |
-| nilerr | 5 | **0** |
+| | main, local | branch, local | **branch, CI** |
+|---|---|---|---|
+| total | 950 | 873 | **666** |
+| production files | 639 | 573 | **573** |
+| `_test.go` | 311 | 300 | **93** |
+| staticcheck | 538 | 526 | **320** |
+| errcheck | 208 | 208 | 208 |
+| errorlint | 84 | 83 | 83 |
+| contextcheck | 36 | 36 | 36 |
+| bodyclose | 36 | 4 | **3** |
+| ineffassign | 20 | 13 | 13 |
+| unused | 16 | 3 | 3 |
+| govet | 7 | 0 | 0 |
+| nilerr | 5 | 0 | 0 |
 
-A new blocking `lint-debt-ceiling` job enforces `CEILING=873`. It is a ratchet:
+A new blocking `lint-debt-ceiling` job enforces `CEILING=666`. It is a ratchet:
 only ever lowered, each drop with a measured before/after.
+
+### The local count was wrong, and the per-linter table is what caught it
+
+The ceiling was first set to 873 — the local figure for the same tree. CI's own
+first run printed **666**. Production findings agree exactly at 573; the entire
+207-point spread is test-file staticcheck, 526 local against 320 in CI.
+
+Cause: this machine's golangci-lint binary was built with a newer Go toolchain
+than `setup-go` installs, and staticcheck's analysis moves with the toolchain it
+was compiled against. Same version string, different verdict.
+
+Two things made this recoverable. The step prints the count it observed on every
+run, and the constant shipped with an instruction to correct it to CI's number
+rather than widen it. And the job prints a **per-linter breakdown** — with only
+a total, 873 vs 666 reads as ordinary drift; with the breakdown, "production
+identical, one linter accounts for all of it" is unmistakable.
+
+The standing rule is now written into the file: a local run is useful for
+direction, never for the value.
 
 The job carries an anti-hollow sentinel — a count of 0 fails loudly, because 0
 means the run analysed nothing (bad scope, crashed linter, empty checkout)
@@ -99,8 +135,8 @@ It was caught because the verification pass re-ran the shipped step bytes under
 measured were not the same shell. Fixed with `|| LINT_RC=$?`, then re-verified
 under `bash -e`:
 
-(run while `CEILING` was still at the pre-final 877; the constant later dropped
-to 873 when four more findings were fixed)
+(run while `CEILING` was still at the pre-final 877; it later became 873 as four
+more findings were fixed, then 666 once CI reported its own count)
 
 - normal path (877 issues, linter exits 1) → step prints the breakdown, exit 0
 - count over ceiling → `::error::lint debt ceiling exceeded: 878 > 877`, exit 1
@@ -228,7 +264,7 @@ removed.
       (with TEST_POSTGRES_DSN — the PG tier really ran, not skipped)
     golangci-lint run --new-from-rev=origin/main ./...     0 issues
     gosec -severity high -confidence medium ./...          0 findings
-    lint-debt count, CI's exact command                    873
+    lint-debt count, CI's exact command                    873 local / 666 in CI
     lint-debt-ceiling step under `bash -e`                 pass + 3 negative tests
     cd web && bun run lint                                 clean
     cd web && bun run test:coverage                        35 files / 254 tests, 11.46%
@@ -250,13 +286,16 @@ Not verified locally, deliberately stated as such:
 
 ## 7. What was deliberately not done
 
-- **No bulk lint remediation.** 873 findings remain and most sit in
+- **No bulk lint remediation.** 666 findings remain and most sit in
   upstream-derived New API files. This fork syncs from upstream periodically;
   rewriting those files for lint cosmetics makes every future cherry-pick
   conflict. The ceiling caps the debt without paying that cost. Pay it down when
   a file is being edited for a real reason.
-- **No coverage-threshold ratchet.** See §1.
+- **No further coverage-threshold ratchet** beyond the CI-measured one in §1.
+  `internal/adapter/handler` stays at 64 against 69.1%: it carries the widest
+  buffer of the three because it has the most cross-test global state, and
+  nothing this round changed that.
 - **No `bun audit --audit-level high`.** See §4 — it still exits 1.
 - **`CEILING` was not set to the pristine-main 950.** That would have handed
-  back 77 points of silent room. It is set at the branch's measured 873, which
-  means CI's own first run either confirms it or names the correct number.
+  back 284 points of silent room. It is set at 666 — the number CI itself
+  printed.

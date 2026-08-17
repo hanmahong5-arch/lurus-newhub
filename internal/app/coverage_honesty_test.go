@@ -83,13 +83,21 @@ func TestAppCoverageGate_HonestBaseline(t *testing.T) {
 		t.Fatal("no check_pkg gate lines found in go-ci.yml — coverage gate may have been removed")
 	}
 
-	// Values track go-ci.yml. Ratcheted 2026-08-09 from 25/59/48 against actuals
-	// CI itself printed on the tree that became main 7c23ec7f (run 31304357298):
-	// app 88.4% / repo 64.3% / handler 69.1%, minus a 4.4 / 2.3 / 5.1pt buffer.
-	// History: 18/58/19 at α9 → 25/59/19 (2026-05-31) → handler 48 (2026-07-20).
+	// Values track go-ci.yml. Ratcheted 2026-08-17 from 84/62/64 against actuals
+	// CI itself printed once coverage-gate was given a real PostgreSQL
+	// (run 32052999168): app 89.4% / repo 80.5% / handler 69.1%, minus a
+	// 3.4 / 3.5 / 5.1pt buffer.
+	//
+	// repo moved 62 → 77 because its old "hermetic ceiling" of 64.3% was not a
+	// ceiling at all — it was the PG-gated tests silently skipping for want of
+	// TEST_POSTGRES_DSN. 18.5 points of real coverage could have been lost
+	// without this gate noticing.
+	//
+	// History: 18/58/19 at α9 → 25/59/19 (2026-05-31) → handler 48 (2026-07-20)
+	// → 84/62/64 (2026-08-09, the 232-file corpus) → 86/77/64 (2026-08-17).
 	want := map[string]int{
-		"internal/app":             84,
-		"internal/adapter/repo":    62,
+		"internal/app":             86,
+		"internal/adapter/repo":    77,
 		"internal/adapter/handler": 64,
 	}
 	for pkg, w := range want {
