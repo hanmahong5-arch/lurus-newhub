@@ -114,6 +114,56 @@ jobs:
     # The Wave-UAT ADR's "80/60/50 aren't reachable in hermetic tests" no longer
     # holds: the 2026-07-25 coverage corpus (PR #72) put all three past it
     # hermetically. Reconciled here and in doc/uat-handbook.md §4 on 2026-08-09.
+    #
+    # 2026-08-17: this job now runs against a real PostgreSQL (services.postgres
+    # below + TEST_POSTGRES_DSN on the test step). WHY: the PG-gated tests reach
+    # the database through SetupTestDB, which t.Skip()s when TEST_POSTGRES_DSN is
+    # unset. Without a DSN this job silently excluded every one of them, so the
+    # number the gate watched was not the repo's real coverage — it was the
+    # coverage of whatever happened to run hermetically.
+    #
+    # Measured 2026-08-17 by running THIS job's script twice against a pristine
+    # checkout of main ff19c348 — same tree, same tests, the only difference
+    # being whether TEST_POSTGRES_DSN was set:
+    #
+    #                              no DSN     real PG    threshold
+    #   internal/app                88.4%  ->  89.4%        84
+    #   internal/adapter/repo       64.8%  ->  80.2%        62
+    #   internal/adapter/handler    69.1%  ->  69.1%        64   (see note below)
+    #
+    # The 88.4% reproduces this job's own 2026-08-09 CI measurement exactly,
+    # which is what makes the paired 89.4/80.2 trustworthy. Individual packages
+    # underneath show the effect far more starkly than the gated aggregates do:
+    #
+    #   internal/pkg/migration      13.2%  ->  90.6%
+    #   internal/app/openrouter_pool 48.2% ->  96.4%
+    #
+    # Attaching PG can only move a package's percentage up: the denominator is
+    # the package's statement count either way, and the DSN only ever un-skips
+    # tests. So this change cannot turn the gate red on its own — it just makes
+    # the measured number mean what it claims to mean. The thresholds are
+    # deliberately NOT touched in this change; they are ratcheted separately,
+    # with a measured before/after, once the new actuals are confirmed in CI.
+    services:
+      # Copied from the pg-integration job below (same image/creds/health gate)
+      # so both jobs exercise the same PostgreSQL major version. Keep them in
+      # sync. pg-integration is NOT merged into this job and must stay: it owns
+      # the anti-hollow sentinel (TestIntegrationPGHarness_RealPostgres + the
+      # grep step), runs -v over the money-path suites, and is not
+      # coverage-gated. Different jobs, different guarantees.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -142,6 +192,11 @@ jobs:
           go-version: '1.25.x'
           cache: true
       - name: Check per-package coverage (statement-weighted)
+        env:
+          # Un-skips the SetupTestDB-gated tests. Without this the gate measures
+          # only the hermetic subset — see the job-level comment for the
+          # measured 13.2% -> 90.6% spread that motivated attaching PG.
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
         run: |
           set -e
           FAIL=0
@@ -158,7 +213,15 @@ jobs:
             local label="$3"
             local profile=/tmp/cov-${label//\//-}.out
 
-            go test -short -timeout=120s -coverprofile="$profile" -covermode=atomic "./${pkg_path}/..." > /tmp/test-out.log 2>&1 || {
+            # -timeout raised 120s -> 900s on 2026-08-17, because the PG-gated
+            # tests this job now runs are much slower than the hermetic subset.
+            # Measured cost of this whole step on main ff19c348: 80s without a
+            # DSN, 310s with a real PostgreSQL — internal/adapter/repo alone
+            # goes from 19s to 217s. The old 120s per-package budget would have
+            # turned the gate red the moment PG was attached, and a per-package
+            # timeout blows up as a test failure, so this had to move with it.
+            # 900s matches the pg-integration job and still fails fast on a hang.
+            go test -short -timeout=900s -coverprofile="$profile" -covermode=atomic "./${pkg_path}/..." > /tmp/test-out.log 2>&1 || {
               echo "  TEST FAILED for ${label} — see log below"
               cat /tmp/test-out.log
               FAIL=1
@@ -183,9 +246,14 @@ jobs:
           #   internal/app 88.4% · internal/adapter/repo 64.3% · internal/adapter/handler 69.1%
           # Lifted by the 232-file 2026-07-25 coverage corpus (#72) landing on
           # top of the #70 defect fixes. Before: 25 / 59 / 48.
-          check_pkg "internal/app"             84 "internal/app"             # actual 88.4% (2026-08-09); 84 = 88.4-4.4pt buffer. Was 25 vs an actual 27.0% from 2026-05-31 — a 61pt dead zone once the corpus landed.
-          check_pkg "internal/adapter/repo"    62 "internal/adapter/repo"    # actual 64.3% (2026-08-09); 62 = 64.3-2.3pt buffer. Smallest lift of the three: repo's hermetic ceiling is low because the PG-only tests skip without TEST_POSTGRES_DSN in this job (they run in the pg-integration job instead, which is not coverage-gated).
-          check_pkg "internal/adapter/handler" 64 "internal/adapter/handler" # actual 69.1% (2026-08-09); 64 = 69.1-5.1pt buffer, keeping the wider buffer this package has carried since 2026-07-20 (it has the most cross-test global state). Prior: 48 from a 52.8% measurement.
+          # 2026-08-17: the three thresholds below are UNCHANGED, but what they
+          # measure changed — this job now supplies a real PostgreSQL, so the
+          # PG-gated tests no longer skip. All three still clear, with more room
+          # than before, so nothing goes red. Raising them is a separate change
+          # that must cite CI-measured actuals; do not ratchet from this note alone.
+          check_pkg "internal/app"             84 "internal/app"             # 88.4% hermetic -> 89.4% with PG (both measured on ff19c348, 2026-08-17); 84 = 88.4-4.4pt buffer. Was 25 vs an actual 27.0% from 2026-05-31 — a 61pt dead zone once the corpus landed.
+          check_pkg "internal/adapter/repo"    62 "internal/adapter/repo"    # 64.8% hermetic -> 80.2% with PG (2026-08-17; ±0.1pt run-to-run); 62 = 64.3-2.3pt buffer from the 2026-08-09 CI number. That old ceiling WAS the skip: repo's PG-only tests never ran in this job, hiding ~15pt. Biggest headroom of the three for the next ratchet.
+          check_pkg "internal/adapter/handler" 64 "internal/adapter/handler" # 69.1% either way (2026-08-17). It does have a PG-gated test (cov_handler-deep-b_logs_test.go:258 skips without TEST_POSTGRES_DSN) and that test now runs, but it exercises so few statements that the package total is unchanged at one decimal — so "unchanged" here means measured-and-unchanged, not not-applicable. 64 = 69.1-5.1pt buffer, keeping the wider buffer this package has carried since 2026-07-20 (it has the most cross-test global state). Prior: 48 from a 52.8% measurement.
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""
@@ -266,8 +334,17 @@ jobs:
         with:
           go-version: '1.25.x'
           cache: true
-      - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - name: Install gosec (pinned)
+        # Pinned 2026-08-17, was @latest. @latest is both a supply-chain hole
+        # (any upstream release lands in CI unreviewed) and a reproducibility
+        # hole (the same tree can change verdict overnight, so a red build may
+        # have nothing to do with the diff that triggered it). v2.28.0 is the
+        # current upstream release (tagged 2026-07-14) — i.e. this pin is a
+        # no-op today and only starts mattering on the next upstream release.
+        # Verified locally before pinning: this exact install + the scan command
+        # below reported "Issues: 0" over 628 files, matching the @latest
+        # behaviour it replaces. Bump deliberately, and re-run the scan when you do.
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
       - name: Run gosec (HIGH severity, MEDIUM+ confidence)
         # Scans only the main module dirs; excludes .claude worktrees (other agent branches).
         # All existing HIGH findings are suppressed with #nosec + justification comments.
@@ -454,3 +531,154 @@ jobs:
             exit 1
           fi
           echo "PG harness sentinel confirmed: integration suite ran against a live Postgres."
+
+  lint-debt-ceiling:
+    name: lint debt ceiling (whole-repo count, ratchet down only)
+    runs-on: ubuntu-latest
+    # Complements — does not replace — the `lint` job above. That job runs
+    # --new-from-rev=origin/main, so it only ever sees findings a PR ADDS; the
+    # pre-existing baseline is invisible to it and, until this job existed, was
+    # watched by nothing at all. A number no gate looks at can drift upward
+    # silently: a PR that rewrites a file can carry its findings along as
+    # "pre-existing" relative to the wrong base, and mass-refactors land whole
+    # new populations of findings that --new-from-rev attributes to no one.
+    #
+    # This job counts the WHOLE repo and fails if the total exceeds a ceiling.
+    # It is a ratchet: the ceiling may only ever move DOWN, and every downward
+    # move must cite a measured before/after (run the command in the step below
+    # on your branch and paste both numbers into the commit message). Never
+    # raise it to make a build green — that converts the gate into decoration.
+    # If your PR pushes the count over, fix what you added or pay down an equal
+    # amount elsewhere.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-proto-go
+          path: _sibling/lurus-proto-go
+          fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: hanmahong5-arch/zita-sdk-go
+          ref: e2611da1e01ef77b8227571204d6780a6364fea3
+          path: _sibling/zita-sdk-go
+          fetch-depth: 1
+      - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
+        run: |
+          mkdir -p ../shared
+          mv _sibling/lurus-proto-go ../shared/lurus-proto-go
+          mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          rmdir _sibling
+      - name: Stub web/dist for //go:embed in web/embed.go
+        run: |
+          mkdir -p web/dist
+          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - name: Install golangci-lint (pinned, same version as the lint job)
+        # Installed directly rather than via golangci-lint-action because this
+        # job needs the raw binary's JSON report on a known path, and needs the
+        # step to survive the exit-1-means-issues-found convention. Keep the
+        # version in lockstep with the `lint` job above and with .golangci.yml's
+        # `version: "2"` schema. Measured install cost: ~71s.
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+      - name: Count whole-repo findings and enforce the ceiling
+        run: |
+          set -uo pipefail
+
+          # ---------------------------------------------------------------
+          # RATCHET VALUE. Only ever decrease this. Every decrease needs a
+          # measured before/after in the commit message.
+          #
+          # Both numbers below are measurements, not estimates. golangci-lint
+          # v2.12.2, this repo's .golangci.yml, this exact scope and command:
+          #
+          #   main ff19c348 (pristine `git archive` checkout)   950
+          #     staticcheck 538 · errcheck 208 · errorlint 84 · contextcheck 36
+          #     bodyclose 36 · ineffassign 20 · unused 16 · govet 7 · nilerr 5
+          #
+          #   this branch (2026-08-17, after the fixes it carries)   873
+          #     staticcheck 526 · errcheck 208 · errorlint 83 · contextcheck 36
+          #     ineffassign 13 · bodyclose 4 · unused 3 · govet 0 · nilerr 0
+          #     (573 production / 300 _test.go)
+          #
+          # The delta is -77 and it reconciles per-linter against the fixes in
+          # this branch, so the ceiling is set at the branch value, not the main
+          # value: leaving it at 950 would hand back 77 points of silent room.
+          #
+          # ⚠️ 873 was measured on Windows. This job runs on ubuntu-latest, and
+          # a per-platform difference of a few findings is possible. The step
+          # prints the count it actually observed — if CI's number differs,
+          # correct THIS constant to CI's number (and say so in the commit); do
+          # not widen it to whatever makes the build green.
+          #
+          # This number is expected to keep falling as the debt is paid down;
+          # lower it as that happens so the ceiling keeps its grip. It is a cap
+          # on regression, NOT a budget to spend up to.
+          # ---------------------------------------------------------------
+          CEILING=873
+
+          REPORT=/tmp/lint-debt.json
+          rm -f "$REPORT"
+
+          # golangci-lint exits 1 whenever it finds anything, which is the
+          # normal path here — so its exit code is deliberately not the pass
+          # signal. Genuine breakage is caught by the guards below instead.
+          # `|| LINT_RC=$?` rather than a bare call followed by `LINT_RC=$?`:
+          # GitHub Actions runs `run:` steps as `bash -e {0}`, and `set -uo
+          # pipefail` above does NOT clear that errexit. A bare call would abort
+          # the step the moment golangci-lint exits 1 (its normal "found
+          # something" path) — before a single line of the logic below ran, and
+          # with no diagnostic. A failure consumed by `||` does not trip
+          # errexit, so this form works under both `bash` and `bash -e`.
+          # No --max-issues-per-linter / --max-same-issues here: .golangci.yml
+          # already sets both to 0, so the report is untruncated. If that ever
+          # changes, this count silently caps and the ceiling stops meaning
+          # anything — keep them at 0 there.
+          LINT_RC=0
+          golangci-lint run --timeout=15m \
+            --output.json.path="$REPORT" ./internal/... ./cmd/... || LINT_RC=$?
+          echo "golangci-lint exit code: ${LINT_RC}"
+
+          if [ ! -s "$REPORT" ]; then
+            echo "::error::golangci-lint wrote no JSON report to ${REPORT} (exit ${LINT_RC}). Failing loudly rather than counting a vacuous 0."
+            exit 1
+          fi
+
+          COUNT=$(jq '.Issues | length' "$REPORT")
+          if ! printf '%s' "$COUNT" | grep -Eq '^[0-9]+$'; then
+            echo "::error::could not parse an issue count from ${REPORT} (got: '${COUNT}')."
+            exit 1
+          fi
+
+          # Anti-hollow sentinel, same spirit as the pg-integration harness
+          # check. A count of 0 does not mean the repo went clean overnight; it
+          # means this run never analysed anything. Verified by construction:
+          # pointing the scope at a non-existent package makes golangci-lint
+          # exit 7 and still emit a well-formed report containing zero issues,
+          # which every guard above happily accepts. Without this check that
+          # misconfiguration prints "PASSED" forever — strictly worse than
+          # having no gate, because it looks like one.
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::whole-repo lint reported 0 issues. The known baseline is in the hundreds, so 0 means this run was hollow (bad scope, crashed linter, empty checkout) rather than a clean repo. Fix the job; do not celebrate."
+            exit 1
+          fi
+
+          echo "whole-repo golangci-lint findings: ${COUNT} (ceiling: ${CEILING})"
+          echo "  production files: $(jq '[.Issues[] | select(.Pos.Filename | endswith("_test.go") | not)] | length' "$REPORT")"
+          echo "  test files:       $(jq '[.Issues[] | select(.Pos.Filename | endswith("_test.go"))] | length' "$REPORT")"
+          echo "  by linter:"
+          jq -r '.Issues[].FromLinter' "$REPORT" | sort | uniq -c | sort -rn | sed 's/^/    /'
+
+          if [ "$COUNT" -gt "$CEILING" ]; then
+            echo "::error::lint debt ceiling exceeded: ${COUNT} > ${CEILING}. Fix the findings this branch adds, or pay down an equal number elsewhere. Do NOT raise the ceiling to go green."
+            exit 1
+          fi
+
+          if [ "$COUNT" -lt "$CEILING" ]; then
+            echo ""
+            echo "Lint debt is BELOW the ceiling (${COUNT} < ${CEILING}) — lower CEILING to ${COUNT} in this file to lock the win in."
+          fi
+          echo "Lint debt ceiling PASSED."
