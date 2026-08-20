@@ -1,12 +1,10 @@
 package repo
 
 import (
-	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
-	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // TryAcquireOrRenew attempts to acquire or renew the named leader lease for
@@ -17,10 +15,10 @@ import (
 // Concurrency contract: the renew/takeover path is a single conditional
 // UPDATE, so the database serializes competing writers — at most one of them
 // can match the (holder-is-me OR lease-expired) predicate and win per row. The
-// first-ever acquire is an INSERT under the name primary key; a racing loser
-// gets a duplicate-key error, which is reported as "not leader" rather than as
-// a failure. The net invariant: at any wall-clock instant at most one holder
-// owns a non-expired lease for a given name.
+// first-ever acquire is an INSERT under the name primary key, made idempotent
+// with ON CONFLICT DO NOTHING, so a racing loser is told it lost by
+// RowsAffected == 0 rather than by an error. The net invariant: at any
+// wall-clock instant at most one holder owns a non-expired lease for a name.
 func TryAcquireOrRenew(name, holderId string, ttl, now int64) (bool, error) {
 	if name == "" || holderId == "" {
 		return false, fmt.Errorf("leader election: name and holderId are required")
@@ -47,8 +45,17 @@ func TryAcquireOrRenew(name, holderId string, ttl, now int64) (bool, error) {
 	}
 
 	// No row was updated: either the lease row does not exist yet, or another
-	// holder owns a still-valid lease. Try to create it; a duplicate-key error
-	// means a concurrent writer owns it — the normal "someone else leads" path.
+	// holder owns a still-valid lease. Insert with ON CONFLICT DO NOTHING so the
+	// second case resolves to RowsAffected == 0 instead of a duplicate-key error.
+	//
+	// That distinction is not cosmetic. Losing the election is the steady state
+	// for every replica but one, on every renewal tick (TTL 30s / 3 = one every
+	// 10s), so raising it as a SQL error had GORM's logger print it at ERROR
+	// level forever. Measured on R6 over a 10-minute window, 2026-08-20: each of
+	// the two follower pods emitted 122 lines of it — 2 lines per tick, the
+	// error and the echoed INSERT — which was 29% and 25% of everything those
+	// pods logged at all. Nothing was wrong; the cluster had simply elected a
+	// leader, 8 640 times a day, per follower.
 	lease := &entity.LeaderElection{
 		Name:       name,
 		HolderId:   holderId,
@@ -56,13 +63,11 @@ func TryAcquireOrRenew(name, holderId string, ttl, now int64) (bool, error) {
 		RenewedAt:  now,
 		ExpiresAt:  expiresAt,
 	}
-	if err := DB.Create(lease).Error; err != nil {
-		if isDuplicateKeyError(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("leader election acquire: %w", err)
+	ins := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(lease)
+	if ins.Error != nil {
+		return false, fmt.Errorf("leader election acquire: %w", ins.Error)
 	}
-	return true, nil
+	return ins.RowsAffected == 1, nil
 }
 
 // ReleaseLease relinquishes the named lease if this holder still owns it, by
@@ -77,21 +82,4 @@ func ReleaseLease(name, holderId string) error {
 		return fmt.Errorf("leader election release: %w", res.Error)
 	}
 	return nil
-}
-
-// isDuplicateKeyError reports whether err is a unique/primary-key violation.
-// TranslateError is not enabled on the GORM config, so gorm.ErrDuplicatedKey
-// is not reliably returned; fall back to dialect-specific message matching for
-// both SQLite (dev/tests) and PostgreSQL (production).
-func isDuplicateKeyError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return true
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "UNIQUE constraint failed") || // SQLite
-		strings.Contains(msg, "duplicate key value") || // PostgreSQL text
-		strings.Contains(msg, "23505") // PostgreSQL SQLSTATE
 }
