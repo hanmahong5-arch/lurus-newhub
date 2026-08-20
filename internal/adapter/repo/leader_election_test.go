@@ -1,9 +1,14 @@
 package repo
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // setupLeaderElectionDB wires an in-memory SQLite DB with the leader_elections
@@ -120,6 +125,83 @@ func TestTryAcquireOrRenew_TwoCandidatesOnlyOneWins(t *testing.T) {
 	}
 	if !aWon || bWon {
 		t.Fatalf("expected exactly node-a to win at the same instant: aWon=%v bWon=%v", aWon, bWon)
+	}
+}
+
+// sqlErrorRecorder captures every statement error GORM would surface to its
+// logger. The default logger prints those at ERROR level, so anything recorded
+// here is a line that shows up in production logs.
+type sqlErrorRecorder struct {
+	logger.Interface
+	errs []error
+}
+
+func (r *sqlErrorRecorder) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		r.errs = append(r.errs, err)
+	}
+}
+
+// TestTryAcquireOrRenew_FollowerPathEmitsNoSQLError pins the log-noise
+// contract: a follower losing the election is the steady state — every replica
+// but one, on every renewal tick — so that path must not provoke a database
+// error. Raised as a duplicate-key ERROR it was, measured on R6 on 2026-08-20,
+// a quarter of everything each follower pod logged.
+//
+// The five tests above all pass against the pre-fix implementation, because
+// they only ever inspect the return values, which were already correct. What
+// went wrong happened on the way to the correct answer and was visible only in
+// the log, so this asserts on the logger rather than on the verdict.
+func TestTryAcquireOrRenew_FollowerPathEmitsNoSQLError(t *testing.T) {
+	defer setupLeaderElectionDB(t)()
+
+	if _, err := TryAcquireOrRenew(entity.LeaderElectionName, "node-a", 30, 1000); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	rec := &sqlErrorRecorder{Interface: DB.Logger}
+	prev := DB.Logger
+	DB.Logger = rec
+	defer func() { DB.Logger = prev }()
+
+	// node-b contends while node-a's lease is valid — the "someone else leads"
+	// path, which reaches the INSERT because the conditional UPDATE matches no row.
+	ok, err := TryAcquireOrRenew(entity.LeaderElectionName, "node-b", 30, 1020)
+	if err != nil {
+		t.Fatalf("contend: %v", err)
+	}
+	if ok {
+		t.Fatal("node-b must not acquire while node-a holds a valid lease")
+	}
+	if len(rec.errs) != 0 {
+		t.Errorf("follower path must not emit SQL errors, got %d: %v", len(rec.errs), rec.errs)
+	}
+}
+
+// TestTryAcquireOrRenew_PGFollowerRowsAffectedZero pins the one thing the
+// SQLite tier cannot prove. The follower verdict now rides entirely on
+// PostgreSQL reporting RowsAffected == 0 for an INSERT ... ON CONFLICT DO
+// NOTHING that hit the conflict. If that ever became 1, every follower would
+// conclude it won the election — two replicas running the master-only
+// background tasks at once, with nothing in the logs to say so.
+func TestTryAcquireOrRenew_PGFollowerRowsAffectedZero(t *testing.T) {
+	defer SetupTestDB(t)()
+	if err := DB.AutoMigrate(&entity.LeaderElection{}); err != nil {
+		t.Fatalf("migrate leader_elections: %v", err)
+	}
+
+	if ok, err := TryAcquireOrRenew(entity.LeaderElectionName, "node-a", 30, 1000); err != nil || !ok {
+		t.Fatalf("first acquire on PG: ok=%v err=%v", ok, err)
+	}
+	ok, err := TryAcquireOrRenew(entity.LeaderElectionName, "node-b", 30, 1020)
+	if err != nil {
+		t.Fatalf("contend on PG: %v", err)
+	}
+	if ok {
+		t.Fatal("PG follower must not win — ON CONFLICT DO NOTHING has to report RowsAffected 0")
+	}
+	if le := currentLease(t); le.HolderId != "node-a" {
+		t.Errorf("holder should remain node-a, got %q", le.HolderId)
 	}
 }
 
