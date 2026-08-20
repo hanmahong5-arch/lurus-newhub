@@ -43,12 +43,13 @@ export default defineConfig({
         'src/main.jsx',
         'src/i18n/**',
       ],
-      // Ratchet floor. Raised 2026-08-17 in the same change that lifted the
-      // coverage: 98 test files / 1737 tests measure statements 39.08,
-      // branches 36.03, functions 33.61, lines 39.00 — up from 11.46 / 12.86 /
-      // 11.52 / 11.12 over 35 files / 254 tests earlier the same day, which was
-      // itself the first number this config had ever produced (the
-      // @vitest/coverage-v8 provider had never been installed).
+      // Ratchet floor. Raised 2026-08-20 in the same change that lifted the
+      // coverage: 139 test files / 2724 tests measure statements 49.80,
+      // branches 47.70, functions 44.94, lines 49.95 — up from 39.08 / 36.03 /
+      // 33.61 / 39.00 over 98 files / 1737 tests on 2026-08-17, which was
+      // itself up from 11.46 / 12.86 / 11.52 / 11.12, the first number this
+      // config had ever produced (the @vitest/coverage-v8 provider had never
+      // been installed until that day).
       //
       // Floors sit ~3pt under the measured values. Observed run-to-run jitter
       // is ~0.01pt, so the margin is for ordinary churn, not for flake.
@@ -58,10 +59,10 @@ export default defineConfig({
       // pass — the point of the floor is that losing coverage has to be a
       // decision somebody writes down.
       thresholds: {
-        statements: 36,
-        branches: 33,
-        functions: 30,
-        lines: 36,
+        statements: 46,
+        branches: 44,
+        functions: 41,
+        lines: 46,
       },
     },
   },
