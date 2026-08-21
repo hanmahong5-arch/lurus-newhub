@@ -290,14 +290,29 @@ describe('CodeViewer — untrusted content rendering', () => {
     expect(container.textContent).toContain('upstream refused the request');
   });
 
-  it.skip('CONTRACT: markup in response content is escaped, never executed', () => {
+  it('CONTRACT: markup in response content is escaped, never executed', () => {
     const { container } = render(<CodeViewer content={RAW_PAYLOAD} />);
     expect(container.querySelector('img')).toBeNull();
     // Still shown to the operator verbatim, just inert.
     expect(container.textContent).toContain('onerror=alert()');
   });
 
-  it.skip('CONTRACT: markup inside a JSON string value is escaped', () => {
+  // The two locks around this one only reach the JSON branch, because
+  // `language` defaults to 'json' and all four call sites pass it explicitly.
+  // Reverting the escape on the plain-text branch was therefore green across
+  // the whole file — an equivalent mutant today, not a hole. It is still a
+  // reachable path through the component's own public prop, and the branch a
+  // future caller rendering a log or a stack trace would land on, so it gets
+  // its own assertion rather than relying on nobody ever passing a language.
+  it('escapes markup on the plain-text branch too, not just the JSON one', () => {
+    const { container } = render(
+      <CodeViewer content={RAW_PAYLOAD} language='text' />,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.textContent).toContain('onerror=alert()');
+  });
+
+  it('CONTRACT: markup inside a JSON string value is escaped', () => {
     const { container } = render(
       <CodeViewer content={{ error: '<b id=cx-inj>boom</b>' }} />,
     );
