@@ -355,7 +355,7 @@ describe('TopUp — external top-up link', () => {
   // fix read as a regression. It also only restated the URL/target assertions
   // already made by "opens the admin-configured link in a new tab" above. The
   // contract now lives solely in the lock below, which is verified RED today.
-  it.skip('the external payment link must be opened with noopener/noreferrer', () => {
+  it('the external payment link must be opened with noopener/noreferrer', () => {
     const open = vi.fn();
     vi.stubGlobal('open', open);
     renderTopUp({ status: { top_up_link: 'https://pay.example.com/buy' } });

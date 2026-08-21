@@ -272,6 +272,37 @@ describe('token key cell', () => {
     expect(screen.queryByTestId('icon-eye-closed')).not.toBeInTheDocument();
   });
 
+  // The mask is built as slice(0, 4) + stars + slice(-4). Those two slices are
+  // only disjoint while the key is longer than eight characters: at exactly
+  // eight they tile it, and below eight they overlap. Either way every
+  // character of the secret ends up on screen — the one thing the reveal
+  // toggle exists to withhold.
+  //
+  // Asserting `not.toContain(key)` is NOT enough and was the first draft's
+  // mistake: for a six-character key the mask reads 'sk-abcd**********cdef',
+  // which discloses all six characters without containing them contiguously,
+  // so a substring check passes while the secret is fully readable. The
+  // invariant asserted instead is the one that actually matters and that
+  // survives any future change of masking format: at least four characters of
+  // the key are always withheld.
+  it.each([1, 4, 6, 7, 8, 9, 11, 12, 48])(
+    'withholds part of a %i-character key from the mask',
+    (len) => {
+      const key = Array.from({ length: len }, (_, i) =>
+        String.fromCharCode(97 + (i % 26)),
+      ).join('');
+      renderCell('token_key', baseToken({ key }));
+
+      const shown = screen.getByTestId('token-key-input').value;
+      const disclosed = shown.replace(/^sk-/, '').replace(/\*+/g, '');
+
+      expect(disclosed.length).toBeLessThanOrEqual(Math.max(0, len - 4));
+      // Still recognisably a masked key rather than an empty box.
+      expect(shown.startsWith('sk-')).toBe(true);
+      expect(shown).toContain('*');
+    },
+  );
+
   it('shows the full secret once that row is marked revealed', () => {
     deps.showKeys = { 5: true };
     cols = getTokensColumns(deps);

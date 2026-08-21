@@ -291,7 +291,7 @@ describe('WalletCard', () => {
     expect(open.mock.calls[0][1]).toBe('_blank');
   });
 
-  it.skip('the platform top-up URL must be opened with noopener/noreferrer', () => {
+  it('the platform top-up URL must be opened with noopener/noreferrer', () => {
     const open = vi.fn();
     vi.stubGlobal('open', open);
     render(

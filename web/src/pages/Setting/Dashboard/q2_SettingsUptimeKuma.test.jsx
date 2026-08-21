@@ -946,7 +946,7 @@ describe('DEFECT: the URL rule accepts any scheme', () => {
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected 'spy' to be called with arguments" — the entry was accepted.
-  it.skip('rejects a javascript: URL', () => {
+  it('rejects a javascript: URL', () => {
     withList(TWO_ROWS);
     click(screen.getByText('添加分类'));
     fillGroup({
@@ -961,7 +961,7 @@ describe('DEFECT: the URL rule accepts any scheme', () => {
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected 'spy' to be called with arguments" — the entry was accepted.
-  it.skip('rejects a file: URL', () => {
+  it('rejects a file: URL', () => {
     withList(TWO_ROWS);
     click(screen.getByText('添加分类'));
     fillGroup({ categoryName: 'X', url: 'file:///etc/passwd', slug: 'x' });

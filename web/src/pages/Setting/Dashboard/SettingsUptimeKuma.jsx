@@ -211,7 +211,15 @@ const SettingsUptimeKuma = ({ options, refresh }) => {
     }
 
     try {
-      new URL(uptimeForm.url);
+      // new URL() accepts javascript:, file: and data: exactly as readily as
+      // https:, and whatever is stored here is handed on to the code that
+      // fetches and links the status page. Parsing is not validation — the
+      // scheme has to be allow-listed explicitly.
+      const parsed = new URL(uptimeForm.url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        showError('请输入有效的URL地址');
+        return;
+      }
     } catch (error) {
       showError('请输入有效的URL地址');
       return;

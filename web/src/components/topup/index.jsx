@@ -85,7 +85,10 @@ const TopUp = () => {
       showError(t('超级管理员未设置充值链接！'));
       return;
     }
-    window.open(topUpLink, '_blank');
+    // topUpLink is administrator-configured and points off-site. Without
+    // noopener the payment page keeps a live window.opener handle back into
+    // this authenticated console tab and can navigate it (reverse tabnabbing).
+    window.open(topUpLink, '_blank', 'noopener,noreferrer');
   };
 
   const getUserQuota = async () => {

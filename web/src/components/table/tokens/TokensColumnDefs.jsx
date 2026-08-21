@@ -110,8 +110,18 @@ const renderGroupColumn = (text, record, t) => {
 // Render token key column with show/hide and copy functionality
 const renderTokenKey = (text, record, showKeys, setShowKeys, copyText) => {
   const fullKey = 'sk-' + record.key;
+  // This mask shows four characters at each end, so it only withholds anything
+  // once the key is at least twelve characters long: at eight the two slices
+  // exactly tile it, below eight they overlap, and between nine and eleven it
+  // gives away all but one or two — in every one of those cases the "masked"
+  // cell discloses what the reveal toggle exists to withhold. 4 shown + 4 shown
+  // + 4 withheld is where the threshold comes from. Real keys are 48 characters,
+  // so this changes nothing in normal use.
+  const MASK_MIN_LENGTH = 12;
   const maskedKey =
-    'sk-' + record.key.slice(0, 4) + '**********' + record.key.slice(-4);
+    record.key.length >= MASK_MIN_LENGTH
+      ? 'sk-' + record.key.slice(0, 4) + '**********' + record.key.slice(-4)
+      : 'sk-' + '*'.repeat(10);
   const revealed = !!showKeys[record.id];
 
   return (

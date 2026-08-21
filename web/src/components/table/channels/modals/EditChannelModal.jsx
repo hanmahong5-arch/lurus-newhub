@@ -277,8 +277,8 @@ const EditChannelModal = (props) => {
     switchVerificationMethod,
   } = useSecureVerification({
     onSuccess: (result) => {
-      // 验证成功后显示密钥
-      console.log('Verification success, result:', result);
+      // 验证成功后显示密钥。result.data.key 是渠道的上游 API 密钥明文，
+      // 不得写入任何日志或控制台。
       if (result && result.success && result.data?.key) {
         showSuccess(t('密钥获取成功'));
         setKeyDisplayState({

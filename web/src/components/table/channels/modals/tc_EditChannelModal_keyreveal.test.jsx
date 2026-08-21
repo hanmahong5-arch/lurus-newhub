@@ -458,7 +458,7 @@ describe('key reveal — credential handling', () => {
   // Verified red 2026-08-20: un-skipped it fails, the logged text contains
   // the key. Verified green 2026-08-20 with line 281 deleted, so this is a
   // real oracle for the repair and not just a red mark.
-  it.skip('CONTRACT:never writes the revealed key to the console', () => {
+  it('CONTRACT:never writes the revealed key to the console', () => {
     renderModal();
     fireVerificationSuccess({ success: true, data: { key: SECRET } });
     expect(loggedText()).not.toContain(SECRET);
