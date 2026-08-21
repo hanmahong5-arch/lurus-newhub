@@ -960,7 +960,7 @@ describe('DEFECT: a write the server refuses still clears the pending flag', () 
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expect(element).not.toBeDisabled()".
-  it.skip('leaves the save button armed after a refused write', async () => {
+  it('leaves the save button armed after a refused write', async () => {
     withList(THREE_DATED);
     API.put.mockResolvedValue({
       data: { success: false, message: '没有权限' },
@@ -1018,14 +1018,14 @@ describe('DEFECT: a stored id of 0 is rewritten and can collide', () => {
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected 2 to be 3" — B and C both became id 2.
-  it.skip('gives every row a distinct id even when one is stored as 0', () => {
+  it('gives every row a distinct id even when one is stored as 0', () => {
     withList(ZERO_ID);
     expect(new Set(rowIds()).size).toBe(3);
   });
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected [ '4' ] to deeply equal [ '0', '4' ]" — deleting C took B too.
-  it.skip('deletes only the announcement that was asked for', () => {
+  it('deletes only the announcement that was asked for', () => {
     withList(ZERO_ID);
     // Screen row 0 is C (newest).
     click(within(row(0)).getByText('删除'));
@@ -1049,7 +1049,7 @@ describe('DEFECT: an unloaded panel saves an empty list over the stored one', ()
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected 'spy' to not be called with arguments" — the PUT went out.
-  it.skip('does not write a collection it never loaded', async () => {
+  it('does not write a collection it never loaded', async () => {
     renderPanel({ [ANN_KEY]: '' });
     click(screen.getByText('添加公告'));
     emit('content', '维护通知');
@@ -1060,6 +1060,24 @@ describe('DEFECT: an unloaded panel saves an empty list over the stored one', ()
       '/api/option/',
       expect.objectContaining({ key: ANN_KEY }),
     );
+  });
+
+  // The pairing half, and the reason the guard cannot key on the announcements
+  // string alone. Its backend default is genuinely '' (ConsoleSetting in the Go
+  // setting struct), so on a fresh install the hydrated value is empty too and
+  // a value-only rule would read that as "still loading" forever — 保存设置
+  // would never work and the first announcement could never be published. The
+  // enable flag is a bool server-side, so it answers 'true'/'false' and is
+  // empty only in the parent's pre-fetch seed; that is what separates the two.
+  it('still saves once the fetch has answered with nothing stored', async () => {
+    renderPanel({ [ANN_KEY]: '', [ENABLED_KEY]: 'true' });
+    click(screen.getByText('添加公告'));
+    emit('content', '维护通知');
+    click(modalOk('添加公告'));
+    await clickAsync(saveButton());
+
+    expect(lastPut().key).toBe(ANN_KEY);
+    expect(savedList()).toHaveLength(1);
   });
 });
 
@@ -1100,7 +1118,7 @@ describe('DEFECT: a malformed stored publishDate makes an announcement uneditabl
   // setAnnouncementsList. (Asserted on the rendered row rather than on the
   // saved blob: nothing is ever sent in this state, so reading the request
   // would fail with an unrelated TypeError instead of naming the defect.)
-  it.skip('edits an announcement whose stored date is not parseable', async () => {
+  it('edits an announcement whose stored date is not parseable', async () => {
     withList(BAD_DATE);
     click(within(row(0)).getByText('编辑'));
     emit('content', 'fixed');

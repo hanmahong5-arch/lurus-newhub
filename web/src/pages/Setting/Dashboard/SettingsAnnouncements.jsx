@@ -44,6 +44,7 @@ import {
   getRelativeTime,
   formatDateTimeString,
 } from '../../../helpers';
+import { withDistinctIds } from '../../../helpers/listIds';
 import { useTranslation } from 'react-i18next';
 
 const { Text } = Typography;
@@ -74,6 +75,17 @@ const SettingsAnnouncements = ({ options, refresh }) => {
   const [panelEnabled, setPanelEnabled] = useState(true);
 
   const formApiRef = useRef(null);
+
+  const storedAnnouncements =
+    options['console_setting.announcements'] ?? options.Announcements;
+  const storedEnabled = options['console_setting.announcements_enabled'];
+  // 父组件先用一份「所有键都是空串」的种子渲染本面板，等 GET /api/option/
+  // 回来后再整体替换。空的公告串既可能是那份种子，也可能是服务端真的一条
+  // 公告都没有，光看它分不出来；而 enabled 键在服务端永远是 'true'/'false'，
+  // 空串只可能来自种子。
+  const announcementsLoaded =
+    Boolean(storedAnnouncements) ||
+    (storedEnabled !== undefined && storedEnabled !== '');
 
   const typeOptions = [
     { value: 'default', label: t('默认') },
@@ -206,17 +218,31 @@ const SettingsAnnouncements = ({ options, refresh }) => {
     if (success) {
       showSuccess('系统公告已更新');
       if (refresh) refresh();
-    } else {
-      showError(message);
+      return true;
     }
+    showError(message);
+    return false;
   };
 
   const submitAnnouncements = async () => {
+    if (!announcementsLoaded) {
+      // 没读到过服务端的公告列表就整份写回，会把已有的公告全部覆盖掉
+      showError('系统公告尚未加载完成，请稍后重试');
+      return;
+    }
+
     try {
       setLoading(true);
       const announcementsJson = JSON.stringify(announcementsList);
-      await updateOption('console_setting.announcements', announcementsJson);
-      setHasChanges(false);
+      const saved = await updateOption(
+        'console_setting.announcements',
+        announcementsJson,
+      );
+      // 服务端拒绝时不会抛异常，此时若照样清掉待保存标记，保存按钮变灰，
+      // 本地改动就再也发不出去了
+      if (saved) {
+        setHasChanges(false);
+      }
     } catch (error) {
       console.error('系统公告更新失败', error);
       showError('系统公告更新失败');
@@ -237,12 +263,14 @@ const SettingsAnnouncements = ({ options, refresh }) => {
   };
 
   const handleEditAnnouncement = (announcement) => {
+    // 存量数据里可能有浏览器解析不了的 publishDate，直接带进表单会得到
+    // Invalid Date，保存时 toISOString 抛错被吞成一句笼统的失败提示，
+    // 这条公告连同那个坏日期就再也改不回来了
+    const storedDate = new Date(announcement.publishDate);
     setEditingAnnouncement(announcement);
     setAnnouncementForm({
       content: announcement.content,
-      publishDate: announcement.publishDate
-        ? new Date(announcement.publishDate)
-        : new Date(),
+      publishDate: Number.isNaN(storedDate.getTime()) ? new Date() : storedDate,
       type: announcement.type || 'default',
       extra: announcement.extra || '',
     });
@@ -321,12 +349,7 @@ const SettingsAnnouncements = ({ options, refresh }) => {
     try {
       const parsed = JSON.parse(announcementsStr);
       const list = Array.isArray(parsed) ? parsed : [];
-      // 确保每个项目都有id
-      const listWithIds = list.map((item, index) => ({
-        ...item,
-        id: item.id || index + 1,
-      }));
-      setAnnouncementsList(listWithIds);
+      setAnnouncementsList(withDistinctIds(list));
     } catch (error) {
       console.error('解析系统公告失败:', error);
       setAnnouncementsList([]);
@@ -334,19 +357,16 @@ const SettingsAnnouncements = ({ options, refresh }) => {
   };
 
   useEffect(() => {
-    const annStr =
-      options['console_setting.announcements'] ?? options.Announcements;
-    if (annStr !== undefined) {
-      parseAnnouncements(annStr);
+    if (storedAnnouncements !== undefined) {
+      parseAnnouncements(storedAnnouncements);
     }
   }, [options['console_setting.announcements'], options.Announcements]);
 
   useEffect(() => {
-    const enabledStr = options['console_setting.announcements_enabled'];
     setPanelEnabled(
-      enabledStr === undefined
+      storedEnabled === undefined
         ? true
-        : enabledStr === 'true' || enabledStr === true,
+        : storedEnabled === 'true' || storedEnabled === true,
     );
   }, [options['console_setting.announcements_enabled']]);
 

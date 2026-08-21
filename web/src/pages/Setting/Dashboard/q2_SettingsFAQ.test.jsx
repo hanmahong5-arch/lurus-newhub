@@ -756,7 +756,7 @@ describe('DEFECT: a write the server refuses still clears the pending flag', () 
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expect(element).not.toBeDisabled()".
-  it.skip('leaves the save button armed after a refused write', async () => {
+  it('leaves the save button armed after a refused write', async () => {
     withList(TWO_ROWS);
     API.put.mockResolvedValue({
       data: { success: false, message: '没有权限' },
@@ -795,14 +795,38 @@ describe('DEFECT: a stored id of 0 is rewritten and can collide', () => {
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected 2 to be 3" — B and C both became id 2.
-  it.skip('gives every row a distinct id even when one is stored as 0', () => {
+  it('gives every row a distinct id even when one is stored as 0', () => {
     withList(ZERO_ID);
     expect(new Set(rowIds()).size).toBe(3);
   });
 
+  // The same collision from the other direction, and the reason preserving 0
+  // is not enough on its own. These blobs predate the id field, so rows with no
+  // id at all still exist; numbering them from their index draws from the very
+  // range the stored ids occupy, so the id-less row here lands on the id the
+  // second row already holds. The synthesised numbers have to come from above
+  // the highest stored id, where nothing can already own them.
+  const MISSING_ID = [
+    { question: 'A', answer: 'a' },
+    { id: 1, question: 'B', answer: 'b' },
+  ];
+
+  it('gives every row a distinct id even when one has no id at all', () => {
+    withList(MISSING_ID);
+    expect(new Set(rowIds()).size).toBe(2);
+  });
+
+  it('deletes only the entry that was asked for when one row has no id', () => {
+    withList(MISSING_ID);
+    click(within(row(1)).getByText('删除'));
+    click(screen.getByTestId('modal-ok'));
+    expect(rowCount()).toBe(1);
+    expect(within(row(0)).getByText('A')).toBeInTheDocument();
+  });
+
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected [ '4' ] to deeply equal [ '4', '0' ]" — deleting C took B too.
-  it.skip('deletes only the entry that was asked for', () => {
+  it('deletes only the entry that was asked for', () => {
     withList(ZERO_ID);
     click(within(row(2)).getByText('删除'));
     click(screen.getByTestId('modal-ok'));
@@ -812,7 +836,7 @@ describe('DEFECT: a stored id of 0 is rewritten and can collide', () => {
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected undefined to be 'B'" — editing C overwrote B's question AND its
   // answer, so no entry answering 'b' was left in the saved blob at all.
-  it.skip('edits only the entry that was asked for', async () => {
+  it('edits only the entry that was asked for', async () => {
     withList(ZERO_ID);
     click(within(row(2)).getByText('编辑'));
     fillFaq({ question: 'C-edited' });
@@ -841,11 +865,64 @@ describe('DEFECT: an unloaded panel saves an empty list over the stored one', ()
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected 'spy' to not be called with arguments" — the PUT went out.
-  it.skip('does not write a collection it never loaded', async () => {
+  it('does not write a collection it never loaded', async () => {
     renderPanel({ [FAQ_KEY]: '' });
     click(screen.getByText('添加问答'));
     fillFaq({ question: 'q', answer: 'a' });
     click(screen.getByTestId('modal-ok'));
+    await clickAsync(saveButton());
+
+    expect(API.put).not.toHaveBeenCalledWith(
+      '/api/option/',
+      expect.objectContaining({ key: FAQ_KEY }),
+    );
+  });
+
+  // The other half of the same rule, and the reason the load signal cannot just
+  // be "is the FAQ string non-empty". The backend default for console_setting
+  // .faq is genuinely "" (ConsoleSetting.FAQ in the Go setting struct), so on a
+  // fresh install the hydrated value is empty too. A value-only rule would read
+  // that as "still loading" forever and 保存设置 could never be pressed — the
+  // operator would have no way to add the first question. The enable flag is a
+  // bool server-side, so it comes back 'true'/'false' and is empty only in the
+  // parent's pre-fetch seed; that is what tells the two states apart.
+  it('saves once the parent has hydrated an empty collection', async () => {
+    renderPanel({ [FAQ_KEY]: '', [ENABLED_KEY]: 'true' });
+    click(screen.getByText('添加问答'));
+    fillFaq({ question: 'q', answer: 'a' });
+    click(screen.getByTestId('modal-ok'));
+    await clickAsync(saveButton());
+
+    expect(API.put).toHaveBeenCalledWith(
+      '/api/option/',
+      expect.objectContaining({ key: FAQ_KEY }),
+    );
+    expect(savedList()).toHaveLength(1);
+  });
+
+  // Pins the mechanism, not just the outcome. An earlier fix keyed on the
+  // identity of the options object instead of its values — "the parent handed
+  // me a different object than at mount, so it must have hydrated". That is
+  // defeated by a neighbouring keystroke: ContentSettingPage renders this panel
+  // alongside three fields whose onChange does setInputs(prev => ({...prev})),
+  // so typing in any of them while the GET is still in flight replaces the
+  // object and re-opens the overwrite window this block exists to close.
+  it('stays locked when a re-render replaces the options object', async () => {
+    const { rerender } = render(
+      <SettingsFAQ options={{ [FAQ_KEY]: '' }} refresh={vi.fn()} />,
+    );
+    click(screen.getByText('添加问答'));
+    fillFaq({ question: 'q', answer: 'a' });
+    click(screen.getByTestId('modal-ok'));
+    // A fresh object, same still-unhydrated values — a sibling field's edit.
+    act(() => {
+      rerender(
+        <SettingsFAQ
+          options={{ [FAQ_KEY]: '', SystemName: 'x' }}
+          refresh={vi.fn()}
+        />,
+      );
+    });
     await clickAsync(saveButton());
 
     expect(API.put).not.toHaveBeenCalledWith(
@@ -880,7 +957,7 @@ describe('DEFECT: deleting the last row of a page strands the operator', () => {
 
   // Verified red on 2026-08-20: un-skipped, this failed with
   // "expected 0 to be greater than 0" — the table showed an empty page.
-  it.skip('does not show an empty table while entries remain', () => {
+  it('does not show an empty table while entries remain', () => {
     withList(SIX_ROWS);
     act(() => H.pagination.onChange(2, 5));
     click(within(row(0)).getByText('删除'));

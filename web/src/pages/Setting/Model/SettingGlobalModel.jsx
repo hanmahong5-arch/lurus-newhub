@@ -61,18 +61,24 @@ export default function SettingGlobalModel(props) {
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
     if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
-    const requestQueue = updateArray.map((item) => {
-      const normalizedValue = normalizeValueBeforeSave(
-        item.key,
-        inputs[item.key],
-      );
-      let value = String(normalizedValue);
 
-      return API.put('/api/option/', {
-        key: item.key,
-        value,
-      });
-    });
+    const payloads = updateArray.map((item) => ({
+      key: item.key,
+      value: String(normalizeValueBeforeSave(item.key, inputs[item.key])),
+    }));
+
+    // The blacklist field declares a JSON rule, but a Form rule only guards the
+    // field itself; the save path has to re-check it, otherwise an unparsable
+    // list reaches the option store, where it reads as empty and every model
+    // silently regains the -thinking/-nothinking rewriting it meant to stop.
+    const invalid = payloads.find(
+      (item) =>
+        item.key === 'global.thinking_model_blacklist' &&
+        !verifyJSON(item.value),
+    );
+    if (invalid) return showError(t('不是合法的 JSON 字符串'));
+
+    const requestQueue = payloads.map((item) => API.put('/api/option/', item));
     setLoading(true);
     Promise.all(requestQueue)
       .then((res) => {

@@ -408,7 +408,7 @@ describe('DEFECT: options the server has never stored are dropped from state', (
 
   // Verified red on 2026-08-20: un-skipped, the save issued zero PUTs
   // (`expected [] to deeply equal [ { key: 'claude.default_max_tokens' … } ]`).
-  it.skip('saves the first value entered for a key the server has not stored yet', async () => {
+  it('saves the first value entered for a key the server has not stored yet', async () => {
     renderPage({ 'claude.thinking_adapter_enabled': true });
     emit('claude.default_max_tokens', '{"default":4096}');
     await save();

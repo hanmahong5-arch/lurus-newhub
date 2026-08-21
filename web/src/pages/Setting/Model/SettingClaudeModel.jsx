@@ -46,18 +46,20 @@ const CLAUDE_DEFAULT_MAX_TOKENS = {
   'claude-3-7-sonnet-20250219-thinking': 8192,
 };
 
+const DEFAULT_CLAUDE_INPUTS = {
+  'claude.model_headers_settings': '',
+  'claude.thinking_adapter_enabled': true,
+  'claude.default_max_tokens': '',
+  'claude.thinking_adapter_budget_tokens_percentage': 0.8,
+};
+
 export default function SettingClaudeModel(props) {
   const { t } = useTranslation();
 
   const [loading, setLoading] = useState(false);
-  const [inputs, setInputs] = useState({
-    'claude.model_headers_settings': '',
-    'claude.thinking_adapter_enabled': true,
-    'claude.default_max_tokens': '',
-    'claude.thinking_adapter_budget_tokens_percentage': 0.8,
-  });
+  const [inputs, setInputs] = useState(DEFAULT_CLAUDE_INPUTS);
   const refForm = useRef();
-  const [inputsRow, setInputsRow] = useState(inputs);
+  const [inputsRow, setInputsRow] = useState(DEFAULT_CLAUDE_INPUTS);
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
@@ -91,9 +93,13 @@ export default function SettingClaudeModel(props) {
   }
 
   useEffect(() => {
-    const currentInputs = {};
+    // Seed from the defaults rather than from props.options alone: compareObjects
+    // only reports a key present in both objects, so a key the server has never
+    // stored would otherwise be missing from inputs/inputsRow and the first value
+    // typed for it would be diffed away instead of saved.
+    const currentInputs = { ...DEFAULT_CLAUDE_INPUTS };
     for (let key in props.options) {
-      if (Object.keys(inputs).includes(key)) {
+      if (Object.prototype.hasOwnProperty.call(DEFAULT_CLAUDE_INPUTS, key)) {
         currentInputs[key] = props.options[key];
       }
     }

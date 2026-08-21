@@ -310,7 +310,13 @@ export default function SettingModelDeployment(props) {
                       theme='solid'
                       style={{ width: '100%' }}
                       onClick={() =>
-                        window.open('https://ai.io.net/ai/api-keys', '_blank')
+                        // noopener severs window.opener so the external page
+                        // cannot navigate this admin console tab.
+                        window.open(
+                          'https://ai.io.net/ai/api-keys',
+                          '_blank',
+                          'noopener,noreferrer',
+                        )
                       }
                     >
                       {t('前往 io.net API Keys')}

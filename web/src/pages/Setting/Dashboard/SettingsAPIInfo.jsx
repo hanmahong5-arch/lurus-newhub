@@ -37,6 +37,7 @@ import {
 } from '@douyinfe/semi-illustrations';
 import { Plus, Edit, Trash2, Save, Settings } from 'lucide-react';
 import { API, showError, showSuccess } from '../../../helpers';
+import { withDistinctIds } from '../../../helpers/listIds';
 import { useTranslation } from 'react-i18next';
 
 const { Text } = Typography;
@@ -93,17 +94,22 @@ const SettingsAPIInfo = ({ options, refresh }) => {
     if (success) {
       showSuccess('API信息已更新');
       if (refresh) refresh();
-    } else {
-      showError(message);
+      return true;
     }
+    showError(message);
+    return false;
   };
 
   const submitApiInfo = async () => {
     try {
       setLoading(true);
       const apiInfoJson = JSON.stringify(apiInfoList);
-      await updateOption('console_setting.api_info', apiInfoJson);
-      setHasChanges(false);
+      const saved = await updateOption('console_setting.api_info', apiInfoJson);
+      // 服务端拒绝（success:false）不会抛异常，若这里照样清掉待保存标记，
+      // 保存按钮会变灰，本地编辑再也发不出去，只能重做一遍
+      if (saved) {
+        setHasChanges(false);
+      }
     } catch (error) {
       console.error('API信息更新失败', error);
       showError('API信息更新失败');
@@ -196,7 +202,7 @@ const SettingsAPIInfo = ({ options, refresh }) => {
 
     try {
       const parsed = JSON.parse(apiInfoStr);
-      setApiInfoList(Array.isArray(parsed) ? parsed : []);
+      setApiInfoList(Array.isArray(parsed) ? withDistinctIds(parsed) : []);
     } catch (error) {
       console.error('解析API信息失败:', error);
       setApiInfoList([]);

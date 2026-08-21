@@ -468,7 +468,7 @@ describe('DEFECT: the blacklist field declares a JSON rule the save path never r
   // Verified red on 2026-08-20: un-skipped, the PUT went out anyway
   // (`expected [ 'global.thinking_model_blacklist' ] not to contain
   // 'global.thinking_model_blacklist'`).
-  it.skip('refuses to save a blacklist that fails its own JSON rule', async () => {
+  it('refuses to save a blacklist that fails its own JSON rule', async () => {
     renderPage({ 'global.thinking_model_blacklist': '["a"]' });
     const rule = H.rules.get('global.thinking_model_blacklist')[0];
     expect(rule.validator({}, '["a", ')).toBe(false);
