@@ -251,7 +251,7 @@ describe('WalletCard', () => {
   // regression. A crash cannot regress further, so the pin protected nothing;
   // the contract lives solely in the lock below, verified RED today.
 
-  it.skip('a wallet payload without a balance must still render a card, not crash', () => {
+  it('a wallet payload without a balance must still render a card, not crash', () => {
     render(
       React.createElement(WalletCard, {
         loading: false,
@@ -448,7 +448,7 @@ describe('UsageGauge', () => {
     expect(container.textContent).not.toMatch(/预计用完日期:\s*\S*\s*\(\s*\d/);
   });
 
-  it.skip('a gauge with no burn-down forecast must not show an exhaustion date at all', () => {
+  it('a gauge with no burn-down forecast must not show an exhaustion date at all', () => {
     const { daysRemaining, exhaustionDate, ...withoutForecast } = gauge;
     render(
       React.createElement(UsageGauge, {
@@ -595,7 +595,7 @@ describe('UsageAlertBanner', () => {
     expect(banner.textContent).not.toMatch(/预计\s*\d+\s*天后用完/);
   });
 
-  it.skip('an alert with no burn-down forecast must not show a forecast clause', () => {
+  it('an alert with no burn-down forecast must not show a forecast clause', () => {
     render(
       React.createElement(UsageAlertBanner, {
         gauge: { level: 'critical', usagePercent: 99 },
@@ -632,7 +632,7 @@ describe('UsageAlertBanner', () => {
     expect(screen.queryByText('立即充值')).not.toBeInTheDocument();
   });
 
-  it.skip('an unclassified gauge level must not raise a quota warning', () => {
+  it('an unclassified gauge level must not raise a quota warning', () => {
     const { container } = render(
       React.createElement(UsageAlertBanner, {
         gauge: { usagePercent: 5, daysRemaining: null },

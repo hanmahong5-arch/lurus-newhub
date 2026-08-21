@@ -30,6 +30,7 @@ const PromoteUserModal = ({ visible, onCancel, onConfirm, user, t }) => {
       type='warning'
     >
       {t('此操作将提升用户的权限级别')}
+      {user?.username ? `：${user.username}` : ''}
     </Modal>
   );
 };

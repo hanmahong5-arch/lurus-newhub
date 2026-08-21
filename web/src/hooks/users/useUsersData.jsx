@@ -170,11 +170,16 @@ export const useUsersData = () => {
     localStorage.setItem('page-size', size + '');
     setPageSize(size);
     setActivePage(1);
-    loadUsers(activePage, size)
-      .then()
-      .catch((reason) => {
-        showError(reason);
-      });
+    const { searchKeyword, searchGroup } = getFormValues();
+    try {
+      if (searchKeyword === '' && searchGroup === '') {
+        await loadUsers(1, size);
+      } else {
+        await searchUsers(1, size, searchKeyword, searchGroup);
+      }
+    } catch (reason) {
+      showError(reason);
+    }
   };
 
   // Handle table row styling for disabled/deleted users

@@ -242,7 +242,7 @@ describe('useTokensData — search', () => {
   // ignores keyword/token entirely. The hook feeds that object straight into
   // setTokens and reads .length off it, so the table receives a non-array and
   // the count becomes undefined. Un-skip once the v2 search contract is fixed.
-  it.skip('v2 search unwraps the paginated envelope', async () => {
+  it('v2 search unwraps the paginated envelope', async () => {
     isV2Mode.mockReturnValue(true);
     const { result } = await mount();
     act(() => {
@@ -347,7 +347,7 @@ describe('useTokensData — lifecycle actions', () => {
   // failure escapes as a rejected promise AFTER setLoading(true) and the
   // table is pinned in the loading state forever. Sibling hooks
   // (useRedemptionsData.manageRedemption) do wrap this in try/catch.
-  it.skip('a transport failure still clears the loading flag', async () => {
+  it('a transport failure still clears the loading flag', async () => {
     const { result } = await mount();
     API.delete.mockRejectedValue(new Error('socket hang up'));
 
@@ -402,7 +402,7 @@ describe('useTokensData — sorting', () => {
   // localeCompare, so quota columns sort lexicographically — 1000 lands
   // before 900 and an operator reading "largest remaining quota" gets the
   // wrong token. Un-skip when numeric columns get a numeric comparator.
-  it.skip('sorts quota columns numerically', async () => {
+  it('sorts quota columns numerically', async () => {
     API.get.mockResolvedValue(
       page([
         tok(1, { remain_quota: 900 }),

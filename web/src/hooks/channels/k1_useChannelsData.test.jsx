@@ -206,7 +206,7 @@ describe('useChannelsData – bootstrap', () => {
   // handlePageChange compounds it: it calls loadChannels().then(() => {}) with
   // no catch, so the rejection also escapes as an unhandled rejection.
   // Skipped: it encodes the correct contract, which the code does not meet.
-  it.skip('stops the spinner when the channel request rejects', async () => {
+  it('stops the spinner when the channel request rejects', async () => {
     setRoutes({
       '/api/channel/': () => Promise.reject(new Error('offline')),
     });
@@ -216,7 +216,7 @@ describe('useChannelsData – bootstrap', () => {
     expect(showError).toHaveBeenCalled();
   });
 
-  it.skip('stops the spinner when the channel request answers undefined', async () => {
+  it('stops the spinner when the channel request answers undefined', async () => {
     setRoutes({ '/api/channel/': () => Promise.resolve(undefined) });
 
     const { result } = renderHook(() => useChannelsData());
@@ -316,7 +316,7 @@ describe('useChannelsData – row shaping', () => {
   // samples decay away (an EMA), permanently understating latency on the
   // aggregated row operators use to spot slow upstreams.
   // Skipped: it encodes the correct contract (mean of the children).
-  it.skip('shows the mean response time of the channels in a tag', async () => {
+  it('shows the mean response time of the channels in a tag', async () => {
     setRoutes({
       '/api/channel/': channelList([
         {
@@ -594,7 +594,7 @@ describe('useChannelsData – manageChannel', () => {
   // weight typed as '1e3' silently becomes 1 — a 1000x routing-weight change
   // in the wrong direction, saved without any warning.
   // Skipped: it encodes the correct contract, which the code does not meet.
-  it.skip('does not silently truncate an exponent-style weight', async () => {
+  it('does not silently truncate an exponent-style weight', async () => {
     const { result } = await loaded();
     API.put.mockResolvedValue({
       data: { success: true, data: { status: 1 } },
@@ -614,7 +614,7 @@ describe('useChannelsData – manageChannel', () => {
   // not catch it; the PUT body serialises weight as null and the upstream row
   // loses its weight.
   // Skipped: it encodes the correct contract, which the code does not meet.
-  it.skip('does not send a non-numeric weight to the server', async () => {
+  it('does not send a non-numeric weight to the server', async () => {
     const { result } = await loaded();
 
     await act(async () => {
@@ -641,7 +641,7 @@ describe('useChannelsData – manageChannel', () => {
   // {} BEFORE awaiting the PUT and never restores it, so a refused or failed
   // request leaves the on-screen row claiming every sub-key is healthy.
   // Skipped: it encodes the correct contract (roll back on failure).
-  it.skip('restores the multi-key status map when enable_all fails', async () => {
+  it('restores the multi-key status map when enable_all fails', async () => {
     const { result } = await loaded();
     const record = {
       ...rows[0],

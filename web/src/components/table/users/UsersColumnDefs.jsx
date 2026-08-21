@@ -102,7 +102,9 @@ const renderUsername = (text, record) => {
  * Render user statistics
  */
 const renderStatistics = (text, record, showEnableDisableModal, t) => {
-  const isDeleted = record.DeletedAt !== null;
+  // Only an actual deletion timestamp means deregistered. A row that simply
+  // omits the field (API projection, cached older payload) is a live account.
+  const isDeleted = Boolean(record.DeletedAt);
 
   // Determine tag text & color like original status column
   let tagColor = 'grey';
@@ -239,6 +241,11 @@ const renderQuotaUsage = (text, record, t) => {
  * Render invite information
  */
 const renderInviteInfo = (text, record, t) => {
+  // Some API projections omit aff_history_quota entirely. Unknown must not be
+  // dressed up as money: undefined / quota_per_unit is NaN, and defaulting to
+  // zero would claim the account earned nothing. Show a placeholder instead.
+  const affQuota = record.aff_history_quota;
+  const affEarnings = affQuota == null ? '—' : renderQuota(affQuota);
   return (
     <div>
       <Space spacing={1}>
@@ -246,7 +253,7 @@ const renderInviteInfo = (text, record, t) => {
           {t('邀请')}: {renderNumber(record.aff_count)}
         </Tag>
         <Tag color='white' shape='circle' className='!text-xs'>
-          {t('收益')}: {renderQuota(record.aff_history_quota)}
+          {t('收益')}: {affEarnings}
         </Tag>
         <Tag color='white' shape='circle' className='!text-xs'>
           {record.inviter_id === 0
@@ -274,7 +281,9 @@ const renderOperations = (
     t,
   },
 ) => {
-  if (record.DeletedAt !== null) {
+  // Same truthiness rule as the status cell: an absent DeletedAt must not strip
+  // an operator of every control on a live account.
+  if (record.DeletedAt) {
     return <></>;
   }
 

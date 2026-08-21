@@ -59,7 +59,9 @@ const WalletCard = ({ wallet, loading, CARD_PROPS }) => {
             </Typography.Text>
             <div className='flex items-baseline gap-2'>
               <Typography.Title heading={3} style={{ margin: 0 }}>
-                {isPlatform ? `¥${balance.toFixed(2)}` : balance.toFixed(4)}
+                {isPlatform
+                  ? `¥${balance?.toFixed(2) || '0.00'}`
+                  : balance?.toFixed(4) || '0.0000'}
               </Typography.Title>
               {isPlatform && wallet.frozen > 0 && (
                 <Typography.Text type='warning' size='small'>

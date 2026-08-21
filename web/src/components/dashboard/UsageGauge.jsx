@@ -144,7 +144,7 @@ export default function UsageGauge({
                 </span>
               </div>
             )}
-            {gauge.daysRemaining !== null && (
+            {gauge.daysRemaining != null && (
               <div>
                 <span className='text-gray-500'>{t('预计用完日期')}: </span>
                 <span className='font-mono'>

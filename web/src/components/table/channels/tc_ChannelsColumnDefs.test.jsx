@@ -577,26 +577,15 @@ describe('STATUS column', () => {
     expect(screen.getByTestId('tag')).toHaveTextContent('已启用 4/4');
   });
 
-  // DEFECT (correctness): an auto-disabled row (status === 3) whose
-  // `other_info` is absent — not '' but undefined, which is what the tag/child
-  // rows and any partially-projected API response carry — reaches
-  // `JSON.parse(undefined)` and throws SyntaxError out of the render function.
-  // React unwinds the whole table, so ONE bad row blanks the entire channel
-  // list instead of degrading that single cell. The `record.other_info === ''`
-  // guard covers only the empty-string case.
-  //
-  // The it.skip below holds the correct contract; the it() under it pins
-  // today's behaviour. Flip both together when fixing.
-  // Verified red 2026-08-20: un-skipped it fails with
-  // "SyntaxError: "undefined" is not valid JSON".
-  it.skip('CONTRACT:renders an auto-disabled row that carries no other_info', () => {
+  // FIXED 2026-08-21: an auto-disabled row (status === 3) whose `other_info`
+  // is absent — not '' but undefined, which is what the tag/child rows and any
+  // partially-projected API response carry — reached `JSON.parse(undefined)`
+  // and threw SyntaxError out of the render function. React unwound the whole
+  // table, so ONE bad row blanked the entire channel list instead of degrading
+  // that single cell. The guard now covers every falsy other_info, not just ''.
+  it('CONTRACT:renders an auto-disabled row that carries no other_info', () => {
     expect(() => renderCell(statusCol(), { status: 3 }, 3)).not.toThrow();
     expect(screen.getByTestId('tag')).toHaveTextContent('自动禁用');
-  });
-
-  it('currently throws while rendering an auto-disabled row with no other_info', () => {
-    // Pinning the defect, not endorsing it — see the comment above.
-    expect(() => renderCell(statusCol(), { status: 3 }, 3)).toThrow();
   });
 
   it('rewrites an empty other_info in place rather than copying the record', () => {
@@ -688,21 +677,23 @@ describe('BALANCE column — money on screen', () => {
     expect(screen.queryByText('$99')).toBeNull();
   });
 
-  // DEFECT (money): the two cells in this single column are formatted by two
-  // helpers with different currency behaviour. `renderQuota` (used quota)
-  // multiplies by status.usd_exchange_rate when quota_display_type is CNY;
-  // `renderQuotaWithAmount` (remaining balance) just prefixes '¥' to the raw
-  // USD figure. With rate=7, one dollar used and one dollar remaining print
-  // side by side as ¥7.00 and ¥1 — the customer's remaining upstream credit is
+  // FIXED upstream 2026-08-21 in helpers/render.jsx: the two cells in this
+  // single column were formatted by two helpers with different currency
+  // behaviour. `renderQuota` (used quota) multiplies by
+  // status.usd_exchange_rate when quota_display_type is CNY;
+  // `renderQuotaWithAmount` (remaining balance) only prefixed '¥' to the raw
+  // USD figure. With rate=7, one dollar used and one dollar remaining printed
+  // side by side as ¥7.00 and ¥1 — the customer's remaining upstream credit was
   // understated ~7x on a screen they use to decide whether to top up.
+  // renderQuotaWithAmount now takes symbol AND rate from getCurrencyConfig, so
+  // the lock below holds without any change in this file.
   describe('currency conversion', () => {
     beforeEach(() => {
       localStorage.setItem('quota_display_type', 'CNY');
       localStorage.setItem('status', JSON.stringify({ usd_exchange_rate: 7 }));
     });
 
-    // Verified red 2026-08-20: un-skipped it fails, 7 is not close to 1.
-    it.skip('CONTRACT:used and remaining use the same exchange rate', () => {
+    it('CONTRACT:used and remaining use the same exchange rate', () => {
       // $1 used and $1 remaining must print as the same CNY magnitude.
       renderCell(balanceCol(), { used_quota: 500000, balance: '1' });
       const [used, remaining] = screen
@@ -715,13 +706,11 @@ describe('BALANCE column — money on screen', () => {
     });
 
     it('applies the exchange rate to the used figure and marks both in ¥', () => {
-      // The used half is CORRECT — renderQuota does multiply by
-      // usd_exchange_rate — so it is safe to pin exactly. The remaining
-      // half is the defect, and its magnitude is held by the CONTRACT lock
-      // above; here we only assert what survives the repair, namely that both
-      // figures carry the same currency symbol. (The previous version of this
-      // test asserted the literal pair ['¥7.00', '¥1'], which would have gone
-      // red on the fix.)
+      // The magnitude of the remaining half is held by the CONTRACT lock
+      // above; here we only assert what survives either formatting, namely
+      // that both figures carry the same currency symbol. (An earlier version
+      // of this test pinned the literal pair ['¥7.00', '¥1'], which went red on
+      // the repair.)
       renderCell(balanceCol(), { used_quota: 500000, balance: '1' });
       const texts = screen.getAllByTestId('tag').map((n) => n.textContent);
       expect(texts).toHaveLength(2);
@@ -729,12 +718,11 @@ describe('BALANCE column — money on screen', () => {
       expect(texts[1].startsWith('¥')).toBe(true);
     });
 
-    // DEFECT (cosmetic, same root cause): the tooltip copy hard-codes the
-    // dollar sign inside the translation key ('剩余额度$'), so the hover text
-    // contradicts the tag next to it under any non-USD display setting.
-    // Verified red 2026-08-20: un-skipped it fails, the tag reads ¥1 while the
-    // tooltip reads 剩余额度$1.
-    it.skip('CONTRACT:the remaining tooltip uses the same currency as the tag', () => {
+    // FIXED 2026-08-21: the tooltip copy hard-coded the dollar sign inside the
+    // translation key ('剩余额度$'), so the hover text contradicted the tag next
+    // to it under any non-USD display setting. The symbol now comes from
+    // getCurrencyConfig, the same source the tag's helper reads.
+    it('CONTRACT:the remaining tooltip uses the same currency as the tag', () => {
       renderCell(balanceCol(), { used_quota: 0, balance: '1' });
       const symbol = screen.getAllByTestId('tag')[1].textContent.trim()[0];
       const tip = screen
@@ -747,6 +735,10 @@ describe('BALANCE column — money on screen', () => {
     it('names the balance and says it is clickable in the remaining tooltip', () => {
       // Currency-agnostic on purpose: whichever symbol the fix settles on, the
       // tooltip must still carry the figure and the click hint.
+      // OPEN (not this round's lock): the figure here is still the raw USD
+      // balance, so under CNY the tooltip reads 剩余额度¥1 beside a ¥7 tag. This
+      // test and the CONTRACT lock above together pin exactly that string, so
+      // converting the tooltip figure needs both to move at once.
       renderCell(balanceCol(), { used_quota: 0, balance: '1' });
       const tips = screen
         .getAllByTestId('tooltip-content')
@@ -868,12 +860,11 @@ describe('PRIORITY / WEIGHT columns', () => {
     });
   });
 
-  // DEFECT (correctness): the per-channel weight editor clamps at min=0, but
-  // the tag-row weight editor reuses the priority clamp of -999. Weight drives
-  // the weighted-random upstream pick; a negative weight is not a valid input
-  // for that and the two editors disagree about the same field.
-  // Verified red 2026-08-20: un-skipped it fails, "-999" !== "0".
-  it.skip('CONTRACT:the tag weight editor enforces the same floor as the per-channel one', () => {
+  // FIXED 2026-08-21: the per-channel weight editor clamps at min=0, but the
+  // tag-row weight editor reused the priority clamp of -999. Weight drives the
+  // weighted-random upstream pick; a negative weight is not a valid input for
+  // that and the two editors disagreed about the same field.
+  it('CONTRACT:the tag weight editor enforces the same floor as the per-channel one', () => {
     const cols = makeCols();
     const single = render(
       <div>
@@ -898,31 +889,8 @@ describe('PRIORITY / WEIGHT columns', () => {
       .getByTestId('number-weight')
       .getAttribute('data-min');
     expect(tagMin).toBe(singleMin);
-  });
-
-  it('currently lets a tag row be given a negative weight the row editor forbids', () => {
-    const cols = makeCols();
-    const single = render(
-      <div>
-        {colByKey(cols, COLUMN_KEYS.WEIGHT).render(1, { id: 1, weight: 1 }, 0)}
-      </div>,
-    );
-    expect(
-      within(single.container).getByTestId('number-weight'),
-    ).toHaveAttribute('data-min', '0');
-    single.unmount();
-
-    const tagRow = render(
-      <div>
-        {colByKey(cols, COLUMN_KEYS.WEIGHT).render(
-          1,
-          { key: 'eu', children: [], weight: 1 },
-          0,
-        )}
-      </div>,
-    );
-    expect(
-      within(tagRow.container).getByTestId('number-weight'),
-    ).toHaveAttribute('data-min', '-999');
+    // Absolute, not just equal: two editors agreeing on -999 would satisfy the
+    // comparison above while still accepting a weight the picker cannot use.
+    expect(tagMin).toBe('0');
   });
 });

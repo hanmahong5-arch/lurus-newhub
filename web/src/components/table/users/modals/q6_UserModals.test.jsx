@@ -117,17 +117,9 @@ describe('PromoteUserModal', () => {
   // user?" with no name, no id, nothing — so a mis-clicked row, or a row that
   // shifted under a background refresh, grants an admin role to the wrong
   // account with no chance to notice. Same for demote and enable/disable.
-  it.skip('CONTRACT: the promote confirmation identifies the account being promoted', () => {
+  it('CONTRACT: the promote confirmation identifies the account being promoted', () => {
     renderIt();
     expect(dialogText()).toContain('carol.ops');
-  });
-
-  it('currently asks about "this user" without saying which', () => {
-    // Fix-safe: asserts the dialog states the ACTION, which any fixed version
-    // still does. It does NOT assert the username is absent — that would turn
-    // red the moment someone adds it, i.e. it would block the fix.
-    renderIt();
-    expect(dialogText()).toContain('提升');
   });
 });
 
@@ -165,7 +157,7 @@ describe('DemoteUserModal', () => {
     expect(props.onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it.skip('CONTRACT: the demote confirmation identifies the account being demoted', () => {
+  it('CONTRACT: the demote confirmation identifies the account being demoted', () => {
     renderIt();
     expect(dialogText()).toContain('carol.ops');
   });
@@ -196,7 +188,7 @@ describe('EnableDisableUserModal', () => {
     );
   });
 
-  it('asks about enabling for every other action value', () => {
+  it('asks about enabling when the action is enable', () => {
     renderIt({ action: 'enable' });
     expect(screen.getByTestId('modal-title')).toHaveTextContent(
       '确定要启用此用户吗？',
@@ -211,20 +203,20 @@ describe('EnableDisableUserModal', () => {
   // constant, or the empty string the table holds before the first open —
   // silently reads as ENABLE. A dialog that is about to lock an account out
   // would then reassure the admin it is switching the account ON.
-  it.skip('CONTRACT: an unrecognised action must not be presented as "enable"', () => {
+  it('CONTRACT: an unrecognised action must not be presented as "enable"', () => {
     renderIt({ action: 'Disable' });
     expect(screen.getByTestId('modal-title')).not.toHaveTextContent(
       '确定要启用此用户吗？',
     );
   });
 
-  it('currently treats any non-"disable" action as an enable', () => {
-    // Pins the mechanism, not a specific wrong string: it shows the fallback
-    // exists. A fix that adds an explicit unknown-action branch keeps the
-    // 'enable' case passing, which is what is asserted here.
-    renderIt({ action: 'enable' });
-    expect(screen.getByTestId('modal-title')).toHaveTextContent(
-      '确定要启用此用户吗？',
+  it('falls back to a neutral confirmation for an action it does not recognise', () => {
+    // '' is what the table holds before the first open, so this is the value
+    // the dialog really renders with on mount — it must claim neither switch.
+    renderIt({ action: '' });
+    expect(screen.getByTestId('modal-title')).toHaveTextContent('确认操作');
+    expect(screen.getByTestId('modal-body')).toHaveTextContent(
+      '此操作具有风险，请确认要继续执行',
     );
   });
 
@@ -236,7 +228,7 @@ describe('EnableDisableUserModal', () => {
     expect(props.onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it.skip('CONTRACT: the lockout confirmation identifies the account being locked out', () => {
+  it('CONTRACT: the lockout confirmation identifies the account being locked out', () => {
     renderIt({ action: 'disable' });
     expect(dialogText()).toContain('carol.ops');
   });
@@ -325,7 +317,7 @@ describe('DeleteUserModal', () => {
   // DEFECT (correctness): identical to the redemptions delete modal — the
   // page-back check reads the `users` prop captured before the delete, so
   // deleting the last account on a page leaves the admin on an empty page.
-  it.skip('CONTRACT: deleting the last account on a page returns the admin to the previous page', async () => {
+  it('CONTRACT: deleting the last account on a page returns the admin to the previous page', async () => {
     const props = renderIt({ users: [target], activePage: 4 });
     await confirmAndSettle();
     expect(props.refresh).toHaveBeenCalledWith(3);
@@ -334,6 +326,10 @@ describe('DeleteUserModal', () => {
   // DEFECT (correctness): manageUser's result is discarded, so a refused
   // deletion closes the dialog and refreshes exactly like a successful one.
   // The admin is left believing an account was deregistered when it was not.
+  // NOT FIXABLE HERE: manageUser is supplied by useUsersData, which never
+  // returns the outcome (src/hooks/users/useUsersData.jsx:124-155 ends on
+  // setLoading(false) with no return). Treating a falsy result as a refusal in
+  // this file would jam the live dialog shut on every successful deletion.
   it.skip('CONTRACT: a refused deletion must not be presented as a completed one', async () => {
     const props = renderIt({
       manageUser: vi.fn().mockResolvedValue(false),
@@ -350,7 +346,7 @@ describe('DeleteUserModal', () => {
     await expect(manageUser.mock.results[0].value).resolves.toBe(false);
   });
 
-  it.skip('CONTRACT: the deletion confirmation identifies the account being deleted', () => {
+  it('CONTRACT: the deletion confirmation identifies the account being deleted', () => {
     renderIt();
     expect(dialogText()).toContain('carol.ops');
   });
