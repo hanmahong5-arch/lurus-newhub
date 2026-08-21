@@ -359,17 +359,13 @@ describe('handleApiError', () => {
     expect(handleApiError(new Error('something else')).details).toBeUndefined();
   });
 
-  it.skip('should survive an error object with no message', () => {
+  it('should survive an error object with no message', () => {
     // DEFECT: line 1 of handleApiError already defends against a missing
     // message (`error.message || '未知错误'`), but two lines later it calls
     // error.message.includes(...) unguarded. A rejection that is not an
     // Error (e.g. a bare string thrown, or `{ status: 500 }`) therefore
     // crashes the very handler written to describe it.
     expect(handleApiError({}).error).toBe('未知错误');
-  });
-
-  it('currently throws on an error object with no message', () => {
-    expect(() => handleApiError({})).toThrow(TypeError);
   });
 });
 

@@ -457,7 +457,7 @@ describe('renderModelPrice (OpenAI-style tooltip)', () => {
     expect(text).toContain('= $0.100000');
   });
 
-  it.skip('should not charge for an image-generation call the flag says did not happen', () => {
+  it('should not charge for an image-generation call the flag says did not happen', () => {
     // DEFECT: `imageGenerationCallPrice * groupRatio` is added to the total
     // unconditionally (render.jsx:1241) while BOTH the itemised <p> and the
     // breakdown string are gated on `imageGenerationCall && price > 0`
@@ -495,43 +495,11 @@ describe('renderModelPrice (OpenAI-style tooltip)', () => {
     // enough: the itemised output-price line is literally
     // "输出价格：$2.000000 * 0 = $0.000000", so that substring is present even
     // while the defect is live — the check passes either way and would give a
-    // false all-clear the moment someone un-skips this after a fix.
+    // false all-clear the moment someone un-skips this after a fix. The total
+    // is the figure that closes the breakdown line (".. * 分组倍率 1 = ..") and
+    // is immediately followed by the disclaimer, so anchor on both edges.
     expect(text).not.toContain('= $0.100000');
-    expect(text).toMatch(/仅供参考[\s\S]*=\s*\$0\.000000/);
-  });
-
-  it('currently adds an unexplained image-generation charge to the total', () => {
-    const text = textOf(
-      renderModelPrice(
-        0,
-        0,
-        1,
-        -1,
-        0,
-        1,
-        undefined,
-        0,
-        1,
-        false,
-        1,
-        0,
-        false,
-        0,
-        0,
-        false,
-        0,
-        0,
-        false,
-        0,
-        0,
-        false,
-        0.1,
-      ),
-    );
-    // Total is $0.10 …
-    expect(text).toContain('= $0.100000');
-    // … but nothing in the breakdown accounts for it.
-    expect(text).not.toContain('图片生成调用');
+    expect(text).toMatch(/\* 分组倍率 1 = \$0\.000000仅供参考/);
   });
 
   it('converts every figure into the display currency', () => {

@@ -87,17 +87,31 @@ export function getRoleName(role) {
     10: 'Admin',
     100: 'Root',
   };
-  return names[role] || 'Unknown';
+  // Own-property lookup only: a role arriving as a string from an API payload
+  // ('toString', 'constructor', …) must not resolve to an Object.prototype
+  // member instead of falling back.
+  return Object.prototype.hasOwnProperty.call(names, role)
+    ? names[role]
+    : 'Unknown';
+}
+
+// localStorage stringifies whatever it is handed, so a field the /api/status
+// payload omitted is persisted as the literal text 'undefined' / 'null'. Those
+// are truthy strings but never real values, so treat them as absent.
+function readStoredString(key) {
+  const value = localStorage.getItem(key);
+  if (!value || value === 'undefined' || value === 'null') return '';
+  return value;
 }
 
 export function getSystemName() {
-  let system_name = localStorage.getItem('system_name');
+  let system_name = readStoredString('system_name');
   if (!system_name) return 'Lurus API';
   return system_name;
 }
 
 export function getLogo() {
-  let logo = localStorage.getItem('logo');
+  let logo = readStoredString('logo');
   if (!logo) return '/logo.png';
   return logo;
 }
@@ -461,7 +475,10 @@ export const buildMessageContent = (
     return '';
   }
 
-  const validImageUrls = imageUrls.filter((url) => url && url.trim() !== '');
+  // The `= []` default only covers undefined; an explicit null must not throw.
+  const validImageUrls = (imageUrls || []).filter(
+    (url) => url && url.trim() !== '',
+  );
 
   if (imageEnabled && validImageUrls.length > 0) {
     return [
@@ -576,7 +593,9 @@ export const getRelativeTime = (publishDate) => {
     return `${diffHours} 小时前`;
   } else if (diffDays < 7) {
     return `${diffDays} 天前`;
-  } else if (diffWeeks < 4) {
+  } else if (diffDays < 30) {
+    // Weeks run right up to the first full month: ending this bucket at 28 days
+    // would hand 28-29 days to the month bucket, which still floors to "0".
     return `${diffWeeks} 周前`;
   } else if (diffMonths < 12) {
     return `${diffMonths} 个月前`;
@@ -689,20 +708,26 @@ export const calculateModelPrice = ({
   // 2. 根据计费类型计算价格
   if (record.quota_type === 0) {
     // 按量计费
+    // 缺失的 completion_ratio 按 1 计（与后端默认一致），否则输出价会算成 NaN
+    const completionRatio = record.completion_ratio ?? 1;
     const inputRatioPriceUSD = record.model_ratio * 2 * usedGroupRatio;
     const completionRatioPriceUSD =
-      record.model_ratio * record.completion_ratio * 2 * usedGroupRatio;
+      record.model_ratio * completionRatio * 2 * usedGroupRatio;
 
     const unitDivisor = tokenUnit === 'K' ? 1000 : 1;
     const unitLabel = tokenUnit === 'K' ? 'K' : 'M';
 
-    const rawDisplayInput = displayPrice(inputRatioPriceUSD);
-    const rawDisplayCompletion = displayPrice(completionRatioPriceUSD);
+    // displayPrice is needed only for its USD -> display-currency conversion,
+    // but it formats to 3 decimals, so re-parsing its output would quantise any
+    // price below 0.0005 to zero before `precision` is ever applied. The
+    // conversion is linear, so convert a scaled-up amount and scale back down.
+    const CONVERT_SCALE = 1e6;
+    const convertPrice = (usd) =>
+      parseFloat(displayPrice(usd * CONVERT_SCALE).replace(/[^0-9.]/g, '')) /
+      CONVERT_SCALE;
 
-    const numInput =
-      parseFloat(rawDisplayInput.replace(/[^0-9.]/g, '')) / unitDivisor;
-    const numCompletion =
-      parseFloat(rawDisplayCompletion.replace(/[^0-9.]/g, '')) / unitDivisor;
+    const numInput = convertPrice(inputRatioPriceUSD) / unitDivisor;
+    const numCompletion = convertPrice(completionRatioPriceUSD) / unitDivisor;
 
     let symbol = '$';
     if (currency === 'CNY') {

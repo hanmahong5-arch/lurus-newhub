@@ -371,7 +371,7 @@ describe('token key cell', () => {
   // Fix: fall back to a placeholder for a missing key. Flip both tests below
   // together.
   // ---------------------------------------------------------------------
-  it.skip('renders a row whose key is missing instead of taking the table down', () => {
+  it('renders a row whose key is missing instead of taking the table down', () => {
     expect(() =>
       renderCell('token_key', baseToken({ key: undefined })),
     ).not.toThrow();
@@ -493,7 +493,7 @@ describe('quota usage cell', () => {
   // accident rather than by intent. A percentage of a capacity should be
   // clamped to 0..100 and the overdraft called out explicitly.
   // ---------------------------------------------------------------------
-  it.skip('clamps the usage bar to 0..100 for an overdrawn token', () => {
+  it('clamps the usage bar to 0..100 for an overdrawn token', () => {
     renderCell(
       'quota_usage',
       baseToken({ used_quota: 1000, remain_quota: -500 }),
@@ -605,7 +605,7 @@ describe('model limits cell', () => {
   // The row then reads 无限制 (no restriction) for a token that the gateway
   // will treat as allowing *nothing*, which is the opposite meaning.
   // ---------------------------------------------------------------------
-  it.skip('distinguishes an empty allow-list from no allow-list', () => {
+  it('distinguishes an empty allow-list from no allow-list', () => {
     renderCell(
       'model_limits',
       baseToken({ model_limits_enabled: true, model_limits: '' }),
@@ -677,7 +677,7 @@ describe('time cells', () => {
   // formatter. The row then shows a formatted date for a token that in fact
   // never expires.
   // ---------------------------------------------------------------------
-  it.skip('recognises the never-expires sentinel however it is typed', () => {
+  it('recognises the never-expires sentinel however it is typed', () => {
     renderCell('expired_time', baseToken({ expired_time: '-1' }), '-1');
     expect(screen.getByText('永不过期')).toBeInTheDocument();
   });
@@ -806,7 +806,7 @@ describe('operations cell — chat links', () => {
   // toasts, and another ten on every re-render (a keystroke in the search box,
   // a refresh tick). Parsing belongs outside the render path, reported once.
   // ---------------------------------------------------------------------
-  it.skip('does not raise toasts as a side effect of rendering rows', () => {
+  it('does not raise toasts as a side effect of rendering rows', () => {
     window.localStorage.setItem('chats', '{not json');
     renderCell('operate', baseToken({ id: 1 }));
     renderCell('operate', baseToken({ id: 2 }));
@@ -886,7 +886,7 @@ describe('operations cell — delete confirmation', () => {
   // (`onOk: async () => { await ...; }`), so this is a local slip, not a
   // house pattern.
   // ---------------------------------------------------------------------
-  it.skip('keeps the confirm dialog open until the delete actually completes', async () => {
+  it('keeps the confirm dialog open until the delete actually completes', async () => {
     let finishDelete;
     deps.manageToken.mockReturnValue(
       new Promise((res) => {

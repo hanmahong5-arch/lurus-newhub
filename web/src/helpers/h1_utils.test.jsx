@@ -174,16 +174,12 @@ describe('getRoleName', () => {
     expect(getRoleName(undefined)).toBe('Unknown');
   });
 
-  it.skip('should return Unknown for a role that collides with an Object key', () => {
+  it('should return Unknown for a role that collides with an Object key', () => {
     // DEFECT: `names[role] || 'Unknown'` (utils.jsx:90) indexes an object
     // literal, so the lookup walks Object.prototype. getRoleName('toString')
     // returns the inherited *function* rather than 'Unknown'. Any role value
     // that arrives as a string from an API response can trip this.
     expect(getRoleName('toString')).toBe('Unknown');
-  });
-
-  it('currently leaks Object.prototype members out of the role map', () => {
-    expect(typeof getRoleName('toString')).toBe('function');
   });
 });
 
@@ -204,7 +200,7 @@ describe('branding fallbacks', () => {
     expect(getFooterHTML()).toBeNull();
   });
 
-  it.skip('should still fall back when /api/status omitted the field', () => {
+  it('should still fall back when /api/status omitted the field', () => {
     // DEFECT: data.js setStatusData does localStorage.setItem('logo',
     // data.logo) unconditionally. localStorage stringifies, so a missing
     // field is persisted as the four characters "undefined" -- which is
@@ -215,13 +211,6 @@ describe('branding fallbacks', () => {
     localStorage.setItem('system_name', String(undefined));
     expect(getLogo()).toBe('/logo.png');
     expect(getSystemName()).toBe('Lurus API');
-  });
-
-  it('currently treats the string "undefined" as a real value', () => {
-    localStorage.setItem('logo', String(undefined));
-    localStorage.setItem('system_name', String(undefined));
-    expect(getLogo()).toBe('undefined');
-    expect(getSystemName()).toBe('undefined');
   });
 });
 
@@ -373,7 +362,7 @@ describe('getRelativeTime buckets', () => {
     expect(getRelativeTime(NOW - 800 * DAY)).toBe('2024-04-06');
   });
 
-  it.skip('should not report "0 个月前" for a 28- or 29-day-old item', () => {
+  it('should not report "0 个月前" for a 28- or 29-day-old item', () => {
     // DEFECT: the week bucket ends at diffWeeks < 4 (i.e. < 28 days) but the
     // month bucket is Math.floor(diffDays / 30), which is still 0 for 28 and
     // 29 days. utils.jsx:579-582 therefore renders the literal string
@@ -381,11 +370,6 @@ describe('getRelativeTime buckets', () => {
     // showing weeks (or round up to 1 month) -- never zero.
     expect(getRelativeTime(NOW - 28 * DAY)).toBe('4 周前');
     expect(getRelativeTime(NOW - 29 * DAY)).toBe('4 周前');
-  });
-
-  it('currently falls into a zero-valued month bucket at 28-29 days', () => {
-    expect(getRelativeTime(NOW - 28 * DAY)).toBe('0 个月前');
-    expect(getRelativeTime(NOW - 29 * DAY)).toBe('0 个月前');
   });
 });
 
@@ -585,16 +569,12 @@ describe('buildMessageContent', () => {
     ]);
   });
 
-  it.skip('should tolerate an explicitly null url list', () => {
+  it('should tolerate an explicitly null url list', () => {
     // DEFECT: the `imageUrls = []` default only applies to undefined. With
     // text present and imageUrls === null the early-return guard is skipped
     // and utils.jsx:464 calls null.filter -> TypeError, taking the composer
     // down mid-send. Correct contract: treat null like an empty list.
     expect(buildMessageContent('hi', null, true)).toBe('hi');
-  });
-
-  it('currently throws on an explicitly null url list', () => {
-    expect(() => buildMessageContent('hi', null, true)).toThrow(TypeError);
   });
 });
 
@@ -919,7 +899,7 @@ describe('calculateModelPrice', () => {
     expect(out.inputPrice).toBe('¤1.0000');
   });
 
-  it.skip('should not lose digits to the display-string round trip', () => {
+  it('should not lose digits to the display-string round trip', () => {
     // DEFECT: utils.jsx:702-705 re-parses the *formatted* string
     // (parseFloat(rawDisplayInput.replace(/[^0-9.]/g,''))) instead of using
     // the number it already has. The production displayPrice formats to 3
@@ -937,19 +917,7 @@ describe('calculateModelPrice', () => {
     expect(out.inputPrice).toBe('$0.0004');
   });
 
-  it('currently quantises a sub-milli-dollar price to zero', () => {
-    const out = calculateModelPrice({
-      record: { quota_type: 0, model_ratio: 0.0002, completion_ratio: 1 },
-      selectedGroup: 'default',
-      groupRatio,
-      tokenUnit: 'M',
-      displayPrice,
-      currency: 'USD',
-    });
-    expect(out.inputPrice).toBe('$0.0000');
-  });
-
-  it.skip('should not print NaN when completion_ratio is missing', () => {
+  it('should not print NaN when completion_ratio is missing', () => {
     // DEFECT: a record without completion_ratio makes completionRatioPriceUSD
     // NaN; displayPrice yields '$NaN'; the [^0-9.] strip leaves an empty
     // string; parseFloat('') is NaN again, so the pricing table shows the
@@ -964,19 +932,10 @@ describe('calculateModelPrice', () => {
       currency: 'USD',
     });
     expect(out.completionPrice).not.toContain('NaN');
-  });
-
-  it('currently prints $NaN when completion_ratio is missing', () => {
-    const out = calculateModelPrice({
-      record: { quota_type: 0, model_ratio: 0.5 },
-      selectedGroup: 'default',
-      groupRatio,
-      tokenUnit: 'M',
-      displayPrice,
-      currency: 'USD',
-    });
+    // A missing completion ratio bills output at the input ratio:
+    // 0.5 * 1 * 2 * 1 = $1.0000 per 1M tokens.
     expect(out.inputPrice).toBe('$1.0000');
-    expect(out.completionPrice).toBe('$NaN');
+    expect(out.completionPrice).toBe('$1.0000');
   });
 });
 

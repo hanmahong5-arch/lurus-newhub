@@ -61,6 +61,18 @@ const colors = [
   'yellow',
 ];
 
+// record.other is operator-supplied JSON written by the gateway; a corrupt or
+// missing blob on a single row must not throw out of a cell render, or React
+// unmounts the whole log table.
+function parseLogOther(otherStr) {
+  try {
+    return getLogOther(otherStr);
+  } catch (e) {
+    console.error(`Failed to parse record.other: "${otherStr}".`, e);
+    return null;
+  }
+}
+
 // Render functions
 function renderType(type, t) {
   switch (type) {
@@ -147,6 +159,11 @@ function renderUseTime(type, t) {
 
 function renderFirstUseTime(type, t) {
   let time = parseFloat(type) / 1000.0;
+  if (!Number.isFinite(time)) {
+    // No first-token time was recorded for this row; show nothing rather than
+    // inventing a latency figure.
+    return null;
+  }
   time = time.toFixed(1);
   if (time < 3) {
     return (
@@ -255,7 +272,7 @@ export const getLogsColumns = ({
       render: (text, record, index) => {
         let isMultiKey = false;
         let multiKeyIndex = -1;
-        let other = getLogOther(record.other);
+        let other = parseLogOther(record.other);
         if (other?.admin_info) {
           let adminInfo = other.admin_info;
           if (adminInfo?.is_multi_key) {
@@ -499,7 +516,7 @@ export const getLogsColumns = ({
         }
         let content = t('渠道') + `：${record.channel}`;
         if (record.other !== '') {
-          let other = JSON.parse(record.other);
+          let other = parseLogOther(record.other);
           if (other === null) {
             return <></>;
           }

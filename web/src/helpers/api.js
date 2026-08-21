@@ -212,8 +212,9 @@ export const buildApiPayload = (
 
 // 处理API错误响应
 export const handleApiError = (error, response = null) => {
+  const message = error.message || '未知错误';
   const errorInfo = {
-    error: error.message || '未知错误',
+    error: message,
     timestamp: new Date().toISOString(),
     stack: error.stack,
   };
@@ -223,9 +224,9 @@ export const handleApiError = (error, response = null) => {
     errorInfo.statusText = response.statusText;
   }
 
-  if (error.message.includes('HTTP error')) {
+  if (message.includes('HTTP error')) {
     errorInfo.details = '服务器返回了错误状态码';
-  } else if (error.message.includes('Failed to fetch')) {
+  } else if (message.includes('Failed to fetch')) {
     errorInfo.details = '网络连接失败或服务器无响应';
   }
 
