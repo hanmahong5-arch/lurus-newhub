@@ -296,8 +296,13 @@ export const useChannelsData = () => {
           tagChannelDates.status = 1;
         }
         tagChannelDates.used_quota += channels[i].used_quota;
-        tagChannelDates.response_time += channels[i].response_time;
-        tagChannelDates.response_time = tagChannelDates.response_time / 2;
+        // Running mean over the children gathered so far. Halving the running
+        // sum instead would decay the older samples and understate latency.
+        const childCount = tagChannelDates.children.length;
+        tagChannelDates.response_time =
+          (tagChannelDates.response_time * (childCount - 1) +
+            channels[i].response_time) /
+          childCount;
       }
     }
     setChannels(channelDates);
@@ -343,30 +348,42 @@ export const useChannelsData = () => {
     setLoading(true);
     const typeParam = typeKey !== 'all' ? `&type=${typeKey}` : '';
     const statusParam = statusF !== 'all' ? `&status=${statusF}` : '';
-    const res = await API.get(
-      `/api/channel/?p=${page}&page_size=${pageSize}&id_sort=${idSort}&tag_mode=${enableTagMode}${typeParam}${statusParam}`,
-    );
+    try {
+      const res = await API.get(
+        `/api/channel/?p=${page}&page_size=${pageSize}&id_sort=${idSort}&tag_mode=${enableTagMode}${typeParam}${statusParam}`,
+      );
 
-    if (res === undefined || reqId !== requestCounter.current) {
-      return;
-    }
-
-    const { success, message, data } = res.data;
-    if (success) {
-      const { items, total, type_counts } = data;
-      if (type_counts) {
-        const sumAll = Object.values(type_counts).reduce(
-          (acc, v) => acc + v,
-          0,
-        );
-        setTypeCounts({ ...type_counts, all: sumAll });
+      if (res === undefined || reqId !== requestCounter.current) {
+        return;
       }
-      setChannelFormat(items, enableTagMode);
-      setChannelCount(total);
-    } else {
-      showError(message);
+
+      const { success, message, data } = res.data;
+      if (success) {
+        const { items, total, type_counts } = data;
+        if (type_counts) {
+          const sumAll = Object.values(type_counts).reduce(
+            (acc, v) => acc + v,
+            0,
+          );
+          setTypeCounts({ ...type_counts, all: sumAll });
+        }
+        setChannelFormat(items, enableTagMode);
+        setChannelCount(total);
+      } else {
+        showError(message);
+      }
+    } catch (error) {
+      // Swallow it here: every caller (bootstrap, paging, refresh) would
+      // otherwise leak an unhandled rejection.
+      if (reqId === requestCounter.current) {
+        showError(error);
+      }
+    } finally {
+      // A newer request owns the spinner — only the latest one may clear it.
+      if (reqId === requestCounter.current) {
+        setLoading(false);
+      }
     }
-    setLoading(false);
   };
 
   // Search channels
@@ -438,6 +455,10 @@ export const useChannelsData = () => {
   const manageChannel = async (id, action, record, value) => {
     let data = { id };
     let res;
+    // The cells hand over the raw input string. Number() honours '1e3' as 1000
+    // where parseInt would truncate it to 1, and yields NaN — not a silently
+    // accepted value — for anything non-numeric.
+    const numericValue = value === '' ? NaN : Math.trunc(Number(value));
     switch (action) {
       case 'delete':
         res = await API.delete(`/api/channel/${id}/`);
@@ -451,19 +472,22 @@ export const useChannelsData = () => {
         res = await API.put('/api/channel/', data);
         break;
       case 'priority':
-        if (value === '') return;
-        data.priority = parseInt(value);
+        if (!Number.isFinite(numericValue)) return;
+        data.priority = numericValue;
         res = await API.put('/api/channel/', data);
         break;
       case 'weight':
-        if (value === '') return;
-        data.weight = parseInt(value);
-        if (data.weight < 0) data.weight = 0;
+        if (!Number.isFinite(numericValue)) return;
+        data.weight = numericValue < 0 ? 0 : numericValue;
         res = await API.put('/api/channel/', data);
         break;
       case 'enable_all':
-        data.channel_info = record.channel_info;
-        data.channel_info.multi_key_status_list = {};
+        // Send a cleared copy — mutating record.channel_info in place would
+        // leave the row claiming every sub-key is healthy if the PUT fails.
+        data.channel_info = {
+          ...record.channel_info,
+          multi_key_status_list: {},
+        };
         res = await API.put('/api/channel/', data);
         break;
     }
@@ -474,6 +498,9 @@ export const useChannelsData = () => {
       let newChannels = [...channels];
       if (action !== 'delete') {
         record.status = channel.status;
+      }
+      if (action === 'enable_all') {
+        record.channel_info = data.channel_info;
       }
       setChannels(newChannels);
     } else {

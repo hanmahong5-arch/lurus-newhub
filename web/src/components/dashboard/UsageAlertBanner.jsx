@@ -55,7 +55,7 @@ export default function UsageAlertBanner({ gauge }) {
             <div className='flex items-center justify-between flex-wrap gap-2'>
               <span>
                 {t('额度即将耗尽')} ({gauge.usagePercent}%)
-                {gauge.daysRemaining !== null &&
+                {gauge.daysRemaining != null &&
                   ` - ${t('预计')} ${gauge.daysRemaining} ${t('天后用完')}`}
               </span>
               {topupButton}
@@ -77,7 +77,7 @@ export default function UsageAlertBanner({ gauge }) {
             <div className='flex items-center justify-between flex-wrap gap-2'>
               <span>
                 {t('额度即将耗尽')} ({gauge.usagePercent}%)
-                {gauge.daysRemaining !== null &&
+                {gauge.daysRemaining != null &&
                   ` - ${t('预计')} ${gauge.daysRemaining} ${t('天后用完')}`}
               </span>
               {topupButton}
@@ -88,24 +88,28 @@ export default function UsageAlertBanner({ gauge }) {
     );
   }
 
-  // Yellow
-  return (
-    <div className='mb-4' role='alert' aria-live='polite'>
-      <Banner
-        type='warning'
-        fullMode={false}
-        onClose={() => setDismissed(true)}
-        description={
-          <div className='flex items-center justify-between flex-wrap gap-2'>
-            <span>
-              {t('额度已使用')} {gauge.usagePercent}%
-              {gauge.daysRemaining !== null &&
-                `，${t('预计')} ${gauge.daysRemaining} ${t('天后用完')}`}
-            </span>
-            {topupButton}
-          </div>
-        }
-      />
-    </div>
-  );
+  if (gauge.level === 'yellow') {
+    return (
+      <div className='mb-4' role='alert' aria-live='polite'>
+        <Banner
+          type='warning'
+          fullMode={false}
+          onClose={() => setDismissed(true)}
+          description={
+            <div className='flex items-center justify-between flex-wrap gap-2'>
+              <span>
+                {t('额度已使用')} {gauge.usagePercent}%
+                {gauge.daysRemaining != null &&
+                  `，${t('预计')} ${gauge.daysRemaining} ${t('天后用完')}`}
+              </span>
+              {topupButton}
+            </div>
+          }
+        />
+      </div>
+    );
+  }
+
+  // An unclassified level is not evidence of a quota problem — stay silent.
+  return null;
 }

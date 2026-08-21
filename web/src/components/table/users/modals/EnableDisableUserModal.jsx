@@ -28,17 +28,32 @@ const EnableDisableUserModal = ({
   action,
   t,
 }) => {
+  // 只有明确认识的动作才配上对应文案：任何其它取值（拼写错误、改名后的常量、
+  // 首次打开前表格里的空串）都不能被说成"启用"，否则一个即将封停账户的对话框
+  // 会反过来告诉管理员它要把账户打开。
   const isDisable = action === 'disable';
+  const isEnable = action === 'enable';
+
+  let title = t('确认操作');
+  let description = t('此操作具有风险，请确认要继续执行');
+  if (isDisable) {
+    title = t('确定要禁用此用户吗？');
+    description = t('此操作将禁用用户账户');
+  } else if (isEnable) {
+    title = t('确定要启用此用户吗？');
+    description = t('此操作将启用用户账户');
+  }
 
   return (
     <Modal
-      title={isDisable ? t('确定要禁用此用户吗？') : t('确定要启用此用户吗？')}
+      title={title}
       visible={visible}
       onCancel={onCancel}
       onOk={onConfirm}
       type='warning'
     >
-      {isDisable ? t('此操作将禁用用户账户') : t('此操作将启用用户账户')}
+      {description}
+      {user?.username ? `：${user.username}` : ''}
     </Modal>
   );
 };

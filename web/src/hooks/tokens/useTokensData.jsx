@@ -164,38 +164,46 @@ export const useTokensData = (openFluentNotification) => {
     setLoading(true);
     let data = { id };
     let res;
-    switch (action) {
-      case 'delete':
-        res = await API.delete(
-          isV2Mode() ? v2Url(`/tokens/${id}`) : `/api/token/${id}/`,
-        );
-        break;
-      case 'enable':
-        data.status = 1;
-        res = await API.put(
-          isV2Mode() ? v2Url(`/tokens/${id}`) : '/api/token/?status_only=true',
-          data,
-        );
-        break;
-      case 'disable':
-        data.status = 2;
-        res = await API.put(
-          isV2Mode() ? v2Url(`/tokens/${id}`) : '/api/token/?status_only=true',
-          data,
-        );
-        break;
-    }
-    const { success, message } = res.data;
-    if (success) {
-      showSuccess('操作成功完成！');
-      let token = res.data.data;
-      let newTokens = [...tokens];
-      if (action !== 'delete') {
-        record.status = token.status;
+    try {
+      switch (action) {
+        case 'delete':
+          res = await API.delete(
+            isV2Mode() ? v2Url(`/tokens/${id}`) : `/api/token/${id}/`,
+          );
+          break;
+        case 'enable':
+          data.status = 1;
+          res = await API.put(
+            isV2Mode()
+              ? v2Url(`/tokens/${id}`)
+              : '/api/token/?status_only=true',
+            data,
+          );
+          break;
+        case 'disable':
+          data.status = 2;
+          res = await API.put(
+            isV2Mode()
+              ? v2Url(`/tokens/${id}`)
+              : '/api/token/?status_only=true',
+            data,
+          );
+          break;
       }
-      setTokens(newTokens);
-    } else {
-      showError(message);
+      const { success, message } = res.data;
+      if (success) {
+        showSuccess('操作成功完成！');
+        let token = res.data.data;
+        let newTokens = [...tokens];
+        if (action !== 'delete') {
+          record.status = token.status;
+        }
+        setTokens(newTokens);
+      } else {
+        showError(message);
+      }
+    } catch (error) {
+      showError(error.message);
     }
     setLoading(false);
   };
@@ -214,9 +222,14 @@ export const useTokensData = (openFluentNotification) => {
     const res = await API.get(searchUrl);
     const { success, message, data } = res.data;
     if (success) {
-      setTokens(data);
-      setTokenCount(data.length);
-      setActivePage(1);
+      // v1 search answers with a flat array, v2 reuses the paginated list route.
+      if (Array.isArray(data)) {
+        setTokens(data);
+        setTokenCount(data.length);
+        setActivePage(1);
+      } else {
+        syncPageData(data || {});
+      }
     } else {
       showError(message);
     }
@@ -229,6 +242,10 @@ export const useTokensData = (openFluentNotification) => {
     setLoading(true);
     let sortedTokens = [...tokens];
     sortedTokens.sort((a, b) => {
+      // Quota columns are numbers; string collation would order 1000 before 900.
+      if (typeof a[key] === 'number' && typeof b[key] === 'number') {
+        return a[key] - b[key];
+      }
       return ('' + a[key]).localeCompare(b[key]);
     });
     if (sortedTokens[0].id === tokens[0].id) {

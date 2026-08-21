@@ -244,7 +244,7 @@ describe('useUsersData — page size', () => {
   // fetches `activePage` — the value captured by the closure at render time.
   // On page 3 with a smaller total the new query can land past the end and
   // show an empty table. Un-skip once it fetches page 1 like it declares.
-  it.skip('resets to page 1 when the page size changes', async () => {
+  it('resets to page 1 when the page size changes', async () => {
     const hook = await mount();
     withForm(hook, { searchKeyword: '', searchGroup: '' });
 
@@ -267,7 +267,7 @@ describe('useUsersData — page size', () => {
   // DEFECT (see report): unlike handlePageChange, handlePageSizeChange never
   // consults the filters — changing rows-per-page silently discards an active
   // search and dumps the unfiltered directory back on screen.
-  it.skip('keeps an active search when the page size changes', async () => {
+  it('keeps an active search when the page size changes', async () => {
     const hook = await mount();
     withForm(hook, { searchKeyword: 'ali', searchGroup: '' });
     API.get.mockClear();

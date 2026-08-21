@@ -498,14 +498,14 @@ describe('a save that fails in transport', () => {
   // reached, so the sheet is left spinning with the submit button stuck in its
   // loading state forever. The operator cannot tell "still saving" from
   // "failed", and the edited quota is silently unsaved.
-  it.skip('CONTRACT: a save that fails in transport tells the operator', async () => {
+  it('CONTRACT: a save that fails in transport tells the operator', async () => {
     H.api.put.mockRejectedValue(new Error('network down'));
     const props = await renderModal();
     await saveAndSwallow(props);
     expect(H.showError).toHaveBeenCalled();
   });
 
-  it.skip('CONTRACT: a save that fails in transport releases the spinner', async () => {
+  it('CONTRACT: a save that fails in transport releases the spinner', async () => {
     H.api.put.mockRejectedValue(new Error('network down'));
     const props = await renderModal();
     await saveAndSwallow(props);
@@ -693,7 +693,7 @@ describe('the add-quota dialog — money arithmetic', () => {
   // dialog reopens pre-filled with the previous amount, so an operator who
   // opens it to check the balance and dismisses it with OK instead of Cancel
   // silently doubles the credit they just issued.
-  it.skip('CONTRACT: an applied delta is cleared so reopening cannot re-grant it', async () => {
+  it('CONTRACT: an applied delta is cleared so reopening cannot re-grant it', async () => {
     await renderModal();
     await openAddQuota();
     await act(async () => {
@@ -709,10 +709,7 @@ describe('the add-quota dialog — money arithmetic', () => {
     expect(H.formValues.current.quota).toBe(2000000);
   });
 
-  it('currently reopens the add-quota dialog still holding the last delta', async () => {
-    // Fix-safe: asserts that the FIRST grant is correct and that reopening
-    // shows a dialog at all. It does not assert the stale amount is still
-    // there, so clearing the field will not turn this red.
+  it('reopens the add-quota dialog with the amount field emptied', async () => {
     await renderModal();
     await openAddQuota();
     await act(async () => {
@@ -721,11 +718,10 @@ describe('the add-quota dialog — money arithmetic', () => {
     await act(async () => {
       screen.getByTestId('quota-ok').click();
     });
-    expect(H.formValues.current.quota).toBe(2000000);
     await openAddQuota();
-    expect(screen.getByTestId('quota-modal')).toHaveAttribute(
-      'data-visible',
-      'true',
+    expect(screen.getByTestId('add-quota-input')).toHaveAttribute(
+      'data-value',
+      '',
     );
   });
 
@@ -733,7 +729,7 @@ describe('the add-quota dialog — money arithmetic', () => {
   // the apply computes `parseInt(addQuotaLocal) || 0`. For any non-numeric
   // entry the preview renders the result as "$NaN" while OK actually adds 0.
   // The two must agree: whatever the preview promises is what OK must do.
-  it.skip('CONTRACT: the preview shows exactly the balance OK will apply', async () => {
+  it('CONTRACT: the preview shows exactly the balance OK will apply', async () => {
     await renderModal();
     await openAddQuota();
     await act(async () => {
@@ -743,19 +739,46 @@ describe('the add-quota dialog — money arithmetic', () => {
     expect(previewed).not.toContain('NaN');
   });
 
-  it('currently previews a non-numeric delta differently from what it applies', async () => {
-    // Fix-safe: asserts the APPLIED value is sane (0 added, balance intact),
-    // which is what a fix would preserve. The broken preview string itself is
-    // pinned only in the skipped contract above.
+  it('previews a non-numeric delta as the nothing it will actually add', async () => {
     await renderModal();
     await openAddQuota();
     await act(async () => {
       H.setDelta('abc');
     });
+    // The whole figure, not just "no NaN": $3.00 + $0.00 = $3.00.
+    expect(screen.getByTestId('quota-modal-body').textContent).toBe(
+      `新额度：${renderQuota(1500000)} + ${renderQuota(0)} = ${renderQuota(1500000)}`,
+    );
+    expect(renderQuota(1500000)).toBe('$3.00');
+    expect(renderQuota(0)).toBe('$0.00');
     await act(async () => {
       screen.getByTestId('quota-ok').click();
     });
+    // ...and OK moves the balance by exactly what was previewed.
     expect(H.formValues.current.quota).toBe(1500000);
+  });
+
+  it('previews a balance held as a string the same way it applies it', async () => {
+    // The submit path guards `typeof quota === 'string'`, so the form really
+    // can hold one. Unparsed, '1500000' + 500000 concatenates: the preview
+    // would promise $3000001.00 while OK adds the $1.00 that was typed.
+    await renderModal();
+    await act(async () => {
+      H.formApi.current.setValue('quota', '1500000');
+    });
+    await openAddQuota();
+    await act(async () => {
+      H.setDelta('500000');
+    });
+    expect(screen.getByTestId('quota-modal-body').textContent).toBe(
+      `新额度：${renderQuota(1500000)} + ${renderQuota(500000)} = ${renderQuota(2000000)}`,
+    );
+    expect(renderQuota(2000000)).toBe('$4.00');
+    await act(async () => {
+      screen.getByTestId('quota-ok').click();
+    });
+    // ...and OK moves the balance by exactly what was previewed: $4.00.
+    expect(H.formValues.current.quota).toBe(2000000);
   });
 
   // DEFECT (money): -1 is the platform's "unlimited" sentinel for a quota. Fed
@@ -763,7 +786,7 @@ describe('the add-quota dialog — money arithmetic', () => {
   // preview greets the operator with "$-0.00" — a balance that reads as a tiny
   // negative debt rather than "unlimited". The same helper defect is recorded
   // on the users grid; here it lands on the dialog that grants credit.
-  it.skip('CONTRACT: an unlimited balance is never previewed as a negative amount', async () => {
+  it('CONTRACT: an unlimited balance is never previewed as a negative amount', async () => {
     await renderModal();
     await act(async () => {
       H.formApi.current.setValue('quota', -1);

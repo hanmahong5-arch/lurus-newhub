@@ -35,7 +35,10 @@ const DeleteUserModal = ({
     await manageUser(user.id, 'delete', user);
     await refresh();
     setTimeout(() => {
-      if (users.length === 0 && activePage > 1) {
+      // users 是删除前捕获的那一页，被删的这一行还在里面：直接看 length 会漏掉
+      // "本页只剩这一个账户"的情形，把管理员留在一张空页上。剔除它再判空。
+      const remaining = users.filter((u) => u.id !== user.id);
+      if (remaining.length === 0 && activePage > 1) {
         refresh(activePage - 1);
       }
     }, 100);
@@ -51,6 +54,7 @@ const DeleteUserModal = ({
       type='danger'
     >
       {t('相当于删除用户，此修改将不可逆')}
+      {user?.username ? `：${user.username}` : ''}
     </Modal>
   );
 };

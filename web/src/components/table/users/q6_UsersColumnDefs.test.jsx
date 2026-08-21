@@ -409,6 +409,9 @@ describe('group column', () => {
   // The it.skip below holds the correct contract; flip it when fixing.
   // Verified red 2026-08-20: un-skipped it fails with
   // "TypeError: Cannot read properties of undefined (reading 'split')".
+  // Re-verified red 2026-08-21, same TypeError. Left skipped on purpose: the
+  // repair belongs to renderGroup in src/helpers/render.jsx (the `group === ''`
+  // guard), not to this column, which only forwards the field.
   it.skip('CONTRACT:a user with no group renders a placeholder instead of throwing', () => {
     expect(() =>
       renderCell(makeCtx(), 'group', user({ group: undefined })),
@@ -544,7 +547,8 @@ describe('operations column', () => {
   // locks the operator out of those accounts with no error shown anywhere.
   // The correct test is a truthiness check on an actual deletion timestamp.
   // Verified red 2026-08-20: un-skipped it fails — 0 buttons are rendered.
-  it.skip('CONTRACT:a row with no DeletedAt field is treated as a live account', () => {
+  // Fixed 2026-08-21: both cells now test the timestamp for truthiness.
+  it('CONTRACT:a row with no DeletedAt field is treated as a live account', () => {
     const record = user();
     delete record.DeletedAt;
     renderCell(makeCtx(), 'operate', record);
@@ -712,13 +716,28 @@ describe('quota usage column — money on screen', () => {
     );
   });
 
-  // DEFECT (money): -1 is the platform's sentinel for "no limit", and it is
-  // pushed straight through renderQuota. -1 / 500000 rounds to a signed zero,
-  // so an unlimited account is displayed to the operator as "$-0.00 / $-0.00"
-  // — a figure that reads as a negative balance on the screen used to decide
-  // whether an account has run out of credit.
+  // DEFECT (money): a quota of -1 is pushed straight through renderQuota.
+  // -1 / 500000 rounds to a signed zero, so the account was displayed to the
+  // operator as "$-0.00 / $-0.00" — a figure that reads as a negative balance
+  // on the screen used to decide whether an account has run out of credit.
   // Verified red 2026-08-20: un-skipped it fails, the tag reads "$-0.00 / $-0.00".
-  it.skip('CONTRACT:an unlimited quota is never printed as a negative money amount', () => {
+  // Resolved 2026-08-21 by helpers/render.jsx, which normalises the signed zero:
+  // the tag now reads "$0.00 / $0.00". Nothing was changed in this column.
+  //
+  // This comment previously asserted that -1 is "the platform's sentinel for
+  // no limit" on a user quota, and concluded the account should read 无限.
+  // Checked against the server on 2026-08-21 and NOT confirmed: -1 is an
+  // unlimited sentinel for max_balance (internal/adapter/handler/
+  // tenant_credit_pool.go:38, middleware/pool_balance_check.go:31) and for
+  // expired_time, but a token spells unlimited quota as the boolean
+  // UnlimitedQuota (internal/domain/entity/token.go:20) and nothing on the
+  // server treats user.quota == -1 specially. So "$0.00" may simply be the
+  // right answer for a hair-thin overdraft here.
+  //
+  // Do not render this as 无限 on the strength of this comment alone — confirm
+  // first how the server actually represents an unlimited user quota. That
+  // unverified premise is the reason this note exists.
+  it('CONTRACT:an unlimited quota is never printed as a negative money amount', () => {
     renderCell(makeCtx(), 'quota_usage', user({ used_quota: 0, quota: -1 }));
     expect(usageTag().textContent).not.toMatch(/-\s*0\.00/);
   });
@@ -742,7 +761,9 @@ describe('quota usage column — money on screen', () => {
   // parseFloat; before /api/status has populated it the parse yields NaN and
   // every figure in this column prints as "$NaN".
   // Verified red 2026-08-20: un-skipped it fails, the tag reads "$NaN / $NaN".
-  it.skip('CONTRACT:an unavailable quota_per_unit does not print NaN as money', () => {
+  // Resolved 2026-08-21 by helpers/render.jsx, which returns the "—" placeholder
+  // when the unit price is unknown: the tag reads "— / —". Nothing changed here.
+  it('CONTRACT:an unavailable quota_per_unit does not print NaN as money', () => {
     window.localStorage.removeItem('quota_per_unit');
     renderCell(makeCtx(), 'quota_usage', user());
     expect(usageTag().textContent).not.toMatch(/NaN/);
@@ -792,7 +813,9 @@ describe('invite column', () => {
   // projections with the field absent, and undefined / 500000 is NaN, so the
   // affiliate earnings tag prints "$NaN" on the user's own row.
   // Verified red 2026-08-20: un-skipped it fails, the tag reads 收益: $NaN.
-  it.skip('CONTRACT:an absent commission total is not rendered as NaN money', () => {
+  // Fixed 2026-08-21: an absent commission renders the "—" placeholder, so the
+  // tag reads 收益: — instead of claiming a figure that could not be computed.
+  it('CONTRACT:an absent commission total is not rendered as NaN money', () => {
     renderCell(makeCtx(), 'invite', user({ aff_history_quota: undefined }));
     expect(tagTexts()[1]).not.toMatch(/NaN/);
   });

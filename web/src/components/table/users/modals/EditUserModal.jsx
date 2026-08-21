@@ -159,32 +159,53 @@ const EditUserModal = (props) => {
   /* ----------------------- submit ----------------------- */
   const submit = async (values) => {
     setLoading(true);
-    let payload = { ...values };
-    if (typeof payload.quota === 'string')
-      payload.quota = parseInt(payload.quota) || 0;
-    if (typeof payload.daily_quota === 'string')
-      payload.daily_quota = parseInt(payload.daily_quota) || 0;
-    if (userId) {
-      payload.id = parseInt(userId);
+    try {
+      let payload = { ...values };
+      if (typeof payload.quota === 'string')
+        payload.quota = parseInt(payload.quota) || 0;
+      if (typeof payload.daily_quota === 'string')
+        payload.daily_quota = parseInt(payload.daily_quota) || 0;
+      if (userId) {
+        payload.id = parseInt(userId);
+      }
+      const url = userId ? `/api/user/` : `/api/user/self`;
+      const res = await API.put(url, payload);
+      const { success, message } = res.data;
+      if (success) {
+        showSuccess(t('用户信息更新成功！'));
+        props.refresh();
+        props.handleClose();
+      } else {
+        showError(message);
+      }
+    } catch (e) {
+      // 请求本身失败（离线、502、会话掉线）时不能让异常逃出 handler：那样既不会
+      // 报错也不会解掉 loading，抽屉会永远转圈，管理员分不清"还在存"和"没存上"。
+      showError(e.message);
+    } finally {
+      setLoading(false);
     }
-    const url = userId ? `/api/user/` : `/api/user/self`;
-    const res = await API.put(url, payload);
-    const { success, message } = res.data;
-    if (success) {
-      showSuccess(t('用户信息更新成功！'));
-      props.refresh();
-      props.handleClose();
-    } else {
-      showError(message);
-    }
-    setLoading(false);
   };
 
   /* --------------------- quota helper -------------------- */
+  // 预览和实际写入必须用同一个解析结果：一边 parseInt(x || 0)、另一边
+  // parseInt(x) || 0 时，非数字输入会让预览显示 $NaN，而确定实际只加 0。
+  const addQuotaDelta = parseInt(addQuotaLocal) || 0;
+
+  // 余额同理：预览直接用表单里的原值，而写入先 parseInt。表单里是字符串时
+  // '1500000' + 500000 会拼成 1500000500000，预览报出天文数字而确定只加 $1。
+  const currentQuota = () =>
+    parseInt(formApiRef.current?.getValue('quota')) || 0;
+
   const addLocalQuota = () => {
-    const current = parseInt(formApiRef.current?.getValue('quota') || 0);
-    const delta = parseInt(addQuotaLocal) || 0;
-    formApiRef.current?.setValue('quota', current + delta);
+    formApiRef.current?.setValue('quota', currentQuota() + addQuotaDelta);
+  };
+
+  // 关闭时清空增量：留在 state 里的话，下次打开对话框会带着上一次的金额，
+  // 顺手点确定就把刚发出去的额度又发了一遍。
+  const closeAddQuotaModal = () => {
+    setAddQuotaLocal('');
+    setIsModalOpen(false);
   };
 
   /* --------------------------- UI --------------------------- */
@@ -526,9 +547,9 @@ const EditUserModal = (props) => {
         visible={addQuotaModalOpen}
         onOk={() => {
           addLocalQuota();
-          setIsModalOpen(false);
+          closeAddQuotaModal();
         }}
-        onCancel={() => setIsModalOpen(false)}
+        onCancel={closeAddQuotaModal}
         closable={null}
         title={
           <div className='flex items-center'>
@@ -539,10 +560,10 @@ const EditUserModal = (props) => {
       >
         <div className='mb-4'>
           {(() => {
-            const current = formApiRef.current?.getValue('quota') || 0;
+            const current = currentQuota();
             return (
               <Text type='secondary' className='block mb-2'>
-                {`${t('新额度：')}${renderQuota(current)} + ${renderQuota(addQuotaLocal)} = ${renderQuota(current + parseInt(addQuotaLocal || 0))}`}
+                {`${t('新额度：')}${renderQuota(current)} + ${renderQuota(addQuotaDelta)} = ${renderQuota(current + addQuotaDelta)}`}
               </Text>
             );
           })()}

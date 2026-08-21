@@ -32,6 +32,7 @@ import {
   renderGroup,
   renderQuota,
   getChannelIcon,
+  getCurrencyConfig,
   renderQuotaWithAmount,
   showSuccess,
   showError,
@@ -394,7 +395,7 @@ export const getChannelsColumns = ({
       dataIndex: 'status',
       render: (text, record, index) => {
         if (text === 3) {
-          if (record.other_info === '') {
+          if (!record.other_info) {
             record.other_info = '{}';
           }
           let otherInfo = JSON.parse(record.other_info);
@@ -437,7 +438,12 @@ export const getChannelsColumns = ({
                   </Tag>
                 </Tooltip>
                 <Tooltip
-                  content={t('剩余额度$') + record.balance + t('，点击更新')}
+                  content={
+                    t('剩余额度') +
+                    getCurrencyConfig().symbol +
+                    record.balance +
+                    t('，点击更新')
+                  }
                 >
                   <Tag
                     color='white'
@@ -565,7 +571,7 @@ export const getChannelsColumns = ({
               }}
               innerButtons
               defaultValue={record.weight}
-              min={-999}
+              min={0}
               size='small'
             />
           );
