@@ -75,7 +75,12 @@ const WalletCard = ({ wallet, loading, CARD_PROPS }) => {
             <Button
               theme='solid'
               type='primary'
-              onClick={() => window.open(wallet.topup_url, '_blank')}
+              // Same reverse-tabnabbing exposure as the top-up page: this URL
+              // comes from the platform and leaves the console tab reachable
+              // through window.opener unless noopener is passed.
+              onClick={() =>
+                window.open(wallet.topup_url, '_blank', 'noopener,noreferrer')
+              }
             >
               {t('充值')}
             </Button>
