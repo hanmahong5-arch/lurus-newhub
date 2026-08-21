@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { escapeHtml } from '../../helpers/sanitize';
 import React, { useState, useMemo, useCallback } from 'react';
 import { Button, Tooltip, Toast } from '@douyinfe/semi-ui';
 import { Copy, ChevronDown, ChevronUp } from 'lucide-react';
@@ -91,8 +92,12 @@ const codeThemeStyles = {
   },
 };
 
+// The input is escaped BEFORE highlighting, not after: the highlighter wraps
+// each match in a <span>, so escaping afterwards would mangle its own markup.
+// Escaping first is safe for the regex below, which keys on quotes, digits and
+// the three literal keywords -- none of which &amp;/&lt;/&gt; can forge.
 const highlightJson = (str) => {
-  return str.replace(
+  return escapeHtml(str).replace(
     /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
     (match) => {
       let color = '#b5cea8';
@@ -168,15 +173,20 @@ const CodeViewer = ({ content, title, language = 'json' }) => {
   }, [formattedContent, contentMetrics.isLarge, isExpanded]);
 
   const highlightedContent = useMemo(() => {
+    // Everything on this path ends up in dangerouslySetInnerHTML. This viewer
+    // shows what a server actually returned, so markup in the payload is
+    // content to be READ, not formatting to be rendered -- it is escaped and
+    // displayed verbatim rather than sanitised away, which would hide the very
+    // thing the operator opened this panel to inspect.
     if (contentMetrics.isVeryLarge && !isExpanded) {
-      return displayContent;
+      return escapeHtml(displayContent);
     }
 
     if (isJsonLike(displayContent, language)) {
       return highlightJson(displayContent);
     }
 
-    return displayContent;
+    return escapeHtml(displayContent);
   }, [displayContent, language, contentMetrics.isVeryLarge, isExpanded]);
 
   const handleCopy = useCallback(async () => {

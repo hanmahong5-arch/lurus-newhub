@@ -345,7 +345,7 @@ describe('AnnouncementsPanel', () => {
     expect(item.textContent).toContain('shipping notice');
   });
 
-  it.skip('announcement HTML must be sanitised before it reaches the DOM', () => {
+  it('announcement HTML must be sanitised before it reaches the DOM', () => {
     render(
       React.createElement(AnnouncementsPanel, {
         ...common,
@@ -421,7 +421,7 @@ describe('FaqPanel', () => {
     expect(document.body.textContent).toContain('escalate to support');
   });
 
-  it.skip('FAQ answer HTML must be sanitised before it reaches the DOM', () => {
+  it('FAQ answer HTML must be sanitised before it reaches the DOM', () => {
     render(
       React.createElement(FaqPanel, {
         ...common,
