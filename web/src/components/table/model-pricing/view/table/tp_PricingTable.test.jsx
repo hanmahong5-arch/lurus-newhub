@@ -235,6 +235,30 @@ describe('PricingTable — column plumbing', () => {
     ).toBeNull();
   });
 
+  // The viewport query lives here now (the column factory takes isMobile as a
+  // plain argument), so this is the only place the mobile wiring is provable.
+  it('unpins the price column when the viewport is mobile', () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = (query) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    });
+    try {
+      const { container } = render(<PricingTable {...baseProps()} />);
+      expect(
+        columnsOf(container).find((c) => c.dataIndex === 'model_price').fixed,
+      ).toBeNull();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
   it('drops horizontal scroll in compact mode and keeps it otherwise', () => {
     const { container: wide } = render(<PricingTable {...baseProps()} />);
     expect(wide.querySelector('[data-testid="table"]')).toHaveAttribute(
@@ -306,7 +330,7 @@ describe('PricingTable — column plumbing', () => {
 // wrapper) and pass isMobile into the factory as a plain argument.
 // ----------------------------------------------------------------------
 describe('PricingTable — hook safety across re-renders', () => {
-  it.skip('CONTRACT: survives a re-render that does not invalidate the column memo', () => {
+  it('CONTRACT: survives a re-render that does not invalidate the column memo', () => {
     const props = baseProps();
     const { rerender, container } = render(<PricingTable {...props} />);
     // Only filteredModels changes; every dep of the columns useMemo is stable.

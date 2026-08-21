@@ -161,7 +161,7 @@ describe('renderNumberWithPoint', () => {
     expect(renderNumberWithPoint(100000)).toBe('10..00.00');
   });
 
-  it.skip('should not throw on null (DEFECT: only undefined is guarded)', () => {
+  it('should not throw on null (DEFECT: only undefined is guarded)', () => {
     // render.jsx:892 guards `num === undefined` only, so a null quota coming
     // back from the API reaches null.toFixed(2) and throws a TypeError,
     // taking the whole table render down. Correct contract mirrors the
@@ -230,7 +230,7 @@ describe('quota unit conversion', () => {
     expect(getQuotaWithUnit(0)).toBe('0.000000');
   });
 
-  it.skip('should not surface NaN when quota_per_unit was never stored', () => {
+  it('should not surface NaN when quota_per_unit was never stored', () => {
     // DEFECT: localStorage.getItem returns null before /api/status lands (or
     // when the field is absent), parseFloat(null) is NaN, and every quota
     // divide becomes NaN. Users see the literal text 'NaN' where money goes.
@@ -238,11 +238,30 @@ describe('quota unit conversion', () => {
     expect(getQuotaWithUnit(500000)).toBe('1.000000');
   });
 
-  it('currently renders the literal string NaN with no quota_per_unit', () => {
-    // Locks the *observed* blast radius of the defect above so a fix has to
-    // move this assertion deliberately rather than by accident.
-    expect(getQuotaWithUnit(500000)).toBe('NaN');
-    expect(Number.isNaN(getQuotaPerUnit())).toBe(true);
+  it('hands the canonical unit rate to every unit helper when it is missing', () => {
+    // Replaces the companion that pinned the NaN blast radius. Same three
+    // helpers, same missing-config state, now stating the rate they must use.
+    expect(getQuotaPerUnit()).toBe(500000);
+    expect(renderUnitWithQuota(2)).toBe(1000000);
+    expect(getQuotaWithUnit(250000, 2)).toBe('0.50');
+  });
+
+  it('shows a placeholder rather than a made-up figure when the rate is missing', () => {
+    // renderQuota is what the quota column, the balance figures and the log
+    // rows all call, and the tests below cannot see this state because their
+    // describe block seeds quota_per_unit in beforeEach. It used to print the
+    // literal '$NaN' here.
+    //
+    // The fix is deliberately NOT the 500000 fallback the three helpers above
+    // use. quota_per_unit is operator-overridable, so computing from the
+    // default would state a specific amount of money that is simply wrong on
+    // any deployment that changed it — and wrong silently, which is worse than
+    // visibly broken. q6_UsersColumnDefs.test.jsx locks that same invariant
+    // from the UI side: the cell must never claim a concrete figure it could
+    // not actually compute.
+    const shown = renderQuota(500000);
+    expect(shown).not.toMatch(/NaN/);
+    expect(shown).not.toMatch(/\d/);
   });
 });
 
@@ -294,16 +313,12 @@ describe('renderQuota', () => {
     expect(renderQuota(1000000)).toBe('€1.80');
   });
 
-  it.skip('should not render a signed zero for a tiny negative balance', () => {
+  it('should not render a signed zero for a tiny negative balance', () => {
     // DEFECT: -1 unit is -$0.000002; .toFixed(2) yields the string '-0.00'.
     // The sub-cent clamp at render.jsx:1040 only fires for quota > 0, so an
     // enterprise customer with a hair-thin negative balance is shown the
     // nonsense value '$-0.00'. Correct contract: '$0.00' (or a real -0.01).
     expect(renderQuota(-1)).toBe('$0.00');
-  });
-
-  it('currently renders a signed zero for a tiny negative balance', () => {
-    expect(renderQuota(-1)).toBe('$-0.00');
   });
 
   it('renders larger negative balances normally', () => {
@@ -342,7 +357,7 @@ describe('getCurrencyConfig vs renderQuota exchange-rate agreement', () => {
     });
   });
 
-  it.skip('should agree with renderQuota on the CNY fallback rate', () => {
+  it('should agree with renderQuota on the CNY fallback rate', () => {
     // DEFECT: with a status blob that has no usd_exchange_rate,
     // getCurrencyConfig (render.jsx:976) falls back to 7 while renderQuota
     // (render.jsx:1020) falls back to 1. The same $1 of spend is therefore
@@ -357,15 +372,18 @@ describe('getCurrencyConfig vs renderQuota exchange-rate agreement', () => {
     expect(viaRenderQuota).toBe(viaConfig);
   });
 
-  it('currently disagrees with renderQuota on the CNY fallback rate', () => {
+  it('prints $1 of spend as ¥7.00 on the CNY fallback rate', () => {
+    // Replaces the companion that pinned the ¥1.00 half of the disagreement.
+    // 500_000 units = $1; the shared fallback rate is 7, so the only correct
+    // figure is ¥7.00.
     localStorage.setItem('quota_display_type', 'CNY');
     localStorage.setItem('quota_per_unit', UNIT);
     localStorage.setItem('status', JSON.stringify({}));
     expect(getCurrencyConfig().rate).toBe(7);
-    expect(renderQuota(500000)).toBe('¥1.00');
+    expect(renderQuota(500000)).toBe('¥7.00');
   });
 
-  it.skip('should agree with renderQuota on the CUSTOM fallback symbol', () => {
+  it('should agree with renderQuota on the CUSTOM fallback symbol', () => {
     // DEFECT: with quota_display_type=CUSTOM but no status blob at all,
     // getCurrencyConfig leaves symbol as its '$' initialiser (the '¤'
     // default only lives inside the `if (statusStr)` block, render.jsx:983)
@@ -376,10 +394,13 @@ describe('getCurrencyConfig vs renderQuota exchange-rate agreement', () => {
     expect(getCurrencyConfig().symbol).toBe('¤');
   });
 
-  it('currently disagrees with renderQuota on the CUSTOM fallback symbol', () => {
+  it('renders the generic currency sign with no status blob at all', () => {
+    // Replaces the companion that pinned the '$' half of the disagreement:
+    // both helpers must reach for '¤' here, and $1 of spend stays 1 unit of
+    // the custom currency because the fallback rate is 1.
     localStorage.setItem('quota_display_type', 'CUSTOM');
     localStorage.setItem('quota_per_unit', UNIT);
-    expect(getCurrencyConfig().symbol).toBe('$');
+    expect(getCurrencyConfig().symbol).toBe('¤');
     expect(renderQuota(500000)).toBe('¤1.00');
   });
 });
@@ -413,7 +434,7 @@ describe('renderQuotaWithAmount', () => {
     expect(renderQuotaWithAmount(2)).toBe('1.0M');
   });
 
-  it.skip('should convert the amount when the display currency is CNY', () => {
+  it('should convert the amount when the display currency is CNY', () => {
     // DEFECT: renderQuotaWithAmount (render.jsx:944) only concatenates the
     // yuan sign onto the USD figure -- no exchange rate is applied, unlike
     // renderQuota. Its single caller renders upstream channel balances
@@ -424,11 +445,9 @@ describe('renderQuotaWithAmount', () => {
     expect(renderQuotaWithAmount(100)).toBe('¥700');
   });
 
-  it('currently leaves the amount unconverted under CNY and CUSTOM', () => {
-    localStorage.setItem('quota_display_type', 'CNY');
-    localStorage.setItem('status', JSON.stringify({ usd_exchange_rate: 7 }));
-    expect(renderQuotaWithAmount(100)).toBe('¥100');
-
+  it('applies the custom currency rate too, not just its symbol', () => {
+    // Replaces the companion that pinned the unconverted '€100'. A $100
+    // channel balance at 0.9 custom units per USD is 90 of them.
     localStorage.setItem('quota_display_type', 'CUSTOM');
     localStorage.setItem(
       'status',
@@ -437,7 +456,7 @@ describe('renderQuotaWithAmount', () => {
         custom_currency_exchange_rate: 0.9,
       }),
     );
-    expect(renderQuotaWithAmount(100)).toBe('€100');
+    expect(renderQuotaWithAmount(100)).toBe('€90');
   });
 });
 
@@ -466,7 +485,7 @@ describe('renderText truncation', () => {
     expect(renderText('abcdefghij', 8)).toBe('abcde...');
   });
 
-  it.skip('should never return a string longer than the input', () => {
+  it('should never return a string longer than the input', () => {
     // DEFECT: for limit < 3 the expression text.slice(0, limit - 3) gets a
     // NEGATIVE end index, so slice counts from the end and keeps almost the
     // whole string -- then appends '...'. renderText('abcdef', 2) returns
@@ -476,11 +495,13 @@ describe('renderText truncation', () => {
     expect(out.length).toBeLessThanOrEqual(6);
   });
 
-  it('currently expands rather than truncates for limits below 3', () => {
-    expect(renderText('abcdef', 2)).toBe('abcde...');
-    expect(renderText('abcdef', 0)).toBe('abc...');
-    // limit 3 is the boundary where it degenerates to a bare ellipsis
+  it('degenerates to a bare ellipsis once the limit leaves no room for text', () => {
+    // Replaces the companion that pinned the expanding behaviour. limit 3 is
+    // the boundary; below it the slice end is clamped at 0 rather than going
+    // negative, so nothing survives but the ellipsis.
     expect(renderText('abcdef', 3)).toBe('...');
+    expect(renderText('abcdef', 2)).toBe('...');
+    expect(renderText('abcdef', 0)).toBe('...');
   });
 });
 
@@ -511,7 +532,7 @@ describe('colour derivation', () => {
     expect(c.startsWith('#') || c.startsWith('rgb')).toBe(true);
   });
 
-  it.skip('should return a colour string for a model named like an Object key', () => {
+  it('should return a colour string for a model named like an Object key', () => {
     // DEFECT: modelColorMap is a plain object literal, so the membership
     // test `if (modelColorMap[modelName])` at render.jsx:578 hits the
     // prototype chain. A model or tag literally named 'constructor' /
@@ -521,8 +542,12 @@ describe('colour derivation', () => {
     expect(typeof modelToColor('constructor')).toBe('string');
   });
 
-  it('currently leaks Object.prototype members out of the colour map', () => {
-    expect(typeof modelToColor('constructor')).toBe('function');
-    expect(typeof modelToColor('toString')).toBe('function');
+  it('hashes prototype-named models like any other unlisted model', () => {
+    // Replaces the companion that pinned the leaked Object.prototype members.
+    for (const name of ['constructor', 'toString', 'hasOwnProperty']) {
+      const c = modelToColor(name);
+      expect(typeof c).toBe('string');
+      expect(c.startsWith('#') || c.startsWith('rgb')).toBe(true);
+    }
   });
 });

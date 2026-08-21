@@ -17,28 +17,32 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+// localStorage 会把入参字符串化，缺失字段会被写成字面量 "undefined"——
+// 一个真值字符串，足以让下游所有 `if (!value)` 兜底失效。缺失就删除键。
+function setOrRemove(key, value) {
+  if (value === undefined || value === null) {
+    localStorage.removeItem(key);
+    return;
+  }
+  localStorage.setItem(key, value);
+}
+
 export function setStatusData(data) {
   localStorage.setItem('status', JSON.stringify(data));
-  localStorage.setItem('system_name', data.system_name);
-  localStorage.setItem('logo', data.logo);
-  localStorage.setItem('footer_html', data.footer_html);
-  localStorage.setItem('quota_per_unit', data.quota_per_unit);
+  setOrRemove('system_name', data.system_name);
+  setOrRemove('logo', data.logo);
+  setOrRemove('footer_html', data.footer_html);
+  setOrRemove('quota_per_unit', data.quota_per_unit);
   // 兼容：保留旧字段，同时写入新的额度展示类型
-  localStorage.setItem('display_in_currency', data.display_in_currency);
+  setOrRemove('display_in_currency', data.display_in_currency);
   localStorage.setItem('quota_display_type', data.quota_display_type || 'USD');
-  localStorage.setItem('enable_drawing', data.enable_drawing);
-  localStorage.setItem('enable_task', data.enable_task);
-  localStorage.setItem('enable_data_export', data.enable_data_export);
-  localStorage.setItem('chats', JSON.stringify(data.chats));
-  localStorage.setItem(
-    'data_export_default_time',
-    data.data_export_default_time,
-  );
-  localStorage.setItem(
-    'default_collapse_sidebar',
-    data.default_collapse_sidebar,
-  );
-  localStorage.setItem('mj_notify_enabled', data.mj_notify_enabled);
+  setOrRemove('enable_drawing', data.enable_drawing);
+  setOrRemove('enable_task', data.enable_task);
+  setOrRemove('enable_data_export', data.enable_data_export);
+  setOrRemove('chats', JSON.stringify(data.chats));
+  setOrRemove('data_export_default_time', data.data_export_default_time);
+  setOrRemove('default_collapse_sidebar', data.default_collapse_sidebar);
+  setOrRemove('mj_notify_enabled', data.mj_notify_enabled);
   if (data.chat_link) {
     // localStorage.setItem('chat_link', data.chat_link);
   } else {

@@ -23,7 +23,13 @@ import { history } from './history';
 
 export function authHeader() {
   // return authorization header with jwt token
-  let user = JSON.parse(localStorage.getItem('user'));
+  let user;
+  try {
+    user = JSON.parse(localStorage.getItem('user'));
+  } catch (e) {
+    // 损坏的 user 影子数据视为未登录，而不是把调用方一起带崩
+    return {};
+  }
 
   if (user && user.token) {
     return { Authorization: 'Bearer ' + user.token };

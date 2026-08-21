@@ -162,7 +162,7 @@ describe('setStatusData', () => {
     expect(localStorage.getItem('docs_link')).toBeNull();
   });
 
-  it.skip('should not persist the literal text "undefined" for missing fields', () => {
+  it('should not persist the literal text "undefined" for missing fields', () => {
     // DEFECT: every setItem here is unconditional, and Storage stringifies
     // its argument. A /api/status response missing `logo`, `system_name` or
     // `quota_per_unit` therefore stores the 9-character string "undefined",
@@ -173,16 +173,6 @@ describe('setStatusData', () => {
     expect(localStorage.getItem('logo')).toBeNull();
     expect(localStorage.getItem('system_name')).toBeNull();
     expect(localStorage.getItem('quota_per_unit')).toBeNull();
-  });
-
-  it('currently writes the string "undefined" for every missing field', () => {
-    setStatusData({});
-    expect(localStorage.getItem('logo')).toBe('undefined');
-    expect(localStorage.getItem('system_name')).toBe('undefined');
-    expect(localStorage.getItem('quota_per_unit')).toBe('undefined');
-    expect(
-      Number.isNaN(parseFloat(localStorage.getItem('quota_per_unit'))),
-    ).toBe(true);
   });
 });
 
@@ -279,18 +269,13 @@ describe('authHeader', () => {
     expect(authHeader()).toEqual({ Authorization: 'Bearer abc123' });
   });
 
-  it.skip('should degrade gracefully when the user shim is corrupted', () => {
+  it('should degrade gracefully when the user shim is corrupted', () => {
     // DEFECT: authHeader parses localStorage without a try/catch, so a
     // truncated or hand-edited `user` entry throws a SyntaxError out of a
     // function whose documented contract is "return {} when unauthenticated".
     // Every caller that builds request headers dies with it.
     localStorage.setItem('user', '{"id":1,');
     expect(authHeader()).toEqual({});
-  });
-
-  it('currently throws on a corrupted user shim', () => {
-    localStorage.setItem('user', '{"id":1,');
-    expect(() => authHeader()).toThrow(SyntaxError);
   });
 });
 

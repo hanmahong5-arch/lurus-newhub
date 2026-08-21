@@ -109,7 +109,12 @@ const renderGroupColumn = (text, record, t) => {
 
 // Render token key column with show/hide and copy functionality
 const renderTokenKey = (text, record, showKeys, setShowKeys, copyText) => {
-  const fullKey = 'sk-' + record.key;
+  // A record the API served without its key (non-owner view, partial
+  // serialisation) must degrade to the masked placeholder like every other
+  // renderer here does — slicing an absent key throws during render and takes
+  // the whole table down over one row.
+  const rawKey = record.key || '';
+  const fullKey = 'sk-' + rawKey;
   // This mask shows four characters at each end, so it only withholds anything
   // once the key is at least twelve characters long: at eight the two slices
   // exactly tile it, below eight they overlap, and between nine and eleven it
@@ -119,8 +124,8 @@ const renderTokenKey = (text, record, showKeys, setShowKeys, copyText) => {
   // so this changes nothing in normal use.
   const MASK_MIN_LENGTH = 12;
   const maskedKey =
-    record.key.length >= MASK_MIN_LENGTH
-      ? 'sk-' + record.key.slice(0, 4) + '**********' + record.key.slice(-4)
+    rawKey.length >= MASK_MIN_LENGTH
+      ? 'sk-' + rawKey.slice(0, 4) + '**********' + rawKey.slice(-4)
       : 'sk-' + '*'.repeat(10);
   const revealed = !!showKeys[record.id];
 
@@ -163,63 +168,74 @@ const renderTokenKey = (text, record, showKeys, setShowKeys, copyText) => {
 
 // Render model limits column
 const renderModelLimits = (text, record, t) => {
-  if (record.model_limits_enabled && text) {
-    const models = text.split(',').filter(Boolean);
-    const categories = getModelCategories(t);
-
-    const vendorAvatars = [];
-    const matchedModels = new Set();
-    Object.entries(categories).forEach(([key, category]) => {
-      if (key === 'all') return;
-      if (!category.icon || !category.filter) return;
-      const vendorModels = models.filter((m) =>
-        category.filter({ model_name: m }),
-      );
-      if (vendorModels.length > 0) {
-        vendorAvatars.push(
-          <Tooltip
-            key={key}
-            content={vendorModels.join(', ')}
-            position='top'
-            showArrow
-          >
-            <Avatar
-              size='extra-extra-small'
-              alt={category.label}
-              color='transparent'
-            >
-              {category.icon}
-            </Avatar>
-          </Tooltip>,
-        );
-        vendorModels.forEach((m) => matchedModels.add(m));
-      }
-    });
-
-    const unmatchedModels = models.filter((m) => !matchedModels.has(m));
-    if (unmatchedModels.length > 0) {
-      vendorAvatars.push(
-        <Tooltip
-          key='unknown'
-          content={unmatchedModels.join(', ')}
-          position='top'
-          showArrow
-        >
-          <Avatar size='extra-extra-small' alt='unknown'>
-            {t('其他')}
-          </Avatar>
-        </Tooltip>,
-      );
-    }
-
-    return <AvatarGroup size='extra-extra-small'>{vendorAvatars}</AvatarGroup>;
-  } else {
+  if (!record.model_limits_enabled) {
     return (
       <Tag color='white' shape='circle'>
         {t('无限制')}
       </Tag>
     );
   }
+
+  const models = (text || '').split(',').filter(Boolean);
+  // Restricted with an empty allow-list is the opposite of unrestricted: the
+  // gateway will let this token reach no model at all, so it must not share a
+  // cell with 无限制.
+  if (models.length === 0) {
+    return (
+      <Tag color='red' shape='circle'>
+        {t('暂无模型')}
+      </Tag>
+    );
+  }
+
+  const categories = getModelCategories(t);
+
+  const vendorAvatars = [];
+  const matchedModels = new Set();
+  Object.entries(categories).forEach(([key, category]) => {
+    if (key === 'all') return;
+    if (!category.icon || !category.filter) return;
+    const vendorModels = models.filter((m) =>
+      category.filter({ model_name: m }),
+    );
+    if (vendorModels.length > 0) {
+      vendorAvatars.push(
+        <Tooltip
+          key={key}
+          content={vendorModels.join(', ')}
+          position='top'
+          showArrow
+        >
+          <Avatar
+            size='extra-extra-small'
+            alt={category.label}
+            color='transparent'
+          >
+            {category.icon}
+          </Avatar>
+        </Tooltip>,
+      );
+      vendorModels.forEach((m) => matchedModels.add(m));
+    }
+  });
+
+  const unmatchedModels = models.filter((m) => !matchedModels.has(m));
+  if (unmatchedModels.length > 0) {
+    vendorAvatars.push(
+      <Tooltip
+        key='unknown'
+        content={unmatchedModels.join(', ')}
+        position='top'
+        showArrow
+      >
+        <Avatar size='extra-extra-small' alt='unknown'>
+          {t('其他')}
+        </Avatar>
+      </Tooltip>,
+    );
+  }
+
+  return <AvatarGroup size='extra-extra-small'>{vendorAvatars}</AvatarGroup>;
 };
 
 // Render IP restrictions column
@@ -284,7 +300,11 @@ const renderQuotaUsage = (text, record, t) => {
       </Popover>
     );
   }
-  const percent = total > 0 ? (remain / total) * 100 : 0;
+  // An overdrawn token (remain < 0, reachable once overdraft is allowed) would
+  // otherwise report a negative share of its capacity — "-100%" on a bar that
+  // only has room for 0..100.
+  const percent =
+    total > 0 ? Math.min(100, Math.max(0, (remain / total) * 100)) : 0;
   const popoverContent = (
     <div className='text-xs p-2'>
       <Paragraph copyable={{ content: renderQuota(used) }}>
@@ -316,6 +336,18 @@ const renderQuotaUsage = (text, record, t) => {
   );
 };
 
+// Read the operator-configured chat links. Deliberately side-effect free: it
+// is called from the render path, where reporting a corrupt value would fire
+// one toast per visible row and another set on every re-render.
+const parseChatLinks = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('chats'));
+    return { links: Array.isArray(parsed) ? parsed : [], corrupt: false };
+  } catch (_) {
+    return { links: [], corrupt: true };
+  }
+};
+
 // Render operations column
 const renderOperations = (
   text,
@@ -327,26 +359,19 @@ const renderOperations = (
   refresh,
   t,
 ) => {
-  let chatsArray = [];
-  try {
-    const raw = localStorage.getItem('chats');
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      for (let i = 0; i < parsed.length; i++) {
-        const item = parsed[i];
-        const name = Object.keys(item)[0];
-        if (!name) continue;
-        chatsArray.push({
-          node: 'item',
-          key: i,
-          name,
-          value: item[name],
-          onClick: () => onOpenLink(name, item[name], record),
-        });
-      }
-    }
-  } catch (_) {
-    showError(t('聊天链接配置错误，请联系管理员'));
+  const chatsArray = [];
+  const { links } = parseChatLinks();
+  for (let i = 0; i < links.length; i++) {
+    const item = links[i];
+    const name = item ? Object.keys(item)[0] : undefined;
+    if (!name) continue;
+    chatsArray.push({
+      node: 'item',
+      key: i,
+      name,
+      value: item[name],
+      onClick: () => onOpenLink(name, item[name], record),
+    });
   }
 
   return (
@@ -419,11 +444,12 @@ const renderOperations = (
           Modal.confirm({
             title: t('确定是否要删除此令牌？'),
             content: t('此修改将不可逆'),
-            onOk: () => {
-              (async () => {
-                await manageToken(record.id, 'delete', record);
-                await refresh();
-              })();
+            // Hand the promise back so the dialog stays up until the delete
+            // has actually landed; a floating IIFE closes it — and so reports
+            // success — before the request has even been sent.
+            onOk: async () => {
+              await manageToken(record.id, 'delete', record);
+              await refresh();
             },
           });
         }}
@@ -445,6 +471,12 @@ export const getTokensColumns = ({
   setShowEdit,
   refresh,
 }) => {
+  // Reported here rather than from a row renderer: once per table, not once
+  // per row per repaint.
+  if (parseChatLinks().corrupt) {
+    showError(t('聊天链接配置错误，请联系管理员'));
+  }
+
   return [
     {
       title: t('名称'),
@@ -494,9 +526,14 @@ export const getTokensColumns = ({
       title: t('过期时间'),
       dataIndex: 'expired_time',
       render: (text, record, index) => {
+        // Numeric compare: the sentinel arrives as the string "-1" from any
+        // backend or proxy that stringifies numerics, and `=== -1` would then
+        // print a formatted date for a token that never expires.
         return (
           <div>
-            {record.expired_time === -1 ? t('永不过期') : renderTimestamp(text)}
+            {Number(record.expired_time) === -1
+              ? t('永不过期')
+              : renderTimestamp(text)}
           </div>
         );
       },

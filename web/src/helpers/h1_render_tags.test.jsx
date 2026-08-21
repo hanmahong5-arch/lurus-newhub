@@ -192,20 +192,21 @@ describe('model → vendor categorisation', () => {
     expect(categorize('acme-inhouse-v1')).toBeNull();
   });
 
-  it.skip('should file 360 models under the 360 vendor', () => {
-    // DEFECT: the `ai360` filter is `includes('360')` but it is declared
-    // AFTER `openai`, whose filter includes `includes('gpt')`. Every real
-    // 360 model name contains both ("360gpt-pro", "360GPT_S2_V9"), so the
-    // ai360 category is unreachable for its own flagship models -- they get
-    // the OpenAI icon in tables and the OpenAI chip in the pricing filter.
+  it('should file 360 models under the 360 vendor', () => {
+    // The `ai360` filter used to be `includes('360')` declared AFTER `openai`,
+    // whose filter includes `includes('gpt')`. Every real 360 model name
+    // contains both, so the ai360 category was unreachable for its own
+    // flagship models -- they got the OpenAI icon in tables and the OpenAI
+    // chip in the pricing filter. It now leads the map, matched on prefix.
     expect(categorize('360gpt-pro')).toBe('ai360');
   });
 
-  it('currently mis-files 360 models under OpenAI', () => {
-    expect(categorize('360gpt-pro')).toBe('openai');
-    // The 360 filter itself works; only the ordering defeats it.
-    const cats = getModelCategories((k) => k);
-    expect(cats.ai360.filter({ model_name: '360gpt-pro' })).toBe(true);
+  it('does not claim a foreign model whose name merely contains 360', () => {
+    // Replaces the companion that pinned the OpenAI mis-filing. Leading the
+    // map means a loose `includes` would now steal from every other vendor,
+    // so the prefix match is load-bearing in both directions.
+    expect(categorize('llama-3-360b')).toBe('llama');
+    expect(categorize('gpt-4-360k')).toBe('openai');
   });
 });
 
@@ -420,19 +421,22 @@ describe('getLobeHubIcon', () => {
     expect(screen.getByTestId('avatar')).toHaveTextContent('N');
   });
 
-  it.skip('should accept a fractional prop value', () => {
-    // DEFECT: the descriptor is split on '.', so a decimal value is torn in
-    // half before parseValue ever sees it. The value parser explicitly
-    // supports decimals (/^-?\d+(?:\.\d+)?$/, render.jsx:450) which shows
-    // they were intended, but that branch is unreachable through this API:
-    // 'OpenAI.size={1.5}' yields size='{1' plus a junk prop named '5}'.
+  it('should accept a fractional prop value', () => {
+    // The descriptor used to be split on a bare '.', so a decimal value was
+    // torn in half before parseValue ever saw it: 'OpenAI.size={1.5}' yielded
+    // size='{1' plus a junk prop named '5}'. The value parser explicitly
+    // supports decimals (/^-?\d+(?:\.\d+)?$/), so that branch was intended
+    // but unreachable through this API. Dots inside {} / quotes are now data.
     expect(getLobeHubIcon('OpenAI.size={1.5}').props.size).toBe(1.5);
   });
 
-  it('currently shreds a fractional prop value across two segments', () => {
-    const el = getLobeHubIcon('OpenAI.size={1.5}');
-    expect(el.props.size).toBe('{1');
-    expect(el.props['5}']).toBe(true);
+  it('keeps a dotted value intact inside quotes as well as braces', () => {
+    // Replaces the companion that pinned the shredded prop. Same seam, the
+    // other quoting form, plus proof the sub-component path still splits.
+    const el = getLobeHubIcon("Claude.Color.shape={'2.5x'}.size=20");
+    expect(el.type).toBe(Claude.Color);
+    expect(el.props.shape).toBe('2.5x');
+    expect(el.props.size).toBe(20);
   });
 });
 

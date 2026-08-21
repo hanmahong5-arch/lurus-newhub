@@ -108,10 +108,13 @@ export const getRedemptionsColumns = ({
       title: t('额度'),
       dataIndex: 'quota',
       render: (text) => {
+        // 面额缺失时 parseInt 得到 NaN，renderQuota 会印出 "$NaN"；
+        // 兑换码是无记名票据，面额未知必须说未知，不能伪装成一个金额
+        const quota = parseInt(text);
         return (
           <div>
             <Tag color='grey' shape='circle'>
-              {renderQuota(parseInt(text))}
+              {Number.isNaN(quota) ? t('未知') : renderQuota(quota)}
             </Tag>
           </div>
         );

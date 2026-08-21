@@ -771,16 +771,20 @@ describe('BALANCE column — money on screen', () => {
   // with parseFloat; before /api/status has populated it the parse yields NaN
   // and the used-quota cell prints the literal string "$NaN" to the operator.
   // Verified red 2026-08-20: un-skipped it fails, the cell reads "$NaN".
-  it.skip('CONTRACT:an unavailable quota_per_unit does not print NaN as money', () => {
+  it('CONTRACT:an unavailable quota_per_unit does not print NaN as money', () => {
     localStorage.removeItem('quota_per_unit');
     renderCell(balanceCol(), { used_quota: 500000, balance: '1' });
     expect(screen.getAllByTestId('tag')[0].textContent).not.toMatch(/NaN/);
   });
 
-  it('currently prints a money figure containing NaN when quota_per_unit is unset', () => {
+  it('does not substitute a computed figure for the rate it is missing', () => {
+    // The other half: not printing NaN must not be achieved by falling back to
+    // the canonical unit rate and stating an amount. quota_per_unit is
+    // operator-overridable, so that amount would be wrong — silently — on any
+    // deployment that changed it.
     localStorage.removeItem('quota_per_unit');
     renderCell(balanceCol(), { used_quota: 500000, balance: '1' });
-    expect(screen.getAllByTestId('tag')[0].textContent).toMatch(/NaN/);
+    expect(screen.getAllByTestId('tag')[0].textContent).not.toMatch(/\$\s*\d/);
   });
 });
 

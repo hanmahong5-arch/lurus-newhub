@@ -144,6 +144,14 @@ export const getModelCategories = (() => {
         icon: null,
         filter: () => true,
       },
+      // 必须排在 openai 之前：360 系列的模型名同时含有 openai 过滤器的关键字，
+      // 排在后面本分类就永远命中不到自己的模型；filter 用 startsWith 收紧，
+      // 避免名字里碰巧带 360 的其它厂商模型被误认。
+      ai360: {
+        label: t('360智脑'),
+        icon: <Ai360.Color />,
+        filter: (model) => model.model_name.toLowerCase().startsWith('360'),
+      },
       openai: {
         label: 'OpenAI',
         icon: <OpenAI />,
@@ -245,11 +253,6 @@ export const getModelCategories = (() => {
         label: 'Cloudflare',
         icon: <Cloudflare.Color />,
         filter: (model) => model.model_name.toLowerCase().includes('@cf/'),
-      },
-      ai360: {
-        label: t('360智脑'),
-        icon: <Ai360.Color />,
-        filter: (model) => model.model_name.toLowerCase().includes('360'),
       },
       jina: {
         label: 'Jina',
@@ -394,6 +397,35 @@ export function getChannelIcon(channelType) {
  * @param {number} size - 图标大小，默认为 14
  * @returns {JSX.Element} - 对应的图标组件或 Avatar
  */
+// 按点号切分图标描述符，但花括号/引号内部的点号属于取值本身：直接 split('.')
+// 会把 size={1.5} 这样的小数撕成 '{1' 和 '5}' 两段。
+function splitIconDescriptor(descriptor) {
+  const segments = [];
+  let current = '';
+  let depth = 0;
+  let quote = null;
+
+  for (const ch of descriptor) {
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '{') {
+      depth++;
+    } else if (ch === '}') {
+      if (depth > 0) depth--;
+    } else if (ch === '.' && depth === 0) {
+      segments.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  segments.push(current);
+
+  return segments;
+}
+
 export function getLobeHubIcon(iconName, size = 14) {
   if (typeof iconName === 'string') iconName = iconName.trim();
   // 如果没有图标名称，返回 Avatar
@@ -402,7 +434,7 @@ export function getLobeHubIcon(iconName, size = 14) {
   }
 
   // 解析组件路径与点号链式属性
-  const segments = String(iconName).split('.');
+  const segments = splitIconDescriptor(String(iconName));
   const baseKey = segments[0];
   const BaseIcon = LobeIcons[baseKey];
 
@@ -575,7 +607,9 @@ export const modelColorMap = {
 
 export function modelToColor(modelName) {
   // 1. 如果模型在预定义的 modelColorMap 中，使用预定义颜色
-  if (modelColorMap[modelName]) {
+  // 用 hasOwnProperty 而非取值判真，否则名为 constructor/toString 的模型
+  // 会命中原型链上的函数并被当成颜色返回
+  if (Object.prototype.hasOwnProperty.call(modelColorMap, modelName)) {
     return modelColorMap[modelName];
   }
 
@@ -640,7 +674,9 @@ export function renderModelTag(modelName, options = {}) {
 
 export function renderText(text, limit) {
   if (text.length > limit) {
-    return text.slice(0, limit - 3) + '...';
+    // limit < 3 时 limit - 3 为负数，slice 会从末尾计数并保留几乎整串，
+    // 结果比原串还长；下限钳到 0，最坏情况只剩省略号。
+    return text.slice(0, Math.max(limit - 3, 0)) + '...';
   }
   return text;
 }
@@ -889,7 +925,7 @@ export function renderQuotaNumberWithDigit(num, digits = 2) {
 }
 
 export function renderNumberWithPoint(num) {
-  if (num === undefined) return '';
+  if (num === undefined || num === null) return '';
   num = num.toFixed(2);
   if (num >= 100000) {
     // Convert number to string to manipulate it
@@ -917,23 +953,30 @@ export function renderNumberWithPoint(num) {
   return num;
 }
 
+// 平台规范单位价：500000 额度 = $1
+const DEFAULT_QUOTA_PER_UNIT = 500000;
+
+// 单位价未知时金额位上显示的占位符（见 renderQuota 里的说明）
+const QUOTA_UNAVAILABLE = '—';
+
+// /api/status 落地前 localStorage 里没有 quota_per_unit，parseFloat(null) 得到
+// NaN，会把之后每一次额度换算都变成 NaN。缺失时回退到规范单位价。
+function readQuotaPerUnit() {
+  const quotaPerUnit = parseFloat(localStorage.getItem('quota_per_unit'));
+  return Number.isFinite(quotaPerUnit) ? quotaPerUnit : DEFAULT_QUOTA_PER_UNIT;
+}
+
 export function getQuotaPerUnit() {
-  let quotaPerUnit = localStorage.getItem('quota_per_unit');
-  quotaPerUnit = parseFloat(quotaPerUnit);
-  return quotaPerUnit;
+  return readQuotaPerUnit();
 }
 
 export function renderUnitWithQuota(quota) {
-  let quotaPerUnit = localStorage.getItem('quota_per_unit');
-  quotaPerUnit = parseFloat(quotaPerUnit);
   quota = parseFloat(quota);
-  return quotaPerUnit * quota;
+  return readQuotaPerUnit() * quota;
 }
 
 export function getQuotaWithUnit(quota, digits = 6) {
-  let quotaPerUnit = localStorage.getItem('quota_per_unit');
-  quotaPerUnit = parseFloat(quotaPerUnit);
-  return (quota / quotaPerUnit).toFixed(digits);
+  return (quota / readQuotaPerUnit()).toFixed(digits);
 }
 
 export function renderQuotaWithAmount(amount) {
@@ -941,20 +984,9 @@ export function renderQuotaWithAmount(amount) {
   if (quotaDisplayType === 'TOKENS') {
     return renderNumber(renderUnitWithQuota(amount));
   }
-  if (quotaDisplayType === 'CNY') {
-    return '¥' + amount;
-  } else if (quotaDisplayType === 'CUSTOM') {
-    const statusStr = localStorage.getItem('status');
-    let symbol = '¤';
-    try {
-      if (statusStr) {
-        const s = JSON.parse(statusStr);
-        symbol = s?.custom_currency_symbol || symbol;
-      }
-    } catch (e) {}
-    return symbol + amount;
-  }
-  return '$' + amount;
+  // 与 renderQuota 共用同一套符号与汇率：只换符号不换汇率会把上游余额少报数倍
+  const { symbol, rate } = getCurrencyConfig();
+  return symbol + amount * rate;
 }
 
 /**
@@ -977,6 +1009,8 @@ export function getCurrencyConfig() {
       }
     } catch (e) {}
   } else if (quotaDisplayType === 'CUSTOM') {
+    // 默认符号必须放在 if 外面：没有 status 时也不能退回美元符号
+    symbol = '¤';
     try {
       if (statusStr) {
         const s = JSON.parse(statusStr);
@@ -1002,44 +1036,31 @@ export function convertUSDToCurrency(usdAmount, digits = 2) {
 }
 
 export function renderQuota(quota, digits = 2) {
-  let quotaPerUnit = localStorage.getItem('quota_per_unit');
   const quotaDisplayType = localStorage.getItem('quota_display_type') || 'USD';
-  quotaPerUnit = parseFloat(quotaPerUnit);
   if (quotaDisplayType === 'TOKENS') {
     return renderNumber(quota);
   }
-  const resultUSD = quota / quotaPerUnit;
-  let symbol = '$';
-  let value = resultUSD;
-  if (quotaDisplayType === 'CNY') {
-    const statusStr = localStorage.getItem('status');
-    let usdRate = 1;
-    try {
-      if (statusStr) {
-        const s = JSON.parse(statusStr);
-        usdRate = s?.usd_exchange_rate || 1;
-      }
-    } catch (e) {}
-    value = resultUSD * usdRate;
-    symbol = '¥';
-  } else if (quotaDisplayType === 'CUSTOM') {
-    const statusStr = localStorage.getItem('status');
-    let symbolCustom = '¤';
-    let rate = 1;
-    try {
-      if (statusStr) {
-        const s = JSON.parse(statusStr);
-        symbolCustom = s?.custom_currency_symbol || symbolCustom;
-        rate = s?.custom_currency_exchange_rate || rate;
-      }
-    } catch (e) {}
-    value = resultUSD * rate;
-    symbol = symbolCustom;
+  // 这里刻意不回退到规范单位价。上面那几个换算助手可以回退，它们的返回值要参与
+  // 计算和回填输入框；而本函数的返回值是给人看的**金额**。单位价可被部署覆盖，
+  // 用默认值算出来的金额在那些部署上是错的，且错得不动声色——操作员没有任何
+  // 线索知道这个数是猜的。宁可显示占位符，也不要报一个算不出来的具体金额。
+  const quotaPerUnit = parseFloat(localStorage.getItem('quota_per_unit'));
+  if (!Number.isFinite(quotaPerUnit) || quotaPerUnit === 0) {
+    return QUOTA_UNAVAILABLE;
   }
+  const resultUSD = quota / quotaPerUnit;
+  // 符号与汇率统一取自 getCurrencyConfig，否则同一笔钱在额度列和价格提示里
+  // 会按两套回退汇率显示成两个数
+  const { symbol, rate } = getCurrencyConfig();
+  const value = resultUSD * rate;
   const fixedResult = value.toFixed(digits);
-  if (parseFloat(fixedResult) === 0 && quota > 0 && value > 0) {
-    const minValue = Math.pow(10, -digits);
-    return symbol + minValue.toFixed(digits);
+  if (parseFloat(fixedResult) === 0) {
+    if (quota > 0 && value > 0) {
+      const minValue = Math.pow(10, -digits);
+      return symbol + minValue.toFixed(digits);
+    }
+    // 极小负数 toFixed 会得到 '-0.00' 这种带符号零，归一成无符号零
+    return symbol + (0).toFixed(digits);
   }
   return symbol + fixedResult;
 }
@@ -1238,7 +1259,8 @@ export function renderModelPrice(
       (completionTokens / 1000000) * completionRatioPrice * groupRatio +
       (webSearchCallCount / 1000) * webSearchPrice * groupRatio +
       (fileSearchCallCount / 1000) * fileSearchPrice * groupRatio +
-      imageGenerationCallPrice * groupRatio;
+      // 与下方明细行同一个开关：调用没发生就不能计入总价，否则总价对不上任何一条明细
+      (imageGenerationCall ? imageGenerationCallPrice * groupRatio : 0);
 
     return (
       <>

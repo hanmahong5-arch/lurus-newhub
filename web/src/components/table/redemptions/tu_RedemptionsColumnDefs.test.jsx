@@ -312,9 +312,9 @@ describe('quota column', () => {
   });
 
   // The contract a redemption row owes its reader: the face value cell is
-  // either a number of money or an explicit placeholder. Un-skip this and it
-  // fails today — the cell reads "$NaN".
-  it.skip('CONTRACT: a missing quota must never render as money-shaped nonsense', () => {
+  // either a number of money or an explicit placeholder. The cell used to
+  // read "$NaN"; it now says 未知.
+  it('CONTRACT: a missing quota must never render as money-shaped nonsense', () => {
     renderCell(makeCtx(), 'quota', code({ quota: undefined }));
     expect(cell().textContent).not.toMatch(/NaN/);
   });

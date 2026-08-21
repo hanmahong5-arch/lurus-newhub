@@ -377,13 +377,13 @@ describe('UsageLogsColumnDefs — channel column', () => {
   // knows this input is untrusted -- it wraps the same parse in try/catch.
   // Worse, the parse happens BEFORE the isAdminUser check, so it also takes the
   // table down for viewers who cannot even see this column.
-  it.skip('survives a log row whose other field is not valid JSON', () => {
+  it('survives a log row whose other field is not valid JSON', () => {
     expect(() =>
       cell('channel', { ...consumption, other: '{"admin_info"' }, { text: 3 }),
     ).not.toThrow();
   });
 
-  it.skip('survives a corrupt other field even for a non-admin viewer', () => {
+  it('survives a corrupt other field even for a non-admin viewer', () => {
     expect(() =>
       cell(
         'channel',
@@ -755,7 +755,7 @@ describe('UsageLogsColumnDefs — use time column', () => {
   // in the red branch. A streamed request whose log has no `frt` (an older row,
   // or one whose other blob was written without it) therefore shows the
   // customer a red "NaN s" first-token time on the usage page.
-  it.skip('does not print NaN when a streamed row has no first-token time', () => {
+  it('does not print NaN when a streamed row has no first-token time', () => {
     const { text } = cell(
       'use_time',
       { type: 2, use_time: 12, is_stream: true, other: '' },
@@ -996,13 +996,13 @@ describe('UsageLogsColumnDefs — retry column', () => {
   // other column in this file tolerates a missing other via getLogOther's
   // undefined -> '{}' default, and the group column tolerates malformed JSON
   // via try/catch. Here a single such row blanks the entire admin log table.
-  it.skip('survives a row with no other field at all', () => {
+  it('survives a row with no other field at all', () => {
     expect(() =>
       cell('retry', { type: 2, channel: 7 }, { text: 0 }),
     ).not.toThrow();
   });
 
-  it.skip('survives a row whose other field is not valid JSON', () => {
+  it('survives a row whose other field is not valid JSON', () => {
     expect(() =>
       cell('retry', { type: 2, channel: 7, other: '{oops' }, { text: 0 }),
     ).not.toThrow();

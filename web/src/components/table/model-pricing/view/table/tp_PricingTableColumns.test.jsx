@@ -187,29 +187,23 @@ const perCallModel = (over = {}) => ({
   ...over,
 });
 
-// getPricingTableColumns calls useIsMobile(), so it may only run inside a
-// render. Capture the produced column list from a probe component.
-const buildColumns = (opts = {}) => {
-  let captured = null;
-  const Probe = () => {
-    captured = getPricingTableColumns({
-      t,
-      selectedGroup: 'default',
-      groupRatio: { default: 1, vip: 0.5 },
-      copyText: vi.fn(),
-      setModalImageUrl: vi.fn(),
-      setIsModalOpenurl: vi.fn(),
-      currency: 'USD',
-      tokenUnit: 'M',
-      displayPrice: makeDisplayPrice(),
-      showRatio: true,
-      ...opts,
-    });
-    return null;
-  };
-  render(<Probe />);
-  return captured;
-};
+// getPricingTableColumns is a plain factory — it takes isMobile as an argument
+// instead of calling the hook itself, so it can be invoked outside a render.
+const buildColumns = (opts = {}) =>
+  getPricingTableColumns({
+    t,
+    selectedGroup: 'default',
+    groupRatio: { default: 1, vip: 0.5 },
+    copyText: vi.fn(),
+    setModalImageUrl: vi.fn(),
+    setIsModalOpenurl: vi.fn(),
+    currency: 'USD',
+    tokenUnit: 'M',
+    displayPrice: makeDisplayPrice(),
+    showRatio: true,
+    isMobile: false,
+    ...opts,
+  });
 
 const columnFor = (columns, dataIndex) =>
   columns.find((c) => c.dataIndex === dataIndex);
@@ -225,23 +219,8 @@ const renderCell = (column, record) => {
   return view.container.querySelector('[data-testid="cell"]');
 };
 
-// `unpins the price column on mobile` replaces window.matchMedia process-wide.
-// Reinstate the desktop stub before every test, so that no assertion in this
-// file depends on where it happens to sit relative to that one.
-const desktopMatchMedia = (query) => ({
-  matches: false,
-  media: query,
-  onchange: null,
-  addListener: () => {},
-  removeListener: () => {},
-  addEventListener: () => {},
-  removeEventListener: () => {},
-  dispatchEvent: () => false,
-});
-
 beforeEach(() => {
   localStorage.clear();
-  window.matchMedia = desktopMatchMedia;
 });
 
 describe('getPricingTableColumns — column set assembly', () => {
@@ -270,21 +249,12 @@ describe('getPricingTableColumns — column set assembly', () => {
   });
 
   it('pins the price column to the right on desktop', () => {
-    const columns = buildColumns();
+    const columns = buildColumns({ isMobile: false });
     expect(columnFor(columns, 'model_price').fixed).toBe('right');
   });
 
   it('unpins the price column on mobile so it cannot cover the table', () => {
-    window.matchMedia = (query) => ({
-      matches: true,
-      media: query,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      dispatchEvent: () => false,
-    });
-    const columns = buildColumns();
+    const columns = buildColumns({ isMobile: true });
     expect(columnFor(columns, 'model_price').fixed).toBeUndefined();
   });
 });
@@ -420,14 +390,24 @@ describe('ratio column — the three ratios behind the price', () => {
   // the ENTIRE pricing table: the customer sees no prices at all rather than
   // one missing cell.
   // ------------------------------------------------------------------
-  it.skip('CONTRACT: a row missing completion_ratio must still render the other ratios', () => {
+  it('CONTRACT: a row missing completion_ratio must still render the other ratios', () => {
     const columns = buildColumns();
     const record = perTokenModel({ completion_ratio: undefined });
-    expect(() =>
-      render(
-        <div>{columnFor(columns, 'model_ratio').render(2, record, 0)}</div>,
-      ),
-    ).not.toThrow();
+    let view;
+    expect(() => {
+      view = render(
+        <div data-testid='cell'>
+          {columnFor(columns, 'model_ratio').render(2, record, 0)}
+        </div>,
+      );
+    }).not.toThrow();
+    // The two ratios the record does carry still reach the customer; only the
+    // absent one reads as unknown. It must NOT read as 0 — a completion ratio
+    // of 0 means free output, which is a price claim we cannot make here.
+    const cell = view.container.querySelector('[data-testid="cell"]');
+    expect(cell.textContent).toContain('模型倍率：2');
+    expect(cell.textContent).toContain('分组倍率：1');
+    expect(cell.textContent).toContain('补全倍率：-');
   });
 
   // NOTE: there is deliberately no live test asserting that a row without

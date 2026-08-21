@@ -227,7 +227,7 @@ describe('TokensActions — delete guard and confirmation', () => {
   // reasonably reads "dialog closed" as "tokens revoked". The dialog must
   // stay up, or at least stay busy, until the batch has actually landed.
   // ---------------------------------------------------------------------
-  it.skip('keeps the delete dialog open until the batch delete resolves', async () => {
+  it('keeps the delete dialog open until the batch delete resolves', async () => {
     let finish;
     const batchDeleteTokens = vi.fn(
       () =>

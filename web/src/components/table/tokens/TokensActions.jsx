@@ -55,8 +55,11 @@ const TokensActions = ({
   };
 
   // Handle delete confirmation
-  const handleConfirmDelete = () => {
-    batchDeleteTokens();
+  const handleConfirmDelete = async () => {
+    // Dismiss only once the batch has actually landed: closing in the same
+    // tick reads as "tokens revoked" even when the request is still in flight
+    // or was refused.
+    await batchDeleteTokens();
     setShowDeleteModal(false);
   };
 
