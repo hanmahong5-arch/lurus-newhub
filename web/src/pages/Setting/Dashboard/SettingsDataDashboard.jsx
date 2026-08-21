@@ -28,6 +28,15 @@ import {
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
 
+// Declared outside the component so hydration always falls back to the full key
+// set: `inputs` itself is what the effect replaces, so keying off it would let
+// the known keys shrink with every options load.
+const DEFAULT_DASHBOARD_INPUTS = {
+  DataExportEnabled: false,
+  DataExportInterval: '',
+  DataExportDefaultTime: '',
+};
+
 export default function DataDashboard(props) {
   const { t } = useTranslation();
 
@@ -37,11 +46,7 @@ export default function DataDashboard(props) {
     { key: 'week', label: t('周'), value: 'week' },
   ];
   const [loading, setLoading] = useState(false);
-  const [inputs, setInputs] = useState({
-    DataExportEnabled: false,
-    DataExportInterval: '',
-    DataExportDefaultTime: '',
-  });
+  const [inputs, setInputs] = useState(DEFAULT_DASHBOARD_INPUTS);
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
 
@@ -81,18 +86,21 @@ export default function DataDashboard(props) {
   }
 
   useEffect(() => {
-    const currentInputs = {};
+    const currentInputs = { ...DEFAULT_DASHBOARD_INPUTS };
     for (let key in props.options) {
-      if (Object.keys(inputs).includes(key)) {
+      if (Object.prototype.hasOwnProperty.call(DEFAULT_DASHBOARD_INPUTS, key)) {
         currentInputs[key] = props.options[key];
       }
     }
     setInputs(currentInputs);
     setInputsRow(structuredClone(currentInputs));
     refForm.current.setValues(currentInputs);
+    // Mirror what was just loaded, not the `inputs` this render closed over —
+    // that one still holds the previous load. getDefaultTime() only rescues the
+    // empty string, so an unstored key must land on the declared default.
     localStorage.setItem(
       'data_export_default_time',
-      String(inputs.DataExportDefaultTime),
+      String(currentInputs.DataExportDefaultTime),
     );
   }, [props.options]);
 

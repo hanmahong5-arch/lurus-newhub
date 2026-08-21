@@ -714,7 +714,7 @@ describe('DEFECT: a write the server refuses still clears the pending flag', () 
 
   // Verified red on 2026-08-20: un-skipped, the button was disabled
   // (`expected element to be enabled`).
-  it.skip('leaves the save button armed after a refused write', async () => {
+  it('leaves the save button armed after a refused write', async () => {
     withList(TWO_ROWS);
     API.put.mockResolvedValue({
       data: { success: false, message: '没有权限' },
@@ -767,7 +767,7 @@ describe('DEFECT: entries stored without an id are indistinguishable from each o
 
   // Verified red on 2026-08-20: un-skipped, the whole list was wiped
   // (`expected 0 to be 1`).
-  it.skip('leaves the other entries alone when deleting an id-less entry', () => {
+  it('leaves the other entries alone when deleting an id-less entry', () => {
     withList(ID_LESS);
     expect(rowCount()).toBe(2);
     click(within(row(0)).getByText('删除'));
@@ -777,7 +777,7 @@ describe('DEFECT: entries stored without an id are indistinguishable from each o
 
   // Verified red on 2026-08-20: un-skipped, the appended entry serialised with
   // `"id": null` (`expected null to be a number`).
-  it.skip('gives an entry appended to an id-less list a usable id', async () => {
+  it('gives an entry appended to an id-less list a usable id', async () => {
     withList(ID_LESS);
     click(screen.getByText('添加API'));
     emit('url', 'https://c.example.com');

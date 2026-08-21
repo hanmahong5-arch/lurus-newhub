@@ -35,6 +35,7 @@ import {
 } from '@douyinfe/semi-illustrations';
 import { Plus, Edit, Trash2, Save, Activity } from 'lucide-react';
 import { API, showError, showSuccess } from '../../../helpers';
+import { withDistinctIds } from '../../../helpers/listIds';
 import { useTranslation } from 'react-i18next';
 
 const { Text } = Typography;
@@ -138,6 +139,18 @@ const SettingsUptimeKuma = ({ options, refresh }) => {
     },
   ];
 
+  // The parent seeds every console_setting.* key to '' and renders this panel
+  // before GET /api/option/ has answered, so an empty groups blob means "not
+  // read yet" just as often as it means "no categories". The server always
+  // answers the enable flag with a boolean, so both keys still empty is the
+  // pre-fetch seed — a blob written from that state would overwrite categories
+  // this panel never read.
+  const groupsOption = options['console_setting.uptime_kuma_groups'];
+  const enabledOption = options['console_setting.uptime_kuma_enabled'];
+  const optionsLoaded =
+    (groupsOption !== undefined && groupsOption !== '') ||
+    (enabledOption !== undefined && enabledOption !== '');
+
   const updateOption = async (key, value) => {
     const res = await API.put('/api/option/', {
       key,
@@ -150,14 +163,27 @@ const SettingsUptimeKuma = ({ options, refresh }) => {
     } else {
       showError(message);
     }
+    return !!success;
   };
 
   const submitUptimeGroups = async () => {
+    if (!optionsLoaded) {
+      showError('配置尚未加载完成，请稍后重试');
+      return;
+    }
+
     try {
       setLoading(true);
       const groupsJson = JSON.stringify(uptimeGroupsList);
-      await updateOption('console_setting.uptime_kuma_groups', groupsJson);
-      setHasChanges(false);
+      const saved = await updateOption(
+        'console_setting.uptime_kuma_groups',
+        groupsJson,
+      );
+      // A refused write resolves normally, so only a confirmed success may
+      // disarm 保存设置 — otherwise the edits sit in state with no way out.
+      if (saved) {
+        setHasChanges(false);
+      }
     } catch (error) {
       console.error('Uptime Kuma配置更新失败', error);
       showError('Uptime Kuma配置更新失败');
@@ -272,11 +298,7 @@ const SettingsUptimeKuma = ({ options, refresh }) => {
     try {
       const parsed = JSON.parse(groupsStr);
       const list = Array.isArray(parsed) ? parsed : [];
-      const listWithIds = list.map((item, index) => ({
-        ...item,
-        id: item.id || index + 1,
-      }));
-      setUptimeGroupsList(listWithIds);
+      setUptimeGroupsList(withDistinctIds(list));
     } catch (error) {
       console.error('解析Uptime Kuma配置失败:', error);
       setUptimeGroupsList([]);

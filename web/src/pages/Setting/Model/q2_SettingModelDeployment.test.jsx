@@ -546,7 +546,7 @@ describe('DEFECT: the io.net link is opened with a live window opener', () => {
   // Verified red on 2026-08-20: un-skipped, the call had only two arguments
   // (`expected "open" to be called with arguments: [ …, …, StringContaining
   // "noopener" ]`).
-  it.skip('severs the opener handle when opening the io.net key page', () => {
+  it('severs the opener handle when opening the io.net key page', () => {
     renderPage({ [ENABLED_FIELD]: true });
     clickLink();
     expect(openSpy).toHaveBeenCalledWith(

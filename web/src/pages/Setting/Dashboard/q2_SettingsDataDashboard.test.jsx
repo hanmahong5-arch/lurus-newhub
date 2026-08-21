@@ -355,7 +355,7 @@ describe('DEFECT: the granularity mirror is written from the pre-hydration state
 
   // Verified red on 2026-08-20: un-skipped, the mirror held "day" after the
   // options moved to "week" (`expected 'day' to be 'week'`).
-  it.skip('mirrors the granularity that was just loaded', () => {
+  it('mirrors the granularity that was just loaded', () => {
     const refresh = vi.fn();
     const { rerender } = render(
       <DataDashboard options={FULL_OPTIONS} refresh={refresh} />,
@@ -372,7 +372,7 @@ describe('DEFECT: the granularity mirror is written from the pre-hydration state
   // Verified red on 2026-08-20: un-skipped, the mirror held the literal
   // "undefined" (`expected [ '', 'hour', 'day', 'week' ] to include
   // 'undefined'`).
-  it.skip('never mirrors a granularity the dashboard cannot use', () => {
+  it('never mirrors a granularity the dashboard cannot use', () => {
     const refresh = vi.fn();
     const { rerender } = render(
       <DataDashboard options={{ DataExportEnabled: true }} refresh={refresh} />,
@@ -412,7 +412,7 @@ describe('DEFECT: options the server has never stored are dropped from state', (
 
   // Verified red on 2026-08-20: un-skipped, the save issued zero PUTs
   // (`expected [] to deeply equal [ { key: 'DataExportDefaultTime' … } ]`).
-  it.skip('saves the first granularity picked when none was stored', async () => {
+  it('saves the first granularity picked when none was stored', async () => {
     renderPage({ DataExportEnabled: true });
     emit('DataExportDefaultTime', 'week');
     await save();

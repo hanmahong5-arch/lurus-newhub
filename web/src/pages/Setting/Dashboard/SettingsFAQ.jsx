@@ -36,6 +36,7 @@ import {
 } from '@douyinfe/semi-illustrations';
 import { Plus, Edit, Trash2, Save, HelpCircle } from 'lucide-react';
 import { API, showError, showSuccess } from '../../../helpers';
+import { withDistinctIds } from '../../../helpers/listIds';
 import { useTranslation } from 'react-i18next';
 
 const { Text } = Typography;
@@ -145,14 +146,25 @@ const SettingsFAQ = ({ options, refresh }) => {
     } else {
       showError(message);
     }
+    return !!success;
   };
 
   const submitFAQ = async () => {
+    if (!faqLoaded) {
+      // 没读到过服务端的问答列表就整份写回，会把已有的问答全部覆盖掉
+      showError('常见问答尚未加载完成，请稍后重试');
+      return;
+    }
+
     try {
       setLoading(true);
       const faqJson = JSON.stringify(faqList);
-      await updateOption('console_setting.faq', faqJson);
-      setHasChanges(false);
+      // 服务端拒绝时只会弹错误不会抛异常，必须按返回值判断：
+      // 否则改动仍留在本地却被置灰，操作员再也无法重发
+      const saved = await updateOption('console_setting.faq', faqJson);
+      if (saved) {
+        setHasChanges(false);
+      }
     } catch (error) {
       console.error('常见问答更新失败', error);
       showError('常见问答更新失败');
@@ -242,12 +254,7 @@ const SettingsFAQ = ({ options, refresh }) => {
     try {
       const parsed = JSON.parse(faqStr);
       const list = Array.isArray(parsed) ? parsed : [];
-      // 确保每个项目都有id
-      const listWithIds = list.map((item, index) => ({
-        ...item,
-        id: item.id || index + 1,
-      }));
-      setFaqList(listWithIds);
+      setFaqList(withDistinctIds(list));
     } catch (error) {
       console.error('解析常见问答失败:', error);
       setFaqList([]);
@@ -259,6 +266,20 @@ const SettingsFAQ = ({ options, refresh }) => {
       parseFAQ(options['console_setting.faq']);
     }
   }, [options['console_setting.faq']]);
+
+  // 父组件在 GET /api/option/ 返回前先用一份「所有键都是空串」的种子渲染本
+  // 面板。空的问答串既可能是那份种子，也可能是服务端真的一条问答都没有，光看
+  // 它分不出来；而 faq_enabled 在服务端是 bool（默认 true），回来的一定是
+  // 'true'/'false'，空串只可能来自种子。未加载就整表写回，会用本地空列表覆盖
+  // 服务端已存的全部问答。
+  //
+  // 判据只看取值、不看 options 的对象身份：同页其它字段（公告栏、用户协议、
+  // 隐私政策）共用一个 setInputs，GET 在途时敲一个字就会换掉 options 对象，
+  // 拿身份当信号会在那一刻误判成已加载。
+  const storedFaq = options['console_setting.faq'];
+  const storedEnabled = options['console_setting.faq_enabled'];
+  const faqLoaded =
+    Boolean(storedFaq) || (storedEnabled !== undefined && storedEnabled !== '');
 
   useEffect(() => {
     const enabledStr = options['console_setting.faq_enabled'];
@@ -346,7 +367,7 @@ const SettingsFAQ = ({ options, refresh }) => {
             icon={<Save size={14} />}
             onClick={submitFAQ}
             loading={loading}
-            disabled={!hasChanges}
+            disabled={!hasChanges || !faqLoaded}
             type='secondary'
             className='w-full md:w-auto'
           >
@@ -363,9 +384,14 @@ const SettingsFAQ = ({ options, refresh }) => {
     </div>
   );
 
+  // 删除后列表可能缩短到当前页之前，此时 currentPage 会指向空白页：
+  // 取值时先夹到有效范围，否则操作员会看到“暂无常见问答”而条目其实还在
+  const totalPages = Math.max(1, Math.ceil(faqList.length / pageSize));
+  const effectivePage = Math.min(currentPage, totalPages);
+
   // 计算当前页显示的数据
   const getCurrentPageData = () => {
-    const startIndex = (currentPage - 1) * pageSize;
+    const startIndex = (effectivePage - 1) * pageSize;
     const endIndex = startIndex + pageSize;
     return faqList.slice(startIndex, endIndex);
   };
@@ -397,7 +423,7 @@ const SettingsFAQ = ({ options, refresh }) => {
           rowKey='id'
           scroll={{ x: 'max-content' }}
           pagination={{
-            currentPage: currentPage,
+            currentPage: effectivePage,
             pageSize: pageSize,
             total: faqList.length,
             showSizeChanger: true,
