@@ -68,8 +68,14 @@ Cluster access: `ssh root@100.122.83.20` (R6, Tailscale).
      --from-literal=IDENTITY_SESSION_SECRET='<...>' \
      --from-literal=LURUS_WHITELABEL_MASTER_SECRET="$(openssl rand -hex 32)"
    ```
-   `IDENTITY_SERVICE_INTERNAL_KEY` is the SAME key platform uses to call the fund
-   endpoint — it already carries scope `balance:write`, no rotation needed.
+   `IDENTITY_SERVICE_INTERNAL_KEY` is the newhub→platform Bearer key ONLY.
+   The fund endpoint runs the OTHER direction: platform calls it with
+   `X-API-Key: <NEWHUB_API_KEY>` — a separate newhub-issued `lurus_ik_*` key
+   (scope `balance:write`), and since 2026-08-22 that key must additionally be
+   ScopeAll or have an `(api_key_id, tenant_id)` row in
+   `internal_api_key_tenants` for each target tenant, else the fund call
+   returns 403 `TENANT_NOT_AUTHORIZED`. (Corrected 2026-08-22 — this line
+   previously claimed the two directions share one key; they never did.)
 
 3. **Apply the overlay** (creates ns, deployment, NodePort service 8850:30850,
    NATS egress netpol; image `ghcr.io/hanmahong5-arch/lurus-newhub:main`):
@@ -107,8 +113,10 @@ Cluster access: `ssh root@100.122.83.20` (R6, Tailscale).
    `platform-core-secrets` (53 keys, no `NEWHUB_BASE_URL`) — so this is an ADD,
    not an edit. Set it where platform-core reads config (secret key or
    deployment env — `internal/pkg/config/config.go` reads `NEWHUB_BASE_URL`;
-   empty value disables the module). Also confirm `INTERNAL_API_KEY` is populated
-   (the fund call sends it as Bearer with scope `balance:write`):
+   empty value disables the module). Also confirm `NEWHUB_API_KEY` is populated —
+   the fund call sends it as `X-API-Key` (newhub-issued `lurus_ik_*`, scope
+   `balance:write`, and ScopeAll-or-whitelisted per the 2026-08-22 tenant guard;
+   NOT the platform `INTERNAL_API_KEY`, which newhub's keyed store never accepts):
    ```
    # secret/env write = owner (kubectl); rollout is drivable via MCP rollout_restart
    kubectl -n lurus-platform rollout restart deploy/platform-core
