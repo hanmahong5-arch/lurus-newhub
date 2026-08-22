@@ -3162,6 +3162,7 @@
     "默认补全倍率": "Tỷ lệ hoàn thành mặc định",
     "（当前仅支持易支付接口，默认使用上方服务器地址作为回调地址！）": "(Hiện tại chỉ hỗ trợ giao diện Epay, địa chỉ máy chủ phía trên được sử dụng làm địa chỉ gọi lại theo mặc định!)",
     "，时间：": ", thời gian:",
-    "，点击更新": ", nhấn để cập nhật"
+    "，点击更新": ", nhấn để cập nhật",
+    "注销账户": "Hủy đăng ký tài khoản"
   }
 }

@@ -18,7 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 
 // Mock helpers BEFORE importing the component.
 vi.mock('../../../helpers', () => ({
@@ -335,6 +341,69 @@ describe('Settings page', () => {
     const calls = API.get.mock.calls.map((c) => c[0]);
     expect(calls.some((u) => u.includes('/user/billing/summary'))).toBe(true);
     expect(calls.some((u) => u.includes('/acme/billing/topups'))).toBe(true);
+  });
+
+  // 7b. A customer with no billing history gets the empty panel, not a spinner.
+  //
+  // The section effects were guarded on "is the data still absent?", which is
+  // true again the moment a fetch resolves empty — so the effect re-ran without
+  // bound. That is not only a failure mode: a customer who has never topped up
+  // receives a successful 200 carrying a null summary and an empty items array,
+  // which re-arms the guard identically. Measured against the running console
+  // in that state before the fix: 670 requests in 5 seconds, and the tab never
+  // left "Loading…".
+  //
+  // HONEST LIMIT OF THIS TEST: it does NOT catch that loop. Verified by
+  // restoring the original guard and dependency array — this file stayed green,
+  // because jsdom with a mocked, already-resolved API does not reproduce the
+  // re-fire the browser exhibits. What it does pin is the state the fix has to
+  // produce: the empty panel, resolved, once. The loop's actual regression
+  // guard is the counting assertion in
+  // tests/e2e/verify-console-settings-and-money.spec.ts, which was verified to
+  // fail against the old code (670 requests) and pass against the new one (0).
+  it('settles a customer with no billing history onto the empty panel', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/billing/summary')) {
+        return Promise.resolve({ data: { success: true, data: null } });
+      }
+      if (url.includes('/billing/topups')) {
+        return Promise.resolve({
+          data: { success: true, data: { items: [] } },
+        });
+      }
+      return Promise.resolve({ data: { success: true, data: {} } });
+    });
+
+    render(<HFSettings />);
+    screen.getByText('Billing').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('billing-section')).toBeTruthy();
+    });
+
+    // Real elapsed time, not a trivially-satisfied waitFor. Each turn of the
+    // loop costs one promise resolution plus a commit, so the count only grows
+    // if the effect genuinely re-arms. The first draft of this test used
+    // `waitFor(() => expect(true).toBe(true))`, which returns on its first
+    // check without ever flushing the re-fire — it passed against the bug.
+    const countSummaryCalls = () =>
+      API.get.mock.calls.filter((c) =>
+        String(c[0]).includes('/user/billing/summary'),
+      ).length;
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    const afterFirstSettle = countSummaryCalls();
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect(countSummaryCalls()).toBe(afterFirstSettle);
+    expect(afterFirstSettle).toBe(1);
+
+    // And it must settle on the empty panel rather than a permanent spinner.
+    expect(screen.queryByText(/Loading…/)).toBeNull();
   });
 
   // 8. Notifications tab — Wave A Squad 5A: stub -> read-only.

@@ -290,7 +290,12 @@ const renderOperations = (
   const moreMenu = [
     {
       node: 'item',
-      name: t('注销'),
+      // Its own key, not the bare 注销: that one is translated "Logout" (and
+      // "Se déconnecter", "ログアウト", …), so in every non-Chinese locale this
+      // danger-typed item — which opens "equivalent to deleting the user, this
+      // is irreversible" — was labelled as if it merely signed someone out.
+      // The header's actual sign-out uses a different key entirely.
+      name: t('注销账户'),
       type: 'danger',
       onClick: () => showDeleteModal(record),
     },
