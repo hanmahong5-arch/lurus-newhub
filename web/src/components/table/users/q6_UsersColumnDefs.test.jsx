@@ -520,15 +520,24 @@ describe('operations column', () => {
     expect(ctx.showPromoteModal).toHaveBeenCalledTimes(1);
   });
 
-  it('hides 注销 behind the overflow menu and marks it as the danger entry', () => {
+  it('hides account deregistration behind the overflow menu as the danger entry', () => {
     const ctx = makeCtx();
     const record = user();
     renderCell(ctx, 'operate', record);
-    const item = byLabel('注销');
+    const item = byLabel('注销账户');
     expect(item.getAttribute('data-variant')).toBe('danger');
     // Irreversible: it must go through the modal, never fire an action itself.
     fireEvent.click(item);
     expect(ctx.showDeleteModal).toHaveBeenCalledWith(record);
+  });
+
+  it('does not label account deregistration with the sign-out string', () => {
+    // The bare 注销 key is translated "Logout" (and "Se déconnecter",
+    // "ログアウト", …). Using it here labelled a danger-typed item — one that
+    // opens "equivalent to deleting the user, this is irreversible" — as if it
+    // merely signed the account out, in every non-Chinese locale.
+    renderCell(makeCtx(), 'operate', user());
+    expect(screen.queryByLabelText('注销')).toBeNull();
   });
 
   it('offers no actions at all on an account that is already deregistered', () => {

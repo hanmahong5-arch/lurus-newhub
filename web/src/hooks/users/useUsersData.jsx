@@ -125,33 +125,44 @@ export const useUsersData = () => {
     // Trigger loading state to force table re-render
     setLoading(true);
 
-    const res = await API.post('/api/user/manage', {
-      id: userId,
-      action,
-    });
-
-    const { success, message } = res.data;
-    if (success) {
-      showSuccess('操作成功完成！');
-      const user = res.data.data;
-
-      // Create a new array and new object to ensure React detects changes
-      const newUsers = users.map((u) => {
-        if (u.id === userId) {
-          if (action === 'delete') {
-            return { ...u, DeletedAt: new Date() };
-          }
-          return { ...u, status: user.status, role: user.role };
-        }
-        return u;
+    // A rejected request must still clear the loading flag. Without the
+    // finally, any transport-level failure leaves the table spinning forever
+    // and the operator cannot tell a wedged page from a slow one — they only
+    // see the interceptor's toast go by. This path is live today: the backend
+    // answers POST /api/user/manage with 404 (the handler was removed when the
+    // service was slimmed to a pure gateway), so EVERY action on this table
+    // takes the reject branch.
+    try {
+      const res = await API.post('/api/user/manage', {
+        id: userId,
+        action,
       });
 
-      setUsers(newUsers);
-    } else {
-      showError(message);
-    }
+      const { success, message } = res.data;
+      if (success) {
+        showSuccess('操作成功完成！');
+        const user = res.data.data;
 
-    setLoading(false);
+        // Create a new array and new object to ensure React detects changes
+        const newUsers = users.map((u) => {
+          if (u.id === userId) {
+            if (action === 'delete') {
+              return { ...u, DeletedAt: new Date() };
+            }
+            return { ...u, status: user.status, role: user.role };
+          }
+          return u;
+        });
+
+        setUsers(newUsers);
+      } else {
+        showError(message);
+      }
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Handle page change

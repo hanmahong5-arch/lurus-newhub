@@ -245,6 +245,26 @@ const HFSettings = () => {
   const { t: tr } = useTranslation();
   const [section, setSection] = useState('profile');
 
+  // Which section fetches have already been attempted, keyed by tenant.
+  //
+  // These effects used to be guarded on "is the data still absent?" — which is
+  // true again the instant a fetch resolves with nothing, so the effect re-ran
+  // without bound. That is not only a failure mode: a customer who has simply
+  // never topped up gets a successful HTTP 200 carrying `summary: null` and
+  // `items: []`, which re-arms the guard exactly the same way. Measured on the
+  // billing tab in that state: 670 requests in 5 seconds, and the panel never
+  // left "loading…".
+  //
+  // Attempted-ness is the right question. Keyed by tenant so switching tenants
+  // still re-fetches, which is the one case the old guard got right.
+  const attemptedRef = useRef(new Set());
+  const shouldAttempt = (key) => {
+    const id = `${key}:${tenantSlug}`;
+    if (attemptedRef.current.has(id)) return false;
+    attemptedRef.current.add(id);
+    return true;
+  };
+
   // Profile state
   const [profile, setProfile] = useState(null); // raw API response data
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -397,27 +417,22 @@ const HFSettings = () => {
   }, [fetchProfile, tenantSlug]);
 
   useEffect(() => {
-    if (section === 'security' && !sessions && !sessionLoading) {
+    if (section === 'security' && shouldAttempt('sessions')) {
       fetchSessions();
     }
-  }, [section, sessions, sessionLoading, fetchSessions]);
+  }, [section, tenantSlug, fetchSessions]);
 
   useEffect(() => {
-    if (section === 'subscription' && !subData && !subLoading) {
+    if (section === 'subscription' && shouldAttempt('subscription')) {
       fetchSubscription();
     }
-  }, [section, subData, subLoading, fetchSubscription]);
+  }, [section, tenantSlug, fetchSubscription]);
 
   useEffect(() => {
-    if (
-      section === 'billing' &&
-      !billSummary &&
-      !billTxns.length &&
-      !billLoading
-    ) {
+    if (section === 'billing' && shouldAttempt('billing')) {
       fetchBilling();
     }
-  }, [section, billSummary, billTxns.length, billLoading, fetchBilling]);
+  }, [section, tenantSlug, fetchBilling]);
 
   const handleRevokeSession = async () => {
     if (revoking) return;
