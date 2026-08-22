@@ -159,12 +159,17 @@ const DocumentRenderer = ({ apiEndpoint, title, cacheKey, emptyMessage }) => {
     );
   }
 
-  // 如果没有内容，显示空状态
+  // 如果没有内容，显示空状态。
+  // `title` arrives already translated from the caller, so building a key by
+  // concatenation asks for '管理员未设置Privacy Policy内容' — a key no locale
+  // carries, which then renders verbatim as that mixed string. Interpolating
+  // keeps the key stable and drops the caller's translated title into the
+  // translated sentence.
   if (!content || content.trim() === '') {
     return (
       <div className='flex justify-center items-center min-h-screen bg-gray-50'>
         <Empty
-          title={t('管理员未设置' + title + '内容')}
+          title={t('管理员未设置 {{title}} 内容', { title })}
           image={
             <IllustrationConstruction style={{ width: 150, height: 150 }} />
           }
@@ -194,10 +199,10 @@ const DocumentRenderer = ({ apiEndpoint, title, cacheKey, emptyMessage }) => {
               target='_blank'
               rel='noopener noreferrer'
               title={content.trim()}
-              aria-label={`${t('访问' + title)}: ${content.trim()}`}
+              aria-label={`${t('访问 {{title}}', { title })}: ${content.trim()}`}
               className='inline-block px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors'
             >
-              {t('访问' + title)}
+              {t('访问 {{title}}', { title })}
             </a>
           </div>
         </Card>

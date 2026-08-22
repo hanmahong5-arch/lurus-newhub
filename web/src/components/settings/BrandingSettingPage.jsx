@@ -94,9 +94,9 @@ const BrandingSettingPage = () => {
     try {
       setLoadingInput((s) => ({ ...s, Logo: true }));
       await updateOption('Logo', inputs.Logo);
-      showSuccess('Logo 已更新');
+      showSuccess(t('Logo 已更新'));
     } catch (error) {
-      showError('Logo 更新失败');
+      showError(t('Logo 更新失败'));
     } finally {
       setLoadingInput((s) => ({ ...s, Logo: false }));
     }
@@ -106,9 +106,9 @@ const BrandingSettingPage = () => {
     try {
       setLoadingInput((s) => ({ ...s, HomePageContent: true }));
       await updateOption('HomePageContent', inputs.HomePageContent);
-      showSuccess('首页内容已更新');
+      showSuccess(t('首页内容已更新'));
     } catch (error) {
-      showError('首页内容更新失败');
+      showError(t('首页内容更新失败'));
     } finally {
       setLoadingInput((s) => ({ ...s, HomePageContent: false }));
     }
@@ -118,9 +118,9 @@ const BrandingSettingPage = () => {
     try {
       setLoadingInput((s) => ({ ...s, About: true }));
       await updateOption('About', inputs.About);
-      showSuccess('关于内容已更新');
+      showSuccess(t('关于内容已更新'));
     } catch (error) {
-      showError('关于内容更新失败');
+      showError(t('关于内容更新失败'));
     } finally {
       setLoadingInput((s) => ({ ...s, About: false }));
     }
@@ -130,9 +130,9 @@ const BrandingSettingPage = () => {
     try {
       setLoadingInput((s) => ({ ...s, Footer: true }));
       await updateOption('Footer', inputs.Footer);
-      showSuccess('页脚内容已更新');
+      showSuccess(t('页脚内容已更新'));
     } catch (error) {
-      showError('页脚内容更新失败');
+      showError(t('页脚内容更新失败'));
     } finally {
       setLoadingInput((s) => ({ ...s, Footer: false }));
     }
@@ -163,7 +163,7 @@ const BrandingSettingPage = () => {
         setShowUpdateModal(true);
       }
     } catch (error) {
-      showError('检查更新失败，请稍后再试');
+      showError(t('检查更新失败，请稍后再试'));
     } finally {
       setLoadingInput((s) => ({ ...s, CheckUpdate: false }));
     }

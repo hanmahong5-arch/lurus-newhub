@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect } from 'react';
 import { API } from '../../helpers';
+import i18next from '../../i18n/i18n';
 
 /**
  * 用户权限钩子 - 从后端获取用户权限，替代前端角色判断
@@ -39,11 +40,11 @@ export const useUserPermissions = () => {
         setPermissions(userPermissions);
         console.log('用户权限加载成功:', userPermissions);
       } else {
-        setError(res.data.message || '获取权限失败');
+        setError(res.data.message || i18next.t('获取权限失败'));
         console.error('获取权限失败:', res.data.message);
       }
     } catch (error) {
-      setError('网络错误，请重试');
+      setError(i18next.t('网络错误，请重试'));
       console.error('加载用户权限异常:', error);
     } finally {
       setLoading(false);
