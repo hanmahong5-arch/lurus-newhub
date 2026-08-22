@@ -229,18 +229,10 @@ func TestFundCreditPool_TenantScopedKeyBoundary(t *testing.T) {
 		}
 	})
 
-	// 待测边界：同一把 key 打别家租户 B 的「注资」端点。
-	//
-	// 🔴 已知缺口（2026-08-11 实测）：注资端点没有做上面那道租户白名单校验，
-	// 所以这里回的是 200，钱真的进了 B 的池子。断言先钉住现状，避免这个行为
-	// 在无人察觉的情况下再漂移；一旦有人给 InternalFundCreditPool 补上
-	// InternalKeyAllowedForTenant，本用例会红 —— 那时把期望改成：
-	//     want status = 403 且 error_code = TENANT_NOT_AUTHORIZED，
-	//     且 f.balanceOf(t, f.TenantB.Id) 保持 0，
-	// 并删掉这段注释。
-	t.Run("narrow_key_can_still_fund_another_tenants_pool_KNOWN_GAP", func(t *testing.T) {
+	// 边界：同一把 key 打别家租户 B 的「注资」端点 —— 必须复用上面同一道
+	// InternalKeyAllowedForTenant 守卫，fail-closed 403，池子分毫不动。
+	t.Run("narrow_key_may_not_fund_another_tenants_pool", func(t *testing.T) {
 		const amount = 12_000
-		before := f.balanceOf(t, f.TenantB.Id)
 
 		code, resp := f.fundAs(t, f.TenantB.Slug, testApiKeyNarrowTenantScoped, map[string]interface{}{
 			"event_id": "evt-cross-tenant-fund",
@@ -248,17 +240,37 @@ func TestFundCreditPool_TenantScopedKeyBoundary(t *testing.T) {
 			"source":   "narrow-integration-key",
 		})
 
-		after := f.balanceOf(t, f.TenantB.Id)
+		if code != http.StatusForbidden {
+			t.Fatalf("窄 key 对别家租户注资必须 403，got %d body=%s", code, mustJSON(resp))
+		}
+		ec, _ := resp["error_code"].(string)
+		if ec != "TENANT_NOT_AUTHORIZED" {
+			t.Errorf("expected error_code=TENANT_NOT_AUTHORIZED, got %q", ec)
+		}
+		if got := f.balanceOf(t, f.TenantB.Id); got != 0 {
+			t.Fatalf("被拒的注资不应改动余额，got %d want 0", got)
+		}
+	})
+
+	// 正向对照：窄 key 打自己被授权的租户 A 的「注资」端点必须放行且真的记账 ——
+	// 没有这一条，一个把守卫写成 deny-all 的实现（例如误传 tenant.Slug 而不是
+	// tenant.Id）在上面两条 403 用例下也会全绿，因为它们只证明了「拒绝」而
+	// 从没证明过「本该放行的也放行」。
+	t.Run("narrow_key_may_fund_its_own_tenant", func(t *testing.T) {
+		const amount = 3_000
+
+		code, resp := f.fundAs(t, f.TenantA.Slug, testApiKeyNarrowTenantScoped, map[string]interface{}{
+			"event_id": "evt-own-tenant-fund",
+			"amount":   amount,
+			"source":   "narrow-integration-key",
+		})
+
 		if code != http.StatusOK {
-			t.Fatalf("缺口行为已改变（不再放行）：status=%d body=%s —— 请按上方注释更新本用例的期望",
-				code, mustJSON(resp))
+			t.Fatalf("窄 key 对自己被授权的租户注资应放行，got %d body=%s", code, mustJSON(resp))
 		}
-		if after != before+amount {
-			t.Fatalf("缺口行为已改变（放行但未入账）：余额 %d → %d —— 请按上方注释更新本用例的期望",
-				before, after)
+		if got := f.balanceOf(t, f.TenantA.Id); got != amount {
+			t.Fatalf("租户 A 余额 = %d，应为 %d", got, amount)
 		}
-		t.Logf("已知缺口成立：一把只被授权租户 %s 的窄 key，给租户 %s 的池子注资 %d 成功，余额 %d → %d",
-			f.TenantA.Id, f.TenantB.Id, amount, before, after)
 	})
 }
 

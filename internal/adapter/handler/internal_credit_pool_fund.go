@@ -24,7 +24,11 @@ import (
 //         key rotation with no security benefit because the caller set is the
 //         same: lurus-platform internal API key)
 // Auth:   X-API-Key + middleware.RequireScope(repo.ScopeBalanceWrite)
-//         (applied in internal-api-router.go)
+//         (applied in internal-api-router.go), AND a tenant-scope check:
+//         the key must carry repo.ScopeAll, OR have a row in
+//         internal_api_key_tenants for (api_key_id, tenant.Id). A key
+//         missing that row gets 403 TENANT_NOT_AUTHORIZED — see the
+//         Response 403 case below for how to unlock it.
 //
 // Idempotency: event_id in the request body is stored with a UNIQUE constraint
 // in credit_pool_fund_events (migration 019). A replayed call returns the first
@@ -51,6 +55,16 @@ import (
 //	    "replayed":    false   // true on idempotent replay
 //	  }
 //	}
+//
+// Response 403 (TENANT_NOT_AUTHORIZED): the key is not ScopeAll and has no
+// internal_api_key_tenants row for this tenant — see Auth above for how to
+// unlock it (whitelist the key for the tenant, or use a ScopeAll key).
+//
+//	{
+//	  "success": false,
+//	  "message": "API key not authorized for this tenant: ...",
+//	  "error_code": "TENANT_NOT_AUTHORIZED"
+//	}
 func InternalFundCreditPool(c *gin.Context) {
 	slug := c.Param("slug")
 	if slug == "" {
@@ -68,6 +82,19 @@ func InternalFundCreditPool(c *gin.Context) {
 			"success":    false,
 			"message":    "tenant not found: verify the slug matches an active tenant in newhub",
 			"error_code": "TENANT_NOT_FOUND",
+		})
+		return
+	}
+
+	// SECURITY: same tenant guard as CreateProvisionedKey / InternalProvisionRedemptions —
+	// narrow provisioning keys must be whitelisted for the tenant, ScopeAll bypasses (fail-closed).
+	keyInterface, _ := c.Get("internal_api_key")
+	apiKey, _ := keyInterface.(*repo.InternalApiKey)
+	if !repo.InternalKeyAllowedForTenant(apiKey, tenant.Id) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "API key not authorized for this tenant: insert (api_key_id, tenant_id) into internal_api_key_tenants, or use a ScopeAll key",
+			"error_code": "TENANT_NOT_AUTHORIZED",
 		})
 		return
 	}
