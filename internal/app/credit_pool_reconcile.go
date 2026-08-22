@@ -8,7 +8,7 @@
 //
 //   - RecordStrandedTopup persists the stranded intent as a
 //     credit_pool_fund_events row with Source = "topup_stranded". The table's
-//     UNIQUE(event_id) makes recording idempotent.
+//     UNIQUE(tenant_id, event_id) makes recording idempotent per tenant.
 //   - ReconcileStrandedTopups (background sweep, leader-gated) retries the
 //     pool credit per event and flips Source to "topup_reconciled" on success.
 //   - TryFinalizeStrandedTopup lets an online client retry (same
@@ -27,7 +27,7 @@
 // Every transition is a conditional UPDATE guarded by `source =
 // 'topup_stranded'` inside the same DB transaction as the pool credit, so at
 // most one actor (sweep tick, replica, or online retry) ever applies the
-// compensating credit for a given event_id.
+// compensating credit for a given (tenant_id, event_id).
 package app
 
 import (
@@ -70,19 +70,30 @@ const creditPoolReconcileBatchSize = 100
 // event (or it never was stranded). Callers treat it as "nothing to do".
 var errFundEventNotStranded = errors.New("fund event is not in stranded state")
 
-// strandedRetryFailures tracks consecutive compensation failures per event_id
-// across sweep ticks so the log line carries an escalation signal. In-memory
-// by design: the durable state is the stranded row itself, the counter only
-// enriches operator logs and resets on restart.
+// strandedRetryFailures tracks consecutive compensation failures per
+// (tenant_id, event_id) across sweep ticks so the log line carries an
+// escalation signal. In-memory by design: the durable state is the stranded
+// row itself, the counter only enriches operator logs and resets on restart.
+// Keyed by the composite because event_id alone is no longer unique across
+// tenants (migration 031) — a plain event_id key would conflate two
+// different tenants' unrelated failure streaks.
 var strandedRetryFailures = struct {
 	sync.Mutex
 	counts map[string]int
 }{counts: map[string]int{}}
 
+// strandedFailureKey builds the strandedRetryFailures map key for one
+// stranded event. Exported-free helper (lowercase) — this counter is purely
+// an operator-log aid, not part of the durable idempotency state.
+func strandedFailureKey(tenantID, eventID string) string {
+	return tenantID + "|" + eventID
+}
+
 // RecordStrandedTopup persists a stranded wallet debit as an open fund event.
 // Called by the topup handler when the pool credit AND the wallet revert both
-// failed. Idempotent via UNIQUE(event_id): a duplicate record attempt (e.g. a
-// client retry that strands again on the same Idempotency-Key) is a no-op.
+// failed. Idempotent via UNIQUE(tenant_id, event_id): a duplicate record
+// attempt for this tenant (e.g. a client retry that strands again on the same
+// Idempotency-Key) is a no-op.
 //
 // NewBalance is 0 while stranded — the pool was NOT credited; the field is
 // filled with the real post-credit balance when the event is reconciled.
@@ -142,14 +153,17 @@ func TryFinalizeStrandedTopup(ctx context.Context, eventID, tenantID string) (*r
 		return &evt, true, nil // idempotent replay — already settled
 	}
 
-	settled, ferr := finalizeStrandedTopup(ctx, eventID)
+	settled, ferr := finalizeStrandedTopup(ctx, eventID, tenantID)
 	if ferr == nil {
 		return settled, true, nil
 	}
 	if errors.Is(ferr, errFundEventNotStranded) {
 		// Lost the race to a concurrent sweep tick — re-read the closed row.
+		// Scoped by tenant_id: event_id alone is no longer unique across
+		// tenants (migration 031), so an unscoped re-read could return a
+		// different tenant's row that happens to share this event_id.
 		var closed repo.CreditPoolFundEvent
-		if rerr := repo.DB.WithContext(ctx).Where("event_id = ?", eventID).First(&closed).Error; rerr != nil {
+		if rerr := repo.DB.WithContext(ctx).Where("event_id = ? AND tenant_id = ?", eventID, tenantID).First(&closed).Error; rerr != nil {
 			return nil, true, fmt.Errorf("stranded event closed concurrently but re-read failed: %w", rerr)
 		}
 		return &closed, true, nil
@@ -158,11 +172,16 @@ func TryFinalizeStrandedTopup(ctx context.Context, eventID, tenantID string) (*r
 }
 
 // finalizeStrandedTopup applies the compensating pool credit for one stranded
-// event and closes it, all inside a single DB transaction:
+// event and closes it, all inside a single DB transaction. tenantID scopes
+// every query on credit_pool_fund_events: event_id alone is no longer unique
+// across tenants (migration 031 — idempotency is per (tenant_id, event_id)),
+// so an unscoped WHERE could claim/credit/rewrite a DIFFERENT tenant's
+// stranded row that happens to share this event_id.
 //
 //  1. Conditional claim: UPDATE ... SET source='topup_reconciled'
-//     WHERE event_id=? AND source='topup_stranded'. Zero rows ⇒ another
-//     actor already owns/closed it ⇒ errFundEventNotStranded, no credit.
+//     WHERE event_id=? AND tenant_id=? AND source='topup_stranded'. Zero
+//     rows ⇒ another actor already owns/closed it ⇒ errFundEventNotStranded,
+//     no credit.
 //  2. Pool credit with the same ceiling guard as TopupPool. Failure rolls
 //     the whole transaction back — including the claim — so the event
 //     stays stranded for the next sweep.
@@ -173,12 +192,12 @@ func TryFinalizeStrandedTopup(ctx context.Context, eventID, tenantID string) (*r
 // Concurrency: the claim UPDATE takes the row lock (PostgreSQL) for the rest
 // of the transaction; a concurrent claimant blocks, then sees source ≠
 // 'topup_stranded' and backs off. SQLite (hermetic test tier) serialises
-// writers entirely. Either way at most one credit per event_id.
-func finalizeStrandedTopup(ctx context.Context, eventID string) (*repo.CreditPoolFundEvent, error) {
+// writers entirely. Either way at most one credit per (tenant_id, event_id).
+func finalizeStrandedTopup(ctx context.Context, eventID, tenantID string) (*repo.CreditPoolFundEvent, error) {
 	var settled repo.CreditPoolFundEvent
 	txErr := repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		claim := tx.Model(&repo.CreditPoolFundEvent{}).
-			Where("event_id = ? AND source = ?", eventID, FundEventSourceStranded).
+			Where("event_id = ? AND tenant_id = ? AND source = ?", eventID, tenantID, FundEventSourceStranded).
 			Update("source", FundEventSourceReconciled)
 		if claim.Error != nil {
 			return fmt.Errorf("claim stranded event: %w", claim.Error)
@@ -188,7 +207,7 @@ func finalizeStrandedTopup(ctx context.Context, eventID string) (*repo.CreditPoo
 		}
 
 		var evt repo.CreditPoolFundEvent
-		if err := tx.Where("event_id = ?", eventID).First(&evt).Error; err != nil {
+		if err := tx.Where("event_id = ? AND tenant_id = ?", eventID, tenantID).First(&evt).Error; err != nil {
 			return fmt.Errorf("load claimed stranded event: %w", err)
 		}
 
@@ -216,7 +235,7 @@ func finalizeStrandedTopup(ctx context.Context, eventID string) (*repo.CreditPoo
 		}
 
 		if err := tx.Model(&repo.CreditPoolFundEvent{}).
-			Where("event_id = ?", eventID).
+			Where("event_id = ? AND tenant_id = ?", eventID, tenantID).
 			Update("new_balance", pool.CurrentBalance).Error; err != nil {
 			return fmt.Errorf("record reconciled balance: %w", err)
 		}
@@ -245,7 +264,7 @@ func finalizeStrandedTopup(ctx context.Context, eventID string) (*repo.CreditPoo
 	metrics.CreditPoolReconciledTotal.Inc()
 	metrics.CreditPoolBalance.WithLabelValues(settled.TenantID).Set(float64(settled.NewBalance))
 	strandedRetryFailures.Lock()
-	delete(strandedRetryFailures.counts, eventID)
+	delete(strandedRetryFailures.counts, strandedFailureKey(tenantID, eventID))
 	strandedRetryFailures.Unlock()
 	return &settled, nil
 }
@@ -257,17 +276,26 @@ func finalizeStrandedTopup(ctx context.Context, eventID string) (*repo.CreditPoo
 // count in the logs; the newhub_credit_pool_stranded_open gauge stays > 0 so
 // the alert keeps firing until a human intervenes (e.g. raises the ceiling).
 func ReconcileStrandedTopups(ctx context.Context) (reconciled int, failed int, err error) {
-	var eventIDs []string
+	// event_id alone no longer identifies a unique row (migration 031), so the
+	// sweep must carry tenant_id alongside it into finalizeStrandedTopup —
+	// otherwise two tenants' stranded events sharing an event_id would race
+	// each other's claim/credit inside the same call.
+	var refs []struct {
+		EventID  string
+		TenantID string
+	}
 	if lerr := repo.DB.WithContext(ctx).Model(&repo.CreditPoolFundEvent{}).
 		Where("source = ?", FundEventSourceStranded).
 		Order("id ASC").
 		Limit(creditPoolReconcileBatchSize).
-		Pluck("event_id", &eventIDs).Error; lerr != nil {
+		Select("event_id, tenant_id").
+		Find(&refs).Error; lerr != nil {
 		return 0, 0, fmt.Errorf("list stranded topup events: %w", lerr)
 	}
 
-	for _, id := range eventIDs {
-		settled, ferr := finalizeStrandedTopup(ctx, id)
+	for _, ref := range refs {
+		id, tenantID := ref.EventID, ref.TenantID
+		settled, ferr := finalizeStrandedTopup(ctx, id, tenantID)
 		switch {
 		case ferr == nil:
 			reconciled++
@@ -278,13 +306,14 @@ func ReconcileStrandedTopups(ctx context.Context) (reconciled int, failed int, e
 			// Closed by a concurrent actor between listing and claiming — fine.
 		default:
 			failed++
+			key := strandedFailureKey(tenantID, id)
 			strandedRetryFailures.Lock()
-			strandedRetryFailures.counts[id]++
-			attempts := strandedRetryFailures.counts[id]
+			strandedRetryFailures.counts[key]++
+			attempts := strandedRetryFailures.counts[key]
 			strandedRetryFailures.Unlock()
 			common.SysError(fmt.Sprintf(
-				"credit-pool reconcile: stranded topup still failing event_id=%s consecutive_failures=%d err=%v",
-				id, attempts, ferr))
+				"credit-pool reconcile: stranded topup still failing event_id=%s tenant=%s consecutive_failures=%d err=%v",
+				id, tenantID, attempts, ferr))
 		}
 	}
 

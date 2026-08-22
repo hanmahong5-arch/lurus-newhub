@@ -175,7 +175,8 @@ func SetInternalApiRouter(router *gin.Engine) {
 	// Platform BillingOutbox supply endpoint — SEAM S1 model (b).
 	// Scope: balance:write — platform's internal key already carries this scope
 	// for wallet operations; no new key rotation required.
-	// Idempotency: enforced via UNIQUE(event_id) in credit_pool_fund_events (migration 019).
+	// Idempotency: enforced via UNIQUE(tenant_id, event_id) in credit_pool_fund_events
+	// (migration 031; supersedes the migration-019 global UNIQUE(event_id)).
 	poolFundGroup := internalGroup.Group("/v1/provisioning")
 	poolFundGroup.Use(middleware.RequireScope(repo.ScopeBalanceWrite))
 	poolFundGroup.Use(middleware.InternalApiRateLimit(

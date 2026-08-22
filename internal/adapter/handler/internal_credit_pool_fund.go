@@ -30,10 +30,16 @@ import (
 //         missing that row gets 403 TENANT_NOT_AUTHORIZED — see the
 //         Response 403 case below for how to unlock it.
 //
-// Idempotency: event_id in the request body is stored with a UNIQUE constraint
-// in credit_pool_fund_events (migration 019). A replayed call returns the first
-// result with HTTP 200 — not an error. The caller (platform BillingOutbox) can
-// safely retry on network failure.
+// Idempotency: event_id in the request body is stored with a composite UNIQUE
+// constraint on (tenant_id, event_id) in credit_pool_fund_events (migration 031,
+// which replaced the migration-019 global UNIQUE(event_id)). A replayed call
+// for the same tenant returns the first result with HTTP 200 — not an error.
+// The caller (platform BillingOutbox) can safely retry on network failure.
+//
+// Scope note for platform integrators: event_id de-duplication is per-tenant
+// ONLY. Reusing the same event_id across two different tenants is NOT treated
+// as a replay of one event — each tenant's call books independently against
+// its own pool, so callers must not assume a single global event_id namespace.
 //
 // Request body (JSON):
 //

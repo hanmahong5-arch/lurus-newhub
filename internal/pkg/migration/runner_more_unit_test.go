@@ -226,7 +226,7 @@ func TestEmbeddedFS_PostBaselineAreExecutable(t *testing.T) {
 // contiguous — invisible to both contiguity and the FS-derived count assertions
 // (which shrink to match). This floor is the one place that catches a dropped
 // tail migration. Bump it by one when you add a migration.
-const migrationCountFloor = 28
+const migrationCountFloor = 31
 
 // TestEmbeddedFS_VersionsAreContiguous pins the migration file set structurally
 // without hard-coding its exact size in 8 places: the numeric prefixes must be

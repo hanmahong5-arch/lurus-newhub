@@ -13,10 +13,14 @@ On a paid subscription activation, platform `platform-core` POSTs the tenant's
 credit-pool fund request to newhub so the LLM relay stops returning 402.
 
 - **newhub side** (shipped): `POST /internal/v1/provisioning/tenants/:slug/credit-pool/fund`
-  (`InternalFundCreditPool`, scope `balance:write`, idempotent on `event_id` via
-  `credit_pool_fund_events` UNIQUE — migration 019). Relay gate `PoolBalanceCheck`
-  returns 402 `pool_exhausted` on an exhausted pool, bypasses (200) on no-row /
-  unlimited / healthy.
+  (`InternalFundCreditPool`, scope `balance:write`, idempotent on the composite
+  `(tenant_id, event_id)` via `credit_pool_fund_events` UNIQUE — migration 031,
+  which replaced the original migration-019 global `UNIQUE(event_id)`). Relay
+  gate `PoolBalanceCheck` returns 402 `pool_exhausted` on an exhausted pool,
+  bypasses (200) on no-row / unlimited / healthy.
+  **Note for platform integrators:** `event_id` de-duplication is scoped to the
+  tenant only — reusing the same `event_id` across two different tenants is NOT
+  a replay; each tenant's call books independently against its own pool.
 - **platform side** (shipped): `internal/module/creditpool.go` rides the
   plan-changed outbox/DLQ path; reads plan features `newhub_pool_slug` +
   `newhub_pool_amount`; POSTs the matching contract to `NEWHUB_BASE_URL`.

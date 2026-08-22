@@ -327,11 +327,13 @@ var ErrFundEventExists = errors.New("fund event already processed (idempotent re
 
 // FundPoolIdempotent atomically credits a tenant pool funded by an external
 // platform BillingOutbox event. Idempotency is enforced via a UNIQUE constraint
-// on credit_pool_fund_events.event_id:
+// on credit_pool_fund_events(tenant_id, event_id) — PER TENANT, not global
+// (migration 031): a replay is "same tenant, same event_id"; a different
+// tenant funding under the same event_id is an independent credit, not a replay.
 //
-//   - If event_id was already processed, the existing CreditPoolFundEvent is
-//     returned alongside ErrFundEventExists — caller returns 200 with that row's
-//     data, not an error to the caller of the endpoint.
+//   - If (tenantID, event_id) was already processed, the existing
+//     CreditPoolFundEvent is returned alongside ErrFundEventExists — caller
+//     returns 200 with that row's data, not an error to the caller of the endpoint.
 //   - Otherwise: TopupPool is called inside a transaction, then a fund event row
 //     is inserted. If the insert fails with a unique-constraint violation (race
 //     replay), the function re-fetches and returns the existing row with
@@ -357,9 +359,10 @@ func FundPoolIdempotent(
 
 	// Fast-path: check if already processed before entering the transaction.
 	// The unique-constraint is the authoritative guard; this pre-check merely
-	// avoids the TopupPool write on obvious replays.
+	// avoids the TopupPool write on obvious replays. Scoped by (tenant_id,
+	// event_id) — a different tenant reusing this event_id is NOT a replay.
 	var existing CreditPoolFundEvent
-	if err := DB.WithContext(ctx).Where("event_id = ?", eventID).First(&existing).Error; err == nil {
+	if err := DB.WithContext(ctx).Where("tenant_id = ? AND event_id = ?", tenantID, eventID).First(&existing).Error; err == nil {
 		return &existing, ErrFundEventExists
 	}
 
@@ -386,7 +389,7 @@ func FundPoolIdempotent(
 			// winner's row and surface ErrFundEventExists to the caller.
 			if isUniqueViolation(insertErr) {
 				var race CreditPoolFundEvent
-				if fetchErr := tx.Where("event_id = ?", eventID).First(&race).Error; fetchErr != nil {
+				if fetchErr := tx.Where("tenant_id = ? AND event_id = ?", tenantID, eventID).First(&race).Error; fetchErr != nil {
 					return fmt.Errorf("fund event insert conflict and re-fetch failed: %w", fetchErr)
 				}
 				funded = &race
@@ -407,7 +410,7 @@ func FundPoolIdempotent(
 				return funded, ErrFundEventExists
 			}
 			var race CreditPoolFundEvent
-			if err := DB.WithContext(ctx).Where("event_id = ?", eventID).First(&race).Error; err != nil {
+			if err := DB.WithContext(ctx).Where("tenant_id = ? AND event_id = ?", tenantID, eventID).First(&race).Error; err != nil {
 				return nil, fmt.Errorf("fund event replay re-fetch: %w", err)
 			}
 			return &race, ErrFundEventExists

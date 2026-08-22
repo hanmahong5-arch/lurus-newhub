@@ -274,15 +274,17 @@ func TestFundCreditPool_TenantScopedKeyBoundary(t *testing.T) {
 	})
 }
 
-// TestFundCreditPool_EventIDIsGlobalNotPerTenant 用同一个 event_id 先后给两个
-// 租户注资。
+// TestFundCreditPool_EventIDScopedPerTenant 用同一个 event_id 先后给两个
+// 租户注资，然后让先注资的租户用同一个键重放。
 //
 // 防的业务事故：幂等键跨租户串了之后，第二个租户的注资被当成重放 ——
 // 接口回 200 success、replayed=true，池子余额纹丝不动，而回给平台的
 // new_balance 是「别人池子」的余额。付了钱的客户额度不到账，且全链没有任何
 // 一处报错或告警 —— 这正是历史上「续费不注资」那类事故能潜伏一整个计费周期
-// 的机制。
-func TestFundCreditPool_EventIDIsGlobalNotPerTenant(t *testing.T) {
+// 的机制。裁决的目标语义：幂等作用域 = per-tenant（migration 031 起
+// UNIQUE(tenant_id, event_id)）—— 同一 (tenant, event_id) 重放才是重放，
+// 不同租户复用同一个 event_id 是各自独立的一次入账。
+func TestFundCreditPool_EventIDScopedPerTenant(t *testing.T) {
 	f := setupMoneyPathRouter(t)
 	t.Cleanup(f.Cleanup)
 
@@ -301,46 +303,52 @@ func TestFundCreditPool_EventIDIsGlobalNotPerTenant(t *testing.T) {
 		t.Fatalf("租户 A 余额 = %d，应为 %d", got, amountA)
 	}
 
-	// 租户 B 带着同一个 event_id 来注资。
+	// 租户 B 带着同一个 event_id 来注资 —— 必须当作全新入账，不是重放。
 	code, resp = f.fundAs(t, f.TenantB.Slug, testApiKeyAllScopes, map[string]interface{}{
 		"event_id": sharedEventID, "amount": amountB, "source": "platform-billing-outbox",
 	})
 	if code != http.StatusOK {
-		t.Fatalf("expected 200 (当前实现按重放处理), got %d body=%s", code, mustJSON(resp))
+		t.Fatalf("租户 B 复用 event_id 注资应成功: status=%d body=%s", code, mustJSON(resp))
 	}
-
-	// 核心事实：B 付了钱，池子里一分没进。
-	balanceB := f.balanceOf(t, f.TenantB.Id)
-	if balanceB != 0 {
-		t.Fatalf("缺口行为已改变：租户 B 余额 = %d（不再是 0）—— 请按下方注释更新本用例的期望", balanceB)
-	}
-	// 而且 A 的余额没有被 B 那 7000 影响 —— 至少钱没打错家。
-	if got := f.balanceOf(t, f.TenantA.Id); got != amountA {
-		t.Fatalf("租户 A 余额被跨租户重放改动: %d，应仍为 %d", got, amountA)
-	}
-
-	// 🔴 已知缺口（2026-08-11 实测）：接口对 B 回的是「成功 + 重放」，而且
-	// new_balance 报的是租户 A 池子的余额。平台侧拿到 2xx 就会把这笔注资记成
-	// 已完成，对账时看到的余额也是别人的数 —— 客户零额度且无人报错。
-	// 正确行为应是：event_id 与 URL 上的租户不一致时拒绝（409/422），
-	// 或幂等键按 (tenant_id, event_id) 复合唯一。届时本用例会红，
-	// 请把下面三条断言改成新的期望并删掉本注释。
-	data, ok := resp["data"].(map[string]interface{})
+	dataB, ok := resp["data"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("missing data field: %s", mustJSON(resp))
 	}
-	if replayed, _ := data["replayed"].(bool); !replayed {
-		t.Fatalf("缺口行为已改变：不再判为 replayed —— 请按上方注释更新本用例的期望")
+	if replayed, _ := dataB["replayed"].(bool); replayed {
+		t.Fatalf("租户 B 是首次入账，不应被判为 replayed: %s", mustJSON(resp))
 	}
-	if success, _ := resp["success"].(bool); !success {
-		t.Fatalf("缺口行为已改变：不再回 success=true —— 请按上方注释更新本用例的期望")
+	// 核心事实：B 付了钱，池子里真的进账了 —— 不是「别人池子」的余额。
+	if got := f.balanceOf(t, f.TenantB.Id); got != amountB {
+		t.Fatalf("租户 B 余额 = %d，应为 %d（真实入账，不是跨租户重放的空转）", got, amountB)
 	}
-	reported, _ := data["new_balance"].(float64)
-	if int64(reported) != amountA {
-		t.Fatalf("缺口行为已改变：回报的 new_balance = %.0f（不再是租户 A 的 %d）—— 请按上方注释更新本用例的期望",
-			reported, int64(amountA))
+	if reportedB, _ := dataB["new_balance"].(float64); int64(reportedB) != amountB {
+		t.Fatalf("租户 B 的 new_balance = %.0f，应为 %d（不是租户 A 的余额）", reportedB, int64(amountB))
 	}
-	t.Logf("已知缺口成立：租户 B 用同一 event_id 注资 %d，接口回 success=true replayed=true "+
-		"new_balance=%.0f（这是租户 A 的余额），而 B 的池子实际余额 = %d",
-		amountB, reported, balanceB)
+	// A 的余额不受 B 这次入账影响 —— 两个租户互不干扰。
+	if got := f.balanceOf(t, f.TenantA.Id); got != amountA {
+		t.Fatalf("租户 A 余额被租户 B 的入账改动: %d，应仍为 %d", got, amountA)
+	}
+
+	// 租户 A 用同一个 event_id 重放（同 tenant + event_id）—— 这才是真重放：
+	// replayed=true，余额不再变。
+	code, resp = f.fundAs(t, f.TenantA.Slug, testApiKeyAllScopes, map[string]interface{}{
+		"event_id": sharedEventID, "amount": amountA, "source": "platform-billing-outbox",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("租户 A 同键重放应回 200: status=%d body=%s", code, mustJSON(resp))
+	}
+	dataA, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing data field on replay: %s", mustJSON(resp))
+	}
+	if replayed, _ := dataA["replayed"].(bool); !replayed {
+		t.Fatalf("租户 A 同 (tenant, event_id) 重放必须判为 replayed=true: %s", mustJSON(resp))
+	}
+	if got := f.balanceOf(t, f.TenantA.Id); got != amountA {
+		t.Fatalf("租户 A 重放后余额 = %d，应仍为 %d（不可重复入账）", got, amountA)
+	}
+	// B 的余额也不受 A 这次重放影响。
+	if got := f.balanceOf(t, f.TenantB.Id); got != amountB {
+		t.Fatalf("租户 B 余额被租户 A 的重放改动: %d，应仍为 %d", got, amountB)
+	}
 }

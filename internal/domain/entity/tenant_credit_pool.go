@@ -112,23 +112,27 @@ func (TenantCreditPoolDraw) TableName() string {
 }
 
 // CreditPoolFundEvent records a completed idempotent fund operation from the
-// platform BillingOutbox. The EventID column carries the outbox event_id as a
-// unique key so replayed calls return the first result without double-crediting.
+// platform BillingOutbox. The EventID column carries the outbox event_id as
+// the idempotency key, scoped PER TENANT (tenant_id, event_id) so replayed
+// calls return the first result without double-crediting — and so two
+// tenants funding under the same event_id (real for hand-typed/smoke keys;
+// never happens for real BillingOutbox UUIDs) credit independently instead of
+// the second tenant's call being misjudged as a replay of the first's.
 //
-// Schema is managed by migration 019 (credit_pool_fund_events).
+// Schema is managed by migration 019 (create) + 031 (per-tenant convergence).
 // Design rationale: keeping fund events in a separate table from
 // tenant_credit_pool_draws avoids polluting the relay audit ledger with
-// cross-service provisioning semantics, and lets UNIQUE(event_id) be enforced
-// without adding a nullable column to the append-only draws table.
+// cross-service provisioning semantics, and lets UNIQUE(tenant_id, event_id)
+// be enforced without adding a nullable column to the append-only draws table.
 type CreditPoolFundEvent struct {
-	ID          int64     `json:"id"          gorm:"primaryKey;autoIncrement"`
-	EventID     string    `json:"event_id"    gorm:"type:varchar(128);not null;uniqueIndex"`
-	TenantID    string    `json:"tenant_id"   gorm:"type:varchar(36);not null;index"`
-	PoolID      int64     `json:"pool_id"     gorm:"not null"`
-	Amount      int64     `json:"amount"      gorm:"type:bigint;not null"`
-	NewBalance  int64     `json:"new_balance" gorm:"type:bigint;not null"`
-	Source      string    `json:"source"      gorm:"type:varchar(64);not null"`
-	CreatedAt   time.Time `json:"created_at"  gorm:"not null"`
+	ID         int64     `json:"id"          gorm:"primaryKey;autoIncrement"`
+	EventID    string    `json:"event_id"    gorm:"type:varchar(128);not null;uniqueIndex:uk_credit_pool_fund_events_tenant_event_id,priority:2"`
+	TenantID   string    `json:"tenant_id"   gorm:"type:varchar(36);not null;index;uniqueIndex:uk_credit_pool_fund_events_tenant_event_id,priority:1"`
+	PoolID     int64     `json:"pool_id"     gorm:"not null"`
+	Amount     int64     `json:"amount"      gorm:"type:bigint;not null"`
+	NewBalance int64     `json:"new_balance" gorm:"type:bigint;not null"`
+	Source     string    `json:"source"      gorm:"type:varchar(64);not null"`
+	CreatedAt  time.Time `json:"created_at"  gorm:"not null"`
 }
 
 // TableName overrides the default GORM table name.
