@@ -57,6 +57,20 @@ jobs:
           go-version: '1.25.x'
           cache: true
       - run: go build ./...
+      - name: Vendor consistency + conformance gate (pkg/entverify)
+        # Guards the vendored offline entitlement-token verifier copy at
+        # internal/pkg/entverify/ against silent drift from its source of
+        # truth (lurus-platform pkg/entverify) and proves the four
+        # entitlement-token trust-boundary invariants still hold on THIS
+        # copy. Runs after setup-go (needs the Go toolchain for the second
+        # command) even though it only depends on the "Relocate sibling
+        # repos" step above — platform is not one of the checked-out
+        # siblings, so the vendor script falls back to a pinned sha256 here.
+        # See scripts/check-entverify-vendor.sh and
+        # internal/pkg/entverify/entitlement_conformance_test.go.
+        run: |
+          bash scripts/check-entverify-vendor.sh
+          go test -tags=entitlement_token_gate ./internal/pkg/entverify/ -run EntitlementTokenConformance -v
 
   test-handler:
     name: handler audit + governance tests
