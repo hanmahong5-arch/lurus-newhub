@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
@@ -83,13 +84,23 @@ func setProvisionVerifier(v *entverify.Verifier) {
 //	}
 //
 // Flow: offline-verify signature+aud+freshness (entverify; a token inside its
-// 72h offline grace still verifies — bounded staleness is the Track B
-// contract), gate plan_code on the cc_ prefix, find-or-create the hub user by
-// sub (platform account id, same path as zita-bootstrap), then mint — or, on
-// replay, return — the user's "switch-provision-<plan_code>" relay token.
+// 72h offline grace still verifies at the LIBRARY level, but this endpoint
+// additionally requires Freshness==Fresh before acting on it — see
+// ENTITLEMENT_STALE below), gate plan_code on the cc_ prefix, find-or-create
+// the hub user by sub (platform account id, same path as zita-bootstrap),
+// then mint, refresh, or (on replay) return the user's
+// "switch-provision-<plan_code>" relay token. An existing, unexpired token is
+// replayed as-is; an existing token that has merely aged past its own expiry
+// is refreshed in place (remain_quota/used_quota carry over — a net
+// reconcile, not a refill); a same-named token that is Disabled (an admin
+// deliberately took it off Enabled) is never resurrected — see TOKEN_REVOKED
+// below.
 // Quota: ent.quota (fallback ent.amount) > 0 → bounded token; absent →
 // unlimited_quota=true, i.e. spend is bounded by the USER balance instead
-// (platform funds it separately).
+// (platform funds it separately). The minted/refreshed relay token's own
+// expiry is forward-looking from the entitlement's exp (exp + the entverify
+// offline-grace margin, never the raw claim verbatim — never immortal, never
+// in the past), so an unrenewed plan stops working on its own.
 //
 // Response 200:
 //
@@ -98,8 +109,10 @@ func setProvisionVerifier(v *entverify.Verifier) {
 //
 // Errors: 400 MISSING_ENTITLEMENT_TOKEN · 401 TOKEN_INVALID (bad signature /
 // malformed / past exp+grace / keys unavailable / non-numeric sub) ·
-// 403 AUD_MISMATCH · 403 PLAN_NOT_ELIGIBLE · 403 USER_DISABLED ·
-// 404 TENANT_NOT_FOUND.
+// 403 AUD_MISMATCH · 403 ENTITLEMENT_STALE (token verified but
+// Freshness==Grace, i.e. past its hard exp) · 403 PLAN_NOT_ELIGIBLE ·
+// 403 USER_DISABLED · 403 TOKEN_REVOKED (same-named relay token exists but
+// was administratively disabled) · 404 TENANT_NOT_FOUND.
 func ProvisionV2(c *gin.Context) {
 	slug := c.Param("tenant_slug")
 	tenant, err := repo.GetTenantBySlug(slug)
@@ -147,6 +160,21 @@ func ProvisionV2(c *gin.Context) {
 			"success":    false,
 			"message":    "entitlement token rejected: " + verifyErr.Error(),
 			"error_code": "TOKEN_INVALID",
+		})
+		return
+	}
+	// A Grace-freshness token verified (signature/aud/exp+72h all check out —
+	// entverify intentionally still returns it so a caller CAN degrade), but
+	// minting or renewing a relay token is not a degrade: the platform-side
+	// entitlement behind a stale claim may already be gone (plan cancelled,
+	// seat revoked) and this endpoint has no way to tell from the token
+	// alone. Bounded staleness means Grace is hard-rejected here — the caller
+	// must fetch a Fresh token from platform before provisioning proceeds.
+	if claims.Freshness == entverify.Grace {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "entitlement token is stale (past its freshness window); obtain a fresh token from platform GET /api/v1/entitlements/" + entitlementExpectedAud,
+			"error_code": "ENTITLEMENT_STALE",
 		})
 		return
 	}
@@ -218,6 +246,19 @@ func ProvisionV2(c *gin.Context) {
 		baseURL = defaultRelayBaseURL
 	}
 
+	// Relay-token expiry is forward-looking from the entitlement's own exp,
+	// never copied verbatim: entverify grades a token Fresh for the WHOLE
+	// window exp <= now < exp+skew, so `exp` itself can already be in the past
+	// at mint/refresh time — copying it verbatim would issue a
+	// dead-on-arrival credential (rejected by the very first relay call).
+	// Anchoring at exp + the offline grace the entitlement contract already
+	// promises covers that window; the floor is a last-resort guard against a
+	// non-positive TTL.
+	expiredAt := claims.ExpiresAt.Add(entverify.DefaultGrace).Unix()
+	if expiredAt <= common.GetTimestamp() {
+		expiredAt = common.GetTimestamp() + int64(entverify.DefaultGrace/time.Second)
+	}
+
 	// Idempotency: one live relay token per (user, plan). An existing enabled,
 	// unexpired token with this name is returned as-is — no duplicate mint.
 	var existing repo.Token
@@ -241,6 +282,70 @@ func ProvisionV2(c *gin.Context) {
 				"plan_code": planCode,
 				"replayed":  true,
 			},
+		})
+		return
+	}
+	// Expired-but-Enabled: the entitlement mints on a fixed 24h cadence, so a
+	// row that merely aged past its own expired_time while Status stayed
+	// Enabled (the Redis-on production shape — the auto-expire status write
+	// in repo/token.go never fires) is a ROUTINE re-provision, not a rare
+	// edge case. ent.quota is a static plan attribute that does not shrink
+	// with spend, so minting a brand-new row here would refill
+	// remain_quota/used_quota to the full plan quota every cycle — a monthly
+	// cap becomes a daily one. Refresh the EXISTING row's expiry in place
+	// instead: remain_quota/used_quota are left untouched, a net reconcile
+	// rather than an increment.
+	if findErr == nil && existing.Status == common.TokenStatusEnabled {
+		if updErr := repo.DB.Model(&existing).Updates(map[string]any{
+			"expired_time":  expiredAt,
+			"accessed_time": common.GetTimestamp(),
+		}).Error; updErr != nil {
+			common.SysError("ProvisionV2: token refresh failed" +
+				" user_id=" + strconv.Itoa(user.Id) + " err=" + updErr.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success":    false,
+				"message":    "failed to refresh relay token",
+				"error_code": "PROVISION_FAILED",
+			})
+			return
+		}
+		common.SysLog("ProvisionV2: refreshed expired token" +
+			" tenant=" + tenant.Id +
+			" user_id=" + strconv.Itoa(user.Id) +
+			" plan=" + planCode +
+			" freshness=" + claims.Freshness.String() +
+			" fingerprint=" + req.Fingerprint)
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"user_id":   user.Id,
+				"token":     "sk-" + existing.Key,
+				"base_url":  baseURL,
+				"plan_code": planCode,
+				"replayed":  true,
+			},
+		})
+		return
+	}
+	// Revocation semantics: a same-named token that is Disabled was
+	// administratively taken off Enabled by a human. Falling through to mint
+	// a fresh Enabled row under the same idempotency name would silently undo
+	// that revocation on the client's next routine provision call — so
+	// re-provisioning is refused outright instead. Expired(3)/Exhausted(4)
+	// are AUTOMATIC transitions repo/token.go itself makes with no human
+	// involved and must NOT be treated as revocation — excluding them here
+	// lets those rows fall through to a fresh mint below instead of
+	// hard-locking the account forever.
+	if findErr == nil && existing.Status == common.TokenStatusDisabled {
+		common.SysLog("ProvisionV2: re-provision denied, token revoked" +
+			" tenant=" + tenant.Id +
+			" user_id=" + strconv.Itoa(user.Id) +
+			" plan=" + planCode +
+			" existing_token_id=" + strconv.Itoa(existing.Id))
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "relay token for this plan was revoked; contact the tenant admin to re-enable it",
+			"error_code": "TOKEN_REVOKED",
 		})
 		return
 	}
@@ -280,7 +385,7 @@ func ProvisionV2(c *gin.Context) {
 		Status:         common.TokenStatusEnabled,
 		CreatedTime:    common.GetTimestamp(),
 		AccessedTime:   common.GetTimestamp(),
-		ExpiredTime:    -1, // plan lifecycle is platform-side; the next provision refresh reconciles
+		ExpiredTime:    expiredAt, // forward-looking: entitlement exp + offline grace, floored at now+grace — never immortal, never <= now
 		RemainQuota:    remainQuota,
 		UnlimitedQuota: unlimited,
 		Group:          "default",

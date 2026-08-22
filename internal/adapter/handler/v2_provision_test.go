@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/entverify"
 
 	"github.com/gin-gonic/gin"
@@ -318,5 +319,266 @@ func TestProvisionV2_UnknownTenant(t *testing.T) {
 	}
 	if resp["error_code"] != "TENANT_NOT_FOUND" {
 		t.Errorf("expected TENANT_NOT_FOUND, got %v", resp["error_code"])
+	}
+}
+
+// TestProvisionV2_GraceTokenRejected: a token past its hard exp but still
+// inside entverify's 72h offline grace verifies (Freshness==Grace, nil
+// error) — but bounded-staleness means ProvisionV2 must hard-reject it
+// rather than degrade-and-mint: no relay token may be issued or renewed off
+// a stale entitlement claim.
+func TestProvisionV2_GraceTokenRejected(t *testing.T) {
+	r, ctx, key := setupProvisionTest(t)
+
+	claims := provClaims("990008", map[string]string{"plan_code": "cc_pro", "quota": "1000"})
+	graceExp := time.Now().Add(-1 * time.Hour) // past exp+skew, well within the 72h grace
+	claims["iat"] = graceExp.Add(-24 * time.Hour).Unix()
+	claims["nbf"] = graceExp.Add(-24 * time.Hour).Unix()
+	claims["exp"] = graceExp.Unix()
+	tok := provSignRS256(t, key, "test-kid", claims)
+
+	code, resp := provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok})
+	if code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%v", code, resp)
+	}
+	if resp["error_code"] != "ENTITLEMENT_STALE" {
+		t.Errorf("expected ENTITLEMENT_STALE, got %v", resp["error_code"])
+	}
+
+	var n int64
+	repo.DB.Model(&repo.Token{}).Where("name = ?", "switch-provision-cc_pro").Count(&n)
+	if n != 0 {
+		t.Errorf("grace-freshness token must not mint a relay token: count=%d want 0", n)
+	}
+}
+
+// TestProvisionV2_IssuedTokenNotImmortal: the minted relay token's expiry
+// must be forward-looking from the entitlement's own exp claim (exp + the
+// entverify offline grace margin, never the raw claim verbatim — see
+// TestProvisionV2_FreshButPastExp_NeverMintsPastExpiry for why), and never
+// -1 (never expires) — an unrenewed plan must eventually stop working on its
+// own.
+func TestProvisionV2_IssuedTokenNotImmortal(t *testing.T) {
+	r, ctx, key := setupProvisionTest(t)
+
+	claims := provClaims("990009", map[string]string{"plan_code": "cc_pro", "quota": "5000"})
+	wantExp := time.Now().Add(24 * time.Hour).Unix()
+	claims["exp"] = wantExp
+	tok := provSignRS256(t, key, "test-kid", claims)
+
+	code, resp := provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%v", code, resp)
+	}
+
+	user, err := repo.GetUserByLurusAccountID(990009)
+	if err != nil {
+		t.Fatalf("bridged user not created: %v", err)
+	}
+	var row repo.Token
+	if err := repo.DB.Where("user_id = ? AND name = ?", user.Id, "switch-provision-cc_pro").First(&row).Error; err != nil {
+		t.Fatalf("relay token not found: %v", err)
+	}
+	if row.ExpiredTime == -1 {
+		t.Fatal("issued relay token must not be immortal (expired_time=-1)")
+	}
+	wantExpiredTime := wantExp + int64(entverify.DefaultGrace/time.Second)
+	if row.ExpiredTime != wantExpiredTime {
+		t.Errorf("expired_time=%d want %d (claims.exp + entverify.DefaultGrace)", row.ExpiredTime, wantExpiredTime)
+	}
+}
+
+// TestProvisionV2_FreshButPastExp_NeverMintsPastExpiry: entverify grades a
+// token Fresh for the WHOLE window exp <= now < exp+skew (5m) — a token can
+// be a minute past its raw exp and still verify Fresh. Copying claims.exp
+// verbatim into the relay token's expired_time would then mint a
+// dead-on-arrival credential (already expired by the time the client makes
+// its first relay call). The minted token's expiry must always be in the
+// future.
+func TestProvisionV2_FreshButPastExp_NeverMintsPastExpiry(t *testing.T) {
+	r, ctx, key := setupProvisionTest(t)
+
+	claims := provClaims("990011", map[string]string{"plan_code": "cc_pro", "quota": "1000"})
+	pastExp := time.Now().Add(-1 * time.Minute) // past exp, inside the 5m skew: Freshness=Fresh
+	claims["iat"] = pastExp.Add(-24 * time.Hour).Unix()
+	claims["nbf"] = pastExp.Add(-24 * time.Hour).Unix()
+	claims["exp"] = pastExp.Unix()
+	tok := provSignRS256(t, key, "test-kid", claims)
+
+	code, resp := provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200 (past-exp-but-Fresh must still provision), got %d body=%v", code, resp)
+	}
+
+	user, err := repo.GetUserByLurusAccountID(990011)
+	if err != nil {
+		t.Fatalf("bridged user not created: %v", err)
+	}
+	var row repo.Token
+	if err := repo.DB.Where("user_id = ? AND name = ?", user.Id, "switch-provision-cc_pro").First(&row).Error; err != nil {
+		t.Fatalf("relay token not found: %v", err)
+	}
+	if row.ExpiredTime <= time.Now().Unix() {
+		t.Fatalf("minted relay token is dead-on-arrival: expired_time=%d <= now=%d", row.ExpiredTime, time.Now().Unix())
+	}
+}
+
+// TestProvisionV2_ExpiredEnabledTokenRefreshedNotReminted: the entitlement
+// mints on a fixed 24h cadence, so a token that has aged past its own
+// expired_time while its Status is still Enabled (the Redis-on production
+// shape — the auto-expire status write in repo/token.go never fires) is a
+// ROUTINE re-provision, not a rare edge case. ent.quota is a static plan
+// attribute that does not shrink with spend, so minting a brand new row here
+// would refill remain_quota/used_quota to the full plan quota every cycle —
+// a monthly cap becomes a daily one. The existing row must be refreshed in
+// place: remain_quota/used_quota carry over untouched.
+func TestProvisionV2_ExpiredEnabledTokenRefreshedNotReminted(t *testing.T) {
+	r, ctx, key := setupProvisionTest(t)
+
+	tok := provSignRS256(t, key, "test-kid",
+		provClaims("990012", map[string]string{"plan_code": "cc_pro", "quota": "1000"}))
+	code, resp := provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%v", code, resp)
+	}
+
+	user, err := repo.GetUserByLurusAccountID(990012)
+	if err != nil {
+		t.Fatalf("bridged user not created: %v", err)
+	}
+
+	// Simulate spend (400 of the original 1000) plus natural expiry with the
+	// row still Enabled.
+	if err := repo.DB.Model(&repo.Token{}).
+		Where("user_id = ? AND name = ?", user.Id, "switch-provision-cc_pro").
+		Updates(map[string]any{
+			"remain_quota": 600,
+			"used_quota":   400,
+			"expired_time": time.Now().Add(-1 * time.Hour).Unix(),
+		}).Error; err != nil {
+		t.Fatalf("simulate spend+expiry: %v", err)
+	}
+
+	tok2 := provSignRS256(t, key, "test-kid",
+		provClaims("990012", map[string]string{"plan_code": "cc_pro", "quota": "1000"}))
+	code, resp = provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok2})
+	if code != http.StatusOK {
+		t.Fatalf("refresh: expected 200, got %d body=%v", code, resp)
+	}
+	data, _ := resp["data"].(map[string]any)
+	if data["replayed"] != true {
+		t.Errorf("expected replayed=true on refresh, got %v", data["replayed"])
+	}
+
+	var rows []repo.Token
+	repo.DB.Where("user_id = ? AND name = ?", user.Id, "switch-provision-cc_pro").Find(&rows)
+	if len(rows) != 1 {
+		t.Fatalf("expired-but-enabled refresh must not mint a duplicate row: count=%d want 1", len(rows))
+	}
+	if rows[0].RemainQuota != 600 {
+		t.Errorf("remain_quota=%d want 600 (must carry over, not refill to plan quota 1000)", rows[0].RemainQuota)
+	}
+	if rows[0].UsedQuota != 400 {
+		t.Errorf("used_quota=%d want 400 (must carry over)", rows[0].UsedQuota)
+	}
+	if rows[0].ExpiredTime <= time.Now().Unix() {
+		t.Errorf("expired_time=%d must be refreshed into the future", rows[0].ExpiredTime)
+	}
+}
+
+// TestProvisionV2_AutoStatusNotTreatedAsRevoked: repo/token.go automatically
+// flips a token to Expired(3) on natural expiry or Exhausted(4) when a
+// bounded token's quota runs out — no human involved, unlike an admin
+// Disabled(2). Neither automatic state may be treated as an administrative
+// revocation: a paying customer whose plan renews must be able to self-heal
+// via a routine provision call, not get locked out of TOKEN_REVOKED forever
+// with no self-service recovery.
+func TestProvisionV2_AutoStatusNotTreatedAsRevoked(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		sub    string
+		acctID int64
+	}{
+		{"expired", common.TokenStatusExpired, "990020", 990020},
+		{"exhausted", common.TokenStatusExhausted, "990021", 990021},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, ctx, key := setupProvisionTest(t)
+			tok := provSignRS256(t, key, "test-kid",
+				provClaims(tc.sub, map[string]string{"plan_code": "cc_pro", "quota": "1000"}))
+			code, resp := provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok})
+			if code != http.StatusOK {
+				t.Fatalf("expected 200, got %d body=%v", code, resp)
+			}
+			user, err := repo.GetUserByLurusAccountID(tc.acctID)
+			if err != nil {
+				t.Fatalf("bridged user not created: %v", err)
+			}
+
+			if err := repo.DB.Model(&repo.Token{}).
+				Where("user_id = ? AND name = ?", user.Id, "switch-provision-cc_pro").
+				Update("status", tc.status).Error; err != nil {
+				t.Fatalf("simulate automatic status %d: %v", tc.status, err)
+			}
+
+			tok2 := provSignRS256(t, key, "test-kid",
+				provClaims(tc.sub, map[string]string{"plan_code": "cc_pro", "quota": "1000"}))
+			code, resp = provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok2})
+			if resp["error_code"] == "TOKEN_REVOKED" {
+				t.Fatalf("automatic status %d must not be treated as administrative revocation", tc.status)
+			}
+			if code != http.StatusOK {
+				t.Fatalf("expected 200 (self-heal), got %d body=%v", code, resp)
+			}
+		})
+	}
+}
+
+// TestProvisionV2_RevokedTokenNotResurrected: once an admin disables the
+// relay token minted for a (user, plan), a later provision call presenting a
+// perfectly valid Fresh entitlement token must NOT resurrect it by minting a
+// new Enabled row under the same idempotency name — that would silently
+// undo the revocation on the client's next routine provision call.
+func TestProvisionV2_RevokedTokenNotResurrected(t *testing.T) {
+	r, ctx, key := setupProvisionTest(t)
+
+	tok := provSignRS256(t, key, "test-kid",
+		provClaims("990010", map[string]string{"plan_code": "cc_pro", "quota": "1000"}))
+	code, resp := provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%v", code, resp)
+	}
+
+	user, err := repo.GetUserByLurusAccountID(990010)
+	if err != nil {
+		t.Fatalf("bridged user not created: %v", err)
+	}
+
+	// Simulate an administrator revoking the relay token out-of-band.
+	if err := repo.DB.Model(&repo.Token{}).
+		Where("user_id = ? AND name = ?", user.Id, "switch-provision-cc_pro").
+		Update("status", common.TokenStatusDisabled).Error; err != nil {
+		t.Fatalf("disable token: %v", err)
+	}
+
+	tok2 := provSignRS256(t, key, "test-kid",
+		provClaims("990010", map[string]string{"plan_code": "cc_pro", "quota": "1000"}))
+	code, resp = provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok2})
+	if code != http.StatusForbidden && code != http.StatusConflict {
+		t.Fatalf("expected 403/409, got %d body=%v", code, resp)
+	}
+	if resp["error_code"] != "TOKEN_REVOKED" {
+		t.Errorf("expected TOKEN_REVOKED, got %v", resp["error_code"])
+	}
+
+	var rows []repo.Token
+	repo.DB.Where("user_id = ? AND name = ?", user.Id, "switch-provision-cc_pro").Find(&rows)
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 token row (no resurrection), got %d", len(rows))
+	}
+	if rows[0].Status != common.TokenStatusDisabled {
+		t.Errorf("expected token to remain disabled, got status=%d", rows[0].Status)
 	}
 }
