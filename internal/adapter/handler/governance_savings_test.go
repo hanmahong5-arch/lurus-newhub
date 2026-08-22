@@ -107,7 +107,10 @@ func TestGetGovernanceSavings_SpendByProduct(t *testing.T) {
 	if got["kova"] != 500 {
 		t.Errorf("kova spend = %d, want 500 (got products=%v)", got["kova"], got)
 	}
-	if got["lurus-api"] != 500 {
-		t.Errorf("lurus-api spend = %d, want 500 (got products=%v)", got["lurus-api"], got)
+	// DefaultSourceProduct 归一为 llm-api 后(2026-08-22,platform
+	// identity.products 里从来只有 llm-api,lurus-api 是从未存在过的标签),
+	// 无 product 归属的 relay 支出落到 llm-api。
+	if got["llm-api"] != 500 {
+		t.Errorf("llm-api spend = %d, want 500 (got products=%v)", got["llm-api"], got)
 	}
 }

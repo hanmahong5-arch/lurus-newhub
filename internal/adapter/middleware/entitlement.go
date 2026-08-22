@@ -7,12 +7,17 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
 const (
 	entitlementCacheTTL = 5 * time.Minute
-	entitlementProduct  = "lurus-api"
+	// entitlementProduct is the product this gate asks the platform about. It
+	// has to be the same id the relay's wallet debit is filed under, or the
+	// quota checked here is not the quota being spent — hence the shared
+	// constant instead of a second literal.
+	entitlementProduct = ratio_setting.DefaultSourceProduct
 )
 
 type entitlementEntry struct {

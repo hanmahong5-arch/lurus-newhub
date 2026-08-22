@@ -22,6 +22,19 @@ func TestResolveSourceProduct(t *testing.T) {
 			}
 		})
 	}
+
+	// The fallback is written into every untagged relay's wallet debit, so it
+	// must name a product the platform catalog actually has — "llm-api", seeded
+	// by platform migrations/003_seed_products.sql. Asserted as a literal (not
+	// via DefaultSourceProduct) because the constant is exactly what can drift:
+	// a value with no catalog row splits relay revenue off the product
+	// dimension and gets every debit rejected once the platform's
+	// billing.require_product_attribution ratchet is on.
+	t.Run("default names a real catalog product", func(t *testing.T) {
+		if got := ResolveSourceProduct(""); got != "llm-api" {
+			t.Errorf("ResolveSourceProduct(\"\") = %q, want %q", got, "llm-api")
+		}
+	})
 }
 
 // TestModelEquivalence_SubsResolve asserts the curated map's invariants:

@@ -13,9 +13,14 @@ import "strings"
 // unrecognized value is never trusted (CLAUDE.md boundary validation).
 const SourceProductHeader = "X-Lurus-Product"
 
-// DefaultSourceProduct is the back-compat fallback (the historical hardcoded
-// value) used when no allow-listed header is present.
-const DefaultSourceProduct = "lurus-api"
+// DefaultSourceProduct is the fallback used when no allow-listed header is
+// present. It must name a row in the platform's identity.products — the value
+// is transmitted as the wallet debit's product_id, and an id the catalog does
+// not know is rejected as unattributed once the platform's
+// billing.require_product_attribution ratchet is on. The relay's historical
+// hardcoded "lurus-api" was never such a row; the seeded one is "llm-api"
+// (platform migrations/003_seed_products.sql).
+const DefaultSourceProduct = "llm-api"
 
 // allowedSourceProducts is the newhub-side allow-list of product ids that may
 // appear on relay traffic. The platform wallet already accepts arbitrary
