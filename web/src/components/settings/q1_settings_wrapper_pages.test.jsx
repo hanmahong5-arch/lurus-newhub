@@ -39,6 +39,17 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
+vi.mock('../../i18n/i18n', () => ({
+  default: {
+    t: (key, opts) =>
+      opts
+        ? String(key).replace(/\{\{(\w+)\}\}/g, (whole, name) =>
+            name in opts ? opts[name] : whole,
+          )
+        : key,
+  },
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key) => key, i18n: { language: 'en' } }),
   Trans: ({ children }) => children,

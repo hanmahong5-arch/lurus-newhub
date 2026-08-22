@@ -32,6 +32,10 @@ import { LocaleProvider } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import zh_CN from '@douyinfe/semi-ui/lib/es/locale/source/zh_CN';
 import en_GB from '@douyinfe/semi-ui/lib/es/locale/source/en_GB';
+import fr_FR from '@douyinfe/semi-ui/lib/es/locale/source/fr';
+import ja_JP from '@douyinfe/semi-ui/lib/es/locale/source/ja_JP';
+import ru_RU from '@douyinfe/semi-ui/lib/es/locale/source/ru_RU';
+import vi_VN from '@douyinfe/semi-ui/lib/es/locale/source/vi_VN';
 
 // 欢迎信息（二次开发者未经允许不准将此移除）
 // Welcome message (Do not remove this without permission from the original developer)
@@ -43,12 +47,27 @@ if (typeof window !== 'undefined') {
   );
 }
 
+const SEMI_LOCALES = {
+  zh: zh_CN,
+  en: en_GB,
+  fr: fr_FR,
+  ja: ja_JP,
+  ru: ru_RU,
+  vi: vi_VN,
+};
+
 function SemiLocaleWrapper({ children }) {
   const { i18n } = useTranslation();
-  const semiLocale = React.useMemo(
-    () => ({ zh: zh_CN, en: en_GB })[i18n.language] || zh_CN,
-    [i18n.language],
-  );
+  // Key on resolvedLanguage, not language. The browser detector reports a full
+  // tag ('en-US'), while `load: 'languageOnly'` means i18next resolves that to
+  // 'en' for its own lookups. Indexing by the full tag missed every time, so
+  // the whole console ran with Chinese Semi widgets — pagination reading
+  // 总页数 / 每页条数, Chinese date pickers and empty states — even while the
+  // application's own copy rendered in English.
+  const semiLocale = React.useMemo(() => {
+    const lng = i18n.resolvedLanguage || i18n.language || '';
+    return SEMI_LOCALES[lng] || SEMI_LOCALES[lng.split('-')[0]] || zh_CN;
+  }, [i18n.resolvedLanguage, i18n.language]);
   return <LocaleProvider locale={semiLocale}>{children}</LocaleProvider>;
 }
 

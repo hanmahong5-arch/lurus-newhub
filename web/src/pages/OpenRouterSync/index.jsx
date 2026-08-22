@@ -31,6 +31,7 @@ import {
 } from '@douyinfe/semi-ui';
 import { API } from '../../helpers/api';
 import ApiPoolCard from './ApiPoolCard';
+import i18next from '../../i18n/i18n';
 
 const { Title, Text } = Typography;
 
@@ -75,7 +76,7 @@ const OpenRouterSync = () => {
         setChannels(list.filter((c) => c.type === 20));
       }
     } catch (e) {
-      Notification.error({ title: '加载失败', content: String(e) });
+      Notification.error({ title: i18next.t('加载失败'), content: String(e) });
     } finally {
       setLoading(false);
     }
@@ -110,8 +111,8 @@ const OpenRouterSync = () => {
       !formValues.categories?.length
     ) {
       Notification.warning({
-        title: '校验失败',
-        content: '名称、目标渠道、分类必填',
+        title: i18next.t('校验失败'),
+        content: i18next.t('名称、目标渠道、分类必填'),
       });
       return;
     }
@@ -120,33 +121,38 @@ const OpenRouterSync = () => {
         ? await API.post('/api/openrouter-sync/jobs', formValues)
         : await API.put(`/api/openrouter-sync/jobs/${editing.id}`, formValues);
       if (res.data?.success) {
-        Notification.success({ title: '已保存' });
+        Notification.success({ title: i18next.t('已保存') });
         setEditing(null);
         reload();
       } else {
         Notification.error({
           title: '保存失败',
-          content: res.data?.message || '未知错误',
+          content: res.data?.message || i18next.t('未知错误'),
         });
       }
     } catch (e) {
-      Notification.error({ title: '保存失败', content: String(e) });
+      Notification.error({ title: i18next.t('保存失败'), content: String(e) });
     }
   };
 
   const remove = async (job) => {
     Modal.confirm({
       title: `删除任务 "${job.name}"？`,
-      content: '已导入的模型不会被立刻清理；下次同步时会按其他规则重新计算。',
+      content: i18next.t(
+        '已导入的模型不会被立刻清理；下次同步时会按其他规则重新计算。',
+      ),
       onOk: async () => {
         try {
           const res = await API.delete(`/api/openrouter-sync/jobs/${job.id}`);
           if (res.data?.success) {
-            Notification.success({ title: '已删除' });
+            Notification.success({ title: i18next.t('已删除') });
             reload();
           }
         } catch (e) {
-          Notification.error({ title: '删除失败', content: String(e) });
+          Notification.error({
+            title: i18next.t('删除失败'),
+            content: String(e),
+          });
         }
       },
     });
@@ -161,24 +167,30 @@ const OpenRouterSync = () => {
       if (res.data?.success) {
         const d = res.data.data;
         if (d?.skipped) {
-          Notification.info({ title: '已跳过', content: d.skip_reason });
+          Notification.info({
+            title: i18next.t('已跳过'),
+            content: d.skip_reason,
+          });
         } else if (d?.circuit_breaker_on) {
           Modal.warning({
-            title: '熔断保护已触发',
+            title: i18next.t('熔断保护已触发'),
             content: `本次抓到的模型数量过少，已中止写入。如确认上游变化，请用强制执行重置基准。`,
           });
         } else {
           Notification.success({
-            title: '执行完成',
+            title: i18next.t('执行完成'),
             content: `新增 ${d?.added?.length || 0} 移除 ${d?.removed?.length || 0}`,
           });
         }
         reload();
       } else {
-        Notification.error({ title: '执行失败', content: res.data?.message });
+        Notification.error({
+          title: i18next.t('执行失败'),
+          content: res.data?.message,
+        });
       }
     } catch (e) {
-      Notification.error({ title: '执行失败', content: String(e) });
+      Notification.error({ title: i18next.t('执行失败'), content: String(e) });
     } finally {
       setRunning((r) => ({ ...r, [job.id]: false }));
     }
@@ -194,10 +206,13 @@ const OpenRouterSync = () => {
           items: res.data.data || [],
         });
       } else {
-        Notification.error({ title: '预览失败', content: res.data?.message });
+        Notification.error({
+          title: i18next.t('预览失败'),
+          content: res.data?.message,
+        });
       }
     } catch (e) {
-      Notification.error({ title: '预览失败', content: String(e) });
+      Notification.error({ title: i18next.t('预览失败'), content: String(e) });
     }
   };
 

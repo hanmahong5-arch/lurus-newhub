@@ -21,6 +21,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, Spin } from '@douyinfe/semi-ui';
 import SettingsChats from '../../pages/Setting/Chat/SettingsChats';
 import { API, showError, toBoolean } from '../../helpers';
+import i18next from '../../i18n/i18n';
 
 const ChatsSetting = () => {
   let [inputs, setInputs] = useState({
@@ -57,7 +58,7 @@ const ChatsSetting = () => {
       setLoading(true);
       await getOptions();
     } catch (error) {
-      showError('刷新失败');
+      showError(i18next.t('刷新失败'));
     } finally {
       setLoading(false);
     }

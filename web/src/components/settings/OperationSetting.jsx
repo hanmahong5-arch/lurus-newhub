@@ -28,6 +28,7 @@ import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring
 import SettingsCreditLimit from '../../pages/Setting/Operation/SettingsCreditLimit';
 import SettingsCheckin from '../../pages/Setting/Operation/SettingsCheckin';
 import { API, showError, toBoolean } from '../../helpers';
+import i18next from '../../i18n/i18n';
 
 const OperationSetting = () => {
   let [inputs, setInputs] = useState({
@@ -103,7 +104,7 @@ const OperationSetting = () => {
       await getOptions();
       // showSuccess('刷新成功');
     } catch (error) {
-      showError('刷新失败');
+      showError(i18next.t('刷新失败'));
     } finally {
       setLoading(false);
     }

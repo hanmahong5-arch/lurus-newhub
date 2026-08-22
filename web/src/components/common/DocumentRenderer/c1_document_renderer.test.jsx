@@ -21,7 +21,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key) => key, i18n: { language: 'zh' } }),
+  // Interpolating identity: the component now builds these strings with
+  // t('…{{title}}…', { title }) instead of concatenating the title into the
+  // key, so a mock that returns the key verbatim would leave {{title}} on
+  // screen and the assertions below would be pinning a placeholder.
+  useTranslation: () => ({
+    t: (key, opts) =>
+      opts
+        ? String(key).replace(/\{\{(\w+)\}\}/g, (whole, name) =>
+            name in opts ? opts[name] : whole,
+          )
+        : key,
+    i18n: { language: 'zh' },
+  }),
   Trans: ({ children }) => children,
   initReactI18next: { type: '3rdParty', init: () => {} },
 }));
@@ -130,7 +142,7 @@ describe('DocumentRenderer — fetch and cache', () => {
 
     await waitFor(() => expect(showError).toHaveBeenCalledWith('文档未配置'));
     expect(screen.getByRole('status')).toHaveTextContent(
-      '管理员未设置关于内容',
+      '管理员未设置 关于 内容',
     );
   });
 
@@ -184,7 +196,7 @@ describe('DocumentRenderer — URL content', () => {
     expect(link).toHaveAttribute('href', 'https://docs.example.com/guide');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
-    expect(link).toHaveTextContent('访问关于');
+    expect(link).toHaveTextContent('访问 关于');
     expect(screen.queryByTestId('markdown')).not.toBeInTheDocument();
   });
 

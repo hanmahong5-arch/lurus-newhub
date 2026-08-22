@@ -137,7 +137,7 @@ const ContentSettingPage = () => {
       setLoading(true);
       await getOptions();
     } catch (error) {
-      showError('刷新失败');
+      showError(t('刷新失败'));
     } finally {
       setLoading(false);
     }
@@ -161,11 +161,11 @@ const ContentSettingPage = () => {
     try {
       setLoading(true);
       await API.post('/api/option/migrate_console_setting');
-      showSuccess('旧配置迁移完成');
+      showSuccess(t('旧配置迁移完成'));
       await refresh();
       setShowMigrateModal(false);
     } catch (err) {
-      showError('迁移失败: ' + (err.message || '未知错误'));
+      showError(t('迁移失败: ') + (err.message || t('未知错误')));
     } finally {
       setLoading(false);
     }

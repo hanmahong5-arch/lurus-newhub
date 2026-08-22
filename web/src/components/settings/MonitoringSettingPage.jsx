@@ -23,6 +23,7 @@ import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring
 import SettingsLog from '../../pages/Setting/Operation/SettingsLog';
 import SettingsDataDashboard from '../../pages/Setting/Dashboard/SettingsDataDashboard';
 import SettingsUptimeKuma from '../../pages/Setting/Dashboard/SettingsUptimeKuma';
+import i18next from '../../i18n/i18n';
 
 const MonitoringSettingPage = () => {
   const [inputs, setInputs] = useState({
@@ -73,7 +74,7 @@ const MonitoringSettingPage = () => {
       setLoading(true);
       await getOptions();
     } catch (error) {
-      showError('刷新失败');
+      showError(i18next.t('刷新失败'));
     } finally {
       setLoading(false);
     }
@@ -97,12 +98,14 @@ const MonitoringSettingPage = () => {
     try {
       setLoading(true);
       await API.post('/api/option/migrate_console_setting');
-      showSuccess('旧配置迁移完成');
+      showSuccess(i18next.t('旧配置迁移完成'));
       await refresh();
       setShowMigrateModal(false);
     } catch (err) {
       console.error(err);
-      showError('迁移失败: ' + (err.message || '未知错误'));
+      showError(
+        i18next.t('迁移失败: ') + (err.message || i18next.t('未知错误')),
+      );
     } finally {
       setLoading(false);
     }

@@ -19,6 +19,17 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
+vi.mock('../../i18n/i18n', () => ({
+  default: {
+    t: (key, opts) =>
+      opts
+        ? String(key).replace(/\{\{(\w+)\}\}/g, (whole, name) =>
+            name in opts ? opts[name] : whole,
+          )
+        : key,
+  },
+}));
+
 vi.mock('../../helpers', () => ({
   API: { get: vi.fn(), post: vi.fn() },
   showError: vi.fn(),

@@ -23,6 +23,17 @@ import { act, render, screen } from '@testing-library/react';
 // Semi UI is unimportable under jsdom (canvas). Tooltip is the only piece
 // StreakBadge uses; render its content inline so the tooltip copy — which is
 // where the streak progress text lives — is assertable.
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key, opts) =>
+      opts
+        ? String(key).replace(/\{\{(\w+)\}\}/g, (whole, name) =>
+            name in opts ? opts[name] : whole,
+          )
+        : key,
+  }),
+}));
+
 vi.mock('@douyinfe/semi-ui', () => ({
   Tooltip: ({ content, children }) =>
     React.createElement(
@@ -200,7 +211,7 @@ describe('StreakBadge — milestones', () => {
 
     expect(badge().className).toBe('streak-celebrate-api');
     expect(document.querySelector('.streak-confetti-api')).not.toBeNull();
-    expect(stored().rewards).toEqual([`7 天连续签到达成 (${dayOffset(0)})`]);
+    expect(stored().rewards).toEqual([`streak-7-${dayOffset(0)}`]);
 
     act(() => vi.advanceTimersByTime(1500));
 
@@ -213,14 +224,14 @@ describe('StreakBadge — milestones', () => {
       currentStreak: 29,
       lastActiveDate: dayOffset(-1),
       longestStreak: 29,
-      rewards: [`7 天连续签到达成 (${dayOffset(-23)})`],
+      rewards: [`streak-7-${dayOffset(-23)}`],
     });
 
     render(<StreakBadge />);
 
     expect(badge().className).toBe('streak-celebrate-api');
     expect(stored().rewards).toHaveLength(2);
-    expect(stored().rewards[1]).toBe(`30 天连续签到达成 (${dayOffset(0)})`);
+    expect(stored().rewards[1]).toBe(`streak-30-${dayOffset(0)}`);
   });
 
   it('does not celebrate on a non-milestone day', () => {

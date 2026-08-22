@@ -141,7 +141,7 @@ const SettingsFAQ = ({ options, refresh }) => {
     });
     const { success, message } = res.data;
     if (success) {
-      showSuccess('常见问答已更新');
+      showSuccess(t('常见问答已更新'));
       if (refresh) refresh();
     } else {
       showError(message);
@@ -152,7 +152,7 @@ const SettingsFAQ = ({ options, refresh }) => {
   const submitFAQ = async () => {
     if (!faqLoaded) {
       // 没读到过服务端的问答列表就整份写回，会把已有的问答全部覆盖掉
-      showError('常见问答尚未加载完成，请稍后重试');
+      showError(t('常见问答尚未加载完成，请稍后重试'));
       return;
     }
 
@@ -167,7 +167,7 @@ const SettingsFAQ = ({ options, refresh }) => {
       }
     } catch (error) {
       console.error('常见问答更新失败', error);
-      showError('常见问答更新失败');
+      showError(t('常见问答更新失败'));
     } finally {
       setLoading(false);
     }
@@ -201,7 +201,7 @@ const SettingsFAQ = ({ options, refresh }) => {
       const newList = faqList.filter((item) => item.id !== deletingFaq.id);
       setFaqList(newList);
       setHasChanges(true);
-      showSuccess('问答已删除，请及时点击“保存设置”进行保存');
+      showSuccess(t('问答已删除，请及时点击“保存设置”进行保存'));
     }
     setShowDeleteModal(false);
     setDeletingFaq(null);
@@ -209,7 +209,7 @@ const SettingsFAQ = ({ options, refresh }) => {
 
   const handleSaveFaq = async () => {
     if (!faqForm.question || !faqForm.answer) {
-      showError('请填写完整的问答信息');
+      showError(t('请填写完整的问答信息'));
       return;
     }
 
@@ -235,11 +235,11 @@ const SettingsFAQ = ({ options, refresh }) => {
       setShowFaqModal(false);
       showSuccess(
         editingFaq
-          ? '问答已更新，请及时点击“保存设置”进行保存'
-          : '问答已添加，请及时点击“保存设置”进行保存',
+          ? t('问答已更新，请及时点击“保存设置”进行保存')
+          : t('问答已添加，请及时点击“保存设置”进行保存'),
       );
     } catch (error) {
-      showError('操作失败: ' + error.message);
+      showError(t('操作失败: ') + error.message);
     } finally {
       setModalLoading(false);
     }
@@ -311,7 +311,7 @@ const SettingsFAQ = ({ options, refresh }) => {
 
   const handleBatchDelete = () => {
     if (selectedRowKeys.length === 0) {
-      showError('请先选择要删除的常见问答');
+      showError(t('请先选择要删除的常见问答'));
       return;
     }
 

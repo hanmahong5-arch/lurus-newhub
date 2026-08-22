@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useCallback, useEffect, useState } from 'react';
 import { API, showError, toBoolean } from '../../helpers';
+import i18next from '../../i18n/i18n';
 
 /**
  * Shared hook for fetching and managing /api/option/ settings.
@@ -67,7 +68,7 @@ export default function useSettingsOptions(initialState, opts = {}) {
       setLoading(true);
       return await getOptions();
     } catch (error) {
-      showError('刷新失败');
+      showError(i18next.t('刷新失败'));
       return null;
     } finally {
       setLoading(false);

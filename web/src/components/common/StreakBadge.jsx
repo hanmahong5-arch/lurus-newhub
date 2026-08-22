@@ -25,6 +25,7 @@ import React, {
   useMemo,
 } from 'react';
 import { Tooltip } from '@douyinfe/semi-ui';
+import { useTranslation } from 'react-i18next';
 
 // =============================================================================
 // Constants
@@ -104,14 +105,14 @@ function recordActivity(current) {
     updated.longestStreak = updated.currentStreak;
   }
 
-  // Milestone rewards
+  // Milestone rewards. The label is a stable identifier, never a display
+  // string: it is persisted to localStorage, so a translated label would make
+  // the dedupe below depend on whichever language happened to be active when
+  // the milestone was reached.
   const milestones = [MILESTONE_7, MILESTONE_30];
   for (const threshold of milestones) {
     if (updated.currentStreak === threshold) {
-      const label =
-        threshold === 7
-          ? `7 \u5929\u8FDE\u7EED\u7B7E\u5230\u8FBE\u6210 (${today})`
-          : `30 \u5929\u8FDE\u7EED\u7B7E\u5230\u8FBE\u6210 (${today})`;
+      const label = `streak-${threshold}-${today}`;
       if (!updated.rewards.includes(label)) {
         updated.rewards = [...updated.rewards, label];
       }
@@ -173,6 +174,7 @@ function ensureStyles() {
 // =============================================================================
 
 const StreakBadge = () => {
+  const { t } = useTranslation();
   const [streak, setStreak] = useState(null);
   const [celebrating, setCelebrating] = useState(false);
   const prevStreakRef = useRef(0);
@@ -214,11 +216,11 @@ const StreakBadge = () => {
     if (!streak) return '';
     const s = streak.currentStreak;
     if (s < MILESTONE_7)
-      return `\u518D\u575A\u6301 ${MILESTONE_7 - s} \u5929\u89E3\u9501 7 \u5929\u6210\u5C31`;
+      return t('再坚持 {{days}} 天解锁 7 天成就', { days: MILESTONE_7 - s });
     if (s < MILESTONE_30)
-      return `\u518D\u575A\u6301 ${MILESTONE_30 - s} \u5929\u89E3\u9501 30 \u5929\u5927\u5956`;
-    return '\u5DF2\u89E3\u9501\u5168\u90E8\u91CC\u7A0B\u7891';
-  }, [streak]);
+      return t('再坚持 {{days}} 天解锁 30 天大奖', { days: MILESTONE_30 - s });
+    return t('已解锁全部里程碑');
+  }, [streak, t]);
 
   // Don't render until loaded, or if no activity yet
   if (!streak || streak.currentStreak <= 0) return null;
@@ -226,13 +228,12 @@ const StreakBadge = () => {
   const tooltipContent = (
     <div style={{ maxWidth: 200 }}>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>
-        {'\uD83D\uDD25'} {'\u8FDE\u7EED\u7B7E\u5230'} {streak.currentStreak}{' '}
-        {'\u5929'}
+        {'🔥'} {t('连续签到 {{days}} 天', { days: streak.currentStreak })}
       </div>
       <div style={{ fontSize: 12, opacity: 0.7 }}>{progressMessage}</div>
       {streak.longestStreak > streak.currentStreak && (
         <div style={{ fontSize: 12, opacity: 0.5, marginTop: 2 }}>
-          {'\u5386\u53F2\u6700\u957F'}: {streak.longestStreak} {'\u5929'}
+          {t('历史最长')}: {streak.longestStreak} {t('天')}
         </div>
       )}
     </div>
@@ -255,7 +256,7 @@ const StreakBadge = () => {
           transition: 'background 0.15s',
           fontSize: 14,
         }}
-        aria-label={`\u8FDE\u7EED\u7B7E\u5230 ${streak.currentStreak} \u5929`}
+        aria-label={t('连续签到 {{days}} 天', { days: streak.currentStreak })}
         onMouseEnter={(e) => {
           e.currentTarget.style.background = 'rgba(var(--semi-grey-9), 0.08)';
         }}
@@ -264,7 +265,7 @@ const StreakBadge = () => {
         }}
       >
         <span role='img' aria-hidden='true'>
-          {'\uD83D\uDD25'}
+          {'🔥'}
         </span>
         <span
           style={{ fontFamily: 'monospace', fontWeight: 500, fontSize: 13 }}
