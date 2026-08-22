@@ -318,6 +318,23 @@ func SetApiV2Router(router *gin.Engine) {
 				mappingRoute.DELETE("/:id", handler.DeleteUserMappingV2)
 			}
 
+			// Internal API key tenant whitelist console (internal_api_key_tenants,
+			// migration 013/021 §1) — previously only manageable by hand-writing
+			// SQL. Key creation itself stays at POST /api/api-keys (v1,
+			// handler.AdminCreateApiKey); this group only lists key metadata
+			// (never key_hash) and manages the per-tenant whitelist.
+			// Rate-limited like govRoute below: granting/revoking cross-tenant
+			// reach for an internal key is at least as sensitive as the
+			// audit-export/chain-verify/logs-export routes further down.
+			internalKeysRoute := adminRoute.Group("/internal-keys")
+			internalKeysRoute.Use(middleware.CriticalRateLimit())
+			{
+				internalKeysRoute.GET("", handler.ListInternalApiKeysV2)
+				internalKeysRoute.GET("/:id/tenants", handler.ListInternalApiKeyTenantsV2)
+				internalKeysRoute.POST("/:id/tenants", handler.GrantInternalApiKeyTenantV2)
+				internalKeysRoute.DELETE("/:id/tenants/:tenant_id", handler.RevokeInternalApiKeyTenantV2)
+			}
+
 			// Platform user management (deferred backlog round 2). Create is
 			// deferred (needs a password/invite flow) — the UI greys it.
 			adminUsers := adminRoute.Group("/users")

@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
 
 	entity "github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -179,6 +181,60 @@ func InternalKeyAllowedForTenant(apiKey *InternalApiKey, tenantID string) bool {
 		Where("api_key_id = ? AND tenant_id = ?", apiKey.Id, tenantID).
 		Count(&count).Error
 	return err == nil && count > 0
+}
+
+// InternalKeyTenantGrant is one row of the internal_api_key_tenants whitelist
+// table. No GORM struct backs that table (migration 013/021 §1 — code reads
+// it via DB.Table, see InternalKeyAllowedForTenant above), so admin listing
+// scans directly into this shape instead of a mapped entity.
+type InternalKeyTenantGrant struct {
+	TenantID  string    `json:"tenant_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListInternalKeyTenants returns the tenant whitelist for one internal API
+// key, newest grant first. Empty slice (not an error) when the key has no
+// whitelist rows — e.g. a ScopeAll key, which bypasses the whitelist entirely
+// per InternalKeyAllowedForTenant and is never expected to have rows here.
+func ListInternalKeyTenants(apiKeyID int) ([]InternalKeyTenantGrant, error) {
+	var grants []InternalKeyTenantGrant
+	err := DB.Table("internal_api_key_tenants").
+		Where("api_key_id = ?", apiKeyID).
+		Order("created_at DESC").
+		Find(&grants).Error
+	if err != nil {
+		return nil, fmt.Errorf("list internal key tenants: %w", err)
+	}
+	return grants, nil
+}
+
+// GrantInternalKeyTenant whitelists tenantID for apiKeyID so
+// InternalKeyAllowedForTenant starts admitting that key for that tenant.
+// Idempotent: granting an already-whitelisted (api_key_id, tenant_id) pair —
+// the table's PRIMARY KEY — is a no-op, not an error.
+func GrantInternalKeyTenant(apiKeyID int, tenantID string) error {
+	err := DB.Exec(
+		`INSERT INTO internal_api_key_tenants (api_key_id, tenant_id) VALUES (?, ?)`,
+		apiKeyID, tenantID,
+	).Error
+	if err != nil && !isUniqueViolation(err) {
+		return fmt.Errorf("grant internal key tenant: %w", err)
+	}
+	return nil
+}
+
+// RevokeInternalKeyTenant removes tenantID from apiKeyID's whitelist.
+// Idempotent: revoking an absent grant is a no-op, not an error — the caller
+// only needs to distinguish "the key itself doesn't exist" (404, checked
+// before calling this) from "nothing to revoke" (200).
+func RevokeInternalKeyTenant(apiKeyID int, tenantID string) error {
+	if err := DB.Exec(
+		`DELETE FROM internal_api_key_tenants WHERE api_key_id = ? AND tenant_id = ?`,
+		apiKeyID, tenantID,
+	).Error; err != nil {
+		return fmt.Errorf("revoke internal key tenant: %w", err)
+	}
+	return nil
 }
 
 // GetAvailableScopes returns all available scopes for UI
