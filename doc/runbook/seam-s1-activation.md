@@ -1,11 +1,20 @@
 # Runbook — SEAM S1 activation (platform entitlement → newhub credit-pool)
 
-> Status 2026-06-20: **BLOCKED on newhub redeploy.** Both code sides are shipped
+> Status 2026-08-22 (supersedes the 2026-06-20 block below): **newhub IS running
+> on R6** — `kubectl` live check: ns `lurus-newhub`, deploy `lurus-newhub` 3/3,
+> Service 8850:30850, deployment age 113d (created ~2026-05-01 and never torn
+> down; CI deploy-to-staging updates THIS deployment on every main push). The
+> 06-20 "torn down" finding did not match the cluster then-or-now — treat it as
+> a mis-scoped audit. **Part A (redeploy) is therefore unnecessary.** The chain's
+> remaining gap is Part B config on the platform side (`NEWHUB_BASE_URL` +
+> `NEWHUB_API_KEY` in ns `lurus-platform`, owner-gated).
+>
+> ~~Status 2026-06-20: **BLOCKED on newhub redeploy.** Both code sides are shipped
 > and contract-matched (verified at HEAD). The chain cannot light up because
 > **newhub is not running on R6** — it was alive on 2026-06-12 (ns `lurus-newhub`,
 > per `lurus/doc/coord/contracts.md`) but has since been torn down. Live cluster
 > now: `lurus-system` runs only the OSS `lurus-newapi` base; no `lurus-newhub`
-> namespace; the `newhub` database is absent from the PG backup/whitelist set.
+> namespace; the `newhub` database is absent from the PG backup/whitelist set.~~
 
 ## What SEAM S1 is
 
@@ -39,7 +48,7 @@ truths, which is the source of truth chosen for this work).
 
 | Goal text | Corrected (committed artifact) | Why |
 |---|---|---|
-| `NEWHUB_BASE_URL=http://lurus-newhub.lurus-newhub.svc:18200` | `http://lurus-newhub.lurus-staging.svc:8850` | `deploy/k8s/r6-stage/` deploys to ns `lurus-staging`, Service `lurus-newhub`, port `8850`→targetPort `3000`. ns `lurus-newhub` and port `18200` are both wrong. |
+| `NEWHUB_BASE_URL=http://lurus-newhub.lurus-newhub.svc:18200` | `http://lurus-newhub.lurus-newhub.svc:8850` | Live-verified 2026-08-22: Service `lurus-newhub` in ns **`lurus-newhub`** (NOT `lurus-staging` — that earlier "correction" read the overlay, not the cluster), port `8850`→targetPort `3000`. Only the port `18200` in the goal text was wrong. |
 | `R1 platform-core-secrets` | R6, ns `lurus-platform` | `platform-core` runs on the STAGE cluster (`lurus-platform` ns, 2/2). R1 is intentionally empty. |
 | tenant slug `lurus-default` | slug = **`lurus`** | Both seeds set `slug='lurus'`. `lurus-default` is the tenant **id** (and OIDC-org placeholder), not the slug. The fund endpoint resolves by `GetTenantBySlug` → plan feature `newhub_pool_slug` **must be `lurus`** or fund 404s → DLQ → false-fail. |
 | `GET /api/v2/tenants/lurus-default/credit-pool` | `GET /api/v2/admin/tenants/default/credit-pool` (RootJWT) **or** `GET /api/v2/lurus/credit-pool/me` (OIDC) | Admin route is under `/admin`, keyed by tenant **id** (`default` on fresh 021 boot), RootJWTAuth. The slug-keyed end-user view is `/api/v2/:tenant_slug/credit-pool/me`. |
