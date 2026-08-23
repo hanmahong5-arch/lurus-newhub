@@ -84,19 +84,35 @@ spec:
               value: "redis://redis.lurus-system.svc.cluster.local:6379/2"
             - name: SESSION_COOKIE_DOMAIN
               value: "test-newhub.lurus.cn"
-            # OIDC stays off pending the one genuinely missing credential: a
-            # client_id registered in the IdP. Everything else was verified
-            # live 2026-08-23: https://identity.lurus.cn/.well-known/openid-configuration
-            # answers 200 with issuer https://identity.lurus.cn, and
-            # /oauth/v2/keys serves JWKS. To flip: register the client in the
-            # IdP, add OIDC_CLIENT_ID to lurus-newhub-secrets, then set
-            # OIDC_ENABLED/OIDC_ISSUER/OIDC_JWKS_URI here TOGETHER — the flag
-            # with a missing issuer/jwks leaves jwksManager nil and turns
-            # every OIDCAuth route into a 500 (InitOIDCAuth logs but does not
-            # fatal). lutu session-token clients survive the flip since
-            # ddca5e65 (#93).
+            # OIDC ON since 2026-08-23. The formerly-missing credential now
+            # exists: the platform app registry (2l-svc-platform
+            # config/apps.yaml entry `newhub`, commit ca2e25a6) registered a
+            # Web+PKCE client in the IdP and its reconciler wrote the issued
+            # client_id into lurus-newhub-secrets/OIDC_CLIENT_ID. The four
+            # settings below must stay set TOGETHER — the flag with a
+            # missing issuer/jwks leaves jwksManager nil and turns every
+            # OIDCAuth route into a 500 (InitOIDCAuth logs but does not
+            # fatal). lutu session-token clients survive since ddca5e65
+            # (#93). SSO entry: GET /api/v2/<tenant_slug>/auth/login (slug
+            # `lurus` = tenant default, mapped to the IdP org).
             - name: OIDC_ENABLED
-              value: "false"
+              value: "true"
+            - name: OIDC_ISSUER
+              value: "https://identity.lurus.cn"
+            - name: OIDC_JWKS_URI
+              value: "https://identity.lurus.cn/oauth/v2/keys"
+            - name: OIDC_REDIRECT_URI
+              value: "https://test-newhub.lurus.cn/api/v2/oauth/callback"
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-newhub-secrets
+                  key: OIDC_CLIENT_ID
+            # First SSO login auto-creates the local user inside the slug
+            # tenant. Tenants stay manually provisioned — no tenant
+            # auto-create, so an unknown org can never mint itself a tenant.
+            - name: OIDC_AUTO_CREATE_USER
+              value: "true"
             - name: MEILISEARCH_ENABLED
               value: "false"
             # Relay pre-auth against the platform wallet for identity-linked
