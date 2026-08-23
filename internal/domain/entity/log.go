@@ -92,8 +92,15 @@ type LogQueryParams struct {
 	TokenName string // Filter by token name
 	Username  string // Filter by username
 	AfterID   int    // Cursor: when > 0, return only rows with id strictly greater (live-tail)
-	Offset    int    // Pagination offset
-	Limit     int    // Pagination limit
+	// ProjectID filters by cost-attribution project (migration 029). Only
+	// applied when > 0 — 0 means "no project filter", NOT "unassigned only".
+	// Filtering *for* unassigned rows is deliberately not expressible here:
+	// the spend report (GetSpendByProject) is where the unassigned bucket is a
+	// first-class row, and overloading 0 to mean both would make every caller
+	// that forgets to set the field silently return only unassigned traffic.
+	ProjectID int
+	Offset    int // Pagination offset
+	Limit     int // Pagination limit
 }
 
 type Stat struct {

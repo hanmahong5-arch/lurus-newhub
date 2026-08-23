@@ -4,6 +4,51 @@
       "shell": {
         "docs": "Tài liệu",
         "support": "Hỗ trợ"
+      },
+      "common": {
+        "dismiss": "bỏ qua"
+      },
+      "nav": {
+        "projects": "Dự án"
+      },
+      "projects": {
+        "crumb": "dự án",
+        "new": "+ dự án mới",
+        "count_other": "{{count}} dự án",
+        "sub": "phân bổ chi phí giữa tenant và mã thông báo · chỉ là nhãn, không phải ranh giới truy cập",
+        "empty": "Chưa có dự án nào. Hãy tạo một dự án, sau đó gán mã thông báo cho nó trên trang Mã thông báo.",
+        "modal_new": "Dự án mới",
+        "modal_edit": "Chỉnh sửa dự án",
+        "modal_hint": "Dự án là nhãn chi phí dùng cho báo cáo. Nó không cấp quyền truy cập và không có thành viên — hãy gán mã thông báo cho nó trên trang Mã thông báo.",
+        "field_name": "tên *",
+        "ph_name": "ví dụ: Marketing",
+        "field_description": "mô tả",
+        "ph_description": "ví dụ: chi tiêu thương hiệu + tăng trưởng",
+        "col_name": "tên",
+        "col_description": "mô tả",
+        "col_project": "dự án",
+        "col_requests": "số yêu cầu",
+        "col_spend": "chi tiêu",
+        "spend_title": "chi tiêu theo dự án",
+        "spend_empty": "Chưa ghi nhận mức sử dụng nào.",
+        "spend_total": "tổng cộng",
+        "unassigned": "chưa gán",
+        "toast_saved": "Đã lưu dự án",
+        "toast_deleted": "Đã xóa dự án",
+        "delete_confirm": "Xóa dự án \"{{name}}\"? Các mã thông báo của nó sẽ trở thành chưa gán; mức sử dụng trước đây vẫn giữ dự án này trong báo cáo.",
+        "admin_required": "Cần quyền quản trị viên",
+        "admin_required_body": "Bạn không có quyền quản lý dự án. Hãy liên hệ quản trị viên tenant.",
+        "token_field": "dự án",
+        "token_field_hint": "Quy chi tiêu của khóa này vào một dự án. Chỉ dùng cho báo cáo — không cấp quyền truy cập.",
+        "token_none": "chưa gán",
+        "token_col": "dự án",
+        "restore": "khôi phục",
+        "undo": "hoàn tác",
+        "toast_restored": "Đã khôi phục dự án",
+        "deleted_title": "dự án đã ngừng dùng",
+        "deleted_hint": "Được giữ lại để mức sử dụng trước đây vẫn hiển thị dưới một tên dễ đọc — và để việc xóa không bao giờ là vĩnh viễn. Khôi phục sẽ không gán lại mã thông báo trừ khi bạn dùng hoàn tác ngay sau khi xóa.",
+        "delete_reversible": "Có thể đảo ngược: dự án chỉ bị ngừng dùng chứ không bị xóa hẳn, và bạn có thể hoàn tác ngay sau đó.",
+        "undo_body_other": "Đã xóa \"{{name}}\". {{count}} mã thông báo đã trở thành chưa gán."
       }
     },
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Tìm kiếm Web {{count}} lần / 1K lần * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

@@ -86,6 +86,8 @@ func GetLogsV2(c *gin.Context) {
 	tokenName := c.Query("token_name")
 	// Live-tail cursor: when present, return only rows newer than this id.
 	afterID, _ := strconv.Atoi(c.DefaultQuery("after_id", "0"))
+	// Cost-attribution filter (migration 029); 0 = no filter.
+	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
 
 	if page < 1 {
 		page = 1
@@ -105,6 +107,7 @@ func GetLogsV2(c *gin.Context) {
 		EndTime:    endTime,
 		TokenName:  tokenName,
 		AfterID:    afterID,
+		ProjectID:  projectID,
 		Offset:     offset,
 		Limit:      pageSize,
 	}
@@ -164,6 +167,8 @@ func GetAllLogsV2(c *gin.Context) {
 	endTime, _ := strconv.ParseInt(c.DefaultQuery("end_time", "0"), 10, 64)
 	tokenName := c.Query("token_name")
 	username := c.Query("username")
+	// Cost-attribution filter (migration 029); 0 = no filter.
+	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
 
 	if page < 1 {
 		page = 1
@@ -183,6 +188,7 @@ func GetAllLogsV2(c *gin.Context) {
 		EndTime:    endTime,
 		TokenName:  tokenName,
 		Username:   username,
+		ProjectID:  projectID,
 		Offset:     offset,
 		Limit:      pageSize,
 	}

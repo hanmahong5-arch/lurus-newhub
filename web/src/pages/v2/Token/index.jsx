@@ -51,6 +51,44 @@ const quotaBarColor = (remainingRatio) => {
   return 'var(--hf-ok)';
 };
 
+// Cost-attribution projects (migration 029). Readable by every user in the
+// tenant — a project is a label, not a permission — so the picker works for
+// ordinary members, not just tenant admins.
+const useProjects = (tenantSlug) => {
+  const [projects, setProjects] = useState([]);
+  useEffect(() => {
+    if (!tenantSlug) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await API.get(`/api/v2/${tenantSlug}/projects`);
+        if (!cancelled && res?.data?.success) {
+          setProjects(res.data.data?.items ?? []);
+        }
+      } catch (_) {
+        // A tenant with no projects (or a transient failure) simply shows the
+        // "unassigned" option; token creation must never be blocked by it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantSlug]);
+  return projects;
+};
+
+const projectSelectStyle = {
+  fontFamily: 'var(--hf-mono)',
+  fontSize: 12,
+  padding: '5px 8px',
+  border: '1px solid var(--hf-rule)',
+  background: 'var(--hf-sunken)',
+  color: 'var(--hf-ink)',
+  borderRadius: 2,
+  outline: 'none',
+  width: '100%',
+};
+
 const tokenStatus = (t) => {
   if (!t || t.status !== 1) return 'disabled';
   if (t.expired_time > 0 && t.expired_time < Math.floor(Date.now() / 1000))
@@ -119,7 +157,7 @@ await client.messages.create({
 
 // ─── Create token modal ───────────────────────────────────────────────────────
 
-const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
+const CreateModal = ({ tenantSlug, projects, onCreated, onClose }) => {
   const { t: tr } = useTranslation();
   const [form, setForm] = useState({
     name: '',
@@ -131,9 +169,15 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
     // (rate_limit_rpm / rate_limit_tpm); 0 = unlimited.
     rpm: '',
     tpm: '',
+    // Cost-attribution project; '' = unassigned (sent as 0).
+    projectId: '',
   });
   const [saving, setSaving] = useState(false);
   const nameRef = useRef(null);
+  // A ref, not the `saving` state: a click and an Enter keypress landing in the
+  // same tick would both read the pre-render value of the state and mint two
+  // tokens — and a token is not something you want an accidental duplicate of.
+  const inFlight = useRef(false);
 
   useEffect(() => {
     nameRef.current?.focus();
@@ -141,7 +185,8 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!form.name.trim()) return;
+    if (!form.name.trim() || inFlight.current) return;
+    inFlight.current = true;
     setSaving(true);
     try {
       const capUSD = parseFloat(form.cap) || 0;
@@ -157,6 +202,7 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
         expired_time: -1,
         rate_limit_rpm: Math.max(0, parseInt(form.rpm, 10) || 0),
         rate_limit_tpm: Math.max(0, parseInt(form.tpm, 10) || 0),
+        project_id: parseInt(form.projectId, 10) || 0,
       });
       if (res?.data?.success) {
         const { key } = res.data.data;
@@ -171,6 +217,9 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
     } catch (_) {
       // error toast shown by API interceptor
     } finally {
+      // Cleared on both paths: a stuck latch would leave the user staring at a
+      // permanently disabled button with no way out but a page reload.
+      inFlight.current = false;
       setSaving(false);
     }
   };
@@ -211,6 +260,7 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
           </span>
           <input
             ref={nameRef}
+            data-testid='token-name-input'
             style={{
               fontFamily: 'var(--hf-mono)',
               fontSize: 12,
@@ -314,6 +364,36 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
           </label>
         )}
 
+        {/* Cost-attribution project (migration 029). Reporting only. */}
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <span className='lbl'>
+            {tr('console.projects.token_field', 'project')}
+          </span>
+          <select
+            data-testid='token-project-select'
+            style={projectSelectStyle}
+            value={form.projectId}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, projectId: e.target.value }))
+            }
+          >
+            <option value=''>
+              {tr('console.projects.token_none', 'unassigned')}
+            </option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <span className='muted' style={{ fontSize: 11 }}>
+            {tr(
+              'console.projects.token_field_hint',
+              "Attributes this key's spend to a project. Reporting only — grants no access.",
+            )}
+          </span>
+        </label>
+
         {/* Per-token rate limits — 0 / empty = unlimited. */}
         <div
           style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}
@@ -363,7 +443,12 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
           <button type='button' className='btn ghost' onClick={onClose}>
             {tr('console.common.cancel', 'cancel')}
           </button>
-          <button type='submit' className='btn primary' disabled={saving}>
+          <button
+            type='submit'
+            className='btn primary'
+            disabled={saving}
+            data-testid='token-create-submit'
+          >
             {saving
               ? tr('console.token.creating', 'creating…')
               : tr('console.token.create_token', 'create token')}
@@ -426,6 +511,8 @@ const LANG_TABS = [
 const HFToken = () => {
   const navigate = useNavigate();
   const tenantSlug = useTenantSlug();
+  const projects = useProjects(tenantSlug);
+  const projectInFlight = useRef(false);
   // Aliased to `tr` because this page uses `t` as the token loop variable in
   // several .map/.filter callbacks — `t` would otherwise shadow the translator.
   const { t: tr } = useTranslation();
@@ -662,6 +749,35 @@ const HFToken = () => {
     if (t.unlimited_quota) return 0;
     const total = t.used_quota + t.remain_quota;
     return total > 0 ? t.used_quota / total : 0;
+  };
+
+  const projectName = (id) =>
+    projects.find((p) => p.id === id)?.name ||
+    tr('console.projects.token_none', 'unassigned');
+
+  // Re-attributing a key changes which project FUTURE spend lands in; log rows
+  // already written keep the project they were stamped with, because
+  // attribution is not retroactive.
+  const handleSaveProject = async (rawValue) => {
+    if (!token || projectInFlight.current) return;
+    projectInFlight.current = true;
+    setSaving(true);
+    try {
+      const res = await API.put(`/api/v2/${tenantSlug}/tokens/${token.id}`, {
+        project_id: parseInt(rawValue, 10) || 0,
+      });
+      if (res?.data?.success) {
+        showSuccess(tr('console.token.toast_saved', 'Saved'));
+        await fetchTokens();
+      }
+    } catch (_) {
+      // error toast from the interceptor; the select falls back to the token's
+      // stored value on the next render, so a failed change is visibly undone
+      // rather than silently left looking applied.
+    } finally {
+      projectInFlight.current = false;
+      setSaving(false);
+    }
   };
 
   const settingsRows = token
@@ -1234,6 +1350,50 @@ const HFToken = () => {
                 {tr('console.token.token_settings', 'token settings')}
               </div>
               <div className='panel'>
+                {/* Cost-attribution project — a <select>, not the generic
+                    InlineEdit text field, because the value is an id chosen
+                    from the tenant's own list (the backend rejects any other,
+                    but a picker makes that impossible to hit by accident). */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '160px 1fr auto',
+                    padding: '12px 16px',
+                    borderBottom: '1px dashed var(--hf-rule)',
+                    fontSize: 12,
+                    alignItems: 'center',
+                  }}
+                >
+                  <span className='lbl' style={{ alignSelf: 'center' }}>
+                    {tr('console.projects.token_field', 'project')}
+                  </span>
+                  <select
+                    data-testid='token-detail-project-select'
+                    style={projectSelectStyle}
+                    disabled={saving}
+                    value={token.project_id || ''}
+                    onChange={(e) => handleSaveProject(e.target.value)}
+                  >
+                    <option value=''>
+                      {tr('console.projects.token_none', 'unassigned')}
+                    </option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                    {/* A key attributed to a project that is no longer listed
+                        (retired) still renders its own value, so opening the
+                        row cannot silently reset the attribution. */}
+                    {token.project_id > 0 &&
+                      !projects.some((p) => p.id === token.project_id) && (
+                        <option value={token.project_id}>
+                          {projectName(token.project_id)}
+                        </option>
+                      )}
+                  </select>
+                  <span />
+                </div>
                 {settingsRows.map(([label, value, field], i, arr) => (
                   <div
                     key={field}
@@ -1319,6 +1479,7 @@ const HFToken = () => {
       {creating && (
         <CreateModal
           tenantSlug={tenantSlug}
+          projects={projects}
           onCreated={handleCreated}
           onClose={() => setCreating(false)}
         />

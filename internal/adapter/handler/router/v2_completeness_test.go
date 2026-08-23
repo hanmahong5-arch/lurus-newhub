@@ -51,6 +51,14 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/:tenant_slug/tokens/batch-delete": true, // TestDeleteTokensV2_DeletesOwnedOnly
 		// redemptions (internal/adapter/handler/v2_redemption_test.go)
 		"DELETE /api/v2/:tenant_slug/redemptions/:id": true, // TestDeleteRedemptionV2_TenantVerification
+		// projects — migration 029 cost attribution (internal/adapter/handler/v2_project_idor_test.go).
+		// repo.GetProjectByID/UpdateProject/SoftDeleteProject all take tenantID
+		// as a mandatory positional argument, so another tenant's id resolves to
+		// ErrProjectNotFound -> 404, indistinguishable from a nonexistent id.
+		"GET /api/v2/:tenant_slug/projects/:id":          true, // TestGetProjectV2_CrossTenantNotFound
+		"PUT /api/v2/:tenant_slug/projects/:id":          true, // TestUpdateProjectV2_CrossTenantNotFound
+		"DELETE /api/v2/:tenant_slug/projects/:id":       true, // TestDeleteProjectV2_CrossTenantNotFound
+		"POST /api/v2/:tenant_slug/projects/:id/restore": true, // TestRestoreProjectV2_CrossTenantNotFound
 		// playground presets (internal/adapter/handler/v2_cross_tenant_isolation_test.go)
 		"DELETE /api/v2/:tenant_slug/playground/presets/:id": true, // TestDeletePresetV2_CrossTenantIsolation
 		// pricing / self-profile (internal/adapter/handler/v2_cross_tenant_isolation_test.go)
@@ -78,6 +86,7 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/:tenant_slug/tokens":             "CreateTokenV2 stamps the caller's own tenant_id/user_id from tenantCtx; cannot target another tenant",
 		"POST /api/v2/:tenant_slug/channels":           "CreateChannelV2 stamps the caller's tenant_id from tenantCtx; cannot target another tenant",
 		"POST /api/v2/:tenant_slug/redemptions":        "CreateRedemptionV2 stamps the caller's own tenant_id; cannot target another tenant",
+		"POST /api/v2/:tenant_slug/projects":           "CreateProjectV2 stamps the caller's own tenant_id from tenantCtx; cannot target another tenant",
 		"POST /api/v2/:tenant_slug/redeem":             "self-service: RedeemCodeV2 redeems into the caller's own balance (mirrors v1's POST /api/user/topup exemption)",
 
 		// ---- credential-is-the-resource: the token/code presented IS the auth, mirrors v1's rationale ----

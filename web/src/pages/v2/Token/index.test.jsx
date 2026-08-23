@@ -85,9 +85,30 @@ const fakeToken = {
   accessed_time: Math.floor(Date.now() / 1000) - 60,
 };
 
+// The page issues TWO GETs: the token list and the tenant's project list
+// (cost attribution, migration 029). A URL-agnostic mock would answer both
+// with the same payload, so the project <select> would render an <option>
+// per token and duplicate every token name in the DOM.
+const wireGet = (tokens, projects = []) => {
+  API.get.mockImplementation((url) => {
+    if (String(url).includes('/projects')) {
+      return Promise.resolve({
+        data: { success: true, data: { items: projects } },
+      });
+    }
+    return Promise.resolve({
+      data: { success: true, data: { items: tokens } },
+    });
+  });
+};
+
 beforeEach(() => {
   API.get.mockReset();
   API.post.mockReset();
+  // put/delete were never reset here, so call counts leaked between tests and
+  // any toHaveBeenCalledTimes() assertion measured the whole file.
+  API.put.mockReset();
+  API.delete.mockReset();
   window.localStorage.clear();
   window.localStorage.setItem('tenant_slug', 'acme');
   // jsdom has no clipboard by default — provide a spy.
@@ -99,9 +120,7 @@ beforeEach(() => {
 
 describe('Token page — multi-format client URLs', () => {
   it('renders the client base URLs and copies the OpenAI base url', async () => {
-    API.get.mockResolvedValue({
-      data: { success: true, data: { items: [fakeToken] } },
-    });
+    wireGet([fakeToken]);
 
     render(<HFToken />);
 
@@ -122,9 +141,7 @@ describe('Token page — multi-format client URLs', () => {
   });
 
   it('offers a copy control for each supported SDK base url', async () => {
-    API.get.mockResolvedValue({
-      data: { success: true, data: { items: [fakeToken] } },
-    });
+    wireGet([fakeToken]);
 
     render(<HFToken />);
     await waitFor(() => screen.getByText('client base urls'));
@@ -144,9 +161,7 @@ describe('Token page — batch operations', () => {
   const t2 = { ...fakeToken, id: 2, name: 'two' };
 
   it('hides the batch bar until tokens are selected, then deletes via one POST', async () => {
-    API.get.mockResolvedValue({
-      data: { success: true, data: { items: [t1, t2] } },
-    });
+    wireGet([t1, t2]);
     API.post.mockResolvedValue({ data: { success: true, deleted: 2 } });
 
     render(<HFToken />);
@@ -176,9 +191,7 @@ describe('Token page — batch operations', () => {
   });
 
   it('keeps batch copy disabled with an honest deferral reason', async () => {
-    API.get.mockResolvedValue({
-      data: { success: true, data: { items: [t1] } },
-    });
+    wireGet([t1]);
 
     render(<HFToken />);
     await waitFor(() => screen.getByText('one'));
@@ -187,5 +200,161 @@ describe('Token page — batch operations', () => {
     const copyBtn = screen.getByTestId('token-batch-copy-btn');
     expect(copyBtn.disabled).toBe(true);
     expect(copyBtn.getAttribute('title')).toMatch(/key-reveal endpoint/i);
+  });
+});
+
+describe('Token page — project attribution (migration 029)', () => {
+  const projects = [
+    { id: 7, name: 'Marketing', description: '' },
+    { id: 8, name: 'Research', description: '' },
+  ];
+
+  it('POSTs the selected project_id when creating a token', async () => {
+    wireGet([], projects);
+    API.post.mockResolvedValue({
+      data: { success: true, data: { id: 9, name: 'k', key: 'sk-new' } },
+    });
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('+ new token'));
+    fireEvent.click(screen.getByText('+ new token'));
+
+    await waitFor(() => screen.getByTestId('token-project-select'));
+    fireEvent.change(screen.getByTestId('token-name-input'), {
+      target: { value: 'tagged' },
+    });
+    fireEvent.change(screen.getByTestId('token-project-select'), {
+      target: { value: '8' },
+    });
+    fireEvent.click(screen.getByTestId('token-create-submit'));
+
+    await waitFor(() => {
+      const call = API.post.mock.calls.find(([url]) =>
+        String(url).endsWith('/tokens'),
+      );
+      expect(call).toBeTruthy();
+      expect(call[1].project_id).toBe(8);
+    });
+  });
+
+  it('sends project_id 0 when left unassigned', async () => {
+    wireGet([], projects);
+    API.post.mockResolvedValue({
+      data: { success: true, data: { id: 9, name: 'k', key: 'sk-new' } },
+    });
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('+ new token'));
+    fireEvent.click(screen.getByText('+ new token'));
+
+    await waitFor(() => screen.getByTestId('token-project-select'));
+    fireEvent.change(screen.getByTestId('token-name-input'), {
+      target: { value: 'untagged' },
+    });
+    fireEvent.click(screen.getByTestId('token-create-submit'));
+
+    await waitFor(() => {
+      const call = API.post.mock.calls.find(([url]) =>
+        String(url).endsWith('/tokens'),
+      );
+      expect(call).toBeTruthy();
+      // 0 = unassigned, never null/undefined — the column is NOT NULL.
+      expect(call[1].project_id).toBe(0);
+    });
+  });
+
+  it('re-attributes an existing token via PUT from the detail panel', async () => {
+    wireGet([{ ...fakeToken, project_id: 7 }], projects);
+    API.put.mockResolvedValue({ data: { success: true } });
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByTestId('token-detail-project-select'));
+
+    const select = screen.getByTestId('token-detail-project-select');
+    expect(select.value).toBe('7');
+
+    fireEvent.change(select, { target: { value: '8' } });
+
+    await waitFor(() => {
+      const call = API.put.mock.calls.find(([url]) =>
+        String(url).includes('/tokens/1'),
+      );
+      expect(call).toBeTruthy();
+      expect(call[1]).toEqual({ project_id: 8 });
+    });
+  });
+
+  it('keeps rendering a retired project the token still points at', async () => {
+    // The project was deleted, so it is absent from the picker list — the
+    // token must still show its own value instead of silently resetting to
+    // "unassigned" the moment the row is opened.
+    wireGet([{ ...fakeToken, project_id: 99 }], projects);
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByTestId('token-detail-project-select'));
+
+    expect(screen.getByTestId('token-detail-project-select').value).toBe('99');
+  });
+});
+
+describe('Token page — repeat-safety', () => {
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  };
+
+  it('mints one token when create is clicked three times', async () => {
+    // A duplicate relay key is not a cosmetic bug: it is a second live
+    // credential the user never asked for and may never notice.
+    wireGet([], []);
+    const d = deferred();
+    API.post.mockReturnValue(d.promise);
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('+ new token'));
+    fireEvent.click(screen.getByText('+ new token'));
+    await waitFor(() => screen.getByTestId('token-create-submit'));
+
+    fireEvent.change(screen.getByTestId('token-name-input'), {
+      target: { value: 'prod' },
+    });
+    const submit = screen.getByTestId('token-create-submit');
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+
+    d.resolve({
+      data: { success: true, data: { id: 9, name: 'prod', key: 'sk-new' } },
+    });
+    await waitFor(() => {
+      expect(API.post).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('sends one PUT when the project select is changed twice in flight', async () => {
+    wireGet(
+      [{ ...fakeToken, project_id: 0 }],
+      [
+        { id: 7, name: 'Marketing' },
+        { id: 8, name: 'Research' },
+      ],
+    );
+    const d = deferred();
+    API.put.mockReturnValue(d.promise);
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByTestId('token-detail-project-select'));
+
+    const select = screen.getByTestId('token-detail-project-select');
+    fireEvent.change(select, { target: { value: '7' } });
+    fireEvent.change(select, { target: { value: '8' } });
+
+    d.resolve({ data: { success: true } });
+    await waitFor(() => {
+      expect(API.put).toHaveBeenCalledTimes(1);
+    });
   });
 });
