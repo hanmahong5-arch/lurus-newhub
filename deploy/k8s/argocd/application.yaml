@@ -1,0 +1,101 @@
+# ArgoCD Application — automated GitOps sync for lurus-newhub on R6 STAGE.
+#
+# WHY (2026-08-23): the previous deploy chain was "merge to main → CI auto-pins
+# the new digest into deploy/k8s/r6-stage/deployment.yaml → someone remembers to
+# SSH-apply it". That last step was silently skipped for 12 days / 74 commits —
+# manifest stayed fresh in git, cluster did not. See
+# doc/decisions/2026-08-23-deploy-canonical-r6-stage.md for the incident and the
+# decision to make ArgoCD the primary convergence path, with the SSH script
+# (scripts/deploy-stage.sh) demoted to a fallback for when ArgoCD itself is down
+# or a secret needs rotating.
+#
+# NOTE on the pre-existing deploy/k8s/r6-stage/argocd-application.yaml
+# (Application "lurus-newhub-r6-stage", manual sync, registered 2026-08-15): that
+# Application was deliberately manual because at the time there was genuinely no
+# digest-bump-on-build step to trust — bump_r6_manifest landed in
+# docker-image-main.yml on 2026-08-16 (commit 8ff7e42c), the day AFTER that
+# registration. The caveat was correct then and is obsolete now that every
+# merge to main auto-pins the digest — this Application supersedes it. Per the deploy/k8s/argocd/README.md
+# cutover steps, the operator deletes the old manual Application (cascade=orphan,
+# it never mutated the cluster so there is nothing to orphan) when wiring this
+# one up, so exactly one ArgoCD Application ever owns these resources at a time.
+#
+# Sync policy:
+#   - automated + selfHeal: true — converges the cluster to git without a human
+#     remembering to run the SSH script; a manual kubectl edit drifting from git
+#     gets reverted automatically (this is the point: no more silent divergence).
+#   - prune: false (DELIBERATE, do not flip without reading this comment) — the
+#     r6-stage kustomization intentionally does NOT include the Secret
+#     (lurus-newhub-secrets, see secret-template.yaml + kustomization.yaml
+#     comment) and the namespace also carries other hand-applied resources
+#     (e.g. TLS/nginx-adjacent objects) that are not tracked in this overlay's
+#     resource list. An automated + prune=true sync would delete anything in the
+#     namespace that this Application does not enumerate — including secrets.
+#     Keep prune off until every live resource in ns lurus-newhub is actually
+#     represented in deploy/k8s/r6-stage/kustomization.yaml.
+#   - syncOptions ServerSideApply=true — avoids the client-side three-way-merge
+#     path (and its last-applied-configuration annotation) entirely, so field
+#     ownership is tracked by the API server instead of an annotation ArgoCD
+#     and the fallback script would both have to keep in sync. NOT a size
+#     workaround: the rendered Deployment is ~5.9 KB, nowhere near the 256 KB
+#     annotation limit. Caveat: the live objects were created by client-side
+#     `kubectl apply` (scripts/deploy-stage.sh), so the first SSA sync takes
+#     over field ownership from the `kubectl-client-side-apply` manager —
+#     expect a one-time managedFields churn, and if the fallback script is used
+#     afterwards it will client-side-apply over SSA-owned fields again.
+#
+# Repo credentials: NONE needed — github.com/hanmahong5-arch/lurus-newhub is a
+# PUBLIC repo (verified 2026-08-23: `gh repo view --json isPrivate` → false, and
+# an unauthenticated GET of .../info/refs?service=git-upload-pack returns 200,
+# which is exactly the fetch ArgoCD performs). Do not create a `repository`
+# secret for it: a credential whose `url` matches this repoURL but whose auth
+# material is wrong will break a sync that otherwise works anonymously. If the
+# repo is ever flipped to private, see deploy/k8s/argocd/README.md.
+#
+# Apply with:   kubectl apply -f deploy/k8s/argocd/application.yaml
+# Remove with:  kubectl -n argocd delete application lurus-newhub --cascade=orphan
+#               (orphan cascade: deletes the Application object only, leaves the
+#               Deployment/Service/etc. in ns lurus-newhub untouched — this is
+#               the rollback to hand-SSH-apply mode; see README.md "Rollback").
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lurus-newhub
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hanmahong5-arch/lurus-newhub.git
+    targetRevision: main
+    path: deploy/k8s/r6-stage
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lurus-newhub
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+  # Same noise filters as the superseded lurus-newhub-r6-stage Application:
+  # rollout bookkeeping annotations churn on every roll without representing a
+  # real spec change.
+  # /spec/replicas: READ THIS BEFORE RELYING ON IT. The overlay DOES pin
+  # `replicas: 3` (deploy/k8s/r6-stage/deployment.yaml), and ignoreDifferences
+  # only suppresses OutOfSync/selfHeal *detection* — it does not stop a sync
+  # from applying the pinned value, because `RespectIgnoreDifferences=true` is
+  # not set. So an emergency `kubectl scale` survives until the next sync (i.e.
+  # the next merge to main), then silently reverts to 3. If you need a manual
+  # scale to stick, change deployment.yaml or pause automated sync.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: apps   # required: ArgoCD matches group+kind, and an empty group
+                    # pattern matches only the core (v1) group, so a bare
+                    # `kind: Deployment` entry never matches apps/Deployment.
+      kind: Deployment
+      jqPathExpressions:
+        - .metadata.annotations."deployment.kubernetes.io/revision"
+        - .metadata.annotations."kubectl.kubernetes.io/last-applied-configuration"
