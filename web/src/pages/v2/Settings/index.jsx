@@ -23,6 +23,7 @@ import HFShell from '../../../components/hifi/HFShell';
 import WIPBanner from '../../../components/hifi/WIPBanner';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
+import { getQuotaPerUSD } from '../../../helpers/formatting';
 
 // Wave 2: only security section is wired; notifications/team/integrations/MFA remain stubs pending infra.
 // Wave 3 Phase 1 (2026-05-20): revoke session wired to DELETE /sessions/current.
@@ -35,8 +36,6 @@ import { API, showError, showSuccess } from '../../../helpers';
  *   Single-device revoke wired (Wave 3 Phase 1). Multi-device tracking deferred to v3.
  * Notifications + Team: mocked; see adr-2026-05-18-budget-alerts.md / -tenant-credit-pool.md.
  */
-
-const QUOTA_PER_USD = 500_000;
 
 const fmtCNY = (v) =>
   typeof v === 'number'
@@ -661,7 +660,7 @@ const HFSettings = () => {
                         {tr('console.settings.spent', 'spent')}
                       </div>
                       <div className='display' style={{ fontSize: 22 }}>
-                        ${(profile.used_quota / QUOTA_PER_USD).toFixed(2)}
+                        ${(profile.used_quota / getQuotaPerUSD()).toFixed(2)}
                       </div>
                     </div>
                     <div>
@@ -1252,7 +1251,7 @@ const HFSettings = () => {
                                 }}
                               >
                                 {typeof t.quota === 'number'
-                                  ? `${(t.quota / QUOTA_PER_USD).toFixed(2)} ${tr('console.settings.usd_eq', 'USD eq.')}`
+                                  ? `${(t.quota / getQuotaPerUSD()).toFixed(2)} ${tr('console.settings.usd_eq', 'USD eq.')}`
                                   : '—'}
                               </td>
                               {/* Status derived from the row — no unconditional

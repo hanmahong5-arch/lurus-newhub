@@ -26,8 +26,12 @@ import {
   showSuccess,
   renderQuota,
   renderQuotaWithPrompt,
+  getQuotaPerUnit,
 } from '../../../../helpers';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
+
+// Quick-pick amounts, in US dollars. Converted to quota units at render time.
+const QUOTA_PRESETS_USD = [1, 10, 50, 100, 500, 1000];
 import {
   Button,
   Modal,
@@ -306,14 +310,14 @@ const EditRedemptionModal = (props) => {
                         extraText={renderQuotaWithPrompt(
                           Number(values.quota) || 0,
                         )}
-                        data={[
-                          { value: 500000, label: '1$' },
-                          { value: 5000000, label: '10$' },
-                          { value: 25000000, label: '50$' },
-                          { value: 50000000, label: '100$' },
-                          { value: 250000000, label: '500$' },
-                          { value: 500000000, label: '1000$' },
-                        ]}
+                        // Derived from the live unit price — see the same
+                        // change in EditTokenModal. A redemption code is
+                        // money handed out; the button must not promise one
+                        // amount and mint another.
+                        data={QUOTA_PRESETS_USD.map((usd) => ({
+                          value: Math.round(usd * getQuotaPerUnit()),
+                          label: `${usd}$`,
+                        }))}
                         showClear
                       />
                     </Col>

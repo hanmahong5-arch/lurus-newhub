@@ -20,12 +20,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import { API, showError } from '../../../helpers';
+import { getQuotaPerUSD } from '../../../helpers/formatting';
 
 // HiFi 11 — Billing. Wired to real APIs (2026-05-19):
 //   GET /api/v2/:slug/billing/invoices  → monthly spend buckets
 //   GET /api/v2/user/billing/summary    → balance / MTD from platform
-
-const QUOTA_PER_USD = 500_000;
 
 const useTenantSlug = () => {
   const [slug, setSlug] = useState('default');
@@ -50,7 +49,7 @@ const fmtCNY = (v) =>
 // `usdEq` is the translated "USD eq." unit suffix — resolved at render time
 // because module scope has no i18n context.
 const fmtQuota = (v, usdEq) =>
-  typeof v === 'number' ? (v / QUOTA_PER_USD).toFixed(4) + ' ' + usdEq : '—';
+  typeof v === 'number' ? (v / getQuotaPerUSD()).toFixed(4) + ' ' + usdEq : '—';
 
 const HFBilling = () => {
   const tenantSlug = useTenantSlug();

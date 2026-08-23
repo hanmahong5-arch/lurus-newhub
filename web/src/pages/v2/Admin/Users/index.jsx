@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
 import { API, showSuccess } from '../../../../helpers';
+import { getQuotaPerUSD } from '../../../../helpers/formatting';
 
 /*
  * v2 admin — user management. Wired to /api/v2/admin/users (RootJWTAuth, session
@@ -29,8 +30,7 @@ import { API, showSuccess } from '../../../../helpers';
  * fields. Create is deferred (needs a password/invite flow) → greyed control.
  */
 
-const QUOTA_PER_USD = 500_000;
-const quotaToUSD = (q) => ((q || 0) / QUOTA_PER_USD).toFixed(2);
+const quotaToUSD = (q) => ((q || 0) / getQuotaPerUSD()).toFixed(2);
 
 // role ints mirror common.Role* (1 user, 5 subscriber, 10 admin, 100 root).
 // Labels are [key, fallback] pairs resolved at render via tr() — module scope
@@ -79,7 +79,7 @@ const EditModal = ({ user, onSaved, onClose }) => {
         status: Number(form.status),
         quota: Math.max(
           0,
-          Math.round((parseFloat(form.quotaUSD) || 0) * QUOTA_PER_USD),
+          Math.round((parseFloat(form.quotaUSD) || 0) * getQuotaPerUSD()),
         ),
         group: form.group.trim() || 'default',
       };

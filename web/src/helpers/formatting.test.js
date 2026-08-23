@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Echo keys so relative-time bucketing is asserted deterministically,
 // independent of i18n init timing / detected language.
@@ -24,6 +24,7 @@ vi.mock('../i18n/i18n', () => ({ default: { t: (k) => k } }));
 
 import {
   QUOTA_PER_USD,
+  getQuotaPerUSD,
   quotaToUSD,
   formatUSD,
   formatCNY,
@@ -32,8 +33,33 @@ import {
 } from './formatting';
 
 describe('quota helpers', () => {
+  // quota_per_unit is read live now, so it must not leak between cases.
+  beforeEach(() => localStorage.clear());
+
   it('uses the canonical 500_000 units-per-USD constant', () => {
     expect(QUOTA_PER_USD).toBe(500_000);
+  });
+
+  it('prefers the operator-configured unit price over the default', () => {
+    // QuotaPerUnit is a server option, delivered to the browser as
+    // quota_per_unit on /api/status. Every v2 page used to divide by the
+    // literal above instead, so on any deployment that changed the option the
+    // whole console misreported money — and Admin/Users and Tenants also
+    // MULTIPLIED by it when writing, granting a different sum than the one the
+    // administrator typed.
+    localStorage.setItem('quota_per_unit', '1000');
+    expect(getQuotaPerUSD()).toBe(1000);
+    expect(quotaToUSD(2000)).toBe('2.00');
+    expect(formatUSD(2000)).toBe('$2.0000');
+  });
+
+  it('falls back to the default when the unit price is absent or unusable', () => {
+    expect(getQuotaPerUSD()).toBe(QUOTA_PER_USD);
+    localStorage.setItem('quota_per_unit', 'not a number');
+    expect(getQuotaPerUSD()).toBe(QUOTA_PER_USD);
+    // Zero would make every amount Infinity rather than merely wrong.
+    localStorage.setItem('quota_per_unit', '0');
+    expect(getQuotaPerUSD()).toBe(QUOTA_PER_USD);
   });
 
   it('quotaToUSD converts and fixes decimals', () => {

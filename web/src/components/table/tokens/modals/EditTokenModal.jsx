@@ -25,6 +25,7 @@ import {
   timestamp2string,
   renderGroupOption,
   renderQuotaWithPrompt,
+  getQuotaPerUnit,
   getModelCategories,
   selectFilter,
   isV2Mode,
@@ -55,6 +56,9 @@ import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../../../context/Status';
 
 const { Text, Title } = Typography;
+
+// Quick-pick amounts, in US dollars. Converted to quota units at render time.
+const QUOTA_PRESETS_USD = [1, 10, 50, 100, 500, 1000];
 
 const EditTokenModal = (props) => {
   const { t } = useTranslation();
@@ -510,14 +514,14 @@ const EditTokenModal = (props) => {
                           ? []
                           : [{ required: true, message: t('请输入额度') }]
                       }
-                      data={[
-                        { value: 500000, label: '1$' },
-                        { value: 5000000, label: '10$' },
-                        { value: 25000000, label: '50$' },
-                        { value: 50000000, label: '100$' },
-                        { value: 250000000, label: '500$' },
-                        { value: 500000000, label: '1000$' },
-                      ]}
+                      // Derived from the live unit price. Written out, these
+                      // labels only hold while QuotaPerUnit is its default;
+                      // an operator who changes the server option would be
+                      // granting a different sum than the one on the button.
+                      data={QUOTA_PRESETS_USD.map((usd) => ({
+                        value: Math.round(usd * getQuotaPerUnit()),
+                        label: `${usd}$`,
+                      }))}
                     />
                   </Col>
                   <Col span={24}>

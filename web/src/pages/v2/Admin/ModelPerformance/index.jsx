@@ -20,6 +20,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import { API } from '../../../../helpers';
+import { getQuotaPerUSD } from '../../../../helpers/formatting';
 
 /*
  * v2 admin — Model performance analytics.
@@ -30,8 +31,6 @@ import { API } from '../../../../helpers';
  * Root-only: the route sits behind RootJWTAuth, so a 403 renders the same
  * forbidden panel as the other admin surfaces (CostIntelligence convention).
  */
-
-const QUOTA_PER_USD = 500_000;
 
 // Time-range presets: [id, i18n key, fallback label, window seconds]
 const RANGES = [
@@ -59,7 +58,7 @@ const fmtPct = (r) => `${((r ?? 0) * 100).toFixed(2)}%`;
 // show a dash instead of a misleading 0ms.
 const fmtMs = (v, samples) => (samples > 0 ? `${Math.round(v)}ms` : '—');
 
-const usd = (quota) => `$${(quota / QUOTA_PER_USD).toFixed(2)}`;
+const usd = (quota) => `$${(quota / getQuotaPerUSD()).toFixed(2)}`;
 
 const HFModelPerformance = () => {
   const { t: tr } = useTranslation();
