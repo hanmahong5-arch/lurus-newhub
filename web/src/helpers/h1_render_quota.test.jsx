@@ -383,6 +383,27 @@ describe('getCurrencyConfig vs renderQuota exchange-rate agreement', () => {
     expect(renderQuota(500000)).toBe('¥7.00');
   });
 
+  it('applies a CNY rate even with no status blob at all', () => {
+    // The yuan sign was set unconditionally while the rate stayed at its USD
+    // initialiser of 1, so a customer whose cached status blob was missing or
+    // corrupt saw their balance understated sevenfold — under a ¥ sign, on the
+    // screen they use to decide whether to top up. Whether the blob exists
+    // cannot be what decides the magnitude; a blob that merely omits the rate
+    // already lands on 7.
+    localStorage.setItem('quota_display_type', 'CNY');
+    localStorage.setItem('quota_per_unit', UNIT);
+    expect(getCurrencyConfig().rate).toBe(7);
+    expect(renderQuota(500000)).toBe('¥7.00');
+  });
+
+  it('applies a CNY rate when the status blob is unparseable', () => {
+    localStorage.setItem('quota_display_type', 'CNY');
+    localStorage.setItem('quota_per_unit', UNIT);
+    localStorage.setItem('status', 'not json{');
+    expect(getCurrencyConfig().rate).toBe(7);
+    expect(renderQuota(500000)).toBe('¥7.00');
+  });
+
   it('should agree with renderQuota on the CUSTOM fallback symbol', () => {
     // DEFECT: with quota_display_type=CUSTOM but no status blob at all,
     // getCurrencyConfig leaves symbol as its '$' initialiser (the '¤'
@@ -424,7 +445,10 @@ describe('convertUSDToCurrency', () => {
 
 describe('renderQuotaWithAmount', () => {
   it('prefixes $ under the default USD display type', () => {
-    expect(renderQuotaWithAmount(12.5)).toBe('$12.5');
+    // Two decimals, matching renderQuota: this is the same channel-balance
+    // column, where the used half already printed '¥7.00' beside a remaining
+    // half of '¥7'. The magnitude is unchanged.
+    expect(renderQuotaWithAmount(12.5)).toBe('$12.50');
   });
 
   it('converts to raw token units under TOKENS', () => {
@@ -442,7 +466,17 @@ describe('renderQuotaWithAmount', () => {
     // as "¥100" on a CNY console: a ~7x understatement of a real balance.
     localStorage.setItem('quota_display_type', 'CNY');
     localStorage.setItem('status', JSON.stringify({ usd_exchange_rate: 7 }));
-    expect(renderQuotaWithAmount(100)).toBe('¥700');
+    expect(renderQuotaWithAmount(100)).toBe('¥700.00');
+  });
+
+  it('rounds the converted figure instead of printing float noise', () => {
+    // 1.1 * 7.3 is 8.030000000000001 in binary floating point, and that is
+    // exactly what the channel table rendered: a balance column showing
+    // ¥8.030000000000001.
+    localStorage.setItem('quota_display_type', 'CNY');
+    localStorage.setItem('status', JSON.stringify({ usd_exchange_rate: 7.3 }));
+    expect(renderQuotaWithAmount(1.1)).toBe('¥8.03');
+    expect(renderQuotaWithAmount(2.9)).toBe('¥21.17');
   });
 
   it('applies the custom currency rate too, not just its symbol', () => {
@@ -456,7 +490,7 @@ describe('renderQuotaWithAmount', () => {
         custom_currency_exchange_rate: 0.9,
       }),
     );
-    expect(renderQuotaWithAmount(100)).toBe('€90');
+    expect(renderQuotaWithAmount(100)).toBe('€90.00');
   });
 });
 

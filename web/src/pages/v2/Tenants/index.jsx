@@ -23,12 +23,11 @@ import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, showSuccess } from '../../../helpers';
 import CreditPoolDrawer from './CreditPoolDrawer';
+import { getQuotaPerUSD } from '../../../helpers/formatting';
 
 /* HiFi 9 — Tenants admin. Wired to /api/v2/admin/tenants (2026-05-11). */
 
-const QUOTA_PER_USD = 500_000;
-
-const quotaToUSD = (q) => (q / QUOTA_PER_USD).toFixed(2);
+const quotaToUSD = (q) => (q / getQuotaPerUSD()).toFixed(2);
 
 /** Status 1=active, 2=disabled, 3=suspended */
 const tenantStatusLabel = (s) => {
@@ -79,7 +78,7 @@ const CreateModal = ({ onCreated, onClose }) => {
         slug: form.slug.trim(),
         plan: form.plan,
         quota_limit: form.quota_limit
-          ? Math.round(parseFloat(form.quota_limit) * QUOTA_PER_USD)
+          ? Math.round(parseFloat(form.quota_limit) * getQuotaPerUSD())
           : 0,
         status: 1,
       };
@@ -555,7 +554,7 @@ const HFTenants = () => {
   };
 
   const totalUsedUSD = tenants
-    .reduce((s, t) => s + (t.used_quota || 0) / QUOTA_PER_USD, 0)
+    .reduce((s, t) => s + (t.used_quota || 0) / getQuotaPerUSD(), 0)
     .toFixed(2);
 
   return (

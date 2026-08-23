@@ -52,6 +52,10 @@ vi.mock('../../../components/hifi/WIPBanner', () => ({
 // Mirror i18next's en behaviour: return the English defaultValue (2nd arg)
 // with {{var}} interpolation, falling back to the key when no default given.
 vi.mock('react-i18next', () => ({
+  // These pages now reach the shared money helpers, which pull in the i18n
+  // module; that calls .use(initReactI18next), so the mock has to carry it.
+  initReactI18next: { type: '3rdParty', init: () => {} },
+  Trans: ({ children }) => children,
   useTranslation: () => ({
     t: (key, fallback, opts) => {
       const vars =

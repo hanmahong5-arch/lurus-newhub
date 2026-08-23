@@ -22,6 +22,7 @@ import HFShell from '../../../components/hifi/HFShell';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError } from '../../../helpers';
+import { getQuotaPerUSD } from '../../../helpers/formatting';
 
 /* Wave 2: Cluster tab wired. Round 2: Live tail wired via cursor-poll. */
 
@@ -35,7 +36,6 @@ import { API, showError } from '../../../helpers';
  * lands on any pod where an SSE stream would pin to one and break on churn.
  */
 
-const QUOTA_PER_USD = 500_000;
 const LOG_TYPE_ERROR = 5;
 
 // Outcome derived from the log type — error logs (type 5) must not render as a
@@ -100,7 +100,7 @@ const fmtTok = (prompt, completion) => {
 
 const fmtCost = (quota) => {
   if (!quota) return '—';
-  const usd = quota / QUOTA_PER_USD;
+  const usd = quota / getQuotaPerUSD();
   return `$${usd.toFixed(4)}`;
 };
 
@@ -486,7 +486,7 @@ const HFLog = () => {
           [
             tr('console.log.stat_quota', 'quota'),
             stat
-              ? `$${(Number(stat.total_quota ?? 0) / QUOTA_PER_USD).toFixed(4)}`
+              ? `$${(Number(stat.total_quota ?? 0) / getQuotaPerUSD()).toFixed(4)}`
               : '—',
             tr('console.log.in_window', 'in window'),
           ],

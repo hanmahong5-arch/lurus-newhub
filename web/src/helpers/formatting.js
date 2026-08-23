@@ -19,18 +19,33 @@ For commercial licensing, please contact support@quantumnous.com
 
 import i18n from '../i18n/i18n';
 
-// Platform quota unit: 500_000 internal quota units == 1 USD. The single
-// authoritative constant — never re-declare this per page.
+// Platform quota unit: 500_000 internal quota units == 1 USD. This is the
+// DEFAULT, not a constant of nature — QuotaPerUnit is a server option, served
+// to the browser as `quota_per_unit` on /api/status. Divide by the live value,
+// never by this, or every figure on the page is wrong by whatever ratio the
+// operator chose. The legacy console has always read the live value
+// (helpers/render.jsx); the v2 pages each re-declared this literal instead.
 export const QUOTA_PER_USD = 500_000;
+
+/** The operator's configured quota-per-USD, falling back to the default. */
+export function getQuotaPerUSD() {
+  // Guard zero as well as NaN: a stored 0 would turn every amount into Infinity
+  // rather than merely misreport it.
+  const stored =
+    typeof localStorage === 'undefined'
+      ? NaN
+      : parseFloat(localStorage.getItem('quota_per_unit'));
+  return Number.isFinite(stored) && stored > 0 ? stored : QUOTA_PER_USD;
+}
 
 // Raw USD-equivalent of a quota amount, fixed to `digits` decimals (string).
 export const quotaToUSD = (quota, digits = 2) =>
-  ((quota || 0) / QUOTA_PER_USD).toFixed(digits);
+  ((quota || 0) / getQuotaPerUSD()).toFixed(digits);
 
 // USD cost with a `$` prefix; em-dash for zero/empty so tables stay quiet.
 export const formatUSD = (quota, digits = 4) => {
   if (!quota) return '—';
-  return `$${(quota / QUOTA_PER_USD).toFixed(digits)}`;
+  return `$${(quota / getQuotaPerUSD()).toFixed(digits)}`;
 };
 
 // CNY money with grouping and 2 decimals; em-dash for non-numeric input.

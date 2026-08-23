@@ -36,6 +36,7 @@ import { IconMail, IconKey, IconBell, IconLink } from '@douyinfe/semi-icons';
 import { ShieldCheck, Bell, DollarSign, Settings } from 'lucide-react';
 import {
   renderQuotaWithPrompt,
+  getQuotaPerUnit,
   API,
   showSuccess,
   showError,
@@ -437,12 +438,14 @@ const NotificationSettings = ({
                     </span>
                   }
                   placeholder={t('请输入预警额度')}
-                  data={[
-                    { value: 100000, label: '0.2$' },
-                    { value: 500000, label: '1$' },
-                    { value: 1000000, label: '5$' },
-                    { value: 5000000, label: '10$' },
-                  ]}
+                  // Derived, not written out: 1_000_000 units was labelled
+                  // "5$" while being $2, so anyone picking it was warned at
+                  // 40% of the balance they asked for. The unit price is a
+                  // server option too, so a literal is wrong twice over.
+                  data={[0.2, 1, 5, 10].map((usd) => ({
+                    value: Math.round(usd * getQuotaPerUnit()),
+                    label: `${usd}$`,
+                  }))}
                   onChange={(val) => handleFormChange('warningThreshold', val)}
                   prefix={<IconBell />}
                   extraText={t(

@@ -213,6 +213,7 @@ vi.mock('../../../../helpers', async () => {
     downloadTextAsFile: H.downloadTextAsFile,
     renderQuota: renderMod.renderQuota,
     renderQuotaWithPrompt: renderMod.renderQuotaWithPrompt,
+    getQuotaPerUnit: renderMod.getQuotaPerUnit,
   };
 });
 

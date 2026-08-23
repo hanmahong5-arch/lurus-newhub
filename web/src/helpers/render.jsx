@@ -986,7 +986,11 @@ export function renderQuotaWithAmount(amount) {
   }
   // 与 renderQuota 共用同一套符号与汇率：只换符号不换汇率会把上游余额少报数倍
   const { symbol, rate } = getCurrencyConfig();
-  return symbol + amount * rate;
+  // Rounded, because the product of two floats is not a money figure: a
+  // balance of 1.1 at rate 7.3 rendered as ¥8.030000000000001 in the channel
+  // table. renderQuota already fixes to 2 decimals; this is the same column.
+  const converted = parseFloat(amount) * rate;
+  return symbol + (Number.isFinite(converted) ? converted.toFixed(2) : '0.00');
 }
 
 /**
@@ -1002,6 +1006,14 @@ export function getCurrencyConfig() {
 
   if (quotaDisplayType === 'CNY') {
     symbol = '¥';
+    // The fallback rate belongs outside the `if (statusStr)`, for the same
+    // reason the CUSTOM symbol below does: with no status blob, or an
+    // unparseable one, the yuan sign was applied while the rate stayed at its
+    // USD initialiser of 1. $1 of credit then printed as ¥1.00 — the customer's
+    // balance understated sevenfold on the screen they use to decide whether to
+    // top up. A blob that merely omits usd_exchange_rate already landed on 7;
+    // whether the blob exists cannot be what decides the magnitude.
+    rate = 7;
     try {
       if (statusStr) {
         const s = JSON.parse(statusStr);
