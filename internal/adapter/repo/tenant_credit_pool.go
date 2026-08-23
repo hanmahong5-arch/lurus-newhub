@@ -385,15 +385,13 @@ func FundPoolIdempotent(
 			CreatedAt:  now,
 		}
 		if insertErr := tx.Create(event).Error; insertErr != nil {
-			// Unique-constraint violation from a concurrent replay: fetch the
-			// winner's row and surface ErrFundEventExists to the caller.
+			// Unique-constraint violation from a concurrent replay. The
+			// failed INSERT leaves the PG transaction ABORTED (any further
+			// statement fails with SQLSTATE 25P02), so the winner's row
+			// cannot be fetched here — signal replay via the sentinel and
+			// let the re-fetch after rollback (below, outside the
+			// transaction) return it.
 			if isUniqueViolation(insertErr) {
-				var race CreditPoolFundEvent
-				if fetchErr := tx.Where("tenant_id = ? AND event_id = ?", tenantID, eventID).First(&race).Error; fetchErr != nil {
-					return fmt.Errorf("fund event insert conflict and re-fetch failed: %w", fetchErr)
-				}
-				funded = &race
-				// Signal replay to the outer scope via a sentinel that we handle below.
 				return ErrFundEventExists
 			}
 			return fmt.Errorf("fund event insert: %w", insertErr)
@@ -405,10 +403,14 @@ func FundPoolIdempotent(
 
 	if txErr != nil {
 		if errors.Is(txErr, ErrFundEventExists) {
-			// Re-fetch outside the rolled-back TX so we return a clean row.
-			if funded != nil {
-				return funded, ErrFundEventExists
-			}
+			// The conflict was detected inside the now rolled-back
+			// transaction, where the winner's row could NOT be read (the
+			// failed INSERT had already aborted it — SQLSTATE 25P02 on any
+			// further statement). Fetch it here, on a fresh implicit
+			// transaction; the 23505 implies the winner committed, so this
+			// read can only miss in the migration-031 residue state (legacy
+			// GLOBAL unique still pinned by an external dependency), which
+			// 031 already RAISEs a WARNING about.
 			var race CreditPoolFundEvent
 			if err := DB.WithContext(ctx).Where("tenant_id = ? AND event_id = ?", tenantID, eventID).First(&race).Error; err != nil {
 				return nil, fmt.Errorf("fund event replay re-fetch: %w", err)

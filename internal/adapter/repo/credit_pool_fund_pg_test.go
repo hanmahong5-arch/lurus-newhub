@@ -14,10 +14,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 )
@@ -160,13 +160,14 @@ func TestFundPoolIdempotent_InputValidation(t *testing.T) {
 // exactly one fund_event row survives. The losing transactions roll back their
 // in-tx topup, so no double credit can persist.
 //
-// Note: on Postgres, a losing goroutine that discovers the duplicate via the
-// in-tx INSERT (rather than the fast-path pre-check) may surface a raw driver
-// error instead of ErrFundEventExists, because the failed INSERT aborts the
-// transaction before the in-tx re-fetch can run (SQLSTATE 25P02). That error
-// classification is an accepted rough edge of the in-tx path; the invariant
-// this test locks is "no double credit", which holds regardless. Run under
-// -race.
+// Note: a losing goroutine resolves either via the fast-path pre-check or —
+// when it passed the pre-check before the winner committed — via the in-tx
+// UNIQUE violation, whose sentinel triggers a rollback and a re-fetch outside
+// the transaction (the in-tx re-fetch it used to attempt was dead code on PG:
+// the failed INSERT aborts the transaction, SQLSTATE 25P02 — see
+// TestFundPoolIdempotent_InTxConflictArm_DeterministicLockWait). Both arms
+// surface ErrFundEventExists; any other error class is exactly the raw error
+// the HTTP layer would 500 on, so it fails this test. Run under -race.
 func TestFundPoolIdempotent_ConcurrentReplayNeverDoubleCredits(t *testing.T) {
 	setupFundPG(t)
 	ctx := context.Background()
@@ -178,17 +179,20 @@ func TestFundPoolIdempotent_ConcurrentReplayNeverDoubleCredits(t *testing.T) {
 
 	const workers = 12
 	var firstWrites int64
+	workerErrs := make([]error, workers)
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(idx int) {
 			defer wg.Done()
 			<-start
-			if _, err := FundPoolIdempotent(ctx, pool.ID, "t-conc", 250, "evt-race", "src", 1); err == nil {
+			_, werr := FundPoolIdempotent(ctx, pool.ID, "t-conc", 250, "evt-race", "src", 1)
+			workerErrs[idx] = werr
+			if werr == nil {
 				atomic.AddInt64(&firstWrites, 1)
 			}
-		}()
+		}(i)
 	}
 	close(start)
 	wg.Wait()
@@ -196,6 +200,12 @@ func TestFundPoolIdempotent_ConcurrentReplayNeverDoubleCredits(t *testing.T) {
 	// At most one goroutine may have committed a credit.
 	if firstWrites > 1 {
 		t.Fatalf("double-credit: %d goroutines committed a fund for the same event_id", firstWrites)
+	}
+	// Every loser must classify as a replay — no error-string tolerance.
+	for i, werr := range workerErrs {
+		if werr != nil && !errors.Is(werr, ErrFundEventExists) {
+			t.Errorf("worker %d: neither success nor ErrFundEventExists: %v", i, werr)
+		}
 	}
 
 	got, err := GetTenantCreditPool("t-conc")
@@ -289,14 +299,16 @@ func TestFundPoolIdempotent_TwoGoroutineBarrierRace(t *testing.T) {
 	// Measured behaviour (repeated -count runs, GORM logs inspected): the
 	// loser usually resolves via the PRE-CHECK fast path — by the time it
 	// looks, the winner's row is already committed, so it gets
-	// ErrFundEventExists without ever opening its own transaction. The in-tx
-	// arm (UNIQUE violation on the loser's own INSERT → the failed statement
-	// aborts the tx, the in-tx re-fetch dies with it, and the "insert
-	// conflict" wrapper surfaces) needs BOTH goroutines to pass the pre-check
-	// before either commits; the warmed-connection barrier above makes that
-	// window reachable, but scheduling still decides which arm fires, so both
-	// stay accepted below. The DB assertions above are what actually prove no
-	// double credit occurred, whichever arm the loser took.
+	// ErrFundEventExists without ever opening its own transaction. When both
+	// goroutines pass the pre-check before either commits, the loser's own
+	// INSERT instead hits the UNIQUE index in-tx; that arm ALSO surfaces
+	// ErrFundEventExists now, via the re-fetch after rollback (the in-tx
+	// re-fetch was dead code on PG — the failed INSERT aborts the
+	// transaction — see TestFundPoolIdempotent_InTxConflictArm_
+	// DeterministicLockWait, which pins that arm deterministically).
+	// Whichever arm fires, the loser must surface ErrFundEventExists and
+	// nothing else: a raw error here is exactly what the HTTP layer would
+	// 500 on, so no error-string tolerance is acceptable.
 	successes, replayLike := 0, 0
 	for i, r := range results {
 		switch {
@@ -307,10 +319,8 @@ func TestFundPoolIdempotent_TwoGoroutineBarrierRace(t *testing.T) {
 			}
 		case errors.Is(r.err, ErrFundEventExists):
 			replayLike++
-		case strings.Contains(r.err.Error(), "insert conflict"):
-			replayLike++
 		default:
-			t.Errorf("goroutine %d: neither success nor a recognizable replay/conflict error: %v", i, r.err)
+			t.Errorf("goroutine %d: neither success nor ErrFundEventExists: %v", i, r.err)
 		}
 	}
 	if successes != 1 || replayLike != 1 {
@@ -337,5 +347,179 @@ func TestIsUniqueViolation(t *testing.T) {
 				t.Errorf("isUniqueViolation(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestFundPoolIdempotent_InTxConflictArm_DeterministicLockWait forces the
+// in-transaction 23505 arm (tx.Create → isUniqueViolation → sentinel →
+// post-rollback re-fetch) that
+// TestFundPoolIdempotent_TwoGoroutineBarrierRace reaches only when the
+// scheduler happens to interleave both goroutines past the pre-check — in
+// measured runs the loser usually resolves via the pre-check fast path and
+// the arm goes unobserved. Determinism here comes from lock ordering, not
+// timing:
+//
+//  1. A raw transaction T1 replicates a winner's writes in production order —
+//     UPDATE the pool balance (taking the row lock), then INSERT the fund
+//     event (taking the unique-index entry) — and stays OPEN. Reversing that
+//     order would deadlock against the loser, which acquires in production
+//     order.
+//  2. FundPoolIdempotent for the same (tenant, event_id) then runs: its
+//     pre-check SELECT cannot see T1's uncommitted row (READ COMMITTED), so
+//     it enters its transaction, where the pool UPDATE blocks on T1's row
+//     lock.
+//  3. T1 commits only after the test OBSERVES a backend blocked by T1's own
+//     backend pid (pg_blocking_pids) — positive proof the call is past the
+//     pre-check and inside its transaction, so the conflict can only resolve
+//     through the in-tx arm.
+//  4. The unblocked UPDATE re-evaluates its predicate and applies (+amount on
+//     top of T1's — a transient double credit), the draw row is written, and
+//     the event INSERT hits the now-committed unique index → SQLSTATE 23505
+//     → the arm signals ErrFundEventExists (it cannot read the winner's row:
+//     the failed INSERT aborted the transaction), the transaction rolls the
+//     double credit and the draw back, and the post-rollback re-fetch
+//     returns T1's row.
+//
+// T1 deliberately writes no draw row: the draw is irrelevant to the conflict
+// arm, and its absence lets the final draw-count-zero assertion double as
+// proof that the loser's rolled-back transaction left nothing behind.
+func TestFundPoolIdempotent_InTxConflictArm_DeterministicLockWait(t *testing.T) {
+	setupFundPG(t)
+	ctx := context.Background()
+
+	pool, err := CreateTenantCreditPool("t-intx", 1, PoolMaxBalanceUnlimited, PoolResetMonthly, 80)
+	if err != nil {
+		t.Fatalf("create pool: %v", err)
+	}
+
+	const eventID = "evt-intx-arm"
+	const amount = int64(900)
+
+	sqlDB, err := DB.DB()
+	if err != nil {
+		t.Fatalf("unwrap sql.DB: %v", err)
+	}
+	t1, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin winner tx: %v", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = t1.Rollback()
+		}
+	}()
+
+	var t1PID int64
+	if err := t1.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&t1PID); err != nil {
+		t.Fatalf("read winner backend pid: %v", err)
+	}
+
+	if res, err := t1.ExecContext(ctx,
+		`UPDATE tenant_credit_pools SET current_balance = current_balance + $1, updated_at = now() WHERE id = $2`,
+		amount, pool.ID); err != nil {
+		t.Fatalf("winner pool update: %v", err)
+	} else if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("winner pool update touched %d rows, want 1 — seed drifted, the lock geometry below is void", n)
+	}
+	if _, err := t1.ExecContext(ctx,
+		`INSERT INTO credit_pool_fund_events (event_id, tenant_id, pool_id, amount, new_balance, source, created_at)
+		 VALUES ($1, $2, $3, $4, $5, 't1-winner', now())`,
+		eventID, "t-intx", pool.ID, amount, amount); err != nil {
+		t.Fatalf("winner event insert: %v", err)
+	}
+
+	type result struct {
+		ev  *CreditPoolFundEvent
+		err error
+	}
+	loserDone := make(chan result, 1)
+	loserCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	go func() {
+		ev, ferr := FundPoolIdempotent(loserCtx, pool.ID, "t-intx", amount, eventID, "loser", 9)
+		loserDone <- result{ev, ferr}
+	}()
+
+	// A fatal while the loser is still blocked would let SetupTestDB's
+	// cleanup DROP DATABASE race the loser's live connection (and its DB
+	// reads race the global-restore) — cancel and drain first, then fail.
+	failNow := func(format string, args ...any) {
+		t.Helper()
+		cancel()
+		select {
+		case <-loserDone:
+		case <-time.After(10 * time.Second):
+		}
+		t.Fatalf(format, args...)
+	}
+
+	// Release T1 only once some backend is observed blocked BY T1's own
+	// backend pid — T1 holds locks only on this test's pool row and event
+	// index entry, so a blocked-by-T1 backend can only be the loser. Pinning
+	// by pid (not query-text matching) stays deterministic even when other
+	// packages share the PG cluster or GORM changes its SQL text.
+	observed := false
+	for i := 0; i < 400; i++ { // ≤10s
+		var waiting int64
+		if err := DB.Raw(
+			`SELECT count(*) FROM pg_stat_activity WHERE ? = ANY(pg_blocking_pids(pid))`, t1PID,
+		).Scan(&waiting).Error; err != nil {
+			failNow("poll pg_blocking_pids: %v", err)
+		}
+		if waiting >= 1 {
+			observed = true
+			break
+		}
+		select {
+		case r := <-loserDone:
+			t.Fatalf("loser finished before ever blocking (ev=%+v err=%v) — the in-tx arm was NOT exercised", r.ev, r.err)
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	if !observed {
+		failNow("never observed the loser blocked by T1 (pid %d); cannot certify the in-tx arm fired", t1PID)
+	}
+
+	if err := t1.Commit(); err != nil {
+		failNow("commit winner tx: %v", err)
+	}
+	committed = true
+
+	r := <-loserDone
+	if !errors.Is(r.err, ErrFundEventExists) {
+		t.Fatalf("in-tx arm must surface ErrFundEventExists, got %v", r.err)
+	}
+	if r.ev == nil || r.ev.Source != "t1-winner" {
+		t.Fatalf("in-tx arm must return the WINNER's row (source=t1-winner, proving the post-rollback re-fetch returned it), got %+v", r.ev)
+	}
+	if r.ev.NewBalance != amount {
+		t.Fatalf("returned winner row new_balance = %d, want %d", r.ev.NewBalance, amount)
+	}
+
+	var evCount int64
+	if err := DB.Model(&CreditPoolFundEvent{}).
+		Where("tenant_id = ? AND event_id = ?", "t-intx", eventID).Count(&evCount).Error; err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if evCount != 1 {
+		t.Fatalf("want exactly 1 fund event, got %d", evCount)
+	}
+
+	got, err := GetTenantCreditPool("t-intx")
+	if err != nil {
+		t.Fatalf("pool readback: %v", err)
+	}
+	if got.CurrentBalance != amount {
+		t.Fatalf("pool balance = %d, want %d — the loser's transient double credit must roll back", got.CurrentBalance, amount)
+	}
+
+	var drawCount int64
+	if err := DB.Model(&TenantCreditPoolDraw{}).
+		Where("pool_id = ?", pool.ID).Count(&drawCount).Error; err != nil {
+		t.Fatalf("count draws: %v", err)
+	}
+	if drawCount != 0 {
+		t.Fatalf("want 0 draw rows (T1 wrote none; the loser's must roll back with its transaction), got %d", drawCount)
 	}
 }
