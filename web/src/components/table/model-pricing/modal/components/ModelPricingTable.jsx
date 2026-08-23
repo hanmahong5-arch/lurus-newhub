@@ -163,7 +163,7 @@ const ModelPricingTable = ({
         render: (text) => (
           <>
             <div className='font-semibold text-orange-600'>{text}</div>
-            <div className='text-xs text-gray-500'>/ 次</div>
+            <div className='text-xs text-gray-500'>{t('/ 次')}</div>
           </>
         ),
       });

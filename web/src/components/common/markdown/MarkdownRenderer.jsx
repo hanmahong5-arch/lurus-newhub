@@ -225,7 +225,7 @@ export function PreCode(props) {
               color: 'var(--semi-color-text-2)',
             }}
           >
-            HTML预览:
+            {t('HTML预览:')}
           </div>
           <div dangerouslySetInnerHTML={{ __html: htmlCode }} />
         </div>
@@ -632,6 +632,7 @@ function _MarkdownContent(props) {
 export const MarkdownContent = React.memo(_MarkdownContent);
 
 export function MarkdownRenderer(props) {
+  const { t } = useTranslation();
   const {
     content,
     loading,
@@ -677,7 +678,7 @@ export function MarkdownRenderer(props) {
               animation: 'spin 1s linear infinite',
             }}
           />
-          正在渲染...
+          {t('正在渲染...')}
         </div>
       ) : (
         <MarkdownContent

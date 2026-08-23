@@ -76,7 +76,23 @@ const CLEANED = new Map(
 // the delimiter itself. Excluding both quotes truncates such a key mid-string
 // and then reports the call as untranslated.
 const T_CALL = /\bt\(\s*(['"])((?:(?!\1)[^\\]|\\.)*?)\1/gs;
-const LITERAL = /(['"])((?:[^\\\n]|\\.)*?)\1/g;
+// Backticks included: a template literal is just as visible on screen as a
+// quoted one, and four notifiers were built that way.
+const LITERAL = /(['"`])((?:[^\\]|\\.)*?)\1/gs;
+
+// t(`…`). A template literal handed to t() becomes its own key after
+// interpolation — '成功删除 3 个模型' — which no bundle can contain, so the call
+// renders Chinese in every locale while looking translated. Five existed.
+const T_TEMPLATE = /\bt\(\s*`((?:[^`\\]|\\.)*)`/gs;
+
+/**
+ * Blank out the key of every t() call, keeping length so offsets still map to
+ * lines. Used before scanning for bare literals: excusing a literal because the
+ * same text appears in some t() call elsewhere in the file is what let
+ * `title: '保存失败'` sit three lines above `t('保存失败')` and render Chinese.
+ */
+const maskTranslatedKeys = (src) =>
+  src.replace(T_CALL, (m) => ' '.repeat(m.length));
 
 /**
  * Turn the source text of a string literal into the string the engine actually
@@ -156,9 +172,14 @@ function notifierSpans(src) {
   return spans;
 }
 
-// Measured, not chosen: 71 on 2026-08-22, 28 of them on the OpenRouter sync
-// page alone. Lower it whenever a surface is translated; never raise it.
-const MARKUP_CHINESE_CEILING = 71;
+/*
+ * The language picker names each language in its own language: 中文 stays 中文
+ * for a French operator, exactly as Français stays Français for a Chinese one.
+ * These are the only Chinese strings in the markup that are correct as they
+ * stand, so they are exempted by VALUE — Chinese appearing anywhere else, in
+ * this file included, still fails.
+ */
+const LANGUAGE_ENDONYMS = new Set(['中文', '日本語']);
 
 describe('i18n integrity', () => {
   it('every Chinese t() key in the source resolves in en.json', () => {
@@ -212,27 +233,25 @@ describe('i18n integrity', () => {
   });
 
   it('no operator-facing toast or error is hardcoded in Chinese', () => {
-    const NOTIFIER =
-      /\b(showSuccess|showError|showWarning|showInfo|showNotice|setError|setErrMsg|Notification\.(?:error|success|warning|info)|Toast\.(?:error|success|warning|info)|Modal\.(?:error|warning|info|confirm))\s*\(/;
     const offenders = [];
     for (const [file, src] of CLEANED) {
-      // Keys used with t() anywhere are translated; only bare literals count.
-      const translated = new Set();
-      let k;
-      T_CALL.lastIndex = 0;
-      while ((k = T_CALL.exec(src))) translated.add(unescapeLiteral(k[2]));
+      // The key of each t() call is blanked, so what remains inside a notifier
+      // is by definition a literal that reaches the screen untranslated. The
+      // earlier form excused any literal whose text was used with t() SOMEWHERE
+      // in the same file, which is how `title: '保存失败'` hid three lines above
+      // an `i18next.t('保存失败')` that was not the call rendering it.
+      const masked = maskTranslatedKeys(src);
 
       // Prettier wraps these calls freely — the message can sit three or four
       // lines below the notifier, inside an object literal or a ternary — so
       // the span is found by matching the call's parentheses rather than by
       // guessing a line window. A window of two lines missed a quarter of them.
-      for (const span of notifierSpans(src)) {
+      for (const span of notifierSpans(masked)) {
         let m;
         LITERAL.lastIndex = 0;
         while ((m = LITERAL.exec(span.text))) {
           if (!HAN.test(m[2])) continue;
-          if (translated.has(unescapeLiteral(m[2]))) continue;
-          const line = src.slice(0, span.start + m.index).split('\n').length;
+          const line = masked.slice(0, span.start + m.index).split('\n').length;
           offenders.push(`${rel(file)}:${line}  ${m[2]}`);
         }
       }
@@ -246,17 +265,36 @@ describe('i18n integrity', () => {
     ).toEqual([]);
   });
 
+  it('no t() call is handed an interpolated template literal', () => {
+    const offenders = [];
+    for (const [file, src] of CLEANED) {
+      let m;
+      T_TEMPLATE.lastIndex = 0;
+      while ((m = T_TEMPLATE.exec(src))) {
+        if (!HAN.test(m[1])) continue;
+        const line = src.slice(0, m.index).split('\n').length;
+        offenders.push(`${rel(file)}:${line}  ${m[1].replace(/\s+/g, ' ')}`);
+      }
+    }
+    expect(
+      offenders,
+      `t(\`…\`) builds its key by interpolation, so the key that reaches ` +
+        `i18next is e.g. '成功删除 3 个模型' — a string no bundle can hold. The ` +
+        `call renders Chinese in every locale while reading as translated, ` +
+        `and the key audit above cannot see it either. Use a placeholder: ` +
+        `t('成功删除 {{n}} 个模型', { n }).\n  ` +
+        offenders.join('\n  '),
+    ).toEqual([]);
+  });
+
   /*
    * Chinese written straight into markup — JSX text, or a label / placeholder /
-   * title prop — never reaches t() at all, so no locale can fix it. The two
-   * classes above are held at zero; this one is a ratchet, because whole
-   * surfaces are still built that way. /console/openrouter-sync is the worst:
-   * measured against the running console in an en-US browser, its heading,
-   * every table column and every form field render in Chinese. Translating
-   * that page is a change of its own; what this assertion buys is that the
-   * count cannot grow while it waits.
+   * title prop — never reaches t() at all, so no locale can fix it. This was a
+   * ratchet at 71 while whole surfaces were still built that way;
+   * /console/openrouter-sync alone held 28 of them. Those are translated now,
+   * so it is an invariant like the rest.
    */
-  it('markup-level Chinese does not spread further', () => {
+  it('no Chinese is written straight into markup', () => {
     const JSX_TEXT = />[^<>{}]*[一-鿿][^<>{}]*</g;
     const BARE_PROP =
       /\b(?:label|placeholder|title|description|text|tooltip|content|emptyText|okText|cancelText)\s*=\s*(['"])((?:(?!\1)[^\\])*?)\1/g;
@@ -268,26 +306,19 @@ describe('i18n integrity', () => {
         while ((m = re.exec(src))) {
           const text = (m[2] ?? m[0].slice(1, -1)).trim();
           if (!HAN.test(text)) continue;
+          if (LANGUAGE_ENDONYMS.has(text)) continue;
           const line = src.slice(0, m.index).split('\n').length;
           offenders.push(`${rel(file)}:${line}  ${text}`);
         }
       }
     }
-    const byFile = offenders.reduce((acc, o) => {
-      const f = o.split(':')[0];
-      acc[f] = (acc[f] || 0) + 1;
-      return acc;
-    }, {});
-    const worst = Object.entries(byFile)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([f, n]) => `${n} ${f}`)
-      .join('\n  ');
     expect(
-      offenders.length,
-      `Markup-level Chinese grew. Worst offenders:\n  ${worst}\n` +
-        `Route the new strings through t() rather than raising this number.`,
-    ).toBeLessThanOrEqual(MARKUP_CHINESE_CEILING);
+      offenders,
+      `Chinese in markup never reaches t(), so no locale can fix it — it is ` +
+        `Chinese on screen for every operator. Wrap each in t() and add the ` +
+        `English to en.json.\n  ` +
+        offenders.join('\n  '),
+    ).toEqual([]);
   });
 
   /*

@@ -223,8 +223,16 @@ vi.mock('../../../helpers', () => ({
   showSuccess: vi.fn(),
 }));
 
+// Interpolating stub: the delete toast now passes its count as an option
+// instead of building the key with a template literal, and the assertion below
+// is on the count the operator actually sees.
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key) => key }),
+  useTranslation: () => ({
+    t: (key, opts) =>
+      String(key).replace(/{{(\w+)}}/g, (m, name) =>
+        opts && name in opts ? String(opts[name]) : m,
+      ),
+  }),
 }));
 
 import SettingsAPIInfo from './SettingsAPIInfo';

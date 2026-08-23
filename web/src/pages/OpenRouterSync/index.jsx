@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Button,
   Card,
@@ -29,17 +29,11 @@ import {
   Tag,
   Typography,
 } from '@douyinfe/semi-ui';
+import { useTranslation } from 'react-i18next';
 import { API } from '../../helpers/api';
 import ApiPoolCard from './ApiPoolCard';
-import i18next from '../../i18n/i18n';
 
 const { Title, Text } = Typography;
-
-const SCHEDULE_OPTIONS = [
-  { value: 'daily', label: '每日 (24h)' },
-  { value: 'weekly', label: '每周 (7d)' },
-  { value: 'manual', label: '仅手动' },
-];
 
 const emptyForm = {
   name: '',
@@ -51,6 +45,7 @@ const emptyForm = {
 };
 
 const OpenRouterSync = () => {
+  const { t } = useTranslation();
   const [jobs, setJobs] = useState([]);
   const [categories, setCategories] = useState([]);
   const [channels, setChannels] = useState([]);
@@ -59,6 +54,15 @@ const OpenRouterSync = () => {
   const [formValues, setFormValues] = useState(emptyForm);
   const [previewing, setPreviewing] = useState(null); // {jobId, items[]}
   const [running, setRunning] = useState({});
+
+  const scheduleOptions = useMemo(
+    () => [
+      { value: 'daily', label: t('每日 (24h)') },
+      { value: 'weekly', label: t('每周 (7d)') },
+      { value: 'manual', label: t('仅手动') },
+    ],
+    [t],
+  );
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -76,11 +80,11 @@ const OpenRouterSync = () => {
         setChannels(list.filter((c) => c.type === 20));
       }
     } catch (e) {
-      Notification.error({ title: i18next.t('加载失败'), content: String(e) });
+      Notification.error({ title: t('加载失败'), content: String(e) });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     reload();
@@ -111,8 +115,8 @@ const OpenRouterSync = () => {
       !formValues.categories?.length
     ) {
       Notification.warning({
-        title: i18next.t('校验失败'),
-        content: i18next.t('名称、目标渠道、分类必填'),
+        title: t('校验失败'),
+        content: t('名称、目标渠道、分类必填'),
       });
       return;
     }
@@ -121,36 +125,36 @@ const OpenRouterSync = () => {
         ? await API.post('/api/openrouter-sync/jobs', formValues)
         : await API.put(`/api/openrouter-sync/jobs/${editing.id}`, formValues);
       if (res.data?.success) {
-        Notification.success({ title: i18next.t('已保存') });
+        Notification.success({ title: t('已保存') });
         setEditing(null);
         reload();
       } else {
         Notification.error({
-          title: '保存失败',
-          content: res.data?.message || i18next.t('未知错误'),
+          title: t('保存失败'),
+          content: res.data?.message || t('未知错误'),
         });
       }
     } catch (e) {
-      Notification.error({ title: i18next.t('保存失败'), content: String(e) });
+      Notification.error({ title: t('保存失败'), content: String(e) });
     }
   };
 
   const remove = async (job) => {
     Modal.confirm({
-      title: `删除任务 "${job.name}"？`,
-      content: i18next.t(
+      title: t('删除任务 "{{name}}"？', { name: job.name }),
+      content: t(
         '已导入的模型不会被立刻清理；下次同步时会按其他规则重新计算。',
       ),
       onOk: async () => {
         try {
           const res = await API.delete(`/api/openrouter-sync/jobs/${job.id}`);
           if (res.data?.success) {
-            Notification.success({ title: i18next.t('已删除') });
+            Notification.success({ title: t('已删除') });
             reload();
           }
         } catch (e) {
           Notification.error({
-            title: i18next.t('删除失败'),
+            title: t('删除失败'),
             content: String(e),
           });
         }
@@ -168,29 +172,34 @@ const OpenRouterSync = () => {
         const d = res.data.data;
         if (d?.skipped) {
           Notification.info({
-            title: i18next.t('已跳过'),
+            title: t('已跳过'),
             content: d.skip_reason,
           });
         } else if (d?.circuit_breaker_on) {
           Modal.warning({
-            title: i18next.t('熔断保护已触发'),
-            content: `本次抓到的模型数量过少，已中止写入。如确认上游变化，请用强制执行重置基准。`,
+            title: t('熔断保护已触发'),
+            content: t(
+              '本次抓到的模型数量过少，已中止写入。如确认上游变化，请用强制执行重置基准。',
+            ),
           });
         } else {
           Notification.success({
-            title: i18next.t('执行完成'),
-            content: `新增 ${d?.added?.length || 0} 移除 ${d?.removed?.length || 0}`,
+            title: t('执行完成'),
+            content: t('新增 {{added}} 移除 {{removed}}', {
+              added: d?.added?.length || 0,
+              removed: d?.removed?.length || 0,
+            }),
           });
         }
         reload();
       } else {
         Notification.error({
-          title: i18next.t('执行失败'),
+          title: t('执行失败'),
           content: res.data?.message,
         });
       }
     } catch (e) {
-      Notification.error({ title: i18next.t('执行失败'), content: String(e) });
+      Notification.error({ title: t('执行失败'), content: String(e) });
     } finally {
       setRunning((r) => ({ ...r, [job.id]: false }));
     }
@@ -207,12 +216,12 @@ const OpenRouterSync = () => {
         });
       } else {
         Notification.error({
-          title: i18next.t('预览失败'),
+          title: t('预览失败'),
           content: res.data?.message,
         });
       }
     } catch (e) {
-      Notification.error({ title: i18next.t('预览失败'), content: String(e) });
+      Notification.error({ title: t('预览失败'), content: String(e) });
     }
   };
 
@@ -226,9 +235,9 @@ const OpenRouterSync = () => {
   }));
 
   const columns = [
-    { title: '名称', dataIndex: 'name' },
+    { title: t('名称'), dataIndex: 'name' },
     {
-      title: '目标渠道',
+      title: t('目标渠道'),
       dataIndex: 'target_channel_id',
       render: (id) => {
         const c = channels.find((x) => x.id === id);
@@ -236,7 +245,7 @@ const OpenRouterSync = () => {
       },
     },
     {
-      title: '分类',
+      title: t('分类'),
       dataIndex: 'categories',
       render: (raw) =>
         parseCategories(raw).map((k) => {
@@ -251,20 +260,26 @@ const OpenRouterSync = () => {
     {
       title: 'Top N',
       dataIndex: 'top_n',
-      render: (n) => (n > 0 ? n : '不限'),
+      render: (n) => (n > 0 ? n : t('不限')),
     },
-    { title: '调度', dataIndex: 'schedule' },
     {
-      title: '启用',
+      title: t('调度'),
+      dataIndex: 'schedule',
+      render: (s) =>
+        scheduleOptions.find((o) => o.value === s)?.label || s || '—',
+    },
+    {
+      title: t('启用'),
       dataIndex: 'enabled',
-      render: (v) => (v ? <Tag color='green'>是</Tag> : <Tag>否</Tag>),
+      render: (v) =>
+        v ? <Tag color='green'>{t('是')}</Tag> : <Tag>{t('否')}</Tag>,
     },
     {
-      title: '上次运行',
+      title: t('上次运行'),
       dataIndex: 'last_run_at',
-      render: (t, row) => (
+      render: (tm, row) => (
         <div>
-          <div>{t ? new Date(t).toLocaleString() : '—'}</div>
+          <div>{tm ? new Date(tm).toLocaleString() : '—'}</div>
           {row.last_error ? (
             <Text type='danger' size='small' ellipsis={{ showTooltip: true }}>
               {row.last_error}
@@ -274,11 +289,11 @@ const OpenRouterSync = () => {
       ),
     },
     {
-      title: '操作',
+      title: t('操作'),
       render: (_, row) => (
         <Space>
           <Button size='small' onClick={() => preview(row)}>
-            预览
+            {t('预览')}
           </Button>
           <Button
             size='small'
@@ -286,16 +301,16 @@ const OpenRouterSync = () => {
             loading={!!running[row.id]}
             onClick={() => runNow(row, false)}
           >
-            立即执行
+            {t('立即执行')}
           </Button>
           <Button size='small' onClick={() => runNow(row, true)} type='warning'>
-            强制执行
+            {t('强制执行')}
           </Button>
           <Button size='small' onClick={() => openEdit(row)}>
-            编辑
+            {t('编辑')}
           </Button>
           <Button size='small' type='danger' onClick={() => remove(row)}>
-            删除
+            {t('删除')}
           </Button>
         </Space>
       ),
@@ -306,18 +321,18 @@ const OpenRouterSync = () => {
     <div className='px-2'>
       <ApiPoolCard />
       <Card style={{ marginBottom: 12 }}>
-        <Title heading={4}>OpenRouter 免费模型同步</Title>
+        <Title heading={4}>{t('OpenRouter 免费模型同步')}</Title>
         <Text type='tertiary'>
-          定期/手动从 OpenRouter
-          拉取免费模型，按分类与排名导入到目标渠道。同步引擎是单一全局引擎：
-          多个任务可指向同一渠道，互不踩踏；管理员手工添加的模型不会被清理。
+          {t(
+            '定期/手动从 OpenRouter 拉取免费模型，按分类与排名导入到目标渠道。同步引擎是单一全局引擎：多个任务可指向同一渠道，互不踩踏；管理员手工添加的模型不会被清理。',
+          )}
         </Text>
         <div style={{ marginTop: 12 }}>
           <Space>
             <Button theme='solid' onClick={openCreate}>
-              新建任务
+              {t('新建任务')}
             </Button>
-            <Button onClick={reload}>刷新</Button>
+            <Button onClick={reload}>{t('刷新')}</Button>
           </Space>
         </div>
       </Card>
@@ -334,13 +349,15 @@ const OpenRouterSync = () => {
 
       <Modal
         title={
-          editing && editing.id ? `编辑任务 #${editing.id}` : '新建同步任务'
+          editing && editing.id
+            ? t('编辑任务 #{{id}}', { id: editing.id })
+            : t('新建同步任务')
         }
         visible={!!editing}
         onCancel={() => setEditing(null)}
         onOk={submit}
-        okText='保存'
-        cancelText='取消'
+        okText={t('保存')}
+        cancelText={t('取消')}
         width={560}
       >
         <Form
@@ -349,59 +366,59 @@ const OpenRouterSync = () => {
         >
           <Form.Input
             field='name'
-            label='任务名称'
-            placeholder='例：每日免费推理 Top10'
+            label={t('任务名称')}
+            placeholder={t('例：每日免费推理 Top10')}
             rules={[{ required: true }]}
           />
           <Form.Select
             field='target_channel_id'
-            label='目标渠道 (OpenRouter)'
+            label={t('目标渠道 (OpenRouter)')}
             optionList={channelOptions}
-            placeholder='选择 OpenRouter 渠道'
+            placeholder={t('选择 OpenRouter 渠道')}
             rules={[{ required: true }]}
           />
           <Form.Select
             field='categories'
-            label='分类（多选）'
+            label={t('分类（多选）')}
             multiple
             optionList={categoryOptions}
-            placeholder='选择要导入的模型分类'
+            placeholder={t('选择要导入的模型分类')}
             rules={[{ required: true }]}
           />
           <Form.InputNumber
             field='top_n'
-            label='Top N（0 = 不限）'
+            label={t('Top N（0 = 不限）')}
             min={0}
             max={1000}
           />
           <Form.Select
             field='schedule'
-            label='调度'
-            optionList={SCHEDULE_OPTIONS}
+            label={t('调度')}
+            optionList={scheduleOptions}
           />
-          <Form.Switch field='enabled' label='启用' />
+          <Form.Switch field='enabled' label={t('启用')} />
         </Form>
       </Modal>
 
       <Modal
-        title={`预览：${previewing?.name || ''}`}
+        title={t('预览：{{name}}', { name: previewing?.name || '' })}
         visible={!!previewing}
         onCancel={() => setPreviewing(null)}
         footer={null}
         width={640}
       >
         <Text type='tertiary'>
-          按当前任务规则筛选 + 排名后将导入的模型（不会写入数据库）：
+          {t('按当前任务规则筛选 + 排名后将导入的模型（不会写入数据库）：')}
         </Text>
         <Table
           columns={[
-            { title: '模型 ID', dataIndex: 'id' },
-            { title: '名称', dataIndex: 'name' },
+            { title: t('模型 ID'), dataIndex: 'id' },
+            { title: t('名称'), dataIndex: 'name' },
             {
-              title: 'Created',
+              title: t('创建时间'),
               dataIndex: 'created',
-              render: (t) =>
-                t ? new Date(t * 1000).toLocaleDateString() : '—',
+              render: (tm) =>
+                tm ? new Date(tm * 1000).toLocaleDateString() : '—',
             },
           ]}
           dataSource={previewing?.items || []}

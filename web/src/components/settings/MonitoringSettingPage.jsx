@@ -114,15 +114,19 @@ const MonitoringSettingPage = () => {
   return (
     <Spin spinning={loading} size='large'>
       <Modal
-        title='配置迁移确认'
+        title={i18next.t('配置迁移确认')}
         visible={showMigrateModal}
         onOk={handleMigrate}
         onCancel={() => setShowMigrateModal(false)}
         confirmLoading={loading}
-        okText='确认迁移'
-        cancelText='取消'
+        okText={i18next.t('确认迁移')}
+        cancelText={i18next.t('取消')}
       >
-        <p>检测到旧版本的 UptimeKuma 配置数据，是否要迁移到新的配置格式？</p>
+        <p>
+          {i18next.t(
+            '检测到旧版本的 UptimeKuma 配置数据，是否要迁移到新的配置格式？',
+          )}
+        </p>
       </Modal>
 
       <Card style={{ marginTop: '10px' }}>

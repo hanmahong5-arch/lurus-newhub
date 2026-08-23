@@ -27,8 +27,18 @@ vi.mock('../../helpers', () => ({
   setTableCompactMode: vi.fn(),
 }));
 
+// The stub interpolates because the code under test now passes its numbers as
+// options — t('成功删除 {{n}} 个模型', { n }) — rather than baking them into the
+// key with a template literal, which produced a key no bundle could hold. A
+// key-passthrough stub would make every count assertion below read
+// '{{n}}' and prove nothing about the value that reaches the operator.
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key) => key }),
+  useTranslation: () => ({
+    t: (key, opts) =>
+      String(key).replace(/{{(\w+)}}/g, (m, name) =>
+        opts && name in opts ? String(opts[name]) : m,
+      ),
+  }),
 }));
 
 import { API, showError, showSuccess } from '../../helpers';
@@ -407,7 +417,7 @@ describe('useModelsData – batch delete', () => {
       await result.current.batchDeleteModels();
     });
 
-    expect(showError).toHaveBeenCalledWith('删除模型 b 失败: in use');
+    expect(showError).toHaveBeenCalledWith('删除模型 b 失败：in use');
     expect(showSuccess).toHaveBeenCalledWith('成功删除 1 个模型');
     expect(result.current.selectedKeys).toEqual([]);
   });

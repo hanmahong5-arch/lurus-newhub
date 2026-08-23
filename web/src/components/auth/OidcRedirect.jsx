@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import Loading from '../common/ui/Loading';
 import { Card, Typography } from '@douyinfe/semi-ui';
 import { API } from '../../helpers';
@@ -28,6 +29,7 @@ import { setTenantSlug } from '../../helpers/apiMode';
 // dropped — Layer C of ADR-0011 routes login through identity, which
 // resolves the account globally rather than per-tenant.
 const OidcRedirect = (_props) => {
+  const { t } = useTranslation();
   const [showFallback, setShowFallback] = useState(false);
 
   useEffect(() => {
@@ -102,7 +104,7 @@ const OidcRedirect = (_props) => {
         <div className='mt-8'>
           <Card className='p-6 shadow-lg'>
             <Typography.Text className='text-gray-600 block text-center'>
-              正在跳转到统一登录，请稍候...
+              {t('正在跳转到统一登录，请稍候...')}
             </Typography.Text>
           </Card>
         </div>

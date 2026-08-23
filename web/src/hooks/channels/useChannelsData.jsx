@@ -521,7 +521,7 @@ export const useChannelsData = () => {
     }
     const { success, message } = res.data;
     if (success) {
-      showSuccess('操作成功完成！');
+      showSuccess(t('操作成功完成！'));
       let newChannels = [...channels];
       for (let i = 0; i < newChannels.length; i++) {
         if (newChannels[i].tag === tag) {

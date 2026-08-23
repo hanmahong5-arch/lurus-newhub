@@ -154,7 +154,7 @@ const BrandingSettingPage = () => {
 
       const { tag_name, body } = res;
       if (tag_name === statusState?.status?.version) {
-        showSuccess(`已是最新版本：${tag_name}`);
+        showSuccess(t('已是最新版本：{{version}}', { version: tag_name }));
       } else {
         setUpdateData({
           tag_name: tag_name,
