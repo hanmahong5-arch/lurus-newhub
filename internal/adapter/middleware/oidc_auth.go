@@ -917,6 +917,19 @@ func RequireOIDCToken() gin.HandlerFunc {
 		claims := &OIDCClaims{}
 		token, err := VerifyIDTokenWithJWKS(tokenString, claims)
 		if err != nil || !token.Valid {
+			// Not an OIDC-issued JWT — lutu also admits phone-code/password
+			// logins, which authenticate against lurus-platform and carry that
+			// service's HS256 session token (no JWKS keypair to verify against;
+			// see contracts.md:572). Try that verifier before rejecting: this
+			// still fails closed because ValidateIdentitySessionToken checks its
+			// own HMAC signature, issuer and expiry, and only runs after the
+			// JWKS path already failed — neither check is weakened by the other.
+			if accountID, sessErr := common.ValidateIdentitySessionToken(tokenString); sessErr == nil && accountID > 0 {
+				c.Set("identity_account_id", accountID)
+				c.Set("oidc_user_id", fmt.Sprintf("identity:%d", accountID))
+				c.Next()
+				return
+			}
 			common.SysLog(fmt.Sprintf("web_search JWT validation failed: %v", err))
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
