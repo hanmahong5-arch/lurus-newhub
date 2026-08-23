@@ -84,12 +84,27 @@ spec:
               value: "redis://redis.lurus-system.svc.cluster.local:6379/2"
             - name: SESSION_COOKIE_DOMAIN
               value: "test-newhub.lurus.cn"
+            # OIDC stays off pending the one genuinely missing credential: a
+            # client_id registered in the IdP. Everything else was verified
+            # live 2026-08-23: https://identity.lurus.cn/.well-known/openid-configuration
+            # answers 200 with issuer https://identity.lurus.cn, and
+            # /oauth/v2/keys serves JWKS. To flip: register the client in the
+            # IdP, add OIDC_CLIENT_ID to lurus-newhub-secrets, then set
+            # OIDC_ENABLED/OIDC_ISSUER/OIDC_JWKS_URI here TOGETHER — the flag
+            # with a missing issuer/jwks leaves jwksManager nil and turns
+            # every OIDCAuth route into a 500 (InitOIDCAuth logs but does not
+            # fatal). lutu session-token clients survive the flip since
+            # ddca5e65 (#93).
             - name: OIDC_ENABLED
               value: "false"
             - name: MEILISEARCH_ENABLED
               value: "false"
+            # Relay pre-auth against the platform wallet for identity-linked
+            # tokens (IdentityAccountID > 0); unlinked traffic keeps the pure
+            # local-quota path. gRPC target = IDENTITY_GRPC_ADDR below,
+            # platform-core verified serving on it 2026-08-23.
             - name: BILLING_UNIFIED_ENABLED
-              value: "false"
+              value: "true"
             - name: IDENTITY_SERVICE_URL
               value: "http://platform-core.lurus-platform.svc.cluster.local:18104"
             - name: IDENTITY_GRPC_ADDR
