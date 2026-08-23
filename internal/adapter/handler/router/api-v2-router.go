@@ -107,6 +107,35 @@ func SetApiV2Router(router *gin.Engine) {
 		}
 
 		// ================================================================
+		// Tenant-scoped cost-attribution Projects (migration 029)
+		//
+		// Mounted under UserAuth + TenantSlugGuard, like tokens/redemptions.
+		// READS are open to every user in the tenant (the token page needs a
+		// project picker an ordinary member can use); WRITES enforce
+		// requireTenantAdmin INSIDE the handler, matching the redemptions
+		// group. A project is a cost LABEL, not a permission boundary —
+		// see internal/domain/entity/project.go.
+		// ================================================================
+
+		tenantProjects := apiV2.Group("/:tenant_slug/projects")
+		tenantProjects.Use(middleware.UserAuth())
+		tenantProjects.Use(middleware.TenantSlugGuard())
+		{
+			tenantProjects.GET("", handler.ListProjectsV2)
+			// Static sibling of /:id — registered first so the intent is
+			// obvious; gin's tree already mixes the two shapes in this file
+			// (POST /tokens/batch-delete next to POST /tokens/:id/rotate).
+			tenantProjects.GET("/spend", handler.GetProjectSpendV2)
+			tenantProjects.GET("/:id", handler.GetProjectV2)
+			tenantProjects.POST("", handler.CreateProjectV2)
+			tenantProjects.PUT("/:id", handler.UpdateProjectV2)
+			tenantProjects.DELETE("/:id", handler.DeleteProjectV2)
+			// Undo for DELETE. Safe to replay: restoring a live project is a
+			// no-op, and re-attachment skips tokens reassigned since.
+			tenantProjects.POST("/:id/restore", handler.RestoreProjectV2)
+		}
+
+		// ================================================================
 		// Tenant-scoped Channel Management (session auth — admin only)
 		// ================================================================
 

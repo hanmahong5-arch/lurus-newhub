@@ -77,6 +77,7 @@ const V2CostIntelligence = lazy(
 const V2ModelPerformance = lazy(
   () => import('./pages/v2/Admin/ModelPerformance'),
 );
+const V2Projects = lazy(() => import('./pages/v2/Projects'));
 const V2ModelRateLimits = lazy(
   () => import('./pages/v2/Admin/ModelRateLimits'),
 );
@@ -358,6 +359,7 @@ function App() {
           ['tenants', V2Tenants],
           ['pricing', V2Pricing],
           ['redemption', V2Redemption],
+          ['projects', V2Projects],
           ['billing', V2Billing],
           ['settings', V2Settings],
           ['flows', V2Flows],

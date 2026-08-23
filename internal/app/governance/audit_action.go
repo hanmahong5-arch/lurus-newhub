@@ -60,6 +60,18 @@ const (
 	ActionRedemptionRedeemed       = "redemption.redeemed"
 	ActionRedemptionInvalidDeleted = "redemption.invalid_deleted"
 
+	// Cost-attribution projects (migration 029). Tenant-admin maintained
+	// labels: renaming or deleting one silently re-shapes every spend report
+	// the tenant reads, so the change belongs in the audit trail even though
+	// a project grants no privilege.
+	ActionProjectCreated = "project.created"
+	ActionProjectUpdated = "project.updated"
+	ActionProjectDeleted = "project.deleted"
+	// ActionProjectRestored is the undo of ActionProjectDeleted. It is a
+	// separate action rather than a "created" event so the audit trail shows
+	// the mistake AND its correction instead of an unexplained resurrection.
+	ActionProjectRestored = "project.restored"
+
 	// System options (global config keys).
 	ActionOptionUpdated = "option.updated"
 
@@ -116,6 +128,7 @@ const (
 	ResourceOption      = "option"
 	ResourceModel       = "model"
 	ResourceTenant      = "tenant"
+	ResourceProject     = "project"
 	ResourceSystem      = "system"
 	ResourceInternalKey = "internal_key"
 )
@@ -161,6 +174,10 @@ var validAuditActions = map[string]struct{}{
 	ActionRedemptionDeleted:        {},
 	ActionRedemptionRedeemed:       {},
 	ActionRedemptionInvalidDeleted: {},
+	ActionProjectCreated:           {},
+	ActionProjectUpdated:           {},
+	ActionProjectDeleted:           {},
+	ActionProjectRestored:          {},
 	ActionOptionUpdated:            {},
 	ActionModelSyncTriggered:       {},
 	ActionTenantCreated:            {},

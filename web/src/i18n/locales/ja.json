@@ -4,6 +4,51 @@
       "shell": {
         "docs": "ドキュメント",
         "support": "サポート"
+      },
+      "common": {
+        "dismiss": "閉じる"
+      },
+      "nav": {
+        "projects": "プロジェクト"
+      },
+      "projects": {
+        "crumb": "プロジェクト",
+        "new": "+ 新規プロジェクト",
+        "count_other": "{{count}} 件のプロジェクト",
+        "sub": "テナントとトークンの間のコスト帰属 · ラベルであり、アクセス境界ではありません",
+        "empty": "プロジェクトはまだありません。作成してから、トークンページでトークンを割り当ててください。",
+        "modal_new": "新規プロジェクト",
+        "modal_edit": "プロジェクトを編集",
+        "modal_hint": "プロジェクトはレポート用のコストラベルです。アクセス権は付与されず、メンバーもいません — トークンページでトークンを割り当ててください。",
+        "field_name": "名称 *",
+        "ph_name": "例：マーケティング",
+        "field_description": "説明",
+        "ph_description": "例：ブランドと成長の支出",
+        "col_name": "名称",
+        "col_description": "説明",
+        "col_project": "プロジェクト",
+        "col_requests": "リクエスト数",
+        "col_spend": "支出",
+        "spend_title": "プロジェクト別支出",
+        "spend_empty": "まだ使用記録がありません。",
+        "spend_total": "合計",
+        "unassigned": "未割り当て",
+        "toast_saved": "プロジェクトを保存しました",
+        "toast_deleted": "プロジェクトを削除しました",
+        "delete_confirm": "プロジェクト「{{name}}」を削除しますか？そのトークンは未割り当てになります。過去の使用量はレポート上にこのプロジェクトとして残ります。",
+        "admin_required": "管理者権限が必要です",
+        "admin_required_body": "プロジェクトを管理する権限がありません。テナント管理者にお問い合わせください。",
+        "token_field": "プロジェクト",
+        "token_field_hint": "このキーの支出をプロジェクトに帰属させます。レポート専用 — アクセス権は付与されません。",
+        "token_none": "未割り当て",
+        "token_col": "プロジェクト",
+        "restore": "復元",
+        "undo": "元に戻す",
+        "toast_restored": "プロジェクトを復元しました",
+        "deleted_title": "廃止されたプロジェクト",
+        "deleted_hint": "過去の使用量が読みやすい名前で表示され続けるように、また削除が最終的な操作にならないように保持されます。削除直後の「元に戻す」を使わない限り、復元してもトークンは再割り当てされません。",
+        "delete_reversible": "取り消し可能：プロジェクトは廃止されるだけで消去されず、直後に元に戻せます。",
+        "undo_body_other": "「{{name}}」を削除しました。{{count}} 個のトークンが未割り当てになりました。"
       }
     },
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Web検索 {{count}}回 / 1K回 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one",

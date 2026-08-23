@@ -54,6 +54,11 @@ func GetLogStatV2(c *gin.Context) {
 	tokenName := c.Query("token_name")
 	startTime, _ := strconv.ParseInt(c.DefaultQuery("start_time", "0"), 10, 64)
 	endTime, _ := strconv.ParseInt(c.DefaultQuery("end_time", "0"), 10, 64)
+	// Cost-attribution filter (migration 029); 0 = no filter. This handler
+	// hand-writes its aggregates instead of going through
+	// repo.GetUserLogsWithParams, so every filter GetLogsV2 accepts has to be
+	// repeated here or the header totals stop matching the rows below them.
+	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
 
 	// Window totals — apply exactly the GetLogsV2 filters, tenant+user scoped.
 	windowQuery := repo.LOG_DB.Model(&repo.Log{}).
@@ -72,6 +77,9 @@ func GetLogStatV2(c *gin.Context) {
 	}
 	if endTime > 0 {
 		windowQuery = windowQuery.Where("created_at <= ?", endTime)
+	}
+	if projectID > 0 {
+		windowQuery = windowQuery.Where("project_id = ?", projectID)
 	}
 
 	var window struct {
@@ -106,6 +114,9 @@ func GetLogStatV2(c *gin.Context) {
 	}
 	if tokenName != "" {
 		rateQuery = rateQuery.Where("token_name = ?", tokenName)
+	}
+	if projectID > 0 {
+		rateQuery = rateQuery.Where("project_id = ?", projectID)
 	}
 
 	var rate struct {
