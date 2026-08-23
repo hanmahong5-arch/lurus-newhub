@@ -128,17 +128,21 @@ spec:
             # platform-core verified serving on it 2026-08-23.
             - name: BILLING_UNIFIED_ENABLED
               value: "true"
-            # Pool-required rollout Phase 0→1 (runbook P2.1). `log` still
-            # BYPASSES relay requests from tenants with no credit-pool row —
-            # it only counts + structured-logs each miss
-            # (event=pool_required_miss) so ops can size the blast radius.
-            # Graduation to `enforce` (402 pool_not_configured) is gated on:
-            # observe misses here, create pool rows for every legitimately
-            # active tenant, THEN flip — never enforce on day one. Any
-            # unrecognized value degrades to `off` (never fail-open to
-            # enforce), see setting/credit_pool_setting.go.
+            # Pool-required rollout GRADUATED to enforce (runbook P3.1,
+            # 2026-08-24). The gate's graduation criterion was verified by
+            # direct DB oracle before the flip: every tenant row
+            # (default / lurus-default / switch, all status=1) has a
+            # tenant_credit_pools row, so enforce changes NOTHING for
+            # existing traffic — it is a pure guardrail against future
+            # tenants slipping into unbilled relay. A tenant with no pool
+            # row now gets HTTP 402 pool_not_configured at the relay gate.
+            # ⚠️ Tenant onboarding MUST therefore provision a credit pool
+            # row (unlimited = max_balance -1) — see
+            # doc/runbook/tenant-onboarding.md. Any unrecognized value
+            # degrades to `off` (never fail-open), and a transient pool-DB
+            # error still fails OPEN by design (pool_balance_check.go).
             - name: CREDIT_POOL_REQUIRED
-              value: "log"
+              value: "enforce"
             - name: IDENTITY_SERVICE_URL
               value: "http://platform-core.lurus-platform.svc.cluster.local:18104"
             - name: IDENTITY_GRPC_ADDR
