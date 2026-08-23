@@ -24,6 +24,7 @@ import WIPBanner from '../../../components/hifi/WIPBanner';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // Wave 2: only security section is wired; notifications/team/integrations/MFA remain stubs pending infra.
 // Wave 3 Phase 1 (2026-05-20): revoke session wired to DELETE /sessions/current.
@@ -65,17 +66,6 @@ const formatRelativeTime = (unixSec, tr) => {
   return tr('console.common.time_days_ago', {
     count: Math.floor(diffSec / 86400),
   });
-};
-
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
 };
 
 // Labels/descriptions resolved at render via tr() — module scope has no i18n

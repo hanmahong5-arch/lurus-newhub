@@ -22,6 +22,7 @@ import HFShell from '../../../components/hifi/HFShell';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API } from '../../../helpers';
 import { QUOTA_PER_USD, quotaToUSD } from '../../../helpers/formatting';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
   computeQPS,
   computeLatencyP50,
@@ -35,17 +36,6 @@ import {
   formatErrorRate,
   DASHBOARD_REALTIME_WINDOW_SECONDS,
 } from './kpis';
-
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
-};
 
 const fmtTs = (ts) => {
   if (!ts) return '—';

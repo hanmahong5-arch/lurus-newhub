@@ -21,22 +21,12 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import { API, showError, showSuccess } from '../../../helpers';
 import useFormDraft from '../../../hooks/common/useFormDraft';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /* v2 Pricing — GET /api/v2/:tenant_slug/pricing (2026-05-19)
    Write path — POST /api/v2/:tenant_slug/pricing (Epic 12, 2026-05-20). */
 
 const DRAFT_KEY = 'v2-pricing-edits';
-
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
-};
 
 const PricingPage = () => {
   const tenantSlug = useTenantSlug();

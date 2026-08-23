@@ -23,6 +23,7 @@ import HFShell from '../../../components/hifi/HFShell';
 import WIPBanner from '../../../components/hifi/WIPBanner';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /* HiFi 7 — Models catalog. Wired to GET /api/v2/:tenant_slug/models (2026-05-19).
    Wave 3 Phase 1 (2026-05-20): add-model modal + try ↗ navigate wired. */
@@ -57,17 +58,6 @@ const DRAFT_INITIAL = {
   model_ratio: 1,
   quota_type: 0,
   model_price: '',
-};
-
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
 };
 
 const STATUS_LABEL = { 1: 'active', 0: 'disabled' };

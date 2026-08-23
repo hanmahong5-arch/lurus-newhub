@@ -21,18 +21,9 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // Reads tenant slug from localStorage — same pattern as Token/Channel/Models pages.
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
-};
 
 const fmtTime = (ts) => {
   if (!ts || ts === 0) return '—';

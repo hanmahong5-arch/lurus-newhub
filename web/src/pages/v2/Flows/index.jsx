@@ -23,6 +23,7 @@ import WIPBanner from '../../../components/hifi/WIPBanner';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
 import { API, showError } from '../../../helpers';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /* HiFi 13 — Flows: multi-step wizards & incident response. Ported from hifi/hf13-flows.jsx. */
 
@@ -1350,17 +1351,6 @@ const RetryScreen = () => {
     </div>
   );
 };
-
-// useTenantSlug mirrors the pattern from Playground — read from localStorage
-// so the Flows page does not need a router param prop.
-function useTenantSlug() {
-  const [slug, setSlug] = useState('default');
-  useState(() => {
-    const s = localStorage.getItem('tenant_slug');
-    if (s) setSlug(s);
-  });
-  return slug;
-}
 
 const HFFlows = () => {
   // Aliased to `tr` per the v2 console convention.

@@ -23,6 +23,7 @@ import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /* Wave 2: Cluster tab wired. Round 2: Live tail wired via cursor-poll. */
 
@@ -69,17 +70,6 @@ const attemptTagClass = (outcome) =>
     : outcome === 'breaker_open'
       ? 'tag'
       : 'tag error';
-
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
-};
 
 const fmtTime = (unixSec) => {
   if (!unixSec) return '—';

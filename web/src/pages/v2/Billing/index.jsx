@@ -21,21 +21,11 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import { API, showError } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // HiFi 11 — Billing. Wired to real APIs (2026-05-19):
 //   GET /api/v2/:slug/billing/invoices  → monthly spend buckets
 //   GET /api/v2/user/billing/summary    → balance / MTD from platform
-
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
-};
 
 const fmtCNY = (v) =>
   typeof v === 'number'

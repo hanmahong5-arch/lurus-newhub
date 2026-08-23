@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // HiFi 5 — Playground multi-model compare. Wired to
 // POST /api/v2/:tenant_slug/playground/run (2026-05-19).
@@ -71,17 +72,6 @@ function readURLParams() {
     return {};
   }
 }
-
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
-};
 
 // Sort columns by latency so the fastest is leftmost — gives the user an
 // at-a-glance perf comparison without an extra UI control. Stable: keeps
