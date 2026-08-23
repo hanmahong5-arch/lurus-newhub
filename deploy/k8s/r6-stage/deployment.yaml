@@ -113,6 +113,13 @@ spec:
             # auto-create, so an unknown org can never mint itself a tenant.
             - name: OIDC_AUTO_CREATE_USER
               value: "true"
+            # The registered client is public (auth method NONE) — the IdP
+            # rejects its code exchange without PKCE, and the handler only
+            # sends code_challenge when this is set (isPKCEEnabled,
+            # oauth.go). Live-verified 2026-08-24: without it the authorize
+            # redirect carried no code_challenge.
+            - name: OIDC_ENABLE_PKCE
+              value: "true"
             - name: MEILISEARCH_ENABLED
               value: "false"
             # Relay pre-auth against the platform wallet for identity-linked
