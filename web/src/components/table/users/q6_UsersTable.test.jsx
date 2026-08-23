@@ -17,70 +17,27 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-// UsersTable is the router between the row action rail and four confirmation
-// dialogs, two of which change a privilege level and one of which deletes an
-// account. Everything asserted here is about IDENTITY and ACTION: which
-// account the confirmation is pointed at, and which verb reaches manageUser.
-//
-// Every fixture user has an id that is neither its array index nor 0/1, and
-// the tests deliberately act on the SECOND row — so an implementation that
-// reached for `users[0]` or a hard-coded id would fail rather than coincide.
+// UsersTable is now a thin wrapper around CardTable: it builds the column set
+// and forwards paging/compact-mode state. It used to also own four
+// confirmation dialogs (promote / demote / enable-disable / delete), all of
+// which posted to POST /api/user/manage — a handler that has not existed
+// since the service was slimmed to a pure gateway, so every one of those
+// controls 404'd. They were removed (see UsersColumnDefs and
+// frontend_route_contract_test.go's knownUnrouted) rather than kept as
+// always-failing buttons; v2 admin users is the working path now. What
+// remains here is the grid plumbing those dialogs used to sit alongside.
 //
 // The column render functions themselves are covered in
 // q6_UsersColumnDefs.test.jsx; getUsersColumns is stubbed with a known set.
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 
-const H = vi.hoisted(() => {
-  const React = require('react');
-  // Each modal stub is a MARKER that publishes the user it was pointed at and
-  // exposes onConfirm/onCancel as real buttons. Stubbing these to `() => null`
-  // would let the whole confirmation path run invisibly.
-  const modalStub = (name, slot, extraAttrs = () => ({})) => ({
-    default: (props) => {
-      slot.current = props;
-      return React.createElement(
-        'div',
-        {
-          'data-testid': `${name}-modal`,
-          'data-visible': String(props.visible),
-          'data-user-id': String(props.user ? props.user.id : 'none'),
-          'data-user-name': String(props.user ? props.user.username : 'none'),
-          ...extraAttrs(props),
-        },
-        React.createElement(
-          'button',
-          {
-            type: 'button',
-            'data-testid': `${name}-ok`,
-            onClick: props.onConfirm ?? props.onOk,
-          },
-          'ok',
-        ),
-        React.createElement(
-          'button',
-          {
-            type: 'button',
-            'data-testid': `${name}-cancel`,
-            onClick: props.onCancel,
-          },
-          'cancel',
-        ),
-      );
-    },
-  });
-  return {
-    modalStub,
-    getUsersColumns: vi.fn(),
-    table: { current: null },
-    promote: { current: null },
-    demote: { current: null },
-    enableDisable: { current: null },
-    del: { current: null },
-  };
-});
+const H = vi.hoisted(() => ({
+  getUsersColumns: vi.fn(),
+  table: { current: null },
+}));
 
 vi.mock('./UsersColumnDefs', () => ({
   getUsersColumns: H.getUsersColumns,
@@ -104,20 +61,6 @@ vi.mock('../../common/ui/CardTable', () => ({
     })
   ),
 }));
-
-vi.mock('./modals/PromoteUserModal', () => H.modalStub('promote', H.promote));
-vi.mock('./modals/DemoteUserModal', () => H.modalStub('demote', H.demote));
-vi.mock('./modals/EnableDisableUserModal', () =>
-  H.modalStub('toggle', H.enableDisable, (p) => ({
-    'data-action': String(p.action),
-  })),
-);
-vi.mock('./modals/DeleteUserModal', () =>
-  H.modalStub('delete', H.del, (p) => ({
-    'data-page': String(p.activePage),
-    'data-userlist': (p.users || []).map((u) => u.id).join(','),
-  })),
-);
 
 vi.mock('@douyinfe/semi-ui', () => ({
   Empty: ({ description, image, darkModeImage }) =>
@@ -164,8 +107,6 @@ const makeProps = (over = {}) => ({
   handleRow: vi.fn(),
   setEditingUser: vi.fn(),
   setShowEditUser: vi.fn(),
-  manageUser: vi.fn().mockResolvedValue(true),
-  refresh: vi.fn().mockResolvedValue(undefined),
   t,
   ...over,
 });
@@ -183,16 +124,18 @@ beforeEach(() => {
 });
 
 describe('grid plumbing', () => {
-  it('hands the column factory all four confirmation openers plus the editor', () => {
+  it('hands the column factory the editor openers and nothing else', () => {
     const { props, openers } = renderTable();
     expect(props.setEditingUser).toBe(openers.setEditingUser);
     expect(props.setShowEditUser).toBe(openers.setShowEditUser);
-    [
-      'showPromoteModal',
-      'showDemoteModal',
-      'showEnableDisableModal',
-      'showDeleteModal',
-    ].forEach((k) => expect(typeof openers[k]).toBe('function'));
+    // Locks the removal: no promote/demote/enable-disable/delete opener is
+    // threaded through any more. Re-adding one here without a live route
+    // behind it is exactly the regression this file guards against.
+    expect(Object.keys(openers).sort()).toEqual([
+      'setEditingUser',
+      'setShowEditUser',
+      't',
+    ]);
   });
 
   it('renders the account rows it was given', () => {
@@ -262,8 +205,6 @@ describe('grid plumbing', () => {
   });
 
   it('offers no bulk row selection on the users screen', () => {
-    // Negative lock: users has no bulk actions today. If row selection is ever
-    // introduced it must arrive with bulk handlers, and this test will say so.
     renderTable();
     expect(screen.getByTestId('card-table')).toHaveAttribute(
       'data-hasselection',
@@ -273,178 +214,5 @@ describe('grid plumbing', () => {
       'data-hasonrow',
       'true',
     );
-  });
-});
-
-describe('confirmations start closed', () => {
-  it('opens none of the four dialogs on a plain render', () => {
-    renderTable();
-    ['promote', 'demote', 'toggle', 'delete'].forEach((n) =>
-      expect(screen.getByTestId(`${n}-modal`)).toHaveAttribute(
-        'data-visible',
-        'false',
-      ),
-    );
-  });
-});
-
-describe('promote', () => {
-  it('points the promote dialog at the account the rail clicked', () => {
-    const { openers } = renderTable();
-    act(() => openers.showPromoteModal(users[1]));
-    const modal = screen.getByTestId('promote-modal');
-    expect(modal).toHaveAttribute('data-visible', 'true');
-    expect(modal).toHaveAttribute('data-user-id', '77');
-  });
-
-  it('promotes that same account — never the first row — and closes', () => {
-    const { props, openers } = renderTable();
-    act(() => openers.showPromoteModal(users[1]));
-    act(() => screen.getByTestId('promote-ok').click());
-    expect(props.manageUser).toHaveBeenCalledTimes(1);
-    expect(props.manageUser).toHaveBeenCalledWith(77, 'promote', users[1]);
-    expect(screen.getByTestId('promote-modal')).toHaveAttribute(
-      'data-visible',
-      'false',
-    );
-  });
-
-  it('changes no privilege when the admin backs out', () => {
-    const { props, openers } = renderTable();
-    act(() => openers.showPromoteModal(users[1]));
-    act(() => screen.getByTestId('promote-cancel').click());
-    expect(props.manageUser).not.toHaveBeenCalled();
-    expect(screen.getByTestId('promote-modal')).toHaveAttribute(
-      'data-visible',
-      'false',
-    );
-  });
-});
-
-describe('demote', () => {
-  it('sends demote — not promote — for the clicked account', () => {
-    const { props, openers } = renderTable();
-    act(() => openers.showDemoteModal(users[1]));
-    expect(screen.getByTestId('demote-modal')).toHaveAttribute(
-      'data-user-id',
-      '77',
-    );
-    act(() => screen.getByTestId('demote-ok').click());
-    expect(props.manageUser).toHaveBeenCalledWith(77, 'demote', users[1]);
-  });
-
-  it('leaves the account alone when the admin backs out', () => {
-    const { props, openers } = renderTable();
-    act(() => openers.showDemoteModal(users[0]));
-    act(() => screen.getByTestId('demote-cancel').click());
-    expect(props.manageUser).not.toHaveBeenCalled();
-  });
-});
-
-describe('enable / disable', () => {
-  it('carries the DISABLE verb through to the API call', () => {
-    const { props, openers } = renderTable();
-    act(() => openers.showEnableDisableModal(users[1], 'disable'));
-    expect(screen.getByTestId('toggle-modal')).toHaveAttribute(
-      'data-action',
-      'disable',
-    );
-    act(() => screen.getByTestId('toggle-ok').click());
-    expect(props.manageUser).toHaveBeenCalledWith(77, 'disable', users[1]);
-  });
-
-  it('carries the ENABLE verb through too — the verb is not hard-coded', () => {
-    const { props, openers } = renderTable();
-    act(() => openers.showEnableDisableModal(users[0], 'enable'));
-    expect(screen.getByTestId('toggle-modal')).toHaveAttribute(
-      'data-action',
-      'enable',
-    );
-    act(() => screen.getByTestId('toggle-ok').click());
-    expect(props.manageUser).toHaveBeenCalledWith(42, 'enable', users[0]);
-  });
-
-  it('uses the verb from the LATEST open, not the first one', () => {
-    // Guards the shared `enableDisableAction` state: opening disable for one
-    // account then enable for another must not submit "disable".
-    const { props, openers } = renderTable();
-    act(() => openers.showEnableDisableModal(users[0], 'disable'));
-    act(() => screen.getByTestId('toggle-cancel').click());
-    act(() => openers.showEnableDisableModal(users[1], 'enable'));
-    act(() => screen.getByTestId('toggle-ok').click());
-    expect(props.manageUser).toHaveBeenCalledTimes(1);
-    expect(props.manageUser).toHaveBeenCalledWith(77, 'enable', users[1]);
-  });
-});
-
-describe('delete', () => {
-  it('points the delete dialog at the clicked account and gives it page context', () => {
-    const { props, openers } = renderTable({ activePage: 3 });
-    act(() => openers.showDeleteModal(users[1]));
-    const modal = screen.getByTestId('delete-modal');
-    expect(modal).toHaveAttribute('data-visible', 'true');
-    expect(modal).toHaveAttribute('data-user-id', '77');
-    expect(modal).toHaveAttribute('data-page', '3');
-    expect(modal).toHaveAttribute('data-userlist', '42,77');
-    expect(H.del.current.manageUser).toBe(props.manageUser);
-    expect(H.del.current.refresh).toBe(props.refresh);
-  });
-
-  it('closes without deleting when the admin backs out', () => {
-    const { props, openers } = renderTable();
-    act(() => openers.showDeleteModal(users[1]));
-    act(() => screen.getByTestId('delete-cancel').click());
-    expect(screen.getByTestId('delete-modal')).toHaveAttribute(
-      'data-visible',
-      'false',
-    );
-    expect(props.manageUser).not.toHaveBeenCalled();
-  });
-
-  it('opens only the delete dialog — the other three stay shut', () => {
-    const { openers } = renderTable();
-    act(() => openers.showDeleteModal(users[0]));
-    ['promote', 'demote', 'toggle'].forEach((n) =>
-      expect(screen.getByTestId(`${n}-modal`)).toHaveAttribute(
-        'data-visible',
-        'false',
-      ),
-    );
-    expect(screen.getByTestId('delete-modal')).toHaveAttribute(
-      'data-visible',
-      'true',
-    );
-  });
-});
-
-describe('outcome of a privilege change', () => {
-  // DEFECT (correctness): handlePromoteConfirm / handleDemoteConfirm /
-  // handleEnableDisableConfirm call manageUser WITHOUT awaiting it and without
-  // inspecting the result, then close the dialog unconditionally. A server
-  // that refuses the promotion produces exactly the same UI as one that
-  // granted it — the dialog closes and the row keeps rendering the old role
-  // with no error state of its own. The delete path at least awaits its call.
-  it.skip('CONTRACT: a refused privilege change must not close the dialog silently', () => {
-    const { openers } = renderTable({
-      manageUser: vi.fn().mockResolvedValue(false),
-    });
-    act(() => openers.showPromoteModal(users[1]));
-    act(() => screen.getByTestId('promote-ok').click());
-    expect(screen.getByTestId('promote-modal')).toHaveAttribute(
-      'data-visible',
-      'true',
-    );
-  });
-
-  it('currently discards the result of the privilege change call', async () => {
-    // Fix-safe: asserts the refusal was genuinely delivered to the component
-    // (the precondition of the contract above) and that the right verb and
-    // account were submitted. Still passes once the outcome is handled.
-    const manageUser = vi.fn().mockResolvedValue(false);
-    const { openers } = renderTable({ manageUser });
-    act(() => openers.showPromoteModal(users[1]));
-    act(() => screen.getByTestId('promote-ok').click());
-    expect(manageUser).toHaveBeenCalledWith(77, 'promote', users[1]);
-    await expect(manageUser.mock.results[0].value).resolves.toBe(false);
   });
 });

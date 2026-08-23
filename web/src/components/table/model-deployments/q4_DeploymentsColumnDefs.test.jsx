@@ -176,8 +176,6 @@ const COLUMN_KEYS = {
 };
 
 const makeHandlers = (overrides = {}) => ({
-  startDeployment: vi.fn(),
-  restartDeployment: vi.fn(),
   deleteDeployment: vi.fn(),
   setEditingDeployment: vi.fn(),
   setShowEdit: vi.fn(),
@@ -552,37 +550,31 @@ describe('actions cell — destroy path', () => {
 });
 
 describe('actions cell — primary action per status', () => {
+  // startDeployment / restartDeployment (POST .../start, .../restart) are
+  // gone: nothing in the route tree ever answered either, so 重试 (retry) and
+  // 启动 (start) were always-failing buttons. failed/error/stopped rows now
+  // get the same 查看详情 primary action a running row gets.
   it('running rows open the details panel', async () => {
     const user = userEvent.setup();
     const { handlers } = renderCell('actions', makeRow({ status: 'running' }));
     expect(primaryButton()).toHaveTextContent('查看详情');
     await user.click(primaryButton());
     expect(handlers.onViewDetails).toHaveBeenCalledTimes(1);
-    expect(handlers.startDeployment).not.toHaveBeenCalled();
   });
 
-  it('stopped rows start, carrying the row id', async () => {
-    const user = userEvent.setup();
-    const { handlers } = renderCell(
-      'actions',
-      makeRow({ status: 'stopped', id: 'dep-other-99' }),
-    );
-    expect(primaryButton()).toHaveTextContent('启动');
-    await user.click(primaryButton());
-    expect(handlers.startDeployment).toHaveBeenCalledWith('dep-other-99');
-  });
-
-  it.each(['failed', 'error'])(
-    '%s rows retry, carrying the row id',
+  it.each(['stopped', 'failed', 'error'])(
+    '%s rows also open the details panel, carrying the row id',
     async (status) => {
       const user = userEvent.setup();
       const { handlers } = renderCell(
         'actions',
         makeRow({ status, id: 'dep-other-99' }),
       );
-      expect(primaryButton()).toHaveTextContent('重试');
+      expect(primaryButton()).toHaveTextContent('查看详情');
       await user.click(primaryButton());
-      expect(handlers.startDeployment).toHaveBeenCalledWith('dep-other-99');
+      expect(handlers.onViewDetails).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'dep-other-99' }),
+      );
     },
   );
 
@@ -600,7 +592,6 @@ describe('actions cell — primary action per status', () => {
       expect(button).toHaveTextContent(label);
       expect(button).toBeDisabled();
       await user.click(button);
-      expect(handlers.startDeployment).not.toHaveBeenCalled();
       expect(handlers.onViewDetails).not.toHaveBeenCalled();
     },
   );
@@ -624,7 +615,6 @@ describe('actions cell — primary action per status', () => {
     // Invariants that survive the fix: the button does nothing when clicked,
     // and the row is still treated as destroyable (it has not ended).
     await user.click(primaryButton());
-    expect(handlers.startDeployment).not.toHaveBeenCalled();
     expect(handlers.onViewDetails).not.toHaveBeenCalled();
     expect(menuTexts()).toContain('销毁容器');
   });
@@ -650,10 +640,14 @@ describe('actions cell — menu composition', () => {
     expect(menuTexts()).toContain('查看日志');
   });
 
-  it('offers channel sync only for a running row', () => {
+  it('offers channel sync only for a running row, and no start item for a stopped one', () => {
+    // '启动' used to appear here too, calling startDeployment — POST
+    // /api/deployments/:id/start, a route nothing in the tree registers.
+    // Removed; a stopped row's menu is just details / logs / destroy.
     renderCell('actions', makeRow({ status: 'stopped' }));
+    expect(menuTexts()).toEqual(['查看详情', '查看日志', '销毁容器']);
     expect(menuTexts()).not.toContain('同步到渠道');
-    expect(menuTexts()).toContain('启动');
+    expect(menuTexts()).not.toContain('启动');
   });
 
   it.each([

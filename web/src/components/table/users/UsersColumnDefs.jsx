@@ -26,9 +26,7 @@ import {
   Progress,
   Popover,
   Typography,
-  Dropdown,
 } from '@douyinfe/semi-ui';
-import { IconMore } from '@douyinfe/semi-icons';
 import { renderGroup, renderNumber, renderQuota } from '../../../helpers';
 
 /**
@@ -101,7 +99,7 @@ const renderUsername = (text, record) => {
 /**
  * Render user statistics
  */
-const renderStatistics = (text, record, showEnableDisableModal, t) => {
+const renderStatistics = (text, record, t) => {
   // Only an actual deletion timestamp means deregistered. A row that simply
   // omits the field (API projection, cached older payload) is a live account.
   const isDeleted = Boolean(record.DeletedAt);
@@ -267,19 +265,19 @@ const renderInviteInfo = (text, record, t) => {
 
 /**
  * Render operations column
+ *
+ * Disable/Enable, Promote, Demote and the "注销账户" (deregister) overflow
+ * item used to live here too. All four posted to POST /api/user/manage,
+ * which no handler has answered since the service was slimmed to a pure
+ * gateway — every click 404'd. They were removed rather than left as
+ * always-failing buttons; v2 admin users (GET/PUT/DELETE) is the working
+ * path for those operations now. 编辑 still works: it opens EditUserModal,
+ * which saves through the live PUT /api/user/.
  */
 const renderOperations = (
   text,
   record,
-  {
-    setEditingUser,
-    setShowEditUser,
-    showPromoteModal,
-    showDemoteModal,
-    showEnableDisableModal,
-    showDeleteModal,
-    t,
-  },
+  { setEditingUser, setShowEditUser, t },
 ) => {
   // Same truthiness rule as the status cell: an absent DeletedAt must not strip
   // an operator of every control on a live account.
@@ -287,38 +285,8 @@ const renderOperations = (
     return <></>;
   }
 
-  const moreMenu = [
-    {
-      node: 'item',
-      // Its own key, not the bare 注销: that one is translated "Logout" (and
-      // "Se déconnecter", "ログアウト", …), so in every non-Chinese locale this
-      // danger-typed item — which opens "equivalent to deleting the user, this
-      // is irreversible" — was labelled as if it merely signed someone out.
-      // The header's actual sign-out uses a different key entirely.
-      name: t('注销账户'),
-      type: 'danger',
-      onClick: () => showDeleteModal(record),
-    },
-  ];
-
   return (
     <Space>
-      {record.status === 1 ? (
-        <Button
-          type='danger'
-          size='small'
-          onClick={() => showEnableDisableModal(record, 'disable')}
-        >
-          {t('禁用')}
-        </Button>
-      ) : (
-        <Button
-          size='small'
-          onClick={() => showEnableDisableModal(record, 'enable')}
-        >
-          {t('启用')}
-        </Button>
-      )}
       <Button
         type='tertiary'
         size='small'
@@ -329,23 +297,6 @@ const renderOperations = (
       >
         {t('编辑')}
       </Button>
-      <Button
-        type='warning'
-        size='small'
-        onClick={() => showPromoteModal(record)}
-      >
-        {t('提升')}
-      </Button>
-      <Button
-        type='secondary'
-        size='small'
-        onClick={() => showDemoteModal(record)}
-      >
-        {t('降级')}
-      </Button>
-      <Dropdown menu={moreMenu} trigger='click' position='bottomRight'>
-        <Button type='tertiary' size='small' icon={<IconMore />} />
-      </Dropdown>
     </Space>
   );
 };
@@ -353,15 +304,7 @@ const renderOperations = (
 /**
  * Get users table column definitions
  */
-export const getUsersColumns = ({
-  t,
-  setEditingUser,
-  setShowEditUser,
-  showPromoteModal,
-  showDemoteModal,
-  showEnableDisableModal,
-  showDeleteModal,
-}) => {
+export const getUsersColumns = ({ t, setEditingUser, setShowEditUser }) => {
   return [
     {
       title: 'ID',
@@ -375,8 +318,7 @@ export const getUsersColumns = ({
     {
       title: t('状态'),
       dataIndex: 'info',
-      render: (text, record, index) =>
-        renderStatistics(text, record, showEnableDisableModal, t),
+      render: (text, record, index) => renderStatistics(text, record, t),
     },
     {
       title: t('剩余额度/总额度'),
@@ -408,15 +350,7 @@ export const getUsersColumns = ({
       fixed: 'right',
       width: 200,
       render: (text, record, index) =>
-        renderOperations(text, record, {
-          setEditingUser,
-          setShowEditUser,
-          showPromoteModal,
-          showDemoteModal,
-          showEnableDisableModal,
-          showDeleteModal,
-          t,
-        }),
+        renderOperations(text, record, { setEditingUser, setShowEditUser, t }),
     },
   ];
 };

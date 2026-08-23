@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { API, showError, showSuccess } from '../../helpers';
+import { API, showError } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 
@@ -37,7 +37,6 @@ export const useUsersData = () => {
   const [userCount, setUserCount] = useState(0);
 
   // Modal states
-  const [showAddUser, setShowAddUser] = useState(false);
   const [showEditUser, setShowEditUser] = useState(false);
   const [editingUser, setEditingUser] = useState({
     id: undefined,
@@ -120,51 +119,6 @@ export const useUsersData = () => {
     setSearching(false);
   };
 
-  // Manage user operations (promote, demote, enable, disable, delete)
-  const manageUser = async (userId, action, record) => {
-    // Trigger loading state to force table re-render
-    setLoading(true);
-
-    // A rejected request must still clear the loading flag. Without the
-    // finally, any transport-level failure leaves the table spinning forever
-    // and the operator cannot tell a wedged page from a slow one — they only
-    // see the interceptor's toast go by. This path is live today: the backend
-    // answers POST /api/user/manage with 404 (the handler was removed when the
-    // service was slimmed to a pure gateway), so EVERY action on this table
-    // takes the reject branch.
-    try {
-      const res = await API.post('/api/user/manage', {
-        id: userId,
-        action,
-      });
-
-      const { success, message } = res.data;
-      if (success) {
-        showSuccess(t('操作成功完成！'));
-        const user = res.data.data;
-
-        // Create a new array and new object to ensure React detects changes
-        const newUsers = users.map((u) => {
-          if (u.id === userId) {
-            if (action === 'delete') {
-              return { ...u, DeletedAt: new Date() };
-            }
-            return { ...u, status: user.status, role: user.role };
-          }
-          return u;
-        });
-
-        setUsers(newUsers);
-      } else {
-        showError(message);
-      }
-    } catch (error) {
-      showError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Handle page change
   const handlePageChange = (page) => {
     setActivePage(page);
@@ -235,10 +189,6 @@ export const useUsersData = () => {
   };
 
   // Modal control functions
-  const closeAddUser = () => {
-    setShowAddUser(false);
-  };
-
   const closeEditUser = () => {
     setShowEditUser(false);
     setEditingUser({
@@ -267,10 +217,8 @@ export const useUsersData = () => {
     groupOptions,
 
     // Modal state
-    showAddUser,
     showEditUser,
     editingUser,
-    setShowAddUser,
     setShowEditUser,
     setEditingUser,
 
@@ -286,12 +234,10 @@ export const useUsersData = () => {
     // Actions
     loadUsers,
     searchUsers,
-    manageUser,
     handlePageChange,
     handlePageSizeChange,
     handleRow,
     refresh,
-    closeAddUser,
     closeEditUser,
     getFormValues,
 

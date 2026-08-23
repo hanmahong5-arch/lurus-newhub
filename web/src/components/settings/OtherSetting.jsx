@@ -254,10 +254,6 @@ const OtherSetting = () => {
         },
       ).then((response) => response.json());
 
-      // Option 3: Use a local proxy endpoint
-      // Create a cached version of the response to avoid frequent GitHub API calls
-      // const res = await API.get('/api/status/github-latest-release');
-
       const { tag_name, body } = res;
       if (tag_name === statusState?.status?.version) {
         showSuccess(t('已是最新版本：{{version}}', { version: tag_name }));

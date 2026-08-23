@@ -43,18 +43,6 @@ export const useDeploymentsData = () => {
     id: undefined,
   });
 
-  // Row selection
-  const [selectedKeys, setSelectedKeys] = useState([]);
-  const rowSelection = {
-    getCheckboxProps: (record) => ({
-      name: record.deployment_name,
-    }),
-    selectedRowKeys: selectedKeys.map((deployment) => deployment.id),
-    onChange: (selectedRowKeys, selectedRows) => {
-      setSelectedKeys(selectedRows);
-    },
-  };
-
   // Form initial values
   const formInitValues = {
     searchKeyword: '',
@@ -167,7 +155,6 @@ export const useDeploymentsData = () => {
     const items = extractItems(data);
     setActivePage(data?.page ?? page);
     setDeploymentCount(data?.total ?? items.length);
-    setSelectedKeys([]);
     setDeployments(
       items.map((deployment) => ({ ...deployment, key: deployment.id })),
     );
@@ -280,36 +267,6 @@ export const useDeploymentsData = () => {
   };
 
   // Deployment operations
-  const startDeployment = async (deploymentId) => {
-    try {
-      const res = await API.post(`/api/deployments/${deploymentId}/start`);
-      if (res.data.success) {
-        showSuccess(t('部署启动成功'));
-        await refresh();
-      } else {
-        showError(res.data.message);
-      }
-    } catch (error) {
-      console.error(error);
-      showError(t('启动部署失败'));
-    }
-  };
-
-  const restartDeployment = async (deploymentId) => {
-    try {
-      const res = await API.post(`/api/deployments/${deploymentId}/restart`);
-      if (res.data.success) {
-        showSuccess(t('部署重启成功'));
-        await refresh();
-      } else {
-        showError(res.data.message);
-      }
-    } catch (error) {
-      console.error(error);
-      showError(t('重启部署失败'));
-    }
-  };
-
   const deleteDeployment = async (deploymentId) => {
     try {
       const res = await API.delete(`/api/deployments/${deploymentId}`);
@@ -430,26 +387,6 @@ export const useDeploymentsData = () => {
     }
   };
 
-  // Batch operations
-  const batchDeleteDeployments = async () => {
-    if (selectedKeys.length === 0) return;
-
-    try {
-      const ids = selectedKeys.map((deployment) => deployment.id);
-      const res = await API.post('/api/deployments/batch_delete', { ids });
-      if (res.data.success) {
-        showSuccess(t('批量删除成功'));
-        setSelectedKeys([]);
-        await refresh();
-      } else {
-        showError(res.data.message);
-      }
-    } catch (error) {
-      console.error(error);
-      showError(t('批量删除失败'));
-    }
-  };
-
   // Table row click handler
   const handleRow = (record) => ({
     onClick: () => {
@@ -472,11 +409,6 @@ export const useDeploymentsData = () => {
     deploymentCount,
     compactMode,
     setCompactMode,
-
-    // Selection
-    selectedKeys,
-    setSelectedKeys,
-    rowSelection,
 
     // Modals
     showEdit,
@@ -507,14 +439,9 @@ export const useDeploymentsData = () => {
     handleRow,
 
     // Deployment operations
-    startDeployment,
-    restartDeployment,
     deleteDeployment,
     updateDeploymentName,
     syncDeploymentToChannel,
-
-    // Batch operations
-    batchDeleteDeployments,
 
     // Translation
     t,

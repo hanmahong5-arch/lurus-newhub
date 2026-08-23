@@ -375,11 +375,14 @@ describe('loading an existing account', () => {
     expect(urls).not.toContain('/api/user/self');
   });
 
-  it('also loads the group list and the daily-quota status for that account', async () => {
+  it('also loads the group list for that account', async () => {
     await renderModal();
     const urls = H.api.get.mock.calls.map((c) => c[0]);
     expect(urls).toContain('/api/group/');
-    expect(urls).toContain('/api/user/88/daily-quota');
+    // The "daily quota" status panel was removed along with the dead
+    // GET .../daily-quota / POST .../daily-quota/reset endpoints it read and
+    // wrote — it always rendered empty because no handler ever answered it.
+    expect(urls).not.toContain('/api/user/88/daily-quota');
   });
 
   it('seeds the form from the response and blanks the password', async () => {
@@ -812,119 +815,23 @@ describe('the add-quota dialog — money arithmetic', () => {
 });
 
 describe('the daily quota panel', () => {
-  const withDaily = (data) => {
-    H.api.get.mockImplementation((url) => {
-      if (url.includes('/api/group/'))
-        return Promise.resolve({
-          data: { success: true, data: ['default', 'vip'] },
-        });
-      if (url.includes('daily-quota'))
-        return Promise.resolve({ data: { success: true, data } });
-      return Promise.resolve(okUser());
-    });
-  };
-
-  it('shows nothing at all when the account has no daily-quota record', async () => {
+  // The "daily quota" status/reset panel (今日额度状态 + 重置每日额度) was
+  // removed: it read GET /api/user/:id/daily-quota and wrote POST
+  // /api/user/:id/daily-quota/reset, and no handler in the tree ever served
+  // either, so the panel rendered empty every time it was opened. The
+  // daily_quota / base_group / fallback_group EDIT fields stay — they
+  // round-trip through the live PUT /api/user/ save path exercised in
+  // 'saving' above — only the broken status readout and its reset button
+  // are gone.
+  it('never requests the removed daily-quota status endpoint', async () => {
     await renderModal();
-    expect(screen.queryByTestId('popconfirm')).not.toBeInTheDocument();
+    const getUrls = H.api.get.mock.calls.map((c) => c[0]);
+    expect(getUrls.some((u) => u.includes('daily-quota'))).toBe(false);
   });
 
-  it('breaks today’s usage down against the cap, in money', async () => {
-    withDaily({
-      daily_used: 250000,
-      daily_quota: 1000000,
-      current_group: 'vip',
-      is_using_fallback: false,
-    });
+  it('never posts to the removed daily-quota reset endpoint', async () => {
     await renderModal();
-    const body = screen.getByTestId('sheet-body').textContent;
-    expect(body).toContain(renderQuota(250000)); // $0.50 used
-    expect(body).toContain(renderQuota(1000000)); // $2.00 cap
-  });
-
-  it('says 无限制 instead of printing a zero cap as money', async () => {
-    withDaily({
-      daily_used: 250000,
-      daily_quota: 0,
-      current_group: 'vip',
-      is_using_fallback: false,
-    });
-    await renderModal();
-    const body = screen.getByTestId('sheet-body').textContent;
-    expect(body).toContain('无限制');
-    expect(body).toContain(renderQuota(250000));
-  });
-
-  it('flags an account that has dropped to its fallback group', async () => {
-    withDaily({
-      daily_used: 1000000,
-      daily_quota: 1000000,
-      current_group: 'free',
-      is_using_fallback: true,
-    });
-    await renderModal();
-    expect(screen.getByTestId('sheet-body').textContent).toContain('降级中');
-  });
-
-  it('does NOT flag an account still on its normal group', async () => {
-    withDaily({
-      daily_used: 100,
-      daily_quota: 1000000,
-      current_group: 'vip',
-      is_using_fallback: false,
-    });
-    await renderModal();
-    expect(screen.getByTestId('sheet-body').textContent).not.toContain(
-      '降级中',
-    );
-  });
-
-  it('gates the daily-quota reset behind a confirmation', async () => {
-    withDaily({
-      daily_used: 100,
-      daily_quota: 1000000,
-      current_group: 'vip',
-      is_using_fallback: false,
-    });
-    await renderModal();
-    expect(screen.getByTestId('popconfirm')).toHaveAttribute(
-      'data-title',
-      '确认重置',
-    );
     expect(H.api.post).not.toHaveBeenCalled();
-  });
-
-  it('resets the daily quota for THAT account when confirmed', async () => {
-    withDaily({
-      daily_used: 100,
-      daily_quota: 1000000,
-      current_group: 'vip',
-      is_using_fallback: false,
-    });
-    await renderModal();
-    await act(async () => {
-      screen.getByTestId('popconfirm-confirm').click();
-    });
-    expect(H.api.post).toHaveBeenCalledWith('/api/user/88/daily-quota/reset');
-    expect(H.showSuccess).toHaveBeenCalledWith('每日额度已重置');
-  });
-
-  it('reports a refused reset instead of claiming it worked', async () => {
-    withDaily({
-      daily_used: 100,
-      daily_quota: 1000000,
-      current_group: 'vip',
-      is_using_fallback: false,
-    });
-    H.api.post.mockResolvedValue({
-      data: { success: false, message: '重置失败' },
-    });
-    await renderModal();
-    await act(async () => {
-      screen.getByTestId('popconfirm-confirm').click();
-    });
-    expect(H.showError).toHaveBeenCalledWith('重置失败');
-    expect(H.showSuccess).not.toHaveBeenCalled();
   });
 });
 

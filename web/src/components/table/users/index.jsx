@@ -20,10 +20,8 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import CardPro from '../../common/ui/CardPro';
 import UsersTable from './UsersTable';
-import UsersActions from './UsersActions';
 import UsersFilters from './UsersFilters';
 import UsersDescription from './UsersDescription';
-import AddUserModal from './modals/AddUserModal';
 import EditUserModal from './modals/EditUserModal';
 import { useUsersData } from '../../../hooks/users/useUsersData';
 import { useIsMobile } from '../../../hooks/common/useIsMobile';
@@ -35,11 +33,8 @@ const UsersPage = () => {
 
   const {
     // Modal state
-    showAddUser,
     showEditUser,
     editingUser,
-    setShowAddUser,
-    closeAddUser,
     closeEditUser,
     refresh,
 
@@ -64,12 +59,6 @@ const UsersPage = () => {
 
   return (
     <>
-      <AddUserModal
-        refresh={refresh}
-        visible={showAddUser}
-        handleClose={closeAddUser}
-      />
-
       <EditUserModal
         refresh={refresh}
         visible={showEditUser}
@@ -87,9 +76,7 @@ const UsersPage = () => {
           />
         }
         actionsArea={
-          <div className='flex flex-col md:flex-row justify-between items-center gap-2 w-full'>
-            <UsersActions setShowAddUser={setShowAddUser} t={t} />
-
+          <div className='flex flex-col md:flex-row justify-end items-center gap-2 w-full'>
             <UsersFilters
               formInitValues={formInitValues}
               setFormApi={setFormApi}

@@ -8,9 +8,18 @@ package router
 // This walks web/src for API.<verb>('/api/…') calls and resolves each against
 // the real route table, enumerated the same way v2_completeness_test.go does.
 //
-// Four such calls exist today; they are listed in knownUnrouted below with
-// what each one breaks. Removing a console surface is an owner's call, so they
-// are recorded rather than deleted — but no NEW one can be added.
+// Eight such calls existed as of 2026-08-23 (Add User, the legacy row actions
+// Disable/Enable/Promote/Demote/Deregister, deployments batch_delete, the
+// "check for updates" GET, and the daily-quota status/reset pair). Every one
+// of them was a console control that could never work, so all eight were
+// removed from web/src rather than kept as always-404 buttons; see PR history
+// around 2026-08-23 for the removal. knownUnrouted stays declared (empty) so
+// a NEW unrouted call still fails loudly instead of silently passing.
+//
+// Removing a console surface is an owner's call, so entries are recorded
+// here with what they broke rather than deleted outright when found — but no
+// NEW one can be added without either registering the route or getting that
+// call.
 
 import (
 	"os"
@@ -25,39 +34,35 @@ import (
 
 // Frontend calls with no matching route. Each entry is a control that cannot
 // work; the value says what it is. Shrink this list, never grow it.
-var knownUnrouted = map[string]string{
-	"POST /api/user/": "legacy /console/user “Add User”. The admin user group " +
-		"registers GET /, GET /search, GET /:id and PUT / only — there is no " +
-		"create handler anywhere in the tree, and v2 admin users is also " +
-		"GET/PUT/DELETE, so no console can create a user.",
-	"POST /api/user/manage": "legacy /console/user row actions — Disable, " +
-		"Enable, Promote, Demote, Deregister. No ManageUser handler exists; it " +
-		"went when the service was slimmed to a pure gateway. Working path is " +
-		"/console/v2/admin/users.",
-	"POST /api/deployments/batch_delete": "legacy /console/deployment batch " +
-		"delete. Single delete (DELETE /:id) is registered; the batch endpoint " +
-		"never was.",
-	"GET /api/status/github-latest-release": "the “check for updates” button " +
-		"in settings › Other. No handler references that path at all.",
-	"GET /api/user/${userId}/daily-quota": "the whole “daily quota” panel in " +
-		"the legacy user editor reads this; no handler in the tree serves it, " +
-		"so the panel renders empty every time it is opened.",
-	"POST /api/user/${userId}/daily-quota/reset": "the “reset daily quota” " +
-		"button in the same panel. No handler exists.",
-	"POST /api/deployments/${deploymentId}/start": "the deployment start " +
-		"button. The group registers /:id/extend and DELETE /:id but nothing " +
-		"for start.",
-	"POST /api/deployments/${deploymentId}/restart": "the deployment restart " +
-		"button; same gap as start.",
-}
+var knownUnrouted = map[string]string{}
 
 // API.get('/x') / API.post(`/x/${id}`) — the axios wrapper the console uses.
 // Bare fetch() is not matched: its verb lives in an options object rather than
 // the callee, and every current fetch call is a streaming relay path.
+// \s* spans newlines, so this also catches the prettier-wrapped form where the
+// URL sits on the line after `API.post(`; the URL itself may not span lines.
 var apiCallRe = regexp.MustCompile(
-	`\bAPI\.(get|post|put|delete|patch)\s*\(\s*['"` + "`" + `](/[^'"` + "`" + `]*)`)
+	`\bAPI\.(get|post|put|delete|patch)\s*\(\s*['"` + "`" + `](/[^'"` + "`" + `\n]*)`)
 
 var interpolationRe = regexp.MustCompile(`\$\{[^}]*\}`)
+
+// Stands in for an interpolated segment. Its value is unknown at scan time: it
+// is usually an id, but `/tenants/${id}/${action}` interpolates the verb too,
+// so a segment holding one matches any gin segment, literal or :param. It
+// still has to be exactly one segment, so /x/${id}/daily-quota is checked for
+// a real `daily-quota` route.
+const interpolatedSeg = "\x00"
+
+// Routes that register only when a dependency is configured, so they are
+// absent from the table this test builds but present in a real boot. Verified
+// against the registration site, not assumed.
+var conditionallyRegistered = map[string]string{
+	"POST /api/v2/auth/zita-bootstrap": "api-v2-router.go registers this " +
+		"inside `if common.ZitaClient != nil`, and the client is nil in a unit " +
+		"test process, so the route is absent here for a reason this test " +
+		"cannot distinguish from a missing handler. Whether it exists at " +
+		"runtime is a deploy-config question, not a routing one.",
+}
 
 func collectRoutes(t *testing.T) map[string][]string {
 	t.Helper()
@@ -86,6 +91,9 @@ func routeMatches(ginPath, concrete string) bool {
 		if i >= len(c) {
 			return false
 		}
+		if strings.Contains(c[i], interpolatedSeg) {
+			continue
+		}
 		if strings.HasPrefix(seg, ":") {
 			if c[i] == "" {
 				return false
@@ -113,6 +121,7 @@ func TestConsoleCallsResolveToRegisteredRoutes(t *testing.T) {
 	type call struct{ key, site string }
 	var unrouted []call
 	seenKnown := map[string]bool{}
+	seenConditional := map[string]bool{}
 
 	err := filepath.Walk(webSrc, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -136,53 +145,60 @@ func TestConsoleCallsResolveToRegisteredRoutes(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for i, line := range strings.Split(string(body), "\n") {
-			for _, m := range apiCallRe.FindAllStringSubmatch(line, -1) {
-				method := strings.ToUpper(m[1])
-				raw := m[2]
-				// Drop any query string, and stand a placeholder in for each
-				// interpolated id so the path has its real segment count.
-				if q := strings.IndexAny(raw, "?#"); q >= 0 {
-					raw = raw[:q]
-				}
-				concrete := interpolationRe.ReplaceAllString(raw, "1")
-				if strings.Contains(concrete, "$") {
-					// A template whose interpolation spans lines; not resolvable
-					// from this line alone.
-					continue
-				}
-				// `/api/x/` in the source is the collection route itself when
-				// nothing follows, so try it with and without the trailing slash.
-				candidates := []string{concrete}
-				if strings.HasSuffix(concrete, "/") {
-					candidates = append(candidates, strings.TrimSuffix(concrete, "/"))
-				}
-				matched := false
-				for _, cand := range candidates {
-					for _, gp := range routes[method] {
-						if routeMatches(gp, cand) {
-							matched = true
-							break
-						}
-					}
-					if matched {
+		// Scan the whole file, not line by line: prettier wraps any call whose
+		// URL pushes the line past 80 columns onto its own line, and a
+		// line-scoped scan cannot see those at all — which is most of the
+		// interpolated ones.
+		src := string(body)
+		for _, loc := range apiCallRe.FindAllStringSubmatchIndex(src, -1) {
+			method := strings.ToUpper(src[loc[2]:loc[3]])
+			raw := src[loc[4]:loc[5]]
+			i := strings.Count(src[:loc[0]], "\n")
+			// Drop any query string, and stand a placeholder in for each
+			// interpolated segment so the path has its real segment count.
+			if q := strings.IndexAny(raw, "?#"); q >= 0 {
+				raw = raw[:q]
+			}
+			concrete := interpolationRe.ReplaceAllString(raw, interpolatedSeg)
+			if strings.Contains(concrete, "$") {
+				// A template whose interpolation spans lines; not resolvable.
+				continue
+			}
+			key := method + " " + raw
+			if _, ok := conditionallyRegistered[key]; ok {
+				seenConditional[key] = true
+				continue
+			}
+			// `/api/x/` in the source is the collection route itself when
+			// nothing follows, so try it with and without the trailing slash.
+			candidates := []string{concrete}
+			if strings.HasSuffix(concrete, "/") {
+				candidates = append(candidates, strings.TrimSuffix(concrete, "/"))
+			}
+			matched := false
+			for _, cand := range candidates {
+				for _, gp := range routes[method] {
+					if routeMatches(gp, cand) {
+						matched = true
 						break
 					}
 				}
 				if matched {
-					continue
+					break
 				}
-				key := method + " " + raw
-				if _, ok := knownUnrouted[key]; ok {
-					seenKnown[key] = true
-					continue
-				}
-				rel, _ := filepath.Rel(filepath.Join("..", "..", "..", ".."), path)
-				unrouted = append(unrouted, call{
-					key:  key,
-					site: filepath.ToSlash(rel) + ":" + itoa(i+1),
-				})
 			}
+			if matched {
+				continue
+			}
+			if _, ok := knownUnrouted[key]; ok {
+				seenKnown[key] = true
+				continue
+			}
+			rel, _ := filepath.Rel(filepath.Join("..", "..", "..", ".."), path)
+			unrouted = append(unrouted, call{
+				key:  key,
+				site: filepath.ToSlash(rel) + ":" + itoa(i+1),
+			})
 		}
 		return nil
 	})
@@ -207,6 +223,11 @@ func TestConsoleCallsResolveToRegisteredRoutes(t *testing.T) {
 	for key := range knownUnrouted {
 		if !seenKnown[key] {
 			t.Errorf("knownUnrouted lists %q but no console call makes it any more; drop the entry", key)
+		}
+	}
+	for key := range conditionallyRegistered {
+		if !seenConditional[key] {
+			t.Errorf("conditionallyRegistered lists %q but no console call makes it any more; drop the entry", key)
 		}
 	}
 }
