@@ -105,6 +105,17 @@ spec:
             # platform-core verified serving on it 2026-08-23.
             - name: BILLING_UNIFIED_ENABLED
               value: "true"
+            # Pool-required rollout Phase 0→1 (runbook P2.1). `log` still
+            # BYPASSES relay requests from tenants with no credit-pool row —
+            # it only counts + structured-logs each miss
+            # (event=pool_required_miss) so ops can size the blast radius.
+            # Graduation to `enforce` (402 pool_not_configured) is gated on:
+            # observe misses here, create pool rows for every legitimately
+            # active tenant, THEN flip — never enforce on day one. Any
+            # unrecognized value degrades to `off` (never fail-open to
+            # enforce), see setting/credit_pool_setting.go.
+            - name: CREDIT_POOL_REQUIRED
+              value: "log"
             - name: IDENTITY_SERVICE_URL
               value: "http://platform-core.lurus-platform.svc.cluster.local:18104"
             - name: IDENTITY_GRPC_ADDR
