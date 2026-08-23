@@ -142,8 +142,9 @@ jobs:
   # the Trivy gate above — this job is skipped when the scan fails), rewrite
   # deploy/k8s/r6-stage/deployment.yaml's digest pin to the image just pushed.
   # Git thereby always names the newest gate-passing image (desired state);
-  # the cluster catches up on the next deliberate manual ArgoCD sync/apply,
-  # never automatically. The bump commit carries [skip ci] so it triggers no
+  # the ArgoCD Application (deploy/k8s/argocd/, automated sync + selfHeal)
+  # converges the cluster to it within its sync interval — this pin IS the
+  # deploy. The bump commit carries [skip ci] so it triggers no
   # workflows (no rebuild loop; a rebuild of identical source would produce a
   # new digest and ping-pong forever without it).
   bump_r6_manifest:

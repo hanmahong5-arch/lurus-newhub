@@ -2,14 +2,14 @@
 
 **Scope**: Wave-UAT campaign (S0 + Sα + Sβ + Sδ + Sα2 + Sε). Generated 2026-05-26.
 
-> **As-of update 2026-06-13 (Wave-2 C2):** the deploy namespace is now
-> **`lurus-staging`** (was `lurus-newhub` — PG netpol, PR #20); the `-n` flags +
-> the emergency-rollback `set image` below are corrected (deployment/container
-> `lurus-newhub`, image `ghcr.io/hanmahong5-arch/lurus-newhub`). The
-> `gh workflow run deploy-staging.yml` path (§2) is **dead** — the cluster API is
-> Tailscale-only so `STAGING_KUBECONFIG` can't be wired; deploy via
-> `scripts/deploy-stage.sh` (see `doc/runbook/staging-deploy.md`). The §1 matrix
-> is left as the historical Sε record.
+> **As-of update 2026-08-23 (ADR deploy-canonical-r6-stage):** the live
+> namespace is **`lurus-newhub`** (the `lurus-staging` ns and its PG netpol
+> never materialised on R6 and are retired). `deploy-staging.yml` and the
+> `deploy/k8s/staging/` overlay are **deleted** — deploys converge via the
+> ArgoCD Application in `deploy/k8s/argocd/` (merge → auto-pin → sync), with
+> `SKIP_SECRETS=1 bash scripts/deploy-stage.sh` as the manual fallback (see
+> `doc/runbook/staging-deploy.md`). §2 below is kept as the historical UAT
+> record; do not execute its deploy steps verbatim.
 
 ---
 
@@ -105,7 +105,10 @@ bash scripts/stage-rollback.sh
 bash scripts/stage-rollback.sh --restore
 ```
 
-The script reads `deploy/k8s/staging/kustomization.yaml` for the current image tag and queries GHCR for the previous `main-<sha7>` tag.
+The script rolls `deployment/lurus-newhub` in ns `lurus-newhub` back one
+revision (`kubectl rollout undo`). With the ArgoCD Application synced, pause or
+delete the Application first — selfHeal reverts manual rollbacks; the durable
+path is `git revert` of the auto-pin commit.
 
 For immediate emergency rollback (no script):
 ```bash

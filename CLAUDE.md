@@ -79,17 +79,17 @@ go test -v ./internal/adapter/handler/...  # 指定包
 go test -run Integration ./...             # 仅集成测试
 go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
 
-# --- K8s (hub.lurus.cn 生产 = R6, ns lurus-newhub;2026-07-15 live 核实——
-# 旧记载 100.98.57.55/lurus-system 已 rot,该处 ns 为空) ---
+# --- K8s (hub.lurus.cn 生产 = R6, ns lurus-newhub) ---
 ssh root@100.122.83.20 "kubectl get pods -n lurus-newhub"                # R6 Tailscale;备用 ssh -p 12222 root@43.226.45.87
 ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=100"
-# 部署 = merge → Publish workflow 出新 :main 镜像 → 取 digest 后钉版:
-#   kubectl set image deployment/lurus-newhub lurus-newhub=ghcr.io/hanmahong5-arch/lurus-newhub@sha256:<新digest> -n lurus-newhub
-# migration 已与 leadership lease 解耦(57e22c8a,2026-07-14):每个 master-capable
-# 副本启动都跑,由 bootAutoMigrateLockID + runner 自己的 AdvisoryLockID 两把
-# advisory lock 串行化,滚动更新不再漏跑(2026-07-15 prod 停在 022 是解耦前的旧行为,
-# 无需再做 scale 0→3 仪式)。带 migration 的部署后仍建议核 schema_migrations;
-# 漂移信号见 /metrics 的 lurus_gateway_schema_migrations_pending 与
+# 部署 = merge main → docker-image-main.yml 出 :main 镜像并 auto-pin r6-stage
+# manifest（[skip ci] commit）→ ArgoCD Application（deploy/k8s/argocd/,
+# automated+selfHeal, prune off）自动收敛。禁手工 kubectl set image——selfHeal
+# 会把它回滚;应急路径与回滚见 doc/runbook/staging-deploy.md。
+# 后备（ArgoCD 不可用时）: SKIP_SECRETS=1 bash scripts/deploy-stage.sh
+# migration 与 leadership lease 解耦(57e22c8a):每个 master-capable 副本启动都跑,
+# 两把 advisory lock 串行化。带 migration 的部署后核 schema_migrations;
+# 漂移信号 = /metrics 的 lurus_gateway_schema_migrations_pending 与
 # /api/health 的 checks.schema_migrations。
 ```
 

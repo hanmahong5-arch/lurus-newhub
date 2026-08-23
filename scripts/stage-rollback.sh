@@ -21,10 +21,13 @@
 
 set -euo pipefail
 
-# Namespace is lurus-staging (the PG pg-access-control netpol whitelists it, NOT
-# lurus-newhub — see runbook Infra-1, PR #20 2026-06-13). Deployment name and the
-# /api/status health URL are unchanged (confirmed against deploy/k8s/{staging,r6-stage}).
-readonly NAMESPACE="lurus-staging"
+# The live workload runs in ns lurus-newhub (r6-stage overlay; the old
+# lurus-staging namespace never existed on R6 — the pg-access-control netpol
+# that once forced it is gone, verified 2026-08-23). Overridable for drills.
+# NOTE: with the ArgoCD Application synced (automated + selfHeal), a rollout
+# undo is reverted by the next sync — pause/delete the Application first, or
+# prefer `git revert` of the auto-pin commit (see doc/runbook/staging-deploy.md).
+NAMESPACE="${NAMESPACE:-lurus-newhub}"
 readonly DEPLOYMENT="lurus-newhub"
 readonly HEALTH_URL="https://test-newhub.lurus.cn/api/status"
 readonly WAIT_TIMEOUT="120s"

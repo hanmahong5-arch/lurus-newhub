@@ -7,26 +7,18 @@ Live deployment of `2b-svc-newhub` on the R6 STAGE cluster, fronted by R6 host n
 - Domain: https://test-newhub.lurus.cn
 - Service: NodePort 30850 -> container port 3000
 - Image: `ghcr.io/hanmahong5-arch/lurus-newhub@sha256:…` (pinned digest, `imagePullPolicy: IfNotPresent`). The pin is **auto-written by CI**: after every gate-passing `:main` build, the `bump_r6_manifest` job in `docker-image-main.yml` rewrites `deployment.yaml`'s `# pin:`/`image:` lines to the pushed digest (`[skip ci]` commit). Roll forward = just sync the ArgoCD app / `apply -k` — never `kubectl set image` (that recreates the manifest-behind-cluster drift closed on 2026-08-15).
-- GitOps: ArgoCD Application `lurus-newhub-r6-stage` (ns `argocd`) tracks this directory with **manual** sync — it reports Synced/OutOfSync but never mutates the cluster on its own. See `argocd-application.yaml` for the registration rationale and the removal one-liner.
+- GitOps: ArgoCD Application `lurus-newhub` (ns `argocd`, manifest in
+  `deploy/k8s/argocd/`) tracks this directory with **automated** sync
+  (prune off, selfHeal on): every auto-pin commit on main converges the
+  cluster within the sync interval. See `deploy/k8s/argocd/README.md` for
+  wiring, rollback and the selfHeal-vs-manual-kubectl warning.
 
-## Which overlay when (staging/ vs r6-stage/)
+## This is the only overlay
 
-There are two STAGE overlays and they are **NOT** interchangeable — they differ in
-**auth integration mode**, which is a product decision, so do not merge them blindly:
-
-| | `deploy/k8s/staging/` | `deploy/k8s/r6-stage/` (this dir) |
-|---|---|---|
-| Auth | OIDC (`OIDC_ENABLED=true`) | platform-identity (`OIDC_ENABLED=false` + `IDENTITY_*`) |
-| Image tag | `:staging` (CI-built) | `:main` (manual) |
-| Ingress | Traefik `IngressRoute`, ClusterIP | host-nginx → NodePort 30850 |
-| Replicas | 1 | 3 |
-| Secret | `lurus-newhub-staging-secrets` | `lurus-newhub-secrets` |
-
-**r6-stage/** deploys Deployment/Service **`lurus-newhub`** into ns **`lurus-newhub`** (the live target); the legacy **staging/** overlay still names ns `lurus-staging` and has zero cluster footprint. Use
-**r6-stage/** for the host-nginx + platform-identity path validated in the Wave-1
-runbook; use **staging/** for the Traefik + OIDC path. A full merge/delete is
-**deferred** until the OIDC-vs-platform-identity choice is settled (ADR pending) —
-see the Wave-2 deferred list.
+The sibling `deploy/k8s/staging/` overlay (Traefik + Zitadel-era OIDC, ns
+`lurus-staging`, `:staging` tag) was deleted on 2026-08-23 — it never had a
+cluster footprint and its auth mode was superseded by platform-identity. The
+decision record is `doc/decisions/2026-08-23-deploy-canonical-r6-stage.md`.
 
 ## Resource inventory (live-verified 2026-08-15)
 

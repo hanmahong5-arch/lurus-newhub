@@ -49,6 +49,13 @@ hardening works on real K8s:**
   **zero restarts** (no storm). Delete the netpol → 200 / Ready / back in endpoints. This is the
   exact "readiness sheds, liveness holds" contract.
 
+> **RESOLVED 2026-08-23:** the `pg-access-control` netpol is gone from the
+> `database` ns, the workload runs (and has run for months) in ns
+> `lurus-newhub` with PG access, and the `staging/` overlay +
+> `deploy-staging.yml` were deleted (ADR
+> `doc/decisions/2026-08-23-deploy-canonical-r6-stage.md`). The paragraph
+> below is the historical record of the 2026-06-13 finding.
+
 **🐞 Deploy-blocking bug found:** the `staging/` + `r6-stage/` overlays and `deploy-staging.yml`
 deploy to namespace **`lurus-newhub`**, which is **not** in the `database` ns `pg-access-control`
 NetworkPolicy whitelist (allowed: `lurus-system, lurus-platform, lucrum, matrix, lurus-staging,
