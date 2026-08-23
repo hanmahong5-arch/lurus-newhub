@@ -523,9 +523,9 @@ const EditUserModal = (props) => {
                       <Col span={24} key={field}>
                         <Form.Input
                           field={field}
-                          label={t(
-                            `已绑定的 ${field.replace('_id', '').toUpperCase()} 账户`,
-                          )}
+                          label={t('已绑定的 {{provider}} 账户', {
+                            provider: field.replace('_id', '').toUpperCase(),
+                          })}
                           readonly
                           placeholder={t(
                             '此项只读，需要用户通过个人设置页面的相关绑定按钮进行绑定，不可直接修改',

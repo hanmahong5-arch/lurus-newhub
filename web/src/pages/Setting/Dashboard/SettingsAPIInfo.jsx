@@ -316,7 +316,9 @@ const SettingsAPIInfo = ({ options, refresh }) => {
     setSelectedRowKeys([]);
     setHasChanges(true);
     showSuccess(
-      `已删除 ${selectedRowKeys.length} 个API信息，请及时点击“保存设置”进行保存`,
+      t('已删除 {{n}} 个API信息，请及时点击“保存设置”进行保存', {
+        n: selectedRowKeys.length,
+      }),
     );
   };
 

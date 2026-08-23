@@ -122,7 +122,7 @@ const ThinkingContent = ({
                 style={{ color: 'white' }}
                 className='text-xs sm:text-sm font-medium opacity-90'
               >
-                思考中
+                {t('思考中')}
               </Typography.Text>
             </div>
           )}

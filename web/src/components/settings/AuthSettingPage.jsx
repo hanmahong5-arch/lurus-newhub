@@ -846,7 +846,7 @@ const AuthSettingPage = () => {
                           )
                         }
                       >
-                        启用邮箱域名白名单
+                        {t('启用邮箱域名白名单')}
                       </Form.Checkbox>
                     </Col>
                     <Col xs={24} sm={24} md={12} lg={12} xl={12}>
@@ -860,7 +860,7 @@ const AuthSettingPage = () => {
                           )
                         }
                       >
-                        启用邮箱别名限制
+                        {t('启用邮箱别名限制')}
                       </Form.Checkbox>
                     </Col>
                   </Row>
@@ -929,7 +929,7 @@ const AuthSettingPage = () => {
                         field='SMTPToken'
                         label={t('SMTP 访问凭证')}
                         type='password'
-                        placeholder='敏感信息不会发送到前端显示'
+                        placeholder={t('敏感信息不会发送到前端显示')}
                       />
                     </Col>
                     <Col xs={24} sm={24} md={8} lg={8} xl={8}>
@@ -1135,7 +1135,7 @@ const AuthSettingPage = () => {
                       <Form.Input
                         field='LinuxDOMinimumTrustLevel'
                         label='LinuxDO Minimum Trust Level'
-                        placeholder='允许注册的最低信任等级'
+                        placeholder={t('允许注册的最低信任等级')}
                       />
                     </Col>
                   </Row>

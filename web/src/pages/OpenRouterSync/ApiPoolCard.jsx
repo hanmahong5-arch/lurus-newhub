@@ -18,24 +18,42 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import React, { useEffect, useState, useCallback } from 'react';
 import { Card, Tag, Table, Typography, Space, Button } from '@douyinfe/semi-ui';
+import { useTranslation } from 'react-i18next';
 import { API } from '../../helpers/api';
 
 const { Text, Title } = Typography;
 
-const STATUS_TAG = {
-  enabled: { color: 'green', label: '启用' },
-  cooling: { color: 'orange', label: '冷却中' },
-  permanent_disabled: { color: 'red', label: '永久禁用' },
+// Colour belongs to the status; the label is built at render time. The keys are
+// written as literal t(…) calls rather than looked up from a table, because the
+// i18n gate can only see keys that appear literally in the source — a label
+// pulled out of a map is invisible to it and could go missing from en.json
+// without anything turning red.
+const STATUS_COLOR = {
+  enabled: 'green',
+  cooling: 'orange',
+  permanent_disabled: 'red',
 };
+const statusLabel = (status, t) =>
+  ({
+    enabled: t('启用'),
+    cooling: t('冷却中'),
+    permanent_disabled: t('永久禁用'),
+  })[status] || status;
 
-const CHANNEL_STATUS_TAG = {
-  enabled: { color: 'green', label: '启用' },
-  auto_disabled: { color: 'orange', label: '自动禁用（待恢复）' },
-  manually_disabled: { color: 'red', label: '手动禁用' },
+const CHANNEL_STATUS_COLOR = {
+  enabled: 'green',
+  auto_disabled: 'orange',
+  manually_disabled: 'red',
 };
+const channelStatusLabel = (status, t) =>
+  ({
+    enabled: t('启用'),
+    auto_disabled: t('自动禁用（待恢复）'),
+    manually_disabled: t('手动禁用'),
+  })[status] || status;
 
-function formatRemaining(seconds) {
-  if (!seconds || seconds <= 0) return '即将恢复';
+function formatRemaining(seconds, t) {
+  if (!seconds || seconds <= 0) return t('即将恢复');
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   const h = Math.floor(seconds / 3600);
@@ -44,6 +62,7 @@ function formatRemaining(seconds) {
 }
 
 const ApiPoolCard = () => {
+  const { t } = useTranslation();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -68,10 +87,11 @@ const ApiPoolCard = () => {
   if (!data || data.length === 0) {
     return (
       <Card style={{ marginBottom: 12 }}>
-        <Title heading={5}>API Pool 状态</Title>
+        <Title heading={5}>{t('API Pool 状态')}</Title>
         <Text type='tertiary'>
-          当前没有启用 multi-key 的 OpenRouter 渠道。在渠道管理中把渠道设为多
-          key 模式后，本卡片会展示池内每个 key 的状态。
+          {t(
+            '当前没有启用 multi-key 的 OpenRouter 渠道。在渠道管理中把渠道设为多 key 模式后，本卡片会展示池内每个 key 的状态。',
+          )}
         </Text>
       </Card>
     );
@@ -85,20 +105,20 @@ const ApiPoolCard = () => {
       render: (v) => <Text code>{v}</Text>,
     },
     {
-      title: '状态',
+      title: t('状态'),
       dataIndex: 'status',
-      render: (s) => {
-        const t = STATUS_TAG[s] || { color: 'grey', label: s };
-        return <Tag color={t.color}>{t.label}</Tag>;
-      },
+      render: (s) => (
+        <Tag color={STATUS_COLOR[s] || 'grey'}>{statusLabel(s, t)}</Tag>
+      ),
     },
     {
-      title: '冷却剩余',
+      title: t('冷却剩余'),
       dataIndex: 'cooldown_seconds_remaining',
-      render: (s, row) => (row.status === 'cooling' ? formatRemaining(s) : '—'),
+      render: (s, row) =>
+        row.status === 'cooling' ? formatRemaining(s, t) : '—',
     },
     {
-      title: '原因',
+      title: t('原因'),
       dataIndex: 'disable_reason',
       render: (r) =>
         r ? (
@@ -127,21 +147,17 @@ const ApiPoolCard = () => {
         }}
       >
         <Title heading={5} style={{ margin: 0 }}>
-          API Pool 状态
+          {t('API Pool 状态')}
         </Title>
         <Button size='small' onClick={reload} loading={loading}>
-          刷新
+          {t('刷新')}
         </Button>
       </div>
       <Text type='tertiary' size='small'>
-        每 10 秒自动刷新。冷却中的 key 由 reaper 在到期后自动恢复。
+        {t('每 10 秒自动刷新。冷却中的 key 由 reaper 在到期后自动恢复。')}
       </Text>
 
       {data.map((ch) => {
-        const ct = CHANNEL_STATUS_TAG[ch.status] || {
-          color: 'grey',
-          label: ch.status,
-        };
         return (
           <Card
             key={ch.channel_id}
@@ -151,19 +167,27 @@ const ApiPoolCard = () => {
               <Space>
                 <Text strong>{ch.channel_name || `#${ch.channel_id}`}</Text>
                 <Text type='tertiary' size='small'>
-                  (渠道 #{ch.channel_id})
+                  {t('(渠道 #{{id}})', { id: ch.channel_id })}
                 </Text>
-                <Tag color={ct.color}>{ct.label}</Tag>
+                <Tag color={CHANNEL_STATUS_COLOR[ch.status] || 'grey'}>
+                  {channelStatusLabel(ch.status, t)}
+                </Tag>
               </Space>
             }
             headerLine={false}
           >
             <Space style={{ marginBottom: 8 }}>
-              <Tag color='green'>启用 {ch.enabled_count}</Tag>
-              <Tag color='orange'>冷却 {ch.cooling_count}</Tag>
-              <Tag color='red'>永久禁用 {ch.permanent_disabled_count}</Tag>
+              <Tag color='green'>
+                {t('启用 {{n}}', { n: ch.enabled_count })}
+              </Tag>
+              <Tag color='orange'>
+                {t('冷却 {{n}}', { n: ch.cooling_count })}
+              </Tag>
+              <Tag color='red'>
+                {t('永久禁用 {{n}}', { n: ch.permanent_disabled_count })}
+              </Tag>
               <Text type='tertiary' size='small'>
-                共 {ch.key_count}
+                {t('共 {{n}}', { n: ch.key_count })}
               </Text>
             </Space>
             <Table
