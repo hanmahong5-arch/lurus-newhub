@@ -205,6 +205,18 @@ func SetApiV2Router(router *gin.Engine) {
 		tenantBilling.Use(middleware.TenantSlugGuard())
 		{
 			tenantBilling.GET("/invoices", handler.ListInvoicesV2)
+			// Lost in 7835280f, which removed the tenant route group whole
+			// while migrating admin auth; GetTopUpsV2 and its unit tests
+			// stayed, and so did the console call. The v2 billing panel has
+			// been asking for /billing/topups and getting a 404 ever since.
+			// Same context and isolation as ListInvoicesV2 beside it: scoped
+			// by tenantCtx.UserID and tenantCtx.TenantID, behind the same
+			// UserAuth + TenantSlugGuard.
+			//
+			// POST /topup is NOT restored here. It moves money, it was
+			// removed in the same commit, and its auth model changed
+			// underneath it — re-opening a money path is an owner's call.
+			tenantBilling.GET("/topups", handler.GetTopUpsV2)
 		}
 
 		// Chat single-model multi-turn — non-stream only v1; in-memory
