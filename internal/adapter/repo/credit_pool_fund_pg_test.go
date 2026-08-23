@@ -13,6 +13,8 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -207,6 +209,113 @@ func TestFundPoolIdempotent_ConcurrentReplayNeverDoubleCredits(t *testing.T) {
 	DB.Model(&entity.CreditPoolFundEvent{}).Where("event_id = ?", "evt-race").Count(&eventCount)
 	if eventCount != 1 {
 		t.Fatalf("want exactly 1 fund event after race, got %d", eventCount)
+	}
+}
+
+// TestFundPoolIdempotent_TwoGoroutineBarrierRace pins the concurrency
+// contract to the minimal reproduction: exactly two callers racing the SAME
+// (tenant_id, event_id) pair through the repo-layer funding path
+// (FundPoolIdempotent), released by a closed-channel barrier so both
+// goroutines reach the pre-check (tenant_credit_pool.go:365) at nearly the
+// same instant instead of serializing behind Go's scheduler — the scenario a
+// duplicated BillingOutbox delivery produces. Assertions read the real
+// database (fund_events row count, pool balance), not just the two returned
+// (event, error) pairs, per the standing rule that concurrency claims must be
+// checked against actual DB state.
+func TestFundPoolIdempotent_TwoGoroutineBarrierRace(t *testing.T) {
+	setupFundPG(t)
+	ctx := context.Background()
+
+	const (
+		tenantID = "t-barrier"
+		amount   = int64(300)
+		eventID  = "evt-barrier"
+	)
+	pool, err := CreateTenantCreditPool(tenantID, 1, PoolMaxBalanceUnlimited, PoolResetMonthly, 80)
+	if err != nil {
+		t.Fatalf("create pool: %v", err)
+	}
+
+	start := make(chan struct{})
+	var ready, wg sync.WaitGroup
+	type outcome struct {
+		ev  *CreditPoolFundEvent
+		err error
+	}
+	results := make([]outcome, 2)
+	for i := 0; i < 2; i++ {
+		ready.Add(1)
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			// Warm a pool connection BEFORE the barrier: without this the
+			// second goroutine is still dialling while the first commits, and
+			// the "race" decays into a sequential replay every single round.
+			if err := DB.Exec("SELECT 1").Error; err != nil {
+				results[idx] = outcome{nil, fmt.Errorf("conn warmup: %w", err)}
+				ready.Done()
+				return
+			}
+			ready.Done()
+			<-start
+			ev, err := FundPoolIdempotent(ctx, pool.ID, tenantID, amount, eventID, "billing-outbox", 1)
+			results[idx] = outcome{ev, err}
+		}(i)
+	}
+	ready.Wait()
+	close(start)
+	wg.Wait()
+
+	// -------- DB-level truth: the load-bearing assertions --------
+	var eventCount int64
+	if err := DB.Model(&entity.CreditPoolFundEvent{}).
+		Where("tenant_id = ? AND event_id = ?", tenantID, eventID).
+		Count(&eventCount).Error; err != nil {
+		t.Fatalf("count fund_events: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("fund_events rows for (tenant,event) = %d, want exactly 1", eventCount)
+	}
+
+	got, err := GetTenantCreditPool(tenantID)
+	if err != nil {
+		t.Fatalf("readback pool: %v", err)
+	}
+	if got.CurrentBalance != amount {
+		t.Fatalf("pool balance = %d, want exactly %d (one credit, not zero or double)", got.CurrentBalance, amount)
+	}
+
+	// -------- return-value classification: real concurrency semantics --------
+	// Measured behaviour (repeated -count runs, GORM logs inspected): the
+	// loser usually resolves via the PRE-CHECK fast path — by the time it
+	// looks, the winner's row is already committed, so it gets
+	// ErrFundEventExists without ever opening its own transaction. The in-tx
+	// arm (UNIQUE violation on the loser's own INSERT → the failed statement
+	// aborts the tx, the in-tx re-fetch dies with it, and the "insert
+	// conflict" wrapper surfaces) needs BOTH goroutines to pass the pre-check
+	// before either commits; the warmed-connection barrier above makes that
+	// window reachable, but scheduling still decides which arm fires, so both
+	// stay accepted below. The DB assertions above are what actually prove no
+	// double credit occurred, whichever arm the loser took.
+	successes, replayLike := 0, 0
+	for i, r := range results {
+		switch {
+		case r.err == nil:
+			successes++
+			if r.ev == nil || r.ev.NewBalance != amount {
+				t.Errorf("goroutine %d: success result has wrong payload: %+v", i, r.ev)
+			}
+		case errors.Is(r.err, ErrFundEventExists):
+			replayLike++
+		case strings.Contains(r.err.Error(), "insert conflict"):
+			replayLike++
+		default:
+			t.Errorf("goroutine %d: neither success nor a recognizable replay/conflict error: %v", i, r.err)
+		}
+	}
+	if successes != 1 || replayLike != 1 {
+		t.Fatalf("want exactly 1 success + 1 replay-or-conflict, got successes=%d replayLike=%d (err0=%v, err1=%v)",
+			successes, replayLike, results[0].err, results[1].err)
 	}
 }
 

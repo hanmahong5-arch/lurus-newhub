@@ -53,6 +53,25 @@
 --   * idx_credit_pool_fund_events_tenant (019/021, plain non-unique index on
 --     tenant_id alone) is untouched — this migration only removes the
 --     single-column UNIQUE, not the plain lookup index.
+--
+-- 2026-08-22 hardened: the drop-loop join now filters c.contype IN ('u','p')
+-- (nulls from the LEFT JOIN — a standalone unique index with no owning
+-- constraint — still pass through). pg_constraint.conindid is populated for
+-- FOREIGN KEY constraints too (pointing at the REFERENCED table's supporting
+-- index), so without this filter a future external FK referencing this
+-- table's legacy unique index would join in under the SAME index, and the
+-- loop would try `ALTER TABLE credit_pool_fund_events DROP CONSTRAINT
+-- <fk_name>` — a constraint that belongs to the OTHER table, which fails.
+-- No such FK exists today; this is fresh-install-only preventive hardening
+-- (stage already applied the unfixed 031 — schema_migrations records only
+-- version + applied_at, no checksum, so this in-place edit only changes what
+-- a NEW install executes).
+-- Residue semantics of that filter, stated honestly: when an external FK
+-- pins the legacy unique, this migration now COMPLETES but leaves the
+-- global UNIQUE(event_id) in place — per-tenant idempotency is then NOT in
+-- effect. The post-loop RAISE WARNING below makes that residue visible in
+-- the install log instead of masquerading as success; removing the pinning
+-- dependency and re-running (idempotent) finishes the convergence.
 
 DO $mig$
 DECLARE
@@ -77,12 +96,31 @@ BEGIN
           AND i.indnkeyatts = 1
           AND (SELECT a.attname FROM pg_attribute a
                WHERE a.attrelid = i.indrelid AND a.attnum = i.indkey[0]) = 'event_id'
+          AND (c.contype IS NULL OR c.contype IN ('u', 'p'))
     LOOP
         IF legacy.constraint_name IS NOT NULL THEN
             EXECUTE format('ALTER TABLE credit_pool_fund_events DROP CONSTRAINT %I', legacy.constraint_name);
         ELSE
             EXECUTE format('DROP INDEX %s', legacy.index_name);
         END IF;
+    END LOOP;
+
+    -- Fail LOUDLY on the residue the contype filter can leave behind: if an
+    -- external dependency (e.g. a future FK from another table) pinned a
+    -- legacy single-column unique so the loop had to leave it, the per-tenant
+    -- idempotency this migration exists for is NOT in effect — cross-tenant
+    -- event_id reuse still collides. A silent skip here would look exactly
+    -- like success in the install log.
+    FOR legacy IN
+        SELECT i.indexrelid::regclass::text AS index_name
+        FROM pg_index i
+        WHERE i.indrelid = 'public.credit_pool_fund_events'::regclass
+          AND i.indisunique
+          AND i.indnkeyatts = 1
+          AND (SELECT a.attname FROM pg_attribute a
+               WHERE a.attrelid = i.indrelid AND a.attnum = i.indkey[0]) = 'event_id'
+    LOOP
+        RAISE WARNING '031: legacy single-column unique % survived (an external dependency pins it) — per-tenant fund idempotency is NOT in effect until it is removed manually', legacy.index_name;
     END LOOP;
 
     -- Per-tenant composite unique (same name the struct tags use, so

@@ -9,6 +9,8 @@ build
 logs
 web/dist
 .env
+# 挡住 .env.bak-YYYY 这类含活凭证的手工备份被 git add -A 吸走(.env.example 均已 tracked 不受影响)
+.env.*
 one-api
 lurus-api
 server

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -301,6 +302,91 @@ func TestGrantInternalApiKeyTenantV2_TenantNotFound(t *testing.T) {
 		t.Fatalf("rejected grant leaked a whitelist row: %s", mustJSON(resp))
 	}
 }
+
+// TestInternalKeysV2_CriticalRateLimit_EnforcesThenBlocks proves that
+// middleware.CriticalRateLimit(), mounted on this group in production
+// (api-v2-router.go:329-336), genuinely rejects requests once armed — not
+// just that it no-ops when disabled. Every existing test against this router
+// (including setupInternalKeyAdminRouter's shared fixture, which omits the
+// middleware entirely) runs with common.CriticalRateLimitEnable at its test
+// binary zero value (false), so the limiter has never actually been proven to
+// limit. Mirrors the enable/save/restore pattern in
+// internal/adapter/middleware/final2_cover_test.go
+// TestRateLimitConstructors_EnabledFactory: since common.RedisEnabled is
+// false in this fixture's DB setup, CriticalRateLimit() resolves to the
+// in-memory limiter (rate-limit.go's rateLimitFactory), so no live Redis is
+// needed.
+func TestInternalKeysV2_CriticalRateLimit_EnforcesThenBlocks(t *testing.T) {
+	f := setupInternalKeyAdminRouter(t)
+	t.Cleanup(f.Cleanup)
+
+	prevEnable := common.CriticalRateLimitEnable
+	prevNum := common.CriticalRateLimitNum
+	prevDuration := common.CriticalRateLimitDuration
+	common.CriticalRateLimitEnable = true
+	common.CriticalRateLimitNum = 2
+	common.CriticalRateLimitDuration = 3600
+	defer func() {
+		common.CriticalRateLimitEnable = prevEnable
+		common.CriticalRateLimitNum = prevNum
+		common.CriticalRateLimitDuration = prevDuration
+	}()
+
+	// setupInternalKeyAdminRouter's shared fixture builds its /internal-keys
+	// group without middleware.CriticalRateLimit() (every other test in this
+	// file needs the limiter OFF). This test instead builds a router that adds
+	// the one piece of production wiring under test — CriticalRateLimit() must
+	// be constructed here, after the globals above are armed, since
+	// rateLimitFactory freezes maxRequestNum/duration/RedisEnabled at
+	// middleware-construction time, not per-request.
+	router := gin.New()
+	admin := router.Group("/api/v2/admin", func(c *gin.Context) {
+		c.Set("id", 1) // mimics RootJWTAuth's admin actor injection
+		c.Next()
+	})
+	ik := admin.Group("/internal-keys")
+	ik.Use(middleware.CriticalRateLimit())
+	ik.GET("", ListInternalApiKeysV2)
+
+	// The in-memory limiter's bucket key is mark+ClientIP and lives in a
+	// package-level store that outlives this test (middleware/rate-limit.go),
+	// with a key TTL far longer than a test binary. internalRequest never sets
+	// RemoteAddr, so every request would land in httptest's default
+	// 192.0.2.1 bucket — the second -count run then starts at an exhausted
+	// window (429 before threshold) and any future limiter-mounted test is
+	// poisoned too. Same reason final2_cover_test.go hands each case its own
+	// IP; here a process-unique IP per invocation keeps every run fresh.
+	seq := rateLimitTestIPSeq.Add(1)
+	remoteAddr := fmt.Sprintf("10.99.%d.%d:1", (seq/250)%250, seq%250)
+	const path = "/api/v2/admin/internal-keys"
+	doGet := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = remoteAddr
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	for i := 0; i < common.CriticalRateLimitNum; i++ {
+		w := doGet()
+		if w.Code != http.StatusOK {
+			t.Fatalf("request %d/%d before threshold: status=%d, want 200, body=%s",
+				i+1, common.CriticalRateLimitNum, w.Code, w.Body.String())
+		}
+	}
+	// The (N+1)th request in the same window must be rejected by the limiter
+	// itself (429), not by auth or a handler error — auth is the same stub
+	// that returned 200 on every prior request.
+	w := doGet()
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("request past threshold: status=%d, want 429, body=%s", w.Code, w.Body.String())
+	}
+}
+
+// rateLimitTestIPSeq hands each limiter-armed test invocation (including
+// -count reps within one binary) a distinct client IP, because the in-memory
+// limiter's buckets are package-global and effectively never expire in-test.
+var rateLimitTestIPSeq atomic.Int64
 
 // TestInternalKeysV2_UnauthenticatedRejected mounts the production
 // middleware.RootJWTAuth (same wiring as api-v2-router.go's adminRoute) and
