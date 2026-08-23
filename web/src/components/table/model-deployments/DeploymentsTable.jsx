@@ -26,6 +26,11 @@ import {
 } from '@douyinfe/semi-illustrations';
 import { getDeploymentsColumns } from './DeploymentsColumnDefs';
 
+// Row selection / batch delete used to be wired here (POST
+// /api/deployments/batch_delete, a route nothing in the tree registers), but
+// the page above already hard-disabled it (batchOperationsEnabled = false),
+// so it never rendered. Removed rather than left as a permanently-off flag.
+
 // Import all the new modals
 import ViewLogsModal from './modals/ViewLogsModal';
 import ExtendDurationModal from './modals/ExtendDurationModal';
@@ -43,16 +48,12 @@ const DeploymentsTable = (deploymentsData) => {
     deploymentCount,
     compactMode,
     visibleColumns,
-    rowSelection,
-    batchOperationsEnabled = true,
     handlePageChange,
     handlePageSizeChange,
     handleRow,
     t,
     COLUMN_KEYS,
     // Column functions and data
-    startDeployment,
-    restartDeployment,
     deleteDeployment,
     syncDeploymentToChannel,
     setEditingDeployment,
@@ -116,8 +117,6 @@ const DeploymentsTable = (deploymentsData) => {
     return getDeploymentsColumns({
       t,
       COLUMN_KEYS,
-      startDeployment,
-      restartDeployment,
       deleteDeployment,
       setEditingDeployment,
       setShowEdit,
@@ -134,8 +133,6 @@ const DeploymentsTable = (deploymentsData) => {
   }, [
     t,
     COLUMN_KEYS,
-    startDeployment,
-    restartDeployment,
     deleteDeployment,
     syncDeploymentToChannel,
     setEditingDeployment,
@@ -183,7 +180,6 @@ const DeploymentsTable = (deploymentsData) => {
         hidePagination={true}
         expandAllRows={false}
         onRow={handleRow}
-        rowSelection={batchOperationsEnabled ? rowSelection : undefined}
         empty={
           <Empty
             image={<IllustrationNoResult style={{ width: 150, height: 150 }} />}

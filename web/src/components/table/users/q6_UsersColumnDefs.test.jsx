@@ -124,34 +124,6 @@ vi.mock('@douyinfe/semi-ui', () => {
       },
       typeof format === 'function' ? format(percent) : null,
     );
-  const Dropdown = ({ menu = [], children, trigger, position }) =>
-    React.createElement(
-      'span',
-      { 'data-testid': 'dropdown', 'data-trigger': trigger },
-      React.createElement(
-        'span',
-        { 'data-testid': 'dropdown-menu', key: 'm' },
-        menu.map((item, i) =>
-          React.createElement(
-            'button',
-            {
-              key: i,
-              type: 'button',
-              'data-testid': 'dropdown-item',
-              'data-variant': item.type,
-              disabled: Boolean(item.disabled),
-              onClick: item.onClick,
-            },
-            item.name,
-          ),
-        ),
-      ),
-      React.createElement(
-        'span',
-        { 'data-testid': 'dropdown-trigger', key: 't' },
-        children,
-      ),
-    );
   // `copyable.content` is the string that lands on the operator's clipboard —
   // surface it, or the copy payload can silently drift from the label.
   const Paragraph = ({ children, copyable }) =>
@@ -175,7 +147,6 @@ vi.mock('@douyinfe/semi-ui', () => {
     Tooltip,
     Popover,
     Progress,
-    Dropdown,
     Modal,
     Typography: { Paragraph, Text, Title: Text },
     Avatar: ({ children }) => React.createElement('span', null, children),
@@ -188,10 +159,6 @@ vi.mock('@douyinfe/semi-ui', () => {
     Pagination: () => null,
   };
 });
-
-vi.mock('@douyinfe/semi-icons', () => ({
-  IconMore: () => React.createElement('i', { 'data-testid': 'icon-more' }),
-}));
 
 // render.jsx pulls i18next in directly; without init t() returns undefined.
 vi.mock('i18next', () => {
@@ -247,10 +214,6 @@ const makeCtx = (over = {}) => ({
   t,
   setEditingUser: vi.fn(),
   setShowEditUser: vi.fn(),
-  showPromoteModal: vi.fn(),
-  showDemoteModal: vi.fn(),
-  showEnableDisableModal: vi.fn(),
-  showDeleteModal: vi.fn(),
   ...over,
 });
 
@@ -474,27 +437,28 @@ describe('status column', () => {
 
 describe('operations column', () => {
   const byLabel = (label) =>
-    screen.getAllByTestId('button').find((b) => b.textContent === label) ??
-    screen.getAllByTestId('dropdown-item').find((b) => b.textContent === label);
+    screen.getAllByTestId('button').find((b) => b.textContent === label);
 
-  it('offers 禁用 (and not 启用) for an enabled account and wires the action', () => {
-    const ctx = makeCtx();
-    const record = user({ status: 1 });
-    renderCell(ctx, 'operate', record);
-    expect(byLabel('启用')).toBeUndefined();
-
-    fireEvent.click(byLabel('禁用'));
-    expect(ctx.showEnableDisableModal).toHaveBeenCalledWith(record, 'disable');
+  // Disable/Enable, Promote, Demote and the "注销账户" overflow item used to
+  // live here. All four posted to POST /api/user/manage, which no handler
+  // has answered since the service was slimmed to a pure gateway — every
+  // click 404'd. They were removed rather than kept as always-failing
+  // buttons; v2 admin users is the working path now. This locks the removal
+  // so a status-driven Disable/Enable control (or a Promote/Demote/Deregister
+  // one) is not silently re-added without a live route behind it.
+  it('offers only 编辑 — no disable/enable, promote, demote or deregister controls', () => {
+    renderCell(makeCtx(), 'operate', user({ status: 1 }));
+    expect(screen.getAllByTestId('button').map((b) => b.textContent)).toEqual([
+      '编辑',
+    ]);
+    expect(screen.queryAllByTestId('dropdown-item')).toHaveLength(0);
   });
 
-  it('offers 启用 (and not 禁用) for a disabled account and wires the action', () => {
-    const ctx = makeCtx();
-    const record = user({ status: 2 });
-    renderCell(ctx, 'operate', record);
-    expect(byLabel('禁用')).toBeUndefined();
-
-    fireEvent.click(byLabel('启用'));
-    expect(ctx.showEnableDisableModal).toHaveBeenCalledWith(record, 'enable');
+  it('offers only 编辑 for a disabled account too — the status has no effect', () => {
+    renderCell(makeCtx(), 'operate', user({ status: 2 }));
+    expect(screen.getAllByTestId('button').map((b) => b.textContent)).toEqual([
+      '编辑',
+    ]);
   });
 
   it('opens the editor on the clicked record when 编辑 is pressed', () => {
@@ -504,40 +468,6 @@ describe('operations column', () => {
     fireEvent.click(byLabel('编辑'));
     expect(ctx.setEditingUser).toHaveBeenCalledWith(record);
     expect(ctx.setShowEditUser).toHaveBeenCalledWith(true);
-  });
-
-  it('routes 提升 and 降级 to their confirmation modals, not straight to the API', () => {
-    const ctx = makeCtx();
-    const record = user();
-    renderCell(ctx, 'operate', record);
-
-    fireEvent.click(byLabel('提升'));
-    expect(ctx.showPromoteModal).toHaveBeenCalledWith(record);
-    expect(ctx.showDemoteModal).not.toHaveBeenCalled();
-
-    fireEvent.click(byLabel('降级'));
-    expect(ctx.showDemoteModal).toHaveBeenCalledWith(record);
-    expect(ctx.showPromoteModal).toHaveBeenCalledTimes(1);
-  });
-
-  it('hides account deregistration behind the overflow menu as the danger entry', () => {
-    const ctx = makeCtx();
-    const record = user();
-    renderCell(ctx, 'operate', record);
-    const item = byLabel('注销账户');
-    expect(item.getAttribute('data-variant')).toBe('danger');
-    // Irreversible: it must go through the modal, never fire an action itself.
-    fireEvent.click(item);
-    expect(ctx.showDeleteModal).toHaveBeenCalledWith(record);
-  });
-
-  it('does not label account deregistration with the sign-out string', () => {
-    // The bare 注销 key is translated "Logout" (and "Se déconnecter",
-    // "ログアウト", …). Using it here labelled a danger-typed item — one that
-    // opens "equivalent to deleting the user, this is irreversible" — as if it
-    // merely signed the account out, in every non-Chinese locale.
-    renderCell(makeCtx(), 'operate', user());
-    expect(screen.queryByLabelText('注销')).toBeNull();
   });
 
   it('offers no actions at all on an account that is already deregistered', () => {
@@ -550,11 +480,11 @@ describe('operations column', () => {
   // DEFECT (correctness): both the status cell and the operations cell test
   // `record.DeletedAt !== null`, so a row where the field is simply ABSENT —
   // undefined, not null — is classified as deregistered. Such a row is painted
-  // 已注销 in red and loses every admin control (disable / edit / promote /
-  // demote / deregister). Any API response that omits the soft-delete column
-  // (a projection, a cached older payload, a hand-built fixture) therefore
-  // locks the operator out of those accounts with no error shown anywhere.
-  // The correct test is a truthiness check on an actual deletion timestamp.
+  // 已注销 in red and loses every admin control (today: just 编辑). Any API
+  // response that omits the soft-delete column (a projection, a cached older
+  // payload, a hand-built fixture) therefore locks the operator out of those
+  // accounts with no error shown anywhere. The correct test is a truthiness
+  // check on an actual deletion timestamp.
   // Verified red 2026-08-20: un-skipped it fails — 0 buttons are rendered.
   // Fixed 2026-08-21: both cells now test the timestamp for truthiness.
   it('CONTRACT:a row with no DeletedAt field is treated as a live account', () => {

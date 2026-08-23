@@ -287,18 +287,16 @@ describe('useDeploymentsData – column visibility', () => {
 });
 
 describe('useDeploymentsData – selection and modal', () => {
-  it('maps the selected rows onto checkbox keys', async () => {
+  // Row selection / batch delete were removed: batchDeleteDeployments posted
+  // to POST /api/deployments/batch_delete, a route nothing in the tree
+  // registers, and the console page had already hard-disabled the feature
+  // before this, so it never reached an operator. The hook no longer exposes
+  // selectedKeys / rowSelection at all.
+  it('exposes no row-selection state', async () => {
     const { result } = await mountLoaded(listOk([{ id: 1 }, { id: 2 }]));
-
-    act(() => {
-      result.current.rowSelection.onChange([1], [{ id: 1, name: 'x' }]);
-    });
-
-    expect(result.current.selectedKeys).toEqual([{ id: 1, name: 'x' }]);
-    expect(result.current.rowSelection.selectedRowKeys).toEqual([1]);
-    expect(
-      result.current.rowSelection.getCheckboxProps({ deployment_name: 'n1' }),
-    ).toEqual({ name: 'n1' });
+    expect(result.current.selectedKeys).toBeUndefined();
+    expect(result.current.rowSelection).toBeUndefined();
+    expect(result.current.batchDeleteDeployments).toBeUndefined();
   });
 
   it('closeEdit hides the modal immediately and clears the record later', async () => {
@@ -346,42 +344,28 @@ describe('useDeploymentsData – selection and modal', () => {
 });
 
 describe('useDeploymentsData – lifecycle operations', () => {
-  it('starts, restarts and deletes, refreshing the list each time', async () => {
+  // startDeployment / restartDeployment (POST .../start, .../restart) and
+  // batchDeleteDeployments (POST .../batch_delete) are gone: nothing in the
+  // route tree ever answered any of the three, and the console buttons that
+  // called them were removed along with them.
+  it('does not expose startDeployment, restartDeployment or batchDeleteDeployments', async () => {
     const { result } = await mountLoaded(listOk([{ id: 3 }]));
-    API.post.mockResolvedValue({ data: { success: true } });
+    expect(result.current.startDeployment).toBeUndefined();
+    expect(result.current.restartDeployment).toBeUndefined();
+    expect(result.current.batchDeleteDeployments).toBeUndefined();
+  });
+
+  it('deletes and refreshes the list', async () => {
+    const { result } = await mountLoaded(listOk([{ id: 3 }]));
     API.delete.mockResolvedValue({ data: { success: true } });
-
-    await act(async () => {
-      await result.current.startDeployment(3);
-    });
-    expect(API.post).toHaveBeenCalledWith('/api/deployments/3/start');
-    expect(showSuccess).toHaveBeenCalledWith('部署启动成功');
-
-    await act(async () => {
-      await result.current.restartDeployment(3);
-    });
-    expect(API.post).toHaveBeenCalledWith('/api/deployments/3/restart');
 
     await act(async () => {
       await result.current.deleteDeployment(3);
     });
     expect(API.delete).toHaveBeenCalledWith('/api/deployments/3');
-    // 1 initial + one refresh per operation.
-    expect(API.get).toHaveBeenCalledTimes(4);
-  });
-
-  it('reports the server message instead of refreshing on a failed start', async () => {
-    const { result } = await mountLoaded(listOk([{ id: 3 }]));
-    API.post.mockResolvedValue({
-      data: { success: false, message: 'already running' },
-    });
-
-    await act(async () => {
-      await result.current.startDeployment(3);
-    });
-
-    expect(showError).toHaveBeenCalledWith('already running');
-    expect(API.get).toHaveBeenCalledTimes(1);
+    // 1 initial + one refresh for the delete.
+    expect(API.get).toHaveBeenCalledTimes(2);
+    expect(showSuccess).toHaveBeenCalledWith('部署删除成功');
   });
 
   it('updateDeploymentName reports success as a boolean', async () => {
@@ -411,51 +395,6 @@ describe('useDeploymentsData – lifecycle operations', () => {
       thrown = await result.current.updateDeploymentName(8, 'renamed');
     });
     expect(thrown).toBe(false);
-  });
-
-  it('batchDeleteDeployments is a no-op without a selection', async () => {
-    const { result } = await mountLoaded(listOk([{ id: 1 }]));
-
-    await act(async () => {
-      await result.current.batchDeleteDeployments();
-    });
-
-    expect(API.post).not.toHaveBeenCalled();
-  });
-
-  it('batchDeleteDeployments posts the selected ids and clears the selection', async () => {
-    const { result } = await mountLoaded(listOk([{ id: 1 }, { id: 2 }]));
-    API.post.mockResolvedValue({ data: { success: true } });
-
-    act(() => {
-      result.current.setSelectedKeys([{ id: 1 }, { id: 2 }]);
-    });
-    await act(async () => {
-      await result.current.batchDeleteDeployments();
-    });
-
-    expect(API.post).toHaveBeenCalledWith('/api/deployments/batch_delete', {
-      ids: [1, 2],
-    });
-    expect(showSuccess).toHaveBeenCalledWith('批量删除成功');
-    expect(result.current.selectedKeys).toEqual([]);
-  });
-
-  it('keeps the selection when the batch delete is refused', async () => {
-    const { result } = await mountLoaded(listOk([{ id: 1 }]));
-    API.post.mockResolvedValue({
-      data: { success: false, message: 'locked' },
-    });
-
-    act(() => {
-      result.current.setSelectedKeys([{ id: 1 }]);
-    });
-    await act(async () => {
-      await result.current.batchDeleteDeployments();
-    });
-
-    expect(showError).toHaveBeenCalledWith('locked');
-    expect(result.current.selectedKeys).toEqual([{ id: 1 }]);
   });
 });
 

@@ -35,7 +35,6 @@ const DeploymentsPage = () => {
 
   // Create deployment modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const batchOperationsEnabled = false;
 
   const {
     // Edit state
@@ -45,11 +44,8 @@ const DeploymentsPage = () => {
     refresh,
 
     // Actions state
-    selectedKeys,
-    setSelectedKeys,
     setEditingDeployment,
     setShowEdit,
-    batchDeleteDeployments,
 
     // Filters state
     formInitValues,
@@ -105,12 +101,8 @@ const DeploymentsPage = () => {
         actionsArea={
           <div className='flex flex-col md:flex-row justify-between items-center gap-2 w-full'>
             <DeploymentsActions
-              selectedKeys={selectedKeys}
-              setSelectedKeys={setSelectedKeys}
               setEditingDeployment={setEditingDeployment}
               setShowEdit={setShowEdit}
-              batchDeleteDeployments={batchDeleteDeployments}
-              batchOperationsEnabled={batchOperationsEnabled}
               compactMode={compactMode}
               setCompactMode={setCompactMode}
               showCreateModal={showCreateModal}
@@ -140,10 +132,7 @@ const DeploymentsPage = () => {
         })}
         t={deploymentsData.t}
       >
-        <DeploymentsTable
-          {...deploymentsData}
-          batchOperationsEnabled={batchOperationsEnabled}
-        />
+        <DeploymentsTable {...deploymentsData} />
       </CardPro>
     </>
   );

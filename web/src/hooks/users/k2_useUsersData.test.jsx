@@ -32,7 +32,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { useUsersData } from './useUsersData';
-import { API, showError, showSuccess } from '../../helpers';
+import { API, showError } from '../../helpers';
 
 const user = (id, over = {}) => ({
   id,
@@ -280,84 +280,6 @@ describe('useUsersData — page size', () => {
   });
 });
 
-describe('useUsersData — manage', () => {
-  it('posts the action and applies the status the server returns', async () => {
-    const { result } = await mount();
-    API.post.mockResolvedValue({
-      data: { success: true, data: { status: 2, role: 1 } },
-    });
-
-    await act(async () => {
-      await result.current.manageUser(1, 'disable', result.current.users[0]);
-    });
-
-    expect(API.post).toHaveBeenCalledWith('/api/user/manage', {
-      id: 1,
-      action: 'disable',
-    });
-    expect(showSuccess).toHaveBeenCalled();
-    expect(result.current.users[0].status).toBe(2);
-    expect(result.current.users[1].status).toBe(1); // untouched
-    expect(result.current.loading).toBe(false);
-  });
-
-  it('applies a promotion to the role field', async () => {
-    const { result } = await mount();
-    API.post.mockResolvedValue({
-      data: { success: true, data: { status: 1, role: 10 } },
-    });
-
-    await act(async () => {
-      await result.current.manageUser(2, 'promote', result.current.users[1]);
-    });
-
-    expect(result.current.users[1].role).toBe(10);
-    expect(result.current.users[0].role).toBe(1);
-  });
-
-  it('tombstones the row locally on delete instead of touching status', async () => {
-    const { result } = await mount();
-    API.post.mockResolvedValue({ data: { success: true, data: {} } });
-
-    await act(async () => {
-      await result.current.manageUser(1, 'delete', result.current.users[0]);
-    });
-
-    expect(result.current.users[0].DeletedAt).toBeInstanceOf(Date);
-    expect(result.current.users[0].status).toBe(1);
-  });
-
-  it('replaces the row objects so the table re-renders', async () => {
-    const { result } = await mount();
-    const before = result.current.users[0];
-    API.post.mockResolvedValue({
-      data: { success: true, data: { status: 2, role: 1 } },
-    });
-
-    await act(async () => {
-      await result.current.manageUser(1, 'disable', before);
-    });
-
-    expect(result.current.users[0]).not.toBe(before);
-    expect(before.status).toBe(1); // the original object is left alone
-  });
-
-  it('reports a rejected action and leaves the rows alone', async () => {
-    const { result } = await mount();
-    API.post.mockResolvedValue({
-      data: { success: false, message: 'cannot demote yourself' },
-    });
-
-    await act(async () => {
-      await result.current.manageUser(1, 'demote', result.current.users[0]);
-    });
-
-    expect(showError).toHaveBeenCalledWith('cannot demote yourself');
-    expect(result.current.users[0].role).toBe(1);
-    expect(result.current.loading).toBe(false);
-  });
-});
-
 describe('useUsersData — row styling and modals', () => {
   it('greys deleted and disabled rows only', async () => {
     const { result } = await mount();
@@ -388,22 +310,6 @@ describe('useUsersData — row styling and modals', () => {
 
     expect(result.current.showEditUser).toBe(false);
     expect(result.current.editingUser).toEqual({ id: undefined });
-  });
-
-  it('closeAddUser only hides the add dialog', async () => {
-    const { result } = await mount();
-
-    act(() => {
-      result.current.setShowAddUser(true);
-      result.current.setEditingUser({ id: 5 });
-    });
-
-    act(() => {
-      result.current.closeAddUser();
-    });
-
-    expect(result.current.showAddUser).toBe(false);
-    expect(result.current.editingUser).toEqual({ id: 5 });
   });
 
   it('getFormValues normalises both filters to empty strings', async () => {

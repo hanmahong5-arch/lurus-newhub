@@ -312,15 +312,11 @@ const makeProps = (overrides = {}) => ({
   deploymentCount: 3,
   compactMode: false,
   visibleColumns: { ...allVisible },
-  rowSelection: { selectedRowKeys: [] },
-  batchOperationsEnabled: true,
   handlePageChange: vi.fn(),
   handlePageSizeChange: vi.fn(),
   handleRow: vi.fn(),
   t,
   COLUMN_KEYS,
-  startDeployment: vi.fn(),
-  restartDeployment: vi.fn(),
   deleteDeployment: vi.fn(),
   syncDeploymentToChannel: vi.fn(),
   setEditingDeployment: vi.fn(),
@@ -403,14 +399,13 @@ describe('compact mode', () => {
 });
 
 describe('row selection and loading', () => {
-  it('offers row selection while batch operations are on', () => {
-    renderTable({ batchOperationsEnabled: true });
-    expect(table().dataset.rowSelection).toBe('on');
-  });
-
-  it('withholds row selection when batch operations are off', () => {
-    // Negative twin: without it, "always selectable" reads as correct.
-    renderTable({ batchOperationsEnabled: false });
+  // Row selection / batch delete were removed: the "批量删除" button posted
+  // to POST /api/deployments/batch_delete, a route nothing in the tree
+  // registers, and the page above had already hard-disabled the feature
+  // (batchOperationsEnabled = false) so it never rendered anyway. The table
+  // no longer accepts a toggle for it at all.
+  it('never offers row selection', () => {
+    renderTable();
     expect(table().dataset.rowSelection).toBe('off');
   });
 

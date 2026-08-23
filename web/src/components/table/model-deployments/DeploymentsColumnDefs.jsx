@@ -269,11 +269,16 @@ const renderInstanceCount = (count, record, t) => {
 };
 
 // Main function to get all deployment columns
+//
+// startDeployment / restartDeployment used to be threaded through here to
+// back a "重试"/"启动" primary action and matching dropdown items. Both
+// posted to POST /api/deployments/:id/start and /restart — routes nothing in
+// the tree ever registered — so every click 404'd. They were removed rather
+// than kept as always-failing buttons; a failed/error/stopped row now gets
+// the same 查看详情 primary action as a running one.
 export const getDeploymentsColumns = ({
   t,
   COLUMN_KEYS,
-  startDeployment,
-  restartDeployment,
   deleteDeployment,
   setEditingDeployment,
   setShowEdit,
@@ -466,30 +471,21 @@ export const getDeploymentsColumns = ({
         // Get primary action based on status
         const getPrimaryAction = () => {
           switch (normalizedStatus) {
+            // 'failed'/'error' used to primary-action a "重试" (retry) and
+            // 'stopped' an "启动" (start), both calling startDeployment — a
+            // route nothing in the tree registers. They fall back to the
+            // same 查看详情 a running row gets rather than an always-404
+            // button; the destroy path (dropdown menu) is unaffected.
             case 'running':
+            case 'failed':
+            case 'error':
+            case 'stopped':
               return {
                 icon: <FaInfoCircle className='text-xs' />,
                 text: t('查看详情'),
                 onClick: () => onViewDetails?.(record),
                 type: 'secondary',
                 theme: 'borderless',
-              };
-            case 'failed':
-            case 'error':
-              return {
-                icon: <FaPlay className='text-xs' />,
-                text: t('重试'),
-                onClick: () => startDeployment(id),
-                type: 'primary',
-                theme: 'solid',
-              };
-            case 'stopped':
-              return {
-                icon: <FaPlay className='text-xs' />,
-                text: t('启动'),
-                onClick: () => startDeployment(id),
-                type: 'primary',
-                theme: 'solid',
               };
             case 'deployment requested':
             case 'deploying':
@@ -576,6 +572,10 @@ export const getDeploymentsColumns = ({
           );
         }
 
+        // 'retry' (failed/error) and 'start' (stopped) items used to live
+        // here too, both calling startDeployment — POST
+        // /api/deployments/:id/start, a route nothing in the tree
+        // registers. Removed along with the primary-action buttons above.
         const managementItems = [];
         if (normalizedStatus === 'running') {
           if (onSyncToChannel) {
@@ -589,28 +589,6 @@ export const getDeploymentsColumns = ({
               </Dropdown.Item>,
             );
           }
-        }
-        if (normalizedStatus === 'failed' || normalizedStatus === 'error') {
-          managementItems.push(
-            <Dropdown.Item
-              key='retry'
-              onClick={() => startDeployment(id)}
-              icon={<FaPlay />}
-            >
-              {t('重试')}
-            </Dropdown.Item>,
-          );
-        }
-        if (normalizedStatus === 'stopped') {
-          managementItems.push(
-            <Dropdown.Item
-              key='start'
-              onClick={() => startDeployment(id)}
-              icon={<FaPlay />}
-            >
-              {t('启动')}
-            </Dropdown.Item>,
-          );
         }
 
         if (managementItems.length > 0) {
