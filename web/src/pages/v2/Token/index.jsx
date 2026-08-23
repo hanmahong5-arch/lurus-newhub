@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
   QUOTA_PER_USD,
   quotaToUSD,
@@ -48,17 +49,6 @@ const quotaBarColor = (remainingRatio) => {
   if (remainingRatio < 0.1) return 'var(--hf-err)';
   if (remainingRatio < 0.3) return 'var(--hf-warn)';
   return 'var(--hf-ok)';
-};
-
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
 };
 
 const tokenStatus = (t) => {

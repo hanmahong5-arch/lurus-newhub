@@ -30,6 +30,7 @@ import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, showSuccess } from '../../../helpers';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // Bounded concurrency for the "test all enabled" sweep — never fan out an
 // unbounded burst of upstream test calls.
@@ -286,17 +287,6 @@ const SyncModelsModal = ({ tenantSlug, channel, onClose, onApply }) => {
  */
 
 // ─── Tenant slug hook ─────────────────────────────────────────────────────────
-
-const useTenantSlug = () => {
-  const [slug, setSlug] = useState('default');
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('tenant_slug');
-      if (s) setSlug(s);
-    } catch (_) {}
-  }, []);
-  return slug;
-};
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 

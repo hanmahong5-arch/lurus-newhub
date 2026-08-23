@@ -213,7 +213,9 @@ describe('Pricing page', () => {
     // After successful POST, GET should be called again to refresh the list.
     // useTenantSlug triggers 2 fetches on mount (default→acme); the save adds 1 more.
     await waitFor(() => {
-      expect(API.get).toHaveBeenCalledTimes(3);
+      // Mount (1) + the post-save refresh (2). Previously 3, the extra one
+      // being the mount's placeholder-slug fetch.
+      expect(API.get).toHaveBeenCalledTimes(2);
     });
   });
 });

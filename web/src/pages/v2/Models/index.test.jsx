@@ -117,14 +117,16 @@ describe('Models page', () => {
       },
       { id: 3, model_name: 'gemini-1.5-pro', vendor: 'Google', status: 1 },
     ];
-    // useTenantSlug starts at 'default' then updates to 'acme' — two fetches occur.
+    // One fetch, not two: useTenantSlug resolves the slug before the first
+    // render, so the mount no longer fires a throwaway request against the
+    // placeholder 'default' tenant first.
     API.get.mockResolvedValue(fakeModelsResponse(items));
 
     render(<HFModels />);
 
     // API called at least once; the final call must use the slug from localStorage.
     await waitFor(() => {
-      expect(API.get).toHaveBeenCalledTimes(2);
+      expect(API.get).toHaveBeenCalledTimes(1);
     });
     // Last call must target the correct tenant slug.
     const lastCall = API.get.mock.calls.at(-1);
@@ -178,7 +180,9 @@ describe('Models page', () => {
     fireEvent.click(screen.getByTestId('vendor-filter-OpenAI'));
 
     await waitFor(() => {
-      expect(API.get).toHaveBeenCalledTimes(3);
+      // Mount (1) + the vendor filter change (2). Previously 3, the extra
+      // one being the mount's placeholder-slug fetch.
+      expect(API.get).toHaveBeenCalledTimes(2);
     });
 
     // Last call must include vendor=OpenAI
