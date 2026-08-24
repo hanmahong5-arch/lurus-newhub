@@ -26,12 +26,24 @@ staging and that the backup gap was a flag flip):
    because the `STAGING_KUBECONFIG` repo secret is empty (it warns and exits 0 — a tracked
    infra gap, `doc/uat-handbook.md §2`). ⇒ the P0-2/P1-4 probe/topology changes **cannot be
    validated on any cluster** until staging is wired. New gating item: **Infra-0** below.
-2. **newhub's DB (`newhub`) has ZERO backup coverage** (previously "unconfirmed"). The pg_dump
-   CronJob hardcodes `-d identity`; newhub's data lives in a **separate `newhub` database**
-   (schema `lurus_api`), **not inside `identity`** (live check — identity's schemas are
-   app/billing/identity/module/notification/public). So no backup path touches newhub data
-   today. The fix extends the dump, not a flag (P1-5).
-3. **The PG is single-instance `lurus-pg-1` (no HA replica).** A node/pod loss on that one
+2. ~~**newhub's DB (`newhub`) has ZERO backup coverage**~~ — **CLOSED, re-verified 2026-08-24.**
+   The `daily-pg-dump` CronJob in ns `database` no longer hardcodes `-d identity`: it enumerates
+   `pg_database` and dumps **every** database plus `pg_dumpall --globals-only` (roles/passwords,
+   without which a restore cannot recreate the `lurus`/`zitadel` roles). Its own comment cites the
+   2026-07-17 drill that surfaced the identity-only gap. Evidence from the latest run's log:
+   `pg_dump newhub complete: 272.8K`. Artifacts land on PVC `lurus-pg-backup` at `/backups`,
+   pruned at 30 days. Correction while here: newhub's tables are in the **`public`** schema
+   (measured, 40 tables) — the `lurus_api` schema named in older docs does not exist.
+   🔴 **What is still open is the OFF-SITE copy, and it is masked by a green Job.**
+   `weekly-s3-upload` reports `Complete 1/1` on every run (16d / 9d / 2d ago), but its first
+   statement is `if [ "${BACKUP_S3_ENABLED:-false}" != "true" ]; then … exit 0`, and the actual
+   log reads `S3 upload disabled (BACKUP_S3_ENABLED!=true) — exiting 0`. **Nothing has ever been
+   uploaded.** Backups therefore exist only on the same disk as the database. Enabling it needs
+   `BACKUP_S3_ENABLED=true` + `BACKUP_S3_BUCKET` + object-store credentials (owner-gated).
+   ⇒ For any CronJob fronted by an `if flag != true; exit 0` guard, Job/Pod status is **not** an
+   oracle — only the log or the artifact is.
+3. **The PG is single-instance (StatefulSet `lurus-pg`, 1 replica, pod `lurus-pg-0` — re-verified
+   2026-08-24; earlier text said `lurus-pg-1`, which does not exist).** A node/pod loss on that one
    PG is a hard newhub outage regardless of newhub replica count — relevant to any availability SLA.
 
 ## In-cluster validation 2026-06-13 (PASS) + a deploy-blocking ns bug
@@ -222,12 +234,21 @@ ssh root@100.98.57.55 "kubectl -n database get cronjob -o wide"   # daily-pg-dum
 
 - **Done in `2l-svc-platform/deploy/k8s/cronjobs/pg-backup.yaml` (PR, 2026-06-15):** the
   CronJob now enumerates every non-system DB at run time (no hardcoded DB list), so the
-  `newhub` DB (datname **`newhub`**, owner-confirmed 2026-06-14; schema `lurus_api`) is
-  covered automatically once the Hub deploys — no second dump line to hand-add later.
-  Then enable **in this order** (the grant is a non-skippable precondition, NOT an optional last step):
-  1. **GRANT first** — `kubectl -n database exec lurus-pg-1 -c postgres -- psql -U postgres -c 'GRANT pg_read_all_data TO lurus;'` (idempotent, read-only). `lurus` owns only 5/9 DBs; **skipping this leaves tally/webgame/zitadel/agentdrq_test UNBACKED — including auth-critical `zitadel`.**
+  `newhub` DB (datname **`newhub`**, owner-confirmed 2026-06-14; tables in the **`public`**
+  schema — measured 2026-08-24, 40 tables; the `lurus_api` schema named in older docs does not
+  exist) is covered automatically once the Hub deploys — no second dump line to hand-add later.
+
+  ✅ **Steps 1–3 are DONE — re-verified 2026-08-24 against the live cluster.** The latest
+  `daily-pg-dump` run dumped globals plus all seven databases, `pg_dump newhub complete: 272.8K`
+  among them, and pruned to 30 days. Left here as the procedure for a rebuild:
+  1. **GRANT first** — `kubectl -n database exec lurus-pg-0 -c postgres -- psql -U postgres -c 'GRANT pg_read_all_data TO lurus;'` (idempotent, read-only; pod is `lurus-pg-0` — the earlier `lurus-pg-1` here does not exist). `lurus` owns only 5/9 DBs; **skipping this leaves tally/webgame/zitadel/agentdrq_test UNBACKED — including auth-critical `zitadel`.**
   2. set ConfigMap `BACKUP_ENABLED=true`.
   3. **verify** — trigger one manual job and confirm zero failures: `kubectl -n database create job --from=cronjob/daily-pg-dump pg-dump-check-001` then `kubectl -n database logs -f job/pg-dump-check-001` must end with `failed: none`.
+
+  🔴 **Still open: the off-site copy.** `weekly-s3-upload` has the same `BACKUP_S3_ENABLED`
+  guard, it is **unset**, and the Job still reports `Complete 1/1` every week while its log says
+  `S3 upload disabled … exiting 0`. Every backup lives only on PVC `lurus-pg-backup`, i.e. the
+  same disk as the database. Needs `BACKUP_S3_ENABLED=true` + `BACKUP_S3_BUCKET` + credentials.
 
   (The dump is no longer single-DB; the old `-d identity` hardcode is gone.) A partial run
   still exits 1 and logs the failed set, but **nothing alerts on it** — step 3's manual check

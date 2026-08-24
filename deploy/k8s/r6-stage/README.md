@@ -74,9 +74,11 @@ kubectl apply -k deploy/k8s/r6-stage/
 #    if run, the script now uses the canonical id='default' (021's compat branch
 #    still tolerates a legacy id='lurus-default' row from old STAGE data, but new
 #    seeds must not create more of it).
-#    db name is `newhub` (owner-confirmed 2026-06-14); `lurus_api` in the service
-#    CLAUDE.md is the *schema* inside it, not the database. The PG pod is lurus-pg-1
-#    in ns `database` (live-verified 2026-06-13).
+#    db name is `newhub` (owner-confirmed 2026-06-14). The tables live in the
+#    `public` schema — measured 2026-08-24, 40 tables; the `lurus_api` schema the
+#    service CLAUDE.md used to name does not exist and that claim is now removed.
+#    The PG pod is lurus-pg-0 in ns `database` (StatefulSet lurus-pg, 1 replica —
+#    re-verified 2026-08-24; the earlier "lurus-pg-1" here was wrong).
 ssh root@100.122.83.20 "kubectl exec -n database lurus-pg-0 -- \
   psql -U lurus -d newhub" < deploy/k8s/r6-stage/seed-default-tenant.sql
 # (PG pod is lurus-pg-0 in ns database — live-verified 2026-07-07; a stale ref to
