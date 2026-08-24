@@ -29,8 +29,10 @@ spec:
         prometheus.io/port: "3000"
         prometheus.io/path: "/metrics"
     spec:
-      # Pod security baseline (parity with base deploy/k8s/deployment.yaml):
-      # non-root, drop fsGroup to the nobody uid.
+      # Pod security baseline: non-root, drop fsGroup to the nobody uid.
+      # (Was "parity with base deploy/k8s/deployment.yaml"; that base manifest
+      # set was deleted 2026-08-24 — it still described the retired lurus-api
+      # image in ns lurus-system. This overlay is the only newhub manifest.)
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -53,8 +55,8 @@ spec:
           # pin: main-20260823-4193322 run=32669379212
           image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:3dffeb1e4f943b4271446f0a1f01b4f738b3a9e5b6d0c30f7361b4624fa336cc
           imagePullPolicy: IfNotPresent
-          # Container hardening (parity with base): no priv-escalation, read-only
-          # root FS (writes go to the /data + /tmp emptyDirs below), drop all caps.
+          # Container hardening: no priv-escalation, read-only root FS (writes go
+          # to the /data + /tmp emptyDirs below), drop all caps.
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -209,8 +211,10 @@ spec:
             periodSeconds: 5
             failureThreshold: 30
             timeoutSeconds: 3
-          # Liveness stays SHALLOW (/api/status) — see base deployment.yaml for
-          # the full P0-2 rationale (no restart on dependency blips).
+          # Liveness stays SHALLOW (/api/status, no dependency checks). A deep
+          # liveness that pinged the shared PG would restart all 3 pods at once
+          # on a DB blip — a cascading restart storm. Restarts must reflect a
+          # broken *process*, never a transient dependency. (P0-2)
           livenessProbe:
             httpGet:
               path: /api/status
@@ -218,7 +222,19 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 15
             timeoutSeconds: 5
-          # Readiness is DEEP (/api/health): a DB-down pod leaves the Service.
+          # Readiness is DEEP (/api/health: DB ping + breaker state). This gates
+          # traffic, not restarts — a NotReady pod is pulled from the Service but
+          # not killed. CORRELATION RISK: all 3 replicas share one PG, so a PG
+          # blip flips all 3 NotReady at once = full outage, worse than the
+          # occasional 500 it replaces. Two mitigations are MANDATORY and ship
+          # WITH this change to PROD:
+          #   1. failureThreshold:3 + periodSeconds:5 ⇒ ~15s of sustained failure
+          #      before a pod leaves the Service, so a 2s PG hiccup never flaps
+          #      the fleet; timeoutSeconds:2 keeps a hung DB ping from wedging.
+          #   2. P1-2 (billing breaker → cached-balance degrade) must be live so
+          #      /api/health does NOT 503 on a billing-path blip — only a true
+          #      DB-down trips readiness. DO NOT apply this readiness change to
+          #      PROD ahead of P1-2.
           readinessProbe:
             httpGet:
               path: /api/health
@@ -228,6 +244,9 @@ spec:
             timeoutSeconds: 2
             failureThreshold: 3
             successThreshold: 1
+          # P1-4: give in-flight relay requests ~5s to drain before SIGTERM on a
+          # rolling update (maxUnavailable:0/maxSurge:1). /bin/sleep exists in the
+          # debian:bookworm-slim runtime base.
           lifecycle:
             preStop:
               exec:

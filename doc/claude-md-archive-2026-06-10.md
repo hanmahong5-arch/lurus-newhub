@@ -94,13 +94,20 @@
 | `LOG_FORMAT` | — | `json` 启用结构化日志 |
 | `LOG_LEVEL` | — | 日志级别 |
 
-### Proxy (For External LLM APIs)
+### Proxy (For External LLM APIs) — ⚠️ 2026-08-24 作废，勿照抄
 
-| Variable | Value (production) | Description |
+下表是 2026-06 快照，**现在一条都不成立**：live deployment 根本没有任何 `*_PROXY` env，
+`10.42.1.1:10808` **无进程监听**（该节点 cni0 是 `10.42.0.1`，且 `:10808` 上什么都没有），
+即便有也到不了——NetworkPolicy `newhub-nats-egress` 把 pod 的 RFC1918 出站全 except 掉了。
+
+现行 egress 模型（直连 :443 + 被墙供应商走 per-channel proxy）与实测证据写在
+`deploy/k8s/r6-stage/netpol-nats-egress.yaml` 头注释，**加代理前先读那里**。
+
+| Variable | Value（2026-06 快照，已作废） | Description |
 |----------|--------------------|-------------|
-| `HTTP_PROXY` / `http_proxy` | `http://10.42.1.1:10808` | 出站代理（访问 OpenAI/Gemini 等） |
-| `HTTPS_PROXY` / `https_proxy` | `http://10.42.1.1:10808` | — |
-| `NO_PROXY` / `no_proxy` | `localhost,127.0.0.1,10.0.0.0/8,*.svc,*.lurus.cn…` | 内网绕过代理 |
+| `HTTP_PROXY` / `http_proxy` | ~~`http://10.42.1.1:10808`~~ | 出站代理（访问 OpenAI/Gemini 等） |
+| `HTTPS_PROXY` / `https_proxy` | ~~`http://10.42.1.1:10808`~~ | — |
+| `NO_PROXY` / `no_proxy` | ~~`localhost,127.0.0.1,10.0.0.0/8,*.svc,*.lurus.cn…`~~ | 内网绕过代理 |
 
 ### OAuth Providers (Optional)
 
