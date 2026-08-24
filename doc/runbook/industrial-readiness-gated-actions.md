@@ -34,14 +34,30 @@ staging and that the backup gap was a flag flip):
    `pg_dump newhub complete: 272.8K`. Artifacts land on PVC `lurus-pg-backup` at `/backups`,
    pruned at 30 days. Correction while here: newhub's tables are in the **`public`** schema
    (measured, 40 tables) — the `lurus_api` schema named in older docs does not exist.
-   🔴 **What is still open is the OFF-SITE copy, and it is masked by a green Job.**
-   `weekly-s3-upload` reports `Complete 1/1` on every run (16d / 9d / 2d ago), but its first
-   statement is `if [ "${BACKUP_S3_ENABLED:-false}" != "true" ]; then … exit 0`, and the actual
-   log reads `S3 upload disabled (BACKUP_S3_ENABLED!=true) — exiting 0`. **Nothing has ever been
-   uploaded.** Backups therefore exist only on the same disk as the database. Enabling it needs
-   `BACKUP_S3_ENABLED=true` + `BACKUP_S3_BUCKET` + object-store credentials (owner-gated).
-   ⇒ For any CronJob fronted by an `if flag != true; exit 0` guard, Job/Pod status is **not** an
+   **The off-site copy is also CLOSED — it just does not live in Kubernetes.** Corrected
+   2026-08-25 (an earlier revision of this line claimed "nothing has ever been uploaded"; that
+   was wrong — see the retraction note below). The working leg is a **host cron**:
+   `/etc/cron.d/*offsite*` → `/usr/local/sbin/pg-backup-offsite.sh` (source in
+   `2l-svc-platform/deploy/r6-host/`) rsyncs the backup PVC to a separate host every day at
+   02:40 CST over a key locked to an `rrsync` forced command. Measured: stamp
+   `2026-08-25 02:40:09`, `exit_code=0 files_transferred=8`,
+   `Total transferred file size: 22,091,129 bytes`. Freshness is exported as
+   `lurus_backup_offsite_age_seconds` / `_exit_code` and alerted on by netdata
+   (`backup_offsite_stale` / `_leg_failing`). A weekly host cron (`32 5 * * 0`) additionally runs
+   `scripts/dr-drill.sh`, which restores every DB from the newest batch into a throwaway
+   namespace, boots a real platform-core against it and measures RTO — last success
+   `2026-08-23 05:32`.
+   🔴 **`weekly-s3-upload` is a decoy, not the off-site mechanism.** It reports `Complete 1/1`
+   forever while its first statement is `if [ "${BACKUP_S3_ENABLED:-false}" != "true" ]; then …
+   exit 0`. It is a *planned second* off-site leg (S3), never enabled.
+   ⇒ Two lessons, the second one more expensive than the first:
+   (a) For any CronJob fronted by an `if flag != true; exit 0` guard, Job/Pod status is **not** an
    oracle — only the log or the artifact is.
+   (b) **Checking only the Kubernetes layer and concluding "it never happens" is wrong here.**
+   Much of this platform's backup / drill / audit machinery lives in **host cron**
+   (`deploy/r6-host/` carries a dozen: dr-drill, backup-freshness, cert-expiry, k8s-drift,
+   money-path, …). A negative claim about scheduled work must check
+   `ls /etc/cron.d/ | grep lurus` and the corresponding stamp/status files too.
 3. **The PG is single-instance (StatefulSet `lurus-pg`, 1 replica, pod `lurus-pg-0` — re-verified
    2026-08-24; earlier text said `lurus-pg-1`, which does not exist).** A node/pod loss on that one
    PG is a hard newhub outage regardless of newhub replica count — relevant to any availability SLA.
@@ -245,10 +261,13 @@ ssh root@100.98.57.55 "kubectl -n database get cronjob -o wide"   # daily-pg-dum
   2. set ConfigMap `BACKUP_ENABLED=true`.
   3. **verify** — trigger one manual job and confirm zero failures: `kubectl -n database create job --from=cronjob/daily-pg-dump pg-dump-check-001` then `kubectl -n database logs -f job/pg-dump-check-001` must end with `failed: none`.
 
-  🔴 **Still open: the off-site copy.** `weekly-s3-upload` has the same `BACKUP_S3_ENABLED`
-  guard, it is **unset**, and the Job still reports `Complete 1/1` every week while its log says
-  `S3 upload disabled … exiting 0`. Every backup lives only on PVC `lurus-pg-backup`, i.e. the
-  same disk as the database. Needs `BACKUP_S3_ENABLED=true` + `BACKUP_S3_BUCKET` + credentials.
+  ✅ **Off-site is covered too — by a host cron, not by `weekly-s3-upload`.**
+  `/usr/local/sbin/pg-backup-offsite.sh` rsyncs the backup PVC to a separate host daily at
+  02:40 CST (`exit_code=0`, 22,091,129 bytes on the 2026-08-25 run), with freshness alerted via
+  `lurus_backup_offsite_age_seconds`. `weekly-s3-upload` is a **planned second leg** that has
+  never been enabled; its permanent `Complete 1/1` says nothing either way. Enabling that second
+  leg needs `BACKUP_S3_ENABLED=true` + `BACKUP_S3_BUCKET` + credentials — defense in depth, not
+  the difference between having and not having off-site copies.
 
   (The dump is no longer single-DB; the old `-d identity` hardcode is gone.) A partial run
   still exits 1 and logs the failed set, but **nothing alerts on it** — step 3's manual check

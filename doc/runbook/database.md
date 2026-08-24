@@ -50,18 +50,28 @@ P=$(kubectl get pods -n database --no-headers | grep daily-pg-dump | tail -1 | a
 kubectl logs -n database "$P" | tail -20     # 应看到每个库的 "pg_dump <db> complete: <size>"
 ```
 
-### 🔴 异地副本目前不存在
+### 异地副本:**在做,但不在 k8s 里** —— 别被 `weekly-s3-upload` 骗了
 
-`weekly-s3-upload` 每次都是 `Complete 1/1`,**但日志是**
-`S3 upload disabled (BACKUP_S3_ENABLED!=true) — exiting 0`。它的第一行就是这个 env 闸,
-未开时立刻 exit 0 —— 所以 Job 状态永远绿,而**从未上传过任何东西**(实测 2026-08-24:
-最近三次 16d/9d/2d 全是这一行)。
+⚠️ **先读这条再下任何「没有异地备份」的结论。** 异地这一环归**宿主层**,不归 k8s:
 
-⇒ 现状:备份**只在同一块盘上**,盘毁即全失。开启需要 `BACKUP_S3_ENABLED=true` +
-`BACKUP_S3_BUCKET` + 对象存储凭证(owner-gated)。
+| 环节 | 位置 | 2026-08-25 实测 |
+|------|------|-----------------|
+| 异地推送 | 宿主 cron `/etc/cron.d/*offsite* → /usr/local/sbin/pg-backup-offsite.sh`(源码 `2l-svc-platform/deploy/r6-host/`) | `40 2 * * * `(CST)。stamp `08-25 02:40:09`、`exit_code=0 files_transferred=8`、日志 `Total transferred file size: 22,091,129 bytes` |
+| 传输方式 | `rsync -a --delete-after` → 另一台主机 | 专用密钥被 `rrsync` **强制命令**锁死,只能跑 rsync(试图执行别的命令会被拒) |
+| 恢复演练 | 宿主 cron `32 5 * * 0` → `scripts/dr-drill.sh` | **每周**把最新一批备份全库恢复进一次性 ns、拉起真 platform-core 冒烟对账并实测 RTO;last-success `08-23 05:32` |
+| 新鲜度告警 | `backup-freshness.sh` → textfile collector → netdata | `lurus_backup_offsite_age_seconds` / `_exit_code` 在流(实测 age=6173s),告警 `backup_offsite_stale` / `_leg_failing` |
 
-> 这是「绿色 Job ≠ 工作发生了」的样本:任何带 `if flag != true; exit 0` 前置闸的定时任务,
-> 判定其是否生效**只能读日志或产物**,不能读 Job/Pod 状态。
+🔴 **k8s 的 `weekly-s3-upload` 是个诱饵,不是异地机制。** 它每次报 `Complete 1/1`,日志却是
+`S3 upload disabled (BACKUP_S3_ENABLED!=true) — exiting 0` —— 第一行就是 env 闸,未开即
+exit 0。它是**规划中的第二条异地腿(S3)**,至今未启用;真正在工作的是上面那条 rsync 腿。
+
+> **两个教训,后一个更贵:**
+> ① 带 `if flag != true; exit 0` 前置闸的定时任务,判定其是否生效**只能读日志或产物**,
+> 不能读 Job/Pod 状态。
+> ② **只查了 k8s 一层就断言「异地备份从未发生」是错的**(2026-08-24 我就是这么误报的)。
+> 本平台的备份/巡检/演练大量住在**宿主 cron**(`deploy/r6-host/` 下有 dr-drill、
+> backup-freshness、cert-expiry、k8s-drift、money-path 等十余条)。**否定式结论必须把
+> 宿主层也查过**:`ls /etc/cron.d/ | grep lurus` + 对应的 stamp/status 文件。
 
 ## Restore
 
@@ -77,6 +87,33 @@ pg_restore -U postgres -h lurus-pg-rw.database.svc -d newhub --table=users --cle
 ```
 
 PITR(WAL 归档)见 `doc/runbook/pg-restore.md`(wal-g)。
+
+### 演练:两条,别混淆
+
+- **全平台**:宿主 cron `32 5 * * 0` 跑 `2l-svc-platform/scripts/dr-drill.sh` —— 全库恢复进
+  一次性 ns + 拉起真 platform-core 冒烟对账 + 实测 RTO。**这是权威演练**。
+- ⚠️ 本仓的 `scripts/pg-restore-drill.sh` 测的是 **wal-g/S3**,不是现役的 pg_dump 链路,
+  且 `WALG_S3_PREFIX` 未设时**静默 skip**。它跑绿**不能**说明现役备份可恢复。
+
+### 单库快速验证(非破坏性,10 秒,可随时手跑)
+
+```bash
+D=/backups/lurus-newhub-<TS>.dump   # 宿主路径见 PVC lurus-pg-backup 的 .spec.local.path
+kubectl exec -n database lurus-pg-0 -- psql -U postgres -q \
+  -c 'DROP DATABASE IF EXISTS restore_drill_tmp;' -c 'CREATE DATABASE restore_drill_tmp;'
+cat "$D" | kubectl exec -i -n database lurus-pg-0 -- \
+  pg_restore -U postgres -d restore_drill_tmp --no-owner --no-privileges
+# 逐表对账,再 DROP DATABASE restore_drill_tmp;
+```
+
+**2026-08-25 首次实跑结果(此前从未验证过现役 pg_dump 产物可恢复)**:
+两侧均 **40 张表**;`users/tokens/channels/tenants/tenant_credit_pools/abilities/options/
+schema_migrations/audit_events` **逐表相等**;唯一差异是 `logs`——按快照时刻
+(`created_at < 1787594401`)切开后**两边都是 18589 行**,live 之后多出的 49 行在恢复库中为 0,
+即纯粹是快照后的新写入。⇒ **产物真实可恢复,且与快照时刻逐表一致。**
+
+> 「有 30 天的 dump」和「dump 能恢复」是两件事。上面这段的价值不在命令,在**对账那一步**——
+> 一个恢复成功但内容为空的库,`pg_restore` 同样退出 0。
 
 ## Migration
 
