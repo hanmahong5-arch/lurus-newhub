@@ -43,7 +43,8 @@ R1's shadow identity/newhub stack was retired 2026-06-23; promotion is a fresh,
 deliberate deploy, not a cutover. Preconditions before any R1 action:
 
 - Owner go/no-go (R1 carries live commercial traffic).
-- A PROD Postgres with the `newhub`/`lurus_api` schema and its own secret
+- A PROD Postgres with the `newhub` database (tables in the `public` schema — the
+  `lurus_api` schema named in older docs does not exist) and its own secret
   (`SESSION_SECRET`, `SQL_DSN`, `IDENTITY_*`, `LURUS_WHITELABEL_MASTER_SECRET`).
 - Migrations run once against PROD PG (boot runner does this under the advisory
   lock; the lock wait + DDL are now statement_timeout-exempt, so a multi-replica

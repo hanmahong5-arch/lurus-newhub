@@ -10,7 +10,7 @@ AI 数据处理枢纽 — Platform 产品组核心成员。在 New API 开源基
 - **Module**: `github.com/LurusTech/lurus-hub`
 - **Namespace / Port**: `lurus-newhub`(R6;2026-07-15 live 核实,旧记载 `lurus-system` 已 rot)/ pod:3000, svc:8850(NodePort 30850)
 - **Image**: `ghcr.io/hanmahong5-arch/lurus-newhub`(digest 钉版,imagePullPolicy=IfNotPresent;`:main` 由 Publish workflow 更新)
-- **DB**: PostgreSQL only（`lurus_api` schema，GORM auto-migrate + embedded migration runner；非 postgres:// DSN boot fast-fail，2026-06 起），Redis DB 0, Meilisearch (optional)
+- **DB**: PostgreSQL **16.14**，库 `newhub`，表在 **`public`** schema（2026-08-24 实测 40 张；旧记载的 `lurus_api` schema 已 rot）。GORM auto-migrate + embedded migration runner；非 postgres:// DSN boot fast-fail（2026-06 起）。Redis **DB 2**（`redis.lurus-system.svc:6379/2`，旧记载 DB 0 已 rot）。Meilisearch 未部署（`MEILISEARCH_ENABLED=false`）
 - **Auth**: OIDC (vendor-neutral; issuer/clientId deploy-time owner-gated), Passkey, session cookie/Redis
 - **Product Group**: Platform (P0)
 
