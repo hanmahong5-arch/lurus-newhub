@@ -71,9 +71,12 @@ cd web && bun run test && bun run typecheck && bun run lint
 # Docker Compose
 docker-compose up -d                            # http://localhost:3000
 
-# Production (K3s + ArgoCD) — see doc/runbook/deployment.md
+# Production (K3s + ArgoCD) — see doc/runbook/staging-deploy.md
+# Deploy = merge to main; CI builds :main and auto-pins deploy/k8s/r6-stage,
+# ArgoCD (selfHeal) converges. Do NOT kubectl set image / rollout restart —
+# selfHeal reverts it. Rollback = revert the auto-pin commit.
 CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -o app ./cmd/server
-ssh root@100.98.57.55 "kubectl rollout restart deployment/lurus-api -n lurus-system"
+ssh root@100.122.83.20 "kubectl get pods -n lurus-newhub"
 ```
 
 ## API Endpoints
@@ -88,7 +91,7 @@ Full API: [docs.lurus.cn](https://docs.lurus.cn/) · [OpenAPI Spec](./docs/opena
 
 | Doc | Description |
 |-----|-------------|
-| [Deployment Runbook](./doc/runbook/deployment.md) | Build, deploy, verify, rollback |
+| [Deployment Runbook](./doc/runbook/staging-deploy.md) | Build, deploy, verify, rollback |
 | [Database Runbook](./doc/runbook/database.md) | Backup, restore, migration |
 | [Tenant Onboarding](./doc/runbook/tenant-onboarding.md) | New tenant setup |
 | [Incident Response](./doc/runbook/incident-response.md) | Triage, escalation, postmortem |

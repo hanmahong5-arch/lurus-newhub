@@ -1,85 +1,26 @@
-# Deployment Runbook
+# Deployment Runbook — 已移至 `staging-deploy.md`
 
-> Service lurus-api · Namespace lurus-system · Host api.lurus.cn. All `kubectl`/`argocd` via `ssh root@100.98.57.55`. Quick 5-min deploy: `DEPLOY.md` (repo root).
+**真源：[`doc/runbook/staging-deploy.md`](./staging-deploy.md)**（构建/部署/验证/回滚/应急路径全在那里）。
 
-## 1. Build
+本文件 2026-08-24 清空。原内容描述的是 **2026-04-23 退役的 `lurus-api`**：
+service `lurus-api` · ns `lurus-system` · host `api.lurus.cn` · ssh `100.98.57.55` ·
+镜像 `ghcr.io/LurusTech/lurus-api` · secret `lurus-api-secrets` —— **每一项对
+`2b-svc-newhub` 都是错的**，且它主推 `kubectl set image` / `kubectl rollout restart` /
+`kubectl apply -k deploy/k8s/` 三条现在会被 ArgoCD selfHeal 直接回滚的操作
+（`deploy/k8s/` 下那套 base manifest 已于同日删除）。需要历史内容从 git 历史取。
 
-CI/CD (GitOps): push to `main` → `.github/workflows/docker-image-main.yml` → `ghcr.io/LurusTech/lurus-api:main-YYYYMMDD-<sha>` → ArgoCD auto-sync.
+现状速查：
 
-```bash
-# Manual local build
-cd web && bun install && bun run build
-CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -o lurus-api ./cmd/server
-docker build -t lurus-api:local .
-```
+| 项 | 值 |
+|----|-----|
+| Service / ns | `lurus-newhub` / `lurus-newhub` |
+| Host | `test-newhub.lurus.cn`（STAGE=R6) |
+| SSH | `root@100.122.83.20`（Tailscale;备用 `ssh -p 12222 root@43.226.45.87`) |
+| 镜像 | `ghcr.io/hanmahong5-arch/lurus-newhub`（digest 钉版) |
+| Secret | `lurus-newhub-secrets` |
+| 部署 | merge main → CI 出 `:main` 并 auto-pin `deploy/k8s/r6-stage` → ArgoCD 收敛 |
+| 回滚 | **revert 那次 auto-pin commit**,不是 `rollout undo` |
 
-Image tags: `main` → `main-YYYYMMDD-<sha>` (GHCR); `alpha` → `alpha-YYYYMMDD-<sha>` (GHCR + Docker Hub); release tag → `v1.2.3`/`latest` (GHCR + Docker Hub).
-
-## 2. Deploy
-
-Prereqs: K3s access, `kubectl` for lurus-system, ArgoCD synced.
-
-```bash
-# ArgoCD (standard): push to main → CI builds → auto-sync
-git push origin main
-kubectl get application lurus-api -n argocd -o jsonpath='{.status.sync.status}'
-# Manual override
-kubectl set image deployment/lurus-api lurus-api=ghcr.io/LurusTech/lurus-api:<tag> -n lurus-system
-kubectl rollout restart deployment/lurus-api -n lurus-system
-kubectl apply -k deploy/k8s/                      # full manifest update
-```
-
-## 3. Verify
-
-```bash
-curl -s -o /dev/null -w "%{http_code}" https://api.lurus.cn/api/status                          # 200
-kubectl exec -n lurus-system deploy/lurus-api -- wget -qO- http://localhost:3000/api/status
-kubectl get pods -n lurus-system -l app=lurus-api; kubectl describe pod -n lurus-system -l app=lurus-api
-kubectl logs -n lurus-system deploy/lurus-api --tail=100        # add -f to follow, --previous after crash
-curl -s https://api.lurus.cn/api/status | jq .
-curl -s -H "Authorization: Bearer <token>" https://api.lurus.cn/api/v2/<tenant>/tokens | jq .   # v2 smoke
-```
-
-## 4. Rollback
-
-```bash
-# ArgoCD
-kubectl get application lurus-api -n argocd -o jsonpath='{.status.history}' | jq
-argocd app rollback lurus-api
-# kubectl
-kubectl rollout history deployment/lurus-api -n lurus-system
-kubectl rollout undo deployment/lurus-api -n lurus-system [--to-revision=<N>]
-kubectl rollout status deployment/lurus-api -n lurus-system
-# Pin specific image
-kubectl set image deployment/lurus-api lurus-api=ghcr.io/LurusTech/lurus-api:main-20260201-abc1234 -n lurus-system
-```
-
-## 5. Configuration
-
-```bash
-kubectl get secret lurus-api-secrets -n lurus-system -o yaml                       # view (base64)
-kubectl create secret generic lurus-api-secrets --from-literal=SQL_DSN='postgres://...' --from-literal=SESSION_SECRET='...' \
-  -n lurus-system --dry-run=client -o yaml | kubectl apply -f -
-kubectl rollout restart deployment/lurus-api -n lurus-system                       # pick up new secrets
-```
-
-| Variable | Source | Required |
-|----------|--------|----------|
-| `SQL_DSN` | Secret | Yes (PostgreSQL) |
-| `SESSION_SECRET` | Secret | Yes |
-| `REDIS_CONN_STRING` | ConfigMap | Optional (in-memory if unset) |
-| `OIDC_CLIENT_ID` / `_SECRET` | Secret | For v2 auth |
-| `MEILI_API_KEY` | Secret | For search |
-| `NODE_TYPE` | Env | `master` (default) or `slave` |
-
-## 6. Resource Limits
-
-CPU req 100m / lim 500m; Memory req 256Mi / lim 1Gi. Adjust in `deploy/k8s/deployment.yaml` if OOMKilled or throttled.
-
-## 7. Pre-Deploy Checklist
-
-- [ ] `go test ./...` passes
-- [ ] No secrets in code (check `.gitignore`)
-- [ ] DB migration reviewed (GORM AutoMigrate on master startup)
-- [ ] `/api/status` responds
-- [ ] ArgoCD: Synced + Healthy
+其余 runbook：`database.md`(备份/恢复/迁移)、`tenant-onboarding.md`(新租户,
+**必须建 credit pool 行**,否则 `CREDIT_POOL_REQUIRED=enforce` 会 402)、
+`incident-response.md`。

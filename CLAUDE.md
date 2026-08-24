@@ -95,19 +95,25 @@ ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=
 
 ## K8s Deployment Facts
 
+> 全表 2026-08-24 对 **live deployment 逐项重核**（旧表整张是 2026-04 退役的
+> `lurus-api`/ns `lurus-system` 的配置——nodeSelector、Redis 地址、Meilisearch、
+> ALLOWED_ORIGINS、Secret 名、出站代理**全部是错的**)。真源 =
+> `deploy/k8s/r6-stage/deployment.yaml`。
+
 | Key | Value |
 |-----|-------|
-| nodeSelector | `lurus.cn/vpn: "true"` |
+| Replicas | `3`（leader election 抽屉演练用;仅 leader 跑 master-only 后台任务) |
+| nodeSelector | **无**(单节点集群 `cloud-ubuntu-5-32c32g`) |
 | Resources | req: 256Mi/100m  lim: 1Gi/500m |
 | Security | runAsUser:65534, readOnlyRootFilesystem, drop ALL caps |
 | Volumes | `data: emptyDir`, `tmp: emptyDir` (no persistent disk) |
-| Redis | `redis://redis:6379` (in-cluster) |
-| Meilisearch | `http://meilisearch:7700` (in-cluster) |
-| Outbound proxy | `http://10.42.1.1:10808` (for Gemini/OpenAI/外网 LLM) |
-| NO_PROXY | `*.svc,*.svc.cluster.local,*.lurus.cn,10.0.0.0/8,…` |
-| ALLOWED_ORIGINS | `https://www.lurus.cn,https://lucrum.lurus.cn` |
-| MODEL_SYNC_FREQUENCY | `60` (分钟) |
-| Secret | `lurus-api-secrets` (SESSION_SECRET, SQL_DSN, OIDC_CLIENT_ID, IDENTITY_SESSION_SECRET, IDENTITY_SERVICE_INTERNAL_KEY, ALIPAY_*) |
+| Redis | `redis://redis.lurus-system.svc.cluster.local:6379/2`(**DB 2**,不是 0) |
+| Meilisearch | `MEILISEARCH_ENABLED=false`(集群内无 meilisearch 实例) |
+| 出站代理 | **无,且不要加**——上游供应商直连 :443。被墙供应商走 per-channel proxy;理由与实测见 `deploy/k8s/r6-stage/netpol-nats-egress.yaml` 头注释 |
+| Egress 管控 | NetworkPolicy `newhub-nats-egress`：仅放行 NATS/DNS/PG/lurus-system/lurus-platform + 公网 80/443（RFC1918 全 except) |
+| ALLOWED_ORIGINS | `https://test-newhub.lurus.cn,https://identity.lurus.cn` |
+| SYNC_FREQUENCY | `60`(秒;渠道缓存同步) |
+| Secret | `lurus-newhub-secrets`,注入 7 个 key：SESSION_SECRET, SQL_DSN, OIDC_CLIENT_ID, IDENTITY_SESSION_SECRET, IDENTITY_SERVICE_INTERNAL_KEY, LURUS_WHITELABEL_MASTER_SECRET, TAVILY_API_KEY(optional) |
 
 ## Environment Variables
 

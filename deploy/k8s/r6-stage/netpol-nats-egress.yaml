@@ -5,6 +5,29 @@
 # - PG in `database` namespace
 # - lurus-system + lurus-platform (Redis, platform-core gRPC/HTTP)
 # - public 80/443 (egress to internet, excluding RFC1918)
+#
+# RELAY EGRESS MODEL (measured from a live pod 2026-08-24 — read before adding
+# an HTTP_PROXY env, it is deliberately absent):
+#   * Upstream LLM providers are reached DIRECTLY on :443. Verified from
+#     lurus-newhub-679b47f4bd-7p4d8: api.deepseek.com OK (a real
+#     /v1/chat/completions returned 200), api.anthropic.com OK (401 = connected),
+#     mirrors.aliyun.com OK. api.openai.com and generativelanguage.googleapis.com
+#     FAIL at the network layer — blocked upstream of this cluster, not by policy.
+#   * The last rule's `except` list means a pod CANNOT reach any RFC1918 address,
+#     so a proxy listening on a node-local/bridge IP is unreachable by design.
+#     Measured: 172.30.0.1:10809, 10.42.0.1:10809 and the node's public IP on
+#     :10809 all fail from inside a pod (only :80/:443 leave, and only to public
+#     addresses). The `10.42.1.1:10808` proxy recorded in the retired base
+#     manifest never resolved here either — cni0 is 10.42.0.1 and nothing listens
+#     on :10808 at all.
+#   * To serve an upstream that is blocked, the designed control point is the
+#     PER-CHANNEL proxy (internal/app/http_client.go — a channel carries its own
+#     proxy URL, and relay_dial_guard.go exempts the proxy host from the SSRF
+#     private-IP check). Deploy that proxy as a Service in ns lurus-system or
+#     lurus-platform: rule 4 above already allows all TCP to those namespaces, so
+#     no NetworkPolicy change is needed. Do NOT set a cluster-wide HTTP_PROXY —
+#     it would route every channel through one egress point and broaden the SSRF
+#     surface the dial guard narrows.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
