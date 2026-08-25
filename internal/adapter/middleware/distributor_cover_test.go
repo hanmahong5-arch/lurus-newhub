@@ -436,14 +436,16 @@ func TestDistribute_ShouldSelect_NoChannelAvailable(t *testing.T) {
 	_, cleanup := setupCoverDB(t)
 	defer cleanup()
 
-	// Empty channel/ability tables → CacheGetRandomSatisfiedChannel fails →
-	// 503 model-not-found. This is the tenant-isolation safety net: a model
-	// with no satisfying channel must never fall through to relay.
+	// Empty channel/ability tables → CacheGetRandomSatisfiedChannel fails.
+	// The tenant-isolation safety net is that the request must never fall
+	// through to relay — that holds for 404 just as much as for 503; with no
+	// ability row ever configured for this (group, model), 404 is the
+	// correct status (a 503 here would make a client retry forever).
 	r := mountDistribute(func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 	})
 	w := doDistribute(r, `{"model":"nonexistent-model"}`)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503 when no channel satisfies model; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 when the model was never configured for this group; body=%s", w.Code, w.Body.String())
 	}
 }
