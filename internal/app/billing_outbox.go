@@ -115,7 +115,7 @@ func EnqueueRelease(accountID, preAuthID int64) error {
 // terminal status or its claim lease expires — no other replica will see them.
 func claimBillingOutbox(ctx context.Context, now time.Time) ([]entity.BillingOutbox, error) {
 	sql := outboxClaimHead + outboxClaimTail
-	if billingOutboxDB.Dialector.Name() == "postgres" {
+	if billingOutboxDB.Name() == "postgres" {
 		sql = outboxClaimHead + outboxClaimLocking + outboxClaimTail
 	}
 

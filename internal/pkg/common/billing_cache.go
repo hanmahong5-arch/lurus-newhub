@@ -47,11 +47,18 @@ func GetCachedWalletBalance(accountID int64) (float64, bool) {
 
 // SetCachedWalletBalance updates the cached wallet balance after a successful pre-auth or settle.
 func SetCachedWalletBalance(accountID int64, balance float64) {
+	setCachedWalletBalance(context.Background(), accountID, balance)
+}
+
+// setCachedWalletBalance is the context-carrying form. Callers that already hold
+// a request or refresh context must use it so the write inherits that deadline
+// instead of silently outliving it.
+func setCachedWalletBalance(ctx context.Context, accountID int64, balance float64) {
 	if !RedisEnabled || RDB == nil {
 		return
 	}
 	key := fmt.Sprintf("%s%d", walletCachePrefix, accountID)
-	RDB.Set(context.Background(), key, fmt.Sprintf("%.4f", balance), walletCacheTTL)
+	RDB.Set(ctx, key, fmt.Sprintf("%.4f", balance), walletCacheTTL)
 }
 
 // ClaimWalletBalanceRefresh reports whether the caller should go fetch a fresh
@@ -83,7 +90,7 @@ func RefreshCachedWalletBalance(ctx context.Context, accountID int64) {
 	if err != nil || wb == nil {
 		return
 	}
-	SetCachedWalletBalance(accountID, wb.Balance-wb.Frozen)
+	setCachedWalletBalance(ctx, accountID, wb.Balance-wb.Frozen)
 }
 
 // InvalidateCachedWalletBalance removes the cached balance (e.g., after settle or topup).

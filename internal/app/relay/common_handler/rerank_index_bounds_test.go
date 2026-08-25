@@ -31,6 +31,9 @@ func rerankBoundsCtx() (*gin.Context, *httptest.ResponseRecorder) {
 	return c, rec
 }
 
+// rerankBoundsResp builds a stub upstream response. Call sites close the body
+// themselves rather than deferring it to a helper — bodyclose only recognises a
+// close in the scope that holds the response.
 func rerankBoundsResp(body string) *http.Response {
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -62,7 +65,10 @@ func TestRerankHandler_XinferencePath_IndexEqualToDocumentCount_RejectedNotPanic
 		}
 	}()
 
-	usage, apiErr := RerankHandler(c, info, rerankBoundsResp(upstreamBody))
+	resp := rerankBoundsResp(upstreamBody)
+	defer func() { _ = resp.Body.Close() }()
+
+	usage, apiErr := RerankHandler(c, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected a bad-response error for an upstream index past the end of the request documents, got nil")
 	}
@@ -99,7 +105,10 @@ func TestRerankHandler_XinferencePath_NegativeIndex_RejectedNotPanic(t *testing.
 		}
 	}()
 
-	usage, apiErr := RerankHandler(c, info, rerankBoundsResp(upstreamBody))
+	resp := rerankBoundsResp(upstreamBody)
+	defer func() { _ = resp.Body.Close() }()
+
+	usage, apiErr := RerankHandler(c, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected a bad-response error for a negative upstream index, got nil")
 	}
@@ -131,7 +140,10 @@ func TestRerankHandler_XinferencePath_NoRequestDocuments_RejectedNotPanic(t *tes
 		}
 	}()
 
-	usage, apiErr := RerankHandler(c, info, rerankBoundsResp(upstreamBody))
+	resp := rerankBoundsResp(upstreamBody)
+	defer func() { _ = resp.Body.Close() }()
+
+	usage, apiErr := RerankHandler(c, info, resp)
 	if apiErr == nil {
 		t.Fatal("expected a bad-response error when there is no document to backfill from, got nil")
 	}
@@ -154,7 +166,10 @@ func TestRerankHandler_XinferencePath_ValidIndicesStillBackfill(t *testing.T) {
 	info := rerankBoundsInfo("original-doc-0", "original-doc-1")
 	info.SetEstimatePromptTokens(11)
 
-	usage, apiErr := RerankHandler(c, info, rerankBoundsResp(upstreamBody))
+	resp := rerankBoundsResp(upstreamBody)
+	defer func() { _ = resp.Body.Close() }()
+
+	usage, apiErr := RerankHandler(c, info, resp)
 	if apiErr != nil {
 		t.Fatalf("unexpected error for in-range indices: %v", apiErr)
 	}
