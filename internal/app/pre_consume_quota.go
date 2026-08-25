@@ -202,6 +202,13 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 	return nil
 }
 
+// preAuthorizeWithBreaker is the platform freeze call. A var (same seam
+// convention as AsyncGo) because the identity gRPC client dials with
+// WaitForReady, so in a test binary the call burns the whole request deadline
+// before falling back to HTTP — which leaves the success path below, and the
+// cache warm-up that hangs off it, otherwise unreachable from tests.
+var preAuthorizeWithBreaker = common.PreAuthorizeWithBreaker
+
 // platformPreAuthorize calls the platform to freeze wallet balance.
 // High-balance users can skip this call entirely (cache-based trust).
 func platformPreAuthorize(c *gin.Context, estimatedQuota int, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
@@ -221,7 +228,7 @@ func platformPreAuthorize(c *gin.Context, estimatedQuota int, relayInfo *relayco
 	defer cancel()
 
 	preAuthStart := time.Now()
-	result, err := common.PreAuthorizeWithBreaker(ctx, accountID, estimatedLB,
+	result, err := preAuthorizeWithBreaker(ctx, accountID, estimatedLB,
 		sourceProductOf(relayInfo), "preauth:"+uuid.NewString(), fmt.Sprintf("relay userId=%d model=%s", relayInfo.UserId, relayInfo.OriginModelName), 300)
 	metrics.BillingPreAuthDuration.Observe(time.Since(preAuthStart).Seconds())
 
@@ -251,5 +258,19 @@ func platformPreAuthorize(c *gin.Context, estimatedQuota int, relayInfo *relayco
 	relayInfo.PlatformGoverned = true
 	logger.LogInfo(c, fmt.Sprintf("platform pre-auth created: id=%d amount=%.4f LB account=%d",
 		result.PreAuthID, estimatedLB, accountID))
+
+	// Warm the wallet cache the degrade path reads. Nothing else writes it, and
+	// TryDegradedPreAuth treats an absent entry as "don't trust" — so without
+	// this a billing outage denies every relay instead of degrading. A pre-auth
+	// that just succeeded is the one moment we know the platform is answering
+	// for this account. Claim-gated (≤1 call per account per cache TTL) and off
+	// the hot path, with its own context: a refresh must never fail the request.
+	if common.ClaimWalletBalanceRefresh(accountID) {
+		AsyncGo(func() {
+			refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer refreshCancel()
+			common.RefreshCachedWalletBalance(refreshCtx, accountID)
+		})
+	}
 	return nil
 }

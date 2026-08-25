@@ -25,8 +25,10 @@ func TestPreConsumeQuota_UnifiedBillingSkipsPreAuthOnHighBalance(t *testing.T) {
 	seedPoolTables(t, db)
 
 	// ShouldSkipPreAuth reads the cached balance from Redis, so wire a real one
-	// (withRedis flips RedisEnabled back on for this test).
+	// (withRedis flips RedisEnabled back on for this test). The trust switch is
+	// off by default — this test is about the fast path itself, so it opts in.
 	_ = withRedis(t)
+	t.Setenv("BILLING_WALLET_TRUST_SKIP_PREAUTH", "true")
 
 	const accountID int64 = 9911
 	prevUnified := common.BillingUnifiedEnabled()

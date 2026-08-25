@@ -307,10 +307,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
-		// Only return quota if downstream failed and quota was actually pre-consumed
-		if newAPIError != nil && relayInfo.FinalPreConsumedQuota != 0 {
-			app.ReturnPreConsumedQuota(c, relayInfo)
-		}
+		releasePreConsumedOnFailure(c, newAPIError, relayInfo)
 	}()
 
 	retryParam := &app.RetryParam{
@@ -466,6 +463,25 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
+}
+
+// returnPreConsumedQuota is a call seam — package-level var so hermetic tests can
+// assert the failure-path release without a live platform endpoint (same seam
+// convention as the wallet calls in tenant_credit_pool.go).
+var returnPreConsumedQuota = app.ReturnPreConsumedQuota
+
+// releasePreConsumedOnFailure hands the pre-consumption back when a relay attempt
+// ended in error. FinalPreConsumedQuota is deliberately NOT part of the gate: the
+// trust path zeroes it while the platform wallet hold stays live, so gating on it
+// left that hold frozen until its TTL expired. Both halves of the hand-back are
+// already guarded inside ReturnPreConsumedQuota — the local refund on
+// FinalPreConsumedQuota != 0, the platform release on PlatformPreAuthID > 0 —
+// so an error alone is the whole condition and nothing is refunded twice.
+func releasePreConsumedOnFailure(c *gin.Context, apiErr *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
+	if apiErr == nil {
+		return
+	}
+	returnPreConsumedQuota(c, relayInfo)
 }
 
 var upgrader = websocket.Upgrader{

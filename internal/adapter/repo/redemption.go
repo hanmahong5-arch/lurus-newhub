@@ -192,6 +192,22 @@ func Redeem(key string, userId int) (quota int, err error) {
 	if err != nil {
 		return 0, errors.New("兑换失败，" + err.Error())
 	}
+	// The quota was written straight to the row inside the transaction, so the
+	// cached copy is now stale-low and GetUserQuota(id, false) would keep
+	// serving the pre-topup balance until the key expires — the user redeems a
+	// code and still gets refused for insufficient quota. IncreaseUserQuota
+	// (user.go) is the path that normally keeps the two in step; do the same
+	// here, after the commit so a rollback can never leave the cache ahead of
+	// the row. If the increment fails, drop the key so the next read falls
+	// through to the database rather than trusting a stale hash.
+	if common.RedisEnabled {
+		if cacheErr := cacheIncrUserQuota(userId, int64(redemption.Quota)); cacheErr != nil {
+			common.SysLog("redeem: failed to increase cached user quota: " + cacheErr.Error())
+			if invErr := invalidateUserCache(userId); invErr != nil {
+				common.SysLog("redeem: failed to invalidate stale user cache: " + invErr.Error())
+			}
+		}
+	}
 	RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(redemption.Quota), redemption.Id))
 	return redemption.Quota, nil
 }

@@ -210,6 +210,8 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	audioTokens := usage.PromptTokensDetails.AudioTokens
 	completionTokens := usage.CompletionTokens
 	cachedCreationTokens := usage.PromptTokensDetails.CachedCreationTokens
+	cachedCreation5mTokens := usage.ClaudeCacheCreation5mTokens
+	cachedCreation1hTokens := usage.ClaudeCacheCreation1hTokens
 
 	modelName := relayInfo.OriginModelName
 
@@ -221,6 +223,8 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
 	modelPrice := relayInfo.PriceData.ModelPrice
 	cachedCreationRatio := relayInfo.PriceData.CacheCreationRatio
+	cachedCreation5mRatio := relayInfo.PriceData.CacheCreation5mRatio
+	cachedCreation1hRatio := relayInfo.PriceData.CacheCreation1hRatio
 
 	// Convert values to decimal for precise calculation
 	dPromptTokens := decimal.NewFromInt(int64(promptTokens))
@@ -229,6 +233,8 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	dAudioTokens := decimal.NewFromInt(int64(audioTokens))
 	dCompletionTokens := decimal.NewFromInt(int64(completionTokens))
 	dCachedCreationTokens := decimal.NewFromInt(int64(cachedCreationTokens))
+	dCachedCreation5mTokens := decimal.NewFromInt(int64(cachedCreation5mTokens))
+	dCachedCreation1hTokens := decimal.NewFromInt(int64(cachedCreation1hTokens))
 	dCompletionRatio := decimal.NewFromFloat(completionRatio)
 	dCacheRatio := decimal.NewFromFloat(cacheRatio)
 	dImageRatio := decimal.NewFromFloat(imageRatio)
@@ -236,6 +242,8 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	dGroupRatio := decimal.NewFromFloat(groupRatio)
 	dModelPrice := decimal.NewFromFloat(modelPrice)
 	dCachedCreationRatio := decimal.NewFromFloat(cachedCreationRatio)
+	dCachedCreation5mRatio := decimal.NewFromFloat(cachedCreation5mRatio)
+	dCachedCreation1hRatio := decimal.NewFromFloat(cachedCreation1hRatio)
 	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 
 	ratio := dModelRatio.Mul(dGroupRatio)
@@ -314,13 +322,22 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 			}
 			cachedTokensWithRatio = dCacheTokens.Mul(dCacheRatio)
 		}
-		var dCachedCreationTokensWithRatio decimal.Decimal
 		if !dCachedCreationTokens.IsZero() {
 			if relayInfo.ChannelType != constant.ChannelTypeAnthropic {
 				baseTokens = baseTokens.Sub(dCachedCreationTokens)
 			}
-			dCachedCreationTokensWithRatio = dCachedCreationTokens.Mul(dCachedCreationRatio)
 		}
+		// Claude 把缓存写入拆成 5m/1h 两档且 1h 单价更高。这里必须和原生
+		// /v1/messages 路径（app.PostClaudeConsumeQuota）拆同样的桶，否则同一渠道
+		// 同一模型经 OpenAI 兼容格式转发时 1h 写入会按 5m 价少收。只上报总数的上游
+		// 落在 remainder 上，仍按 CacheCreationRatio 计价，行为不变。
+		remainingCachedCreationTokens := cachedCreationTokens - cachedCreation5mTokens - cachedCreation1hTokens
+		if remainingCachedCreationTokens < 0 {
+			remainingCachedCreationTokens = 0
+		}
+		dCachedCreationTokensWithRatio := dCachedCreation5mTokens.Mul(dCachedCreation5mRatio).
+			Add(dCachedCreation1hTokens.Mul(dCachedCreation1hRatio)).
+			Add(decimal.NewFromInt(int64(remainingCachedCreationTokens)).Mul(dCachedCreationRatio))
 
 		// 减去 image tokens
 		var imageTokensWithRatio decimal.Decimal
@@ -355,6 +372,9 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	}
 	// 添加 responses tools call 调用的配额
 	quotaCalculateDecimal = quotaCalculateDecimal.Add(dWebSearchQuota)
+	// claude web search 与其它工具费同样入账；此前只写进了日志的 other 里，
+	// 等于按"已收费"记账却从未扣款
+	quotaCalculateDecimal = quotaCalculateDecimal.Add(dClaudeWebSearchQuota)
 	quotaCalculateDecimal = quotaCalculateDecimal.Add(dFileSearchQuota)
 	// 添加 audio input 独立计费
 	quotaCalculateDecimal = quotaCalculateDecimal.Add(audioInputQuota)
