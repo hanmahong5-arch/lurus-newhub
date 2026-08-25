@@ -6,15 +6,30 @@ package router
 // handler. None of these need a real database: every path exercised here
 // is rejected by an early-return auth guard (TokenAuth with an empty
 // Authorization header short-circuits before any repo call; InternalApiAuth
-// short-circuits on a missing X-API-Key header; metricsAuthMiddleware is a
-// pure IP check) — so a stubbed-out handler could never make these tests
-// pass, only a genuinely wired guard can.
+// short-circuits on a missing X-API-Key header) — so a stubbed-out handler
+// could never make these tests pass, only a genuinely wired guard can.
+//
+// metricsAuthMiddleware is NOT a pure IP check (it used to be, and that was
+// the bug: R6 has no k8s Ingress, the edge is host nginx proxying to a local
+// NodePort, and both public vhosts always set X-Real-IP/X-Forwarded-For — so
+// c.Request.RemoteAddr is private/loopback for every request that reaches
+// the pod, public internet callers included, which made the old
+// RemoteAddr-only guard pass every public scrape). The guard now also
+// inspects whether a forwarding header (X-Forwarded-For/X-Real-IP/Forwarded)
+// is present: a private/loopback RemoteAddr WITH one of those headers means
+// "relayed by nginx, RemoteAddr is meaningless" and requires a valid
+// METRICS_AUTH_TOKEN bearer token; a private/loopback RemoteAddr with NONE of
+// them means a genuine direct in-cluster scrape and is admitted unconditionally
+// (this must never require a token, or real scraping breaks). See
+// TestMetricsAuthMiddleware_IPClassification's later cases and
+// TestSetRouter_MetricsEndpoint_RejectsPublicScraper's third sub-case for the
+// regression this closes.
 //
 // Self-check performed while writing these: replacing SetInternalApiRouter/
 // SetRelayRouter/SetVideoRouter/SetDashboardRouter/SetRouter's bodies with a
 // no-op (register nothing) makes every test below fail — either the route
-// stops existing (404 instead of 401/403) or /metrics never gets its IP
-// guard (200 instead of 403 for a public RemoteAddr).
+// stops existing (404 instead of 401/403) or /metrics never gets its guard
+// (200 instead of 403).
 
 import (
 	"fmt"
@@ -45,7 +60,9 @@ func routerRelayHasRoute(engine *gin.Engine, method, path string) bool {
 }
 
 // ---------------------------------------------------------------------
-// metricsAuthMiddleware: pure IP-classification guard for /metrics.
+// metricsAuthMiddleware: IP-classification + forwarding-header + optional
+// bearer-token guard for /metrics. See this file's header comment for why
+// RemoteAddr alone is not enough on R6's actual topology.
 // ---------------------------------------------------------------------
 
 func TestMetricsAuthMiddleware_IPClassification(t *testing.T) {
@@ -54,36 +71,77 @@ func TestMetricsAuthMiddleware_IPClassification(t *testing.T) {
 	cases := []struct {
 		name       string
 		remoteAddr string
+		headers    map[string]string
+		token      string // METRICS_AUTH_TOKEN to set for this case; "" = unset
+		authHeader string
 		wantBlock  bool
 	}{
-		{"loopback IPv4 allowed", "127.0.0.1:54321", false},
-		{"loopback IPv6 allowed", "[::1]:54321", false},
-		{"RFC1918 10.x allowed (in-cluster pod CIDR)", "10.42.0.7:9100", false},
-		{"RFC1918 172.16.x allowed", "172.16.5.5:9100", false},
-		{"RFC1918 192.168.x allowed", "192.168.1.50:9100", false},
-		{"public internet IP blocked", "8.8.8.8:443", true},
-		{"another public IP blocked", "203.0.113.9:12345", true},
-		{"no port in RemoteAddr falls back to bare host (public → blocked)", "8.8.8.8", true},
-		{"no port in RemoteAddr falls back to bare host (loopback → allowed)", "127.0.0.1", false},
-		{"unparseable RemoteAddr blocked (fails open to deny, not allow)", "not-an-ip:1234", true},
+		{"loopback IPv4 allowed", "127.0.0.1:54321", nil, "", "", false},
+		{"loopback IPv6 allowed", "[::1]:54321", nil, "", "", false},
+		{"RFC1918 10.x allowed (in-cluster pod CIDR)", "10.42.0.7:9100", nil, "", "", false},
+		{"RFC1918 172.16.x allowed", "172.16.5.5:9100", nil, "", "", false},
+		{"RFC1918 192.168.x allowed", "192.168.1.50:9100", nil, "", "", false},
+		{"public internet IP blocked", "8.8.8.8:443", nil, "", "", true},
+		{"another public IP blocked", "203.0.113.9:12345", nil, "", "", true},
+		{"no port in RemoteAddr falls back to bare host (public → blocked)", "8.8.8.8", nil, "", "", true},
+		{"no port in RemoteAddr falls back to bare host (loopback → allowed)", "127.0.0.1", nil, "", "", false},
+		{"unparseable RemoteAddr blocked (fails open to deny, not allow)", "not-an-ip:1234", nil, "", "", true},
+
+		// Regression coverage for the real prod topology: host nginx always
+		// fronts the pod and always injects a forwarding header, even for
+		// public callers, so RemoteAddr staying private tells us nothing.
+		{"private RemoteAddr + X-Forwarded-For, no token configured → blocked (this IS the real prod topology for a public request)",
+			"10.42.0.7:9100", map[string]string{"X-Forwarded-For": "203.0.113.9"}, "", "", true},
+		{"private RemoteAddr + X-Real-IP, no token configured → blocked",
+			"127.0.0.1:9100", map[string]string{"X-Real-IP": "203.0.113.9"}, "", "", true},
+		{"private RemoteAddr + Forwarded, no token configured → blocked",
+			"127.0.0.1:9100", map[string]string{"Forwarded": "for=203.0.113.9"}, "", "", true},
+		{"private RemoteAddr + X-Forwarded-For, token configured but Authorization missing → blocked",
+			"10.42.0.7:9100", map[string]string{"X-Forwarded-For": "203.0.113.9"}, "s3cr3t", "", true},
+		{"private RemoteAddr + X-Forwarded-For, token configured, wrong bearer → blocked",
+			"10.42.0.7:9100", map[string]string{"X-Forwarded-For": "203.0.113.9"}, "s3cr3t", "Bearer wrong", true},
+		{"private RemoteAddr + X-Forwarded-For, token configured, correct bearer → allowed",
+			"10.42.0.7:9100", map[string]string{"X-Forwarded-For": "203.0.113.9"}, "s3cr3t", "Bearer s3cr3t", false},
+		{"private RemoteAddr, no forwarding header, token configured but unused → still allowed (direct-scrape path stays unconditional)",
+			"10.42.0.7:9100", nil, "s3cr3t", "", false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			prevToken, hadToken := os.LookupEnv("METRICS_AUTH_TOKEN")
+			if tc.token == "" {
+				_ = os.Unsetenv("METRICS_AUTH_TOKEN")
+			} else {
+				_ = os.Setenv("METRICS_AUTH_TOKEN", tc.token)
+			}
+			defer func() {
+				if hadToken {
+					_ = os.Setenv("METRICS_AUTH_TOKEN", prevToken)
+				} else {
+					_ = os.Unsetenv("METRICS_AUTH_TOKEN")
+				}
+			}()
+
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
 			c.Request.RemoteAddr = tc.remoteAddr
+			for k, v := range tc.headers {
+				c.Request.Header.Set(k, v)
+			}
+			if tc.authHeader != "" {
+				c.Request.Header.Set("Authorization", tc.authHeader)
+			}
 
 			metricsAuthMiddleware()(c)
 
 			blocked := c.IsAborted() && rec.Code == http.StatusForbidden
 			if blocked != tc.wantBlock {
-				t.Fatalf("RemoteAddr=%q: expected blocked=%v, got blocked=%v (code=%d, aborted=%v)",
-					tc.remoteAddr, tc.wantBlock, blocked, rec.Code, c.IsAborted())
+				t.Fatalf("RemoteAddr=%q headers=%v: expected blocked=%v, got blocked=%v (code=%d, aborted=%v)",
+					tc.remoteAddr, tc.headers, tc.wantBlock, blocked, rec.Code, c.IsAborted())
 			}
 			if !tc.wantBlock && c.IsAborted() {
-				t.Fatalf("RemoteAddr=%q: legitimate scraper request was aborted", tc.remoteAddr)
+				t.Fatalf("RemoteAddr=%q headers=%v: legitimate scraper request was aborted", tc.remoteAddr, tc.headers)
 			}
 		})
 	}
@@ -134,6 +192,29 @@ func TestSetRouter_MetricsEndpoint_RejectsPublicScraper(t *testing.T) {
 	engine.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("expected loopback scraper admitted with 200, got %d", w2.Code)
+	}
+
+	// Regression lock for the real prod topology: R6 has no k8s Ingress, host
+	// nginx relays every request (public or not) to the pod's NodePort and
+	// always sets X-Forwarded-For, so RemoteAddr alone stays private/loopback
+	// even for a genuinely public caller. On today's HEAD before this fix,
+	// this sub-case returns 200 (RemoteAddr-only guard sees a private
+	// RemoteAddr and admits it) — that IS the metric-leak defect. With
+	// METRICS_AUTH_TOKEN unset, it must be rejected.
+	prevToken, hadToken := os.LookupEnv("METRICS_AUTH_TOKEN")
+	_ = os.Unsetenv("METRICS_AUTH_TOKEN")
+	defer func() {
+		if hadToken {
+			_ = os.Setenv("METRICS_AUTH_TOKEN", prevToken)
+		}
+	}()
+	req3 := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req3.RemoteAddr = "10.42.0.7:9100"
+	req3.Header.Set("X-Forwarded-For", "203.0.113.9")
+	w3 := httptest.NewRecorder()
+	engine.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusForbidden {
+		t.Fatalf("expected nginx-relayed request (private RemoteAddr + X-Forwarded-For, no METRICS_AUTH_TOKEN) rejected with 403, got %d body=%s", w3.Code, w3.Body.String())
 	}
 }
 
