@@ -124,7 +124,11 @@ env 详表（Required / platform Integration / OIDC / Meilisearch / Runtime Tuni
 
 ## Internal API Scopes
 
-路径前缀 `/internal`，需 `Authorization: Bearer <key>` + scope 匹配（`repo.ScopeXxx`）。
+路径前缀 `/internal`，需 **`X-API-Key: lurus_ik_…`** 头 + scope 匹配（`repo.ScopeXxx`）。
+⚠️ 2026-08-25 实测订正：此处原写 `Authorization: Bearer <key>`，是错的——`middleware.InternalApiAuth`
+（`internal_api_auth.go:14`）只读 `X-API-Key`，用 Bearer 会拿到 401 `API key required`。
+`/internal/admin/*`（backfill-token-accounts / convergence-stats）要 `ScopeAdmin`；线上唯一那把
+key `platform-core` 只有 `balance:write / user:delete / provisioning`，**没有 admin**，调用前先确认 scope。
 
 | Scope | Endpoints |
 |-------|-----------|
