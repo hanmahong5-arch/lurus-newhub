@@ -143,10 +143,11 @@ const HFBilling = () => {
   const trend = invoices.slice(0, 6).slice().reverse();
   const trendMax = trend.reduce((m, b) => Math.max(m, b.amount_cny ?? 0), 1);
 
-  const balanceDisplay =
-    summary?.wallet_balance_cny != null
-      ? fmtCNY(summary.wallet_balance_cny)
-      : '—';
+  // The platform BillingSummary DTO emits `balance`; `wallet_balance_cny` was
+  // never one of its fields, so reading only that showed an em dash forever.
+  // The old key is kept as a fallback in case some other producer sends it.
+  const walletBalance = summary?.balance ?? summary?.wallet_balance_cny;
+  const balanceDisplay = walletBalance != null ? fmtCNY(walletBalance) : '—';
   const mtdDisplay =
     summary?.mtd_spend_cny != null
       ? fmtCNY(summary.mtd_spend_cny)
@@ -484,16 +485,14 @@ const HFBilling = () => {
                     </span>
                   </div>
                 )}
-                {summary.wallet_balance_cny != null && (
+                {walletBalance != null && (
                   <div
                     style={{ display: 'flex', justifyContent: 'space-between' }}
                   >
                     <span className='muted'>
                       {tr('console.billing.wallet', 'wallet')}
                     </span>
-                    <span className='mono strong'>
-                      {fmtCNY(summary.wallet_balance_cny)}
-                    </span>
+                    <span className='mono strong'>{fmtCNY(walletBalance)}</span>
                   </div>
                 )}
               </div>

@@ -24,7 +24,7 @@ import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
-  QUOTA_PER_USD,
+  getQuotaPerUSD,
   quotaToUSD,
   formatRelativeTime,
 } from '../../../helpers/formatting';
@@ -193,10 +193,13 @@ const CreateModal = ({ tenantSlug, projects, onCreated, onClose }) => {
       const res = await API.post(`/api/v2/${tenantSlug}/tokens`, {
         name: form.name.trim(),
         unlimited_quota: form.unlimited || capUSD <= 0,
+        // The operator's live quota-per-USD, not the default: the cap is read
+        // back through the same rate, so a hardcoded divisor here would make
+        // what you typed and what you see disagree.
         remain_quota:
           form.unlimited || capUSD <= 0
             ? 0
-            : Math.round(capUSD * QUOTA_PER_USD),
+            : Math.round(capUSD * getQuotaPerUSD()),
         model_limits_enabled: form.limitModels && !!form.models.trim(),
         model_limits: form.models.trim(),
         expired_time: -1,
@@ -559,11 +562,11 @@ const HFToken = () => {
 
   const activeCount = tokens.filter((t) => tokenStatus(t) === 'live').length;
   const totalUsedUSD = tokens
-    .reduce((s, t) => s + t.used_quota / QUOTA_PER_USD, 0)
+    .reduce((s, t) => s + t.used_quota / getQuotaPerUSD(), 0)
     .toFixed(2);
   const totalCapUSD = tokens
     .filter((t) => !t.unlimited_quota)
-    .reduce((s, t) => s + (t.used_quota + t.remain_quota) / QUOTA_PER_USD, 0)
+    .reduce((s, t) => s + (t.used_quota + t.remain_quota) / getQuotaPerUSD(), 0)
     .toFixed(2);
 
   // ── Per-token derived values ──────────────────────────────────────────────
@@ -692,7 +695,7 @@ const HFToken = () => {
         body.unlimited_quota = true;
         body.remain_quota = 0;
       } else {
-        const newTotalUnits = Math.round(usd * QUOTA_PER_USD);
+        const newTotalUnits = Math.round(usd * getQuotaPerUSD());
         body.unlimited_quota = false;
         body.remain_quota = Math.max(0, newTotalUnits - token.used_quota);
       }
