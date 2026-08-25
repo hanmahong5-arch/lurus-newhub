@@ -167,9 +167,16 @@ spec:
                   name: lurus-newhub-secrets
                   key: LURUS_WHITELABEL_MASTER_SECRET
             - name: ALLOWED_ORIGINS
+              # hub.lurus.cn is this service's own production domain. R6 has no
+              # ingress controller: both hub.lurus.cn and test-newhub.lurus.cn are
+              # host-nginx vhosts proxying the SAME NodePort 30850 (sources:
+              # deploy/r6-host-nginx/), so a browser on hub.lurus.cn sends
+              # Origin: https://hub.lurus.cn and was being rejected with 403 —
+              # including the OPTIONS preflight. Listing only the stage hostname
+              # left the production hostname's own console unusable.
               # identity.lurus.cn is the OIDC issuer (IDENTITY_PUBLIC_URL); its
               # origin must be allowed for the SSO callback/CORS to work.
-              value: "https://test-newhub.lurus.cn,https://identity.lurus.cn"
+              value: "https://hub.lurus.cn,https://test-newhub.lurus.cn,https://identity.lurus.cn"
             - name: LLM_QUOTA_NATS_ENABLED
               value: "true"
             - name: NATS_URL
