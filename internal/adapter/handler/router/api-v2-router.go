@@ -216,6 +216,11 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantModels.GET("", handler.ListModelsV2)
 			// Wave 3 Phase 1 (2026-05-20): add / delete wired.
 			// Single-model edit deferred to v3 per scope-cut.
+			//
+			// The catalogue is platform-global (entity.Model has no tenant_id),
+			// so these two enforce requirePlatformRoot INSIDE the handler — the
+			// group's UserAuth level is for the GET only. Do not "restore" them
+			// to tenant-admin: v1 keeps the equivalent writes behind RootAuth.
 			tenantModels.POST("", handler.CreateModelV2)
 			tenantModels.DELETE("/:id", handler.DeleteModelV2)
 		}
@@ -225,7 +230,10 @@ func SetApiV2Router(router *gin.Engine) {
 		tenantPricing.Use(middleware.TenantSlugGuard())
 		{
 			tenantPricing.GET("", handler.GetPricingV2)
-			// Wave 3 Phase 1 (2026-05-20): markup write path.
+			// Wave 3 Phase 1 (2026-05-20): markup write path. Writes the
+			// process-wide ratio maps + the single global option row, so it
+			// enforces requirePlatformRoot inside the handler (same rationale
+			// as tenantModels above).
 			tenantPricing.POST("", handler.UpdatePricingV2)
 		}
 

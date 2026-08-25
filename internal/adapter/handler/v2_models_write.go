@@ -53,7 +53,8 @@ type createModelV2Req struct {
 }
 
 // CreateModelV2 handles POST /api/v2/:tenant_slug/models.
-// Requires admin role — same level as channel management.
+// Requires platform root: the model catalogue has no tenant_id and the pricing it
+// persists lives in the global ratio options, so this is not a per-tenant write.
 func CreateModelV2(c *gin.Context) {
 	slug := c.Param("tenant_slug")
 	if slug == "" {
@@ -79,8 +80,8 @@ func CreateModelV2(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Tenant context not found"})
 		return
 	}
-	if !requireTenantAdmin(c, tenantCtx) {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Admin role required"})
+	if !requirePlatformRoot(c, tenantCtx) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Root role required"})
 		return
 	}
 
@@ -239,7 +240,8 @@ func saveCreatedModelRatioOption(optionKey string, ratioMap map[string]float64) 
 
 // DeleteModelV2 handles DELETE /api/v2/:tenant_slug/models/:id.
 // Soft-deletes via GORM DeletedAt. Tenant is validated but models are global
-// catalog entries — only admins can delete from the catalog.
+// catalog entries with no ownership predicate to filter on — the row is removed
+// for every tenant at once, so only platform root may delete from the catalog.
 func DeleteModelV2(c *gin.Context) {
 	slug := c.Param("tenant_slug")
 	if slug == "" {
@@ -265,8 +267,8 @@ func DeleteModelV2(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Tenant context not found"})
 		return
 	}
-	if !requireTenantAdmin(c, tenantCtx) {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Admin role required"})
+	if !requirePlatformRoot(c, tenantCtx) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Root role required"})
 		return
 	}
 

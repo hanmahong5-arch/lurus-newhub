@@ -251,7 +251,15 @@ func TestCoverUpliftAnalytics_GetAllQuotaDates_GroupedByModel(t *testing.T) {
 		}
 	}
 
+	// These cases pin the grouping/range logic, which is the cross-tenant
+	// (root) view; tenant scoping itself is covered in
+	// usedata_tenant_scope_test.go.
 	r := gin.New()
+	r.Use(setAnalyticsCtx(map[string]interface{}{
+		"id":        ctx.RootUser.Id,
+		"role":      common.RoleRootUser,
+		"tenant_id": ctx.TenantID,
+	}))
 	r.GET("/api/data", GetAllQuotaDates)
 
 	w := doAnalyticsGet(r, "/api/data?start_timestamp=0&end_timestamp=2000")
@@ -295,6 +303,11 @@ func TestCoverUpliftAnalytics_GetAllQuotaDates_ByUsername(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(setAnalyticsCtx(map[string]interface{}{
+		"id":        ctx.RootUser.Id,
+		"role":      common.RoleRootUser,
+		"tenant_id": ctx.TenantID,
+	}))
 	r.GET("/api/data", GetAllQuotaDates)
 
 	w := doAnalyticsGet(r, "/api/data?start_timestamp=0&end_timestamp=2000&username=alice")

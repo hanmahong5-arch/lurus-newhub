@@ -22,3 +22,20 @@ func requireTenantAdmin(c *gin.Context, tc *middleware.TenantContext) bool {
 	// OIDC-JWT path: roles arrive as strings extracted from the token claims.
 	return tc != nil && (hasRole(tc.Roles, "admin") || hasRole(tc.Roles, "root"))
 }
+
+// requirePlatformRoot is requireTenantAdmin's stricter sibling for v2 routes that
+// are mounted under /:tenant_slug but whose write lands on PLATFORM-GLOBAL state
+// (the process-wide ratio maps, the single-row option table, the tenant-less model
+// catalogue). The tenant in the URL is route decoration there, not a blast radius:
+// letting one tenant's admin through would let them reprice or delete models for
+// every tenant. v1 puts the same writes behind middleware.RootAuth() — this keeps
+// v2 at that level.
+//
+// Unlike requireTenantAdmin, the OIDC-JWT path accepts "root" ONLY: "admin" is the
+// tenant-scoped role and must not reach a global write.
+func requirePlatformRoot(c *gin.Context, tc *middleware.TenantContext) bool {
+	if c.GetInt("role") >= common.RoleRootUser { // session / access-token path
+		return true
+	}
+	return tc != nil && hasRole(tc.Roles, "root")
+}
