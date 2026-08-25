@@ -111,7 +111,9 @@ ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=
 | Meilisearch | `MEILISEARCH_ENABLED=false`(集群内无 meilisearch 实例) |
 | 出站代理 | **无,且不要加**——上游供应商直连 :443。被墙供应商走 per-channel proxy;理由与实测见 `deploy/k8s/r6-stage/netpol-nats-egress.yaml` 头注释 |
 | Egress 管控 | NetworkPolicy `newhub-nats-egress`：仅放行 NATS/DNS/PG/lurus-system/lurus-platform + 公网 80/443（RFC1918 全 except) |
-| ALLOWED_ORIGINS | `https://test-newhub.lurus.cn,https://identity.lurus.cn` |
+| ALLOWED_ORIGINS | `https://hub.lurus.cn,https://test-newhub.lurus.cn,https://identity.lurus.cn`(2026-08-25 补 hub;它是本服务自己的生产域,此前只列了 stage 域。同源请求不受影响——gin-contrib/cors 对 Origin==Host 直接短路,所以缺口只影响跨域调用) |
+| 边缘 | **无 k8s Ingress**;宿主 nginx vhost `hub.lurus.cn` / `test-newhub.lurus.cn` 均 `proxy_pass http://127.0.0.1:30850`,源码在 `deploy/r6-host-nginx/`。两者都设 `X-Forwarded-For`/`X-Real-IP` ⇒ **pod 侧 `RemoteAddr` 恒为私网**,任何「靠 RemoteAddr 判内外网」的守卫在此拓扑下恒真 |
+| `/metrics` | 双层封堵(2026-08-25):nginx `location = /metrics { return 404; }` + 应用层 `metricsAuthMiddleware`(无转发头的直连放行、带转发头则要 `METRICS_AUTH_TOKEN`)。唯一合法抓取者 = 宿主 netdata go.d job `newhub` → `http://localhost:30850/metrics`(直连,不经 nginx) |
 | SYNC_FREQUENCY | `60`(秒;渠道缓存同步) |
 | Secret | `lurus-newhub-secrets`,注入 7 个 key：SESSION_SECRET, SQL_DSN, OIDC_CLIENT_ID, IDENTITY_SESSION_SECRET, IDENTITY_SERVICE_INTERNAL_KEY, LURUS_WHITELABEL_MASTER_SECRET, TAVILY_API_KEY(optional) |
 
