@@ -67,18 +67,27 @@ func InitChannelCache() {
 		}
 	}
 
+	// MultiKeyPollingIndex is the one field of a cached channel that relay
+	// goroutines mutate in place, and they do it under the per-channel polling
+	// lock (GetNextEnabledKey in channel.go). Reading it here under
+	// channelSyncLock alone would be two different mutexes guarding one word.
+	//
+	// Snapshot it under the writer's own lock, and do that BEFORE taking
+	// channelSyncLock — never while holding it. GetNextEnabledKey takes the
+	// polling lock and its caller then briefly takes channelSyncLock.RLock, so
+	// acquiring the pair in the other order here would invert the ordering.
+	// Nothing below holds two of these locks at once.
+	carriedPollingIndex := carryOverPollingIndices()
+
 	channelSyncLock.Lock()
 	group2model2channels = newGroup2model2channels
-	//channelsIDM = newChannelId2channel
-	for i, channel := range newChannelId2channel {
+	for _, channel := range newChannelId2channel {
 		if channel.ChannelInfo.IsMultiKey {
 			channel.Keys = channel.GetKeys()
 			if channel.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling {
-				if oldChannel, ok := channelsIDM[i]; ok {
-					// 存在旧的渠道，如果是多key且轮询，保留轮询索引信息
-					if oldChannel.ChannelInfo.IsMultiKey && oldChannel.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling {
-						channel.ChannelInfo.MultiKeyPollingIndex = oldChannel.ChannelInfo.MultiKeyPollingIndex
-					}
+				// 存在旧的渠道，如果是多key且轮询，保留轮询索引信息
+				if idx, ok := carriedPollingIndex[channel.Id]; ok {
+					channel.ChannelInfo.MultiKeyPollingIndex = idx
 				}
 			}
 		}
@@ -86,6 +95,31 @@ func InitChannelCache() {
 	channelsIDM = newChannelId2channel
 	channelSyncLock.Unlock()
 	common.SysLog("channels synced from database")
+}
+
+// carryOverPollingIndices reads the current polling position of every cached
+// multi-key polling channel, each under that channel's own polling lock so the
+// read is ordered against GetNextEnabledKey's write. The cache map is copied
+// under a short read lock which is released before any polling lock is taken,
+// so the two locks are never held simultaneously.
+func carryOverPollingIndices() map[int]int {
+	channelSyncLock.RLock()
+	live := make([]*Channel, 0, len(channelsIDM))
+	for _, channel := range channelsIDM {
+		live = append(live, channel)
+	}
+	channelSyncLock.RUnlock()
+
+	carried := make(map[int]int, len(live))
+	for _, channel := range live {
+		lock := GetChannelPollingLock(channel.Id)
+		lock.Lock()
+		if channel.ChannelInfo.IsMultiKey && channel.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling {
+			carried[channel.Id] = channel.ChannelInfo.MultiKeyPollingIndex
+		}
+		lock.Unlock()
+	}
+	return carried
 }
 
 func SyncChannelCache(frequency int) {
