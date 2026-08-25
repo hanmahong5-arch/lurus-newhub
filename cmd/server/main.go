@@ -47,6 +47,35 @@ import (
 var buildFS = web.BuildFS
 var indexPage = web.IndexPage
 
+// billingOutboxInterval is how often the outbox drain runs.
+const billingOutboxInterval = 5 * time.Second
+
+// billingOutboxTick drains the billing outbox once, if unified billing is on
+// right now. The toggle is read per tick rather than once at startup because
+// StartBillingConfigPoller can flip it from the platform console at runtime — a
+// boot-time gate left every settle enqueued after the flip sitting in the table
+// until the next pod restart.
+func billingOutboxTick(ctx context.Context) {
+	if !common.BillingUnifiedEnabled() {
+		return
+	}
+	_ = app.ProcessBillingOutbox(ctx)
+}
+
+// runBillingOutboxLoop ticks the outbox drain until ctx is cancelled.
+func runBillingOutboxLoop(ctx context.Context, interval time.Duration) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			billingOutboxTick(ctx)
+		}
+	}
+}
+
 func main() {
 	startTime := time.Now()
 
@@ -232,21 +261,11 @@ func run(ctx context.Context, startTime time.Time) error {
 	// without a pod restart.  No-op when IDENTITY_SERVICE_URL is unset.
 	common.StartBillingConfigPoller(ctx)
 
-	// Background task: billing outbox processor (5s ticker)
-	if common.BillingUnifiedEnabled() {
-		g.Go(func() error {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-ticker.C:
-					_ = app.ProcessBillingOutbox(ctx)
-				}
-			}
-		})
-	}
+	// Background task: billing outbox processor. Started unconditionally — see
+	// runBillingOutboxLoop for why the toggle is read per tick instead.
+	g.Go(func() error {
+		return runBillingOutboxLoop(ctx, billingOutboxInterval)
+	})
 
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
 		common.BatchUpdateEnabled = true
@@ -555,13 +574,13 @@ func InitResources(ctx context.Context) error {
 		}
 	}
 
-	// Initialize billing outbox (pre-auth settlement retry queue)
-	if common.BillingUnifiedEnabled() {
-		if err := app.InitBillingOutbox(repo.DB); err != nil {
-			common.SysError(fmt.Sprintf("Failed to initialize billing outbox: %v", err))
-		} else {
-			common.SysLog("billing unified mode enabled, outbox initialized")
-		}
+	// Initialize billing outbox (pre-auth settlement retry queue). Not gated on
+	// BillingUnifiedEnabled(): the toggle is runtime-flippable, and an
+	// uninitialized outbox makes EnqueueSettle drop the settle on the floor.
+	if err := app.InitBillingOutbox(repo.DB); err != nil {
+		common.SysError(fmt.Sprintf("Failed to initialize billing outbox: %v", err))
+	} else {
+		common.SysLog("billing outbox initialized")
 	}
 
 	// Initialize zita SDK client (Layer B/C of ADR-0011 — replaces

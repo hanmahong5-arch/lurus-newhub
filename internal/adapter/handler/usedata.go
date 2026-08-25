@@ -14,7 +14,13 @@ func GetAllQuotaDates(c *gin.Context) {
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	username := c.Query("username")
-	dates, err := repo.GetAllQuotaDates(startTimestamp, endTimestamp, username)
+	// Root (platform operator) sees every tenant's usage; a tenant admin is
+	// constrained to their own tenant. AdminAuth() alone does not enforce this.
+	scope := repo.AllTenantsForAdmin()
+	if c.GetInt("role") < common.RoleRootUser {
+		scope = repo.ForTenant(c.GetString("tenant_id"))
+	}
+	dates, err := repo.GetAllQuotaDatesScoped(scope, startTimestamp, endTimestamp, username)
 	if err != nil {
 		common.ApiError(c, err)
 		return

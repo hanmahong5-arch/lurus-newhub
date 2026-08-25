@@ -1,6 +1,7 @@
 package common_handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 
@@ -42,6 +43,13 @@ func RerankHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 				if result.Document != nil {
 					if doc, ok := result.Document.(string); ok {
 						if doc == "" {
+							// The index used for the backfill comes from upstream, so it
+							// cannot be trusted to address the caller's own document slice.
+							if result.Index < 0 || result.Index >= len(info.Documents) {
+								return nil, types.NewOpenAIError(
+									fmt.Errorf("rerank response index %d out of range for %d documents", result.Index, len(info.Documents)),
+									types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+							}
 							document = info.Documents[result.Index]
 						} else {
 							document = doc

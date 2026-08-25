@@ -97,7 +97,7 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/switch/user/topup":      "inline raw-token auth; self-service topup for the token owner",
 
 		// ---- global catalog entities: no tenant_id column at all (verified: entity/model_meta.go) ----
-		"POST /api/v2/:tenant_slug/models":       "CreateModelV2: entity.Model has no tenant_id column (global catalog); tenant_slug is validated only for route/RBAC gating (admin role), never as a data filter",
+		"POST /api/v2/:tenant_slug/models":       "CreateModelV2: entity.Model has no tenant_id column (global catalog); tenant_slug is validated only for route existence, never as a data filter — and because the write is global the handler gates on requirePlatformRoot, not tenant-admin",
 		"DELETE /api/v2/:tenant_slug/models/:id": "DeleteModelV2: same — global catalog entry, mirrors v1's POST /api/channel/fix \"global maintenance, not a per-tenant data mutation\" exemption",
 
 		// ---- conditionally-registered routes (only present under specific env/config; exempted defensively) ----

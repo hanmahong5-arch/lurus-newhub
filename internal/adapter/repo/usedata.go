@@ -112,10 +112,29 @@ func increaseQuotaData(userId int, username string, modelName string, count int,
 	}
 }
 
+// applyQuotaData constrains a quota_data query to one tenant. quota_data has no
+// tenant_id column of its own, so the scope cannot reuse TenantScope.apply and
+// has to reach the tenant through the owning user row. Every cross-user query
+// below needs it — usernames are only per-tenant unique (uk_users_tenant_username),
+// and an unscoped aggregate leaks other tenants' totals just as surely as an
+// unscoped detail list.
+func (s TenantScope) applyQuotaData(tx *gorm.DB) *gorm.DB {
+	if s.allTenants {
+		return tx
+	}
+	return tx.Where("user_id IN (SELECT id FROM users WHERE tenant_id = ?)", s.tenantID)
+}
+
+// GetQuotaDataByUsername spans every tenant. Caller-facing surfaces must go
+// through GetAllQuotaDatesScoped instead.
 func GetQuotaDataByUsername(username string, startTime int64, endTime int64) (quotaData []*QuotaData, err error) {
+	return getQuotaDataByUsername(AllTenantsForAdmin(), username, startTime, endTime)
+}
+
+func getQuotaDataByUsername(scope TenantScope, username string, startTime int64, endTime int64) (quotaData []*QuotaData, err error) {
 	var quotaDatas []*QuotaData
 	// 从quota_data表中查询数据
-	err = DB.Table("quota_data").Where("username = ? and created_at >= ? and created_at <= ?", username, startTime, endTime).Find(&quotaDatas).Error
+	err = scope.applyQuotaData(DB.Table("quota_data")).Where("username = ? and created_at >= ? and created_at <= ?", username, startTime, endTime).Find(&quotaDatas).Error
 	return quotaDatas, err
 }
 
@@ -126,14 +145,23 @@ func GetQuotaDataByUserId(userId int, startTime int64, endTime int64) (quotaData
 	return quotaDatas, err
 }
 
+// GetAllQuotaDates spans every tenant. Reserve it for platform-admin surfaces
+// and system tasks; caller-facing views must use GetAllQuotaDatesScoped.
 func GetAllQuotaDates(startTime int64, endTime int64, username string) (quotaData []*QuotaData, err error) {
+	return GetAllQuotaDatesScoped(AllTenantsForAdmin(), startTime, endTime, username)
+}
+
+// GetAllQuotaDatesScoped is the tenant-aware form of GetAllQuotaDates: the
+// scope applies to both branches, so a tenant admin's aggregate is summed over
+// their own users only.
+func GetAllQuotaDatesScoped(scope TenantScope, startTime int64, endTime int64, username string) (quotaData []*QuotaData, err error) {
 	if username != "" {
-		return GetQuotaDataByUsername(username, startTime, endTime)
+		return getQuotaDataByUsername(scope, username, startTime, endTime)
 	}
 	var quotaDatas []*QuotaData
 	// 从quota_data表中查询数据
 	// only select model_name, sum(count) as count, sum(quota) as quota, model_name, created_at from quota_data group by model_name, created_at;
 	//err = DB.Table("quota_data").Where("created_at >= ? and created_at <= ?", startTime, endTime).Find(&quotaDatas).Error
-	err = DB.Table("quota_data").Select("model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, created_at").Where("created_at >= ? and created_at <= ?", startTime, endTime).Group("model_name, created_at").Find(&quotaDatas).Error
+	err = scope.applyQuotaData(DB.Table("quota_data")).Select("model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, created_at").Where("created_at >= ? and created_at <= ?", startTime, endTime).Group("model_name, created_at").Find(&quotaDatas).Error
 	return quotaDatas, err
 }

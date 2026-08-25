@@ -12,13 +12,51 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
 	outboxActionSettle  = "settle"
 	outboxActionRelease = "release"
 	outboxMaxRetries    = 10
+
+	outboxStatusPending    = "pending"
+	outboxStatusProcessing = "processing"
+	outboxStatusDone       = "done"
+	outboxStatusFailed     = "failed"
+
+	// outboxClaimLease bounds how long a claimed entry stays owned. A pod killed
+	// between the claim and the terminal update would otherwise wedge its entries
+	// in "processing" forever — nothing else moves them out of that status. Two
+	// orders of magnitude above the 5s per-entry call timeout below, so a live
+	// processor is never stolen from.
+	outboxClaimLease = 5 * time.Minute
+)
+
+// The claim statement. It is a single UPDATE, not a SELECT, because the claim has
+// to OUTLIVE the row locks: a bare SELECT ... FOR UPDATE SKIP LOCKED on the root
+// handle runs in autocommit, so PostgreSQL releases the locks the instant the
+// statement finishes and all three replicas' tickers hand the same entry to
+// SettlePreAuthGRPC. Persisting the "processing" status inside the same statement
+// moves mutual exclusion onto the row itself, where it survives the tick.
+//
+// The second WHERE arm re-claims entries whose lease expired (outboxClaimLease).
+// Table name mirrors entity.BillingOutbox.TableName() — asserted in the tests.
+const (
+	outboxClaimHead = `UPDATE billing_outbox SET status = ?, updated_at = ?
+WHERE id IN (
+	SELECT id FROM billing_outbox
+	WHERE (status = ? AND next_retry <= ?) OR (status = ? AND updated_at <= ?)
+	ORDER BY next_retry ASC
+	LIMIT 50`
+	// PostgreSQL-only (runtime is PG-only): peers step over rows another claimer
+	// is mid-UPDATE on instead of queueing behind them. The hermetic SQLite tier
+	// has no row-level locking dialect — its single writer lock already makes the
+	// statement atomic — so the clause is dropped there rather than weakened here.
+	outboxClaimLocking = `
+	FOR UPDATE SKIP LOCKED`
+	outboxClaimTail = `
+)
+RETURNING *`
 )
 
 // billingOutboxDB is set during initialization and used by the outbox worker.
@@ -41,7 +79,7 @@ func EnqueueSettle(accountID, preAuthID int64, amountLB float64) error {
 		PreAuthID: preAuthID,
 		Action:    outboxActionSettle,
 		AmountLB:  amountLB,
-		Status:    "pending",
+		Status:    outboxStatusPending,
 		NextRetry: time.Now(),
 	}
 	if err := billingOutboxDB.Create(&entry).Error; err != nil {
@@ -62,7 +100,7 @@ func EnqueueRelease(accountID, preAuthID int64) error {
 		PreAuthID: preAuthID,
 		Action:    outboxActionRelease,
 		AmountLB:  0,
-		Status:    "pending",
+		Status:    outboxStatusPending,
 		NextRetry: time.Now(),
 	}
 	if err := billingOutboxDB.Create(&entry).Error; err != nil {
@@ -72,27 +110,43 @@ func EnqueueRelease(accountID, preAuthID int64) error {
 	return nil
 }
 
-// ProcessBillingOutbox polls pending entries and retries them.
-// Uses FOR UPDATE SKIP LOCKED to prevent multi-pod double-processing.
+// claimBillingOutbox flips a bounded batch of due entries to "processing" and
+// returns them. Entries it returns are owned by this caller until it writes a
+// terminal status or its claim lease expires — no other replica will see them.
+func claimBillingOutbox(ctx context.Context, now time.Time) ([]entity.BillingOutbox, error) {
+	sql := outboxClaimHead + outboxClaimTail
+	if billingOutboxDB.Name() == "postgres" {
+		sql = outboxClaimHead + outboxClaimLocking + outboxClaimTail
+	}
+
+	var entries []entity.BillingOutbox
+	err := billingOutboxDB.WithContext(ctx).Raw(sql,
+		outboxStatusProcessing, now,
+		outboxStatusPending, now,
+		outboxStatusProcessing, now.Add(-outboxClaimLease),
+	).Scan(&entries).Error
+	return entries, err
+}
+
+// ProcessBillingOutbox claims due entries and retries them.
+// The claim is durable (status="processing"), so the 3 replicas' tickers cannot
+// hand the same entry to the platform twice.
 func ProcessBillingOutbox(ctx context.Context) error {
 	if billingOutboxDB == nil {
 		return nil
 	}
 
-	// Accurate pending count for metrics (including not-yet-ready entries)
+	// Queue depth = everything not yet terminal. A claimed entry is still
+	// outstanding work, so "processing" belongs in the count — otherwise the
+	// gauge reads 0 while entries are in flight or wedged mid-retry.
 	var pendingCount int64
-	billingOutboxDB.Model(&entity.BillingOutbox{}).Where("status = ?", "pending").Count(&pendingCount)
+	billingOutboxDB.Model(&entity.BillingOutbox{}).
+		Where("status IN ?", []string{outboxStatusPending, outboxStatusProcessing}).
+		Count(&pendingCount)
 	metrics.BillingOutboxPending.Set(float64(pendingCount))
 
-	// Claim entries atomically: SELECT ... FOR UPDATE SKIP LOCKED prevents
-	// two pods from processing the same entry simultaneously.
-	var entries []entity.BillingOutbox
-	if err := billingOutboxDB.
-		Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-		Where("status = ? AND next_retry <= ?", "pending", time.Now()).
-		Order("next_retry ASC").
-		Limit(50).
-		Find(&entries).Error; err != nil {
+	entries, err := claimBillingOutbox(ctx, time.Now())
+	if err != nil {
 		return fmt.Errorf("query outbox: %w", err)
 	}
 
@@ -112,17 +166,17 @@ func ProcessBillingOutbox(ctx context.Context) error {
 		cancel()
 
 		if err == nil {
-			// Atomic update: only mark done if still pending (guard against race)
+			// Atomic update: only mark done if we still hold the claim.
 			billingOutboxDB.Model(&entity.BillingOutbox{}).
-				Where("id = ? AND status = ?", entry.ID, "pending").
-				Updates(map[string]any{"status": "done", "error": ""})
+				Where("id = ? AND status = ?", entry.ID, outboxStatusProcessing).
+				Updates(map[string]any{"status": outboxStatusDone, "error": ""})
 			slog.Info("billing outbox processed", "id", entry.ID, "action", entry.Action, "preauth_id", entry.PreAuthID)
 		} else {
 			entry.RetryCount++
 			entry.Error = err.Error()
-			newStatus := "pending"
+			newStatus := outboxStatusPending
 			if entry.RetryCount >= outboxMaxRetries {
-				newStatus = "failed"
+				newStatus = outboxStatusFailed
 				metrics.BillingOutboxFailedTotal.Inc()
 				slog.Error("billing outbox permanently failed", "id", entry.ID, "action", entry.Action, "preauth_id", entry.PreAuthID, "err", err)
 			} else {
@@ -130,9 +184,9 @@ func ProcessBillingOutbox(ctx context.Context) error {
 				entry.NextRetry = time.Now().Add(backoff)
 				slog.Warn("billing outbox retry scheduled", "id", entry.ID, "retry", entry.RetryCount, "next", entry.NextRetry, "err", err)
 			}
-			// Atomic update: only update if still pending
+			// Atomic update: only update if we still hold the claim
 			billingOutboxDB.Model(&entity.BillingOutbox{}).
-				Where("id = ? AND status = ?", entry.ID, "pending").
+				Where("id = ? AND status = ?", entry.ID, outboxStatusProcessing).
 				Updates(map[string]any{
 					"retry_count": entry.RetryCount,
 					"next_retry":  entry.NextRetry,

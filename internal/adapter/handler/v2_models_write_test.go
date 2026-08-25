@@ -104,15 +104,19 @@ func setupModelsWriteRouter(t *testing.T) *modelsWriteTestCtx {
 	}
 
 	router := gin.New()
-	// mockAuth defaults to an authenticated tenant-admin — this mirrors the
-	// real UserAuth()+TenantSlugGuard() chain, which always populates
-	// tenant_context before the handler runs. The admin-gate tests below
-	// override this via the X-Test-Role header to exercise the 403 path.
+	// mockAuth defaults to an authenticated platform root — the model catalogue
+	// is global (no tenant_id), so that is the level the write handlers require.
+	// The context shape mirrors the real UserAuth()+TenantSlugGuard() chain,
+	// which always populates tenant_context before the handler runs. The gate
+	// tests below downgrade the caller via X-Test-Role to hit the 403 path.
 	mockAuth := func(c *gin.Context) {
 		c.Set("id", user.Id)
-		role := common.RoleAdminUser
-		if c.GetHeader("X-Test-Role") == "user" {
+		role := common.RoleRootUser
+		switch c.GetHeader("X-Test-Role") {
+		case "user":
 			role = common.RoleCommonUser
+		case "admin":
+			role = common.RoleAdminUser
 		}
 		c.Set("role", role)
 		c.Set("tenant_context", &middleware.TenantContext{
@@ -287,9 +291,13 @@ func TestV2ModelsWrite_DeleteNotFound(t *testing.T) {
 	}
 }
 
-// 6. AdminGate (Create) — HIGH: CreateModelV2 must reject a non-admin caller
-// with 403 before any catalogue mutation; an admin caller must still succeed.
-func TestV2ModelsWrite_CreateAdminGate(t *testing.T) {
+// 6. RootGate (Create) — HIGH: CreateModelV2 writes the tenant-less catalogue and
+// the global ratio options, so it must reject anything below platform root with
+// 403 before any mutation; a root caller must still succeed.
+//
+// The tenant-admin subtest used to assert 201. That assertion was wrong — see
+// TestV2PricingWrite_RootGate for the rationale.
+func TestV2ModelsWrite_CreateRootGate(t *testing.T) {
 	ctx := setupModelsWriteRouter(t)
 
 	t.Run("non_admin_forbidden", func(t *testing.T) {
@@ -298,22 +306,30 @@ func TestV2ModelsWrite_CreateAdminGate(t *testing.T) {
 			t.Fatalf("expected 403, got %d — body: %s", w.Code, w.Body.String())
 		}
 		out := parseWriteResp(t, w)
-		if msg, _ := out["message"].(string); msg != "Admin role required" {
-			t.Errorf("message = %q, want %q", msg, "Admin role required")
+		if msg, _ := out["message"].(string); msg != "Root role required" {
+			t.Errorf("message = %q, want %q", msg, "Root role required")
 		}
 	})
 
-	t.Run("admin_allowed", func(t *testing.T) {
+	t.Run("tenant_admin_forbidden", func(t *testing.T) {
+		w := postModel(ctx, map[string]interface{}{"model_name": "gate-test-model"}, map[string]string{"X-Test-Role": "admin"})
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for a role-10 tenant admin, got %d — body: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("root_allowed", func(t *testing.T) {
 		w := postModel(ctx, map[string]interface{}{"model_name": "gate-test-model"})
 		if w.Code != http.StatusCreated {
-			t.Fatalf("expected 201 for admin caller, got %d — body: %s", w.Code, w.Body.String())
+			t.Fatalf("expected 201 for root caller, got %d — body: %s", w.Code, w.Body.String())
 		}
 	})
 }
 
-// 7. AdminGate (Delete) — HIGH: DeleteModelV2 must reject a non-admin caller
-// with 403 before any catalogue mutation; an admin caller must still succeed.
-func TestV2ModelsWrite_DeleteAdminGate(t *testing.T) {
+// 7. RootGate (Delete) — HIGH: DeleteModelV2 soft-deletes a catalogue row for
+// every tenant at once, so it must reject anything below platform root with 403
+// before any mutation; a root caller must still succeed.
+func TestV2ModelsWrite_DeleteRootGate(t *testing.T) {
 	ctx := setupModelsWriteRouter(t)
 
 	m := &repo.Model{ModelName: "gate-delete-model", Status: 1}
@@ -328,10 +344,22 @@ func TestV2ModelsWrite_DeleteAdminGate(t *testing.T) {
 		}
 	})
 
-	t.Run("admin_allowed", func(t *testing.T) {
+	t.Run("tenant_admin_forbidden", func(t *testing.T) {
+		w := deleteModel(ctx, m.Id, map[string]string{"X-Test-Role": "admin"})
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for a role-10 tenant admin, got %d — body: %s", w.Code, w.Body.String())
+		}
+		// The row must still be there — the gate has to fire before the delete.
+		var still repo.Model
+		if err := ctx.db.First(&still, m.Id).Error; err != nil {
+			t.Fatalf("model was deleted despite the 403: %v", err)
+		}
+	})
+
+	t.Run("root_allowed", func(t *testing.T) {
 		w := deleteModel(ctx, m.Id)
 		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200 for admin caller, got %d — body: %s", w.Code, w.Body.String())
+			t.Fatalf("expected 200 for root caller, got %d — body: %s", w.Code, w.Body.String())
 		}
 	})
 }

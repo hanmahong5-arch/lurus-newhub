@@ -43,9 +43,10 @@ type updatePricingResponse struct {
 	UpdatedCount int `json:"updated_count"`
 }
 
-// UpdatePricingV2 handles bulk pricing patches for a tenant's model catalogue.
-// Route (registered by Opus): POST /api/v2/:tenant_slug/pricing
-// Auth: UserAuth middleware (OIDC JWT) — tenant admin only.
+// UpdatePricingV2 handles bulk pricing patches for the model catalogue.
+// Route: POST /api/v2/:tenant_slug/pricing
+// Auth: UserAuth middleware + platform root (requirePlatformRoot) — the write is
+// global, the tenant slug only selects the route.
 //
 // Request body: JSON array of updatePricingRequest.
 // At least one item is required; model_name is mandatory per item; ratios must be > 0.
@@ -75,8 +76,10 @@ func UpdatePricingV2(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Tenant context not found"})
 		return
 	}
-	if !requireTenantAdmin(c, tenantCtx) {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Admin role required"})
+	// Root, not tenant-admin: the writes below replace the process-wide ratio maps
+	// and the single global option row, so they reprice every tenant at once.
+	if !requirePlatformRoot(c, tenantCtx) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Root role required"})
 		return
 	}
 

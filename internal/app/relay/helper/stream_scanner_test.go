@@ -14,20 +14,25 @@ const (
 	outcomeDone
 )
 
-// parseStreamLine replicates the inline parsing logic from stream_scanner.go
-// (lines 207-248) as a pure function so it can be unit-tested without needing
-// a full gin.Context / HTTP response pipeline.
+// parseStreamLine replicates the inline parsing logic of stream_scanner.go's
+// scan loop as a pure function so the line shapes can be enumerated cheaply.
+// It is a replica, not an oracle — the behavioural cover that actually drives
+// StreamScannerHandler lives in stream_scanner_terminal_test.go.
 func parseStreamLine(line string) (outcome, string) {
 	data := line
 
 	if len(data) < 6 {
 		return outcomeSkipped, ""
 	}
-	if data[:5] != "data:" && data[:6] != "[DONE]" {
+	// Terminal-vs-data is decided before any stripping: a bare "[DONE]" has no
+	// "data:" prefix to strip.
+	if strings.HasPrefix(data, "[DONE]") {
+		return outcomeDone, data
+	}
+	if !strings.HasPrefix(data, "data:") {
 		return outcomeSkipped, ""
 	}
-	data = data[5:]
-	data = strings.TrimSpace(data)
+	data = strings.TrimSpace(data[5:])
 	if data == "" {
 		return outcomeSkipped, ""
 	}
@@ -131,12 +136,13 @@ func TestStreamLineParseLogic(t *testing.T) {
 			wantData:    "",
 		},
 		{
-			// Known quirk: "[DONE]" → len=6, [0:5]="[DONE" != "data:", [0:6]="[DONE]" == "[DONE]"
-			// → data = [5:] = "]", TrimSpace → "]", not empty, not HasPrefix "[DONE]" → outcomeData
-			name:        "raw DONE line quirk",
+			// Was asserted as outcomeData/"]" — that documented the defect rather
+			// than the contract: an unconditional 5-byte strip mangled a bare
+			// terminator into a payload and lost the [DONE] signal entirely.
+			name:        "raw DONE line",
 			line:        "[DONE]",
-			wantOutcome: outcomeData,
-			wantData:    "]",
+			wantOutcome: outcomeDone,
+			wantData:    "[DONE]",
 		},
 	}
 

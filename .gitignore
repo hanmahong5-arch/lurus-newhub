@@ -13,7 +13,11 @@ web/dist
 .env.*
 one-api
 lurus-api
-server
+# Anchored: unanchored `server` matched the cmd/server DIRECTORY, so git never
+# even listed new files under it — a test added there was invisible to
+# `git status` and would have been lost. This is the upstream build output name;
+# ours is lurus-api above.
+/server
 /__debug_bin*
 .DS_Store
 tiktoken_cache
@@ -41,6 +45,9 @@ doc/database-credentials.md
 # Coverage files
 cov_*.out
 coverage*
+# ...but never a source file. `coverage*` was swallowing coverage*_test.go, so
+# tests written into those names were staged as no-ops and silently never landed.
+!coverage*_test.go
 *.out
 
 # IDE / tools

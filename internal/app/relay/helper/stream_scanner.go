@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
@@ -65,6 +66,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		pingTicker *time.Ticker
 		writeMutex sync.Mutex     // Mutex to protect concurrent writes
 		wg         sync.WaitGroup // 用于等待所有 goroutine 退出
+		// detached 在本函数返回前置位:此后 c 会被 gin 放回 sync.Pool 复用,
+		// 任何仍存活的写 goroutine 必须短路,否则会写进下一个请求的连接。
+		detached atomic.Bool
 	)
 
 	generalSettings := operation_setting.GetGeneralSetting()
@@ -110,6 +114,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			logger.LogError(c, "timeout waiting for goroutines to exit")
 		}
 
+		// 等待超时意味着还有写 goroutine 存活;置位让它们在真正落笔前退出。
+		// c.Request.Context() 兜不住这条路径——Context 被复用后读到的是下一个
+		// 请求的活 context,永远不是 Done。
+		detached.Store(true)
+
 		close(stopChan)
 	}()
 
@@ -154,9 +163,14 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 					// 客户端连接,panic 若不 recover 会绕过外层 goroutine 的恢复直接崩进程;
 					// 内层 defer Unlock 在 panic 展开时先于 recover 执行,不会泄漏 writeMutex。
 					done := make(chan error, 1)
+					wg.Add(1)
 					common.SafeGo(func() {
+						defer wg.Done()
 						writeMutex.Lock()
 						defer writeMutex.Unlock()
+						if detached.Load() {
+							return
+						}
 						done <- PingData(c)
 					})
 
@@ -230,15 +244,22 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			if len(data) < 6 {
 				continue
 			}
-			if data[:5] != "data:" && data[:6] != "[DONE]" {
-				continue
+			// 终止符可能以裸 "[DONE]" 或 "data: [DONE]" 两种形态到达,必须先判定
+			// 再剥前缀:无条件剥 5 字节会把裸 "[DONE]" 削成 "]" 当负载下发,终止
+			// 标记随之丢失,调用方据此把真实 usage 判为不可信并按 0 计费。
+			isTerminal := strings.HasPrefix(data, "[DONE]")
+			if !isTerminal {
+				if !strings.HasPrefix(data, "data:") {
+					continue
+				}
+				// 剥 5 字节再 TrimSpace,"data:x" 与 "data: x" 同样可解析。
+				data = strings.TrimSpace(data[5:])
+				if data == "" {
+					continue
+				}
+				isTerminal = strings.HasPrefix(data, "[DONE]")
 			}
-			data = data[5:]
-			data = strings.TrimSpace(data)
-			if data == "" {
-				continue
-			}
-			if !strings.HasPrefix(data, "[DONE]") {
+			if !isTerminal {
 				info.SetFirstResponseTime()
 
 				// 使用超时机制防止写操作阻塞。dataHandler 是各 provider 的闭包,
@@ -246,9 +267,16 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				// 包裹避免其 panic 绕过外层 recover 崩进程,内层 defer Unlock 先于 recover
 				// 执行不泄漏 writeMutex(panic 时不 send done,外层 select 由 WriteTimeout 兜底)。
 				done := make(chan bool, 1)
+				// wg 计入这个内层 writer:它经 c 直接写客户端,若不等它退出,
+				// 本函数返回后 gin 回收 Context,晚到的写就打到别人的 socket 上。
+				wg.Add(1)
 				common.SafeGo(func() {
+					defer wg.Done()
 					writeMutex.Lock()
 					defer writeMutex.Unlock()
+					if detached.Load() {
+						return
+					}
 					done <- dataHandler(data)
 				})
 

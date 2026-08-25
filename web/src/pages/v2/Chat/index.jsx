@@ -17,12 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import React, { useCallback, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import WIPBanner from '../../../components/hifi/WIPBanner';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /* Wave 2: Chat wired to non-stream POST /api/v2/:slug/chat/send.
    In-memory conversation only — no chat_session table yet, so the
@@ -38,8 +38,11 @@ const formatPreview = (text) => {
 };
 
 const HFChat = () => {
-  const params = useParams();
-  const tenantSlug = params.tenant_slug || params.tenantSlug || 'default';
+  // The route is the static /console/v2/chat — it carries no :tenant_slug
+  // segment, so reading useParams() here yielded the literal 'default' and
+  // every send was answered 404 by TenantSlugGuard. Same source as the other
+  // v2 pages.
+  const tenantSlug = useTenantSlug();
   // Aliased to `tr` per the v2 console convention.
   const { t: tr } = useTranslation();
 

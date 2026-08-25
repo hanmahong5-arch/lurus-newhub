@@ -927,11 +927,14 @@ func handlerPricingModelsSetup(t *testing.T) (*V2TestContext, *repo.Tenant) {
 	return ctx, tenant
 }
 
+// Role is root, not RoleAdminUser: Create/DeleteModelV2 write the tenant-less
+// catalogue, so they gate on requirePlatformRoot. These edge tests are about what
+// happens PAST the gate, so the caller has to clear it.
 func handlerPricingAdminModelCtx(method, target string, body interface{}, tenant *repo.Tenant) (*gin.Context, *httptest.ResponseRecorder) {
 	c, w := handlerPricingNewCtx(method, target, body)
 	c.Params = gin.Params{{Key: "tenant_slug", Value: tenant.Slug}}
 	c.Set("id", 1)
-	c.Set("role", common.RoleAdminUser)
+	c.Set("role", common.RoleRootUser)
 	c.Set("tenant_context", &middleware.TenantContext{TenantID: tenant.Id, UserID: 1})
 	return c, w
 }

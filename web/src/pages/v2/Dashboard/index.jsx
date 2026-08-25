@@ -21,10 +21,9 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API } from '../../../helpers';
-import { QUOTA_PER_USD, quotaToUSD } from '../../../helpers/formatting';
+import { getQuotaPerUSD, quotaToUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
-  computeQPS,
   computeLatencyP50,
   computeLatencyP95,
   computeLatencyP99,
@@ -54,6 +53,10 @@ const fmtTs = (ts) => {
 // Realtime KPI tiles derived from the last DASHBOARD_REALTIME_WINDOW_SECONDS
 // window of /api/v2/{slug}/logs. No dedicated metrics endpoint exists yet;
 // see _bmad-output/planning-artifacts/hardening-swarm-2026-05-18-acceptance.md.
+
+// GET /api/v2/:slug/logs rejects page_size > 100 by falling back to 20
+// (v2_log.go), so asking for more than this returns *fewer* rows, not more.
+const DASHBOARD_LOG_PAGE_SIZE = 100;
 
 // Shown when the user has zero tokens — Reseller-MVP onboarding TTFT lift,
 // modelled on OpenRouter / Anthropic quickstart pattern.
@@ -149,6 +152,8 @@ const HFDashboard = () => {
 
   const [me, setMe] = useState(null);
   const [logs, setLogs] = useState([]);
+  // Server-reported row count for the window; `logs` is only the first page.
+  const [logTotal, setLogTotal] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
@@ -164,7 +169,7 @@ const HFDashboard = () => {
       const [meRes, logsRes] = await Promise.all([
         API.get(`/api/v2/${tenantSlug}/user/me`, { skipErrorHandler: true }),
         API.get(
-          `/api/v2/${tenantSlug}/logs?page=1&page_size=200&start_time=${startTime}`,
+          `/api/v2/${tenantSlug}/logs?page=1&page_size=${DASHBOARD_LOG_PAGE_SIZE}&start_time=${startTime}`,
           { skipErrorHandler: true },
         ),
       ]);
@@ -175,6 +180,8 @@ const HFDashboard = () => {
         // were always empty against the real backend.
         const items = logsRes.data.data?.logs ?? logsRes.data.data?.items ?? [];
         setLogs(Array.isArray(items) ? items : []);
+        const total = logsRes.data.data?.total;
+        setLogTotal(typeof total === 'number' ? total : null);
       }
     } catch (e) {
       // Intentionally silent — the degraded empty state IS the UX here.
@@ -197,7 +204,12 @@ const HFDashboard = () => {
       : null;
 
   // Realtime KPIs derived from the fetched 5-minute window.
-  const qps = computeQPS(logs, DASHBOARD_REALTIME_WINDOW_SECONDS);
+  // QPS counts every request in the window, so it must use the server's
+  // `total`; logs.length is one page and would cap the rate at
+  // DASHBOARD_LOG_PAGE_SIZE / window.
+  const windowRequests = logTotal ?? logs.length;
+  const qps =
+    windowRequests > 0 ? windowRequests / DASHBOARD_REALTIME_WINDOW_SECONDS : 0;
   const p50 = computeLatencyP50(logs);
   const p95 = computeLatencyP95(logs);
   const p99 = computeLatencyP99(logs);
@@ -518,7 +530,8 @@ const HFDashboard = () => {
                 const maxQuota = costByModel[0].totalQuota || 1;
                 return costByModel.map((row, i) => {
                   const pct = (row.totalQuota / maxQuota) * 100;
-                  const usd = (row.totalQuota / QUOTA_PER_USD).toFixed(4);
+                  // Live rate, like every other money figure on this page.
+                  const usd = (row.totalQuota / getQuotaPerUSD()).toFixed(4);
                   return (
                     <div key={row.model}>
                       <div

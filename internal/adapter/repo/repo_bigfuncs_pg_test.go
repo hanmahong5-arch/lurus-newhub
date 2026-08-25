@@ -274,7 +274,12 @@ func TestCreateUserFromIDPClaims_PG(t *testing.T) {
 
 	t.Run("email fallback links existing user", func(t *testing.T) {
 		existing := seedUser(t, "legacy", "legacy@corp.com", common.RoleCommonUser, common.UserStatusEnabled, "default")
-		claims := &OIDCUserClaims{Sub: "oidc-sub-legacy", Email: "legacy@corp.com", Name: "Legacy User", PreferredUsername: "legacy"}
+		// EmailVerified was left at its zero value when this test was written
+		// because nothing read the field. The fallback now requires a verified
+		// address; this subtest covers the legitimate same-tenant,
+		// non-privileged link, so it asserts the verified case. The refusals are
+		// locked in user_mapping_email_fallback_test.go.
+		claims := &OIDCUserClaims{Sub: "oidc-sub-legacy", Email: "legacy@corp.com", EmailVerified: true, Name: "Legacy User", PreferredUsername: "legacy"}
 		user, mapping, err := CreateUserFromIDPClaims(claims, "default")
 		if err != nil {
 			t.Fatalf("email fallback: %v", err)

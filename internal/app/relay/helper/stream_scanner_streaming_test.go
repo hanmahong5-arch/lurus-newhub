@@ -11,15 +11,15 @@ import (
 )
 
 // NOTE: the keep-alive ping and DebugEnabled-branch tests were removed. They
-// provoked benign-in-production data races that only surface because
-// StreamScannerHandler does not wg.Wait() for its ping/scanner goroutines
-// before returning: the ping test read the httptest response buffer while an
+// provoked data races: the ping test read the httptest response buffer while an
 // untracked inner ping-writer goroutine was still writing it, and the debug
 // test toggled the process-wide common.DebugEnabled flag (which production sets
 // once at startup, never at runtime) while a scanner goroutine read it in its
-// deferred exit trace. Reproducing them race-free would require changing the
-// streaming hot path (track the inner goroutine + wg.Wait), which is out of
-// scope for a coverage pass.
+// deferred exit trace. The first cause is gone — the inner ping/data writers are
+// now counted by the same WaitGroup the cleanup path waits on, so they are
+// joined before StreamScannerHandler returns (see
+// stream_scanner_terminal_test.go). The DebugEnabled race is a test-only
+// artifact and those tests stay removed.
 
 // TestStreamScannerHandler_DataHandlerTimeout forces the per-write timeout branch
 // by making the data handler block far longer than the configured WriteTimeout.

@@ -93,14 +93,19 @@ func setupPricingWriteRouter(t *testing.T) *pricingWriteCtx {
 	}
 
 	router := gin.New()
-	// mockAuth defaults to an authenticated tenant-admin — this mirrors the
-	// real UserAuth()+TenantSlugGuard() chain, which always populates
-	// tenant_context before the handler runs. The admin-gate tests below
-	// override this via the X-Test-Role header to exercise the 403 path.
+	// mockAuth defaults to an authenticated platform root — UpdatePricingV2
+	// replaces the process-wide ratio maps and the global option row, so root
+	// is the level it requires. The context shape mirrors the real
+	// UserAuth()+TenantSlugGuard() chain, which always populates
+	// tenant_context before the handler runs. The gate tests below downgrade
+	// the caller via the X-Test-Role header to exercise the 403 path.
 	mockAuth := func(c *gin.Context) {
-		role := common.RoleAdminUser
-		if c.GetHeader("X-Test-Role") == "user" {
+		role := common.RoleRootUser
+		switch c.GetHeader("X-Test-Role") {
+		case "user":
 			role = common.RoleCommonUser
+		case "admin":
+			role = common.RoleAdminUser
 		}
 		c.Set("role", role)
 		c.Set("tenant_context", &middleware.TenantContext{
@@ -238,11 +243,16 @@ func TestV2PricingWrite_MissingModelName(t *testing.T) {
 	}
 }
 
-// 5. AdminGate — CRITICAL: UpdatePricingV2 mutates global ratio maps and must
-// reject non-admin callers with 403 before any write occurs; an admin caller
-// for the same tenant/batch must still succeed (200), guarding against
-// over-tightening.
-func TestV2PricingWrite_AdminGate(t *testing.T) {
+// 5. RootGate — CRITICAL: UpdatePricingV2 mutates the process-wide ratio maps and
+// the single global option row, so it must reject anything below platform root
+// with 403 before any write occurs; a root caller for the same batch must still
+// succeed (200), guarding against over-tightening.
+//
+// This used to assert that a tenant admin (role 10) was allowed through. That
+// assertion was wrong: the route is mounted under /:tenant_slug but the write has
+// no tenant in it, so one tenant's admin repriced every tenant. v1 keeps the
+// equivalent write behind middleware.RootAuth().
+func TestV2PricingWrite_RootGate(t *testing.T) {
 	ctx := setupPricingWriteRouter(t)
 
 	batch := []map[string]interface{}{
@@ -255,15 +265,22 @@ func TestV2PricingWrite_AdminGate(t *testing.T) {
 			t.Fatalf("status = %d, want 403, body: %s", w.Code, w.Body.String())
 		}
 		resp := parsePricingWrite(t, w)
-		if msg, _ := resp["message"].(string); msg != "Admin role required" {
-			t.Errorf("message = %q, want %q", msg, "Admin role required")
+		if msg, _ := resp["message"].(string); msg != "Root role required" {
+			t.Errorf("message = %q, want %q", msg, "Root role required")
 		}
 	})
 
-	t.Run("admin_allowed", func(t *testing.T) {
+	t.Run("tenant_admin_forbidden", func(t *testing.T) {
+		w := postPricing(ctx, ctx.tenantSlug, batch, map[string]string{"X-Test-Role": "admin"})
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 for a role-10 tenant admin, body: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("root_allowed", func(t *testing.T) {
 		w := postPricing(ctx, ctx.tenantSlug, batch)
 		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 for admin caller, body: %s", w.Code, w.Body.String())
+			t.Fatalf("status = %d, want 200 for root caller, body: %s", w.Code, w.Body.String())
 		}
 	})
 }

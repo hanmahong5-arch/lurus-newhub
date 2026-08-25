@@ -58,10 +58,6 @@ vi.mock('../../../components/hifi/HFShell', () => ({
     ),
 }));
 
-vi.mock('react-router-dom', () => ({
-  useParams: () => ({ tenant_slug: 'acme' }),
-}));
-
 // Mirror i18next's en behaviour: return the English defaultValue (2nd arg)
 // with {{var}} interpolation, falling back to the key when no default given.
 vi.mock('react-i18next', () => ({
@@ -88,6 +84,10 @@ beforeEach(() => {
   API.post.mockReset();
   showError.mockReset();
   showSuccess.mockReset();
+  // The slug the browser was actually given — the page must read it from
+  // storage, not from the (segment-less) /console/v2/chat route.
+  window.localStorage.clear();
+  window.localStorage.setItem('tenant_slug', 'acme');
 });
 
 const chatResponse = (content, latencyMs = 120) => ({
@@ -138,6 +138,26 @@ describe('Chat page', () => {
     expect(url).toBe('/api/v2/acme/chat/send');
     expect(payload.model).toBe('gpt-4o');
     expect(payload.messages).toEqual([{ role: 'user', content: 'hello' }]);
+  });
+
+  // 2b. Regression: /console/v2/chat is a static route with no :tenant_slug
+  //     segment, so deriving the slug from useParams() posted every message to
+  //     /api/v2/default/chat/send — a slug no tenant owns, so TenantSlugGuard
+  //     404'd the whole page. The slug must come from the stored tenant.
+  it('posts to the stored tenant slug, never the literal default', async () => {
+    window.localStorage.setItem('tenant_slug', 'lurus');
+    API.post.mockResolvedValueOnce(chatResponse('pong'));
+    render(<HFChat />);
+
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'ping' },
+    });
+    fireEvent.click(screen.getByText(/▶ send/i).closest('button'));
+
+    await waitFor(() => expect(API.post).toHaveBeenCalledTimes(1));
+    const urls = API.post.mock.calls.map(([u]) => u);
+    expect(urls).toEqual(['/api/v2/lurus/chat/send']);
+    expect(urls.some((u) => u.includes('/api/v2/default/'))).toBe(false);
   });
 
   // 3. Multi-turn — second send forwards the *full* history (user + asst +

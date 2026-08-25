@@ -372,7 +372,15 @@ func indexByteDeepB(s string, b byte) int {
 func TestGetLogClusterV2_PostgresBucketExpression(t *testing.T) {
 	pg := handlerDeepBSetupPGClusterRouter(t)
 
-	base := time.Now().Add(-30 * time.Minute).Unix()
+	// Anchor the three rows just inside ONE hour bucket, in the past. Seeding at
+	// now-30min straddled an hour boundary whenever the current minute was near
+	// :30 — the rows then landed in two buckets and the "one aggregated row"
+	// assertion failed, roughly two minutes in every hour. The previous hour is
+	// used rather than the current one so the rows are never in the future,
+	// which would depend on the caller passing a `to` beyond now. Truncating
+	// aligns to a UTC boundary, which is also a boundary in the whole-hour zones
+	// DATE_TRUNC could be running in (CI's PostgreSQL is UTC).
+	base := time.Now().Truncate(time.Hour).Add(-time.Hour + time.Minute).Unix()
 	for i := 0; i < 3; i++ {
 		if err := pg.db.Create(&repo.Log{
 			UserId: pg.userID, TenantId: pg.tenantID, Type: repo.LogTypeConsume,

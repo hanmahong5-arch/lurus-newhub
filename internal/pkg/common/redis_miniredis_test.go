@@ -381,11 +381,25 @@ func TestInitRedisClient_Disabled(t *testing.T) {
 	}
 }
 
+// TestShouldSkipPreAuth_DefaultsOff locks the shipped default. The fast path
+// stops the platform freeze from happening at all, so it must not switch itself
+// on merely because something started warming the wallet cache.
+func TestShouldSkipPreAuth_DefaultsOff(t *testing.T) {
+	withMiniRedis(t)
+
+	SetCachedWalletBalance(100, 500.0) // ample by every other guard
+	if ShouldSkipPreAuth(100, 1.0) {
+		t.Error("pre-auth must not be skipped unless BILLING_WALLET_TRUST_SKIP_PREAUTH is set")
+	}
+}
+
 // TestShouldSkipPreAuth_MiniRedis covers both outcomes of the fast-path skip
 // decision against a real cache: a high balance skips pre-auth, a thin balance
-// does not.
+// does not. The switch is set explicitly because the balance guards, not the
+// default, are what this test is about.
 func TestShouldSkipPreAuth_MiniRedis(t *testing.T) {
 	withMiniRedis(t)
+	t.Setenv("BILLING_WALLET_TRUST_SKIP_PREAUTH", "true")
 
 	SetCachedWalletBalance(100, 500.0)
 	if !ShouldSkipPreAuth(100, 1.0) {
