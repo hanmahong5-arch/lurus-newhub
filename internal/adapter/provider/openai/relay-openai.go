@@ -103,6 +103,40 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	return helper.ObjectData(c, lastStreamResponse)
 }
 
+// sendFinalStreamData sends the last raw SSE chunk of a stream, attaching
+// lurusExt onto the chunk's own "usage" object when the upstream inlined
+// usage in that chunk (containStreamUsage==true upstream). This is the only
+// place x_lurus reaches the client for that case: HandleFinalResponse's
+// synthetic-usage-frame branch is skipped whenever the chunk already carries
+// usage, so without this the perception extension is computed and discarded.
+//
+// lurusExt==nil, forceFormat, thinkToContent, or any parse failure falls back
+// to the untouched raw passthrough (sendStreamData) — never invents or drops
+// a frame.
+func sendFinalStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool, lurusExt *types.LurusUsageExtension) error {
+	if lurusExt == nil || forceFormat || thinkToContent || data == "" {
+		return sendStreamData(c, info, data, forceFormat, thinkToContent)
+	}
+
+	var bodyMap map[string]interface{}
+	if err := common.Unmarshal(common.StringToByteSlice(data), &bodyMap); err != nil {
+		return sendStreamData(c, info, data, forceFormat, thinkToContent)
+	}
+
+	usageMap, ok := bodyMap["usage"].(map[string]interface{})
+	if !ok {
+		return sendStreamData(c, info, data, forceFormat, thinkToContent)
+	}
+	usageMap["x_lurus"] = lurusExt
+
+	merged, err := common.Marshal(bodyMap)
+	if err != nil {
+		return sendStreamData(c, info, data, forceFormat, thinkToContent)
+	}
+
+	return helper.StringData(c, string(merged))
+}
+
 func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
@@ -176,9 +210,32 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		logger.LogError(c, fmt.Sprintf("error handling last response: %s, lastStreamData: [%s]", err.Error(), lastStreamData))
 	}
 
+	// When the upstream inlines usage in the last chunk (containStreamUsage),
+	// that chunk is sent below via sendFinalStreamData and never reaches
+	// HandleFinalResponse's synthetic-usage-frame branch, so the perception
+	// extension has to be computed and attached here instead. Run the same
+	// per-vendor cache-token post-processing used for the final billed usage
+	// so x_lurus.cached_tokens matches (e.g. DeepSeek's cache-hit remap);
+	// applyUsagePostProcessing only ever fills a zero CachedTokens, so
+	// running it here and again below on the billed usage is idempotent.
+	//
+	// sawDone is required as well, and is already final by this point. An
+	// abnormally-ended stream (upstream died after emitting its usage chunk
+	// but before "[DONE]") is deliberately not billed — usage is zeroed a few
+	// lines down for exactly that reason — so quoting a cost on the frame the
+	// client receives would advertise a charge that never happens. The
+	// pre-existing synthetic-frame path has the same property by accident,
+	// because it runs after the zeroing; this one has to say so explicitly.
+	var lastLurusExt *types.LurusUsageExtension
+	if containStreamUsage && sawDone {
+		applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
+		estimatedQuota := helper.EstimateQuotaFromUsage(info, usage)
+		lastLurusExt = helper.ComputeLurusExtension(info, usage, estimatedQuota)
+	}
+
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		if shouldSendLastResp {
-			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
+			_ = sendFinalStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent, lastLurusExt)
 		}
 	}
 
