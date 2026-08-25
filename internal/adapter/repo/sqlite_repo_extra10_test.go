@@ -474,8 +474,14 @@ func TestCreateUserFromIDPClaims_EmailFallback(t *testing.T) {
 	}
 
 	claims := &OIDCUserClaims{
-		Sub:               "sub-email-fallback-001",
-		Email:             "pre-zitadel@ex.com",
+		Sub:   "sub-email-fallback-001",
+		Email: "pre-zitadel@ex.com",
+		// The fallback only trusts a verified address. This test predates that
+		// rule and left the field at its zero value; it means to cover the
+		// legitimate same-tenant, non-privileged link, so it asserts the
+		// verified case. The unverified case is locked separately in
+		// user_mapping_email_fallback_test.go.
+		EmailVerified:     true,
 		Name:              "Pre Zitadel",
 		PreferredUsername: "prezit",
 	}

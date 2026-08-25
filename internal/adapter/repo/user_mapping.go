@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"gorm.io/gorm"
 )
 
@@ -164,7 +165,9 @@ func GetUserByIDPSubject(idpSubject string, tenantID string) (*User, *UserIdenti
 //
 // Lookup order:
 //  1. Exact mapping match (idp subject column + tenant_id)
-//  2. Email fallback — matches pre-OIDC users across all tenants, auto-creates mapping
+//  2. Email fallback — links a pre-OIDC user *of the same tenant*, and only when
+//     the claimed address is verified, the match is unambiguous, and the matched
+//     account is not privileged. See the comment on the branch for why.
 //  3. Auto-create new user (if OIDC_AUTO_CREATE_USER=true)
 func CreateUserFromIDPClaims(claims *OIDCUserClaims, tenantID string) (*User, *UserIdentityMapping, error) {
 	// Step 1: Check if mapping already exists
@@ -177,15 +180,40 @@ func CreateUserFromIDPClaims(claims *OIDCUserClaims, tenantID string) (*User, *U
 		return user, existingMapping, nil
 	}
 
-	// Step 2: Email fallback — link pre-existing users who haven't migrated to OIDC yet.
-	// Search across all tenants (legacy users may have tenant_id="default").
-	if claims.Email != "" {
-		var existingUser User
+	// Step 2: Email fallback — link a pre-OIDC user *of this tenant* who has not
+	// migrated yet.
+	//
+	// This branch converts an IdP-supplied email claim into a local identity, so
+	// it is deliberately narrow. It must never (a) cross a tenant boundary,
+	// (b) resolve an ambiguous match by preferring privilege, (c) trust an
+	// unverified email, or (d) adopt an admin/root account. Any one of those
+	// turns "sign up at the IdP with the right address" into account takeover:
+	// the callback writes the matched user's id and role straight into the
+	// session (handler/oauth.go), and middleware.authHelper trusts that role.
+	//
+	// The tenant predicate is written out explicitly rather than left to the
+	// tenant plugin so the scoping is visible at the call site.
+	if claims.Email != "" && claims.EmailVerified {
+		var candidates []User
 		err := WithoutTenantIsolation(DB).
-			Where("email = ? AND status = 1 AND deleted_at IS NULL", claims.Email).
-			Order("role DESC"). // prefer highest-privilege match (root > admin > user)
-			First(&existingUser).Error
-		if err == nil {
+			Where("tenant_id = ? AND email = ? AND status = ? AND deleted_at IS NULL",
+				tenantID, claims.Email, common.UserStatusEnabled).
+			Limit(2).
+			Find(&candidates).Error
+		switch {
+		case err != nil:
+			// Fall through to step 3 rather than guessing.
+		case len(candidates) > 1:
+			common.SysLog(fmt.Sprintf(
+				"oidc email fallback: refusing ambiguous match for tenant %s (%d enabled users share the claimed address)",
+				tenantID, len(candidates)))
+		case len(candidates) == 1 && candidates[0].Role >= common.RoleAdminUser:
+			// Privileged accounts are linked by an operator, never by a login.
+			common.SysLog(fmt.Sprintf(
+				"oidc email fallback: refusing to auto-link privileged user %d (role %d) in tenant %s; link it explicitly",
+				candidates[0].Id, candidates[0].Role, tenantID))
+		case len(candidates) == 1:
+			existingUser := candidates[0]
 			mapping, mapErr := CreateUserMapping(
 				existingUser.Id,
 				claims.Sub,
