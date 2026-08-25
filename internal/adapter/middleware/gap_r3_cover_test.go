@@ -243,17 +243,25 @@ func TestDistribute_ModelLimit_NonMapValue_Rejects(t *testing.T) {
 	}
 }
 
-func TestDistribute_AutoGroup_NoAutoGroups_503(t *testing.T) {
+func TestDistribute_AutoGroup_ModelNeverConfigured_404(t *testing.T) {
 	_, cleanup := setupCoverDB(t)
 	defer cleanup()
-	// usingGroup="auto" with no auto-groups configured → channel selection
-	// errors → 503 with the auto(...) group formatting branch.
+	// The old name and comment here claimed this exercised "no auto-groups
+	// configured → selection returns an error → 503". It never did: autoGroups
+	// defaults to ["default"] at package scope (internal/pkg/setting/auto_group.go)
+	// and nothing in this test clears it, so the len(GetAutoGroups())==0
+	// fail-fast in channel_select.go is unreachable from here. What actually
+	// runs is the loop over ["default"], which finds nothing in the empty test
+	// DB and falls out to (channel=nil, err=nil) — the branch this file's
+	// sibling change is about. With no ability row ever configured for
+	// (default, this model), 404 is the correct answer; the previous 503 was
+	// the conflated behavior, not a property worth preserving.
 	r := mountDistribute(func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, "auto")
 	})
 	w := doDistribute(r, `{"model":"gpt-4o"}`)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503 for auto group with no channels; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for an auto group whose concrete groups never configured the model; body=%s", w.Code, w.Body.String())
 	}
 }
 

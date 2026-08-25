@@ -15,6 +15,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -139,7 +140,20 @@ func Distribute() func(c *gin.Context) {
 					return
 				}
 				if channel == nil {
-					abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("分组 %s 下模型 %s 无可用渠道（distributor）", usingGroup, modelRequest.Model), string(types.ErrorCodeModelNotFound))
+					// err == nil but no channel: could mean (a) this (group, model)
+					// was never configured at all — a client error — or (b) it was
+					// configured but every backing channel is currently disabled —
+					// a genuine, possibly-transient outage. Both selection paths
+					// above only ever look at enabled=true rows, so they can't tell
+					// the two apart; do one extra existence probe (ignoring
+					// enabled) to pick the status code. 503 is the default and is
+					// only narrowed to 404 on a positive answer, so an unanswerable
+					// probe leaves the outage reading intact.
+					statusCode := http.StatusServiceUnavailable
+					if modelNeverConfigured(c, usingGroup, modelRequest.Model) {
+						statusCode = http.StatusNotFound
+					}
+					abortWithOpenAiMessage(c, statusCode, fmt.Sprintf("分组 %s 下模型 %s 无可用渠道（distributor）", usingGroup, modelRequest.Model), string(types.ErrorCodeModelNotFound))
 					return
 				}
 			}
@@ -151,6 +165,45 @@ func Distribute() func(c *gin.Context) {
 		}
 		c.Next()
 	}
+}
+
+// modelNeverConfigured reports whether (group, model) can be POSITIVELY shown
+// to have no ability row at all — regardless of enabled/channel-status — so
+// the caller can tell "never configured" (a client error) apart from
+// "configured but every backing channel is currently disabled" (a real
+// outage). abilities are never stored under the literal group "auto", so
+// "auto" is expanded to its concrete member groups first.
+//
+// It answers false whenever the question can't be answered: an empty group, an
+// "auto" that resolves to no concrete groups, or a failed query. The direction
+// is deliberate and is the whole point of the phrasing — the caller starts at
+// 503 and only narrows to 404 on a true, so an unanswerable probe keeps the
+// outage reading. Answering true on uncertainty would tell clients to stop
+// retrying a service that is merely down, which is the more expensive mistake.
+func modelNeverConfigured(c *gin.Context, group, model string) bool {
+	if group == "" {
+		return false
+	}
+	groups := []string{group}
+	if group == "auto" {
+		userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+		groups = app.GetUserAutoGroup(userGroup)
+		if len(groups) == 0 {
+			return false
+		}
+	}
+	normalizedModel := ratio_setting.FormatMatchingModelName(model)
+	var count int64
+	query := repo.DB.Model(&entity.Ability{}).Where(`"group" IN ?`, groups)
+	if normalizedModel != model {
+		query = query.Where("model = ? OR model = ?", model, normalizedModel)
+	} else {
+		query = query.Where("model = ?", model)
+	}
+	if err := query.Count(&count).Error; err != nil {
+		return false
+	}
+	return count == 0
 }
 
 // getModelFromRequest 从请求中读取模型信息
