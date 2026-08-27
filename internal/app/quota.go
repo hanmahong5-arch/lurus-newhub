@@ -896,6 +896,27 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 		})
 	}
 
+	// Cost-spike window recording, for the same reason the TPM block above sits
+	// out here: middleware.CostSpikeLimit reads this window on EVERY relay and
+	// admits the request when it finds nothing, so a window written only for
+	// wallet-bridged accounts is a fuse that cannot trip for anybody else. It
+	// used to live inside the platform-wallet gate below, which on the live
+	// gateway meant 1 of 6 tokens accumulated a window and the other 5 were
+	// permanently invisible to the fuse.
+	//
+	// No TokenId > 0 condition, unlike the TPM block: the window is keyed on the
+	// user, and adding a token predicate here would silently narrow what gets
+	// recorded relative to the behaviour this replaces. RecordCostSpikeWindow
+	// carries its own no-op guards (protection disabled, Redis absent,
+	// non-positive tokens), so this stays a fire-and-forget that never fails or
+	// slows the settlement.
+	if totalQuota > 0 {
+		costSpikeUserID := relayInfo.UserId
+		AsyncGo(func() {
+			RecordCostSpikeWindow(costSpikeUserID, totalQuota)
+		})
+	}
+
 	if relayInfo.IdentityAccountID > 0 && totalQuota > 0 {
 		accountID := relayInfo.IdentityAccountID
 		amountLB := float64(totalQuota) / common.QuotaPerUnit
@@ -942,7 +963,6 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				defer rptCancel()
 				common.ReportLLMUsageGRPC(rptCtx, accountID, amountLB)
 				reportQuotaThreshold(rptCtx, relayInfo, totalQuota)
-				RecordCostSpikeWindow(relayInfo.UserId, totalQuota)
 				if charged {
 					// Track A mirror metering: one usage_events row per charged
 					// relay, joined against wallet_transactions by the daily
@@ -966,7 +986,6 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				}
 				common.ReportLLMUsageGRPC(debitCtx, accountID, amountLB)
 				reportQuotaThreshold(debitCtx, relayInfo, totalQuota)
-				RecordCostSpikeWindow(relayInfo.UserId, totalQuota)
 				// Mirror the legacy debit too (shared refID joins the pair):
 				// wallet>usage here would hide double charges from the drift SQL.
 				mirrorUsageEvent(debitCtx, relayInfo, accountID, totalQuota, amountLB, refID, 0)
