@@ -34,7 +34,7 @@ export default function RequestRateLimit(props) {
 
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
-    ModelRequestRateLimitEnabled: false,
+    ModelRequestRateLimitEnabled: true,
     ModelRequestRateLimitCount: -1,
     ModelRequestRateLimitSuccessCount: 1000,
     ModelRequestRateLimitDurationMinutes: 1,

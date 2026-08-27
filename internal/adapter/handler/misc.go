@@ -3,10 +3,10 @@ package handler
 import (
 	"net/http"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/common"
-	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/console_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
@@ -44,10 +44,23 @@ func GetStatus(c *gin.Context) {
 	legalSetting := system_setting.GetLegalSettings()
 
 	// Build login methods configuration for frontend
+	//
+	// password.enabled / registration_enabled are hardcoded to false here,
+	// independent of common.PasswordLoginEnabled / common.PasswordRegisterEnabled
+	// (which stay untouched — they still round-trip through repo/option.go's
+	// OptionMap into the admin Settings UI, so flipping their defaults would
+	// change stored-config semantics beyond this status projection). This
+	// repo has no password login/registration routes: grepping
+	// internal/adapter/handler/router/*.go (excluding _test.go) for
+	// "register"/"login" finds exactly two registered routes — GET
+	// /:tenant_slug/auth/login (OIDC redirect, api-v2-router.go:35) and GET
+	// /auth/zita-login (Zita SDK login, api-v2-router.go:47) — and no POST
+	// /api/user/register or POST /api/user/login handler anywhere. Re-run
+	// that grep before ever flipping this back to true.
 	loginMethods := gin.H{
 		"password": gin.H{
-			"enabled":              common.PasswordLoginEnabled,
-			"registration_enabled": common.PasswordRegisterEnabled,
+			"enabled":              false,
+			"registration_enabled": false,
 		},
 		"sms": gin.H{
 			"enabled":       common.SMSEnabled,
@@ -89,9 +102,14 @@ func GetStatus(c *gin.Context) {
 	}
 
 	// Build registration configuration
+	//
+	// mode/enabled are hardcoded closed for the same reason as password
+	// login above — see the comment on loginMethods.password. common.RegisterEnabled
+	// / common.RegistrationMode are left untouched (same OptionMap round-trip
+	// concern).
 	registration := gin.H{
-		"mode":                        common.RegistrationMode,
-		"enabled":                     common.RegisterEnabled,
+		"mode":                        common.RegistrationModeClosed,
+		"enabled":                     false,
 		"email_verification_required": common.EmailVerificationEnabled,
 		"phone_verification_required": common.RegistrationMode == common.RegistrationModePhoneVerified,
 		"invite_code_required":        common.InviteCodeRequired || common.RegistrationMode == common.RegistrationModeInviteOnly,
@@ -175,8 +193,8 @@ func GetStatus(c *gin.Context) {
 		// New: Frontend login configuration
 		"login_methods": loginMethods,
 		"registration":  registration,
-		"security":           security,
-		"sms_enabled":        common.SMSEnabled,
+		"security":      security,
+		"sms_enabled":   common.SMSEnabled,
 	}
 
 	// 根据启用状态注入可选内容
@@ -259,4 +277,3 @@ func GetHomePageContent(c *gin.Context) {
 	})
 	return
 }
-

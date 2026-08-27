@@ -325,10 +325,42 @@ func GetUserByLurusAccountID(accountID int64) (*User, error) {
 	return &user, err
 }
 
+// DeleteUserById soft-deletes the user AND revokes every one of their relay
+// tokens. Before this fix it only called User.Delete() (a bare soft delete
+// of the users row): middleware.TokenAuth resolves a token to its owner via
+// repo.GetTokenByKey (token.go:264), never by looking the user up first, so
+// an already-issued token kept authenticating for as long as its row (or a
+// stale Redis cache entry) survived — see
+// TestUserDelete_TokensSurviveSoftDeleteAlone in
+// r5d_user_delete_cascade_test.go for the pinned pre-fix behavior of the
+// (still-unchanged) User.Delete() method in isolation.
+//
+// Tokens are revoked one at a time through Token.Delete() (token.go:404)
+// instead of a single bulk `DB.Where("user_id = ?").Delete(&Token{})`: the
+// bulk form never runs cacheDeleteToken per key (token.go:408), so a
+// Redis-cached token would keep validating from cache until its TTL even
+// after the DB row was gone. Tokens are revoked BEFORE the user row so a
+// mid-failure leaves a still-enabled user with fewer tokens rather than a
+// deleted user with a live token — the direction this fix closes.
+//
+// The only production caller is the internal API's user:delete scope
+// (internal_api_ext.go:248); the userRoute group (router/api-router.go:
+// 230-236) has no DELETE, so this path is unreachable from the console.
 func DeleteUserById(id int) (err error) {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
+
+	var tokens []Token
+	if err := DB.Where("user_id = ?", id).Find(&tokens).Error; err != nil {
+		return fmt.Errorf("load user's tokens: %w", err)
+	}
+	for i := range tokens {
+		if err := tokens[i].Delete(); err != nil {
+			return fmt.Errorf("revoke token id=%d: %w", tokens[i].Id, err)
+		}
+	}
+
 	user := User{Id: id}
 	return user.Delete()
 }

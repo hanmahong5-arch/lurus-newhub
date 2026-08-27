@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // rateLimitFactory's Redis branch is only taken when RedisEnabled is true; wire
@@ -90,9 +92,34 @@ func TestInternalApiRateLimit_Disabled_Passthrough(t *testing.T) {
 	}
 }
 
-// redisRateLimitHandler must return 500 when the success-count check errors
-// (a corrupt stored timestamp at capacity is unparseable).
-func TestRedisRateLimitHandler_SuccessCheckError_500(t *testing.T) {
+// TestRedisRateLimitHandler_SuccessCheckError_FailsOpen was
+// TestRedisRateLimitHandler_SuccessCheckError_500 until operator decision D1
+// (2026-08-27). The expectation was flipped, not deleted, and not because the
+// production code was bent to match a failing test:
+//
+//   - What it used to assert (500) was reachable only through
+//     setting.ModelRequestRateLimitEnabled, which shipped as `false`
+//     (setting/rate_limit.go, `var ModelRequestRateLimitEnabled = false` before
+//     this round). ModelRequestRateLimit (model-rate-limit.go:256) returns a
+//     no-op passthrough when that flag is off, so redisRateLimitHandler's error
+//     branch had never executed against live traffic. Flipping the expectation
+//     therefore changes no behavior any caller has ever observed.
+//   - D1 chose fail-OPEN so that a Redis hiccup degrades rate limiting instead
+//     of turning every relay request into a 500, matching the sibling limiters
+//     BusinessRateLimit and RelayConcurrencyLimit.
+//
+// This test seeds an unparseable timestamp rather than killing the connection,
+// so it pins the half of the contract the sibling test in final_cover_test.go
+// (TestModelRateLimit_Redis_CheckError_FailsOpen, which uses a dead Redis)
+// does not reach: checkRedisRateLimit's time.Parse failure at
+// model-rate-limit.go:92-95 returns a non-nil err from a perfectly healthy
+// backend, and that STORED-DATA-CORRUPTION error takes the same fail-open
+// branch and the same metric label as a connection error.
+//
+// Two assertions, so the degradation cannot become silent: the request is
+// admitted (200), and metrics.RateLimitDegradedTotal{model_rate_limit_success}
+// increments.
+func TestRedisRateLimitHandler_SuccessCheckError_FailsOpen(t *testing.T) {
 	_, rdb, cleanup := withMiniRedis(t)
 	defer cleanup()
 
@@ -110,13 +137,18 @@ func TestRedisRateLimitHandler_SuccessCheckError_500(t *testing.T) {
 
 	const uid = 990301
 	// Pre-seed the success key at capacity (len==1) with an unparseable entry so
-	// checkRedisRateLimit reaches the time.Parse error branch → handler 500.
+	// checkRedisRateLimit reaches the time.Parse error branch (model-rate-limit.go:92-95).
 	if err := rdb.LPush(context.Background(), "rateLimit:MRRLS:990301", "corrupt").Err(); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	before := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("model_rate_limit_success"))
 	code, _ := runModelRateLimitMR(uid)
-	if code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500 (rate-limit check failure)", code)
+	if code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (fail-open on rate-limit check failure, operator decision D1)", code)
+	}
+	after := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("model_rate_limit_success"))
+	if after != before+1 {
+		t.Errorf("RateLimitDegradedTotal{model_rate_limit_success} = %v, want %v (a corrupt stored timestamp must be counted as a degradation, not swallowed)", after, before+1)
 	}
 }
 

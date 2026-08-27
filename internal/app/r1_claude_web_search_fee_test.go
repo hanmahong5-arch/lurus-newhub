@@ -2,7 +2,7 @@ package app
 
 // r1_claude_web_search_fee_test.go — R1 lane, F1. claude_web_search_requests
 // is written by the Claude provider adapter
-// (internal/adapter/provider/claude/relay-claude.go:786, inside
+// (internal/adapter/provider/claude/relay-claude.go:817, inside
 // HandleClaudeResponseData) but before this fix was read by exactly one
 // non-test site: relay/compatible_handler.go:280. That means a Claude
 // web-search call made through the native /v1/messages path
@@ -13,15 +13,19 @@ package app
 // blob keys the frontend already reads
 // (web/src/hooks/usage-logs/useUsageLogsData.jsx:382-383,459-461).
 //
-// Scope note: HandleClaudeResponseData is only reached by the NON-streaming
-// callers (provider/claude/relay-claude.go:810 ClaudeHandler, and
-// provider/aws/relay-aws.go:228). The streaming completion path
-// (ClaudeStreamHandler -> HandleStreamFinalResponse) never calls
-// HandleClaudeResponseData, so claude_web_search_requests is never set for a
-// streaming /v1/messages call — this fix does not charge Claude web search
-// on the streaming path, only on the non-streaming one. Same account, same
-// tool, two different prices depending on stream vs non-stream — a known,
-// unclosed gap, not covered by the tests below.
+// Scope note (updated 2026-08-27, lane L-A / G2): HandleClaudeResponseData is
+// only reached by the NON-streaming callers (provider/claude/relay-claude.go
+// ClaudeHandler, and provider/aws/relay-aws.go's awsHandler). At the time this
+// file was first written the streaming completion path (ClaudeStreamHandler
+// -> HandleStreamFinalResponse) never set claude_web_search_requests, so a
+// streamed /v1/messages web-search call went unbilled. That gap is now closed
+// by a second, symmetric c.Set in HandleStreamFinalResponse
+// (provider/claude/relay-claude.go) — see
+// provider/claude/r5a_stream_web_search_test.go for the streaming-path lock.
+// This file only ever drove PostClaudeConsumeQuota directly with the context
+// key pre-set, so it never exercised either write site; it stays as the
+// "does the fee formula debit and log correctly once the key is set"
+// coverage, independent of which path set that key.
 
 import (
 	"encoding/json"
@@ -40,7 +44,7 @@ import (
 
 // TestR1ClaudeNativeWebSearchIsCharged drives PostClaudeConsumeQuota with the
 // claude_web_search_requests context key set (mirrors what
-// relay-claude.go:786 sets) and asserts the fee is added to the debited quota
+// relay-claude.go:817 sets) and asserts the fee is added to the debited quota
 // AND recorded in the log's `other` blob.
 func TestR1ClaudeNativeWebSearchIsCharged(t *testing.T) {
 	db := setupServiceTestDB(t)
@@ -95,7 +99,7 @@ func TestR1ClaudeNativeWebSearchIsCharged(t *testing.T) {
 		t.Fatalf("no consume log written: %v", err)
 	}
 
-	// logContent (quota.go:374) is the only human-readable record of the call
+	// logContent (quota.go:377) is the only human-readable record of the call
 	// count and fee for admins reading the raw consume log Content column
 	// (the structured other[] blob asserted below is a separate column, not a
 	// substitute) — must name both the call count and the computed fee.

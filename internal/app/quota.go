@@ -71,7 +71,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 
 		quota := modelPrice.Mul(quotaPerUnit).Mul(groupRatio)
 		// Round half-up rather than truncate — matches the non-UsePrice branch
-		// below (:123) and compatible_handler.go:392's Round(0) (that line
+		// below (:123) and compatible_handler.go:399's Round(0) (that line
 		// runs for both the UsePrice and non-UsePrice branches there, it is
 		// not UsePrice-specific). A bare IntPart() truncated every fractional
 		// cent down, e.g. a modelPrice*groupRatio*QuotaPerUnit of 6.5 settled
@@ -80,7 +80,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 		// Post-hoc floor: on this branch there is no modelRatio/groupRatio
 		// "ratio" term to test (the price is per-call, not per-token), so the
 		// correct nonzero-input guard is ModelPrice != 0, not the `ratio` used
-		// below. Same intent as compatible_handler.go:406-408's
+		// below. Same intent as compatible_handler.go:422-424's
 		// floor-sub-unit-to-1, different predicate (see that branch's own
 		// note further down in this file). Triggers only when
 		// modelPrice*groupRatio*QuotaPerUnit(500000) rounds to 0, i.e.
@@ -124,7 +124,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 	// Post-hoc floor: the guard above only fires on quota<=0 (exactly zero or
 	// negative pre-round); a strictly-positive 0<quota<0.5 still rounds down
 	// to 0 here without this, settling a real, already-served audio call to a
-	// free one. Mirrors compatible_handler.go:406-408.
+	// free one. Mirrors compatible_handler.go:422-424.
 	if !ratio.IsZero() && rounded == 0 {
 		rounded = 1
 	}
@@ -325,24 +325,27 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		promptTokens, cacheTokens, cacheCreationTokens5m, cacheCreationTokens1h, remainingCacheCreationTokens, completionTokens,
 		cacheRatio, cacheCreationRatio5m, cacheCreationRatio1h, cacheCreationRatio, completionRatio, groupRatio, modelRatio, modelPrice)
 
-	if modelRatio != 0 && calculateQuota.LessThanOrEqual(decimal.Zero) {
+	// Predicate centralized in r5a_price_floor.go (ChargeableInputNonZero):
+	// under UsePrice this reads modelPrice!=0 instead of the always-false
+	// modelRatio!=0 (helper.ModelPriceHelper never assigns ModelRatio when
+	// UsePrice is true — see that file's header comment for the full chain).
+	if ChargeableInputNonZero(relayInfo.PriceData.UsePrice, modelPrice, modelRatio) && calculateQuota.LessThanOrEqual(decimal.Zero) {
 		calculateQuota = decimal.NewFromInt(1)
 	}
 
 	// Claude native web search tool fee — same formula as the
 	// OpenAI-compatible sibling path (relay/compatible_handler.go:280-286),
 	// added here so /v1/messages charges it too instead of only logging it
-	// (F1: claude_web_search_requests's sole write site is
-	// provider/claude/relay-claude.go:786, inside HandleClaudeResponseData,
-	// which only the NON-streaming callers reach — ClaudeHandler:810 and
-	// aws/relay-aws.go:228. ClaudeStreamHandler's completion path
-	// (HandleStreamFinalResponse) never calls HandleClaudeResponseData, so it
-	// never sets this context key. Net effect of this fix: a Claude native
-	// web search call is now charged when the request is non-streaming, but
-	// STILL not charged when streaming — that asymmetry is not closed by this
-	// change and should be called out as a known gap, not implied fixed). Not
-	// claiming general cross-format price parity beyond this — see the note
-	// on the decimal accumulation above.
+	// (F1). claude_web_search_requests has exactly two non-test write sites
+	// (grepped 2026-08-27): provider/claude/relay-claude.go's
+	// HandleClaudeResponseData (non-streaming — reached from ClaudeHandler and
+	// aws/relay-aws.go's awsHandler) and, since the G2 fix, the same file's
+	// HandleStreamFinalResponse (streaming — reached from ClaudeStreamHandler
+	// and aws/relay-aws.go's awsStreamHandler). A single request reaches
+	// exactly one of the two Set call sites, so this read below sees the
+	// count from whichever path actually served that request — streaming and
+	// non-streaming Claude native web search calls are now both charged
+	// through this same block.
 	claudeWebSearchCallCount := ctx.GetInt("claude_web_search_requests")
 	var claudeWebSearchPrice float64
 	var claudeWebSearchFee decimal.Decimal
@@ -357,7 +360,7 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	}
 
 	// Round half-up rather than truncate — matches the OpenAI-compatible
-	// sibling path (compatible_handler.go:392, decimal.Round(0)). The whole
+	// sibling path (compatible_handler.go:399, decimal.Round(0)). The whole
 	// accumulation above is decimal end-to-end (claudeCalculateQuota), not
 	// float64: a float64 accumulator hit real precision loss on this path —
 	// e.g. modelRatio=0.125, groupRatio=2.5, completionRatio=0.7, prompt=4,
@@ -382,29 +385,19 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	} else {
-		// Post-hoc floor: a nonzero modelRatio with a nonzero (but
-		// sub-half-unit) calc must never round down to a free call — same
-		// intent as compatible_handler.go:406-408's floor, but not the same
-		// predicate: this guard (and the pre-round guard above at :328-330)
-		// keys on modelRatio!=0 alone, while the sibling guards
-		// (compatible_handler.go:367 and :406) key on
-		// ratio(=modelRatio*groupRatio).IsZero(). This does NOT translate into
-		// an observable behavior difference on this path: when groupRatio==0,
-		// calculateQuota is exactly 0 regardless of modelRatio, so the
-		// pre-round guard at :328-330 (which shares this guard's modelRatio!=0
-		// predicate) already lifts calculateQuota to 1 before Round(0) ever
-		// runs — this floor then sees quota==1, not 0, and never fires.
-		// Verified by probe (modelRatio=0.75, groupRatio=0 via
-		// PostClaudeConsumeQuota): debited quota is 1 whether or not this
-		// floor exists. The actual, load-bearing divergence between the two
-		// predicates is at the pre-round guards themselves — quota.go:328
-		// (modelRatio!=0) vs compatible_handler.go:367 (!ratio.IsZero()) — not
-		// at these post-hoc floors. The pre-existing calculateQuota<=0 guard
-		// above (:328-330) does NOT cover the sub-half-unit case (it only
-		// fires on exactly-zero or negative calc), which is exactly the gap
-		// that let a 0<calc<1 Claude-native call settle to quota==0 while the
-		// upstream had already served a real response.
-		if modelRatio != 0 && quota == 0 {
+		// Post-hoc floor: a chargeable input (ChargeableInputNonZero — same
+		// predicate as the pre-round guard above) with a nonzero-but-
+		// sub-half-unit calc must never round down to a free call. That
+		// pre-round guard does NOT cover this case on its own (it only fires
+		// on an exactly-zero or negative calculateQuota), which is exactly the
+		// gap that let a 0<calc<1 call settle to quota==0 while the upstream
+		// had already served a real response. When groupRatio==0 instead,
+		// calculateQuota is exactly 0 and the pre-round guard (sharing this
+		// floor's predicate) already lifts it to 1 before Round(0) runs, so
+		// this floor sees quota==1 and never fires for that case — verified by
+		// probe (modelRatio=0.75, groupRatio=0 via PostClaudeConsumeQuota):
+		// debited quota is 1 whether or not this floor exists.
+		if ChargeableInputNonZero(relayInfo.PriceData.UsePrice, modelPrice, modelRatio) && quota == 0 {
 			quota = 1
 		}
 		repo.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)

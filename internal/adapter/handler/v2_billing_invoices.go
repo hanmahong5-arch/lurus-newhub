@@ -16,11 +16,16 @@ const (
 )
 
 // invoiceMonthBucket holds aggregated spend for one calendar month.
+//
+// There is intentionally no `amount_usd` field. A prior version emitted one
+// by copying amount_cny 1:1, which is off by the real CNY/USD rate (~7x) —
+// there is no FX source wired into this package. Add it back only once a
+// real conversion is available (see operation_setting.USDExchangeRate for
+// the site-wide rate already used elsewhere, if that becomes the source).
 type invoiceMonthBucket struct {
 	Month        string  `json:"month"`         // "YYYY-MM"
 	Quota        int64   `json:"quota"`         // raw quota units consumed
 	AmountCNY    float64 `json:"amount_cny"`    // quota / QuotaPerUnit (1 CNY per QuotaPerUnit)
-	AmountUSD    float64 `json:"amount_usd"`    // same as CNY for now (1:1 assumed by billing model)
 	RequestCount int64   `json:"request_count"` // number of log rows
 }
 
@@ -169,8 +174,8 @@ func aggregateInvoiceMonths(userID int, tenantID string, fromTS, toTS int64) ([]
 		err := repo.LOG_DB.
 			Model(&repo.Log{}).
 			Select(
-				"TO_CHAR(TO_TIMESTAMP(created_at), 'YYYY-MM') AS month, " +
-					"COALESCE(SUM(quota), 0) AS quota_sum, " +
+				"TO_CHAR(TO_TIMESTAMP(created_at), 'YYYY-MM') AS month, "+
+					"COALESCE(SUM(quota), 0) AS quota_sum, "+
 					"COUNT(*) AS request_count",
 			).
 			Where("user_id = ? AND tenant_id = ? AND type = ? AND created_at >= ? AND created_at < ?",
@@ -186,8 +191,8 @@ func aggregateInvoiceMonths(userID int, tenantID string, fromTS, toTS int64) ([]
 		err := repo.LOG_DB.
 			Model(&repo.Log{}).
 			Select(
-				"STRFTIME('%Y-%m', DATETIME(created_at, 'unixepoch')) AS month, " +
-					"COALESCE(SUM(quota), 0) AS quota_sum, " +
+				"STRFTIME('%Y-%m', DATETIME(created_at, 'unixepoch')) AS month, "+
+					"COALESCE(SUM(quota), 0) AS quota_sum, "+
 					"COUNT(*) AS request_count",
 			).
 			Where("user_id = ? AND tenant_id = ? AND type = ? AND created_at >= ? AND created_at < ?",
@@ -207,7 +212,6 @@ func aggregateInvoiceMonths(userID int, tenantID string, fromTS, toTS int64) ([]
 			Month:        r.Month,
 			Quota:        r.QuotaSum,
 			AmountCNY:    amountCNY,
-			AmountUSD:    amountCNY, // billing model: 1 CNY = 1 USD quota unit; update when FX integration lands
 			RequestCount: r.RequestCount,
 		})
 	}

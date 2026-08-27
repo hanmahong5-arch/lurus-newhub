@@ -10,26 +10,42 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SysLog logs a system-level info message
-// This is a compatibility wrapper that uses slog internally
+// SysLog logs a system-level info message.
+//
+// In text mode it writes only the legacy "[SYS] <timestamp> | <message>"
+// line ops tooling greps for. In JSON mode it writes only the structured slog
+// record —
+// that record already carries the message plus source=system, so also
+// Fprintf-ing the legacy line would double-write every system log event (the
+// [SYS] line and the JSON line say the same thing, just in two formats).
+//
+// Which mode is live is decided by SlogConfigFromEnv (slog.go:75-86), and
+// LOG_FORMAT is not the only input: with LOG_FORMAT unset it falls back to
+// GIN_MODE, selecting JSON when GIN_MODE=release. The r6-stage deployment
+// sets both (GIN_MODE at deploy/k8s/r6-stage/deployment.yaml:73,
+// LOG_FORMAT="json" at :195-196), so the live path is the JSON one and the
+// [SYS] lines currently visible in `kubectl logs` disappear once this ships.
 func SysLog(s string) {
 	l := ensureSlogInit()
-	// Use custom format to match legacy output: [SYS] timestamp | message
+	if IsJSONLogFormat() {
+		l.Info(s, "source", "system")
+		return
+	}
 	t := time.Now()
 	_, _ = fmt.Fprintf(gin.DefaultWriter, "[SYS] %v | %s \n", t.Format("2006/01/02 - 15:04:05"), s)
-	// Also log to slog for structured logging
-	l.Info(s, "source", "system")
 }
 
-// SysError logs a system-level error message
-// This is a compatibility wrapper that uses slog internally
+// SysError logs a system-level error message. See SysLog for why the legacy
+// Fprintf line and the structured slog record are mutually exclusive on
+// format rather than both firing.
 func SysError(s string) {
 	l := ensureSlogInit()
-	// Use custom format to match legacy output: [SYS] timestamp | message
+	if IsJSONLogFormat() {
+		l.Error(s, "source", "system")
+		return
+	}
 	t := time.Now()
 	_, _ = fmt.Fprintf(gin.DefaultErrorWriter, "[SYS] %v | %s \n", t.Format("2006/01/02 - 15:04:05"), s)
-	// Also log to slog for structured logging
-	l.Error(s, "source", "system")
 }
 
 // FatalLog logs a fatal message and exits the program

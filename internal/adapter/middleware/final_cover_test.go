@@ -11,11 +11,13 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/andybalholm/brotli"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -155,17 +157,34 @@ func TestRedisRateLimiterKeyed_LLenError_500(t *testing.T) {
 	_ = w
 }
 
-func TestModelRateLimit_Redis_CheckError_500(t *testing.T) {
+// TestModelRateLimit_Redis_CheckError_FailsOpen was TestModelRateLimit_Redis_CheckError_500
+// until operator decision D1 (2026-08-27): checkRedisRateLimit's LLen error is
+// now a deliberate fail-OPEN (redisRateLimitHandler calls c.Next() and admits
+// the request), matching the sibling limiters BusinessRateLimit and
+// RelayConcurrencyLimit. The 500 this test used to assert was reachable only
+// because setting.ModelRequestRateLimitEnabled defaulted to false in every
+// other test in this package/repo — i.e. this branch had never actually run
+// against live traffic before this round armed the switch, so there is no
+// "pre-fix passing behavior" being changed out from under production here.
+// The replacement assertions: (1) the request is admitted (200, not
+// aborted), and (2) metrics.RateLimitDegradedTotal for
+// "model_rate_limit_success" increments — the degradation must stay visible
+// even though it's no longer fatal.
+func TestModelRateLimit_Redis_CheckError_FailsOpen(t *testing.T) {
 	cleanup := deadRedis(t)
 	defer cleanup()
-	// checkRedisRateLimit's LLen errors → redisRateLimitHandler returns 500.
+	before := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("model_rate_limit_success"))
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("id", 999123); c.Next() })
 	r.GET("/m", redisRateLimitHandler(60, 0, 5), func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/m", nil))
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500 when Redis unavailable in model rate limiter", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (fail-open on Redis error, operator decision D1)", w.Code)
+	}
+	after := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("model_rate_limit_success"))
+	if after != before+1 {
+		t.Errorf("RateLimitDegradedTotal{model_rate_limit_success} = %v, want %v (must increment on every fail-open, not just log)", after, before+1)
 	}
 }
 

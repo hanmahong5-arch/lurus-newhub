@@ -168,13 +168,54 @@ func Redeem(key string, userId int) (quota int, err error) {
 			return errors.New("该兑换码已过期")
 		}
 
-		// Verify user belongs to the same tenant as the redemption code
+		// Verify user belongs to the same tenant as the redemption code.
+		//
+		// This used to skip the check entirely for redemption.TenantId ==
+		// "default" ("v1 backward compatibility"), which made every code
+		// sitting in the platform's own "default" tenant — including
+		// anything created without an explicit tenant, since
+		// entity.Redemption's TenantId column defaults to "default" — a
+		// cross-tenant wildcard: any user of any tenant could redeem it.
+		// "default" is not a neutral placeholder here, it's the platform's
+		// own tenant, so the bypass amounted to "codes minted for the
+		// platform's own console are globally redeemable."
+		//
+		// Grep of `repo.Redeem(` outside _test.go (2026-08-27) returns three
+		// call sites in total — one of which IS the console:
+		//   switch_redeem.go:218    POST /api/v2/switch/redeem (anonymous)
+		//   switch_user_topup.go:56 POST /api/v2/switch/user/topup (token auth)
+		//   v2_redemption.go:88     RedeemCodeV2, mounted twice — at
+		//                           api-v2-router.go:188 (POST
+		//                           /api/v2/:tenant_slug/redeem) and at
+		//                           api-router.go:60 (v1-compat POST
+		//                           /api/user/topup). This is the console path.
+		// Only the first is gated ahead of this check — see
+		// switchRedeemAllowDefaultTenant in switch_redeem.go, which refuses a
+		// "default"-tenant code before it ever reaches here. The other two
+		// have no such pre-gate: this unconditional check IS their only
+		// tenant guard, and they have no SWITCH_REDEEM_ALLOW_DEFAULT_TENANT
+		// escape hatch, so for them the change is not reversible without a
+		// code change.
+		//
+		// BLAST RADIUS the operator must sign off on (measured 2026-08-27, not
+		// inferred): the v1 admin console mints codes into "default"
+		// unconditionally. handler/redemption.go's AddRedemption reads
+		// tenant_id off the gin context and falls back to "default" when it is
+		// absent; the only non-test writers of that context key are
+		// middleware/oidc_auth.go (3 sites) and repo/tenant_context.go, and
+		// `POST /api/redemption/` runs none of them — its chain is CORS +
+		// GlobalAPIRateLimit + RequestBodySizeLimit + AdminAuth
+		// (api-router.go's redemptionRoute), and AdminAuth delegates to
+		// authHelper, which never sets tenant_id. So every code that route
+		// produces carries TenantId="default", and after this change no user
+		// outside the "default" tenant can redeem one through any of the three
+		// call sites above. Minting for a reseller tenant has to go through a
+		// tenant-scoped path.
 		var user User
 		if err := tx.Where("id = ?", userId).First(&user).Error; err != nil {
 			return errors.New("用户不存在")
 		}
-		// Allow "default" tenant codes to be redeemed by any tenant (v1 backward compatibility)
-		if redemption.TenantId != "default" && user.TenantId != redemption.TenantId {
+		if user.TenantId != redemption.TenantId {
 			common.SysError(fmt.Sprintf("Tenant mismatch in Redeem: redemption.TenantId=%s, user.TenantId=%s", redemption.TenantId, user.TenantId))
 			return errors.New("该兑换码不属于当前租户")
 		}

@@ -26,6 +26,14 @@ var (
 	slogWriter    io.Writer
 	slogErrWriter io.Writer
 	slogMu        sync.RWMutex
+	// slogJSONFormat records the format InitSlog last applied, so callers that
+	// need to branch on it (e.g. the access-log middleware choosing between the
+	// legacy "[GIN] ..." text line and a structured record) read the format
+	// InitSlog actually built instead of re-reading LOG_FORMAT themselves,
+	// which would drift from the GIN_MODE=release auto-select in
+	// SlogConfigFromEnv (below, around the os.Getenv("GIN_MODE") check) the
+	// moment LOG_FORMAT is left unset.
+	slogJSONFormat atomic.Bool
 )
 
 // SlogConfig holds configuration for the slog logger
@@ -252,6 +260,7 @@ func InitSlog(cfg *SlogConfig) *slog.Logger {
 	slogLevel.Set(cfg.Level)
 	slogWriter = cfg.Writer
 	slogErrWriter = cfg.ErrWriter
+	slogJSONFormat.Store(cfg.JSONFormat)
 
 	var handler slog.Handler
 	opts := &slog.HandlerOptions{
@@ -298,6 +307,13 @@ func ensureSlogInit() *slog.Logger {
 // GetSlogLogger returns the global slog logger
 func GetSlogLogger() *slog.Logger {
 	return ensureSlogInit()
+}
+
+// IsJSONLogFormat reports whether the format InitSlog last applied is JSON.
+// Before the first InitSlog call it reports false (the DefaultSlogConfig
+// text default), matching ensureSlogInit's lazy-init fallback.
+func IsJSONLogFormat() bool {
+	return slogJSONFormat.Load()
 }
 
 // SetSlogLevel dynamically sets the log level
