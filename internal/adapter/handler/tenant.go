@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -128,6 +129,14 @@ func CreateTenant(c *gin.Context) {
 	// Create tenant
 	tenant, err := repo.CreateTenantFromIDP(req.IDPOrgID, req.Slug, req.Name)
 	if err != nil {
+		if errors.Is(err, repo.ErrReservedTenantSlug) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Slug \"" + req.Slug + "\" is reserved by a platform route and cannot be used for a tenant; choose a different slug",
+				"error":   err.Error(),
+			})
+			return
+		}
 		common.SysError("Failed to create tenant: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,

@@ -84,6 +84,15 @@ func CreateTenantFromIDP(orgID string, orgDomain string, orgName string) (*Tenan
 		return existingTenant, nil
 	}
 
+	// Reject a NEW tenant whose slug would shadow a reserved static v2 route
+	// segment (D5, lane L4). Inserted AFTER the idempotent short-circuit
+	// above so an already-existing tenant (e.g. the live slug="switch"
+	// tenant, out of scope per X3) keeps resolving on repeat calls instead
+	// of suddenly failing here.
+	if err := ValidateTenantSlug(orgDomain); err != nil {
+		return nil, err
+	}
+
 	// Generate tenant ID (can use orgID or generate new UUID)
 	tenantID := GenerateID() // You can implement this function or use orgID directly
 
