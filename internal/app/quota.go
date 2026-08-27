@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -18,6 +19,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
@@ -68,7 +70,28 @@ func calculateAudioQuota(info QuotaInfo) int {
 		groupRatio := decimal.NewFromFloat(info.GroupRatio)
 
 		quota := modelPrice.Mul(quotaPerUnit).Mul(groupRatio)
-		return int(quota.IntPart())
+		// Round half-up rather than truncate — matches the non-UsePrice branch
+		// below (:123) and compatible_handler.go:392's Round(0) (that line
+		// runs for both the UsePrice and non-UsePrice branches there, it is
+		// not UsePrice-specific). A bare IntPart() truncated every fractional
+		// cent down, e.g. a modelPrice*groupRatio*QuotaPerUnit of 6.5 settled
+		// to 6, not 7.
+		rounded := int(quota.Round(0).IntPart())
+		// Post-hoc floor: on this branch there is no modelRatio/groupRatio
+		// "ratio" term to test (the price is per-call, not per-token), so the
+		// correct nonzero-input guard is ModelPrice != 0, not the `ratio` used
+		// below. Same intent as compatible_handler.go:406-408's
+		// floor-sub-unit-to-1, different predicate (see that branch's own
+		// note further down in this file). Triggers only when
+		// modelPrice*groupRatio*QuotaPerUnit(500000) rounds to 0, i.e.
+		// modelPrice*groupRatio < 1e-6 — reachable in production whenever an
+		// admin-configured per-call model price is sub-$0.000001; see
+		// TestR1CalculateAudioQuota_UsePriceSubHalfUnitFloorsToOne for the
+		// exemplar.
+		if info.ModelPrice != 0 && rounded == 0 {
+			rounded = 1
+		}
+		return rounded
 	}
 
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
@@ -97,7 +120,15 @@ func calculateAudioQuota(info QuotaInfo) int {
 		quota = decimal.NewFromInt(1)
 	}
 
-	return int(quota.Round(0).IntPart())
+	rounded := int(quota.Round(0).IntPart())
+	// Post-hoc floor: the guard above only fires on quota<=0 (exactly zero or
+	// negative pre-round); a strictly-positive 0<quota<0.5 still rounds down
+	// to 0 here without this, settling a real, already-served audio call to a
+	// free one. Mirrors compatible_handler.go:406-408.
+	if !ratio.IsZero() && rounded == 0 {
+		rounded = 1
+	}
+	return rounded
 }
 
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
@@ -285,31 +316,63 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		promptTokens -= cacheCreationTokens
 	}
 
-	calculateQuota := 0.0
-	if !relayInfo.PriceData.UsePrice {
-		calculateQuota = float64(promptTokens)
-		calculateQuota += float64(cacheTokens) * cacheRatio
-		calculateQuota += float64(cacheCreationTokens5m) * cacheCreationRatio5m
-		calculateQuota += float64(cacheCreationTokens1h) * cacheCreationRatio1h
-		remainingCacheCreationTokens := cacheCreationTokens - cacheCreationTokens5m - cacheCreationTokens1h
-		if remainingCacheCreationTokens > 0 {
-			calculateQuota += float64(remainingCacheCreationTokens) * cacheCreationRatio
-		}
-		calculateQuota += float64(completionTokens) * completionRatio
-		calculateQuota = calculateQuota * groupRatio * modelRatio
-	} else {
-		calculateQuota = modelPrice * common.QuotaPerUnit * groupRatio
+	remainingCacheCreationTokens := cacheCreationTokens - cacheCreationTokens5m - cacheCreationTokens1h
+	if remainingCacheCreationTokens < 0 {
+		remainingCacheCreationTokens = 0
 	}
 
-	if modelRatio != 0 && calculateQuota <= 0 {
-		calculateQuota = 1
+	calculateQuota := claudeCalculateQuota(relayInfo.PriceData.UsePrice,
+		promptTokens, cacheTokens, cacheCreationTokens5m, cacheCreationTokens1h, remainingCacheCreationTokens, completionTokens,
+		cacheRatio, cacheCreationRatio5m, cacheCreationRatio1h, cacheCreationRatio, completionRatio, groupRatio, modelRatio, modelPrice)
+
+	if modelRatio != 0 && calculateQuota.LessThanOrEqual(decimal.Zero) {
+		calculateQuota = decimal.NewFromInt(1)
 	}
 
-	quota := int(calculateQuota)
+	// Claude native web search tool fee — same formula as the
+	// OpenAI-compatible sibling path (relay/compatible_handler.go:280-286),
+	// added here so /v1/messages charges it too instead of only logging it
+	// (F1: claude_web_search_requests's sole write site is
+	// provider/claude/relay-claude.go:786, inside HandleClaudeResponseData,
+	// which only the NON-streaming callers reach — ClaudeHandler:810 and
+	// aws/relay-aws.go:228. ClaudeStreamHandler's completion path
+	// (HandleStreamFinalResponse) never calls HandleClaudeResponseData, so it
+	// never sets this context key. Net effect of this fix: a Claude native
+	// web search call is now charged when the request is non-streaming, but
+	// STILL not charged when streaming — that asymmetry is not closed by this
+	// change and should be called out as a known gap, not implied fixed). Not
+	// claiming general cross-format price parity beyond this — see the note
+	// on the decimal accumulation above.
+	claudeWebSearchCallCount := ctx.GetInt("claude_web_search_requests")
+	var claudeWebSearchPrice float64
+	var claudeWebSearchFee decimal.Decimal
+	if claudeWebSearchCallCount > 0 {
+		claudeWebSearchPrice = operation_setting.GetClaudeWebSearchPricePerThousand()
+		claudeWebSearchFee = decimal.NewFromFloat(claudeWebSearchPrice).
+			Div(decimal.NewFromInt(1000)).
+			Mul(decimal.NewFromFloat(groupRatio)).
+			Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+			Mul(decimal.NewFromInt(int64(claudeWebSearchCallCount)))
+		calculateQuota = calculateQuota.Add(claudeWebSearchFee)
+	}
+
+	// Round half-up rather than truncate — matches the OpenAI-compatible
+	// sibling path (compatible_handler.go:392, decimal.Round(0)). The whole
+	// accumulation above is decimal end-to-end (claudeCalculateQuota), not
+	// float64: a float64 accumulator hit real precision loss on this path —
+	// e.g. modelRatio=0.125, groupRatio=2.5, completionRatio=0.7, prompt=4,
+	// completion=24 summed to 6.49999999999999911182 in float64 (rounds to 6)
+	// versus the exact decimal 6.5 (rounds to 7) the compatible-handler
+	// sibling path computes for the same inputs. See
+	// r1_quota_decimal_parity_test.go for the reproduction.
+	quota := int(calculateQuota.Round(0).IntPart())
 
 	totalTokens := promptTokens + completionTokens
 
 	var logContent string
+	if claudeWebSearchCallCount > 0 {
+		logContent += fmt.Sprintf("Claude Web Search 调用 %d 次，调用花费 %s", claudeWebSearchCallCount, claudeWebSearchFee.String())
+	}
 	// record all the consume log even if quota is 0
 	if totalTokens == 0 {
 		// in this case, must be some error happened
@@ -319,6 +382,31 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	} else {
+		// Post-hoc floor: a nonzero modelRatio with a nonzero (but
+		// sub-half-unit) calc must never round down to a free call — same
+		// intent as compatible_handler.go:406-408's floor, but not the same
+		// predicate: this guard (and the pre-round guard above at :328-330)
+		// keys on modelRatio!=0 alone, while the sibling guards
+		// (compatible_handler.go:367 and :406) key on
+		// ratio(=modelRatio*groupRatio).IsZero(). This does NOT translate into
+		// an observable behavior difference on this path: when groupRatio==0,
+		// calculateQuota is exactly 0 regardless of modelRatio, so the
+		// pre-round guard at :328-330 (which shares this guard's modelRatio!=0
+		// predicate) already lifts calculateQuota to 1 before Round(0) ever
+		// runs — this floor then sees quota==1, not 0, and never fires.
+		// Verified by probe (modelRatio=0.75, groupRatio=0 via
+		// PostClaudeConsumeQuota): debited quota is 1 whether or not this
+		// floor exists. The actual, load-bearing divergence between the two
+		// predicates is at the pre-round guards themselves — quota.go:328
+		// (modelRatio!=0) vs compatible_handler.go:367 (!ratio.IsZero()) — not
+		// at these post-hoc floors. The pre-existing calculateQuota<=0 guard
+		// above (:328-330) does NOT cover the sub-half-unit case (it only
+		// fires on exactly-zero or negative calc), which is exactly the gap
+		// that let a 0<calc<1 Claude-native call settle to quota==0 while the
+		// upstream had already served a real response.
+		if modelRatio != 0 && quota == 0 {
+			quota = 1
+		}
 		repo.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		repo.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
@@ -355,6 +443,18 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		cacheCreationTokens5m, cacheCreationRatio5m,
 		cacheCreationTokens1h, cacheCreationRatio1h,
 		modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	if claudeWebSearchCallCount > 0 {
+		// Set directly on the map GenerateClaudeOtherInfo returns rather than
+		// inside that shared generator — these three keys already exist in the
+		// projection contract (repo/log.go:146-147 strips web_search_price /
+		// web_search_call_count for non-admins; the frontend already reads all
+		// three: web/src/hooks/usage-logs/useUsageLogsData.jsx:382-383,459-461),
+		// so no new key + no change to GenerateClaudeOtherInfo itself (its only
+		// production call site is the one immediately above, this function).
+		other["web_search"] = true
+		other["web_search_call_count"] = claudeWebSearchCallCount
+		other["web_search_price"] = claudeWebSearchPrice
+	}
 	logParams := repo.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     promptTokens,
@@ -371,6 +471,48 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	}
 	governance.EnrichLogParams(ctx, relayInfo, &logParams)
 	repo.RecordConsumeLog(ctx, relayInfo.UserId, logParams)
+}
+
+// claudeCalculateQuota computes the Claude-native settlement amount entirely
+// in decimal (shopspring/decimal) — the accumulation used to be float64 (see
+// git history) and lost precision (see the r1_quota_decimal_parity_test.go
+// exemplar: modelRatio=0.125, groupRatio=2.5, completionRatio=0.7, prompt=4,
+// completion=24 summed to 6.49999999999999911182 in float64, one Round(0)
+// step away from a wrong answer). NOT a term-for-term match with the
+// OpenAI-compatible sibling formula in relay/compatible_handler.go (lines
+// 249-373): both accumulate in decimal end-to-end, and both bucket 5m/1h
+// cache-creation tokens plus the completion term the same shape, but the
+// prompt-base deduction rule differs — compatible_handler.go:317-327
+// subtracts cacheTokens/cachedCreationTokens from baseTokens for every
+// non-Anthropic channel (ali/zhipu_4v/moonshot/deepseek/gemini/aws all
+// support RelayFormatClaude and hit that subtraction), while this function's
+// caller (PostClaudeConsumeQuota) only ever runs the equivalent subtraction
+// for ChannelTypeOpenRouter. The two paths only actually agree on an
+// Anthropic-native channel. Extracted to a pure function (no gin.Context, no
+// DB) so a fixed-input grid test can diff it against an independently
+// hand-typed decimal expression without sharing code with the thing under
+// test.
+func claudeCalculateQuota(usePrice bool,
+	promptTokens, cacheTokens, cacheCreationTokens5m, cacheCreationTokens1h, remainingCacheCreationTokens, completionTokens int,
+	cacheRatio, cacheCreationRatio5m, cacheCreationRatio1h, cacheCreationRatio, completionRatio, groupRatio, modelRatio, modelPrice float64,
+) decimal.Decimal {
+	dGroupRatio := decimal.NewFromFloat(groupRatio)
+
+	if usePrice {
+		return decimal.NewFromFloat(modelPrice).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Mul(dGroupRatio)
+	}
+
+	ratio := decimal.NewFromFloat(modelRatio).Mul(dGroupRatio)
+
+	promptQuota := decimal.NewFromInt(int64(promptTokens)).
+		Add(decimal.NewFromInt(int64(cacheTokens)).Mul(decimal.NewFromFloat(cacheRatio))).
+		Add(decimal.NewFromInt(int64(cacheCreationTokens5m)).Mul(decimal.NewFromFloat(cacheCreationRatio5m))).
+		Add(decimal.NewFromInt(int64(cacheCreationTokens1h)).Mul(decimal.NewFromFloat(cacheCreationRatio1h))).
+		Add(decimal.NewFromInt(int64(remainingCacheCreationTokens)).Mul(decimal.NewFromFloat(cacheCreationRatio)))
+
+	completionQuota := decimal.NewFromInt(int64(completionTokens)).Mul(decimal.NewFromFloat(completionRatio))
+
+	return promptQuota.Add(completionQuota).Mul(ratio)
 }
 
 func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData) int {
@@ -757,6 +899,7 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	if relayInfo.IdentityAccountID > 0 && totalQuota > 0 {
 		accountID := relayInfo.IdentityAccountID
 		amountLB := float64(totalQuota) / common.QuotaPerUnit
+		warnZeroWalletAmount(accountID, totalQuota, amountLB)
 
 		if relayInfo.PlatformPreAuthID > 0 {
 			preAuthID := relayInfo.PlatformPreAuthID
@@ -860,6 +1003,69 @@ func mirrorUsageEvent(ctx context.Context, relayInfo *relaycommon.RelayInfo, acc
 		return
 	}
 	metrics.BillingUsageMirrorTotal.WithLabelValues("success").Inc()
+}
+
+// zeroWalletWarnLast tracks, per platform account, the last time
+// warnZeroWalletAmount emitted its ERROR-level log line — a 1/minute-per-
+// account throttle. QuotaPerUnit=500000 means any settlement with
+// totalQuota<25 trips the leak condition below, and a live single relay call
+// settles to totalQuota in the 1-2 range, so before this throttle every
+// identity-linked-token request logged one ERROR line (D-A5): with several
+// such tokens in flight this was effectively a log line per request, not a
+// leak signal. The metrics counter below stays UNCONDITIONAL (D-A5) —
+// throttling it too would hide *how many* charges were lost, only the log
+// noise is gated. Deliberately per-account, not global: a global throttle
+// would mask a second, different account tripping the same condition in the
+// same window (D-A5 explicitly forbids a global throttle for this reason).
+var zeroWalletWarnLast sync.Map // accountID(int64) -> time.Time
+
+// zeroWalletWarnLogf is a seam over common.SysError so tests can observe the
+// throttle's actual output. Without this indirection, tests have no way to
+// tell "the throttle suppressed this call" apart from "the throttle never
+// fired at all" — common.SysError writes to the process log, which is not
+// something a unit test can assert against; grep across the repo (before
+// this seam existed) found zero tests capturing common.SysError or the
+// wallet_zero_amount_charge event, i.e. the throttle body itself (the
+// zeroWalletWarnLast.LoadOrStore block below) had no test that would fail if
+// its suppression `return` were deleted.
+var zeroWalletWarnLogf = common.SysError
+
+// resetZeroWalletWarnThrottle clears the per-account throttle state. Test-only
+// seam: without it, warnZeroWalletAmount's log-suppression window makes tests
+// that call it directly for the same accountID order-dependent on wall clock.
+func resetZeroWalletWarnThrottle() {
+	zeroWalletWarnLast.Range(func(key, _ any) bool {
+		zeroWalletWarnLast.Delete(key)
+		return true
+	})
+}
+
+// warnZeroWalletAmount detects a strictly-positive local quota that converts
+// to a platform-wallet amount that will round to 0.0000 under the wallet's
+// numeric(14,4) column (< 0.00005 LB) — i.e. the local ledger recorded real,
+// already-paid-for upstream usage, but the wallet-side charge is silently
+// lost to truncation. Pure observation: it does not alter amountLB or the
+// settle/debit call that follows it, and it does not touch the wallet schema
+// itself: the wallet tables live in the platform/identity repository, not this
+// one, so widening that column is a separate change there. Until it lands this
+// counter is the only signal that a paid-for call was billed as free.
+func warnZeroWalletAmount(accountID int64, totalQuota int, amountLB float64) {
+	if totalQuota <= 0 || amountLB >= 0.00005 {
+		return
+	}
+	metrics.BillingZeroAmountChargeTotal.Inc()
+
+	now := time.Now()
+	if last, loaded := zeroWalletWarnLast.LoadOrStore(accountID, now); loaded {
+		if now.Sub(last.(time.Time)) < time.Minute {
+			return
+		}
+		zeroWalletWarnLast.Store(accountID, now)
+	}
+
+	zeroWalletWarnLogf(fmt.Sprintf(
+		`{"event":"wallet_zero_amount_charge","who":"account:%d","what":"positive local quota %d converts to %.6f LB","result":"will round to 0.0000 under wallet numeric(14,4), charge silently lost"}`,
+		accountID, totalQuota, amountLB))
 }
 
 // reportQuotaThreshold fetches the user's current quota state from DB and

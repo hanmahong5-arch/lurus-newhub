@@ -103,6 +103,21 @@ var (
 		[]string{"write"},
 	)
 
+	// BillingZeroAmountChargeTotal counts platform-wallet settlements where a
+	// strictly-positive local quota converted to a wallet amount that will
+	// round to 0.0000 under the platform wallet's numeric(14,4) column (i.e.
+	// < 0.00005 LB). Pure observation — the settle call itself is unchanged —
+	// so this is a leak DETECTOR, not a fix (the wallet-side precision fix is
+	// tracked separately, out of scope here).
+	BillingZeroAmountChargeTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "billing",
+			Name:      "zero_amount_charge_total",
+			Help:      "Positive local quota settlements whose wallet amount rounds to 0.0000 under numeric(14,4)",
+		},
+	)
+
 	// BillingUsageMirrorTotal counts usage-event mirror reports to the
 	// platform (POST /internal/v1/usage/events, metric=llm_relay) by status
 	// (success/error). The mirror feeds the Track A drift reconciliation;
