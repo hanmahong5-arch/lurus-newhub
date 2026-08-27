@@ -107,7 +107,7 @@ var invoiceDBCounter invoiceCounterType
 type invoiceCounterType struct{ v int64 }
 
 func (c *invoiceCounterType) Add(n int64) int64 { c.v += n; return c.v }
-func (c *invoiceCounterType) Load() int64        { return c.v }
+func (c *invoiceCounterType) Load() int64       { return c.v }
 
 func getInvoices(ctx *invoiceCtx, query string) *httptest.ResponseRecorder {
 	path := "/api/v2/" + ctx.tenantID + "/billing/invoices"
@@ -328,7 +328,7 @@ func TestV2Billing_TenantIsolation(t *testing.T) {
 // TestV2Billing_InvoiceViewForbiddenFields verifies that invoiceMonthBucket
 // (the view struct returned by ListInvoicesV2) does not expose raw payment
 // provider IDs, internal transaction references, or tenant-scoped counters.
-// invoiceMonthBucket only carries month/quota/amount_cny/amount_usd/request_count
+// invoiceMonthBucket only carries month/quota/amount_cny/request_count
 // so this test confirms no raw entity fields bleed through.
 func TestV2Billing_InvoiceViewForbiddenFields(t *testing.T) {
 	ctx := setupInvoiceRouter(t)
@@ -359,10 +359,18 @@ func TestV2Billing_InvoiceViewForbiddenFields(t *testing.T) {
 	}
 
 	// Fields that must be present (the whitelisted invoice shape).
-	for _, required := range []string{"month", "quota", "amount_cny", "amount_usd", "request_count"} {
+	for _, required := range []string{"month", "quota", "amount_cny", "request_count"} {
 		if _, ok := bucket[required]; !ok {
 			t.Errorf("expected field %q in invoice bucket, not found", required)
 		}
+	}
+
+	// amount_usd must NOT be present: a prior version emitted it as a 1:1
+	// copy of amount_cny, which is off by the real CNY/USD rate (~7x) — there
+	// is no FX source wired into this package. Re-adding it without a real
+	// conversion would silently regress into that bug.
+	if _, ok := bucket["amount_usd"]; ok {
+		t.Errorf("amount_usd should not be present in the invoice bucket (no real FX source wired in); got %v", bucket["amount_usd"])
 	}
 
 	// amount_cny must be consistent with quota for the billing model.
