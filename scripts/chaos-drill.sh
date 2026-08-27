@@ -16,9 +16,19 @@
 #               script (needs slow upstream mock). Marked SKIP with reason
 #               in SKIP_REASON_B at the top of the script. Wrappers MUST
 #               check this marker.
-#   Scenario C: send up to 100 quick requests, confirm cost-spike middleware
-#               returns 429 and disables user. Automatically re-enables the
-#               user on exit.
+#   Scenario C: send up to 100 quick requests to breach the 5-minute cost
+#               window. What gets asserted depends on
+#               CHAOS_COST_SPIKE_ENFORCE (default: false, mirroring the
+#               deployed COST_SPIKE_ENFORCE default — see
+#               internal/pkg/common/constants.go): false (the default)
+#               asserts the requests are all admitted (no 429), the user
+#               stays enabled, and
+#               lurus_gateway_cost_spike_breach_total{action="observed"}
+#               increases in Prometheus; true asserts the legacy 429 +
+#               auto-disable behavior and re-enables the user on exit. This
+#               script cannot change the remote deployment's env — it only
+#               picks which assertion matches what that deployment is
+#               actually configured to do.
 #
 # Required env:
 #   HUB_BASE, ADMIN_TOKEN, USER_TOKEN, CHAOS_CHANNEL_ID, TEST_USER_ID
@@ -28,6 +38,9 @@
 #             If unset AND not reachable, prom assertions print ⚠️  skip.
 #   NS        Kubernetes namespace for newhub logs (default: lurus-system)
 #   APP_LABEL Kubernetes label selector (default: app=lurus-newhub)
+#   CHAOS_COST_SPIKE_ENFORCE  "true" if the target deployment has
+#             COST_SPIKE_ENFORCE=true; drives which Scenario C assertion
+#             runs (see above). Default: false.
 #
 # Usage:
 #   HUB_BASE=https://hub-stage.lurus.cn \
@@ -57,6 +70,7 @@ TEST_USER_ID="${TEST_USER_ID:-}"
 PROM_URL="${PROM_URL:-http://prometheus.observability.svc:9090}"
 NS="${NS:-lurus-system}"
 APP_LABEL="${APP_LABEL:-app=lurus-newhub}"
+CHAOS_COST_SPIKE_ENFORCE="${CHAOS_COST_SPIKE_ENFORCE:-false}"
 
 if [ -z "$ADMIN_TOKEN" ] || [ -z "$USER_TOKEN" ] || [ -z "$CHAOS_CHANNEL_ID" ] || [ -z "$TEST_USER_ID" ]; then
   echo "ERROR: missing required env. Set ADMIN_TOKEN, USER_TOKEN, CHAOS_CHANNEL_ID, TEST_USER_ID."
@@ -106,6 +120,23 @@ prom_query() {
     gt) awk -v a="$val" -v b="$expected" 'BEGIN{exit !(a>b)}'  && return 0 || return 1 ;;
     *)  fail "prom_query unknown op: $op"; return 1 ;;
   esac
+}
+
+# prom_value <promql> — echoes the raw scalar value for a query, or an empty
+# string if Prometheus/jq is unavailable or the series has no data. Unlike
+# prom_query this never calls warn/fail itself; callers that need a before/
+# after delta (Scenario C's observe-mode counter check) decide how to handle
+# emptiness.
+prom_value() {
+  local query="$1"
+  local resp
+  resp=$(curl -sS --max-time 10 -G --data-urlencode "query=${query}" \
+    "${PROM_URL}/api/v1/query" 2>/dev/null) || { echo ""; return; }
+  command -v jq >/dev/null 2>&1 || { echo ""; return; }
+  local status
+  status=$(echo "$resp" | jq -r '.status // "error"')
+  [ "$status" = "success" ] || { echo ""; return; }
+  echo "$resp" | jq -r '.data.result[0].value[1] // ""'
 }
 
 # ---- Scenario A: 5xx injection → breaker opens ----------------------------
@@ -206,10 +237,14 @@ fi
 hdr "Scenario B — upstream timeout returns 524 + breaker records"
 warn "Scenario B SKIPPED" "$SKIP_REASON_B"
 
-# ---- Scenario C: cost spike → user disabled ------------------------------
+# ---- Scenario C: cost spike (enforce → disabled / observe → counted) -----
 
-hdr "Scenario C — cost spike protection (8-2.1) auto-disables user"
-echo "  $(printf '\033[2m  NOTE: this disables TEST_USER_ID=%s. Will be auto-re-enabled on exit via trap.\033[0m\n' "$TEST_USER_ID")"
+hdr "Scenario C — cost spike protection (8-2.1), CHAOS_COST_SPIKE_ENFORCE=$CHAOS_COST_SPIKE_ENFORCE"
+if [ "$CHAOS_COST_SPIKE_ENFORCE" = "true" ]; then
+  echo "  $(printf '\033[2m  NOTE: this disables TEST_USER_ID=%s. Will be auto-re-enabled on exit via trap.\033[0m\n' "$TEST_USER_ID")"
+else
+  echo "  $(printf '\033[2m  NOTE: COST_SPIKE_ENFORCE defaults to false (observe mode) — requests are expected to be ADMITTED, not blocked. Set CHAOS_COST_SPIKE_ENFORCE=true only if the target deployment actually runs with COST_SPIKE_ENFORCE=true.\033[0m\n')"
+fi
 
 # Auto-skip via env if running unattended; otherwise prompt.
 if [ "${CHAOS_AUTO_C:-0}" = "1" ] || [ ! -t 0 ]; then
@@ -221,7 +256,7 @@ fi
 
 if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
   echo "  skipped Scenario C"
-else
+elif [ "$CHAOS_COST_SPIKE_ENFORCE" = "true" ]; then
   echo "  sending up to 100 quick chat-completion requests..."
   burst=0
   for i in $(seq 1 100); do
@@ -236,7 +271,7 @@ else
     fi
   done
   if [ "$burst" = 0 ]; then
-    fail "no 429 after 100 requests" "threshold may be too high or middleware not wired"
+    fail "no 429 after 100 requests" "threshold may be too high, middleware not wired, or the deployment isn't actually running COST_SPIKE_ENFORCE=true (CHAOS_COST_SPIKE_ENFORCE=true assumed it was)"
   fi
 
   # Verify user disabled
@@ -258,6 +293,74 @@ else
     ok "user $TEST_USER_ID re-enabled (status=1)"
   else
     fail "user re-enable verification failed" "$verify"
+  fi
+else
+  echo "  sending 100 quick chat-completion requests (observe mode: all must be admitted)..."
+  # sum() is load-bearing, not cosmetic: r6-stage runs replicas=3, so this
+  # counter has one series per pod and the burst below round-robins across
+  # them. prom_value reads .data.result[0], so an unaggregated query would
+  # compare two arbitrary and possibly different pods' series and could go
+  # both false-red and false-green. The alert rules query it the same way.
+  breach_query='sum(lurus_gateway_cost_spike_breach_total{action="observed"})'
+  before=$(prom_value "$breach_query")
+  [ -z "$before" ] && before=0
+
+  sent=0
+  saw429=0
+  for i in $(seq 1 100); do
+    code=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
+      -H "Authorization: Bearer $USER_TOKEN" \
+      "$HUB_BASE/v1/chat/completions" \
+      -d '{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"x"}],"max_tokens":1000}' || echo "000")
+    sent=$i
+    if [ "$code" = "429" ]; then
+      saw429=1
+      fail "request $i got 429 in observe mode" "COST_SPIKE_ENFORCE=false must never 429 — either the deployment is actually running enforce mode (rerun with CHAOS_COST_SPIKE_ENFORCE=true) or this is a real regression"
+      break
+    fi
+  done
+  if [ "$saw429" = 0 ]; then
+    ok "$sent requests admitted, none returned 429 (observe mode does not block)"
+  fi
+
+  # Poll rather than sleep a fixed 2s. There is no 2-second scrape anywhere in
+  # this repo — the rule groups in deploy/ are interval:30s — so a short fixed
+  # sleep re-reads the pre-burst value and fails a healthy system. Bounded at
+  # ~70s (two full 30s intervals plus slack) so a genuinely stuck counter still
+  # terminates the drill instead of hanging it.
+  after="$before"
+  for _ in $(seq 1 14); do
+    sleep 5
+    probe=$(prom_value "$breach_query")
+    [ -n "$probe" ] && after="$probe"
+    awk -v a="$after" -v b="$before" 'BEGIN{exit !(a>b)}' && break
+  done
+
+  if [ -z "$after" ]; then
+    warn "Prometheus unreachable or cost_spike_breach_total{action=observed} has no series" "cannot confirm the breach was counted — check PROM_URL"
+  elif awk -v a="$after" -v b="$before" 'BEGIN{exit !(a>b)}'; then
+    ok "sum(lurus_gateway_cost_spike_breach_total{action=observed}) increased ($before -> $after)"
+  elif [ "$before" = "0" ] && [ "$after" = "0" ]; then
+    # Not a failure: the cost-spike window is only written for wallet-linked
+    # tokens (both RecordCostSpikeWindow call sites sit inside
+    # `relayInfo.IdentityAccountID > 0`), and console-created tokens do not set
+    # identity_account_id. A drill token that is not wallet-linked therefore
+    # never accumulates a window, so the counter cannot move and that says
+    # nothing about the middleware. Downgrading to warn keeps the drill honest
+    # instead of red-by-configuration.
+    warn "breach counter stayed at 0 — cannot exercise the observe path with this token" \
+      "the 5-minute window is only recorded when the token is wallet-linked (identity_account_id > 0); check TEST_USER_ID's token before treating this as a defect"
+  else
+    fail "sum(lurus_gateway_cost_spike_breach_total{action=observed}) did not increase" "before=$before after=$after"
+  fi
+
+  # Observe mode must never disable the account.
+  user=$(curl -sS --max-time 10 -H "Authorization: Bearer $ADMIN_TOKEN" \
+    "$HUB_BASE/api/user/$TEST_USER_ID")
+  if echo "$user" | grep -q '"status":2'; then
+    fail "user $TEST_USER_ID was disabled in observe mode" "$user"
+  else
+    ok "user $TEST_USER_ID remains enabled (observe mode never disables)"
   fi
 fi
 

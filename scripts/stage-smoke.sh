@@ -186,9 +186,15 @@ fi
 # --- 5. story 8-2.1 cost spike protection ----------------------------------
 
 hdr "story 8-2.1 — cost spike protection (5-min sliding window)"
-# Real breach test is in chaos-drill.sh Scenario C (which actually disables
-# the user). Here we only assert wiring + that chaos-drill's SKIP_REASON_B
-# marker is acknowledged (audit gap is visible, not silent).
+# Real breach test is in chaos-drill.sh Scenario C.
+# COST_SPIKE_ENFORCE defaults to false (internal/pkg/common/constants.go), and chaos-drill.sh mirrors that via
+# CHAOS_COST_SPIKE_ENFORCE (also default false): the default run asserts the
+# breach is admitted (no 429), the user stays enabled, and
+# lurus_gateway_cost_spike_breach_total{action="observed"} increases — it
+# does NOT disable the user unless CHAOS_COST_SPIKE_ENFORCE=true (which
+# should only be set if the target deployment actually runs
+# COST_SPIKE_ENFORCE=true). Here we only assert wiring + that chaos-drill's
+# SKIP_REASON_B marker is acknowledged (audit gap is visible, not silent).
 if require_env ADMIN_TOKEN TEST_USER_ID; then
   ok "smoke wiring present (full breach automated in chaos-drill.sh Scenario C)"
   if grep -q 'SKIP_REASON_B=' "$SCRIPT_DIR/chaos-drill.sh" 2>/dev/null; then
