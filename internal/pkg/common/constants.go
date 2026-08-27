@@ -266,15 +266,16 @@ var (
 	// and returns 429, versus just being logged/counted (observe mode).
 	// Defaults to false (observe-only). Reasons:
 	//   (i)   CostSpikeHardLimitPer5Min=50000 (~$0.10/5min) has never been
-	//         crossed by real traffic. The write side (quota.go
-	//         RecordCostSpikeWindow) only fires when
-	//         relayInfo.IdentityAccountID > 0, true today for 1 of 6 live
-	//         tokens — that one token's window does accumulate real data, it
-	//         has simply never crossed the threshold. The other 5/6 tokens'
-	//         windows stay permanently empty (RecordCostSpikeWindow never
-	//         fires for them at all), so flipping this flag back to enforce
-	//         would still do nothing for those 5/6 — that is a separate
-	//         write-side gap, not closed by this flag either way.
+	//         crossed by real traffic, and until the write side was fixed it
+	//         could not have been: PostConsumeQuota only recorded the window
+	//         inside its platform-wallet gate, so on the live gateway 1 of 6
+	//         tokens accumulated data and the other 5 were invisible to the
+	//         fuse. Recording is unconditional now (quota.go, pinned by
+	//         TestR6PostConsumeQuota_RecordsCostSpikeWindowWithoutIdentityAccount),
+	//         which means flipping this flag to enforce would for the first
+	//         time apply an uncalibrated threshold to traffic that has never
+	//         been measured against it. That is an argument for observing
+	//         first, not for leaving the write side broken.
 	//   (ii)  The breach action is repo.DisableUserById — an auto-suspend
 	//         whose failure mode is a self-inflicted outage for a paying
 	//         customer, which is worse than a fuse that has never tripped.
