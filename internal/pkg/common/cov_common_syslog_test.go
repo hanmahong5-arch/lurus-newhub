@@ -2,6 +2,7 @@ package common
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -24,11 +25,26 @@ func covSwapGinWriters(t *testing.T) (out *bytes.Buffer, errOut *bytes.Buffer) {
 	return out, errOut
 }
 
-// TestSysLog_WritesLegacyFormatAndStructuredLog asserts SysLog produces the
-// documented "[SYS] <timestamp> | <message>" line on gin.DefaultWriter — the
-// legacy console format ops tooling greps for — and does not touch the error
-// writer at all.
+// covInitTextMode forces the package-global slog logger into text mode
+// (io.Discard sinks so the structured branch, which these SysLog/SysError
+// text-mode tests never exercise, cannot write to a nil writer if some other
+// code path happens to log through it during the test).
+func covInitTextMode(t *testing.T) {
+	t.Helper()
+	InitSlog(&SlogConfig{JSONFormat: false, Writer: io.Discard, ErrWriter: io.Discard})
+}
+
+// TestSysLog_WritesLegacyFormatAndStructuredLog pins SysLog's TEXT-mode
+// branch: it produces the documented "[SYS] <timestamp> | <message>" line on
+// gin.DefaultWriter — the legacy console format ops tooling greps for — and
+// does not touch the error writer at all. This used to be unconditional
+// behavior; SysLog now also has a JSON-mode branch (see
+// r5b_syslog_format_test.go) that skips this Fprintf entirely to avoid
+// double-writing every system log event, so this test must force text mode
+// itself rather than relying on whatever format an earlier test in this
+// package left the global logger in.
 func TestSysLog_WritesLegacyFormatAndStructuredLog(t *testing.T) {
+	covInitTextMode(t)
 	out, errOut := covSwapGinWriters(t)
 
 	SysLog("hub booted on node-7")
@@ -48,10 +64,13 @@ func TestSysLog_WritesLegacyFormatAndStructuredLog(t *testing.T) {
 	}
 }
 
-// TestSysError_WritesToErrorWriterOnly asserts SysError's legacy line lands on
-// gin.DefaultErrorWriter (so it flows into stderr/alerting pipelines) and
-// leaves the info writer untouched.
+// TestSysError_WritesToErrorWriterOnly pins SysError's TEXT-mode branch: its
+// legacy line lands on gin.DefaultErrorWriter (so it flows into
+// stderr/alerting pipelines) and leaves the info writer untouched. See
+// TestSysLog_WritesLegacyFormatAndStructuredLog for why text mode must be
+// forced explicitly now that SysError also has a JSON-mode branch.
 func TestSysError_WritesToErrorWriterOnly(t *testing.T) {
+	covInitTextMode(t)
 	out, errOut := covSwapGinWriters(t)
 
 	SysError("db ping failed: connection refused")
@@ -68,9 +87,12 @@ func TestSysError_WritesToErrorWriterOnly(t *testing.T) {
 	}
 }
 
-// TestSysLogf_FormatsBeforeDelegating covers the format-then-delegate wrapper:
-// the printf verbs must be expanded, not passed through literally.
+// TestSysLogf_FormatsBeforeDelegating covers the format-then-delegate wrapper
+// on top of SysLog's TEXT-mode branch: the printf verbs must be expanded, not
+// passed through literally. Forces text mode for the same reason as
+// TestSysLog_WritesLegacyFormatAndStructuredLog.
 func TestSysLogf_FormatsBeforeDelegating(t *testing.T) {
+	covInitTextMode(t)
 	out, _ := covSwapGinWriters(t)
 
 	SysLogf("tenant=%s quota=%d", "acme-co", 42)
@@ -87,6 +109,7 @@ func TestSysLogf_FormatsBeforeDelegating(t *testing.T) {
 // TestSysErrorf_FormatsBeforeDelegating mirrors TestSysLogf_FormatsBeforeDelegating
 // for the error-writer sibling.
 func TestSysErrorf_FormatsBeforeDelegating(t *testing.T) {
+	covInitTextMode(t)
 	_, errOut := covSwapGinWriters(t)
 
 	SysErrorf("channel %d disabled after %d failures", 17, 3)
