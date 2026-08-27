@@ -785,19 +785,31 @@ type LogStatEntry struct {
 	TotalQuota int64  `json:"total_quota"`
 }
 
-// GetUserLogStatInternal returns aggregated usage stats (by model or day).
-// GetUserLogStatByPeriod returns usage stats filtered by time period and grouped by model.
+// GetUserLogStatByPeriod returns consume-usage stats filtered by time period
+// and grouped by model. created_at is a unix-epoch bigint (see
+// GetUserLogStatInternal below); the caller passes a time.Time, so this
+// function is responsible for the .Unix() conversion — binding time.Time
+// directly into the Where clause makes PostgreSQL reject the query with
+// 22P02 (invalid_text_representation). Only LogTypeConsume rows are
+// included: topup/manage rows are written with an EMPTY model_name
+// (RecordLog / RecordLogWithTenant, log.go:199-220/223-, build Log{}
+// without setting Quota at all, so those rows are Quota==0, not "huge" —
+// their actual problem is that grouping by model_name would add a spurious
+// empty-key group to the result), and LogTypeError rows carry a real
+// ModelName but were never billed, so including them would inflate that
+// model's count with requests that cost nothing.
 func GetUserLogStatByPeriod(userID int, since time.Time) ([]LogStatEntry, error) {
 	var results []LogStatEntry
 	err := LOG_DB.Model(&Log{}).
 		Select("model_name as key, COUNT(*) as count, COALESCE(SUM(quota), 0) as total_quota").
-		Where("user_id = ? AND created_at >= ?", userID, since).
+		Where("user_id = ? AND type = ? AND created_at >= ?", userID, LogTypeConsume, since.Unix()).
 		Group("model_name").
 		Order("total_quota DESC").
 		Find(&results).Error
 	return results, err
 }
 
+// GetUserLogStatInternal returns aggregated usage stats (by model or day).
 func GetUserLogStatInternal(userID int, groupBy string) ([]LogStatEntry, error) {
 	var results []LogStatEntry
 	var selectExpr, groupExpr string

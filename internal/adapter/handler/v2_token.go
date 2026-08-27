@@ -42,31 +42,39 @@ type tokenView struct {
 	ProjectId int `json:"project_id"`
 }
 
+// toTokenView projects a single repo.Token into the field-whitelisted view
+// (masked Key, no tenant/provisioning linkage). Shared by the list endpoint
+// and the update endpoint so neither can accidentally regress to leaking the
+// raw Key.
+func toTokenView(t *repo.Token) tokenView {
+	scopes := t.GetScopes()
+	if scopes == nil {
+		scopes = []string{}
+	}
+	return tokenView{
+		Id:                 t.Id,
+		Name:               t.Name,
+		Key:                maskKey(t.Key),
+		Status:             t.Status,
+		CreatedTime:        t.CreatedTime,
+		AccessedTime:       t.AccessedTime,
+		ExpiredTime:        t.ExpiredTime,
+		RemainQuota:        t.RemainQuota,
+		UsedQuota:          t.UsedQuota,
+		UnlimitedQuota:     t.UnlimitedQuota,
+		ModelLimitsEnabled: t.ModelLimitsEnabled,
+		ModelLimits:        t.ModelLimits,
+		AllowIps:           t.AllowIps,
+		Group:              t.Group,
+		Scopes:             scopes,
+		ProjectId:          t.ProjectId,
+	}
+}
+
 func toTokenViews(tokens []*repo.Token) []tokenView {
 	items := make([]tokenView, 0, len(tokens))
 	for _, t := range tokens {
-		scopes := t.GetScopes()
-		if scopes == nil {
-			scopes = []string{}
-		}
-		items = append(items, tokenView{
-			Id:                 t.Id,
-			Name:               t.Name,
-			Key:                maskKey(t.Key),
-			Status:             t.Status,
-			CreatedTime:        t.CreatedTime,
-			AccessedTime:       t.AccessedTime,
-			ExpiredTime:        t.ExpiredTime,
-			RemainQuota:        t.RemainQuota,
-			UsedQuota:          t.UsedQuota,
-			UnlimitedQuota:     t.UnlimitedQuota,
-			ModelLimitsEnabled: t.ModelLimitsEnabled,
-			ModelLimits:        t.ModelLimits,
-			AllowIps:           t.AllowIps,
-			Group:              t.Group,
-			Scopes:             scopes,
-			ProjectId:          t.ProjectId,
-		})
+		items = append(items, toTokenView(t))
 	}
 	return items
 }
@@ -332,11 +340,11 @@ func UpdateTokenV2(c *gin.Context) {
 	var req struct {
 		Name               string    `json:"name"`
 		ExpiredTime        int64     `json:"expired_time"`
-		RemainQuota        int       `json:"remain_quota"`
+		RemainQuota        *int      `json:"remain_quota"` // nil = no change; explicit 0 sets to zero
 		UnlimitedQuota     *bool     `json:"unlimited_quota"`
 		ModelLimitsEnabled *bool     `json:"model_limits_enabled"`
-		ModelLimits        string    `json:"model_limits"`
-		AllowIps           string    `json:"allow_ips"`
+		ModelLimits        *string   `json:"model_limits"` // nil = no change; "" clears the allowlist
+		AllowIps           *string   `json:"allow_ips"`    // nil = no change; "" clears (unrestricted)
 		Group              string    `json:"group"`
 		Status             *int      `json:"status"`
 		Scopes             *[]string `json:"scopes"`         // nil = no change; non-nil (incl. []) = replace allowlist
@@ -383,27 +391,27 @@ func UpdateTokenV2(c *gin.Context) {
 		token.UnlimitedQuota = *req.UnlimitedQuota
 	}
 
-	if !token.UnlimitedQuota && req.RemainQuota != 0 {
-		if req.RemainQuota < 0 {
+	if req.RemainQuota != nil && !token.UnlimitedQuota {
+		if *req.RemainQuota < 0 {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"success": false,
 				"message": "Quota value cannot be negative",
 			})
 			return
 		}
-		token.RemainQuota = req.RemainQuota
+		token.RemainQuota = *req.RemainQuota
 	}
 
 	if req.ModelLimitsEnabled != nil {
 		token.ModelLimitsEnabled = *req.ModelLimitsEnabled
 	}
 
-	if req.ModelLimits != "" {
-		token.ModelLimits = req.ModelLimits
+	if req.ModelLimits != nil {
+		token.ModelLimits = *req.ModelLimits
 	}
 
-	if req.AllowIps != "" {
-		token.AllowIps = &req.AllowIps
+	if req.AllowIps != nil {
+		token.AllowIps = req.AllowIps
 	}
 
 	if req.Group != "" {
@@ -497,7 +505,7 @@ func UpdateTokenV2(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Token updated successfully",
-		"data":    token,
+		"data":    toTokenView(token),
 	})
 }
 

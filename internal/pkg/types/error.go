@@ -94,6 +94,13 @@ const (
 	ErrorCodeInsufficientUserQuota      ErrorCode = "insufficient_user_quota"
 	ErrorCodePreConsumeTokenQuotaFailed ErrorCode = "pre_consume_token_quota_failed"
 	ErrorCodeTenantQuotaExceeded        ErrorCode = "tenant_quota_exceeded"
+	// ErrorCodeTokenQuotaExhausted marks a per-TOKEN spending-cap rejection —
+	// distinct from ErrorCodeInsufficientUserQuota (per-USER wallet balance).
+	// The remedy differs: a token-cap 402 is fixed by editing the token's own
+	// remain_quota/unlimited_quota (token_service.go's guidance), not by a
+	// wallet top-up. See middleware.TokenAuth and PreConsumeQuota's
+	// ErrTokenQuotaInsufficient branch.
+	ErrorCodeTokenQuotaExhausted ErrorCode = "token_quota_exhausted"
 )
 
 type NewAPIError struct {
@@ -436,7 +443,8 @@ func RelayErrorType(err *NewAPIError) string {
 	}
 	switch err.errorCode {
 	// Caller quota/credit exhaustion — actionable, not an upstream fault.
-	case ErrorCodeInsufficientUserQuota, ErrorCodePreConsumeTokenQuotaFailed, ErrorCodeTenantQuotaExceeded:
+	case ErrorCodeInsufficientUserQuota, ErrorCodePreConsumeTokenQuotaFailed, ErrorCodeTenantQuotaExceeded,
+		ErrorCodeTokenQuotaExhausted:
 		return "insufficient_quota"
 	// newhub-internal / request-prep / routing / persistence failures: synthetic
 	// 500s (or client-prep 4xx) that must NOT count as upstream provider faults.
@@ -503,6 +511,62 @@ func ErrOptionWithTopupURL() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		raw, _ := json.Marshal(map[string]string{
 			"topup_url": common.IdentityPublicURL + walletTopupPath,
+		})
+		e.Metadata = json.RawMessage(raw)
+	}
+}
+
+// ErrOptionWithTokenQuotaHint attaches structured metadata for a per-TOKEN
+// spending-cap 402 (HTTP 402, ErrorCodeTokenQuotaExhausted): the token's own
+// remain_quota, NOT a wallet top-up link. Unlike ErrOptionWithTopupURL, a
+// wallet top-up cannot fix this state — the remedy is editing the token's
+// remain_quota or switching it to unlimited (see token_service.go's
+// "请先修改令牌剩余额度，或者设置为无限额度" guidance) — so this option
+// deliberately does NOT set a management URL (none exists yet) and does NOT
+// set Retry-After (no data source for "how long until it recovers").
+//
+// The field is named token_remain_quota_units (not token_remain_quota) and
+// carries the RAW internal quota integer (common.QuotaPerUnit units == 1
+// baseline USD), deliberately NOT the same unit as the human-readable
+// error.message text: PreConsumeQuota's ErrTokenQuotaInsufficient path
+// builds that message via logger.FormatQuota, which renders in whatever
+// currency operation_setting.GetQuotaDisplayType() is configured for (USD,
+// CNY, or a custom currency/rate) — a moving target this hint must not try
+// to match. Naming the raw-unit field explicitly (rather than reusing the
+// ambiguous "token_remain_quota" name) is the fix for a prior defect where
+// the same JSON response carried this integer under that name right next to
+// a currency-formatted number in .message, differing by ~5x10^5 with no unit
+// on either — see r2_token_quota_code_test.go / l3_token_quota_402_test.go.
+// remainQuota is NOT floored at zero: a negative value (e.g. from a
+// concurrent settlement draining the token between the read and this call)
+// is passed through as-is — see the negative-value case in
+// r2_token_quota_code_test.go.
+func ErrOptionWithTokenQuotaHint(remainQuota int) NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		raw, _ := json.Marshal(map[string]any{
+			"reason":                   "token_quota_exhausted",
+			"token_remain_quota_units": remainQuota,
+		})
+		e.Metadata = json.RawMessage(raw)
+	}
+}
+
+// ErrOptionWithTokenDisabledHint is the sibling of ErrOptionWithTokenQuotaHint
+// for the state repo.ValidateUserToken's Status==TokenStatusExhausted branch
+// can also produce: the token's Status flag is still "exhausted" but its
+// RemainQuota has since been raised above zero (or switched to unlimited)
+// without Status being flipped back to Enabled — handler/token.go's
+// app.ApplyTokenUpdate copies RemainQuota but never touches Status; the
+// enable transition only runs when the update request explicitly sets
+// status=Enabled (token.go:230/CanEnableToken). Calling this "token quota
+// exhausted" (ErrOptionWithTokenQuotaHint's reason) would contradict the very
+// remainQuota this metadata reports, so it uses a distinct reason string —
+// the remedy is re-enabling the token in the console, not editing its quota.
+func ErrOptionWithTokenDisabledHint(remainQuota int) NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		raw, _ := json.Marshal(map[string]any{
+			"reason":                   "token_disabled",
+			"token_remain_quota_units": remainQuota,
 		})
 		e.Metadata = json.RawMessage(raw)
 	}

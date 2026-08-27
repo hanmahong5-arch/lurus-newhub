@@ -32,8 +32,12 @@ func runCostSpike(userID int) *httptest.ResponseRecorder {
 	return w
 }
 
-// Breach: a window already over the hard limit must auto-disable the user and
-// return 429 — the core cost-spike safety behavior, exercised end-to-end.
+// Breach in ENFORCE mode (common.CostSpikeEnforce=true): a window already
+// over the hard limit must auto-disable the user and return 429 — the
+// legacy cost-spike safety behavior, exercised end-to-end. This is the only
+// end-to-end proof that enforcement still works once an operator flips
+// COST_SPIKE_ENFORCE back on; observe mode (the D-A6 default) is covered
+// separately in r4_cost_spike_enforce_test.go.
 func TestCostSpikeLimit_Breach_MiniRedis(t *testing.T) {
 	_, dbCleanup := setupCoverDB(t)
 	defer dbCleanup()
@@ -48,11 +52,14 @@ func TestCostSpikeLimit_Breach_MiniRedis(t *testing.T) {
 
 	prevEnabled := common.CostSpikeProtectionEnabled
 	prevLimit := common.CostSpikeHardLimitPer5Min
+	prevEnforce := common.CostSpikeEnforce
 	common.CostSpikeProtectionEnabled = true
 	common.CostSpikeHardLimitPer5Min = 50000
+	common.CostSpikeEnforce = true
 	defer func() {
 		common.CostSpikeProtectionEnabled = prevEnabled
 		common.CostSpikeHardLimitPer5Min = prevLimit
+		common.CostSpikeEnforce = prevEnforce
 	}()
 
 	// Seed a fresh window entry worth 60000 quota units (> 50000 limit).

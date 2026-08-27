@@ -254,11 +254,34 @@ var RateLimitKeyExpirationDuration = 20 * time.Minute
 
 // CostSpikeProtection — per-user 5-minute sliding window safety net. Catches
 // agent loops or runaway scripts that burn through quota faster than the
-// monthly cap can intervene. On breach, the user account is auto-disabled.
-// Knobs (env): COST_SPIKE_PROTECTION_ENABLED, COST_SPIKE_HARD_LIMIT_PER_5MIN.
+// monthly cap can intervene. On breach, the user account is auto-disabled —
+// but only when CostSpikeEnforce is true (see below).
+// Knobs (env): COST_SPIKE_PROTECTION_ENABLED, COST_SPIKE_HARD_LIMIT_PER_5MIN,
+// COST_SPIKE_ENFORCE.
 var (
 	CostSpikeProtectionEnabled = true
 	CostSpikeHardLimitPer5Min  = 50000 // quota units (~0.1 USD/5min at typical ratios)
+
+	// CostSpikeEnforce gates whether a breach actually disables the account
+	// and returns 429, versus just being logged/counted (observe mode).
+	// Defaults to false (observe-only). Reasons:
+	//   (i)   CostSpikeHardLimitPer5Min=50000 (~$0.10/5min) has never been
+	//         crossed by real traffic. The write side (quota.go
+	//         RecordCostSpikeWindow) only fires when
+	//         relayInfo.IdentityAccountID > 0, true today for 1 of 6 live
+	//         tokens — that one token's window does accumulate real data, it
+	//         has simply never crossed the threshold. The other 5/6 tokens'
+	//         windows stay permanently empty (RecordCostSpikeWindow never
+	//         fires for them at all), so flipping this flag back to enforce
+	//         would still do nothing for those 5/6 — that is a separate
+	//         write-side gap, not closed by this flag either way.
+	//   (ii)  The breach action is repo.DisableUserById — an auto-suspend
+	//         whose failure mode is a self-inflicted outage for a paying
+	//         customer, which is worse than a fuse that has never tripped.
+	//   (iii) Observe first, collect the real distribution, then decide on
+	//         enforcement. One env var (COST_SPIKE_ENFORCE=true) flips this
+	//         back on; fully reversible.
+	CostSpikeEnforce = false
 )
 
 const (

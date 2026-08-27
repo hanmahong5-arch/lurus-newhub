@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -261,11 +262,11 @@ func authHelper(c *gin.Context, minRole int) {
 	emailVal, _ := c.Get("email")
 	email, _ := emailVal.(string)
 	c.Set("tenant_context", &TenantContext{
-		TenantID:  tenantId,
-		UserID:    userId,
-		Email:     email,
-		Username:  usernameVal,
-		Roles:     []string{},
+		TenantID: tenantId,
+		UserID:   userId,
+		Email:    email,
+		Username: usernameVal,
+		Roles:    []string{},
 	})
 
 	c.Next()
@@ -321,7 +322,7 @@ func TokenAuth() func(c *gin.Context) {
 			}
 			c.Request.Header.Set("Authorization", "Bearer "+key)
 		}
-		// 检查path包含/v1/messages 或 /v1/models 
+		// 检查path包含/v1/messages 或 /v1/models
 		if strings.Contains(c.Request.URL.Path, "/v1/messages") || strings.Contains(c.Request.URL.Path, "/v1/models") {
 			anthropicKey := c.Request.Header.Get("x-api-key")
 			if anthropicKey != "" {
@@ -368,6 +369,65 @@ func TokenAuth() func(c *gin.Context) {
 			}
 		}
 		if err != nil {
+			if errors.Is(err, repo.ErrTokenQuotaExhausted) {
+				// This is the TOKEN's own spending cap (repo/token.go's
+				// ValidateUserToken guards at :182 Status==TokenStatusExhausted
+				// and :218 RemainQuota<=0), not the user's wallet balance — a
+				// top-up cannot fix it, only editing the token's remain_quota /
+				// unlimited_quota can (see token_service.go's "请先修改令牌剩余
+				// 额度，或者设置为无限额度" remedy). Route to the token-cap
+				// error code + hint instead of the wallet
+				// ErrorCodeInsufficientUserQuota/topup_url pair used for actual
+				// user-balance 402s elsewhere (pre_consume_quota.go).
+				//
+				// repo/token.go:182's Status==TokenStatusExhausted branch does
+				// NOT imply RemainQuota<=0 — an admin can raise remain_quota
+				// (app.ApplyTokenUpdate) without also re-enabling the token
+				// (that's a separate, explicit status=Enabled request,
+				// handler/token.go:230-239). In that reachable state the real
+				// remedy is re-enabling the token, not editing a quota that's
+				// already fine, so the hint (reason + wire message) must not
+				// claim "quota exhausted".
+				remainQuota := 0
+				quotaAvailable := false
+				if token != nil {
+					remainQuota = token.RemainQuota
+					// Single source of truth shared with repo.ValidateUserToken's
+					// own Status==TokenStatusExhausted branch — see
+					// repo.Token.QuotaAvailable(). Re-deriving this boolean here
+					// independently is exactly the drift a prior defect hit: the
+					// two copies had zero consistency lock between them, so an
+					// edit to one silently stopped matching the other.
+					quotaAvailable = token.QuotaAvailable()
+				}
+				hintOption := types.ErrOptionWithTokenQuotaHint(remainQuota)
+				auditReason := `{"reason":"token_quota_exhausted"}`
+				if quotaAvailable {
+					hintOption = types.ErrOptionWithTokenDisabledHint(remainQuota)
+					auditReason = `{"reason":"token_disabled"}`
+				}
+				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorToken, 0,
+					governance.ActionAuthFailed, governance.ResourceToken, 0,
+					auditReason))
+				// Deliberately NOT abortWithOpenAiMessage: that helper's tail call
+				// to logger.LogError (middleware/utils.go) would put every one of
+				// these 402s into stdout/DB error logs — a caller retrying against
+				// an exhausted token could otherwise flood them. The audit event
+				// above is the durable record; ErrOptionWithNoRecordErrorLog()
+				// already opts this NewAPIError out of the relay-side error log for
+				// the same reason: a caller retrying a doomed request should not be
+				// able to flood the error log, but MUST still leave a durable trail
+				// somewhere — the audit event above is that trail. This branch is an
+				// intentional exception, not an oversight; if that tradeoff needs
+				// revisiting, start from this comment (this repo has no doc/coord).
+				apiErr := types.NewErrorWithStatusCode(err, types.ErrorCodeTokenQuotaExhausted, http.StatusPaymentRequired,
+					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(), hintOption)
+				oaiErr := apiErr.ToOpenAIError()
+				oaiErr.Message = common.MessageWithRequestId(oaiErr.Message, c.GetString(common.RequestIdKey))
+				c.JSON(http.StatusPaymentRequired, gin.H{"error": oaiErr})
+				c.Abort()
+				return
+			}
 			governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorToken, 0,
 				governance.ActionAuthFailed, governance.ResourceToken, 0,
 				fmt.Sprintf(`{"reason":"invalid_token"}`)))

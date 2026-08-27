@@ -115,7 +115,23 @@ groups:
           service: lurus-hub
         annotations:
           summary: "cost-spike 429s firing at {{ printf \"%.2f\" $value }}/s"
-          description: "Multiple users hitting the 5-min quota guard simultaneously. Could be coordinated abuse OR a too-tight threshold."
+          description: "This expr counts EVERY 429 the gateway emits, not just cost-spike ones — the other producers are the per-token/per-model rate limits, the concurrency limit, the entitlement gate, secure-verification and TOTP, plus upstream 429s passed through by the relay. So a firing alert most likely means a rate-limit surge; treat it as such first. The cost-spike fuse can only contribute here when COST_SPIKE_ENFORCE=true, which is NOT the shipped default (see internal/pkg/common/constants.go) — under the default observe mode a cost-spike breach is counted, not blocked, so watch CostSpikeObservedRateHigh below for that signal instead."
+
+      # Observe-mode counterpart to CostSpikeBurstHigh: COST_SPIKE_ENFORCE
+      # defaults to false (internal/pkg/common/constants.go), so
+      # breaches are counted via lurus_gateway_cost_spike_breach_total but
+      # never 429 and CostSpikeBurstHigh above stays silent. Info severity,
+      # not paged — the actual consumer for "observe first, collect the real
+      # distribution" before enforce is flipped back on.
+      - alert: CostSpikeObservedRateHigh
+        expr: sum(rate(lurus_gateway_cost_spike_breach_total{action="observed"}[5m])) > 0.02
+        for: 10m
+        labels:
+          severity: info
+          service: lurus-hub
+        annotations:
+          summary: "cost-spike observed-mode breaches at {{ printf \"%.3f\" $value }}/s"
+          description: "COST_SPIKE_ENFORCE=false (observe mode): breaches are counted/logged but admitted, never blocked. Informational only — use this to gauge whether the threshold or enforce rollout needs revisiting."
 
       - alert: QuotaCapBurstHigh
         expr: sum(rate(lurus_gateway_requests_total{status="402"}[5m])) > 5
