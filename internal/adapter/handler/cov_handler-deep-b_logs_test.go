@@ -369,6 +369,12 @@ func indexByteDeepB(s string, b byte) int {
 	return -1
 }
 
+// TestGetLogClusterV2_PostgresBucketExpression covers two things at once:
+// the PG DATE_TRUNC/TO_CHAR bucket expression (the reason it lives in the
+// PG tier), and that the endpoint's `type = ?` predicate really reaches
+// PostgreSQL (not just SQLite, which the hermetic
+// TestGetLogClusterV2_CrossTenantIsolation test already covers) — the
+// endpoint reports ERROR clusters only.
 func TestGetLogClusterV2_PostgresBucketExpression(t *testing.T) {
 	pg := handlerDeepBSetupPGClusterRouter(t)
 
@@ -383,11 +389,22 @@ func TestGetLogClusterV2_PostgresBucketExpression(t *testing.T) {
 	base := time.Now().Truncate(time.Hour).Add(-time.Hour + time.Minute).Unix()
 	for i := 0; i < 3; i++ {
 		if err := pg.db.Create(&repo.Log{
-			UserId: pg.userID, TenantId: pg.tenantID, Type: repo.LogTypeConsume,
-			ModelName: "gpt-4o", Content: "", CreatedAt: base + int64(i)*60,
+			UserId: pg.userID, TenantId: pg.tenantID, Type: repo.LogTypeError,
+			ModelName: "gpt-4o", Content: "upstream timeout", CreatedAt: base + int64(i)*60,
 		}).Error; err != nil {
 			t.Fatalf("seed log %d: %v", i, err)
 		}
+	}
+
+	// Negative row: a successful (consume) call in the same tenant/bucket,
+	// under a distinct model name so a regression is visible as an extra
+	// item rather than a merged count. It must NOT appear below — if the
+	// `type = ?` predicate is ever dropped, len(items) becomes 2 instead of 1.
+	if err := pg.db.Create(&repo.Log{
+		UserId: pg.userID, TenantId: pg.tenantID, Type: repo.LogTypeConsume,
+		ModelName: "gpt-4o-consume-leak", Content: "", CreatedAt: base,
+	}).Error; err != nil {
+		t.Fatalf("seed negative consume log: %v", err)
 	}
 
 	for _, bucket := range []string{"hour", "day"} {
@@ -406,7 +423,7 @@ func TestGetLogClusterV2_PostgresBucketExpression(t *testing.T) {
 			data := resp["data"].(map[string]interface{})
 			items := data["items"].([]interface{})
 			if len(items) != 1 {
-				t.Fatalf("items = %d, want 1 aggregated row (3 same-model/same-bucket logs), body=%s", len(items), w.Body.String())
+				t.Fatalf("items = %d, want 1 aggregated row (3 same-model/same-bucket error logs; the negative consume-type row under a distinct model must not surface a 2nd item), body=%s", len(items), w.Body.String())
 			}
 			row := items[0].(map[string]interface{})
 			if row["count"].(float64) != 3 {

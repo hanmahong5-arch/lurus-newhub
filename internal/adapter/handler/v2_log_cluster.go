@@ -84,11 +84,18 @@ func GetLogClusterV2(c *gin.Context) {
 		Count     int64  `gorm:"column:count"`
 	}
 
+	// This endpoint reports ERROR clusters: without the `type = ?` predicate
+	// below, the query previously aggregated every log row regardless of
+	// type — including LogTypeConsume (successful, billed calls) — and
+	// labeled their Content as an "error_code". repo.LogTypeError (5) is the
+	// only type whose Content is actually an error string; see
+	// internal/adapter/repo/log.go:299 (the sole writer that sets Type:
+	// LogTypeError).
 	var rows []rawRow
 	err = repo.LOG_DB.Model(&repo.Log{}).
 		Select(selectSQL).
-		Where("tenant_id = ? AND user_id = ? AND created_at >= ? AND created_at <= ?",
-			tenantCtx.TenantID, tenantCtx.UserID, from, to).
+		Where("tenant_id = ? AND user_id = ? AND type = ? AND created_at >= ? AND created_at <= ?",
+			tenantCtx.TenantID, tenantCtx.UserID, repo.LogTypeError, from, to).
 		Group(groupSQL).
 		Order("count DESC").
 		Find(&rows).Error

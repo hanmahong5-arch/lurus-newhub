@@ -95,9 +95,12 @@ func TestUpdatePricingV2_CrossTenantIsolation(t *testing.T) {
 
 // ── Log Cluster ──────────────────────────────────────────────────────────────
 
-// TestGetLogClusterV2_CrossTenantIsolation: seeds logs for two tenants in the
-// same SQLite DB.  A user authenticated as tenant-A must only see tenant-A
-// logs even when tenant-B has logs for the same model.
+// TestGetLogClusterV2_CrossTenantIsolation: the endpoint reports ERROR
+// clusters (repo.LogTypeError rows only). This seeds error logs for two
+// tenants in the same SQLite DB, plus a same-tenant LogTypeConsume row that
+// must be excluded — a user authenticated as tenant-A must see only
+// tenant-A's *error* logs: neither tenant-B's errors nor tenant-A's own
+// successful (consume) calls.
 func TestGetLogClusterV2_CrossTenantIsolation(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
@@ -106,26 +109,38 @@ func TestGetLogClusterV2_CrossTenantIsolation(t *testing.T) {
 	tenantB := "cross-tenant-cluster-other"
 	now := time.Now().Unix()
 
-	// 3 consume logs for tenant-A.
+	// 3 error logs for tenant-A.
 	for i := 0; i < 3; i++ {
 		ctx.DB.Create(&repo.Log{
 			UserId:    ctx.NormalUser.Id,
 			TenantId:  tenantA,
-			Type:      repo.LogTypeConsume,
+			Type:      repo.LogTypeError,
 			ModelName: "gpt-4o",
-			Content:   "",
+			Content:   "upstream timeout",
 			CreatedAt: now - int64(i*60),
 		})
 	}
 
-	// 5 consume logs for tenant-B — must not appear in tenant-A's cluster view.
+	// 1 successful (consume) log for tenant-A — must NOT appear: this is the
+	// row that proves the `type = ?` predicate is really applied. If it were
+	// dropped, this row would join the count below and total would be 4, not 3.
+	ctx.DB.Create(&repo.Log{
+		UserId:    ctx.NormalUser.Id,
+		TenantId:  tenantA,
+		Type:      repo.LogTypeConsume,
+		ModelName: "gpt-4o",
+		Content:   "",
+		CreatedAt: now,
+	})
+
+	// 5 error logs for tenant-B — must not appear in tenant-A's cluster view.
 	for i := 0; i < 5; i++ {
 		ctx.DB.Create(&repo.Log{
 			UserId:    ctx.AdminUser.Id,
 			TenantId:  tenantB,
-			Type:      repo.LogTypeConsume,
+			Type:      repo.LogTypeError,
 			ModelName: "gpt-4o",
-			Content:   "",
+			Content:   "upstream timeout",
 			CreatedAt: now - int64(i*60),
 		})
 	}
@@ -139,15 +154,16 @@ func TestGetLogClusterV2_CrossTenantIsolation(t *testing.T) {
 	data := resp["data"].(map[string]interface{})
 	items := data["items"].([]interface{})
 
-	// Tenant-A has 3 logs for gpt-4o (single hour bucket).
-	// Total count across all returned items must be 3, not 8.
+	// Tenant-A has 3 error logs for gpt-4o (single hour bucket). Total count
+	// across all returned items must be 3 — not 4 (own consume row leaked,
+	// i.e. the type filter is missing) and not 8 (tenant-B leaked).
 	var totalCount float64
 	for _, it := range items {
 		row := it.(map[string]interface{})
 		totalCount += row["count"].(float64)
 	}
 	if totalCount != 3 {
-		t.Errorf("expected total count=3 (tenant-A only), got %.0f — tenant-B logs may have leaked", totalCount)
+		t.Errorf("expected total count=3 (tenant-A errors only), got %.0f — tenant-B logs and/or non-error logs may have leaked", totalCount)
 	}
 }
 

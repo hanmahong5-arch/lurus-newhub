@@ -8,14 +8,19 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 )
 
-// seedClusterLog inserts a log with explicit model_name, content (used as
-// error_code proxy in cluster aggregation), and created_at.
+// seedClusterLog inserts a log with explicit model_name, content (the real
+// error text — the cluster endpoint reports ERROR clusters, see
+// v2_log_cluster.go), and created_at. Type is LogTypeError, not
+// LogTypeConsume: the endpoint's `type = ?` predicate excludes everything
+// else (locked by TestGetLogClusterV2_CrossTenantIsolation in
+// v2_cross_tenant_isolation_test.go), so a LogTypeConsume seed here would
+// never surface in the response.
 func seedClusterLog(t *testing.T, ctx *V2TestContext, userID int, model, errorCode string, createdAt int64) {
 	t.Helper()
 	l := &repo.Log{
 		UserId:    userID,
 		TenantId:  ctx.TenantID,
-		Type:      repo.LogTypeConsume,
+		Type:      repo.LogTypeError,
 		ModelName: model,
 		Content:   errorCode,
 		CreatedAt: createdAt,
