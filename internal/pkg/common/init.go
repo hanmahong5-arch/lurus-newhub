@@ -103,6 +103,7 @@ func InitEnv() {
 
 	CostSpikeProtectionEnabled = GetEnvOrDefaultBool("COST_SPIKE_PROTECTION_ENABLED", true)
 	CostSpikeHardLimitPer5Min = GetEnvOrDefault("COST_SPIKE_HARD_LIMIT_PER_5MIN", 50000)
+	CostSpikeEnforce = GetEnvOrDefaultBool("COST_SPIKE_ENFORCE", false)
 
 	// Initialize string variables with GetEnvOrDefaultString
 	GeminiSafetySetting = GetEnvOrDefaultString("GEMINI_SAFETY_SETTING", "BLOCK_NONE")

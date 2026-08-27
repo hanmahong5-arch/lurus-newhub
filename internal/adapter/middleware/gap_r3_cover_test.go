@@ -174,9 +174,15 @@ func TestPoolBalanceCheck_DBError_FailsOpen(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// cost_spike.go: breach where auto-disable itself errors (:55) still 429
+// cost_spike.go: breach where auto-disable itself errors (:98) still 429
 // ---------------------------------------------------------------------------
 
+// TestCostSpikeLimit_Breach_DisableError_Still429 exercises ENFORCE mode
+// specifically (common.CostSpikeEnforce=true): the disable-fails path only
+// runs when enforce is on, since observe mode (the default since D-A6) never
+// calls repo.DisableUserById at all. Mirrors the prevEnforce snapshot/defer
+// pattern already used by TestCostSpikeLimit_Breach_MiniRedis in
+// cost_spike_cover_test.go.
 func TestCostSpikeLimit_Breach_DisableError_Still429(t *testing.T) {
 	db, dbCleanup := setupCoverDB(t)
 	defer dbCleanup()
@@ -186,11 +192,14 @@ func TestCostSpikeLimit_Breach_DisableError_Still429(t *testing.T) {
 
 	prevEnabled := common.CostSpikeProtectionEnabled
 	prevLimit := common.CostSpikeHardLimitPer5Min
+	prevEnforce := common.CostSpikeEnforce
 	common.CostSpikeProtectionEnabled = true
 	common.CostSpikeHardLimitPer5Min = 50000
+	common.CostSpikeEnforce = true
 	defer func() {
 		common.CostSpikeProtectionEnabled = prevEnabled
 		common.CostSpikeHardLimitPer5Min = prevLimit
+		common.CostSpikeEnforce = prevEnforce
 	}()
 
 	const uid = 553311
