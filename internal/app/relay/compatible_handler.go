@@ -364,7 +364,14 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 
 		quotaCalculateDecimal = promptQuota.Add(completionQuota).Mul(ratio)
 
-		if !ratio.IsZero() && quotaCalculateDecimal.LessThanOrEqual(decimal.Zero) {
+		// Predicate centralized in app.ChargeableInputNonZero (see that
+		// function's doc comment in internal/app/r5a_price_floor.go). This
+		// branch only ever runs under !UsePrice (guarded above), so this call
+		// always evaluates to modelRatio!=0 — dropping the groupRatio factor
+		// `ratio.IsZero()` used to carry. That is a deliberate cross-path
+		// consistency fix: it now matches app.PostClaudeConsumeQuota's
+		// equivalent pre-round guard, which never depended on groupRatio.
+		if app.ChargeableInputNonZero(relayInfo.PriceData.UsePrice, modelPrice, modelRatio) && quotaCalculateDecimal.LessThanOrEqual(decimal.Zero) {
 			quotaCalculateDecimal = decimal.NewFromInt(1)
 		}
 	} else {
@@ -403,7 +410,16 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	} else {
-		if !ratio.IsZero() && quota == 0 {
+		// This site DOES run under UsePrice (unlike the branch-scoped floor
+		// above): before this fix `!ratio.IsZero()` (ratio =
+		// dModelRatio.Mul(dGroupRatio), :249) was always false under UsePrice
+		// because ModelRatio is never assigned by helper.ModelPriceHelper's
+		// UsePrice branch — see internal/app/r5a_price_floor.go's header
+		// comment for the full chain. That made this floor dead exactly when
+		// a per-call-priced model's modelPrice*groupRatio*QuotaPerUnit rounded
+		// to 0: the call settled to quota==0, i.e. free, despite a real
+		// upstream response already served.
+		if app.ChargeableInputNonZero(relayInfo.PriceData.UsePrice, modelPrice, modelRatio) && quota == 0 {
 			quota = 1
 		}
 		repo.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
