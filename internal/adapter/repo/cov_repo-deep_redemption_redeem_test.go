@@ -208,21 +208,32 @@ func TestRedeem_TenantMismatchRejected(t *testing.T) {
 	}
 }
 
-// A code minted under the "default" tenant is a backward-compatible v1
-// global code — any tenant's user may redeem it, even though their
-// TenantId differs from the code's.
-func TestRedeem_DefaultTenantCodeRedeemableByAnyTenant(t *testing.T) {
+// G5a: a code minted under the "default" tenant used to be treated as a
+// backward-compatible v1 global code — redeemable by ANY tenant's user
+// regardless of a TenantId mismatch. Because "default" is also the
+// platform's own tenant (and the column's GORM default for any code
+// inserted without an explicit tenant), that wildcard let a cross-tenant
+// user redeem a code that was never minted for them: a genuine
+// authorization bypass, not a compatibility shim. This test used to assert
+// the bypass succeeded; it now pins the fixed, tenant-scoped rejection.
+func TestRedeem_DefaultTenantCodeRejectedForOtherTenant(t *testing.T) {
 	SetupTestDB(t)
 	u := repoDeepSeedRedeemUser(t, "some-other-tenant", 0)
 	code := repoDeepSeedRedemptionCode(t, "default", "code-global-"+common.GetUUID(), 400, common.RedemptionCodeStatusEnabled, 0)
 
-	if _, err := Redeem(code.Key, u.Id); err != nil {
-		t.Fatalf("a default-tenant code must be redeemable across tenants, got %v", err)
+	_, err := Redeem(code.Key, u.Id)
+	if err == nil || !strings.Contains(err.Error(), "不属于当前租户") {
+		t.Fatalf("a default-tenant code must NOT be redeemable by a different tenant's user, got %v", err)
 	}
 	var reloadedU User
 	DB.First(&reloadedU, u.Id)
-	if reloadedU.Quota != 400 {
-		t.Fatalf("cross-tenant redeem of a default-tenant code must credit quota, got %d", reloadedU.Quota)
+	if reloadedU.Quota != 0 {
+		t.Fatalf("rejected cross-tenant redeem must not credit quota, got %d", reloadedU.Quota)
+	}
+	var reloadedCode Redemption
+	DB.First(&reloadedCode, code.Id)
+	if reloadedCode.Status != common.RedemptionCodeStatusEnabled {
+		t.Fatalf("an unusable (rejected) code must not be burned — expected it to stay Enabled, got status=%d", reloadedCode.Status)
 	}
 }
 

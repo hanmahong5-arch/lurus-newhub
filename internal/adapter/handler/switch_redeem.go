@@ -13,6 +13,26 @@ import (
 	"gorm.io/gorm"
 )
 
+// switchRedeemAllowDefaultTenant is the G5a escape hatch. Read once at
+// startup (package-level var init) so a single env value governs the whole
+// process lifetime — no config-drift between requests.
+//
+// Off (default, secure): a redemption code whose TenantId is "default" (the
+// platform's own tenant, and also entity.Redemption's GORM column default
+// for any code created without an explicit tenant — see
+// internal/domain/entity/redemption.go:8) is refused by this ANONYMOUS,
+// unauthenticated endpoint instead of being treated as a globally-valid
+// activation code. Real activation codes belong to a reseller tenant (see
+// 2c-gui-switch/doc/reseller-onboarding.md's ProvisionResellerHub, which
+// takes a tenantSlug) — a code sitting in "default" reaching this endpoint
+// is the G5a defect, not a supported flow.
+//
+// On: byte-for-byte the pre-fix behavior for this specific gate (the code
+// path this variable guards is skipped entirely) — restores the old
+// behavior for an operator who confirms a live integration still depends on
+// it, without a code change.
+var switchRedeemAllowDefaultTenant = common.GetEnvOrDefaultBool("SWITCH_REDEEM_ALLOW_DEFAULT_TENANT", false)
+
 // ============================================================================
 // Switch Anonymous Redeem (Phase D Track 2.1)
 //
@@ -144,12 +164,36 @@ func SwitchRedeemAnonymous(c *gin.Context) {
 		return
 	}
 
-	// Step 2: resolve the tenant. Codes inserted by v1 have TenantId
-	// "default" — we honor that as a wildcard (matches repo.Redeem's
-	// tenant-isolation bypass) and don't surface a tenant_slug.
+	// Step 2: resolve the tenant.
 	tenantID := redemption.TenantId
 	if tenantID == "" {
 		tenantID = "default"
+	}
+
+	// G5a: a code with no tenant (or explicitly "default") is not a
+	// reseller activation code — reject before provisioning anything, so no
+	// anonymous account or token gets sedimented for a code that was never
+	// meant to be redeemed this way. The message is one of
+	// switchRedeemKnownErrors' sentinels (it's also what repo.Redeem now
+	// returns for the same underlying cross-tenant mismatch — see
+	// redemption.go's Redeem), so the two paths report identically.
+	//
+	// Client-side caveat, read 2026-08-27 in 2c-gui-switch
+	// internal/redemption/redeem.go's classifyRedeemFailure: this text
+	// matches none of its substring branches (已使用/used/redeemed, 过期/expire,
+	// 禁用/停用/账户/disabled/suspend/revoked, 不存在/not found/invalid), so it
+	// lands in the `default:` arm and is TYPED as ErrCodeNotFound. The user
+	// still reads this exact sentence — defaultMessage() passes a non-empty
+	// Hub message through verbatim — but any client logic that branches on
+	// the Kind rather than the text will treat a tenant mismatch as
+	// "code does not exist". Adding a "租户" branch on the client is the fix;
+	// until then, do not rely on the Kind here.
+	if tenantID == "default" && !switchRedeemAllowDefaultTenant {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "该兑换码不属于当前租户",
+		})
+		return
 	}
 
 	var tenantSlug string

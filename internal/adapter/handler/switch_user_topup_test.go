@@ -116,9 +116,18 @@ func (s *switchUserTopupTestCtx) seedToken(t *testing.T, override repo.Token) *r
 
 // seedRedemption inserts a redemption code directly (bypassing
 // repo.RedemptionInsert's tenant scoping, which isn't wired in this
-// harness). TenantId "default" matches repo.Redeem's v1-compat bypass so
-// the tenant-ownership check trivially passes against our tenant-less test
-// user.
+// harness).
+//
+// Comment corrected 2026-08-27: this used to say TenantId "default" passes
+// repo.Redeem's tenant check because of a "v1-compat bypass" for
+// "default"-tenant codes. That bypass has been removed (G5a — see
+// repo/redemption.go's Redeem, whose tenant equality check is now
+// unconditional). The reason these fixtures still pass is plainer: the
+// seeded user has no explicit TenantId, so entity.User's GORM
+// `default:'default'` column default gives it "default" too, and the check
+// is an equality that both sides satisfy. Seed a user with a different
+// TenantId and this same helper's codes will now be rejected — which is
+// exactly what TestSwitchUserTopup_CrossTenantCodeRejected below pins.
 func (s *switchUserTopupTestCtx) seedRedemption(t *testing.T, key string, quota int) *repo.Redemption {
 	t.Helper()
 	r := &repo.Redemption{
@@ -279,6 +288,71 @@ func TestSwitchUserTopup_UnknownCode(t *testing.T) {
 	}
 	if message == "" {
 		t.Errorf("expected non-empty message")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cross-tenant rejection (G5a). repo.Redeem's tenant equality check used to
+// be skipped whenever the code's TenantId was "default", so a
+// "default"-tenant code was redeemable by any user of any tenant. It is now
+// unconditional, and THIS route is one of the two callers that has no
+// pre-gate and no escape-hatch env var — SWITCH_REDEEM_ALLOW_DEFAULT_TENANT
+// only guards SwitchRedeemAnonymous. Nothing in the tree observed this
+// route's behavior change until this test.
+//
+// Note what "cross-tenant" means for the currently-shipping mint path: the
+// v1 admin console stamps every code it creates with TenantId "default"
+// (handler/redemption.go's AddRedemption falls back to "default" because
+// nothing in the /api/redemption chain sets a tenant_id context key), so
+// this is not an exotic case — it is what happens to any tenant user who
+// tries to redeem an admin-minted code.
+// ---------------------------------------------------------------------------
+
+func TestSwitchUserTopup_CrossTenantCodeRejected(t *testing.T) {
+	ctx := setupSwitchUserTopupTest(t)
+	tok := ctx.seedToken(t, repo.Token{})
+
+	// Move the token owner out of the "default" tenant. The code seeded below
+	// stays in "default" (seedRedemption's fixture, matching what the v1 admin
+	// console mints), so the two no longer match.
+	if err := ctx.db.Model(&repo.User{}).Where("id = ?", ctx.user.Id).
+		Update("tenant_id", "acme-reseller").Error; err != nil {
+		t.Fatalf("move user to another tenant: %v", err)
+	}
+
+	code := common.GetRandomString(32)
+	red := ctx.seedRedemption(t, code, 300_000)
+
+	w := ctx.post(t, "Bearer sk-"+tok.Key, map[string]string{"key": code})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (repo.Redeem must refuse a code from another tenant); body: %s", w.Code, w.Body.String())
+	}
+	success, message, quota := decodeTopupEnvelope(t, w)
+	if success {
+		t.Fatalf("success = true, want false — a 'default'-tenant code was credited to a user in tenant %q", "acme-reseller")
+	}
+	if !strings.Contains(message, "不属于当前租户") {
+		t.Errorf("message = %q, want the tenant-mismatch sentinel — a different rejection reason means the request failed before reaching the tenant check, which would make this test pass without observing it", message)
+	}
+	if quota != 0 {
+		t.Errorf("data.quota = %d, want 0", quota)
+	}
+
+	// The money half: no balance moved and the code is still spendable by its
+	// rightful tenant.
+	var refreshedUser repo.User
+	if err := ctx.db.Where("id = ?", ctx.user.Id).First(&refreshedUser).Error; err != nil {
+		t.Fatalf("refetch user: %v", err)
+	}
+	if refreshedUser.Quota != 500_000 {
+		t.Errorf("user quota = %d, want 500000 unchanged", refreshedUser.Quota)
+	}
+	var refreshedCode repo.Redemption
+	if err := ctx.db.Where("id = ?", red.Id).First(&refreshedCode).Error; err != nil {
+		t.Fatalf("refetch redemption: %v", err)
+	}
+	if refreshedCode.Status != common.RedemptionCodeStatusEnabled {
+		t.Errorf("redemption status = %d, want %d (a rejected attempt must not consume the code)", refreshedCode.Status, common.RedemptionCodeStatusEnabled)
 	}
 }
 
