@@ -94,6 +94,17 @@ func ShouldDisableChannel(channelType int, err *types.NewAPIError) bool {
 		return true
 	case "Arrearage":
 		return true
+	// token_quota_exhausted (R2/B2): auth.go and PreConsumeQuota both emit
+	// this error with type="new_api_error"/code="token_quota_exhausted" (see
+	// NewErrorWithStatusCode + ToOpenAIError's default branch, which always
+	// sets Type to the ErrorType constant, never the ErrorCode). A downstream
+	// newhub instance relaying through this one as an upstream channel
+	// therefore observes it here, not in the oaiErr.Type switch below — it
+	// belongs in this Code switch, not the Type one (verified by round-trip:
+	// marshal the real 402 body, re-parse via RelayErrorHandler, see
+	// r2_channel_token_quota_test.go).
+	case "token_quota_exhausted":
+		return true
 	}
 	switch oaiErr.Type {
 	case "insufficient_quota":

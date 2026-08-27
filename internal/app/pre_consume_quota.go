@@ -144,6 +144,23 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 			} else {
 				releasePlatformPreAuth(relayInfo)
 				relayInfo.PlatformPreAuthID = 0
+				if errors.Is(err, ErrTokenQuotaInsufficient) {
+					// Per-TOKEN spending cap (quota.go:645-649 — "not ledger
+					// state"), same remedy as the TokenAuth 402
+					// (middleware/auth.go): fix the token's own remain_quota
+					// or set it unlimited, not a wallet top-up.
+					remainQuota := 0
+					if tok, gErr := repo.GetTokenByKey(relayInfo.TokenKey, false); gErr == nil && tok != nil {
+						remainQuota = tok.RemainQuota
+					}
+					return types.NewErrorWithStatusCode(err, types.ErrorCodeTokenQuotaExhausted,
+						http.StatusPaymentRequired, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
+						types.ErrOptionWithTokenQuotaHint(remainQuota))
+				}
+				// A genuine DB/write failure here (not the per-key cap) is
+				// neither a token-cap nor a user-balance rejection — out of
+				// scope for B2, left byte-identical to its pre-existing shape
+				// (no topup_url, no token-cap hint).
 				return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed,
 					http.StatusPaymentRequired, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 			}

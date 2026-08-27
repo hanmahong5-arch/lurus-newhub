@@ -67,6 +67,18 @@ func (token *Token) Clean() {
 	token.Key = ""
 }
 
+// QuotaAvailable reports whether the token's OWN spending cap still has
+// room: an unlimited token always has room; a limited one needs
+// RemainQuota > 0. ValidateUserToken's Status==TokenStatusExhausted branch
+// below and middleware.TokenAuth's 402-hint branch both call this single
+// definition so "does this token still have quota" can never drift apart
+// between the two files — a prior defect had each site re-derive the same
+// boolean expression independently, and deleting one copy's UnlimitedQuota
+// check left the other package's tests fully green.
+func (token *Token) QuotaAvailable() bool {
+	return token.UnlimitedQuota || token.RemainQuota > 0
+}
+
 func (token *Token) GetIpLimits() []string {
 	// delete empty spaces
 	//split with \n
@@ -137,6 +149,30 @@ func SearchUserTokens(userId int, keyword string, token string) (tokens []*Token
 	return tokens, err
 }
 
+// ErrTokenQuotaExhausted is the sentinel for both quota-exhaustion paths in
+// ValidateUserToken (Status==TokenStatusExhausted and the live
+// !UnlimitedQuota && RemainQuota<=0 downgrade). Callers use errors.Is to
+// detect it and answer with 402 instead of the generic 401 the other
+// ValidateUserToken failures get — see middleware.TokenAuth. Both paths still
+// wrap this sentinel even when the Status==TokenStatusExhausted branch's
+// RemainQuota is actually positive (see the branch below) — the caller still
+// needs the 402 token-management guidance, just with a different message.
+var ErrTokenQuotaExhausted = errors.New("令牌不可用")
+
+// tokenExhaustedMessage builds the human-readable 402 guidance for a token
+// that has genuinely run out of its own spending cap (QuotaAvailable() ==
+// false). Both the Status==TokenStatusExhausted branch below and the live
+// RemainQuota<=0 downgrade call this single definition so the two call
+// sites can never render diverging text for what must be the identical
+// caller-facing state (TestL3ValidateUserToken_BothBranches_SameSuffix
+// pins the two outputs equal). remainQuota is embedded as a raw integer —
+// same figure/unit as the metadata's token_remain_quota_units — so the
+// wire message itself carries a number instead of forcing the caller to
+// parse metadata for one.
+func tokenExhaustedMessage(remainQuota int) error {
+	return fmt.Errorf("%w（该令牌可用额度已用尽 [剩余 %d]，请修改令牌剩余额度或设置为无限额度）", ErrTokenQuotaExhausted, remainQuota)
+}
+
 func ValidateUserToken(key string) (token *Token, err error) {
 	if key == "" {
 		return nil, errors.New("未提供令牌")
@@ -144,9 +180,25 @@ func ValidateUserToken(key string) (token *Token, err error) {
 	token, err = GetTokenByKey(key, false)
 	if err == nil {
 		if token.Status == common.TokenStatusExhausted {
-			keyPrefix := key[:3]
-			keySuffix := key[len(key)-3:]
-			return token, errors.New("该令牌额度已用尽 TokenStatusExhausted[sk-" + keyPrefix + "***" + keySuffix + "]")
+			// Status==TokenStatusExhausted does NOT imply RemainQuota<=0: an
+			// admin can raise remain_quota (handler/token.go's
+			// app.ApplyTokenUpdate copies RemainQuota from the update
+			// request) without also flipping Status back to Enabled —
+			// CanEnableToken/the enable transition only runs when the
+			// request body explicitly sets status=Enabled (token.go:230).
+			// Asserting "额度已用尽，请修改剩余额度" in that state is false
+			// (the metadata this error feeds — see
+			// types.ErrOptionWithTokenDisabledHint — already reports the
+			// raised remain_quota) and points the caller at a field that's
+			// already fine; the real remedy is re-enabling the token.
+			if token.QuotaAvailable() {
+				remainDesc := "无限额度"
+				if !token.UnlimitedQuota {
+					remainDesc = fmt.Sprintf("%d", token.RemainQuota)
+				}
+				return token, fmt.Errorf("%w（该令牌剩余额度充足 [%s]，但令牌当前处于已禁用状态，请前往令牌管理页重新启用）", ErrTokenQuotaExhausted, remainDesc)
+			}
+			return token, tokenExhaustedMessage(token.RemainQuota)
 		} else if token.Status == common.TokenStatusExpired {
 			return token, errors.New("该令牌已过期")
 		}
@@ -172,9 +224,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 					common.SysLog("failed to update token status" + err.Error())
 				}
 			}
-			keyPrefix := key[:3]
-			keySuffix := key[len(key)-3:]
-			return token, errors.New(fmt.Sprintf("[sk-%s***%s] 该令牌额度已用尽 !token.UnlimitedQuota && token.RemainQuota = %d", keyPrefix, keySuffix, token.RemainQuota))
+			return token, tokenExhaustedMessage(token.RemainQuota)
 		}
 		return token, nil
 	}

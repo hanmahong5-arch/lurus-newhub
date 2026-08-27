@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"crypto/rsa"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -27,8 +29,13 @@ func TestTokenAuth_MJSecretHeader(t *testing.T) {
 	}
 }
 
-// TokenAuth: an exhausted token is rejected with 401.
-func TestTokenAuth_ExhaustedToken_401(t *testing.T) {
+// TokenAuth: an exhausted token is rejected with 402 (a per-TOKEN spending-cap
+// rejection, D4/B2) carrying token-management guidance in its metadata — NOT
+// a wallet topup_url, since a wallet top-up cannot raise a token's own
+// remain_quota (see token_service.go's remedy: edit the token or set it
+// unlimited). The response also carries "(request id: ...)" like every other
+// TokenAuth rejection (B5).
+func TestTokenAuth_ExhaustedToken_402(t *testing.T) {
 	_, cleanup := setupCoverDB(t)
 	defer cleanup()
 	user := &repo.User{Username: "exh", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Email: "exh@local", TenantId: "default"}
@@ -45,8 +52,43 @@ func TestTokenAuth_ExhaustedToken_401(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer sk-"+key)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401 for exhausted token; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want 402 for exhausted token; body=%s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		Error struct {
+			Message  string          `json:"message"`
+			Code     string          `json:"code"`
+			Metadata json.RawMessage `json:"metadata"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal body: %v; body=%s", err, w.Body.String())
+	}
+	if body.Error.Code != "token_quota_exhausted" {
+		t.Errorf("error.code = %q, want %q; body=%s", body.Error.Code, "token_quota_exhausted", w.Body.String())
+	}
+	if !strings.Contains(body.Error.Message, "(request id:") {
+		t.Errorf("error.message = %q, want it to contain %q", body.Error.Message, "(request id:")
+	}
+
+	var meta struct {
+		Reason                string  `json:"reason"`
+		TokenRemainQuotaUnits *int    `json:"token_remain_quota_units"`
+		TopupURL              *string `json:"topup_url"`
+	}
+	if err := json.Unmarshal(body.Error.Metadata, &meta); err != nil {
+		t.Fatalf("unmarshal metadata: %v; metadata=%s", err, body.Error.Metadata)
+	}
+	if meta.Reason != "token_quota_exhausted" {
+		t.Errorf("metadata.reason = %q, want %q", meta.Reason, "token_quota_exhausted")
+	}
+	if meta.TokenRemainQuotaUnits == nil {
+		t.Errorf("metadata.token_remain_quota_units missing; metadata=%s", body.Error.Metadata)
+	}
+	if meta.TopupURL != nil {
+		t.Errorf("metadata must NOT carry topup_url for a per-token cap 402, got: %s", body.Error.Metadata)
 	}
 }
 
