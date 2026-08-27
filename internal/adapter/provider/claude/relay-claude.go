@@ -592,6 +592,17 @@ type ClaudeResponseInfo struct {
 	ResponseText strings.Builder
 	Usage        *dto.Usage
 	Done         bool
+	// WebSearchRequests is the G2 streaming counterpart of the non-streaming
+	// claude_web_search_requests context key set in HandleClaudeResponseData
+	// (below). Populated by FormatClaudeResponseInfo from
+	// ClaudeUsage.ServerToolUse.WebSearchRequests, which Anthropic may report
+	// on either the message_start or the message_delta event (grepped: no
+	// documented guarantee of which, so both arms below feed this field) —
+	// kept as a running max rather than last-write-wins so a later event that
+	// omits server_tool_use (a zero value, since the field is a pointer that
+	// may simply be nil on that event) cannot erase a count a prior event
+	// already reported.
+	WebSearchRequests int
 }
 
 func FormatClaudeResponseInfo(requestMode int, claudeResponse *dto.ClaudeResponse, oaiResponse *dto.ChatCompletionsStreamResponse, claudeInfo *ClaudeResponseInfo) bool {
@@ -613,6 +624,9 @@ func FormatClaudeResponseInfo(requestMode int, claudeResponse *dto.ClaudeRespons
 			claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Message.Usage.GetCacheCreation5mTokens()
 			claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Message.Usage.GetCacheCreation1hTokens()
 			claudeInfo.Usage.CompletionTokens = claudeResponse.Message.Usage.OutputTokens
+			if stu := claudeResponse.Message.Usage.ServerToolUse; stu != nil && stu.WebSearchRequests > claudeInfo.WebSearchRequests {
+				claudeInfo.WebSearchRequests = stu.WebSearchRequests
+			}
 		} else if claudeResponse.Type == "content_block_delta" {
 			if claudeResponse.Delta == nil {
 				return false
@@ -632,6 +646,9 @@ func FormatClaudeResponseInfo(requestMode int, claudeResponse *dto.ClaudeRespons
 				}
 				claudeInfo.Usage.CompletionTokens = usage.OutputTokens
 				claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
+				if stu := usage.ServerToolUse; stu != nil && stu.WebSearchRequests > claudeInfo.WebSearchRequests {
+					claudeInfo.WebSearchRequests = stu.WebSearchRequests
+				}
 			}
 
 			// 判断是否完整
@@ -703,6 +720,20 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 			}
 			claudeInfo.Usage = app.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, claudeInfo.Usage.PromptTokens)
 		}
+	}
+
+	// G2 fix: the streaming counterpart of HandleClaudeResponseData's
+	// c.Set("claude_web_search_requests", ...) below (non-streaming). Before
+	// this, ClaudeStreamHandler -> HandleStreamFinalResponse never set this
+	// key, so app.PostClaudeConsumeQuota / relay.postConsumeQuota always read
+	// claude_web_search_requests==0 for a streamed /v1/messages call and a
+	// Claude native web search tool call went unbilled whenever the client
+	// sent stream=true. claudeInfo.WebSearchRequests survives the
+	// claudeInfo.Usage reassignment above (it lives on ClaudeResponseInfo, not
+	// inside *dto.Usage) so this still fires on the incomplete-usage fallback
+	// path too.
+	if claudeInfo.WebSearchRequests > 0 {
+		c.Set("claude_web_search_requests", claudeInfo.WebSearchRequests)
 	}
 
 	if info.RelayFormat == types.RelayFormatClaude {
