@@ -28,8 +28,16 @@ var USDExchangeRate float64 = 7.3 // 1 USD = X CNY
 var Price float64 = 2.0           // unit price
 
 // 默认配置
+//
+// DocsLink defaults to empty, not the upstream open-source project's docs
+// site: this codebase serves a commercial production domain (hub.lurus.cn),
+// and surfacing "https://docs.newapi.pro" there is a white-label leak — the
+// frontend (useNavigation.js, Home/index.jsx) already treats an empty
+// DocsLink as "hide the Docs entry", so leaving it blank degrades cleanly
+// instead of rendering a broken/wrong link. An admin can still set a real
+// URL from Settings > General.
 var generalSetting = GeneralSetting{
-	DocsLink:                   "https://docs.newapi.pro",
+	DocsLink:                   "",
 	PingIntervalEnabled:        false,
 	PingIntervalSeconds:        60,
 	QuotaDisplayType:           QuotaDisplayTypeUSD,
