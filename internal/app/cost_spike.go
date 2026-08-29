@@ -74,7 +74,16 @@ func RecordCostSpikeWindow(userID, tokens int) {
 	if common.RDB == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	// 3s, not 1s: measured live 2026-08-29 — the first write after an idle
+	// period blocked for the full 1s budget and died on context-deadline
+	// ("cost_spike record failed ... context deadline exceeded") while the
+	// very next command on a sibling goroutine succeeded instantly. A cold
+	// pooled connection pays dial + DNS that 1s does not absorb; on a
+	// low-traffic gateway that makes the FIRST settlement after every idle
+	// gap the one most likely to vanish from the window. Same bump as
+	// bizTPMRedisTimeout (business_tpm.go), which failed identically in the
+	// same live session.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	now := time.Now().UnixMilli()

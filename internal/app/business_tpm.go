@@ -49,8 +49,15 @@ const (
 	// matches the middleware's RPM ZSET expiry.
 	bizTPMTTL = BizTPMWindow + 10*time.Second
 	// bizTPMRedisTimeout bounds the async record write (RecordCostSpikeWindow
-	// uses the same 1s budget).
-	bizTPMRedisTimeout = time.Second
+	// uses the same budget). 3s, not 1s: measured live 2026-08-29 — after an
+	// idle gap the first token-dimension write blocked for the full 1s and
+	// died on context-deadline ("business tpm record failed for
+	// rl:biz:tpm:tok:1: context deadline exceeded") while the tenant-dimension
+	// write on the SAME goroutine, issued 1ms later, succeeded instantly. The
+	// 1s was being spent establishing a cold pooled connection (dial + DNS),
+	// not talking to Redis. See cost_spike.go for the identical failure and
+	// the shared rationale.
+	bizTPMRedisTimeout = 3 * time.Second
 )
 
 // BizTPMNow is the window clock. A variable (like AsyncGo above and the
