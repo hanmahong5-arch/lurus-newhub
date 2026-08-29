@@ -370,6 +370,55 @@ func (token *Token) RotateKeyWithTimestamp(newKey string, rotatedAt int64) error
 	return token.rotateKey(newKey, map[string]interface{}{"key": newKey, "rotated_at": rotatedAt})
 }
 
+// ErrRotationRaceLost is returned by RotateKeyWithTimestampCAS when the
+// compare-and-swap guard found that another writer already advanced the
+// token's rotated_at past the observed baseline — i.e. this rotation lost the
+// race and must NOT rotate again. Callers treat it as a benign skip, not a
+// failure: the key was already rotated by the winning writer.
+var ErrRotationRaceLost = errors.New("token rotation race lost: rotated_at advanced concurrently")
+
+// RotateKeyWithTimestampCAS is the concurrency-safe variant of
+// RotateKeyWithTimestamp. It only rotates if the token's persisted rotated_at
+// still equals prevRotatedAt (the value the caller observed before deciding
+// the token was due; pass the raw persisted RotatedAt — which is 0 for a
+// never-rotated token — not the CreatedTime fallback used for due-ness). The
+// UPDATE carries that guard in its WHERE clause, so two racing rotators —
+// e.g. the scheduled leader task and a manual /internal/admin/rotate-due-tokens
+// trigger, or a brief split-brain where two replicas both believe they are
+// leader — cannot both rotate the same token: the conditional UPDATE
+// serializes them and the loser sees RowsAffected == 0.
+//
+// On a successful swap the in-memory token.Key / token.RotatedAt are advanced
+// and the cache is refreshed (same as rotateKey). On a lost race nothing is
+// mutated and the old cache entry is left intact (the winner refreshed it).
+func (token *Token) RotateKeyWithTimestampCAS(newKey string, prevRotatedAt, newRotatedAt int64) error {
+	oldKey := token.Key
+	result := DB.Model(&Token{}).
+		Where("id = ? AND rotated_at = ?", token.Id, prevRotatedAt).
+		Updates(map[string]interface{}{"key": newKey, "rotated_at": newRotatedAt})
+	if result.Error != nil {
+		return fmt.Errorf("rotate token CAS update: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		// Either the row vanished or rotated_at no longer matches the baseline:
+		// a concurrent writer won. Do not mutate in-memory state or cache.
+		return ErrRotationRaceLost
+	}
+
+	// CAS won: advance in-memory state and refresh the cache for old+new key.
+	token.Key = newKey
+	token.RotatedAt = newRotatedAt
+	if shouldUpdateRedis(true, nil) {
+		gopool.Go(func() {
+			_ = cacheDeleteToken(oldKey)
+			if e := cacheSetToken(*token); e != nil {
+				common.SysLog("failed to update token cache after CAS rotation: " + e.Error())
+			}
+		})
+	}
+	return nil
+}
+
 // rotateKey applies the given column updates while swapping token.Key in place,
 // then invalidates the token cache for the old and new key. Shared by RotateKey
 // and RotateKeyWithTimestamp so the cache-invalidation logic lives in one place.
