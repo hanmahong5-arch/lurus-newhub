@@ -44,7 +44,9 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	app.IOCopyBytesGracefully(c, resp, responseBody)
 
 	// compute usage
-	usage := dto.Usage{}
+	// OpenAI-wire semantics: the responses API's input_tokens INCLUDES
+	// input_tokens_details.cached_tokens (see dto.Usage.PromptTokensIncludeCached).
+	usage := dto.Usage{PromptTokensIncludeCached: true}
 	if responsesResponse.Usage != nil {
 		usage.PromptTokens = responsesResponse.Usage.InputTokens
 		usage.CompletionTokens = responsesResponse.Usage.OutputTokens
@@ -76,7 +78,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	defer app.CloseResponseBodyGracefully(resp)
 
-	var usage = &dto.Usage{}
+	// OpenAI-wire semantics, same as the non-stream handler above.
+	var usage = &dto.Usage{PromptTokensIncludeCached: true}
 	var responseTextBuilder strings.Builder
 
 	helper.StreamScannerHandler(c, resp, info, func(data string) bool {

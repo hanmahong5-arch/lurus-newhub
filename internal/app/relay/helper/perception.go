@@ -50,10 +50,16 @@ func EstimateQuotaFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 
 	ratio := dModelRatio.Mul(dGroupRatio)
 
+	// Prompt-base deduction keyed on the wire flag stamped at the usage parse
+	// site (dto.Usage.PromptTokensIncludeCached), matching the real billing in
+	// compatible_handler.go/postConsumeQuota — this estimate used to guess
+	// from ChannelType and disagreed with the actual charge on exactly the
+	// combinations where that guess is wrong (Claude wire on non-Anthropic
+	// channels, OpenAI wire billed via the Claude path).
 	baseTokens := dPromptTokens
 	var cachedTokensWithRatio decimal.Decimal
 	if !dCacheTokens.IsZero() {
-		if relayInfo.ChannelMeta != nil && relayInfo.ChannelType != constant.ChannelTypeAnthropic {
+		if usage.PromptTokensIncludeCached {
 			baseTokens = baseTokens.Sub(dCacheTokens)
 		}
 		cachedTokensWithRatio = dCacheTokens.Mul(dCacheRatio)
@@ -61,7 +67,7 @@ func EstimateQuotaFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 
 	var cachedCreationWithRatio decimal.Decimal
 	if !dCachedCreationTokens.IsZero() {
-		if relayInfo.ChannelMeta != nil && relayInfo.ChannelType != constant.ChannelTypeAnthropic {
+		if usage.PromptTokensIncludeCached {
 			baseTokens = baseTokens.Sub(dCachedCreationTokens)
 		}
 		cachedCreationWithRatio = dCachedCreationTokens.Mul(dCachedCreationRatio)
