@@ -647,6 +647,14 @@ func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, res
 		return
 	}
 
+	// Every caller of this function parsed the usage off an OpenAI-wire
+	// response in this package: prompt_tokens INCLUDES cached_tokens (the
+	// vendor remaps below fill CachedTokens from DeepSeek/Zhipu/Moonshot
+	// fields whose prompt_tokens likewise count hits — DeepSeek documents
+	// prompt_tokens = cache hit + miss). The settlement paths key the
+	// prompt-base deduction on this flag; see dto.Usage.PromptTokensIncludeCached.
+	usage.PromptTokensIncludeCached = true
+
 	switch info.ChannelType {
 	case constant.ChannelTypeDeepSeek:
 		if usage.PromptTokensDetails.CachedTokens == 0 && usage.PromptCacheHitTokens != 0 {

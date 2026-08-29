@@ -718,7 +718,17 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 			if common.DebugEnabled {
 				common.SysLog("claude response usage is not complete, maybe upstream error")
 			}
+			// ResponseText2Usage builds a FRESH usage (prompt kept, completion
+			// re-estimated from the streamed text) — carry over the cache
+			// dimensions already parsed from message_start, or this fallback
+			// silently zeroes them and the settlement charges neither the
+			// cache-read term nor the (1.25x/2x-priced) cache-creation terms.
+			prev := claudeInfo.Usage
 			claudeInfo.Usage = app.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, claudeInfo.Usage.PromptTokens)
+			claudeInfo.Usage.PromptTokensDetails.CachedTokens = prev.PromptTokensDetails.CachedTokens
+			claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = prev.PromptTokensDetails.CachedCreationTokens
+			claudeInfo.Usage.ClaudeCacheCreation5mTokens = prev.ClaudeCacheCreation5mTokens
+			claudeInfo.Usage.ClaudeCacheCreation1hTokens = prev.ClaudeCacheCreation1hTokens
 		}
 	}
 

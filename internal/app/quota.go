@@ -304,13 +304,29 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	cacheCreationTokens5m := usage.ClaudeCacheCreation5mTokens
 	cacheCreationTokens1h := usage.ClaudeCacheCreation1hTokens
 
-	if relayInfo.ChannelType == constant.ChannelTypeOpenRouter {
+	// Prompt-base deduction keyed on the WIRE SEMANTICS stamped where the
+	// usage was parsed (dto.Usage.PromptTokensIncludeCached), not on channel
+	// type: the old gate here was `ChannelType == OpenRouter`, which missed
+	// every other OpenAI-wire channel serving /v1/messages (OpenAI, Azure,
+	// Ollama, Xinference, SiliconFlow, Perplexity, BaiduV2, VolcEngine on a
+	// non-special base — all funnel through provider/openai/relay-openai.go,
+	// whose prompt_tokens INCLUDES cached_tokens). On those, cached tokens
+	// were billed at full input price PLUS CacheRatio — 11x the intended
+	// price on a fully cached prompt at CacheRatio=0.1. Anthropic-wire
+	// channels (anthropic/aws/vertex-claude and the ali/zhipu_4v/deepseek/
+	// moonshot Claude passthroughs) leave the flag false: their input_tokens
+	// already exclude cache reads/writes, so no deduction — unchanged.
+	if usage.PromptTokensIncludeCached {
 		promptTokens -= cacheTokens
-		isUsingCustomSettings := relayInfo.PriceData.UsePrice || hasCustomModelRatio(modelName, relayInfo.PriceData.ModelRatio)
-		if cacheCreationTokens == 0 && relayInfo.PriceData.CacheCreationRatio != 1 && usage.Cost != 0 && !isUsingCustomSettings {
-			maybeCacheCreationTokens := CalcOpenRouterCacheCreateTokens(*usage, relayInfo.PriceData)
-			if maybeCacheCreationTokens >= 0 && promptTokens >= maybeCacheCreationTokens {
-				cacheCreationTokens = maybeCacheCreationTokens
+		// The cost-based cache-creation inference stays OpenRouter-only: it
+		// reads OpenRouter's proprietary usage.Cost field.
+		if relayInfo.ChannelType == constant.ChannelTypeOpenRouter {
+			isUsingCustomSettings := relayInfo.PriceData.UsePrice || hasCustomModelRatio(modelName, relayInfo.PriceData.ModelRatio)
+			if cacheCreationTokens == 0 && relayInfo.PriceData.CacheCreationRatio != 1 && usage.Cost != 0 && !isUsingCustomSettings {
+				maybeCacheCreationTokens := CalcOpenRouterCacheCreateTokens(*usage, relayInfo.PriceData)
+				if maybeCacheCreationTokens >= 0 && promptTokens >= maybeCacheCreationTokens {
+					cacheCreationTokens = maybeCacheCreationTokens
+				}
 			}
 		}
 		promptTokens -= cacheCreationTokens
@@ -471,20 +487,20 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 // git history) and lost precision (see the r1_quota_decimal_parity_test.go
 // exemplar: modelRatio=0.125, groupRatio=2.5, completionRatio=0.7, prompt=4,
 // completion=24 summed to 6.49999999999999911182 in float64, one Round(0)
-// step away from a wrong answer). NOT a term-for-term match with the
-// OpenAI-compatible sibling formula in relay/compatible_handler.go (lines
-// 249-373): both accumulate in decimal end-to-end, and both bucket 5m/1h
-// cache-creation tokens plus the completion term the same shape, but the
-// prompt-base deduction rule differs — compatible_handler.go:317-327
-// subtracts cacheTokens/cachedCreationTokens from baseTokens for every
-// non-Anthropic channel (ali/zhipu_4v/moonshot/deepseek/gemini/aws all
-// support RelayFormatClaude and hit that subtraction), while this function's
-// caller (PostClaudeConsumeQuota) only ever runs the equivalent subtraction
-// for ChannelTypeOpenRouter. The two paths only actually agree on an
-// Anthropic-native channel. Extracted to a pure function (no gin.Context, no
-// DB) so a fixed-input grid test can diff it against an independently
-// hand-typed decimal expression without sharing code with the thing under
-// test.
+// step away from a wrong answer). Since 2026-08-29 the prompt-base deduction
+// in BOTH this function's caller (PostClaudeConsumeQuota) and the
+// OpenAI-compatible sibling (relay/compatible_handler.go postConsumeQuota) is
+// keyed on the wire flag stamped at the usage parse site
+// (dto.Usage.PromptTokensIncludeCached) — the two paths now apply the same
+// deduction rule for the same usage. (The earlier version of this comment
+// claimed ali/zhipu_4v/moonshot/deepseek/gemini/aws "hit that subtraction"
+// when serving RelayFormatClaude — traced 2026-08-29, that was wrong: the
+// dispatch in handler/relay.go switches on relay format only, so every
+// /v1/messages request settles here regardless of channel, and those
+// channels' Claude passthroughs produce Anthropic-wire usage anyway.)
+// Extracted to a pure function (no gin.Context, no DB) so a fixed-input grid
+// test can diff it against an independently hand-typed decimal expression
+// without sharing code with the thing under test.
 func claudeCalculateQuota(usePrice bool,
 	promptTokens, cacheTokens, cacheCreationTokens5m, cacheCreationTokens1h, remainingCacheCreationTokens, completionTokens int,
 	cacheRatio, cacheCreationRatio5m, cacheCreationRatio1h, cacheCreationRatio, completionRatio, groupRatio, modelRatio, modelPrice float64,

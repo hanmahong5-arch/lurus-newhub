@@ -312,18 +312,23 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	var audioInputPrice float64
 	if !relayInfo.PriceData.UsePrice {
 		baseTokens := dPromptTokens
-		// 减去 cached tokens
-		// Anthropic API 的 input_tokens 已经不包含缓存 tokens，不需要减去
-		// OpenAI/OpenRouter 等 API 的 prompt_tokens 包含缓存 tokens，需要减去
+		// 减去 cached tokens——判据是 usage 解析点打的 wire 标
+		// (dto.Usage.PromptTokensIncludeCached),不再猜渠道类型:
+		// OpenAI-wire 的 prompt_tokens 包含缓存 tokens,需要减去;
+		// Anthropic-wire 的 input_tokens 本就不含缓存。旧判据
+		// `ChannelType != Anthropic` 对「OpenAI 格式打在 aws/vertex-claude
+		// 渠道」是错的——那些 usage 走 claude wire(不含缓存),照减会把底数
+		// 减成负数、整单被 floor 到 1(实际免单)。cache-creation 同理:它只在
+		// claude wire 上非零,而那时恰不该减,旧代码的这条减法执行必错。
 		var cachedTokensWithRatio decimal.Decimal
 		if !dCacheTokens.IsZero() {
-			if relayInfo.ChannelType != constant.ChannelTypeAnthropic {
+			if usage.PromptTokensIncludeCached {
 				baseTokens = baseTokens.Sub(dCacheTokens)
 			}
 			cachedTokensWithRatio = dCacheTokens.Mul(dCacheRatio)
 		}
 		if !dCachedCreationTokens.IsZero() {
-			if relayInfo.ChannelType != constant.ChannelTypeAnthropic {
+			if usage.PromptTokensIncludeCached {
 				baseTokens = baseTokens.Sub(dCachedCreationTokens)
 			}
 		}

@@ -225,6 +225,35 @@ type Usage struct {
 	TotalTokens          int `json:"total_tokens"`
 	PromptCacheHitTokens int `json:"prompt_cache_hit_tokens,omitempty"`
 
+	// PromptTokensIncludeCached records the WIRE SEMANTICS of PromptTokens with
+	// respect to PromptTokensDetails.CachedTokens, stamped at the point the
+	// usage is parsed off the upstream response — the only place the wire is
+	// known for certain:
+	//
+	//   true  — OpenAI-wire: prompt_tokens INCLUDES cached_tokens
+	//           (OpenAI, Azure, OpenRouter, DeepSeek hit+miss, Zhipu, Moonshot,
+	//           and every other adaptor that funnels through
+	//           provider/openai/relay-openai.go). Billing must subtract the
+	//           cached tokens from the prompt base before pricing them at
+	//           CacheRatio.
+	//   false — Anthropic-wire (input_tokens EXCLUDES cache read/creation:
+	//           provider/claude/relay-claude.go, reached natively and via
+	//           aws/vertex/ali/zhipu_4v/deepseek/moonshot Claude-format
+	//           passthroughs) and Gemini-wire (CachedTokens never populated).
+	//           No subtraction.
+	//
+	// Both settlement paths (app.PostClaudeConsumeQuota and
+	// relay/compatible_handler.go postConsumeQuota) key the prompt-base
+	// deduction on THIS flag. They used to guess it from ChannelType, which is
+	// unknowable there: the same channel type serves both wires depending on
+	// relay format (measured 2026-08-29: Claude-format on an OpenAI-wire
+	// channel over-charged cached tokens at full input price PLUS cache price —
+	// 11x on a fully cached prompt at CacheRatio=0.1 — while OpenAI-format on
+	// aws/vertex-claude subtracted tokens the wire never included, under-
+	// charging to the point of a floored-to-1 free call).
+	// json:"-": trust only our own parse sites, never the upstream body.
+	PromptTokensIncludeCached bool `json:"-"`
+
 	PromptTokensDetails    InputTokenDetails  `json:"prompt_tokens_details"`
 	CompletionTokenDetails OutputTokenDetails `json:"completion_tokens_details"`
 	InputTokens            int                `json:"input_tokens"`

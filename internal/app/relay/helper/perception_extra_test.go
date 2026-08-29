@@ -14,8 +14,10 @@ import (
 )
 
 func TestEstimateQuotaFromUsage_CacheImageCreationTokens(t *testing.T) {
-	// Non-anthropic channel: cached/image/creation tokens are subtracted from the
-	// base and re-added with their own ratios.
+	// OpenAI-wire usage (PromptTokensIncludeCached, stamped at the parse site
+	// since 2026-08-29 — the deduction keys on the flag, not ChannelType):
+	// cached/image/creation tokens are subtracted from the base and re-added
+	// with their own ratios.
 	info := &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI},
 		PriceData: types.PriceData{
@@ -28,8 +30,9 @@ func TestEstimateQuotaFromUsage_CacheImageCreationTokens(t *testing.T) {
 		},
 	}
 	usage := &dto.Usage{
-		PromptTokens:     100,
-		CompletionTokens: 10,
+		PromptTokens:              100,
+		CompletionTokens:          10,
+		PromptTokensIncludeCached: true,
 		PromptTokensDetails: dto.InputTokenDetails{
 			CachedTokens:         20,
 			ImageTokens:          10,

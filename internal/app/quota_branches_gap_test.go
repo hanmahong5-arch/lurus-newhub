@@ -32,6 +32,10 @@ func TestPostClaudeConsumeQuota_OpenRouterCacheTiers(t *testing.T) {
 		PromptTokens:     1000,
 		CompletionTokens: 100,
 		TotalTokens:      1100,
+		// Production OpenRouter usage is parsed by provider/openai/
+		// relay-openai.go, which stamps the OpenAI-wire flag — the prompt-base
+		// deduction now keys on it instead of ChannelType (2026-08-29).
+		PromptTokensIncludeCached: true,
 		PromptTokensDetails: dto.InputTokenDetails{
 			CachedTokens:         200,
 			CachedCreationTokens: 300,
