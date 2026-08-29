@@ -110,8 +110,17 @@ func TestManager_MultipleTasksShutdown(t *testing.T) {
 		}
 	}
 
-	// Let them run
-	time.Sleep(30 * time.Millisecond)
+	// Let them run: wait until every task has ticked at least once instead of
+	// sleeping a fixed interval — under full-suite CPU load a fixed 30ms can
+	// elapse before a single 10ms ticker fires, failing all five "should have
+	// run" assertions below at once (observed 2026-08-29 on a loaded
+	// `go test ./...` run; passes in isolation every time).
+	deadline := time.Now().Add(2 * time.Second)
+	for _, task := range tasks {
+		for task.runCount.Load() == 0 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 
 	// Shutdown
 	cancel()
