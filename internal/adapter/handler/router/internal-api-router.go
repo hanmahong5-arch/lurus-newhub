@@ -154,6 +154,7 @@ func SetInternalApiRouter(router *gin.Engine) {
 	{
 		adminGroup.POST("/backfill-token-accounts", handler.InternalBackfillTokenAccountIDs)
 		adminGroup.GET("/convergence-stats", handler.InternalConvergenceStats)
+		adminGroup.POST("/rotate-due-tokens", handler.InternalRotateDueTokens)
 	}
 
 	// Provisioning API — Reseller sub-tenant key issuance / revocation

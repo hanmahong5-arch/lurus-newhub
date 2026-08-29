@@ -107,28 +107,52 @@ type LeaderTask struct {
 	interval time.Duration
 	fn       func(ctx context.Context) error
 	isLeader func() bool
+	// poll is how often Run re-checks leadership between work intervals so a
+	// freshly acquired lease triggers a catch-up run promptly instead of after
+	// a full interval. min(interval, leaderTaskPollInterval); a field only so
+	// tests can shrink it.
+	poll time.Duration
 }
 
-// NewLeaderTask creates a leader-gated ticker task. fn runs at most once per
-// interval, and only on the current leader.
+// leaderTaskPollInterval bounds how long a new leader waits before its
+// catch-up run. 30s is well under the shortest production task interval and
+// far above the lease renewal cadence, so the edge is seen promptly without
+// busy-polling.
+const leaderTaskPollInterval = 30 * time.Second
+
+// NewLeaderTask creates a leader-gated periodic task. fn runs promptly when
+// this process first becomes leader (catching up work a predecessor may never
+// have reached — with a 24h interval and deployments more frequent than that,
+// a ticker-only task could otherwise never fire), then at most once per
+// interval while leadership is held. fn must therefore be self-gating /
+// idempotent about what is actually due; every current user already is.
 func NewLeaderTask(name string, interval time.Duration, fn func(ctx context.Context) error) *LeaderTask {
+	poll := interval
+	if poll > leaderTaskPollInterval {
+		poll = leaderTaskPollInterval
+	}
 	return &LeaderTask{
 		name:     name,
 		interval: interval,
 		fn:       fn,
 		isLeader: common.IsLeader,
+		poll:     poll,
 	}
 }
 
 // Name implements lifecycle.Task.
 func (t *LeaderTask) Name() string { return t.name }
 
-// Run implements lifecycle.Task: ticks on the interval, skipping work whenever
-// this node is not the leader. fn errors are swallowed so a single failure
-// does not stop the ticker.
+// Run implements lifecycle.Task: polls leadership and runs fn when this node
+// is leader and either has never run fn in this process or the interval has
+// elapsed since the last run. Regaining leadership within an interval does
+// NOT re-run fn (lastRun survives the flap), preserving the at-most-once-per-
+// interval contract per process; a failover to a fresh process runs promptly
+// because its lastRun is zero.
 func (t *LeaderTask) Run(ctx context.Context) error {
-	ticker := time.NewTicker(t.interval)
+	ticker := time.NewTicker(t.poll)
 	defer ticker.Stop()
+	var lastRun time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -137,8 +161,12 @@ func (t *LeaderTask) Run(ctx context.Context) error {
 			if !t.isLeader() {
 				continue
 			}
+			if !lastRun.IsZero() && time.Since(lastRun) < t.interval {
+				continue
+			}
+			lastRun = time.Now()
 			// fn errors are swallowed so a single failure does not stop the
-			// ticker; fn itself is responsible for logging.
+			// loop; fn itself is responsible for logging.
 			_ = t.fn(ctx)
 		}
 	}

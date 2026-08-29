@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -86,7 +87,18 @@ func RotateDueTokens(ctx context.Context, now int64, send EmailSender) (int, err
 			common.SysError(fmt.Sprintf("secret rotation: generate key for token %d: %v", token.Id, err))
 			continue
 		}
-		if err := token.RotateKeyWithTimestamp(newKey, now); err != nil {
+		// CAS on the persisted rotated_at (NOT the CreatedTime fallback): if a
+		// concurrent rotator — the manual /internal/admin/rotate-due-tokens
+		// trigger, or a second replica during a brief leadership split-brain —
+		// already rotated this token, the guarded UPDATE matches zero rows and
+		// we skip it: no double rotation, no audit event or owner email for a
+		// rotation that did not happen here.
+		//nolint:contextcheck // the cache refresh inside is intentionally detached fire-and-forget (same as rotateKey)
+		if err := token.RotateKeyWithTimestampCAS(newKey, token.RotatedAt, now); err != nil {
+			if errors.Is(err, repo.ErrRotationRaceLost) {
+				common.SysLog(fmt.Sprintf("secret rotation: token %d already rotated concurrently, skipping", token.Id))
+				continue
+			}
 			common.SysError(fmt.Sprintf("secret rotation: rotate token %d: %v", token.Id, err))
 			continue
 		}
