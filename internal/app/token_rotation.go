@@ -93,6 +93,7 @@ func RotateDueTokens(ctx context.Context, now int64, send EmailSender) (int, err
 		// already rotated this token, the guarded UPDATE matches zero rows and
 		// we skip it: no double rotation, no audit event or owner email for a
 		// rotation that did not happen here.
+		//nolint:contextcheck // the cache refresh inside is intentionally detached fire-and-forget (same as rotateKey)
 		if err := token.RotateKeyWithTimestampCAS(newKey, token.RotatedAt, now); err != nil {
 			if errors.Is(err, repo.ErrRotationRaceLost) {
 				common.SysLog(fmt.Sprintf("secret rotation: token %d already rotated concurrently, skipping", token.Id))
