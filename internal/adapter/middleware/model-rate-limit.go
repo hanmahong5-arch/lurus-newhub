@@ -21,6 +21,17 @@ import (
 const (
 	ModelRequestRateLimitCountMark        = "MRRL"
 	ModelRequestRateLimitSuccessCountMark = "MRRLS"
+
+	// rateLimitRecordTimeout bounds the post-response success-count write.
+	// 3s, not 1s: measured live 2026-08-29, the first Redis write after an
+	// idle period blocked for exactly a 1-second budget and died on
+	// context-deadline while the immediately following command on the same
+	// goroutine succeeded instantly — a cold pooled connection pays
+	// connection establishment (dial + DNS) that a 1s budget does not absorb.
+	// Same rationale as the 3s bump in internal/app/cost_spike.go and
+	// internal/app/business_tpm.go (bizTPMRedisTimeout), which failed the
+	// same way in the same live session.
+	rateLimitRecordTimeout = 3 * time.Second
 )
 
 // r6aRateLimitDegradedLogLast throttles the fail-open log line below to at
@@ -117,7 +128,16 @@ func recordRedisRequest(ctx context.Context, rdb *redis.Client, key string, maxC
 	}
 
 	now := time.Now().Format(timeFormat)
-	rdb.LPush(ctx, key, now)
+	if err := rdb.LPush(ctx, key, now).Err(); err != nil {
+		// A lost recording silently under-counts the success dimension — the
+		// exact failure mode that kept this limiter unable to trip for two
+		// deploys (see the caller's context note). Same visibility contract
+		// as the fail-open branches above: unconditional metric, throttled
+		// log line.
+		metrics.RecordRateLimitDegraded("model_rate_limit_record")
+		r6aRateLimitDegradedLogf("record", "rate limit success recording failed: "+err.Error())
+		return
+	}
 	rdb.LTrim(ctx, key, 0, int64(maxCount-1))
 	rdb.Expire(ctx, key, time.Duration(setting.ModelRequestRateLimitDurationMinutes)*time.Minute)
 }
@@ -210,7 +230,25 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 
 		// 5. 如果请求成功，记录成功请求
 		if c.Writer.Status() < 400 {
-			recordRedisRequest(ctx, rdb, successKey, successMaxCount)
+			// NOT the request context: by the time this line runs the client
+			// has usually hung up already. The relay pipeline settles quota
+			// (hundreds of ms of DB writes) between writing the response and
+			// returning through this middleware, and both one-shot clients
+			// and the host nginx (no upstream keepalive) close the connection
+			// the moment they have the full response — which cancels
+			// c.Request.Context() before the unwind reaches here. With the
+			// request context this LPush then fails instantly and silently,
+			// so the SUCCESS dimension — the only dimension the shipped
+			// defaults arm (setting/rate_limit.go:52) — never counted
+			// anything and the ceiling could never trip. Proven live
+			// 2026-08-29: three one-shot relay probes recorded nothing;
+			// two requests reusing one connection recorded the first (the
+			// connection was still open) and lost the second. Pinned by
+			// TestRedisRateLimitHandler_RecordsAfterClientDisconnect.
+			recCtx, cancel := context.WithTimeout(
+				context.WithoutCancel(c.Request.Context()), rateLimitRecordTimeout)
+			recordRedisRequest(recCtx, rdb, successKey, successMaxCount)
+			cancel()
 		}
 	}
 }

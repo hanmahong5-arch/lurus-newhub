@@ -21,6 +21,11 @@ import (
 //	                            (checkRedisRateLimit against the MRRLS key)
 //	model_rate_limit_total   — redisRateLimitHandler's total-count token
 //	                            bucket check (limiter.Allow)
+//	model_rate_limit_record  — recordRedisRequest's post-response success
+//	                            recording (the LPush to the MRRLS key). Not a
+//	                            fail-open (the request already succeeded);
+//	                            counts silently LOST recordings, i.e. the
+//	                            success dimension under-counting.
 //
 // Composite risk (see the callers' comments for the full statement): while
 // this counter is climbing, BusinessRateLimit/BusinessModelRateLimit and
@@ -38,13 +43,14 @@ var RateLimitDegradedTotal = promauto.NewCounterVec(
 	[]string{"check"},
 )
 
-// RecordRateLimitDegraded increments the fail-open counter for the given
-// check ("model_rate_limit_success" or "model_rate_limit_total").
+// RecordRateLimitDegraded increments the degradation counter for the given
+// check ("model_rate_limit_success", "model_rate_limit_total" or
+// "model_rate_limit_record").
 func RecordRateLimitDegraded(check string) {
 	RateLimitDegradedTotal.WithLabelValues(check).Inc()
 }
 
-// init pre-registers both known label values with a zero count, matching the
+// init pre-registers the known label values with a zero count, matching the
 // pattern in r4_cost_spike.go: a CounterVec child series only exists in
 // /metrics once its first Inc() fires, so an absent series would otherwise be
 // ambiguous between "no degradation has happened yet" and "this counter
@@ -52,4 +58,5 @@ func RecordRateLimitDegraded(check string) {
 func init() {
 	RateLimitDegradedTotal.WithLabelValues("model_rate_limit_success")
 	RateLimitDegradedTotal.WithLabelValues("model_rate_limit_total")
+	RateLimitDegradedTotal.WithLabelValues("model_rate_limit_record")
 }
