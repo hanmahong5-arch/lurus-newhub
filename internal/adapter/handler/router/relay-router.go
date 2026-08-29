@@ -189,7 +189,16 @@ func SetRelayRouter(router *gin.Engine) {
 	//relayMjRouter.Use()
 
 	relaySunoRouter := router.Group("/suno")
-	relaySunoRouter.Use(middleware.TokenAuth(), middleware.PoolBalanceCheck(), middleware.Distribute())
+	// Same enforcement chain as relayV1Router (same order, minus the
+	// post-Distribute model dimension — task routes have no per-model limits):
+	// these task groups used to mount only TokenAuth+PoolBalanceCheck, so none
+	// of the rate/cost ceilings applied to /suno at all. Every middleware here
+	// no-ops or fails open when its context/config is absent, so a deployment
+	// with the features off behaves exactly as before.
+	relaySunoRouter.Use(middleware.TokenAuth(), middleware.PoolBalanceCheck(),
+		middleware.CostSpikeLimit(), middleware.EntitlementCheck(),
+		middleware.ModelRequestRateLimit(), middleware.BusinessRateLimit(),
+		middleware.RelayConcurrencyLimit(), middleware.Distribute())
 	{
 		relaySunoRouter.POST("/submit/:action", handler.RelayTask)
 		relaySunoRouter.POST("/fetch", handler.RelayTask)
@@ -198,7 +207,13 @@ func SetRelayRouter(router *gin.Engine) {
 
 	// OpenAI-compatible music generation routes (used by lurus-creator)
 	relayMusicRouter := router.Group("/v1/audio")
-	relayMusicRouter.Use(middleware.TokenAuth(), middleware.PoolBalanceCheck(), middleware.Distribute())
+	// Enforcement chain: see the /suno comment above. NOTE this group is a
+	// sibling of relayV1Router's /v1/audio/* routes, not a child — /v1/music
+	// paths never passed through the /v1 chain's limiters.
+	relayMusicRouter.Use(middleware.TokenAuth(), middleware.PoolBalanceCheck(),
+		middleware.CostSpikeLimit(), middleware.EntitlementCheck(),
+		middleware.ModelRequestRateLimit(), middleware.BusinessRateLimit(),
+		middleware.RelayConcurrencyLimit(), middleware.Distribute())
 	{
 		relayMusicRouter.POST("/music", handler.RelayTask)
 		relayMusicRouter.GET("/music/:task_id", handler.RelayTask)
@@ -218,26 +233,42 @@ func SetRelayRouter(router *gin.Engine) {
 }
 
 func registerMjRouterGroup(relayMjRouter *gin.RouterGroup) {
-	relayMjRouter.Use(middleware.TokenAuth(), middleware.PoolBalanceCheck(), middleware.Distribute())
-	// Image proxy requires TokenAuth but not Distribute; registered after .Use()
-	// so Gin applies the middleware. Distribute is a no-op for GET-only proxy.
-	relayMjRouter.GET("/image/:id", relay.RelayMidjourneyImage)
+	relayMjRouter.Use(middleware.TokenAuth(), middleware.PoolBalanceCheck())
+
+	// Image proxy: chain unchanged from before the enforcement mount below
+	// (TokenAuth + PoolBalanceCheck + Distribute; Distribute is a no-op for the
+	// GET-only proxy). Deliberately kept OUTSIDE the enforcement chain: gallery
+	// UIs burst-load images, and counting each thumbnail GET against the user's
+	// request window would starve the actual submit calls. Pinned by
+	// TestSetRelayRouter_MjImageProxy_NotRateLimited.
+	imageGroup := relayMjRouter.Group("")
+	imageGroup.Use(middleware.Distribute())
+	imageGroup.GET("/image/:id", relay.RelayMidjourneyImage)
+
+	// Same enforcement chain as relayV1Router, same order — in particular
+	// BEFORE Distribute, so the ceilings still reject when no channel is
+	// configured (a 503 from Distribute must not mask a 429). Before this,
+	// none of the rate/cost ceilings applied to any /mj submit route.
+	submitGroup := relayMjRouter.Group("")
+	submitGroup.Use(middleware.CostSpikeLimit(), middleware.EntitlementCheck(),
+		middleware.ModelRequestRateLimit(), middleware.BusinessRateLimit(),
+		middleware.RelayConcurrencyLimit(), middleware.Distribute())
 	{
-		relayMjRouter.POST("/submit/action", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/shorten", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/modal", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/imagine", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/change", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/simple-change", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/describe", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/blend", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/edits", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/video", handler.RelayMidjourney)
-		relayMjRouter.POST("/notify", handler.RelayMidjourney)
-		relayMjRouter.GET("/task/:id/fetch", handler.RelayMidjourney)
-		relayMjRouter.GET("/task/:id/image-seed", handler.RelayMidjourney)
-		relayMjRouter.POST("/task/list-by-condition", handler.RelayMidjourney)
-		relayMjRouter.POST("/insight-face/swap", handler.RelayMidjourney)
-		relayMjRouter.POST("/submit/upload-discord-images", handler.RelayMidjourney)
+		submitGroup.POST("/submit/action", handler.RelayMidjourney)
+		submitGroup.POST("/submit/shorten", handler.RelayMidjourney)
+		submitGroup.POST("/submit/modal", handler.RelayMidjourney)
+		submitGroup.POST("/submit/imagine", handler.RelayMidjourney)
+		submitGroup.POST("/submit/change", handler.RelayMidjourney)
+		submitGroup.POST("/submit/simple-change", handler.RelayMidjourney)
+		submitGroup.POST("/submit/describe", handler.RelayMidjourney)
+		submitGroup.POST("/submit/blend", handler.RelayMidjourney)
+		submitGroup.POST("/submit/edits", handler.RelayMidjourney)
+		submitGroup.POST("/submit/video", handler.RelayMidjourney)
+		submitGroup.POST("/notify", handler.RelayMidjourney)
+		submitGroup.GET("/task/:id/fetch", handler.RelayMidjourney)
+		submitGroup.GET("/task/:id/image-seed", handler.RelayMidjourney)
+		submitGroup.POST("/task/list-by-condition", handler.RelayMidjourney)
+		submitGroup.POST("/insight-face/swap", handler.RelayMidjourney)
+		submitGroup.POST("/submit/upload-discord-images", handler.RelayMidjourney)
 	}
 }
