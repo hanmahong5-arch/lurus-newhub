@@ -63,6 +63,14 @@ jobs:
   security:
     name: bun audit + gitleaks
     runs-on: ubuntu-latest
+    # push/PR only. gitleaks-action scans the pushed commit RANGE on those
+    # events but the FULL history on schedule/workflow_dispatch, where it
+    # trips on known historical doc artifacts (verified 2026-08-30: same
+    # HEAD, push run green, dispatch run red on commits fbff5649/9eee5290
+    # from June). Leaving it on schedule would paint every nightly e2e run
+    # red at the run level — a permanently-red signal nobody reads. The
+    # incremental gate on real code pushes is unchanged.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     # Run security checks independently so they don't block the fast test job
     steps:
       - uses: actions/checkout@v4

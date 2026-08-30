@@ -8,7 +8,8 @@ There was no environment where UAT/e2e could run without touching production
 | | prod (`r6-stage/`) | uat (this overlay) |
 |---|---|---|
 | Namespace | `lurus-newhub` | `lurus-newhub-uat` |
-| NodePort | 30850 (both public domains) | **30851** (no domain; host-local/tunnel only) |
+| Domain | `hub.lurus.cn` | `test-newhub.lurus.cn` (since 2026-08-30 cutover) |
+| NodePort | 30850 | **30851** (also reachable host-local/tunnel) |
 | PostgreSQL | db `newhub` | db `newhub_uat` (role `newhub_uat`) |
 | Redis | DB 2 | DB 3 |
 | OIDC | on | **off** (no IdP client for UAT; bridge login instead) |
@@ -24,12 +25,21 @@ There was no environment where UAT/e2e could run without touching production
   Rotate the same way.
 - Convergence: ArgoCD Application `lurus-newhub-uat`
   (`deploy/k8s/argocd/application-uat.yaml`), automated + selfHeal, prune off.
-- Reaching it: `ssh -p 12222 -L 30851:localhost:30851 root@43.226.45.87`
-  (or Tailscale `100.122.83.20`), then `http://localhost:30851`.
+- Reaching it: `https://test-newhub.lurus.cn` (host-nginx vhost →
+  NodePort 30851, source `deploy/r6-host-nginx/test-newhub.conf`). The tunnel
+  path `ssh -p 12222 -L 30851:localhost:30851 root@43.226.45.87` (or Tailscale
+  `100.122.83.20`) still works for API-level access, but since `SESSION_SECURE`
+  went `true` (2026-08-30) browsers DROP the session cookie over plain-http
+  localhost — use the domain for browser/e2e flows.
 - Fresh-DB bootstrapping is the product's own: GORM auto-migrate + embedded
   migration runner; migration 021 self-seeds the default tenant. First boot
-  seeds the root user like any fresh install.
-- **Owner-gated follow-up**: pointing `test-newhub.lurus.cn` here requires
-  first moving the prod instance's `OIDC_REDIRECT_URI` +
-  `SESSION_COOKIE_DOMAIN` off that domain and registering the new redirect in
-  the IdP — until then the domain keeps pointing at prod.
+  seeds the root user like any fresh install. Public-exposure hardening
+  (2026-08-30): `RegisterEnabled=false` seeded in the `options` table (code
+  default is open registration), bridge rejects bad tokens (403), and the
+  `users` table carries no password column — password login is structurally
+  absent, bridge is the only local login.
+- ~~Owner-gated follow-up: pointing `test-newhub.lurus.cn` here~~ **DONE
+  2026-08-30**: prod SSO moved to `hub.lurus.cn` (r6-stage deployment env +
+  platform `config/apps.yaml` domain PATCH, client_id unchanged), then the
+  vhost flipped 30850 → 30851. Nightly e2e runs against this instance via
+  `.github/workflows/web-ci.yml` (schedule 19:00 UTC).

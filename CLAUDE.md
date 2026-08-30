@@ -1,6 +1,6 @@
 # Lurus Newhub (2b-svc-newhub)
 
-> **[STATUS 2026-05-12]**: 本目录是 `2b-svc-newhub`（domain: `hub.lurus.cn`，stage on R6: `test-newhub.lurus.cn`）。
+> **[STATUS 2026-08-30]**: 本目录是 `2b-svc-newhub`（生产 domain: `hub.lurus.cn`；`test-newhub.lurus.cn` 自 2026-08-30 起指向隔离 UAT 实例,不再是生产别名）。
 > 原 `2b-svc-api`（lurus-hub）已于 **2026-04-23 REMOVED**，由 newapi 接管直接中转职能。
 
 AI 数据处理枢纽 — Platform 产品组核心成员。在 New API 开源基座上进化：数据处理管道 + 个性化定制中转 + 企业级计费集成。多租户 Hub 层（newapi 之上 + Platform 计费），详见 `doc/` 和 `_bmad-output/`。
@@ -111,15 +111,16 @@ ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=
 | Meilisearch | `MEILISEARCH_ENABLED=false`(集群内无 meilisearch 实例) |
 | 出站代理 | **无,且不要加**——上游供应商直连 :443。被墙供应商走 per-channel proxy;理由与实测见 `deploy/k8s/r6-stage/netpol-nats-egress.yaml` 头注释 |
 | Egress 管控 | NetworkPolicy `newhub-nats-egress`：仅放行 NATS/DNS/PG/lurus-system/lurus-platform + 公网 80/443（RFC1918 全 except) |
-| ALLOWED_ORIGINS | `https://hub.lurus.cn,https://test-newhub.lurus.cn,https://identity.lurus.cn`(2026-08-25 补 hub;它是本服务自己的生产域,此前只列了 stage 域。同源请求不受影响——gin-contrib/cors 对 Origin==Host 直接短路,所以缺口只影响跨域调用) |
-| 边缘 | **无 k8s Ingress**;宿主 nginx vhost `hub.lurus.cn` / `test-newhub.lurus.cn` 均 `proxy_pass http://127.0.0.1:30850`,源码在 `deploy/r6-host-nginx/`。两者都设 `X-Forwarded-For`/`X-Real-IP` ⇒ **pod 侧 `RemoteAddr` 恒为私网**,任何「靠 RemoteAddr 判内外网」的守卫在此拓扑下恒真 |
+| ALLOWED_ORIGINS | `https://hub.lurus.cn,https://identity.lurus.cn`(2026-08-30 切换时**移除** test-newhub——它已是 UAT 的 origin,留着=授权弱加固实例对生产发凭证跨域调用) |
+| 边缘 | **无 k8s Ingress**;宿主 nginx vhost:`hub.lurus.cn`→`proxy_pass http://127.0.0.1:30850`(生产),`test-newhub.lurus.cn`→`:30851`(UAT,2026-08-30 切换),源码在 `deploy/r6-host-nginx/`。均设 `X-Forwarded-For`/`X-Real-IP` ⇒ **pod 侧 `RemoteAddr` 恒为私网**,任何「靠 RemoteAddr 判内外网」的守卫在此拓扑下恒真 |
+| SSO/Cookie | `OIDC_REDIRECT_URI=https://hub.lurus.cn/api/v2/oauth/callback`、`SESSION_COOKIE_DOMAIN=""`(host-only;2026-08-30 切换,旧值 test-newhub 曾让 hub 域浏览器拒收 cookie ⇒ hub 域 SSO 一直是坏的)、`OIDC_POST_LOGOUT_REDIRECT_URI=https://hub.lurus.cn/`。IdP 侧 redirect 由 platform `config/apps.yaml` newhub 条目 domain 派生(单 URI,client_id 稳定) |
 | `/metrics` | 双层封堵(2026-08-25):nginx `location = /metrics { return 404; }` + 应用层 `metricsAuthMiddleware`(无转发头的直连放行、带转发头则要 `METRICS_AUTH_TOKEN`)。唯一合法抓取者 = 宿主 netdata go.d job `newhub` → `http://localhost:30850/metrics`(直连,不经 nginx) |
 | SYNC_FREQUENCY | `60`(秒;渠道缓存同步) |
 | Secret | `lurus-newhub-secrets`,注入 7 个 key：SESSION_SECRET, SQL_DSN, OIDC_CLIENT_ID, IDENTITY_SESSION_SECRET, IDENTITY_SERVICE_INTERNAL_KEY, LURUS_WHITELABEL_MASTER_SECRET, TAVILY_API_KEY(optional) |
 
 ## UAT Instance (2026-08-30 起)
 
-隔离 UAT 实例 `ns lurus-newhub-uat` / **NodePort 30851**(无域名,`ssh -L 30851:localhost:30851 root@100.122.83.20` 隧道访问):独立 PG 库 `newhub_uat`、Redis DB 3、与生产**同 digest**(auto-pin 双写两个 manifest)。有意差异:OIDC/billing-unified/NATS 关、`E2E_BRIDGE_TOKEN` 开(bridge 登录)、web 限流 600、session cookie host-only 非 Secure。真源 = `deploy/k8s/r6-uat/`(README 有对照表)。**Playwright e2e 首次可执行**:`cd web && E2E_BASE_URL=http://localhost:30851 E2E_BRIDGE_TOKEN=$(ssh … kubectl get secret …) bun run test:e2e`(2026-08-30 首跑 33 passed/1 legit skip)。把 test-newhub 域指到 UAT 前必须先把生产的 OIDC_REDIRECT_URI+SESSION_COOKIE_DOMAIN 挪离该域(owner 决策)。
+隔离 UAT 实例 `ns lurus-newhub-uat` / **NodePort 30851** / 域名 **`https://test-newhub.lurus.cn`**(2026-08-30 nginx 切换,原指生产 30850):独立 PG 库 `newhub_uat`、Redis DB 3、与生产**同 digest**(auto-pin 双写两个 manifest)。有意差异:OIDC/billing-unified/NATS 关、`E2E_BRIDGE_TOKEN` 开(bridge 登录)、web 限流 600、注册关(`options.RegisterEnabled=false`,代码默认开)。session cookie host-only + **Secure**(⇒ 隧道 `http://localhost:30851` 的浏览器流会丢 cookie,浏览器/e2e 走域名;API 级隧道照旧)。真源 = `deploy/k8s/r6-uat/`(README 有对照表)。**e2e**:`cd web && E2E_BRIDGE_TOKEN=$(ssh … kubectl -n lurus-newhub-uat get secret …) bun run test:e2e`(E2E_BASE_URL 默认即 test-newhub 域;2026-08-30 域名双跑 33 passed/1 legit skip×2,状态幂等)。**CI 夜跑**:web-ci.yml schedule 19:00 UTC(03:00 北京)跑 e2e job,repo secret `E2E_BRIDGE_TOKEN`(R6 侧生成,轮换后要 `gh secret set` 同步)。
 
 ## Environment Variables
 

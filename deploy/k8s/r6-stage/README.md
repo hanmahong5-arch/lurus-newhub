@@ -4,7 +4,9 @@ Live deployment of `2b-svc-newhub` on the R6 STAGE cluster, fronted by R6 host n
 
 - Cluster: R6 (`43.226.45.87`, Tailscale `100.122.83.20`), single-node K3s — per `lurus/CLAUDE.md` Server Landing SSOT
 - Namespace: `lurus-newhub` — the ns the live Deployment/Service actually run in. (An earlier revision moved this to `lurus-staging` believing PG's `pg-access-control` netpol required it; that netpol no longer exists — `kubectl get netpol -n database` is empty — so the manifests were reverted to `lurus-newhub` to match the live cluster, 2026-07-07.)
-- Domain: https://test-newhub.lurus.cn
+- Domain: https://hub.lurus.cn (2026-08-30 cutover: `test-newhub.lurus.cn` now
+  fronts the isolated UAT instance on NodePort 30851 — see `../r6-uat/`; until
+  then both domains hit this deployment)
 - Service: NodePort 30850 -> container port 3000
 - Image: `ghcr.io/hanmahong5-arch/lurus-newhub@sha256:…` (pinned digest, `imagePullPolicy: IfNotPresent`). The pin is **auto-written by CI**: after every gate-passing `:main` build, the `bump_r6_manifest` job in `docker-image-main.yml` rewrites `deployment.yaml`'s `# pin:`/`image:` lines to the pushed digest (`[skip ci]` commit). Roll forward = just sync the ArgoCD app / `apply -k` — never `kubectl set image` (that recreates the manifest-behind-cluster drift closed on 2026-08-15).
 - GitOps: ArgoCD Application `lurus-newhub` (ns `argocd`, manifest in
@@ -45,7 +47,7 @@ This K8s Deployment is unrelated to the `lurus-api` container defined by the
 root `docker-compose.yml` / `lurus-api.service`. That compose instance is a
 **frozen legacy artifact** (up 2+ months on R6 outside this namespace, untouched
 since; do not `docker-compose up`/restart/edit it as part of any K8s work here).
-The live product traffic (`test-newhub.lurus.cn`) is served exclusively by the
+The live product traffic (`hub.lurus.cn`) is served exclusively by the
 `lurus-newhub` Deployment in this directory.
 
 ## First apply
