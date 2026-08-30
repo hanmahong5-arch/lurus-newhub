@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: lurus-newhub
+  namespace: lurus-newhub-uat
+  labels:
+    app: lurus-newhub
+spec:
+  type: NodePort
+  ports:
+    - port: 8850
+      targetPort: 3000
+      # 30851 = UAT. 30850 is the production instance (ns lurus-newhub); both
+      # public domains proxy to 30850 — nothing routes here except deliberate
+      # UAT/e2e traffic (host-local curl or an SSH tunnel).
+      nodePort: 30851
+      name: http
+  selector:
+    app: lurus-newhub

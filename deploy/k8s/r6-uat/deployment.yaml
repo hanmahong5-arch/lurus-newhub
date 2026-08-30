@@ -1,0 +1,167 @@
+# UAT instance of lurus-newhub on R6 — the first environment that is NOT
+# production. Context (UAT 2026-08-26 finding): test-newhub.lurus.cn and
+# hub.lurus.cn proxy to the SAME NodePort/process/DB, so every "stage"
+# verification was actually hitting production. This instance gives UAT and
+# the Playwright e2e suite an isolated data plane:
+#   - own PostgreSQL database `newhub_uat` (role newhub_uat, schema built by
+#     the same GORM auto-migrate + embedded runner on first boot; migration
+#     021 self-seeds the default tenant)
+#   - own Redis keyspace (DB 3; prod uses DB 2)
+#   - E2E_BRIDGE_TOKEN set → /api/v2/bridge/exchange registers, so e2e can
+#     log in without OIDC
+#
+# Deliberate divergences from prod (each is a "must not touch prod state"
+# decision, not drift):
+#   - OIDC off: no IdP client is registered for a UAT redirect URI; e2e uses
+#     the bridge. Wiring UAT into the IdP is an owner decision.
+#   - BILLING_UNIFIED off: UAT relay traffic must never debit the real
+#     platform wallet. /api/health reports billing=legacy_mode (healthy).
+#   - LLM_QUOTA_NATS off: UAT events must not pollute the LLM_EVENTS stream
+#     consumed by lurus-notification.
+#   - replicas 1, no SESSION_COOKIE_DOMAIN (accessed via NodePort/tunnel).
+# Everything else (image digest, probes, security context, resource shape,
+# CREDIT_POOL_REQUIRED=enforce, ERROR_LOG_ENABLED) tracks production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lurus-newhub
+  namespace: lurus-newhub-uat
+  labels:
+    app: lurus-newhub
+    environment: uat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lurus-newhub
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: lurus-newhub
+        environment: uat
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: lurus-newhub
+          # The `# pin:` and `image:` lines are AUTO-WRITTEN by
+          # docker-image-main.yml (bump_r6_manifest job) — same mechanism as
+          # deploy/k8s/r6-stage/deployment.yaml, both files are rewritten by
+          # every :main build so UAT always runs the digest prod runs.
+          # pin: main-20260830-4bb786b run=33305140001
+          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:ed5ecc9bf3aa89569e54b0d90dcc9108f51383643c34844aa5ea277b8cc6a2bb
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: PORT
+              value: "3000"
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: GIN_MODE
+              value: "release"
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-newhub-uat-secrets
+                  key: SESSION_SECRET
+            - name: SQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-newhub-uat-secrets
+                  key: SQL_DSN
+            - name: REDIS_CONN_STRING
+              value: "redis://redis.lurus-system.svc.cluster.local:6379/3"
+            - name: ERROR_LOG_ENABLED
+              value: "true"
+            - name: OIDC_ENABLED
+              value: "false"
+            - name: MEILISEARCH_ENABLED
+              value: "false"
+            - name: BILLING_UNIFIED_ENABLED
+              value: "false"
+            - name: CREDIT_POOL_REQUIRED
+              value: "enforce"
+            - name: LLM_QUOTA_NATS_ENABLED
+              value: "false"
+            - name: ALLOWED_ORIGINS
+              value: "http://localhost:5173"
+            # Registers POST /api/v2/bridge/exchange (rate-limited bootstrap
+            # login for e2e). The route does not exist when this env is unset —
+            # this is the one env that must NEVER be set on the prod instance.
+            - name: E2E_BRIDGE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-newhub-uat-secrets
+                  key: E2E_BRIDGE_TOKEN
+            - name: LURUS_WHITELABEL_MASTER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-newhub-uat-secrets
+                  key: LURUS_WHITELABEL_MASTER_SECRET
+            - name: NODE_TYPE
+              value: "master"
+            - name: SYNC_FREQUENCY
+              value: "60"
+            - name: GRACEFUL_SHUTDOWN_TIMEOUT
+              value: "30s"
+            - name: LOG_FORMAT
+              value: "json"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          startupProbe:
+            httpGet:
+              path: /api/status
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 30
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+            successThreshold: 1
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep", "5"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

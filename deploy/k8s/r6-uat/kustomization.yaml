@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# R6 UAT deployment for lurus-newhub — isolated data plane (own PG database
+# newhub_uat, Redis DB 3, bridge login enabled) reachable ONLY via NodePort
+# 30851. No public domain routes here. Apply with:
+#   kubectl apply -k deploy/k8s/r6-uat/
+# or let the ArgoCD Application (deploy/k8s/argocd/application-uat.yaml)
+# converge it.
+#
+# The Secret lurus-newhub-uat-secrets (SESSION_SECRET, SQL_DSN,
+# LURUS_WHITELABEL_MASTER_SECRET, E2E_BRIDGE_TOKEN) is hand-created on the
+# cluster with server-side-generated random values and is deliberately NOT a
+# resource here — same policy and reasoning as the r6-stage overlay.
+
+namespace: lurus-newhub-uat
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - netpol-egress.yaml

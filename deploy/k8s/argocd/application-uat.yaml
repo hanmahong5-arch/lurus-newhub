@@ -1,0 +1,37 @@
+# ArgoCD Application — UAT instance (ns lurus-newhub-uat, NodePort 30851).
+# Same sync policy and reasoning as application.yaml (the prod Application):
+# automated + selfHeal, prune OFF because the hand-created Secret
+# (lurus-newhub-uat-secrets) is not represented in the overlay.
+#
+# Apply with:   kubectl apply -f deploy/k8s/argocd/application-uat.yaml
+# Remove with:  kubectl -n argocd delete application lurus-newhub-uat --cascade=orphan
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lurus-newhub-uat
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hanmahong5-arch/lurus-newhub.git
+    targetRevision: main
+    path: deploy/k8s/r6-uat
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lurus-newhub-uat
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: apps
+      kind: Deployment
+      jqPathExpressions:
+        - .metadata.annotations."deployment.kubernetes.io/revision"
+        - .metadata.annotations."kubectl.kubernetes.io/last-applied-configuration"

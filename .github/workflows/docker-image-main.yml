@@ -148,7 +148,7 @@ jobs:
   # workflows (no rebuild loop; a rebuild of identical source would produce a
   # new digest and ping-pong forever without it).
   bump_r6_manifest:
-    name: Auto-pin r6-stage manifest
+    name: Auto-pin r6-stage + r6-uat manifests
     needs: build_and_push
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -157,7 +157,10 @@ jobs:
     env:
       VERSION: ${{ needs.build_and_push.outputs.version }}
       DIGEST: ${{ needs.build_and_push.outputs.digest }}
-      FILE: deploy/k8s/r6-stage/deployment.yaml
+      # Both instances track the same digest: r6-stage (de facto prod, ns
+      # lurus-newhub) and r6-uat (isolated UAT, ns lurus-newhub-uat). One
+      # build → both pins, so UAT always runs exactly what prod runs.
+      FILES: "deploy/k8s/r6-stage/deployment.yaml deploy/k8s/r6-uat/deployment.yaml"
     steps:
       - name: Check out main
         uses: actions/checkout@v4
@@ -173,10 +176,13 @@ jobs:
             *) echo "::error::build job emitted no usable digest ('$DIGEST') — aborting bump"; exit 1 ;;
           esac
           test -n "$VERSION" || { echo "::error::empty version output"; exit 1; }
-          sed -i -E "s|^(\s*)# pin: .*$|\1# pin: ${VERSION} run=${{ github.run_id }}|" "$FILE"
-          sed -i -E "/image: ghcr\.io\/hanmahong5-arch\/lurus-newhub@/ s|@sha256:[0-9a-f]+|@${DIGEST}|" "$FILE"
-          # Post-write predicate: the new digest must actually be in the file.
-          grep -F "image: ghcr.io/hanmahong5-arch/lurus-newhub@${DIGEST}" "$FILE"
+          for FILE in $FILES; do
+            test -f "$FILE" || { echo "::error::pin target $FILE missing"; exit 1; }
+            sed -i -E "s|^(\s*)# pin: .*$|\1# pin: ${VERSION} run=${{ github.run_id }}|" "$FILE"
+            sed -i -E "/image: ghcr\.io\/hanmahong5-arch\/lurus-newhub@/ s|@sha256:[0-9a-f]+|@${DIGEST}|" "$FILE"
+            # Post-write predicate: the new digest must actually be in the file.
+            grep -F "image: ghcr.io/hanmahong5-arch/lurus-newhub@${DIGEST}" "$FILE"
+          done
 
       - name: Commit & push ([skip ci])
         run: |
@@ -186,7 +192,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$FILE"
+          git add $FILES
           git commit -m "chore(deploy): r6-stage auto-pin ${VERSION} [skip ci]"
           # Rebase-retry: another merge (or another build's bump) may land
           # between our checkout and push.
