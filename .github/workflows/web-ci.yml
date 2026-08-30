@@ -14,9 +14,14 @@ on:
   workflow_dispatch:
     inputs:
       run_e2e:
-        description: 'Run Playwright e2e against STAGE'
+        description: 'Run Playwright e2e against UAT (test-newhub.lurus.cn)'
         required: false
         default: 'false'
+  # Nightly e2e against the isolated UAT instance (test-newhub.lurus.cn →
+  # NodePort 30851 since the 2026-08-30 cutover). 19:00 UTC = 03:00 Beijing:
+  # off working hours and clear of auto-pin rollouts.
+  schedule:
+    - cron: '0 19 * * *'
 
 defaults:
   run:
@@ -115,9 +120,13 @@ jobs:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
   e2e:
-    name: Playwright e2e (STAGE)
+    name: Playwright e2e (UAT)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_e2e == 'true'
+    # Branch on event: schedule events carry NO inputs, so a naive
+    # `inputs.run_e2e == 'true'` arm alone would never fire nightly.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_e2e == 'true') ||
+      github.event_name == 'schedule'
     needs: test
     steps:
       - uses: actions/checkout@v4
@@ -130,7 +139,10 @@ jobs:
         env:
           E2E_BASE_URL: ${{ secrets.E2E_BASE_URL || 'https://test-newhub.lurus.cn' }}
           E2E_BRIDGE_TOKEN: ${{ secrets.E2E_BRIDGE_TOKEN }}
-          E2E_TENANT_SLUG: ${{ secrets.E2E_TENANT_SLUG || 'default' }}
+          # 'lurus' matches the helper default (tests/e2e/helpers/auth.ts) that
+          # every green local run used — the bridge's cosmetic "default" slug is
+          # not routable, so a 'default' fallback here would fail in CI only.
+          E2E_TENANT_SLUG: ${{ secrets.E2E_TENANT_SLUG || 'lurus' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
