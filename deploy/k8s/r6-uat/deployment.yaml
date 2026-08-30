@@ -85,6 +85,16 @@ spec:
                   key: SQL_DSN
             - name: REDIS_CONN_STRING
               value: "redis://redis.lurus-system.svc.cluster.local:6379/3"
+            # Host-only, non-Secure session cookie. UAT is reached via a
+            # localhost tunnel over plain http; the code defaults
+            # (Domain=.lurus.cn + Secure when GIN_MODE=release) make the
+            # browser/client silently DROP the session cookie — bridge login
+            # returns 200 but every authenticated call after it is a 401
+            # (observed on first e2e run 2026-08-30: 28/34 failed this way).
+            - name: SESSION_COOKIE_DOMAIN
+              value: ""
+            - name: SESSION_SECURE
+              value: "false"
             - name: ERROR_LOG_ENABLED
               value: "true"
             - name: OIDC_ENABLED
