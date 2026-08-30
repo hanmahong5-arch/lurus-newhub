@@ -86,6 +86,14 @@ spec:
               value: "redis://redis.lurus-system.svc.cluster.local:6379/2"
             - name: SESSION_COOKIE_DOMAIN
               value: "test-newhub.lurus.cn"
+            # UAT 2026-08-26 P-finding: the code default is FALSE, so from
+            # launch until 2026-08-29 the gateway recorded ZERO error logs —
+            # upstream relay failures left no queryable trace. Rows go into
+            # the shared logs table (LogTypeError) and age out through the
+            # same DeleteOldLog retention as consume logs, so volume is
+            # bounded.
+            - name: ERROR_LOG_ENABLED
+              value: "true"
             # OIDC ON since 2026-08-23. The formerly-missing credential now
             # exists: the platform app registry (2l-svc-platform
             # config/apps.yaml entry `newhub`, commit ca2e25a6) registered a
