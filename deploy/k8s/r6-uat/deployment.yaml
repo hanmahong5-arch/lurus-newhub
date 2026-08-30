@@ -18,7 +18,10 @@
 #     platform wallet. /api/health reports billing=legacy_mode (healthy).
 #   - LLM_QUOTA_NATS off: UAT events must not pollute the LLM_EVENTS stream
 #     consumed by lurus-notification.
-#   - replicas 1, no SESSION_COOKIE_DOMAIN (accessed via NodePort/tunnel).
+#   - replicas 1, host-only session cookie. Since 2026-08-30 the
+#     test-newhub.lurus.cn vhost fronts this instance (TLS at the host-nginx
+#     edge, source deploy/r6-host-nginx/test-newhub.conf); the NodePort
+#     tunnel remains for API-level access.
 # Everything else (image digest, probes, security context, resource shape,
 # CREDIT_POOL_REQUIRED=enforce, ERROR_LOG_ENABLED) tracks production.
 apiVersion: apps/v1
@@ -85,16 +88,20 @@ spec:
                   key: SQL_DSN
             - name: REDIS_CONN_STRING
               value: "redis://redis.lurus-system.svc.cluster.local:6379/3"
-            # Host-only, non-Secure session cookie. UAT is reached via a
-            # localhost tunnel over plain http; the code defaults
-            # (Domain=.lurus.cn + Secure when GIN_MODE=release) make the
-            # browser/client silently DROP the session cookie — bridge login
-            # returns 200 but every authenticated call after it is a 401
+            # Host-only session cookie. The code default Domain=.lurus.cn made
+            # localhost tunnel clients silently DROP the cookie — bridge login
+            # returned 200 but every authenticated call after it was a 401
             # (observed on first e2e run 2026-08-30: 28/34 failed this way).
             - name: SESSION_COOKIE_DOMAIN
               value: ""
+            # Secure since the 2026-08-30 nginx cutover: test-newhub.lurus.cn
+            # (TLS at the host-nginx edge) now fronts this instance, so the
+            # cookie must not travel over plain http. Note for tunnel access
+            # (http://localhost:30851): browsers DROP Secure cookies on plain-
+            # http localhost responses — use the domain, not the tunnel, for
+            # browser/e2e flows.
             - name: SESSION_SECURE
-              value: "false"
+              value: "true"
             # The whole e2e suite arrives from ONE ip (the SSH tunnel), and the
             # default web limit (60 req/180s/ip) starts 429ing page assets
             # mid-suite — measured 2026-08-30: a 70-GET burst went 42x200 then
@@ -116,7 +123,11 @@ spec:
             - name: LLM_QUOTA_NATS_ENABLED
               value: "false"
             - name: ALLOWED_ORIGINS
-              value: "http://localhost:5173"
+              # test-newhub.lurus.cn fronts THIS instance since the 2026-08-30
+              # nginx cutover (it proxied prod:30850 before) — without it every
+              # same-origin POST from the UAT console would 403 the moment the
+              # domain flips. localhost:5173 stays for local vite dev.
+              value: "https://test-newhub.lurus.cn,http://localhost:5173"
             # Registers POST /api/v2/bridge/exchange (rate-limited bootstrap
             # login for e2e). The route does not exist when this env is unset —
             # this is the one env that must NEVER be set on the prod instance.
