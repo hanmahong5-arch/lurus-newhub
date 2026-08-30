@@ -117,6 +117,10 @@ ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=
 | SYNC_FREQUENCY | `60`(秒;渠道缓存同步) |
 | Secret | `lurus-newhub-secrets`,注入 7 个 key：SESSION_SECRET, SQL_DSN, OIDC_CLIENT_ID, IDENTITY_SESSION_SECRET, IDENTITY_SERVICE_INTERNAL_KEY, LURUS_WHITELABEL_MASTER_SECRET, TAVILY_API_KEY(optional) |
 
+## UAT Instance (2026-08-30 起)
+
+隔离 UAT 实例 `ns lurus-newhub-uat` / **NodePort 30851**(无域名,`ssh -L 30851:localhost:30851 root@100.122.83.20` 隧道访问):独立 PG 库 `newhub_uat`、Redis DB 3、与生产**同 digest**(auto-pin 双写两个 manifest)。有意差异:OIDC/billing-unified/NATS 关、`E2E_BRIDGE_TOKEN` 开(bridge 登录)、web 限流 600、session cookie host-only 非 Secure。真源 = `deploy/k8s/r6-uat/`(README 有对照表)。**Playwright e2e 首次可执行**:`cd web && E2E_BASE_URL=http://localhost:30851 E2E_BRIDGE_TOKEN=$(ssh … kubectl get secret …) bun run test:e2e`(2026-08-30 首跑 33 passed/1 legit skip)。把 test-newhub 域指到 UAT 前必须先把生产的 OIDC_REDIRECT_URI+SESSION_COOKIE_DOMAIN 挪离该域(owner 决策)。
+
 ## Environment Variables
 
 env 详表（Required / platform Integration / OIDC / Meilisearch / Runtime Tuning / Observability / Proxy / OAuth）见 **`.env.example`** 与 **`doc/claude-md-archive-2026-06-10.md`**。
