@@ -36,6 +36,14 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid request, "+err.Error())
 			return
 		}
+		// Publish the requested model before channel selection, not after:
+		// every abort below (model-not-allowed, no-channel 404/503) records an
+		// error log, and without this the row's model column would be empty —
+		// SetupContextForSelectedChannel sets the same key to the same value,
+		// but only on the success path.
+		if modelRequest != nil && modelRequest.Model != "" {
+			c.Set("original_model", modelRequest.Model)
+		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {

@@ -131,6 +131,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
 
+			// Pre-channel failures (request binding/validation, token estimate,
+			// pricing, pre-consume, channel selection) never pass through
+			// processChannelError, so without this they left no error-log row.
+			// Record before the SetMessage mutations below so the row carries
+			// the raw masked error, same as channel-stage rows. Errors that
+			// opted out via ErrOptionWithNoRecordErrorLog stay out — the check
+			// lives inside recordRelayErrorLog.
+			recordTerminalRelayError(c, newAPIError)
+
 			// Resolve the last-tried provider once for both the O1 metric and the
 			// client-facing provider context below (mirrors the RecordRelayTotal defer).
 			provider := constant.GetChannelTypeName(c.GetInt("channel_type"))
@@ -234,7 +243,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
 			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
 		} else {
-			newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest)
+			// 400, not NewError's default 500: this is the caller's malformed
+			// body. The default also made IsUpstreamFailure (500 ⇒ true) dress
+			// the response up as "upstream provider Unknown returned 500" and
+			// counted client garbage toward our 5xx rate.
+			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest)
 		}
 		return
 	}
@@ -630,39 +643,64 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		openrouter_pool.MaybeMarkCooldown(channelError, err)
 	})
 
-	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
-		// 保存错误日志到mysql中
-		userId := c.GetInt("id")
-		tokenName := c.GetString("token_name")
-		modelName := c.GetString("original_model")
-		tokenId := c.GetInt("token_id")
-		userGroup := c.GetString("group")
-		channelId := c.GetInt("channel_id")
-		other := make(map[string]interface{})
-		if c.Request != nil && c.Request.URL != nil {
-			other["request_path"] = c.Request.URL.Path
-		}
-		other["error_type"] = err.GetErrorType()
-		other["error_code"] = err.GetErrorCode()
-		other["status_code"] = err.StatusCode
-		other["channel_id"] = channelId
-		other["channel_name"] = c.GetString("channel_name")
-		other["channel_type"] = c.GetInt("channel_type")
-		other["relay_mode"] = c.GetInt("relay_mode")
-		if upModel := c.GetString("original_model"); upModel != "" {
-			other["upstream_model"] = upModel
-		}
-		adminInfo := make(map[string]interface{})
-		adminInfo["use_channel"] = c.GetStringSlice("use_channel")
-		isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
-		if isMultiKey {
-			adminInfo["is_multi_key"] = true
-			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
-		}
-		other["admin_info"] = adminInfo
-		repo.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveError(), tokenId, 0, false, userGroup, other)
-	}
+	// Channel-stage errors are recorded (or deliberately skipped) HERE, once
+	// per attempt; mark that so the terminal-error fallback in Relay's deferred
+	// renderer doesn't write the last attempt's error a second time.
+	c.Set(relayErrorLogHandledKey, true)
+	recordRelayErrorLog(c, err)
+}
 
+// relayErrorLogHandledKey marks that processChannelError already owned the
+// error-log decision for this request. The deferred renderer in Relay only
+// records when the flag is absent — i.e. the error happened BEFORE any channel
+// attempt (request validation, token estimation, pricing, channel selection),
+// a class that previously left no error-log row at all.
+const relayErrorLogHandledKey = "relay_error_log_handled"
+
+// recordTerminalRelayError is the deferred renderer's fallback: it records the
+// terminal error ONLY when no channel-stage attempt already owned the logging
+// decision, so the last attempt's error is never written twice.
+func recordTerminalRelayError(c *gin.Context, err *types.NewAPIError) {
+	if c.GetBool(relayErrorLogHandledKey) {
+		return
+	}
+	recordRelayErrorLog(c, err)
+}
+
+func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
+	if !constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) {
+		return
+	}
+	// 保存错误日志到mysql中
+	userId := c.GetInt("id")
+	tokenName := c.GetString("token_name")
+	modelName := c.GetString("original_model")
+	tokenId := c.GetInt("token_id")
+	userGroup := c.GetString("group")
+	channelId := c.GetInt("channel_id")
+	other := make(map[string]interface{})
+	if c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	other["error_type"] = err.GetErrorType()
+	other["error_code"] = err.GetErrorCode()
+	other["status_code"] = err.StatusCode
+	other["channel_id"] = channelId
+	other["channel_name"] = c.GetString("channel_name")
+	other["channel_type"] = c.GetInt("channel_type")
+	other["relay_mode"] = c.GetInt("relay_mode")
+	if upModel := c.GetString("original_model"); upModel != "" {
+		other["upstream_model"] = upModel
+	}
+	adminInfo := make(map[string]interface{})
+	adminInfo["use_channel"] = c.GetStringSlice("use_channel")
+	isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
+	if isMultiKey {
+		adminInfo["is_multi_key"] = true
+		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+	}
+	other["admin_info"] = adminInfo
+	repo.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveError(), tokenId, 0, false, userGroup, other)
 }
 
 func RelayMidjourney(c *gin.Context) {
