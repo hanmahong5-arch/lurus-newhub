@@ -95,6 +95,14 @@ spec:
               value: ""
             - name: SESSION_SECURE
               value: "false"
+            # The whole e2e suite arrives from ONE ip (the SSH tunnel), and the
+            # default web limit (60 req/180s/ip) starts 429ing page assets
+            # mid-suite — measured 2026-08-30: a 70-GET burst went 42x200 then
+            # 28x429, which is exactly the "later specs see a blank SPA"
+            # failure shape. Limiter stays ENABLED so the middleware is still
+            # exercised; only the budget is UAT-sized.
+            - name: GLOBAL_WEB_RATE_LIMIT
+              value: "600"
             - name: ERROR_LOG_ENABLED
               value: "true"
             - name: OIDC_ENABLED
