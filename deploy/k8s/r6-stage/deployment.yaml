@@ -84,8 +84,15 @@ spec:
                   key: SQL_DSN
             - name: REDIS_CONN_STRING
               value: "redis://redis.lurus-system.svc.cluster.local:6379/2"
+            # Host-only session cookie (2026-08-30 domain cutover). The old
+            # value test-newhub.lurus.cn made every browser on hub.lurus.cn
+            # silently DROP the session cookie (domain mismatch), which broke
+            # the whole SSO chain there — PKCE code_verifier lives in the
+            # session, so the callback could never succeed. test-newhub now
+            # fronts the UAT instance; empty = cookie scoped to whichever
+            # host served it, correct for the single prod domain hub.lurus.cn.
             - name: SESSION_COOKIE_DOMAIN
-              value: "test-newhub.lurus.cn"
+              value: ""
             # UAT 2026-08-26 P-finding: the code default is FALSE, so from
             # launch until 2026-08-29 the gateway recorded ZERO error logs —
             # upstream relay failures left no queryable trace. Rows go into
@@ -112,7 +119,13 @@ spec:
             - name: OIDC_JWKS_URI
               value: "https://identity.lurus.cn/oauth/v2/keys"
             - name: OIDC_REDIRECT_URI
-              value: "https://test-newhub.lurus.cn/api/v2/oauth/callback"
+              value: "https://hub.lurus.cn/api/v2/oauth/callback"
+            # Absolute post-logout target (2026-08-30). The previous unset
+            # state fell back to the relative "/login", which can never match
+            # the absolute post-logout URI registered at the IdP (derived from
+            # the apps.yaml domain), so IdP-side logout redirect always failed.
+            - name: OIDC_POST_LOGOUT_REDIRECT_URI
+              value: "https://hub.lurus.cn/"
             - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
@@ -175,16 +188,14 @@ spec:
                   name: lurus-newhub-secrets
                   key: LURUS_WHITELABEL_MASTER_SECRET
             - name: ALLOWED_ORIGINS
-              # hub.lurus.cn is this service's own production domain. R6 has no
-              # ingress controller: both hub.lurus.cn and test-newhub.lurus.cn are
-              # host-nginx vhosts proxying the SAME NodePort 30850 (sources:
-              # deploy/r6-host-nginx/), so a browser on hub.lurus.cn sends
-              # Origin: https://hub.lurus.cn and was being rejected with 403 —
-              # including the OPTIONS preflight. Listing only the stage hostname
-              # left the production hostname's own console unusable.
+              # hub.lurus.cn is this service's own production domain.
               # identity.lurus.cn is the OIDC issuer (IDENTITY_PUBLIC_URL); its
               # origin must be allowed for the SSO callback/CORS to work.
-              value: "https://hub.lurus.cn,https://test-newhub.lurus.cn,https://identity.lurus.cn"
+              # test-newhub.lurus.cn was REMOVED 2026-08-30: that vhost now
+              # fronts the isolated UAT instance (NodePort 30851). Keeping it
+              # here would authorize the weaker-hardened UAT origin to make
+              # credentialed cross-origin calls against production.
+              value: "https://hub.lurus.cn,https://identity.lurus.cn"
             - name: LLM_QUOTA_NATS_ENABLED
               value: "true"
             - name: NATS_URL
