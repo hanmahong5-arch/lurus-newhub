@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
-import { API, showError } from '../../../helpers';
+import { API, showError, isAdmin } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
@@ -70,6 +70,19 @@ const attemptTagClass = (outcome) =>
     : outcome === 'breaker_open'
       ? 'tag'
       : 'tag error';
+
+// The row's auxiliary payload (tier-filtered server-side): user rows carry
+// cache token counts and request_path; tenant-admin rows additionally carry
+// admin_info. Absent or corrupt payloads read as null, never as an error.
+const parseOther = (row) => {
+  if (!row?.other) return null;
+  try {
+    const o = typeof row.other === 'string' ? JSON.parse(row.other) : row.other;
+    return o && typeof o === 'object' ? o : null;
+  } catch (_) {
+    return null;
+  }
+};
 
 const fmtTime = (unixSec) => {
   if (!unixSec) return '—';
@@ -133,14 +146,29 @@ const HFLog = () => {
   const [stat, setStat] = useState(null);
   const [statLoading, setStatLoading] = useState(false);
 
-  // Filter state
-  const [filterModel, setFilterModel] = useState('');
-  const [filterToken, setFilterToken] = useState('');
+  // Filter state. Model/token/type seed from the URL query so other pages can
+  // deep-link a pre-filtered view (Dashboard's cost-by-model rows do).
+  const [filterModel, setFilterModel] = useState(
+    () => new URLSearchParams(window.location.search).get('model_name') || '',
+  );
+  const [filterToken, setFilterToken] = useState(
+    () => new URLSearchParams(window.location.search).get('token_name') || '',
+  );
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
+  // errors-only maps to the API's type filter (5 = error rows).
+  const [errorsOnly, setErrorsOnly] = useState(
+    () =>
+      new URLSearchParams(window.location.search).get('type') ===
+      String(LOG_TYPE_ERROR),
+  );
+  // Tenant-wide scope (admin only): reads /logs/all instead of /logs. Those
+  // rows carry the full `other` payload, so the routing-trace panel and the
+  // pricing-ratio fields only light up here.
+  const [tenantWide, setTenantWide] = useState(false);
 
   const fetchLogs = useCallback(
-    async (currentPage, model, token, start, end) => {
+    async (currentPage, model, token, start, end, errOnly, wide) => {
       setLoading(true);
       try {
         const params = new URLSearchParams({
@@ -149,6 +177,7 @@ const HFLog = () => {
         });
         if (model) params.set('model_name', model);
         if (token) params.set('token_name', token);
+        if (errOnly) params.set('type', String(LOG_TYPE_ERROR));
         if (start)
           params.set(
             'start_time',
@@ -161,7 +190,7 @@ const HFLog = () => {
           );
 
         const res = await API.get(
-          `/api/v2/${tenantSlug}/logs?${params.toString()}`,
+          `/api/v2/${tenantSlug}/logs${wide ? '/all' : ''}?${params.toString()}`,
         );
         if (res?.data?.success) {
           const d = res.data.data;
@@ -184,12 +213,13 @@ const HFLog = () => {
   );
 
   const fetchStat = useCallback(
-    async (model, token, start, end) => {
+    async (model, token, start, end, errOnly) => {
       setStatLoading(true);
       try {
         const params = new URLSearchParams();
         if (model) params.set('model_name', model);
         if (token) params.set('token_name', token);
+        if (errOnly) params.set('type', String(LOG_TYPE_ERROR));
         if (start)
           params.set(
             'start_time',
@@ -217,8 +247,16 @@ const HFLog = () => {
   // Fetch on mount and whenever tenantSlug changes
   useEffect(() => {
     if (tenantSlug) {
-      fetchLogs(page, filterModel, filterToken, filterStart, filterEnd);
-      fetchStat(filterModel, filterToken, filterStart, filterEnd);
+      fetchLogs(
+        page,
+        filterModel,
+        filterToken,
+        filterStart,
+        filterEnd,
+        errorsOnly,
+        tenantWide,
+      );
+      fetchStat(filterModel, filterToken, filterStart, filterEnd, errorsOnly);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantSlug]);
@@ -321,13 +359,62 @@ const HFLog = () => {
 
   const applyFilters = () => {
     setPage(1);
-    fetchLogs(1, filterModel, filterToken, filterStart, filterEnd);
-    fetchStat(filterModel, filterToken, filterStart, filterEnd);
+    fetchLogs(
+      1,
+      filterModel,
+      filterToken,
+      filterStart,
+      filterEnd,
+      errorsOnly,
+      tenantWide,
+    );
+    fetchStat(filterModel, filterToken, filterStart, filterEnd, errorsOnly);
   };
 
   const goPage = (next) => {
     setPage(next);
-    fetchLogs(next, filterModel, filterToken, filterStart, filterEnd);
+    fetchLogs(
+      next,
+      filterModel,
+      filterToken,
+      filterStart,
+      filterEnd,
+      errorsOnly,
+      tenantWide,
+    );
+  };
+
+  const toggleErrorsOnly = () => {
+    const next = !errorsOnly;
+    setErrorsOnly(next);
+    setPage(1);
+    fetchLogs(
+      1,
+      filterModel,
+      filterToken,
+      filterStart,
+      filterEnd,
+      next,
+      tenantWide,
+    );
+    fetchStat(filterModel, filterToken, filterStart, filterEnd, next);
+  };
+
+  const toggleTenantWide = () => {
+    const next = !tenantWide;
+    setTenantWide(next);
+    setPage(1);
+    fetchLogs(
+      1,
+      filterModel,
+      filterToken,
+      filterStart,
+      filterEnd,
+      errorsOnly,
+      next,
+    );
+    // Stat header intentionally stays on the caller's own usage: /logs/stat
+    // has no tenant-wide variant.
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -411,15 +498,34 @@ const HFLog = () => {
         </button>
         <button
           type='button'
+          className={errorsOnly ? 'btn primary' : 'btn ghost'}
+          data-testid='log-errors-only'
+          onClick={toggleErrorsOnly}
+        >
+          {tr('console.log.errors_only', 'errors only')}
+        </button>
+        {isAdmin() && (
+          <button
+            type='button'
+            className={tenantWide ? 'btn primary' : 'btn ghost'}
+            data-testid='log-tenant-wide'
+            onClick={toggleTenantWide}
+          >
+            {tr('console.log.tenant_wide', 'all users (admin)')}
+          </button>
+        )}
+        <button
+          type='button'
           className='btn ghost'
           onClick={() => {
             setFilterModel('');
             setFilterToken('');
             setFilterStart('');
             setFilterEnd('');
+            setErrorsOnly(false);
             setPage(1);
-            fetchLogs(1, '', '', '', '');
-            fetchStat('', '', '', '');
+            fetchLogs(1, '', '', '', '', false, tenantWide);
+            fetchStat('', '', '', '', false);
           }}
         >
           {tr('console.log.clear', 'clear')}
@@ -792,6 +898,75 @@ const HFLog = () => {
                           ? tr('console.log.yes', 'yes')
                           : tr('console.log.no', 'no')}
                       </div>
+                      {tenantWide && selectedLog.username && (
+                        <div>
+                          <span className='muted'>
+                            {tr('console.log.detail_user', 'user')}:
+                          </span>{' '}
+                          {selectedLog.username}
+                        </div>
+                      )}
+                      {/* Billing-explainability fields from the row's `other`
+                          payload (present since the API started shipping the
+                          tier-filtered projection). Each renders only when the
+                          row actually carries it — no fabricated zeros. */}
+                      {(() => {
+                        const o = parseOther(selectedLog);
+                        if (!o) return null;
+                        return (
+                          <>
+                            {Number(o.cache_tokens) > 0 && (
+                              <div data-testid='log-detail-cache-read'>
+                                <span className='muted'>
+                                  {tr(
+                                    'console.log.detail_cache_read',
+                                    'cache read tokens',
+                                  )}
+                                  :
+                                </span>{' '}
+                                {o.cache_tokens}
+                              </div>
+                            )}
+                            {Number(o.cache_creation_tokens) > 0 && (
+                              <div data-testid='log-detail-cache-write'>
+                                <span className='muted'>
+                                  {tr(
+                                    'console.log.detail_cache_write',
+                                    'cache write tokens',
+                                  )}
+                                  :
+                                </span>{' '}
+                                {o.cache_creation_tokens}
+                              </div>
+                            )}
+                            {o.request_path && (
+                              <div data-testid='log-detail-endpoint'>
+                                <span className='muted'>
+                                  {tr(
+                                    'console.log.detail_endpoint',
+                                    'endpoint',
+                                  )}
+                                  :
+                                </span>{' '}
+                                {o.request_path}
+                              </div>
+                            )}
+                            {o.frt != null &&
+                              Number.isFinite(Number(o.frt)) && (
+                                <div data-testid='log-detail-frt'>
+                                  <span className='muted'>
+                                    {tr(
+                                      'console.log.detail_first_response',
+                                      'first response',
+                                    )}
+                                    :
+                                  </span>{' '}
+                                  {Math.round(Number(o.frt))}ms
+                                </div>
+                              )}
+                          </>
+                        );
+                      })()}
                       {selectedLog.content && (
                         <div>
                           <span className='muted'>

@@ -73,8 +73,10 @@ func TestV2SessionRevoke_Happy(t *testing.T) {
 	if !ok {
 		t.Fatalf("data field missing or wrong type")
 	}
-	if data["redirect"] != "/console/v2/login" {
-		t.Errorf("redirect = %v, want /console/v2/login", data["redirect"])
+	// /login is the SPA's only login route; the old /console/v2/login hint
+	// pointed at a path absent from the v2 route table (rendered NotFound).
+	if data["redirect"] != "/login" {
+		t.Errorf("redirect = %v, want /login", data["redirect"])
 	}
 
 	// At least one Set-Cookie header must be present (session expiry).

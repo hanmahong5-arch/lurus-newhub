@@ -116,17 +116,25 @@ func formatUserLogs(logs []*Log) {
 		// Strip Internal-tier governance struct fields (not visible to regular users).
 		logs[i].RequestFingerprint = ""
 		logs[i].UpstreamModel = ""
-		var otherMap map[string]interface{}
-		otherMap, _ = common.StrToMap(logs[i].Other)
-		if otherMap != nil {
-			// Strip Internal-tier fields from Other map (governance classification).
-			for _, key := range internalOtherKeys {
-				delete(otherMap, key)
-			}
-		}
-		logs[i].Other = common.MapToJsonStr(otherMap)
+		logs[i].Other = SanitizeOtherForUser(logs[i].Other)
 		logs[i].Id = logs[i].Id % 1024
 	}
+}
+
+// SanitizeOtherForUser returns a log row's Other JSON with every TierInternal
+// key stripped (governance classification) — the projection a non-admin caller
+// may see. Both the v1 self-log formatting above and the v2 log projection go
+// through here so there is exactly one strip list; an empty or unparseable
+// payload comes back as "" so callers can omit the field.
+func SanitizeOtherForUser(other string) string {
+	otherMap, _ := common.StrToMap(other)
+	if otherMap == nil {
+		return ""
+	}
+	for _, key := range internalOtherKeys {
+		delete(otherMap, key)
+	}
+	return common.MapToJsonStr(otherMap)
 }
 
 // internalOtherKeys lists Other map keys classified as TierInternal that must

@@ -34,8 +34,9 @@ import (
 //
 // This is a single-device model: there is no per-session store, so revocation
 // clears the gin session cookie and the platform lurus_session cookie. The
-// caller is expected to navigate to /console/v2/login after receiving the
-// redirect field.
+// caller is expected to navigate to /login after receiving the redirect
+// field (/login is the SPA's only login route — the v2 route table has no
+// /console/v2/login, which used to be hinted here and rendered NotFound).
 //
 // Why this is enough: both UserAuth (v1 session) and the OIDC bridge read
 // the session from the same cookie. Clearing it makes every subsequent
@@ -67,7 +68,7 @@ func RevokeCurrentSessionV2(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"redirect": "/console/v2/login",
+			"redirect": "/login",
 		},
 	})
 }

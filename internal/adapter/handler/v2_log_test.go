@@ -240,8 +240,11 @@ func TestGetAllLogsV2_NonAdminRejected(t *testing.T) {
 }
 
 // TestGetLogsV2_ForbiddenFields guards the logView whitelist: the log endpoints
-// must not expose tenant_id, caller IP (PII), the raw `other` payload, or the
-// governance-internal fingerprint/upstream-model columns.
+// must not expose tenant_id, caller IP (PII), or the governance-internal
+// fingerprint/upstream-model columns. `other` is tier-filtered rather than
+// dropped (contract change 2026-08-31, matching the v1 self-log route): the
+// user route keeps user-tier keys (cache_tokens, request_path) and strips
+// every TierInternal key (admin_info, pricing ratios).
 func TestGetLogsV2_ForbiddenFields(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
@@ -254,7 +257,7 @@ func TestGetLogsV2_ForbiddenFields(t *testing.T) {
 		ModelName:          "gpt-4",
 		CreatedAt:          1700000000,
 		Ip:                 "203.0.113.7",
-		Other:              `{"secret":"payload"}`,
+		Other:              `{"cache_tokens":42,"request_path":"/v1/chat/completions","model_ratio":2.5,"group_ratio":1.0,"frt":123.0,"admin_info":{"use_channel":["7"],"route_attempts":[{"channel_id":7}]}}`,
 		RequestFingerprint: "fp-abc123",
 		UpstreamModel:      "gpt-4-internal",
 	}
@@ -271,13 +274,103 @@ func TestGetLogsV2_ForbiddenFields(t *testing.T) {
 	}
 	lg := logs[0].(map[string]interface{})
 
-	for _, f := range []string{"tenant_id", "ip", "other", "request_fingerprint", "upstream_model", "channel_type", "relay_mode"} {
+	for _, f := range []string{"tenant_id", "ip", "request_fingerprint", "upstream_model", "channel_type", "relay_mode"} {
 		if _, exists := lg[f]; exists {
 			t.Errorf("forbidden field %q leaked through logView", f)
 		}
 	}
 	if _, ok := lg["model_name"]; !ok {
 		t.Error("expected model_name field in logView")
+	}
+
+	other, ok := lg["other"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected sanitized `other` object on the user route, got %T", lg["other"])
+	}
+	if got, ok := other["cache_tokens"].(float64); !ok || got != 42 {
+		t.Errorf("user-tier key cache_tokens should survive sanitization, got %v", other["cache_tokens"])
+	}
+	if got, ok := other["request_path"].(string); !ok || got != "/v1/chat/completions" {
+		t.Errorf("user-tier key request_path should survive sanitization, got %v", other["request_path"])
+	}
+	for _, f := range []string{"admin_info", "model_ratio", "group_ratio", "frt"} {
+		if _, exists := other[f]; exists {
+			t.Errorf("TierInternal key %q leaked through the user-route `other` projection", f)
+		}
+	}
+}
+
+// TestGetAllLogsV2_AdminSeesFullOther: the tenant-admin route ships the full
+// `other` payload — admin_info.route_attempts is what feeds the console's
+// routing-trace panel, which was structurally dead while v2 dropped `other`.
+func TestGetAllLogsV2_AdminSeesFullOther(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	row := &repo.Log{
+		UserId:    ctx.NormalUser.Id,
+		TenantId:  ctx.TenantID,
+		Type:      repo.LogTypeConsume,
+		ModelName: "gpt-4",
+		CreatedAt: 1700000000,
+		Other:     `{"cache_tokens":7,"model_ratio":2.5,"admin_info":{"route_attempts":[{"channel_id":7,"outcome":"success"}]}}`,
+	}
+	if err := ctx.DB.Create(row).Error; err != nil {
+		t.Fatalf("failed to seed log: %v", err)
+	}
+
+	w := V2RequestAsUser(ctx, ctx.AdminUser, http.MethodGet, "/api/v2/test-tenant/logs/all", nil, nil)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	logs := data["logs"].([]interface{})
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	other, ok := logs[0].(map[string]interface{})["other"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected full `other` object on the admin route")
+	}
+	if _, exists := other["model_ratio"]; !exists {
+		t.Error("admin route must keep TierInternal pricing keys")
+	}
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("admin route must keep admin_info, got %v", other["admin_info"])
+	}
+	if _, exists := adminInfo["route_attempts"]; !exists {
+		t.Error("admin_info.route_attempts must reach the admin route (routing panel data)")
+	}
+}
+
+// TestGetLogsV2_CorruptOtherOmitted: a corrupt stored payload must be omitted,
+// not embedded — an invalid RawMessage would break marshalling of the whole
+// response and 500 the page for every row in it.
+func TestGetLogsV2_CorruptOtherOmitted(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	row := &repo.Log{
+		UserId:    ctx.NormalUser.Id,
+		TenantId:  ctx.TenantID,
+		Type:      repo.LogTypeConsume,
+		ModelName: "gpt-4",
+		CreatedAt: 1700000000,
+		Other:     `{not-json`,
+	}
+	if err := ctx.DB.Create(row).Error; err != nil {
+		t.Fatalf("failed to seed log: %v", err)
+	}
+
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs", nil, nil)
+	AssertV2Status(t, w, http.StatusOK)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	logs := data["logs"].([]interface{})
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	if _, exists := logs[0].(map[string]interface{})["other"]; exists {
+		t.Error("corrupt `other` must be omitted from the projection")
 	}
 }
 

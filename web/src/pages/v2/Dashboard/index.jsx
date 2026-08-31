@@ -533,7 +533,27 @@ const HFDashboard = () => {
                   // Live rate, like every other money figure on this page.
                   const usd = (row.totalQuota / getQuotaPerUSD()).toFixed(4);
                   return (
-                    <div key={row.model}>
+                    // Deep-link into the log page pre-filtered to this model:
+                    // the cost figure stops being a dead end and becomes the
+                    // entry point to the requests behind it.
+                    <div
+                      key={row.model}
+                      data-testid={`cost-model-row-${i}`}
+                      role='link'
+                      tabIndex={0}
+                      title={t(
+                        'console.dashboard.view_logs',
+                        'view these requests in logs',
+                      )}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => {
+                        window.location.href = `/console/v2/log?model_name=${encodeURIComponent(row.model)}`;
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter')
+                          window.location.href = `/console/v2/log?model_name=${encodeURIComponent(row.model)}`;
+                      }}
+                    >
                       <div
                         style={{
                           display: 'flex',

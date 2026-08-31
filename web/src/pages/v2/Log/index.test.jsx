@@ -27,6 +27,9 @@ import {
 } from '@testing-library/react';
 
 // Mock helpers BEFORE importing the component — vi.mock is hoisted.
+// isAdmin defaults to false so the tenant-wide toggle stays hidden unless a
+// test opts in via mockIsAdmin.
+const mockIsAdmin = vi.fn(() => false);
 vi.mock('../../../helpers', () => ({
   API: {
     get: vi.fn(),
@@ -34,6 +37,7 @@ vi.mock('../../../helpers', () => ({
   },
   showError: vi.fn(),
   showSuccess: vi.fn(),
+  isAdmin: (...a) => mockIsAdmin(...a),
 }));
 
 // HFShell pulls TenantSwitcher → API helper chain → react-router. Stub to a
@@ -74,6 +78,8 @@ beforeEach(() => {
   API.get.mockReset();
   API.post.mockReset();
   showError.mockReset();
+  mockIsAdmin.mockReset();
+  mockIsAdmin.mockReturnValue(false);
   window.localStorage.clear();
   window.localStorage.setItem('tenant_slug', 'acme');
 
@@ -535,5 +541,140 @@ describe('Log page', () => {
       expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
     );
     expect(screen.queryByTestId('log-route-attempts')).toBeNull();
+  });
+
+  // ── Deep-linking + errors-only + tenant-wide + billing detail ─────────────
+
+  it('seeds model/token/type filters from the URL query (deep-link support)', async () => {
+    // The export test above replaces window.location with a static mock whose
+    // `search` is frozen at '' — history.pushState would mutate the REAL
+    // location while the component reads the mock. Override explicitly.
+    const prevLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: {
+        ...prevLocation,
+        search: '?model_name=m-deep&token_name=tk-deep&type=5',
+      },
+    });
+    try {
+      render(<HFLog />);
+      await waitFor(() => expect(API.get).toHaveBeenCalled());
+
+      // The inputs reflect the seeded filters…
+      expect(screen.getByPlaceholderText('model name…')).toHaveValue('m-deep');
+      expect(screen.getByPlaceholderText('token name…')).toHaveValue('tk-deep');
+      // …and the very FIRST fetch already carries them — a deep link that only
+      // filled the boxes but fetched everything would defeat its purpose.
+      const firstLogsCall = API.get.mock.calls
+        .map(([u]) => u)
+        .find((u) => u.includes('/logs?'));
+      expect(firstLogsCall).toContain('model_name=m-deep');
+      expect(firstLogsCall).toContain('token_name=tk-deep');
+      expect(firstLogsCall).toContain('type=5');
+    } finally {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: prevLocation,
+      });
+    }
+  });
+
+  it('errors-only toggle adds type=5 to the fetch and clears it on second click', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    fireEvent.click(screen.getByTestId('log-errors-only'));
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      expect(
+        urls.some((u) => u.includes('/logs?') && u.includes('type=5')),
+      ).toBe(true);
+      // The stat header must aggregate the SAME slice the table shows.
+      expect(
+        urls.some((u) => u.includes('/logs/stat') && u.includes('type=5')),
+      ).toBe(true);
+    });
+
+    API.get.mockClear();
+    fireEvent.click(screen.getByTestId('log-errors-only'));
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs?'));
+      expect(logsCall).toBeDefined();
+      expect(logsCall).not.toContain('type=5');
+    });
+  });
+
+  it('hides the tenant-wide toggle from non-admins', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    expect(screen.queryByTestId('log-tenant-wide')).toBeNull();
+  });
+
+  it('tenant-wide toggle (admin) switches the fetch to /logs/all', async () => {
+    mockIsAdmin.mockReturnValue(true);
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    fireEvent.click(screen.getByTestId('log-tenant-wide'));
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      expect(urls.some((u) => u.includes('/api/v2/acme/logs/all?'))).toBe(true);
+    });
+
+    // Toggling back returns to the caller-scoped route.
+    API.get.mockClear();
+    fireEvent.click(screen.getByTestId('log-tenant-wide'));
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      expect(urls.some((u) => u.includes('/logs?'))).toBe(true);
+      expect(urls.some((u) => u.includes('/logs/all'))).toBe(false);
+    });
+  });
+
+  it('renders billing-explainability fields from the row `other` payload', async () => {
+    renderWithLog(
+      logWithOther(
+        JSON.stringify({
+          cache_tokens: 42,
+          cache_creation_tokens: 7,
+          request_path: '/v1/chat/completions',
+          frt: 123.4,
+        }),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
+    );
+    expect(screen.getByTestId('log-detail-cache-read').textContent).toContain(
+      '42',
+    );
+    expect(screen.getByTestId('log-detail-cache-write').textContent).toContain(
+      '7',
+    );
+    expect(screen.getByTestId('log-detail-endpoint').textContent).toContain(
+      '/v1/chat/completions',
+    );
+    expect(screen.getByTestId('log-detail-frt').textContent).toContain('123ms');
+  });
+
+  it('renders no fabricated zeros when the row carries no billing detail', async () => {
+    renderWithLog(logWithOther(JSON.stringify({ cache_tokens: 0 })));
+
+    await waitFor(() =>
+      expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
+    );
+    for (const id of [
+      'log-detail-cache-read',
+      'log-detail-cache-write',
+      'log-detail-endpoint',
+      'log-detail-frt',
+    ]) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
   });
 });

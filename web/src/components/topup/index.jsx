@@ -52,20 +52,27 @@ const TopUp = () => {
     }
     setIsSubmitting(true);
     try {
-      const url = isV2Mode() ? v2Url('/redemptions/redeem') : '/api/user/topup';
+      // v2 route is POST /api/v2/:slug/redeem (RedeemCodeV2). The previous
+      // '/redemptions/redeem' path is registered nowhere and 404'd every v2
+      // redemption from this page.
+      const url = isV2Mode() ? v2Url('/redeem') : '/api/user/topup';
       const res = await API.post(url, { key: redemptionCode });
       const { success, message, data } = res.data;
       if (success) {
+        // v1 returns the credited amount as a bare number; v2 wraps it as
+        // { quota_added } (v2_redemption.go).
+        const credited =
+          typeof data === 'number' ? data : (data?.quota_added ?? 0);
         showSuccess(t('兑换成功！'));
         Modal.success({
           title: t('兑换成功！'),
-          content: t('成功兑换额度：') + renderQuota(data),
+          content: t('成功兑换额度：') + renderQuota(credited),
           centered: true,
         });
         if (userState.user) {
           const updatedUser = {
             ...userState.user,
-            quota: userState.user.quota + data,
+            quota: userState.user.quota + credited,
           };
           userDispatch({ type: 'login', payload: updatedUser });
         }
