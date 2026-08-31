@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -12,9 +13,13 @@ import (
 )
 
 // logView is the field-whitelisted projection returned by the v2 log endpoints.
-// It excludes tenant_id (implicit from route), the caller IP (PII), the raw
-// `other` payload, and the governance-internal fingerprint/upstream-model/
-// channel-type/relay-mode columns. Mirrors redemptionView.
+// It excludes tenant_id (implicit from route), the caller IP (PII), and the
+// governance-internal fingerprint/upstream-model/channel-type/relay-mode
+// columns. Mirrors redemptionView. `other` is tier-filtered, not dropped:
+// the user route ships the same TierInternal-stripped projection as the v1
+// self-log route (cache token counts, request_path — what makes a bill
+// explainable), the tenant-admin route ships the full payload including
+// admin_info.route_attempts, which feeds the console's routing-trace panel.
 type logView struct {
 	Id               int    `json:"id"`
 	UserId           int    `json:"user_id"`
@@ -34,11 +39,26 @@ type logView struct {
 	TokenId          int    `json:"token_id"`
 	Group            string `json:"group"`
 	TotalLatencyMs   int    `json:"total_latency_ms"`
+	// Omitted (not null) when the row carries no payload or the stored JSON is
+	// corrupt — embedding an invalid RawMessage would break marshalling of the
+	// entire response.
+	Other json.RawMessage `json:"other,omitempty"`
 }
 
-func toLogViews(logs []*repo.Log) []logView {
+// toLogViews projects log rows for the API. includeInternalOther=true is the
+// tenant-admin view (full `other`); false strips TierInternal keys via the
+// same shared list the v1 self-log route uses.
+func toLogViews(logs []*repo.Log, includeInternalOther bool) []logView {
 	items := make([]logView, 0, len(logs))
 	for _, l := range logs {
+		other := l.Other
+		if !includeInternalOther {
+			other = repo.SanitizeOtherForUser(other)
+		}
+		var rawOther json.RawMessage
+		if other != "" && other != "null" && json.Valid([]byte(other)) {
+			rawOther = json.RawMessage(other)
+		}
 		items = append(items, logView{
 			Id:               l.Id,
 			UserId:           l.UserId,
@@ -58,6 +78,7 @@ func toLogViews(logs []*repo.Log) []logView {
 			TokenId:          l.TokenId,
 			Group:            l.Group,
 			TotalLatencyMs:   l.TotalLatencyMs,
+			Other:            rawOther,
 		})
 	}
 	return items
@@ -126,7 +147,7 @@ func GetLogsV2(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"logs":      toLogViews(logs),
+			"logs":      toLogViews(logs, false),
 			"total":     total,
 			"page":      page,
 			"page_size": pageSize,
@@ -207,7 +228,9 @@ func GetAllLogsV2(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"logs":      toLogViews(logs),
+			// Full `other` (admin_info incl. route_attempts): this handler is
+			// gated on requireTenantAdmin above.
+			"logs":      toLogViews(logs, true),
 			"total":     total,
 			"page":      page,
 			"page_size": pageSize,

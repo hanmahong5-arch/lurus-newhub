@@ -179,15 +179,30 @@ describe('TopUp — redemption submission', () => {
 
   it('routes the redemption through the tenant-scoped v2 endpoint in v2 mode', async () => {
     isV2Mode.mockReturnValue(true);
-    renderTopUp();
+    // v2 responds { quota_added }, not the v1 bare number.
+    apiPost.mockResolvedValue({
+      data: { success: true, data: { quota_added: 700 } },
+    });
+    const { dispatch } = renderTopUp({ user: { id: 5, quota: 1000 } });
     fireEvent.change(screen.getByTestId('redeem-input'), {
       target: { value: 'CODE-2' },
     });
     fireEvent.click(redeemButton());
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
-    expect(apiPost).toHaveBeenCalledWith('/api/v2/acme/redemptions/redeem', {
+    // POST /api/v2/:slug/redeem is the registered route (RedeemCodeV2). The
+    // page used to post to '/redemptions/redeem', which no router mounts —
+    // every v2 redemption 404'd while this suite pinned the broken path.
+    expect(apiPost).toHaveBeenCalledWith('/api/v2/acme/redeem', {
       key: 'CODE-2',
+    });
+    // The v2 envelope's quota_added must reach both the dialog and the cache.
+    expect(modalSuccess).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '成功兑换额度：Q<700>' }),
+    );
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'login',
+      payload: expect.objectContaining({ id: 5, quota: 1700 }),
     });
   });
 
@@ -254,12 +269,10 @@ describe('TopUp — redemption submission', () => {
     );
   });
 
-  // DEFECT (correctness/money): `topUp()` credits the local cache with
-  // `userState.user.quota + data` without checking that `data` is a number.
-  // A success envelope that omits the amount turns the cached balance into
-  // NaN, and every balance readout on the page renders NaN until the user
-  // reloads. The paired it.skip below holds the contract that a malformed
-  // success response must not corrupt the cached balance.
+  // `topUp()` now normalises the credited amount (bare v1 number or v2
+  // { quota_added }, else 0), so a success envelope that omits the amount
+  // credits nothing instead of writing NaN into the cached balance. The
+  // invariant below plus the un-skipped contract test guard both halves.
   it('never credits a positive amount from a success envelope that carries none', async () => {
     apiPost.mockResolvedValue({ data: { success: true } });
     const { dispatch } = renderTopUp({ user: { id: 5, quota: 1000 } });
@@ -270,18 +283,14 @@ describe('TopUp — redemption submission', () => {
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
 
-    // INVARIANT, not a pin on the defect. Both shapes satisfy it: today the
-    // missing guard writes NaN (not a finite number, so not > 1000), and once
-    // the guard lands `dispatch` is either skipped or called with the untouched
-    // 1000. What must never happen in either world is money being minted out of
-    // a malformed response — e.g. a careless `data ?? 500` fallback. Written
-    // this way, repairing the defect leaves this test green instead of turning
-    // it red and reading as a regression.
+    // INVARIANT: money must never be minted out of a malformed response —
+    // e.g. a careless `data ?? 500` fallback. The guard credits 0, so the
+    // cached balance stays at 1000.
     const credited = dispatch.mock.calls.map((c) => c[0]?.payload?.quota);
     expect(credited.some((q) => Number.isFinite(q) && q > 1000)).toBe(false);
   });
 
-  it.skip('a redemption response without an amount must not corrupt the cached balance', async () => {
+  it('a redemption response without an amount must not corrupt the cached balance', async () => {
     apiPost.mockResolvedValue({ data: { success: true } });
     const { dispatch } = renderTopUp({ user: { id: 5, quota: 1000 } });
     fireEvent.change(screen.getByTestId('redeem-input'), {

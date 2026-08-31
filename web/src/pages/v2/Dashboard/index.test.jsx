@@ -198,6 +198,62 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
     await waitFor(() => screen.getByText(/0 tokens/));
   });
 
+  it('cost-by-model rows deep-link to the log page filtered to that model', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.resolve({ data: { success: true, data: makeMe() } });
+      }
+      return Promise.resolve({
+        data: {
+          success: true,
+          data: {
+            logs: [
+              makeLog({
+                type: 2,
+                model_name: 'model/x-1',
+                quota: 5000,
+                created_at: now - 10,
+              }),
+            ],
+            total: 1,
+          },
+        },
+      });
+    });
+
+    // Capture href assignments without leaving jsdom.
+    const prevLocation = window.location;
+    let assignedHref = '';
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: {
+        ...prevLocation,
+        set href(v) {
+          assignedHref = v;
+        },
+        get href() {
+          return assignedHref;
+        },
+      },
+    });
+    try {
+      const { fireEvent } = await import('@testing-library/react');
+      render(React.createElement(HFDashboard));
+
+      const row = await waitFor(() => screen.getByTestId('cost-model-row-0'));
+      fireEvent.click(row);
+      // The '/' in the model name must be encoded, or the link lands on a
+      // nonexistent nested route instead of a query param.
+      expect(assignedHref).toBe('/console/v2/log?model_name=model%2Fx-1');
+    } finally {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: prevLocation,
+      });
+    }
+  });
+
   it('does NOT show onboarding when token_count > 0', async () => {
     API.get.mockResolvedValue({
       data: { success: true, data: makeMe({ token_count: 2 }) },

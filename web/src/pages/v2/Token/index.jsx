@@ -1449,7 +1449,15 @@ const HFToken = () => {
                 <button
                   type='button'
                   className='btn'
-                  onClick={() => navigate('/console/v2/log')}
+                  onClick={() =>
+                    // Carry the context: land on the log page already filtered
+                    // to this token instead of dumping the user on everything.
+                    navigate(
+                      token?.name
+                        ? `/console/v2/log?token_name=${encodeURIComponent(token.name)}`
+                        : '/console/v2/log',
+                    )
+                  }
                 >
                   {tr('console.token.view_logs', 'view logs')}
                 </button>

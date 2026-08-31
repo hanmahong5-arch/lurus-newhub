@@ -429,7 +429,9 @@ const HFSettings = () => {
     try {
       const res = await API.delete(`/api/v2/${tenantSlug}/sessions/current`);
       if (res?.data?.success) {
-        const redirect = res.data.data?.redirect ?? '/console/v2/login';
+        // Fallback must be a route that exists: the SPA's only login route is
+        // /login ('/console/v2/login' is not in the v2 route table).
+        const redirect = res.data.data?.redirect ?? '/login';
         navigate(redirect);
       } else {
         showError(
