@@ -623,15 +623,20 @@ describe('Log page', () => {
     await waitFor(() => {
       const urls = API.get.mock.calls.map(([u]) => u);
       expect(urls.some((u) => u.includes('/api/v2/acme/logs/all?'))).toBe(true);
+      // The stat header must follow the scope — a caller-scoped header over a
+      // tenant-wide table would misreport every aggregate.
+      expect(urls.some((u) => u.includes('/logs/stat/all'))).toBe(true);
     });
 
-    // Toggling back returns to the caller-scoped route.
+    // Toggling back returns to the caller-scoped routes.
     API.get.mockClear();
     fireEvent.click(screen.getByTestId('log-tenant-wide'));
     await waitFor(() => {
       const urls = API.get.mock.calls.map(([u]) => u);
       expect(urls.some((u) => u.includes('/logs?'))).toBe(true);
       expect(urls.some((u) => u.includes('/logs/all'))).toBe(false);
+      expect(urls.some((u) => u.includes('/logs/stat/all'))).toBe(false);
+      expect(urls.some((u) => u.includes('/logs/stat'))).toBe(true);
     });
   });
 

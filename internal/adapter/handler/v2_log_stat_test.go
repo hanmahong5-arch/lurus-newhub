@@ -148,3 +148,94 @@ func TestGetLogStatV2_WideWindowReturnsAllTotals(t *testing.T) {
 		t.Errorf("expected total_quota=1500 across wide window, got %d", got)
 	}
 }
+
+// TestGetAllLogStatV2_AdminSeesTenantWideTotals: /logs/stat/all drops the
+// user_id scope so the header matches the rows /logs/all lists. The same
+// admin on plain /logs/stat still sees only their own rows — that contrast is
+// what a "route both paths to the same handler" mutation would break.
+func TestGetAllLogStatV2_AdminSeesTenantWideTotals(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	now := common.GetTimestamp()
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "gpt-4o", 1000, 100, 200, now)
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "claude-3.5", 500, 50, 60, now)
+	seedStatLog(t, ctx, ctx.AdminUser.Id, "gpt-4o", 250, 25, 30, now)
+
+	w := V2RequestAsUser(ctx, ctx.AdminUser, http.MethodGet, "/api/v2/test-tenant/logs/stat/all", nil, nil)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	if got := int(data["total_requests"].(float64)); got != 3 {
+		t.Errorf("expected tenant-wide total_requests=3, got %d", got)
+	}
+	if got := int(data["total_quota"].(float64)); got != 1750 {
+		t.Errorf("expected tenant-wide total_quota=1750, got %d", got)
+	}
+	if got := int(data["tpm"].(float64)); got != 465 {
+		t.Errorf("expected tenant-wide tpm=465, got %d", got)
+	}
+
+	w = V2RequestAsUser(ctx, ctx.AdminUser, http.MethodGet, "/api/v2/test-tenant/logs/stat", nil, nil)
+	resp = AssertV2Success(t, w)
+	data = resp["data"].(map[string]interface{})
+	if got := int(data["total_requests"].(float64)); got != 1 {
+		t.Errorf("expected caller-scoped total_requests=1 on /logs/stat, got %d", got)
+	}
+	if got := int(data["total_quota"].(float64)); got != 250 {
+		t.Errorf("expected caller-scoped total_quota=250 on /logs/stat, got %d", got)
+	}
+}
+
+// TestGetAllLogStatV2_ForbiddenForNormalUser: tenant-wide aggregates cover
+// every member's usage, so the route carries the same admin gate as /logs/all.
+func TestGetAllLogStatV2_ForbiddenForNormalUser(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	now := common.GetTimestamp()
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "gpt-4o", 1000, 100, 200, now)
+
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs/stat/all", nil, nil)
+	AssertV2Status(t, w, http.StatusForbidden)
+}
+
+// TestGetAllLogStatV2_UsernameFilter: the tenant-wide route accepts the same
+// `username` member filter GetAllLogsV2 does.
+func TestGetAllLogStatV2_UsernameFilter(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	now := common.GetTimestamp()
+	for _, row := range []struct {
+		userID   int
+		username string
+		quota    int
+	}{
+		{ctx.NormalUser.Id, "alice", 1000},
+		{ctx.NormalUser.Id, "alice", 200},
+		{ctx.AdminUser.Id, "bob", 9999},
+	} {
+		lg := &repo.Log{
+			UserId:    row.userID,
+			TenantId:  ctx.TenantID,
+			Type:      repo.LogTypeConsume,
+			Username:  row.username,
+			ModelName: "gpt-4o",
+			Quota:     row.quota,
+			CreatedAt: now,
+		}
+		if err := ctx.DB.Create(lg).Error; err != nil {
+			t.Fatalf("failed to seed log: %v", err)
+		}
+	}
+
+	w := V2RequestAsUser(ctx, ctx.AdminUser, http.MethodGet, "/api/v2/test-tenant/logs/stat/all?username=alice", nil, nil)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	if got := int(data["total_requests"].(float64)); got != 2 {
+		t.Errorf("expected total_requests=2 for username filter, got %d", got)
+	}
+	if got := int(data["total_quota"].(float64)); got != 1200 {
+		t.Errorf("expected total_quota=1200 for username filter, got %d", got)
+	}
+}
