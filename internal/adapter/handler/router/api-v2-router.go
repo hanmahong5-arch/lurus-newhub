@@ -166,6 +166,9 @@ func SetApiV2Router(router *gin.Engine) {
 			// Aggregate header (RPM/TPM/total requests/total quota) over the
 			// active filters — mirrors GetLogsV2's filter shape.
 			tenantLogs.GET("/stat", handler.GetLogStatV2)
+			// Tenant-wide stat (admin gate in the handler) — pairs with
+			// GET /all so the header can summarise the same rows it lists.
+			tenantLogs.GET("/stat/all", handler.GetAllLogStatV2)
 			// Wave 3 Phase 2 (2026-05-20): CSV export with streaming writer
 			// and a 50k-row hard cap (clamped silently above that).
 			tenantLogs.GET("/export", handler.ExportLogsV2)

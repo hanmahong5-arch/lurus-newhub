@@ -49,6 +49,42 @@ func GetLogStatV2(c *gin.Context) {
 		return
 	}
 
+	serveLogStatV2(c, tenantCtx.TenantID, tenantCtx.UserID, "")
+}
+
+// GetAllLogStatV2 is the tenant-wide sibling of GetLogStatV2 — same aggregates
+// with no user_id filter, so the stat header can summarise the same rows
+// GetAllLogsV2 lists. Mirrors that route's shape: admin gate in the handler
+// (mounted under UserAuth()), plus an optional `username` filter.
+// Route: GET /api/v2/:tenant_slug/logs/stat/all
+func GetAllLogStatV2(c *gin.Context) {
+	tenantCtx, err := middleware.GetTenantContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "Tenant context not found",
+		})
+		return
+	}
+
+	// Tenant-wide aggregates cover every member's usage, so this must stay
+	// restricted to tenant admins — same gate as GetAllLogsV2.
+	if !requireTenantAdmin(c, tenantCtx) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "Admin role required",
+		})
+		return
+	}
+
+	serveLogStatV2(c, tenantCtx.TenantID, 0, c.Query("username"))
+}
+
+// serveLogStatV2 runs the two aggregate queries and writes the response.
+// userID > 0 scopes to that member's rows; userID == 0 is tenant-wide (callers
+// must admin-gate before passing 0). username is the tenant-wide route's
+// optional member filter.
+func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string) {
 	logType, _ := strconv.Atoi(c.DefaultQuery("type", "0"))
 	modelName := c.Query("model_name")
 	tokenName := c.Query("token_name")
@@ -60,9 +96,16 @@ func GetLogStatV2(c *gin.Context) {
 	// repeated here or the header totals stop matching the rows below them.
 	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
 
-	// Window totals — apply exactly the GetLogsV2 filters, tenant+user scoped.
+	// Window totals — apply exactly the GetLogsV2 filters, tenant scoped
+	// (+ user scoped unless tenant-wide).
 	windowQuery := repo.LOG_DB.Model(&repo.Log{}).
-		Where("tenant_id = ? AND user_id = ?", tenantCtx.TenantID, tenantCtx.UserID)
+		Where("tenant_id = ?", tenantID)
+	if userID > 0 {
+		windowQuery = windowQuery.Where("user_id = ?", userID)
+	}
+	if username != "" {
+		windowQuery = windowQuery.Where("username = ?", username)
+	}
 	if logType > 0 {
 		windowQuery = windowQuery.Where("type = ?", logType)
 	}
@@ -94,7 +137,7 @@ func GetLogStatV2(c *gin.Context) {
 			"COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, " +
 			"COALESCE(SUM(completion_tokens), 0) AS completion_tokens").
 		Scan(&window).Error; err != nil {
-		common.SysError("GetLogStatV2: window aggregate failed: " + err.Error())
+		common.SysError("serveLogStatV2: window aggregate failed: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "Failed to aggregate log stats",
@@ -102,13 +145,19 @@ func GetLogStatV2(c *gin.Context) {
 		return
 	}
 
-	// Rolling RPM/TPM — last 60s of consume traffic for the same model/token
-	// scope, independent of the caller's window. now is the cutoff anchor.
+	// Rolling RPM/TPM — last 60s of consume traffic for the same scope,
+	// independent of the caller's window. now is the cutoff anchor.
 	since := time.Now().Unix() - logStatWindowSeconds
 	rateQuery := repo.LOG_DB.Model(&repo.Log{}).
-		Where("tenant_id = ? AND user_id = ?", tenantCtx.TenantID, tenantCtx.UserID).
+		Where("tenant_id = ?", tenantID).
 		Where("type = ?", repo.LogTypeConsume).
 		Where("created_at >= ?", since)
+	if userID > 0 {
+		rateQuery = rateQuery.Where("user_id = ?", userID)
+	}
+	if username != "" {
+		rateQuery = rateQuery.Where("username = ?", username)
+	}
 	if modelName != "" {
 		rateQuery = rateQuery.Where("model_name = ?", modelName)
 	}
@@ -127,7 +176,7 @@ func GetLogStatV2(c *gin.Context) {
 		Select("COUNT(*) AS rpm, " +
 			"COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS tpm").
 		Scan(&rate).Error; err != nil {
-		common.SysError("GetLogStatV2: rate aggregate failed: " + err.Error())
+		common.SysError("serveLogStatV2: rate aggregate failed: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "Failed to aggregate log stats",

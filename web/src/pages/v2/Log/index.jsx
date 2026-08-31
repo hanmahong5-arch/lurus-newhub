@@ -213,7 +213,7 @@ const HFLog = () => {
   );
 
   const fetchStat = useCallback(
-    async (model, token, start, end, errOnly) => {
+    async (model, token, start, end, errOnly, wide) => {
       setStatLoading(true);
       try {
         const params = new URLSearchParams();
@@ -232,7 +232,8 @@ const HFLog = () => {
           );
         const qs = params.toString();
         const res = await API.get(
-          `/api/v2/${tenantSlug}/logs/stat` + (qs ? `?${qs}` : ''),
+          `/api/v2/${tenantSlug}/logs/stat${wide ? '/all' : ''}` +
+            (qs ? `?${qs}` : ''),
         );
         if (res?.data?.success) setStat(res.data.data);
       } catch (_) {
@@ -256,7 +257,14 @@ const HFLog = () => {
         errorsOnly,
         tenantWide,
       );
-      fetchStat(filterModel, filterToken, filterStart, filterEnd, errorsOnly);
+      fetchStat(
+        filterModel,
+        filterToken,
+        filterStart,
+        filterEnd,
+        errorsOnly,
+        tenantWide,
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantSlug]);
@@ -368,7 +376,14 @@ const HFLog = () => {
       errorsOnly,
       tenantWide,
     );
-    fetchStat(filterModel, filterToken, filterStart, filterEnd, errorsOnly);
+    fetchStat(
+      filterModel,
+      filterToken,
+      filterStart,
+      filterEnd,
+      errorsOnly,
+      tenantWide,
+    );
   };
 
   const goPage = (next) => {
@@ -397,7 +412,14 @@ const HFLog = () => {
       next,
       tenantWide,
     );
-    fetchStat(filterModel, filterToken, filterStart, filterEnd, next);
+    fetchStat(
+      filterModel,
+      filterToken,
+      filterStart,
+      filterEnd,
+      next,
+      tenantWide,
+    );
   };
 
   const toggleTenantWide = () => {
@@ -413,8 +435,16 @@ const HFLog = () => {
       errorsOnly,
       next,
     );
-    // Stat header intentionally stays on the caller's own usage: /logs/stat
-    // has no tenant-wide variant.
+    // Stat header follows the scope: /logs/stat/all summarises the same rows
+    // /logs/all lists.
+    fetchStat(
+      filterModel,
+      filterToken,
+      filterStart,
+      filterEnd,
+      errorsOnly,
+      next,
+    );
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
