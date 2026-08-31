@@ -180,6 +180,19 @@ func autoCreateBridgedUser(accountID int64) (*repo.User, error) {
 		}
 		return nil, err
 	}
+	// Welcome-quota parity with the OIDC auto-create path: Insert() stamps
+	// common.QuotaForNewUser (an option that defaults to 0), while
+	// CreateUserFromIDPClaims grants the per-tenant policy
+	// quota.new_user_quota (default 10000). Live-probed 2026-08-31: a fresh
+	// bridged user landed with quota 0 and 402'd on its very first relay
+	// call. Same tenant, same "new user" event — same grant. Best-effort:
+	// a failed grant must not fail the login itself.
+	if grant := repo.GetTenantConfigInt(user.TenantId, "quota.new_user_quota", 10000); grant > user.Quota {
+		if err := repo.DB.Model(&repo.User{}).Where("id = ?", user.Id).
+			Update("quota", grant).Error; err != nil {
+			common.SysError(fmt.Sprintf("zita-bootstrap: welcome quota grant failed (user=%d): %v", user.Id, err))
+		}
+	}
 	// Re-read by lurus_account_id to pick up DB-assigned id and defaults
 	// applied by the Insert path (quota grant, sidebar config init).
 	return repo.GetUserByLurusAccountID(accountID)

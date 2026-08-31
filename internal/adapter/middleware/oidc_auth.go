@@ -515,6 +515,24 @@ func jwkToRSAPublicKey(jwk JWK) (*rsa.PublicKey, error) {
 // handleSessionFallback checks for valid session-based OAuth data when no Bearer token is present.
 // Returns true if it handled the request (either successfully authenticated via session, or aborted).
 // Returns false if no session auth data is available and caller should try other methods.
+// injectSessionAccountID copies the platform account linkage from the gin
+// SESSION (set by zita-bootstrap / the legacy OAuth callback) into the gin
+// CONTEXT, falling back to the user row's lurus_account_id column. Without
+// this, every session-cookie (browser) caller of /api/v2/user/billing/*
+// read as "platform account not linked" (503) even though the linkage was
+// sitting in both the session and the users table — the Bearer-JWT path was
+// the only one that ever populated the context key (live-probed 2026-08-31:
+// fresh bridged user, summary+checkout both 503).
+func injectSessionAccountID(c *gin.Context, session sessions.Session, user *repo.User) {
+	if acct, ok := session.Get("identity_account_id").(int64); ok && acct > 0 {
+		c.Set("identity_account_id", acct)
+		return
+	}
+	if user != nil && user.LurusAccountID != nil && *user.LurusAccountID > 0 {
+		c.Set("identity_account_id", *user.LurusAccountID)
+	}
+}
+
 func handleSessionFallback(c *gin.Context) bool {
 	// Check if session middleware is available (prevents panic when session store not configured)
 	if _, exists := c.Get(sessions.DefaultKey); !exists {
@@ -587,6 +605,7 @@ func handleSessionFallback(c *gin.Context) bool {
 		c.Set("tenant_id", tenantID)
 		c.Set("user_id", user.Id)
 		c.Set("id", user.Id)
+		injectSessionAccountID(c, session, user)
 
 		c.Next()
 		return true
@@ -630,6 +649,7 @@ func handleSessionFallback(c *gin.Context) bool {
 		c.Set("tenant_id", tenantID)
 		c.Set("user_id", user.Id)
 		c.Set("id", user.Id)
+		injectSessionAccountID(c, session, user)
 
 		c.Next()
 		return true
