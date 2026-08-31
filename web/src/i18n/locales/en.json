@@ -39,7 +39,9 @@
       "nav": {
         "section_workspace": "workspace",
         "section_my_account": "my account",
-        "section_platform_admin": "platform · admin",
+        "section_routing_models": "routing & models",
+        "section_governance": "governance",
+        "section_operations": "operations & insights",
         "dashboard": "Dashboard",
         "playground": "Playground",
         "chat": "Chat",
@@ -921,7 +923,7 @@
       },
       "admin": {
         "users": {
-          "crumb_admin": "platform · admin",
+          "crumb_admin": "governance",
           "crumb": "users",
           "count_one": "{{count}} user",
           "count_other": "{{count}} users",
@@ -961,7 +963,7 @@
           "delete_warn_undo": "This action cannot be undone"
         },
         "settings": {
-          "crumb_admin": "platform · admin",
+          "crumb_admin": "operations & insights",
           "crumb": "settings",
           "heading_lbl": "admin settings",
           "title": "System settings",
@@ -1003,7 +1005,7 @@
           "f_usd_exchange_rate": "USD exchange rate"
         },
         "cost": {
-          "crumb_admin": "platform · admin",
+          "crumb_admin": "operations & insights",
           "crumb": "cost intelligence",
           "heading_lbl": "cost intelligence",
           "title": "Savings analyzer",
@@ -1031,7 +1033,7 @@
           "excluded_lbl": "excluded from re-pricing (honest gaps)"
         },
         "analytics": {
-          "crumb_admin": "platform · admin",
+          "crumb_admin": "operations & insights",
           "crumb": "model performance",
           "heading_lbl": "model performance",
           "title": "Model performance",
@@ -1061,7 +1063,7 @@
           "col_p95": "p95"
         },
         "audit": {
-          "crumb_admin": "platform · admin",
+          "crumb_admin": "governance",
           "crumb": "audit",
           "heading_lbl": "audit trail",
           "count_one": "{{count}} event",
@@ -1103,7 +1105,7 @@
           "no_details": "(no details)"
         },
         "gateway": {
-          "crumb_admin": "platform · admin",
+          "crumb_admin": "operations & insights",
           "crumb": "gateway",
           "heading_lbl": "routing health",
           "open_count_one": "{{count}} breaker open",

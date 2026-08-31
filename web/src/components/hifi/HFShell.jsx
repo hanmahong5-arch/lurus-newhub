@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import React, { useEffect, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   LuActivity,
@@ -126,6 +126,12 @@ const useThemeToggle = () => {
 // Nav labels carry an i18n `key` plus the original English `label` as the
 // t() defaultValue — so a missing translation degrades to readable English,
 // never a bare `console.nav.x` key.
+//
+// Sections group by JOB, not by backing table: workspace (do work) →
+// my account (my keys/usage/money) → three admin groups split by concern
+// (routing & models / governance / operations & insights). `minRole` hides a
+// section from the rail for lower roles — UI hygiene only; every /api/v2/admin
+// route keeps its own server-side authz, which remains the real gate.
 const NAV_SECTIONS = [
   {
     h: 'workspace',
@@ -167,7 +173,7 @@ const NAV_SECTIONS = [
         glyph: LuKeyRound,
         label: 'Tokens',
         key: 'console.nav.tokens',
-        badge: '5',
+        badge: '',
       },
       {
         id: 'logs',
@@ -196,13 +202,24 @@ const NAV_SECTIONS = [
         glyph: LuWallet,
         label: 'Billing',
         key: 'console.nav.billing',
-        badge: '$241',
+        badge: '',
+      },
+      // Account settings (sessions revoke etc.) is user-scope, not admin —
+      // it lived in the admin section only as a hi-fi port leftover.
+      {
+        id: 'settings',
+        href: '/console/v2/settings',
+        glyph: LuSettings,
+        label: 'Settings',
+        key: 'console.nav.settings',
+        badge: '',
       },
     ],
   },
   {
-    h: 'platform · admin',
-    hKey: 'console.nav.section_platform_admin',
+    h: 'routing & models',
+    hKey: 'console.nav.section_routing_models',
+    minRole: 10,
     items: [
       {
         id: 'channels',
@@ -210,7 +227,7 @@ const NAV_SECTIONS = [
         glyph: LuRadioTower,
         label: 'Channels',
         key: 'console.nav.channels',
-        badge: '8',
+        badge: '',
       },
       {
         id: 'models',
@@ -218,14 +235,6 @@ const NAV_SECTIONS = [
         glyph: LuBoxes,
         label: 'Models',
         key: 'console.nav.models',
-        badge: '54',
-      },
-      {
-        id: 'users',
-        href: '/console/v2/tenants',
-        glyph: LuUsers,
-        label: 'Tenants',
-        key: 'console.nav.tenants',
         badge: '',
       },
       {
@@ -236,15 +245,30 @@ const NAV_SECTIONS = [
         key: 'console.nav.pricing',
         badge: '',
       },
+    ],
+  },
+  {
+    h: 'governance',
+    hKey: 'console.nav.section_governance',
+    minRole: 10,
+    items: [
       {
-        id: 'redemption',
-        href: '/console/v2/redemption',
-        glyph: LuTicket,
-        label: 'Redemption',
-        key: 'console.nav.redemption',
+        id: 'users',
+        href: '/console/v2/tenants',
+        glyph: LuUsers,
+        label: 'Tenants',
+        key: 'console.nav.tenants',
         badge: '',
       },
-      // Cost-attribution projects (migration 029). Lives in the admin section
+      {
+        id: 'admin-users',
+        href: '/console/v2/admin/users',
+        glyph: LuUserCog,
+        label: 'Users (admin)',
+        key: 'console.nav.admin_users',
+        badge: '',
+      },
+      // Cost-attribution projects (migration 029). Lives in an admin section
       // because creating/renaming/deleting one is tenant-admin gated — reading
       // the list is open to every member (the Token page's picker needs it).
       {
@@ -255,12 +279,46 @@ const NAV_SECTIONS = [
         key: 'console.nav.projects',
         badge: '',
       },
+      // Per-(tenant, model) RPM/TPM rate-limit config (migration 026).
       {
-        id: 'settings',
-        href: '/console/v2/settings',
-        glyph: LuSettings,
-        label: 'Settings',
-        key: 'console.nav.settings',
+        id: 'admin-model-limits',
+        href: '/console/v2/admin/model-limits',
+        glyph: LuTimer,
+        label: 'Model limits',
+        key: 'console.nav.model_limits',
+        badge: '',
+      },
+      {
+        id: 'redemption',
+        href: '/console/v2/redemption',
+        glyph: LuTicket,
+        label: 'Redemption',
+        key: 'console.nav.redemption',
+        badge: '',
+      },
+      // Audit trail + tamper-evidence chain verifier (migration 024 backend).
+      {
+        id: 'admin-audit',
+        href: '/console/v2/admin/audit',
+        glyph: LuLink2,
+        label: 'Audit trail',
+        key: 'console.nav.admin_audit',
+        badge: '',
+      },
+    ],
+  },
+  {
+    h: 'operations & insights',
+    hKey: 'console.nav.section_operations',
+    minRole: 10,
+    items: [
+      // Live circuit-breaker state per channel (this replica).
+      {
+        id: 'admin-gateway',
+        href: '/console/v2/admin/gateway',
+        glyph: LuZap,
+        label: 'Gateway health',
+        key: 'console.nav.admin_gateway',
         badge: '',
       },
       // Cost-aware-routing savings analyzer (Phase 1).
@@ -281,42 +339,6 @@ const NAV_SECTIONS = [
         key: 'console.nav.model_performance',
         badge: '',
       },
-      // Per-(tenant, model) RPM/TPM rate-limit config (migration 026).
-      {
-        id: 'admin-model-limits',
-        href: '/console/v2/admin/model-limits',
-        glyph: LuTimer,
-        label: 'Model limits',
-        key: 'console.nav.model_limits',
-        badge: '',
-      },
-      // Admin surfaces (deferred backlog round 2) — now wired.
-      {
-        id: 'admin-users',
-        href: '/console/v2/admin/users',
-        glyph: LuUserCog,
-        label: 'Users (admin)',
-        key: 'console.nav.admin_users',
-        badge: '',
-      },
-      // Live circuit-breaker state per channel (this replica).
-      {
-        id: 'admin-gateway',
-        href: '/console/v2/admin/gateway',
-        glyph: LuZap,
-        label: 'Gateway health',
-        key: 'console.nav.admin_gateway',
-        badge: '',
-      },
-      // Audit trail + tamper-evidence chain verifier (migration 024 backend).
-      {
-        id: 'admin-audit',
-        href: '/console/v2/admin/audit',
-        glyph: LuLink2,
-        label: 'Audit trail',
-        key: 'console.nav.admin_audit',
-        badge: '',
-      },
       {
         id: 'admin-settings',
         href: '/console/v2/admin/settings',
@@ -335,15 +357,18 @@ const NAV_SECTIONS = [
 // pull a chunk of v1 state we don't need here); a thin localStorage
 // read is enough to surface "who am I" + a logout escape hatch.
 const useBridgedUser = () => {
-  const [user, setUser] = useState(null);
-  useEffect(() => {
+  // Lazy initializer, not an effect: the role-gated nav sections must be
+  // decided on the FIRST paint, or an admin's rail visibly pops in a frame
+  // late (and a user's flashes admin entries it then removes).
+  const [user] = useState(() => {
     try {
       const raw = localStorage.getItem('user');
-      if (raw) setUser(JSON.parse(raw));
+      return raw ? JSON.parse(raw) : null;
     } catch (e) {
       // malformed payload — leave user null, the logout button still works
+      return null;
     }
-  }, []);
+  });
   return user;
 };
 
@@ -469,6 +494,7 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
     null;
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = () => setNavOpen(false);
+  const navigate = useNavigate();
   return (
     <div className={'hf hf-shell' + (navOpen ? ' nav-open' : '')}>
       <HfToastHost />
@@ -487,7 +513,12 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
         <button
           type='button'
           className='btn'
+          data-testid='shell-search-button'
           aria-label={t('console.shell.search', 'search anything')}
+          onClick={() => {
+            closeNav();
+            navigate('/console/v2/cmdk');
+          }}
           style={{
             width: '100%',
             justifyContent: 'space-between',
@@ -504,7 +535,9 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
           </span>
         </button>
 
-        {NAV_SECTIONS.map((s) => (
+        {NAV_SECTIONS.filter(
+          (s) => !s.minRole || (user?.role ?? 0) >= s.minRole,
+        ).map((s) => (
           <div className='nav-section' key={s.h}>
             <div className='nav-h'>{t(s.hKey, s.h)}</div>
             {s.items.map((it) => {

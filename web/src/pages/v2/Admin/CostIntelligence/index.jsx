@@ -107,7 +107,7 @@ const HFCostIntelligence = () => {
     <HFShell
       active='admin-cost'
       crumbs={[
-        tr('console.admin.cost.crumb_admin', 'platform · admin'),
+        tr('console.admin.cost.crumb_admin', 'operations & insights'),
         tr('console.admin.cost.crumb', 'cost intelligence'),
       ]}
     >

@@ -39,7 +39,9 @@
       "nav": {
         "section_workspace": "工作区",
         "section_my_account": "我的账户",
-        "section_platform_admin": "平台 · 管理",
+        "section_routing_models": "路由 · 模型",
+        "section_governance": "治理",
+        "section_operations": "运维 · 洞察",
         "dashboard": "概览",
         "playground": "调试台",
         "chat": "对话",
@@ -921,7 +923,7 @@
       },
       "admin": {
         "users": {
-          "crumb_admin": "平台 · 管理",
+          "crumb_admin": "治理",
           "crumb": "用户",
           "count_one": "{{count}} 个用户",
           "count_other": "{{count}} 个用户",
@@ -961,7 +963,7 @@
           "delete_warn_undo": "此操作无法撤销"
         },
         "settings": {
-          "crumb_admin": "平台 · 管理",
+          "crumb_admin": "运维 · 洞察",
           "crumb": "设置",
           "heading_lbl": "管理设置",
           "title": "系统设置",
@@ -1003,7 +1005,7 @@
           "f_usd_exchange_rate": "美元汇率"
         },
         "cost": {
-          "crumb_admin": "平台 · 管理",
+          "crumb_admin": "运维 · 洞察",
           "crumb": "成本智能",
           "heading_lbl": "成本智能",
           "title": "节省分析器",
@@ -1031,7 +1033,7 @@
           "excluded_lbl": "未参与重新计价（诚实缺口）"
         },
         "analytics": {
-          "crumb_admin": "平台 · 管理",
+          "crumb_admin": "运维 · 洞察",
           "crumb": "模型性能",
           "heading_lbl": "模型性能",
           "title": "模型性能",
@@ -1061,7 +1063,7 @@
           "col_p95": "p95"
         },
         "audit": {
-          "crumb_admin": "平台 · 管理",
+          "crumb_admin": "治理",
           "crumb": "审计",
           "heading_lbl": "审计日志",
           "count_one": "{{count}} 条事件",
@@ -1103,7 +1105,7 @@
           "no_details": "（无详情）"
         },
         "gateway": {
-          "crumb_admin": "平台 · 管理",
+          "crumb_admin": "运维 · 洞察",
           "crumb": "网关",
           "heading_lbl": "路由健康",
           "open_count_one": "{{count}} 个熔断器已打开",

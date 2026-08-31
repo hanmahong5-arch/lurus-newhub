@@ -365,7 +365,7 @@ const HFProjects = () => {
     <HFShell
       active='projects'
       crumbs={[
-        tr('console.nav.section_platform_admin', 'platform · admin'),
+        tr('console.nav.section_governance', 'governance'),
         tr('console.projects.crumb', 'projects'),
       ]}
       actions={

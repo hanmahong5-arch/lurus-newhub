@@ -390,7 +390,7 @@ const HFAdminSettings = () => {
     <HFShell
       active='admin-settings'
       crumbs={[
-        tr('console.admin.settings.crumb_admin', 'platform · admin'),
+        tr('console.admin.settings.crumb_admin', 'operations & insights'),
         tr('console.admin.settings.crumb', 'settings'),
       ]}
     >

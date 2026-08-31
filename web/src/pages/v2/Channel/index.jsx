@@ -1236,7 +1236,7 @@ const HFChannel = () => {
     <HFShell
       active='channels'
       crumbs={[
-        t('console.nav.section_platform_admin', 'platform · admin'),
+        t('console.nav.section_routing_models', 'routing & models'),
         t('console.channel.crumb', 'channels'),
       ]}
       actions={

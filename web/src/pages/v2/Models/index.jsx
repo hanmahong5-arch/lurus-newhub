@@ -199,7 +199,7 @@ const HFModels = () => {
       <HFShell
         active='models'
         crumbs={[
-          tr('console.nav.section_platform_admin', 'platform · admin'),
+          tr('console.nav.section_routing_models', 'routing & models'),
           tr('console.models.crumb', 'model management'),
         ]}
         actions={

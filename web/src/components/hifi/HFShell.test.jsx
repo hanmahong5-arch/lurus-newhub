@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 // Mock the helper chain + heavy children so the shell renders in isolation.
 vi.mock('../../helpers', () => ({
@@ -43,6 +43,12 @@ import HFShell from './HFShell';
 beforeEach(() => {
   window.localStorage.clear();
 });
+
+const setBridgedUser = (role) =>
+  window.localStorage.setItem(
+    'user',
+    JSON.stringify({ role, username: 'shell-test', display_name: 'Shell T.' }),
+  );
 
 const renderShell = () =>
   render(
@@ -73,7 +79,8 @@ describe('HFShell deferred-surface nav placeholders', () => {
     expect(el.tagName.toLowerCase()).not.toBe('a');
   });
 
-  it('admin-users and admin-settings are now real nav links (round 2 wired)', () => {
+  it('admin-users and admin-settings are real nav links for an admin', () => {
+    setBridgedUser(10);
     renderShell();
 
     // No longer disabled placeholders.
@@ -89,6 +96,84 @@ describe('HFShell deferred-surface nav placeholders', () => {
     expect(settingsLink).toBeTruthy();
     expect(settingsLink.getAttribute('href')).toBe(
       '/console/v2/admin/settings',
+    );
+  });
+});
+
+describe('HFShell role-gated nav sections', () => {
+  it('hides every admin section from a regular user (role 1)', () => {
+    setBridgedUser(1);
+    renderShell();
+
+    // One representative item per admin section.
+    expect(screen.queryByText('Channels')).toBeNull(); // routing & models
+    expect(screen.queryByText('Tenants')).toBeNull(); // governance
+    expect(screen.queryByText('Gateway health')).toBeNull(); // operations
+  });
+
+  it('hides admin sections when no bridged user exists at all', () => {
+    renderShell();
+    expect(screen.queryByText('Channels')).toBeNull();
+    expect(screen.queryByText('Audit trail')).toBeNull();
+  });
+
+  it('shows all three admin sections to an admin (role 10)', () => {
+    setBridgedUser(10);
+    renderShell();
+
+    expect(screen.getByText('Channels').closest('a')).toBeTruthy();
+    expect(screen.getByText('Tenants').closest('a')).toBeTruthy();
+    expect(screen.getByText('Gateway health').closest('a')).toBeTruthy();
+    expect(screen.getByText('Audit trail').closest('a')).toBeTruthy();
+  });
+
+  it('keeps account Settings in "my account", visible to a regular user', () => {
+    setBridgedUser(1);
+    renderShell();
+
+    const settingsLink = screen.getByText('Settings').closest('a');
+    expect(settingsLink).toBeTruthy();
+    expect(settingsLink.getAttribute('href')).toBe('/console/v2/settings');
+  });
+
+  it('renders no hardcoded demo badges (the $241 / counts were fake)', () => {
+    setBridgedUser(10);
+    const { container } = renderShell();
+    expect(container.querySelector('.nav-badge')).toBeNull();
+  });
+});
+
+describe('HFShell search entry', () => {
+  it('clicking the search button navigates to the command palette', () => {
+    // Location probe rendered as the shell's page body: after the click the
+    // router must be on /console/v2/cmdk — a fake ⌘K button that goes nowhere
+    // was the previous (dishonest) behavior.
+    const LocationProbe = () => {
+      const loc = useLocation();
+      return React.createElement(
+        'div',
+        { 'data-testid': 'loc-probe' },
+        loc.pathname,
+      );
+    };
+    render(
+      React.createElement(
+        MemoryRouter,
+        { initialEntries: ['/console/v2/dashboard'] },
+        React.createElement(
+          HFShell,
+          { active: 'dashboard' },
+          React.createElement(LocationProbe),
+        ),
+      ),
+    );
+
+    expect(screen.getByTestId('loc-probe').textContent).toBe(
+      '/console/v2/dashboard',
+    );
+    fireEvent.click(screen.getByTestId('shell-search-button'));
+    expect(screen.getByTestId('loc-probe').textContent).toBe(
+      '/console/v2/cmdk',
     );
   });
 });

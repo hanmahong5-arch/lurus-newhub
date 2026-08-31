@@ -331,7 +331,7 @@ const V2AdminAudit = () => {
     <HFShell
       active='admin-audit'
       crumbs={[
-        tr('console.admin.audit.crumb_admin', 'platform · admin'),
+        tr('console.admin.audit.crumb_admin', 'governance'),
         tr('console.admin.audit.crumb', 'audit'),
       ]}
       actions={

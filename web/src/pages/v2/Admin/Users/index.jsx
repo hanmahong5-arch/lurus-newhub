@@ -315,7 +315,7 @@ const HFAdminUsers = () => {
     <HFShell
       active='admin-users'
       crumbs={[
-        tr('console.admin.users.crumb_admin', 'platform · admin'),
+        tr('console.admin.users.crumb_admin', 'governance'),
         tr('console.admin.users.crumb', 'users'),
       ]}
       actions={

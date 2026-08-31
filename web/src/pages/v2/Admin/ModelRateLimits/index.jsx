@@ -304,7 +304,7 @@ const HFModelRateLimits = () => {
     <HFShell
       active='admin-model-limits'
       crumbs={[
-        tr('console.nav.section_platform_admin', 'platform · admin'),
+        tr('console.nav.section_governance', 'governance'),
         tr('console.model_limits.crumb', 'model limits'),
       ]}
       actions={

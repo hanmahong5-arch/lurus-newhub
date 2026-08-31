@@ -80,7 +80,7 @@ const V2AdminGateway = () => {
     <HFShell
       active='admin-gateway'
       crumbs={[
-        tr('console.admin.gateway.crumb_admin', 'platform · admin'),
+        tr('console.admin.gateway.crumb_admin', 'operations & insights'),
         tr('console.admin.gateway.crumb', 'gateway'),
       ]}
       actions={

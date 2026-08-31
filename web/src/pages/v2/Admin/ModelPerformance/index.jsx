@@ -242,7 +242,7 @@ const HFModelPerformance = () => {
     <HFShell
       active='admin-analytics'
       crumbs={[
-        tr('console.admin.analytics.crumb_admin', 'platform · admin'),
+        tr('console.admin.analytics.crumb_admin', 'operations & insights'),
         tr('console.admin.analytics.crumb', 'model performance'),
       ]}
       actions={
