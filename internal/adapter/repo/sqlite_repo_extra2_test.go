@@ -423,7 +423,7 @@ func TestLogRepo_GetLogByKey(t *testing.T) {
 	}
 
 	// GetLogByKey returns empty slice when no logs for the key — just ensure no error
-	logs, err := GetLogByKey("sk-" + keyStr)
+	logs, err := GetLogByKey("sk-"+keyStr, u.Id, "default")
 	if err != nil {
 		t.Fatalf("GetLogByKey: %v", err)
 	}

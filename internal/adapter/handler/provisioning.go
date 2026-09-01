@@ -228,9 +228,18 @@ func ListProvisionedKeys(c *gin.Context) {
 
 	includeRevoked := c.Query("include_revoked") == "true"
 
+	// LIST reach must stay symmetric with revoke reach: RevokeProvisionedKey
+	// skips the creator check for ScopeAll, so a ScopeAll (platform-admin)
+	// key lists every creator's provisioned keys here — otherwise it could
+	// revoke keys it cannot see. Narrow Reseller keys stay scoped to their
+	// own creator identity.
 	creatorUserID := 0
 	if apiKey != nil {
-		creatorUserID = apiKey.CreatedBy
+		if apiKey.HasScope(repo.ScopeAll) {
+			creatorUserID = repo.ProvisionedAllCreators
+		} else {
+			creatorUserID = apiKey.CreatedBy
+		}
 	}
 
 	tokens, err := repo.GetProvisionedTokensByTenant(creatorUserID, tenant.Id, includeRevoked, offset, limit)
@@ -339,6 +348,31 @@ func RevokeProvisionedKey(c *gin.Context) {
 			"error_code": "KEY_NOT_FOUND",
 		})
 		return
+	}
+
+	// SECURITY (revoke/list scoping asymmetry): ListProvisionedKeys scopes
+	// its query to the caller's creator identity (creator_user_id =
+	// apiKey.CreatedBy — see GetProvisionedTokensByTenant), so a narrow
+	// Reseller key only ever sees the keys it issued. Without the same check
+	// here, that same narrow key could revoke ANY key in a whitelisted
+	// tenant, including ones issued by a different Reseller sharing that
+	// tenant. ScopeAll keys keep the same bypass they get on the tenant
+	// whitelist above — a platform admin key is already trusted to act on
+	// any creator's keys. 404 (not 403) to match the tenant-mismatch branch
+	// above and avoid confirming the key_id exists under a foreign creator.
+	if apiKey == nil || !apiKey.HasScope(repo.ScopeAll) {
+		creatorUserID := 0
+		if apiKey != nil {
+			creatorUserID = apiKey.CreatedBy
+		}
+		if token.CreatorUserId != creatorUserID {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success":    false,
+				"message":    "Provisioned key not found in this tenant",
+				"error_code": "KEY_NOT_FOUND",
+			})
+			return
+		}
 	}
 
 	if err := token.Delete(); err != nil {

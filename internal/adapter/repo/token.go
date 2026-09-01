@@ -648,6 +648,13 @@ func CountUserTokensByTenant(userID int, tenantID string) (int64, error) {
 	return total, err
 }
 
+// ProvisionedAllCreators is the creatorUserID sentinel meaning "no creator
+// filter" — reserved for ScopeAll (platform-admin) callers, whose LIST must
+// match their revoke reach (RevokeProvisionedKey skips the creator check for
+// ScopeAll). 0 cannot be the sentinel: it is a real stored value (legacy
+// tokens), so filtering by 0 must keep meaning "creator_user_id = 0".
+const ProvisionedAllCreators = -1
+
 // GetProvisionedTokensByTenant returns Tokens issued via the Provisioning API
 // for a specific (Reseller user, tenant) pair, ordered by id DESC. Used by
 // GET /internal/v1/provisioning/tenants/:slug/keys (Tier 1.1, 2026-05-19).
@@ -657,6 +664,8 @@ func CountUserTokensByTenant(userID int, tenantID string) (int64, error) {
 //     Reseller — keeps one Reseller's LIST output from leaking another's
 //     keys even when both happen to write to the same tenant via separate
 //     Provisioning keys. Legacy tokens (creator_user_id = 0) never show up.
+//     ProvisionedAllCreators (-1) disables the filter (ScopeAll callers) so
+//     the list reach stays symmetric with the revoke reach.
 //   - tenant_id = tenantID narrows to the URL-bound tenant scope.
 //   - includeRevoked=false adds status = TokenStatusEnabled. GORM's
 //     soft-delete (DeletedAt) is always applied by Find — revoked rows
@@ -665,7 +674,14 @@ func CountUserTokensByTenant(userID int, tenantID string) (int64, error) {
 // limit / offset are clamped at the handler; the repo trusts the window.
 func GetProvisionedTokensByTenant(creatorUserID int, tenantID string, includeRevoked bool, offset, limit int) ([]*Token, error) {
 	var tokens []*Token
-	q := DB.Where("creator_user_id = ? AND tenant_id = ?", creatorUserID, tenantID)
+	q := DB.Where("tenant_id = ?", tenantID)
+	if creatorUserID == ProvisionedAllCreators {
+		// Still a PROVISIONED-keys listing: creator_user_id > 0 keeps
+		// user-created tokens (creator 0) out even for ScopeAll callers.
+		q = q.Where("creator_user_id > 0")
+	} else {
+		q = q.Where("creator_user_id = ?", creatorUserID)
+	}
 	if !includeRevoked {
 		q = q.Where("status = ?", common.TokenStatusEnabled)
 	}
@@ -678,7 +694,12 @@ func GetProvisionedTokensByTenant(creatorUserID int, tenantID string, includeRev
 // LIST response. Filter semantics MUST stay in sync with the Get above.
 func CountProvisionedTokensByTenant(creatorUserID int, tenantID string, includeRevoked bool) (int64, error) {
 	var total int64
-	q := DB.Model(&Token{}).Where("creator_user_id = ? AND tenant_id = ?", creatorUserID, tenantID)
+	q := DB.Model(&Token{}).Where("tenant_id = ?", tenantID)
+	if creatorUserID == ProvisionedAllCreators {
+		q = q.Where("creator_user_id > 0")
+	} else {
+		q = q.Where("creator_user_id = ?", creatorUserID)
+	}
 	if !includeRevoked {
 		q = q.Where("status = ?", common.TokenStatusEnabled)
 	}

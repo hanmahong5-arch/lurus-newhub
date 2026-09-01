@@ -157,6 +157,26 @@ func TestDistribute_Override_CrossTenant_NonRoot_Denied(t *testing.T) {
 	}
 }
 
+// E1: when the caller's tenant_context cannot be resolved at all (no
+// "tenant_context" key set — e.g. a code path that reaches Distribute without
+// going through TokenAuth), a non-root channel pin must fail CLOSED (403),
+// not silently skip the ownership check and let the pin through.
+func TestDistribute_Override_UnresolvableTenant_NonRoot_Denied(t *testing.T) {
+	db, cleanup := setupCoverDB(t)
+	defer cleanup()
+	seedChannelR3(t, db, 62, "tenant-b")
+
+	r := mountDistribute(func(c *gin.Context) {
+		// Deliberately do NOT set "tenant_context" — simulates GetTenantContext
+		// erroring out for a non-root caller attempting a channel pin.
+		common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, "62")
+	})
+	w := doDistribute(r, `{"model":"gpt-4o"}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 when tenant context can't be resolved for a non-root channel pin; body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestDistribute_Override_CrossTenant_Root_Allowed(t *testing.T) {
 	db, cleanup := setupCoverDB(t)
 	defer cleanup()

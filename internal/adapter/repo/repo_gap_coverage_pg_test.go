@@ -352,7 +352,7 @@ func TestGetLogByKey_SeparateLogDBBranch_PG(t *testing.T) {
 		t.Fatalf("seed log: %v", err)
 	}
 
-	logs, err := GetLogByKey("sk-" + tok.Key)
+	logs, err := GetLogByKey("sk-"+tok.Key, normal.Id, "default")
 	if err != nil {
 		t.Fatalf("GetLogByKey (LOG_SQL_DSN branch): %v", err)
 	}
@@ -361,7 +361,7 @@ func TestGetLogByKey_SeparateLogDBBranch_PG(t *testing.T) {
 	}
 
 	// Miss case: a non-existent key returns the not-found error (token lookup fails).
-	if _, err := GetLogByKey("sk-does-not-exist"); err == nil {
+	if _, err := GetLogByKey("sk-does-not-exist", normal.Id, "default"); err == nil {
 		t.Fatal("GetLogByKey with unknown key must return an error in LOG_SQL_DSN branch")
 	}
 }

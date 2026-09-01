@@ -40,6 +40,12 @@ import (
 // the -race gate. Exported only so cross-package test binaries can set it.
 var AsyncGo = gopool.Go
 
+// debitWalletGRPC is a test seam over the money-moving wallet call (same
+// convention as AsyncGo). The legacy no-pre-auth settlement gate must be
+// assertable on the debit itself — a proxy signal like the usage mirror can
+// stay gated while the debit silently loses its gate.
+var debitWalletGRPC = common.DebitWalletGRPC
+
 type TokenDetails struct {
 	TextTokens  int
 	AudioTokens int
@@ -789,24 +795,34 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	// settlement, which is the ledger of record.
 	advisory := common.LocalLedgerAdvisory() && relayInfo.PlatformGoverned
 
+	// Provisioned keys (handler/provisioning.go:110) are TENANT-scoped and are
+	// minted with UserId=0 by design — no user row exists for them, so every
+	// user-ledger leg in this function would write against a non-existent row
+	// (and repo.PostConsumeDailyQuota / reportQuotaThreshold would hard-error on
+	// GetUserById(0)). Their settlement is the token quota (Phase 3) plus the
+	// tenant credit pool (Phase 2.5), both of which run unchanged below.
+	userLedger := relayInfo.UserId > 0
+
 	// Phase 1: Update local user quota
-	if quota > 0 {
-		err = repo.DecreaseUserQuota(relayInfo.UserId, quota)
-	} else {
-		err = repo.IncreaseUserQuota(relayInfo.UserId, -quota, false)
-	}
-	if err != nil {
-		if !advisory {
-			return err
+	if userLedger {
+		if quota > 0 {
+			err = repo.DecreaseUserQuota(relayInfo.UserId, quota)
+		} else {
+			err = repo.IncreaseUserQuota(relayInfo.UserId, -quota, false)
 		}
-		metrics.BillingAdvisoryMeterLost.WithLabelValues("user_quota").Inc()
-		common.SysLog(fmt.Sprintf("advisory: user quota shadow write lost (settle proceeds): userId=%d, quota=%d, err=%s",
-			relayInfo.UserId, quota, err.Error()))
-		err = nil
+		if err != nil {
+			if !advisory {
+				return err
+			}
+			metrics.BillingAdvisoryMeterLost.WithLabelValues("user_quota").Inc()
+			common.SysLog(fmt.Sprintf("advisory: user quota shadow write lost (settle proceeds): userId=%d, quota=%d, err=%s",
+				relayInfo.UserId, quota, err.Error()))
+			err = nil
+		}
 	}
 
 	// Phase 2: Update daily quota (non-critical, best-effort)
-	if quota > 0 {
+	if userLedger && quota > 0 {
 		if dailyErr := repo.PostConsumeDailyQuota(relayInfo.UserId, quota); dailyErr != nil {
 			common.SysLog("failed to update daily quota: " + dailyErr.Error())
 		}
@@ -854,23 +870,31 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 			}
 			common.SysLog(fmt.Sprintf("token quota update failed, compensating: userId=%d, quota=%d, err=%s",
 				relayInfo.UserId, quota, err.Error()))
-			if quota > 0 {
-				if compErr := repo.IncreaseUserQuota(relayInfo.UserId, quota, false); compErr != nil {
-					common.SysError(fmt.Sprintf("CRITICAL: compensation failed: userId=%d, quota=%d, err=%s",
-						relayInfo.UserId, quota, compErr.Error()))
-				}
-			} else {
-				if compErr := repo.DecreaseUserQuota(relayInfo.UserId, -quota); compErr != nil {
-					common.SysError(fmt.Sprintf("CRITICAL: compensation failed: userId=%d, quota=%d, err=%s",
-						relayInfo.UserId, -quota, compErr.Error()))
+			// Compensation exists solely to undo Phase 1; when Phase 1 was
+			// skipped (tenant-scoped key, no user row) there is nothing to undo.
+			if userLedger {
+				if quota > 0 {
+					if compErr := repo.IncreaseUserQuota(relayInfo.UserId, quota, false); compErr != nil {
+						common.SysError(fmt.Sprintf("CRITICAL: compensation failed: userId=%d, quota=%d, err=%s",
+							relayInfo.UserId, quota, compErr.Error()))
+					}
+				} else {
+					if compErr := repo.DecreaseUserQuota(relayInfo.UserId, -quota); compErr != nil {
+						common.SysError(fmt.Sprintf("CRITICAL: compensation failed: userId=%d, quota=%d, err=%s",
+							relayInfo.UserId, -quota, compErr.Error()))
+					}
 				}
 			}
 			// Don't return yet — must still handle platform pre-auth release below
 		}
 	}
 
-	// Phase 4: Email notification (non-critical, async)
-	if sendEmail && (quota+preConsumedQuota) != 0 {
+	// Phase 4: Email notification (non-critical, async).
+	// The notify decision is a READ of the user balance (relayInfo.UserQuota vs
+	// the remind threshold) addressed to a user mailbox — neither exists for a
+	// tenant-scoped key, whose UserQuota is a hardcoded 0 and would therefore
+	// trip "quota too low" on every single request.
+	if sendEmail && userLedger && (quota+preConsumedQuota) != 0 {
 		checkAndSendQuotaNotify(relayInfo, quota, preConsumedQuota)
 	}
 
@@ -919,7 +943,12 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	// carries its own no-op guards (protection disabled, Redis absent,
 	// non-positive tokens), so this stays a fire-and-forget that never fails or
 	// slows the settlement.
-	if totalQuota > 0 {
+	// userLedger here too: the window is keyed on the user id, so a
+	// tenant-scoped key (UserId=0) would pile every provisioned tenant's spend
+	// into one shared "user:0" window — a fuse that trips on the sum of
+	// unrelated tenants. middleware.CostSpikeLimit reads the same user-keyed
+	// window, so skipping the write keeps read and write consistent.
+	if totalQuota > 0 && userLedger {
 		costSpikeUserID := relayInfo.UserId
 		AsyncGo(func() {
 			RecordCostSpikeWindow(costSpikeUserID, totalQuota)
@@ -982,22 +1011,51 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				}
 			})
 		} else {
-			// Legacy path: fire-and-forget debit (no pre-auth)
+			// Legacy path: fire-and-forget debit (no pre-auth).
+			//
+			// Gated on the SAME principle as the pre-auth branch above: when the
+			// local settlement is inconsistent and we are not in advisory mode,
+			// the wallet must not be charged for a request that was not properly
+			// recorded locally. Up there the corrective action is "release
+			// instead of settle"; here there is no freeze to release, so the
+			// equivalent action is simply not to charge. Before this gate the
+			// debit fired unconditionally, so the exact case the pre-auth branch
+			// refuses to charge WAS charged for any account that happened to
+			// have no pre-auth (flag-off windows, high-balance skip, degraded
+			// admit) — the same double-debit risk, inconsistently applied.
+			charge := localQuotaConsistent || advisory
+			if !charge {
+				// Same severity/shape as the local-inconsistency logs above
+				// (common.SysLog) so the skipped revenue is observable rather
+				// than silently dropped.
+				common.SysLog(fmt.Sprintf("legacy wallet debit skipped, local quota inconsistent (non-advisory): accountID=%d, amount=%.4f LB, userId=%d",
+					accountID, amountLB, relayInfo.UserId))
+			}
 			refID := "llm-usage:" + uuid.NewString()
 			AsyncGo(func() {
 				debitCtx, debitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer debitCancel()
-				if _, debitErr := common.DebitWalletGRPC(debitCtx, accountID, amountLB, "llm_usage",
-					fmt.Sprintf("relay userId=%d", relayInfo.UserId), sourceProductOf(relayInfo),
-					refID); debitErr != nil {
-					common.SysLog(fmt.Sprintf("legacy wallet debit failed: accountID=%d, amount=%.4f LB, err=%s",
-						accountID, amountLB, debitErr.Error()))
+				if charge {
+					if _, debitErr := debitWalletGRPC(debitCtx, accountID, amountLB, "llm_usage",
+						fmt.Sprintf("relay userId=%d", relayInfo.UserId), sourceProductOf(relayInfo),
+						refID); debitErr != nil {
+						common.SysLog(fmt.Sprintf("legacy wallet debit failed: accountID=%d, amount=%.4f LB, err=%s",
+							accountID, amountLB, debitErr.Error()))
+					}
 				}
+				// Usage reporting stays unconditional, mirroring the pre-auth
+				// branch: it runs there on the release path too, and it moves no
+				// money.
 				common.ReportLLMUsageGRPC(debitCtx, accountID, amountLB)
 				reportQuotaThreshold(debitCtx, relayInfo, totalQuota)
-				// Mirror the legacy debit too (shared refID joins the pair):
-				// wallet>usage here would hide double charges from the drift SQL.
-				mirrorUsageEvent(debitCtx, relayInfo, accountID, totalQuota, amountLB, refID, 0)
+				if charge {
+					// Mirror the legacy debit too (shared refID joins the pair):
+					// wallet>usage here would hide double charges from the drift
+					// SQL. Keyed on `charge` for the same reason the pre-auth
+					// branch keys its mirror on `charged` — mirroring a debit
+					// that never happened invents a charge in the drift data.
+					mirrorUsageEvent(debitCtx, relayInfo, accountID, totalQuota, amountLB, refID, 0)
+				}
 			})
 		}
 	}

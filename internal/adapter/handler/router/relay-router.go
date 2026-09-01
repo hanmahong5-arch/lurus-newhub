@@ -219,14 +219,33 @@ func SetRelayRouter(router *gin.Engine) {
 		relayMusicRouter.GET("/music/:task_id", handler.RelayTask)
 	}
 
+	// Invariant (2026-08-31, closing the gap the /suno and /v1/audio/music
+	// fixes above left open): every BILLED relay group mounts the FULL
+	// governance chain, same order as relayV1Router — TokenAuth,
+	// PoolBalanceCheck, CostSpikeLimit, EntitlementCheck,
+	// ModelRequestRateLimit, BusinessRateLimit, RelayConcurrencyLimit,
+	// Distribute, BusinessModelRateLimit. This native Gemini group used to
+	// mount only TokenAuth+PoolBalanceCheck+ModelRequestRateLimit+Distribute,
+	// so cost-spike protection, entitlement checks, per-token/tenant RPM+TPM,
+	// the in-flight concurrency cap, and the per-model RPM+TPM dimension
+	// never applied to /v1beta at all.
 	relayGeminiRouter := router.Group("/v1beta")
 	relayGeminiRouter.Use(middleware.TokenAuth())
 	relayGeminiRouter.Use(middleware.PoolBalanceCheck())
+	relayGeminiRouter.Use(middleware.CostSpikeLimit())
+	relayGeminiRouter.Use(middleware.EntitlementCheck())
 	relayGeminiRouter.Use(middleware.ModelRequestRateLimit())
-	relayGeminiRouter.Use(middleware.Distribute())
+	relayGeminiRouter.Use(middleware.BusinessRateLimit())
+	relayGeminiRouter.Use(middleware.RelayConcurrencyLimit())
 	{
+		// BusinessModelRateLimit needs the model + tenant stash that only
+		// exist once Distribute has parsed the request, so — like
+		// relayV1Router's httpRouter/wsRouter sub-groups — it is mounted on
+		// its own sub-group AFTER Distribute, not alongside the chain above.
+		geminiHTTPRouter := relayGeminiRouter.Group("")
+		geminiHTTPRouter.Use(middleware.Distribute(), middleware.BusinessModelRateLimit())
 		// Gemini API 路径格式: /v1beta/models/{model_name}:{action}
-		relayGeminiRouter.POST("/models/*path", func(c *gin.Context) {
+		geminiHTTPRouter.POST("/models/*path", func(c *gin.Context) {
 			handler.Relay(c, types.RelayFormatGemini)
 		})
 	}

@@ -87,30 +87,43 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 	// traffic (unlinked users, flag-off windows) keeps the full local gate.
 	advisory := common.LocalLedgerAdvisory() && relayInfo.PlatformGoverned
 
-	// Local quota validation (always runs — backward compat + defense in depth)
-	userQuota, err := repo.GetUserQuota(relayInfo.UserId, false)
-	if err != nil {
-		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
-	}
+	// Provisioned keys (handler/provisioning.go:110) are tenant-scoped and are
+	// minted with UserId=0 by design — there is no user row, hence no user
+	// balance to read or pre-deduct. repo.GetUserQuota(0) matches no row and
+	// answers 0 WITHOUT an error, so the gate below used to 402 every single
+	// provisioned relay. Their money is the token's own quota plus the tenant
+	// credit pool; both of those legs still run in full below.
+	provisioned := relayInfo.UserId == 0
 
-	if userQuota <= 0 || userQuota-preConsumedQuota < 0 {
-		if advisory {
-			// Platform wallet already vouched for this request — the local
-			// shadow balance disagreeing is exactly the drift the advisory
-			// rollout measures, not a reason to refuse paid-for service.
-			metrics.BillingAdvisoryBypassTotal.WithLabelValues("user_balance_402").Inc()
-			logger.LogInfo(c, fmt.Sprintf("advisory: local balance would 402 (available %s, required %s) — platform-governed, continuing",
-				logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)))
-		} else {
-			// Local quota insufficient — must release platform pre-auth if one was created.
-			releasePlatformPreAuth(relayInfo)
-			relayInfo.PlatformPreAuthID = 0
-			return types.NewErrorWithStatusCode(
-				fmt.Errorf("insufficient quota: available %s, required %s",
-					logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
-				types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
-				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
-				types.ErrOptionWithTopupURL())
+	// Local quota validation (always runs for user-owned tokens — backward
+	// compat + defense in depth)
+	userQuota := 0
+	if !provisioned {
+		var err error
+		userQuota, err = repo.GetUserQuota(relayInfo.UserId, false)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		}
+
+		if userQuota <= 0 || userQuota-preConsumedQuota < 0 {
+			if advisory {
+				// Platform wallet already vouched for this request — the local
+				// shadow balance disagreeing is exactly the drift the advisory
+				// rollout measures, not a reason to refuse paid-for service.
+				metrics.BillingAdvisoryBypassTotal.WithLabelValues("user_balance_402").Inc()
+				logger.LogInfo(c, fmt.Sprintf("advisory: local balance would 402 (available %s, required %s) — platform-governed, continuing",
+					logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)))
+			} else {
+				// Local quota insufficient — must release platform pre-auth if one was created.
+				releasePlatformPreAuth(relayInfo)
+				relayInfo.PlatformPreAuthID = 0
+				return types.NewErrorWithStatusCode(
+					fmt.Errorf("insufficient quota: available %s, required %s",
+						logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
+					types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
+					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
+					types.ErrOptionWithTopupURL())
+			}
 		}
 	}
 
@@ -164,53 +177,59 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 				return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed,
 					http.StatusPaymentRequired, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 			}
-		} else if advisory {
-			// Advisory shadow ledger: keep the UNCONDITIONAL user debit so the
-			// shadow balance can still go negative (that drift is exactly what the
-			// rollout measures) — never blocked, never 402. Only a real DB write
-			// error gets the log-and-continue treatment. Byte-identical to the
-			// behavior before the atomic pre-consume gate.
-			if err := repo.DecreaseUserQuota(relayInfo.UserId, preConsumedQuota); err != nil {
-				// Roll the token freeze back so the shadow ledger stays
-				// consistent, then continue without a local freeze.
-				if compErr := repo.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, preConsumedQuota); compErr != nil {
-					common.SysError(fmt.Sprintf("advisory: token freeze rollback failed: tokenId=%d, quota=%d, err=%s",
-						relayInfo.TokenId, preConsumedQuota, compErr.Error()))
+		} else if !provisioned {
+			// Tenant-scoped keys stop here: the token debit above IS their whole
+			// local pre-deduction. Both branches below operate on a user row that
+			// does not exist for them — and the non-advisory one would answer
+			// ok=false (0 rows matched) and 402 every provisioned relay.
+			if advisory {
+				// Advisory shadow ledger: keep the UNCONDITIONAL user debit so the
+				// shadow balance can still go negative (that drift is exactly what the
+				// rollout measures) — never blocked, never 402. Only a real DB write
+				// error gets the log-and-continue treatment. Byte-identical to the
+				// behavior before the atomic pre-consume gate.
+				if err := repo.DecreaseUserQuota(relayInfo.UserId, preConsumedQuota); err != nil {
+					// Roll the token freeze back so the shadow ledger stays
+					// consistent, then continue without a local freeze.
+					if compErr := repo.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, preConsumedQuota); compErr != nil {
+						common.SysError(fmt.Sprintf("advisory: token freeze rollback failed: tokenId=%d, quota=%d, err=%s",
+							relayInfo.TokenId, preConsumedQuota, compErr.Error()))
+					}
+					metrics.BillingAdvisoryBypassTotal.WithLabelValues("pre_deduct").Inc()
+					common.SysLog(fmt.Sprintf("advisory: user pre-deduct failed, continuing without local freeze: userId=%d, quota=%d, err=%s",
+						relayInfo.UserId, preConsumedQuota, err.Error()))
+					preConsumedQuota = 0
 				}
-				metrics.BillingAdvisoryBypassTotal.WithLabelValues("pre_deduct").Inc()
-				common.SysLog(fmt.Sprintf("advisory: user pre-deduct failed, continuing without local freeze: userId=%d, quota=%d, err=%s",
-					relayInfo.UserId, preConsumedQuota, err.Error()))
-				preConsumedQuota = 0
-			}
-		} else {
-			// Non-advisory: atomic conditional debit closes the user-gate TOCTOU.
-			// The userQuota<=0 / userQuota-preConsumedQuota<0 fast pre-check above
-			// stays as a cheap short-circuit, but under concurrency it can pass on
-			// a balance another racing request has since drained — the atomic
-			// UPDATE is the backstop that keeps quota from going negative.
-			ok, err := repo.DecreaseUserQuotaIfEnough(relayInfo.UserId, preConsumedQuota)
-			if err != nil || !ok {
-				// The token was already atomically debited by PreConsumeTokenQuota
-				// above — roll it back so an aborted request never strands a
-				// per-key debit.
-				if compErr := repo.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, preConsumedQuota); compErr != nil {
-					common.SysError(fmt.Sprintf("token freeze rollback failed: tokenId=%d, quota=%d, err=%s",
-						relayInfo.TokenId, preConsumedQuota, compErr.Error()))
+			} else {
+				// Non-advisory: atomic conditional debit closes the user-gate TOCTOU.
+				// The userQuota<=0 / userQuota-preConsumedQuota<0 fast pre-check above
+				// stays as a cheap short-circuit, but under concurrency it can pass on
+				// a balance another racing request has since drained — the atomic
+				// UPDATE is the backstop that keeps quota from going negative.
+				ok, err := repo.DecreaseUserQuotaIfEnough(relayInfo.UserId, preConsumedQuota)
+				if err != nil || !ok {
+					// The token was already atomically debited by PreConsumeTokenQuota
+					// above — roll it back so an aborted request never strands a
+					// per-key debit.
+					if compErr := repo.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, preConsumedQuota); compErr != nil {
+						common.SysError(fmt.Sprintf("token freeze rollback failed: tokenId=%d, quota=%d, err=%s",
+							relayInfo.TokenId, preConsumedQuota, compErr.Error()))
+					}
+					releasePlatformPreAuth(relayInfo)
+					relayInfo.PlatformPreAuthID = 0
+					if err != nil {
+						// Real DB error — same error code/path as before.
+						return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+					}
+					// ok == false: balance out-raced the pre-check → the same 402 the
+					// fast path returns for insufficient local quota.
+					return types.NewErrorWithStatusCode(
+						fmt.Errorf("insufficient quota: available %s, required %s",
+							logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
+						types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
+						types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
+						types.ErrOptionWithTopupURL())
 				}
-				releasePlatformPreAuth(relayInfo)
-				relayInfo.PlatformPreAuthID = 0
-				if err != nil {
-					// Real DB error — same error code/path as before.
-					return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
-				}
-				// ok == false: balance out-raced the pre-check → the same 402 the
-				// fast path returns for insufficient local quota.
-				return types.NewErrorWithStatusCode(
-					fmt.Errorf("insufficient quota: available %s, required %s",
-						logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
-					types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
-					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
-					types.ErrOptionWithTopupURL())
 			}
 		}
 	}
