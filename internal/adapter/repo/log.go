@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -164,16 +165,61 @@ var internalOtherKeys = []string{
 	"data_flow_dest",
 }
 
-func GetLogByKey(key string) (logs []*Log, err error) {
-	if os.Getenv("LOG_SQL_DSN") != "" {
-		var tk Token
-		if err = DB.Model(&Token{}).Where(logKeyCol+"=?", strings.TrimPrefix(key, "sk-")).First(&tk).Error; err != nil {
-			return nil, err
+// GetLogByKey returns the history of the ONE token identified by its
+// plaintext key, and only when that token belongs to the calling principal.
+//
+// The ownership predicate lives here rather than in the handler on purpose:
+// the key is caller-supplied, so the endpoint's own auth (TokenAuth) proves
+// only that SOMEBODY is authenticated, not that the queried key is theirs.
+// Enforcing in the repo means a future second call site cannot reopen the
+// hole by forgetting the check — passing a caller identity is a compile-time
+// obligation, the same discipline TenantScope imposes on the cross-user
+// queries above.
+//
+// Fail-closed rules:
+//   - callerUserID <= 0 is denied outright. Provisioned tokens carry
+//     UserId = 0, so `target.UserId == callerUserID` would be 0 == 0 for
+//     EVERY provisioned token — an equality that is not an identity. Denying
+//     is the simpler half of the choice: such callers lose an endpoint they
+//     have no console for, instead of gaining each other's spend history.
+//   - an empty callerTenantID matches nothing, matching ForTenant's
+//     fail-closed convention.
+//   - an unknown key and a foreign key return the IDENTICAL shape (both go
+//     through deny), so the endpoint is not an existence oracle for other
+//     people's keys. Only a genuine infrastructure error is surfaced.
+//
+// The token lookup is Unscoped because a caller who revoked (soft-deleted)
+// their own key must still be able to read that key's history.
+func GetLogByKey(key string, callerUserID int, callerTenantID string) (logs []*Log, err error) {
+	separateLogDB := os.Getenv("LOG_SQL_DSN") != ""
+	// deny reproduces, byte for byte, what an unknown key returned before this
+	// check existed: an empty page on the join path, not-found on the
+	// separate-log-DB path.
+	deny := func() ([]*Log, error) {
+		if separateLogDB {
+			return nil, gorm.ErrRecordNotFound
 		}
-		err = LOG_DB.Model(&Log{}).Where("token_id=?", tk.Id).Find(&logs).Error
-	} else {
-		err = LOG_DB.Joins("left join tokens on tokens.id = logs.token_id").Where("tokens.key = ?", strings.TrimPrefix(key, "sk-")).Find(&logs).Error
+		return []*Log{}, nil
 	}
+	if callerUserID <= 0 || callerTenantID == "" {
+		return deny()
+	}
+	var tk Token
+	if err = DB.Unscoped().Model(&Token{}).Where(logKeyCol+"=?", strings.TrimPrefix(key, "sk-")).First(&tk).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return deny()
+		}
+		return nil, err
+	}
+	tokenTenant := tk.TenantId
+	if tokenTenant == "" {
+		// Rows predating the tenant column default land in the default tenant.
+		tokenTenant = "default"
+	}
+	if tk.UserId != callerUserID || tokenTenant != callerTenantID {
+		return deny()
+	}
+	err = LOG_DB.Model(&Log{}).Where("token_id=?", tk.Id).Find(&logs).Error
 	formatUserLogs(logs)
 	return logs, err
 }

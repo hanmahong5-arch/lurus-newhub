@@ -72,8 +72,11 @@ func TestDeleteHistoryLogs_V1_DBError(t *testing.T) {
 
 // ─── GetLogByKey ────────────────────────────────────────────────────────────
 
+// registerV1LogByKeyRoute mounts the handler behind a caller identity, since
+// the lookup is now scoped to the authenticated principal's own tokens
+// (TokenAuth supplies id + tenant_id in production).
 func registerV1LogByKeyRoute(ctx *V2TestContext) {
-	ctx.Router.GET("/api/log/token", GetLogByKey)
+	ctx.Router.GET("/api/log/token", asCaller(ctx.NormalUser.Id, ctx.TenantID), GetLogByKey)
 }
 
 // TestGetLogByKey_Success proves the happy-path join actually resolves a
@@ -101,19 +104,22 @@ func TestGetLogByKey_Success(t *testing.T) {
 	}
 }
 
-// TestGetLogByKey_DBError forces the join query itself to fail (drop the
-// logs table the join selects from) and asserts the handler's own error
+// TestGetLogByKey_DBError forces the log query itself to fail (drop the
+// logs table it selects from) and asserts the handler's own error
 // envelope — success:false + the raw driver error message, per the
-// handler's `"message": err.Error()` contract.
+// handler's `"message": err.Error()` contract. The token must be seeded and
+// owned by the caller first: an unknown key now short-circuits into the
+// unknown-key shape and would never reach the failing log query.
 func TestGetLogByKey_DBError(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 	registerV1LogByKeyRoute(ctx)
 
+	tok := SeedV2Token(t, ctx, ctx.NormalUser.Id, "logbykey-dberr-token")
 	if err := ctx.DB.Migrator().DropTable(&repo.Log{}); err != nil {
 		t.Fatalf("drop logs table: %v", err)
 	}
-	w := V2Request(ctx.Router, http.MethodGet, "/api/log/token?key=sk-anything", nil, nil)
+	w := V2Request(ctx.Router, http.MethodGet, "/api/log/token?key=sk-"+tok.Key, nil, nil)
 	if w.Code != http.StatusOK { // handler always returns 200 per its own contract
 		t.Fatalf("status = %d, want 200 (handler wraps errors in the 200 envelope), body=%s", w.Code, w.Body.String())
 	}

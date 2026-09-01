@@ -361,6 +361,10 @@ func TestDistribute_SpecificChannel_EnabledPasses(t *testing.T) {
 	}
 	r := mountDistribute(func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, "12")
+		// A resolvable caller tenant is part of the channel-pin contract now:
+		// production always has one (TokenAuth injects it) and an unresolvable
+		// tenant fails closed (TestDistribute_Override_UnresolvableTenant_*).
+		c.Set("tenant_context", &TenantContext{TenantID: "default"})
 	})
 	w := doDistribute(r, `{"model":"gpt-4o"}`)
 	if w.Code != http.StatusOK {
@@ -383,6 +387,9 @@ func TestDistribute_SpecificChannel_NoKeysAvailable_Aborts(t *testing.T) {
 	}
 	r := mountDistribute(func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, "13")
+		// See TestDistribute_SpecificChannel_EnabledPasses — pins require a
+		// resolvable caller tenant since the fail-closed guard.
+		c.Set("tenant_context", &TenantContext{TenantID: "default"})
 	})
 	w := doDistribute(r, `{"model":"gpt-4o"}`)
 	if w.Code != http.StatusServiceUnavailable {

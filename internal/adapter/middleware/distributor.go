@@ -65,19 +65,25 @@ func Distribute() func(c *gin.Context) {
 			// and exfiltrate the upstream key/base_url of, a channel owned by
 			// another tenant. Confine the pinned channel to the caller's tenant; a
 			// root operator (flag set in SetupContextForToken) keeps the
-			// cross-tenant override. When the caller's tenant can't be resolved
-			// (only possible off the normal TokenAuth path, which always injects
-			// it) fail OPEN so this never breaks legitimate relay traffic.
+			// cross-tenant override. TokenAuth always injects tenant_context on
+			// the normal relay path (round-3 #3), so a resolution failure here
+			// means the caller's tenant is genuinely unknown — fail CLOSED (403)
+			// rather than silently skipping the ownership check, otherwise an
+			// unresolvable tenant context becomes a free pass to pin any tenant's
+			// channel.
 			if !common.GetContextKeyBool(c, constant.ContextKeyTokenSpecificChannelRootOverride) {
-				if callerTenant, terr := GetTenantContext(c); terr == nil && callerTenant != nil && callerTenant.TenantID != "" {
-					channelTenant := channel.TenantId
-					if channelTenant == "" {
-						channelTenant = "default"
-					}
-					if channelTenant != callerTenant.TenantID {
-						abortWithOpenAiMessage(c, http.StatusForbidden, "无权使用其他租户的渠道")
-						return
-					}
+				callerTenant, terr := GetTenantContext(c)
+				if terr != nil || callerTenant == nil || callerTenant.TenantID == "" {
+					abortWithOpenAiMessage(c, http.StatusForbidden, "无法确定调用方租户，拒绝渠道绑定")
+					return
+				}
+				channelTenant := channel.TenantId
+				if channelTenant == "" {
+					channelTenant = "default"
+				}
+				if channelTenant != callerTenant.TenantID {
+					abortWithOpenAiMessage(c, http.StatusForbidden, "无权使用其他租户的渠道")
+					return
 				}
 			}
 		} else {

@@ -40,9 +40,10 @@ type Token struct {
 	// enforced by middleware.BusinessRateLimit). 0 = unlimited — every row that
 	// predates migration 023 keeps its unthrottled behavior.
 	RateLimitRPM int `json:"rate_limit_rpm" gorm:"column:rpm_limit;default:0"`
-	// RateLimitTPM caps this token's LLM tokens per minute. The column exists
-	// (migration 023) but is NOT yet enforced — see the TPM TODO in
-	// middleware/business_rate_limit.go. 0 = unlimited.
+	// RateLimitTPM caps this token's LLM tokens per minute (migration 023).
+	// Enforced in middleware.BusinessRateLimit (business_rate_limit.go),
+	// which admits/rejects against a sliding usage window recorded by
+	// app.PostConsumeQuota (quota.go) after each request settles. 0 = unlimited.
 	RateLimitTPM int `json:"rate_limit_tpm" gorm:"column:tpm_limit;default:0"`
 	// ProjectId attributes this token's spend to a Project (migration 029).
 	// 0 = unassigned (entity.ProjectUnassigned). It is a cost-attribution

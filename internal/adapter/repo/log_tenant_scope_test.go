@@ -304,7 +304,7 @@ func TestLogScope_PrincipalScopedQueries(t *testing.T) {
 	}
 	assertOnlyTenant(t, "GetTokenLogsInternal", logs, f.tenantA.Id)
 
-	logs, err = GetLogByKey("sk-" + f.tokenA.Key)
+	logs, err = GetLogByKey("sk-"+f.tokenA.Key, f.userA.Id, f.tenantA.Id)
 	if err != nil {
 		t.Fatalf("GetLogByKey: %v", err)
 	}

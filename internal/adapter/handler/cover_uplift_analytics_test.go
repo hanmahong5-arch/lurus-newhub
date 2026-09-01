@@ -201,7 +201,10 @@ func TestCoverUpliftAnalytics_GetLogByKey_Found(t *testing.T) {
 	}
 
 	r := gin.New()
-	r.GET("/api/log/token", GetLogByKey)
+	// GetLogByKey is ownership-checked against the authenticated principal
+	// (TokenAuth sets id + tenant_id in production), so the caller identity
+	// has to be present for the happy path to resolve anything.
+	r.GET("/api/log/token", asCaller(ctx.NormalUser.Id, ctx.TenantID), GetLogByKey)
 
 	w := doAnalyticsGet(r, "/api/log/token?key=sk-"+tok.Key)
 	resp := AssertV2Success(t, w)
@@ -220,7 +223,7 @@ func TestCoverUpliftAnalytics_GetLogByKey_NoMatch(t *testing.T) {
 	defer ctx.Cleanup()
 
 	r := gin.New()
-	r.GET("/api/log/token", GetLogByKey)
+	r.GET("/api/log/token", asCaller(ctx.NormalUser.Id, ctx.TenantID), GetLogByKey)
 
 	w := doAnalyticsGet(r, "/api/log/token?key=sk-does-not-exist-anywhere")
 	resp := AssertV2Success(t, w)

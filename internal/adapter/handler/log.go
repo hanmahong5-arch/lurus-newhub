@@ -163,7 +163,12 @@ func SearchUserLogs(c *gin.Context) {
 
 func GetLogByKey(c *gin.Context) {
 	key := c.Query("key")
-	logs, err := repo.GetLogByKey(key)
+	// The queried key is caller-supplied, so ownership must be decided from
+	// the authenticated principal instead: TokenAuth sets both "id" (the
+	// token owner) and "tenant_id" (the token's tenant). repo.GetLogByKey
+	// refuses anything that is not the caller's own token, and returns the
+	// unknown-key shape for foreign keys so this stays out of oracle duty.
+	logs, err := repo.GetLogByKey(key, c.GetInt("id"), c.GetString("tenant_id"))
 	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,

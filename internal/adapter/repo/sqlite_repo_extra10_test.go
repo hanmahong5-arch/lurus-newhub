@@ -136,7 +136,7 @@ func TestGetLogByKey_JoinPath(t *testing.T) {
 	_ = seedLog(t, u.Id, LogTypeSystem, "gpt-4", "default")
 
 	// GetLogByKey — exercises the JOIN path (no LOG_SQL_DSN env)
-	logs, err := GetLogByKey(tok.Key)
+	logs, err := GetLogByKey(tok.Key, u.Id, "default")
 	if err != nil {
 		t.Fatalf("GetLogByKey: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestGetLogByKey_WithSkPrefix(t *testing.T) {
 	tok := seedToken(t, u.Id, common.TokenStatusEnabled, true, 0, -1)
 
 	// Pass with sk- prefix — TrimPrefix should handle it
-	_, err := GetLogByKey("sk-" + tok.Key)
+	_, err := GetLogByKey("sk-"+tok.Key, u.Id, "default")
 	if err != nil {
 		t.Fatalf("GetLogByKey with sk- prefix: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestGetLogByKey_NonExistentKey(t *testing.T) {
 	setupSQLiteDB(t)
 
 	// Non-existent key — should return empty slice or error, not panic
-	logs, err := GetLogByKey("nonexistent-key-xyz")
+	logs, err := GetLogByKey("nonexistent-key-xyz", 1, "default")
 	// JOIN path: returns empty slice with no error
 	if err != nil {
 		t.Logf("GetLogByKey nonexistent: %v (acceptable)", err)

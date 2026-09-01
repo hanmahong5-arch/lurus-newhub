@@ -469,18 +469,42 @@ func TokenAuth() func(c *gin.Context) {
 			}
 		}
 
-		userCache, err := repo.GetUserCache(token.UserId)
-		if err != nil {
-			abortWithOpenAiMessage(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-		userEnabled := userCache.Status == common.UserStatusEnabled
-		if !userEnabled {
-			abortWithOpenAiMessage(c, http.StatusForbidden, "用户已被封禁")
-			return
-		}
+		// Provisioned keys (handler/provisioning.go:110) are TENANT-scoped by
+		// ADR, not user-scoped: they are minted with UserId=0 on purpose and no
+		// user row is ever created for them. repo.GetUserCache(0) falls through
+		// to repo.GetUserById(0), which hard-errors ("id 为空！",
+		// repo/user.go:306), so every relay call on a provisioned key used to
+		// 500 right here — the whole feature was structurally dead on the relay
+		// path. Treat UserId==0 as a first-class relay principal instead: the
+		// token's own status/quota plus the tenant gates below are the
+		// authority, and the money comes only from the token quota + the tenant
+		// credit pool (app.PreConsumeQuota / app.PostConsumeQuota skip the
+		// user-quota legs for UserId==0). Everything else on this path — IP
+		// limits, scopes, tenant gates, project attribution, tenant context —
+		// keeps running exactly as it does for a user-owned token.
+		//
+		// The TenantId requirement is a positive marker: the provisioning
+		// handler always stamps a non-empty tenant, so a stray legacy row with
+		// user_id=0 AND an empty tenant must NOT inherit the relaxed user
+		// gates — it keeps the old fail-closed 500 below instead of relaying
+		// as tenant "default" with no user-status check.
+		provisioned := token.UserId == 0 && token.TenantId != ""
+		var userCache *repo.UserBase
+		if !provisioned {
+			var cacheErr error
+			userCache, cacheErr = repo.GetUserCache(token.UserId)
+			if cacheErr != nil {
+				abortWithOpenAiMessage(c, http.StatusInternalServerError, cacheErr.Error())
+				return
+			}
+			userEnabled := userCache.Status == common.UserStatusEnabled
+			if !userEnabled {
+				abortWithOpenAiMessage(c, http.StatusForbidden, "用户已被封禁")
+				return
+			}
 
-		repo.UserBaseWriteContext(userCache, c)
+			repo.UserBaseWriteContext(userCache, c)
+		}
 
 		// TI (round-3 #2 + #3): resolve the token's owning tenant and enforce
 		// tenant-level gates on the relay hot path.
@@ -512,34 +536,63 @@ func TokenAuth() func(c *gin.Context) {
 				return
 			}
 		}
+		// A provisioned key has no user row, so it carries no email/username —
+		// logs and audit rows for that traffic show them empty. Accepted: the
+		// tenant id (right above) is the attribution unit for tenant-scoped keys.
+		tenantCtxEmail := ""
+		tenantCtxUsername := ""
+		if userCache != nil {
+			tenantCtxEmail = userCache.Email
+			tenantCtxUsername = userCache.Username
+		}
 		repo.InjectTenantContext(c, tokenTenantId, token.UserId)
 		c.Set("tenant_context", &TenantContext{
 			TenantID: tokenTenantId,
 			UserID:   token.UserId,
-			Email:    userCache.Email,
-			Username: userCache.Username,
+			Email:    tenantCtxEmail,
+			Username: tenantCtxUsername,
 			Roles:    []string{},
 		})
 
 		// Propagate user_id to context.Context for structured log correlation.
 		c.Request = c.Request.WithContext(common.WithUserID(c.Request.Context(), fmt.Sprintf("%d", token.UserId)))
 
-		userGroup := userCache.Group
-		tokenGroup := token.Group
-		if tokenGroup != "" {
-			// check common.UserUsableGroups[userGroup]
-			if _, ok := app.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
-				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
-				return
+		var userGroup string
+		if provisioned {
+			// No user row ⇒ nothing to validate the token group AGAINST: the
+			// usable-groups check below keys on the owning user's group
+			// (app.GetUserUsableGroups(userGroup)), which for a tenant-scoped
+			// key does not exist. The token's own group is the sole authority
+			// here; empty falls back to "default" — the same default the
+			// provisioning handler stamps when the caller omits it.
+			userGroup = token.Group
+			if userGroup == "" {
+				userGroup = "default"
 			}
-			// check group in common.GroupRatio
-			if !ratio_setting.ContainsGroupRatio(tokenGroup) {
-				if tokenGroup != "auto" {
-					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
+			// UserBaseWriteContext is skipped for provisioned keys, so the
+			// "auto"-group resolution inputs (ContextKeyUserGroup, read by the
+			// distributor and channel selection via app.GetUserAutoGroup) must
+			// be seeded here or an auto-group token would resolve against an
+			// empty owner group.
+			common.SetContextKey(c, constant.ContextKeyUserGroup, userGroup)
+		} else {
+			userGroup = userCache.Group
+			tokenGroup := token.Group
+			if tokenGroup != "" {
+				// check common.UserUsableGroups[userGroup]
+				if _, ok := app.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
 					return
 				}
+				// check group in common.GroupRatio
+				if !ratio_setting.ContainsGroupRatio(tokenGroup) {
+					if tokenGroup != "auto" {
+						abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
+						return
+					}
+				}
+				userGroup = tokenGroup
 			}
-			userGroup = tokenGroup
 		}
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, userGroup)
 
