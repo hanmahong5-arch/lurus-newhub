@@ -135,6 +135,19 @@ func SanitizeOtherForUser(other string) string {
 	for _, key := range internalOtherKeys {
 		delete(otherMap, key)
 	}
+	// Rows written before 2026-09-01 carry frt = -1000, the "no first token
+	// observed" sentinel that used to be subtracted unconditionally. The write
+	// side is fixed, but the fix is forward-only and frt became user-visible in
+	// the same day's change, so without this every historical non-streaming row
+	// would show a paying customer "-1000ms time to first token". A latency is
+	// never negative; drop the key rather than render a sentinel as a
+	// measurement. The admin route intentionally keeps the raw payload — an
+	// audit surface should show what is actually stored.
+	if frt, ok := otherMap["frt"]; ok {
+		if v, isNum := frt.(float64); !isNum || v < 0 {
+			delete(otherMap, "frt")
+		}
+	}
 	return common.MapToJsonStr(otherMap)
 }
 
