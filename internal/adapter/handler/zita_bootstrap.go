@@ -187,9 +187,14 @@ func autoCreateBridgedUser(accountID int64) (*repo.User, error) {
 	// bridged user landed with quota 0 and 402'd on its very first relay
 	// call. Same tenant, same "new user" event — same grant. Best-effort:
 	// a failed grant must not fail the login itself.
+	//
+	// MUST go through IncreaseUserQuota, not a raw DB update: Insert()'s
+	// sidebar-config step calls user.Update(), which caches the user hash
+	// (Quota=0) in Redis — a raw UPDATE leaves that stale 0 in the cache and
+	// relay's GetUserQuota keeps 402-ing (second live probe proved it: DB
+	// said 10000, relay said "available $0.000000").
 	if grant := repo.GetTenantConfigInt(user.TenantId, "quota.new_user_quota", 10000); grant > user.Quota {
-		if err := repo.DB.Model(&repo.User{}).Where("id = ?", user.Id).
-			Update("quota", grant).Error; err != nil {
+		if err := repo.IncreaseUserQuota(user.Id, grant-user.Quota, true); err != nil {
 			common.SysError(fmt.Sprintf("zita-bootstrap: welcome quota grant failed (user=%d): %v", user.Id, err))
 		}
 	}
