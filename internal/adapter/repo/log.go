@@ -149,7 +149,10 @@ var internalOtherKeys = []string{
 	"cache_creation_ratio",
 	"model_price",
 	"user_group_ratio",
-	"frt",
+	// "frt" is deliberately NOT here: time to first token is the caller's own
+	// request timing, classified TierPublic alongside total_latency_ms. See
+	// governance/classification.go — and TestInternalOtherKeys_NoPublicField
+	// keeps the two lists from drifting apart again.
 	"is_model_mapped",
 	"upstream_model_name",
 	"web_search_price",
