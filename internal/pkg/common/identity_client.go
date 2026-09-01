@@ -535,6 +535,30 @@ type CheckoutResult struct {
 	ExpiresAt *string `json:"expires_at"`
 }
 
+// CheckoutError is returned by CreateCheckout when lurus-platform answers with
+// a non-201 HTTP status. It preserves the platform's status code/body so
+// callers can distinguish a request the platform actively rejected (e.g. 400
+// bad amount / method not configured) from a genuine outage (network error,
+// 5xx) instead of collapsing both into one generic failure. Request-level
+// failures (couldn't even reach the platform) still return a plain error, not
+// this type — callers should type-assert with errors.As and treat a miss as
+// "platform unreachable".
+type CheckoutError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *CheckoutError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.Code != "" {
+		return fmt.Sprintf("checkout failed: %s (status %d)", e.Code, e.Status)
+	}
+	return fmt.Sprintf("checkout failed (status %d)", e.Status)
+}
+
 // CreateCheckout creates a checkout session on lurus-platform for wallet topup.
 // The sourceService identifies which product initiated the checkout (e.g., "lurus-api").
 func CreateCheckout(ctx context.Context, accountID int64, amountCNY float64, paymentMethod, sourceService, idempotencyKey, returnURL string) (*CheckoutResult, error) {
@@ -567,10 +591,15 @@ func CreateCheckout(ctx context.Context, accountID int64, amountCNY float64, pay
 
 	if resp.StatusCode != http.StatusCreated {
 		var errResp struct {
-			Error string `json:"error"`
+			Error   string `json:"error"`
+			Message string `json:"message"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return nil, fmt.Errorf("checkout failed: %s (status %d)", errResp.Error, resp.StatusCode)
+		msg := errResp.Message
+		if msg == "" {
+			msg = errResp.Error
+		}
+		return nil, &CheckoutError{Status: resp.StatusCode, Code: errResp.Error, Message: msg}
 	}
 	var result CheckoutResult
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

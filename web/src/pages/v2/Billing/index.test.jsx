@@ -96,6 +96,40 @@ const fakeSummary = {
   subscription_plan: 'pro',
 };
 
+const fakePaymentMethods = [
+  { id: 'alipay', name: 'Alipay', provider: 'alipay', type: 'redirect' },
+  { id: 'wechat', name: 'WeChat Pay', provider: 'wechat', type: 'qr' },
+];
+
+// Shared API.get mock: routes invoices / summary / payment-methods by URL so
+// each test only has to override the branch it cares about.
+const mockGetDefaults = ({
+  invoices = fakeInvoices,
+  summary = fakeSummary,
+  methods = fakePaymentMethods,
+  summaryRejects = false,
+  methodsRejects = false,
+} = {}) => {
+  API.get.mockImplementation((url) => {
+    if (url.includes('/billing/invoices')) {
+      return Promise.resolve({
+        data: { success: true, data: { items: invoices } },
+      });
+    }
+    if (url.includes('/billing/payment-methods')) {
+      return methodsRejects
+        ? Promise.reject(new Error('network error'))
+        : Promise.resolve({ data: { success: true, data: methods } });
+    }
+    if (url.includes('/billing/summary')) {
+      return summaryRejects
+        ? Promise.reject(new Error('503 Service Unavailable'))
+        : Promise.resolve({ data: { success: true, data: summary } });
+    }
+    return Promise.resolve({ data: { success: true, data: {} } });
+  });
+};
+
 beforeEach(() => {
   API.get.mockReset();
   API.post.mockReset();
@@ -105,18 +139,12 @@ beforeEach(() => {
 });
 
 describe('Billing page', () => {
-  // 1. On mount, fetches invoices + summary; rendered content reflects mock data.
-  it('fetches invoices + summary on mount', async () => {
-    // Use mockResolvedValue (sticky) so repeated calls due to slug re-initialisation
-    // from localStorage all resolve successfully without throwing.
-    API.get.mockImplementation((url) => {
-      if (url.includes('/billing/invoices')) {
-        return Promise.resolve({
-          data: { success: true, data: { items: fakeInvoices } },
-        });
-      }
-      return Promise.resolve({ data: { success: true, data: fakeSummary } });
-    });
+  // 1. On mount, fetches invoices + summary + payment methods; rendered
+  //    content reflects mock data.
+  it('fetches invoices + summary + payment methods on mount', async () => {
+    // mockImplementation (sticky) so repeated calls due to slug
+    // re-initialisation from localStorage all resolve successfully.
+    mockGetDefaults();
 
     render(<HFBilling />);
 
@@ -129,21 +157,29 @@ describe('Billing page', () => {
 
     const calls = API.get.mock.calls.map(([url]) => url);
     expect(calls).toContain('/api/v2/user/billing/summary');
+    expect(calls).toContain('/api/v2/user/billing/payment-methods');
 
     // Invoice row for 2026-05 should appear in the DOM.
     await waitFor(() => {
       expect(screen.getByText('2026-05')).toBeTruthy();
     });
+
+    // Server-driven payment methods rendered (not the old hardcoded Alipay).
+    await waitFor(() => {
+      expect(screen.getByTestId('billing-method-alipay')).toBeTruthy();
+      expect(screen.getByTestId('billing-method-wechat')).toBeTruthy();
+    });
   });
 
-  // 2. Clicking recharge calls POST /api/v2/user/billing/checkout and on
-  //    success navigates to checkout_url via window.location.href.
-  it('navigates to checkout on recharge click', async () => {
-    API.get.mockResolvedValue({ data: { success: true, data: { items: [] } } });
+  // 2. Clicking recharge calls POST /api/v2/user/billing/checkout with the
+  //    user-selected amount/method and on success navigates to pay_url (the
+  //    actual DTO field — checkout_url was never real) via window.location.href.
+  it('navigates to checkout on recharge click, using selected amount + method', async () => {
+    mockGetDefaults({ invoices: [] });
     API.post.mockResolvedValueOnce({
       data: {
         success: true,
-        data: { checkout_url: 'https://pay.example.com/order/123' },
+        data: { pay_url: 'https://pay.example.com/order/123' },
       },
     });
 
@@ -160,6 +196,15 @@ describe('Billing page', () => {
 
     render(<HFBilling />);
 
+    // Wait for payment methods to load so a method is selected by default.
+    await waitFor(() => {
+      expect(screen.getByTestId('billing-method-wechat')).toBeTruthy();
+    });
+
+    // User picks a non-default amount preset and payment method.
+    fireEvent.click(screen.getByTestId('billing-amount-preset-500'));
+    fireEvent.click(screen.getByTestId('billing-method-wechat'));
+
     const btn = screen.getByTestId('billing-recharge');
     fireEvent.click(btn);
 
@@ -167,8 +212,10 @@ describe('Billing page', () => {
       expect(API.post).toHaveBeenCalledTimes(1);
     });
 
-    const [url] = API.post.mock.calls[0];
+    const [url, body] = API.post.mock.calls[0];
     expect(url).toBe('/api/v2/user/billing/checkout');
+    expect(body.amount_cny).toBe(500);
+    expect(body.payment_method).toBe('wechat');
 
     await waitFor(() => {
       expect(navigatedTo).toBe('https://pay.example.com/order/123');
@@ -177,14 +224,60 @@ describe('Billing page', () => {
     window.location = originalLocation;
   });
 
+  // 2b. A platform 400 (bad amount / method not configured) surfaces its real
+  //     message via showError and must NOT flip the platform-down banner —
+  //     that banner is reserved for actual outages (network/5xx).
+  it('surfaces the platform 400 message without triggering the platform-down banner', async () => {
+    mockGetDefaults({ invoices: [] });
+    const err = new Error('Request failed with status code 400');
+    err.response = {
+      status: 400,
+      data: {
+        success: false,
+        message: 'method not available: provider not configured',
+      },
+    };
+    API.post.mockRejectedValueOnce(err);
+
+    render(<HFBilling />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('billing-method-alipay')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId('billing-recharge'));
+
+    await waitFor(() => {
+      expect(showError).toHaveBeenCalledWith(
+        'method not available: provider not configured',
+      );
+    });
+    expect(screen.queryByTestId('billing-platform-down')).toBeNull();
+  });
+
+  // 2c. Empty payment-methods list (loaded successfully, but platform has
+  //     none configured) renders the honest empty state and disables recharge
+  //     instead of a broken/hardcoded-alipay button.
+  it('renders an honest empty state when no payment methods are configured', async () => {
+    mockGetDefaults({ invoices: [], methods: [] });
+
+    render(<HFBilling />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('billing-no-payment-methods')).toBeTruthy();
+    });
+
+    const btn = screen.getByTestId('billing-recharge');
+    expect(btn.disabled).toBe(true);
+
+    fireEvent.click(btn);
+    expect(API.post).not.toHaveBeenCalled();
+  });
+
   // 3. PDF download buttons are disabled with scope-cut tooltip; edit payment
   //    is now a real link to identity.lurus.cn/wallet.
   it('PDF buttons disabled; payment is a link to identity.lurus.cn', async () => {
-    API.get
-      .mockResolvedValueOnce({
-        data: { success: true, data: { items: fakeInvoices } },
-      })
-      .mockResolvedValueOnce({ data: { success: true, data: fakeSummary } });
+    mockGetDefaults();
 
     render(<HFBilling />);
 

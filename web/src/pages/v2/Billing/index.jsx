@@ -41,6 +41,15 @@ const fmtCNY = (v) =>
 const fmtQuota = (v, usdEq) =>
   typeof v === 'number' ? (v / getQuotaPerUSD()).toFixed(4) + ' ' + usdEq : '—';
 
+// Client-side amount presets + bounds. These are a UX guard only — the
+// platform remains the authority and enforces the same bounds server-side
+// (lurus-platform wallet.go minTopupCNY=1 / maxTopupCNY=100000) with a 400 on
+// violation, so a stale/looser client constant here can never let an invalid
+// amount through, only produce a late 400 instead of an early inline error.
+const AMOUNT_PRESETS_CNY = [100, 500, 1000, 5000];
+const MIN_TOPUP_CNY = 1;
+const MAX_TOPUP_CNY = 100000;
+
 const HFBilling = () => {
   const tenantSlug = useTenantSlug();
   // Aliased to `tr` per the v2 console convention (avoids shadowing).
@@ -54,17 +63,30 @@ const HFBilling = () => {
   // as an honest banner instead of silently rendering "—" as if zero-balance.
   const [platformDown, setPlatformDown] = useState(false);
 
+  // Server-driven payment methods. `methodsLoaded` distinguishes "still
+  // fetching" from "fetched, platform has none configured" — only the latter
+  // is the honest empty state (fetch failure also lands here, fail-safe: we
+  // never assume alipay/any method is available).
+  const [methods, setMethods] = useState([]);
+  const [methodsLoaded, setMethodsLoaded] = useState(false);
+  const [selectedMethod, setSelectedMethod] = useState('');
+  const [amount, setAmount] = useState(String(AMOUNT_PRESETS_CNY[0]));
+
   const fetchAll = useCallback(async () => {
     if (!tenantSlug) return;
     setLoading(true);
     setPlatformDown(false);
     try {
-      // allSettled so a platform-summary 503 doesn't also blank the invoices
-      // table. summary uses skipErrorHandler so its failure shows the banner,
-      // not a duplicate toast.
-      const [invRes, sumRes] = await Promise.allSettled([
+      // allSettled so a platform-summary/payment-methods failure doesn't also
+      // blank the invoices table. summary + payment-methods use
+      // skipErrorHandler so their failure shows the banner / honest empty
+      // state, not a duplicate toast.
+      const [invRes, sumRes, methodsRes] = await Promise.allSettled([
         API.get(`/api/v2/${tenantSlug}/billing/invoices`),
         API.get('/api/v2/user/billing/summary', { skipErrorHandler: true }),
+        API.get('/api/v2/user/billing/payment-methods', {
+          skipErrorHandler: true,
+        }),
       ]);
 
       if (invRes.status === 'fulfilled' && invRes.value?.data?.success) {
@@ -86,6 +108,20 @@ const HFBilling = () => {
         // Platform billing service unreachable — balance/MTD can't be trusted.
         setPlatformDown(true);
       }
+
+      // Fetch failure or a non-array/empty payload both resolve to "no
+      // payment method configured" — the honest empty state, never a silent
+      // fallback to a hardcoded provider.
+      const rawList =
+        methodsRes.status === 'fulfilled' && methodsRes.value?.data?.success
+          ? methodsRes.value.data.data
+          : [];
+      const list = Array.isArray(rawList) ? rawList : [];
+      setMethods(list);
+      setMethodsLoaded(true);
+      setSelectedMethod((prev) =>
+        prev && list.some((m) => m.id === prev) ? prev : (list[0]?.id ?? ''),
+      );
     } catch (_) {
       // unreachable with allSettled; kept as a defensive backstop
     } finally {
@@ -101,20 +137,54 @@ const HFBilling = () => {
     fetchAll();
   }, [fetchAll]);
 
+  // Client-side bounds check only — a UX guard, not the authority. Returns
+  // the parsed amount or null when out of bounds / not a number.
+  const parsedAmount = (() => {
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n < MIN_TOPUP_CNY || n > MAX_TOPUP_CNY) {
+      return null;
+    }
+    return n;
+  })();
+  const amountInvalid = parsedAmount === null;
+  const noPaymentMethods = methodsLoaded && methods.length === 0;
+
   const handleRecharge = async () => {
+    if (noPaymentMethods || !selectedMethod) {
+      showError(
+        tr(
+          'console.billing.no_payment_methods',
+          'No payment method is configured yet — top-up is temporarily unavailable',
+        ),
+      );
+      return;
+    }
+    if (amountInvalid) {
+      showError(
+        tr(
+          'console.billing.amount_invalid',
+          'enter an amount between {{min}} and {{max}} CNY',
+          {
+            min: MIN_TOPUP_CNY,
+            max: MAX_TOPUP_CNY,
+          },
+        ),
+      );
+      return;
+    }
     setRecharging(true);
     try {
       const res = await API.post(
         '/api/v2/user/billing/checkout',
         {
-          amount_cny: 200,
-          payment_method: 'alipay',
+          amount_cny: parsedAmount,
+          payment_method: selectedMethod,
           return_url: window.location.href,
         },
         { skipErrorHandler: true },
       );
-      if (res?.data?.success && res.data.data?.checkout_url) {
-        window.location.href = res.data.data.checkout_url;
+      if (res?.data?.success && res.data.data?.pay_url) {
+        window.location.href = res.data.data.pay_url;
       } else {
         showError(
           res?.data?.message ||
@@ -124,16 +194,28 @@ const HFBilling = () => {
             ),
         );
       }
-    } catch (_) {
-      // Checkout reaches the same platform billing service — a failure here is
-      // the same outage. Surface the honest banner rather than only a toast.
-      setPlatformDown(true);
-      showError(
-        tr(
-          'console.billing.service_unavailable',
-          'Billing service temporarily unavailable — please try again later',
-        ),
-      );
+    } catch (err) {
+      // A platform 400 (bad amount / method not configured) is a rejected
+      // request, not an outage — surface its real message and leave the
+      // platform-down banner alone. Anything else (network error, 5xx, or no
+      // response at all) is the same outage class as the summary fetch.
+      if (err?.response?.status === 400) {
+        showError(
+          err?.response?.data?.message ||
+            tr(
+              'console.billing.method_not_available',
+              'top-up unavailable: no payment method configured',
+            ),
+        );
+      } else {
+        setPlatformDown(true);
+        showError(
+          tr(
+            'console.billing.service_unavailable',
+            'Billing service temporarily unavailable — please try again later',
+          ),
+        );
+      }
     } finally {
       setRecharging(false);
     }
@@ -168,12 +250,25 @@ const HFBilling = () => {
             type='button'
             className='btn primary'
             onClick={handleRecharge}
-            disabled={recharging}
+            disabled={recharging || noPaymentMethods}
+            title={
+              noPaymentMethods
+                ? tr(
+                    'console.billing.no_payment_methods',
+                    'No payment method is configured yet — top-up is temporarily unavailable',
+                  )
+                : undefined
+            }
             data-testid='billing-recharge'
           >
             {recharging
               ? tr('console.billing.processing', 'processing…')
-              : tr('console.billing.recharge', '+ top up')}
+              : noPaymentMethods
+                ? tr(
+                    'console.billing.method_not_available',
+                    'top-up unavailable: no payment method configured',
+                  )
+                : tr('console.billing.recharge', '+ top up')}
           </button>
         </>
       }
@@ -349,46 +444,154 @@ const HFBilling = () => {
 
         {/* Side panel */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Payment method — edit deferred */}
+          {/* Top-up amount — server bounds are authoritative; presets +
+              custom input are a client-side UX guard only. */}
+          <div className='panel' style={{ padding: 18 }}>
+            <div className='lbl'>
+              {tr('console.billing.amount_label', 'top-up amount (CNY)')}
+            </div>
+            <div
+              style={{
+                marginTop: 10,
+                display: 'flex',
+                gap: 6,
+                flexWrap: 'wrap',
+              }}
+            >
+              {AMOUNT_PRESETS_CNY.map((preset) => (
+                <button
+                  key={preset}
+                  type='button'
+                  className={
+                    amount === String(preset)
+                      ? 'btn sm primary'
+                      : 'btn sm ghost'
+                  }
+                  onClick={() => setAmount(String(preset))}
+                  data-testid={`billing-amount-preset-${preset}`}
+                >
+                  ¥{preset}
+                </button>
+              ))}
+            </div>
+            <label
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 5,
+                marginTop: 10,
+              }}
+            >
+              <span className='faint mono' style={{ fontSize: 10 }}>
+                {tr('console.billing.amount_custom', 'custom amount')}
+              </span>
+              <input
+                type='number'
+                min={MIN_TOPUP_CNY}
+                max={MAX_TOPUP_CNY}
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                style={{
+                  fontFamily: 'var(--hf-mono)',
+                  fontSize: 12,
+                  padding: '5px 8px',
+                  border: '1px solid var(--hf-rule)',
+                  background: 'var(--hf-sunken)',
+                  color: 'var(--hf-ink)',
+                  borderRadius: 2,
+                  outline: 'none',
+                  width: '100%',
+                }}
+                data-testid='billing-amount-custom'
+              />
+            </label>
+            {amountInvalid && (
+              <div
+                className='faint'
+                style={{ marginTop: 6, color: 'var(--hf-err)', fontSize: 10 }}
+                data-testid='billing-amount-error'
+              >
+                {tr(
+                  'console.billing.amount_invalid',
+                  'enter an amount between {{min}} and {{max}} CNY',
+                  { min: MIN_TOPUP_CNY, max: MAX_TOPUP_CNY },
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Payment method — server-driven (GET .../billing/payment-methods).
+              An empty, successfully-loaded list is the honest "not yet
+              configured" state, not a hardcoded fallback provider. */}
           <div className='panel' style={{ padding: 18 }}>
             <div className='lbl'>
               {tr('console.billing.payment_method', 'payment method')}
             </div>
-            <div
-              className='panel-paper'
-              style={{
-                marginTop: 10,
-                padding: 14,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-              }}
-            >
+            {noPaymentMethods ? (
               <div
+                className='panel-paper'
+                role='status'
+                data-testid='billing-no-payment-methods'
                 style={{
-                  width: 36,
-                  height: 24,
-                  background: 'var(--hf-ink)',
-                  color: 'var(--hf-bg)',
-                  fontFamily: 'var(--hf-mono)',
-                  fontSize: 9,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  letterSpacing: '0.1em',
+                  marginTop: 10,
+                  padding: 14,
+                  color: 'var(--hf-ink-2)',
+                  fontSize: 11,
+                  lineHeight: 1.5,
                 }}
               >
-                ALI
+                {tr(
+                  'console.billing.no_payment_methods',
+                  'No payment method is configured yet — top-up is temporarily unavailable',
+                )}
               </div>
-              <div>
-                <div className='mono strong'>
-                  {tr('console.billing.alipay', 'Alipay')}
-                </div>
-                <div className='faint mono' style={{ fontSize: 10 }}>
-                  {tr('console.billing.default_method', 'default')}
-                </div>
+            ) : (
+              <div
+                role='radiogroup'
+                aria-label={tr(
+                  'console.billing.method_label',
+                  'select payment method',
+                )}
+                style={{
+                  marginTop: 10,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                {methods.map((m) => (
+                  <label
+                    key={m.id}
+                    className='panel-paper'
+                    style={{
+                      padding: 10,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      cursor: 'pointer',
+                      border:
+                        selectedMethod === m.id
+                          ? '1px solid var(--hf-accent)'
+                          : '1px solid var(--hf-rule)',
+                    }}
+                  >
+                    <input
+                      type='radio'
+                      name='billing-payment-method'
+                      checked={selectedMethod === m.id}
+                      onChange={() => setSelectedMethod(m.id)}
+                      data-testid={`billing-method-${m.id}`}
+                    />
+                    <div>
+                      <div className='mono strong'>{m.name}</div>
+                      <div className='faint mono' style={{ fontSize: 10 }}>
+                        {m.provider}
+                      </div>
+                    </div>
+                  </label>
+                ))}
               </div>
-            </div>
+            )}
             <div style={{ marginTop: 8 }}>
               {/* Payment method management lives on Platform — link out */}
               <a

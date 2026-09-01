@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -116,15 +117,27 @@ func CreateBillingCheckout(c *gin.Context) {
 		req.ReturnURL,
 	)
 	if err != nil {
-		status := http.StatusServiceUnavailable
-		msg := "checkout service unavailable"
-		if strings.Contains(err.Error(), "insufficient") {
-			status = http.StatusBadRequest
-			msg = err.Error()
+		// A CheckoutError means the platform actively answered the request
+		// (not a network/5xx outage). Its Status is the platform's real HTTP
+		// status — pass a 400 through honestly with the real message so the
+		// frontend can distinguish "bad amount / no payment method configured"
+		// from "platform is down". Anything else (network error, 5xx, or no
+		// typed error at all) stays the generic 503.
+		var checkoutErr *common.CheckoutError
+		if errors.As(err, &checkoutErr) && checkoutErr.Status == http.StatusBadRequest {
+			msg := checkoutErr.Message
+			if msg == "" {
+				msg = "invalid checkout request"
+			}
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": msg,
+			})
+			return
 		}
-		c.JSON(status, gin.H{
+		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"success": false,
-			"message": msg,
+			"message": "checkout service unavailable",
 		})
 		return
 	}
