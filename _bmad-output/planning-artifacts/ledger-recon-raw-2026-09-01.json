@@ -1,0 +1,652 @@
+[
+ {
+  "item": "N4: v2 Billing checkout page hardcodes amount_cny=200 and payment_method='alipay'; no server-driven amount/method selection; recharge flow also silently fails even on success due to a field-name mismatch",
+  "verdict": "confirmed",
+  "evidence": [
+   {
+    "file": "2b-svc-newhub/web/src/pages/v2/Billing/index.jsx",
+    "line": 104,
+    "note": "handleRecharge() posts a fixed body: amount_cny: 200, payment_method: 'alipay', return_url: window.location.href — no UI control for either value (lines 104-115)."
+   },
+   {
+    "file": "2b-svc-newhub/web/src/pages/v2/Billing/index.jsx",
+    "line": 116,
+    "note": "On success it reads res.data.data?.checkout_url and navigates window.location.href to it. The actual DTO field is pay_url (see identity_client.go:531-536), so even a successful checkout leaves checkout_url undefined and falls into the showError branch — the button is broken end-to-end today, not just under-configured."
+   },
+   {
+    "file": "2b-svc-newhub/web/src/pages/v2/Billing/index.test.jsx",
+    "line": 146,
+    "note": "The existing vitest mock itself asserts on the fictional field { checkout_url: 'https://pay.example.com/order/123' } — a self-validating test that hides the field-name mismatch instead of catching it."
+   },
+   {
+    "file": "2b-svc-newhub/web/src/pages/v2/Billing/index.jsx",
+    "line": 352,
+    "note": "Payment-method side panel is hardcoded markup: 'ALI' logo block + tr('console.billing.alipay','Alipay') + tr('console.billing.default_method','default'); 'edit' just links out to identity.lurus.cn/wallet (lines 352-409). No selector, no read of any payment-methods list."
+   },
+   {
+    "file": "2b-svc-newhub/internal/adapter/handler/v2_billing.go",
+    "line": 65,
+    "note": "GetBillingPaymentMethods (GET /api/v2/user/billing/payment-methods) already exists and calls common.GetPaymentMethods to list platform-configured methods with {id,name,provider,type} — but the frontend never calls this endpoint."
+   },
+   {
+    "file": "2b-svc-newhub/internal/adapter/handler/router/api-v2-router.go",
+    "line": 326,
+    "note": "Route billingRoute.GET(\"/payment-methods\", handler.GetBillingPaymentMethods) is registered (and POST /checkout at line 327), confirming the endpoint is live but unused by the SPA."
+   },
+   {
+    "file": "2b-svc-newhub/internal/adapter/handler/v2_billing.go",
+    "line": 78,
+    "note": "createCheckoutRequest{AmountCNY float64 binding:\"required,gt=0\", PaymentMethod string binding:\"required\"} — backend accepts any amount/method the client sends; no server-side bound enforced in newhub itself before proxying."
+   },
+   {
+    "file": "2b-svc-newhub/internal/adapter/handler/v2_billing.go",
+    "line": 118,
+    "note": "CreateBillingCheckout collapses every platform error except one containing 'insufficient' into a generic 503 {message:'checkout service unavailable'} — a platform 400 'method not available: provider not configured' (see platform internal_api.go:823-827) is indistinguishable from a genuine platform outage on the wire today."
+   },
+   {
+    "file": ".wt-platform-ledger/internal/adapter/handler/internal_api.go",
+    "line": 765,
+    "note": "Platform-side amount bounds actually enforced: req.AmountCNY < minTopupCNY (400) / > maxTopupCNY (400)."
+   },
+   {
+    "file": ".wt-platform-ledger/internal/adapter/handler/wallet.go",
+    "line": 20,
+    "note": "minTopupCNY = 1.0, maxTopupCNY = 100000.0 — the true server bounds for checkout amount_cny (distinct from newhub's own minTransferCNY/maxTransferCNY=1..10000 in v2_billing.go:19-20, which govern the separate wallet→quota TopUpV2 endpoint, not checkout)."
+   },
+   {
+    "file": ".wt-platform-ledger/internal/adapter/handler/internal_api.go",
+    "line": 896,
+    "note": "GetPaymentMethods (GET /internal/v1/payment-methods) returns []payment.MethodInfo{ID,Name,Provider,Type} plus a synthetic bank_transfer entry only when configured (lines 909-918) — this is exactly the list newhub's GetBillingPaymentMethods forwards but the SPA doesn't consume; it carries no amount bounds field."
+   },
+   {
+    "file": ".wt-platform-ledger/internal/adapter/handler/internal_api.go",
+    "line": 823,
+    "note": "CreateCheckout rejects an unconfigured/unavailable payment_method with 400 ErrCodeMethodNotAvailable BEFORE writing an order row — this is the 'payments not yet enabled' case the UI should show honestly instead of a generic failure toast."
+   }
+  ],
+  "proposal": "Backend (2b-svc-newhub, no platform changes needed — platform already exposes what's required):\n1. internal/pkg/common/identity_client.go: change CreateCheckout's error path to also return the platform HTTP status via a typed error (e.g. `type CheckoutError struct{ Status int; Code string; Message string }` implementing `error`), instead of discarding errResp beyond formatting a string. Preserve the raw platform status/body.\n2. internal/adapter/handler/v2_billing.go CreateBillingCheckout (line ~109-130): switch on the typed error's Status: platform 400 (bad amount / method not available) → propagate 400 with the real message (not the blanket 503); anything else (network error, 5xx) → keep 503 'checkout service unavailable'. This turns the current always-503 branch into an honest passthrough so the frontend can distinguish 'no valid method configured' from 'platform down'.\n3. Fix the response field bug: keep CheckoutResult.PayURL as-is (it's correct/consistent with GetCheckoutStatus and platform's contract) — the frontend is the one reading the wrong key (checkout_url); fix on the frontend side (below), not the backend, since pay_url is already the established contract used elsewhere (v2_billing.go:194-206 status poll also returns pay_url).\n\nFrontend (web/src/pages/v2/Billing/index.jsx):\n1. On mount, alongside the existing invoices/summary Promise.allSettled fetch, add `API.get('/api/v2/user/billing/payment-methods')` and store `[methods, setMethods]`. If the call fails or returns an empty array, treat as 'no payment method configured' (see below).\n2. Replace the hardcoded 'ALI' panel with a Semi UI `RadioGroup`/`Select` (matches existing v2 modal patterns e.g. model-limits page) driven by `methods`, defaulting to the first entry (or the platform's flagged default once GetPaymentMethods DTO exposes one — currently it doesn't; until then just default to methods[0] and let the user change it). Persist the chosen `selectedMethod.id` in state and send it as `payment_method`.\n3. Add an amount selector: a small set of CNY presets (e.g. 100 / 500 / 1000 / 5000) as buttons/RadioGroup plus a custom `InputNumber` field, client-bounded to the known server bounds (min 1 / max 100000 — surface these as named constants mirroring platform's minTopupCNY/maxTopupCNY, with a comment citing the platform source of truth) purely as a UX guard; the server remains the authority (400 on violation, already enforced per evidence above). Default preset e.g. 200 to preserve current UX, but now user-changeable.\n4. Fix `res.data.data?.checkout_url` → `res.data.data?.pay_url` to match the actual DTO (identity_client.go CheckoutResult.PayURL / json:\"pay_url\").\n5. 'Payments not yet enabled' honest state: if the payment-methods fetch succeeds but returns `[]` (no provider configured — mirrors platform GetPaymentMethods appending nothing when unconfigured, internal_api.go:900-918), render a disabled recharge button with an inline note (new i18n key `console.billing.no_payment_methods`, e.g. 'No payment method is configured yet — top-up is temporarily unavailable') instead of letting the user click into a guaranteed 503/400. If the checkout POST itself now returns 400 with a method-not-available message (per backend change above), surface that literal message via `showError` (already wired) rather than the generic platform-down banner, which should be reserved for actual 503/network failures.\n6. Add i18n keys to both web/src/i18n/locales/en.json and zh.json under `console.billing.*`: `amount_label`, `amount_custom`, `method_label`, `no_payment_methods`, `method_not_available` (following the existing flat key style already in the file, e.g. lines 692-709).\n\nFail-safe behavior: server-side amount/method validation is unchanged and remains authoritative (platform internal_api.go:765-827); the client-side presets/bounds are UX-only guardrails. If the payment-methods fetch fails (network/503), fall back to disabling recharge with the existing `platformDown` banner rather than assuming alipay is available (removes the current silent hardcode assumption). No new write path is introduced — this only wires already-existing, already-scoped (`checkout` scope, internal_api.go / inject_scopes.go:27-29) read/write endpoints into the UI that currently ignores them.",
+  "risk": "Low blast radius: changes are confined to one SPA page (web/src/pages/v2/Billing/index.jsx) plus a narrower error-typing change in internal/pkg/common/identity_client.go and internal/adapter/handler/v2_billing.go that only affects how an already-failing case is reported (400 vs 503), not the success path. No schema/migration/contract change to the platform repo. Main risk is scope: touching identity_client.go's error handling is shared code — must confirm no other caller of common.CreateCheckout (grep found only v2_billing.go:109) depends on the current generic error string format before changing its type.",
+  "effort": "M",
+  "tests": "Backend (Go, hermetic, follow internal/adapter/handler/v2_billing_test.go patterns which already stub identity endpoints — see TestTopUpV2_InvalidAmount_TooLow/TooHigh at lines 33/54 for the httptest-mock-server style): add TestCreateBillingCheckout_MethodNotAvailable_Returns400 (mock platform /internal/v1/checkout/create returning 400 ErrCodeMethodNotAvailable, assert newhub now returns 400 with the real message, not 503) and TestCreateBillingCheckout_PlatformDown_Returns503 (mock connection refused/5xx, assert 503 preserved) to pin the new branch without breaking the existing unconditional-503 assumption. Frontend (vitest, web/src/pages/v2/Billing/index.test.jsx): fix the existing 'navigates to checkout on recharge click' test's mock to use `pay_url` (catches the field-name regression the current test hides); add a test asserting the amount/method sent in the POST body reflect user selection (fireEvent on the new selector before clicking recharge, then assert API.post body via `API.post.mock.calls[0][1]`); add a test for the 'no payment methods configured' empty-array case rendering the disabled honest state (`billing-recharge` disabled + i18n text present)."
+ },
+ {
+  "item": "N1",
+  "verdict": "needs_owner",
+  "evidence": [
+   {
+    "file": "internal/adapter/handler/v2_token.go",
+    "line": 253,
+    "note": "CreateTokenV2 builds repo.Token literal (UserId..ProjectId) with no IdentityAccountID field — console v2 token creation never stamps it; defaults to gorm default:0."
+   },
+   {
+    "file": "internal/adapter/handler/token.go",
+    "line": 141,
+    "note": "AddToken (v1) binds request JSON into repo.Token then calls app.BuildCleanToken, which also omits IdentityAccountID."
+   },
+   {
+    "file": "internal/app/token_service.go",
+    "line": 139,
+    "note": "BuildCleanToken's repo.Token{...} literal (lines 140-158) has no IdentityAccountID field — confirms v1 path too never sets it."
+   },
+   {
+    "file": "internal/adapter/repo/token.go",
+    "line": 36,
+    "note": "IdentityAccountID int64 `gorm:\"default:0;index:idx_identity_account,where:identity_account_id > 0\"` — DB-level default 0."
+   },
+   {
+    "file": "internal/adapter/handler/internal_api_ext.go",
+    "line": 561,
+    "note": "Only writer #1: InternalProvisionUser's initial-token step sets token.IdentityAccountID = linkedAccountID (and forces UnlimitedQuota=true) when req.CreateInitialToken and linkedAccountID>0 — a platform-provisioning path, not console AddToken/CreateTokenV2."
+   },
+   {
+    "file": "internal/adapter/handler/internal_backfill.go",
+    "line": 17,
+    "note": "Writer #2: InternalBackfillTokenAccountIDs (POST /internal/admin/backfill-token-accounts) is a re-runnable admin endpoint that stamps IdentityAccountID on ANY token with identity_account_id=0 whose owning user has an active OIDC identity mapping — this would also capture console-created tokens, not just provisioned ones, if re-run."
+   },
+   {
+    "file": "internal/adapter/handler/router/internal-api-router.go",
+    "line": 155,
+    "note": "backfill-token-accounts is registered under adminGroup (ScopeAdmin); per project CLAUDE.md the only live internal API key ('platform-core') lacks admin scope, so this backfill path is currently not reachable in prod."
+   },
+   {
+    "file": "internal/adapter/middleware/auth.go",
+    "line": 640,
+    "note": "TokenAuth: if token.IdentityAccountID > 0, sets gin context key identity_account_id — this is how a token's linkage reaches relay dispatch."
+   },
+   {
+    "file": "internal/adapter/provider/common/relay_info.go",
+    "line": 130,
+    "note": "RelayInfo.IdentityAccountID field, comment: 'lurus-platform account ID for wallet bridging (0 = not available)'."
+   },
+   {
+    "file": "internal/app/pre_consume_quota.go",
+    "line": 77,
+    "note": "PreConsumeQuota only calls platformPreAuthorize when common.BillingUnifiedEnabled() && relayInfo.IdentityAccountID > 0 && preConsumedQuota > 0 — confirms the gate is exactly IdentityAccountID>0 plus the global flag."
+   },
+   {
+    "file": "internal/app/quota.go",
+    "line": 958,
+    "note": "Settlement gate: if relayInfo.IdentityAccountID > 0 && totalQuota > 0 { ... } — computes amountLB := float64(totalQuota)/common.QuotaPerUnit and calls common.SettleWithBreaker(settleCtx, relayInfo.PlatformPreAuthID, amountLB) (line 976)."
+   },
+   {
+    "file": "internal/pkg/common/billing_client.go",
+    "line": 142,
+    "note": "SettlePreAuth POSTs {actual_amount: actualAmount} to platform '/internal/v1/wallet/pre-auth/%d/settle' — this is the HTTP settle call cited above."
+   },
+   {
+    "file": "internal/pkg/common/constants.go",
+    "line": 21,
+    "note": "var QuotaPerUnit = 500 * 1000.0 // $0.002 / 1K tokens — local quota unit resolution is 1/500000 dollar (~$0.000002)."
+   },
+   {
+    "file": "internal/app/quota.go",
+    "line": 1096,
+    "note": "Comment: 'QuotaPerUnit=500000 means any settlement with totalQuota<25 trips the leak condition... a live single relay call settles to totalQuota in the 1-2 range' i.e. typical per-relay settlement is ~$0.000002–0.000004."
+   },
+   {
+    "file": "internal/app/quota.go",
+    "line": 1138,
+    "note": "warnZeroWalletAmount(accountID, totalQuota, amountLB): fires whenever amountLB < 0.00005 dollars, logs {'event':'wallet_zero_amount_charge', ... 'result':'will round to 0.0000 under wallet numeric(14,4), charge silently lost'} and increments metrics.BillingZeroAmountChargeTotal — an already-known, monitored, UNFIXED revenue-leak defect on the existing identity-linked-token population."
+   },
+   {
+    "file": "internal/domain/entity/wallet.go",
+    "line": 40,
+    "note": "(platform repo, .wt-platform-ledger) Balance float64 `gorm:\"type:decimal(14,4);default:0\"` — confirms the platform wallet column truncates to $0.0001 resolution, the precision ceiling the newhub comment above is warning about."
+   },
+   {
+    "file": "internal/app/coverage_lift_test.go",
+    "line": 213,
+    "note": "Existing hermetic test pattern (TestPostConsumeQuota_SettleFailureEnqueuesOutbox) exercises the settle/outbox path via relayInfo.IdentityAccountID + PlatformPreAuthID with an in-process fake identity backend — the harness to extend for any future opt-in test."
+   }
+  ],
+  "proposal": "Confirmed on HEAD: console-created tokens (AddToken v1, CreateTokenV2 v2) never set IdentityAccountID — verified by reading both handlers' repo.Token construction end-to-end (token.go:141, v2_token.go:253, token_service.go:139-158), none of which reference the field; it is only ever written by (a) InternalProvisionUser's platform-provisioning initial-token step (internal_api_ext.go:561, gated on linkedAccountID>0 from OIDC-account resolution), and (b) the re-runnable admin backfill endpoint InternalBackfillTokenAccountIDs (internal_backfill.go), which — if it were ever invoked (currently blocked because the only live internal key lacks ScopeAdmin) — WOULD also retroactively stamp console-created tokens for any OIDC-linked user, not just provisioned ones. So the \"console tokens never enter unified billing\" premise holds today only because (1) the create handlers don't set it and (2) the one endpoint that could backfill it is scope-gated out of reach — not because of any design boundary preventing it.\n\nFlipping console tokens onto unified billing is NOT a safe 'flip a flag' step, because the precision problem it's blocked on is empirically severe, not marginal: per the code's own comment (quota.go:1096) a live single relay call settles to totalQuota in the 1-2 range under QuotaPerUnit=500000, i.e. ~$0.000002-0.000004 per call — two orders of magnitude below the platform wallet's decimal(14,4) ($0.0001) resolution (wallet.go:40, platform repo). warnZeroWalletAmount (quota.go:1138) already fires-and-logs 'will round to 0.0000... charge silently lost' for any settle under $0.00005, and increments an UNCONDITIONAL metric (BillingZeroAmountChargeTotal) specifically because this is a known, currently-tolerated leak on the small identity-linked-token population. Stamping ordinary console tokens (which are typical low-cost chat-completion traffic, i.e. exactly the sub-$0.0001-per-call regime) would not 'apply unified billing' to them — it would silently zero out the revenue for nearly every relay call they make while still burning a PreAuthorize/Settle HTTP round-trip (+ outbox/retry machinery) per request, which is strictly worse than the current local-quota + LUC→LUT accounting (which has $0.000002 granularity and loses nothing).\n\nNo safe incremental step (e.g. a per-token opt-in bool) is worth landing in newhub right now: any token that opts in inherits the same rounding-to-zero math immediately, so an opt-in flag would just be a self-service way to lose revenue faster, with no mitigating design behind it. There is also no existing UI/API surface for a billing-mode choice (grepped web/src for identity_account_id/IdentityAccountID — zero hits), so this would additionally require new console UX and a customer-facing decision about what 'unified billing' means for their token, which is a product/finance call, not an engineering toggle.\n\nWhat actually needs to happen before this is safe, and who owns it:\n1. Platform-repo (owner: platform team): wallet.Balance / wallet_transactions precision needs to move beyond decimal(14,4) — e.g. decimal(18,8) or an integer micro-dollar column — so it can represent the ~$0.000002 granularity newhub already produces. This is a schema migration + historical-row reconciliation decision outside newhub's repo boundary.\n2. Alternatively/additionally (newhub side, only after #1 is scoped): a sub-cent accumulation buffer in PostConsumeQuota's settlement branch (quota.go:958) that defers Settle calls until an account's unsettled remainder crosses the platform's minimum billable unit — this is new stateful design (must survive process restarts and not double-settle on crash/retry, i.e. needs its own durable accumulator table plus reconciliation against the existing outbox/advisory-ledger machinery in pre_consume_quota.go), which itself needs an owner decision on where that accumulator lives and how it reconciles with LocalLedgerAdvisory (billing_client.go:35-64) before implementation starts.\nRecommend surfacing #1 to the platform team as a precondition, and treating any newhub-side accumulation-buffer design as its own story requiring explicit sign-off (per this repo's Story 文档规则 for money-path changes) rather than a quick opt-in flag.",
+  "risk": "Doing nothing: status quo continues (console tokens on local quota + LUC/LUT, no precision loss) — this is the documented deliberate interim state and is safe. Doing the naive fix (flip console tokens to unified billing, or ship a bare per-token opt-in without addressing precision): near-100% of relay revenue from opted-in tokens would round to $0.0000 at settle time (per quota.go:1096/1138 math), which is a silent, hard-to-detect revenue leak at much larger scale than today's small identity-linked-token population, while doubling relay latency/complexity (PreAuthorize+Settle HTTP round trips, outbox retries) for effectively free traffic.",
+  "effort": "L",
+  "deps": "Platform repo (wallet precision schema decision, owner: platform team) must be resolved or explicitly scoped before any newhub-side accumulation-buffer or opt-in-flag implementation begins; also depends on a product/finance decision on what 'unified billing for console tokens' should mean to customers (new console UX currently does not exist).",
+  "tests": "No new tests proposed since no code change is recommended now. If/when the owner decision unblocks implementation: extend the existing hermetic pattern in internal/app/coverage_lift_test.go:213 (TestPostConsumeQuota_SettleFailureEnqueuesOutbox, which already drives PostConsumeQuota with relayInfo.IdentityAccountID + PlatformPreAuthID against an in-process fake identity backend) to add a case asserting amountLB below the platform's new minimum billable unit is either accumulated (not settled) or explicitly reported as zero-loss-safe, and a companion test proving warnZeroWalletAmount's threshold (quota.go:1139, amountLB >= 0.00005) is updated to match whatever new wallet precision is adopted."
+ },
+ {
+  "item": "P2 — UpsertByZitadelSub stuffs non-email Zitadel loginName into accounts.email for username+password logins",
+  "verdict": "confirmed",
+  "evidence": [
+   {
+    "file": "internal/app/account_service.go",
+    "line": 183,
+    "note": "func (s *AccountService) UpsertByZitadelSub(ctx, sub, email, displayName, avatarURL) — the 2nd positional param is treated as an email unconditionally; no format validation anywhere in the function."
+   },
+   {
+    "file": "internal/app/account_service.go",
+    "line": 237,
+    "note": "Only guard present is `if email == \"\" { email = \"sub.\"+sub+\"@noreply...\" }` — a non-empty but non-email string (a username) passes straight through."
+   },
+   {
+    "file": "internal/app/account_service.go",
+    "line": 240,
+    "note": "New-account struct literal: `a = &entity.Account{ZitadelSub: sub, Email: email, DisplayName: displayName, ...}` — Username field is never set here, stays default ''."
+   },
+   {
+    "file": "internal/adapter/handler/zlogin_handler.go",
+    "line": 681,
+    "note": "DirectLogin (username+password flow) calls `h.accounts.UpsertByZitadelSub(ctx, userID, loginName, displayName, \"\")` — loginName lands in the `email` positional slot."
+   },
+   {
+    "file": "internal/adapter/handler/zlogin_handler.go",
+    "line": 921,
+    "note": "resolveLoginName's own doc comment: \"For old users, Zitadel loginName is their email. For new users, it's their username.\" — confirms loginName is NOT guaranteed to be an email."
+   },
+   {
+    "file": "migrations/126_drop_stale_accounts_email_key.sql",
+    "line": 11,
+    "note": "Post-mortem for this exact defect: \"the user's next login then JIT-provisioned a structurally corrupt accounts row via UpsertByZitadelSub (username='', Zitadel loginName stuffed into the email column). Account id 184 was such a row (repaired by hand ...)\" — confirms live occurrence AND that the fix so far was a one-off manual repair, not a code change to UpsertByZitadelSub."
+   },
+   {
+    "file": "migrations/126_drop_stale_accounts_email_key.sql",
+    "line": 17,
+    "note": "Explicitly names ids 6/37/38/39 as \"also have username='' but carry REAL emails — legitimate email-login accounts, not this corruption, left untouched\" — matches the task's do-not-touch set."
+   },
+   {
+    "file": "internal/domain/entity/account.go",
+    "line": 48,
+    "note": "Username field exists (`gorm:\"type:varchar(64)\"`, partial-unique per migration 010/012) but UpsertByZitadelSub never writes to it — the loginName has nowhere correct to land."
+   },
+   {
+    "file": "internal/adapter/repo/account_backfill.go",
+    "line": 83,
+    "note": "Repo's established email-validation convention: `mail.ParseAddress` after `fieldcrypto.CanonEmail`; same `net/mail` pattern used in registration_service.go:444, magic_link_service.go:172, identity_ops_service.go:509/635/801 — none of these are wired into UpsertByZitadelSub."
+   }
+  ],
+  "proposal": "Code fix in internal/app/account_service.go (UpsertByZitadelSub, account_service.go:183-267):\n1. Add `\"net/mail\"` import.\n2. At function entry, classify the incoming `email` param instead of trusting it:\n   ```go\n   emailClaim, usernameClaim := \"\", \"\"\n   if email != \"\" {\n       if _, err := mail.ParseAddress(email); err == nil {\n           emailClaim = email\n       } else {\n           usernameClaim = email // e.g. Zitadel loginName for username+password identities\n       }\n   }\n   ```\n3. \"found by sub\" branch (currently account_service.go:189-198): keep updating DisplayName/AvatarURL; additionally self-heal missing fields WITHOUT overwriting existing values (mirrors the A3 \"only relink when unbound\" philosophy):\n   ```go\n   if usernameClaim != \"\" && a.Username == \"\" { a.Username = usernameClaim }\n   if emailClaim != \"\" && a.Email == \"\" { a.Email = emailClaim }\n   ```\n   This makes the very next login of a previously-corrupted account (ZitadelSub already set, Username still '') backfill Username automatically — no touch to accounts whose Email is already populated (covers ids 6/37/38/39: emailClaim there is always their real email since resolveLoginName returns acc.Email when acc.Username==\"\", so the branch is a no-op on those rows).\n4. \"found by email\" branch (account_service.go:200-225): gate the `GetByEmail` lookup on `emailClaim != \"\"` (skip entirely when the claim isn't an email — no point querying accounts.email with a raw username).\n5. \"new account\" branch (account_service.go:227-247): use `emailClaim` (falling back to the existing `sub.<sub>@noreply.lurus.cn` placeholder when empty) for `Email:`, and add `Username: usernameClaim` to the struct literal.\nNet effect: a username+password JIT-provisioned account gets `Email=\"sub.<sub>@noreply.lurus.cn\"` (or real email once the user later verifies one through the existing email-bind flow) and `Username=<loginName>` — matching the shape of a normal username registration, not a corrupted row.\n\nData repair (optional, for rows already corrupted before this deploys — id 184 is already hand-fixed per migration 126's comment, but any other silently-corrupted dormant rows are not): new migration `NNN_repair_zitadel_loginname_in_email.sql` (reserve the ID in `doc/coord/migration-ledger.md` first per repo convention):\n```sql\nUPDATE identity.accounts\nSET username = email, email = ''\nWHERE username = ''\n  AND email ~ '^[a-zA-Z0-9_]{3,32}$';   -- entity.reUsername's exact pattern: never matches a real\n                                         -- address (which always contains '@'), so ids 6/37/38/39\n                                         -- (real emails) are structurally excluded, no ID allowlist needed.\n```\nIdempotent (predicate stops matching once username is populated). Risk: a genuine username collision on the partial unique index `idx_accounts_username_lower_unique` (migration 012) would abort the statement — acceptable fail-closed behavior requiring manual triage, should be called out in the migration's header comment (mirrors the `account_backfill.go` planner's collision-abort philosophy).",
+  "risk": "Low. The guard only changes behavior for the previously-corrupting case (a non-email 2nd argument); every other call site (grpc/server.go:495, internal_api.go:351, sso_handler.go:162, tenant_genesis_service.go:461 — all genuine OIDC/admin emails) passes `mail.ParseAddress`-valid strings and is byte-for-byte unaffected. Fails safe: an invalid/empty email claim now falls through to the pre-existing noreply placeholder instead of corrupting the unique-constrained Email column, and the loginName is preserved (in Username) instead of being silently lost. The self-heal on the update path only fills currently-empty fields, never overwrites — cannot regress the legitimate username=''+real-email rows (6/37/38/39). The SQL repair's only failure mode is a hard abort on a genuine username collision (no partial/silent corruption).",
+  "effort": "M",
+  "tests": "Hermetic Go tests in internal/app/, following existing patterns (account_service_test.go / account_service_subswap_test.go use a fake accountStore, no DB): (1) TestAccountService_UpsertByZitadelSub_NonEmailLoginNameGoesToUsername — call UpsertByZitadelSub(ctx, \"sub-new\", \"johndoe123\", \"John\", \"\") on a fresh fake store, assert the resulting account has Username==\"johndoe123\" and Email != \"johndoe123\" (either \"\" or the noreply placeholder) — this is the regression pin for the exact defect migration 126 documented. (2) TestAccountService_UpsertByZitadelSub_SelfHealsMissingUsernameOnRelogin — seed a fake store with a pre-corrupted row (ZitadelSub set, Email=\"staleusername\", Username=\"\"), call Upsert again with the same sub and a resolved usernameClaim, assert Username backfills while the stale Email is left untouched (documents that Email cleanup needs the SQL repair, not the code guard). (3) TestAccountService_UpsertByZitadelSub_RealEmailUnaffected — existing TestAccountService_UpsertByZitadelSub_NewAccount / _ExistingSub (account_service_test.go:49,74) must still pass unmodified, proving no regression for the OIDC-email call sites. For the SQL migration: a migration-runner integration test (pattern in account_service_cotx_pg_integration_test.go using a real PG) seeding one corrupt row + one legitimate username=''+real-email row, running the migration, and asserting only the corrupt row moved.",
+  "deps": "None blocking; independent of the in-flight newhub tenancy sprint (PR #119 branch). Platform-repo-only change. The SQL migration requires reserving the next ID in root doc/coord/migration-ledger.md before writing the file (repo convention) — ledger currently shows 126 as \"(next available)\" though migrations/126_drop_stale_accounts_email_key.sql already exists on disk, so the implementer must re-check the true next-free ID at execution time rather than trust the ledger line verbatim."
+ },
+ {
+  "item": "P3 (platform): billing wallets numeric(14,4) LUC → cents migration — current state on HEAD",
+  "verdict": "needs_owner",
+  "evidence": [
+   {
+    "file": "doc/decisions/0023-int64-money-canonical.md",
+    "line": 3,
+    "note": "ADR 0023 status is still \"Proposed (owner decision pending — see §7)\" — never flipped to Accepted; §7 lists 3 unresolved owner decisions (unit confirmation beyond P0, wire/deprecation strategy, scope vs Feature H) plus a #4 'go/no-go to start P0 only' that WAS exercised."
+   },
+   {
+    "file": "migrations/105_money_cents_dual_write.sql",
+    "line": 99,
+    "note": "P0: adds *_cents BIGINT shadow columns + BEFORE INSERT/UPDATE triggers on 6 cash tables (billing.wallets/wallet_transactions/payment_orders/wallet_pre_authorizations/refunds, identity.product_plans). Additive, zero read/behavior change, reversible."
+   },
+   {
+    "file": "migrations/106_money_cents_backfill.sql",
+    "line": 51,
+    "note": "P1/P2: DDL-only migration defining billing.backfill_money_cents(limit) and billing.money_cents_drift(); mutates no data at migrate time by design."
+   },
+   {
+    "file": "doc/coord/migration-ledger.md",
+    "line": 80,
+    "note": "105 DEPLOYED R6 main-d9aa0b2 2026-06-23 (unverified column)."
+   },
+   {
+    "file": "doc/coord/migration-ledger.md",
+    "line": 81,
+    "note": "106 DEPLOYED R6 main-d9aa0b2 2026-06-23, but explicit note: \"actual backfill run for 101-106 is a separate gated operator step, not yet run\" — this is the current authoritative ledger status (file last touched 2026-08-26, unrelated line, still current)."
+   },
+   {
+    "file": "scripts/backfill-money-cents.sh",
+    "line": 55,
+    "note": "Backfill refuses to run unless BILLING_UNIFIED_ENABLED=preview — an explicit operator opt-in that per the ledger has not been exercised. No evidence in repo (workflows, docs) that it has ever run against R6/prod."
+   },
+   {
+    "file": "internal/domain/entity/wallet.go",
+    "line": 50,
+    "note": "Wallet struct got BalanceCents/FrozenCents *int64 nullable shadow fields (nil = not yet backfilled) — this IS a P3 read-cutover step, but scoped to ONLY the wallets table, not the other 5 shadow tables."
+   },
+   {
+    "file": "internal/domain/entity/wallet.go",
+    "line": 63,
+    "note": "AvailableCents()/BalanceCentsValue() (line 73) prefer the int64 shadow when non-nil, else fall back to int64(float64*100) — data-gated, safe by construction."
+   },
+   {
+    "file": "internal/adapter/repo/credits_grants.go",
+    "line": 283,
+    "note": "Only production call site of AvailableCents(): auto_payg overage shortfall gate. This is the exact truncation bug ADR 0023 cited (old inline int64((Balance-Frozen)*100)) — now fixed via the shadow-preferring accessor."
+   },
+   {
+    "file": "internal/adapter/handler/whoami_handler.go",
+    "line": 243,
+    "note": "Only other call site of the new cents accessors (BalanceCentsValue(), display only)."
+   },
+   {
+    "file": "internal/adapter/repo/wallet.go",
+    "line": 104,
+    "note": "Comment: \"Balance arithmetic is performed in SQL (DECIMAL) to avoid float64 drift\" — the authoritative gate at line 214 (`WHERE (balance - frozen) >= ?`) runs in exact Postgres DECIMAL, not Go float64; the Go-side pre-check at line 209 and BalanceAfter at line 235 are still float64."
+   },
+   {
+    "file": "internal/adapter/repo/wallet.go",
+    "line": 209,
+    "note": "Debit gate compares w.Balance-w.Frozen (float64) as a pre-check; DB re-check via SQL is exact but this Go path, and BalanceAfter written into WalletTransaction (line 235), are still float64 元, not cents."
+   },
+   {
+    "file": "internal/adapter/repo/wallet.go",
+    "line": 1174,
+    "note": "CreatePreAuth freeze gate: `if w.Balance-w.Frozen < pa.Amount` — same float64 pattern, no SQL-level DECIMAL re-check guarding this specific path (unlike Debit)."
+   },
+   {
+    "file": "internal/app/refund_service.go",
+    "line": 357,
+    "note": "Refund proration still computes `int64(math.Round(r.AmountCNY * 100))` from the float64 PaymentOrder.AmountCNY field — does NOT read payment_orders.amount_cny_cents (the shadow exists in SQL per migration 105 but PaymentOrder Go struct, wallet.go:227-263, has no AmountCnyCents field to read it into)."
+   },
+   {
+    "file": "internal/app/wallet_service.go",
+    "line": 383,
+    "note": "WalletStatement Cash view built from w.Balance/w.Frozen float64 (display path, not a gate, but confirms P3 wire/display cutover hasn't happened either)."
+   },
+   {
+    "file": ".github/workflows/core.yaml",
+    "line": 497,
+    "note": "\"Money-cents footing gate\" CI step: the authoritative zero-drift assertion (TestMoneyCents_Footing_ZeroDrift) only runs in the separate PG+MinIO integration workflow; this core.yaml step no-ops green whenever the MONEY_CENTS_PG_DSN secret is unset (line 523-526) — cannot confirm from repo alone whether that secret is wired to prod R6."
+   }
+  ],
+  "proposal": "ASSESS-ONLY finding, no code change proposed. Current state precisely: P0 (schema+dual-write trigger, migration 105) and the P1/P2 SQL tooling (migration 106: backfill_money_cents()/money_cents_drift()) are deployed to R6/prod (2026-06-23) and are zero-behavior-change — every write since that date fills both the DECIMAL column and its *_cents shadow. Nothing reads the shadow for 5 of 6 tables (wallet_transactions, payment_orders, wallet_pre_authorizations, refunds, product_plans): their Go entity structs (internal/domain/entity/wallet.go) were never extended with the corresponding *_cents fields, so those columns are DB-only and inert. For the 6th table (billing.wallets) the Go layer DOES have nullable BalanceCents/FrozenCents fields with a data-gated fallback (AvailableCents()/BalanceCentsValue()), but only 2 call sites in the whole codebase use them (credits_grants.go auto_payg gate, whoami display) — every money-moving gate/write in internal/adapter/repo/wallet.go (Debit, refund-reversal, CreatePreAuth/Settle) and the proration in internal/app/refund_service.go still compute on the float64 DECIMAL(14,4)/(10,2) columns directly. Per doc/coord/migration-ledger.md:81 the actual P1 backfill (populating *_cents on pre-2026-06-23 rows) has explicitly NOT been run — it is a manually-gated operator step (scripts/backfill-money-cents.sh, requires BILLING_UNIFIED_ENABLED=preview) with no evidence in-repo it was ever invoked against R6. If an owner does want to resume, the concrete, already-scoped-and-tooled completion path is exactly ADR 0023's own P1→P3: (1) run scripts/backfill-money-cents.sh + verify scripts/money-cents-drift-report.sh reports 0 everywhere; (2) hold a P2 shadow-compare window (the drift-report script + CI footing gate already exist for this); (3) extend WalletTransaction/PaymentOrder/WalletPreAuthorization/RedemptionCode/product_plans Go structs with their *_cents fields and swap the float64 gates in wallet.go/refund_service.go/wallet_service.go to the same nil-fallback pattern already proven safe in entity.Wallet.AvailableCents(). This is a real but bounded engineering effort with existing test scaffolding — it is NOT a big rewrite. It is, however, blocked on a product decision: ADR 0023's own status is still \"Proposed (owner decision pending — see §7)\" and this task's own framing states the owner already ruled the 14,4+tolerance design intentional — i.e., there is already a standing decision to park the migration at the current (safe, inert) P0 state rather than complete P1-P5. Recommend: leave as-is; do not run the backfill or touch any read path without an explicit fresh owner go-ahead, since flipping reads to cents before backfill completes on the 5 tables that have zero Go-side exposure would silently treat every un-backfilled historical row as NULL/0 — a real correctness bug, not a cosmetic one.",
+  "risk": "If anyone proceeds without re-confirming the owner decision: (a) flipping any of the 5 non-wallets tables' reads to *_cents today would be wrong for 100% of historical rows (no Go field exists to even read them, and no backfill has run) — silent zero/NULL treatment of real money; (b) even for billing.wallets, extending more call sites to AvailableCents()-style logic before running the P1 backfill just means most rows keep falling back to the existing float64 path (safe, but doesn't fix anything) while giving false confidence that migration progress was made; (c) P4 (wire) touches cross-service consumers per ADR §3 (kova usage report, subscription checkout, newhub, mobile SDKs) — any premature internal/v1 cutover breaks those without coordinated deploys.",
+  "effort": "M",
+  "tests": "Already exist and pin current (P0/P1-tooling) correctness: internal/adapter/repo/money_cents_dual_write_pg_test.go (TestToCents_RoundHalfEven_PG — round-half-to-even conversion, PG-gated via PLATFORM_TEST_POSTGRES_DSN), internal/adapter/repo/money_cents_backfill_pg_test.go (backfill function), internal/adapter/repo/money_footing_pg_test.go (TestMoneyCents_Footing_ZeroDrift, build tag `integration`, run in the PG+MinIO integration workflow — sums amount_cents independently and asserts it equals balance_cents plus billing.money_cents_drift()==0). If P3 is ever resumed, the pattern to mirror for new tests is credits_grants.go's use of entity.Wallet.AvailableCents(): a hermetic test with the shadow nil (fallback path) and one with it populated (exact path), matching the existing data-gated design."
+ },
+ {
+  "item": "N5 — passkey config surface is settings-only theater with zero working handlers (both repos)",
+  "verdict": "confirmed",
+  "evidence": [
+   {
+    "file": "internal/pkg/setting/system_setting/passkey.go",
+    "line": 11,
+    "note": "PasskeySettings struct + defaultPasskeySettings registered under config.GlobalConfig.Register(\"passkey\",...) in init(); GetPasskeySettings() only derives RPID/Origins from ServerAddress. No registration/authentication handler anywhere consumes it."
+   },
+   {
+    "file": "internal/adapter/handler/misc.go",
+    "line": 43,
+    "note": "GetStatus reads system_setting.GetPasskeySettings() and republishes it into the /api/status response (login_methods.passkey block lines 96-101, security.passkey_available line 122, top-level passkey_login/passkey_rp_id/... lines 181-187) — this is the only backend consumer besides the setting struct itself."
+   },
+   {
+    "file": "internal/adapter/handler/router",
+    "line": 0,
+    "note": "grep -rn passkey|webauthn across internal/adapter/handler/router/*.go (excl _test.go) is empty — no /webauthn/* or /passkey/* route registered anywhere, confirming misc.go:43 and passkey.go are the entire backend footprint."
+   },
+   {
+    "file": "internal/adapter/handler/option.go",
+    "line": 50,
+    "note": "UpdateOption has a per-key switch/allowlist for side-effect validation but no denylist — a raw {key:\"passkey.enabled\",value:true} admin POST reaches repo.UpdateOption unblocked, so an admin CAN flip the flag GetStatus reports as enabled even though nothing behind it can register/verify a credential."
+   },
+   {
+    "file": "internal/pkg/setting/config/config.go",
+    "line": 42,
+    "note": "LoadFromDB/handleConfigUpdate route DB option rows by \"name.\" prefix match against config.GlobalConfig.configs — this is a FLAT key-value store (options table Key/Value columns), not a JSON blob with strict unmarshal."
+   },
+   {
+    "file": "internal/adapter/repo/option.go",
+    "line": 555,
+    "note": "handleConfigUpdate: config.GlobalConfig.Get(configName) returns nil for an unregistered prefix and the function just `return false` — the raw \"passkey.xxx\" key/value still lands in common.OptionMap (set at option.go:236 before this check) but is never parsed into any struct. No panic, no error path — confirms removing passkey.go leaves pre-existing DB rows inert, not broken."
+   },
+   {
+    "file": "web/src/components/settings/AuthSettingPage.jsx",
+    "line": 703,
+    "note": "Full '配置 Passkey' Form.Section (checkbox + rp_display_name/rp_id/user_verification/attachment_preference/allow_insecure_origin/origins fields, submitPasskeySettings at line 501) is RENDERED — this file is imported and mounted at web/src/pages/Setting/index.jsx:32,71 (case branch returns <AuthSettingPage/>), so this admin form is reachable in production."
+   },
+   {
+    "file": "web/src/components/settings/SystemSetting.jsx",
+    "line": 1119,
+    "note": "Duplicate legacy '配置 Passkey' Form.Section; only importer found is its own test file (q1_system_setting.test.jsx:305) — grep -rln \"SystemSetting'\" web/src --include=*.jsx found no non-test consumer, so this copy's production reachability is unverified/likely orphaned pending legacy-shell retirement (see console-ia P1 roadmap in memory)."
+   },
+   {
+    "file": "web/src/services/secureVerification.js",
+    "line": 41,
+    "note": "SecureVerificationService.checkAvailableVerificationMethods() hardcodes hasPasskey:false, passkeySupported:false unconditionally — the only real code path that could ever populate these flags always reports passkey unavailable."
+   },
+   {
+    "file": "web/src/components/common/modals/SecureVerificationModal.jsx",
+    "line": 278,
+    "note": "Passkey TabPane guarded by `hasPasskey && passkeySupported` — since secureVerification.js:43-44 hardcodes both false, this branch is dead in production; it only renders in tests that inject hasPasskey:true by hand (web/src/components/common/modals/c1_modals.test.jsx:310,345,357), proving the tab's only 'reachability' is test-mock-only."
+   },
+   {
+    "file": "web/src",
+    "line": 0,
+    "note": "grep -rn \"navigator.credentials|simplewebauthn|startAuthentication|startRegistration|/webauthn|/passkey/\" across web/src and internal/ (excl _test.go) returned zero matches — no client-side WebAuthn API call and no such route path exists anywhere in the codebase."
+   },
+   {
+    "file": "migrations/008_drop_auth_columns.sql",
+    "line": 29,
+    "note": "DROP TABLE IF EXISTS passkey_credentials; DROP TABLE IF EXISTS passkey_sessions; — inside the 001-020 baseline block that CLAUDE.md documents as 'record only, never executed'; internal/domain/entity has zero passkey/webauthn fields (grep empty), confirming no live DB schema footprint today."
+   },
+   {
+    "file": "internal/app/auth_policy_service.go",
+    "line": 333,
+    "note": "PLATFORM SIDE ALREADY FIXED 2026-08-21: EffectivePolicy() unconditionally sets out.Passkey=false at line 341 regardless of any per-app apps.yaml override (line 287 applyOverride is nullified by this floor), with an explicit comment: 'Passkey has no implementation anywhere: router.go registers no passkey/webauthn route... and no handler exists to register.' Field kept only for response-shape stability."
+   },
+   {
+    "file": "internal/app/capability_backing_test.go",
+    "line": 73,
+    "note": "Test table pins the platform floor: {\"passkey\": {runtimeFloored, \"floored to a constant false: router.go registers NO passkey/webauthn route and no handler exists to register one\"}} — asserted at line 215 {\"passkey\", pol.Passkey}. This is the regression guard already protecting the platform fix; no equivalent guard exists in newhub."
+   },
+   {
+    "file": "internal/module/app_registry/types.go",
+    "line": 98,
+    "note": "apps.yaml schema still exposes `passkey *bool` for shape stability — matches auth_policy_service.go's documented intent, consistent with 'already_fixed by flooring, not by deleting the field' pattern."
+   }
+  ],
+  "proposal": "Newhub is the live defect; platform already applied the correct fix pattern (floor to constant false + regression test) on 2026-08-21 and needs no further change here.\n\nNewhub — full removal (repo owns both the config and its only consumers, so this can land atomically):\nBackend:\n1. Delete internal/pkg/setting/system_setting/passkey.go entirely (struct, default var, init() Register call, GetPasskeySettings()).\n2. internal/adapter/handler/misc.go: remove `passkeySetting := system_setting.GetPasskeySettings()` (line 43), the `\"passkey\"` sub-object in loginMethods (lines 96-101), `\"passkey_available\"` in the security block (line 122), and the 7 top-level `passkey_*` keys (lines 181-187). If any external console build depends on key *presence* in /api/status (unverified — check doc/coord/contracts.md for a newhub /api/status entry before deleting; if referenced, mirror platform's approach and hardcode `false`/omit sub-object instead of deleting keys outright).\n3. internal/adapter/handler/option.go: no code change needed — UpdateOption's absence of a denylist is not itself a security bug (options are admin-only), it just becomes moot once passkey.go's Register() call is gone (handleConfigUpdate silently drops the prefix, per option.go:555-558).\n\nFrontend:\n4. web/src/components/settings/AuthSettingPage.jsx: remove the '配置 Passkey' Card/Form.Section (~line 703-830), its inputs' default state entries (~78-84), the onChange switch cases (~135-147), and submitPasskeySettings() (~501-533).\n5. web/src/components/settings/SystemSetting.jsx: mirror the same removal (~85-91, 191-206, 643-676, 1119-1242) — first confirm via a fresh grep whether this legacy page is still routed anywhere beyond its own test (this session only checked jsx importers, not route tables) before deleting vs. leaving it for the already-planned legacy-shell retirement.\n6. web/src/services/secureVerification.js: drop the two now-pointless literals (hasPasskey/passkeySupported) — return object shrinks to {has2FA, hasSession} — and web/src/hooks/common/useSecureVerification.jsx: remove hasPasskey/passkeySupported from state/canUseMethod/getRecommendedMethod (lines 45-47,93,103,197-201,213-216,278).\n7. web/src/components/common/modals/SecureVerificationModal.jsx: delete the passkey TabPane (lines 278-358) and the hasPasskey destructure/guard (lines 62,85).\n8. i18n: after 4-7 land, re-grep `-i passkey` across web/src/i18n/locales/*.json and delete every key with zero remaining consumers (this session already confirmed several — 已启用 Passkey，无需密码即可登录 / 当前设备不支持 Passkey / Passkey 已重置 / Passkey 已解绑 / 无法发起 Passkey 注册 / 注册 Passkey / Passkey 登录 — have ZERO jsx/js consumers today, i.e., they are already orphaned before any code deletion).\n\nDB safety: no migration needed. Confirmed via config.go:42-68 (flat \"name.key\" row storage, not a JSON blob) and repo/option.go:555-558 (handleConfigUpdate returns false → no-op) that any pre-existing `options` rows named `passkey.*` simply become permanently-unread strings in common.OptionMap after passkey.go is deleted — no deserialization error, no boot failure. An optional follow-up `DELETE FROM options WHERE key LIKE 'passkey.%'` can tidy the table but is not required for correctness.",
+  "risk": "Low, mechanical deletion — but three sub-risks: (a) unverified whether /api/status's passkey_* keys are read by anything outside this repo's own frontend (no contracts.md check done this session — grep it before deleting response keys outright; if referenced, floor to false like platform did instead of removing); (b) SystemSetting.jsx's production reachability was not conclusively proven dead in this session (only its jsx-importer graph was checked, not the route table) — verify before deleting vs. flagging for the already-planned legacy-shell retirement; (c) i18n key removal must be re-grepped AFTER code deletion, not before, since deleting the UI orphans additional keys beyond the ones already-confirmed dead.",
+  "effort": "M",
+  "deps": "None blocking — self-contained within 2b-svc-newhub. Optional: confirm doc/coord/contracts.md has no newhub /api/status passkey_* consumer before deleting response keys (vs. flooring to false).",
+  "tests": "1. Hermetic Go: extend internal/pkg/setting/config/cov_boot-settings_config_test.go's existing unregistered-prefix pattern (mirrors lines 251-252/273/293/312) with a subtest asserting LoadFromDB does not error/panic when the options map contains legacy `passkey.enabled=true` rows with no matching Register() — pins the \"safe to leave orphaned DB rows\" claim before/after passkey.go is deleted. 2. Backend handler test: assert GET /api/status JSON body no longer contains \"passkey\"/\"passkey_login\"/\"passkey_available\" keys (or contains hardcoded false, per contracts-check outcome) — add alongside existing internal/adapter/handler/cov_handler-identity-log_verify_test.go which already exercises this path. 3. Frontend: update web/src/components/settings/q1_system_setting.test.jsx and web/src/components/common/modals/c1_modals.test.jsx to remove the passkey-tab assertions (lines ~310-364 in c1_modals.test.jsx) — since those tests currently inject hasPasskey:true by hand to exercise dead code, their removal itself is the regression guard (a `bun run test` failure on any leftover passkey reference after deletion proves nothing was missed)."
+ },
+ {
+  "item": "N2 — zita-bridge auto-created user always lands TenantId=\"default\"; no B-end tenant onboarding path for the bridge login flow",
+  "verdict": "confirmed",
+  "evidence": [
+   {
+    "file": "internal/adapter/handler/zita_bootstrap.go",
+    "line": 161,
+    "note": "autoCreateBridgedUser hard-codes TenantId: \"default\" (line 169) — the only field ZitaBootstrap can source is id.AccountID (line 45), there is no tenant input anywhere in this path."
+   },
+   {
+    "file": "internal/adapter/handler/v2_provision.go",
+    "line": 207,
+    "note": "ProvisionV2 calls the SAME autoCreateBridgedUser, and its own comment says so explicitly: \"one platform account maps to one hub user regardless of which tenant slug the client called\" — the :tenant_slug param (line 117) is looked up only for a 404 check and log lines (tenant.Id at 271/313/341), never applied to user.TenantId. Same defect, second call site."
+   },
+   {
+    "file": "C:/Users/Anita/go/pkg/mod/github.com/hanmahong5-arch/zita-sdk-go@v0.1.0/identity.go",
+    "line": 30,
+    "note": "zita.Identity.OrgID is declared but documented \"Reserved — multi-tenant org context lands with /api/v1/account/me/orgs\" and the HMAC fast-path ValidateSession never populates it (line 6-9) — so even if newhub tried to read an org claim from the bridge, v0.1.0 of the SDK never supplies one."
+   },
+   {
+    "file": "internal/adapter/middleware/oidc_auth.go",
+    "line": 1041,
+    "note": "(a)/(b) answered: a working org_id→tenant auto-create mechanism DOES already exist — mapOIDCUserToLurus + repo.GetTenantByIDPOrgID/CreateTenantFromIDP, gated by OIDC_AUTO_CREATE_TENANT env (line 1049) — but it lives entirely inside the legacy Bearer-JWT OIDCAuth() middleware path, which is separate from and not invoked by ZitaBootstrap/ProvisionV2."
+   },
+   {
+    "file": "internal/adapter/handler/oauth.go",
+    "line": 115,
+    "note": "(a) confirmed: /:tenant_slug/auth/login → OIDCLoginRedirect exists (router/api-v2-router.go:35) and resolves the tenant via repo.GetTenantBySlug(tenantSlug), but this is the legacy OAuth-callback path being phased out in favor of the zita bridge (zita_login.go:17-20 comment: 'While migration is in flight both handlers exist ... legacy path can be deleted')."
+   },
+   {
+    "file": "internal/adapter/handler/tenant.go",
+    "line": 83,
+    "note": "(c) confirmed: tenants are created today via POST /api/v2/admin/tenants (CreateTenant), gated RootJWTAuth-only per router/v2_completeness_test.go:116 — a platform-operator action, not self-service."
+   },
+   {
+    "file": "internal/adapter/repo/redemption.go",
+    "line": 155,
+    "note": "Existing atomic-consume pattern to model a new invite-consume function on: SELECT...FOR UPDATE inside a transaction, status check, single-use semantics — reusable template for a tenant-invite table."
+   }
+  ],
+  "proposal": "Add a minimal, root-admin-issued \"tenant invite code\" that the zita-bridge auto-create path optionally consumes — everything else (existing users, OIDC legacy path, org-claim mechanism) stays untouched.\n\n1. New entity + migration (reserve next ID, currently migrations/031 is latest — needs a ledger reservation in root doc/coord/migration-ledger.md before writing SQL, per repo baseline contract): `internal/domain/entity/tenant_invite.go` — `TenantInvite{Id int, TenantId string (FK→tenants.id), Code string (unique, 32-hex like Redemption.Key), Status int (pending=1/consumed=2/revoked=3), ExpiredTime int64 (0=no expiry), CreatedByUserId int, ConsumedByAccountId *int64, ConsumedAt *time.Time, CreatedAt time.Time}`. Migration file `migrations/032_create_tenant_invites.sql`, PG-only + idempotent (`CREATE TABLE IF NOT EXISTS`), per the 021+ baseline contract in CLAUDE.md.\n\n2. `internal/adapter/repo/tenant_invite.go`:\n   - `CreateTenantInvite(tenantID string, createdByUserID int, ttl time.Duration) (*TenantInvite, error)` — mints a random 32-hex code (reuse `repo.GenerateID`/existing key-gen helper used by Redemption), inserts pending row.\n   - `ConsumeTenantInvite(code string) (*Tenant, error)` — mirrors `Redeem`'s pattern at internal/adapter/repo/redemption.go:155-169 exactly: `WithoutTenantIsolation(DB).Transaction(...)` + `Clauses(clause.Locking{Strength:\"UPDATE\"})` on the invite row, check `Status==pending` and `ExpiredTime==0 || ExpiredTime>now`, flip to consumed, load and return the parent `Tenant` via `GetTenantByID`. Returns typed sentinel errors (`ErrInviteNotFound`, `ErrInviteExpired`, `ErrInviteAlreadyConsumed`) so callers can log-and-fallback instead of surfacing 500s.\n\n3. Admin endpoint `internal/adapter/handler/tenant.go`: `CreateTenantInvite(c *gin.Context)` — `POST /api/v2/admin/tenants/:id/invites`, mounted next to the existing `tenantMgmt` group (router/api-v2-router.go, same RootJWTAuth gate as `CreateTenant` at line 342), body `{ttl_hours int}` optional, returns `{code, expires_at}` for the operator to hand to the B-end customer (e.g. pasted into an onboarding email).\n\n4. Bridge-side plumbing:\n   - `zita_login.go` `ZitaLogin`: accept optional `?invite=<code>` query param. If present and passes a cheap format check (32 hex chars — do NOT hit the DB here, keep this handler side-effect-free), set a short-lived cookie `pending_tenant_invite` (HttpOnly, Secure, SameSite=Lax, Max-Age=600s) before the redirect at line 44, so the code survives the round trip through identity.lurus.cn without being re-attached to return_to (avoids leaking it into platform-side logs/referrers).\n   - `zita_bootstrap.go` `ZitaBootstrap`: only in the `errors.Is(err, gorm.ErrRecordNotFound)` branch (line 55-66, i.e. only on first-ever bridge login — never touches an existing user's tenant), read the `pending_tenant_invite` cookie via `c.Cookie(...)`. If present, call `repo.ConsumeTenantInvite(code)`; on success pass the resolved `tenant.Id` into a new `autoCreateBridgedUser(accountID, tenantID string)` parameter (replacing the hard-coded `\"default\"` at line 169) and use `repo.GetTenantConfigInt(tenantID, ...)` (already tenant-aware at line 196, unaffected). On ANY failure (cookie absent, invalid format, not found, expired, already consumed, DB error) — log via `common.SysLog` and fall through to `tenantID = \"default\"`, i.e. today's exact behavior. Clear the cookie (`c.SetCookie(..., -1, ...)`) after the attempt regardless of outcome so a stale/reused browser session cannot silently rebind a later unrelated login.\n   - `v2_provision.go` `ProvisionV2`: same one-line change — pass the already-looked-up `tenant.Id` (line 118, currently only used for 404/logging) into the new `autoCreateBridgedUser(accountID, tenant.Id)` signature, since that endpoint's URL already names the target tenant explicitly (no invite-cookie plumbing needed here — the :tenant_slug IS the customer's stated intent, it was just being discarded).\n\nFail-safe guarantees: unknown/garbage/expired/already-consumed invite → never a crash, never a 500, always falls back to the pre-existing \"default\" placement (identical to current behavior when the code fails); no org-claim inference is added so no risk of the OIDC \"blank org_id / wrong org auto-folds into one tenant\" class of bug seen at oidc_auth.go:1035-1043; existing/returning bridged users are never re-tenanted by this change (cookie only consulted in the auto-create branch); code is single-use via the same row-level lock pattern already proven correct for Redemption codes.",
+  "risk": "Backward compatibility: zero blast radius when no invite cookie is present (100% of today's bridge logins) — the new code path is additive and only activates on the new query param / cookie. Race: two tabs racing the same invite code — FOR-UPDATE lock serializes, the loser still succeeds login (falls back to default), only misses the intended tenant; worth a SysLog(WARN) so ops notice and can re-issue rather than silently losing the customer into \"default\". Scope creep risk: do NOT also wire the org-claim OIDC_AUTO_CREATE_TENANT path into the bridge in this same PR — that requires SDK v0.2.x Whoami() (identity.go:8-9, OrgID not populated today) and is a separate, larger change. New migration touches root `doc/coord/migration-ledger.md` reservation — must be done before writing SQL per repo baseline contract; not yet reserved as part of this recon.",
+  "effort": "M",
+  "deps": "Migration ID reservation in root repo's doc/coord/migration-ledger.md before the SQL file can be written (owner-gated per CLAUDE.md); no dependency on zita-sdk-go version bump (design deliberately avoids needing OrgID/Whoami()).",
+  "tests": "Hermetic Go tests using the existing SetupV2TestRouter(t) harness (pattern confirmed in internal/adapter/handler/cov_h5e_zita_autocreate_test.go, glebarez SQLite tier):\n1. repo/tenant_invite_test.go: ConsumeTenantInvite happy path (pending→consumed, returns correct tenant); second consume on same code returns ErrInviteAlreadyConsumed; expired code returns ErrInviteExpired; unknown code returns ErrInviteNotFound.\n2. handler: TestZitaBootstrap_ValidInviteCookie_NewUserLandsInInvitedTenant — seed a Tenant + pending TenantInvite, set the pending_tenant_invite cookie on the test request, assert the newly auto-created user's TenantId equals the invited tenant and response tenant_slug matches (mirrors the assertion style at cov_h5e_zita_autocreate_test.go:39).\n3. handler: TestZitaBootstrap_ExpiredOrMissingInviteCookie_FallsBackToDefault — pins the fail-safe explicitly: expired/garbage/absent cookie → user created with TenantId==\"default\", HTTP 200 (no 500).\n4. handler: TestZitaBootstrap_ExistingUser_InviteCookiePresent_TenantUnchanged — pre-existing bridged user + a valid invite cookie for a DIFFERENT tenant → asserts TenantId is untouched (pins \"invite only applies at first-time creation\").\n5. handler: TestProvisionV2_AutoCreate_UsesURLTenantSlug — mirrors provisioning_test.go patterns, asserts the auto-created user's TenantId equals the tenant resolved from :tenant_slug rather than \"default\".\nConcurrency (two goroutines racing ConsumeTenantInvite on the same code, asserting exactly one winner) needs real row locking and should run against the PG integration tier (`go test -run Integration`), consistent with Redeem's own FOR-UPDATE reliance on Postgres semantics."
+ },
+ {
+  "item": "N3 — legacy direct-OIDC auth track coexists with zita bridge, unconditionally routed, zero live internal consumers",
+  "verdict": "confirmed",
+  "evidence": [
+   {
+    "file": "internal/adapter/handler/router/api-v2-router.go",
+    "line": 35,
+    "note": "Legacy Track 1 registered unconditionally (no ZitaClient/OIDC_ENABLED guard) inside apiV2 group: GET /:tenant_slug/auth/login → OIDCLoginRedirect; only middleware is CORS+RequestBodySizeLimit+OptionalZitaIdentity (public, no rate limit)."
+   },
+   {
+    "file": "internal/adapter/handler/router/api-v2-router.go",
+    "line": 36,
+    "note": "GET /oauth/callback → OIDCCallback, same public unconditional registration."
+   },
+   {
+    "file": "internal/adapter/handler/router/api-v2-router.go",
+    "line": 37,
+    "note": "GET /auth/session-info → GetSessionInfo, unconditional."
+   },
+   {
+    "file": "internal/adapter/handler/router/api-v2-router.go",
+    "line": 38,
+    "note": "POST /oauth/logout → OIDCLogout, unconditional."
+   },
+   {
+    "file": "internal/adapter/handler/router/api-v2-router.go",
+    "line": 39,
+    "note": "POST /oauth/refresh → RefreshAccessToken, unconditional."
+   },
+   {
+    "file": "internal/adapter/handler/router/api-v2-router.go",
+    "line": 46,
+    "note": "Track 2 (zita bridge): GET /auth/zita-login → ZitaLogin, unconditional."
+   },
+   {
+    "file": "internal/adapter/handler/router/api-v2-router.go",
+    "line": 52,
+    "note": "POST /auth/zita-bootstrap gated by `if common.ZitaClient != nil` AND middleware.BootstrapRateLimit() — legacy track has no equivalent rate limiter."
+   },
+   {
+    "file": "internal/adapter/handler/oauth.go",
+    "line": 115,
+    "note": "OIDCLoginRedirect: builds IdP authorize URL, sets PKCE/nonce/state in session — full interactive entry point."
+   },
+   {
+    "file": "internal/adapter/handler/oauth.go",
+    "line": 223,
+    "note": "OIDCCallback: exchanges code, auto-creates tenant/user (OIDC_AUTO_CREATE_TENANT/OIDC_AUTO_CREATE_USER), sets V1 session vars + oauth_access_token/refresh_token/id_token, redirects browser to /oauth/oidc."
+   },
+   {
+    "file": "internal/adapter/handler/zita_bootstrap.go",
+    "line": 19,
+    "note": "Comment: 'Replaces the legacy OIDC OAuth callback path for the v2 frontend (ADR-0011 Layer C)'."
+   },
+   {
+    "file": "web/src/App.jsx",
+    "line": 183,
+    "note": "/login and /login/:tenantSlug (App.jsx:183,191) and /register (App.jsx:200) all render <OidcRedirect/>, which no longer calls the legacy login route."
+   },
+   {
+    "file": "web/src/components/auth/OidcRedirect.jsx",
+    "line": 51,
+    "note": "bootstrap() POSTs /api/v2/auth/zita-bootstrap first; on failure falls through to GET /api/v2/auth/zita-login (line 88). Zero calls to /:tenant_slug/auth/login anywhere in this file."
+   },
+   {
+    "file": "web/src/components/auth/OidcCallback.jsx",
+    "line": 44,
+    "note": "Mounted only at /oauth/oidc (App.jsx:210); calls GET /api/v2/auth/session-info. Nothing in web/src links/navigates to /oauth/oidc except the legacy OIDCCallback server redirect itself (oauth.go:443), which is only reached after OIDCLoginRedirect — never invoked — so this component is unreachable via normal navigation."
+   },
+   {
+    "file": "web/src/helpers/api.js",
+    "line": 85,
+    "note": "401 self-heal (ensureSession) re-authenticates exclusively via POST /api/v2/auth/zita-bootstrap, not legacy OIDC."
+   },
+   {
+    "file": "web/src/hooks/common/useHeaderBar.js",
+    "line": 154,
+    "note": "Logout button calls POST /api/v2/auth/zita-logout, not /api/v2/oauth/logout."
+   },
+   {
+    "file": "web/src/pages/v2/AccountDisabled/index.jsx",
+    "line": 89,
+    "note": "window.location.href = '/api/v2/auth/zita-logout' — also zita track, not legacy."
+   },
+   {
+    "file": "web/tests/e2e/helpers/auth.ts",
+    "line": 63,
+    "note": "e2e auth uses a THIRD path, POST /api/v2/bridge/exchange (STAGE/CI-only), not legacy OIDC nor zita-bootstrap."
+   },
+   {
+    "file": "deploy/k8s/r6-stage/deployment.yaml",
+    "line": 115,
+    "note": "OIDC_ENABLED=true, OIDC_ISSUER, OIDC_JWKS_URI, OIDC_REDIRECT_URI=https://hub.lurus.cn/api/v2/oauth/callback, OIDC_CLIENT_ID (secret), OIDC_AUTO_CREATE_USER=true, OIDC_ENABLE_PKCE=true are all live in the prod-serving manifest for hub.lurus.cn — comment explicitly still documents 'SSO entry: GET /api/v2/<tenant_slug>/auth/login' as of the 2026-08-23 OIDC-ON change, meaning Track 1 has a real registered IdP client and is fully functional end-to-end, not just dead code."
+   },
+   {
+    "file": "deploy/k8s/r6-stage/deployment.yaml",
+    "line": 173,
+    "note": "IDENTITY_PUBLIC_URL=https://identity.lurus.cn and IDENTITY_SESSION_SECRET (secret) are both set → common.ZitaClient is non-nil in prod (internal/pkg/common/zita_client.go:20-36 InitZitaClient), so the 'legacy OIDC path remains as fallback' comment in cmd/server/main.go:588 never actually engages — zita is always available."
+   },
+   {
+    "file": "internal/adapter/middleware/oidc_auth.go",
+    "line": 192,
+    "note": "oidcEnabled reads OIDC_ENABLED — but this gates a SEPARATE, still-live mechanism: middleware.OIDCAuth() (Bearer-JWT verification), used by platformUser routes (api-v2-router.go:319, billing/identity-overview) and /:tenant_slug/credit-pool/me (api-v2-router.go:72). This does NOT depend on OIDCLoginRedirect/OIDCCallback and must not be disabled alongside the legacy interactive flow."
+   },
+   {
+    "file": "internal/adapter/middleware/oidc_auth.go",
+    "line": 556,
+    "note": "handleSessionFallback reads session.Get('oauth_access_token') — a session key ONLY ever set by the legacy OIDCCallback (oauth.go:418) or RefreshAccessToken (oauth.go:582); zita-bridge sessions never carry it (zita_bootstrap.go only sets id/username/role/status/group/identity_account_id, no oauth_access_token). This fallback branch is Track-1-dependent and currently dead in practice since Track 1's entry point is never invoked by any live frontend."
+   },
+   {
+    "file": "internal/adapter/handler/router/frontend_route_contract_test.go",
+    "line": 6,
+    "note": "Existing hermetic test scans web/src for API.<verb>('/api/...') calls and fails if any resolves to no route — a live tripwire that would catch a NEW legacy-route call being reintroduced; it currently passes with zero legacy-track calls found."
+   },
+   {
+    "file": "internal/adapter/handler/router/v2_completeness_test.go",
+    "line": 75,
+    "note": "POST /api/v2/oauth/logout and /oauth/refresh are documented in the route-completeness contract as 'self-service' with no consumer note — contrast with zita-bootstrap's explicit 'conditionallyRegistered' rationale (frontend_route_contract_test.go:60), underscoring these were never annotated as actively consumed."
+   }
+  ],
+  "proposal": "Phased retirement (option a), NOT full deletion in one shot, because the legacy track's IdP client is live-registered in prod (deployment.yaml OIDC_CLIENT_ID/OIDC_REDIRECT_URI) and this session could not verify external repos (Switch app, lutu client) never hit it directly:\n\nPhase 1 (this repo, low-risk, reversible via env flip):\n1. In internal/adapter/handler/oauth.go, add a package-level `legacyOIDCLoginEnabled() bool` helper reading a new env var `OIDC_LEGACY_LOGIN_ENABLED` (default false when unset — fail-closed/retired-by-default), mirroring the existing `isPKCEEnabled()` (oauth.go:841) pattern.\n2. At the top of `OIDCLoginRedirect` (oauth.go:115) and `OIDCCallback` (oauth.go:223), short-circuit with `c.JSON(http.StatusNotFound, ...)` (or redirect to `/login`, which now goes through zita) when `!legacyOIDCLoginEnabled()`, logging via `common.SysLog` with request IP/UA so an unexpected live caller shows up in logs during burn-in — this is the oracle for \"does anything still depend on this\" before Phase 2 deletes it.\n3. Leave `OIDCLogout`/`RefreshAccessToken`/`GetSessionInfo` untouched — they are read-only/inert once step 2 stops anything from ever populating `oauth_access_token`/`oauth_id_token` in a session, so no separate gate is needed for them.\n4. Do NOT touch OIDC_ENABLED/OIDC_ISSUER/OIDC_JWKS_URI/OIDC_CLIENT_ID in deploy/k8s/r6-stage/deployment.yaml — `middleware.OIDCAuth()` (oidc_auth.go:192) needs them for the unrelated Bearer-JWT path (platformUser/billing, credit-pool/me).\n5. Deploy: no manifest change required (new env var defaults to disabled/retired). Rollback = set `OIDC_LEGACY_LOGIN_ENABLED=true` in deployment.yaml if an unexpected consumer surfaces.\n\nPhase 2 (owner-gated, after a burn-in window with zero hits logged in step 2): delete `OIDCLoginRedirect`, `OIDCCallback`, `OIDCLogout`, `RefreshAccessToken` and their now-orphaned helpers (`exchangeCodeForToken`, `refreshAccessToken`, `buildOIDCAuthURL`, `generateOAuthState`/`parseOAuthState`, `isPKCEEnabled`/`generatePKCE`, `validateIDToken`/`validateIDTokenClaims`, `computeStateHMAC`, `isValidTenantSlug`/`isValidRedirectURL` — re-grep for other callers first, some may be shared), remove the 4 route registrations at api-v2-router.go:35-39, strip `OIDC_REDIRECT_URI`/`OIDC_AUTO_CREATE_USER`/`OIDC_ENABLE_PKCE` from deployment.yaml (keep the 4 vars the Bearer path needs), and have the owner deregister the `/api/v2/oauth/callback` redirect_uri client entry at the IdP (2l-svc-platform `config/apps.yaml` newhub entry) since deployment.yaml documents it as still registered there.",
+  "risk": "Phase 1 risk is low and reversible (env-var flip). Residual risk: this session could only verify zero consumers inside 2b-svc-newhub's web/ and e2e — could not check external repos (e.g. a Switch app or lutu client) for direct HTTP calls to `/api/v2/:tenant_slug/auth/login` or `/api/v2/oauth/callback`; the burn-in logging in step 2 of Phase 1 is the safety net for that gap. Must keep OIDC_ENABLED/ISSUER/JWKS/CLIENT_ID env vars alive regardless — accidentally removing them alongside the legacy routes would break the unrelated Bearer-JWT billing/credit-pool paths (oidc_auth.go:192, api-v2-router.go:72,319).",
+  "effort": "M",
+  "tests": "Hermetic Go tests in internal/adapter/handler/oauth_test.go (existing file, already has coverage for these handlers): add cases asserting `OIDCLoginRedirect` and `OIDCCallback` return 404 when `OIDC_LEGACY_LOGIN_ENABLED` is unset/false, and behave as today when explicitly set to \"true\" (regression safety net for the flag itself). No new IdP/network mocking needed since the short-circuit happens before any outbound call. Existing `internal/adapter/handler/router/frontend_route_contract_test.go` and `v2_completeness_test.go` remain the tripwires against web/src ever reintroducing a call to the retired routes — no changes needed to them for Phase 1; Phase 2's route removal would require deleting their now-stale oauth entries at that time."
+ },
+ {
+  "item": "P1: Register() creates the Zitadel human user before the local DB insert, and never compensates when the DB insert fails — orphaned IAM identity per failed attempt, later resurrected as a half-provisioned account row via the login JIT path.",
+  "verdict": "confirmed",
+  "evidence": [
+   {
+    "file": "internal/app/registration_service.go",
+    "line": 568,
+    "note": "Legacy Register path (used when identityOps unwired or email==\"\" — this is the email-less username+password branch that hit the 2026-08-31 incident): `if s.identity != nil { hu, err := s.identity.CreateHumanUser(...) }` — Zitadel user created first."
+   },
+   {
+    "file": "internal/app/registration_service.go",
+    "line": 618,
+    "note": "`if err := s.accounts.Create(ctx, account); err != nil { return nil, fmt.Errorf(\"register: create account: %w\", err) }` — on failure the function returns immediately; zitadelSub (already minted at line ~591) is never disabled or deleted. No rollback call anywhere in Register()."
+   },
+   {
+    "file": "internal/app/identity_ops_service.go",
+    "line": 630,
+    "note": "IdentityOpsService.CreateHumanUser — the Phase B Wave A path Register delegates to when `s.identityOps != nil && emailAddr != \"\"` (registration_service.go:524). Same shape: ensureZitaUser (line 666) creates/adopts the Zita user, then `s.accounts.Create` at line 691 — on failure only logs+returns error, no compensating delete."
+   },
+   {
+    "file": "internal/app/identity_ops_service.go",
+    "line": 620,
+    "note": "Doc comment explicitly documents the design as 'no rollback, rely on reincarnation-safe adopt on next attempt' — this is the intentional-but-incomplete mitigation that the 2026-08-31 incident exposed: it only self-heals on a *register* retry, not on a *login* attempt."
+   },
+   {
+    "file": "migrations/126_drop_stale_accounts_email_key.sql",
+    "line": 11,
+    "note": "Incident writeup on HEAD confirms the exact failure chain: 'POST /api/v1/auth/register with no email → 500 ... AFTER the Zitadel human user was already created (never rolled back → orphaned IAM identity per attempt); the user's next login then JIT-provisioned a structurally corrupt accounts row via UpsertByZitadelSub (username='', Zitadel loginName stuffed into the email column)'. The constraint bug (accounts_email_key) is fixed by this migration; the missing rollback it describes is untouched."
+   },
+   {
+    "file": "internal/app/account_service.go",
+    "line": 183,
+    "note": "UpsertByZitadelSub — the login-time JIT path (called from zlogin_handler.go:681 and sso_handler.go:162). GetByZitadelSub then GetByEmail both miss for an orphan whose DB insert never landed, so it falls into the 'New account' branch (line 227) and creates a fresh row bound to the orphaned sub — this is the 'resurrection' the incident describes."
+   },
+   {
+    "file": "internal/adapter/handler/zlogin_handler.go",
+    "line": 681,
+    "note": "`h.accounts.UpsertByZitadelSub(c.Request.Context(), userID, loginName, displayName, \"\")` — DirectLogin passes Zitadel loginName (not a real email) as the email argument; for an email-less signup this is what stuffs loginName into accounts.email, matching the migration-126 comment. Separate, narrower defect than the rollback gap — flagging for awareness, not folding into this fix."
+   },
+   {
+    "file": "internal/pkg/zita/zita.go",
+    "line": 68,
+    "note": "UserManager interface — only DisableUser/ReactivateUser/CreateHumanUser/LookupUserByEmail etc. are exposed. No DeleteUser method exists on the facade RegistrationService/IdentityOpsService consume."
+   },
+   {
+    "file": "internal/pkg/zitadel/client.go",
+    "line": 915,
+    "note": "func (c *Client) DeleteUser(ctx, userID) error — hard-delete, DELETE /management/v1/users/{userId}, 404 treated as success (idempotent). Exists on the raw client but is NOT wired into zita.IdentityProvider."
+   },
+   {
+    "file": "internal/module/identity_admin/service.go",
+    "line": 184,
+    "note": "Established compensation idiom already in the codebase for a different flow (API-key machine-user creation): on a post-create local failure, best-effort s.zitadel.DeleteUser(...) + logger.WarnContext(...), original error still returned unmodified. This is the pattern to mirror for Register."
+   },
+   {
+    "file": "internal/adapter/repo/account.go",
+    "line": 92,
+    "note": "AccountRepo.Create is a single db.WithContext(ctx).Create(a).Error statement — a non-nil error means no row was committed, so gating compensation on this specific error branch cannot ever fire after a successful commit."
+   },
+   {
+    "file": "internal/app/identity_ops_service.go",
+    "line": 46,
+    "note": "idpCreator interface (only CreateHumanUser + LookupUserByEmail) is the narrow dependency IdentityOpsService.creator holds — must be widened to add DeleteUser for the compensation call to be pluggable there."
+   },
+   {
+    "file": "internal/app/app_arms_extra_test.go",
+    "line": 255,
+    "note": "TestCreateHumanUser_DBCreateError already exercises exactly the target scenario (fakeIDPCreator + accounts.Create failure) but only asserts err != nil — no assertion on IdP-side cleanup. Natural pin point to extend."
+   },
+   {
+    "file": "internal/app/app_arms_extra_test.go",
+    "line": 267,
+    "note": "TestCreateHumanUser_LurusIDStampError exercises the post-commit failure (account row already created, only the LurusID Update fails) — the counter-case that must NOT trigger a compensating delete, since the local row now legitimately owns the Zita sub."
+   }
+  ],
+  "proposal": "1) Widen the zita facade: add `DeleteUser(ctx context.Context, userID string) error` to `zita.UserManager` (internal/pkg/zita/zita.go, next to DisableUser/ReactivateUser at line 71), implement it in `zitadelImpl.DeleteUser` (internal/pkg/zita/zitadel_impl.go, mirroring the DisableUser wrapper at line 132) delegating to the already-idempotent `z.c.DeleteUser` (internal/pkg/zitadel/client.go:915). 2) Widen `idpCreator` in internal/app/identity_ops_service.go:46 to also require `DeleteUser(ctx, userID) error`. 3) Add a small shared helper, e.g. `compensateZitaUser(ctx, log *slog.Logger, deleter interface{ DeleteUser(context.Context, string) error }, zitadelSub string, zitaCreatedFresh bool, cause error)`, that no-ops unless `zitaCreatedFresh` is true (only ever delete a user WE just minted in this call — never one merely adopted via lookup/409-recovery, since that may predate this attempt and belong to a legitimate external identity), calls DeleteUser, and on failure does `slog.WarnContext(ctx, \"...orphan_zita_cleanup_failed\", \"zitadel_sub\", zitadelSub, \"err\", delErr)` — never returning delErr, always returning the original cause unchanged. 4) Call sites, both strictly BEFORE the local row commits: in identity_ops_service.go CreateHumanUser, wrap the generateAffCode failure (line ~676) and the s.accounts.Create failure (line 691) with the helper, passing zitaApplied as zitaCreatedFresh. Do NOT wrap the s.accounts.Update LurusID-stamp failure at line 697 — the account row already committed there, so a delete would orphan a live DB row instead of an IAM identity. In registration_service.go legacy path, apply identical treatment around the generateAffCode call (line ~594) and s.accounts.Create (line 618), gated on !hu.AlreadyExisted (fresh-create, computed right after line 591), and likewise skip the LurusID-stamp Update at line 624. 5) Leave UpsertByZitadelSub (account_service.go) and the login handlers untouched — once the compensating delete fires, GetByZitadelSub/GetByEmail correctly find nothing because the Zitadel user no longer exists either, so a subsequent login attempt fails cleanly at credential verification (401) instead of reaching the JIT-provision branch; when the best-effort delete itself fails (logged), behavior is unchanged from today (same orphan-then-reincarnate fallback already relied on), so failed compensation introduces no regression. The DirectLogin loginName-into-email conflation (zlogin_handler.go:681) is a separate, narrower defect worth a follow-up but out of scope here.",
+  "risk": "Compensation is strictly best-effort and gated to fire only on the two pre-commit failure branches per path (generateAffCode, accounts.Create) and only for freshly-minted (not adopted) Zita users, so it cannot delete a user that a persisted local account row depends on. Worst case if DeleteUser itself errors: identical to today's behavior (stranded orphan, same reincarnation fallback already in place) — no new failure mode introduced. Slight new IO on the error path (one extra HTTP DELETE to Zitadel) only when accounts.Create/generateAffCode already failed, so no hot-path latency impact.",
+  "effort": "M",
+  "deps": "None blocking; touches internal/pkg/zita/zita.go, internal/pkg/zita/zitadel_impl.go, internal/app/identity_ops_service.go, internal/app/registration_service.go, plus the two fakes (fakeIDPCreator in identity_ops_service_test.go, zita.IdentityProvider consumer in registration_service_test.go) and their httptest mock servers.",
+  "tests": "Hermetic Go tests, no network/DB: (a) extend fakeIDPCreator (internal/app/identity_ops_service_test.go:675) with a deleteCalls int counter and DeleteUser method satisfying the widened idpCreator; extend TestCreateHumanUser_DBCreateError (app_arms_extra_test.go:255) to assert creator.deleteCalls == 1 after the accounts.Create failure, and add the counter-assertion creator.deleteCalls == 0 to TestCreateHumanUser_LurusIDStampError (app_arms_extra_test.go:267) to pin 'no delete after a successful account-row commit'. Also add a case where zitaApplied=false (adopted user, via aa2_alreadyExistsCreator) + accounts.Create fails, asserting deleteCalls == 0 (never delete an adopted/pre-existing identity). (b) mirror the same three cases for the legacy RegistrationService.Register path using the existing newZitadelMockServer httptest harness (registration_service_test.go:27) — extend the mock handler to also respond to DELETE /management/v1/users/{id} and assert it was hit exactly once when a mockAccountStore.createErr is injected before Register(), and not hit when only the LurusID-stamp Update fails."
+ }
+]
