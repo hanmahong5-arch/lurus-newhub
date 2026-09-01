@@ -293,7 +293,14 @@ func TestGetLogsV2_ForbiddenFields(t *testing.T) {
 	if got, ok := other["request_path"].(string); !ok || got != "/v1/chat/completions" {
 		t.Errorf("user-tier key request_path should survive sanitization, got %v", other["request_path"])
 	}
-	for _, f := range []string{"admin_info", "model_ratio", "group_ratio", "frt"} {
+	// frt (time to first token) is the caller's own request timing, classified
+	// TierPublic alongside total_latency_ms since 2026-09-01. It used to be
+	// stripped here, which made the headline latency metric of a gateway the one
+	// number the paying customer could not see.
+	if got, ok := other["frt"].(float64); !ok || got != 123.0 {
+		t.Errorf("frt should survive sanitization (TierPublic — the caller's own latency), got %v", other["frt"])
+	}
+	for _, f := range []string{"admin_info", "model_ratio", "group_ratio"} {
 		if _, exists := other[f]; exists {
 			t.Errorf("TierInternal key %q leaked through the user-route `other` projection", f)
 		}

@@ -56,6 +56,15 @@ var FieldClassification = map[string]DataTier{
 	"created_at":        TierPublic,
 	"type":              TierPublic,
 	"use_time":          TierPublic,
+	// Time to first token. Public for the same reason total_latency_ms is: the
+	// framework's own PROV mapping puts latency under Activity, and this is the
+	// caller's own request timing — it carries no price, no margin and no
+	// upstream identity. It sat under Internal until 2026-09-01, which meant the
+	// headline performance number of an AI gateway was the one thing the paying
+	// customer could not see, while the coarser total_latency_ms right next to
+	// it was public. (It was also a sentinel -1000 on every non-streaming
+	// request until the same day, so nobody had reason to question the tier.)
+	"frt": TierPublic,
 
 	// Internal — admin only
 	"channel_id":          TierInternal,
@@ -70,7 +79,6 @@ var FieldClassification = map[string]DataTier{
 	"data_flow_source":    TierInternal,
 	"data_flow_dest":      TierInternal,
 	"admin_info":          TierInternal,
-	"frt":                 TierInternal,
 
 	// Confidential — user opt-in, masked on export
 	"user_id":    TierConfidential,
