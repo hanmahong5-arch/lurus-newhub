@@ -78,6 +78,32 @@ B 端: 租户 credit pool (CREDIT_POOL_REQUIRED=enforce, 无池 402)
 **杠杆设计原则**:每个 seam 只在一条 journey 里测一次;负面各测一处(无 cookie
 401 / 登出后 401 / 无池 402 已有 Go 锁);其余组合交给 hermetic 层。
 
+## 5b. 2026-09-01 workflow 修复轮(P1/P2/N2/N4/N5 全部上线)
+
+台账逐项重验(8 侦察 agent,raw = `ledger-recon-raw-2026-09-01.json`)后四车道实现,
+全部 live 验证:
+
+| # | 交付 | live 判据 |
+|---|---|---|
+| P1 | 注册失败补偿删除 IdP 用户(仅本次新铸+仅 commit 前分支,失败只记日志) | platform `8ba39e8a`,Core CI/CD 自动部署 `main-72d4c12`,常规注册回归 201/200/200 |
+| P2 | UpsertByZitadelSub net/mail 分类,非邮箱 loginName 落 username 列 | platform `3b64fb55`,同上;变异红×2 |
+| N2 | 租户邀请码(migration 032):root 签发一次性码,bootstrap `?invite=` 仅首登消费 | 探针:新用户落 `probe-invite` 租户、invite 行转 consumed、同码重放回落 default 照常登录 |
+| N4 | checkout 选择器 + typed error + **pay_url 字段错配**(成功也报失败) | 400 真消息透传 live;顺带揪出↓ |
+| N4b | 🔴 **Idempotency-Key 要 header 不是 body——checkout 从未端到端通过**,旧 503 一刀切把它埋了整个历史 | 修后探针:400 从 "requires Idempotency-Key header" 推进到 "provider not configured"(=E1,链上只剩商户凭证) |
+| N5 | passkey 死面整体移除(settings 剧场+/api/status 投影+secure-verification 引用) | `/api/status` 零 passkey 键;缺失锁+legacy options 行容忍锁 |
+
+**驳回/不动**:P3/N1 维持 owner 结论(钱包 14,4 有意设计);N3 侦察结论「legacy OIDC
+零消费者」被否决——hub 域浏览器 SSO(08-30 实证)就走它,文档化保留,不加投机 flag。
+
+**新入账**:
+- 🟡 platform `TestWalletRepo_BalanceEqualsSumAfterMixedConcurrent` Integration 常年红
+  (≥6 连红横跨无关提交,钱包并发不变量)→ owner,常年红毁信号。
+- 🟡 tenant_invites 表 GORM 先建 ⇒ `created_at` 无 DB default(SQL 032 声明了
+  DEFAULT NOW() 但 live 表没有;app 写路径不受影响,raw SQL 插入须显式供值)。
+- 🟡 v2_provision.go 已解析 :tenant_slug 却仍建 default 用户(既有缺口,N2 注释标记)。
+- ✅ platform Actions 已复活且 Core CI/CD 是 push-to-deploy(set image+rollout+/sli
+  验证+自动回滚)——「P4 手工出包」台账项作废。
+
 ## 6. 运维记录
 
 - UAT bridge token 已轮换(两次泄露:昨日 Playwright 工件 + 今日代理 base64),
