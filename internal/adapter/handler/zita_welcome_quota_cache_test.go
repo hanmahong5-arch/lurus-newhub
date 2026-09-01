@@ -39,7 +39,7 @@ func TestAutoCreateBridgedUser_WelcomeQuotaVisibleThroughCache(t *testing.T) {
 	}()
 
 	const accountID = int64(939393)
-	got, err := autoCreateBridgedUser(accountID)
+	got, err := autoCreateBridgedUser(accountID, "default")
 	if err != nil {
 		t.Fatalf("autoCreateBridgedUser: %v", err)
 	}

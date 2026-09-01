@@ -15,8 +15,8 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
-	"github.com/gin-gonic/gin"
 	"github.com/LurusTech/lurus-hub/internal/pkg/entverify"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -210,7 +210,12 @@ func ProvisionV2(c *gin.Context) {
 	user, err := repo.GetUserByLurusAccountID(accountID)
 	autoCreated := false
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		user, err = autoCreateBridgedUser(accountID)
+		// "default" preserves this endpoint's existing behavior exactly —
+		// tenant invite consumption (N2) is wired into ZitaBootstrap's
+		// auto-create branch only; ProvisionV2 already resolves `tenant`
+		// from :tenant_slug above but that is a pre-existing, separately
+		// tracked gap (recon N2 evidence #2), out of scope here.
+		user, err = autoCreateBridgedUser(accountID, "default")
 		if err != nil {
 			common.SysError("ProvisionV2: auto-create user failed" +
 				" account_id=" + strconv.FormatInt(accountID, 10) + " err=" + err.Error())

@@ -18,7 +18,7 @@ func TestAutoCreateBridgedUser_GrantsWelcomeQuota(t *testing.T) {
 	defer ctx.Cleanup()
 
 	const accountID = int64(929292)
-	got, err := autoCreateBridgedUser(accountID)
+	got, err := autoCreateBridgedUser(accountID, "default")
 	if err != nil {
 		t.Fatalf("autoCreateBridgedUser: %v", err)
 	}

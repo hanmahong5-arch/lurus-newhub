@@ -60,6 +60,7 @@ var registeredModels = []interface{}{
 	&entity.ModelRateLimit{},
 	&entity.BillingCheckoutOrder{},
 	&entity.Project{},
+	&entity.TenantInvite{},
 }
 
 // tenantColumnExempt maps a GORM-derived table name (not on
@@ -107,6 +108,12 @@ var tenantColumnExempt = map[string]string{
 		"filter (including ResolveProjectNames, whose Unscoped() read would " +
 		"otherwise resolve another tenant's project NAME from a stray id) — " +
 		"no call site routes this table through WithTenantID/GetTenantDB",
+	"tenant_invites": "CreateTenantInvite/RevokeTenantInvite (tenant_invite.go) take " +
+		"tenantID as a mandatory argument and filter explicitly; " +
+		"ConsumeTenantInvite deliberately looks up by code alone (the caller — " +
+		"a first-time bridge login — has no tenant context yet, that's the " +
+		"whole point of the invite) inside WithoutTenantIsolation, same as " +
+		"Redeem — no call site routes this table through WithTenantID/GetTenantDB",
 }
 
 // TestTenantPlugin_AllowListCoversEveryRegisteredTenantColumn is the

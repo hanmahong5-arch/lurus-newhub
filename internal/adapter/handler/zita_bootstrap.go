@@ -26,7 +26,12 @@ import (
 //  2. Look up users WHERE lurus_account_id = identity.AccountID.
 //  3. If absent, auto-create with username "lurus_<account_id>" — the SDK
 //     MVP only carries account_id, so we cannot seed email/displayName
-//     from claims (those land with v0.2.x Whoami()).
+//     from claims (those land with v0.2.x Whoami()). An optional
+//     ?invite=<code> query param is consumed (repo.ConsumeTenantInvite) ONLY
+//     on this first-ever-login path — see resolveInviteTenant below — to
+//     place the new user in a B-end tenant instead of the "default"
+//     placeholder; any failure (missing/garbage/expired/already-consumed
+//     code) silently falls back to "default", it never blocks the login.
 //  4. Set V1 session vars (id/username/role/status/group) so existing
 //     middleware.UserAuth() admits the request, and return user JSON for
 //     the frontend's localStorage 'user' shim.
@@ -53,7 +58,12 @@ func ZitaBootstrap(c *gin.Context) {
 	user, err := repo.GetUserByLurusAccountID(id.AccountID)
 	autoCreated := false
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		user, err = autoCreateBridgedUser(id.AccountID)
+		// Invite consumption is scoped to THIS branch only — a repeat login
+		// for an already-bridged user never reaches here, so an invite
+		// query param on that request is simply ignored (existing users'
+		// tenant is never changed by an invite, by construction).
+		tenantID := resolveInviteTenant(c, id.AccountID)
+		user, err = autoCreateBridgedUser(id.AccountID, tenantID)
 		if err != nil {
 			common.SysError(fmt.Sprintf("zita-bootstrap: auto-create user failed (account_id=%d): %v", id.AccountID, err))
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -63,7 +73,7 @@ func ZitaBootstrap(c *gin.Context) {
 			return
 		}
 		autoCreated = true
-		common.SysLog(fmt.Sprintf("zita-bootstrap: auto-created user %s (id=%d, lurus_account_id=%d)", user.Username, user.Id, id.AccountID))
+		common.SysLog(fmt.Sprintf("zita-bootstrap: auto-created user %s (id=%d, lurus_account_id=%d, tenant_id=%s)", user.Username, user.Id, id.AccountID, tenantID))
 	} else if err != nil {
 		common.SysError(fmt.Sprintf("zita-bootstrap: lookup failed (account_id=%d): %v", id.AccountID, err))
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -153,12 +163,41 @@ func resolveTenantSlug(tenantID string) string {
 	return tenant.Slug
 }
 
+// resolveInviteTenant reads an optional ?invite=<code> query param off the
+// bootstrap request and, if it redeems successfully, returns the invite's
+// bound tenant id; otherwise (param absent, code unknown/expired/already
+// consumed/revoked, or a DB error) it returns "default" — the exact
+// pre-invite behavior — and logs why. Never returns an error: this sits on
+// the login critical path and an invite is a nice-to-have, not a
+// precondition for logging in.
+func resolveInviteTenant(c *gin.Context, accountID int64) string {
+	code := c.Query("invite")
+	if code == "" {
+		return "default"
+	}
+	tenant, err := repo.ConsumeTenantInvite(code, accountID)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("zita-bootstrap: invite consume failed (account_id=%d): %v — falling back to default tenant", accountID, err))
+		return "default"
+	}
+	governance.RecordAuditEvent(governance.NewAuditEvent(
+		c, governance.ActorSystem, 0,
+		governance.ActionTenantInviteConsumed, governance.ResourceTenant, 0,
+		fmt.Sprintf(`{"tenant_id":%q,"account_id":%d}`, tenant.Id, accountID),
+	))
+	return tenant.Id
+}
+
 // autoCreateBridgedUser provisions a minimum-viable newhub user for a
 // platform-authenticated visitor with no existing binding. Username is
 // derived from account_id (guaranteed unique by the platform); email and
 // display_name stay empty until the SDK Whoami() ships and the bridge
-// can backfill them.
-func autoCreateBridgedUser(accountID int64) (*repo.User, error) {
+// can backfill them. tenantID is "default" unless a valid tenant invite
+// was just consumed for this login (resolveInviteTenant).
+func autoCreateBridgedUser(accountID int64, tenantID string) (*repo.User, error) {
+	if tenantID == "" {
+		tenantID = "default"
+	}
 	username := fmt.Sprintf("lurus_%d", accountID)
 	user := &repo.User{
 		Username:       username,
@@ -166,7 +205,7 @@ func autoCreateBridgedUser(accountID int64) (*repo.User, error) {
 		Role:           common.RoleCommonUser,
 		Status:         common.UserStatusEnabled,
 		Group:          "default",
-		TenantId:       "default",
+		TenantId:       tenantID,
 		LurusAccountID: &accountID,
 	}
 	if err := user.Insert(); err != nil {

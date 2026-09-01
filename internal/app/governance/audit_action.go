@@ -84,6 +84,11 @@ const (
 	ActionTenantDeleted        = "tenant.deleted"
 	ActionTenantMappingDeleted = "tenant.mapping_deleted"
 	ActionTenantBrandUpdated   = "tenant.brand_updated"
+	// Tenant invite codes (migration 032, N2) — root-issued one-time codes
+	// that route a first-time zita-bridge login into a specific tenant.
+	ActionTenantInviteIssued   = "tenant.invite_issued"
+	ActionTenantInviteConsumed = "tenant.invite_consumed"
+	ActionTenantInviteRevoked  = "tenant.invite_revoked"
 
 	// Internal API key tenant whitelist (internal_api_key_tenants — migration
 	// 013/021 §1). Granting/revoking changes which tenants a narrow-scope
@@ -185,6 +190,9 @@ var validAuditActions = map[string]struct{}{
 	ActionTenantDeleted:            {},
 	ActionTenantMappingDeleted:     {},
 	ActionTenantBrandUpdated:       {},
+	ActionTenantInviteIssued:       {},
+	ActionTenantInviteConsumed:     {},
+	ActionTenantInviteRevoked:      {},
 	ActionInternalKeyTenantGranted: {},
 	ActionInternalKeyTenantRevoked: {},
 	ActionSensitiveBlocked:         {},

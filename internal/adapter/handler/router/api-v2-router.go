@@ -361,6 +361,13 @@ func SetApiV2Router(router *gin.Engine) {
 				tenantMgmt.POST("/:id/credit-pool/topup", handler.TopupCreditPool)
 				tenantMgmt.GET("/:id/credit-pool/usage", handler.ListCreditPoolUsage)
 				tenantMgmt.DELETE("/:id/credit-pool", handler.DeleteCreditPool)
+
+				// Tenant invite codes (N2) — root-issued one-time onboarding
+				// codes consumed by handler.ZitaBootstrap's auto-create branch
+				// (?invite=<code>) to land a new zita-bridge user in this
+				// tenant instead of "default".
+				tenantMgmt.POST("/:id/invites", handler.IssueTenantInvite)
+				tenantMgmt.DELETE("/:id/invites/:invite_id", handler.RevokeTenantInvite)
 			}
 
 			mappingRoute := adminRoute.Group("/mappings")

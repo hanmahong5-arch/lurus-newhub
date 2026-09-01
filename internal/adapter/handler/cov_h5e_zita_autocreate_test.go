@@ -32,7 +32,7 @@ func TestAutoCreateBridgedUser_ConcurrentRaceLost_ReturnsWinnerRow(t *testing.T)
 		t.Fatalf("seed race winner: %v", err)
 	}
 
-	got, err := autoCreateBridgedUser(accountID)
+	got, err := autoCreateBridgedUser(accountID, "default")
 	if err != nil {
 		t.Fatalf("autoCreateBridgedUser: want nil error (race recovery), got %v", err)
 	}
@@ -71,7 +71,7 @@ func TestAutoCreateBridgedUser_GenuineInsertFailure_PropagatesError(t *testing.T
 		t.Fatalf("seed username-colliding user: %v", err)
 	}
 
-	got, err := autoCreateBridgedUser(accountID)
+	got, err := autoCreateBridgedUser(accountID, "default")
 	if err == nil {
 		t.Fatalf("autoCreateBridgedUser: want a genuine error (username collision, no race winner), got user=%+v", got)
 	}

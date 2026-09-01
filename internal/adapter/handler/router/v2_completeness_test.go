@@ -129,6 +129,8 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/admin/tenants/:id/credit-pool/topup":          "RootJWTAuth-gated: root manages every tenant's credit pool by design",
 		"GET /api/v2/admin/tenants/:id/credit-pool/usage":           "RootJWTAuth-gated: root manages every tenant's credit pool by design",
 		"DELETE /api/v2/admin/tenants/:id/credit-pool":              "RootJWTAuth-gated: root manages every tenant's credit pool by design",
+		"POST /api/v2/admin/tenants/:id/invites":                    "RootJWTAuth-gated: root mints onboarding invite codes for every tenant by design (N2)",
+		"DELETE /api/v2/admin/tenants/:id/invites/:invite_id":       "RootJWTAuth-gated: repo.RevokeTenantInvite scopes by (id, tenant_id) itself — a code belonging to a different tenant 404s as not-found, same as the credit-pool group above",
 		"GET /api/v2/admin/mappings/:id":                            "RootJWTAuth-gated: root reads platform user-identity mappings across every tenant by design",
 		"DELETE /api/v2/admin/mappings/:id":                         "RootJWTAuth-gated: root manages platform user-identity mappings across every tenant by design",
 		"PUT /api/v2/admin/users/:id":                               "RootJWTAuth-gated: root manages platform admin users across every tenant by design",
