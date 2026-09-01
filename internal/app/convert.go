@@ -201,6 +201,38 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 	return &openAIRequest, nil
 }
 
+// claudeTerminalUsage is the ONE place an OpenAI-wire usage becomes the
+// terminal Claude usage — the `message_delta` of a stream and the body of a
+// non-stream response must report the same numbers for the same request.
+//
+// It exists because they didn't. The three call sites were three hand-written
+// literals; the two streaming ones were exact copies of each other and the
+// non-streaming one had been written without the cache fields, so a Claude-wire
+// client saw cache_read_input_tokens=0 on every non-streamed reply while the
+// request was billed at the cache discount (measured 2026-09-01: upstream
+// reported 3456 cached tokens, the settlement charged 127 instead of 477, and
+// the client got a zero). Adding a field to one copy is how that happened, and
+// three copies means it can happen again; one function plus
+// TestClaudeTerminalUsage_StreamAndNonStreamAgree means it cannot.
+//
+// Known gap, deliberately not closed here: dto.Usage also carries
+// ClaudeCacheCreation5mTokens / 1hTokens and ClaudeUsage has the matching
+// fields, but no upstream reachable from this conversion populates them, so
+// there is no way to prove a mapping live. Shipping an unverifiable wire change
+// is worse than a documented zero — revisit when a Claude-wire passthrough
+// upstream is available to probe against.
+func claudeTerminalUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
+	if oaiUsage == nil {
+		return nil
+	}
+	return &dto.ClaudeUsage{
+		InputTokens:              oaiUsage.PromptTokens,
+		OutputTokens:             oaiUsage.CompletionTokens,
+		CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
+	}
+}
+
 func generateStopBlock(index int) *dto.ClaudeResponse {
 	return &dto.ClaudeResponse{
 		Type:  "content_block_stop",
@@ -325,13 +357,8 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			}
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Type: "message_delta",
-					Usage: &dto.ClaudeUsage{
-						InputTokens:              oaiUsage.PromptTokens,
-						OutputTokens:             oaiUsage.CompletionTokens,
-						CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
-						CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
-					},
+					Type:  "message_delta",
+					Usage: claudeTerminalUsage(oaiUsage),
 					Delta: &dto.ClaudeMediaMessage{
 						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
 					},
@@ -463,13 +490,8 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			}
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Type: "message_delta",
-					Usage: &dto.ClaudeUsage{
-						InputTokens:              oaiUsage.PromptTokens,
-						OutputTokens:             oaiUsage.CompletionTokens,
-						CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
-						CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
-					},
+					Type:  "message_delta",
+					Usage: claudeTerminalUsage(oaiUsage),
 					Delta: &dto.ClaudeMediaMessage{
 						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
 					},
@@ -520,18 +542,7 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	}
 	claudeResponse.Content = contents
 	claudeResponse.StopReason = stopReason
-	// Cache fields must be carried here exactly as the streaming twin does
-	// (see the message_delta usage above). Omitting them made every NON-stream
-	// /v1/messages response report cache_read_input_tokens = 0 while the request
-	// was in fact billed at the cache discount — the money was right, the number
-	// the customer got back was not, so cache-hit-rate monitoring on an
-	// OpenAI-wire channel read a flat zero forever.
-	claudeResponse.Usage = &dto.ClaudeUsage{
-		InputTokens:              openAIResponse.PromptTokens,
-		OutputTokens:             openAIResponse.CompletionTokens,
-		CacheCreationInputTokens: openAIResponse.PromptTokensDetails.CachedCreationTokens,
-		CacheReadInputTokens:     openAIResponse.PromptTokensDetails.CachedTokens,
-	}
+	claudeResponse.Usage = claudeTerminalUsage(&openAIResponse.Usage)
 
 	return claudeResponse
 }
