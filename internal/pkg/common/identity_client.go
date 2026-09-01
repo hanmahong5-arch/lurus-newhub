@@ -582,6 +582,13 @@ func CreateCheckout(ctx context.Context, accountID int64, amountCNY float64, pay
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+IdentityServiceInternalKey)
+	// The platform enforces idempotency via the Idempotency-Key HEADER and
+	// 400s without it — the body field alone has never been accepted
+	// (live-probed 2026-09-01: every checkout died on "This endpoint
+	// requires an Idempotency-Key header", previously disguised as the
+	// blanket 503). Keep the body field for older readers; the header is
+	// what the platform actually checks.
+	req.Header.Set("Idempotency-Key", idempotencyKey)
 
 	resp, err := identityClient.Do(req)
 	if err != nil {
