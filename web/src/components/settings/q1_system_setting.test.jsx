@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 /**
  * SystemSetting — the console screen that owns the authentication providers,
- * the SMTP credentials and the SSRF egress filter. Fourteen separate submit
+ * the SMTP credentials and the SSRF egress filter. Thirteen separate submit
  * buttons, each assembling its own `[{key, value}]` array and handing it to a
  * shared `updateOptions`.
  *
@@ -94,8 +94,8 @@ vi.mock('axios', () => ({
 // (a) Form owns the values and republishes the whole object through
 //     onValueChange, which is how SystemSetting's state is updated;
 // (b) `field="['a.b']"` bracket-path notation resolves to the key 'a.b', the
-//     way real Semi does — several passkey fields use it, and a stub that
-//     kept the literal would silently test the stub instead of the code.
+//     way real Semi does — several OIDC/Discord fields use it, and a stub
+//     that kept the literal would silently test the stub instead of the code.
 vi.mock('@douyinfe/semi-ui', () => {
   const FormCtx = React.createContext({ values: {}, setField: () => {} });
   const RadioCtx = React.createContext({ onChange: () => {} });
@@ -359,11 +359,6 @@ const BASE = {
   WeChatServerAddress: 'https://wechat.example.test',
   WeChatServerToken: '',
   WeChatAccountQRCodeImageURL: 'https://cdn.example.test/qr.png',
-  'passkey.rp_display_name': 'Example Console',
-  'passkey.rp_id': 'example.test',
-  'passkey.origins': 'https://console.example.test',
-  'passkey.user_verification': 'preferred',
-  'passkey.attachment_preference': '',
 };
 
 const mountLoaded = async (overrides = {}) => {
@@ -392,7 +387,6 @@ describe('SystemSetting — loading options', () => {
     await mountLoaded({
       PasswordLoginEnabled: 'false',
       'oidc.enabled': 'true',
-      'passkey.enabled': '0',
       // Same textual value as PasswordLoginEnabled but NOT in the coercion
       // switch: it must stay a string. Without this negative half, "coerces
       // the listed flags" and "coerces everything" are the same test.
@@ -401,7 +395,6 @@ describe('SystemSetting — loading options', () => {
 
     expect(screen.getByTestId('f-PasswordLoginEnabled').checked).toBe(false);
     expect(screen.getByTestId('f-oidc.enabled').checked).toBe(true);
-    expect(screen.getByTestId('f-passkey.enabled').checked).toBe(false);
     // A string reaching a Select stays the string it was.
     expect(screen.getByTestId('f-LinuxDOMinimumTrustLevel')).toBeTruthy();
   });
@@ -763,8 +756,8 @@ describe('SystemSetting — updateOptions result handling', () => {
   // through to `showSuccess(t('更新成功'))` and merges the rejected values
   // into local state, so the form redraws showing the value as if it had been
   // saved. The flag branch immediately above gets this right (`return` on the
-  // first failure). Ten of the fourteen save buttons on this screen — SMTP,
-  // OIDC, GitHub, Discord, LinuxDO, WeChat, Telegram, Turnstile, passkey and
+  // first failure). Nine of the thirteen save buttons on this screen — SMTP,
+  // OIDC, GitHub, Discord, LinuxDO, WeChat, Telegram, Turnstile and
   // the SSRF egress filter — go through the broken branch. An operator who
   // tightens the SSRF ip whitelist, is shown "更新成功" and sees the new list
   // on screen has in fact changed nothing on the server, and has no reason to
@@ -1084,89 +1077,5 @@ describe('SystemSetting — the other OAuth providers', () => {
     await waitFor(() => expect(API.put).toHaveBeenCalled());
     expect(putFor('TurnstileSiteKey').value).toBe('ts-site-2');
     expect(putKeys()).not.toContain('TurnstileSecretKey');
-  });
-});
-
-describe('SystemSetting — passkey', () => {
-  it('sends the five passkey fields from the current form values', async () => {
-    await mountLoaded();
-
-    typeInto('f-passkey.rp_display_name', 'Example Console v2');
-    fireEvent.click(screen.getByText('保存 Passkey 设置'));
-
-    await waitFor(() => expect(API.put).toHaveBeenCalled());
-    expect(putFor('passkey.rp_display_name').value).toBe('Example Console v2');
-    expect(putFor('passkey.rp_id').value).toBe('example.test');
-    expect(putFor('passkey.user_verification').value).toBe('preferred');
-    expect(putFor('passkey.origins').value).toBe(
-      'https://console.example.test',
-    );
-    expect(putKeys().sort()).toEqual([
-      'passkey.attachment_preference',
-      'passkey.origins',
-      'passkey.rp_display_name',
-      'passkey.rp_id',
-      'passkey.user_verification',
-    ]);
-  });
-
-  it('sends a changed verification level rather than the default', async () => {
-    await mountLoaded();
-
-    typeInto('f-passkey.user_verification', 'required');
-    fireEvent.click(screen.getByText('保存 Passkey 设置'));
-
-    await waitFor(() => expect(API.put).toHaveBeenCalled());
-    // 'required' differs from both the stored value and the 'preferred'
-    // fallback, so a fallback that fired anyway would be visible.
-    expect(putFor('passkey.user_verification').value).toBe('required');
-  });
-
-  // These two were written as skipped defect locks, on the theory that
-  // submitPasskeySettings' `formValues[k] || inputs[k] || <default>` chain
-  // re-sends the OLD origin list when the operator clears the box. Both PASS
-  // when un-skipped, so the theory is wrong, and a lock that passes gets read
-  // later as a bug someone already fixed. The reason is at
-  // SystemSetting.jsx:705 — the Form's `onValueChange` is `handleFormChange`,
-  // which does `setInputs(values)` — so `inputs` IS the live form object and
-  // the middle term of the chain can never resurrect a value that was just
-  // cleared. They are kept live rather than deleted because the behaviour is
-  // the security-relevant one (clearing an origin is how a decommissioned
-  // console hostname is revoked from WebAuthn), and because the chain would
-  // start dropping the clear the day its fallback is repointed at
-  // `originInputs`, which does hold the loaded value.
-  it('clearing the passkey origins clears them on the server too', async () => {
-    await mountLoaded();
-
-    typeInto('f-passkey.origins', '');
-    fireEvent.click(screen.getByText('保存 Passkey 设置'));
-
-    await waitFor(() => expect(API.put).toHaveBeenCalled());
-    expect(putFor('passkey.origins').value).toBe('');
-  });
-
-  it('clearing the passkey relying-party id clears it on the server too', async () => {
-    await mountLoaded();
-
-    typeInto('f-passkey.rp_id', '');
-    fireEvent.click(screen.getByText('保存 Passkey 设置'));
-
-    await waitFor(() => expect(API.put).toHaveBeenCalled());
-    expect(putFor('passkey.rp_id').value).toBe('');
-  });
-
-  // Live counterpart: whatever the fallback chain ends up doing, a passkey
-  // save must never invent an origin the operator has not entered. Setting a
-  // new value must win outright — this passes both before and after the fix.
-  it('a newly typed origin list replaces the stored one outright', async () => {
-    await mountLoaded();
-
-    typeInto('f-passkey.origins', 'https://new-console.example.test');
-    fireEvent.click(screen.getByText('保存 Passkey 设置'));
-
-    await waitFor(() => expect(API.put).toHaveBeenCalled());
-    expect(putFor('passkey.origins').value).toBe(
-      'https://new-console.example.test',
-    );
   });
 });

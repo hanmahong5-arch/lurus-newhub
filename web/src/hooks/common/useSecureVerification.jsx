@@ -42,8 +42,6 @@ export const useSecureVerification = ({
   // 验证方式可用性状态
   const [verificationMethods, setVerificationMethods] = useState({
     has2FA: false,
-    hasPasskey: false,
-    passkeySupported: false,
     hasSession: false,
   });
 
@@ -52,7 +50,7 @@ export const useSecureVerification = ({
 
   // 当前验证状态
   const [verificationState, setVerificationState] = useState({
-    method: null, // '2fa' | 'passkey'
+    method: null, // '2fa' | 'session'
     loading: false,
     code: '',
     apiCall: null,
@@ -90,8 +88,8 @@ export const useSecureVerification = ({
       // 检查验证方式
       const methods = await checkVerificationMethods();
 
-      if (!methods.has2FA && !methods.hasPasskey && !methods.hasSession) {
-        const errorMessage = t('您需要先启用两步验证或 Passkey 才能执行此操作');
+      if (!methods.has2FA && !methods.hasSession) {
+        const errorMessage = t('您需要先启用两步验证才能执行此操作');
         showError(errorMessage);
         onError?.(new Error(errorMessage));
         return false;
@@ -100,9 +98,7 @@ export const useSecureVerification = ({
       // 设置默认验证方式
       let defaultMethod = preferredMethod;
       if (!defaultMethod) {
-        if (methods.hasPasskey && methods.passkeySupported) {
-          defaultMethod = 'passkey';
-        } else if (methods.has2FA) {
+        if (methods.has2FA) {
           defaultMethod = '2fa';
         } else if (methods.hasSession) {
           defaultMethod = 'session';
@@ -194,11 +190,6 @@ export const useSecureVerification = ({
       switch (method) {
         case '2fa':
           return verificationMethods.has2FA;
-        case 'passkey':
-          return (
-            verificationMethods.hasPasskey &&
-            verificationMethods.passkeySupported
-          );
         case 'session':
           return verificationMethods.hasSession;
         default:
@@ -210,12 +201,6 @@ export const useSecureVerification = ({
 
   // 获取推荐的验证方式
   const getRecommendedMethod = useCallback(() => {
-    if (
-      verificationMethods.hasPasskey &&
-      verificationMethods.passkeySupported
-    ) {
-      return 'passkey';
-    }
     if (verificationMethods.has2FA) {
       return '2fa';
     }
@@ -274,9 +259,7 @@ export const useSecureVerification = ({
 
     // 便捷属性
     hasAnyVerificationMethod:
-      verificationMethods.has2FA ||
-      verificationMethods.hasPasskey ||
-      verificationMethods.hasSession,
+      verificationMethods.has2FA || verificationMethods.hasSession,
     isLoading: verificationState.loading,
     currentMethod: verificationState.method,
     code: verificationState.code,

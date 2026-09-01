@@ -268,6 +268,33 @@ func TestConfigManager_LoadFromDB_PrefixScoping(t *testing.T) {
 	}
 }
 
+// TestConfigManager_LoadFromDB_LegacyUnregisteredPrefixIsSafeNoOp pins the
+// N5 removal contract: internal/pkg/setting/system_setting/passkey.go was
+// deleted (root contracts.md had zero passkey consumers, dead config
+// surface), so "passkey" is no longer a registered module name. A DB
+// `options` row left over from before the deletion (e.g. "passkey.enabled"
+// = "true") must not error or panic on boot — it just becomes a permanently
+// unread key/value pair, per the same unregistered-prefix path exercised
+// generically above by "moduleC.name".
+func TestConfigManager_LoadFromDB_LegacyUnregisteredPrefixIsSafeNoOp(t *testing.T) {
+	cm := NewConfigManager()
+	a := &boot_settings_configSample{Name: "kept"}
+	cm.Register("moduleA", a)
+
+	err := cm.LoadFromDB(map[string]string{
+		"moduleA.name":    "a-updated",
+		"passkey.enabled": "true",
+		"passkey.rp_id":   "hub.lurus.cn",
+		"passkey.origins": "https://hub.lurus.cn",
+	})
+	if err != nil {
+		t.Fatalf("expected legacy unregistered \"passkey.*\" rows to be a safe no-op, got error: %v", err)
+	}
+	if a.Name != "a-updated" {
+		t.Fatalf("expected the still-registered module to update normally, got %q", a.Name)
+	}
+}
+
 func TestConfigManager_SaveToDB_EmitsNamespacedKeys(t *testing.T) {
 	cm := NewConfigManager()
 	cm.Register("mod", &boot_settings_configSample{Name: "n", Enabled: true, Tags: []string{}, Meta: map[string]string{}})

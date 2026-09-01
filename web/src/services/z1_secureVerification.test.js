@@ -48,8 +48,6 @@ describe('SecureVerificationService.checkAvailableVerificationMethods', () => {
     expect(API.get).toHaveBeenCalledWith('/api/verify/status');
     expect(methods).toEqual({
       has2FA: true,
-      hasPasskey: false,
-      passkeySupported: false,
       hasSession: false,
     });
   });
@@ -100,18 +98,8 @@ describe('SecureVerificationService.checkAvailableVerificationMethods', () => {
 
     expect(m).toEqual({
       has2FA: false,
-      hasPasskey: false,
-      passkeySupported: false,
       hasSession: true,
     });
-  });
-
-  it('never advertises passkey support', async () => {
-    API.get.mockResolvedValue({ data: { data: { totp_enrolled: true } } });
-    const m =
-      await SecureVerificationService.checkAvailableVerificationMethods();
-    expect(m.hasPasskey).toBe(false);
-    expect(m.passkeySupported).toBe(false);
   });
 });
 

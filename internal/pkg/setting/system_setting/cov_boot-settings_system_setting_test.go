@@ -2,8 +2,6 @@ package system_setting
 
 import (
 	"testing"
-
-	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 )
 
 // --- discord.go ---
@@ -83,89 +81,6 @@ func TestGetFetchSetting_SSRFProtectionOnByDefault(t *testing.T) {
 	}
 	if len(s.AllowedPorts) != 4 || s.AllowedPorts[0] != "80" {
 		t.Fatalf("expected default allowed ports [80 443 8080 8443], got %v", s.AllowedPorts)
-	}
-}
-
-// --- passkey.go ---
-
-func boot_settings_resetPasskeySettings(t *testing.T) {
-	t.Helper()
-	origPasskey := defaultPasskeySettings
-	origAddr := ServerAddress
-	t.Cleanup(func() {
-		defaultPasskeySettings = origPasskey
-		ServerAddress = origAddr
-	})
-}
-
-func TestGetPasskeySettings_DerivesRPIDFromServerAddress(t *testing.T) {
-	boot_settings_resetPasskeySettings(t)
-	defaultPasskeySettings = PasskeySettings{RPDisplayName: common.SystemName}
-	ServerAddress = "https://hub.lurus.cn:8443/path"
-
-	s := GetPasskeySettings()
-	if s.RPID != "hub.lurus.cn:8443" {
-		t.Fatalf("expected RPID derived as host[:port] from ServerAddress, got %q", s.RPID)
-	}
-	if s.Origins != "https://hub.lurus.cn:8443/path" {
-		t.Fatalf("expected Origins to default to raw ServerAddress, got %q", s.Origins)
-	}
-}
-
-func TestGetPasskeySettings_UnparsableServerAddressFallsBackToRaw(t *testing.T) {
-	boot_settings_resetPasskeySettings(t)
-	defaultPasskeySettings = PasskeySettings{}
-	// A bare host:port with no scheme parses to a URL with empty Host (the
-	// whole string becomes Path), so the code must fall back to using the
-	// raw string as RPID rather than emitting an empty RPID.
-	ServerAddress = "  example.com:9999  "
-
-	s := GetPasskeySettings()
-	if s.RPID != "example.com:9999" {
-		t.Fatalf("expected fallback RPID to be the trimmed raw address, got %q", s.RPID)
-	}
-}
-
-func TestGetPasskeySettings_ExistingRPIDNotOverwritten(t *testing.T) {
-	boot_settings_resetPasskeySettings(t)
-	defaultPasskeySettings = PasskeySettings{RPID: "already-set.example.com"}
-	ServerAddress = "https://different-host.example.com"
-
-	s := GetPasskeySettings()
-	if s.RPID != "already-set.example.com" {
-		t.Fatalf("expected pre-configured RPID to be preserved, got %q", s.RPID)
-	}
-}
-
-func TestGetPasskeySettings_OriginsPlaceholderTreatedAsUnset(t *testing.T) {
-	boot_settings_resetPasskeySettings(t)
-	// FINDING: the literal string "[]" (a plausible "empty JSON array"
-	// placeholder some admin UI might submit) is special-cased identically to
-	// an empty string and gets overwritten with ServerAddress rather than
-	// being respected as "explicitly no origins" — locking current behavior.
-	defaultPasskeySettings = PasskeySettings{Origins: "[]"}
-	ServerAddress = "https://hub.lurus.cn"
-
-	s := GetPasskeySettings()
-	if s.Origins != "https://hub.lurus.cn" {
-		t.Fatalf("expected \"[]\" origins placeholder replaced by ServerAddress, got %q", s.Origins)
-	}
-}
-
-func TestGetPasskeySettings_DefaultDisabledAndUserVerificationPreferred(t *testing.T) {
-	boot_settings_resetPasskeySettings(t)
-	defaultPasskeySettings = PasskeySettings{
-		Enabled:          false,
-		UserVerification: "preferred",
-	}
-	ServerAddress = ""
-
-	s := GetPasskeySettings()
-	if s.Enabled {
-		t.Fatalf("expected Passkey auth disabled by default")
-	}
-	if s.UserVerification != "preferred" {
-		t.Fatalf("expected default user verification 'preferred', got %q", s.UserVerification)
 	}
 }
 

@@ -448,7 +448,7 @@ describe('key reveal — credential handling', () => {
   // verbatim by console-forwarding / session-replay / error-reporting agents,
   // is visible in any screen share or support recording, and is dumped into
   // "save console output" bug reports. The whole point of putting this behind
-  // a Passkey / 2FA step-up is that the key is only exposed to the operator
+  // a 2FA / session step-up is that the key is only exposed to the operator
   // for as long as the modal is open; the log defeats that.
   //
   // Both reveal shapes go through the same log statement, so the lock covers

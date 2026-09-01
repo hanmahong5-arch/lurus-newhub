@@ -40,7 +40,6 @@ func GetStatus(c *gin.Context) {
 	common.OptionMapRWMutex.RLock()
 	defer common.OptionMapRWMutex.RUnlock()
 
-	passkeySetting := system_setting.GetPasskeySettings()
 	legalSetting := system_setting.GetLegalSettings()
 
 	// Build login methods configuration for frontend
@@ -93,12 +92,6 @@ func GetStatus(c *gin.Context) {
 			"client_id":              system_setting.GetOIDCSettings().ClientId,
 			"authorization_endpoint": system_setting.GetOIDCSettings().AuthorizationEndpoint,
 		},
-		"passkey": gin.H{
-			"enabled":           passkeySetting.Enabled,
-			"display_name":      passkeySetting.RPDisplayName,
-			"rp_id":             passkeySetting.RPID,
-			"user_verification": passkeySetting.UserVerification,
-		},
 	}
 
 	// Build registration configuration
@@ -118,8 +111,7 @@ func GetStatus(c *gin.Context) {
 
 	// Build security configuration
 	security := gin.H{
-		"2fa_available":     true,
-		"passkey_available": passkeySetting.Enabled,
+		"2fa_available": true,
 	}
 
 	data := gin.H{
@@ -178,13 +170,6 @@ func GetStatus(c *gin.Context) {
 		"oidc_enabled":                system_setting.GetOIDCSettings().Enabled,
 		"oidc_client_id":              system_setting.GetOIDCSettings().ClientId,
 		"oidc_authorization_endpoint": system_setting.GetOIDCSettings().AuthorizationEndpoint,
-		"passkey_login":               passkeySetting.Enabled,
-		"passkey_display_name":        passkeySetting.RPDisplayName,
-		"passkey_rp_id":               passkeySetting.RPID,
-		"passkey_origins":             passkeySetting.Origins,
-		"passkey_allow_insecure":      passkeySetting.AllowInsecureOrigin,
-		"passkey_user_verification":   passkeySetting.UserVerification,
-		"passkey_attachment":          passkeySetting.AttachmentPreference,
 		"setup":                       constant.IsSetup(),
 		"user_agreement_enabled":      legalSetting.UserAgreement != "",
 		"privacy_policy_enabled":      legalSetting.PrivacyPolicy != "",

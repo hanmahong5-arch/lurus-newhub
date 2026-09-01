@@ -216,8 +216,6 @@ const secureProps = (methods, state = {}, over = {}) => ({
   visible: true,
   verificationMethods: {
     has2FA: false,
-    hasPasskey: false,
-    passkeySupported: false,
     hasSession: false,
     ...methods,
   },
@@ -236,7 +234,7 @@ describe('SecureVerificationModal — no method enrolled', () => {
 
     expect(screen.getByText('需要安全验证')).toBeInTheDocument();
     expect(
-      screen.getByText('您需要先启用两步验证或 Passkey 才能查看敏感信息。'),
+      screen.getByText('您需要先启用两步验证才能查看敏感信息。'),
     ).toBeInTheDocument();
     expect(screen.queryByTestId('tab-strip')).not.toBeInTheDocument();
 
@@ -304,22 +302,9 @@ describe('SecureVerificationModal — 2FA', () => {
     expect(props.onCancel).not.toHaveBeenCalled();
     expect(input).toBeDisabled();
   });
-
-  it('does not submit on Enter from another tab', () => {
-    const props = secureProps(
-      { has2FA: true, hasPasskey: true, passkeySupported: true },
-      { method: 'passkey', code: '654321' },
-    );
-    render(<SecureVerificationModal {...props} />);
-
-    // The 2FA pane is not mounted on the passkey tab, so drive the handler
-    // through the passkey pane's own verify button instead.
-    fireEvent.click(screen.getByRole('button', { name: '验证 Passkey' }));
-    expect(props.onVerify).toHaveBeenCalledWith('passkey');
-  });
 });
 
-describe('SecureVerificationModal — session and passkey tabs', () => {
+describe('SecureVerificationModal — session tab', () => {
   it('offers session confirmation only when 2FA is absent', () => {
     const props = secureProps({ hasSession: true }, { method: 'session' });
     const { unmount } = render(<SecureVerificationModal {...props} />);
@@ -335,33 +320,6 @@ describe('SecureVerificationModal — session and passkey tabs', () => {
       />,
     );
     expect(screen.queryByTestId('tab-session')).not.toBeInTheDocument();
-  });
-
-  it('hides the passkey tab when the browser cannot do WebAuthn', () => {
-    render(
-      <SecureVerificationModal
-        {...secureProps({
-          has2FA: true,
-          hasPasskey: true,
-          passkeySupported: false,
-        })}
-      />,
-    );
-
-    expect(screen.getByTestId('tab-2fa')).toBeInTheDocument();
-    expect(screen.queryByTestId('tab-passkey')).not.toBeInTheDocument();
-  });
-
-  it('reports tab switches to the caller', () => {
-    const props = secureProps(
-      { has2FA: true, hasPasskey: true, passkeySupported: true },
-      { method: '2fa' },
-    );
-    render(<SecureVerificationModal {...props} />);
-
-    fireEvent.click(screen.getByTestId('tab-passkey'));
-
-    expect(props.onMethodSwitch).toHaveBeenCalledWith('passkey');
   });
 
   it('shows the caller description and title', () => {
@@ -391,21 +349,5 @@ describe('SecureVerificationModal — session and passkey tabs', () => {
 
     expect(screen.getByRole('button', { name: '取消' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '确认' })).toBeDisabled();
-  });
-
-  // DEFECT (skipped): the "nothing enrolled" guard only looks at has2FA /
-  // hasPasskey / hasSession, ignoring passkeySupported. A user whose only
-  // factor is a passkey, on a browser without WebAuthn, falls through to the
-  // tabbed modal — where every TabPane is gated off, so the dialog renders an
-  // empty body with footer={null}: no verify control, no cancel control, no
-  // explanation. It should show the same "enrol a factor" guidance.
-  it.skip('explains itself when the only factor is an unsupported passkey', () => {
-    render(
-      <SecureVerificationModal
-        {...secureProps({ hasPasskey: true, passkeySupported: false })}
-      />,
-    );
-
-    expect(screen.getByText('需要安全验证')).toBeInTheDocument();
   });
 });

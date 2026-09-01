@@ -40,8 +40,6 @@ export class SecureVerificationService {
     }
     return {
       has2FA: totpEnrolled,
-      hasPasskey: false,
-      passkeySupported: false,
       hasSession: !totpEnrolled,
     };
   }

@@ -59,8 +59,7 @@ const SecureVerificationModal = ({
   const [isAnimating, setIsAnimating] = useState(false);
   const [verifySuccess, setVerifySuccess] = useState(false);
 
-  const { has2FA, hasPasskey, passkeySupported, hasSession } =
-    verificationMethods;
+  const { has2FA, hasSession } = verificationMethods;
   const { method, loading, code } = verificationState;
 
   useEffect(() => {
@@ -82,7 +81,7 @@ const SecureVerificationModal = ({
   };
 
   // 如果用户没有启用任何验证方式
-  if (visible && !has2FA && !hasPasskey && !hasSession) {
+  if (visible && !has2FA && !hasSession) {
     return (
       <Modal
         title={title || t('安全验证')}
@@ -110,7 +109,7 @@ const SecureVerificationModal = ({
             {t('需要安全验证')}
           </Typography.Title>
           <Typography.Text type='tertiary'>
-            {t('您需要先启用两步验证或 Passkey 才能查看敏感信息。')}
+            {t('您需要先启用两步验证才能查看敏感信息。')}
           </Typography.Text>
           <br />
           <Typography.Text type='tertiary'>
@@ -269,88 +268,6 @@ const SecureVerificationModal = ({
                     onClick={() => onVerify('session')}
                   >
                     {t('确认')}
-                  </Button>
-                </div>
-              </div>
-            </TabPane>
-          )}
-
-          {hasPasskey && passkeySupported && (
-            <TabPane tab={t('Passkey')} itemKey='passkey'>
-              <div style={{ paddingTop: '20px' }}>
-                <div
-                  style={{
-                    textAlign: 'center',
-                    padding: '24px 16px',
-                    marginBottom: '20px',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 56,
-                      height: 56,
-                      margin: '0 auto 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      borderRadius: '50%',
-                      background: 'var(--semi-color-primary-light-default)',
-                    }}
-                  >
-                    <svg
-                      style={{
-                        width: 28,
-                        height: 28,
-                        color: 'var(--semi-color-primary)',
-                      }}
-                      fill='currentColor'
-                      viewBox='0 0 20 20'
-                    >
-                      <path
-                        fillRule='evenodd'
-                        d='M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 012 2 1 1 0 102 0 4 4 0 00-4-4z'
-                        clipRule='evenodd'
-                      />
-                    </svg>
-                  </div>
-                  <Typography.Title
-                    heading={5}
-                    style={{ margin: '0 0 8px', fontSize: '16px' }}
-                  >
-                    {t('使用 Passkey 验证')}
-                  </Typography.Title>
-                  <Typography.Text
-                    type='tertiary'
-                    style={{
-                      display: 'block',
-                      margin: 0,
-                      fontSize: '13px',
-                      lineHeight: '1.5',
-                    }}
-                  >
-                    {t('点击验证按钮，使用您的生物特征或安全密钥')}
-                  </Typography.Text>
-                </div>
-
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    gap: '8px',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <Button onClick={onCancel} disabled={loading}>
-                    {t('取消')}
-                  </Button>
-                  <Button
-                    theme='solid'
-                    type='primary'
-                    loading={loading}
-                    disabled={loading}
-                    onClick={() => onVerify(method)}
-                  >
-                    {t('验证 Passkey')}
                   </Button>
                 </div>
               </div>

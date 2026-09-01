@@ -85,6 +85,31 @@ func TestR5CStatusCapability_LoginMethodsAndRegistrationReportClosed(t *testing.
 	if docsLink, _ := data["docs_link"].(string); docsLink != "" {
 		t.Errorf("docs_link = %q, want empty string (white-label leak: GetStatus must not surface a hardcoded upstream docs URL — see general_setting.go's DocsLink default comment)", docsLink)
 	}
+
+	// N5: passkey was settings-only theater — a registered config struct with
+	// zero backend handlers (no /webauthn or /passkey route ever existed).
+	// system_setting/passkey.go and its projection here were deleted outright
+	// (root contracts.md has zero passkey consumers). This pins the response
+	// shape so a re-add doesn't silently resurrect dead keys.
+	if _, ok := loginMethods["passkey"]; ok {
+		t.Errorf("login_methods.passkey key present, want removed (passkey config surface was deleted, see N5)")
+	}
+	securityBlock, ok := data["security"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("security missing or wrong shape, body=%s", w.Body.String())
+	}
+	if _, ok := securityBlock["passkey_available"]; ok {
+		t.Errorf("security.passkey_available key present, want removed (passkey config surface was deleted, see N5)")
+	}
+	for _, key := range []string{
+		"passkey_login", "passkey_display_name", "passkey_rp_id",
+		"passkey_origins", "passkey_allow_insecure",
+		"passkey_user_verification", "passkey_attachment",
+	} {
+		if _, ok := data[key]; ok {
+			t.Errorf("top-level %q key present, want removed (passkey config surface was deleted, see N5)", key)
+		}
+	}
 }
 
 // routeRegistrationPattern matches gin route registration calls of the form

@@ -47,8 +47,6 @@ import { isVerificationRequiredError } from '../../helpers/secureApiCall';
 
 const methods = (over = {}) => ({
   has2FA: false,
-  hasPasskey: false,
-  passkeySupported: false,
   hasSession: false,
   ...over,
 });
@@ -95,38 +93,24 @@ describe('useSecureVerification — capability discovery', () => {
     expect(result.current.getRecommendedMethod()).toBeNull();
   });
 
-  it('canUseMethod requires passkey support, not just registration', async () => {
+  it('canUseMethod recognizes only known factors', async () => {
     SecureVerificationService.checkAvailableVerificationMethods.mockResolvedValue(
-      methods({ hasPasskey: true, passkeySupported: false, has2FA: true }),
+      methods({ has2FA: true }),
     );
     const { result } = await mount();
 
     await waitFor(() => expect(result.current.canUseMethod('2fa')).toBe(true));
-    expect(result.current.canUseMethod('passkey')).toBe(false);
     expect(result.current.canUseMethod('session')).toBe(false);
     expect(result.current.canUseMethod('carrier-pigeon')).toBe(false);
   });
 
-  it('recommends passkey over 2fa, and 2fa over session', async () => {
-    SecureVerificationService.checkAvailableVerificationMethods.mockResolvedValue(
-      methods({
-        hasPasskey: true,
-        passkeySupported: true,
-        has2FA: true,
-        hasSession: true,
-      }),
-    );
-    const all = await mount();
-    await waitFor(() =>
-      expect(all.result.current.getRecommendedMethod()).toBe('passkey'),
-    );
-
+  it('recommends 2fa over session', async () => {
     SecureVerificationService.checkAvailableVerificationMethods.mockResolvedValue(
       methods({ has2FA: true, hasSession: true }),
     );
-    const noPasskey = await mount();
+    const all = await mount();
     await waitFor(() =>
-      expect(noPasskey.result.current.getRecommendedMethod()).toBe('2fa'),
+      expect(all.result.current.getRecommendedMethod()).toBe('2fa'),
     );
 
     SecureVerificationService.checkAvailableVerificationMethods.mockResolvedValue(
@@ -163,7 +147,7 @@ describe('useSecureVerification — starting a challenge', () => {
 
   it('opens the modal on the strongest available factor', async () => {
     SecureVerificationService.checkAvailableVerificationMethods.mockResolvedValue(
-      methods({ hasPasskey: true, passkeySupported: true, has2FA: true }),
+      methods({ has2FA: true, hasSession: true }),
     );
     const { result } = await mount();
 
@@ -175,13 +159,13 @@ describe('useSecureVerification — starting a challenge', () => {
 
     expect(armed).toBe(true);
     expect(result.current.isModalVisible).toBe(true);
-    expect(result.current.currentMethod).toBe('passkey');
+    expect(result.current.currentMethod).toBe('2fa');
     expect(apiCall).not.toHaveBeenCalled();
   });
 
   it('honours an explicitly preferred factor', async () => {
     SecureVerificationService.checkAvailableVerificationMethods.mockResolvedValue(
-      methods({ hasPasskey: true, passkeySupported: true, has2FA: true }),
+      methods({ has2FA: true, hasSession: true }),
     );
     const { result } = await mount();
 
@@ -360,8 +344,8 @@ describe('useSecureVerification — modal state', () => {
     expect(result.current.code).toBe('654321');
 
     // Switching factor wipes the half-typed code so it cannot leak across.
-    act(() => result.current.switchVerificationMethod('passkey'));
-    expect(result.current.currentMethod).toBe('passkey');
+    act(() => result.current.switchVerificationMethod('session'));
+    expect(result.current.currentMethod).toBe('session');
     expect(result.current.code).toBe('');
   });
 
