@@ -22,7 +22,7 @@ import HFShell from '../../../components/hifi/HFShell';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, isAdmin } from '../../../helpers';
-import { getQuotaPerUSD } from '../../../helpers/formatting';
+import { formatUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /* Wave 2: Cluster tab wired. Round 2: Live tail wired via cursor-poll. */
@@ -101,11 +101,9 @@ const fmtTok = (prompt, completion) => {
   return `${p}→${c}`;
 };
 
-const fmtCost = (quota) => {
-  if (!quota) return '—';
-  const usd = quota / getQuotaPerUSD();
-  return `$${usd.toFixed(4)}`;
-};
+// Delegates to the shared helper so the sub-precision floor lives in one place
+// (a real charge must not render as $0.0000 — see formatUSD).
+const fmtCost = (quota) => formatUSD(quota);
 
 const PAGE_SIZE = 50;
 
@@ -611,9 +609,7 @@ const HFLog = () => {
           ],
           [
             tr('console.log.stat_quota', 'quota'),
-            stat
-              ? `$${(Number(stat.total_quota ?? 0) / getQuotaPerUSD()).toFixed(4)}`
-              : '—',
+            stat ? formatUSD(Number(stat.total_quota ?? 0)) : '—',
             tr('console.log.in_window', 'in window'),
           ],
           [

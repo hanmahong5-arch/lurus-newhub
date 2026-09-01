@@ -41,8 +41,10 @@ func GetSelfV2(c *gin.Context) {
 		return
 	}
 
-	// Get user's token count
-	tokenCount, _ := repo.CountUserTokens(user.Id)
+	// Token count is TENANT-SCOPED. CountUserTokens counts every token the user
+	// owns across all tenants, which on a multi-tenant hub both over-reports the
+	// dashboard's "active keys" card and leaks a cross-tenant cardinality.
+	tokenCount, _ := repo.CountUserTokensByTenant(user.Id, tenantCtx.TenantID)
 
 	// Get daily quota info
 	dailyQuotaInfo, _ := repo.GetUserDailyQuotaInfo(user.Id)
@@ -59,19 +61,36 @@ func GetSelfV2(c *gin.Context) {
 		}
 	}
 
+	// This response is a strict SUPERSET of the v1 GetSelf projection, because
+	// the v2 route used to be wired to GetSelf and two legacy-shell consumers
+	// (components/topup/index.jsx and hooks/dashboard/useDashboardData.js) push
+	// the whole payload into the global user state — dropping setting /
+	// sidebar_modules / permissions here would break the legacy top-up page.
+	userSetting := user.GetSetting()
+	permissions := calculateUserPermissions(user.Role)
+	// Admin remarks are not the user's to see (same rule as GetSelf).
+	user.Remark = ""
+
 	// Build response (exclude sensitive fields)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"id":              user.Id,
-			"username":        user.Username,
-			"display_name":    user.DisplayName,
-			"email":           user.Email,
-			"role":            user.Role,
-			"status":          user.Status,
-			"quota":           user.Quota,
-			"used_quota":      user.UsedQuota,
-			"remaining_quota": user.Quota - user.UsedQuota,
+			"id":           user.Id,
+			"username":     user.Username,
+			"display_name": user.DisplayName,
+			"email":        user.Email,
+			"role":         user.Role,
+			"status":       user.Status,
+			"quota":        user.Quota,
+			"used_quota":   user.UsedQuota,
+			// `quota` IS the spendable balance — the relay path decrements it and
+			// increments used_quota on the same settlement, so remaining is quota
+			// itself. The previous `user.Quota - user.UsedQuota` subtracted the
+			// spend a second time and under-reported the balance by exactly the
+			// lifetime spend (measured on a live account: quota=19998688,
+			// used_quota=1312, funded 20000000 — the sum, not the difference, is
+			// the invariant).
+			"remaining_quota": user.Quota,
 			"request_count":   user.RequestCount,
 			"group":           user.Group,
 			"tenant_id":       tenantCtx.TenantID,
@@ -79,6 +98,10 @@ func GetSelfV2(c *gin.Context) {
 			"idp_user":        tenantCtx.IDPSubject,
 			"roles":           tenantCtx.Roles,
 			"daily_quota":     dailyQuota,
+			// v1 GetSelf parity (legacy shell reads these off the shared store)
+			"setting":         user.Setting,
+			"sidebar_modules": userSetting.SidebarModules,
+			"permissions":     permissions,
 		},
 	})
 }

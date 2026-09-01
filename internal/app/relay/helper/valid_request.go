@@ -210,6 +210,13 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 		}
 	}
 
+	// Bound the billing multiplier on BOTH intake paths (multipart form above
+	// and JSON body) — see dto.MaxImageN for why an unbounded n is a charge
+	// problem even though n is unsigned.
+	if imageRequest.N > dto.MaxImageN {
+		return nil, fmt.Errorf("n must be an integer between 1 and %d", dto.MaxImageN)
+	}
+
 	return imageRequest, nil
 }
 

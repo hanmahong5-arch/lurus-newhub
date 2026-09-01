@@ -62,8 +62,15 @@ func SetApiV2Router(router *gin.Engine) {
 			apiV2.POST("/bridge/exchange", middleware.BootstrapRateLimit(), handler.BridgeExchange)
 		}
 
-		// Tenant-scoped user endpoint (session auth — called by frontend in V2 mode)
-		apiV2.GET("/:tenant_slug/user/me", middleware.UserAuth(), middleware.TenantSlugGuard(), handler.GetSelf)
+		// Tenant-scoped user endpoint (session auth — called by frontend in V2 mode).
+		// GetSelfV2, not the v1 GetSelf: the v1 projection has no remaining_quota
+		// and no token_count, so the v2 dashboard's "remaining quota" card fell
+		// through to its unlimited-plan branch (telling a metered customer they
+		// were on an unlimited plan) and its "active keys" card was pinned at 0,
+		// which also kept the "you have no keys yet" onboarding banner up while
+		// the keys page listed keys. GetSelfV2 is a strict superset of GetSelf —
+		// see the comment on its response body.
+		apiV2.GET("/:tenant_slug/user/me", middleware.UserAuth(), middleware.TenantSlugGuard(), handler.GetSelfV2)
 
 		// EndUser pool readback (Tier 1.2, 2026-05-19). OIDCAuth →
 		// tenantCtx.TenantID must match the URL slug; otherwise the handler

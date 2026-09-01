@@ -228,14 +228,8 @@ func updateSunoTaskAll(ctx context.Context, channelId int, taskIds []string, tas
 				logger.LogError(ctx, "error update user quota cache: "+err.Error())
 			} else {
 				quota := task.Quota
-				if quota != 0 {
-					err = repo.IncreaseUserQuota(task.UserId, quota, false)
-					if err != nil {
-						logger.LogError(ctx, "fail to increase user quota: "+err.Error())
-					}
-					logContent := fmt.Sprintf("异步任务执行失败 %s，补偿 %s", task.TaskID, logger.LogQuota(quota))
-					repo.RecordLog(task.UserId, repo.LogTypeSystem, logContent)
-				}
+				refundTaskQuota(ctx, task.UserId, task.ChannelId, quota,
+					fmt.Sprintf("异步任务执行失败 %s，补偿 %s", task.TaskID, logger.LogQuota(quota)))
 			}
 		}
 		if responseItem.Status == repo.TaskStatusSuccess {

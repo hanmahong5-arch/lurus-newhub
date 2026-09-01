@@ -43,9 +43,19 @@ export const quotaToUSD = (quota, digits = 2) =>
   ((quota || 0) / getQuotaPerUSD()).toFixed(digits);
 
 // USD cost with a `$` prefix; em-dash for zero/empty so tables stay quiet.
+// A charge that really happened never renders as $0.0000: when it falls below
+// the display precision it floors to the smallest representable amount. Showing
+// a real debit as zero makes a metered product look free to the person reading
+// the log — the legacy console has always floored this way
+// (helpers/render.jsx renderQuota), the v2 pages did not.
 export const formatUSD = (quota, digits = 4) => {
   if (!quota) return '—';
-  return `$${(quota / getQuotaPerUSD()).toFixed(digits)}`;
+  const usd = quota / getQuotaPerUSD();
+  const fixed = usd.toFixed(digits);
+  if (usd > 0 && parseFloat(fixed) === 0) {
+    return `$${Math.pow(10, -digits).toFixed(digits)}`;
+  }
+  return `$${fixed}`;
 };
 
 // CNY money with grouping and 2 decimals; em-dash for non-numeric input.

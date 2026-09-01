@@ -73,6 +73,22 @@ describe('quota helpers', () => {
     expect(formatUSD(500_000)).toBe('$1.0000');
     expect(formatUSD(0)).toBe('—');
   });
+
+  // A charge that really happened must never render as $0.0000. Measured on
+  // UAT: two real relay calls debited quota=2 each and the v2 log page showed
+  // "$0.0000" in the cost column and in the window total — a metered product
+  // rendering itself free. The legacy console has always floored this way
+  // (helpers/render.jsx renderQuota); the v2 pages had their own un-floored
+  // copy of the division.
+  it('formatUSD floors a real but sub-precision charge instead of showing zero', () => {
+    // 2 quota units at the default 500_000/USD is $0.000004 — below 4 decimals.
+    expect(formatUSD(2)).toBe('$0.0001');
+    expect(formatUSD(1, 2)).toBe('$0.01');
+    // Zero stays the quiet em-dash: nothing was charged, nothing to floor.
+    expect(formatUSD(0)).toBe('—');
+    // Values at or above the display precision are untouched.
+    expect(formatUSD(50_000)).toBe('$0.1000');
+  });
 });
 
 describe('formatCNY', () => {

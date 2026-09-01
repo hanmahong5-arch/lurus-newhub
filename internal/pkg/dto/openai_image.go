@@ -11,6 +11,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// MaxImageN bounds the image-count billing multiplier. N is unsigned, so the
+// negative-n-becomes-a-credit failure is structurally impossible here, but N is
+// multiplied straight into ImagePriceRatio below with nothing capping it: a
+// client-supplied n is a direct, unbounded multiplier on the charge, and a
+// large enough one drives the float64 product past what the int64 quota can
+// represent. 128 is well above any provider's real per-request image limit.
+const MaxImageN = 128
+
 type ImageRequest struct {
 	Model             string          `json:"model"`
 	Prompt            string          `json:"prompt" binding:"required"`
