@@ -36,6 +36,12 @@ func refundTaskQuota(ctx context.Context, userId, channelId, quota int, logConte
 		return false
 	}
 	restored := true
+	// ctx is the caller's poller context, used for the log lines. The repo
+	// helpers below keep the same signatures they had at the four call sites
+	// this replaced — their internal cache refreshes are deliberately detached
+	// fire-and-forget, so threading ctx into them would let a cancelled poll
+	// abort a refund that has already moved money.
+	//nolint:contextcheck // unchanged from the call sites this consolidates; the cache refresh inside is intentionally detached
 	if err := repo.IncreaseUserQuota(userId, quota, false); err != nil {
 		logger.LogError(ctx, "fail to increase user quota: "+err.Error())
 		restored = false
@@ -48,6 +54,7 @@ func refundTaskQuota(ctx context.Context, userId, channelId, quota int, logConte
 	}
 	// Recorded even when the restore failed, matching the behaviour of the
 	// sites this replaced: the operator needs the trace either way.
+	//nolint:contextcheck // same as above — RecordLog's username-cache refresh is detached by design
 	repo.RecordLog(userId, repo.LogTypeSystem, logContent)
 	return restored
 }
