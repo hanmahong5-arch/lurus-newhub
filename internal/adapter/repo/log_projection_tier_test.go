@@ -62,6 +62,37 @@ func TestSanitizeOtherForUser_KeepsLatencyStripsPricing(t *testing.T) {
 	}
 }
 
+// TestSanitizeOtherForUser_DropsSentinelFrt covers the forward-only edge of the
+// frt fix: the write side stopped emitting the -1000 sentinel on 2026-09-01,
+// but every row written before that still carries it, and frt became
+// user-visible the same day. Without this guard a customer opening a historical
+// non-streaming request sees "-1000ms time to first token". Verified live on
+// UAT: rows predating the fix do carry frt=-1000.
+func TestSanitizeOtherForUser_DropsSentinelFrt(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		keep bool
+	}{
+		{"historical sentinel", `{"frt":-1000,"cache_tokens":1}`, false},
+		{"negative of any size", `{"frt":-1,"cache_tokens":1}`, false},
+		{"real measurement", `{"frt":118,"cache_tokens":1}`, true},
+		{"zero is a real sub-millisecond measurement", `{"frt":0,"cache_tokens":1}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeOtherForUser(tc.in)
+			if has := containsKey(t, got, "frt"); has != tc.keep {
+				t.Errorf("frt present = %v, want %v (input %s -> %s). A negative latency is a "+
+					"sentinel leaking as a measurement, not a slow request.", has, tc.keep, tc.in, got)
+			}
+			if !containsKey(t, got, "cache_tokens") {
+				t.Error("the frt guard must not disturb the rest of the projection")
+			}
+		})
+	}
+}
+
 func containsKey(t *testing.T, jsonStr, key string) bool {
 	t.Helper()
 	m := map[string]any{}
