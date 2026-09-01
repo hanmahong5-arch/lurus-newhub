@@ -520,9 +520,17 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	}
 	claudeResponse.Content = contents
 	claudeResponse.StopReason = stopReason
+	// Cache fields must be carried here exactly as the streaming twin does
+	// (see the message_delta usage above). Omitting them made every NON-stream
+	// /v1/messages response report cache_read_input_tokens = 0 while the request
+	// was in fact billed at the cache discount — the money was right, the number
+	// the customer got back was not, so cache-hit-rate monitoring on an
+	// OpenAI-wire channel read a flat zero forever.
 	claudeResponse.Usage = &dto.ClaudeUsage{
-		InputTokens:  openAIResponse.PromptTokens,
-		OutputTokens: openAIResponse.CompletionTokens,
+		InputTokens:              openAIResponse.PromptTokens,
+		OutputTokens:             openAIResponse.CompletionTokens,
+		CacheCreationInputTokens: openAIResponse.PromptTokensDetails.CachedCreationTokens,
+		CacheReadInputTokens:     openAIResponse.PromptTokensDetails.CachedTokens,
 	}
 
 	return claudeResponse

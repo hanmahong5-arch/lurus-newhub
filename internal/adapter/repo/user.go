@@ -835,6 +835,25 @@ func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
 	updateUserUsedQuotaAndRequestCount(id, quota, 1)
 }
 
+// UpdateUserUsedQuota adjusts only the cumulative used_quota, leaving
+// request_count untouched. Refunds need exactly this: the async-task submission
+// path already counted the request (UpdateUserUsedQuotaAndRequestCount), so a
+// later refund must reverse the spend WITHOUT reversing the attempt — the
+// request really did happen.
+//
+// Without this, every failed async task permanently inflated used_quota: the
+// refund restored `quota` (the spendable balance) but left the matching
+// used_quota increment in place, so `quota + used_quota` drifted above the
+// amount the user was ever funded, and every report derived from used_quota
+// (dashboard spend, per-channel cost) over-stated reality.
+func UpdateUserUsedQuota(id int, quota int) {
+	if common.BatchUpdateEnabled {
+		addNewRecord(BatchUpdateTypeUsedQuota, id, quota)
+		return
+	}
+	updateUserUsedQuota(id, quota)
+}
+
 func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
 		map[string]interface{}{

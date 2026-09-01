@@ -322,20 +322,34 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	// channels (anthropic/aws/vertex-claude and the ali/zhipu_4v/deepseek/
 	// moonshot Claude passthroughs) leave the flag false: their input_tokens
 	// already exclude cache reads/writes, so no deduction — unchanged.
+	//
+	// The deduction lands on a SEPARATE billing base; `promptTokens` keeps the
+	// raw upstream figure for the whole function. It used to be decremented in
+	// place, so the consume log recorded the post-deduction number
+	// (RecordConsumeLogParams.PromptTokens further down): the same physical
+	// request logged prompt_tokens=1926 via /v1/chat/completions and
+	// prompt_tokens=6 via /v1/messages (measured 2026-09-01), which made the two
+	// wire formats impossible to reconcile and under-counted input in every
+	// token-based usage report by exactly the cached amount. The
+	// OpenAI-compatible sibling already separates them
+	// (relay/compatible_handler.go:314 `baseTokens := dPromptTokens`); this
+	// brings the Claude-native path in line. Money is unchanged — the same
+	// reduced base still feeds claudeCalculateQuota.
+	billablePromptTokens := promptTokens
 	if usage.PromptTokensIncludeCached {
-		promptTokens -= cacheTokens
+		billablePromptTokens -= cacheTokens
 		// The cost-based cache-creation inference stays OpenRouter-only: it
 		// reads OpenRouter's proprietary usage.Cost field.
 		if relayInfo.ChannelType == constant.ChannelTypeOpenRouter {
 			isUsingCustomSettings := relayInfo.PriceData.UsePrice || hasCustomModelRatio(modelName, relayInfo.PriceData.ModelRatio)
 			if cacheCreationTokens == 0 && relayInfo.PriceData.CacheCreationRatio != 1 && usage.Cost != 0 && !isUsingCustomSettings {
 				maybeCacheCreationTokens := CalcOpenRouterCacheCreateTokens(*usage, relayInfo.PriceData)
-				if maybeCacheCreationTokens >= 0 && promptTokens >= maybeCacheCreationTokens {
+				if maybeCacheCreationTokens >= 0 && billablePromptTokens >= maybeCacheCreationTokens {
 					cacheCreationTokens = maybeCacheCreationTokens
 				}
 			}
 		}
-		promptTokens -= cacheCreationTokens
+		billablePromptTokens -= cacheCreationTokens
 	}
 
 	remainingCacheCreationTokens := cacheCreationTokens - cacheCreationTokens5m - cacheCreationTokens1h
@@ -344,7 +358,7 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	}
 
 	calculateQuota := claudeCalculateQuota(relayInfo.PriceData.UsePrice,
-		promptTokens, cacheTokens, cacheCreationTokens5m, cacheCreationTokens1h, remainingCacheCreationTokens, completionTokens,
+		billablePromptTokens, cacheTokens, cacheCreationTokens5m, cacheCreationTokens1h, remainingCacheCreationTokens, completionTokens,
 		cacheRatio, cacheCreationRatio5m, cacheCreationRatio1h, cacheCreationRatio, completionRatio, groupRatio, modelRatio, modelPrice)
 
 	// Predicate centralized in r5a_price_floor.go (ChargeableInputNonZero):
@@ -392,7 +406,12 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	// r1_quota_decimal_parity_test.go for the reproduction.
 	quota := int(calculateQuota.Round(0).IntPart())
 
-	totalTokens := promptTokens + completionTokens
+	// Deliberately the BILLABLE base, not the raw one. Its only consumer is the
+	// "upstream returned nothing" detector below; switching it to raw would
+	// start charging fully-cached zero-completion responses that settle to 0
+	// today. Behaviour preserved on purpose — the reporting fix is the log
+	// field, not this guard.
+	totalTokens := billablePromptTokens + completionTokens
 
 	var logContent string
 	if claudeWebSearchCallCount > 0 {

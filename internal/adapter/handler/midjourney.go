@@ -177,12 +177,8 @@ func UpdateMidjourneyTaskBulk() {
 					logger.LogError(ctx, "UpdateMidjourneyTask task error: "+err.Error())
 				} else {
 					if shouldReturnQuota {
-						err = repo.IncreaseUserQuota(task.UserId, task.Quota, false)
-						if err != nil {
-							logger.LogError(ctx, "fail to increase user quota: "+err.Error())
-						}
-						logContent := fmt.Sprintf("构图失败 %s，补偿 %s", task.MjId, logger.LogQuota(task.Quota))
-						repo.RecordLog(task.UserId, repo.LogTypeSystem, logContent)
+						refundTaskQuota(ctx, task.UserId, task.ChannelId, task.Quota,
+							fmt.Sprintf("构图失败 %s，补偿 %s", task.MjId, logger.LogQuota(task.Quota)))
 					}
 				}
 			}
@@ -362,12 +358,8 @@ func updateMidjourneyTasks(ctx context.Context) {
 				logger.LogError(ctx, "UpdateMidjourneyTask task error: "+err.Error())
 			} else {
 				if shouldReturnQuota {
-					err = repo.IncreaseUserQuota(task.UserId, task.Quota, false)
-					if err != nil {
-						logger.LogError(ctx, "fail to increase user quota: "+err.Error())
-					}
-					logContent := fmt.Sprintf("构图失败 %s，补偿 %s", task.MjId, logger.LogQuota(task.Quota))
-					repo.RecordLog(task.UserId, repo.LogTypeSystem, logContent)
+					refundTaskQuota(ctx, task.UserId, task.ChannelId, task.Quota,
+						fmt.Sprintf("构图失败 %s，补偿 %s", task.MjId, logger.LogQuota(task.Quota)))
 				}
 			}
 		}

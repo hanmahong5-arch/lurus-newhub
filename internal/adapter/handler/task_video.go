@@ -217,16 +217,17 @@ func updateVideoSingleTask(ctx context.Context, adaptor provider.TaskAdaptor, ch
 									logger.LogQuota(preConsumedQuota),
 									taskResult.TotalTokens,
 								))
-								if err := repo.IncreaseUserQuota(task.UserId, refundQuota, false); err != nil {
-									logger.LogError(ctx, fmt.Sprintf("退还预扣费失败: %s", err.Error()))
-								} else {
+								// Mirror of the quotaDelta > 0 branch above, which moves BOTH
+								// used_quota counters when it charges the difference. Giving
+								// money back has to move the same two the other way, or an
+								// over-estimated pre-consume leaves used_quota showing the
+								// estimate forever — that asymmetry lived inside this single
+								// if/else until 2026-09-01.
+								refundLog := fmt.Sprintf("视频任务成功退还多扣费用，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，退还 %s",
+									modelRatio, finalGroupRatio, taskResult.TotalTokens,
+									logger.LogQuota(preConsumedQuota), logger.LogQuota(actualQuota), logger.LogQuota(refundQuota))
+								if refundTaskQuota(ctx, task.UserId, task.ChannelId, refundQuota, refundLog) {
 									task.Quota = actualQuota // 更新任务记录的实际扣费额度
-
-									// 记录退款日志
-									logContent := fmt.Sprintf("视频任务成功退还多扣费用，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，退还 %s",
-										modelRatio, finalGroupRatio, taskResult.TotalTokens,
-										logger.LogQuota(preConsumedQuota), logger.LogQuota(actualQuota), logger.LogQuota(refundQuota))
-									repo.RecordLog(task.UserId, repo.LogTypeSystem, logContent)
 								}
 							} else {
 								// quotaDelta == 0, 预扣费刚好准确
@@ -268,11 +269,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor provider.TaskAdaptor, ch
 
 	if shouldRefund {
 		// 任务失败且之前状态不是失败才退还额度，防止重复退还
-		if err := repo.IncreaseUserQuota(task.UserId, quota, false); err != nil {
-			logger.LogWarn(ctx, "Failed to increase user quota: "+err.Error())
-		}
-		logContent := fmt.Sprintf("Video async task failed %s, refund %s", task.TaskID, logger.LogQuota(quota))
-		repo.RecordLog(task.UserId, repo.LogTypeSystem, logContent)
+		refundTaskQuota(ctx, task.UserId, task.ChannelId, quota,
+			fmt.Sprintf("Video async task failed %s, refund %s", task.TaskID, logger.LogQuota(quota)))
 	}
 
 	return nil
