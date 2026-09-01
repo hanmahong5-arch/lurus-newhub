@@ -1,6 +1,10 @@
 # Lurus Hub 业务验收测试（UAT / PROD）
 
-> **版本**：2026-08-31（整份重写；上一版 2026-06-05 的用例与"已实测"基线已全部作废）
+> **版本**：2026-09-01（用例订正版。2026-08-31 首版整份重写；上一版 2026-06-05 的用例与"已实测"基线已全部作废）
+>
+> **首次全量执行：2026-09-01**，25 场景 live 跑完（UAT + PROD 只读），结果 21 PASS / 1 FAIL / 3 BLOCKED、P0=0 P1=0。
+> 执行中发现本文自身有 **11 处用例错误**，其中三处会把**正确的产品行为判成 FAIL**；本版已逐条订正，订正点标 `【订正 2026-09-01】`。
+> 唯一那条 FAIL（TC-M3）的两个根因已由 PR #120 修复并 live 复验，本版同步更新其 oracle。
 > 面向**业务 / QA / 客户成功**的黑盒验收测试。不是 Go 单测（开发侧见 `TESTING.md`），
 > 而是"产品对外能不能用"的端到端确认。每条场景给：目的 / env / 优先级 / 串联功能点 / 前置 / 步骤（动作 + oracle）/ 回归防守。
 >
@@ -39,7 +43,7 @@
 | `$TENANT_ID` | 租户 id（credit-pool 路由用的是 id 不是 slug） | `GET $BASE/api/v2/admin/tenants`（root 会话） |
 | `$MODEL` | 当前渠道池里真实可路由的模型标识 | `GET $BASE/v1/models` + Bearer token，从返回的 `data[]` 里选 |
 | `$MODEL_ALLOWED` / `$MODEL_FORBIDDEN` | 白名单内 / 白名单外但平台可路由的两个模型标识 | 同上，取两个不同值 |
-| `$CODE` | 一次性兑换码（**32 位**，未使用） | 租户 admin 在 Redemption 页铸码，或 owner 直接发放；一码一用，多个场景各需一枚 |
+| `$CODE` | 一次性兑换码（**32 位**，未使用） | **【订正 2026-09-01】现铸，不要从库里挑**：租户 admin `POST /api/v2/:slug/redemptions`（需 role≥10），码值只在**创建响应**的 `data.codes[0].key` 出现一次。① `GET /redemptions` 列表返回的是**同长同形掩码**（首尾各 4 位真实 + 24 个 `*`，见 §TC-C3 的 P3 注），拿它去兑换得 `400 无效的兑换码`，与"码不存在"同一文案；② `redemptions` 表有 `deleted_at` 软删列，直接按 `status=1` 挑行会挑到软删码，同样必然 400。一码一用，多个场景各需一枚 |
 | `$INTERNAL_KEY` | internal API key（`lurus_ik_…`） | PROD：`重要信息.md`；UAT：按 §TC-G1 前置现场铸 |
 | `ROOT_JWT` | PROD root 的 IdP access_token | 仅 PROD `/api/v2/admin/*` 用；UAT 不需要（见 §0.2.2 注） |
 
@@ -124,7 +128,28 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 
 ⇒ **二者不可画等号**。同一个用户当天的其他 token 流量会污染 `total_cost_lb`。精确对账一律用 **delta**：token 侧用 `balance_lb` 前后差，跨接口只能断言 `total_cost_lb_delta >= balance_delta`。
 
-#### 0.2.6 `ERROR_LOG_ENABLED` 跑前核实 live env
+#### 0.2.6 UAT 必须有一个**可路由的上游渠道**，否则整组中转场景无从验起
+
+**【新增 2026-09-01】** `newhub_uat` 是全新库，**默认 `channels` 与 `abilities` 都是空的**。没有渠道时，每一个"中转返回 200"的 oracle（TC-M1/M2/M3、TC-C1、TC-C6 正控、TC-G3 步骤 4-5、TC-G7 正控）都只能记 BLOCKED——也就是钱路验收整块作废。开测前先确认：
+
+```bash
+curl -sS -H "Authorization: Bearer <任意可用 token>" "$BASE/v1/models" | jq '.data[].id'   # 空数组 = 没渠道
+```
+
+种渠道**必须走管理 API，不能直接写库**——`abilities` 行是 `BatchInsertChannels` 生成的，直接 `INSERT INTO channels` 建出来的渠道路由不到，症状是 `404 model_not_found（distributor）`：
+
+```bash
+# root 会话；key 由 owner 提供
+curl -sS -b cookies.txt -X POST "$BASE/api/channel/" -H 'Content-Type: application/json' -d '{
+  "mode":"single",
+  "channel":{"name":"uat-acceptance","type":1,"key":"<上游 key>",
+             "base_url":"https://api.deepseek.com","models":"deepseek-chat",
+             "group":"default","status":1,"priority":0,"weight":1}}'
+```
+
+Oracle：`success=true`，且 `GET /v1/models` 随后能列出该模型。⚠️ 这会产生**真实上游花费**（2026-09-01 实测 deepseek-chat 约 $0.000002/次，整轮验收 < $0.001）。
+
+#### 0.2.7 `ERROR_LOG_ENABLED` 跑前核实 live env
 
 代码默认 **false**（`internal/pkg/common/init.go:160`）；UAT/PROD 的 manifest 显式设为 `true`（`deploy/k8s/r6-uat/deployment.yaml:113`、`deploy/k8s/r6-stage/deployment.yaml:102`）。所有"失败调用应落日志"的 oracle 都依赖它。跑 TC-C6 / TC-G4 之前请运维确认 live 环境变量确为 `true`，否则整组是假红。
 
@@ -165,7 +190,7 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 | ID | 目的 | env | 动作 | Oracle |
 |----|------|-----|------|--------|
 | **TC-S1** | 网关存活 | BOTH | `curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" "$BASE/api/status"` | `200`，耗时 < 1s |
-| **TC-S2** | 配置体可读 & 单位价可取 | BOTH | `curl -sS "$BASE/api/status" \| jq '.success, .data.quota_per_unit, .data.version'` | `success=true`；`quota_per_unit` 为正整数（记为 `$QPU`）；`version` 非空 |
+| **TC-S2** | 配置体可读 & 单位价可取 | BOTH | `curl -sS "$BASE/api/status" \| jq '.success, .data.quota_per_unit, .data.version'` | `success=true`；`quota_per_unit` 为正整数（记为 `$QPU`）；`version` 非空。<br>**【订正 2026-09-01】** 再加两条:①两个环境的 `version` 必须**相同**（UAT 与 PROD 同 digest 是 `deploy/k8s/r6-uat/` 的设计不变量，双写 auto-pin 保证）；②**在整轮验收的开头和结尾各取一次 `version` 并比对**——2026-09-01 首跑时镜像在开跑 2-5 分钟后被一次自动部署换了版，早期步骤与后期步骤跑在不同代码上，是核验员而不是执行者发现的 |
 | **TC-S3** | 详细健康检查 | BOTH | `curl -sS "$BASE/api/health" \| jq '.'` | `200`；`checks.schema_migrations` 无 pending（带 migration 的部署后尤其要看这一项） |
 | **TC-S4** | **`/metrics` 必须 404**（设计如此） | BOTH | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/metrics"` | **`404`**。双层封堵：边缘 nginx `location = /metrics { return 404; }` + 应用层 `metricsAuthMiddleware`。**返回 200 + Prometheus 文本 = P0 缺陷**（真实余额指标公网可读）。唯一合法抓取者是宿主 netdata 直连 NodePort，不经 nginx |
 | **TC-S5** | Switch 公开路由（若仍在编）| BOTH | `curl -sS "$BASE/api/v2/switch/tools/versions"`；`curl -sS "$BASE/api/v2/switch/presets"`；`curl -sS "$BASE/api/v2/switch/pricing"` | 三条均 `200` 且 `success=true`；`/presets` 的 `data` 是数组（空数组合法）；`/pricing` 的 `data` 含 `quota_per_unit`。**若某条 404，先确认该路由是否已下线再判 FAIL** |
@@ -229,7 +254,10 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 - **env**：UAT · **优先级**：P0
 - **串联功能点**：建 token → 冷调用（cache write）→ 热调用（cache read）→ v1 自助日志读 `other` → 数值恒等式判别
 - **前置**：§0.2 全部；需要一个**支持 prompt cache 且会在响应里回报缓存字段**的渠道/模型（记 `$MODEL`）。若 UAT 渠道池没有任何缓存能力，本场景记 **BLOCKED: UAT 渠道池无缓存供应商，待补种**，不记 FAIL。
-- ⚠️ 缓存**不会自动发生**：messages 原生格式必须在内容块上显式带 `cache_control`，且被缓存段要够长（≥1024 tokens 量级）。用裸字符串 `"system":"…"` 永远拿不到缓存命中，那是用例错不是产品错。
+- ⚠️ 缓存是否**自动发生取决于上游供应商**，这决定了本场景该怎么跑：
+  - **Anthropic 系上游**：不会自动缓存，必须在内容块上显式带 `cache_control`，被缓存段要够长（≥1024 tokens 量级）。用裸字符串 `"system":"…"` 永远拿不到命中，那是用例错不是产品错。
+  - **【订正 2026-09-01】OpenAI 兼容上游（当前 UAT 唯一渠道 = DeepSeek）**：**自动前缀缓存**，不认 `cache_control`，也**不单独计量 cache creation**。所以步骤 3 的 `cache_creation_input_tokens > 0` 在这类渠道上**结构性恒为 0**，那是渠道能力差异，**不记 FAIL**。正确跑法：构造一段 ≥1024 tokens 的**固定前缀**放进 `system`，仅改 user 内容，冷调用一次、热调用一次，判据落在热调用的 `cache_read_input_tokens > 0`。
+  - 2026-09-01 实测配方（可直接抄）：20KB 重复文本作 `system`，冷调用 `usage.cache_read_input_tokens=0`，热调用 `=3456`，`input_tokens` 两次都是 3527。
 
 | # | 动作 | Oracle |
 |---|------|--------|
@@ -237,9 +265,10 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 | 2 | `curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/billing/balance"` | `200`，记 `$BAL_A` |
 | 3 | **冷调用**：`curl -sS -H "x-api-key: $TOKEN" -H 'anthropic-version: 2023-06-01' -H 'Content-Type: application/json' -X POST "$BASE/v1/messages" -d '{"model":"'"$MODEL"'","max_tokens":1,"system":[{"type":"text","text":"<固定的 ≥1024 tokens 长文本>","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"ping1"}]}'` | `200`；`usage.cache_creation_input_tokens > 0`（冷写入成功——这是步骤 4 能命中的前提）且 `usage.cache_read_input_tokens` 为 0/缺失。查 balance 记 `delta_1` |
 | 4 | **热调用**：同一 `$TOKEN`、**同一段带 `cache_control` 的 system**，仅把 user content 换成 `ping2` | `200`；`usage.cache_read_input_tokens > 0`（上游真的命中了缓存）。查 balance 记 `delta_2` |
-| 5 | `curl -sS -b cookies.txt "$BASE/api/v2/$TENANT_SLUG/logs/all?token_name=acc-m3"`（管理员会话） | `200`；取热调用那一行的 `prompt_tokens` 与 `other` 里的 `cache_tokens` / `model_ratio` / `cache_ratio`。⚠️ ratio 键**只有这条管理员路由给**：`/api/log/self/` 对所有人剥 TierInternal 键、旧版 v2 `/logs` 完全不带 `other`（2026-08-31 实核 + 修复） |
-| 6 | **数值判别**（本地计算，用步骤 5 的实际比率） | 计费的 input 部分必须等于 **`(prompt_tokens − cache_tokens) + cache_tokens × cache_ratio`**（wire 语义扣减，`quota.go:307-333` 的 `if usage.PromptTokensIncludeCached { promptTokens -= cacheTokens }`）；<br>**必须严格不等于** `prompt_tokens + cache_tokens × cache_ratio`（缓存段被全价 input **再加**一遍缓存价的双计形状 = "按渠道猜测"回归复发）。两个形状相差 `cache_tokens × model_ratio × group_ratio`，足以判别 |
-| 7 | 兜底 sanity | `0 < delta_2 < delta_1`（命中缓存严格更便宜、但不为 0、不倒挂）。**这一条只作辅助，不能单独作为通过依据** |
+| 5 | `curl -sS -b cookies.txt "$BASE/api/v2/$TENANT_SLUG/logs/all?token_name=acc-m3"`（**必须是 role≥100 的 root 会话**） | `200`；取热调用那一行的 `prompt_tokens` 与 `other` 里的 `cache_tokens` / `model_ratio` / `cache_ratio` / `completion_ratio` / `group_ratio`。<br>⚠️ ratio 键**只有这条管理员路由给**：`/api/log/self/` 对所有人剥 TierInternal 键、旧版 v2 `/logs` 完全不带 `other`。<br>**【订正 2026-09-01】** 原文只写"管理员会话"，实测**普通用户会话在这里拿 403 `Admin role required`**（`repo/log.go:142-149`）。另:**比率必须从这里实测取，不许套默认值**——判别式的两个形状相差 `cache_tokens × model_ratio × group_ratio`，用假设的比率去算等于自证自话 |
+| 6 | **数值判别**（本地计算，用步骤 5 的实际比率） | 计费的 input 部分必须等于 **`(prompt_tokens − cache_tokens) + cache_tokens × cache_ratio`**（wire 语义扣减，`quota.go:307-333` 的 `if usage.PromptTokensIncludeCached { promptTokens -= cacheTokens }`）；<br>**必须严格不等于** `prompt_tokens + cache_tokens × cache_ratio`（缓存段被全价 input **再加**一遍缓存价的双计形状 = "按渠道猜测"回归复发）。两个形状相差 `cache_tokens × model_ratio × group_ratio`，足以判别。<br>**【订正 2026-09-01】** 式中的 `prompt_tokens` 必须是**上游原始值**。PR #120 之前 Claude 原生路径把**扣减后**的值落库（同一段前缀 `/v1/chat/completions` 记 3527、`/v1/messages` 记 71），代进式子得负数、判别式失效；**PR #120 起两种 wire 的日志统一记原始值**，直接用步骤 5 那一行即可。<br>2026-09-01 实测对账（比率全部取自步骤 5）：`(3527−3456) + 3456×0.25 + 4×1 = 939`，`939 × 0.135 × 1 = 126.765 → Round = 127`，与日志 `quota=127` **逐位相等**；双计形状 `(3527 + 3456×0.25 + 4) × 0.135 = 593`，被排除 |
+| 7 | 兜底 sanity | `0 < delta_2 < delta_1`（命中缓存严格更便宜、但不为 0、不倒挂）。**这一条只作辅助，不能单独作为通过依据**。2026-09-01 实测 `delta_1=477`、`delta_2=127` |
+| 8 | **【新增 2026-09-01】** 客户侧可见性：热调用响应体的 `usage.cache_read_input_tokens` | **`> 0`**（实测 3456）。PR #120 之前非流式 `/v1/messages` **恒返回 0**——请求按缓存折扣计了费，但客户端拿不到命中数据，基于 Anthropic SDK 的缓存命中率看板恒读零。流式路径一直是对的，只有非流式漏了，所以**必须用非流式验这一条** |
 
 **回归防守**：缓存计价按渠道猜测导致的**双向真缺陷**——多收 11× 与少收免单；修法是把 wire 语义标记打在 usage 解析点、下游禁猜来源。
 
@@ -263,7 +292,7 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 | 7 | `curl -sS -b cookies.txt -X PUT "$BASE/api/v2/$TENANT_SLUG/tokens/$TOKEN_ID" -H 'Content-Type: application/json' -d '{"remain_quota":1000000}'` | `200`，`success=true` |
 | 8 | 再次重复步骤 2 的中转调用；随后 `curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/billing/balance"` | 中转 `200`；`balance_lb` 相对提额后的值**严格下降**（整条链真的走通了计费判定，不只是数据库数字变了） |
 | 9 | `curl -sS -i -b cookies.txt -X POST "$BASE/api/v2/$TENANT_SLUG/redeem" -H 'Content-Type: application/json' -d '{"key":"'"$CODE"'"}'` | **`400`**，`success=false`（`v2_redemption.go:89-95`） |
-| 10 | `curl -sS -b cookies.txt "$BASE/api/v2/$TENANT_SLUG/user/me"` | `data.quota` 与步骤 5 读到的值**逐字节相同**（重放没有二次入账；只看状态码不算数） |
+| 10 | `curl -sS -b cookies.txt "$BASE/api/v2/$TENANT_SLUG/user/me"` | `data.quota` 与**步骤 9 之前刚读的那次**逐字节相同（重放没有二次入账；只看状态码不算数）。<br>**【订正 2026-09-01】** 原文写"与步骤 5 相同"是**错的**,会把正确的防重放行为判成 FAIL:步骤 8 的两次真实中转**同时也扣用户钱包**（`internal/app/quota.go` 结算瀑布里的 `DecreaseUserQuota`），实测步骤 5 读到 20001000、步骤 10 读到 20000998，差的正是那 2 个单位。**所以必须在步骤 9 的重放之前再读一次 `user/me` 作为参照系** |
 
 **回归防守**：兑换码重放二次入账；402 被措辞成"上游故障"的裸 500；池未配的 402 与配额 402 混淆。
 
@@ -273,7 +302,8 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 
 - **env**：UAT · **优先级**：P1
 - **串联功能点**：带 `model_limits` 的 token → 越权模型 403 → 错误日志落库（`type==5`）→ rotate 旧 key 立即失效 → delete 新 key 立即失效
-- **前置**：§0.2 全部；`ERROR_LOG_ENABLED` live 为 true（§0.2.6）；`$MODEL_ALLOWED` / `$MODEL_FORBIDDEN` 两个不同的可路由模型
+- **前置**：§0.2 全部；`ERROR_LOG_ENABLED` live 为 true（§0.2.7）；`$MODEL_ALLOWED` / `$MODEL_FORBIDDEN` 两个不同的模型名。
+  **【订正 2026-09-01】** UAT 渠道池通常只有**一个**可路由模型，凑不出两个。此时把 `model_limits` 设成那个可路由模型，`$MODEL_FORBIDDEN` 用任意别的模型名即可——**本场景的判据本来就是两种拒绝的形状差异**：`403`（TokenAuth 阶段的白名单拒绝，期望值）vs `404 model_not_found`（Distribute 阶段"无可用渠道"）。看到 404 就说明白名单闸没生效或请求根本没走到它，正是要抓的东西。执行时把观测到的是哪一个写进证据。
 
 | # | 动作 | Oracle |
 |---|------|--------|
@@ -329,7 +359,7 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 | 4 | `curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/billing/usage?period=today"` | `200`；记 `$USAGE_0 = total_cost_lb` |
 | 5 | `curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE/v1/chat/completions" -d '{"model":"'"$MODEL"'","messages":[{"role":"user","content":"hi"}],"max_tokens":8}'` | `200`，`usage.prompt_tokens > 0` |
 | 6 | 再发一次同样的调用 | `200` |
-| 7 | 浏览器 Log 页（`/console/v2/log`）按 `token_name=acc-c1` 过滤 | 列表出现 2 行，`model` 列 = `$MODEL`，`quota` 列为正整数（记两行的 `quota` 为 `q1`、`q2`） |
+| 7 | 浏览器 Log 页（`/console/v2/log`）按 `token_name=acc-c1` 过滤 | 列表出现 2 行，`model` 列 = `$MODEL`，成本列**非 `—`**。<br>**【订正 2026-09-01】** 原文写"`quota` 列为正整数"是**错的**：v2 日志页那一列渲染的是 **USD 四位小数**（`fmtCost`），页面上不存在整数 quota 列。`q1`/`q2` 要从 API 取:`GET /api/v2/:slug/logs?token_name=acc-c1` 的 `logs[].quota`。<br>另:PR #120 之前极小额扣费（如 quota=2）在这一列渲染成 `$0.0000`——计费产品把自己显示成免费；现已按 legacy 的规矩落到最小可表示值（`$0.0001`），**看到 `$0.0000` 而 API 侧 quota>0 即为回归** |
 | 8 | `curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/billing/usage?period=today"` | `200`；`(q1 + q2) / $QPU == total_cost_lb − $USAGE_0`（**围绕步骤 5-6 取 delta**，绝对值会被同用户当日其他流量污染） |
 
 > **~~已知缺陷~~ 已修复（2026-08-31，随下一次镜像部署生效）**
@@ -348,7 +378,7 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 
 | # | 动作 | Oracle |
 |---|------|--------|
-| 1 | 隐身窗口打开 `https://hub.lurus.cn/login`，**不做任何点击**，等待 | 浏览器自动被重定向到 identity 域（`identity.lurus.cn`）的登录表单，地址栏主机名不再是 `hub.lurus.cn` |
+| 1 | 隐身窗口打开 `https://hub.lurus.cn/login`，**不做任何点击**，等待 | 浏览器自动被重定向到 identity 域（`identity.lurus.cn`），地址栏主机名不再是 `hub.lurus.cn`。<br>**【订正 2026-09-01】** 两点:①**给足等待预算**——PROD 主 bundle 6.6MB，慢链路下需 ≥3 分钟才渲染完,过早判定会误判成"没跳转";②**不要断言 `<form>` 元素**——identity 前端没有用 `<form>`（实测 `FORM_COUNT: 0`），判据要落在用户名/密码**输入控件**上。服务端侧可用 `curl -sSI "$PROD/api/v2/auth/zita-login?return_to=…"` 直查 302 的 `Location`,与浏览器互为佐证 |
 | 2 | 在 IdP 页面输入测试账号凭据并完成授权 | 浏览器最终落在 `https://hub.lurus.cn/console/v2/dashboard`（允许中间经过 `/login` 一跳）；页面顶栏显示 `display_name`/用户名，其 title 属性含账号邮箱。**不要断言停在 `/oauth/oidc`**——那是旧版 OIDC-direct 流的落点，不是这条链路 |
 | 3 | 复制浏览器 session cookie，`curl -sS -b "<cookie>" "$BASE/api/v2/auth/session-info"` | `200`，`success == true`，`data.id` / `data.username` 与测试账号一致。**不要断言 `authenticated` 字段**（不存在），也**不要断言 `data.tenant_slug` 非空**——该字段只有旧版 OIDC 回调会填，现行登录路径永远留空 |
 | 4 | `curl -sS -b "<cookie>" "$BASE/api/v2/$TENANT_SLUG/user/me"`（用该账号**自己**的租户 slug） | `200`，`data.email` / `data.username` 与 IdP 账号一致，`data.role` 与预置角色一致（**没有被"择优"提权成 admin**） |
@@ -413,15 +443,16 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 
 - **env**：UAT · **优先级**：P0
 - **串联功能点**：正控（自己的 slug 200）→ 换 slug 的 `user/me` / `tokens` / `logs` 全部 403 → 浏览器改 localStorage 复现租户切换 → KPI 保持空
-- **前置**：TC-C1 的浏览器会话与 `cookies.txt`；`$SLUG_B` = 当前用户无权限的另一个 slug（UAT 上没有第二个租户时，用一个**不存在**的 slug 也成立——断言是"不得在另一个 slug 标签下吐出本租户数据"）
+- **前置**：TC-C1 的浏览器会话与 `cookies.txt`；`$SLUG_B` = 当前用户无权限的另一个 slug。
+  **【订正 2026-09-01】** UAT 上**确实有第二个租户** `switch`（`tenants` 表 slug=switch），**优先用它**——真实他租户的判别力强于不存在的 slug。两种都跑更好，但要注意二者**状态码不同**（见下）。
 - ⚠️ **控制台 URL 里没有租户段**：v2 路由是扁平的（`/console/v2/dashboard` 等），API 路径里的 slug 来自 `localStorage.tenant_slug`。"改地址栏切租户"不是可执行动作。
 
 | # | 动作 | Oracle |
 |---|------|--------|
 | 1 | `curl -sS -b cookies.txt "$BASE/api/v2/$TENANT_SLUG/user/me"` | `200`，`data.id == $UID`（正控：守卫放行了匹配的 slug）。<br>**不要断言 `data.tenant_slug`**——该响应白名单里没有这个字段，断言必然假红。需要 slug 回显就用 bridge 响应里捕获的值 |
-| 2 | `curl -sS -i -b cookies.txt "$BASE/api/v2/$SLUG_B/user/me"` | **`403`**（`TenantSlugGuard`）；响应体**不含**任何用户字段（`email` / `id` / `username` 一个都不许出现） |
-| 3 | `curl -sS -i -b cookies.txt "$BASE/api/v2/$SLUG_B/tokens"` | **`403`**；响应体不含任何 token 名称或 key 前缀 |
-| 4 | `curl -sS -i -b cookies.txt "$BASE/api/v2/$SLUG_B/logs"` | **`403`**；不返回任何日志行，**连 `total` 计数也不得透出真实值**（0 条数据泄露） |
+| 2 | `curl -sS -i -b cookies.txt "$BASE/api/v2/$SLUG_B/user/me"` | **存在的他租户 → `403 TENANT_MISMATCH`；不存在的 slug → `404 TENANT_NOT_FOUND`**（`TenantSlugGuard`）。两者都可，**判据是响应体不含任何用户字段**（`email` / `id` / `username` 一个都不许出现）。<br>**【订正 2026-09-01】** 原文步骤 2-4 写死 403,与本场景前置里"用不存在的 slug 也成立"自相矛盾——照写死的 403 执行会把**正确的** 404 判成 FAIL |
+| 3 | `curl -sS -i -b cookies.txt "$BASE/api/v2/$SLUG_B/tokens"` | **`403`（他租户）/ `404`（不存在）**；响应体不含任何 token 名称或 key 前缀 |
+| 4 | `curl -sS -i -b cookies.txt "$BASE/api/v2/$SLUG_B/logs"` | **`403`（他租户）/ `404`（不存在）**；不返回任何日志行，**连 `total` 计数也不得透出真实值**（0 条数据泄露） |
 | 5 | 浏览器 DevTools：`localStorage.setItem('tenant_slug','$SLUG_B')` 然后刷新 `/console/v2/dashboard`（这正是顶栏租户切换器做的事） | 所有 `/api/v2/$SLUG_B/*` 的 XHR 均 `403 TENANT_MISMATCH`；KPI 卡片停在空占位（`—`），页面上**不出现任何一行/一个数字属于 `$SLUG_B`**；不得出现"空白仪表盘伪装成加载成功" |
 | 6 | 复原：`localStorage.setItem('tenant_slug','$TENANT_SLUG')` 并刷新 | 回到正常仪表盘（确认步骤 5 的拒绝是 slug 导致，不是会话坏了） |
 
@@ -433,7 +464,7 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 
 - **env**：UAT · **优先级**：P1
 - **串联功能点**：建可用 token → 正常调用（正控）→ 打一个不存在的模型（404）→ 日志页/日志 API 出现该错误行 → 匿名失败**不**落日志（边界）
-- **前置**：§0.2 全部；`ERROR_LOG_ENABLED` live = true（§0.2.6）
+- **前置**：§0.2 全部；`ERROR_LOG_ENABLED` live = true（§0.2.7）
 - 🔑 **错误日志闸的两个条件**：**已认证**（`c.GetInt("id") > 0`）**且非 429**（`middleware/utils.go:47-53`）。用"已删除的 key"去触发 401 是**测不到**这条日志的——token 找不到时 `id` 根本没被设置，那条 401 按设计不落行。
 
 | # | 动作 | Oracle |
@@ -507,9 +538,9 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 |---|------|--------|
 | 1 | 复用 `cookies.txt`（必要时按 §0.2.1 重新 bridge） | 会话可用 |
 | 2 | `curl -sS -b cookies.txt -X POST "$BASE/api/v2/$TENANT_SLUG/tokens" -H 'Content-Type: application/json' -d '{"name":"gov03-token","unlimited_quota":true,"rate_limit_rpm":2}'` | **`201`**，`data.key` 匹配 `^sk-`（记 `$TOKEN`），`data.id` 为数字。<br>⚠️ `rate_limit_rpm` 必须显式给：默认 0 时业务限流**永远不触发**（`business_rate_limit.go:321,328`），步骤 5 会变成不可证伪的空断言 |
-| 3 | `for i in $(seq 1 610); do curl -s -o /dev/null -w "%{http_code}\n" "$BASE/"; done \| sort \| uniq -c` | 前 ~600 次 `200`，之后出现 `429`。**web 限流的 429 响应体是空的**（`GlobalWebRateLimit` 只写状态码，`rate-limit.go:60-63,78-82`） |
+| 3 | `for i in $(seq 1 610); do curl -s -o /dev/null -w "%{http_code}\n" "$BASE/"; done \| sort \| uniq -c` | 前 ~600 次 `200`，之后出现 `429`。**web 限流的 429 响应体是空的**。<br>**【订正 2026-09-01】** 原文说 `GlobalWebRateLimit` "只写状态码"是**错的**：`rate-limit.go:61` 与 `:80` 两条 deny 分支**都先调** `setRateLimitResponseHeaders`(`:188-192`) 再 `c.Status(429)`，web 429 **同样带** `Retry-After` / `X-RateLimit-Limit: 600` / `X-RateLimit-Remaining: 0`（实测）。⇒ **"有没有限流头"不构成判别力**，见步骤 5 |
 | 4 | 紧接着（同一 IP、web 桶仍处于耗尽状态）发一次中转：`curl -sS -i -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE/v1/chat/completions" -d '{"model":"'"$MODEL"'","messages":[{"role":"user","content":"hi"}],"max_tokens":5}'` | **不是空 body 的 429**，且响应上**没有** `X-RateLimit-*` 头 —— `200`（或上游错误）皆可。<br>⚠️ **不接受 402 作为通过依据**：零额度 token 或未配池同样给 402，那种"通过"是请求死在两个限流器之前 |
-| 5 | 60s 窗口内快速连发 20 次同样的中转调用 | 至少 1 次 `429`，且其 body 是 **JSON** `{"error":{…}}`，`message` 含"每分钟"，并带 `Retry-After` / `X-RateLimit-Limit` 头 ⇒ **与步骤 3 的空 body 429 形状截然不同**，证明 `ModelRequestRateLimit` / `BusinessRateLimit` 是与 `GlobalWebRateLimit` 完全独立的执法路径 |
+| 5 | 60s 窗口内快速连发 20 次同样的中转调用 | 至少 1 次 `429`，且**同时满足**：① body 是 **JSON** `{"error":{…}}`（步骤 3 的 web 429 body 为空）；② **`X-RateLimit-Limit` 等于该 token 的 `rate_limit_rpm`（2），而不是 web 桶的 600**。<br>**【订正 2026-09-01】** 原文用"带 `Retry-After` / `X-RateLimit-*` 头"作判别是**空断言**——两种 429 都带这些头（见步骤 3 订正）。真正的判别是 **body 形状 + limit 数值**：limit=2 证明拦它的是 `BusinessRateLimit` 的 token 计数器，limit=600 说明还是 web 桶 |
 
 **回归防守**：web 按 IP 限流把中转流量误伤（症状：单跑绿、连跑白屏 429）；限流器挂在错误的位置导致 503 掩盖 429。
 
@@ -546,7 +577,7 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 |---|------|--------|
 | 1 | `curl -sS -i -X OPTIONS "$BASE/api/v2/$TENANT_SLUG/user/me" -H "Origin: <上面对应环境的白名单 origin>" -H "Access-Control-Request-Method: GET"` | 响应头 `Access-Control-Allow-Origin` **等于**该 origin，且有 `Access-Control-Allow-Credentials: true` |
 | 2 | `curl -sS -i -X OPTIONS "$BASE/api/v2/$TENANT_SLUG/user/me" -H "Origin: https://evil.example.com" -H "Access-Control-Request-Method: GET"` | **`403`**，且**没有**任何回显 `evil.example.com` 的 `Access-Control-Allow-Origin` 头 |
-| 3 | 浏览器：在**另一个源**的页面（任意非 `$BASE` 的站点）DevTools Console 执行<br>`fetch('$BASE/api/v2/$TENANT_SLUG/user/me',{credentials:'include'}).then(r=>r.text()).then(t=>console.log('DATA',t)).catch(e=>console.log('BLOCKED',e))` | Console 打印 `BLOCKED …` 并伴随 CORS 策略报错；DevTools 里该请求响应状态 `403` 且无 `Access-Control-Allow-Origin`，页面 JS 拿不到响应体。<br>⚠️ **不要断言"cookie 被发送了"**：session cookie 是 `SameSite=Lax`，跨站请求本就不会携带它。CORS 与 SameSite 是**两层独立防线** |
+| 3 | 浏览器：在**另一个源**的页面（任意非 `$BASE` 的站点）DevTools Console 执行<br>`fetch('$BASE/api/v2/$TENANT_SLUG/user/me',{credentials:'include'}).then(r=>r.text()).then(t=>console.log('DATA',t)).catch(e=>console.log('BLOCKED',e))` | Console 打印 `BLOCKED …` 并伴随 CORS 策略报错，页面 JS 拿不到响应体。<br>**【订正 2026-09-01】** 原文还要求"DevTools 里该请求响应状态 403 且无 ACAO"——**自动化下拿不到**:被 CORS 拦截的响应不会上报给 CDP/Playwright,那一半必然取不到证。把它拆成两条独立证据:①浏览器侧只断言 `BLOCKED`；②**服务端侧用带同一 `Origin` 头的 curl 直查** `403` + `access-control-*` 头计数为 0。<br>⚠️ **不要断言"cookie 被发送了"**：session cookie 是 `SameSite=Lax`，跨站请求本就不会携带它。CORS 与 SameSite 是**两层独立防线** |
 | 4 | 在 `$BASE` 自己的页面上执行同样的 fetch（相对路径） | Console 打印 `DATA` + 真实用户 JSON（`200`）——证明步骤 3 的拦截是 Origin 导致，不是会话失效 |
 
 **回归防守**：CORS 白名单缺口被同源短路掩盖（"缺口不影响同源"曾被误判两次）；带凭据的跨源读取。
@@ -614,6 +645,8 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 
 | 阶段 | 场景数 | PASS | FAIL | BLOCKED | N/A | 结论 | 签字 / 日期 |
 |------|--------|------|------|---------|-----|------|-------------|
+> 首次执行的实测填表见 **§7.1 执行记录**；下表留白供后续轮次使用。
+
 | 1 冒烟（TC-S1…S6） | 6 | | | | | | |
 | 2 会话 & 租户（TC-C1、TC-C5、TC-C2） | 3 | | | | | | |
 | 3 Token & 中转（TC-M1、TC-M5） | 2 | | | | | | |
@@ -622,6 +655,17 @@ curl -sS "$BASE/api/status" | jq '.data.quota_per_unit'   # 记为 $QPU，默认
 | **合计** | **25** | | | | | □通过 □有条件通过 □不通过 | |
 
 **业务负责人**：________  **QA**：________  **开发对接**：________  **执行环境/日期**：________
+
+---
+
+### 7.1 执行记录
+
+| 轮次 | 日期 | 环境/版本 | 结果 | 备注 |
+|------|------|-----------|------|------|
+| 首次全量 | 2026-09-01 | UAT `main-20260901-76eb587` + PROD 只读 | **21 PASS / 1 FAIL / 3 BLOCKED / 0 N-A**，P0=0 P1=0 ⇒ **有条件通过** | 唯一 FAIL = TC-M3（缺陷定级 P2:钱对报表错）。3 条 BLOCKED（TC-C2 / TC-C4 / TC-G1）全部卡在 PROD 凭据 + "PROD 只读"约束，非产品缺陷。另开出 P2×3 + P3×3 |
+| 缺陷修复 | 2026-09-01 | PR #120 → UAT/PROD `main-20260901-cf9ba9e` | TC-M3 的两个根因已修并 live 复验 ⇒ **TC-M3 转 PASS** | 非流式 `/v1/messages` 的 `cache_read_input_tokens` 实测 3456（此前恒 0）；两种 wire 的日志 `prompt_tokens` 统一为原始值 3527；计费恒等式用**实测比率**复算 `939 × 0.135 = 126.765 → 127`，与日志 `quota` 逐位相等 |
+
+> **待解阻（需 owner）**：① PROD IdP 侧已预配置的测试账号（解 TC-C2，连带解 TC-C4）；② PROD `platform-core` internal key，且 TC-G1 步骤 5 是 `DELETE` 方法，需**显式豁免"PROD 只读"**才能执行。
 
 > 填表约定：`BLOCKED` = 环境/数据不具备（如 UAT 渠道池无缓存供应商），**不等于** FAIL，但必须写明阻塞原因与解阻条件；`N/A` = 该 env 结构性不适用。
 
