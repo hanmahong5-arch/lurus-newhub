@@ -236,11 +236,24 @@ type Usage struct {
 	//           provider/openai/relay-openai.go). Billing must subtract the
 	//           cached tokens from the prompt base before pricing them at
 	//           CacheRatio.
+	//   true  — also Gemini-wire (promptTokenCount "includes the number of
+	//           tokens in the cached content" per the generateContent
+	//           UsageMetadata reference; stamped in provider/gemini) and
+	//           xAI (provider/xai).
 	//   false — Anthropic-wire (input_tokens EXCLUDES cache read/creation:
 	//           provider/claude/relay-claude.go, reached natively and via
 	//           aws/vertex/ali/zhipu_4v/deepseek/moonshot Claude-format
-	//           passthroughs) and Gemini-wire (CachedTokens never populated).
-	//           No subtraction.
+	//           passthroughs). No subtraction.
+	//
+	// Canonical form: this struct is the SETTLEMENT record and always keeps
+	// the semantics of the wire it was parsed from — PromptTokens means
+	// whatever that wire's prompt field means, and the flag says which.
+	// Nothing rewrites it into another wire's semantics in place. When the
+	// figure has to be PRESENTED to a caller speaking a different wire, the
+	// two methods below (AnthropicInputTokens, AsOpenAIWire) derive a display
+	// value from the record; the record itself is never changed, so the
+	// settlement paths and the consume log (which records the raw upstream
+	// prompt figure) stay on source semantics.
 	//
 	// Both settlement paths (app.PostClaudeConsumeQuota and
 	// relay/compatible_handler.go postConsumeQuota) key the prompt-base
@@ -269,6 +282,53 @@ type Usage struct {
 
 	// Lurus billing extension (omitted when nil for backward compatibility)
 	XLurus *types.LurusUsageExtension `json:"x_lurus,omitempty"`
+}
+
+// AnthropicInputTokens is the prompt figure in Anthropic-wire semantics:
+// input_tokens is "the number of input tokens which were not read from or used
+// to create a cache", so the caller's total input is
+// input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+// (Anthropic prompt-caching guide). When this record was parsed off a wire
+// whose prompt already includes the cached slice (flag true) the slice is
+// removed; a Claude-wire caller applying Anthropic arithmetic to the
+// unadjusted figure would count it twice. When the flag is false the record is
+// already in Anthropic semantics and is returned as is. A cached count larger
+// than the prompt is an upstream misreport; the display figure is clamped at
+// zero rather than emitting a negative token count (settlement is unaffected:
+// it never calls this).
+func (u Usage) AnthropicInputTokens() int {
+	if !u.PromptTokensIncludeCached {
+		return u.PromptTokens
+	}
+	n := u.PromptTokens - u.PromptTokensDetails.CachedTokens - u.PromptTokensDetails.CachedCreationTokens
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// AsOpenAIWire returns a DISPLAY copy in OpenAI-wire semantics: prompt_tokens
+// is the whole prompt and prompt_tokens_details.cached_tokens is the part of
+// it that was a cache hit (OpenAI Chat Completions usage reference; Gemini's
+// promptTokenCount is defined the same way). A record parsed off the Anthropic
+// wire (flag false) has PromptTokens = input_tokens, which excludes both cache
+// terms, so they are added back and total_tokens is recomputed as
+// prompt + completion. Idempotent: a record already in OpenAI semantics is
+// returned unchanged.
+//
+// Only call this on a usage whose flag was stamped at its parse site. A raw
+// OpenAI-wire chunk that was re-parsed without the stamp reads as flag=false
+// and would be double-counted. The receiver is a value: the settlement record
+// the caller holds is never modified.
+func (u Usage) AsOpenAIWire() Usage {
+	if u.PromptTokensIncludeCached {
+		return u
+	}
+	out := u
+	out.PromptTokens = u.PromptTokens + u.PromptTokensDetails.CachedTokens + u.PromptTokensDetails.CachedCreationTokens
+	out.TotalTokens = out.PromptTokens + u.CompletionTokens
+	out.PromptTokensIncludeCached = true
+	return out
 }
 
 type OpenAIVideoResponse struct {

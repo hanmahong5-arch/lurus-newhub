@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"strings"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/samber/lo"
@@ -40,6 +40,12 @@ func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 	}
 
 	if streamResponse.Usage != nil {
+		// This usage was re-parsed off the raw chunk, so the wire flag and the
+		// vendor cache remaps are missing; the converter keys the Claude-wire
+		// input_tokens subtraction on that flag (dto.Usage.AnthropicInputTokens).
+		// Every caller of HandleStreamFormat feeds OpenAI-wire chunks (prompt
+		// includes cached), the precondition applyUsagePostProcessing states.
+		applyUsagePostProcessing(info, streamResponse.Usage, common.StringToByteSlice(data))
 		info.ClaudeConvertInfo.Usage = streamResponse.Usage
 	}
 	claudeResponses := app.StreamResponseOpenAI2Claude(&streamResponse, info)
@@ -250,6 +256,14 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		// second message_start.
 		info.SendResponseCount++
 		info.ClaudeConvertInfo.Usage = usage
+		// When the upstream inlines usage in its final finish chunk, the
+		// converter's terminal message_delta is built from THIS re-parsed usage
+		// (not from the billed one above), so it needs the same wire stamp and
+		// vendor remaps; see handleClaudeFormat. Idempotent on the standard
+		// usage-only last chunk.
+		if streamResponse.Usage != nil {
+			applyUsagePostProcessing(info, streamResponse.Usage, common.StringToByteSlice(lastStreamData))
+		}
 
 		claudeResponses := app.StreamResponseOpenAI2Claude(&streamResponse, info)
 		// Whatever the last chunk was, the Claude-wire client gets exactly one

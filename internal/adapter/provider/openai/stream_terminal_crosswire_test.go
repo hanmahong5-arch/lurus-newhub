@@ -125,8 +125,13 @@ func TestOaiStreamHandler_ClaudeWire_TrailingUsageChunkClosesTheMessage(t *testi
 	if d.Delta == nil || d.Delta.StopReason == nil || *d.Delta.StopReason != "end_turn" {
 		t.Errorf("message_delta.delta.stop_reason = %+v, want end_turn (the SDKs read stop_reason from here)", d.Delta)
 	}
-	if d.Usage == nil || d.Usage.OutputTokens != 30 || d.Usage.CacheReadInputTokens != 50 {
-		t.Errorf("message_delta.usage = %+v, want output_tokens 30 and cache_read_input_tokens 50 from the trailing usage chunk", d.Usage)
+	// input_tokens is in Anthropic semantics: the 120-token prompt minus the 50
+	// cached tokens = 70 (Anthropic input_tokens excludes cache reads; the
+	// OpenAI-wire prompt_tokens includes them). Until 2026-09-02 the raw 120
+	// was copied through alongside cache_read_input_tokens 50, so an Anthropic
+	// SDK summing the three terms read 170 for a 120-token prompt.
+	if d.Usage == nil || d.Usage.OutputTokens != 30 || d.Usage.CacheReadInputTokens != 50 || d.Usage.InputTokens != 70 {
+		t.Errorf("message_delta.usage = %+v, want input_tokens 70, output_tokens 30 and cache_read_input_tokens 50 from the trailing usage chunk", d.Usage)
 	}
 }
 
@@ -259,5 +264,106 @@ func TestOaiStreamHandler_GeminiWire_TerminalFrameShowsRemappedCache(t *testing.
 	frames := geminiFrames(t, w.rec.Body.String())
 	if got := frames[len(frames)-1].UsageMetadata.CachedContentTokenCount; got != 50 {
 		t.Errorf("terminal cachedContentTokenCount = %d, want 50 (DeepSeek remap applied to the settled usage)", got)
+	}
+}
+
+// --- Inline-usage frame shapes -------------------------------------------
+//
+// Not every OpenAI-wire vendor sends the usage-only trailing chunk. Two real
+// shapes put the usage INSIDE the finish_reason chunk, and on both the Claude
+// terminal message_delta is built from that chunk's re-parsed usage rather
+// than from the billed one, so the wire stamp and vendor remaps have to be
+// applied at the re-parse sites (handleClaudeFormat / HandleFinalResponse's
+// Claude branch). Each test names the site whose removal turns it red while
+// claudeTerminalUsage itself is unchanged.
+
+const crossWireInlineFinishUsageChunk = `{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150,"prompt_tokens_details":{"cached_tokens":50}}}`
+
+func claudeTerminalDelta(t *testing.T, body string) dto.ClaudeResponse {
+	t.Helper()
+	events := claudeEvents(t, body)
+	var deltas, stops []dto.ClaudeResponse
+	for _, ev := range events {
+		switch ev.Type {
+		case "message_delta":
+			deltas = append(deltas, ev)
+		case "message_stop":
+			stops = append(stops, ev)
+		}
+	}
+	if len(deltas) != 1 || len(stops) != 1 {
+		t.Fatalf("message_delta×%d message_stop×%d, want exactly one each; events: %v", len(deltas), len(stops), claudeEventTypes(events))
+	}
+	if deltas[0].Usage == nil {
+		t.Fatalf("message_delta carries no usage; events: %v", claudeEventTypes(events))
+	}
+	return deltas[0]
+}
+
+// Usage inlined in the finish chunk, which is the last frame: the delta is
+// built in HandleFinalResponse from the re-parsed chunk. Red if that branch
+// stops stamping the wire flag (input_tokens would read 120).
+func TestOaiStreamHandler_ClaudeWire_InlineUsageOnFinalFinishChunk(t *testing.T) {
+	withStreamingTimeout(t)
+	w := newRecorderCtx(t)
+	info := crossWireInfo(types.RelayFormatClaude)
+	resp := crossWireSSE(
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}`,
+		crossWireInlineFinishUsageChunk,
+		"[DONE]",
+	)
+	defer func() { _ = resp.Body.Close() }()
+	if _, apiErr := OaiStreamHandler(w.ctx, info, resp); apiErr != nil {
+		t.Fatalf("handler: %v", apiErr.Error())
+	}
+	d := claudeTerminalDelta(t, w.rec.Body.String())
+	if d.Usage.InputTokens != 70 || d.Usage.CacheReadInputTokens != 50 || d.Usage.OutputTokens != 30 {
+		t.Errorf("message_delta.usage = %+v, want input_tokens 70 / cache_read 50 / output 30 (Anthropic semantics)", d.Usage)
+	}
+}
+
+// Usage inlined in the finish chunk with one more frame after it: the finish
+// chunk goes through HandleStreamFormat, so the delta is built from
+// handleClaudeFormat's re-parsed usage. Red if that site stops stamping.
+func TestOaiStreamHandler_ClaudeWire_InlineUsageFollowedByAnotherFrame(t *testing.T) {
+	withStreamingTimeout(t)
+	w := newRecorderCtx(t)
+	info := crossWireInfo(types.RelayFormatClaude)
+	resp := crossWireSSE(
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}`,
+		crossWireInlineFinishUsageChunk,
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[]}`,
+		"[DONE]",
+	)
+	defer func() { _ = resp.Body.Close() }()
+	if _, apiErr := OaiStreamHandler(w.ctx, info, resp); apiErr != nil {
+		t.Fatalf("handler: %v", apiErr.Error())
+	}
+	d := claudeTerminalDelta(t, w.rec.Body.String())
+	if d.Usage.InputTokens != 70 || d.Usage.CacheReadInputTokens != 50 || d.Usage.OutputTokens != 30 {
+		t.Errorf("message_delta.usage = %+v, want input_tokens 70 / cache_read 50 / output 30 (Anthropic semantics)", d.Usage)
+	}
+}
+
+// DeepSeek reports the hit in prompt_cache_hit_tokens, not cached_tokens; the
+// vendor remap must run at the re-parse site too, or the Claude-wire caller
+// gets cache_read_input_tokens 0 and input_tokens 120 for the same event.
+func TestOaiStreamHandler_ClaudeWire_InlineUsageDeepSeekShapeIsRemapped(t *testing.T) {
+	withStreamingTimeout(t)
+	w := newRecorderCtx(t)
+	info := crossWireInfo(types.RelayFormatClaude)
+	info.ChannelType = constant.ChannelTypeDeepSeek
+	resp := crossWireSSE(
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}`,
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150,"prompt_cache_hit_tokens":50,"prompt_cache_miss_tokens":70}}`,
+		"[DONE]",
+	)
+	defer func() { _ = resp.Body.Close() }()
+	if _, apiErr := OaiStreamHandler(w.ctx, info, resp); apiErr != nil {
+		t.Fatalf("handler: %v", apiErr.Error())
+	}
+	d := claudeTerminalDelta(t, w.rec.Body.String())
+	if d.Usage.InputTokens != 70 || d.Usage.CacheReadInputTokens != 50 {
+		t.Errorf("message_delta.usage = %+v, want input_tokens 70 / cache_read 50 (DeepSeek prompt_cache_hit_tokens remapped, then Anthropic semantics)", d.Usage)
 	}
 }

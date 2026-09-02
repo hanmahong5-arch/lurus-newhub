@@ -8,13 +8,13 @@ import (
 	"net/http"
 	"strings"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/openrouter"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider/openrouter"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -640,9 +640,24 @@ func FormatClaudeResponseInfo(requestMode int, claudeResponse *dto.ClaudeRespons
 		} else if claudeResponse.Type == "message_delta" {
 			// 最终的usage获取
 			if usage := claudeResponse.Usage; usage != nil {
+				// message_delta usage counts are CUMULATIVE whole-message totals
+				// (Anthropic streaming guide); the official SDKs' accumulators
+				// (Python accumulate_event, TypeScript MessageStream) take
+				// message_start as the base and OVERWRITE a counter when the delta
+				// carries it, never add. input_tokens and the two cache counters
+				// are omitted when they do not apply — e.g. the server-tool case
+				// re-reports all three after message_start — so a present (>0)
+				// value replaces the message_start figure and an absent one keeps
+				// it. Our fields are int, so 0 and absent are indistinguishable;
+				// a genuine cumulative 0 cannot lower a non-zero start value.
 				if usage.InputTokens > 0 {
-					// 不叠加，只取最新的
 					claudeInfo.Usage.PromptTokens = usage.InputTokens
+				}
+				if usage.CacheReadInputTokens > 0 {
+					claudeInfo.Usage.PromptTokensDetails.CachedTokens = usage.CacheReadInputTokens
+				}
+				if usage.CacheCreationInputTokens > 0 {
+					claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = usage.CacheCreationInputTokens
 				}
 				claudeInfo.Usage.CompletionTokens = usage.OutputTokens
 				claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
@@ -750,7 +765,12 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		//
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		if info.ShouldIncludeUsage {
-			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, *claudeInfo.Usage)
+			// OpenAI-wire caller: prompt_tokens must be the whole prompt with
+			// cached_tokens as the subset that hit the cache (OpenAI usage
+			// reference), while claudeInfo.Usage holds Anthropic input_tokens,
+			// which EXCLUDES cache read/creation. AsOpenAIWire is a value copy
+			// in the caller's semantics; the settlement record is untouched.
+			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, claudeInfo.Usage.AsOpenAIWire())
 			err := helper.ObjectData(c, response)
 			if err != nil {
 				common.SysLog("send final response failed: " + err.Error())
@@ -813,7 +833,13 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
 		openaiResponse := ResponseClaude2OpenAI(requestMode, &claudeResponse)
-		openaiResponse.Usage = *claudeInfo.Usage
+		// Display copy in OpenAI-wire semantics (prompt_tokens includes the
+		// cached slice; Anthropic input_tokens excludes it). Until 2026-09-02 the
+		// settlement record was copied verbatim, so an OpenAI-wire caller doing
+		// (prompt_tokens - cached_tokens) under-counted its uncached input by
+		// the whole cache read. claudeInfo.Usage (returned to settlement) keeps
+		// Anthropic semantics.
+		openaiResponse.Usage = claudeInfo.Usage.AsOpenAIWire()
 		responseData, err = json.Marshal(openaiResponse)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeBadResponseBody)

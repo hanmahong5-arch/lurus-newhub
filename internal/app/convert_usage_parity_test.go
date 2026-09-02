@@ -89,7 +89,13 @@ func TestClaudeTerminalUsage_CarriesEveryFieldItCan(t *testing.T) {
 	got := claudeTerminalUsage(&u)
 
 	carried := map[string]int{
-		"InputTokens":              u.PromptTokens,
+		// Anthropic-wire semantics: input_tokens excludes the cache read and
+		// cache creation terms. The fixture is flagged as an includes-cached wire
+		// (OpenAI/Gemini/xAI), so the Claude-wire figure is prompt minus both:
+		// 3527 - 3456 - 17 = 54. Until 2026-09-02 this line expected u.PromptTokens
+		// (3527), which pinned the SOURCE semantics onto the Claude wire and made a
+		// Claude SDK count the 3456 cached tokens twice.
+		"InputTokens":              u.PromptTokens - u.PromptTokensDetails.CachedTokens - u.PromptTokensDetails.CachedCreationTokens,
 		"OutputTokens":             u.CompletionTokens,
 		"CacheCreationInputTokens": u.PromptTokensDetails.CachedCreationTokens,
 		"CacheReadInputTokens":     u.PromptTokensDetails.CachedTokens,

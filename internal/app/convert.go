@@ -215,6 +215,17 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 // three copies means it can happen again; one function plus
 // TestClaudeTerminalUsage_StreamAndNonStreamAgree means it cannot.
 //
+// input_tokens is presented in Anthropic-wire semantics: the three prompt
+// terms are mutually exclusive (input_tokens excludes cache read and cache
+// creation; Anthropic prompt-caching guide), whereas every upstream that
+// reaches this function speaks a wire whose prompt_tokens INCLUDES the cached
+// slice (OpenAI chat/Responses, Gemini promptTokenCount, xAI). Until 2026-09-02
+// the raw prompt_tokens was copied across while cache_read_input_tokens was
+// also emitted, so a Claude-wire caller applying Anthropic arithmetic counted
+// the cached slice twice (a 120-prompt/50-cached event read as 170 input
+// tokens). dto.Usage.AnthropicInputTokens keys the subtraction on the wire
+// flag stamped at the parse site; the settlement record is not modified.
+//
 // Known gap, deliberately not closed here: dto.Usage also carries
 // ClaudeCacheCreation5mTokens / 1hTokens and ClaudeUsage has the matching
 // fields, but no upstream reachable from this conversion populates them, so
@@ -226,7 +237,7 @@ func claudeTerminalUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 		return nil
 	}
 	return &dto.ClaudeUsage{
-		InputTokens:              oaiUsage.PromptTokens,
+		InputTokens:              oaiUsage.AnthropicInputTokens(),
 		OutputTokens:             oaiUsage.CompletionTokens,
 		CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
 		CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
