@@ -2,9 +2,7 @@ package relay
 
 // postconsume_xai_cache_test.go — metadata to money for xAI, both transports.
 // The same upstream numbers (prompt 120 including 50 cached, 30 output) must
-// settle at the same figure whether or not the client streamed. Before
-// 2026-09-01 non-stream settled at 175 (cached parsed, flag missing: full
-// prompt plus cache price) and stream at 150 (cached dropped: full price),
+// settle at the same figure whether or not the client streamed. // 2026-09-01 // prompt plus cache price) and stream at 150 (cached dropped: full price),
 // against a correct 105.
 
 import (
@@ -74,7 +72,7 @@ func TestPostConsumeQuota_XaiCachedTokens_SameChargeOnBothTransports(t *testing.
 	// quota = (120 - 50) base + 50*0.1 cache read + 30 completion = 70 + 5 + 30 = 105
 	const want = 105
 	if got := settleXai(t, "xai-cache-nonstream", false); got != want {
-		t.Errorf("non-stream settled at %d, want %d (175 = flag missing: full prompt plus cache price)", got, want)
+		t.Errorf("non-stream settled at %d, want %d (155 = flag missing: full prompt plus cache price)", got, want)
 	}
 	if got := settleXai(t, "xai-cache-stream", true); got != want {
 		t.Errorf("stream settled at %d, want %d (150 = cached dropped: full input price)", got, want)
