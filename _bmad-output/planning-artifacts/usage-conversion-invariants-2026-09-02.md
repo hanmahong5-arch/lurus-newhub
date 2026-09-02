@@ -146,3 +146,24 @@ Each wire's own arithmetic then over- or under-counts by the cached slice. See �
    (`grok-3-beta` era) and carry no cache ratio. Refresh model names and ratios from the
    provider price lists in one pass, with the source URL in the comment as done for
    Gemini.
+
+### 4.3 addendum — Grok price audit (2026-09-02, read-only research; owner decision needed)
+
+Source: https://docs.x.ai/docs/models (fetched twice, consistent). The caching guide and
+legacy-models pages returned 404, so the usage field name for cached tokens and the
+retirement status of old ids could **not** be confirmed from a primary source.
+
+- Repo: `ratio_setting/model_ratio.go` carries eight `grok-*` entries (`grok-3-beta`,
+  `grok-3-mini-beta`, `grok-3-fast-beta`, `grok-3-mini-fast-beta`, `grok-2`,
+  `grok-2-vision`, `grok-beta`, `grok-vision-beta`); **none** is on the current models
+  page. `defaultCacheRatio` has **no** grok entry, so every xAI cache read is priced at
+  ratio 1 (full input price) today.
+- Current text models and the cached/input ratio the page implies (USD per 1M tokens):
+  `grok-4.6` 2.00 / 0.50 → 0.25 · `grok-4.5` 2.00 / 0.30 → 0.15 · `grok-4.3` 1.25 / 0.20 →
+  0.16 · `grok-4.20-0309-reasoning`, `-non-reasoning`, `grok-4.20-multi-agent-0309`
+  1.25 / 0.20 → 0.16 · `grok-build-0.1` 1.00 / 0.20 → 0.20.
+- Blocker for seeding: the page bills the **whole request** at a higher tier once the
+  prompt reaches a listed threshold (≥200k context, input and cached ×2). The ratio table
+  is one value per model, so the tier cannot be expressed; the owner must choose the
+  lower tier (under-bills long prompts) or the higher (over-bills short ones) before any
+  grok entry is seeded. No repo change was made.
