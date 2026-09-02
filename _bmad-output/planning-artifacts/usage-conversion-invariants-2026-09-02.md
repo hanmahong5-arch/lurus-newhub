@@ -276,10 +276,18 @@ client gone, `streamSawFinish`), `provider/claude/stream_incomplete_test.go`,
 `handler/relay_inband_error_test.go` (drives `Relay` on a pre-flushed writer).
 Mutation 12/12 red.
 
+Follow-up (same day, separate PR): `geminiStreamHandler` now reports whether a
+`finishReason` arrived (any reason: STOP, MAX_TOKENS, SAFETY, …). Without one, and with
+the caller still connected, `GeminiChatStreamHandler` sends the wire error instead of the
+usage frame + `[DONE]` / Claude-wire `message_stop`, and the native passthrough
+`GeminiTextGenerationStreamHandler` appends the Gemini error envelope instead of ending
+on a bare EOF. Partial output stays billed from the last cumulative `usageMetadata`.
+Locks: `provider/gemini/stream_incomplete_test.go`. Mutation 5/6 red; the sixth (drop the
+`ClientListening` guard on the passthrough) is an equivalent mutant: the Gemini/OpenAI
+frames go through `StringData`, which already refuses to write on a done request context,
+so the guard is a redundant statement of intent, not a behaviour.
+
 Not done / owner:
-- Native Gemini upstream (`geminiStreamHandler`) has no completeness signal; an
-  abandoned Gemini stream still ends as a bare EOF / usage frame. Needs `finishReason`
-  tracking; same shape as the Claude change.
 - Billing policy differs by path: OpenAI-compatible abandoned streams bill zero, native
   Anthropic ones bill the partial text. Left as is (policy), documented here.
 - The non-stream Gemini error envelope (`relay.go` `c.JSON` path) still uses the OpenAI
