@@ -99,8 +99,11 @@ func TestHandleFinalResponse_GeminiFormat_TranslatesFinishReason(t *testing.T) {
 	}
 }
 
-// Mirrors the streaming skip branch above: the terminal chunk with no
-// content and no finish reason must not emit a frame at all.
+// A terminal chunk with no content, no finish reason and a ZEROED usage is an
+// abnormal end (the handler zeroes usage when no [DONE] was seen, and nothing
+// is billed): no frame is invented for it. With a real usage the same chunk
+// becomes the terminal usageMetadata frame — see
+// TestOaiStreamHandler_GeminiWire_SingleStopFrameCarriesBilledUsage.
 func TestHandleFinalResponse_GeminiFormat_ContentlessChunkWritesNothing(t *testing.T) {
 	w := newRecorderCtx(t)
 	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatGemini}

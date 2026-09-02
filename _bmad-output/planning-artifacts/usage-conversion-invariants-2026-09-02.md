@@ -44,6 +44,34 @@ stamped. Do not infer the semantics from the shape of the struct.
   measured by mutation, not derived (a derived 175 turned out to be 155).
 - **Whole-value assignment** in stream merges (`*usage = built`) instead of hand-copied
   field lists.
+- **Billing invariance matrix** (`internal/app/relay/billing_invariance_matrix_test.go`,
+  2026-09-02): one semantic event (prompt 120 with 50 cached, 30 output) through the
+  production `Adaptor.DoResponse` of eight upstream wires × both transports × both
+  settlement paths; every cell charges 105. A second table asserts the caller sees the
+  cache hit in its own wire's field for every client format the handler serves.
+- **Stream terminal shape per client wire** (`provider/openai/stream_terminal_crosswire_test.go`):
+  Claude-wire clients get exactly one `message_delta` (stop_reason + billed usage) and one
+  `message_stop`; Gemini-wire clients get exactly one STOP frame and it carries the billed
+  `usageMetadata`. Locked over the `stream_options.include_usage` frame order the relay
+  itself requests (finish chunk, then usage-only chunk).
+
+## 2a. Found by the matrix (2026-09-02)
+
+The 32 settlement cells were green on the first run: money is invariant. The
+caller-visibility half found two streaming defects, both in the frame order the relay
+requests from every channel in `streamSupportedChannels` (finish_reason chunk, then a
+usage-only chunk):
+
+| Client wire | What the caller got | Cause | Fix |
+|---|---|---|---|
+| Claude on OpenAI-wire upstream, stream | no `message_delta` at all: no stop_reason, no usage, no cache figures | finish chunk emitted `message_stop` before usage was known and set `Done`; the usage chunk was then discarded | terminal pair deferred until usage is known; `CloseClaudeStream` guarantees one `message_delta` + `message_stop` at end of stream |
+| Gemini on OpenAI-wire upstream, stream | one STOP frame with the pre-request estimate, real counts never | usage-only chunk (no content, no finish) dropped as a "leading empty frame" | usage-only chunk is a frame; content-less finish chunk held so the terminal frame is the single STOP with billed `usageMetadata` (vendor remaps included) |
+
+Both are "figures wrong, money right". A third, not fixed here: the **prompt figure
+itself changes semantics across wires**. An OpenAI-wire caller on an Anthropic upstream
+sees `prompt_tokens` = Anthropic `input_tokens` (cache excluded), and a Claude-wire caller
+on an OpenAI upstream sees `input_tokens` = OpenAI `prompt_tokens` (cache included).
+Each wire's own arithmetic then over- or under-counts by the cached slice. See §4.1.
 
 ## 3. Not changed, with reasons
 
@@ -60,11 +88,15 @@ stamped. Do not infer the semantics from the shape of the struct.
 
 ## 4. Remaining plan (in value order)
 
-1. **Billing invariance matrix** — one table-driven test: for each provider handler that
-   owns a response path × each client wire format it serves, feed identical upstream
-   numbers and assert identical settlement. Today the parity tests exist per provider;
-   the matrix makes the cross-provider claim ("a cache hit costs the same on every
-   OpenAI-wire upstream") a single red/green.
+1. **Prompt-figure semantics at the wire boundary** (found by the matrix, §2a). When the
+   usage crosses wires, present the prompt in the caller's semantics: Claude-wire
+   `input_tokens` = prompt − cached − cache_creation when the source flag says the prompt
+   includes them; OpenAI-wire `prompt_tokens` = input + cache_read + cache_creation when
+   it does not. Display copy only: the settlement struct keeps its source semantics.
+   Touches `claudeTerminalUsage`, the Claude handler's OpenAI-format usage copy, and the
+   #122 lock that pins `input_tokens` = 3127 (that lock pinned "fields carried", not the
+   semantics). Third matrix table: same event, every wire, the prompt figure in that
+   wire's semantics.
 2. **Live proof on a real Gemini or xAI channel** — the fixes are unit- and
    mutation-verified only. First real channel: send the same prompt twice, expect
    `cached_tokens > 0` on the second reply and a log `cache_tokens` that reconciles with

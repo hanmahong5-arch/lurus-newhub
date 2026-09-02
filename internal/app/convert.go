@@ -233,6 +233,63 @@ func claudeTerminalUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 	}
 }
 
+// claudeTerminalEvents closes a Claude-wire stream — message_delta (stop_reason
+// + usage) then message_stop — and marks the conversion Done. It returns nil
+// and leaves Done unset while no usage is known yet. OpenAI-wire upstreams the
+// relay asks for stream_options.include_usage (every channel in
+// streamSupportedChannels) send usage in a trailing chunk AFTER the
+// finish_reason chunk; the finish chunk therefore cannot close the message,
+// and the usage chunk (or HandleFinalResponse, which fills
+// ClaudeConvertInfo.Usage with the billed figures) does. Until 2026-09-02 the
+// finish chunk emitted message_stop with no message_delta at all — Claude-wire
+// callers on those upstreams got no stop_reason, no usage and no cache figures,
+// and the usage chunk was then dropped because Done was already set.
+func claudeTerminalEvents(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) []*dto.ClaudeResponse {
+	oaiUsage := openAIResponse.Usage
+	if oaiUsage == nil {
+		oaiUsage = info.Usage
+	}
+	if oaiUsage == nil {
+		return nil
+	}
+	info.Done = true
+	return []*dto.ClaudeResponse{
+		{
+			Type:  "message_delta",
+			Usage: claudeTerminalUsage(oaiUsage),
+			Delta: &dto.ClaudeMediaMessage{
+				StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
+			},
+		},
+		{Type: "message_stop"},
+	}
+}
+
+// CloseClaudeStream is the end-of-stream guarantee for Claude-wire clients,
+// called once by HandleFinalResponse after the last chunk is converted. If the
+// terminal pair has not gone out yet — finish chunk seen without usage and no
+// usage chunk followed, or no finish chunk at all — it closes any open content
+// block and emits message_delta + message_stop from the usage settlement has.
+// FinishReason doubles as the "stop block already sent" marker: both branches
+// of StreamResponseOpenAI2Claude emit content_block_stop in the same call that
+// records it.
+func CloseClaudeStream(info *relaycommon.RelayInfo) []*dto.ClaudeResponse {
+	if info.ClaudeConvertInfo == nil || info.Done {
+		return nil
+	}
+	var out []*dto.ClaudeResponse
+	if info.FinishReason == "" {
+		if info.LastMessagesType != "" {
+			out = append(out, generateStopBlock(info.Index))
+		}
+		info.FinishReason = "stop"
+	}
+	if info.Usage == nil {
+		info.Usage = &dto.Usage{}
+	}
+	return append(out, claudeTerminalEvents(&dto.ChatCompletionsStreamResponse{}, info)...)
+}
+
 func generateStopBlock(index int) *dto.ClaudeResponse {
 	return &dto.ClaudeResponse{
 		Type:  "content_block_stop",
@@ -351,32 +408,16 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		if len(openAIResponse.Choices) > 0 && openAIResponse.Choices[0].FinishReason != nil && *openAIResponse.Choices[0].FinishReason != "" {
 			info.FinishReason = *openAIResponse.Choices[0].FinishReason
 			claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
-			oaiUsage := openAIResponse.Usage
-			if oaiUsage == nil {
-				oaiUsage = info.ClaudeConvertInfo.Usage
-			}
-			if oaiUsage != nil {
-				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Type:  "message_delta",
-					Usage: claudeTerminalUsage(oaiUsage),
-					Delta: &dto.ClaudeMediaMessage{
-						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
-					},
-				})
-			}
-			claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-				Type: "message_stop",
-			})
-			info.ClaudeConvertInfo.Done = true
+			claudeResponses = append(claudeResponses, claudeTerminalEvents(openAIResponse, info)...)
 		}
 		return claudeResponses
 	}
 
 	if len(openAIResponse.Choices) == 0 {
-		// 非标准的 OpenAI 响应（无 choices）。
-		// 此处 info.ClaudeConvertInfo.Done 不可能为真：函数入口处 Done==true 已 return nil，
-		// 而 Done 仅在 SendResponseCount==1 分支内置位，且该分支必定提前 return，
-		// 因此走到这里 Done 恒为 false——原先的收尾块为死代码，已删除。
+		// No choices: a non-standard frame, or the stream_options.include_usage
+		// chunk that follows the finish_reason chunk. Nothing is emitted for it
+		// here; it is always the last frame, and HandleFinalResponse closes the
+		// message from it via CloseClaudeStream with the billed usage.
 		return claudeResponses
 	} else {
 		chosenChoice := openAIResponse.Choices[0]
@@ -484,24 +525,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 
 		if doneChunk || info.ClaudeConvertInfo.Done {
 			claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
-			oaiUsage := openAIResponse.Usage
-			if oaiUsage == nil {
-				oaiUsage = info.ClaudeConvertInfo.Usage
-			}
-			if oaiUsage != nil {
-				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Type:  "message_delta",
-					Usage: claudeTerminalUsage(oaiUsage),
-					Delta: &dto.ClaudeMediaMessage{
-						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
-					},
-				})
-			}
-			claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-				Type: "message_stop",
-			})
-			info.ClaudeConvertInfo.Done = true
-			return claudeResponses
+			return append(claudeResponses, claudeTerminalEvents(openAIResponse, info)...)
 		}
 	}
 
@@ -853,6 +877,18 @@ func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relayco
 }
 
 // StreamResponseOpenAI2Gemini 将 OpenAI 流式响应转换为 Gemini 格式
+// geminiFinishReason maps an OpenAI finish_reason onto Gemini's FinishReason.
+func geminiFinishReason(openAIFinishReason string) string {
+	switch openAIFinishReason {
+	case "length":
+		return "MAX_TOKENS"
+	case "content_filter":
+		return "SAFETY"
+	default: // stop, tool_calls, anything else
+		return "STOP"
+	}
+}
+
 func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) *dto.GeminiChatResponse {
 	// 检查是否有实际内容或结束标志
 	hasContent := false
@@ -863,11 +899,18 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 		}
 		if choice.FinishReason != nil {
 			hasFinishReason = true
+			info.StreamFinishReason = *choice.FinishReason
 		}
 	}
+	hasUsage := openAIResponse.Usage != nil
 
-	// 如果没有实际内容且没有结束标志，跳过。主要针对 openai 流响应开头的空数据
-	if !hasContent && !hasFinishReason {
+	// Skip only the truly empty frames (OpenAI's leading role-only chunk). A
+	// usage-only chunk — what stream_options.include_usage produces AFTER the
+	// finish_reason chunk — is the frame that carries the real counts and
+	// must reach the caller as Gemini's terminal usageMetadata. Until
+	// 2026-09-02 it was dropped here, so Gemini-wire callers on every
+	// OpenAI-wire upstream only ever saw the pre-request estimate.
+	if !hasContent && !hasFinishReason && !hasUsage {
 		return nil
 	}
 
@@ -892,19 +935,7 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 
 		// 设置结束原因
 		if choice.FinishReason != nil {
-			var finishReason string
-			switch *choice.FinishReason {
-			case "stop":
-				finishReason = "STOP"
-			case "length":
-				finishReason = "MAX_TOKENS"
-			case "content_filter":
-				finishReason = "SAFETY"
-			case "tool_calls":
-				finishReason = "STOP"
-			default:
-				finishReason = "STOP"
-			}
+			finishReason := geminiFinishReason(*choice.FinishReason)
 			candidate.FinishReason = &finishReason
 		}
 
@@ -947,6 +978,21 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 		}
 
 		candidate.Content = content
+		geminiResponse.Candidates = append(geminiResponse.Candidates, candidate)
+	}
+
+	// A usage-only chunk has no choices; Gemini's wire still expects a
+	// candidate on the terminal frame, carrying the finish reason the held
+	// finish chunk (openai.handleGeminiFormat) recorded.
+	if len(openAIResponse.Choices) == 0 && hasUsage {
+		candidate := dto.GeminiChatCandidate{
+			SafetyRatings: []dto.GeminiChatSafetyRating{},
+			Content:       dto.GeminiChatContent{Role: "model", Parts: make([]dto.GeminiPart, 0)},
+		}
+		if info.StreamFinishReason != "" {
+			fr := geminiFinishReason(info.StreamFinishReason)
+			candidate.FinishReason = &fr
+		}
 		geminiResponse.Candidates = append(geminiResponse.Candidates, candidate)
 	}
 
