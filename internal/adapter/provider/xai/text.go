@@ -55,9 +55,16 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		// 把 xAI 的usage转换为 OpenAI 的usage
 		if xAIResp.Usage != nil {
 			containStreamUsage = true
-			usage.PromptTokens = xAIResp.Usage.PromptTokens
-			usage.TotalTokens = xAIResp.Usage.TotalTokens
+			// Whole-value copy. xAI is OpenAI-wire: the usage chunk carries
+			// prompt_tokens_details.cached_tokens and completion_tokens_details.
+			// reasoning_tokens, and the three-field copy this replaces dropped
+			// both — every streamed cache hit was billed at full input price.
+			*usage = *xAIResp.Usage
 			usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
+			// cached_tokens is a slice of prompt_tokens on this wire (docs.x.ai
+			// prompt-caching usage: turn 2 prompt_tokens=120, cached_tokens=50), so
+			// the settlement paths must subtract it from the base once.
+			usage.PromptTokensIncludeCached = true
 		}
 
 		openaiResponse := streamResponseXAI2OpenAI(xAIResp, usage)
@@ -94,6 +101,11 @@ func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response
 	if xaiResponse.Usage != nil {
 		xaiResponse.Usage.CompletionTokens = xaiResponse.Usage.TotalTokens - xaiResponse.Usage.PromptTokens
 		xaiResponse.Usage.CompletionTokenDetails.TextTokens = xaiResponse.Usage.CompletionTokens - xaiResponse.Usage.CompletionTokenDetails.ReasoningTokens
+		// Parsed straight from the OpenAI-wire body, so cached_tokens is already
+		// here — but without this flag the settlement paths billed prompt_tokens
+		// (which includes the cached slice) at full price AND the cached slice
+		// again at CacheRatio.
+		xaiResponse.Usage.PromptTokensIncludeCached = true
 	}
 
 	// new body
