@@ -203,23 +203,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 			// If SSE bytes were already flushed to the client (error surfaced after
 			// streaming started), a raw c.JSON blob would corrupt the text/event-stream
-			// body for every consumer. Emit the error in-band as an SSE event instead,
-			// framed exactly like a normal stream end (data line + terminal [DONE]).
-			// Only this already-started-stream branch changes; the not-yet-written
-			// c.JSON path below is untouched.
+			// body for every consumer. Emit the error in-band in the caller's wire
+			// shape instead (helper.StreamError: each official SDK recognises exactly
+			// one shape, and only that one raises). Only this already-started-stream
+			// branch changes; the not-yet-written c.JSON path below is untouched.
 			if c.Writer.Written() {
-				switch relayFormat {
-				case types.RelayFormatClaude:
-					_ = helper.ObjectData(c, gin.H{
-						"type":  "error",
-						"error": newAPIError.ToClaudeError(),
-					})
-				default:
-					_ = helper.ObjectData(c, gin.H{
-						"error": newAPIError.ToOpenAIError(),
-					})
-				}
-				helper.Done(c)
+				helper.StreamError(c, relayFormat, newAPIError)
 				return
 			}
 
