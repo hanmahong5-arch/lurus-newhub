@@ -131,12 +131,11 @@ Each wire's own arithmetic then over- or under-counts by the cached slice. See �
      official SDKs overwrite from `message_delta`, so the final message is right).
      Inbound `message_delta` cache counters are int, so 0 and absent are
      indistinguishable; a present (>0) value overwrites the `message_start` figure, an
-     absent one keeps it (SDK accumulator rule). OpenAI's wire has no standard field for
-     cache creation, so it is folded into `prompt_tokens` at the undiscounted rate — an
-     OpenAI SDK's estimate of the creation term is 0.25× below the relay's 1.25× charge;
-     the non-standard `claude_cache_creation_5_m/1_h_tokens` keys remain for callers
-     that want to reconstruct it. OpenAI-wire `cache_write_tokens` (chat and Responses)
-     is parsed, billed and shown since 2026-09-02 — see §4.4.
+     absent one keeps it (SDK accumulator rule). OpenAI-wire `cache_write_tokens` (chat and
+     Responses) is parsed, billed and shown since 2026-09-02 (§4.4); the non-standard
+     `claude_cache_creation_5_m/1_h_tokens` keys remain for callers that want the
+     5m/1h split. Streams the upstream abandons are now reported as errors on every
+     wire instead of as a normal end — see §4.5.
 2. **Live proof on a real Gemini or xAI channel** — the fixes are unit- and
    mutation-verified only. First real channel: send the same prompt twice, expect
    `cached_tokens > 0` on the second reply and a log `cache_tokens` that reconciles with
@@ -226,3 +225,64 @@ reachable from here; only the write ratio, which the guide states, is). Live pro
 GPT-5.6 key remains owner-gated. Coordination changelog (root repo): OpenAI-wire callers
 on Anthropic channels now see `prompt_tokens_details.cache_write_tokens` when a write
 occurred.
+
+### 4.5 An abandoned stream must not look like a finished answer (2026-09-02, implemented)
+
+Found while re-verifying the §4.1 "Claude-branch abnormal end" note against HEAD with a
+probe test (OpenAI-compatible upstream, two content chunks, then EOF: no `[DONE]`, no
+`finish_reason`). The relay correctly bills nothing for such a stream — and then told
+every client wire the answer was complete:
+
+| client wire | what the caller got | what its SDK does with it |
+|---|---|---|
+| OpenAI | zero-usage frame with `x_lurus` cost 0, then `[DONE]` | returns normally, `finish_reason` absent |
+| Claude | `content_block_stop` + `message_delta{stop_reason:end_turn}` + `message_stop` | returns a *complete* message with `end_turn` |
+| Gemini | bare EOF | iteration ends, no error |
+
+A native Anthropic upstream that stops before `message_delta` had the same shape (usage
+frame + `[DONE]` on the OpenAI wire, bare EOF on the Claude wire) while billing the
+partial text. Each official SDK raises on exactly one in-band shape (sources read
+2026-09-02): openai-python on any data frame whose JSON has an `error` key;
+anthropic-sdk-python only on an SSE frame whose **event line** is `error` (frames with no
+event line are silently dropped); google-genai on a frame starting with `{"error":` (and
+it json-decodes every line, so a `[DONE]` becomes a decode error). Relay's existing
+deferred in-band renderer (`relay.go`, `c.Writer.Written()` branch) emitted a data-only
+`{"type":"error"}` for the Claude wire — invisible to the SDK — and an OpenAI envelope +
+`[DONE]` for the Gemini wire.
+
+Changes:
+- `RelayInfo.StreamEndReason` recorded by `helper.StreamScannerHandler`: empty when the
+  `[DONE]` terminator arrived, else `streaming_timeout` / `upstream_closed` /
+  `client_gone`. Wires without a terminator read `upstream_closed` on a normal end too,
+  so each handler pairs it with its own completeness signal.
+- `helper.StreamError(c, format, err)`: the one shape per wire. OpenAI: `data:
+  {"error":…}` + `[DONE]`. Claude: `event: error` + `data: {"type":"error",…}`, no
+  `[DONE]`. Gemini: `data: {"error":{code,message,status}}` (struct so `error` is the
+  first key), no `[DONE]`. `relay.go`'s in-band branch now calls it.
+- `openai.OaiStreamHandler`: `!sawDone && !streamSawFinish(chunks) && ClientListening` →
+  `HandleIncompleteStream`: forward the held-back last chunk (real content), then the
+  wire error (`upstream_stream_incomplete`, 502; 504 when the relay's own idle timeout
+  fired; never retried). A stream that delivered `finish_reason` but no `[DONE]` keeps
+  the normal end (some compatible upstreams end that way). The billing rule (`!sawDone`
+  ⇒ zero) is untouched.
+- `claude.HandleStreamFinalResponse`: message mode with `!claudeInfo.Done` → the wire
+  error instead of the usage frame + `[DONE]` (OpenAI wire) / bare EOF (Claude wire).
+  Partial text is still billed (pre-existing rule; the caller received it).
+
+Locks: `helper/stream_error_test.go` (shapes, status map, `ClientListening`,
+`IncompleteStreamError`), `helper/stream_scanner_end_reason_test.go` (four reasons),
+`provider/openai/stream_incomplete_test.go` (three wires, finish-without-`[DONE]`,
+client gone, `streamSawFinish`), `provider/claude/stream_incomplete_test.go`,
+`handler/relay_inband_error_test.go` (drives `Relay` on a pre-flushed writer).
+Mutation 12/12 red.
+
+Not done / owner:
+- Native Gemini upstream (`geminiStreamHandler`) has no completeness signal; an
+  abandoned Gemini stream still ends as a bare EOF / usage frame. Needs `finishReason`
+  tracking; same shape as the Claude change.
+- Billing policy differs by path: OpenAI-compatible abandoned streams bill zero, native
+  Anthropic ones bill the partial text. Left as is (policy), documented here.
+- The non-stream Gemini error envelope (`relay.go` `c.JSON` path) still uses the OpenAI
+  shape; the SDK tolerates it. Cosmetic.
+- Live proof needs an upstream that can be made to die mid-stream; not reproducible on
+  UAT (single DeepSeek channel, balance negative).
