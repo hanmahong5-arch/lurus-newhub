@@ -42,7 +42,13 @@ func TestHandleClaudeFormat_ValidChunk_EmitsMessageStart(t *testing.T) {
 
 func TestHandleClaudeFormat_CapturesUsageOntoClaudeConvertInfo(t *testing.T) {
 	w := newRecorderCtx(t)
-	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude, SendResponseCount: 2, ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{}}
+	// ChannelMeta is always initialised in production (RelayInfo.InitChannelMeta)
+	// and the chunk's usage is now wire-stamped through applyUsagePostProcessing,
+	// which reads the channel type; a bare RelayInfo is not a production shape.
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude, SendResponseCount: 2, ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{},
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
 	data := `{"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}`
 	if err := HandleStreamFormat(w.ctx, info, data, false, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)

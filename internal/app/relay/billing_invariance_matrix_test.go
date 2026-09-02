@@ -24,6 +24,7 @@ package relay
 // site under test is the production one, not a re-implementation.
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -122,7 +123,13 @@ func matrixRows() []matrixRow {
 			relayMode: relayconstant.RelayModeChatCompletions, adaptor: func() provider.Adaptor { return &moonshot.Adaptor{} },
 			nonStream: oaiChatNonStream(`{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150,"cached_tokens":50}`),
 			stream:    oaiChatStream(`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"cached_tokens":50}}],"usage":{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150}}`),
-			formats:   []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatGemini},
+			// No Claude format here: the Moonshot adaptor serves Claude-wire
+			// clients from its Anthropic-native endpoint (claude.ClaudeStreamHandler),
+			// so these OpenAI-shaped bodies never reach the OpenAI->Claude
+			// conversion on this channel. The inline-usage finish-chunk shape this
+			// row has is locked for that conversion in
+			// provider/openai/stream_terminal_crosswire_test.go.
+			formats: []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatGemini},
 		},
 		{
 			name: "zhipu v4 (standard slot through its own adaptor)", channelType: constant.ChannelTypeZhipu_v4,
@@ -311,6 +318,309 @@ func TestBillingInvariance_CallerSeesTheCacheHitOnEveryWire(t *testing.T) {
 					_, forwarded := parseThroughAdaptor(t, row, stream, format)
 					if !strings.Contains(forwarded, cachedField[format]) {
 						t.Errorf("caller body lacks %s:\n%s", cachedField[format], forwarded)
+					}
+				})
+			}
+		}
+	}
+}
+
+// Third table (2026-09-02): the PROMPT figure the caller sees must be in the
+// caller's own wire semantics, whichever upstream wire produced it.
+//
+//   - OpenAI chat / Responses: prompt_tokens (input_tokens) is the whole prompt
+//     and cached_tokens is the subset that hit the cache -> 120 with cached 50,
+//     total_tokens = prompt + completion.
+//   - Claude: input_tokens EXCLUDES cache_read_input_tokens and
+//     cache_creation_input_tokens (mutually exclusive terms) -> 70 with
+//     cache_read 50. Streams are merged the way the official SDKs do it:
+//     message_start.usage is the base, a counter present on message_delta
+//     overwrites it, an absent one keeps it, nothing is ever added.
+//   - Gemini: promptTokenCount includes cachedContentTokenCount -> 120 with
+//     cached 50.
+//
+// Each cell then applies that wire's own cost arithmetic to the figures it
+// received and must land on matrixWantQuota (105): the caller's SDK and the
+// relay's settlement agree. A negative assertion pins that the SOURCE wire's
+// figure is absent (Claude bodies must not say input_tokens 120, OpenAI bodies
+// must not say prompt_tokens 70) so a revert is red even if the arithmetic
+// check is ever loosened.
+//
+// Mutation discipline — the two funnels are independent, and the red sets do
+// not overlap: reverting claudeTerminalUsage (app/convert.go) to the raw
+// prompt reddens only the Claude-format cells of the OpenAI and Gemini rows;
+// reverting the two AsOpenAIWire copies in provider/claude/relay-claude.go
+// reddens only the OpenAI-format cells of the Anthropic row. The first two
+// tables stay green under either mutation: they prove the money did not move.
+//
+// Same-wire passthrough keeps the vendor's dialect: an OpenAI-wire caller on
+// DeepSeek/Moonshot receives the raw upstream body, where the cache hit sits in
+// prompt_cache_hit_tokens / cached_tokens rather than
+// prompt_tokens_details.cached_tokens. The prompt figure is still OpenAI
+// semantics (120 includes the hit), so the reader below accepts those dialect
+// slots for the cached figure; normalising the slot is not part of this change.
+
+// sseDataFrames returns the payload of every SSE data line (or bare JSON line)
+// in a forwarded stream body, excluding the [DONE] terminator.
+func sseDataFrames(body string) []string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "data:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		if line == "" || line == "[DONE]" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// callerPromptFigures is the prompt-side usage a caller reads off the body it
+// received, in that wire's own fields.
+type callerPromptFigures struct {
+	prompt, cached, creation, output, total int
+}
+
+// openAIWireUsageFrame is an OpenAI-wire usage as a caller reads it, including
+// the vendor dialect slots a same-wire passthrough leaves in place.
+type openAIWireUsageFrame struct {
+	Usage *struct {
+		dto.Usage
+		VendorCachedTokens int `json:"cached_tokens"` // Moonshot non-stream slot
+	} `json:"usage"`
+	Choices []struct {
+		Usage struct {
+			CachedTokens int `json:"cached_tokens"` // Moonshot stream slot
+		} `json:"usage"`
+	} `json:"choices"`
+}
+
+func (f openAIWireUsageFrame) figures() callerPromptFigures {
+	u := f.Usage
+	cached := u.PromptTokensDetails.CachedTokens
+	if cached == 0 {
+		cached = u.PromptCacheHitTokens // DeepSeek dialect
+	}
+	if cached == 0 {
+		cached = u.VendorCachedTokens
+	}
+	for _, ch := range f.Choices {
+		if cached == 0 && ch.Usage.CachedTokens > 0 {
+			cached = ch.Usage.CachedTokens
+		}
+	}
+	return callerPromptFigures{prompt: u.PromptTokens, cached: cached, output: u.CompletionTokens, total: u.TotalTokens}
+}
+
+func openAIWireFigures(t *testing.T, stream bool, body string) callerPromptFigures {
+	t.Helper()
+	var last *openAIWireUsageFrame
+	frames := []string{body}
+	if stream {
+		frames = sseDataFrames(body)
+	}
+	for _, frame := range frames {
+		var fr openAIWireUsageFrame
+		if err := json.Unmarshal([]byte(frame), &fr); err != nil {
+			t.Fatalf("OpenAI frame %q: %v", frame, err)
+		}
+		if fr.Usage != nil && (fr.Usage.PromptTokens > 0 || fr.Usage.CompletionTokens > 0) {
+			f := fr
+			last = &f
+		}
+	}
+	if last == nil {
+		t.Fatalf("OpenAI body carried no usage:\n%s", body)
+	}
+	return last.figures()
+}
+
+type responsesWireUsage struct {
+	InputTokens        int `json:"input_tokens"`
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+func responsesWireFigures(t *testing.T, stream bool, body string) callerPromptFigures {
+	t.Helper()
+	var u responsesWireUsage
+	if !stream {
+		var r struct {
+			Usage responsesWireUsage `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(body), &r); err != nil {
+			t.Fatalf("Responses body: %v\n%s", err, body)
+		}
+		u = r.Usage
+	} else {
+		found := false
+		for _, frame := range sseDataFrames(body) {
+			var fr struct {
+				Type     string `json:"type"`
+				Response struct {
+					Usage responsesWireUsage `json:"usage"`
+				} `json:"response"`
+			}
+			if err := json.Unmarshal([]byte(frame), &fr); err != nil {
+				t.Fatalf("Responses frame %q: %v", frame, err)
+			}
+			if fr.Type == "response.completed" {
+				u = fr.Response.Usage
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("Responses stream carried no response.completed frame:\n%s", body)
+		}
+	}
+	return callerPromptFigures{prompt: u.InputTokens, cached: u.InputTokensDetails.CachedTokens, output: u.OutputTokens, total: u.TotalTokens}
+}
+
+// claudeWireFigures merges a Claude-wire stream the way the official SDK
+// accumulators do (message_start base, message_delta overwrites present
+// counters), or reads the non-stream body's usage.
+func claudeWireFigures(t *testing.T, stream bool, body string) callerPromptFigures {
+	t.Helper()
+	var merged dto.ClaudeUsage
+	if !stream {
+		var r dto.ClaudeResponse
+		if err := json.Unmarshal([]byte(body), &r); err != nil {
+			t.Fatalf("Claude body: %v\n%s", err, body)
+		}
+		if r.Usage == nil {
+			t.Fatalf("Claude body carries no usage:\n%s", body)
+		}
+		merged = *r.Usage
+	} else {
+		sawStart, sawDelta := false, false
+		for _, frame := range sseDataFrames(body) {
+			var ev struct {
+				Type    string `json:"type"`
+				Message *struct {
+					Usage *dto.ClaudeUsage `json:"usage"`
+				} `json:"message"`
+				Usage map[string]json.RawMessage `json:"usage"`
+			}
+			if err := json.Unmarshal([]byte(frame), &ev); err != nil {
+				t.Fatalf("Claude event %q: %v", frame, err)
+			}
+			switch ev.Type {
+			case "message_start":
+				if ev.Message != nil && ev.Message.Usage != nil {
+					merged = *ev.Message.Usage
+					sawStart = true
+				}
+			case "message_delta":
+				sawDelta = true
+				for key, raw := range ev.Usage {
+					var n int
+					if err := json.Unmarshal(raw, &n); err != nil {
+						continue // non-numeric (server_tool_use object)
+					}
+					switch key {
+					case "input_tokens":
+						merged.InputTokens = n
+					case "cache_read_input_tokens":
+						merged.CacheReadInputTokens = n
+					case "cache_creation_input_tokens":
+						merged.CacheCreationInputTokens = n
+					case "output_tokens":
+						merged.OutputTokens = n
+					}
+				}
+			}
+		}
+		if !sawStart || !sawDelta {
+			t.Fatalf("Claude stream lacks message_start (%v) or message_delta (%v):\n%s", sawStart, sawDelta, body)
+		}
+	}
+	return callerPromptFigures{prompt: merged.InputTokens, cached: merged.CacheReadInputTokens, creation: merged.CacheCreationInputTokens, output: merged.OutputTokens}
+}
+
+func geminiWireFigures(t *testing.T, stream bool, body string) callerPromptFigures {
+	t.Helper()
+	var um *dto.GeminiUsageMetadata
+	frames := []string{body}
+	if stream {
+		frames = sseDataFrames(body)
+	}
+	for _, frame := range frames {
+		var fr dto.GeminiChatResponse
+		if err := json.Unmarshal([]byte(frame), &fr); err != nil {
+			t.Fatalf("Gemini frame %q: %v", frame, err)
+		}
+		if fr.UsageMetadata.PromptTokenCount > 0 {
+			m := fr.UsageMetadata
+			um = &m
+		}
+	}
+	if um == nil {
+		t.Fatalf("Gemini body carried no usageMetadata:\n%s", body)
+	}
+	return callerPromptFigures{prompt: um.PromptTokenCount, cached: um.CachedContentTokenCount, output: um.CandidatesTokenCount, total: um.TotalTokenCount}
+}
+
+func TestBillingInvariance_CallerSeesThePromptInItsOwnWireSemantics(t *testing.T) {
+	prevTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 60
+	defer func() { constant.StreamingTimeout = prevTimeout }()
+
+	type wireSpec struct {
+		figures    func(*testing.T, bool, string) callerPromptFigures
+		wantPrompt int
+		wantCached int
+		// sdkCost is that wire's documented input-side arithmetic at the matrix
+		// ratios (cache read 0.1x, cache creation 1.25x), plus the output.
+		sdkCost func(callerPromptFigures) int
+		// wrong is the SOURCE wire's figure that must not appear in the body.
+		wrong string
+		// checkTotal: on includes-cached wires total_tokens = prompt + completion.
+		checkTotal bool
+	}
+	includesCached := func(f callerPromptFigures) int { return (f.prompt - f.cached) + f.cached/10 + f.output }
+	specs := map[types.RelayFormat]wireSpec{
+		types.RelayFormatOpenAI: {figures: openAIWireFigures, wantPrompt: 120, wantCached: 50, sdkCost: includesCached,
+			wrong: `"prompt_tokens":70`, checkTotal: true},
+		types.RelayFormatOpenAIResponses: {figures: responsesWireFigures, wantPrompt: 120, wantCached: 50, sdkCost: includesCached,
+			wrong: `"input_tokens":70`, checkTotal: true},
+		types.RelayFormatClaude: {figures: claudeWireFigures, wantPrompt: 70, wantCached: 50,
+			sdkCost: func(f callerPromptFigures) int { return f.prompt + f.cached/10 + f.creation*5/4 + f.output },
+			wrong:   `"input_tokens":120`},
+		types.RelayFormatGemini: {figures: geminiWireFigures, wantPrompt: 120, wantCached: 50, sdkCost: includesCached,
+			wrong: `"promptTokenCount":70`},
+	}
+
+	for _, row := range matrixRows() {
+		for _, format := range row.formats {
+			for _, stream := range []bool{false, true} {
+				name := row.name + "/" + string(format) + map[bool]string{false: "/non-stream", true: "/stream"}[stream]
+				t.Run(name, func(t *testing.T) {
+					spec, ok := specs[format]
+					if !ok {
+						t.Fatalf("no wire spec for format %s", format)
+					}
+					_, forwarded := parseThroughAdaptor(t, row, stream, format)
+					got := spec.figures(t, stream, forwarded)
+					if got.prompt != spec.wantPrompt || got.cached != spec.wantCached {
+						t.Errorf("caller prompt figure = %d with cached %d, want %d with cached %d in %s semantics; body:\n%s",
+							got.prompt, got.cached, spec.wantPrompt, spec.wantCached, format, forwarded)
+					}
+					if got.output != matrixOutput {
+						t.Errorf("caller output figure = %d, want %d", got.output, matrixOutput)
+					}
+					if spec.checkTotal && got.total != got.prompt+got.output {
+						t.Errorf("total_tokens = %d, want prompt + completion = %d", got.total, got.prompt+got.output)
+					}
+					if cost := spec.sdkCost(got); cost != matrixWantQuota {
+						t.Errorf("the caller's own %s arithmetic on the figures it received gives %d, relay charged %d", format, cost, matrixWantQuota)
+					}
+					if strings.Contains(forwarded, spec.wrong) {
+						t.Errorf("caller body carries the SOURCE wire's prompt figure %s:\n%s", spec.wrong, forwarded)
 					}
 				})
 			}
