@@ -1073,10 +1073,18 @@ func handleFinalStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.Ch
 	return nil
 }
 
-func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, *types.NewAPIError) {
+// geminiStreamHandler drives the scanner and returns the billed usage plus
+// whether the upstream finished the answer: a Gemini stream ends with a chunk
+// carrying finishReason (STOP, MAX_TOKENS, SAFETY, …); a stream that stops
+// without one was abandoned (idle timeout, reset, EOF). The partial output is
+// still billed from the last cumulative usageMetadata — the caller received
+// it — but the caller must be told (helper.StreamError), not handed a normal
+// end.
+func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, bool, *types.NewAPIError) {
 	var usage = &dto.Usage{}
 	var imageCount int
 	var streamErr *types.NewAPIError
+	var sawFinish bool
 	responseText := strings.Builder{}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string) bool {
@@ -1092,6 +1100,9 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 		// 统计图片数量
 		for _, candidate := range geminiResponse.Candidates {
+			if candidate.FinishReason != nil && *candidate.FinishReason != "" {
+				sawFinish = true
+			}
 			for _, part := range candidate.Content.Parts {
 				if part.InlineData != nil && part.InlineData.MimeType != "" {
 					imageCount++
@@ -1115,7 +1126,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	})
 
 	if streamErr != nil {
-		return nil, streamErr
+		return nil, false, streamErr
 	}
 
 	if imageCount != 0 {
@@ -1136,7 +1147,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	}
 
-	return usage, nil
+	return usage, sawFinish, nil
 }
 
 func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -1144,7 +1155,7 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	createAt := common.GetTimestamp()
 	finishReason := constant.FinishReasonStop
 
-	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
+	usage, complete, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		response, isStop := streamResponseGeminiChat2OpenAI(geminiResponse)
 
 		response.Id = id
@@ -1195,6 +1206,19 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 
 	if err != nil {
 		return usage, err
+	}
+
+	// No finishReason ever arrived: the upstream stopped mid-answer. Every
+	// chunk already went out through handleStream, so the caller gets its
+	// wire's error frame instead of the usage frame + [DONE] / Claude-wire
+	// message_stop that would dress the partial answer up as a complete one.
+	// When the caller itself hung up there is nobody left to tell.
+	if !complete && helper.ClientListening(c, info) {
+		helper.StreamError(c, info.RelayFormat, helper.IncompleteStreamError(info))
+		if info.ClaudeConvertInfo != nil {
+			info.Done = true
+		}
+		return usage, nil
 	}
 
 	response := helper.GenerateFinalUsageResponse(id, createAt, info.UpstreamModelName, *usage)

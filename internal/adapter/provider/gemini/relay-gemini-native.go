@@ -79,7 +79,7 @@ func NativeGeminiEmbeddingHandler(c *gin.Context, resp *http.Response, info *rel
 func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	helper.SetEventStreamHeaders(c)
 
-	return geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
+	usage, complete, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		err := helper.StringData(c, data)
 		if err != nil {
 			logger.LogError(c, "failed to write stream data: "+err.Error())
@@ -88,4 +88,14 @@ func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayIn
 		info.SendResponseCount++
 		return true
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Native passthrough: the frames went out verbatim, so an upstream that
+	// stopped without finishReason left the Gemini-wire caller with a bare
+	// EOF its SDK treats as a normal end. Tell it in the wire's own envelope.
+	if !complete && helper.ClientListening(c, info) {
+		helper.StreamError(c, types.RelayFormatGemini, helper.IncompleteStreamError(info))
+	}
+	return usage, nil
 }
