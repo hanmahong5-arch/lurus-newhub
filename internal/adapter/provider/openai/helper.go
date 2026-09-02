@@ -214,7 +214,7 @@ func claudeLastChunkEvents(info *relaycommon.RelayInfo, lastStreamData string, u
 	// (content, then the usage chunk) re-entered that branch here and sent a
 	// second message_start.
 	info.SendResponseCount++
-	info.ClaudeConvertInfo.Usage = usage
+	info.Usage = usage
 	// When the upstream inlines usage in its final finish chunk, the
 	// converter's terminal message_delta is built from THIS re-parsed usage
 	// (not from the billed one above), so it needs the same wire stamp and
@@ -302,7 +302,7 @@ func HandleIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo, lastStr
 					_ = helper.ClaudeData(c, *resp)
 				}
 			}
-			info.ClaudeConvertInfo.Done = true
+			info.Done = true
 		}
 	case types.RelayFormatGemini:
 		if frame, ok := geminiLastChunkFrame(info, lastStreamData, nil); ok {

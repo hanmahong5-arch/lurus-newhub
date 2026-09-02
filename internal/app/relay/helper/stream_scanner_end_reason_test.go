@@ -20,6 +20,7 @@ func TestStreamScannerHandler_RecordsEndReason(t *testing.T) {
 		c, _ := newStreamCtx()
 		info := &relaycommon.RelayInfo{}
 		resp := respFromString("data: alpha\n\ndata: [DONE]\n\n")
+		defer func() { _ = resp.Body.Close() }()
 		StreamScannerHandler(c, resp, info, func(string) bool { return true })
 		if info.StreamEndReason != "" {
 			t.Errorf("StreamEndReason = %q, want empty after the terminator", info.StreamEndReason)
@@ -30,6 +31,7 @@ func TestStreamScannerHandler_RecordsEndReason(t *testing.T) {
 		c, _ := newStreamCtx()
 		info := &relaycommon.RelayInfo{}
 		resp := respFromString("data: alpha\n\ndata: beta\n\n")
+		defer func() { _ = resp.Body.Close() }()
 		StreamScannerHandler(c, resp, info, func(string) bool { return true })
 		if info.StreamEndReason != relaycommon.StreamEndUpstreamClosed {
 			t.Errorf("StreamEndReason = %q, want %q", info.StreamEndReason, relaycommon.StreamEndUpstreamClosed)
