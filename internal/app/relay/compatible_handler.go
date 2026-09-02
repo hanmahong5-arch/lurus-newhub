@@ -222,7 +222,10 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	modelRatio := relayInfo.PriceData.ModelRatio
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
 	modelPrice := relayInfo.PriceData.ModelPrice
-	cachedCreationRatio := relayInfo.PriceData.CacheCreationRatio
+	// Wire-keyed: an OpenAI-wire cache write (cache_write_tokens) is billed at
+	// the plain input rate unless the operator listed the model; the Anthropic
+	// wire keeps the 1.25 default. See types.PriceData.CacheCreationRatioForWire.
+	cachedCreationRatio := relayInfo.PriceData.CacheCreationRatioForWire(usage.PromptTokensIncludeCached)
 	cachedCreation5mRatio := relayInfo.PriceData.CacheCreation5mRatio
 	cachedCreation1hRatio := relayInfo.PriceData.CacheCreation1hRatio
 

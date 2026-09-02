@@ -3,9 +3,9 @@ package helper
 import (
 	"fmt"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
@@ -58,6 +58,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var cacheCreationRatio float64
 	var cacheCreationRatio5m float64
 	var cacheCreationRatio1h float64
+	var cacheCreationRatioDefaulted bool
 	var audioRatio float64
 	var audioCompletionRatio float64
 	var freeModel bool
@@ -80,7 +81,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		}
 		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
 		cacheRatio, _ = ratio_setting.GetCacheRatio(info.OriginModelName)
-		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(info.OriginModelName)
+		var cacheCreationRatioListed bool
+		cacheCreationRatio, cacheCreationRatioListed = ratio_setting.GetCreateCacheRatio(info.OriginModelName)
+		cacheCreationRatioDefaulted = !cacheCreationRatioListed
 		cacheCreationRatio5m = cacheCreationRatio
 		// 固定1h和5min缓存写入价格的比例
 		cacheCreationRatio1h = cacheCreationRatio * claudeCacheCreation1hMultiplier
@@ -116,20 +119,21 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	}
 
 	priceData := types.PriceData{
-		FreeModel:            freeModel,
-		ModelPrice:           modelPrice,
-		ModelRatio:           modelRatio,
-		CompletionRatio:      completionRatio,
-		GroupRatioInfo:       groupRatioInfo,
-		UsePrice:             usePrice,
-		CacheRatio:           cacheRatio,
-		ImageRatio:           imageRatio,
-		AudioRatio:           audioRatio,
-		AudioCompletionRatio: audioCompletionRatio,
-		CacheCreationRatio:   cacheCreationRatio,
-		CacheCreation5mRatio: cacheCreationRatio5m,
-		CacheCreation1hRatio: cacheCreationRatio1h,
-		QuotaToPreConsume:    preConsumedQuota,
+		FreeModel:                   freeModel,
+		ModelPrice:                  modelPrice,
+		ModelRatio:                  modelRatio,
+		CompletionRatio:             completionRatio,
+		GroupRatioInfo:              groupRatioInfo,
+		UsePrice:                    usePrice,
+		CacheRatio:                  cacheRatio,
+		ImageRatio:                  imageRatio,
+		AudioRatio:                  audioRatio,
+		AudioCompletionRatio:        audioCompletionRatio,
+		CacheCreationRatio:          cacheCreationRatio,
+		CacheCreation5mRatio:        cacheCreationRatio5m,
+		CacheCreation1hRatio:        cacheCreationRatio1h,
+		CacheCreationRatioDefaulted: cacheCreationRatioDefaulted,
+		QuotaToPreConsume:           preConsumedQuota,
 	}
 
 	if common.DebugEnabled {

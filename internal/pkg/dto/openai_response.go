@@ -342,8 +342,15 @@ type OpenAIVideoResponse struct {
 }
 
 type InputTokenDetails struct {
-	CachedTokens         int `json:"cached_tokens"`
-	CachedCreationTokens int `json:"-"`
+	CachedTokens int `json:"cached_tokens"`
+	// CachedCreationTokens is the cache-write slice of the prompt. OpenAI's wire
+	// carries it as cache_write_tokens on both chat (prompt_tokens_details) and
+	// Responses (input_tokens_details) usage: "the unadjusted number of prompt
+	// tokens written to cache", disjoint from cached_tokens and inside
+	// prompt_tokens/input_tokens; the Anthropic wire fills it from
+	// cache_creation_input_tokens (outside input_tokens). Serialized only when
+	// non-zero so callers on models without cache writes see no new key.
+	CachedCreationTokens int `json:"cache_write_tokens,omitempty"`
 	TextTokens           int `json:"text_tokens"`
 	AudioTokens          int `json:"audio_tokens"`
 	ImageTokens          int `json:"image_tokens"`

@@ -1125,9 +1125,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 
 	usage.PromptTokensDetails.TextTokens = usage.PromptTokens
-	if usage.TotalTokens > 0 {
-		usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
-	}
+	usage.CompletionTokens = geminiCompletionTokens(*usage)
 
 	if usage.CompletionTokens <= 0 {
 		str := responseText.String()
@@ -1230,7 +1228,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	fullTextResponse := responseGeminiChat2OpenAI(c, &geminiResponse)
 	fullTextResponse.Model = info.UpstreamModelName
 	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata)
-	usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
+	usage.CompletionTokens = geminiCompletionTokens(usage)
 
 	fullTextResponse.Usage = usage
 
@@ -1353,6 +1351,27 @@ func GeminiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	}
 
 	return usage, nil
+}
+
+// geminiCompletionTokens is the completion figure settlement and the caller
+// see. The builder already has it right (candidatesTokenCount +
+// thoughtsTokenCount). Both handlers used to overwrite it with
+// totalTokenCount - PromptTokens, but PromptTokens carries
+// toolUsePromptTokenCount while totalTokenCount does not ("prompt + thoughts +
+// response candidates", ai.google.dev/api/generate-content, read 2026-09-02):
+// every grounded / tool-use call was under-counted by the tool-use prompt and
+// went negative once that exceeded the answer, and the non-streaming handler
+// fed the negative figure straight to the charge. The subtraction survives only
+// as a fallback for an upstream that reports a total but no candidate count,
+// and never below zero (the stream handler then estimates from the text).
+func geminiCompletionTokens(u dto.Usage) int {
+	if u.CompletionTokens > 0 {
+		return u.CompletionTokens
+	}
+	if derived := u.TotalTokens - u.PromptTokens; derived > 0 {
+		return derived
+	}
+	return 0
 }
 
 // buildUsageFromGeminiMetadata converts Gemini's UsageMetadata to dto.Usage.

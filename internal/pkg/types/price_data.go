@@ -17,13 +17,17 @@ type PriceData struct {
 	CacheCreationRatio   float64
 	CacheCreation5mRatio float64
 	CacheCreation1hRatio float64
-	ImageRatio           float64
-	AudioRatio           float64
-	AudioCompletionRatio float64
-	OtherRatios          map[string]float64
-	UsePrice             bool
-	QuotaToPreConsume    int // 预消耗额度
-	GroupRatioInfo       GroupRatioInfo
+	// CacheCreationRatioDefaulted is true when CacheCreationRatio is the map
+	// default because no per-model entry exists (set only by helper.ModelPriceHelper);
+	// an explicitly set ratio is always honoured. See CacheCreationRatioForWire.
+	CacheCreationRatioDefaulted bool
+	ImageRatio                  float64
+	AudioRatio                  float64
+	AudioCompletionRatio        float64
+	OtherRatios                 map[string]float64
+	UsePrice                    bool
+	QuotaToPreConsume           int // 预消耗额度
+	GroupRatioInfo              GroupRatioInfo
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {
@@ -34,6 +38,23 @@ func (p *PriceData) AddOtherRatio(key string, ratio float64) {
 		return
 	}
 	p.OtherRatios[key] = ratio
+}
+
+// CacheCreationRatioForWire returns the ratio a cache write is billed at.
+// promptIncludesCached is the wire flag stamped where the usage was parsed
+// (dto.Usage.PromptTokensIncludeCached): true on the OpenAI/Gemini wire, false
+// on the Anthropic wire. The map default behind CacheCreationRatio (1.25) is
+// Anthropic's universal write surcharge and is the right answer for any
+// unlisted Claude name. On the OpenAI wire (prompt_tokens_details /
+// input_tokens_details .cache_write_tokens, parsed since 2026-09-02) a write
+// costs the plain input rate unless the vendor says otherwise for that model
+// (GPT-5.6 and later: 1.25x, seeded in ratio_setting), so an unlisted model on
+// that wire bills writes at 1 instead of inheriting another vendor's surcharge.
+func (p *PriceData) CacheCreationRatioForWire(promptIncludesCached bool) float64 {
+	if promptIncludesCached && p.CacheCreationRatioDefaulted {
+		return 1
+	}
+	return p.CacheCreationRatio
 }
 
 type PerCallPriceData struct {
