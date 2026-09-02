@@ -125,6 +125,11 @@ type RelayInfo struct {
 	UserQuota              int
 	RelayFormat            types.RelayFormat
 	SendResponseCount      int
+	// StreamFinishReason is the last finish_reason seen while re-framing an
+	// OpenAI-wire stream for a Gemini-wire client. A content-less finish chunk
+	// is held back (openai.handleGeminiFormat) so the terminal frame — the one
+	// carrying the billed usageMetadata — is the single STOP the client sees.
+	StreamFinishReason     string
 	FinalPreConsumedQuota  int   // 最终预消耗的配额
 	IsClaudeBetaQuery      bool  // /v1/messages?beta=true
 	IdentityAccountID      int64 // lurus-platform account ID for wallet bridging (0 = not available)

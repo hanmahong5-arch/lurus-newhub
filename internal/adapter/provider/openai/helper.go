@@ -56,6 +56,16 @@ func handleGeminiFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 		return err
 	}
 
+	// A content-less finish_reason chunk with no usage is held back: the
+	// upstream was asked for stream_options.include_usage, so its usage chunk
+	// follows, and HandleFinalResponse turns that into the single STOP frame
+	// carrying the billed usageMetadata. Forwarding the finish from here gave
+	// Gemini-wire callers a STOP with estimated counts, then nothing.
+	if finish, ok := contentlessFinish(&streamResponse); ok && streamResponse.Usage == nil {
+		info.StreamFinishReason = finish
+		return nil
+	}
+
 	geminiResponse := app.StreamResponseOpenAI2Gemini(&streamResponse, info)
 
 	// 如果返回 nil，表示没有实际内容，跳过发送
@@ -73,6 +83,21 @@ func handleGeminiFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 	c.Render(-1, &common.CustomEvent{Data: "data: " + string(geminiResponseStr)})
 	_ = helper.FlushWriter(c)
 	return nil
+}
+
+// contentlessFinish reports the finish_reason of a chunk that carries one and
+// no content (no text, no tool call): the OpenAI finish frame.
+func contentlessFinish(streamResponse *dto.ChatCompletionsStreamResponse) (string, bool) {
+	finish := ""
+	for _, choice := range streamResponse.Choices {
+		if choice.Delta.GetContentString() != "" || len(choice.Delta.ToolCalls) > 0 {
+			return "", false
+		}
+		if choice.FinishReason != nil && *choice.FinishReason != "" {
+			finish = *choice.FinishReason
+		}
+	}
+	return finish, finish != ""
 }
 
 func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, responseTextBuilder *strings.Builder, toolCount *int) error {
@@ -218,9 +243,18 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 			return
 		}
 
+		// The last chunk is numbered like every other one: HandleStreamFormat
+		// counts the chunks it converts, and the converter keys its message_start
+		// branch on SendResponseCount == 1. Without this a two-chunk stream
+		// (content, then the usage chunk) re-entered that branch here and sent a
+		// second message_start.
+		info.SendResponseCount++
 		info.ClaudeConvertInfo.Usage = usage
 
 		claudeResponses := app.StreamResponseOpenAI2Claude(&streamResponse, info)
+		// Whatever the last chunk was, the Claude-wire client gets exactly one
+		// message_delta (stop_reason + billed usage) and one message_stop.
+		claudeResponses = append(claudeResponses, app.CloseClaudeStream(info)...)
 		for _, resp := range claudeResponses {
 			_ = helper.ClaudeData(c, *resp)
 		}
@@ -237,6 +271,15 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		// 因此相比较于 google 官方的流响应，由 openai 转换而来会多一个 parts 为空，finishReason 为 STOP 的响应
 		// 而包含最后一段文本输出的响应（倒数第二个）的 finishReason 为 null
 		// 暂不知是否有程序会不兼容。
+
+		// The terminal frame carries the billed usage — the same figures the
+		// OpenAI-format final frame and the consume log get — so vendor remaps
+		// (DeepSeek/Moonshot cache fields) and a usage-only last chunk both reach
+		// the caller. A zeroed usage (abnormal end, not billed) is not attached:
+		// nothing is invented for a stream that did not finish.
+		if usage != nil && (usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0) {
+			streamResponse.Usage = usage
+		}
 
 		geminiResponse := app.StreamResponseOpenAI2Gemini(&streamResponse, info)
 
