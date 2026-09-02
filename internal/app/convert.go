@@ -745,15 +745,43 @@ func extractTextFromGeminiParts(parts []dto.GeminiPart) string {
 	return strings.Join(texts, "\n")
 }
 
+// geminiUsageMetadata is the ONE place an OpenAI-wire usage becomes the
+// usageMetadata a Gemini-wire client reads — the streaming and non-streaming
+// converters below both call it, so they cannot drift (the same defect class
+// that left non-streamed Claude replies without cache figures; see
+// claudeTerminalUsage).
+//
+// Field semantics differ between the two wires and are normalised here:
+//   - OpenAI completion_tokens INCLUDES reasoning; Gemini reports thoughts
+//     separately and candidatesTokenCount EXCLUDES them.
+//   - Both wires count cached tokens inside the prompt total, so
+//     cachedContentTokenCount is a straight copy of cached_tokens.
+//
+// provider/gemini.buildUsageFromGeminiMetadata is the inverse; the round-trip
+// test in that package pins the two against each other.
+func geminiUsageMetadata(u *dto.Usage) dto.GeminiUsageMetadata {
+	if u == nil {
+		return dto.GeminiUsageMetadata{}
+	}
+	reasoning := u.CompletionTokenDetails.ReasoningTokens
+	total := u.TotalTokens
+	if total == 0 {
+		total = u.PromptTokens + u.CompletionTokens
+	}
+	return dto.GeminiUsageMetadata{
+		PromptTokenCount:        u.PromptTokens,
+		CandidatesTokenCount:    u.CompletionTokens - reasoning,
+		ThoughtsTokenCount:      reasoning,
+		TotalTokenCount:         total,
+		CachedContentTokenCount: u.PromptTokensDetails.CachedTokens,
+	}
+}
+
 // ResponseOpenAI2Gemini 将 OpenAI 响应转换为 Gemini 格式
 func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relaycommon.RelayInfo) *dto.GeminiChatResponse {
 	geminiResponse := &dto.GeminiChatResponse{
-		Candidates: make([]dto.GeminiChatCandidate, 0, len(openAIResponse.Choices)),
-		UsageMetadata: dto.GeminiUsageMetadata{
-			PromptTokenCount:     openAIResponse.PromptTokens,
-			CandidatesTokenCount: openAIResponse.CompletionTokens,
-			TotalTokenCount:      openAIResponse.PromptTokens + openAIResponse.CompletionTokens,
-		},
+		Candidates:    make([]dto.GeminiChatCandidate, 0, len(openAIResponse.Choices)),
+		UsageMetadata: geminiUsageMetadata(&openAIResponse.Usage),
 	}
 
 	for _, choice := range openAIResponse.Choices {
@@ -853,9 +881,7 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 	}
 
 	if openAIResponse.Usage != nil {
-		geminiResponse.UsageMetadata.PromptTokenCount = openAIResponse.Usage.PromptTokens
-		geminiResponse.UsageMetadata.CandidatesTokenCount = openAIResponse.Usage.CompletionTokens
-		geminiResponse.UsageMetadata.TotalTokenCount = openAIResponse.Usage.TotalTokens
+		geminiResponse.UsageMetadata = geminiUsageMetadata(openAIResponse.Usage)
 	}
 
 	for _, choice := range openAIResponse.Choices {

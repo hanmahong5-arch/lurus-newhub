@@ -58,6 +58,14 @@ var defaultCacheRatio = map[string]float64{
 	"claude-sonnet-4-5-20250929-thinking": 0.1,
 	"claude-opus-4-5-20251101":            0.1,
 	"claude-opus-4-5-20251101-thinking":   0.1,
+	// Gemini context-cache read price, borrowed from upstream New API
+	// setting/ratio_setting/cache_ratio.go (2026-09-01). Only the models upstream
+	// lists are seeded; older Gemini families keep the map default of 1 until an
+	// operator sets a ratio, which is money-neutral: cached tokens are then
+	// priced exactly as they were before cachedContentTokenCount was parsed.
+	"gemini-3-flash-preview": 0.1,
+	"gemini-3-pro-preview":   0.1,
+	"gemini-3.1-pro-preview": 0.1,
 }
 
 var defaultCreateCacheRatio = map[string]float64{

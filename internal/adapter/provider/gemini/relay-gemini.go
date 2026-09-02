@@ -10,14 +10,14 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/openai"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider/openai"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/reasoning"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
@@ -1104,12 +1104,11 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 		// 更新使用量统计
 		if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
-			built := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata)
-			usage.PromptTokens = built.PromptTokens
-			usage.CompletionTokens = built.CompletionTokens
-			usage.CompletionTokenDetails = built.CompletionTokenDetails
-			usage.TotalTokens = built.TotalTokens
-			usage.PromptTokensDetails = built.PromptTokensDetails
+			// Whole-value assignment on purpose: this used to copy five named
+			// fields and silently dropped whatever the builder learned to fill
+			// later (the wire-semantics flag would have been the next casualty).
+			// `usage` has no state of its own before this point.
+			*usage = buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata)
 		}
 
 		return callback(data, &geminiResponse)
@@ -1365,11 +1364,20 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata) dto.Usage {
 		TotalTokens:      metadata.TotalTokenCount,
 	}
 	usage.CompletionTokenDetails.ReasoningTokens = metadata.ThoughtsTokenCount
+	// Gemini reports the cached slice INSIDE promptTokenCount (same wire
+	// semantics as OpenAI's prompt_tokens/cached_tokens), so the billing base
+	// must subtract it once — stamp the flag the settlement paths key on
+	// (dto.Usage.PromptTokensIncludeCached). Until 2026-09-01 the field was not
+	// even parsed: cache hits were billed at full input price and the caller
+	// never saw a cached_tokens figure to reconcile against.
+	usage.PromptTokensDetails.CachedTokens = metadata.CachedContentTokenCount
+	usage.PromptTokensIncludeCached = true
 	for _, detail := range metadata.PromptTokensDetails {
-		if detail.Modality == "AUDIO" {
-			usage.PromptTokensDetails.AudioTokens = detail.TokenCount
-		} else if detail.Modality == "TEXT" {
-			usage.PromptTokensDetails.TextTokens = detail.TokenCount
+		switch detail.Modality {
+		case "AUDIO":
+			usage.PromptTokensDetails.AudioTokens += detail.TokenCount
+		case "TEXT":
+			usage.PromptTokensDetails.TextTokens += detail.TokenCount
 		}
 	}
 	return usage
