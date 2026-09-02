@@ -414,13 +414,10 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 	}
 
 	if len(openAIResponse.Choices) == 0 {
-		// No choices: either a non-standard frame (ignored) or the
-		// stream_options.include_usage chunk that follows the finish_reason
-		// chunk. Once a finish has been seen the content_block_stop is already
-		// out and this chunk is what closes the message.
-		if info.FinishReason != "" {
-			return claudeTerminalEvents(openAIResponse, info)
-		}
+		// No choices: a non-standard frame, or the stream_options.include_usage
+		// chunk that follows the finish_reason chunk. Nothing is emitted for it
+		// here; it is always the last frame, and HandleFinalResponse closes the
+		// message from it via CloseClaudeStream with the billed usage.
 		return claudeResponses
 	} else {
 		chosenChoice := openAIResponse.Choices[0]
