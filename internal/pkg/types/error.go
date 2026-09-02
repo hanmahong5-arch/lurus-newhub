@@ -82,9 +82,13 @@ const (
 	ErrorCodeBadResponse            ErrorCode = "bad_response"
 	ErrorCodeBadResponseBody        ErrorCode = "bad_response_body"
 	ErrorCodeEmptyResponse          ErrorCode = "empty_response"
-	ErrorCodeAwsInvokeError         ErrorCode = "aws_invoke_error"
-	ErrorCodeModelNotFound          ErrorCode = "model_not_found"
-	ErrorCodePromptBlocked          ErrorCode = "prompt_blocked"
+	// ErrorCodeUpstreamStreamIncomplete: the upstream stream stopped before
+	// signalling completion (no terminator and no finish reason). Surfaced
+	// in-band on an already-started stream; never billed.
+	ErrorCodeUpstreamStreamIncomplete ErrorCode = "upstream_stream_incomplete"
+	ErrorCodeAwsInvokeError           ErrorCode = "aws_invoke_error"
+	ErrorCodeModelNotFound            ErrorCode = "model_not_found"
+	ErrorCodePromptBlocked            ErrorCode = "prompt_blocked"
 
 	// sql error
 	ErrorCodeQueryDataError  ErrorCode = "query_data_error"

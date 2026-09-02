@@ -42,7 +42,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		return
 	}
 
+	var terminalSeen atomic.Bool
 	setTerminalMarkerSeen := func() {
+		terminalSeen.Store(true)
 		if len(sawTerminalMarker) > 0 && sawTerminalMarker[0] != nil {
 			*sawTerminalMarker[0] = true
 		}
@@ -311,15 +313,24 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	})
 
 	// 主循环等待完成或超时
+	// The reason is recorded on info for the handlers: an upstream that
+	// stops without its terminator must reach the caller as an error frame,
+	// not as an invented normal end (openai.HandleIncompleteStream,
+	// claude.HandleStreamFinalResponse).
 	select {
 	case <-ticker.C:
 		// 超时处理逻辑
 		logger.LogError(c, "streaming timeout")
+		info.StreamEndReason = relaycommon.StreamEndTimeout
 	case <-stopChan:
 		// 正常结束
 		logger.LogInfo(c, "streaming finished")
+		if !terminalSeen.Load() {
+			info.StreamEndReason = relaycommon.StreamEndUpstreamClosed
+		}
 	case <-c.Request.Context().Done():
 		// 客户端断开连接
 		logger.LogInfo(c, "client disconnected")
+		info.StreamEndReason = relaycommon.StreamEndClientGone
 	}
 }

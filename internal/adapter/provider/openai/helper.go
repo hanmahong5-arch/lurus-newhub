@@ -197,6 +197,123 @@ func processCompletions(streamResp string, streamItems []string, responseTextBui
 	return nil
 }
 
+// claudeLastChunkEvents converts the held-back last chunk of an OpenAI-wire
+// stream for a Claude-wire client. Shared by the normal end
+// (HandleFinalResponse, which then closes the stream) and the incomplete end
+// (HandleIncompleteStream, which then sends the error frame).
+func claudeLastChunkEvents(info *relaycommon.RelayInfo, lastStreamData string, usage *dto.Usage) ([]*dto.ClaudeResponse, bool) {
+	var streamResponse dto.ChatCompletionsStreamResponse
+	if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
+		common.SysLog("error unmarshalling stream response: " + err.Error())
+		return nil, false
+	}
+
+	// The last chunk is numbered like every other one: HandleStreamFormat
+	// counts the chunks it converts, and the converter keys its message_start
+	// branch on SendResponseCount == 1. Without this a two-chunk stream
+	// (content, then the usage chunk) re-entered that branch here and sent a
+	// second message_start.
+	info.SendResponseCount++
+	info.ClaudeConvertInfo.Usage = usage
+	// When the upstream inlines usage in its final finish chunk, the
+	// converter's terminal message_delta is built from THIS re-parsed usage
+	// (not from the billed one above), so it needs the same wire stamp and
+	// vendor remaps; see handleClaudeFormat. Idempotent on the standard
+	// usage-only last chunk.
+	if streamResponse.Usage != nil {
+		applyUsagePostProcessing(info, streamResponse.Usage, common.StringToByteSlice(lastStreamData))
+	}
+
+	return app.StreamResponseOpenAI2Claude(&streamResponse, info), true
+}
+
+// geminiLastChunkFrame converts the held-back last chunk of an OpenAI-wire
+// stream into the Gemini-wire frame, attaching the billed usage when there is
+// one. Returns false when the chunk carries nothing worth a frame.
+func geminiLastChunkFrame(info *relaycommon.RelayInfo, lastStreamData string, usage *dto.Usage) (string, bool) {
+	var streamResponse dto.ChatCompletionsStreamResponse
+	if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
+		common.SysLog("error unmarshalling stream response: " + err.Error())
+		return "", false
+	}
+
+	// 这里处理的是 openai 最后一个流响应，其 delta 为空，有 finish_reason 字段
+	// 因此相比较于 google 官方的流响应，由 openai 转换而来会多一个 parts 为空，finishReason 为 STOP 的响应
+	// 而包含最后一段文本输出的响应（倒数第二个）的 finishReason 为 null
+	// 暂不知是否有程序会不兼容。
+
+	// The terminal frame carries the billed usage — the same figures the
+	// OpenAI-format final frame and the consume log get — so vendor remaps
+	// (DeepSeek/Moonshot cache fields) and a usage-only last chunk both reach
+	// the caller. A zeroed usage (abnormal end, not billed) is not attached:
+	// nothing is invented for a stream that did not finish.
+	if usage != nil && (usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0) {
+		streamResponse.Usage = usage
+	}
+
+	geminiResponse := app.StreamResponseOpenAI2Gemini(&streamResponse, info)
+
+	// openai 流响应开头的空数据
+	if geminiResponse == nil {
+		return "", false
+	}
+
+	geminiResponseStr, err := common.Marshal(geminiResponse)
+	if err != nil {
+		common.SysLog("error marshalling gemini response: " + err.Error())
+		return "", false
+	}
+	return string(geminiResponseStr), true
+}
+
+// streamSawFinish reports whether any chunk of the stream carried a
+// finish_reason. Only consulted for streams that ended without [DONE]; it
+// walks from the end because the finish frame is the last or second-to-last
+// chunk of a normal stream.
+func streamSawFinish(streamItems []string) bool {
+	for i := len(streamItems) - 1; i >= 0; i-- {
+		var chunk dto.ChatCompletionsStreamResponse
+		if err := common.Unmarshal(common.StringToByteSlice(streamItems[i]), &chunk); err != nil {
+			continue
+		}
+		for _, choice := range chunk.Choices {
+			if choice.FinishReason != nil && *choice.FinishReason != "" && *choice.FinishReason != "null" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HandleIncompleteStream is HandleFinalResponse's counterpart for a stream the
+// upstream never finished: no [DONE] and no finish_reason. The held-back last
+// chunk is still forwarded (it is real content the caller should have), then
+// the caller gets its wire's in-band error instead of an invented normal end.
+// Before this every wire read as a complete answer: the Claude wire got
+// message_delta{stop_reason:end_turn} + message_stop, the OpenAI wire a
+// zero-usage frame + [DONE], the Gemini wire a bare EOF. Nothing is billed for
+// such a stream (the caller zeroes usage), so nothing is quoted either.
+func HandleIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo, lastStreamData string) {
+	switch info.RelayFormat {
+	case types.RelayFormatClaude:
+		if info.ClaudeConvertInfo != nil {
+			if claudeResponses, ok := claudeLastChunkEvents(info, lastStreamData, &dto.Usage{}); ok {
+				for _, resp := range claudeResponses {
+					_ = helper.ClaudeData(c, *resp)
+				}
+			}
+			info.ClaudeConvertInfo.Done = true
+		}
+	case types.RelayFormatGemini:
+		if frame, ok := geminiLastChunkFrame(info, lastStreamData, nil); ok {
+			c.Render(-1, &common.CustomEvent{Data: "data: " + frame})
+			_ = helper.FlushWriter(c)
+		}
+	}
+	// OpenAI wire: the last chunk already went out through sendFinalStreamData.
+	helper.StreamError(c, info.RelayFormat, helper.IncompleteStreamError(info))
+}
+
 func handleLastResponse(lastStreamData string, responseId *string, createAt *int64,
 	systemFingerprint *string, model *string, usage **dto.Usage,
 	containStreamUsage *bool, info *relaycommon.RelayInfo,
@@ -243,29 +360,10 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		helper.Done(c)
 
 	case types.RelayFormatClaude:
-		var streamResponse dto.ChatCompletionsStreamResponse
-		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
+		claudeResponses, ok := claudeLastChunkEvents(info, lastStreamData, usage)
+		if !ok {
 			return
 		}
-
-		// The last chunk is numbered like every other one: HandleStreamFormat
-		// counts the chunks it converts, and the converter keys its message_start
-		// branch on SendResponseCount == 1. Without this a two-chunk stream
-		// (content, then the usage chunk) re-entered that branch here and sent a
-		// second message_start.
-		info.SendResponseCount++
-		info.ClaudeConvertInfo.Usage = usage
-		// When the upstream inlines usage in its final finish chunk, the
-		// converter's terminal message_delta is built from THIS re-parsed usage
-		// (not from the billed one above), so it needs the same wire stamp and
-		// vendor remaps; see handleClaudeFormat. Idempotent on the standard
-		// usage-only last chunk.
-		if streamResponse.Usage != nil {
-			applyUsagePostProcessing(info, streamResponse.Usage, common.StringToByteSlice(lastStreamData))
-		}
-
-		claudeResponses := app.StreamResponseOpenAI2Claude(&streamResponse, info)
 		// Whatever the last chunk was, the Claude-wire client gets exactly one
 		// message_delta (stop_reason + billed usage) and one message_stop.
 		claudeResponses = append(claudeResponses, app.CloseClaudeStream(info)...)
@@ -275,36 +373,8 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		info.ClaudeConvertInfo.Done = true
 
 	case types.RelayFormatGemini:
-		var streamResponse dto.ChatCompletionsStreamResponse
-		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
-			return
-		}
-
-		// 这里处理的是 openai 最后一个流响应，其 delta 为空，有 finish_reason 字段
-		// 因此相比较于 google 官方的流响应，由 openai 转换而来会多一个 parts 为空，finishReason 为 STOP 的响应
-		// 而包含最后一段文本输出的响应（倒数第二个）的 finishReason 为 null
-		// 暂不知是否有程序会不兼容。
-
-		// The terminal frame carries the billed usage — the same figures the
-		// OpenAI-format final frame and the consume log get — so vendor remaps
-		// (DeepSeek/Moonshot cache fields) and a usage-only last chunk both reach
-		// the caller. A zeroed usage (abnormal end, not billed) is not attached:
-		// nothing is invented for a stream that did not finish.
-		if usage != nil && (usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0) {
-			streamResponse.Usage = usage
-		}
-
-		geminiResponse := app.StreamResponseOpenAI2Gemini(&streamResponse, info)
-
-		// openai 流响应开头的空数据
-		if geminiResponse == nil {
-			return
-		}
-
-		geminiResponseStr, err := common.Marshal(geminiResponse)
-		if err != nil {
-			common.SysLog("error marshalling gemini response: " + err.Error())
+		geminiResponseStr, ok := geminiLastChunkFrame(info, lastStreamData, usage)
+		if !ok {
 			return
 		}
 

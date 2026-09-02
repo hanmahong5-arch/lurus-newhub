@@ -761,6 +761,16 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		c.Set("claude_web_search_requests", claudeInfo.WebSearchRequests)
 	}
 
+	// No message_delta ever arrived: the upstream stopped mid-answer. The
+	// partial text is billed above (the caller received it), and the caller
+	// is told it is partial — before this the OpenAI wire got a usage frame +
+	// [DONE] and the Claude wire a bare EOF, both of which read as a normal
+	// end. When the caller itself hung up there is nobody left to tell.
+	if requestMode != RequestModeCompletion && !claudeInfo.Done && helper.ClientListening(c, info) {
+		helper.StreamError(c, info.RelayFormat, helper.IncompleteStreamError(info))
+		return
+	}
+
 	if info.RelayFormat == types.RelayFormatClaude {
 		//
 	} else if info.RelayFormat == types.RelayFormatOpenAI {

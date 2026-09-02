@@ -6,14 +6,14 @@ import (
 	"net/http"
 	"strings"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/openrouter"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider/openrouter"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -259,6 +259,17 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
+
+	// No terminator and no finish_reason: the upstream stopped mid-answer
+	// (idle timeout, reset, EOF). The caller gets its wire's error frame
+	// instead of an invented normal end. A stream that delivered its
+	// finish_reason but no [DONE] is complete for the caller and keeps the
+	// normal end (it is still not billed, above). When the caller itself hung
+	// up there is nobody left to tell.
+	if !sawDone && !streamSawFinish(streamItems) && helper.ClientListening(c, info) {
+		HandleIncompleteStream(c, info, lastStreamData)
+		return usage, nil
+	}
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 

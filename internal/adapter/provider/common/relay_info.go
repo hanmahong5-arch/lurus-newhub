@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -79,6 +79,14 @@ type TokenCountMeta struct {
 	estimatePromptTokens int
 }
 
+// How helper.StreamScannerHandler saw the upstream stream stop; see
+// RelayInfo.StreamEndReason.
+const (
+	StreamEndTimeout        = "streaming_timeout" // no upstream frame within StreamingTimeout
+	StreamEndUpstreamClosed = "upstream_closed"   // upstream body ended (EOF/reset) before the terminator
+	StreamEndClientGone     = "client_gone"       // the caller hung up first
+)
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -102,44 +110,51 @@ type RelayInfo struct {
 	// X-Lurus-Product header; empty on paths that don't resolve it (callers
 	// fall back to the default product id). Carried here because the wallet
 	// settlement path (PostConsumeQuota) has no gin.Context.
-	SourceProduct          string
+	SourceProduct string
 	// ProjectId is the cost-attribution project of the authenticated token
 	// (migration 029); 0 = unassigned. Carried here for the same reason as
 	// SourceProduct above: the settlement path (PostConsumeQuota ->
 	// EnrichLogParams -> RecordConsumeLog) has no gin.Context to read from.
 	// It is a label, never an authorization input.
-	ProjectId              int
-	RequestURLPath         string
-	ShouldIncludeUsage     bool
-	DisablePing            bool // 是否禁止向下游发送自定义 Ping
-	ClientWs               *websocket.Conn
-	TargetWs               *websocket.Conn
-	InputAudioFormat       string
-	OutputAudioFormat      string
-	RealtimeTools          []dto.RealTimeTool
-	IsFirstRequest         bool
-	AudioUsage             bool
-	ReasoningEffort        string
-	UserSetting            dto.UserSetting
-	UserEmail              string
-	UserQuota              int
-	RelayFormat            types.RelayFormat
-	SendResponseCount      int
+	ProjectId          int
+	RequestURLPath     string
+	ShouldIncludeUsage bool
+	DisablePing        bool // 是否禁止向下游发送自定义 Ping
+	ClientWs           *websocket.Conn
+	TargetWs           *websocket.Conn
+	InputAudioFormat   string
+	OutputAudioFormat  string
+	RealtimeTools      []dto.RealTimeTool
+	IsFirstRequest     bool
+	AudioUsage         bool
+	ReasoningEffort    string
+	UserSetting        dto.UserSetting
+	UserEmail          string
+	UserQuota          int
+	RelayFormat        types.RelayFormat
+	SendResponseCount  int
 	// StreamFinishReason is the last finish_reason seen while re-framing an
 	// OpenAI-wire stream for a Gemini-wire client. A content-less finish chunk
 	// is held back (openai.handleGeminiFormat) so the terminal frame — the one
 	// carrying the billed usageMetadata — is the single STOP the client sees.
-	StreamFinishReason     string
-	FinalPreConsumedQuota  int   // 最终预消耗的配额
-	IsClaudeBetaQuery      bool  // /v1/messages?beta=true
-	IdentityAccountID      int64 // lurus-platform account ID for wallet bridging (0 = not available)
-	PlatformPreAuthID      int64 // Pre-authorization ID from platform wallet (0 = not using pre-auth)
+	StreamFinishReason string
+	// StreamEndReason is how the upstream stream stopped, recorded by
+	// helper.StreamScannerHandler: "" when the OpenAI-wire terminator
+	// ([DONE]) arrived, otherwise one of the StreamEnd* values. Wires with no
+	// terminator (Anthropic, Gemini) read StreamEndUpstreamClosed on every
+	// normal end too, so each handler pairs it with its own completeness
+	// signal (finish_reason seen, message_delta seen).
+	StreamEndReason       string
+	FinalPreConsumedQuota int   // 最终预消耗的配额
+	IsClaudeBetaQuery     bool  // /v1/messages?beta=true
+	IdentityAccountID     int64 // lurus-platform account ID for wallet bridging (0 = not available)
+	PlatformPreAuthID     int64 // Pre-authorization ID from platform wallet (0 = not using pre-auth)
 	// PlatformGoverned marks a request the platform wallet ADMITTED — set on
 	// every platformPreAuthorize admit path (real pre-auth, high-balance skip,
 	// degraded-cache admit). LOCAL_LEDGER_ADVISORY only relaxes the local
 	// quota gate for governed requests; unlinked/legacy traffic keeps the full
 	// local gate so advisory mode can never open a free-ride door.
-	PlatformGoverned       bool
+	PlatformGoverned bool
 
 	PriceData types.PriceData
 
