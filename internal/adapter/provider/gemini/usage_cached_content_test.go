@@ -67,8 +67,8 @@ func TestGeminiChatHandler_CachedContentReachesLedgerAndCaller(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("body not OpenAI JSON: %v (%s)", err, w.Body.String())
 	}
-	if out.Usage.PromptTokensDetails.CachedTokens != 700 {
-		t.Errorf("caller sees prompt_tokens_details.cached_tokens=%d, want 700 — the customer cannot reconcile a cache discount they cannot see", out.Usage.PromptTokensDetails.CachedTokens)
+	if out.PromptTokensDetails.CachedTokens != 700 {
+		t.Errorf("caller sees prompt_tokens_details.cached_tokens=%d, want 700 — the customer cannot reconcile a cache discount they cannot see", out.PromptTokensDetails.CachedTokens)
 	}
 }
 
