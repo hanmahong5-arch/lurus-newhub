@@ -58,13 +58,13 @@ func TestHandleClaudeResponseData_OpenAIWire_PromptTokensIncludeCacheTerms(t *te
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("caller body is not an OpenAI response: %v\n%s", err, w.Body.String())
 	}
-	if out.Usage.PromptTokens != 16 || out.Usage.CompletionTokens != 7 || out.Usage.TotalTokens != 23 {
+	if out.PromptTokens != 16 || out.CompletionTokens != 7 || out.TotalTokens != 23 {
 		t.Errorf("caller usage = prompt %d / completion %d / total %d, want 16 / 7 / 23 "+
 			"(OpenAI prompt_tokens is the whole prompt: 11 + 3 read + 2 creation)",
-			out.Usage.PromptTokens, out.Usage.CompletionTokens, out.Usage.TotalTokens)
+			out.PromptTokens, out.CompletionTokens, out.TotalTokens)
 	}
-	if out.Usage.PromptTokensDetails.CachedTokens != 3 {
-		t.Errorf("caller cached_tokens = %d, want 3", out.Usage.PromptTokensDetails.CachedTokens)
+	if out.PromptTokensDetails.CachedTokens != 3 {
+		t.Errorf("caller cached_tokens = %d, want 3", out.PromptTokensDetails.CachedTokens)
 	}
 	if strings.Contains(w.Body.String(), `"prompt_tokens":11`) {
 		t.Errorf("caller body still carries the Anthropic input_tokens as prompt_tokens:\n%s", w.Body.String())
