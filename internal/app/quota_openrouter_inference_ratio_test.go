@@ -5,6 +5,7 @@ import (
 	"time"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
@@ -32,6 +33,12 @@ func TestPostClaudeConsumeQuota_OpenRouterInferenceKeepsConfiguredRatio(t *testi
 		t.Skip("no default model ratios available")
 	}
 
+	// Cost chosen so the inference solves to exactly 300 creation tokens (the
+	// formula in CalcOpenRouterCacheCreateTokens with ratio 2, read 0.5,
+	// completion 3): cost = q·(1000 − 100·0.5 + 100·3 + 300), q = modelRatio/QuotaPerUnit.
+	q := modelRatio / common.QuotaPerUnit
+	cost := q * (1000 - 100*0.5 + 100*3 + 300)
+
 	charge := func(defaulted bool) int {
 		userId := seedTestUser(t, db, 100_000_000)
 		key, tokenId := seedTestToken(t, db, userId, 100_000_000, false)
@@ -39,7 +46,7 @@ func TestPostClaudeConsumeQuota_OpenRouterInferenceKeepsConfiguredRatio(t *testi
 			PromptTokens: 1000, CompletionTokens: 100, TotalTokens: 1100,
 			PromptTokensIncludeCached: true,
 			PromptTokensDetails:       dto.InputTokenDetails{CachedTokens: 100},
-			Cost:                      float64(0.5),
+			Cost:                      cost,
 		}
 		relayInfo := &relaycommon.RelayInfo{
 			UserId: userId, TokenId: tokenId, TokenKey: key,
