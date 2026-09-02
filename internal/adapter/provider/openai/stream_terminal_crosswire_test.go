@@ -95,7 +95,9 @@ func TestOaiStreamHandler_ClaudeWire_TrailingUsageChunkClosesTheMessage(t *testi
 	w := newRecorderCtx(t)
 	info := crossWireInfo(types.RelayFormatClaude)
 
-	usage, apiErr := OaiStreamHandler(w.ctx, info, crossWireStandardStream())
+	resp := crossWireStandardStream()
+	defer func() { _ = resp.Body.Close() }()
+	usage, apiErr := OaiStreamHandler(w.ctx, info, resp)
 	if apiErr != nil {
 		t.Fatalf("handler: %v", apiErr.Error())
 	}
@@ -139,6 +141,7 @@ func TestOaiStreamHandler_ClaudeWire_NoUsageChunkStillCloses(t *testing.T) {
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`,
 		"[DONE]",
 	)
+	defer func() { _ = resp.Body.Close() }()
 	if _, apiErr := OaiStreamHandler(w.ctx, info, resp); apiErr != nil {
 		t.Fatalf("handler: %v", apiErr.Error())
 	}
@@ -163,6 +166,7 @@ func TestOaiStreamHandler_ClaudeWire_NoFinishReasonIsClosedAtEnd(t *testing.T) {
 		crossWireUsageChunk,
 		"[DONE]",
 	)
+	defer func() { _ = resp.Body.Close() }()
 	if _, apiErr := OaiStreamHandler(w.ctx, info, resp); apiErr != nil {
 		t.Fatalf("handler: %v", apiErr.Error())
 	}
@@ -203,7 +207,9 @@ func TestOaiStreamHandler_GeminiWire_SingleStopFrameCarriesBilledUsage(t *testin
 	w := newRecorderCtx(t)
 	info := crossWireInfo(types.RelayFormatGemini)
 
-	if _, apiErr := OaiStreamHandler(w.ctx, info, crossWireStandardStream()); apiErr != nil {
+	resp := crossWireStandardStream()
+	defer func() { _ = resp.Body.Close() }()
+	if _, apiErr := OaiStreamHandler(w.ctx, info, resp); apiErr != nil {
 		t.Fatalf("handler: %v", apiErr.Error())
 	}
 	frames := geminiFrames(t, w.rec.Body.String())
@@ -239,13 +245,14 @@ func TestOaiStreamHandler_GeminiWire_TerminalFrameShowsRemappedCache(t *testing.
 	withStreamingTimeout(t)
 	w := newRecorderCtx(t)
 	info := crossWireInfo(types.RelayFormatGemini)
-	info.ChannelMeta.ChannelType = constant.ChannelTypeDeepSeek
+	info.ChannelType = constant.ChannelTypeDeepSeek
 	resp := crossWireSSE(
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}`,
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150,"prompt_cache_hit_tokens":50,"prompt_cache_miss_tokens":70}}`,
 		"[DONE]",
 	)
+	defer func() { _ = resp.Body.Close() }()
 	if _, apiErr := OaiStreamHandler(w.ctx, info, resp); apiErr != nil {
 		t.Fatalf("handler: %v", apiErr.Error())
 	}

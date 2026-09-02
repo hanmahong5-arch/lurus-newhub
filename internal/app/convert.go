@@ -247,12 +247,12 @@ func claudeTerminalUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 func claudeTerminalEvents(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) []*dto.ClaudeResponse {
 	oaiUsage := openAIResponse.Usage
 	if oaiUsage == nil {
-		oaiUsage = info.ClaudeConvertInfo.Usage
+		oaiUsage = info.Usage
 	}
 	if oaiUsage == nil {
 		return nil
 	}
-	info.ClaudeConvertInfo.Done = true
+	info.Done = true
 	return []*dto.ClaudeResponse{
 		{
 			Type:  "message_delta",
@@ -274,18 +274,18 @@ func claudeTerminalEvents(openAIResponse *dto.ChatCompletionsStreamResponse, inf
 // of StreamResponseOpenAI2Claude emit content_block_stop in the same call that
 // records it.
 func CloseClaudeStream(info *relaycommon.RelayInfo) []*dto.ClaudeResponse {
-	if info.ClaudeConvertInfo == nil || info.ClaudeConvertInfo.Done {
+	if info.ClaudeConvertInfo == nil || info.Done {
 		return nil
 	}
 	var out []*dto.ClaudeResponse
 	if info.FinishReason == "" {
-		if info.ClaudeConvertInfo.LastMessagesType != "" {
-			out = append(out, generateStopBlock(info.ClaudeConvertInfo.Index))
+		if info.LastMessagesType != "" {
+			out = append(out, generateStopBlock(info.Index))
 		}
 		info.FinishReason = "stop"
 	}
-	if info.ClaudeConvertInfo.Usage == nil {
-		info.ClaudeConvertInfo.Usage = &dto.Usage{}
+	if info.Usage == nil {
+		info.Usage = &dto.Usage{}
 	}
 	return append(out, claudeTerminalEvents(&dto.ChatCompletionsStreamResponse{}, info)...)
 }
