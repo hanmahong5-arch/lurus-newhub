@@ -46,7 +46,7 @@ func EstimateQuotaFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	dCompletionRatio := decimal.NewFromFloat(relayInfo.PriceData.CompletionRatio)
 	dCacheRatio := decimal.NewFromFloat(relayInfo.PriceData.CacheRatio)
 	dImageRatio := decimal.NewFromFloat(relayInfo.PriceData.ImageRatio)
-	dCachedCreationRatio := decimal.NewFromFloat(relayInfo.PriceData.CacheCreationRatio)
+	dCachedCreationRatio := decimal.NewFromFloat(relayInfo.PriceData.CacheCreationRatioForWire(usage.PromptTokensIncludeCached))
 
 	ratio := dModelRatio.Mul(dGroupRatio)
 

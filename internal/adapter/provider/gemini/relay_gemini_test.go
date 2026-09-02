@@ -555,10 +555,12 @@ func TestBuildUsageFromGeminiMetadata(t *testing.T) {
 	}
 }
 
-// TestBuildUsageFromGeminiMetadata_RecalculationNote documents the known
-// inconsistency (BUG-3): the helper computes CompletionTokens as
-// CandidatesTokenCount + ThoughtsTokenCount, but some callers overwrite it
-// with TotalTokens - PromptTokens. This test records the discrepancy.
+// TestBuildUsageFromGeminiMetadata_RecalculationNote: the helper computes
+// CompletionTokens as CandidatesTokenCount + ThoughtsTokenCount. Until
+// 2026-09-02 both handlers overwrote it with TotalTokens - PromptTokens, which
+// is wrong whenever toolUsePromptTokenCount is non-zero (it is inside
+// PromptTokens, outside totalTokenCount); they now keep the helper figure via
+// geminiCompletionTokens (tool_use_completion_test.go).
 func TestBuildUsageFromGeminiMetadata_RecalculationNote(t *testing.T) {
 	metadata := dto.GeminiUsageMetadata{
 		PromptTokenCount:        100,

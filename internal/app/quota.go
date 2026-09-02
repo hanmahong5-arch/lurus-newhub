@@ -303,7 +303,9 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	cacheRatio := relayInfo.PriceData.CacheRatio
 	cacheTokens := usage.PromptTokensDetails.CachedTokens
 
-	cacheCreationRatio := relayInfo.PriceData.CacheCreationRatio
+	// Wire-keyed, same rule as relay/compatible_handler.go/postConsumeQuota:
+	// see types.PriceData.CacheCreationRatioForWire.
+	cacheCreationRatio := relayInfo.PriceData.CacheCreationRatioForWire(usage.PromptTokensIncludeCached)
 	cacheCreationRatio5m := relayInfo.PriceData.CacheCreation5mRatio
 	cacheCreationRatio1h := relayInfo.PriceData.CacheCreation1hRatio
 	cacheCreationTokens := usage.PromptTokensDetails.CachedCreationTokens
@@ -346,6 +348,10 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 				maybeCacheCreationTokens := CalcOpenRouterCacheCreateTokens(*usage, relayInfo.PriceData)
 				if maybeCacheCreationTokens >= 0 && billablePromptTokens >= maybeCacheCreationTokens {
 					cacheCreationTokens = maybeCacheCreationTokens
+					// The inference above solved for tokens against the configured
+					// ratio; billing them at any other ratio would not reproduce
+					// the upstream cost it was derived from.
+					cacheCreationRatio = relayInfo.PriceData.CacheCreationRatio
 				}
 			}
 		}

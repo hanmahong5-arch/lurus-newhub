@@ -135,8 +135,8 @@ Each wire's own arithmetic then over- or under-counts by the cached slice. See �
      cache creation, so it is folded into `prompt_tokens` at the undiscounted rate — an
      OpenAI SDK's estimate of the creation term is 0.25× below the relay's 1.25× charge;
      the non-standard `claude_cache_creation_5_m/1_h_tokens` keys remain for callers
-     that want to reconstruct it. Responses-wire `cache_write_tokens` is not parsed
-     (neither billed nor shown) — separate follow-up.
+     that want to reconstruct it. OpenAI-wire `cache_write_tokens` (chat and Responses)
+     is parsed, billed and shown since 2026-09-02 — see §4.4.
 2. **Live proof on a real Gemini or xAI channel** — the fixes are unit- and
    mutation-verified only. First real channel: send the same prompt twice, expect
    `cached_tokens > 0` on the second reply and a log `cache_tokens` that reconciles with
@@ -167,3 +167,62 @@ retirement status of old ids could **not** be confirmed from a primary source.
   is one value per model, so the tier cannot be expressed; the owner must choose the
   lower tier (under-bills long prompts) or the higher (over-bills short ones) before any
   grok entry is seeded. No repo change was made.
+
+### 4.4 Cache writes on the OpenAI wire + Gemini tool-use completion (2026-09-02, implemented)
+
+Two follow-ups from §4.1, both re-verified against HEAD and both money-relevant.
+
+**Gemini completion figure.** `buildUsageFromGeminiMetadata` folds
+`toolUsePromptTokenCount` into `PromptTokens` (it is billed as input) and computes
+`CompletionTokens = candidates + thoughts`. Both handlers then overwrote that with
+`TotalTokens − PromptTokens`. The official definition is `totalTokenCount = prompt +
+thoughts + response candidates` (ai.google.dev/api/generate-content, read 2026-09-02);
+the tool-use prompt is *beside* it, not inside. So a grounded call was under-counted by
+the tool-use prompt and went **negative** once that exceeded the answer; the
+non-streaming handler handed the negative figure to settlement as a credit, the streaming
+handler hid it behind its text-length estimate. Fix: `geminiCompletionTokens` keeps the
+builder figure; the subtraction survives only as a fallback for an upstream that reports
+a total but no candidate count, floored at zero. Locks: `tool_use_completion_test.go`
+(non-stream, stream, fallback/floor table).
+
+**`cache_write_tokens`.** Present on both OpenAI usage shapes in the official OpenAPI
+spec (chat `prompt_tokens_details.cache_write_tokens`: "the unadjusted number of prompt
+tokens written to cache"; Responses `input_tokens_details.cache_write_tokens`, required
+alongside `cached_tokens`). Disjoint from `cached_tokens`, inside `prompt_tokens` (the
+org-usage example on the same spec: 500 uncached + 400 cached + 100 written = 1000). The
+vendor prices writes at **1.25× the uncached input rate for GPT-5.6 and later** and adds
+no write charge on earlier models (developers.openai.com prompt-caching guide, read
+2026-09-02). Until now the Go field was `json:"-"`: not parsed, billed as plain input,
+invisible to callers on any wire.
+
+Changes:
+- `dto.InputTokenDetails.CachedCreationTokens` is `json:"cache_write_tokens,omitempty"`:
+  chat-wire parse is automatic, OpenAI-wire callers on Anthropic upstreams now also see
+  the write count under the spec's key (zero stays off the wire). Responses parse copies
+  it explicitly on both transports.
+- **Ratio by wire.** The map default behind `CacheCreationRatio` (1.25) is Anthropic's
+  universal surcharge and must keep applying to any unlisted Claude name. Mapping OpenAI
+  writes onto the same field would have billed every older GPT model's writes at 1.25×.
+  `types.PriceData.CacheCreationRatioDefaulted` (set only by `ModelPriceHelper` when the
+  model has no `defaultCreateCacheRatio` entry) and `CacheCreationRatioForWire(flag)`:
+  on the OpenAI/Gemini wire (`PromptTokensIncludeCached`) an unlisted model bills the
+  write at 1; a listed one (gpt-5.6, -sol, -terra, -luna seeded at 1.25) or the Anthropic
+  wire keeps the configured ratio. An explicitly set ratio is always honoured. Applied in
+  all three places that price creation tokens (`postConsumeQuota`,
+  `PostClaudeConsumeQuota`, `EstimateQuotaFromUsage`); the OpenRouter cost inference
+  keeps the ratio it solved against.
+- Claude-wire callers on OpenAI upstreams now get `cache_creation_input_tokens` and an
+  `input_tokens` net of both cache terms (`AnthropicInputTokens` already subtracted
+  creation; it was always zero before).
+
+Locks: `dto/usage_cache_write_wire_test.go` (round trip, zero omitted),
+`provider/openai/cache_write_tokens_test.go` (chat non-stream/stream × OpenAI/Claude
+callers, Responses non-stream/stream), `relay/billing_cache_write_test.go` (105 / 110 /
+110 across both settlement paths and the estimate), `helper/price_cache_write_defaulted_test.go`,
+`types/price_data_cache_write_test.go`, `app/quota_openrouter_inference_ratio_test.go`.
+
+Not done / owner: model ratios for the gpt-5.6 family are not seeded (pricing page not
+reachable from here; only the write ratio, which the guide states, is). Live proof on a
+GPT-5.6 key remains owner-gated. Coordination changelog (root repo): OpenAI-wire callers
+on Anthropic channels now see `prompt_tokens_details.cache_write_tokens` when a write
+occurred.

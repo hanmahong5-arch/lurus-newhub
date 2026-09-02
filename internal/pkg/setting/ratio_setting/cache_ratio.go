@@ -95,6 +95,17 @@ var defaultCreateCacheRatio = map[string]float64{
 	"claude-sonnet-4-5-20250929-thinking": 1.25,
 	"claude-opus-4-5-20251101":            1.25,
 	"claude-opus-4-5-20251101-thinking":   1.25,
+	// OpenAI: "For GPT-5.6 and later, cache writes cost 1.25x the standard,
+	// uncached input-token rate"; earlier GPT models carry no write charge
+	// (developers.openai.com/api/docs/guides/prompt-caching, read 2026-09-02;
+	// ids from developers.openai.com/api/docs/models the same day). Applies to
+	// prompt_tokens_details / input_tokens_details .cache_write_tokens, parsed
+	// since 2026-09-02. Unlisted models on the OpenAI wire bill writes at 1
+	// (types.PriceData.CacheCreationRatioForWire), so older GPTs are untouched.
+	"gpt-5.6":       1.25,
+	"gpt-5.6-sol":   1.25,
+	"gpt-5.6-terra": 1.25,
+	"gpt-5.6-luna":  1.25,
 }
 
 //var defaultCreateCacheRatio = map[string]float64{}
