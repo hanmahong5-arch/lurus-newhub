@@ -367,11 +367,18 @@ type GeminiChatResponse struct {
 }
 
 type GeminiUsageMetadata struct {
-	PromptTokenCount        int                         `json:"promptTokenCount"`
-	CandidatesTokenCount    int                         `json:"candidatesTokenCount"`
-	TotalTokenCount         int                         `json:"totalTokenCount"`
-	ThoughtsTokenCount      int                         `json:"thoughtsTokenCount"`
-	ToolUsePromptTokenCount int                         `json:"toolUsePromptTokenCount,omitempty"`
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	TotalTokenCount         int `json:"totalTokenCount"`
+	ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+	ToolUsePromptTokenCount int `json:"toolUsePromptTokenCount,omitempty"`
+	// CachedContentTokenCount is the cached slice of PromptTokenCount (Gemini
+	// counts it INSIDE promptTokenCount: "when cachedContent is set, this is
+	// still the total effective prompt size"). Both explicit context caching and
+	// the implicit caching that 2.5-series models apply by default report here.
+	// It was missing until 2026-09-01, so every Gemini cache hit was billed at
+	// full input price and was invisible to the caller.
+	CachedContentTokenCount int                         `json:"cachedContentTokenCount,omitempty"`
 	PromptTokensDetails     []GeminiPromptTokensDetails `json:"promptTokensDetails"`
 }
 
