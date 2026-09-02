@@ -2,8 +2,10 @@ package relay
 
 // postconsume_xai_cache_test.go — metadata to money for xAI, both transports.
 // The same upstream numbers (prompt 120 including 50 cached, 30 output) must
-// settle at the same figure whether or not the client streamed. // 2026-09-01 // prompt plus cache price) and stream at 150 (cached dropped: full price),
-// against a correct 105.
+// settle at the same figure whether or not the client streamed. Before
+// 2026-09-01 non-stream settled at 155 (cached parsed, flag missing: full
+// prompt plus cache price) and stream at 150 (cached dropped: full price),
+// against a correct 105. Both figures are measured by mutation, not derived.
 
 import (
 	"io"
