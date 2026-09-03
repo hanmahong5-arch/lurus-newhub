@@ -81,3 +81,68 @@ func TestRelay_InBandErrorAfterStreamStarted_IsWireNative(t *testing.T) {
 		})
 	}
 }
+
+// TestRelay_NonStreamErrorEnvelope_IsWireNative is the not-yet-written half of
+// the test above. When nothing has been flushed the deferred renderer takes the
+// c.JSON path, which had a Claude case and an OpenAI default and no Gemini case
+// at all — so a google-genai caller received an OpenAI envelope, failed to
+// recognise its own error shape, and surfaced a parse failure instead of the
+// reason its request was rejected.
+func TestRelay_NonStreamErrorEnvelope_IsWireNative(t *testing.T) {
+	prev := constant.MaxRequestBodyMB
+	constant.MaxRequestBodyMB = 10
+	t.Cleanup(func() { constant.MaxRequestBodyMB = prev })
+
+	cases := []struct {
+		format  types.RelayFormat
+		path    string
+		want    []string
+		mustNot []string
+	}{
+		{
+			// Gemini's own envelope: {"error":{code,message,status}}, with
+			// google.rpc status names — not {"error":{"message","type"}}.
+			types.RelayFormatGemini, "/v1beta/models/m:generateContent",
+			[]string{`{"error":{"code":400,`, `"status":"INVALID_ARGUMENT"`},
+			[]string{`"type":"new_api_error"`},
+		},
+		{
+			types.RelayFormatClaude, "/v1/messages",
+			[]string{`"type":"error"`, `"error":{`},
+			[]string{`"status":"INVALID_ARGUMENT"`},
+		},
+		{
+			types.RelayFormatOpenAI, "/v1/chat/completions",
+			[]string{`{"error":{`, `"message":`},
+			[]string{`"status":"INVALID_ARGUMENT"`},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.format), func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(""))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			Relay(c, tc.format)
+
+			body := w.Body.String()
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s: error body missing %q:\n%s", tc.format, want, body)
+				}
+			}
+			for _, bad := range tc.mustNot {
+				if strings.Contains(body, bad) {
+					t.Errorf("%s: error body must not contain %q:\n%s", tc.format, bad, body)
+				}
+			}
+			// Nothing was streamed, so the status line is still ours to set and
+			// must carry the real status rather than 200.
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("%s: status = %d, want 400", tc.format, w.Code)
+			}
+		})
+	}
+}

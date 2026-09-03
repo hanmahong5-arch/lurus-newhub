@@ -36,54 +36,17 @@ func StreamError(c *gin.Context, format types.RelayFormat, apiErr *types.NewAPIE
 	case types.RelayFormatClaude:
 		_ = ClaudeData(c, dto.ClaudeResponse{Type: "error", Error: apiErr.ToClaudeError()})
 	case types.RelayFormatGemini:
-		oai := apiErr.ToOpenAIError()
-		_ = ObjectData(c, geminiErrorFrame{Error: geminiError{
-			Code:    apiErr.StatusCode,
-			Message: oai.Message,
-			Status:  geminiStatus(apiErr.StatusCode),
-		}})
+		_ = ObjectData(c, apiErr.ToGeminiError())
 	default:
 		_ = ObjectData(c, gin.H{"error": apiErr.ToOpenAIError()})
 		Done(c)
 	}
 }
 
-// geminiErrorFrame is the Gemini API error envelope ({"error":{code,message,
-// status}}); a struct so "error" is the first key, which is what the SDK
-// checks.
-type geminiErrorFrame struct {
-	Error geminiError `json:"error"`
-}
-
-type geminiError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Status  string `json:"status"`
-}
-
-// geminiStatus maps an HTTP status to the google.rpc.Code name the Gemini API
-// puts in error.status.
-func geminiStatus(code int) string {
-	switch code {
-	case http.StatusBadRequest:
-		return "INVALID_ARGUMENT"
-	case http.StatusUnauthorized:
-		return "UNAUTHENTICATED"
-	case http.StatusForbidden:
-		return "PERMISSION_DENIED"
-	case http.StatusNotFound:
-		return "NOT_FOUND"
-	case http.StatusTooManyRequests:
-		return "RESOURCE_EXHAUSTED"
-	case http.StatusInternalServerError:
-		return "INTERNAL"
-	case http.StatusBadGateway, http.StatusServiceUnavailable:
-		return "UNAVAILABLE"
-	case http.StatusGatewayTimeout:
-		return "DEADLINE_EXCEEDED"
-	}
-	return "UNKNOWN"
-}
+// The Gemini error envelope moved to internal/pkg/types (ToGeminiError /
+// GeminiStatus): the non-streaming relay path needs the same shape, and it
+// cannot import this package. No forwarding shim is left behind — one wire
+// shape, one definition.
 
 // ClientListening reports whether there is still a caller to write to: false
 // once the request context is done or the scanner saw the caller hang up.
