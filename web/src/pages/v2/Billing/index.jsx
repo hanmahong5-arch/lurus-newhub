@@ -50,6 +50,12 @@ const AMOUNT_PRESETS_CNY = [100, 500, 1000, 5000];
 const MIN_TOPUP_CNY = 1;
 const MAX_TOPUP_CNY = 100000;
 
+// Redemption codes are exactly 32 characters. Same UX-guard-not-authority rule
+// as the amount bounds above: RedeemCodeV2 (v2_redemption.go) rejects any other
+// length with a 400 regardless of what this client does, so the check here only
+// saves a round trip and gives an inline hint instead of a toast.
+const REDEEM_CODE_LENGTH = 32;
+
 const HFBilling = () => {
   const tenantSlug = useTenantSlug();
   // Aliased to `tr` per the v2 console convention (avoids shadowing).
@@ -71,6 +77,13 @@ const HFBilling = () => {
   const [methodsLoaded, setMethodsLoaded] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState('');
   const [amount, setAmount] = useState(String(AMOUNT_PRESETS_CNY[0]));
+
+  // Redemption. v2 had no entry point for this at all — the only one lived on
+  // the legacy /console/topup shell, which the v2 navigation cannot reach, so a
+  // customer holding a valid code had nowhere in the console to spend it.
+  const [redeemCode, setRedeemCode] = useState('');
+  const [redeeming, setRedeeming] = useState(false);
+  const [redeemResult, setRedeemResult] = useState(null);
 
   const fetchAll = useCallback(async () => {
     if (!tenantSlug) return;
@@ -148,6 +161,41 @@ const HFBilling = () => {
   })();
   const amountInvalid = parsedAmount === null;
   const noPaymentMethods = methodsLoaded && methods.length === 0;
+
+  // Same endpoint and same response shape the legacy topup component already
+  // speaks (components/topup/index.jsx): POST /api/v2/:slug/redeem with a
+  // `key` field, answering { quota_added }. Logic reused, component not.
+  const redeem = async () => {
+    if (redeeming || redeemCode.length !== REDEEM_CODE_LENGTH) return;
+    setRedeeming(true);
+    setRedeemResult(null);
+    try {
+      const res = await API.post(
+        `/api/v2/${tenantSlug}/redeem`,
+        { key: redeemCode },
+        { skipErrorHandler: true },
+      );
+      if (res?.data?.success) {
+        setRedeemResult(res.data.data?.quota_added ?? 0);
+        setRedeemCode('');
+        // The balance shown above just changed; re-read it rather than doing
+        // local arithmetic that could disagree with the server.
+        fetchAll();
+      } else {
+        showError(
+          res?.data?.message ||
+            tr('console.billing.redeem_failed', 'Redemption failed'),
+        );
+      }
+    } catch (err) {
+      showError(
+        err?.response?.data?.message ||
+          tr('console.billing.redeem_failed', 'Redemption failed'),
+      );
+    } finally {
+      setRedeeming(false);
+    }
+  };
 
   const handleRecharge = async () => {
     if (noPaymentMethods || !selectedMethod) {
@@ -609,6 +657,93 @@ const HFBilling = () => {
                 {tr('console.billing.manage_payment', 'manage payment')} ↗
               </a>
             </div>
+          </div>
+
+          {/* Redeem a code.
+              v2 had no redemption entry point at all: the only one lived on the
+              legacy /console/topup shell, which the v2 navigation cannot reach
+              (see console-ia-2026-08-31.md), so a customer holding a valid code
+              had nowhere in the console to spend it.
+
+              This reuses the LOGIC, not the component: the same
+              POST /api/v2/:slug/redeem and the same { quota_added } response
+              the legacy topup component already speaks — no Semi UI card gets
+              dragged into the hi-fi shell. */}
+          <div className='panel' style={{ padding: 18 }}>
+            <div className='lbl'>
+              {tr('console.billing.redeem_title', 'redeem a code')}
+            </div>
+            <form
+              data-testid='redeem-form'
+              onSubmit={(e) => {
+                e.preventDefault();
+                redeem();
+              }}
+              style={{ marginTop: 10, display: 'flex', gap: 6 }}
+            >
+              <input
+                data-testid='redeem-input'
+                aria-label={tr('console.billing.redeem_title', 'redeem a code')}
+                value={redeemCode}
+                onChange={(e) => setRedeemCode(e.target.value.trim())}
+                placeholder={tr(
+                  'console.billing.redeem_placeholder',
+                  '32-character code',
+                )}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontFamily: 'var(--hf-mono)',
+                  fontSize: 12,
+                  padding: '5px 8px',
+                  border: '1px solid var(--hf-rule)',
+                  background: 'var(--hf-sunken)',
+                  color: 'var(--hf-ink)',
+                  borderRadius: 2,
+                  outline: 'none',
+                }}
+              />
+              <button
+                type='submit'
+                className='btn sm primary'
+                data-testid='redeem-submit'
+                // Client-side length guard only. The server enforces the same
+                // rule (v2_redemption.go rejects any length != 32 with a 400),
+                // so this saves a round trip; it is not the security boundary.
+                disabled={redeeming || redeemCode.length !== REDEEM_CODE_LENGTH}
+              >
+                {redeeming
+                  ? tr('console.common.loading', 'loading…')
+                  : tr('console.billing.redeem_submit', 'redeem')}
+              </button>
+            </form>
+            {redeemCode.length > 0 &&
+              redeemCode.length !== REDEEM_CODE_LENGTH && (
+                <div
+                  className='muted'
+                  data-testid='redeem-hint'
+                  style={{ fontSize: 11, marginTop: 6 }}
+                >
+                  {tr(
+                    'console.billing.redeem_length_hint',
+                    '{{count}}/32 characters',
+                    { count: redeemCode.length },
+                  )}
+                </div>
+              )}
+            {redeemResult != null && (
+              <div
+                className='strong'
+                data-testid='redeem-result'
+                style={{ fontSize: 12, marginTop: 8 }}
+              >
+                {tr('console.billing.redeem_success', 'credited')}{' '}
+                {fmtQuota(
+                  redeemResult,
+                  tr('console.billing.usd_eq', 'USD eq.'),
+                )}
+              </div>
+            )}
           </div>
 
           {/* Spend trend */}
