@@ -18,7 +18,7 @@ func TestHandleStreamFinalResponse_Incomplete_CountsInRelayErrorsTotal(t *testin
 	before := testutil.ToFloat64(series)
 
 	c, _, info, claudeInfo := newIncompleteClaudeCtx(t, types.RelayFormatClaude, false)
-	info.ChannelMeta.ChannelType = constant.ChannelTypeAnthropic
+	info.ChannelType = constant.ChannelTypeAnthropic
 	info.OriginModelName = "claude-x"
 	HandleStreamFinalResponse(c, info, claudeInfo, RequestModeMessage)
 	if got := testutil.ToFloat64(series) - before; got != 1 {
@@ -27,7 +27,7 @@ func TestHandleStreamFinalResponse_Incomplete_CountsInRelayErrorsTotal(t *testin
 
 	before = testutil.ToFloat64(series)
 	c, _, info, claudeInfo = newIncompleteClaudeCtx(t, types.RelayFormatClaude, false)
-	info.ChannelMeta.ChannelType = constant.ChannelTypeAnthropic
+	info.ChannelType = constant.ChannelTypeAnthropic
 	info.OriginModelName = "claude-x"
 	claudeInfo.Done = true
 	HandleStreamFinalResponse(c, info, claudeInfo, RequestModeMessage)
