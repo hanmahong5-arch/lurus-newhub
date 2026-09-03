@@ -101,13 +101,13 @@ an HTTP/2 `PROTOCOL_ERROR` after ten minutes. What worked, end to end:
 
 ```bash
 # 0. The pinned digest must be a single OCI manifest and the package public:
-crane manifest ghcr.io/hanmahong5-arch/lurus-newhub:<digest> | head -3
-#    (crane: go run github.com/google/go-containerregistry/cmd/crane ...)
+crane manifest ghcr.io/hanmahong5-arch/lurus-newhub@sha256:<digest> | head -3
+#    (crane: go run github.com/google/go-containerregistry/cmd/crane@latest ...)
 
 # 1. Workstation: pull the OCI layout with HTTP/2 disabled (the digest is kept
 #    verbatim; the layout is a directory, not a tar).
 GODEBUG=http2client=0 crane pull --format=oci \
-  ghcr.io/hanmahong5-arch/lurus-newhub:<digest> newhub-oci
+  ghcr.io/hanmahong5-arch/lurus-newhub@sha256:<digest> newhub-oci
 tar -C newhub-oci -cf newhub.oci.tar .
 
 # 2. Ship it to the node — /data is the only writable disk on R6.
