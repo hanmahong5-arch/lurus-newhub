@@ -20,7 +20,29 @@ Status: W1 baseline (2026-05-09); revisit after 7 days of stage data.
 
 - **50ms overhead P99**: most enterprise B2B integrations budget 100-200ms of platform overhead on top of actual work. We target half that to leave headroom for ingress + their client-side processing.
 - **99.5% success rate**: ~1 failure per 200 requests over 7 days. Aligns with single-provider uptime reality; retries cover us. Tighten to 99.9% when circuit-breaker + multi-provider failover are battle-tested.
-- **TTFB / first-chunk streaming latency** is NOT yet measured — instrumenting requires touching every provider adapter (~20 files). Deferred to W1.5; for now we treat upstream as a black box and rely on `relay_duration_seconds` as the proxy.
+- **TTFB / first-chunk streaming latency.** ⚠️ The line that used to sit here —
+  "NOT yet measured; instrumenting requires touching every provider adapter
+  (~20 files)" — was already false when it was written. Time to first token is
+  recorded on every request as `other.frt` on the consume log, written from
+  three places, and it has been user-visible in the console since 2026-09-01.
+  What is missing is a *metric*: there is no histogram, so there is no
+  percentile and therefore still no SLI.
+
+  It is also not a ~20-file job. Every provider funnels through
+  `RelayInfo.SetFirstResponseTime()`, so one histogram observation in that
+  setter covers all of them — but only since 2026-09-03, when cloudflare and
+  cohere stopped assigning `FirstResponseTime` directly and bypassing it.
+  `TestFirstResponseTimeHasASingleWriter`
+  (`internal/adapter/provider/common/`) keeps that true; without it, any
+  instrumentation on the setter would silently omit those two providers and
+  produce a percentile that looks complete and is not.
+
+  When this is promoted to an SLI it must be documented as a **streaming-only**
+  one. A non-streaming request emits no first token, so no `frt` is written at
+  all — the population is streaming requests, and quoting it as if it covered
+  all traffic would misstate the denominator.
+
+  Until the histogram exists, `relay_duration_seconds` remains the proxy.
 
 ## PromQL queries
 
@@ -81,7 +103,9 @@ When **success rate** drops below 99.5%: check `circuit_breaker_state` (open bre
 ## Out of scope for W1
 
 - Per-phase pipeline breakdown (validate/token/quota separately) — add when overhead spikes warrant it.
-- Upstream TTFB instrumentation inside provider adapters — W1.5.
+- Upstream TTFB **histogram** (the value itself is already recorded as `other.frt`;
+  the single seam is `RelayInfo.SetFirstResponseTime`, kept single by
+  `TestFirstResponseTimeHasASingleWriter`). Must be labelled a streaming-only SLI.
 - Streaming first-chunk latency for SSE — needs response-writer middleware timing.
 - Cache hit/miss metrics — N/A until W4 caching layer ships.
 - SLO budget burn-rate alerts — set up when 7d baseline data exists.

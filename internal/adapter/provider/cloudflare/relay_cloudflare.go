@@ -6,13 +6,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -64,7 +63,10 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 		err = helper.ObjectData(c, response)
 		if isFirst {
 			isFirst = false
-			info.FirstResponseTime = time.Now()
+			// Was a direct `info.FirstResponseTime = time.Now()`, which skipped
+			// the setter and would therefore have skipped any instrumentation
+			// hung on it (see TestFirstResponseTimeHasASingleWriter).
+			info.SetFirstResponseTime()
 		}
 		if err != nil {
 			logger.LogError(c, "error_rendering_stream_response: "+err.Error())
