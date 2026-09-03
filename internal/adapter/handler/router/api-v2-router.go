@@ -62,6 +62,20 @@ func SetApiV2Router(router *gin.Engine) {
 			apiV2.POST("/bridge/exchange", middleware.BootstrapRateLimit(), handler.BridgeExchange)
 		}
 
+		// Fault-injection upstream: UAT only, same env-gated construction as
+		// the bridge above — registered ONLY when FAULTSIM_TOKEN is non-empty,
+		// so in production the route does not exist at all. See faultsim.go for
+		// why this has to exist (mid-stream abandonment, breaker transitions and
+		// failover suppression cannot be proven live without an upstream that
+		// can be made to die) and for the three independent safety properties.
+		//
+		// Mounted under /api/v2 rather than at the root so it inherits this
+		// group's body-size cap; it is NOT under /:tenant_slug because it is
+		// not tenant data — it is a stand-in for a provider.
+		if handler.FaultSimEnabled() {
+			apiV2.POST("/faultsim/v1/chat/completions", handler.FaultSimChatCompletions)
+		}
+
 		// Tenant-scoped user endpoint (session auth — called by frontend in V2 mode).
 		// GetSelfV2, not the v1 GetSelf: the v1 projection has no remaining_quota
 		// and no token_count, so the v2 dashboard's "remaining quota" card fell

@@ -12,10 +12,22 @@
 #                 - HTTP status codes (≥3 5xx of 5)
 #                 - Prometheus circuit_breaker_state{channel_id="..."} → 1
 #                 - kubectl log tail contains "breaker.*open"
-#   Scenario B: slow-loris request (300s no body). Not automated in this
-#               script (needs slow upstream mock). Marked SKIP with reason
-#               in SKIP_REASON_B at the top of the script. Wrappers MUST
-#               check this marker.
+#   Scenario B: upstream that dies mid-stream / stalls before the first byte /
+#               reports an unpaid account. Automated as of 2026-09-03 against
+#               the in-process fault simulator
+#               (internal/adapter/handler/faultsim.go); it was a permanent SKIP
+#               before that because it "needs a slow upstream mock".
+#               Requires FAULTSIM_TOKEN + FAULTSIM_CHANNEL_ID; without them it
+#               still reports SKIP rather than silently passing.
+#
+#               Setup: start the UAT instance with FAULTSIM_TOKEN set, then
+#               seed a channel whose base_url is
+#               http://127.0.0.1:3000/api/v2/faultsim (loopback on purpose —
+#               deploy/k8s/r6-uat/netpol-egress.yaml excludes all RFC1918, so a
+#               separate Pod would be unreachable) with key = FAULTSIM_TOKEN
+#               and models = mid_stream_abort,slow_headers,http_500,
+#               rate_limit_429,upstream_insufficient_balance. The fault mode is
+#               selected by the requested model name.
 #   Scenario C: send up to 100 quick requests to breach the 5-minute cost
 #               window. What gets asserted depends on
 #               CHAOS_COST_SPIKE_ENFORCE (default: false, mirroring the
@@ -34,16 +46,19 @@
 #   HUB_BASE, ADMIN_TOKEN, USER_TOKEN, CHAOS_CHANNEL_ID, TEST_USER_ID
 #
 # Optional env:
-#   PROM_URL  Prometheus base URL (default: http://prometheus.observability.svc:9090)
-#             If unset AND not reachable, prom assertions print ⚠️  skip.
-#   NS        Kubernetes namespace for newhub logs (default: lurus-system)
+#   PROM_URL  Prometheus base URL. NO DEFAULT (2026-09-03): the old default
+#             pointed at a service that does not exist, so metric assertions
+#             silently degraded to warnings while the drill printed green.
+#             If unset or unreachable, those assertions print ⚠️ NOT VERIFIED.
+#   NS        Kubernetes namespace for newhub logs (default: lurus-newhub;
+#             was lurus-system, the namespace retired in 2026-04)
 #   APP_LABEL Kubernetes label selector (default: app=lurus-newhub)
 #   CHAOS_COST_SPIKE_ENFORCE  "true" if the target deployment has
 #             COST_SPIKE_ENFORCE=true; drives which Scenario C assertion
 #             runs (see above). Default: false.
 #
 # Usage:
-#   HUB_BASE=https://hub-stage.lurus.cn \
+#   HUB_BASE=https://test-newhub.lurus.cn \
 #   ADMIN_TOKEN=sk-admin-... \
 #   USER_TOKEN=sk-... \
 #   CHAOS_CHANNEL_ID=99 \
@@ -58,17 +73,30 @@ set -euo pipefail
 # accept a green chaos-drill if SKIP_REASON_B is non-empty.
 # Audit ref: 2026-05-20 squad 2A.
 # ────────────────────────────────────────────────────────────────────────
-SKIP_REASON_B="Scenario B (slow-loris 524) requires a controllable slow upstream mock; \
-not yet wired in STAGE. Manual verification required: point CHAOS_CHANNEL_ID base_url \
-at httpbin.org/delay/300, send 1 request with --max-time 60, expect 524 + breaker increment."
+SKIP_REASON_B="Scenario B requires FAULTSIM_TOKEN and FAULTSIM_CHANNEL_ID; see the \
+'Scenario B' section of this script's header."
 
-HUB_BASE="${HUB_BASE:-https://hub-stage.lurus.cn}"
+HUB_BASE="${HUB_BASE:-https://test-newhub.lurus.cn}"
 ADMIN_TOKEN="${ADMIN_TOKEN:-}"
 USER_TOKEN="${USER_TOKEN:-}"
 CHAOS_CHANNEL_ID="${CHAOS_CHANNEL_ID:-}"
 TEST_USER_ID="${TEST_USER_ID:-}"
-PROM_URL="${PROM_URL:-http://prometheus.observability.svc:9090}"
-NS="${NS:-lurus-system}"
+# 2026-09-03: was http://prometheus.observability.svc:9090 — no such service
+# exists and has not for some time, so every Prometheus assertion in this
+# script silently degraded to a ⚠️ skip and the drill still printed green.
+# There is no default now: unset means the metric assertions announce
+# themselves as unverified rather than quietly passing.
+PROM_URL="${PROM_URL:-}"
+# 2026-09-03: was lurus-system, the namespace of the service retired in
+# 2026-04. Every `kubectl logs` in this script therefore failed to match, and
+# the log assertions degraded to warnings.
+NS="${NS:-lurus-newhub}"
+# The fault-injection upstream (internal/adapter/handler/faultsim.go), which is
+# what finally makes Scenario B automatable. Both must be set for it to run:
+# the token the UAT instance was started with, and the id of a channel seeded
+# to point at http://127.0.0.1:3000/api/v2/faultsim/v1/chat/completions.
+FAULTSIM_TOKEN="${FAULTSIM_TOKEN:-}"
+FAULTSIM_CHANNEL_ID="${FAULTSIM_CHANNEL_ID:-}"
 APP_LABEL="${APP_LABEL:-app=lurus-newhub}"
 CHAOS_COST_SPIKE_ENFORCE="${CHAOS_COST_SPIKE_ENFORCE:-false}"
 
@@ -94,6 +122,16 @@ hdr()  { printf '\n\033[2m── %s ──\033[0m\n' "$1"; }
 prom_query() {
   local query="$1" op="$2" expected="$3"
   local resp
+  # PROM_URL has no default any more. It used to point at
+  # prometheus.observability.svc, a service that does not exist, so every
+  # metric assertion here degraded to a warning while the drill still printed
+  # green — the failure mode this whole script exists to avoid. Say plainly
+  # that the assertion did not run.
+  if [ -z "${PROM_URL}" ]; then
+    warn "PROM_URL unset — metric assertion NOT VERIFIED" \
+      "R6 has no Prometheus; scrape /metrics directly or point PROM_URL at one. query=${query}"
+    return 2
+  fi
   resp=$(curl -sS --max-time 10 -G --data-urlencode "query=${query}" \
     "${PROM_URL}/api/v1/query" 2>/dev/null) || {
     warn "Prometheus unreachable at ${PROM_URL}" "skipping assertion: ${query}"
@@ -234,8 +272,61 @@ fi
 
 # ---- Scenario B: slow-loris timeout (524) ---------------------------------
 
-hdr "Scenario B — upstream timeout returns 524 + breaker records"
-warn "Scenario B SKIPPED" "$SKIP_REASON_B"
+hdr "Scenario B — upstream dies mid-stream / stalls before first byte"
+if [ -z "$FAULTSIM_TOKEN" ] || [ -z "$FAULTSIM_CHANNEL_ID" ]; then
+  warn "Scenario B SKIPPED" "$SKIP_REASON_B"
+else
+  # This scenario was a permanent SKIP because it "needs a controllable slow
+  # upstream mock". That upstream now exists in-process (faultsim.go), so the
+  # skip is a configuration choice rather than a standing gap.
+  #
+  # B1 — mid-stream abort. The only way to reach the incomplete-stream path
+  # and relay_failover_suppressed_total{reason="stream_already_started"}: an
+  # upstream that emits real frames and then stops. The client sees HTTP 200
+  # (headers left long ago), so the assertion is on the BODY — frames present,
+  # terminator absent — not on the status code.
+  b1_body=$(curl -sS --max-time 60 \
+    -H "Authorization: Bearer ${USER_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"mid_stream_abort","stream":true,"messages":[{"role":"user","content":"hi"}]}' \
+    "${HUB_BASE}/v1/chat/completions" 2>/dev/null) || b1_body=""
+
+  if [ -z "$b1_body" ]; then
+    fail "B1 mid-stream abort produced no body" "expected partial SSE frames"
+  elif printf '%s' "$b1_body" | grep -q '\[DONE\]'; then
+    fail "B1 stream terminated normally" \
+      "a [DONE] means the abort did not happen — check that FAULTSIM_CHANNEL_ID points at the simulator"
+  else
+    ok "B1 mid-stream abort: stream ended without a terminator"
+  fi
+
+  # B2 — stall before the first byte, exercising the relay's own idle timeout.
+  b2_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 120 \
+    -H "Authorization: Bearer ${USER_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"slow_headers","messages":[{"role":"user","content":"hi"}]}' \
+    "${HUB_BASE}/v1/chat/completions" 2>/dev/null) || b2_code="000"
+
+  case "$b2_code" in
+    504|524) ok "B2 stalled upstream surfaced as $b2_code" ;;
+    *) fail "B2 stalled upstream returned $b2_code" "expected 504/524 from the relay idle timeout" ;;
+  esac
+
+  # B3 — unpaid provider account must classify as its own thing, not as
+  # "the caller sent a bad request".
+  b3_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+    -H "Authorization: Bearer ${USER_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"upstream_insufficient_balance","messages":[{"role":"user","content":"hi"}]}' \
+    "${HUB_BASE}/v1/chat/completions" 2>/dev/null) || b3_code="000"
+  if [ "$b3_code" = "000" ]; then
+    fail "B3 request failed outright" "expected a response carrying the upstream 402"
+  else
+    ok "B3 unpaid-upstream fault surfaced (HTTP $b3_code)"
+    prom_query 'sum(lurus_gateway_relay_errors_total{error_type="upstream_insufficient_balance"})' gt 0 \
+      || true
+  fi
+fi
 
 # ---- Scenario C: cost spike (enforce → disabled / observe → counted) -----
 
@@ -368,9 +459,18 @@ fi
 
 echo ""
 printf '\033[2m──────────────\033[0m pass=%d fail=%d\n' "$PASS" "$FAIL"
-echo "  $(printf '\033[2m  Scenario B remains SKIPPED — see SKIP_REASON_B in script header\033[0m\n')"
+if [ -z "$FAULTSIM_TOKEN" ] || [ -z "$FAULTSIM_CHANNEL_ID" ]; then
+  printf '\033[2m  Scenario B SKIPPED — set FAULTSIM_TOKEN + FAULTSIM_CHANNEL_ID to run it\033[0m\n'
+fi
+if [ -z "${PROM_URL}" ]; then
+  printf '\033[2m  metric assertions NOT VERIFIED — PROM_URL unset\033[0m\n'
+fi
 if [ "$FAIL" -eq 0 ]; then
-  printf '\033[32m✓\033[0m chaos drill complete (Scenario B not automated)\n'
+  if [ -z "$FAULTSIM_TOKEN" ] || [ -z "$FAULTSIM_CHANNEL_ID" ]; then
+    printf '\033[32m✓\033[0m chaos drill complete (Scenario B skipped)\n'
+  else
+    printf '\033[32m✓\033[0m chaos drill complete\n'
+  fi
   exit 0
 else
   printf '\033[31m✗\033[0m %d scenario(s) failed\n' "$FAIL"
