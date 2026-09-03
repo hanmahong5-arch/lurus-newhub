@@ -82,6 +82,55 @@ What the script does:
 | `SECRET_NAME` | `lurus-newhub-secrets` | |
 | `SKIP_SECRETS` | unset | set to `1` to skip the secret checks/upsert entirely |
 
+`SSH_HOST` is passed to `ssh` verbatim (no port flag), so when the Tailscale
+path is down point it at an `~/.ssh/config` alias for the direct port:
+`Host r6-direct` / `HostName 43.226.45.87` / `Port 12222` / `User root`, then
+`SSH_HOST=r6-direct`. The UAT overlay is the same script with
+`OVERLAY=deploy/k8s/r6-uat NAMESPACE=lurus-newhub-uat HEALTH_URL=https://test-newhub.lurus.cn/api/health`.
+Both overlays' kustomizations exclude the Secret, so `apply` never touches it.
+
+### When the node cannot pull the image (GitHub CDN unreachable)
+
+Seen 2026-09-03: ArgoCD flipped to `Sync=Unknown` (repo-server's GitHub fetch
+through the host `xray` `gh-egress` outbound timed out) and, at the same time,
+`kubelet` could not pull the pinned digest — every blob request to
+`pkg-containers.githubusercontent.com` ended in `EOF`, a 2 KB config blob
+included, so it is a reachability cut, not size throttling. The domestic GHCR
+mirrors did not finish either, and a `crane pull` from a workstation died with
+an HTTP/2 `PROTOCOL_ERROR` after ten minutes. What worked, end to end:
+
+```bash
+# 0. The pinned digest must be a single OCI manifest and the package public:
+crane manifest ghcr.io/hanmahong5-arch/lurus-newhub:<digest> | head -3
+#    (crane: go run github.com/google/go-containerregistry/cmd/crane ...)
+
+# 1. Workstation: pull the OCI layout with HTTP/2 disabled (the digest is kept
+#    verbatim; the layout is a directory, not a tar).
+GODEBUG=http2client=0 crane pull --format=oci \
+  ghcr.io/hanmahong5-arch/lurus-newhub:<digest> newhub-oci
+tar -C newhub-oci -cf newhub.oci.tar .
+
+# 2. Ship it to the node — /data is the only writable disk on R6.
+scp newhub.oci.tar r6-direct:/data/tmp/newhub.oci.tar
+
+# 3. Import into k3s's containerd (k3s ctr, NOT /usr/bin/ctr — that one talks
+#    to dockerd's containerd). --digests --base-name names the image exactly
+#    as the manifest references it, so imagePullPolicy=IfNotPresent hits.
+ssh r6-direct 'k3s ctr -n k8s.io images import --digests \
+  --base-name ghcr.io/hanmahong5-arch/lurus-newhub /data/tmp/newhub.oci.tar \
+  && k3s ctr -n k8s.io images ls | grep <digest-prefix> \
+  && rm /data/tmp/newhub.oci.tar'
+
+# 4. The ImagePullBackOff pod picks the image up on its next back-off retry
+#    (≤5 min); rollout completes on its own. Then verify:
+ssh r6-direct 'kubectl -n lurus-newhub rollout status deployment/lurus-newhub; \
+  curl -s http://127.0.0.1:30850/api/status | grep -o "\"version\":\"[^\"]*\""'
+```
+
+Every push to `main` builds a new digest (the publish workflow has no path
+filter), so while the CDN is cut each merge needs this once more. When ArgoCD
+recovers it compares live against git and finds them equal — no extra roll.
+
 ## Rollback
 
 ⚠️ **Do not use `scripts/stage-rollback.sh` as-is.** It hardcodes
