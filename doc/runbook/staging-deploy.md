@@ -1,7 +1,7 @@
 # Runbook — STAGE deploy
 
 - **Source:** operator (deploy / re-deploy of newhub to R6 STAGE)
-- **Triggered by:** need to ship a build to `test-newhub.lurus.cn`
+- **Triggered by:** need to ship a build to R6 STAGE (`hub.lurus.cn`; `test-newhub.lurus.cn` is the separate UAT instance since 2026-08-30)
 - **Severity:** procedure
 - **Last review:** 2026-08-23 — rewritten per `doc/decisions/2026-08-23-deploy-canonical-r6-stage.md`
 
@@ -20,7 +20,7 @@ Verify a deploy landed:
 
 ```bash
 kubectl -n argocd get application lurus-newhub -o jsonpath='{.status.sync.status} {.status.health.status}{"\n"}'
-curl -fsS https://test-newhub.lurus.cn/api/health | jq .
+curl -fsS https://hub.lurus.cn/api/health | jq .
 ```
 
 If the Application shows `OutOfSync`/`Unknown` for longer than one poll
@@ -150,9 +150,52 @@ git log --oneline --grep='auto-pin' -5
 git revert <bad-auto-pin-sha>        # then push per normal review flow
 ```
 
-Emergency rollback (faster, but ArgoCD will undo it unless you pause sync
-first — selfHeal reverts any manual `kubectl set image`/`rollout undo` back to
-the git-pinned digest):
+### Fast rollback while the image CDN is degraded
+
+Measured 2026-09-03: R6's link to the GitHub image CDN runs at **10–17 KB/s**,
+so a 28 MB layer never finishes and any rollback that needs a *new* pull is not
+a rollback — it is an ImagePullBackOff. The path below deliberately needs no
+pull at all, and it is the one to reach for first during an incident.
+
+It works because of three properties that hold today:
+
+- `imagePullPolicy: IfNotPresent` (`deploy/k8s/r6-stage/deployment.yaml:57`),
+- the digest you are rolling *back to* already ran on this node, so it is in
+  the local containerd store, and
+- `maxUnavailable: 0` (line 20), so a pod that cannot start never takes the
+  serving pod down with it.
+
+```bash
+# 1. find the digest that was live before the bad one. Auto-pin commits are
+#    the deployment history; the previous one names a digest already on the node.
+git log --oneline --grep='auto-pin' -5
+git show <previous-auto-pin-sha>:deploy/k8s/r6-stage/deployment.yaml | grep -A1 '# pin:'
+
+# 2. rewrite BOTH manifests to that digest (prod + UAT track the same one) and
+#    push straight to main. [skip ci] is REQUIRED: without it the push builds a
+#    new image and auto-pins a new digest, i.e. it undoes the rollback and asks
+#    the CDN for 28 MB it cannot deliver.
+git commit -am 'chore(deploy): roll back r6-stage to <version> [skip ci]'
+git push origin main
+
+# 3. ArgoCD converges on its next sync; kubelet finds the digest locally.
+ssh root@100.122.83.20 "kubectl -n lurus-newhub rollout status deployment/lurus-newhub --timeout=180s"
+curl -fsS https://hub.lurus.cn/api/status
+```
+
+Do NOT `kubectl set image` here: selfHeal puts the git-pinned digest back, so
+the fix silently disappears at the next sync. Git is the only durable lever.
+
+When the digest you need is genuinely absent from the node (e.g. rolling back
+past a node rebuild), there is no way around moving the bytes — use the
+side-channel transfer recipe (`crane pull` on a machine with bandwidth → `scp`
+→ `k3s ctr import --digests`) rather than waiting on the CDN.
+
+### Emergency rollback with sync paused
+
+Faster still, but ArgoCD will undo it unless you pause sync first — selfHeal
+reverts any manual `kubectl set image`/`rollout undo` back to the git-pinned
+digest:
 
 ```bash
 # 1. pause automated sync
@@ -163,16 +206,18 @@ ssh root@100.122.83.20 "kubectl -n lurus-newhub rollout undo deployment/lurus-ne
   kubectl -n lurus-newhub rollout status deployment/lurus-newhub --timeout=120s"
 # 3. verify, then land the matching git revert and re-enable automated sync by
 #    re-applying deploy/k8s/argocd/application.yaml
-curl -fsS https://test-newhub.lurus.cn/api/status
+curl -fsS https://hub.lurus.cn/api/status
 ```
 
 ## Verify
 
 ```bash
-# deep health (200 healthy / 503 degraded):
-curl -fsS https://test-newhub.lurus.cn/api/health | jq .
+# deep health (200 healthy / 503 degraded). NB: r6-stage serves hub.lurus.cn;
+# test-newhub.lurus.cn has pointed at the isolated UAT instance (:30851) since
+# 2026-08-30, so verifying there proves nothing about this deployment.
+curl -fsS https://hub.lurus.cn/api/health | jq .
 # liveness (DB-free):
-curl -fsS https://test-newhub.lurus.cn/api/status
+curl -fsS https://hub.lurus.cn/api/status
 # active image:
 ssh root@100.122.83.20 "kubectl -n lurus-newhub get deploy lurus-newhub \
   -o jsonpath='{.spec.template.spec.containers[0].image}'"
