@@ -171,11 +171,30 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 						types.ErrOptionWithTokenQuotaHint(remainQuota))
 				}
 				// A genuine DB/write failure here (not the per-key cap) is
-				// neither a token-cap nor a user-balance rejection — out of
-				// scope for B2, left byte-identical to its pre-existing shape
-				// (no topup_url, no token-cap hint).
-				return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed,
-					http.StatusPaymentRequired, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+				// neither a token-cap nor a user-balance rejection: it is our
+				// database failing to write. It used to answer 402 with code
+				// pre_consume_token_quota_failed, which RelayErrorType buckets
+				// as "insufficient_quota" — so a persistence outage was
+				// indistinguishable, in the customer's response AND on the
+				// operator's dashboard, from "this customer ran out of money".
+				//
+				// The same function already handles the identical situation
+				// correctly one branch down (the post-check UPDATE failure at
+				// ErrorCodeUpdateDataError), so this follows that precedent:
+				// 500, "internal" in RelayErrorType, SkipRetry because retrying
+				// a broken write on another channel cannot help.
+				//
+				// NoRecordErrorLog is deliberately dropped. It is right for a
+				// 402 — a customer being out of credit is not an incident and
+				// would flood the error log — and wrong for an internal fault,
+				// which is precisely the thing an operator needs a log row for.
+				//
+				// types.ErrorCodePreConsumeTokenQuotaFailed and its
+				// RelayErrorType mapping stay: app/channel.go still matches the
+				// literal "pre_consume_token_quota_failed" when parsing
+				// responses relayed back from older downstream instances.
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeUpdateDataError,
+					http.StatusInternalServerError, types.ErrOptionWithSkipRetry())
 			}
 		} else if !provisioned {
 			// Tenant-scoped keys stop here: the token debit above IS their whole
