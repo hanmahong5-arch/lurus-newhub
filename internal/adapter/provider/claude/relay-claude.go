@@ -767,7 +767,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	// [DONE] and the Claude wire a bare EOF, both of which read as a normal
 	// end. When the caller itself hung up there is nobody left to tell.
 	if requestMode != RequestModeCompletion && !claudeInfo.Done && helper.ClientListening(c, info) {
-		helper.StreamError(c, info.RelayFormat, helper.IncompleteStreamError(info))
+		helper.StreamError(c, info.RelayFormat, helper.ReportIncompleteStream(c, info))
 		return
 	}
 

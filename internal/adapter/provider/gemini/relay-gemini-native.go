@@ -95,7 +95,7 @@ func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayIn
 	// stopped without finishReason left the Gemini-wire caller with a bare
 	// EOF its SDK treats as a normal end. Tell it in the wire's own envelope.
 	if !complete && helper.ClientListening(c, info) {
-		helper.StreamError(c, types.RelayFormatGemini, helper.IncompleteStreamError(info))
+		helper.StreamError(c, types.RelayFormatGemini, helper.ReportIncompleteStream(c, info))
 	}
 	return usage, nil
 }
