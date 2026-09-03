@@ -160,6 +160,19 @@ var internalOtherKeys = []string{
 	"completion_ratio",
 	"cache_ratio",
 	"cache_creation_ratio",
+	// The 5m/1h cache-creation multipliers, written by GenerateClaudeOtherInfo
+	// whenever the corresponding bucket is non-zero. They are the same kind of
+	// value as cache_creation_ratio right above — our price multiplier — and
+	// were simply never added here, which is exactly the failure mode this
+	// list has: it is default-allow, so a new key leaks until someone
+	// remembers. TestOtherProjectionIsFullyClassified now fails the build
+	// instead of remembering.
+	//
+	// Only the *_ratio keys are stripped. cache_creation_tokens_5m / _1h stay
+	// visible: a token count is the customer's own consumption, and they need
+	// it to reconcile a discounted charge.
+	"cache_creation_ratio_5m",
+	"cache_creation_ratio_1h",
 	"model_price",
 	"user_group_ratio",
 	// "frt" is deliberately NOT here: time to first token is the caller's own
@@ -172,10 +185,30 @@ var internalOtherKeys = []string{
 	"web_search_call_count",
 	"file_search_price",
 	"file_search_call_count",
+	// Written by the error-log path (adapter/handler/relay.go
+	// recordRelayErrorLog), which builds its own Other map rather than going
+	// through the generators — so these never passed through any of the
+	// classification the consume-log keys did. They name the upstream account
+	// that served (and failed) the request: TierInternal in
+	// governance/classification.go, and the same values the v2 user log route
+	// now blanks in the channel_name column. Stripping the column while
+	// shipping the payload would have been a false credential.
+	//
+	// channel_type is deliberately NOT stripped alongside them: governance
+	// classifies it TierPublic, and TestInternalOtherKeys_NoPublicField
+	// enforces that. The vendor family is already implied by the model the
+	// caller chose; the account identity is not.
+	"channel_id",
+	"channel_name",
 	"image_ratio",
 	"audio_ratio",
 	"audio_completion_ratio",
 	"audio_input_price",
+	// The flag half of audio_input_price above: it is written only when a
+	// separate audio-input price was applied, so keeping it while stripping the
+	// price announces a pricing decision the caller cannot see. The sibling
+	// audio_input_token_count stays — that is their own consumption.
+	"audio_input_seperate_price",
 	"image_generation_call_price",
 	"data_flow_source",
 	"data_flow_dest",
