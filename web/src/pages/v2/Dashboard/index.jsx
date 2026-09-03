@@ -16,11 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
-import { API } from '../../../helpers';
+import { API, getServerAddress } from '../../../helpers';
 import { getQuotaPerUSD, quotaToUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
@@ -60,15 +60,24 @@ const DASHBOARD_LOG_PAGE_SIZE = 100;
 
 // Shown when the user has zero tokens — Reseller-MVP onboarding TTFT lift,
 // modelled on OpenRouter / Anthropic quickstart pattern.
-const RELAY_BASE_URL = 'https://api.lurus.cn/v1';
-
+//
+// The base URL was the module constant 'https://api.lurus.cn/v1' — a domain
+// retired in 2026-04 that no longer resolves, i.e. the very first command we
+// hand a brand-new customer could not succeed. It now resolves per render from
+// getServerAddress() (configured `status.server_address`, else the origin the
+// console is served from), so the quickstart names the host the reader is
+// already talking to. See web/src/pages/v2/Token/index.jsx for the same fix.
 const OnboardingCurlBlock = ({ username, tenantSlug }) => {
   const { t } = useTranslation();
+  const relayBaseUrl = useMemo(
+    () => `${getServerAddress().replace(/\/+$/, '')}/v1`,
+    [],
+  );
   const navigateToTokens = (e) => {
     e.preventDefault();
     window.location.href = '/console/v2/token';
   };
-  const curlExample = `curl ${RELAY_BASE_URL}/chat/completions \\
+  const curlExample = `curl ${relayBaseUrl}/chat/completions \\
   -H "Authorization: Bearer YOUR_TOKEN_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{

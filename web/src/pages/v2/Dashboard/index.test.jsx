@@ -24,6 +24,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 // ─── mocks ───────────────────────────────────────────────────────────────────
 
 vi.mock('../../../helpers', () => ({
+  // The onboarding curl block resolves the relay host at render time.
+  getServerAddress: () => 'https://hub.example.test',
   API: {
     get: vi.fn(),
   },

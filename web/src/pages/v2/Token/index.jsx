@@ -16,12 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
-import { API, showError, showSuccess } from '../../../helpers';
+import {
+  API,
+  getServerAddress,
+  showError,
+  showSuccess,
+} from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
   getQuotaPerUSD,
@@ -29,17 +40,29 @@ import {
   formatRelativeTime,
 } from '../../../helpers/formatting';
 
-const RELAY_HOST = 'https://api.lurus.cn';
-const BASE_URL = `${RELAY_HOST}/v1`;
+// The relay host used to be the module constant 'https://api.lurus.cn'. That
+// domain was retired in 2026-04 and no longer resolves, so every snippet and
+// base-url row on this page handed new customers an address that cannot be
+// reached — following the console's own instructions failed 100% of the time.
+//
+// The host now comes from getServerAddress() (helpers/token.js): the operator's
+// configured `status.server_address`, falling back to window.location.origin.
+// In production that setting is an empty string, so the origin fallback is the
+// branch that actually runs — a console served from hub.lurus.cn advertises
+// hub.lurus.cn, and the isolated UAT instance advertises itself instead of
+// pointing customers at production.
+//
+// Trailing slashes are stripped so `${host}/v1` can never produce a `//v1`.
+const relayHostFromServer = () => getServerAddress().replace(/\/+$/, '');
 
 // Client base URLs the hub genuinely speaks. We intentionally omit an "Azure"
 // URL: the hub's client-facing relay is OpenAI-compatible at /v1 (Azure is an
 // upstream channel type, not a client endpoint) — inventing one would be a
 // fabricated URL. Each entry is copy-pasteable into the matching SDK's baseURL.
-const CLIENT_ENDPOINTS = [
-  ['OpenAI / compatible', `${RELAY_HOST}/v1`],
-  ['Anthropic · Claude SDK', RELAY_HOST],
-  ['Gemini', `${RELAY_HOST}/v1beta`],
+const clientEndpointsFor = (host) => [
+  ['OpenAI / compatible', `${host}/v1`],
+  ['Anthropic · Claude SDK', host],
+  ['Gemini', `${host}/v1beta`],
 ];
 
 // Quota bar colour keyed to REMAINING headroom: red < 10%, amber < 30%, else
@@ -122,14 +145,17 @@ const copy = async (text) => {
   }
 };
 
-const buildSnippets = (key) => ({
-  curl: `curl ${BASE_URL}/chat/completions \\
+// `host` is the live relay host (see relayHostFromServer) — never a literal.
+// Every snippet below is copy-pasted verbatim by customers, so a stale host
+// here is a broken integration, not a cosmetic issue.
+const buildSnippets = (key, host) => ({
+  curl: `curl ${host}/v1/chat/completions \\
   -H "Authorization: Bearer ${key}" \\
   -H "Content-Type: application/json" \\
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'`,
   python: `from openai import OpenAI
 
-client = OpenAI(api_key="${key}", base_url="${BASE_URL}")
+client = OpenAI(api_key="${key}", base_url="${host}/v1")
 resp = client.chat.completions.create(
     model="gpt-4o",
     messages=[{"role": "user", "content": "hi"}],
@@ -137,7 +163,7 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)`,
   node: `import OpenAI from "openai";
 
-const client = new OpenAI({ apiKey: "${key}", baseURL: "${BASE_URL}" });
+const client = new OpenAI({ apiKey: "${key}", baseURL: "${host}/v1" });
 const r = await client.chat.completions.create({
   model: "gpt-4o",
   messages: [{ role: "user", content: "hi" }],
@@ -146,7 +172,7 @@ const r = await client.chat.completions.create({
 
 const client = new Anthropic({
   apiKey: "${key}",
-  baseURL: "https://api.lurus.cn",
+  baseURL: "${host}",
 });
 await client.messages.create({
   model: "claude-3.5-sonnet",
@@ -820,7 +846,17 @@ const HFToken = () => {
       ]
     : [];
 
-  const snippetMap = buildSnippets(rotatedKey(token) || 'YOUR_KEY');
+  // Resolved once per mount from the server this console is served by, so the
+  // snippets, the base-url row and the per-SDK endpoint list can never drift
+  // apart or name a host the customer cannot reach.
+  const relayHost = useMemo(() => relayHostFromServer(), []);
+  const baseUrl = `${relayHost}/v1`;
+  const clientEndpoints = useMemo(
+    () => clientEndpointsFor(relayHost),
+    [relayHost],
+  );
+
+  const snippetMap = buildSnippets(rotatedKey(token) || 'YOUR_KEY', relayHost);
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1184,12 +1220,12 @@ const HFToken = () => {
                     {tr('console.token.base_url', 'base url')}
                   </span>
                   <span className='mono strong' style={{ fontSize: 13 }}>
-                    {BASE_URL}
+                    {baseUrl}
                   </span>
                   <button
                     type='button'
                     className='btn sm'
-                    onClick={() => copy(BASE_URL)}
+                    onClick={() => copy(baseUrl)}
                   >
                     {tr('console.common.copy', 'copy')}
                   </button>
@@ -1259,7 +1295,7 @@ const HFToken = () => {
                 <div
                   style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
                 >
-                  {CLIENT_ENDPOINTS.map(([label, url]) => (
+                  {clientEndpoints.map(([label, url]) => (
                     <div
                       key={label}
                       style={{

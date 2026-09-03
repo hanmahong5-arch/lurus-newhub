@@ -31,7 +31,7 @@ go test -bench=BenchmarkSyncAllChannelModels ./internal/adapter/handler/
 ### Frontend
 
 ```bash
-cd web && bun run test           # + test:watch, typecheck, lint, lint:fix
+cd web && bun run test           # + test:watch, lint (prettier), lint:fix, eslint
 ```
 
 ## Coverage targets (from CLAUDE.md)
@@ -50,7 +50,7 @@ Current (2026-02-13): handler ~45% (14 test files, ~60 tests); app ~30% (2 files
 go test -short -cover ./...          # 1. unit + coverage
 go test -race -short ./...           # 2. race
 go test -run Integration ./...       # 3. integration (env: SQL_DSN)
-cd web && bun run test && bun run typecheck && bun run lint   # 4. frontend
+cd web && bun run test && bun run lint && bun run eslint && bun run check:casing   # 4. frontend (no typecheck script — plain JS)
 ```
 
 GitHub Actions: setup-go 1.25 → unit tests → race → integration (with services via `SQL_DSN` secret).
