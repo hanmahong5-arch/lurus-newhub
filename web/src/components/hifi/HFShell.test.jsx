@@ -176,6 +176,74 @@ describe('HFShell search entry', () => {
       '/console/v2/cmdk',
     );
   });
+
+  // The rail has rendered a ⌘K badge next to that button since the shell was
+  // built, and the whole repo contained exactly one keydown listener — in
+  // Playground, for something else. The badge advertised a shortcut that did
+  // nothing at all.
+  it('⌘K / Ctrl-K opens the command palette', () => {
+    const LocationProbe = () => {
+      const loc = useLocation();
+      return React.createElement(
+        'div',
+        { 'data-testid': 'loc-probe' },
+        loc.pathname,
+      );
+    };
+    const renderAt = (path) =>
+      render(
+        React.createElement(
+          MemoryRouter,
+          { initialEntries: [path] },
+          React.createElement(
+            HFShell,
+            { active: 'dashboard' },
+            React.createElement(LocationProbe),
+          ),
+        ),
+      );
+
+    const { unmount } = renderAt('/console/v2/dashboard');
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    expect(screen.getByTestId('loc-probe').textContent).toBe(
+      '/console/v2/cmdk',
+    );
+    unmount();
+
+    // Ctrl-K for non-mac keyboards.
+    renderAt('/console/v2/dashboard');
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.getByTestId('loc-probe').textContent).toBe(
+      '/console/v2/cmdk',
+    );
+  });
+
+  it('a bare k does not hijack typing', () => {
+    const LocationProbe = () => {
+      const loc = useLocation();
+      return React.createElement(
+        'div',
+        { 'data-testid': 'loc-probe' },
+        loc.pathname,
+      );
+    };
+    render(
+      React.createElement(
+        MemoryRouter,
+        { initialEntries: ['/console/v2/dashboard'] },
+        React.createElement(
+          HFShell,
+          { active: 'dashboard' },
+          React.createElement(LocationProbe),
+        ),
+      ),
+    );
+
+    fireEvent.keyDown(window, { key: 'k' });
+    expect(screen.getByTestId('loc-probe').textContent).toBe(
+      '/console/v2/dashboard',
+    );
+  });
 });
 
 describe('HFShell help escape hatches', () => {

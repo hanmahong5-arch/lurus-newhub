@@ -16,153 +16,264 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import HFShell from '../../../components/hifi/HFShell';
+import HFShell, { NAV_SECTIONS } from '../../../components/hifi/HFShell';
+import { API, isAdmin } from '../../../helpers';
+import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /*
- * HiFi 6 — Cmd-K command palette + IA reference.
- * Ported from design canvas hifi/hf6-cmdk.jsx (2026-05-07).
+ * HiFi 6 — Cmd-K command palette.
+ *
+ * Every group here used to be hardcoded demo data: channels "openai/main ·
+ * $412.80 / 1h · 99.4% healthy", models "gpt-4o · $2.50 / $10 · 128k ctx",
+ * recent requests "req_1f4a…e90c · 504". None of it came from this
+ * installation — the numbers were invented on a design canvas in 2026-05 and
+ * shipped verbatim, so the palette confidently described channels that do not
+ * exist at prices we do not charge. It is now wired to the same endpoints the
+ * corresponding pages use.
+ *
+ * Two consequences, both deliberate:
+ *   - The channels group is admin-only, because /channels sits behind
+ *     AdminAuth (router/api-v2-router.go:150). A non-admin gets no group at
+ *     all rather than an empty one implying they have no channels.
+ *   - Actions with no backend are removed rather than disabled. "Set monthly
+ *     budget…" had nothing behind it (migration 029 gives projects no budget
+ *     column) and "Rotate api key…" had no reachable flow from here.
  */
 
-// Translatable strings are [key, fallback] pairs resolved at render via tr()
-// (module scope has no i18n context). Raw strings (channel/model/request ids,
-// prices, paths) stay untranslated by design.
-const GROUPS = [
-  {
-    g: ['group_navigate', 'navigate'],
-    items: [
-      [['nav_dashboard', 'Dashboard'], '/console/v2/dashboard', 'g d'],
-      [['nav_logs', 'Logs · last 1h'], '/console/v2/log', 'g l'],
-      [['nav_channels', 'Channels'], '/console/v2/channel', 'g c'],
-      [['nav_tokens', 'Tokens'], '/console/v2/token', 'g t'],
-      [['nav_playground', 'Playground'], '/console/v2/playground', 'g p'],
-    ],
-  },
-  {
-    g: ['group_channels', 'channels'],
-    items: [
-      ['openai/main', ['demo_ch_openai', '$412.80 / 1h · 99.4% healthy'], null],
-      [
-        'anthropic/eu',
-        ['demo_ch_anthropic', '$281.10 / 1h · 98.1% healthy'],
-        null,
-      ],
-      ['vertex/asia', ['demo_ch_vertex', '$88.60 / 1h · 87.2% degraded'], null],
-    ],
-  },
-  {
-    g: ['group_models', 'models'],
-    items: [
-      ['gpt-4o', ['demo_model_gpt4o', '$2.50 / $10 · 128k ctx'], null],
-      [
-        'claude-3.5-sonnet',
-        ['demo_model_claude', '$3.00 / $15 · 200k ctx'],
-        null,
-      ],
-      ['gemini-1.5-pro', ['demo_model_gemini', '$1.25 / $5 · 2M ctx'], null],
-    ],
-  },
-  {
-    g: ['group_recent', 'recent'],
-    items: [
-      ['req_1f4a...e90c · 504', 'gpt-4o · 4.8s · acme', null],
-      ['req_8b03...77ef · 200', 'claude-3.5 · 1.1s · contoso', null],
-    ],
-  },
-  {
-    g: ['group_actions', 'actions'],
-    items: [
-      [
-        ['action_create_token', 'Create token…'],
-        ['action_create_token_hint', 'opens wizard'],
-        '⌘N',
-      ],
-      [['action_rotate_key', 'Rotate api key…'], '', null],
-      [['action_set_budget', 'Set monthly budget…'], '', null],
-      [
-        ['action_toggle_theme', 'Toggle theme'],
-        ['action_toggle_theme_hint', 'light · dark'],
-        '⌘.',
-      ],
-    ],
-  },
-];
+const MAX_PER_GROUP = 6;
 
-const KBD_REF = [
-  [
-    ['⌘', 'K'],
-    ['kbd_open_palette', 'open palette · search anything'],
-  ],
-  [
-    ['g', 'd'],
-    ['kbd_go_dashboard', 'go to dashboard'],
-  ],
-  [
-    ['g', 'l'],
-    ['kbd_go_logs', 'go to logs'],
-  ],
-  [
-    ['g', 'c'],
-    ['kbd_go_channels', 'go to channels'],
-  ],
-  [
-    ['g', 't'],
-    ['kbd_go_tokens', 'go to tokens'],
-  ],
-  [
-    ['g', 'p'],
-    ['kbd_go_playground', 'go to playground'],
-  ],
-  [
-    ['⌘', 'N'],
-    ['kbd_new_token', 'new token'],
-  ],
-  [
-    ['⌘', '.'],
-    ['kbd_toggle_theme', 'toggle theme'],
-  ],
-];
+// The models group shows a price, which means joining two endpoints: /models
+// is the catalogue (name + vendor) and /pricing carries the ratio or per-call
+// price. A model with no pricing row shows its vendor alone — never an
+// invented number.
+const priceHint = (entry, tr) => {
+  if (!entry) return '';
+  if (entry.quota_type === 1 && typeof entry.model_price === 'number') {
+    return tr('console.palette.per_call_price', '${{price}} / call', {
+      price: entry.model_price,
+    });
+  }
+  if (typeof entry.model_ratio === 'number') {
+    return tr('console.palette.ratio', 'ratio {{ratio}}', {
+      ratio: entry.model_ratio,
+    });
+  }
+  return '';
+};
 
 const HFCmdK = () => {
   const { t: tr } = useTranslation();
+  const navigate = useNavigate();
+  const tenantSlug = useTenantSlug();
   const [open, setOpen] = useState(true);
   const [q, setQ] = useState('');
   const [hover, setHover] = useState(0);
+  const admin = isAdmin();
 
-  // Resolve a [key, fallback] pair via i18n; pass raw strings through.
-  const tx = (v) =>
-    Array.isArray(v) ? tr(`console.palette.${v[0]}`, v[1]) : v;
+  const [models, setModels] = useState([]);
+  const [pricing, setPricing] = useState([]);
+  const [tokens, setTokens] = useState([]);
+  const [recent, setRecent] = useState([]);
+  const [channels, setChannels] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchAll = useCallback(async () => {
+    if (!tenantSlug) return;
+    setLoading(true);
+    // allSettled: one slow or forbidden source must not blank the whole
+    // palette. Each group degrades independently to "not loaded".
+    const requests = [
+      API.get(`/api/v2/${tenantSlug}/models?limit=50`, {
+        skipErrorHandler: true,
+      }),
+      API.get(`/api/v2/${tenantSlug}/pricing`, { skipErrorHandler: true }),
+      API.get(`/api/v2/${tenantSlug}/tokens?p=1&size=${MAX_PER_GROUP}`, {
+        skipErrorHandler: true,
+      }),
+      API.get(`/api/v2/${tenantSlug}/logs?page=1&page_size=${MAX_PER_GROUP}`, {
+        skipErrorHandler: true,
+      }),
+    ];
+    if (admin) {
+      requests.push(
+        API.get(`/api/v2/${tenantSlug}/channels?p=1&size=${MAX_PER_GROUP}`, {
+          skipErrorHandler: true,
+        }),
+      );
+    }
+    const [mRes, pRes, tRes, lRes, cRes] = await Promise.allSettled(requests);
+
+    const payload = (res) =>
+      res?.status === 'fulfilled' && res.value?.data?.success
+        ? res.value.data.data
+        : null;
+
+    setModels(payload(mRes)?.items ?? []);
+    const pricingData = payload(pRes);
+    setPricing(Array.isArray(pricingData?.pricing) ? pricingData.pricing : []);
+    setTokens(payload(tRes)?.items ?? []);
+    setRecent(payload(lRes)?.logs ?? []);
+    setChannels(admin ? (payload(cRes)?.items ?? []) : []);
+    setLoading(false);
+  }, [tenantSlug, admin]);
+
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
+
+  const priceByModel = useMemo(() => {
+    const map = new Map();
+    for (const p of pricing) {
+      if (p?.model_name) map.set(p.model_name, p);
+    }
+    return map;
+  }, [pricing]);
+
+  // Groups are built from live state. An empty group is dropped entirely: an
+  // empty "channels" heading reads as "you have none", and that is a claim we
+  // cannot make when the request may simply have failed.
+  const groups = useMemo(() => {
+    const out = [];
+
+    out.push({
+      key: 'navigate',
+      title: tr('console.palette.group_navigate', 'navigate'),
+      // Same source and same minRole gating as the rail itself, so the palette
+      // cannot offer an admin destination to a user who has no such nav entry.
+      rows: NAV_SECTIONS.filter(
+        (s) => !s.minRole || (admin ? 10 : 0) >= s.minRole,
+      ).flatMap((s) =>
+        s.items.map((it) => ({
+          label: tr(it.key, it.label),
+          hint: it.href,
+          href: it.href,
+        })),
+      ),
+    });
+
+    if (models.length) {
+      out.push({
+        key: 'models',
+        title: tr('console.palette.group_models', 'models'),
+        rows: models.map((m) => ({
+          label: m.model_name,
+          hint: [m.vendor, priceHint(priceByModel.get(m.model_name), tr)]
+            .filter(Boolean)
+            .join(' · '),
+          href: '/console/v2/pricing',
+        })),
+      });
+    }
+
+    if (tokens.length) {
+      out.push({
+        key: 'tokens',
+        title: tr('console.palette.group_tokens', 'tokens'),
+        rows: tokens.map((t) => ({
+          label: t.name,
+          hint: t.unlimited_quota
+            ? tr('console.palette.token_unlimited', 'unlimited')
+            : tr('console.palette.token_remaining', '{{quota}} remaining', {
+                quota: t.remain_quota,
+              }),
+          href: '/console/v2/token',
+        })),
+      });
+    }
+
+    if (recent.length) {
+      out.push({
+        key: 'recent',
+        title: tr('console.palette.group_recent', 'recent requests'),
+        rows: recent.map((r) => ({
+          label: r.model_name || '—',
+          hint: [
+            r.total_latency_ms != null ? `${r.total_latency_ms}ms` : null,
+            r.token_name || null,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+          href: '/console/v2/log',
+        })),
+      });
+    }
+
+    if (admin && channels.length) {
+      out.push({
+        key: 'channels',
+        title: tr('console.palette.group_channels', 'channels'),
+        rows: channels.map((ch) => ({
+          label: ch.name,
+          hint:
+            ch.status === 1
+              ? tr('console.palette.channel_enabled', 'enabled')
+              : tr('console.palette.channel_disabled', 'disabled'),
+          href: '/console/v2/channel',
+        })),
+      });
+    }
+
+    out.push({
+      key: 'actions',
+      title: tr('console.palette.group_actions', 'actions'),
+      rows: [
+        {
+          label: tr('console.palette.action_create_token', 'Create token…'),
+          hint: '/console/v2/token',
+          href: '/console/v2/token',
+        },
+      ],
+    });
+
+    return out.map((g) => ({ ...g, rows: g.rows.slice(0, MAX_PER_GROUP) }));
+  }, [tr, admin, models, priceByModel, tokens, recent, channels]);
+
+  // The search box used to be inert — typing changed nothing. Filtering is
+  // client-side over what is already loaded, which is honest about its scope:
+  // it searches the palette, not the whole installation.
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return groups;
+    return groups
+      .map((g) => ({
+        ...g,
+        rows: g.rows.filter((r) =>
+          `${r.label} ${r.hint}`.toLowerCase().includes(needle),
+        ),
+      }))
+      .filter((g) => g.rows.length > 0);
+  }, [groups, q]);
+
+  const resultCount = filtered.reduce((n, g) => n + g.rows.length, 0);
+
+  const go = (row) => {
+    if (!row?.href) return;
+    setOpen(false);
+    navigate(row.href);
+  };
 
   return (
     <HFShell
-      active='tokens'
+      active='dashboard'
       crumbs={[
         tr('console.palette.crumb_account', 'my account'),
-        tr('console.palette.crumb_tokens', 'tokens'),
+        tr('console.palette.crumb_palette', 'command palette'),
       ]}
-      actions={
-        <>
-          <button type='button' className='btn'>
-            {tr('console.palette.btn_last_30d', 'last 30d ▾')}
-          </button>
-          <button type='button' className='btn primary'>
-            {tr('console.palette.btn_new_token', '+ new token')}
-          </button>
-        </>
-      }
     >
       <div style={{ position: 'relative', height: '100%' }}>
         <div className='hf-page-head'>
           <div>
             <div className='lbl' style={{ marginBottom: 6 }}>
-              {tr('console.palette.heading_lbl', 'tokens')}
+              {tr('console.palette.heading_lbl', 'command palette')}
             </div>
-            <h1>{tr('console.palette.heading', { count: 5 })}</h1>
+            <h1>{tr('console.palette.heading_plain', 'search anything')}</h1>
             <div className='sub'>
               {tr(
                 'console.palette.sub',
-                'try the global palette · ⌘K is the fastest path through Lurus Hub',
+                'jump to a page, model, token, channel or recent request',
               )}
             </div>
           </div>
@@ -172,6 +283,10 @@ const HFCmdK = () => {
             <div className='lbl'>
               {tr('console.palette.kbd_reference', 'keyboard reference')}
             </div>
+            {/* Only shortcuts that exist. This list used to advertise
+                g d / g l / g c / g t / g p / ⌘N / ⌘. — seven bindings, none of
+                them implemented anywhere in the app. ⌘K is real now (HFShell
+                registers the listener). */}
             <div
               style={{
                 display: 'grid',
@@ -181,19 +296,19 @@ const HFCmdK = () => {
                 fontSize: 12,
               }}
             >
-              {KBD_REF.map(([k, d], i) => (
-                <div
-                  key={i}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-                >
-                  {k.map((x, j) => (
-                    <span key={j} className='kbd'>
-                      {x}
-                    </span>
-                  ))}
-                  <span className='muted'>{tx(d)}</span>
-                </div>
-              ))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className='kbd'>⌘</span>
+                <span className='kbd'>K</span>
+                <span className='muted'>
+                  {tr('console.palette.kbd_open_palette', 'open palette')}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className='kbd'>esc</span>
+                <span className='muted'>
+                  {tr('console.palette.kbd_close', 'close palette')}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -214,6 +329,7 @@ const HFCmdK = () => {
           >
             <div
               onClick={(e) => e.stopPropagation()}
+              data-testid='palette'
               style={{
                 width: 600,
                 maxHeight: 480,
@@ -239,11 +355,15 @@ const HFCmdK = () => {
                 </span>
                 <input
                   autoFocus
+                  data-testid='palette-input'
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setOpen(false);
+                  }}
                   placeholder={tr(
                     'console.palette.ph_search',
-                    'go to · run · search logs models tokens channels…',
+                    'go to · search models tokens channels…',
                   )}
                   style={{
                     flex: 1,
@@ -258,18 +378,39 @@ const HFCmdK = () => {
                 <span className='kbd'>esc</span>
               </div>
               <div style={{ overflow: 'auto', flex: 1 }}>
-                {GROUPS.map((gr, gi) => (
-                  <div key={gi}>
+                {loading && (
+                  <div className='muted' style={{ padding: '12px 16px' }}>
+                    {tr('console.common.loading', 'loading…')}
+                  </div>
+                )}
+                {!loading && resultCount === 0 && (
+                  <div
+                    className='muted'
+                    data-testid='palette-empty'
+                    style={{ padding: '12px 16px' }}
+                  >
+                    {tr('console.palette.no_results', 'no matches')}
+                  </div>
+                )}
+                {filtered.map((gr, gi) => (
+                  <div key={gr.key}>
                     <div className='lbl' style={{ padding: '10px 16px 4px' }}>
-                      {tx(gr.g)}
+                      {gr.title}
                     </div>
-                    {gr.items.map((it, i) => {
+                    {gr.rows.map((row, i) => {
                       const idx = gi * 100 + i;
                       const active = hover === idx;
                       return (
                         <div
-                          key={i}
+                          key={`${gr.key}-${i}`}
+                          data-testid={`palette-row-${gr.key}`}
+                          role='button'
+                          tabIndex={0}
                           onMouseEnter={() => setHover(idx)}
+                          onClick={() => go(row)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') go(row);
+                          }}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -288,15 +429,14 @@ const HFCmdK = () => {
                             className='strong'
                             style={{ minWidth: 230, fontSize: 13 }}
                           >
-                            {tx(it[0])}
+                            {row.label}
                           </span>
                           <span
                             className='muted mono'
                             style={{ flex: 1, fontSize: 11 }}
                           >
-                            {tx(it[1])}
+                            {row.hint}
                           </span>
-                          {it[2] && <span className='kbd'>{it[2]}</span>}
                         </div>
                       );
                     })}
@@ -315,20 +455,16 @@ const HFCmdK = () => {
                 }}
               >
                 <span>
-                  <span className='kbd'>↑↓</span>{' '}
-                  {tr('console.palette.footer_navigate', 'navigate')}
-                </span>
-                <span>
                   <span className='kbd'>↵</span>{' '}
                   {tr('console.palette.footer_open', 'open')}
                 </span>
-                <span>
-                  <span className='kbd'>⌘↵</span>{' '}
-                  {tr('console.palette.footer_new_tab', 'new tab')}
-                </span>
                 <span style={{ flex: 1 }} />
-                <span>
-                  {tr('console.palette.footer_results', { count: 72 })}
+                {/* A real count of what is on screen. It used to read a
+                    constant 72 regardless of content. */}
+                <span data-testid='palette-count'>
+                  {tr('console.palette.footer_results', '{{count}} results', {
+                    count: resultCount,
+                  })}
                 </span>
               </div>
             </div>
