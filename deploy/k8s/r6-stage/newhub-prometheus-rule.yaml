@@ -1,3 +1,35 @@
+# ⚠️ REFERENCE ONLY — NOT DEPLOYED (verified 2026-09-03)
+#
+# Nothing evaluates these 20 rules. Two independent reasons:
+#
+#   1. This file is not in deploy/k8s/r6-stage/kustomization.yaml's `resources:`
+#      list, so no apply and no ArgoCD sync ever touches it.
+#   2. Adding it there would not fix that. `PrometheusRule` is a custom resource
+#      owned by the Prometheus Operator, and R6 runs no Prometheus Operator —
+#      the apply would be rejected for an unknown kind. R6's monitoring is host
+#      netdata (deploy/r6-host-netdata/).
+#
+# It is kept as the record of what we decided was worth alerting on. Do not
+# read a rule here as an alert that fires, and do not cite this file from Go
+# source as if it were live — internal/pkg/metrics/alert_wiring_honesty_test.go
+# fails the build if that happens again.
+#
+# Two rules below are also wrong on their own terms and are left as written so
+# the correction is visible when they are ported:
+#   - HubAvailabilityBelowSLO derives RELAY availability from
+#     lurus_gateway_requests_total, which counts every HTTP request including
+#     the console. Console traffic dominates and dilutes the relay error ratio.
+#   - HubOverheadHigh subtracts p95(relay_duration_seconds) from
+#     p95(request_duration_seconds): two different populations, so the result is
+#     normally negative and can never cross the positive 0.1 threshold.
+#     lurus_gateway_relay_overhead_duration_seconds already measures this
+#     directly.
+#
+# The live alerting path is host netdata, which is already proven to deliver
+# (it pages on backup freshness today). Porting target: three rules that can
+# actually be provoked — relay_errors_total{error_type="upstream_5xx"} surges,
+# rate_limit_degraded_total > 0, and relay_failover_suppressed_total surges.
+#
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:

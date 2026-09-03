@@ -382,8 +382,14 @@ var (
 	// tenant credit pool balance reached zero. Labeled by tenant_id and
 	// pool_kind (currently always "relay" — extensible for future pool types).
 	//
-	// Alert: NewhubPoolExhaustedRejections fires when rate > 5/min sustained
-	// for 5 minutes (see deploy/k8s/r6-stage/newhub-prometheus-rule.yaml).
+	// ⚠️ NOT ALERTED. This used to say "Alert:
+	// NewhubPoolExhaustedRejections fires when rate > 5/min sustained for 5
+	// minutes", citing a rule file — the only reference to that file anywhere in
+	// the repository, and it reads as an operational guarantee. Nothing fires:
+	// the rule file is a PrometheusRule CRD, it is not in any kustomization, and
+	// R6 runs no Prometheus Operator to accept it. An exhausted tenant credit
+	// pool pages nobody today; it is visible only by reading this counter.
+	// See alert_wiring_honesty_test.go, which fails the build if this drifts back.
 	PoolExhaustedRejections = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
