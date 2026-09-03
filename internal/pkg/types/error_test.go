@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -126,4 +127,55 @@ func TestUpstreamProviderContext_ShapingAndMasking(t *testing.T) {
 	if e.StatusCode != 500 {
 		t.Errorf("status code must be unchanged by message shaping, got %d", e.StatusCode)
 	}
+}
+
+// TestRelayErrorType_UpstreamInsufficientBalance separates "our provider
+// account is unpaid" from upstream_4xx, the bucket that means "the caller sent
+// a bad request". Reading an unpaid invoice as customer error points whoever is
+// on call at the wrong party, and it is the one failure class here that
+// retrying or failing over cannot fix.
+func TestRelayErrorType_UpstreamInsufficientBalance(t *testing.T) {
+	t.Run("upstream 402", func(t *testing.T) {
+		// DeepSeek answers 402 when the account balance is exhausted.
+		e := WithOpenAIError(OpenAIError{Message: "Insufficient Balance"}, http.StatusPaymentRequired)
+		if got := RelayErrorType(e); got != "upstream_insufficient_balance" {
+			t.Errorf("RelayErrorType = %q, want upstream_insufficient_balance", got)
+		}
+	})
+
+	t.Run("upstream error codes", func(t *testing.T) {
+		for _, code := range []string{"insufficient_quota", "billing_not_active", "Arrearage"} {
+			e := WithOpenAIError(OpenAIError{Code: code, Message: "no credit"}, http.StatusForbidden)
+			if got := RelayErrorType(e); got != "upstream_insufficient_balance" {
+				t.Errorf("code %q: RelayErrorType = %q, want upstream_insufficient_balance", code, got)
+			}
+		}
+	})
+
+	// The critical non-regression: OUR OWN 402s are the caller running out of
+	// credit and must stay in insufficient_quota. If this classification were
+	// placed before the error-code switch it would swallow all of them, and the
+	// customer-facing quota signal would silently become an upstream signal.
+	t.Run("our own 402s are unaffected", func(t *testing.T) {
+		for _, code := range []ErrorCode{
+			ErrorCodeInsufficientUserQuota,
+			ErrorCodeTokenQuotaExhausted,
+			ErrorCodeTenantQuotaExceeded,
+			ErrorCodePreConsumeTokenQuotaFailed,
+		} {
+			e := &NewAPIError{errorCode: code, StatusCode: http.StatusPaymentRequired}
+			if got := RelayErrorType(e); got != "insufficient_quota" {
+				t.Errorf("%s: RelayErrorType = %q, want insufficient_quota — this is the "+
+					"caller's balance, not ours", code, got)
+			}
+		}
+	})
+
+	// An ordinary upstream 4xx must not drift into the new bucket.
+	t.Run("plain upstream 4xx stays upstream_4xx", func(t *testing.T) {
+		e := WithOpenAIError(OpenAIError{Code: "invalid_request_error"}, http.StatusBadRequest)
+		if got := RelayErrorType(e); got != "upstream_4xx" {
+			t.Errorf("RelayErrorType = %q, want upstream_4xx", got)
+		}
+	})
 }
