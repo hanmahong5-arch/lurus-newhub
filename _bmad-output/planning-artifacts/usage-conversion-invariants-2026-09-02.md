@@ -287,7 +287,20 @@ Locks: `provider/gemini/stream_incomplete_test.go`. Mutation 5/6 red; the sixth 
 frames go through `StringData`, which already refuses to write on a done request context,
 so the guard is a redundant statement of intent, not a behaviour.
 
+Operator visibility (same day, third PR): the stream handlers return no error for an
+abandoned stream, so the relay's terminal-error path never saw one — the request counted
+as a success in `relay_requests_total`/`relay_errors_total` and the only trace was the
+consume-log note "上游没有返回计费信息". `helper.ReportIncompleteStream` (called at all
+four sites) now records `relay_errors_total{provider,model,error_type}` through the
+existing `RelayErrorType` taxonomy (502 → `upstream_5xx`, relay idle timeout →
+`upstream_timeout`) and logs the reason. Locks: `helper/stream_error_report_test.go` plus
+one `*_metric_test.go` per provider package (finished streams and callers that hung up
+must not count). Mutation 7/7 red.
+
 Not done / owner:
+- Netdata: no alert is wired on `relay_errors_total{error_type="upstream_5xx"}` rate
+  today; an abandoned-stream burst from one provider is the signal to alert on
+  (host-side netdata config, outside this repo).
 - Billing policy differs by path: OpenAI-compatible abandoned streams bill zero, native
   Anthropic ones bill the partial text. Left as is (policy), documented here.
 - The non-stream Gemini error envelope (`relay.go` `c.JSON` path) still uses the OpenAI
