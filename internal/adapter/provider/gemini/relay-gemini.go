@@ -1214,7 +1214,7 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	// message_stop that would dress the partial answer up as a complete one.
 	// When the caller itself hung up there is nobody left to tell.
 	if !complete && helper.ClientListening(c, info) {
-		helper.StreamError(c, info.RelayFormat, helper.IncompleteStreamError(info))
+		helper.StreamError(c, info.RelayFormat, helper.ReportIncompleteStream(c, info))
 		if info.ClaudeConvertInfo != nil {
 			info.Done = true
 		}

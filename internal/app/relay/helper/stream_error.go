@@ -2,10 +2,14 @@ package helper
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
+	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -101,4 +105,30 @@ func IncompleteStreamError(info *relaycommon.RelayInfo) *types.NewAPIError {
 		status = http.StatusGatewayTimeout
 	}
 	return types.NewErrorWithStatusCode(errors.New(msg), types.ErrorCodeUpstreamStreamIncomplete, status, types.ErrOptionWithSkipRetry())
+}
+
+// ReportIncompleteStream builds the incomplete-stream error and makes the
+// event visible to operators before it goes to the caller. The stream handler
+// returns no error for an abandoned stream (the frames are out, billing is
+// settled separately), so the relay's terminal-error path never sees it: the
+// request counted as a success and the only trace was a consume-log note. The
+// count now lands in relay_errors_total under the same provider/model/type
+// taxonomy as every other terminal failure (502 → upstream_5xx, the relay's
+// own idle timeout → upstream_timeout), plus one error line carrying the
+// reason. Call exactly once per abandoned stream.
+func ReportIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
+	err := IncompleteStreamError(info)
+	provider, model, reason := "Unknown", "unknown", ""
+	if info != nil {
+		reason = info.StreamEndReason
+		if info.ChannelMeta != nil {
+			provider = constant.GetChannelTypeName(info.ChannelType)
+		}
+		if info.OriginModelName != "" {
+			model = info.OriginModelName
+		}
+	}
+	metrics.RecordRelayError(provider, model, types.RelayErrorType(err))
+	logger.LogError(c, fmt.Sprintf("upstream stream incomplete: reason=%s provider=%s model=%s", reason, provider, model))
+	return err
 }

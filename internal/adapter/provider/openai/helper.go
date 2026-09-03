@@ -311,7 +311,7 @@ func HandleIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo, lastStr
 		}
 	}
 	// OpenAI wire: the last chunk already went out through sendFinalStreamData.
-	helper.StreamError(c, info.RelayFormat, helper.IncompleteStreamError(info))
+	helper.StreamError(c, info.RelayFormat, helper.ReportIncompleteStream(c, info))
 }
 
 func handleLastResponse(lastStreamData string, responseId *string, createAt *int64,
