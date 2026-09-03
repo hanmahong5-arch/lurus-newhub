@@ -414,20 +414,27 @@ describe('Log page', () => {
     });
   });
 
-  // 6. TTFT renders as an honest n/a cell (with a reason), never a silent —;
-  //    upstream shows the channel id when the row carries one.
-  it('renders TTFT as n/a and upstream from the channel id', async () => {
-    const log = {
-      id: 1,
-      type: 2,
-      model_name: 'gpt-4o',
-      total_latency_ms: 120,
-      prompt_tokens: 100,
-      completion_tokens: 200,
-      quota: 1000,
-      created_at: Math.floor(Date.now() / 1000),
-      channel: 7,
-    };
+  // 6. TTFT. A row with no first token still renders an honest n/a cell (never
+  //    a silent —); upstream shows the channel id when the row carries one.
+  //
+  //    This used to assert the reason matched /ttft/i, which passed against the
+  //    text "TTFT not stored: the log schema has no time-to-first-token
+  //    column" — a false claim. other.frt is written by the relay and kept by
+  //    the user-tier projection on purpose. The reason must now describe why
+  //    THIS row has no value, not deny that the field exists.
+  const ttftBaseLog = {
+    id: 1,
+    type: 2,
+    model_name: 'gpt-4o',
+    total_latency_ms: 120,
+    prompt_tokens: 100,
+    completion_tokens: 200,
+    quota: 1000,
+    created_at: Math.floor(Date.now() / 1000),
+    channel: 7,
+  };
+
+  const wireLogs = (log) => {
     API.get.mockImplementation((url) => {
       if (url.includes('/logs/stat')) {
         return Promise.resolve({ data: { success: true, data: {} } });
@@ -436,18 +443,41 @@ describe('Log page', () => {
         data: { success: true, data: { logs: [log], total: 1 } },
       });
     });
+  };
+
+  it('renders TTFT as n/a for a row with no frt, and upstream from the channel id', async () => {
+    wireLogs(ttftBaseLog);
 
     render(<HFLog />);
 
     await waitFor(() => {
       expect(screen.getAllByTestId('na-cell').length).toBeGreaterThan(0);
     });
-    const naCells = screen.getAllByTestId('na-cell');
-    expect(
-      naCells.some((c) => /ttft/i.test(c.getAttribute('title') || '')),
-    ).toBe(true);
+    const reasons = screen
+      .getAllByTestId('na-cell')
+      .map((c) => c.getAttribute('title') || '');
+    expect(reasons.some((r) => /first token/i.test(r))).toBe(true);
+    // The retired lie must not come back.
+    expect(reasons.some((r) => /schema has no/i.test(r))).toBe(false);
     // upstream column shows "#7" because log.channel is present.
     expect(screen.getByText('#7')).toBeTruthy();
+  });
+
+  it('renders the TTFT value from other.frt when the row carries one', async () => {
+    wireLogs({
+      ...ttftBaseLog,
+      other: JSON.stringify({ frt: 412.6 }),
+    });
+
+    render(<HFLog />);
+
+    // Rounded, with the same ms suffix the latency column uses.
+    await waitFor(() => expect(screen.getByText('413')).toBeTruthy());
+    // …and no n/a cell claiming TTFT is unavailable on a row that has it.
+    const reasons = screen
+      .queryAllByTestId('na-cell')
+      .map((c) => c.getAttribute('title') || '');
+    expect(reasons.some((r) => /first token/i.test(r))).toBe(false);
   });
 
   // ── Routing trace (other.admin_info.route_attempts) ───────────────────────

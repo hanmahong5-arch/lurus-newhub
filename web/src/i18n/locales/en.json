@@ -415,7 +415,7 @@
         "th_token": "token",
         "th_tok": "tok",
         "th_code": "code",
-        "ttft_na_reason": "TTFT not stored: the log schema has no time-to-first-token column",
+        "ttft_na_reason": "no first token recorded for this request (non-streaming requests emit none)",
         "upstream_na_reason": "upstream channel id not recorded on this log row",
         "outcome_ok": "ok",
         "outcome_error": "error",
