@@ -334,6 +334,46 @@ before the later-sequenced execution work.
 | **P1-5** | **🔴 WHOLE-cluster RPO=∞ (live 2026-06-13)**: pg_dump CronJob never deployed; CNPG base backups broken since 03-02 (PG pod can't reach API `10.43.0.1:443`); `retentionPolicy 2d` → no restorable base. **Track A**: deploy hostPath-`/data` pg_dump of `identity`+`newhub` (floor); **Track B**: fix pod→API + bump retention (PITR) | platform infra/storage; **SLA #1**, platform-wide |
 | **P2-2** | sealed-secrets choice + decouple shared `IDENTITY_SESSION_SECRET` | controller/secret-custody choice |
 | **P2-4** | `hub.lurus.cn` DNS / R1 PROD launch | owner explicitly PMF-gated |
+| **PRICE-1** | **🔴 xAI cache reads are billed at full price today.** Decide the grok context-tier pricing | **money, currently wrong in our favour** — see below |
+| **PRICE-2** | GPT-5.6-series model ratios | blocks serving those models at all — see below |
+
+### PRICE-1 — grok context-tier pricing (blocking, currently mispricing)
+
+Measured 2026-09-03 against HEAD:
+
+- `internal/pkg/setting/ratio_setting/model_ratio.go:257-265` carries eight grok
+  entries, all from the grok-2 / `*-beta` era.
+- `cache_ratio.go` contains **zero** grok entries.
+- `GetCacheRatio` returns `1` for an unknown model
+  (`cache_ratio.go:149-156`), and `helper/price.go:83` uses that value
+  directly.
+
+Composed: **every xAI cached-token read is charged at the full input rate**,
+because "no entry" and "no discount" are the same value. This is not a latent
+risk; it is what the code does on each request today.
+
+It is gated rather than fixed because the fix is a business decision, not an
+edit. xAI prices ≥200k-context requests in a different tier, and a single
+scalar `model_ratio` per model name cannot express "one price below 200k,
+another above". Someone has to choose:
+
+  (a) price the whole model at the higher tier (over-charges short requests),
+  (b) price at the lower tier (under-charges long ones — we absorb it), or
+  (c) add context-length tiering to the ratio model (a schema change).
+
+Do not "just add a cache ratio": picking a number without deciding (a)/(b)/(c)
+sets one silently. Refresh the eight model entries against x.ai's current
+price page in the same pass — a prior review reported them as no longer listed
+there, which was not re-verified here.
+
+### PRICE-2 — GPT-5.6-series ratios (blocking those models)
+
+The 5.6 series has no `model_ratio` entry, so those models cannot be served
+with a correct price. Related and already handled in code: from GPT-5.6 the
+cache-write multiplier is 1.25× on the OpenAI wire, which
+`CacheCreationRatioForWire` implements — unlisted models default to 1 on the
+OpenAI wire specifically so older GPT models are not over-charged. The ratios
+themselves are still owner input.
 
 ## Deferred by red-team calibration (pre-PMF — do NOT build now)
 
