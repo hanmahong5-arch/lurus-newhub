@@ -326,7 +326,21 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		// 正常结束
 		logger.LogInfo(c, "streaming finished")
 		if !terminalSeen.Load() {
-			info.StreamEndReason = relaycommon.StreamEndUpstreamClosed
+			// A caller that hangs up mid-stream usually ends the upstream read
+			// too, so stopChan and the request context both become ready and
+			// Go's select picks among ready cases AT RANDOM. Without this
+			// check the reason recorded for one physical event is a coin
+			// flip, and the losing side is the expensive one: a client_gone
+			// stream logged as upstream_closed is an ERR line blaming the
+			// provider for a customer pressing Ctrl-C, and it is the signal
+			// the planned upstream-error alerts read. Ask the context
+			// directly instead of racing it — the caller being gone is a
+			// fact, not an event we might miss.
+			if c.Request.Context().Err() != nil {
+				info.StreamEndReason = relaycommon.StreamEndClientGone
+			} else {
+				info.StreamEndReason = relaycommon.StreamEndUpstreamClosed
+			}
 		}
 	case <-c.Request.Context().Done():
 		// 客户端断开连接
