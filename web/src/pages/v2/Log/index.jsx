@@ -29,8 +29,9 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /*
  * v2 Log page — wired to GET /api/v2/:tenant_slug/logs (+ /logs/stat header).
- * TTFT is not stored in the log schema → rendered as an honest n/a, never a
- * silent —. Upstream channel is shown when the row carries a channel id/name,
+ * TTFT comes from other.frt when the request produced a first token, and an
+ * honest n/a (never a silent —) when it did not. Upstream channel is shown when
+ * the row carries a channel id/name,
  * otherwise n/a. The outcome tag is derived from the log `type` (error rows are
  * not painted green). Live tail polls /logs?after_id=<cursor> every 3s: the
  * service runs fixed replicas over shared Postgres, so a stateless cursor-poll
@@ -82,6 +83,42 @@ const parseOther = (row) => {
   } catch (_) {
     return null;
   }
+};
+
+// Time to first token. Two identical hardcoded `NotAvailable` cells used to
+// live in the trace table and the live tail, both claiming "the log schema has
+// no time-to-first-token column". That reason was false: the relay writes
+// `other.frt` on every request that produced a first token
+// (internal/app/log_info_generate.go), it survives the user-tier projection on
+// purpose (repo.SanitizeOtherForUser keeps it — it is the caller's own request
+// timing, classified TierPublic), and the detail panel has been rendering it
+// all along. The table was the only place still saying it did not exist.
+//
+// n/a is still a real and common answer, so this does not always render a
+// number: a non-streaming request never emits a first token, so no `frt` key is
+// written at all, and rows from before 2026-09-01 carry the -1000 "no first
+// token observed" sentinel, which the server strips rather than show a negative
+// latency. What changed is only that the stated reason is now true.
+const TtftCell = ({ row }) => {
+  const { t: tr } = useTranslation();
+  const o = parseOther(row);
+  const frt = o?.frt;
+  if (frt != null && Number.isFinite(Number(frt))) {
+    return (
+      <>
+        {Math.round(Number(frt))}
+        <span className='faint'>ms</span>
+      </>
+    );
+  }
+  return (
+    <NotAvailable
+      reason={tr(
+        'console.log.ttft_na_reason',
+        'no first token recorded for this request (non-streaming requests emit none)',
+      )}
+    />
+  );
 };
 
 const fmtTime = (unixSec) => {
@@ -759,12 +796,7 @@ const HFLog = () => {
                             )}
                           </td>
                           <td className='mono'>
-                            <NotAvailable
-                              reason={tr(
-                                'console.log.ttft_na_reason',
-                                'TTFT not stored: the log schema has no time-to-first-token column',
-                              )}
-                            />
+                            <TtftCell row={r} />
                           </td>
                           <td className='strong'>{r.model_name || '—'}</td>
                           <td className='mono muted'>
@@ -1316,12 +1348,7 @@ const HFLog = () => {
                             )}
                           </td>
                           <td className='mono'>
-                            <NotAvailable
-                              reason={tr(
-                                'console.log.ttft_na_reason',
-                                'TTFT not stored: the log schema has no time-to-first-token column',
-                              )}
-                            />
+                            <TtftCell row={r} />
                           </td>
                           <td className='strong'>{r.model_name || '—'}</td>
                           <td className='mono muted'>

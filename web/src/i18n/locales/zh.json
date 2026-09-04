@@ -415,7 +415,7 @@
         "th_token": "令牌",
         "th_tok": "tok",
         "th_code": "状态",
-        "ttft_na_reason": "未存储 TTFT：日志表没有首 token 延迟字段",
+        "ttft_na_reason": "该请求没有记录首 token（非流式请求不产生首 token）",
         "upstream_na_reason": "该日志行未记录上游渠道 ID",
         "outcome_ok": "成功",
         "outcome_error": "错误",
