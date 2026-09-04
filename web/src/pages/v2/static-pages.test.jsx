@@ -20,6 +20,10 @@ For commercial licensing, please contact support@quantumnous.com
 // β5: render-only smoke tests for static / illustrative v2 pages.
 // These pages carry no backend API calls; we assert they mount without
 // throwing and render at least one DOM node.
+//
+// CommandPalette left this file on 2026-09-03: it now fetches models,
+// pricing, tokens, logs and channels, so "renders without error" is no longer
+// a meaningful assertion about it. It has its own suite with real mocks.
 
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
@@ -86,7 +90,6 @@ vi.mock('../../components/hifi/TweaksPanel', () => ({
 // ─── imports after mocks ──────────────────────────────────────────────────────
 
 import AccountDisabled from './AccountDisabled/index';
-import CommandPalette from './CommandPalette/index';
 import DesignSystem from './DesignSystem/index';
 import States from './States/index';
 import Variants from './Variants/index';
@@ -111,18 +114,6 @@ describe('AccountDisabled page', () => {
     // Both i18n CTAs render (mock t() returns the English fallback).
     expect(getByText('Contact administrator')).toBeTruthy();
     expect(getByText('Switch account')).toBeTruthy();
-  });
-});
-
-describe('CommandPalette page', () => {
-  it('renders without error', () => {
-    const { container } = render(React.createElement(CommandPalette));
-    expect(container.firstChild).toBeTruthy();
-  });
-
-  it('renders the shell wrapper', () => {
-    const { getByTestId } = render(React.createElement(CommandPalette));
-    expect(getByTestId('hf-shell')).toBeTruthy();
   });
 });
 

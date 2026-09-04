@@ -132,7 +132,10 @@ const useThemeToggle = () => {
 // (routing & models / governance / operations & insights). `minRole` hides a
 // section from the rail for lower roles — UI hygiene only; every /api/v2/admin
 // route keeps its own server-side authz, which remains the real gate.
-const NAV_SECTIONS = [
+// Exported so the command palette can offer the same destinations with the same
+// minRole gating, instead of maintaining a second hardcoded copy that silently
+// drifts (the palette previously listed five routes chosen by hand, ungated).
+export const NAV_SECTIONS = [
   {
     h: 'workspace',
     hKey: 'console.nav.section_workspace',
@@ -495,6 +498,27 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = () => setNavOpen(false);
   const navigate = useNavigate();
+
+  // ⌘K / Ctrl-K actually opens the palette now. The rail has rendered a ⌘K
+  // badge next to the search button since the shell was built, but the repo
+  // had exactly one keydown listener in it (Playground's) and none of them was
+  // this — so the badge advertised a shortcut that did nothing. It goes to the
+  // same route the search button does; the badge and the button are now the
+  // same affordance rather than one real and one decorative.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'k' && e.key !== 'K') return;
+      if (!e.metaKey && !e.ctrlKey) return;
+      // Browsers bind Ctrl-K to the address bar; this is a deliberate override
+      // inside our own console, so preventDefault is required for it to work.
+      e.preventDefault();
+      closeNav();
+      navigate('/console/v2/cmdk');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navigate]);
+
   return (
     <div className={'hf hf-shell' + (navOpen ? ' nav-open' : '')}>
       <HfToastHost />
