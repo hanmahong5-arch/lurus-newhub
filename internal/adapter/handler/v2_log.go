@@ -52,8 +52,21 @@ func toLogViews(logs []*repo.Log, includeInternalOther bool) []logView {
 	items := make([]logView, 0, len(logs))
 	for _, l := range logs {
 		other := l.Other
+		// channel_name is classified TierInternal (governance/classification.go)
+		// and the v1 self-log route has always blanked it (formatUserLogs). The
+		// v2 user route shipped it anyway, so an ordinary customer could read
+		// our upstream vendor accounts straight off their own log rows — the
+		// operator's channel naming ("openai-key3", "azure-backup") describes
+		// our supply chain, not their request.
+		//
+		// The console already renders channel_name → #<channel id> → n/a, so
+		// blanking it here needs no frontend change: users fall back to the
+		// opaque id. The tenant-admin route (includeInternalOther=true) is
+		// unaffected.
+		channelName := l.ChannelName
 		if !includeInternalOther {
 			other = repo.SanitizeOtherForUser(other)
+			channelName = ""
 		}
 		var rawOther json.RawMessage
 		if other != "" && other != "null" && json.Valid([]byte(other)) {
@@ -74,7 +87,7 @@ func toLogViews(logs []*repo.Log, includeInternalOther bool) []logView {
 			UseTime:          l.UseTime,
 			IsStream:         l.IsStream,
 			ChannelId:        l.ChannelId,
-			ChannelName:      l.ChannelName,
+			ChannelName:      channelName,
 			TokenId:          l.TokenId,
 			Group:            l.Group,
 			TotalLatencyMs:   l.TotalLatencyMs,

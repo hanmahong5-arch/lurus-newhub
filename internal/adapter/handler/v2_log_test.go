@@ -430,3 +430,118 @@ func TestGetLogsV2_TypeFilter(t *testing.T) {
 		t.Errorf("expected 1 topup log, got %d", total)
 	}
 }
+
+// TestGetLogsV2_ChannelIdentityHiddenFromUser locks the 2026-09-03 decision
+// that an ordinary customer must not read which upstream account served their
+// request. The operator's channel naming ("openai-key3", "azure-backup")
+// describes our supply chain, not the caller's request, and governance
+// classifies channel_name/channel_id TierInternal.
+//
+// It has to cover BOTH carriers or it is a false credential: the value rides on
+// the logView.channel_name column AND — on error rows, which build their own
+// payload in recordRelayErrorLog — inside other. Blanking one while shipping
+// the other hides nothing.
+//
+// channel_type is deliberately still visible: governance classifies it
+// TierPublic and the vendor family is already implied by the model the caller
+// chose. See TestInternalOtherKeys_NoPublicField.
+func TestGetLogsV2_ChannelIdentityHiddenFromUser(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	// Note: Log.ChannelName is `gorm:"->"` — read-only, filled by a join, never
+	// persisted. Seeding it here would assert nothing, so the column half of
+	// this guarantee is locked directly against toLogViews in
+	// TestToLogViews_BlanksChannelNameForUsersOnly below; this test covers the
+	// half that does round-trip through the database, the `other` payload.
+	row := &repo.Log{
+		UserId:    ctx.NormalUser.Id,
+		TenantId:  ctx.TenantID,
+		Type:      repo.LogTypeError,
+		ModelName: "gpt-4",
+		CreatedAt: 1700000000,
+		ChannelId: 7,
+		Other:     `{"error_code":"upstream_5xx","channel_id":7,"channel_name":"openai-primary-key3","channel_type":1,"status_code":502}`,
+	}
+	if err := ctx.DB.Create(row).Error; err != nil {
+		t.Fatalf("failed to seed log: %v", err)
+	}
+
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs", nil, nil)
+	resp := AssertV2Success(t, w)
+	logs := resp["data"].(map[string]interface{})["logs"].([]interface{})
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	lg := logs[0].(map[string]interface{})
+
+	// The console falls back to "#<id>", so the row stays identifiable.
+	if got, ok := lg["channel"].(float64); !ok || got != 7 {
+		t.Errorf("channel id = %v, want 7 — blanking the name must not blank the opaque id "+
+			"the console falls back to", lg["channel"])
+	}
+
+	other, ok := lg["other"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected sanitized `other` object on the user route, got %T", lg["other"])
+	}
+	for _, f := range []string{"channel_name", "channel_id"} {
+		if _, exists := other[f]; exists {
+			t.Errorf("error-log `other` leaked %q to a non-admin — blanking the column while "+
+				"shipping the payload hides nothing", f)
+		}
+	}
+	// The caller must still be able to see why their own request failed.
+	for _, f := range []string{"error_code", "status_code", "channel_type"} {
+		if _, exists := other[f]; !exists {
+			t.Errorf("user projection dropped %q — the caller needs to know why their own "+
+				"request failed", f)
+		}
+	}
+
+	// The tenant-admin route is the audit surface and keeps everything.
+	w = V2RequestAsUser(ctx, ctx.AdminUser, http.MethodGet, "/api/v2/test-tenant/logs/all", nil, nil)
+	resp = AssertV2Success(t, w)
+	logs = resp["data"].(map[string]interface{})["logs"].([]interface{})
+	if len(logs) != 1 {
+		t.Fatalf("admin route: expected 1 log, got %d", len(logs))
+	}
+	adminOther := logs[0].(map[string]interface{})["other"].(map[string]interface{})
+	if _, exists := adminOther["channel_name"]; !exists {
+		t.Error("admin route must keep other.channel_name — it is the audit surface")
+	}
+}
+
+// TestToLogViews_BlanksChannelNameForUsersOnly drives the projection directly
+// because Log.ChannelName is `gorm:"->"`: it is populated by a join at read
+// time and cannot be seeded through the ORM, so an end-to-end test would assert
+// an empty string that was already empty for the wrong reason.
+func TestToLogViews_BlanksChannelNameForUsersOnly(t *testing.T) {
+	rows := []*repo.Log{{
+		Id:          1,
+		ChannelId:   7,
+		ChannelName: "openai-primary-key3",
+		ModelName:   "gpt-4",
+	}}
+
+	user := toLogViews(rows, false)
+	if len(user) != 1 {
+		t.Fatalf("expected 1 view, got %d", len(user))
+	}
+	if user[0].ChannelName != "" {
+		t.Errorf("user view channel_name = %q, want empty — the operator's channel naming "+
+			"describes our upstream accounts, not the caller's request (TierInternal in "+
+			"governance/classification.go, and blanked by the v1 self-log route since forever)",
+			user[0].ChannelName)
+	}
+	if user[0].ChannelId != 7 {
+		t.Errorf("user view channel id = %d, want 7 — the console falls back to #<id>, so "+
+			"blanking the name must not blank the id", user[0].ChannelId)
+	}
+
+	admin := toLogViews(rows, true)
+	if admin[0].ChannelName != "openai-primary-key3" {
+		t.Errorf("admin view channel_name = %q, want the real name — the tenant-admin route "+
+			"is how an operator finds the failing upstream", admin[0].ChannelName)
+	}
+}
