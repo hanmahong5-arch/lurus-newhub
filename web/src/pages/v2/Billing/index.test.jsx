@@ -322,3 +322,89 @@ describe('Billing page', () => {
     expect(screen.getByText('2026-05')).toBeTruthy();
   });
 });
+
+// ── Redeem a code (2026-09-03) ──────────────────────────────────────────────
+//
+// v2 had no redemption entry point at all. The only one lived on the legacy
+// /console/topup shell, which the v2 navigation cannot reach, so a customer
+// holding a valid code had nowhere in the console to spend it.
+describe('Billing — redeem a code', () => {
+  const CODE = 'a'.repeat(32);
+
+  const renderReady = async () => {
+    mockGetDefaults();
+    render(<HFBilling />);
+    await waitFor(() =>
+      expect(screen.getByTestId('redeem-input')).toBeTruthy(),
+    );
+  };
+
+  it('posts the code to the v2 redeem endpoint and shows what was credited', async () => {
+    await renderReady();
+    API.post.mockResolvedValue({
+      data: { success: true, data: { quota_added: 500000 } },
+    });
+
+    fireEvent.change(screen.getByTestId('redeem-input'), {
+      target: { value: CODE },
+    });
+    fireEvent.click(screen.getByTestId('redeem-submit'));
+
+    await waitFor(() => {
+      expect(API.post).toHaveBeenCalledWith(
+        '/api/v2/acme/redeem',
+        { key: CODE },
+        expect.anything(),
+      );
+    });
+    // quota_added is a quota figure, not a currency amount; it must be
+    // converted through the operator's rate exactly like every other number on
+    // this page (500000 / 500000 = 1.0000).
+    await waitFor(() => {
+      expect(screen.getByTestId('redeem-result').textContent).toContain(
+        '1.0000',
+      );
+    });
+    // The balance panel above just changed — it must be re-read from the
+    // server, not patched with local arithmetic.
+    await waitFor(() => {
+      const summaryCalls = API.get.mock.calls.filter(([u]) =>
+        u.includes('/billing/summary'),
+      );
+      expect(summaryCalls.length).toBeGreaterThan(1);
+    });
+  });
+
+  it('will not submit a code of the wrong length', async () => {
+    await renderReady();
+
+    fireEvent.change(screen.getByTestId('redeem-input'), {
+      target: { value: 'too-short' },
+    });
+
+    expect(screen.getByTestId('redeem-submit').disabled).toBe(true);
+    // …and says why, inline, rather than letting the user guess.
+    expect(screen.getByTestId('redeem-hint').textContent).toContain('9/32');
+
+    fireEvent.click(screen.getByTestId('redeem-submit'));
+    expect(API.post).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the server message when the code is rejected', async () => {
+    await renderReady();
+    API.post.mockResolvedValue({
+      data: { success: false, message: 'invalid redemption code' },
+    });
+
+    fireEvent.change(screen.getByTestId('redeem-input'), {
+      target: { value: CODE },
+    });
+    fireEvent.click(screen.getByTestId('redeem-submit'));
+
+    await waitFor(() => {
+      expect(showError).toHaveBeenCalledWith('invalid redemption code');
+    });
+    // No credited figure may appear for a rejected code.
+    expect(screen.queryByTestId('redeem-result')).toBeNull();
+  });
+});
