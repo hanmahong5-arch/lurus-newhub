@@ -24,6 +24,7 @@ import WIPBanner from '../../../components/hifi/WIPBanner';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
+import { TotpService } from '../../../services/secureVerification';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // Wave 2: only security section is wired; notifications/team/integrations/MFA remain stubs pending infra.
@@ -268,6 +269,32 @@ const HFSettings = () => {
   const [revokeVisible, setRevokeVisible] = useState(false);
   const [revoking, setRevoking] = useState(false);
 
+  // Real TOTP state. This panel used to render a green dot and the words
+  // "authenticator app · enabled" unconditionally — for every user, whether or
+  // not they had ever enrolled — and disabled its button with the reason "MFA
+  // infra pending — totp_seed table not yet provisioned". That reason was
+  // false: the backend has had /api/user/totp/{status,enroll,confirm,disable}
+  // (router/api-router.go) and the full enrolment UI has been live at
+  // /console/personal all along. So the one security control a user might check
+  // before trusting us told them they were protected when they were not.
+  //
+  // null = not loaded yet, false = the status call failed. Both render as
+  // "unknown", never as a green light: claiming MFA is on is the failure mode
+  // that matters here.
+  const [totpStatus, setTotpStatus] = useState(null);
+  const [totpLoading, setTotpLoading] = useState(false);
+
+  const fetchTotpStatus = useCallback(async () => {
+    setTotpLoading(true);
+    try {
+      setTotpStatus(await TotpService.getStatus());
+    } catch (_) {
+      setTotpStatus(false);
+    } finally {
+      setTotpLoading(false);
+    }
+  }, []);
+
   // Subscription tab (Wave A Squad 5A) — derived from /user/me + best-effort
   // /user/billing/summary. No dedicated subscription endpoint yet.
   const [subLoading, setSubLoading] = useState(false);
@@ -410,6 +437,14 @@ const HFSettings = () => {
       fetchSessions();
     }
   }, [section, tenantSlug, fetchSessions]);
+
+  useEffect(() => {
+    // TOTP is a per-user credential, not tenant-scoped, so this does not gate
+    // on tenantSlug the way the panels above do.
+    if (section === 'security' && totpStatus === null && !totpLoading) {
+      fetchTotpStatus();
+    }
+  }, [section, totpStatus, totpLoading, fetchTotpStatus]);
 
   useEffect(() => {
     if (section === 'subscription' && shouldAttempt('subscription')) {
@@ -687,24 +722,52 @@ const HFSettings = () => {
                     marginTop: 10,
                   }}
                 >
-                  <span className='dot ok' />{' '}
-                  <span className='strong'>
-                    {tr(
-                      'console.settings.mfa_status',
-                      'authenticator app · enabled',
-                    )}
+                  {/* The dot is green ONLY when the user is actually enrolled.
+                      A pending enrolment (secret issued, never confirmed) does
+                      not protect the account and must not read as protection. */}
+                  <span
+                    className={
+                      totpStatus && totpStatus.enrolled ? 'dot ok' : 'dot'
+                    }
+                    data-testid='mfa-dot'
+                  />{' '}
+                  <span className='strong' data-testid='mfa-status'>
+                    {totpLoading
+                      ? tr('console.common.loading', 'loading…')
+                      : totpStatus === null || totpStatus === false
+                        ? tr(
+                            'console.settings.mfa_status_unknown',
+                            'authenticator app · status unavailable',
+                          )
+                        : totpStatus.enrolled
+                          ? tr(
+                              'console.settings.mfa_status_enrolled',
+                              'authenticator app · enabled',
+                            )
+                          : totpStatus.pending
+                            ? tr(
+                                'console.settings.mfa_status_pending',
+                                'authenticator app · setup started, not confirmed',
+                              )
+                            : tr(
+                                'console.settings.mfa_status_off',
+                                'authenticator app · not enabled',
+                              )}
                   </span>
                   <span style={{ flex: 1 }} />
                   <button
                     type='button'
                     className='btn sm'
-                    disabled
+                    data-testid='mfa-manage'
+                    onClick={() => navigate('/console/personal')}
                     title={tr(
-                      'console.settings.mfa_regenerate_title',
-                      'MFA infra pending — totp_seed table not yet provisioned',
+                      'console.settings.mfa_manage_title',
+                      'enrol, regenerate or disable your authenticator',
                     )}
                   >
-                    {tr('console.settings.mfa_regenerate', 'regenerate')}
+                    {totpStatus && totpStatus.enrolled
+                      ? tr('console.settings.mfa_manage', 'manage')
+                      : tr('console.settings.mfa_enable', 'set up')}
                   </button>
                 </div>
               </div>

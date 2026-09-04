@@ -37,11 +37,19 @@ vi.mock('../../../helpers', () => ({
   showSuccess: vi.fn(),
 }));
 
+const mockNavigate = vi.fn();
 vi.mock('react-router-dom', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
 }));
 
 // HFShell passthrough — isolates Settings from shell/router dependencies.
+// TotpService is the real security signal this panel reports; stub it so each
+// test can state exactly which enrolment state it is asserting about.
+const mockTotpStatus = vi.fn();
+vi.mock('../../../services/secureVerification', () => ({
+  TotpService: { getStatus: (...a) => mockTotpStatus(...a) },
+}));
+
 vi.mock('../../../components/hifi/HFShell', () => ({
   default: ({ children }) =>
     React.createElement('div', { 'data-testid': 'hf-shell' }, children),
@@ -155,6 +163,10 @@ beforeEach(() => {
   API.get.mockReset();
   API.put.mockReset();
   API.delete.mockReset();
+  mockNavigate.mockReset();
+  mockTotpStatus.mockReset();
+  // Default: never enrolled. A test that means "enabled" must say so.
+  mockTotpStatus.mockResolvedValue({ enrolled: false, pending: false });
   window.localStorage.clear();
   window.localStorage.setItem('tenant_slug', 'acme');
 
@@ -471,5 +483,87 @@ describe('Settings page', () => {
     // No region labelled "current" — all are merely "available".
     expect(screen.queryByText('current')).toBeNull();
     expect(screen.getAllByText('available').length).toBe(3);
+  });
+});
+
+// ── MFA status (2026-09-03) ─────────────────────────────────────────────────
+//
+// The panel used to render a green dot and "authenticator app · enabled"
+// unconditionally, with the button disabled because "MFA infra pending —
+// totp_seed table not yet provisioned". That reason was false: the backend has
+// /api/user/totp/{status,enroll,confirm,disable} and the enrolment UI is live
+// at /console/personal. So the one security control a user might check before
+// trusting us reported protection they did not have.
+describe('Settings — MFA reflects real TOTP status', () => {
+  const openSecurity = async () => {
+    render(<HFSettings />);
+    screen.getByText('Security').click();
+    await waitFor(() => expect(screen.getByTestId('mfa-status')).toBeTruthy());
+  };
+
+  it('reports "not enabled" with no green dot for a user who never enrolled', async () => {
+    mockTotpStatus.mockResolvedValue({ enrolled: false, pending: false });
+
+    await openSecurity();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mfa-status').textContent).toContain(
+        'not enabled',
+      );
+    });
+    // The green dot is the whole claim; it must not be lit.
+    expect(screen.getByTestId('mfa-dot').className).not.toContain('ok');
+  });
+
+  it('lights the dot only once enrolment is confirmed', async () => {
+    mockTotpStatus.mockResolvedValue({ enrolled: true, pending: false });
+
+    await openSecurity();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mfa-status').textContent).toContain('enabled');
+    });
+    expect(screen.getByTestId('mfa-dot').className).toContain('ok');
+  });
+
+  it('does not treat a pending, unconfirmed enrolment as protection', async () => {
+    mockTotpStatus.mockResolvedValue({ enrolled: false, pending: true });
+
+    await openSecurity();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mfa-status').textContent).toContain(
+        'not confirmed',
+      );
+    });
+    // A secret was issued but never confirmed — the account is not protected.
+    expect(screen.getByTestId('mfa-dot').className).not.toContain('ok');
+  });
+
+  it('says the status is unavailable when the call fails, never "enabled"', async () => {
+    mockTotpStatus.mockRejectedValue(new Error('boom'));
+
+    await openSecurity();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mfa-status').textContent).toContain(
+        'unavailable',
+      );
+    });
+    expect(screen.getByTestId('mfa-dot').className).not.toContain('ok');
+  });
+
+  it('offers a working route to the enrolment UI instead of a disabled button', async () => {
+    mockTotpStatus.mockResolvedValue({ enrolled: false, pending: false });
+
+    await openSecurity();
+
+    const btn = await screen.findByTestId('mfa-manage');
+    // The old button was permanently disabled behind a false reason.
+    expect(btn.disabled).toBe(false);
+    btn.click();
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/console/personal');
+    });
   });
 });
