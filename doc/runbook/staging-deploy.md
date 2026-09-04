@@ -127,8 +127,12 @@ ssh r6-direct 'kubectl -n lurus-newhub rollout status deployment/lurus-newhub; \
   curl -s http://127.0.0.1:30850/api/status | grep -o "\"version\":\"[^\"]*\""'
 ```
 
-Every push to `main` builds a new digest (the publish workflow has no path
-filter), so while the CDN is cut each merge needs this once more. When ArgoCD
+Every push to `main` that touches build inputs makes a new digest, so while
+the CDN is cut each such merge needs this once more. Documentation-only
+merges do not: since 2026-09-04 the publish workflow carries a `paths-ignore`
+for `doc/**`, `docs/**`, `_bmad-output/**`, `**/*.md` and `deploy/**`
+(verified on the first docs-only merge after it landed — that push produced a
+Secret Scan run and no image build). When ArgoCD
 recovers it compares live against git and finds them equal — no extra roll.
 
 ## Rollback
