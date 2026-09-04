@@ -7,7 +7,6 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
 )
 
@@ -36,7 +35,7 @@ func init() {
 }
 
 func InitBatchUpdater() {
-	gopool.Go(func() {
+	AsyncGo(func() {
 		for {
 			time.Sleep(time.Duration(common.BatchUpdateInterval) * time.Second)
 			batchUpdate()

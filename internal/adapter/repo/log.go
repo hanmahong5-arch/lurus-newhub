@@ -19,7 +19,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
 )
 
@@ -474,7 +473,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		search.SyncLogAsync(convertLogToSearchLog(log))
 	}
 	if common.DataExportEnabled {
-		gopool.Go(func() {
+		AsyncGo(func() {
 			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
 		})
 	}
