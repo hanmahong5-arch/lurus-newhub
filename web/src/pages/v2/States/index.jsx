@@ -16,8 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import HFShell from '../../../components/hifi/HFShell';
+import { getServerAddress } from '../../../helpers';
 
 /* HiFi 15 — States: empty / loading / error / mobile / modal. Ported from hifi/hf15-states.jsx. */
 
@@ -31,6 +32,13 @@ const VIEWS = [
 
 const HFStates = () => {
   const [view, setView] = useState('empty');
+  // Same rule as the Token and Dashboard pages: never print a hardcoded relay
+  // host. This page's empty state used 'https://api.lurus.cn', retired in
+  // 2026-04 — a copy-pasteable command that cannot connect.
+  const relayBaseUrl = useMemo(
+    () => `${getServerAddress().replace(/\/+$/, '')}/v1`,
+    [],
+  );
   return (
     <HFShell
       active='logs'
@@ -98,7 +106,7 @@ const HFStates = () => {
           >
             <span className='muted'># test it from your terminal</span>
             {'\n'}
-            curl https://api.lurus.cn/v1/chat/completions \\{'\n'}
+            curl {relayBaseUrl}/chat/completions \\{'\n'}
             {'  '}-H "Authorization: Bearer $LURUS_KEY" \\{'\n'}
             {'  '}-d '{'{'}"model":"gpt-4o","messages":[{'{'}
             "role":"user","content":"hi"{'}'}]{'}'}'

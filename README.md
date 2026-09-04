@@ -66,7 +66,7 @@ go test ./...                                   # all
 go test -short ./...                            # unit only (skip integration)
 go test -race ./...                             # race detector (before merge)
 go test -v ./internal/app/ -run TestCompareVersions
-cd web && bun run test && bun run typecheck && bun run lint
+cd web && bun run test && bun run lint && bun run eslint   # no typecheck script: plain JS
 
 # Docker Compose
 docker-compose up -d                            # http://localhost:3000

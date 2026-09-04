@@ -25,6 +25,15 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
 
+// States prints a copy-pasteable curl command and must resolve the relay host
+// from the serving server rather than a hardcoded domain (the retired
+// api.lurus.cn). Stub the helpers barrel: importing it for real pulls
+// helpers/api.js → Semi UI → lottie-web, which paints into a canvas jsdom
+// doesn't have, and these are deliberately dependency-light smoke tests.
+vi.mock('../../helpers', () => ({
+  getServerAddress: () => 'https://hub.example.test',
+}));
+
 // Stub HFShell so static pages don't drag in the full shell dependency tree.
 vi.mock('../../components/hifi/HFShell', () => ({
   default: ({ children, actions }) =>

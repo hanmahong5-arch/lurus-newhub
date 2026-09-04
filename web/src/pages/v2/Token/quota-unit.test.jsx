@@ -27,6 +27,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('../../../helpers', () => ({
+  // The page resolves the relay host from the server it is served by.
+  getServerAddress: () => 'https://hub.example.test',
   API: {
     get: vi.fn(),
     post: vi.fn(),

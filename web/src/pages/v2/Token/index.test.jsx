@@ -20,6 +20,14 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
+// getServerAddress is stubbed rather than imported for real: the real module
+// (helpers/token.js) pulls in helpers/api.js → Semi UI → lottie-web, which
+// needs a canvas that jsdom does not have. The two halves of the guarantee are
+// locked separately and both halves are real:
+//   1. the helper returns server_address, else window.location.origin —
+//      helpers/h1_api.test.jsx, `describe('getServerAddress')`, 4 cases;
+//   2. the page prints whatever the helper returns, never a literal — here.
+// The stub therefore returns a value the page could not have hardcoded.
 vi.mock('../../../helpers', () => ({
   API: {
     get: vi.fn(),
@@ -29,6 +37,7 @@ vi.mock('../../../helpers', () => ({
   },
   showError: vi.fn(),
   showSuccess: vi.fn(),
+  getServerAddress: vi.fn(),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -70,7 +79,7 @@ vi.mock('../../../components/common/ConfirmDialog', () => ({
 }));
 
 import HFToken from './index';
-import { API } from '../../../helpers';
+import { API, getServerAddress } from '../../../helpers';
 
 const fakeToken = {
   id: 1,
@@ -111,6 +120,10 @@ beforeEach(() => {
   API.delete.mockReset();
   window.localStorage.clear();
   window.localStorage.setItem('tenant_slug', 'acme');
+  // Default to the production-shaped answer: `server_address` is empty in
+  // production, so the helper returns the serving origin.
+  getServerAddress.mockReset();
+  getServerAddress.mockReturnValue(window.location.origin);
   // jsdom has no clipboard by default — provide a spy.
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
@@ -119,15 +132,20 @@ beforeEach(() => {
 });
 
 describe('Token page — multi-format client URLs', () => {
+  // These used to assert the literal 'https://api.lurus.cn', a domain retired
+  // in 2026-04 that no longer resolves — so the page's own tests certified an
+  // integration guide that could not work. The host must now track the server
+  // the console is served by.
   it('renders the client base URLs and copies the OpenAI base url', async () => {
     wireGet([fakeToken]);
+    getServerAddress.mockReturnValue('https://hub.example.test');
 
     render(<HFToken />);
 
     await waitFor(() => screen.getByText('client base urls'));
 
     // Gemini base url is unique to the client-endpoints panel.
-    expect(screen.getByText('https://api.lurus.cn/v1beta')).toBeTruthy();
+    expect(screen.getByText('https://hub.example.test/v1beta')).toBeTruthy();
 
     // Copy the OpenAI-compatible endpoint.
     const copyBtn = screen.getByTestId('copy-endpoint-OpenAI / compatible');
@@ -135,9 +153,47 @@ describe('Token page — multi-format client URLs', () => {
 
     await waitFor(() => {
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-        'https://api.lurus.cn/v1',
+        'https://hub.example.test/v1',
       );
     });
+  });
+
+  // Production's `server_address` is an empty string, so the helper returns the
+  // serving origin (locked in helpers/h1_api.test.jsx) — that is the path real
+  // customers hit, and it must reach the page too, not just the configured one.
+  it('renders the serving origin when that is what the helper resolves to', async () => {
+    wireGet([fakeToken]);
+    // beforeEach already set the mock to window.location.origin.
+
+    render(<HFToken />);
+
+    await waitFor(() => screen.getByText('client base urls'));
+
+    expect(screen.getByText(`${window.location.origin}/v1beta`)).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('copy-endpoint-Anthropic · Claude SDK'));
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+        window.location.origin,
+      );
+    });
+  });
+
+  // The snippets are what customers actually paste. Locking the panel alone
+  // would let a hardcoded host survive inside buildSnippets().
+  it('builds the curl snippet against the resolved host, not a literal', async () => {
+    wireGet([fakeToken]);
+    getServerAddress.mockReturnValue('https://hub.example.test/');
+
+    // The first token is selected by default and the snippet tab defaults to
+    // curl, so the snippet renders without any interaction.
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('client base urls'));
+
+    const shown = document.body.textContent;
+    // Trailing slash on server_address must not yield '//v1'.
+    expect(shown).toContain('https://hub.example.test/v1/chat/completions');
+    expect(shown).not.toContain('api.lurus.cn');
   });
 
   it('offers a copy control for each supported SDK base url', async () => {

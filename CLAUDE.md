@@ -68,8 +68,10 @@ cd web && bun install && bun run dev        # 前端 port 5173 (代理到 3000)
 CGO_ENABLED=0 go build -ldflags "-s -w -X 'github.com/LurusTech/lurus-hub/internal/pkg/common.Version=$(cat VERSION)'" -o lurus-api ./cmd/server
 
 # --- Frontend ---
-cd web && bun run typecheck
+# NB: web/ has no `typecheck` script (plain JS, not TS) — `bun run typecheck`
+# has always failed here. Real gates: lint = prettier --check, plus eslint.
 cd web && bun run lint
+cd web && bun run eslint
 cd web && bun run build
 
 # --- Test ---
