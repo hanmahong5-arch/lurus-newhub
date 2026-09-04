@@ -1,3 +1,15 @@
+# ⚠️ REFERENCE ONLY — NOT DEPLOYED (verified 2026-09-03)
+#
+# Nothing evaluates these 17 rules: there is no Prometheus for them to load
+# into. R6's monitoring is host netdata (deploy/r6-host-netdata/), which scrapes
+# /metrics via a go.d prometheus job but does not read Prometheus rule files.
+#
+# This file and deploy/k8s/r6-stage/newhub-prometheus-rule.yaml have drifted
+# apart; treat that one as the fuller record. Kept for the metric-naming
+# conventions and severity taxonomy below, which the netdata port should follow.
+# internal/pkg/metrics/alert_wiring_honesty_test.go fails the build if Go source
+# starts citing either file as a live alert.
+#
 # Prometheus alerting rules for Lurus Hub Phase 1 hardening.
 #
 # Mount path examples:
