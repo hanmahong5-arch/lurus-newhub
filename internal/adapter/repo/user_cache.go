@@ -11,8 +11,6 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/bytedance/gopkg/util/gopool"
 )
 
 // UserBase is a type alias for entity.UserBase (canonical definition in domain/entity/user.go)
@@ -64,7 +62,7 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) && user != nil {
-			gopool.Go(func() {
+			AsyncGo(func() {
 				if err := updateUserCache(*user); err != nil {
 					common.SysLog("failed to update user status cache: " + err.Error())
 				}

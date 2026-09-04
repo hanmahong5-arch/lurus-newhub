@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
-	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
 )
 
@@ -252,7 +251,7 @@ func GetTokenById(id int) (*Token, error) {
 	token := Token{Id: id}
 	err := DB.First(&token, "id = ?", id).Error
 	if shouldUpdateRedis(true, err) {
-		gopool.Go(func() {
+		AsyncGo(func() {
 			if err := cacheSetToken(token); err != nil {
 				common.SysLog("failed to update user status cache: " + err.Error())
 			}
@@ -265,7 +264,7 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) && token != nil {
-			gopool.Go(func() {
+			AsyncGo(func() {
 				if err := cacheSetToken(*token); err != nil {
 					common.SysLog("failed to update user status cache: " + err.Error())
 				}
@@ -321,7 +320,7 @@ func AutoCreateDefaultToken(userId int) (*Token, error) {
 func (token *Token) Update() (err error) {
 	defer func() {
 		if shouldUpdateRedis(true, err) {
-			gopool.Go(func() {
+			AsyncGo(func() {
 				err := cacheSetToken(*token)
 				if err != nil {
 					common.SysLog("failed to update token cache: " + err.Error())
@@ -344,7 +343,7 @@ func (token *Token) Update() (err error) {
 func (token *Token) SelectUpdate() (err error) {
 	defer func() {
 		if shouldUpdateRedis(true, err) {
-			gopool.Go(func() {
+			AsyncGo(func() {
 				err := cacheSetToken(*token)
 				if err != nil {
 					common.SysLog("failed to update token cache: " + err.Error())
@@ -409,7 +408,7 @@ func (token *Token) RotateKeyWithTimestampCAS(newKey string, prevRotatedAt, newR
 	token.Key = newKey
 	token.RotatedAt = newRotatedAt
 	if shouldUpdateRedis(true, nil) {
-		gopool.Go(func() {
+		AsyncGo(func() {
 			_ = cacheDeleteToken(oldKey)
 			if e := cacheSetToken(*token); e != nil {
 				common.SysLog("failed to update token cache after CAS rotation: " + e.Error())
@@ -427,7 +426,7 @@ func (token *Token) rotateKey(newKey string, updates map[string]interface{}) (er
 	token.Key = newKey
 	defer func() {
 		if shouldUpdateRedis(true, err) {
-			gopool.Go(func() {
+			AsyncGo(func() {
 				_ = cacheDeleteToken(oldKey)
 				if e := cacheSetToken(*token); e != nil {
 					common.SysLog("failed to update token cache after rotation: " + e.Error())
@@ -453,7 +452,7 @@ func ListAutoRotateTokens() ([]*Token, error) {
 func (token *Token) Delete() (err error) {
 	defer func() {
 		if shouldUpdateRedis(true, err) {
-			gopool.Go(func() {
+			AsyncGo(func() {
 				err := cacheDeleteToken(token.Key)
 				if err != nil {
 					common.SysLog("failed to delete token cache: " + err.Error())
@@ -513,7 +512,7 @@ func IncreaseTokenQuota(id int, key string, quota int) (err error) {
 		return errors.New("quota 不能为负数！")
 	}
 	if common.RedisEnabled {
-		gopool.Go(func() {
+		AsyncGo(func() {
 			err := cacheIncrTokenQuota(key, int64(quota))
 			if err != nil {
 				common.SysLog("failed to increase token quota: " + err.Error())
@@ -543,7 +542,7 @@ func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 		return errors.New("quota 不能为负数！")
 	}
 	if common.RedisEnabled {
-		gopool.Go(func() {
+		AsyncGo(func() {
 			err := cacheDecrTokenQuota(key, int64(quota))
 			if err != nil {
 				common.SysLog("failed to decrease token quota: " + err.Error())
@@ -613,7 +612,7 @@ func DecreaseTokenQuotaIfEnough(id int, key string, quota int) (ok bool, err err
 		return false, nil
 	}
 	if common.RedisEnabled {
-		gopool.Go(func() {
+		AsyncGo(func() {
 			if cErr := cacheDecrTokenQuota(key, int64(quota)); cErr != nil {
 				common.SysLog("failed to decrease token quota cache: " + cErr.Error())
 			}
@@ -731,7 +730,7 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	}
 
 	if common.RedisEnabled {
-		gopool.Go(func() {
+		AsyncGo(func() {
 			for _, t := range tokens {
 				_ = cacheDeleteToken(t.Key)
 			}
