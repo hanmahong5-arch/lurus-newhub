@@ -58,8 +58,8 @@ spec:
           # docker-image-main.yml (bump_r6_manifest job) — same mechanism as
           # deploy/k8s/r6-stage/deployment.yaml, both files are rewritten by
           # every :main build so UAT always runs the digest prod runs.
-          # pin: main-20260904-e81da57 run=33845327686
-          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:4f2b78b7cc232b57955e7a79a7af56018d65f2e64aee2050048a9ef137e6cfbb
+          # pin: main-20260904-62b6e93 run=33845726317
+          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:0b262a1a437c7e216ced09a50161d309f4525ac644fcbee18271a907099dab66
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
