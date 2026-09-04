@@ -6,13 +6,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -113,7 +112,11 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		case data := <-dataChan:
 			if isFirst {
 				isFirst = false
-				info.FirstResponseTime = time.Now()
+				// Was a direct `info.FirstResponseTime = time.Now()`, which
+				// skipped the setter and would therefore have skipped any
+				// instrumentation hung on it (see
+				// TestFirstResponseTimeHasASingleWriter).
+				info.SetFirstResponseTime()
 			}
 			data = strings.TrimSuffix(data, "\r")
 			var cohereResp CohereResponse
