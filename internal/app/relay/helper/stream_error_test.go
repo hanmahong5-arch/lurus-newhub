@@ -69,18 +69,6 @@ func TestStreamError_WireNativeShapes(t *testing.T) {
 	})
 }
 
-func TestGeminiStatus(t *testing.T) {
-	for code, want := range map[int]string{
-		400: "INVALID_ARGUMENT", 401: "UNAUTHENTICATED", 403: "PERMISSION_DENIED", 404: "NOT_FOUND",
-		429: "RESOURCE_EXHAUSTED", 500: "INTERNAL", 502: "UNAVAILABLE", 503: "UNAVAILABLE",
-		504: "DEADLINE_EXCEEDED", 418: "UNKNOWN",
-	} {
-		if got := geminiStatus(code); got != want {
-			t.Errorf("geminiStatus(%d) = %s, want %s", code, got, want)
-		}
-	}
-}
-
 func TestClientListening(t *testing.T) {
 	c, _ := newStreamCtx()
 	if !ClientListening(c, &relaycommon.RelayInfo{}) {

@@ -218,6 +218,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 					"type":  "error",
 					"error": newAPIError.ToClaudeError(),
 				})
+			case types.RelayFormatGemini:
+				// A Gemini caller got an OpenAI envelope here — the streaming
+				// path has spoken Gemini's native shape since the in-band error
+				// work, but the not-yet-written path never grew a case, so the
+				// SDK could not recognise its own error and surfaced a decode
+				// failure instead of the reason. Same envelope as
+				// helper.StreamError now uses, from the same single definition.
+				c.JSON(newAPIError.StatusCode, newAPIError.ToGeminiError())
 			default:
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"error": newAPIError.ToOpenAIError(),
@@ -278,7 +286,26 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorToken,
 				relayInfo.UserId, governance.ActionSensitiveBlocked, governance.ResourceUser,
 				relayInfo.TokenId, fmt.Sprintf(`{"word_count":%d}`, len(words))))
-			newAPIError = types.NewError(err, types.ErrorCodeSensitiveWordsDetected)
+			// `err` is provably nil here — both preceding assignments to it
+			// return on failure — so types.NewError(err, …) produced an error
+			// with no underlying cause. That meant NewAPIError.Error() fell
+			// back to the bare error-code string, and NewError's default 500
+			// made IsUpstreamFailure true, so a caller whose prompt we
+			// deliberately rejected was told "upstream provider Unknown
+			// returned 500": our policy decision dressed up as a vendor outage,
+			// and counted toward our 5xx rate.
+			//
+			// 400, because the request is the problem and we know it; SkipRetry
+			// because no other channel will like the same prompt any better.
+			//
+			// The message states the count and NOT the matched terms: echoing
+			// them back turns the endpoint into an oracle for enumerating the
+			// blocklist. NewErrorWithStatusCode calls err.Error()
+			// unconditionally, so it must never be handed the nil above.
+			newAPIError = types.NewErrorWithStatusCode(
+				fmt.Errorf("request rejected: prompt contains %d blocked term(s)", len(words)),
+				types.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry())
 			return
 		}
 	}
