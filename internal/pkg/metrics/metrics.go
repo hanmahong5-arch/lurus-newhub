@@ -110,8 +110,9 @@ var (
 	// error_type (O1). Recorded once per failed request at the relay's final-error
 	// defer — terminal outcomes only, never per-retry (RetryAttempts covers that),
 	// and success skips it. error_type is one of {upstream_5xx, upstream_4xx,
-	// upstream_timeout, upstream_rate_limit, insufficient_quota, internal}; see
-	// types.RelayErrorType. This is the missing "WHY is a provider failing" signal —
+	// upstream_timeout, upstream_rate_limit, upstream_insufficient_balance,
+	// insufficient_quota, internal}; see types.RelayErrorType. This is the missing
+	// "WHY is a provider failing" signal —
 	// RelayRequestsTotal{status="error"} only says THAT it failed.
 	RelayErrorsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{

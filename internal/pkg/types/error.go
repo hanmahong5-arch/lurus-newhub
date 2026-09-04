@@ -440,7 +440,8 @@ func IsUpstreamFailure(err *NewAPIError) bool {
 //     falling back to the 4xx/5xx status class.
 //
 // Returns one of: upstream_5xx, upstream_4xx, upstream_timeout,
-// upstream_rate_limit, insufficient_quota, internal.
+// upstream_rate_limit, upstream_insufficient_balance, insufficient_quota,
+// internal.
 func RelayErrorType(err *NewAPIError) string {
 	if err == nil {
 		return "internal"
@@ -461,6 +462,33 @@ func RelayErrorType(err *NewAPIError) string {
 	}
 	// From here the error is attributable to the upstream exchange (response
 	// status, transport failure, or channel capacity).
+
+	// OUR account is out of money at the provider. Split out from upstream_4xx,
+	// which is the bucket meaning "the caller sent a bad request" — reading an
+	// unpaid provider invoice as customer error is exactly the wrong conclusion
+	// for whoever is on call, and this is the one failure class here that no
+	// amount of retrying or failing over can fix.
+	//
+	// Not hypothetical: UAT's DeepSeek account balance is already negative as
+	// of 2026-09-03, and production's single active route is the same provider.
+	//
+	// Both signals are safe only because the switch above has already returned:
+	// every 402 newhub itself emits carries one of the caller-quota codes
+	// (insufficient_user_quota / token_quota_exhausted / tenant_quota_exceeded),
+	// so a 402 reaching this line came from upstream. Likewise the code strings
+	// below are the provider's own — WithOpenAIError copies the upstream error
+	// code verbatim into errorCode, so "insufficient_quota" here is OpenAI's
+	// spelling and can never collide with ours ("insufficient_user_quota").
+	if err.StatusCode == http.StatusPaymentRequired {
+		return "upstream_insufficient_balance"
+	}
+	switch string(err.errorCode) {
+	case "insufficient_quota", // OpenAI
+		"billing_not_active", // several vendors
+		"Arrearage":          // Alibaba / Tongyi
+		return "upstream_insufficient_balance"
+	}
+
 	switch err.StatusCode {
 	case http.StatusTooManyRequests: // 429
 		return "upstream_rate_limit"
