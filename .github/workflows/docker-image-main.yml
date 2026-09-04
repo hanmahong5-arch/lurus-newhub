@@ -13,13 +13,36 @@ name: Publish Docker image (main branch)
 # pre-merge) — that gate is folded in below, now scanning the actual
 # `:main`/`:main-<date>-<sha>` artifact instead of a throwaway look-alike
 # build that was never the one actually deployed.
+# `paths-ignore` (2026-09-03): this workflow had no path filter at all, so a
+# pure-documentation commit produced a full `:main` image and an auto-pin
+# manifest commit. That is not free right now — R6's link to the GitHub image
+# CDN measures 10–17 KB/s, so every new digest costs a ~20-minute manual
+# side-channel transfer before the cluster can converge on it.
+#
+# The listed paths provably cannot change the artifact: the binary embeds only
+# `web/dist` (`web/embed.go`) and compiles Go sources, `deploy/**` is applied by
+# ArgoCD rather than baked in, and `.dockerignore` already drops `docs`/`*.md`
+# from the build context. A push touching any non-listed path still builds —
+# GitHub skips only when *every* changed file matches.
 on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'doc/**'
+      - 'docs/**'
+      - '_bmad-output/**'
+      - '**/*.md'
+      - 'deploy/**'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - 'doc/**'
+      - 'docs/**'
+      - '_bmad-output/**'
+      - '**/*.md'
+      - 'deploy/**'
   workflow_dispatch:
     inputs:
       name:
