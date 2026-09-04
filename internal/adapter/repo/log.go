@@ -198,6 +198,19 @@ var internalOtherKeys = []string{
 	// classifies it TierPublic, and TestInternalOtherKeys_NoPublicField
 	// enforces that. The vendor family is already implied by the model the
 	// caller chose; the account identity is not.
+	//
+	// Read channel_id here for what it is, not for more than it is: the
+	// numeric id is ALSO carried by the public logView column "channel"
+	// (v2_log.go, json:"channel"), which stays visible for both users and
+	// admins — the legacy self-log projection formatUserLogs above made the
+	// same call, blanking ChannelName/UpstreamModel/RequestFingerprint and
+	// keeping ChannelId, and the console's "#25" fallback and support tickets
+	// depend on it. So stripping channel_id from Other blocks zero bits today.
+	// It is on the list because governance classifies it TierInternal and it
+	// costs nothing, NOT because channel identity is hidden. The secret this
+	// entry actually protects is channel_name next to it; the id is not
+	// hidden anywhere, and anyone reading this list as "the caller cannot
+	// tell which channel served them" would be reading it wrong.
 	"channel_id",
 	"channel_name",
 	"image_ratio",
