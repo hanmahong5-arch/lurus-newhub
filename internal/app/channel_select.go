@@ -12,9 +12,14 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
+	Ctx        *gin.Context
+	TokenGroup string
+	ModelName  string
+	// TenantID scopes channel selection to platform-shared channels plus this
+	// tenant's own (see repo.GetRandomSatisfiedChannelForTenant). "" performs
+	// no tenant filtering — callers that have a resolved caller tenant must
+	// set this, or selection stays tenant-blind for them.
+	TenantID     string
 	Retry        *int
 	resetNextTry bool
 }
@@ -133,7 +138,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = repo.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
+			channel, _ = repo.GetRandomSatisfiedChannelForTenant(param.TenantID, autoGroup, param.ModelName, priorityRetry)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -171,7 +176,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 			break
 		}
 	} else {
-		channel, err = repo.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
+		channel, err = repo.GetRandomSatisfiedChannelForTenant(param.TenantID, param.TokenGroup, param.ModelName, param.GetRetry())
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
