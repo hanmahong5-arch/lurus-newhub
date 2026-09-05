@@ -567,6 +567,16 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *app.Ret
 			AutoBan: &autoBanInt,
 		}, nil
 	}
+	// Retry re-selection must stay inside the same tenant boundary as the
+	// first Distribute() pick. Resolve it fresh from the request context here
+	// rather than trusting a value threaded in earlier: retryParam is a single
+	// struct reused/mutated across the whole retry loop, and getChannel is the
+	// one choke point every retry attempt (RelayHandler and RelayTask alike)
+	// passes through. Unresolvable tenant leaves TenantID at its zero value,
+	// i.e. tenant-blind — same fallback as the initial Distribute() selection.
+	if tc, terr := middleware.GetTenantContext(c); terr == nil && tc != nil {
+		retryParam.TenantID = tc.TenantID
+	}
 	channel, selectGroup, err := app.CacheGetRandomSatisfiedChannel(retryParam)
 
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)

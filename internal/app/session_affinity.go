@@ -262,6 +262,24 @@ func lookupAffinityChannel(param *RetryParam, affinityKey string) (*repo.Channel
 		return nil, ""
 	}
 
+	// A binding recorded before the caller's tenant is known to be resolved
+	// (param.TenantID == "") is not re-checked here — same as the rest of this
+	// file, an unresolved tenant means no tenant filtering. But once we DO
+	// have a caller tenant, a pin that points at a channel owned by a
+	// DIFFERENT, non-shared tenant must never be honoured: the whole point of
+	// affinity is to bias the choice among channels the caller could already
+	// reach, never to widen reach. Treat it exactly like any other
+	// invalidation and fall through to normal (now tenant-filtered) selection.
+	if param.TenantID != "" {
+		owner := channel.TenantId
+		if owner != "" && owner != "default" && owner != param.TenantID {
+			recordAffinityOutcome("stale")
+			logger.LogDebug(param.Ctx, "session affinity stale: channel #%d belongs to tenant %s, caller is tenant %s",
+				channel.Id, owner, param.TenantID)
+			return nil, ""
+		}
+	}
+
 	recordAffinityOutcome("hit")
 	logger.LogDebug(param.Ctx, "session affinity hit: channel #%d (group %s)", channel.Id, rec.Group)
 	return channel, rec.Group

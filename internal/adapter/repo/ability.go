@@ -48,12 +48,39 @@ func GetAllEnableAbilities() []Ability {
 	return abilities
 }
 
-func getPriority(group string, model string, retry int) (int, error) {
+// abilityTenantScope narrows an abilities query to channels visible to
+// tenantID: platform-shared channels (channels.tenant_id 'default' or '')
+// plus channels owned by tenantID itself. abilities carries no tenant column
+// of its own, so the restriction goes through a channel_id subquery.
+//
+// tenantID == "" means "no tenant filter" — this is what GetChannel's
+// tenant-blind signature (kept for its existing callers) passes, and it
+// reproduces the exact query this function ran before tenant scoping existed.
+func abilityTenantScope(tenantID string) (string, []interface{}) {
+	if tenantID == "" {
+		return "", nil
+	}
+	return " and channel_id in (select id from channels where tenant_id in (?, ?, ?))",
+		[]interface{}{"default", "", tenantID}
+}
+
+// abilityBaseCondition builds the (group, model, enabled[, tenant]) predicate
+// shared by getPriority and getChannelQuery, so the two never drift apart on
+// what "the same query, scoped to a retry/priority" means.
+func abilityBaseCondition(group string, model string, tenantID string) (string, []interface{}) {
+	scope, scopeArgs := abilityTenantScope(tenantID)
+	cond := commonGroupCol + " = ? and model = ? and enabled = ?" + scope
+	args := append([]interface{}{group, model, true}, scopeArgs...)
+	return cond, args
+}
+
+func getPriority(group string, model string, retry int, tenantID string) (int, error) {
+	cond, args := abilityBaseCondition(group, model, tenantID)
 
 	var priorities []int
 	err := DB.Model(&Ability{}).
 		Select("DISTINCT(priority)").
-		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+		Where(cond, args...).
 		Order("priority DESC").              // 按优先级降序排序
 		Pluck("priority", &priorities).Error // Pluck用于将查询的结果直接扫描到一个切片中
 
@@ -78,25 +105,36 @@ func getPriority(group string, model string, retry int) (int, error) {
 	return priorityToUse, nil
 }
 
-func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
-	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
+func getChannelQuery(group string, model string, retry int, tenantID string) (*gorm.DB, error) {
+	baseCond, baseArgs := abilityBaseCondition(group, model, tenantID)
+	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(baseCond, baseArgs...)
+	channelQuery := DB.Where(baseCond+" and priority = (?)", append(append([]interface{}{}, baseArgs...), maxPrioritySubQuery)...)
 	if retry != 0 {
-		priority, err := getPriority(group, model, retry)
+		priority, err := getPriority(group, model, retry, tenantID)
 		if err != nil {
 			return nil, err
 		} else {
-			channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
+			channelQuery = DB.Where(baseCond+" and priority = ?", append(append([]interface{}{}, baseArgs...), priority)...)
 		}
 	}
 
 	return channelQuery, nil
 }
 
+// GetChannel is the tenant-blind lookup kept for existing callers; it is
+// exactly GetChannelForTenant with no tenant filter applied.
 func GetChannel(group string, model string, retry int) (*Channel, error) {
+	return GetChannelForTenant(group, model, retry, "")
+}
+
+// GetChannelForTenant is GetChannel's DB-fallback counterpart to
+// GetRandomSatisfiedChannelForTenant (channel_cache.go): it is used when the
+// in-memory cache is disabled, so the SQL query itself must do the tenant
+// filtering that the memory-cache path does in Go.
+func GetChannelForTenant(group string, model string, retry int, tenantID string) (*Channel, error) {
 	var abilities []Ability
 
-	channelQuery, err := getChannelQuery(group, model, retry)
+	channelQuery, err := getChannelQuery(group, model, retry, tenantID)
 	if err != nil {
 		return nil, err
 	}

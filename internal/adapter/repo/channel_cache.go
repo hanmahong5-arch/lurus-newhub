@@ -147,10 +147,57 @@ func SyncChannelCacheWithContext(ctx context.Context, frequency int) {
 	}
 }
 
+// GetRandomSatisfiedChannel is the tenant-blind selector kept for existing
+// callers (internal tooling, admin flows) that intentionally need visibility
+// across every tenant's channels. It is exactly
+// GetRandomSatisfiedChannelForTenant with no tenant filter applied.
 func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+	return GetRandomSatisfiedChannelForTenant("", group, model, retry)
+}
+
+// filterChannelsForTenant drops candidate channel ids owned by a tenant other
+// than tenantID, keeping platform-shared channels (TenantId "" or "default")
+// plus tenantID's own. tenantID == "" disables filtering entirely.
+//
+// An id with no entry in channelsIDM is left in rather than dropped — that is
+// a cache/DB consistency error, not a tenant mismatch, and the existing
+// "数据库一致性错误" detection further down the caller still needs to see it.
+//
+// Caller must hold channelSyncLock (read or write).
+func filterChannelsForTenant(ids []int, tenantID string) []int {
+	if tenantID == "" {
+		return ids
+	}
+	filtered := make([]int, 0, len(ids))
+	for _, id := range ids {
+		channel, ok := channelsIDM[id]
+		if !ok {
+			filtered = append(filtered, id)
+			continue
+		}
+		owner := channel.TenantId
+		if owner == "" || owner == "default" || owner == tenantID {
+			filtered = append(filtered, id)
+		}
+	}
+	return filtered
+}
+
+// GetRandomSatisfiedChannelForTenant is the tenant-scoped channel selector.
+//
+// Policy: a channel whose TenantId is "default" or "" is platform-shared and
+// may serve any tenant; a channel owned by any other tenant serves only
+// callers of that tenant. tenantID == "" performs no filtering at all (see
+// GetRandomSatisfiedChannel) — callers that resolve a real caller tenant must
+// pass it here, not leave it empty, or this guard does nothing for them.
+//
+// Filtering happens BEFORE the priority/weight bucketing below runs, so a
+// foreign-tenant channel can never win the weighted draw even if it would
+// otherwise have the highest priority or the largest weight in the group.
+func GetRandomSatisfiedChannelForTenant(tenantID string, group string, model string, retry int) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		return GetChannelForTenant(group, model, retry, tenantID)
 	}
 
 	channelSyncLock.RLock()
@@ -164,6 +211,8 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = group2model2channels[group][normalizedModel]
 	}
+
+	channels = filterChannelsForTenant(channels, tenantID)
 
 	if len(channels) == 0 {
 		return nil, nil

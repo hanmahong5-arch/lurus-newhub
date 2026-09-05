@@ -133,10 +133,27 @@ func Distribute() func(c *gin.Context) {
 						common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
 					}
 				}
+				// Caller tenant, when resolvable, scopes selection to
+				// platform-shared channels plus the caller's own (TI round-3
+				// #1 covered the sk-<key>-<channelId> PIN above; this is the
+				// same defect on the ordinary weighted-selection path every
+				// non-pinned relay request takes). TokenAuth always injects
+				// tenant_context on the real relay path, so this resolves in
+				// production; when it doesn't (paths that reach Distribute
+				// without TokenAuth), selection stays tenant-blind rather
+				// than failing closed — unlike the channel PIN above, this
+				// path can only ever land on a channel already eligible for
+				// (group, model), which is a much narrower capability than
+				// naming an arbitrary channel id.
+				callerTenantID := ""
+				if tc, terr := GetTenantContext(c); terr == nil && tc != nil {
+					callerTenantID = tc.TenantID
+				}
 				channel, selectGroup, err = app.CacheGetRandomSatisfiedChannel(&app.RetryParam{
 					Ctx:        c,
 					ModelName:  modelRequest.Model,
 					TokenGroup: usingGroup,
+					TenantID:   callerTenantID,
 					Retry:      common.GetPointer(0),
 				})
 				if err != nil {
@@ -169,6 +186,20 @@ func Distribute() func(c *gin.Context) {
 					}
 					abortWithOpenAiMessage(c, statusCode, fmt.Sprintf("分组 %s 下模型 %s 无可用渠道（distributor）", usingGroup, modelRequest.Model), string(types.ErrorCodeModelNotFound))
 					return
+				}
+				// Defence in depth: CacheGetRandomSatisfiedChannel already
+				// filtered by callerTenantID above, so this should never
+				// trip. Assert it anyway so a future change to the selection
+				// path (a new fallback, a cache bug) can't silently regress
+				// into cross-tenant relay — fail the same way "no available
+				// channel" already does, not with a different error shape
+				// that would leak the existence of another tenant's channel.
+				if callerTenantID != "" {
+					owner := channel.TenantId
+					if owner != "" && owner != "default" && owner != callerTenantID {
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("分组 %s 下模型 %s 无可用渠道（distributor）", usingGroup, modelRequest.Model), string(types.ErrorCodeModelNotFound))
+						return
+					}
 				}
 			}
 		}
