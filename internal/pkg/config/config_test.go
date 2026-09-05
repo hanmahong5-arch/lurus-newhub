@@ -458,6 +458,42 @@ func TestLoadFromEnv_CORSOverride_AllowedOrigins_WithSpaces(t *testing.T) {
 	}
 }
 
+// --- Tests for Security.TrustedProxies default and override ---
+
+func TestLoadFromEnv_SecurityDefaults_TrustedProxies(t *testing.T) {
+	cfg := loadFromEnv()
+	want := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"::1/128",
+		"fe80::/10",
+	}
+	if len(cfg.Security.TrustedProxies) != len(want) {
+		t.Fatalf("Security.TrustedProxies length = %d, want %d", len(cfg.Security.TrustedProxies), len(want))
+	}
+	for i, w := range want {
+		if cfg.Security.TrustedProxies[i] != w {
+			t.Errorf("Security.TrustedProxies[%d] = %q, want %q", i, cfg.Security.TrustedProxies[i], w)
+		}
+	}
+}
+
+func TestLoadFromEnv_SecurityOverride_TrustedProxies(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", "203.0.113.0/24, 198.51.100.5/32")
+	cfg := loadFromEnv()
+	want := []string{"203.0.113.0/24", "198.51.100.5/32"}
+	if len(cfg.Security.TrustedProxies) != len(want) {
+		t.Fatalf("Security.TrustedProxies length = %d, want %d", len(cfg.Security.TrustedProxies), len(want))
+	}
+	for i, w := range want {
+		if cfg.Security.TrustedProxies[i] != w {
+			t.Errorf("Security.TrustedProxies[%d] = %q, want %q", i, cfg.Security.TrustedProxies[i], w)
+		}
+	}
+}
+
 // --- Tests for envString helper ---
 
 func TestEnvString_ReturnsDefault_WhenEnvUnset(t *testing.T) {

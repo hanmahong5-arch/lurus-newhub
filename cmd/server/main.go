@@ -324,6 +324,10 @@ func run(ctx context.Context, startTime time.Time) error {
 
 	// Initialize Gin HTTP server
 	engine := gin.New()
+	if err := router.ConfigureTrustedProxies(engine, config.Get().Security.TrustedProxies); err != nil {
+		//nolint:contextcheck // boot-time fatal, same shape as the other FatalLog calls in run(); there is no request context to pass
+		common.FatalLog(fmt.Sprintf("invalid TRUSTED_PROXIES: %v", err))
+	}
 	engine.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
 		metrics.RecordPanic("http")
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
