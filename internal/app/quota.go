@@ -1083,6 +1083,32 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				}
 			})
 		}
+	} else if relayInfo.IdentityAccountID > 0 && totalQuota <= 0 && preConsumedQuota > 0 && relayInfo.PlatformPreAuthID > 0 {
+		// Zero-usage settlement (e.g. an abnormal stream end that resolves to
+		// no billable tokens): totalQuota <= 0 means the branch above never
+		// runs, so without this arm the pre-auth froze above never gets
+		// settled OR released — it just sits until the platform-side TTL
+		// (300s) auto-expires it. There is nothing to charge here, so the
+		// only correct action is release, mirroring the local-inconsistency
+		// release path above. Clear PlatformPreAuthID the same way the settle
+		// arm does, so a later ReturnPreConsumedQuota (failure-path cleanup)
+		// can't release the same pre-auth a second time.
+		//
+		// preConsumedQuota > 0 pins this to the FINAL settlement call — the
+		// only caller shape that passes FinalPreConsumedQuota through
+		// (quota.go PostConsume paths, relay/compatible_handler.go). The
+		// two other callers pass 0 and must not reach here: the realtime
+		// WSS path (PreWssConsumeQuota) calls this once per usage event, and
+		// a zero-token event mid-session must not release a freeze that the
+		// next positive event is meant to settle — otherwise that event falls
+		// through to the no-pre-auth debit path, which has no outbox; and
+		// ReturnPreConsumedQuota passes a negative refund and does its own
+		// release right after, keeping PlatformPreAuthID for the logs.
+		zeroUsagePreAuthID := relayInfo.PlatformPreAuthID
+		releasePlatformPreAuth(relayInfo)
+		relayInfo.PlatformPreAuthID = 0
+		common.SysLog(fmt.Sprintf("released pre-auth %d on zero-usage settlement: accountID=%d, userId=%d",
+			zeroUsagePreAuthID, relayInfo.IdentityAccountID, relayInfo.UserId))
 	}
 
 	// Return the original token quota error if local state was inconsistent
