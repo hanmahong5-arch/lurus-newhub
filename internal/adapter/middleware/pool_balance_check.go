@@ -11,6 +11,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -68,13 +69,16 @@ func PoolBalanceCheck() gin.HandlerFunc {
 				switch setting.GetCreditPoolRequired() {
 				case setting.CreditPoolRequiredEnforce:
 					app.RecordPoolNotConfigured(tenantID, "enforce")
-					c.JSON(http.StatusPaymentRequired, gin.H{
-						"error": gin.H{
-							"code":      "pool_not_configured",
-							"message":   "Tenant credit pool is not configured",
-							"tenant_id": tenantID,
-						},
-					})
+					// Wire-native envelope (renderRejection): a Claude/Gemini caller
+					// hitting this gate must see its own error shape, not always
+					// OpenAI's. tenant_id has no home in types.OpenAIError, so it
+					// rides the OpenAI-wire-only extra map (see wire_format.go).
+					apiErr := types.WithOpenAIError(types.OpenAIError{
+						Message: "Tenant credit pool is not configured",
+						Type:    "new_api_error",
+						Code:    "pool_not_configured",
+					}, http.StatusPaymentRequired)
+					renderRejection(c, apiErr, gin.H{"tenant_id": tenantID})
 					c.Abort()
 					return
 				case setting.CreditPoolRequiredLog:
@@ -106,13 +110,14 @@ func PoolBalanceCheck() gin.HandlerFunc {
 
 		if pool.IsExhausted() {
 			app.RecordPoolExhausted(tenantID, "relay")
-			c.JSON(http.StatusPaymentRequired, gin.H{
-				"error": gin.H{
-					"code":      "pool_exhausted",
-					"message":   "Tenant credit pool exhausted",
-					"tenant_id": tenantID,
-				},
-			})
+			// See the pool_not_configured branch above for why this goes
+			// through renderRejection instead of a raw OpenAI-shaped c.JSON.
+			apiErr := types.WithOpenAIError(types.OpenAIError{
+				Message: "Tenant credit pool exhausted",
+				Type:    "new_api_error",
+				Code:    "pool_exhausted",
+			}, http.StatusPaymentRequired)
+			renderRejection(c, apiErr, gin.H{"tenant_id": tenantID})
 			c.Abort()
 			return
 		}

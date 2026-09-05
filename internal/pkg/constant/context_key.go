@@ -73,4 +73,12 @@ const (
 	// ContextKeyRouteAttempts carries the per-attempt routing trace
 	// ([]app.RouteAttempt) assembled during retries and written to the log row.
 	ContextKeyRouteAttempts ContextKey = "route_attempts"
+
+	// ContextKeyRelayFormat carries the wire format (types.RelayFormat) the
+	// inbound request speaks, stamped by middleware.StampRelayFormat from the
+	// request path before any middleware that might reject it. handler.Relay
+	// only learns this deep inside itself — too late for a middleware-stage
+	// 401/402/429 to answer in the caller's own wire shape instead of always
+	// answering OpenAI's, which a Claude/Gemini SDK cannot parse.
+	ContextKeyRelayFormat ContextKey = "relay_format"
 )

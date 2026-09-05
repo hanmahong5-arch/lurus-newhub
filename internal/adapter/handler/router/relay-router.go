@@ -40,6 +40,9 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	geminiRouter := router.Group("/v1beta/models")
+	// StampRelayFormat first: a TokenAuth rejection on this group must answer
+	// in Gemini's wire shape, not the OpenAI default (see wire_format.go).
+	geminiRouter.Use(middleware.StampRelayFormat())
 	geminiRouter.Use(middleware.TokenAuth())
 	{
 		geminiRouter.GET("", func(c *gin.Context) {
@@ -48,6 +51,9 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	geminiCompatibleRouter := router.Group("/v1beta/openai/models")
+	// Under /v1beta/openai/ — relayFormatForPath resolves this to OpenAI's
+	// wire, not Gemini's, matching the OpenAI-compatible handler below.
+	geminiCompatibleRouter.Use(middleware.StampRelayFormat())
 	geminiCompatibleRouter.Use(middleware.TokenAuth())
 	{
 		geminiCompatibleRouter.GET("", func(c *gin.Context) {
@@ -69,6 +75,12 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	relayV1Router := router.Group("/v1")
+	// StampRelayFormat must be the very first Use() on this group: every
+	// middleware mounted below it (TokenAuth, PoolBalanceCheck, the rate
+	// limiters) can reject the request, and gin snapshots the chain at
+	// Group()/Use() time — stamping later would leave those rejections
+	// still answering the OpenAI default.
+	relayV1Router.Use(middleware.StampRelayFormat())
 	relayV1Router.Use(middleware.TokenAuth())
 	// Tenant credit-pool gate: after TokenAuth (need tenant_context),
 	// before CostSpikeLimit so an exhausted pool short-circuits the chain
@@ -230,6 +242,9 @@ func SetRelayRouter(router *gin.Engine) {
 	// the in-flight concurrency cap, and the per-model RPM+TPM dimension
 	// never applied to /v1beta at all.
 	relayGeminiRouter := router.Group("/v1beta")
+	// StampRelayFormat first — same reasoning as relayV1Router above: every
+	// middleware mounted on this group after it can reject the request.
+	relayGeminiRouter.Use(middleware.StampRelayFormat())
 	relayGeminiRouter.Use(middleware.TokenAuth())
 	relayGeminiRouter.Use(middleware.PoolBalanceCheck())
 	relayGeminiRouter.Use(middleware.CostSpikeLimit())

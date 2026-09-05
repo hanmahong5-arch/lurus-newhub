@@ -8,6 +8,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
+	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,13 +18,18 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 		codeStr = code[0]
 	}
 	userId := c.GetInt("id")
-	c.JSON(statusCode, gin.H{
-		"error": gin.H{
-			"message": common.MessageWithRequestId(message, c.GetString(common.RequestIdKey)),
-			"type":    "new_api_error",
-			"code":    codeStr,
-		},
-	})
+	// ErrorTypeOpenAIError (via WithOpenAIError) rather than the plainer
+	// NewErrorWithStatusCode: its ToClaudeError/ToOpenAIError branches key
+	// off the RelayError payload we set below instead of stamping the
+	// ErrorType constant ("new_api_error") into every wire — see
+	// renderRejection's godoc. The OpenAI-wire fields below (message/type/
+	// code) are byte-for-byte what this helper always emitted.
+	apiErr := types.WithOpenAIError(types.OpenAIError{
+		Message: common.MessageWithRequestId(message, c.GetString(common.RequestIdKey)),
+		Type:    "new_api_error",
+		Code:    codeStr,
+	}, statusCode)
+	renderRejection(c, apiErr)
 	c.Abort()
 	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", userId, message))
 	recordMiddlewareErrorLog(c, statusCode, message, codeStr)
