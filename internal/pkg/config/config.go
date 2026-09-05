@@ -85,6 +85,12 @@ type CronConfig struct {
 type SecurityConfig struct {
 	// SMSCodeExpiration is the TTL for SMS verification codes.
 	SMSCodeExpiration time.Duration
+	// TrustedProxies is the list of CIDRs gin trusts to have set X-Forwarded-For
+	// honestly. Default covers the RFC1918 + loopback + link-local ranges the
+	// in-cluster host nginx reverse proxy connects from; anything outside these
+	// ranges has its X-Forwarded-For ignored and ClientIP() falls back to the
+	// TCP peer address.
+	TrustedProxies []string
 }
 
 var (
@@ -123,6 +129,14 @@ func loadFromEnv() *Config {
 		},
 		Security: SecurityConfig{
 			SMSCodeExpiration: envDuration("SMS_CODE_EXPIRATION", 5*time.Minute),
+			TrustedProxies: envStringSlice("TRUSTED_PROXIES", []string{
+				"10.0.0.0/8",
+				"172.16.0.0/12",
+				"192.168.0.0/16",
+				"127.0.0.0/8",
+				"::1/128",
+				"fe80::/10",
+			}),
 		},
 		Storage: StorageConfig{
 			MinIOBucket:         envString("MINIO_RELEASES_BUCKET", "lurus-releases"),
