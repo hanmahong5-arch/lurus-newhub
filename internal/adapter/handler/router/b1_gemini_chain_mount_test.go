@@ -145,8 +145,15 @@ func b1Do(engine *gin.Engine, authHeader, path string) *httptest.ResponseRecorde
 // TestSetRelayRouter_BusinessRateLimit_MountedOnGeminiChain locks
 // middleware.BusinessRateLimit(): a token with RateLimitRPM=1 must be
 // rejected on its second /v1beta request within the 1-minute window, with
-// the business_rate_limit_exceeded code that distinguishes it from
-// ModelRequestRateLimit (already locked on this chain) or any other limiter.
+// the 令牌-scoped message that distinguishes it from ModelRequestRateLimit
+// (already locked on this chain) or any other limiter.
+//
+// Fingerprint changed from the "business_rate_limit_exceeded" OpenAI-wire
+// error code to this message substring by the wire-native-envelope fix
+// (renderRejection): /v1beta rejections now answer in Gemini's own error
+// shape, which carries a numeric HTTP code and a message, not New API's
+// internal string reason-code — so that code no longer appears on this wire
+// at all, by design (see internal/adapter/middleware/wire_format.go).
 func TestSetRelayRouter_BusinessRateLimit_MountedOnGeminiChain(t *testing.T) {
 	fx, cleanup := b1SeedGeminiToken(t, 1 /* rpmLimit */, 0)
 	defer cleanup()
@@ -162,8 +169,8 @@ func TestSetRelayRouter_BusinessRateLimit_MountedOnGeminiChain(t *testing.T) {
 	if w2.Code != http.StatusTooManyRequests {
 		t.Fatalf("second request status=%d, want 429 (BusinessRateLimit must be mounted on the /v1beta chain); body=%s", w2.Code, w2.Body.String())
 	}
-	if !strings.Contains(w2.Body.String(), "business_rate_limit_exceeded") {
-		t.Fatalf("second request body=%s, want the business_rate_limit_exceeded code — a 429 from a different limiter earlier in the chain would false-pass a bare status check", w2.Body.String())
+	if !strings.Contains(w2.Body.String(), "令牌每分钟请求数已达上限") {
+		t.Fatalf("second request body=%s, want the token-scoped rate-limit message — a 429 from a different limiter earlier in the chain would false-pass a bare status check", w2.Body.String())
 	}
 }
 
@@ -312,8 +319,11 @@ func TestSetRelayRouter_RelayConcurrencyLimit_MountedOnGeminiChain(t *testing.T)
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("status=%d, want 429 (RelayConcurrencyLimit must be mounted on the /v1beta chain); body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "concurrency_limit_exceeded") {
-		t.Fatalf("body=%s, want the concurrency_limit_exceeded code — a 429 from a different limiter would false-pass a bare status check", w.Body.String())
+	// Fingerprint changed from the "concurrency_limit_exceeded" OpenAI-wire
+	// error code to this message substring by the wire-native-envelope fix —
+	// see the BusinessRateLimit test above for why.
+	if !strings.Contains(w.Body.String(), "并发请求数已达上限") {
+		t.Fatalf("body=%s, want the concurrency-limit message — a 429 from a different limiter would false-pass a bare status check", w.Body.String())
 	}
 }
 
@@ -372,7 +382,12 @@ func TestSetRelayRouter_BusinessModelRateLimit_MountedOnGeminiChain(t *testing.T
 	if w2.Code != http.StatusTooManyRequests {
 		t.Fatalf("second request status=%d, want 429 (BusinessModelRateLimit must be mounted AFTER Distribute on the /v1beta chain); body=%s", w2.Code, w2.Body.String())
 	}
-	if !strings.Contains(w2.Body.String(), "business_rate_limit_exceeded") {
-		t.Fatalf("second request body=%s, want the business_rate_limit_exceeded code — a 429 from a different limiter would false-pass a bare status check", w2.Body.String())
+	// Fingerprint changed from the "business_rate_limit_exceeded" OpenAI-wire
+	// error code to this message substring by the wire-native-envelope fix —
+	// see the BusinessRateLimit test above for why. The 模型-scoped wording
+	// (as opposed to that test's 令牌-scoped one) is what distinguishes this
+	// limiter from the token-rpm one.
+	if !strings.Contains(w2.Body.String(), "模型每分钟请求数已达上限") {
+		t.Fatalf("second request body=%s, want the model-scoped rate-limit message — a 429 from a different limiter would false-pass a bare status check", w2.Body.String())
 	}
 }

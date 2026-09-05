@@ -422,9 +422,8 @@ func TokenAuth() func(c *gin.Context) {
 				// revisiting, start from this comment (this repo has no doc/coord).
 				apiErr := types.NewErrorWithStatusCode(err, types.ErrorCodeTokenQuotaExhausted, http.StatusPaymentRequired,
 					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(), hintOption)
-				oaiErr := apiErr.ToOpenAIError()
-				oaiErr.Message = common.MessageWithRequestId(oaiErr.Message, c.GetString(common.RequestIdKey))
-				c.JSON(http.StatusPaymentRequired, gin.H{"error": oaiErr})
+				apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), c.GetString(common.RequestIdKey)))
+				renderRejection(c, apiErr)
 				c.Abort()
 				return
 			}
