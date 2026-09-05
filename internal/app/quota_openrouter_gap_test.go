@@ -7,6 +7,7 @@ package app
 //   - debitTenantPool's exhausted-then-overdraft-also-fails "lost debit" arm.
 
 import (
+	"sort"
 	"testing"
 	"time"
 
@@ -26,15 +27,34 @@ func TestPostClaudeConsumeQuota_OpenRouterCostInference(t *testing.T) {
 
 	// Pick a model that exists in the default ratio map, and use its DEFAULT
 	// ratio, so hasCustomModelRatio()==false => the cost-inference branch runs.
+	//
+	// The pick is deterministic on purpose. This used to take the first key
+	// of a range over the map — Go randomises map iteration, and the map
+	// holds models whose ratio-priced cost is legitimately zero (ratio 0, or
+	// per-request priced via the price map instead). Landing on one of those
+	// is not a defect in the inference path, but the assertion below cannot
+	// tell that apart from the branch silently doing nothing, so the test
+	// went red on whichever CI run drew a bad model (main bbc82c91 and #157
+	// both drew llama-3-sonar-large-32k-chat, quota 0). Sorted keys, first
+	// one with a positive ratio and no per-request price.
 	defMap := ratio_setting.GetDefaultModelRatioMap()
+	priceMap := ratio_setting.GetDefaultModelPriceMap()
+	keys := make([]string, 0, len(defMap))
+	for k := range defMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	var model string
 	var modelRatio float64
-	for k, v := range defMap {
-		model, modelRatio = k, v
+	for _, k := range keys {
+		if _, priced := priceMap[k]; priced || defMap[k] <= 0 {
+			continue
+		}
+		model, modelRatio = k, defMap[k]
 		break
 	}
 	if model == "" {
-		t.Skip("no default model ratios available")
+		t.Fatal("no ratio-priced model with a positive default ratio — the fixture's precondition no longer holds")
 	}
 
 	c := createTestGinContext()
