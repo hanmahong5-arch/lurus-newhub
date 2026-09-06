@@ -90,7 +90,40 @@ func GetHealthDetailed(c *gin.Context) {
 	}
 
 	c.JSON(status, gin.H{
-		"status": map[bool]string{true: "healthy", false: "degraded"}[healthy],
+		"status": healthBodyStatus(healthy, checks),
 		"checks": checks,
 	})
+}
+
+// healthIntentionalOffStates lists the exact check values that represent a
+// deliberate opt-out rather than a fault — these must never be reported as
+// "degraded" even though they are not literally "ok".
+var healthIntentionalOffStates = map[string]map[string]bool{
+	"redis":             {"disabled": true},
+	"billing":           {"legacy_mode": true},
+	"database":          {"not_configured": true},
+	"schema_migrations": {"unknown": true},
+}
+
+// healthBodyStatus derives the human-facing "status" word from the full set
+// of checks, independent of the HTTP status code. The code only ever moves
+// on a failed database check (readiness contract, untouched above); the body
+// word must additionally go "degraded" for soft-dependency failures — Redis
+// down, the billing breaker open, pending migrations — so an operator (or an
+// alert reading this JSON) can't mistake a replica whose rate limiters are
+// failing open for a genuinely healthy one.
+func healthBodyStatus(healthy bool, checks map[string]string) string {
+	if !healthy {
+		return "degraded"
+	}
+	for name, value := range checks {
+		if value == "ok" {
+			continue
+		}
+		if healthIntentionalOffStates[name][value] {
+			continue
+		}
+		return "degraded"
+	}
+	return "healthy"
 }
