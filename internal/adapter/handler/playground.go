@@ -16,6 +16,7 @@ import (
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -77,10 +78,28 @@ func Playground(c *gin.Context) {
 	}
 	repo.UserBaseWriteContext(userCache, c)
 
+	// Carry the REAL identity PlaygroundAuth already resolved instead of
+	// rebuilding a zero-value token: this second SetupContextForToken call
+	// OVERWRITES the context, so a token with Id==0 makes PostConsumeQuota's
+	// pool-debit guard (`relayInfo.TokenId > 0`) fail and playground spend
+	// draws no credit pool at all, while a zero ProjectId leaves every log
+	// row this request produces permanently unattributable.
+	//
+	// Only the three fields SetupContextForToken actually reads back are
+	// restored (Id/Key/ProjectId) — the tenant travels in its own
+	// "tenant_context" key set by PlaygroundAuth, not on this struct. The
+	// display name is the one genuine override: the playground has no token
+	// of its own worth naming.
+	realTokenId := c.GetInt("token_id")
+	realTokenKey := c.GetString("token_key")
+	realProjectId := common.GetContextKeyInt(c, constant.ContextKeyProjectId)
 	tempToken := &repo.Token{
-		UserId: userId,
-		Name:   fmt.Sprintf("playground-%s", relayInfo.UsingGroup),
-		Group:  relayInfo.UsingGroup,
+		Id:        realTokenId,
+		Key:       realTokenKey,
+		UserId:    userId,
+		ProjectId: realProjectId,
+		Name:      fmt.Sprintf("playground-%s", relayInfo.UsingGroup),
+		Group:     relayInfo.UsingGroup,
 	}
 	_ = middleware.SetupContextForToken(c, tempToken)
 

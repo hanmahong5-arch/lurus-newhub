@@ -62,7 +62,24 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	playgroundRouter := router.Group("/pg")
-	playgroundRouter.Use(middleware.PlaygroundAuth(), middleware.Distribute())
+	playgroundRouter.Use(middleware.PlaygroundAuth())
+	// Tenant credit-pool gate: after PlaygroundAuth (need tenant_context),
+	// before CostSpikeLimit so an exhausted pool short-circuits the chain —
+	// same order as relayV1Router below (ADR 2026-05-18 §5 enforcement
+	// order); the playground is a billed relay path like any other and must
+	// not be exempt from the ceilings that path enforces.
+	playgroundRouter.Use(middleware.PoolBalanceCheck())
+	// Cost-spike protection runs after auth (needs user id) and before
+	// entitlement/rate-limit so a runaway loop can't keep racking up checks.
+	playgroundRouter.Use(middleware.CostSpikeLimit())
+	playgroundRouter.Use(middleware.EntitlementCheck())
+	playgroundRouter.Use(middleware.ModelRequestRateLimit())
+	playgroundRouter.Use(middleware.BusinessRateLimit())
+	// Occupancy cap (in-flight), complementing the per-minute limits above:
+	// holds a lease for the whole request, so it must wrap everything after it.
+	// Disabled unless RELAY_MAX_CONCURRENT_PER_TOKEN/_PER_TENANT is set.
+	playgroundRouter.Use(middleware.RelayConcurrencyLimit())
+	playgroundRouter.Use(middleware.Distribute())
 	{
 		playgroundRouter.POST("/chat/completions", handler.Playground)
 	}
