@@ -249,6 +249,16 @@ func CreateTokenV2(c *gin.Context) {
 		allowIps = &req.AllowIps
 	}
 
+	// Stamp the platform account link from the CALLER's own user row (never
+	// from the request body — there is no such field on it). Without this
+	// PostConsumeQuota's wallet-debit gate never fires for a v2-created
+	// token, no matter how the caller's platform account is linked. No link
+	// leaves the field at zero, same as an unlinked v1 token.
+	var identityAccountID int64
+	if owner, err := repo.GetUserById(tenantCtx.UserID); err == nil && owner.LurusAccountID != nil {
+		identityAccountID = *owner.LurusAccountID
+	}
+
 	// Create token with tenant context
 	token := repo.Token{
 		UserId:             tenantCtx.UserID,
@@ -268,6 +278,7 @@ func CreateTokenV2(c *gin.Context) {
 		RateLimitRPM:       req.RateLimitRPM,
 		RateLimitTPM:       req.RateLimitTPM,
 		ProjectId:          req.ProjectId,
+		IdentityAccountID:  identityAccountID,
 	}
 
 	err = token.Insert()
