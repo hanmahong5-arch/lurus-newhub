@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 )
 
@@ -136,7 +136,25 @@ func GenerateTokenKey() (string, error) {
 // no tenant validation whatsoever — this allow-list is the only thing keeping
 // an attacker-supplied field out of the row. "Completing" the list here would
 // open an unvalidated cross-tenant project assignment.
+//
+// IdentityAccountID (the lurus-platform account link) is stamped from the
+// OWNER's user row, never from the request body — there is no field for it
+// in the allow-list above, so it cannot be attacker-supplied either. Without
+// this stamp PostConsumeQuota's wallet-debit gate (quota.go, keyed on
+// relayInfo.IdentityAccountID > 0) never fires for a self-service token, no
+// matter how the owner's platform account is linked. A user with no platform
+// link leaves the field at zero, which is correct: nothing to bill upstream.
 func BuildCleanToken(userId int, tenantId string, token *repo.Token, key string) repo.Token {
+	// repo.DB nil-guard: BuildCleanToken was previously a pure struct-copy
+	// with no DB dependency; keep that contract for callers/tests that don't
+	// wire a database (repo.DB == nil is the well-known "not wired" state
+	// used elsewhere in this codebase, e.g. lifecycle boot ordering).
+	var identityAccountID int64
+	if repo.DB != nil {
+		if owner, err := repo.GetUserById(userId); err == nil && owner.LurusAccountID != nil {
+			identityAccountID = *owner.LurusAccountID
+		}
+	}
 	return repo.Token{
 		UserId:             userId,
 		TenantId:           tenantId,
@@ -155,6 +173,7 @@ func BuildCleanToken(userId int, tenantId string, token *repo.Token, key string)
 		Scopes:             token.Scopes,
 		RateLimitRPM:       token.RateLimitRPM,
 		RateLimitTPM:       token.RateLimitTPM,
+		IdentityAccountID:  identityAccountID,
 	}
 }
 

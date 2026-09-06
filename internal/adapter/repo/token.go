@@ -292,23 +292,44 @@ func (token *Token) Insert() error {
 
 // AutoCreateDefaultToken creates a default unlimited-quota token for a user
 // so the playground and other session-based features work without manual setup.
+//
+// The token is bound to the OWNER's own tenant — not a hardcoded "default" —
+// so it routes through the same channels and draws against the same credit
+// pool a manually-created key for that user would. "default" is used only as
+// a fallback for the (pre-backfill) case where the owner's own tenant_id is
+// genuinely empty, never as the primary assignment. The platform account
+// link is stamped the same way BuildCleanToken does, so this token also
+// participates in the wallet-debit gate when the owner has one.
 func AutoCreateDefaultToken(userId int) (*Token, error) {
 	key, err := common.GenerateRandomKey(48)
 	if err != nil {
 		return nil, fmt.Errorf("generate token key: %w", err)
 	}
+
+	tenantId := "default"
+	var identityAccountID int64
+	if owner, err := GetUserById(userId); err == nil {
+		if owner.TenantId != "" {
+			tenantId = owner.TenantId
+		}
+		if owner.LurusAccountID != nil {
+			identityAccountID = *owner.LurusAccountID
+		}
+	}
+
 	token := &Token{
-		UserId:         userId,
-		TenantId:       "default",
-		Key:            key,
-		Status:         common.TokenStatusEnabled,
-		Name:           "default",
-		CreatedTime:    common.GetTimestamp(),
-		AccessedTime:   common.GetTimestamp(),
-		ExpiredTime:    -1, // never expires
-		RemainQuota:    0,
-		UnlimitedQuota: true,
-		Group:          "",
+		UserId:            userId,
+		TenantId:          tenantId,
+		Key:               key,
+		Status:            common.TokenStatusEnabled,
+		Name:              "default",
+		CreatedTime:       common.GetTimestamp(),
+		AccessedTime:      common.GetTimestamp(),
+		ExpiredTime:       -1, // never expires
+		RemainQuota:       0,
+		UnlimitedQuota:    true,
+		Group:             "",
+		IdentityAccountID: identityAccountID,
 	}
 	if err := token.Insert(); err != nil {
 		return nil, fmt.Errorf("insert token: %w", err)
