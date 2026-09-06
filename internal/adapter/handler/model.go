@@ -213,11 +213,20 @@ func ListModels(c *gin.Context, modelType int) {
 				Type:        "model",
 			}
 		}
+		// A day-one tenant (or a token whose model allow-list is empty) has
+		// zero routable models here — useranthropicModels[0] and [len-1] must
+		// not be read unguarded in that case, or this panics with index out
+		// of range instead of answering an empty, otherwise well-formed list.
+		var firstId, lastId interface{}
+		if len(useranthropicModels) > 0 {
+			firstId = useranthropicModels[0].ID
+			lastId = useranthropicModels[len(useranthropicModels)-1].ID
+		}
 		c.JSON(200, gin.H{
 			"data":     useranthropicModels,
-			"first_id": useranthropicModels[0].ID,
+			"first_id": firstId,
 			"has_more": false,
-			"last_id":  useranthropicModels[len(useranthropicModels)-1].ID,
+			"last_id":  lastId,
 		})
 	case constant.ChannelTypeGemini:
 		userGeminiModels := make([]dto.GeminiModel, len(userOpenAiModels))
@@ -276,14 +285,28 @@ func RetrieveModel(c *gin.Context, modelType int) {
 			c.JSON(200, aiModel)
 		}
 	} else {
-		openAIError := types.OpenAIError{
-			Message: fmt.Sprintf("The model '%s' does not exist", modelId),
-			Type:    "invalid_request_error",
-			Param:   "model",
-			Code:    "model_not_found",
+		// A missing model is a 404, not a 200-with-error-body — and the body
+		// must be the caller's own wire envelope (mirrors the success switch
+		// above), not always the OpenAI shape regardless of which wire asked.
+		switch modelType {
+		case constant.ChannelTypeAnthropic:
+			c.JSON(http.StatusNotFound, gin.H{
+				"type": "error",
+				"error": types.ClaudeError{
+					Type:    "not_found_error",
+					Message: fmt.Sprintf("The model '%s' does not exist", modelId),
+				},
+			})
+		default:
+			openAIError := types.OpenAIError{
+				Message: fmt.Sprintf("The model '%s' does not exist", modelId),
+				Type:    "invalid_request_error",
+				Param:   "model",
+				Code:    "model_not_found",
+			}
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": openAIError,
+			})
 		}
-		c.JSON(200, gin.H{
-			"error": openAIError,
-		})
 	}
 }
