@@ -706,6 +706,70 @@ func PlaygroundAuth() func(c *gin.Context) {
 			return
 		}
 
+		// TI: resolve the OWNING USER's tenant, not the token row's —
+		// repo.AutoCreateDefaultToken now stamps the owner's own tenant, but
+		// every row it created before that change carries TenantId:"default"
+		// and there is no backfill, so trusting the token row here would
+		// silently drop those non-default-tenant playground callers back onto
+		// the platform-shared pool. Mirrors authHelper's session-path
+		// resolution (tenantId defaults to "default"; a lookup error fails
+		// OPEN, matching that code, rather than 500ing every playground call
+		// on a transient DB hiccup). One GetUserCache call also resolves the
+		// owning user's status and group, so the disabled check and the group
+		// seed below share it instead of hitting the DB/cache twice.
+		tenantId := "default"
+		userGroup := token.Group
+		userCache, cacheErr := repo.GetUserCache(userId)
+		if cacheErr == nil && userCache != nil {
+			if userCache.Status == common.UserStatusDisabled {
+				abortWithOpenAiMessage(c, http.StatusForbidden, "用户已被封禁")
+				return
+			}
+			if userCache.TenantId != "" {
+				tenantId = userCache.TenantId
+			}
+			if userGroup == "" {
+				userGroup = userCache.Group
+			}
+		}
+		if userGroup == "" {
+			userGroup = "default"
+		}
+
+		// TI-5 (mirrors authHelper): a disabled/suspended tenant is locked out
+		// of the playground too, not just the console/bearer relay path. Skip
+		// the bootstrap/system tenant, same reasoning as authHelper.
+		if tenantId != "default" {
+			if tenant, tErr := repo.GetTenantByID(tenantId); tErr == nil && tenant != nil && tenant.IsDisabled() {
+				c.JSON(http.StatusForbidden, gin.H{
+					"success":    false,
+					"message":    "所属租户已被禁用或暂停",
+					"error_code": "TENANT_DISABLED",
+				})
+				c.Abort()
+				return
+			}
+		}
+
+		repo.InjectTenantContext(c, tenantId, userId)
+		emailVal, usernameVal := "", ""
+		if userCache != nil {
+			emailVal = userCache.Email
+			usernameVal = userCache.Username
+		}
+		c.Set("tenant_context", &TenantContext{
+			TenantID: tenantId,
+			UserID:   userId,
+			Email:    emailVal,
+			Username: usernameVal,
+			Roles:    []string{},
+		})
+		// Seed the using-group so channel eligibility/ratio resolve against
+		// the caller's actual group instead of falling back to the global
+		// list (Distribute reads ContextKeyUsingGroup before this fix it was
+		// never set on this path at all).
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, userGroup)
+
 		// Set up token context for relay.
 		c.Set("id", token.UserId)
 		if err := SetupContextForToken(c, token); err != nil {

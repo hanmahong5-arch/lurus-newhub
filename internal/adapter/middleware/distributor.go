@@ -137,11 +137,18 @@ func Distribute() func(c *gin.Context) {
 				// platform-shared channels plus the caller's own (TI round-3
 				// #1 covered the sk-<key>-<channelId> PIN above; this is the
 				// same defect on the ordinary weighted-selection path every
-				// non-pinned relay request takes). TokenAuth always injects
-				// tenant_context on the real relay path, so this resolves in
-				// production; when it doesn't (paths that reach Distribute
-				// without TokenAuth), selection stays tenant-blind rather
-				// than failing closed — unlike the channel PIN above, this
+				// non-pinned relay request takes). Both authenticators that
+				// sit in front of Distribute() in production — TokenAuth (the
+				// bearer relay path) and PlaygroundAuth (the session-based
+				// playground) — now inject tenant_context, so this resolves
+				// for every current production mount of Distribute()
+				// (relay-router.go's relayV1Router/relayMjRouter/
+				// relaySunoRouter/relayMusicRouter/relayGeminiRouter/
+				// playgroundRouter and video-router.go's video groups all sit
+				// behind one of the two). If a future caller reaches Distribute
+				// without either — the fallback below is for THAT case, not a
+				// currently-live gap — selection stays tenant-blind rather
+				// than failing closed; unlike the channel PIN above, this
 				// path can only ever land on a channel already eligible for
 				// (group, model), which is a much narrower capability than
 				// naming an arbitrary channel id.
