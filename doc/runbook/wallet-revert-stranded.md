@@ -139,8 +139,8 @@ curl -sS -X POST \
   "$IDENTITY_SERVICE_URL/internal/v1/wallet/credit"
 ```
 
-`amount_in_LB` = `quota_units / 1000` (matches the handler's conversion
-at `tenant_credit_pool.go:142`).
+`amount_in_LB` = `quota_units / QuotaPerUnit` (500000 — matches the handler's
+conversion `currency.LucToLut()` in `TopupCreditPool`, `tenant_credit_pool.go`).
 
 ### Option B — Manually credit the pool
 

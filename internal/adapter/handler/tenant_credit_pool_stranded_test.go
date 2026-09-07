@@ -23,6 +23,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 )
 
 // stubWalletSeams replaces the wallet call seams for one test and restores
@@ -45,6 +46,88 @@ func stubWalletSeams(t *testing.T, revertErr error) (debitCalls, revertCalls *in
 		creditWallet = prevCredit
 	})
 	return debitCalls, revertCalls
+}
+
+// stubWalletSeamsCapture is stubWalletSeams plus the amount argument each
+// seam was called with, so tests can assert on the wallet-unit conversion
+// (BILL-A: the debit must be expressed in the SSOT currency.LucToLut() unit,
+// not a stale hardcoded divisor) without duplicating the call-count plumbing.
+func stubWalletSeamsCapture(t *testing.T, revertErr error) (debitCalls, revertCalls *int, debitAmount, revertAmount *float64) {
+	t.Helper()
+	debitCalls, revertCalls = new(int), new(int)
+	debitAmount, revertAmount = new(float64), new(float64)
+
+	prevDebit, prevCredit := debitWallet, creditWallet
+	debitWallet = func(ctx context.Context, accountID int64, amount float64, txType, description, productID, idempotencyKey string) (*common.DebitWalletResult, error) {
+		*debitCalls++
+		*debitAmount = amount
+		return &common.DebitWalletResult{Success: true, BalanceAfter: 999}, nil
+	}
+	creditWallet = func(ctx context.Context, accountID int64, amount float64, txType, description, productID, idempotencyKey string) error {
+		*revertCalls++
+		*revertAmount = amount
+		return revertErr
+	}
+	t.Cleanup(func() {
+		debitWallet = prevDebit
+		creditWallet = prevCredit
+	})
+	return debitCalls, revertCalls, debitAmount, revertAmount
+}
+
+// TestTopupCreditPool_WalletDebitUsesQuotaPerUnit: the platform wallet must be
+// debited in the SSOT unit (currency.LucToLut(), i.e. common.QuotaPerUnit —
+// the same conversion quota.go / the v2 transfer / internal topup all use),
+// not a stale hardcoded 1000 divisor that overcharges the wallet 500x.
+func TestTopupCreditPool_WalletDebitUsesQuotaPerUnit(t *testing.T) {
+	ctx := setupStrandedCtx(t, 10_000_000) // ample ceiling, normal (non-stranded) path
+	_, _, debitAmount, _ := stubWalletSeamsCapture(t, nil)
+
+	w := topupWithKey(ctx, 500000, "idem-unit-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	want := float64(500000) / currency.LucToLut()
+	if *debitAmount != want {
+		t.Errorf("wallet debit amount = %v, want %v (500000 quota / QuotaPerUnit)", *debitAmount, want)
+	}
+}
+
+// TestTopupCreditPool_SubGranularityAmountRejected: an amount whose wallet
+// debit would round to 0.0000 LB must be refused before any wallet or pool
+// write — otherwise the pool is credited for free.
+func TestTopupCreditPool_SubGranularityAmountRejected(t *testing.T) {
+	ctx := setupStrandedCtx(t, 10_000_000)
+	debitCalls, _, _, _ := stubWalletSeamsCapture(t, nil)
+
+	w := topupWithKey(ctx, 24, "idem-subgran-1") // 24 quota = 0.000048 LB → rounds to 0.0000
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a sub-granularity amount, body: %s", w.Code, w.Body.String())
+	}
+	if *debitCalls != 0 {
+		t.Errorf("wallet debit calls = %d, want 0 (rejected before the wallet seam)", *debitCalls)
+	}
+}
+
+// TestTopupCreditPool_RevertCreditsSameAmountAsDebit: when TopupPool fails
+// and the revert fires, the credit-back must restore exactly what was
+// debited — proving the revert path still reuses walletAmount rather than
+// recomputing it with a different divisor.
+func TestTopupCreditPool_RevertCreditsSameAmountAsDebit(t *testing.T) {
+	ctx := setupStrandedCtx(t, 100) // ceiling 100 < amount 500000 → TopupPool fails
+	_, revertCalls, debitAmount, revertAmount := stubWalletSeamsCapture(t, nil)
+
+	w := topupWithKey(ctx, 500000, "idem-revert-unit-1")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (ceiling), body: %s", w.Code, w.Body.String())
+	}
+	if *revertCalls != 1 {
+		t.Fatalf("revert calls = %d, want 1", *revertCalls)
+	}
+	if *revertAmount != *debitAmount {
+		t.Errorf("revert amount = %v, debit amount = %v, want equal", *revertAmount, *debitAmount)
+	}
 }
 
 // topupWithKey posts a topup with an explicit Idempotency-Key header

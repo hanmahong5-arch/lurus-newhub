@@ -9,6 +9,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/gin-gonic/gin"
@@ -278,7 +279,22 @@ func TopupCreditPool(c *gin.Context) {
 	}
 	accountID := *actor.LurusAccountID
 
-	walletAmount := float64(req.Amount) / 1000.0 // 1 LB ≈ 1000 quota units, matches existing relay accounting
+	// 1 LB = QuotaPerUnit quota (currency.LucToLut(), never hardcode 500000 —
+	// see currency.go:36), same conversion as quota.go:985 / the v2 transfer /
+	// internal topup. The wallet keeps 4 decimals (numeric(14,4)), so a debit
+	// is exact only for multiples of QuotaPerUnit/10000 quota; the sub-0.0001
+	// remainder of any other amount is lost to rounding, and anything under
+	// half that granularity rounds to a 0.0000 debit — free pool credit — so
+	// those requests are rejected outright.
+	walletAmount := float64(req.Amount) / currency.LucToLut()
+	if walletAmount < 0.00005 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "amount " + strconv.FormatInt(req.Amount, 10) + " quota would round to a 0.0000 LB wallet debit (minimum " +
+				strconv.FormatInt(int64(currency.LucToLut())/20000, 10) + " quota)",
+		})
+		return
+	}
 	// Idempotency key per topup intent (contracts.md S1 / ADR D4 "deterministic
 	// business key, never random"): honour a caller-supplied Idempotency-Key so a
 	// double-clicked/retried topup dedupes against double-charge; fall back to a
