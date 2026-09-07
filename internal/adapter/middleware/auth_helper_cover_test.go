@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,6 +134,111 @@ func TestAuthHelper_TenantDisabled_403(t *testing.T) {
 	w := serveRole(r, nil)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403 for member of disabled tenant; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// authHelper re-validates status against the DB (via the user cache) on
+// every request. Without that, a long-lived session/cookie keeps a disabled
+// user admitted until the session expires or is reissued — an admin's
+// "disable this user" action would be cosmetic. The session in this test
+// never changes; only the DB does.
+func TestAuthHelper_SessionStatusRevalidated_DisabledInDB(t *testing.T) {
+	_, cleanup := setupCoverDB(t)
+	defer cleanup()
+
+	user := &repo.User{
+		Username: "disableme", Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
+		Email: "disableme@local", TenantId: "default",
+	}
+	if err := repo.DB.Create(user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// buildRoleRouter re-seeds these exact session values before every
+	// request, so status stays "Enabled" for the lifetime of r regardless of
+	// what happens in the DB — exactly like a real cookie that isn't reissued.
+	r := buildRoleRouter(map[string]interface{}{
+		"username": user.Username, "role": user.Role, "id": user.Id, "status": common.UserStatusEnabled,
+	}, UserAuth)
+
+	// Baseline: DB and session agree — request succeeds.
+	if w := serveRole(r, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("baseline (pre-disable) request failed; status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	if err := repo.DisableUserById(user.Id); err != nil {
+		t.Fatalf("DisableUserById: %v", err)
+	}
+
+	// Same session, no logout, no wait — the very next request must observe
+	// the disable.
+	w := serveRole(r, nil)
+	if strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("disabled user's existing session still reached the handler; body=%s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "封禁") {
+		t.Errorf("body = %s, want it to contain the ban message '封禁'", w.Body.String())
+	}
+	var body struct {
+		Success bool `json:"success"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body.Success {
+		t.Errorf("success = true, want false for a disabled user")
+	}
+}
+
+// Twin of the status test: authHelper must also re-validate role, so an
+// admin demotion takes effect on the demoted user's very next
+// AdminAuth-gated request rather than waiting for their session to refresh.
+func TestAuthHelper_SessionRoleRevalidated_DemotedInDB(t *testing.T) {
+	_, cleanup := setupCoverDB(t)
+	defer cleanup()
+
+	user := &repo.User{
+		Username: "demoteme", Role: common.RoleAdminUser, Status: common.UserStatusEnabled,
+		Email: "demoteme@local", TenantId: "default", Group: "default",
+	}
+	if err := repo.DB.Create(user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	r := buildRoleRouter(map[string]interface{}{
+		"username": user.Username, "role": common.RoleAdminUser, "id": user.Id, "status": user.Status,
+	}, AdminAuth)
+
+	if w := serveRole(r, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("baseline (pre-demotion) admin request failed; status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	if _, err := repo.AdminUpdateUser(user.Id, common.RoleCommonUser, user.Status, user.Quota, user.Group); err != nil {
+		t.Fatalf("AdminUpdateUser demote: %v", err)
+	}
+
+	w := serveRole(r, nil)
+	if strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("demoted user's existing admin session still reached the handler; body=%s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "权限不足") {
+		t.Errorf("body = %s, want it to contain '权限不足'", w.Body.String())
+	}
+}
+
+// Negative control: when the cache/DB lookup itself fails (here, the session
+// carries an id that was never persisted), revalidation must fail OPEN and
+// preserve the session-supplied status/role — mirroring the pre-existing
+// tenant-disabled check's fail-open policy on lookup error. A transient
+// Redis/DB hiccup must not turn into a hard rejection for every request.
+func TestAuthHelper_SessionRevalidation_FailsOpenOnLookupError(t *testing.T) {
+	_, cleanup := setupCoverDB(t)
+	defer cleanup()
+
+	r := buildRoleRouter(map[string]interface{}{
+		"username": "ghost", "role": common.RoleCommonUser, "id": 424242, "status": common.UserStatusEnabled,
+	}, UserAuth)
+	w := serveRole(r, nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Errorf("status=%d body=%s, want 200 ok:true when the cache/DB lookup fails (fail open)", w.Code, w.Body.String())
 	}
 }
 

@@ -57,6 +57,7 @@ func (user *User) ToBaseUser() *UserBase {
 		Group:          user.Group,
 		Quota:          user.Quota,
 		Status:         user.Status,
+		Role:           user.Role,
 		Username:       user.Username,
 		Setting:        user.Setting,
 		Email:          user.Email,
@@ -376,11 +377,22 @@ func HardDeleteUserById(id int) error {
 // cost-spike protection middleware as the corrective action when the 5-min
 // quota window is exceeded — keeps the runaway loop from draining the wallet
 // further until an admin reviews. Idempotent.
+//
+// Invalidates the user cache after a successful update so authHelper's
+// per-request re-validation (which reads through the cache) observes the
+// disable on the very next request instead of serving a stale "enabled"
+// entry until the cache's own TTL expires.
 func DisableUserById(id int) error {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
-	return DB.Model(&User{}).Where("id = ?", id).Update("status", common.UserStatusDisabled).Error
+	if err := DB.Model(&User{}).Where("id = ?", id).Update("status", common.UserStatusDisabled).Error; err != nil {
+		return err
+	}
+	if err := invalidateUserCache(id); err != nil {
+		common.SysLog("disable user cache invalidation failed: " + err.Error())
+	}
+	return nil
 }
 
 // AdminListUsers returns a paginated, optionally-filtered list of users across

@@ -40,6 +40,14 @@ func authHelper(c *gin.Context, minRole int) {
 	id := session.Get("id")
 	status := session.Get("status")
 	useAccessToken := false
+	// sdkSelfHealed marks that the SDK-bridge branch below just wrote an
+	// Enabled status into the session from its own DB read. The cache
+	// re-validation further down is the single status authority for this
+	// request, so when the two reads disagree (cache lagging the DB, or the
+	// reverse) the session must follow the value the request was actually
+	// authorised on rather than keep a cookie claiming Enabled for a disabled
+	// user.
+	sdkSelfHealed := false
 	if username == nil {
 		// v2 console SDK-bridge path (ADR-0011 Layer C): a user who logged in
 		// through the platform SDK carries a lurus_session COOKIE — not a gin
@@ -68,6 +76,8 @@ func authHelper(c *gin.Context, minRole int) {
 				if saveErr := session.Save(); saveErr != nil {
 					logger.LogWarnKV(c.Request.Context(), "sdk identity session self-heal failed",
 						"who", user.Username, "account_id", zid.AccountID, "result", saveErr.Error())
+				} else {
+					sdkSelfHealed = true
 				}
 			}
 		}
@@ -93,7 +103,7 @@ func authHelper(c *gin.Context, minRole int) {
 			// Identity session token validated — resolve to local user via identity account lookup.
 			idMapping, _ := common.GetAccountByZitadelSub_ByAccountID(c.Request.Context(), accountID)
 			if idMapping != nil && idMapping.ZitadelSub != "" {
-				user, _, userErr := repo.GetUserByIDPSubject(idMapping.ZitadelSub, "default")
+				user, _, userErr := repo.GetUserByIDPSubjectAnyTenant(idMapping.ZitadelSub)
 				if userErr == nil && user != nil {
 					username = user.Username
 					role = user.Role
@@ -160,6 +170,44 @@ func authHelper(c *gin.Context, minRole int) {
 			return
 		}
 	}
+
+	// Resolve the authoritative user ID as an int once, up front — both the
+	// session re-validation below and the tenant-context injection further
+	// down need it, and asserting it twice invited them to drift apart.
+	userId, ok := id.(int)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "invalid session data: user ID is not an integer",
+		})
+		c.Abort()
+		return
+	}
+
+	// Re-validate status and role against the user cache (DB-backed) on
+	// every request. The gin session cookie snapshots status/role at login
+	// and is trusted for its whole lifetime, so without this an admin
+	// disabling a user or demoting an admin only took effect once the cookie
+	// expired or was reissued. (The access-token and platform-session
+	// branches above already read the user row per request; this closes the
+	// cookie path.) Lookup failure fails OPEN (same policy as the
+	// tenant-disabled check below) rather than hard-erroring every request
+	// on a transient Redis/DB hiccup.
+	userCache, cacheErr := repo.GetUserCache(userId)
+	if cacheErr == nil && userCache != nil {
+		status = userCache.Status
+		// Role==0 means the cache entry predates the Role field or was
+		// otherwise never populated — treat that as "unknown", never as a
+		// demotion to zero.
+		if userCache.Role > 0 {
+			role = userCache.Role
+		}
+		if sdkSelfHealed && userCache.Status != common.UserStatusEnabled {
+			session.Set("status", userCache.Status)
+			_ = session.Save()
+		}
+	}
+
 	statusVal, ok := status.(int)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{
@@ -221,18 +269,11 @@ func authHelper(c *gin.Context, minRole int) {
 	// Propagate user_id to context.Context for structured log correlation.
 	c.Request = c.Request.WithContext(common.WithUserID(c.Request.Context(), fmt.Sprintf("%v", id)))
 
-	// Inject tenant context for v1 API tenant isolation
-	userId, ok := id.(int)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": "invalid session data: user ID is not an integer",
-		})
-		c.Abort()
-		return
-	}
+	// Inject tenant context for v1 API tenant isolation. Reuses the
+	// userCache resolved above (session re-validation) instead of a second
+	// GetUserCache round-trip.
 	tenantId := "default"
-	if userCache, cacheErr := repo.GetUserCache(userId); cacheErr == nil && userCache.TenantId != "" {
+	if cacheErr == nil && userCache != nil && userCache.TenantId != "" {
 		tenantId = userCache.TenantId
 	}
 

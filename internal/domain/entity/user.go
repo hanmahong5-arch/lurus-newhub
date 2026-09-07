@@ -100,12 +100,17 @@ func (user *User) IsSubscriber() bool {
 
 // UserBase is a lightweight view of User for caching
 type UserBase struct {
-	Id             int    `json:"id"`
-	TenantId       string `json:"tenant_id"`
-	Group          string `json:"group"`
-	Email          string `json:"email"`
-	Quota          int    `json:"quota"`
-	Status         int    `json:"status"`
+	Id       int    `json:"id"`
+	TenantId string `json:"tenant_id"`
+	Group    string `json:"group"`
+	Email    string `json:"email"`
+	Quota    int    `json:"quota"`
+	Status   int    `json:"status"`
+	// Role lets authHelper re-validate a session's privilege level against
+	// the DB on every request (not just status). 0 means "not populated" —
+	// caches built before this field existed, or written without a DB hit —
+	// and callers must treat that as unknown rather than as a demotion.
+	Role           int    `json:"role"`
 	Username       string `json:"username"`
 	Setting        string `json:"setting"`
 	DailyQuota     int    `json:"daily_quota"`

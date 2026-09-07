@@ -90,6 +90,7 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 		Group:          user.Group,
 		Quota:          user.Quota,
 		Status:         user.Status,
+		Role:           user.Role,
 		Username:       user.Username,
 		Setting:        user.Setting,
 		Email:          user.Email,
