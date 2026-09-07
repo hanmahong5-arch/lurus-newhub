@@ -12,6 +12,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -106,9 +107,10 @@ type RelayInfo struct {
 	RelayMode              int
 	OriginModelName        string
 	// SourceProduct is the resolved cross-product attribution tag for this
-	// relay (Workstream 0). Set on the main Relay() path from the
-	// X-Lurus-Product header; empty on paths that don't resolve it (callers
-	// fall back to the default product id). Carried here because the wallet
+	// relay (Workstream 0). Set in genBaseRelayInfo from the X-Lurus-Product
+	// header, so every relay path — chat/OpenAI/Claude/Gemini/rerank AND the
+	// MJ/Task paths that build RelayInfo directly via GenRelayInfo without
+	// going through Relay() — carries it. Carried here because the wallet
 	// settlement path (PostConsumeQuota) has no gin.Context.
 	SourceProduct string
 	// ProjectId is the cost-attribution project of the authenticated token
@@ -457,6 +459,11 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		TokenUnlimited: common.GetContextKeyBool(c, constant.ContextKeyTokenUnlimited),
 		TokenGroup:     tokenGroup,
 		ProjectId:      common.GetContextKeyInt(c, constant.ContextKeyProjectId),
+		// Workstream 0: resolve the cross-product attribution tag here, once,
+		// so every GenRelayInfo* entry point carries it — including MJ/Task,
+		// which build RelayInfo directly and never pass through Relay().
+		// Unknown/absent header -> the default product id.
+		SourceProduct: ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader)),
 
 		isFirstResponse: true,
 		RelayMode:       relayconstant.Path2RelayMode(c.Request.URL.Path),

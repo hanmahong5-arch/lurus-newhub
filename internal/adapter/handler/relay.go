@@ -264,11 +264,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		common.SetContextKey(c, constant.ContextKeySessionAffinity, affinityKey)
 	}
 
-	// Workstream 0: resolve the cross-product attribution tag once, here, so it
-	// reaches both the wallet (PostConsumeQuota, which has no gin.Context) and
-	// the log row (EnrichLogParams). Unknown/absent header → default product.
-	relayInfo.SourceProduct = ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader))
-
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
@@ -715,6 +710,11 @@ func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
 	other["channel_name"] = c.GetString("channel_name")
 	other["channel_type"] = c.GetInt("channel_type")
 	other["relay_mode"] = c.GetInt("relay_mode")
+	// Workstream 0: error rows never went through genBaseRelayInfo when the
+	// failure happened before GenRelayInfo ran (e.g. request binding), so
+	// RelayInfo.SourceProduct may not exist yet — read the header directly
+	// off the request that is still in hand, same resolver as the success path.
+	other["source_product"] = ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader))
 	if upModel := c.GetString("original_model"); upModel != "" {
 		other["upstream_model"] = upModel
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,6 +30,20 @@ type logStatView struct {
 	Tpm              int64 `json:"tpm"`
 	StartTime        int64 `json:"start_time"`
 	EndTime          int64 `json:"end_time"`
+	// ByProduct is the cross-product attribution breakdown (Workstream 0):
+	// the same window filters as the totals above, MINUS the source_product
+	// filter itself, so a caller filtering to one product still sees where
+	// the rest of the window's spend went.
+	ByProduct []productSpendView `json:"by_product"`
+}
+
+// productSpendView is one row of the by_product breakdown.
+type productSpendView struct {
+	SourceProduct    string `json:"source_product"`
+	TotalRequests    int64  `json:"total_requests"`
+	TotalQuota       int64  `json:"total_quota"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
 }
 
 // GetLogStatV2 returns aggregate usage stats for the current user over the
@@ -95,6 +110,8 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 	// repo.GetUserLogsWithParams, so every filter GetLogsV2 accepts has to be
 	// repeated here or the header totals stop matching the rows below them.
 	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
+	// Cross-product attribution filter (Workstream 0); "" = no filter.
+	sourceProduct := c.Query("source_product")
 
 	// Window totals — apply exactly the GetLogsV2 filters, tenant scoped
 	// (+ user scoped unless tenant-wide).
@@ -123,6 +140,9 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 	}
 	if projectID > 0 {
 		windowQuery = windowQuery.Where("project_id = ?", projectID)
+	}
+	if sourceProduct != "" {
+		windowQuery = windowQuery.Where(repo.SourceProductExpr()+" = ?", sourceProduct)
 	}
 
 	var window struct {
@@ -167,6 +187,9 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 	if projectID > 0 {
 		rateQuery = rateQuery.Where("project_id = ?", projectID)
 	}
+	if sourceProduct != "" {
+		rateQuery = rateQuery.Where(repo.SourceProductExpr()+" = ?", sourceProduct)
+	}
 
 	var rate struct {
 		Rpm int64 `gorm:"column:rpm"`
@@ -177,6 +200,56 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 			"COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS tpm").
 		Scan(&rate).Error; err != nil {
 		common.SysError("serveLogStatV2: rate aggregate failed: " + err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to aggregate log stats",
+		})
+		return
+	}
+
+	// by_product breakdown — same window filters as the totals above, MINUS
+	// the source_product filter, so it always shows where a caller's window
+	// spend went even when they filtered the totals down to one product.
+	// Unattributed rows (no tag, or written before attribution shipped) fold
+	// into the default product id rather than a blank group, mirroring
+	// repo.GetSpendByProduct.
+	breakdownQuery := repo.LOG_DB.Model(&repo.Log{}).
+		Where("tenant_id = ?", tenantID)
+	if userID > 0 {
+		breakdownQuery = breakdownQuery.Where("user_id = ?", userID)
+	}
+	if username != "" {
+		breakdownQuery = breakdownQuery.Where("username = ?", username)
+	}
+	if logType > 0 {
+		breakdownQuery = breakdownQuery.Where("type = ?", logType)
+	}
+	if modelName != "" {
+		breakdownQuery = breakdownQuery.Where("model_name = ?", modelName)
+	}
+	if tokenName != "" {
+		breakdownQuery = breakdownQuery.Where("token_name = ?", tokenName)
+	}
+	if startTime > 0 {
+		breakdownQuery = breakdownQuery.Where("created_at >= ?", startTime)
+	}
+	if endTime > 0 {
+		breakdownQuery = breakdownQuery.Where("created_at <= ?", endTime)
+	}
+	if projectID > 0 {
+		breakdownQuery = breakdownQuery.Where("project_id = ?", projectID)
+	}
+
+	var byProduct []productSpendView
+	if err := breakdownQuery.
+		Select("COALESCE(" + repo.SourceProductExpr() + ", '" + ratio_setting.DefaultSourceProduct + "') AS source_product, " +
+			"COUNT(*) AS total_requests, " +
+			"COALESCE(SUM(quota), 0) AS total_quota, " +
+			"COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, " +
+			"COALESCE(SUM(completion_tokens), 0) AS completion_tokens").
+		Group("source_product").
+		Scan(&byProduct).Error; err != nil {
+		common.SysError("serveLogStatV2: by_product aggregate failed: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "Failed to aggregate log stats",
@@ -195,6 +268,7 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 			Tpm:              rate.Tpm,
 			StartTime:        startTime,
 			EndTime:          endTime,
+			ByProduct:        byProduct,
 		},
 	})
 }

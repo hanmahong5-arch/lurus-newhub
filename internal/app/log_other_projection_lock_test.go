@@ -16,6 +16,8 @@ import (
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
@@ -87,6 +89,13 @@ var wantUserVisible = map[string]string{
 	// name claims to be the upstream model and is not; fixing that means
 	// renaming or dropping it at the write site, not hiding it here.
 	"upstream_model": "misnamed: holds the caller's own original_model, identical to the public model_name",
+
+	// Written unconditionally by governance.EnrichLogParams at the settlement
+	// chokepoint (governance.go), not by a generator. Unlike data_flow_source
+	// / data_flow_dest right below, source_product is NOT in
+	// repo.internalOtherKeys — it is meant to reach the caller (a sibling
+	// product team reading its own spend via ?source_product=).
+	"source_product": "which product (switch/lutu/kova/…) sent this request — Workstream 0 cross-product attribution, their own call",
 }
 
 // wantInternal: keys that must never reach a non-admin. Predominantly our
@@ -119,6 +128,13 @@ var wantInternal = map[string]string{
 	// tension is visible rather than accidental.
 	"web_search_call_count":  "existing policy: stripped alongside its price",
 	"file_search_call_count": "existing policy: stripped alongside its price",
+
+	// Written unconditionally by governance.EnrichLogParams at the settlement
+	// chokepoint (governance.go). Both are already in repo.internalOtherKeys
+	// today — this only makes that existing runtime decision visible to the
+	// default-deny gate above, not a new choice.
+	"data_flow_source": "the token name that made the call — already stripped by repo.internalOtherKeys",
+	"data_flow_dest":   "which channel type served them — already stripped by repo.internalOtherKeys",
 
 	// Error-log rows name the upstream account that failed. The v2 user log
 	// route blanks the channel_name COLUMN (v2_log.go), so leaving these in the
@@ -211,6 +227,15 @@ func driveGenerators(t *testing.T) map[string]struct{} {
 			HasSpecialRatio:   true,
 		},
 	}))
+
+	// governance.EnrichLogParams is the settlement-path Other producer: it
+	// runs AFTER the generators above, at every RecordConsumeLog call site,
+	// and writes data_flow_source/data_flow_dest/source_product unconditionally.
+	// None of those three were reachable from the generators alone, which is
+	// exactly how they shipped unclassified.
+	enrichParams := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	governance.EnrichLogParams(newCtx(), &relaycommon.RelayInfo{SourceProduct: "switch"}, enrichParams)
+	collect(enrichParams.Other)
 
 	return keys
 }
