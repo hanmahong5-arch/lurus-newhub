@@ -160,6 +160,35 @@ func GetUserByIDPSubject(idpSubject string, tenantID string) (*User, *UserIdenti
 	return user, mapping, nil
 }
 
+// GetUserByIDPSubjectAnyTenant retrieves the lurus user for an OIDC subject
+// without constraining the lookup to a single tenant. The lurus-platform
+// session-bearer path (authHelper) has no tenant of its own to scope
+// by — pinning that lookup to "default" left every user provisioned into a
+// non-default tenant unable to authenticate with a platform session token.
+// When more than one active mapping exists for the same subject (the schema
+// doesn't forbid it, even though today's provisioning creates at most one),
+// prefer the active mapping, then the lowest id, so the result is
+// deterministic rather than whatever order the DB happens to return.
+func GetUserByIDPSubjectAnyTenant(idpSubject string) (*User, *UserIdentityMapping, error) {
+	var mapping UserIdentityMapping
+	err := DB.Where("zitadel_user_id = ? AND is_active = ?", idpSubject, true).
+		Order("is_active DESC, id ASC").
+		First(&mapping).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, errors.New("user mapping not found")
+		}
+		return nil, nil, err
+	}
+
+	user, err := GetUserById(mapping.LurusUserID, false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return user, &mapping, nil
+}
+
 // CreateUserFromIDPClaims creates a new lurus user from upstream OIDC JWT claims
 // and establishes the identity mapping.
 //

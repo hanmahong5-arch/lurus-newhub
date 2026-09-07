@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,6 +195,107 @@ func TestAuthHelper_IdentitySessionToken_ResolvesUser(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &got)
 	if got.ID != user.Id {
 		t.Errorf("resolved id = %d, want %d (mapped local user)", got.ID, user.Id)
+	}
+}
+
+// authHelper: the lurus-platform session-bearer path must resolve a user
+// provisioned into ANY tenant, not just "default". Before the fix, the
+// mapping lookup was pinned to tenant "default" — a bridge login for a user
+// provisioned in some other tenant could never find its mapping and always
+// fell through to a rejection, even though the token itself was valid.
+// Twin of TestAuthHelper_IdentitySessionToken_ResolvesUser with tenant
+// "tenantX".
+func TestAuthHelper_IdentitySessionToken_ResolvesNonDefaultTenantUser(t *testing.T) {
+	_, cleanup := setupCoverDB(t)
+	defer cleanup()
+
+	const acct = int64(70012)
+	const idpSub = "idp-subject-70012-tenantx"
+
+	prevSecret := common.IdentitySessionSecret
+	common.IdentitySessionSecret = "session-secret-gap-r3-tenantx"
+	defer func() { common.IdentitySessionSecret = prevSecret }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"account":{"id":%d,"idp_subject":%q,"email":"bridgex@local"}}`, acct, idpSub)
+	}))
+	defer srv.Close()
+	prevURL := common.IdentityServiceURL
+	common.IdentityServiceURL = srv.URL
+	defer func() { common.IdentityServiceURL = prevURL }()
+
+	tenant := &entity.Tenant{
+		Id: "tenantX", Slug: "tenantX", Name: "Tenant X",
+		Status: entity.TenantStatusEnabled, PlanType: entity.TenantPlanFree,
+		MaxUsers: 10, MaxQuota: 1000,
+	}
+	if err := repo.DB.Create(tenant).Error; err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+
+	// Seed the local user + IDP-subject mapping the bridge resolves to, both
+	// in the non-default tenant.
+	user := &repo.User{
+		Username: "bridgeuserx", Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
+		Email: "bridgex@local", TenantId: "tenantX", Quota: 1000,
+	}
+	if err := repo.DB.Create(user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	mapping := &entity.UserIdentityMapping{
+		LurusUserID: user.Id, IDPSubject: idpSub, TenantID: "tenantX",
+		Email: "bridgex@local", IsActive: true,
+	}
+	if err := repo.DB.Create(mapping).Error; err != nil {
+		t.Fatalf("create mapping: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(gin.Recovery())
+	store := cookie.NewStore([]byte("gap-r3-secret"))
+	r.Use(sessions.Sessions("session", store))
+	handler := func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"id": c.GetInt("id"), "tenant_id": c.GetString("tenant_id")})
+	}
+	r.GET("/p", UserAuth(), handler)
+	r.HEAD("/p", UserAuth(), handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/p", nil)
+	req.Header.Set("Authorization", "Bearer "+mintIdentitySessionToken(common.IdentitySessionSecret, acct))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for non-default-tenant bridge login; body=%s", w.Code, w.Body.String())
+	}
+	var got struct {
+		ID       int    `json:"id"`
+		TenantID string `json:"tenant_id"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.ID != user.Id {
+		t.Errorf("resolved id = %d, want %d (the tenantX user)", got.ID, user.Id)
+	}
+	if got.TenantID != "tenantX" {
+		t.Errorf("tenant_id = %q, want %q", got.TenantID, "tenantX")
+	}
+
+	// Control: a HEAD probe with no bearer at all still fails the ordinary
+	// "no access token" way — proves the 200 above came from resolving the
+	// real identity, not from some blanket admit on this route.
+	headReq := httptest.NewRequest(http.MethodHead, "/p", nil)
+	headW := httptest.NewRecorder()
+	r.ServeHTTP(headW, headReq)
+	var headBody struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(headW.Body.Bytes(), &headBody)
+	if headBody.Success {
+		t.Errorf("HEAD without a bearer succeeded; want success:false")
+	}
+	if !strings.Contains(headBody.Message, "access token") {
+		t.Errorf("HEAD failure message = %q, want it to mention access token", headBody.Message)
 	}
 }
 
