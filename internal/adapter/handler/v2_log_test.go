@@ -545,3 +545,37 @@ func TestToLogViews_BlanksChannelNameForUsersOnly(t *testing.T) {
 			"is how an operator finds the failing upstream", admin[0].ChannelName)
 	}
 }
+
+// TestGetLogsV2_SourceProductFilter is the read side of the cross-product
+// attribution filter (Workstream 0): a sibling product team must be able to
+// pull back exactly the rows it wrote the tag into, scoped to ITS tenant only
+// — a tenant-B row tagged with the same product must never leak into tenant
+// A's filtered result.
+func TestGetLogsV2_SourceProductFilter(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	tenantB := ctx.TenantID + "-b"
+	seedOther := func(tenantID string, other string) {
+		lg := &repo.Log{
+			UserId:   ctx.NormalUser.Id,
+			TenantId: tenantID,
+			Type:     repo.LogTypeConsume,
+			Other:    other,
+		}
+		if err := ctx.DB.Create(lg).Error; err != nil {
+			t.Fatalf("seed log: %v", err)
+		}
+	}
+	seedOther(ctx.TenantID, `{"source_product":"lutu"}`)
+	seedOther(ctx.TenantID, `{"source_product":"switch"}`)
+	seedOther(tenantB, `{"source_product":"lutu"}`)
+
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs?source_product=lutu", nil, nil)
+	AssertV2Status(t, w, http.StatusOK)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	if total := int(data["total"].(float64)); total != 1 {
+		t.Errorf("total = %d, want exactly 1 (tenant A's lutu row only; tenant B's must never leak in)", total)
+	}
+}

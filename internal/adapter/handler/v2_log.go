@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
-	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -122,6 +122,8 @@ func GetLogsV2(c *gin.Context) {
 	afterID, _ := strconv.Atoi(c.DefaultQuery("after_id", "0"))
 	// Cost-attribution filter (migration 029); 0 = no filter.
 	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
+	// Cross-product attribution filter (Workstream 0); "" = no filter.
+	sourceProduct := c.Query("source_product")
 
 	if page < 1 {
 		page = 1
@@ -134,16 +136,17 @@ func GetLogsV2(c *gin.Context) {
 
 	// Build log query params (tenant isolation via the explicit scope arg)
 	params := &repo.LogQueryParams{
-		UserID:     tenantCtx.UserID,
-		LogType:    logType,
-		ModelName:  modelName,
-		StartTime:  startTime,
-		EndTime:    endTime,
-		TokenName:  tokenName,
-		AfterID:    afterID,
-		ProjectID:  projectID,
-		Offset:     offset,
-		Limit:      pageSize,
+		UserID:        tenantCtx.UserID,
+		LogType:       logType,
+		ModelName:     modelName,
+		StartTime:     startTime,
+		EndTime:       endTime,
+		TokenName:     tokenName,
+		AfterID:       afterID,
+		ProjectID:     projectID,
+		SourceProduct: sourceProduct,
+		Offset:        offset,
+		Limit:         pageSize,
 	}
 
 	// Get logs
@@ -203,6 +206,8 @@ func GetAllLogsV2(c *gin.Context) {
 	username := c.Query("username")
 	// Cost-attribution filter (migration 029); 0 = no filter.
 	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
+	// Cross-product attribution filter (Workstream 0); "" = no filter.
+	sourceProduct := c.Query("source_product")
 
 	if page < 1 {
 		page = 1
@@ -216,15 +221,16 @@ func GetAllLogsV2(c *gin.Context) {
 	// Build log query params (no user filter for all logs; tenant isolation
 	// via the explicit scope arg)
 	params := &repo.LogQueryParams{
-		LogType:    logType,
-		ModelName:  modelName,
-		StartTime:  startTime,
-		EndTime:    endTime,
-		TokenName:  tokenName,
-		Username:   username,
-		ProjectID:  projectID,
-		Offset:     offset,
-		Limit:      pageSize,
+		LogType:       logType,
+		ModelName:     modelName,
+		StartTime:     startTime,
+		EndTime:       endTime,
+		TokenName:     tokenName,
+		Username:      username,
+		ProjectID:     projectID,
+		SourceProduct: sourceProduct,
+		Offset:        offset,
+		Limit:         pageSize,
 	}
 
 	// Get all logs for tenant

@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -286,5 +287,37 @@ func TestEnrichLogParams_ProjectIdUnassignedStaysZero(t *testing.T) {
 	// the tenant total — unlike SourceProduct, which DOES have a default.
 	if params.ProjectId != 0 {
 		t.Errorf("ProjectId = %d, want 0 — unassigned must stay unassigned, not be defaulted", params.ProjectId)
+	}
+}
+
+// TestEnrichLogParams_SourceProductFromRelayInfo is the settlement-side half
+// of the cross-product attribution chain (Workstream 0): RelayInfo has no
+// gin.Context by the time PostConsumeQuota runs, so whatever
+// genBaseRelayInfo resolved has to survive unchanged through here into the
+// log row's Other.source_product.
+func TestEnrichLogParams_SourceProductFromRelayInfo(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now(), SourceProduct: "kova"}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if got := params.Other["source_product"]; got != "kova" {
+		t.Errorf("Other[source_product] = %v, want %q", got, "kova")
+	}
+}
+
+// TestEnrichLogParams_SourceProductDefaultsWhenEmpty covers relay paths that
+// never resolve SourceProduct (MJ/Task/WS before this workstream, or any
+// future caller that forgets to): the log row must still get the default
+// product id, never an empty/missing key that would make the column
+// unfilterable.
+func TestEnrichLogParams_SourceProductDefaultsWhenEmpty(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now()}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if got := params.Other["source_product"]; got != ratio_setting.DefaultSourceProduct {
+		t.Errorf("Other[source_product] = %v, want default %q", got, ratio_setting.DefaultSourceProduct)
 	}
 }

@@ -15,8 +15,14 @@ import (
 
 // seedStatLog creates a consume log with quota + token counts at a chosen
 // timestamp so the aggregate and the rolling RPM/TPM window can both be tested.
-func seedStatLog(t *testing.T, ctx *V2TestContext, userID int, model string, quota, prompt, completion int, createdAt int64) {
+// other is variadic (optional Other JSON, e.g. `{"source_product":"switch"}`)
+// so every existing call site keeps compiling unchanged.
+func seedStatLog(t *testing.T, ctx *V2TestContext, userID int, model string, quota, prompt, completion int, createdAt int64, other ...string) {
 	t.Helper()
+	otherJSON := ""
+	if len(other) > 0 {
+		otherJSON = other[0]
+	}
 	lg := &repo.Log{
 		UserId:           userID,
 		TenantId:         ctx.TenantID,
@@ -26,6 +32,7 @@ func seedStatLog(t *testing.T, ctx *V2TestContext, userID int, model string, quo
 		PromptTokens:     prompt,
 		CompletionTokens: completion,
 		CreatedAt:        createdAt,
+		Other:            otherJSON,
 	}
 	if err := ctx.DB.Create(lg).Error; err != nil {
 		t.Fatalf("failed to seed stat log: %v", err)
@@ -237,5 +244,56 @@ func TestGetAllLogStatV2_UsernameFilter(t *testing.T) {
 	}
 	if got := int(data["total_quota"].(float64)); got != 1200 {
 		t.Errorf("expected total_quota=1200 for username filter, got %d", got)
+	}
+}
+
+// TestGetLogStatV2_SourceProductFilterAndBreakdown covers both new pieces of
+// Workstream 0 on this endpoint: the source_product filter narrows the
+// header totals, and by_product always shows the FULL breakdown of the
+// window regardless of that filter — so a caller who filters to "switch"
+// still sees where the rest of the window's spend (kova) went.
+func TestGetLogStatV2_SourceProductFilterAndBreakdown(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	now := common.GetTimestamp()
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "gpt-4o", 30, 3, 6, now, `{"source_product":"switch"}`)
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "gpt-4o", 20, 2, 4, now, `{"source_product":"switch"}`)
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "gpt-4o", 5, 1, 1, now, `{"source_product":"kova"}`)
+
+	// Filtered: totals narrow to the two switch rows.
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs/stat?source_product=switch", nil, nil)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	if got := int(data["total_requests"].(float64)); got != 2 {
+		t.Errorf("expected total_requests=2 for source_product=switch, got %d", got)
+	}
+	if got := int(data["total_quota"].(float64)); got != 50 {
+		t.Errorf("expected total_quota=50 for source_product=switch, got %d", got)
+	}
+
+	byProduct, ok := data["by_product"].([]interface{})
+	if !ok {
+		t.Fatalf("by_product missing or wrong type: %v", data["by_product"])
+	}
+	found := map[string]int{}
+	for _, row := range byProduct {
+		m := row.(map[string]interface{})
+		found[m["source_product"].(string)] = int(m["total_quota"].(float64))
+	}
+	if found["switch"] != 50 {
+		t.Errorf("by_product[switch].total_quota = %d, want 50", found["switch"])
+	}
+	if found["kova"] != 5 {
+		t.Errorf("by_product[kova].total_quota = %d, want 5 — filtering the totals must not hide "+
+			"the rest of the window from the breakdown", found["kova"])
+	}
+
+	// Unfiltered: totals cover all three rows.
+	w = V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs/stat", nil, nil)
+	resp = AssertV2Success(t, w)
+	data = resp["data"].(map[string]interface{})
+	if got := int(data["total_quota"].(float64)); got != 55 {
+		t.Errorf("expected unfiltered total_quota=55, got %d", got)
 	}
 }

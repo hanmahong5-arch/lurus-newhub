@@ -15,6 +15,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -64,6 +65,7 @@ func TestDistribute_NoChannel_RecordsErrorLog(t *testing.T) {
 		c.Set("group", "default")
 		c.Set("tenant_id", "acme-corp")
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+		c.Request.Header.Set(ratio_setting.SourceProductHeader, "switch")
 	})
 	w := doDistribute(r, `{"model":"no-such-model"}`)
 	if w.Code != http.StatusNotFound {
@@ -100,6 +102,9 @@ func TestDistribute_NoChannel_RecordsErrorLog(t *testing.T) {
 	}
 	if !strings.Contains(lg.Other, `"stage":"middleware"`) {
 		t.Errorf("Other = %q, want stage=middleware marker", lg.Other)
+	}
+	if !strings.Contains(lg.Other, `"source_product":"switch"`) {
+		t.Errorf("Other = %q, want source_product switch on a middleware-stage error row", lg.Other)
 	}
 }
 

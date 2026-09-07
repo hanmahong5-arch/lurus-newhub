@@ -8,6 +8,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 	"github.com/gin-gonic/gin"
 )
@@ -67,6 +68,10 @@ func recordMiddlewareErrorLog(c *gin.Context, statusCode int, message string, co
 	if c.Request != nil && c.Request.URL != nil {
 		other["request_path"] = c.Request.URL.Path
 	}
+	// Cross-product attribution: same resolver as the relay paths, so a
+	// middleware rejection (no channel, authz, parse) still lands under the
+	// product that sent it in /logs?source_product= instead of the default.
+	other["source_product"] = ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader))
 	repo.RecordErrorLog(c, userId, c.GetInt("channel_id"), c.GetString("original_model"),
 		c.GetString("token_name"), message, c.GetInt("token_id"), 0, false, c.GetString("group"), other)
 }

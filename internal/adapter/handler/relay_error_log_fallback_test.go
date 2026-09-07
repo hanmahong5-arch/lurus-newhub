@@ -14,6 +14,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,7 @@ func TestRelay_PreChannelBindingError_RecordsErrorLog(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{not-json`))
 	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set(ratio_setting.SourceProductHeader, "lutu")
 	c.Set("id", 55)
 	c.Set("token_id", 77)
 	c.Set("token_name", "probe-token")
@@ -70,6 +72,11 @@ func TestRelay_PreChannelBindingError_RecordsErrorLog(t *testing.T) {
 	}
 	if !strings.Contains(lg.Other, string(types.ErrorCodeInvalidRequest)) {
 		t.Errorf("Other = %q, want error code %s", lg.Other, types.ErrorCodeInvalidRequest)
+	}
+	// Attribution is resolved off the raw header here because this failure
+	// happens before GenRelayInfo ever runs (relay.go recordRelayErrorLog).
+	if !strings.Contains(lg.Other, `"source_product":"lutu"`) {
+		t.Errorf("Other = %q, want source_product lutu on a pre-GenRelayInfo error row", lg.Other)
 	}
 }
 

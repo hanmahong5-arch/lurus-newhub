@@ -762,6 +762,16 @@ func DeleteOldLog(ctx context.Context, scope TenantScope, targetTimestamp int64,
 // V2 API Log Query Functions with Tenant Support
 // ============================================================================
 
+// SourceProductExpr exposes the dialect-specific Other.source_product JSON
+// extraction (savings.go's jsonSourceProductExpr, unexported) to callers
+// outside this package — namely v2_log_stat.go's by_product breakdown, which
+// hand-writes its own aggregate query rather than going through
+// GetUserLogsWithParams. One definition, so every reader of the tag agrees on
+// how to extract it.
+func SourceProductExpr() string {
+	return jsonSourceProductExpr()
+}
+
 // GetUserLogsWithParams retrieves logs for a user with tenant isolation.
 // scope replaces the former params.TenantID soft filter (an empty TenantID
 // silently meant "all tenants" — fail-open); params.TenantID is now ignored.
@@ -808,6 +818,13 @@ func GetUserLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []*L
 	// clauses, which are indexed, so it narrows an already-bounded scan.
 	if params.ProjectID > 0 {
 		tx = tx.Where("project_id = ?", params.ProjectID)
+	}
+
+	// Cross-product attribution filter (Workstream 0). Empty = no filter.
+	// Same JSON extraction the tenant-wide spend aggregate uses (savings.go),
+	// so a caller's filtered total here always agrees with that aggregate.
+	if params.SourceProduct != "" {
+		tx = tx.Where(jsonSourceProductExpr()+" = ?", params.SourceProduct)
 	}
 
 	// Count total matching records
@@ -858,6 +875,11 @@ func GetTenantLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []
 	// Cost-attribution filter (migration 029). > 0 only: 0 means "no filter".
 	if params.ProjectID > 0 {
 		tx = tx.Where("project_id = ?", params.ProjectID)
+	}
+
+	// Cross-product attribution filter (Workstream 0). Empty = no filter.
+	if params.SourceProduct != "" {
+		tx = tx.Where(jsonSourceProductExpr()+" = ?", params.SourceProduct)
 	}
 
 	// Count total matching records
