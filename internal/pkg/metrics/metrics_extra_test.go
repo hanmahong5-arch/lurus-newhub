@@ -144,15 +144,15 @@ func TestRecordRelayOverhead(t *testing.T) {
 func TestRecordRelayTotal(t *testing.T) {
 	provider, model := "gemini", "gemini-1.5-pro"
 
-	sc := RelayTotalDuration.WithLabelValues(provider, model, "success")
-	ec := RelayTotalDuration.WithLabelValues(provider, model, "error")
+	sc := RelayTotalDuration.WithLabelValues(provider, model, "success", "llm-api")
+	ec := RelayTotalDuration.WithLabelValues(provider, model, "error", "llm-api")
 
 	beforeSuccess := observerSampleCount(t, sc)
 	beforeError := observerSampleCount(t, ec)
 
-	RecordRelayTotal(provider, model, "success", 0.3)
-	RecordRelayTotal(provider, model, "success", 1.2)
-	RecordRelayTotal(provider, model, "error", 5.0)
+	RecordRelayTotal(provider, model, "success", "llm-api", 0.3)
+	RecordRelayTotal(provider, model, "success", "llm-api", 1.2)
+	RecordRelayTotal(provider, model, "error", "llm-api", 5.0)
 
 	if got := observerSampleCount(t, sc) - beforeSuccess; got != 2 {
 		t.Errorf("expected 2 success observations, got %d", got)

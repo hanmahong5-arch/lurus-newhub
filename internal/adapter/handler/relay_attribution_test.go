@@ -19,12 +19,37 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 )
+
+// observerSampleCount reads the cumulative sample_count of a single
+// prometheus.Observer time series (a HistogramVec.WithLabelValues(...)
+// result). testutil.ToFloat64 only works for Counter/Gauge, so histogram
+// series (like relay_total_duration_seconds) need this instead.
+func observerSampleCount(t *testing.T, o prometheus.Observer) int {
+	t.Helper()
+	m, ok := o.(prometheus.Metric)
+	if !ok {
+		t.Fatalf("observer does not implement prometheus.Metric (%T)", o)
+	}
+	var pb dto.Metric
+	if err := m.Write(&pb); err != nil {
+		t.Fatalf("observer Write failed: %v", err)
+	}
+	hist := pb.GetHistogram()
+	if hist == nil {
+		t.Fatalf("observer metric is not a histogram")
+	}
+	return int(hist.GetSampleCount())
+}
 
 // setupSensitiveRejection mirrors relay_sensitive_rejection_test.go's fixture:
 // a prompt containing a blocklisted word is rejected with 400 AFTER
@@ -72,10 +97,42 @@ func TestRelay_SourceProductHeader_ReachesErrorLogRow(t *testing.T) {
 			c.Request.Header.Set("Content-Type", "application/json")
 			c.Request.Header.Set(ratio_setting.SourceProductHeader, tc.header)
 
+			// A sensitive-word rejection fires before any channel is tried
+			// (constant.GetChannelTypeName(0) == "Unknown", capitalized — the
+			// package's own no-such-channel default) and before
+			// "original_model" is set in gin context by the real route chain
+			// (this test drives Relay() directly, skipping it, so it falls to
+			// relay.go's "unknown" literal) — only the product label
+			// distinguishes the two cases. ErrorCodeSensitiveWordsDetected
+			// classifies as error_type "internal" (types.RelayErrorType).
+			errSeries := metrics.RelayErrorsTotal.WithLabelValues("Unknown", "unknown", "internal", tc.wantProduct)
+			errBefore := testutil.ToFloat64(errSeries)
+
+			// relay_total_duration_seconds{status="error",product=...} is the
+			// series the end-to-end defer in Relay() records via
+			// observeRelayOutcome(..., total=true) — the only metrics site that
+			// fires for a pre-channel-selection rejection like this one (the
+			// post-channel-selection site, relay_requests_total, never runs
+			// because no channel was ever selected). Asserting on it here locks
+			// that relay.go still passes the live relayInfo (not nil, not a
+			// hand-rolled product string) into the consolidated call site.
+			totalSeries := metrics.RelayTotalDuration.WithLabelValues("Unknown", "unknown", "error", tc.wantProduct)
+			totalBefore := observerSampleCount(t, totalSeries)
+
 			Relay(c, types.RelayFormatOpenAI)
 
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400 for a rejected sensitive prompt; body=%s", w.Code, w.Body.String())
+			}
+
+			if got := testutil.ToFloat64(errSeries) - errBefore; got != 1 {
+				t.Errorf("relay_errors_total{provider=Unknown,model=unknown,error_type=internal,product=%s} delta = %v, want 1",
+					tc.wantProduct, got)
+			}
+
+			if got := observerSampleCount(t, totalSeries) - totalBefore; got != 1 {
+				t.Errorf("relay_total_duration_seconds{provider=Unknown,model=unknown,status=error,product=%s} sample delta = %v, want 1",
+					tc.wantProduct, got)
 			}
 
 			var logs []repo.Log

@@ -81,7 +81,7 @@ func IncompleteStreamError(info *relaycommon.RelayInfo) *types.NewAPIError {
 // reason. Call exactly once per abandoned stream.
 func ReportIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
 	err := IncompleteStreamError(info)
-	provider, model, reason := "Unknown", "unknown", ""
+	provider, model, reason, product := "Unknown", "unknown", "", "unknown"
 	if info != nil {
 		reason = info.StreamEndReason
 		if info.ChannelMeta != nil {
@@ -90,8 +90,11 @@ func ReportIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo) *types.
 		if info.OriginModelName != "" {
 			model = info.OriginModelName
 		}
+		if info.SourceProduct != "" {
+			product = info.SourceProduct
+		}
 	}
-	metrics.RecordRelayError(provider, model, types.RelayErrorType(err))
+	metrics.RecordRelayError(provider, model, types.RelayErrorType(err), product)
 	logger.LogError(c, fmt.Sprintf("upstream stream incomplete: reason=%s provider=%s model=%s", reason, provider, model))
 	return err
 }

@@ -35,7 +35,11 @@ var (
 		[]string{"method", "path"},
 	)
 
-	// RelayRequestsTotal counts relay requests by provider and model
+	// RelayRequestsTotal counts relay requests by provider, model, status, and
+	// the cross-product attribution tag (X-Lurus-Product; see
+	// ratio_setting.ResolveSourceProduct). status includes "client_gone" —
+	// the caller hung up before the stream finished, distinct from a
+	// completed "success" — see relayOutcome in the handler package.
 	RelayRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -43,7 +47,7 @@ var (
 			Name:      "relay_requests_total",
 			Help:      "Total number of relay requests to upstream providers",
 		},
-		[]string{"provider", "model", "status"},
+		[]string{"provider", "model", "status", "product"},
 	)
 
 	// RelayDuration measures upstream API latency
@@ -119,9 +123,9 @@ var (
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "relay_errors_total",
-			Help:      "Terminal relay errors by provider, model, and error_type",
+			Help:      "Terminal relay errors by provider, model, error_type, and product",
 		},
-		[]string{"provider", "model", "error_type"},
+		[]string{"provider", "model", "error_type", "product"},
 	)
 
 	// RelayFailoverTotal counts failover events: a request abandoning one channel
@@ -187,17 +191,6 @@ var (
 		},
 	)
 
-	// ChannelHealth tracks channel availability
-	ChannelHealth = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "channel_health",
-			Help:      "Channel health status (1=healthy, 0=unhealthy)",
-		},
-		[]string{"channel_id", "channel_name", "provider"},
-	)
-
 	// CacheHits tracks cache hit/miss ratio
 	CacheHits = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -207,29 +200,6 @@ var (
 			Help:      "Cache hit/miss counts",
 		},
 		[]string{"cache_type", "result"}, // result: hit, miss
-	)
-
-	// ChannelConsecutiveErrors tracks consecutive errors per channel
-	// Reset to 0 on successful request, incremented on each error
-	ChannelConsecutiveErrors = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "channel_consecutive_errors",
-			Help:      "Consecutive error count per channel (resets on success)",
-		},
-		[]string{"channel_id", "channel_name", "provider"},
-	)
-
-	// ChannelErrorsTotal tracks total channel errors
-	ChannelErrorsTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "channel_errors_total",
-			Help:      "Total errors per channel",
-		},
-		[]string{"channel_id", "channel_name", "provider", "error_type"},
 	)
 
 	// CircuitBreakerState tracks per-channel breaker state (0=closed, 1=open, 2=half_open)
@@ -289,7 +259,7 @@ var (
 			Help:      "End-to-end Relay() handler duration including retries and upstream wall time",
 			Buckets:   []float64{.05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60, 120},
 		},
-		[]string{"provider", "model", "status"},
+		[]string{"provider", "model", "status", "product"},
 	)
 
 	// CreditPoolDebitTotal counts every successful debit against a tenant
@@ -306,8 +276,18 @@ var (
 	)
 
 	// CreditPoolBalance reflects the current_balance column of each pool.
-	// Set from DebitPoolInTx + TopupPool call-sites. Resellers watch this on
-	// their Grafana panel; the CreditPoolBalanceLow alert fires under 20% ceiling.
+	// Set from DebitPoolInTx + TopupPool call-sites.
+	//
+	// ⚠️ NOT ALERTED, NOT DASHBOARDED. This used to say "Resellers watch this
+	// on their Grafana panel; the CreditPoolBalanceLow alert fires under 20%
+	// ceiling" — neither one is true. The Grafana dashboard was undeployed
+	// JSON (never applied by any kustomization) and has been deleted; the rule
+	// of that name is a PrometheusRule CRD no kustomization deploys, and R6
+	// has no Prometheus Operator to accept it anyway. A low or exhausted
+	// tenant credit pool notifies nobody today; it is visible only by reading
+	// this gauge or the admin credit-pool endpoints. See
+	// alert_wiring_honesty_test.go, which fails go test if this drifts
+	// back.
 	CreditPoolBalance = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -390,7 +370,7 @@ var (
 	// the rule file is a PrometheusRule CRD, it is not in any kustomization, and
 	// R6 runs no Prometheus Operator to accept it. An exhausted tenant credit
 	// pool pages nobody today; it is visible only by reading this counter.
-	// See alert_wiring_honesty_test.go, which fails the build if this drifts back.
+	// See alert_wiring_honesty_test.go, which fails go test if this drifts back.
 	PoolExhaustedRejections = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -401,18 +381,24 @@ var (
 		[]string{"tenant_id", "pool_kind"},
 	)
 
-	// BillingDebitAmountCNY observes the CNY amount of every successful
-	// WalletDebit call to lurus-platform. Labeled by tenant_id.
-	// Buckets cover typical LLM cost range: fractions of fen to hundreds of yuan.
+	// BillingDebitAmountCNY observes the CNY amount of every confirmed wallet
+	// charge to lurus-platform — both directions of it: a pre-auth settling
+	// (op="settle", quota.go PostConsumeQuota) and a direct wallet debit
+	// (op="debit", DebitWalletGRPC and its HTTP twin DebitWallet). Labeled by
+	// product (the cross-product attribution tag, not tenant_id — tenant is
+	// not the caller's unit of billing here, product is) and op, so the two
+	// legs stay distinguishable in the same series instead of one silently
+	// going unobserved. Buckets cover typical LLM cost range: fractions of
+	// fen to hundreds of yuan.
 	BillingDebitAmountCNY = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "billing_debit_amount_cny",
-			Help:      "CNY amount per successful WalletDebit call to lurus-platform, by tenant",
+			Help:      "CNY amount per confirmed wallet charge to lurus-platform, by product and op (debit/settle)",
 			Buckets:   []float64{0.0001, 0.001, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100},
 		},
-		[]string{"tenant_id"},
+		[]string{"product", "op"},
 	)
 
 	// CreditPoolNotConfiguredTotal counts relay requests that hit a missing
@@ -451,16 +437,19 @@ var (
 	)
 )
 
-// RecordRelayRequest records a relay request with its outcome
-func RecordRelayRequest(provider, model, status string, durationSec float64) {
-	RelayRequestsTotal.WithLabelValues(provider, model, status).Inc()
+// RecordRelayRequest records a relay request with its outcome and the
+// cross-product attribution tag. RelayDuration stays provider/model only —
+// it measures upstream latency, which does not vary by caller product.
+func RecordRelayRequest(provider, model, status, product string, durationSec float64) {
+	RelayRequestsTotal.WithLabelValues(provider, model, status, product).Inc()
 	RelayDuration.WithLabelValues(provider, model).Observe(durationSec)
 }
 
-// RecordRelayError records a terminal relay failure classified by error_type (O1).
-// Call once per failed request from the relay's final-error path.
-func RecordRelayError(provider, model, errorType string) {
-	RelayErrorsTotal.WithLabelValues(provider, model, errorType).Inc()
+// RecordRelayError records a terminal relay failure classified by error_type (O1)
+// and the cross-product attribution tag. Call once per failed request from the
+// relay's final-error path.
+func RecordRelayError(provider, model, errorType, product string) {
+	RelayErrorsTotal.WithLabelValues(provider, model, errorType, product).Inc()
 }
 
 // RecordRelayFailover records a failover event (O2). reason is "breaker_open"
@@ -510,26 +499,6 @@ func RecordCacheHit(cacheType string, hit bool) {
 	CacheHits.WithLabelValues(cacheType, result).Inc()
 }
 
-// RecordChannelError increments consecutive error count for a channel
-func RecordChannelError(channelID, channelName, provider, errorType string) {
-	ChannelConsecutiveErrors.WithLabelValues(channelID, channelName, provider).Inc()
-	ChannelErrorsTotal.WithLabelValues(channelID, channelName, provider, errorType).Inc()
-}
-
-// ResetChannelErrors resets consecutive error count on successful request
-func ResetChannelErrors(channelID, channelName, provider string) {
-	ChannelConsecutiveErrors.WithLabelValues(channelID, channelName, provider).Set(0)
-}
-
-// SetChannelHealth sets channel health status (1=healthy, 0=unhealthy)
-func SetChannelHealth(channelID, channelName, provider string, healthy bool) {
-	value := 0.0
-	if healthy {
-		value = 1.0
-	}
-	ChannelHealth.WithLabelValues(channelID, channelName, provider).Set(value)
-}
-
 // RecordCircuitBreakerState sets the breaker state gauge for a channel.
 func RecordCircuitBreakerState(channelID string, state int) {
 	CircuitBreakerState.WithLabelValues(channelID).Set(float64(state))
@@ -552,9 +521,9 @@ func RecordRelayOverhead(durationSec float64) {
 }
 
 // RecordRelayTotal records end-to-end Relay() handler duration.
-// status must be "success" or "error".
-func RecordRelayTotal(provider, model, status string, durationSec float64) {
-	RelayTotalDuration.WithLabelValues(provider, model, status).Observe(durationSec)
+// status is "success", "error", or "client_gone" (see handler.relayOutcome).
+func RecordRelayTotal(provider, model, status, product string, durationSec float64) {
+	RelayTotalDuration.WithLabelValues(provider, model, status, product).Observe(durationSec)
 }
 
 // RecordPoolExhaustedRejection increments the pool exhaustion rejection counter.
@@ -563,10 +532,11 @@ func RecordPoolExhaustedRejection(tenantID, poolKind string) {
 	PoolExhaustedRejections.WithLabelValues(tenantID, poolKind).Inc()
 }
 
-// RecordBillingDebit records the CNY amount of a successful WalletDebit.
-// tenantID may be empty for requests not linked to a tenant (recorded under "").
-func RecordBillingDebit(tenantID string, amountCNY float64) {
-	BillingDebitAmountCNY.WithLabelValues(tenantID).Observe(amountCNY)
+// RecordBillingDebit records the CNY amount of a confirmed wallet charge.
+// op is "debit" (direct WalletDebit) or "settle" (pre-auth settlement).
+// product may be empty for requests with no resolved attribution tag.
+func RecordBillingDebit(product, op string, amountCNY float64) {
+	BillingDebitAmountCNY.WithLabelValues(product, op).Observe(amountCNY)
 }
 
 // RecordPoolNotConfigured increments CreditPoolNotConfiguredTotal for a

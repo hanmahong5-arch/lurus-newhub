@@ -13,17 +13,17 @@ import (
 // This file is the M2 gate: Go source must not describe an alert as if it were
 // deployed when it is not.
 //
-// The repository carries two alerting rule files —
-// deploy/k8s/r6-stage/newhub-prometheus-rule.yaml (20 rules) and
-// deploy/grafana/newhub-alerts.yaml (17) — and neither is deployed anywhere.
-// The first is not in the r6-stage kustomization's `resources:` list, and
-// adding it would not help: it is a `PrometheusRule` custom resource, and R6
-// runs no Prometheus Operator, so the apply would be rejected for an unknown
-// kind. The second is a bare rule file for a Prometheus that does not exist
-// either — R6's monitoring is host netdata.
+// The repository carries one alerting rule file —
+// deploy/k8s/r6-stage/newhub-prometheus-rule.yaml (20 rules) — and it is not
+// deployed anywhere. It is not in the r6-stage kustomization's `resources:`
+// list, and adding it would not help: it is a `PrometheusRule` custom
+// resource, and R6 runs no Prometheus Operator, so the apply would be
+// rejected for an unknown kind. R6's monitoring is host netdata. (A second
+// rule file, deploy/grafana/newhub-alerts.yaml, existed for an undeployed
+// Grafana stack and was deleted 2026-09-07 along with the rest of
+// deploy/grafana/ — same story, one less file to keep honest.)
 //
-// The only place in the whole repository that mentions either file is a comment
-// in metrics.go, which reads as an operational guarantee: "Alert:
+// A comment in metrics.go used to read as an operational guarantee: "Alert:
 // NewhubPoolExhaustedRejections fires when rate > 5/min sustained for 5 minutes
 // (see deploy/k8s/r6-stage/newhub-prometheus-rule.yaml)". Nothing fires. A
 // reader of that comment concludes an exhausted credit pool pages someone.
@@ -252,5 +252,98 @@ func TestAlertRuleExpressionsAreNotStructurallyImpossible(t *testing.T) {
 				"directly. Fix the expression, or mark the file %q.",
 				af, alertFileMarker)
 		}
+	}
+}
+
+// alertNamesIn extracts every `alert: Name` rule name declared in a rule
+// file's YAML body.
+var alertNameLineRe = regexp.MustCompile(`(?m)^\s*-?\s*alert:\s*(\w+)`)
+
+func alertNamesIn(body []byte) []string {
+	var names []string
+	for _, m := range alertNameLineRe.FindAllSubmatch(body, -1) {
+		names = append(names, string(m[1]))
+	}
+	return names
+}
+
+// quotedSpanRe strips `"..."` spans (dotall) before the fires/pages sentence
+// scan below, so a comment that QUOTES a historical false claim — documenting
+// what NOT to say, e.g. PoolExhaustedRejections' own doc comment above — is
+// not itself flagged as making that claim. The whole point of quoting the old
+// wording is to show it is retracted; only unquoted prose asserts something.
+var quotedSpanRe = regexp.MustCompile(`(?s)"[^"]*"`)
+
+// fireOrPageWordRe matches "fires" or "pages" as a whole word.
+var fireOrPageWordRe = regexp.MustCompile(`\b(fires|pages)\b`)
+
+// TestNoAlertNamedAsFiringInGoSource extends the honesty gate above: even
+// without citing a rule FILE by name, Go source can still assert that a named
+// ALERT fires or pages — metrics.go once said "the CreditPoolBalanceLow alert
+// fires under 20% ceiling" without ever mentioning
+// newhub-prometheus-rule.yaml, so the file-reference check above could not
+// catch it. This scans for an alert name and "fires"/"pages" landing in the
+// same sentence of unquoted prose.
+func TestNoAlertNamedAsFiringInGoSource(t *testing.T) {
+	root := repoRoot(t)
+	alertFiles := findAlertRuleFiles(t, root)
+	if len(alertFiles) == 0 {
+		t.Fatal("found no alerting rule files under deploy/ — the scan is measuring nothing")
+	}
+
+	var names []string
+	for _, af := range alertFiles {
+		body, err := os.ReadFile(filepath.Join(root, af))
+		if err != nil {
+			t.Fatalf("read %s: %v", af, err)
+		}
+		names = append(names, alertNamesIn(body)...)
+	}
+	if len(names) == 0 {
+		t.Fatal("found zero alert names in the rule files — the scan is measuring nothing")
+	}
+
+	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+
+		// Flatten to prose: drop each line's leading `//`/whitespace so a
+		// comment paragraph spanning several source lines reads as one
+		// run of text, then strip quoted spans (see quotedSpanRe) before
+		// splitting into sentences.
+		var flat strings.Builder
+		for _, line := range strings.Split(string(raw), "\n") {
+			trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "//"))
+			flat.WriteString(trimmed)
+			flat.WriteString(" ")
+		}
+		text := quotedSpanRe.ReplaceAllString(flat.String(), " ")
+
+		rel, _ := filepath.Rel(root, path)
+		for _, sentence := range strings.Split(text, ".") {
+			if !fireOrPageWordRe.MatchString(sentence) {
+				continue
+			}
+			for _, name := range names {
+				if regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`).MatchString(sentence) {
+					t.Errorf("%s: names alert %q and \"fires\"/\"pages\" in the same sentence:\n%q\n\n"+
+						"No kustomization deploys any rule file under deploy/ (R6 has no Prometheus "+
+						"Operator). Nothing in this rule file pages anyone — say so, or deploy it.",
+						rel, name, strings.TrimSpace(sentence))
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan internal/ for alert-name claims: %v", err)
 	}
 }

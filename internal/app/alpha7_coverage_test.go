@@ -315,8 +315,15 @@ func TestProcessBillingOutbox_BeforeInit_ReturnsNil(t *testing.T) {
 }
 
 // ─── credit_pool.go — thin metric wrappers ────────────────────────────────
-// RecordPoolExhausted and RecordDebitSuccess delegate to metrics package.
-// The counters are global — just verify they don't panic.
+// RecordPoolExhausted delegates to the metrics package. The counter is
+// global — just verify it doesn't panic.
+//
+// RecordDebitSuccess was deleted (2026-09-07): its doc comment claimed it was
+// "Called by DebitWalletGRPC (and its HTTP fallback)", but DebitWalletGRPC has
+// always called metrics.RecordBillingDebit directly (identity_grpc_client.go)
+// — this wrapper had zero callers anywhere in the repo. See
+// declared_series_written_test.go for the same class of check on the metrics
+// package's own declared series.
 
 func TestRecordPoolExhausted_NoPanic(t *testing.T) {
 	defer func() {
@@ -325,15 +332,6 @@ func TestRecordPoolExhausted_NoPanic(t *testing.T) {
 		}
 	}()
 	RecordPoolExhausted("tenant-test", "relay")
-}
-
-func TestRecordDebitSuccess_NoPanic(t *testing.T) {
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("RecordDebitSuccess panicked: %v", r)
-		}
-	}()
-	RecordDebitSuccess("tenant-test", 1.23)
 }
 
 // ─── billing_outbox.go — InitBillingOutbox with SQLite ───────────────────

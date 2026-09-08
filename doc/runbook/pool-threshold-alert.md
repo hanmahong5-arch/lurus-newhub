@@ -1,19 +1,29 @@
 # Runbook — CreditPoolBalanceLow / CreditPoolExhausted
 
 > **Source**: ADR 2026-05-18 (tenant-credit-pool) + Lane δ alerts.
-> **Triggered by**: Prometheus rules in `deploy/grafana/newhub-alerts.yaml`.
-> **Last review**: 2026-05-18.
+> **⚠️ NOT WIRED (verified 2026-09-07)**: the two rules below live only in
+> `deploy/k8s/r6-stage/newhub-prometheus-rule.yaml`, a `PrometheusRule` CRD no
+> kustomization applies and R6 runs no Prometheus Operator to accept — R6's
+> monitoring is host netdata, which does not evaluate this file. Neither alert
+> fires or pages anyone today; a low/exhausted pool is visible only by reading
+> `lurus_gateway_credit_pool_balance` directly or the admin credit-pool
+> endpoints. `deploy/grafana/newhub-alerts.yaml`, the file this runbook
+> originally pointed at, was undeployed Grafana JSON and was deleted
+> 2026-09-07. Treat the table below as the design target for when this gets
+> wired to a real alerting backend, not as a live behaviour.
+> **Last review**: 2026-05-18 (content), 2026-09-07 (deployment status).
 
-## Alert pair
+## Alert pair (design target — see NOT WIRED note above)
 
 | Alert | Severity | Condition | Duration |
 |---|---|---|---|
 | `CreditPoolBalanceLow` | warning | `lurus_gateway_credit_pool_balance < 1000 and > 0` | 10m |
 | `CreditPoolExhausted` | page | `lurus_gateway_credit_pool_balance <= 0` | 5m |
 
-Both labels include `tenant_id`. The exhausted alert is **user-impacting**:
-all relay calls for that tenant are now returning HTTP 402 from
-`middleware.PoolBalanceCheck`.
+Both labels include `tenant_id`. The exhausted CONDITION is
+**user-impacting** whether or not anything alerts on it: all relay calls for
+that tenant are returning HTTP 402 from `middleware.PoolBalanceCheck`. Finding
+out today means reading the gauge or the admin endpoint — nothing pages.
 
 ## Triage — 5-minute path
 
@@ -29,8 +39,8 @@ all relay calls for that tenant are now returning HTTP 402 from
     WHERE tenant_id = '<tenant_id>';
    ```
 
-3. **Look at recent debit pattern** — usage panel in Grafana
-   ("Credit pool debit rate (5m)") or the admin endpoint:
+3. **Look at recent debit pattern** — the admin endpoint (there is no Grafana
+   panel; see the NOT WIRED note at the top of this runbook):
    ```
    GET /api/v2/admin/tenants/<tenant_id>/credit-pool/usage?limit=50
    ```

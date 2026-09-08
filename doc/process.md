@@ -508,3 +508,20 @@ L2 ADR 调研发现 11 条 alert + 15 个 dashboard panel 全用错指标前缀 
 - **证据（本地实跑，Docker v28.2.2 可用 → 不像 -race 只能靠 CI）**: `docker run postgres:16-alpine` + DSN → **719 PASS / 0 FAIL / 7 SKIP**（7 = `-short` stress + SQLite-only），0 个 "DSN not set" skip。CI 复现绿（PostgreSQL 16.14，哨兵 + 并发 e2e 均 PASS）。merge 后 main CI 全 8 job 绿。
 - **范围**: off `origin/main`，纯增量（CI job + 2 测试文件），**零 money-path 源改动**；money-path linkage WIP 仍只在 feature 分支、不在 main，无冲突。
 - **未做（followup）**: PG-only 路径跑 `-race`（这些路径从未经探测器，可能暴露既存 race，单独硬化）。
+
+## 2026-09-07 · METRICS-HONESTY: dead series + phantom dashboards retired
+
+`channel_health`/`channel_consecutive_errors`/`channel_errors_total`（连同
+`RecordChannelError`/`SetChannelHealth`/`ResetChannelErrors`）从
+`internal/pkg/metrics/metrics.go` 删除 — grep 全仓零非测试调用方，三条自
+`metrics.go` 建文件（2026-02-05，即约 7 个月）起从未写入的指标。`deploy/grafana/`（3 个从未被任何 kustomization apply 的
+dashboard/alert 文件）整目录删除；`doc/decisions/observability.md` 补
+2026-09-07 更新块订正 Jaeger "staging: deployed" 的过期声明（OTLP collector
+已停,监控栈=Netdata 自托管）。`billing_debit_amount_cny` 标签从 `tenant_id`
+改 `product,op`，补上 `quota.go` PostConsumeQuota 结算分支（此前只有直接
+`DebitWalletGRPC` 调用点写这个指标,pre-auth settle 分支动了真钱却零观测）与
+HTTP fallback `DebitWallet` 的写入点。`relay_requests_total`/
+`relay_errors_total`/`relay_total_duration` 加 `product` 标签,`status` 新增
+`client_gone`（`handler.relayOutcome`,调用方断连不再算 "success"）。新增
+`internal/pkg/metrics/declared_series_written_test.go` 闸门：每个
+`promauto.New*` 变量必须有真实生产写入方，否则 CI 测试失败。

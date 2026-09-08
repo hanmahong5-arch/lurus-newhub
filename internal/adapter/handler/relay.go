@@ -97,6 +97,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	var (
 		newAPIError *types.NewAPIError
 		ws          *websocket.Conn
+		// relayInfo is declared here (nil until GenRelayInfo succeeds below) so
+		// the two deferred metric/error renderers — written before GenRelayInfo
+		// runs — can still read relayInfo.SourceProduct / StreamEndReason for
+		// the product label and the client_gone outcome once it exists.
+		relayInfo *relaycommon.RelayInfo
 	)
 
 	// Total-duration defer. Declared first so LIFO runs it LAST,
@@ -110,11 +115,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if model == "" {
 			model = "unknown"
 		}
-		status := "success"
-		if newAPIError != nil {
-			status = "error"
-		}
-		metrics.RecordRelayTotal(provider, model, status, time.Since(requestStart).Seconds())
+		observeRelayOutcome(provider, model, relayInfo, newAPIError, time.Since(requestStart).Seconds(), true)
 	}()
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -153,7 +154,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			// O1 (B2): classify this terminal failure. Runs once per request — the
 			// defer body executes only on the error path (success returns without
 			// setting newAPIError), so this never double-counts vs RetryAttempts.
-			metrics.RecordRelayError(provider, model, types.RelayErrorType(newAPIError))
+			errProduct := "unknown"
+			if relayInfo != nil {
+				errProduct = relayInfo.SourceProduct
+			}
+			metrics.RecordRelayError(provider, model, types.RelayErrorType(newAPIError), errProduct)
 
 			// E1 (B4): when the failure is upstream-attributable, tell the client
 			// WHICH provider failed and with what status, BEFORE the request-id wrap
@@ -249,7 +254,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
+	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
@@ -408,11 +413,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		// Record metrics
 		relayDuration := time.Since(relayStart).Seconds()
-		status := "success"
-		if newAPIError != nil {
-			status = "error"
-		}
-		metrics.RecordRelayRequest(providerName, relayInfo.OriginModelName, status, relayDuration)
+		observeRelayOutcome(providerName, relayInfo.OriginModelName, relayInfo, newAPIError, relayDuration, false)
 
 		// Annotate LLM span with usage and status after relay completes.
 		// costCNY is estimated from pre-consumed quota; final settlement happens async.

@@ -17,13 +17,6 @@ func RecordPoolExhausted(tenantID, poolKind string) {
 	metrics.RecordPoolExhaustedRejection(tenantID, poolKind)
 }
 
-// RecordDebitSuccess observes the CNY amount of a successful WalletDebit.
-// Called by DebitWalletGRPC (and its HTTP fallback) immediately after a
-// confirmed debit response from lurus-platform.
-func RecordDebitSuccess(tenantID string, amountCNY float64) {
-	metrics.RecordBillingDebit(tenantID, amountCNY)
-}
-
 // RecordPoolNotConfigured increments CreditPoolNotConfiguredTotal for a given
 // tenant/action. Called by pool_balance_check middleware when
 // CREDIT_POOL_REQUIRED is "log" (bypass-but-counted) or "enforce" (402) and

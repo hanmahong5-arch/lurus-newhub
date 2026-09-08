@@ -220,12 +220,12 @@ func DebitWalletGRPC(ctx context.Context, accountID int64, amount float64, txTyp
 		return DebitWallet(ctx, accountID, amount, txType, description, productID, idempotencyKey)
 	}
 
-	// Record billing debit metric after confirmed success.
-	// tenantID is not available at this call-site; label uses productID as the
-	// closest scoping key. Relay-path callers that have tenantID should use
-	// metrics.RecordBillingDebit(tenantID, amount) directly for finer granularity.
+	// Record billing debit metric after confirmed success. productID doubles
+	// as the cross-product attribution label (op="debit" — this is the direct
+	// wallet-debit leg, distinct from the pre-auth settle leg observed in
+	// quota.go PostConsumeQuota).
 	if resp.Success {
-		metrics.RecordBillingDebit(productID, amount)
+		metrics.RecordBillingDebit(productID, "debit", amount)
 	}
 
 	return &DebitWalletResult{

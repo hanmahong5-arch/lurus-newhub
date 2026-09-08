@@ -15,7 +15,7 @@ import (
 // error). Labels: provider from the channel type, model from OriginModelName
 // (empty in this harness → "unknown").
 func TestOaiStreamHandler_IncompleteStream_CountsInRelayErrorsTotal(t *testing.T) {
-	series := metrics.RelayErrorsTotal.WithLabelValues("OpenAI", "unknown", "upstream_5xx")
+	series := metrics.RelayErrorsTotal.WithLabelValues("OpenAI", "unknown", "upstream_5xx", "unknown")
 	before := testutil.ToFloat64(series)
 	runIncompleteStream(t, types.RelayFormatOpenAI, truncatedStream(), false)
 	if got := testutil.ToFloat64(series) - before; got != 1 {
