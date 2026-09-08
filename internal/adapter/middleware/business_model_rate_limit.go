@@ -108,6 +108,8 @@ func BusinessModelRateLimit() gin.HandlerFunc {
 			return
 		}
 
+		var hr bizHeadroom
+
 		// RPM is checked (and its admission recorded) BEFORE TPM, mirroring the
 		// token/tenant dimensions in business_rate_limit.go. Consequence: a
 		// request admitted past RPM but then rejected by TPM has still consumed
@@ -123,17 +125,32 @@ func BusinessModelRateLimit() gin.HandlerFunc {
 		// contain ':', so the first ':' after the prefix unambiguously bounds
 		// the tenant; no cross-(tenant,model) key collision is reachable.
 		if limits.RPM > 0 {
-			allowed, retryAfter := bizAllow(c, bizModelKeyPrefix+tenantID+":"+model, limits.RPM)
+			allowed, retryAfter, state := bizAllow(c, bizModelKeyPrefix+tenantID+":"+model, limits.RPM)
 			if !allowed {
 				bizReject(c, "model", "rpm", limits.RPM, retryAfter)
 				return
 			}
+			if cand := state.headroom("model", "rpm", limits.RPM); cand.tighterThan(hr) {
+				hr = cand
+			}
 		}
 		if limits.TPM > 0 {
 			total, oldestMs, qerr := app.QueryBusinessTPMModelWindow(c.Request.Context(), tenantID, model)
-			if !bizTPMAdmit(c, "model", limits.TPM, total, oldestMs, qerr) {
+			ok, cand := bizTPMAdmit(c, "model", limits.TPM, total, oldestMs, qerr)
+			if !ok {
 				return
 			}
+			if cand.tighterThan(hr) {
+				hr = cand
+			}
+		}
+
+		// Only overwrite what BusinessRateLimit (token/tenant dimensions,
+		// earlier in the chain) already wrote if the model dimension is
+		// actually tighter — read back off the writer rather than threading
+		// extra state through the context.
+		if bizHeadroomEnabled && hr.tighterThan(bizHeadroomFromHeaders(c)) {
+			setRateLimitHeadroomHeaders(c, hr.Scope, hr.LimitType, hr.Limit, hr.Remaining, hr.ResetUnix)
 		}
 
 		c.Next()

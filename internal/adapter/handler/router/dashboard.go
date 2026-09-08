@@ -18,5 +18,9 @@ func SetDashboardRouter(router *gin.Engine) {
 		apiRouter.GET("/v1/dashboard/billing/subscription", handler.GetSubscription)
 		apiRouter.GET("/dashboard/billing/usage", handler.GetUsage)
 		apiRouter.GET("/v1/dashboard/billing/usage", handler.GetUsage)
+		// L2-REQUEST-IDENTITY: by-request-id lookup and key introspection —
+		// both read-only, ride the same TokenAuth context as the routes above.
+		apiRouter.GET("/v1/generation", handler.GetGeneration)
+		apiRouter.GET("/v1/key", handler.GetKeyInfo)
 	}
 }

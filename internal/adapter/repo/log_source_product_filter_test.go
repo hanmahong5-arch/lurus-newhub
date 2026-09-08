@@ -20,7 +20,7 @@ func TestGetUserLogsWithParams_SourceProductFilter(t *testing.T) {
 		{UserId: u.Id, TenantId: u.TenantId, Type: LogTypeConsume, ModelName: "gpt-4o", Quota: 10, CreatedAt: now, Other: `{"source_product":"lutu"}`},
 		{UserId: u.Id, TenantId: u.TenantId, Type: LogTypeConsume, ModelName: "gpt-4o", Quota: 20, CreatedAt: now, Other: `{"source_product":"switch"}`},
 		// Legacy/unattributed row: Other is "" (not valid JSON), same as rows
-		// written before this workstream shipped — jsonSourceProductExpr must
+		// written before this workstream shipped — jsonOtherTextExpr must
 		// not error on it.
 		{UserId: u.Id, TenantId: u.TenantId, Type: LogTypeConsume, ModelName: "gpt-4o", Quota: 30, CreatedAt: now, Other: ""},
 	}

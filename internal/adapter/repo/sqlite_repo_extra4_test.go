@@ -256,6 +256,13 @@ func TestToken_ValidateUserToken_EmptyKey(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for empty key")
 	}
+	// L3-CONTRACT-TAXONOMY residual item 6: this message is forwarded
+	// verbatim onto the wire by middleware.TokenAuth (auth.go's err.Error()
+	// on the generic ValidateUserToken failure 401) — it must render in
+	// English, not the retired Chinese "未提供令牌" literal.
+	if err != nil && err.Error() != "no token provided" {
+		t.Errorf(`err = %q, want "no token provided"`, err.Error())
+	}
 }
 
 func TestToken_ValidateUserToken_Valid(t *testing.T) {
@@ -299,6 +306,12 @@ func TestToken_ValidateUserToken_Expired_DB(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for expired token")
 	}
+	// L3-CONTRACT-TAXONOMY residual item 6: forwarded verbatim onto the wire
+	// by middleware.TokenAuth — must render in English, not the retired
+	// Chinese "该令牌已过期" literal.
+	if err != nil && err.Error() != "token has expired" {
+		t.Errorf(`err = %q, want "token has expired"`, err.Error())
+	}
 }
 
 func TestToken_ValidateUserToken_ExpiredByTime(t *testing.T) {
@@ -314,8 +327,12 @@ func TestToken_ValidateUserToken_ExpiredByTime(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for time-expired token")
 	}
-	if !strings.Contains(err.Error(), "过期") {
-		t.Errorf("expected 过期 in error, got: %v", err)
+	// L3-CONTRACT-TAXONOMY residual item 6: this literal was translated from
+	// the retired Chinese "该令牌已过期" to English ("expired" in English,
+	// not 过期) — see the sibling TokenStatusExpired branch's identical
+	// literal in TestToken_ValidateUserToken_Expired_DB above.
+	if !strings.Contains(err.Error(), "expired") {
+		t.Errorf("expected \"expired\" in error, got: %v", err)
 	}
 }
 

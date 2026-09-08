@@ -128,6 +128,32 @@ func TestL3ValidateUserToken_ShortKeyNoPanic(t *testing.T) {
 	}
 }
 
+// TestL3ValidateUserToken_StatusDisabled_ErrTokenDisabledSentinel is the
+// L3-CONTRACT-TAXONOMY item 3 lock: a plainly-disabled token
+// (TokenStatusDisabled — neither exhausted nor expired) must return the
+// ErrTokenDisabled sentinel, matchable with errors.Is, distinct from
+// ErrTokenQuotaExhausted — middleware.TokenAuth maps it to the
+// token_disabled error code instead of falling through to the generic
+// invalid_request 401 every other ValidateUserToken failure gets.
+func TestL3ValidateUserToken_StatusDisabled_ErrTokenDisabledSentinel(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+
+	u := seedUser(t, "l3_status_disabled", "l3statusdisabled@test.com", common.RoleCommonUser, common.UserStatusEnabled, "default")
+	tok := seedToken(t, u.Id, common.TokenStatusDisabled, false, 5000, -1)
+
+	_, err := ValidateUserToken(tok.Key)
+	if err == nil {
+		t.Fatal("expected error for TokenStatusDisabled token")
+	}
+	if !errors.Is(err, ErrTokenDisabled) {
+		t.Errorf("errors.Is(err, ErrTokenDisabled) = false, want true; err=%v", err)
+	}
+	if errors.Is(err, ErrTokenQuotaExhausted) {
+		t.Errorf("a plainly-disabled token must NOT also match ErrTokenQuotaExhausted; err=%v", err)
+	}
+}
+
 // tokenExhaustedHintSuffix is the human-readable suffix both exhaustion
 // branches (Status==TokenStatusExhausted and RemainQuota<=0) must share —
 // pointing the caller at the TOKEN's own remain_quota/unlimited_quota

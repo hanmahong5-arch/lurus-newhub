@@ -579,3 +579,65 @@ func TestGetLogsV2_SourceProductFilter(t *testing.T) {
 		t.Errorf("total = %d, want exactly 1 (tenant A's lutu row only; tenant B's must never leak in)", total)
 	}
 }
+
+// TestGetLogsV2_RequestIdFilter is the read side of L2-REQUEST-IDENTITY's
+// correlation-id filter: an integrator holding only a caller-generated
+// request id must be able to pull back exactly that row, scoped to their own
+// tenant only.
+func TestGetLogsV2_RequestIdFilter(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	tenantB := ctx.TenantID + "-b"
+	seedOther := func(tenantID string, other string) {
+		lg := &repo.Log{
+			UserId:   ctx.NormalUser.Id,
+			TenantId: tenantID,
+			Type:     repo.LogTypeConsume,
+			Other:    other,
+		}
+		if err := ctx.DB.Create(lg).Error; err != nil {
+			t.Fatalf("seed log: %v", err)
+		}
+	}
+	seedOther(ctx.TenantID, `{"request_id":"uat-abc12345"}`)
+	seedOther(ctx.TenantID, `{"request_id":"uat-other0000"}`)
+	seedOther(tenantB, `{"request_id":"uat-abc12345"}`)
+
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs?request_id=uat-abc12345", nil, nil)
+	AssertV2Status(t, w, http.StatusOK)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	if total := int(data["total"].(float64)); total != 1 {
+		t.Errorf("total = %d, want exactly 1 (tenant A's row only; tenant B's must never leak in)", total)
+	}
+}
+
+// TestGetLogsV2_SessionIdFilter mirrors the request_id filter above for
+// X-Session-Id-tagged rows.
+func TestGetLogsV2_SessionIdFilter(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	seedOther := func(tenantID string, other string) {
+		lg := &repo.Log{
+			UserId:   ctx.NormalUser.Id,
+			TenantId: tenantID,
+			Type:     repo.LogTypeConsume,
+			Other:    other,
+		}
+		if err := ctx.DB.Create(lg).Error; err != nil {
+			t.Fatalf("seed log: %v", err)
+		}
+	}
+	seedOther(ctx.TenantID, `{"session_id":"conv-42"}`)
+	seedOther(ctx.TenantID, `{"session_id":"conv-99"}`)
+
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs?session_id=conv-42", nil, nil)
+	AssertV2Status(t, w, http.StatusOK)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	if total := int(data["total"].(float64)); total != 1 {
+		t.Errorf("total = %d, want exactly 1 (only the conv-42 row)", total)
+	}
+}

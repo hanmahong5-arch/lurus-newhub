@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -34,6 +35,16 @@ func TestDistribute_ShouldSelect_ModelNeverConfigured_404(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "model_not_found") {
 		t.Errorf("body missing model_not_found code; body=%s", w.Body.String())
 	}
+	// L3-CONTRACT-TAXONOMY residual item 6: distributor.go's no-channel
+	// rejection message was a bare Chinese sentence; it must render in
+	// English on the wire like every other rejection this cycle standardised
+	// on ("no available channel for model ... (distributor)"), not leak CJK.
+	if !strings.Contains(w.Body.String(), "no available channel for model") {
+		t.Errorf("body = %s, want the English no-available-channel message", w.Body.String())
+	}
+	if strings.ContainsAny(w.Body.String(), "分组渠道") {
+		t.Errorf("body = %s, still leaks the retired Chinese no-channel message", w.Body.String())
+	}
 }
 
 // Test B: an ability row exists for (group, model) but it's Enabled=false
@@ -63,6 +74,12 @@ func TestDistribute_ShouldSelect_ChannelDisabledButAbilityExists_503(t *testing.
 	w := doDistribute(r, `{"model":"gpt-4o"}`)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503 when the model is configured but its only channel is disabled; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "no available channel for model") {
+		t.Errorf("body = %s, want the English no-available-channel message", w.Body.String())
+	}
+	if strings.ContainsAny(w.Body.String(), "分组渠道") {
+		t.Errorf("body = %s, still leaks the retired Chinese no-channel message", w.Body.String())
 	}
 }
 
@@ -96,5 +113,75 @@ func TestModelNeverConfigured_UnanswerableProbe_KeepsOutageReading(t *testing.T)
 	}
 	if modelNeverConfigured(c, "default", "this-model-does-not-exist-xyz") {
 		t.Error("failed query: want false so the caller keeps 503, got true")
+	}
+}
+
+// L3-CONTRACT-TAXONOMY: a token restricted to model_limits={"a"} requesting
+// model "b" must 403 with the model_blocked code, and the wire-native type
+// (permission_error) on both the OpenAI and the Anthropic envelope — not the
+// retired new_api_error literal on either wire.
+func mountDistributeModelLimit() *gin.Engine {
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(func(c *gin.Context) {
+		common.SetContextKey(c, constant.ContextKeyTokenModelLimitEnabled, true)
+		common.SetContextKey(c, constant.ContextKeyTokenModelLimit, map[string]bool{"a": true})
+		c.Next()
+	})
+	pass := func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) }
+	v1 := r.Group("/v1")
+	v1.Use(StampRelayFormat())
+	v1.POST("/chat/completions", Distribute(), pass)
+	v1.POST("/messages", Distribute(), pass)
+	return r
+}
+
+func TestDistribute_ModelLimits_Blocked_OpenAIWire(t *testing.T) {
+	_, cleanup := setupCoverDB(t)
+	defer cleanup()
+
+	r := mountDistributeModelLimit()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"b"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"type":"permission_error"`) {
+		t.Errorf("body = %s, want error.type permission_error", body)
+	}
+	if !strings.Contains(body, `"code":"model_blocked"`) {
+		t.Errorf("body = %s, want error.code model_blocked", body)
+	}
+	if strings.Contains(body, "new_api_error") {
+		t.Errorf("body = %s, must not leak the retired new_api_error literal", body)
+	}
+}
+
+func TestDistribute_ModelLimits_Blocked_AnthropicWire(t *testing.T) {
+	_, cleanup := setupCoverDB(t)
+	defer cleanup()
+
+	r := mountDistributeModelLimit()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"b"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, `"error":{`) {
+		t.Errorf(`body = %s, want a Claude envelope ("type":"error","error":{...})`, body)
+	}
+	if !strings.Contains(body, `"type":"permission_error"`) {
+		t.Errorf("body = %s, want the nested error.type permission_error", body)
+	}
+	if strings.Contains(body, "new_api_error") {
+		t.Errorf("body = %s, must not leak the retired new_api_error literal", body)
 	}
 }

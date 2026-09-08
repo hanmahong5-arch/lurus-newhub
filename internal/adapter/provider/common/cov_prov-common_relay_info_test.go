@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -771,5 +771,110 @@ func TestRemoveGeminiDisabledFields_NoContentsIsNoop(t *testing.T) {
 	}
 	if m["model"] != "gemini-pro" {
 		t.Errorf("model = %v, want preserved", m["model"])
+	}
+}
+
+// ---- L2-REQUEST-IDENTITY: SessionId / EndUserHash ----
+
+func TestGenRelayInfoOpenAI_SessionIdFromHeader(t *testing.T) {
+	c := provCommonNewGinContext(t, "POST", "/v1/chat/completions")
+	c.Request.Header.Set("X-Session-Id", "conv-42")
+
+	info := GenRelayInfoOpenAI(c, &dto.GeneralOpenAIRequest{Model: "gpt-4"})
+	if info.SessionId != "conv-42" {
+		t.Errorf("SessionId = %q, want conv-42", info.SessionId)
+	}
+}
+
+func TestGenRelayInfoOpenAI_SessionIdOversizedIsDropped(t *testing.T) {
+	c := provCommonNewGinContext(t, "POST", "/v1/chat/completions")
+	c.Request.Header.Set("X-Session-Id", strings.Repeat("a", 201))
+
+	info := GenRelayInfoOpenAI(c, &dto.GeneralOpenAIRequest{Model: "gpt-4"})
+	if info.SessionId != "" {
+		t.Errorf("SessionId = %q, want dropped (>200 bytes)", info.SessionId)
+	}
+}
+
+func TestGenRelayInfoOpenAI_SessionIdNonPrintableIsDropped(t *testing.T) {
+	c := provCommonNewGinContext(t, "POST", "/v1/chat/completions")
+	c.Request.Header.Set("X-Session-Id", "conv-\x01-42")
+
+	info := GenRelayInfoOpenAI(c, &dto.GeneralOpenAIRequest{Model: "gpt-4"})
+	if info.SessionId != "" {
+		t.Errorf("SessionId = %q, want dropped (non-printable byte)", info.SessionId)
+	}
+}
+
+func TestGenRelayInfoOpenAI_EndUserHash_FromUserField(t *testing.T) {
+	c := provCommonNewGinContext(t, "POST", "/v1/chat/completions")
+	common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+	c.Set("tenant_id", "acme")
+
+	info := GenRelayInfoOpenAI(c, &dto.GeneralOpenAIRequest{Model: "gpt-4", User: "alice"})
+	if info.EndUserHash == "" {
+		t.Fatal("EndUserHash empty, want a hash of the OpenAI user field")
+	}
+	if len(info.EndUserHash) != 16 {
+		t.Errorf("EndUserHash len = %d, want 16", len(info.EndUserHash))
+	}
+	if strings.Contains(info.EndUserHash, "alice") {
+		t.Errorf("EndUserHash = %q, must never contain the raw end-user value", info.EndUserHash)
+	}
+
+	// Same raw value under a different tenant must hash differently — the
+	// hash is tenant-scoped, not a global end-user fingerprint.
+	c2 := provCommonNewGinContext(t, "POST", "/v1/chat/completions")
+	c2.Set("tenant_id", "other-tenant")
+	info2 := GenRelayInfoOpenAI(c2, &dto.GeneralOpenAIRequest{Model: "gpt-4", User: "alice"})
+	if info2.EndUserHash == info.EndUserHash {
+		t.Error("EndUserHash identical across tenants for the same raw user — hash is not tenant-scoped")
+	}
+}
+
+func TestGenRelayInfoOpenAI_EndUserHash_EmptyWhenNoUserField(t *testing.T) {
+	c := provCommonNewGinContext(t, "POST", "/v1/chat/completions")
+	info := GenRelayInfoOpenAI(c, &dto.GeneralOpenAIRequest{Model: "gpt-4"})
+	if info.EndUserHash != "" {
+		t.Errorf("EndUserHash = %q, want empty when no user field sent", info.EndUserHash)
+	}
+}
+
+func TestGenRelayInfoClaude_EndUserHash_FromMetadataUserId(t *testing.T) {
+	c := provCommonNewGinContext(t, "POST", "/v1/messages")
+	c.Set("tenant_id", "acme")
+
+	req := &dto.ClaudeRequest{
+		Model:    "claude-3-opus",
+		Metadata: json.RawMessage(`{"user_id":"bob"}`),
+	}
+	info := GenRelayInfoClaude(c, req)
+	if info.EndUserHash == "" {
+		t.Fatal("EndUserHash empty, want a hash of Anthropic-wire metadata.user_id")
+	}
+	if strings.Contains(info.EndUserHash, "bob") {
+		t.Errorf("EndUserHash = %q, must never contain the raw end-user value", info.EndUserHash)
+	}
+}
+
+// TestGenRelayInfoResponses_EndUserHash_FromUserField locks findings item
+// L2-REQUEST-IDENTITY#1: the Responses API wire (dto.OpenAIResponsesRequest)
+// carries its own `user` field distinct from dto.GeneralOpenAIRequest, and
+// deriveEndUserHash's type switch must handle it or every Responses-wire
+// call silently drops end-user attribution.
+func TestGenRelayInfoResponses_EndUserHash_FromUserField(t *testing.T) {
+	c := provCommonNewGinContext(t, "POST", "/v1/responses")
+	c.Set("tenant_id", "acme")
+
+	req := &dto.OpenAIResponsesRequest{Model: "gpt-4o", User: "carol"}
+	info := GenRelayInfoResponses(c, req)
+	if info.EndUserHash == "" {
+		t.Fatal("EndUserHash empty, want a hash of the Responses wire user field")
+	}
+	if len(info.EndUserHash) != 16 {
+		t.Errorf("EndUserHash len = %d, want 16", len(info.EndUserHash))
+	}
+	if strings.Contains(info.EndUserHash, "carol") {
+		t.Errorf("EndUserHash = %q, must never contain the raw end-user value", info.EndUserHash)
 	}
 }

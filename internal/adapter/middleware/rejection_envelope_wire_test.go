@@ -61,6 +61,11 @@ func TestMiddlewareRejection_EnvelopeIsWireNative(t *testing.T) {
 	if strings.Contains(body, "new_api_error") {
 		t.Errorf("/v1/messages 401 body = %s, must not leak the OpenAI-wire error type onto the Claude wire", body)
 	}
+	// L3-CONTRACT-TAXONOMY: the nested error.type must be the Anthropic-wire
+	// taxonomy value for a 401, not a bare status echo.
+	if !strings.Contains(body, `"type":"authentication_error"`) {
+		t.Errorf(`/v1/messages 401 body = %s, want error.type "authentication_error"`, body)
+	}
 
 	// Gemini wire: /v1beta/models/<model>:generateContent with an
 	// unrecognised key (Gemini callers authenticate via x-goog-api-key).
@@ -80,8 +85,10 @@ func TestMiddlewareRejection_EnvelopeIsWireNative(t *testing.T) {
 		t.Errorf(`/v1beta 401 body = %s, want "status":"UNAUTHENTICATED"`, body2)
 	}
 
-	// OpenAI wire, unchanged: /v1/chat/completions with the same bad key
-	// must still answer the pre-existing new_api_error shape.
+	// OpenAI wire: /v1/chat/completions with the same bad key must answer
+	// the vendor-taxonomy type (authentication_error, not new_api_error)
+	// plus a non-empty machine code — L3-CONTRACT-TAXONOMY's root-converter
+	// fix (types.WireErrorType via NewErrorWithStatusCode in utils.go).
 	req3 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
 	req3.Header.Set("Content-Type", "application/json")
 	req3.Header.Set("Authorization", "Bearer nosuchtokenatall")
@@ -90,8 +97,15 @@ func TestMiddlewareRejection_EnvelopeIsWireNative(t *testing.T) {
 	if w3.Code != http.StatusUnauthorized {
 		t.Fatalf("/v1/chat/completions bad key: status = %d, want 401; body=%s", w3.Code, w3.Body.String())
 	}
-	if !strings.Contains(w3.Body.String(), `"type":"new_api_error"`) {
-		t.Errorf(`/v1/chat/completions 401 body = %s, want the untouched OpenAI wire (type=new_api_error)`, w3.Body.String())
+	body3 := w3.Body.String()
+	if !strings.Contains(body3, `"type":"authentication_error"`) {
+		t.Errorf(`/v1/chat/completions 401 body = %s, want error.type "authentication_error"`, body3)
+	}
+	if strings.Contains(body3, "new_api_error") {
+		t.Errorf("/v1/chat/completions 401 body = %s, must not leak the retired new_api_error literal", body3)
+	}
+	if strings.Contains(body3, `"code":""`) {
+		t.Errorf(`/v1/chat/completions 401 body = %s, want a non-empty machine code`, body3)
 	}
 }
 
@@ -121,6 +135,15 @@ func TestMiddlewareRejection_PoolExhausted_EnvelopeIsWireNative(t *testing.T) {
 	}
 	if strings.Contains(body, "new_api_error") {
 		t.Errorf("/v1/messages 402 body = %s, must not leak the OpenAI-wire error type onto the Claude wire", body)
+	}
+	// L3-CONTRACT-TAXONOMY item 4: before the root-mapping fix,
+	// pool_balance_check.go built this error via types.WithOpenAIError, so
+	// ToClaudeError's ErrorTypeOpenAIError branch stamped the raw Code
+	// string ("pool_exhausted") into error.type instead of the Anthropic
+	// vendor taxonomy — a Claude SDK would see an unrecognised type value
+	// where it expects billing_error.
+	if !strings.Contains(body, `"type":"billing_error"`) {
+		t.Errorf(`/v1/messages 402 body = %s, want the nested error.type "billing_error" (not the leaked pool_exhausted code)`, body)
 	}
 
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))

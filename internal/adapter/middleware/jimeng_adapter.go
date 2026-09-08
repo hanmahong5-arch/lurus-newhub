@@ -8,6 +8,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/gin-gonic/gin"
 )
@@ -16,14 +17,14 @@ func JimengRequestConvert() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		action := c.Query("Action")
 		if action == "" {
-			abortWithOpenAiMessage(c, http.StatusBadRequest, "Action query parameter is required")
+			abortWithOpenAiMessage(c, http.StatusBadRequest, "Action query parameter is required", string(types.ErrorCodeInvalidRequest))
 			return
 		}
 
 		// Handle Jimeng official API request
 		var originalReq map[string]interface{}
 		if err := common.UnmarshalBodyReusable(c, &originalReq); err != nil {
-			abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid request body")
+			abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid request body", string(types.ErrorCodeInvalidRequest))
 			return
 		}
 		model, _ := originalReq["req_key"].(string)
@@ -37,7 +38,7 @@ func JimengRequestConvert() func(c *gin.Context) {
 
 		jsonData, err := json.Marshal(unifiedReq)
 		if err != nil {
-			abortWithOpenAiMessage(c, http.StatusInternalServerError, "Failed to marshal request body")
+			abortWithOpenAiMessage(c, http.StatusInternalServerError, "Failed to marshal request body", string(types.ErrorCodeGatewayInternal))
 			return
 		}
 
@@ -54,7 +55,7 @@ func JimengRequestConvert() func(c *gin.Context) {
 		if action == "CVSync2AsyncGetResult" {
 			taskId, ok := originalReq["task_id"].(string)
 			if !ok || taskId == "" {
-				abortWithOpenAiMessage(c, http.StatusBadRequest, "task_id is required for CVSync2AsyncGetResult")
+				abortWithOpenAiMessage(c, http.StatusBadRequest, "task_id is required for CVSync2AsyncGetResult", string(types.ErrorCodeInvalidRequest))
 				return
 			}
 			c.Request.URL.Path = "/v1/video/generations/" + taskId

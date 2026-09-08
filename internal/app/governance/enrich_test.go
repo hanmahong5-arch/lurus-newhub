@@ -321,3 +321,49 @@ func TestEnrichLogParams_SourceProductDefaultsWhenEmpty(t *testing.T) {
 		t.Errorf("Other[source_product] = %v, want default %q", got, ratio_setting.DefaultSourceProduct)
 	}
 }
+
+// ── L2-REQUEST-IDENTITY: session_id / end_user ────────────────────────────
+
+func TestEnrichLogParams_SessionIdWrittenWhenNonEmpty(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now(), SessionId: "conv-42"}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if got := params.Other["session_id"]; got != "conv-42" {
+		t.Errorf("Other[session_id] = %v, want %q", got, "conv-42")
+	}
+}
+
+func TestEnrichLogParams_SessionIdAbsentWhenEmpty(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now()}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if _, exists := params.Other["session_id"]; exists {
+		t.Error("Other[session_id] should be absent, not an empty string, when RelayInfo carries none")
+	}
+}
+
+func TestEnrichLogParams_EndUserWrittenWhenNonEmpty(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now(), EndUserHash: "0123456789abcdef"}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if got := params.Other["end_user"]; got != "0123456789abcdef" {
+		t.Errorf("Other[end_user] = %v, want the hash", got)
+	}
+}
+
+func TestEnrichLogParams_EndUserAbsentWhenEmpty(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now()}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if _, exists := params.Other["end_user"]; exists {
+		t.Error("Other[end_user] should be absent when RelayInfo carries no EndUserHash")
+	}
+}

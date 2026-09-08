@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
-	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
-	"github.com/LurusTech/lurus-hub/internal/app"
-	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -33,7 +33,7 @@ func Distribute() func(c *gin.Context) {
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
-			abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid request, "+err.Error())
+			abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid request, "+err.Error(), string(types.ErrorCodeInvalidRequest))
 			return
 		}
 		// Publish the requested model before channel selection, not after:
@@ -47,16 +47,16 @@ func Distribute() func(c *gin.Context) {
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
-				abortWithOpenAiMessage(c, http.StatusBadRequest, "无效的渠道 Id")
+				abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid channel id", string(types.ErrorCodeInvalidRequest))
 				return
 			}
 			channel, err = repo.GetChannelById(id, true)
 			if err != nil {
-				abortWithOpenAiMessage(c, http.StatusBadRequest, "无效的渠道 Id")
+				abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid channel id", string(types.ErrorCodeInvalidRequest))
 				return
 			}
 			if channel.Status != common.ChannelStatusEnabled {
-				abortWithOpenAiMessage(c, http.StatusForbidden, "该渠道已被禁用")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "This channel is disabled", string(types.ErrorCodeChannelSpecifyForbidden))
 				return
 			}
 			// TI (round-3 #1): the sk-<key>-<channelId> override lets an admin pin
@@ -74,7 +74,7 @@ func Distribute() func(c *gin.Context) {
 			if !common.GetContextKeyBool(c, constant.ContextKeyTokenSpecificChannelRootOverride) {
 				callerTenant, terr := GetTenantContext(c)
 				if terr != nil || callerTenant == nil || callerTenant.TenantID == "" {
-					abortWithOpenAiMessage(c, http.StatusForbidden, "无法确定调用方租户，拒绝渠道绑定")
+					abortWithOpenAiMessage(c, http.StatusForbidden, "Cannot determine caller tenant, denying channel binding", string(types.ErrorCodeChannelSpecifyForbidden))
 					return
 				}
 				channelTenant := channel.TenantId
@@ -82,7 +82,7 @@ func Distribute() func(c *gin.Context) {
 					channelTenant = "default"
 				}
 				if channelTenant != callerTenant.TenantID {
-					abortWithOpenAiMessage(c, http.StatusForbidden, "无权使用其他租户的渠道")
+					abortWithOpenAiMessage(c, http.StatusForbidden, "Not authorized to use another tenant's channel", string(types.ErrorCodeChannelSpecifyForbidden))
 					return
 				}
 			}
@@ -94,7 +94,7 @@ func Distribute() func(c *gin.Context) {
 				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
 				if !ok {
 					// token model limit is empty, all models are not allowed
-					abortWithOpenAiMessage(c, http.StatusForbidden, "该令牌无权访问任何模型")
+					abortWithOpenAiMessage(c, http.StatusForbidden, "This token is not authorized to access any model", string(types.ErrorCodeModelBlocked))
 					return
 				}
 				var tokenModelLimit map[string]bool
@@ -104,14 +104,14 @@ func Distribute() func(c *gin.Context) {
 				}
 				matchName := ratio_setting.FormatMatchingModelName(modelRequest.Model) // match gpts & thinking-*
 				if _, ok := tokenModelLimit[matchName]; !ok {
-					abortWithOpenAiMessage(c, http.StatusForbidden, "该令牌无权访问模型 "+modelRequest.Model)
+					abortWithOpenAiMessage(c, http.StatusForbidden, "This token is not authorized to access model "+modelRequest.Model, string(types.ErrorCodeModelBlocked))
 					return
 				}
 			}
 
 			if shouldSelectChannel {
 				if modelRequest.Model == "" {
-					abortWithOpenAiMessage(c, http.StatusBadRequest, "未指定模型名称，模型名称不能为空")
+					abortWithOpenAiMessage(c, http.StatusBadRequest, "Model name not specified, model name cannot be empty", string(types.ErrorCodeInvalidRequest))
 					return
 				}
 				var selectGroup string
@@ -121,12 +121,12 @@ func Distribute() func(c *gin.Context) {
 					playgroundRequest := &dto.PlayGroundRequest{}
 					err = common.UnmarshalBodyReusable(c, playgroundRequest)
 					if err != nil {
-						abortWithOpenAiMessage(c, http.StatusBadRequest, "无效的playground请求, "+err.Error())
+						abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid playground request, "+err.Error(), string(types.ErrorCodeInvalidRequest))
 						return
 					}
 					if playgroundRequest.Group != "" {
 						if !app.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
-							abortWithOpenAiMessage(c, http.StatusForbidden, "无权访问该分组")
+							abortWithOpenAiMessage(c, http.StatusForbidden, "Not authorized to access this group", string(types.ErrorCodeGroupNotAllowed))
 							return
 						}
 						usingGroup = playgroundRequest.Group
@@ -168,7 +168,7 @@ func Distribute() func(c *gin.Context) {
 					if usingGroup == "auto" {
 						showGroup = fmt.Sprintf("auto(%s)", selectGroup)
 					}
-					message := fmt.Sprintf("获取分组 %s 下模型 %s 的可用渠道失败（distributor）: %s", showGroup, modelRequest.Model, err.Error())
+					message := fmt.Sprintf("failed to select an available channel for model %s in group %s (distributor): %s", modelRequest.Model, showGroup, err.Error())
 					// 如果错误，但是渠道不为空，说明是数据库一致性问题
 					//if channel != nil {
 					//	common.SysError(fmt.Sprintf("渠道不存在：%d", channel.Id))
@@ -191,7 +191,7 @@ func Distribute() func(c *gin.Context) {
 					if modelNeverConfigured(c, usingGroup, modelRequest.Model) {
 						statusCode = http.StatusNotFound
 					}
-					abortWithOpenAiMessage(c, statusCode, fmt.Sprintf("分组 %s 下模型 %s 无可用渠道（distributor）", usingGroup, modelRequest.Model), string(types.ErrorCodeModelNotFound))
+					abortWithOpenAiMessage(c, statusCode, fmt.Sprintf("no available channel for model %s in group %s (distributor)", modelRequest.Model, usingGroup), string(types.ErrorCodeModelNotFound))
 					return
 				}
 				// Defence in depth: CacheGetRandomSatisfiedChannel already
@@ -204,7 +204,7 @@ func Distribute() func(c *gin.Context) {
 				if callerTenantID != "" {
 					owner := channel.TenantId
 					if owner != "" && owner != "default" && owner != callerTenantID {
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("分组 %s 下模型 %s 无可用渠道（distributor）", usingGroup, modelRequest.Model), string(types.ErrorCodeModelNotFound))
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("no available channel for model %s in group %s (distributor)", modelRequest.Model, usingGroup), string(types.ErrorCodeModelNotFound))
 						return
 					}
 				}

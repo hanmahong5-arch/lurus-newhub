@@ -105,7 +105,85 @@ const (
 	// wallet top-up. See middleware.TokenAuth and PreConsumeQuota's
 	// ErrTokenQuotaInsufficient branch.
 	ErrorCodeTokenQuotaExhausted ErrorCode = "token_quota_exhausted"
+
+	// gateway rejection codes — the machine-readable half of a middleware-
+	// stage 4xx/5xx (L3-CONTRACT-TAXONOMY). Every abortWithOpenAiMessage call
+	// site now names one of these (or reuses ErrorCodeInvalidRequest) instead
+	// of leaving Code empty; see abort_code_structural_test.go for the sweep.
+	ErrorCodeModelBlocked             ErrorCode = "model_blocked"
+	ErrorCodeTokenDisabled            ErrorCode = "token_disabled"
+	ErrorCodeUserBanned               ErrorCode = "user_banned"
+	ErrorCodeTenantSuspended          ErrorCode = "tenant_suspended"
+	ErrorCodeIpNotAllowed             ErrorCode = "ip_not_allowed"
+	ErrorCodeGroupNotAllowed          ErrorCode = "group_not_allowed"
+	ErrorCodeSessionRequired          ErrorCode = "session_required"
+	ErrorCodeChannelSpecifyForbidden  ErrorCode = "channel_specify_forbidden"
+	ErrorCodeScopeNotGranted          ErrorCode = "scope_not_granted"
+	ErrorCodeRequestRateLimitExceeded ErrorCode = "request_rate_limit_exceeded"
+	ErrorCodeGatewayInternal          ErrorCode = "gateway_internal"
+
+	// Emitted by the pool/entitlement/cost-spike/rate-limit gates below
+	// PoolBalanceCheck in the relay chain; promoted from string literals so
+	// the openapi_contract_lock_test bidirectional enum check (relay.json
+	// GatewayError.code.enum <-> ErrorCode constants) covers them too.
+	ErrorCodePoolExhausted             ErrorCode = "pool_exhausted"
+	ErrorCodePoolNotConfigured         ErrorCode = "pool_not_configured"
+	ErrorCodeQuotaExceeded             ErrorCode = "quota_exceeded"
+	ErrorCodeCostSpikeLimitExceeded    ErrorCode = "cost_spike_limit_exceeded"
+	ErrorCodeBusinessRateLimitExceeded ErrorCode = "business_rate_limit_exceeded"
+	ErrorCodeConcurrencyLimitExceeded  ErrorCode = "concurrency_limit_exceeded"
+	ErrorCodeAPINotImplemented         ErrorCode = "api_not_implemented"
 )
+
+// WireErrorType maps an HTTP status code to the vendor-taxonomy "type" string
+// for a gateway-originated rejection (errorType == ErrorTypeNewAPIError),
+// selected by which wire the caller is speaking. OpenAI and Anthropic share
+// almost the same buckets; they diverge on 402 (insufficient_quota vs
+// billing_error) and on the two capacity statuses — 503 and 529 — where the
+// Anthropic wire uses overloaded_error (OpenAI's 503 stays the plain 5xx
+// api_error bucket). No literal constructor in this codebase builds a
+// gateway-originated (NewErrorWithStatusCode/ErrorTypeNewAPIError) error with
+// StatusCode 529; the branch is reachable only when a channel's admin-configured
+// status_code_mapping (applied by app/error.go ResetStatusCode) rewrites a
+// gateway-originated status to 529.
+// Any status this table does not name falls back to invalid_request_error
+// for 4xx and api_error for 5xx/unknown — never the bare "new_api_error"
+// literal a caller would otherwise have to special-case.
+func WireErrorType(statusCode int, wire ErrorType) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusPaymentRequired:
+		if wire == ErrorTypeClaudeError {
+			return "billing_error"
+		}
+		return "insufficient_quota"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case http.StatusServiceUnavailable:
+		if wire == ErrorTypeClaudeError {
+			return "overloaded_error"
+		}
+		return "api_error"
+	case 529:
+		if wire == ErrorTypeClaudeError {
+			return "overloaded_error"
+		}
+		return "api_error"
+	}
+	if statusCode/100 == 5 {
+		return "api_error"
+	}
+	return "invalid_request_error"
+}
 
 type NewAPIError struct {
 	Err            error
@@ -199,9 +277,18 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 			}
 		}
 	default:
+		// ErrorTypeNewAPIError (gateway-originated middleware/handler
+		// rejections) gets the vendor-taxonomy type keyed off the HTTP
+		// status; the other default-falling types (midjourney/gemini/
+		// rerank/upstream_error) keep stamping their own ErrorType literal
+		// unchanged — those wires have their own type vocabularies already.
+		errType := string(e.errorType)
+		if e.errorType == ErrorTypeNewAPIError {
+			errType = WireErrorType(e.StatusCode, ErrorTypeOpenAIError)
+		}
 		result = OpenAIError{
 			Message: e.Error(),
-			Type:    string(e.errorType),
+			Type:    errType,
 			Param:   "",
 			Code:    e.errorCode,
 		}
@@ -238,9 +325,16 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 			result = claudeError
 		}
 	default:
+		// Mirrors ToOpenAIError's default branch above: only
+		// ErrorTypeNewAPIError gets the vendor (Anthropic) taxonomy mapping;
+		// the other default-falling ErrorTypes keep their own literal.
+		errType := string(e.errorType)
+		if e.errorType == ErrorTypeNewAPIError {
+			errType = WireErrorType(e.StatusCode, ErrorTypeClaudeError)
+		}
 		result = ClaudeError{
 			Message: e.Error(),
-			Type:    string(e.errorType),
+			Type:    errType,
 		}
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {

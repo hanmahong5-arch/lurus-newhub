@@ -158,6 +158,17 @@ func SearchUserTokens(userId int, keyword string, token string) (tokens []*Token
 // needs the 402 token-management guidance, just with a different message.
 var ErrTokenQuotaExhausted = errors.New("令牌不可用")
 
+// ErrTokenDisabled is the sentinel for a token whose Status is neither
+// Enabled, Exhausted, nor Expired. The `token.Status != TokenStatusEnabled`
+// check this sentinel guards reaches it for TokenStatusDisabled (constants.go:
+// deliberately non-zero, =2) AND for the zero value (a Status column left
+// unset, e.g. a row inserted without an explicit status) — TokenStatusEnabled
+// is 1, not 0, so a bare zero also falls into this branch, not just the
+// explicit-disable case. middleware.TokenAuth uses errors.Is to map it to
+// the token_disabled error code instead of the generic invalid_request 401
+// the other ValidateUserToken failures get.
+var ErrTokenDisabled = errors.New("token status unavailable")
+
 // tokenExhaustedMessage builds the human-readable 402 guidance for a token
 // that has genuinely run out of its own spending cap (QuotaAvailable() ==
 // false). Both the Status==TokenStatusExhausted branch below and the live
@@ -174,7 +185,7 @@ func tokenExhaustedMessage(remainQuota int) error {
 
 func ValidateUserToken(key string) (token *Token, err error) {
 	if key == "" {
-		return nil, errors.New("未提供令牌")
+		return nil, errors.New("no token provided")
 	}
 	token, err = GetTokenByKey(key, false)
 	if err == nil {
@@ -199,10 +210,10 @@ func ValidateUserToken(key string) (token *Token, err error) {
 			}
 			return token, tokenExhaustedMessage(token.RemainQuota)
 		} else if token.Status == common.TokenStatusExpired {
-			return token, errors.New("该令牌已过期")
+			return token, errors.New("token has expired")
 		}
 		if token.Status != common.TokenStatusEnabled {
-			return token, errors.New("该令牌状态不可用")
+			return token, fmt.Errorf("%w", ErrTokenDisabled)
 		}
 		if token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
 			if !common.RedisEnabled {
@@ -212,7 +223,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 					common.SysLog("failed to update token status" + err.Error())
 				}
 			}
-			return token, errors.New("该令牌已过期")
+			return token, errors.New("token has expired")
 		}
 		if !token.UnlimitedQuota && token.RemainQuota <= 0 {
 			if !common.RedisEnabled {
@@ -229,9 +240,9 @@ func ValidateUserToken(key string) (token *Token, err error) {
 	}
 	common.SysLog("ValidateUserToken: failed to get token: " + err.Error())
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, errors.New("无效的令牌")
+		return nil, errors.New("invalid token")
 	} else {
-		return nil, errors.New("无效的令牌，数据库查询出错，请联系管理员")
+		return nil, errors.New("invalid token: token lookup failed, contact the administrator")
 	}
 }
 

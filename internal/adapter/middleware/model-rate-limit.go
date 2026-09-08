@@ -13,6 +13,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -194,7 +195,9 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 		}
 		if !allowed {
 			setRateLimitResponseHeaders(c, successMaxCount, 0, duration)
-			abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", setting.ModelRequestRateLimitDurationMinutes, successMaxCount))
+			c.Writer.Header().Set("X-RateLimit-Scope", "user")
+			c.Writer.Header().Set("X-RateLimit-Type", "requests")
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", setting.ModelRequestRateLimitDurationMinutes, successMaxCount), string(types.ErrorCodeRequestRateLimitExceeded))
 			return
 		}
 
@@ -221,7 +224,9 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 
 			if !allowed {
 				setRateLimitResponseHeaders(c, totalMaxCount, 0, duration)
-				abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", setting.ModelRequestRateLimitDurationMinutes, totalMaxCount))
+				c.Writer.Header().Set("X-RateLimit-Scope", "user")
+				c.Writer.Header().Set("X-RateLimit-Type", "requests")
+				abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", setting.ModelRequestRateLimitDurationMinutes, totalMaxCount), string(types.ErrorCodeRequestRateLimitExceeded))
 			}
 		}
 
@@ -265,6 +270,8 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 		// 1. 检查总请求数限制（当totalMaxCount为0时跳过）
 		if totalMaxCount > 0 && !inMemoryRateLimiter.Request(totalKey, totalMaxCount, duration) {
 			setRateLimitResponseHeaders(c, totalMaxCount, 0, duration)
+			c.Writer.Header().Set("X-RateLimit-Scope", "user")
+			c.Writer.Header().Set("X-RateLimit-Type", "requests")
 			c.Status(http.StatusTooManyRequests)
 			c.Abort()
 			return
@@ -275,6 +282,8 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 		checkKey := successKey + "_check"
 		if !inMemoryRateLimiter.Request(checkKey, successMaxCount, duration) {
 			setRateLimitResponseHeaders(c, successMaxCount, 0, duration)
+			c.Writer.Header().Set("X-RateLimit-Scope", "user")
+			c.Writer.Header().Set("X-RateLimit-Type", "requests")
 			c.Status(http.StatusTooManyRequests)
 			c.Abort()
 			return

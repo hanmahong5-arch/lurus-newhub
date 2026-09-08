@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -108,15 +109,28 @@ func EntitlementCheck() gin.HandlerFunc {
 // survives MaskSensitiveInfo and matches the shape clients already parse for
 // other 402/429 upgrade prompts.
 func abortQuotaExceeded(c *gin.Context) {
-	apiErr := types.WithOpenAIError(types.OpenAIError{
-		// "quota_exceeded" appears in the message text (not just Code) because
-		// the Gemini/Claude wire envelopes (types.ToGeminiError/ToClaudeError)
-		// carry Message but drop Code — a caller on either of those wires must
-		// still be able to match on the reason string.
-		Message: "Your API quota has been exhausted (quota_exceeded). Please upgrade your plan or top up credits.",
-		Type:    "new_api_error",
-		Code:    "quota_exceeded",
-	}, http.StatusTooManyRequests, types.ErrOptionWithUpgradeURL())
+	// Routed through the root mapping (NewErrorWithStatusCode + WireErrorType
+	// via renderRejection) instead of a hand-built OpenAI-shaped body, so the
+	// Claude wire gets rate_limit_error (not an OpenAI type leaking through).
+	apiErr := types.NewErrorWithStatusCode(
+		errors.New(
+			// "quota_exceeded" appears in the message text (not just Code)
+			// because the Gemini/Claude wire envelopes
+			// (types.ToGeminiError/ToClaudeError) carry Message but drop
+			// Code — a caller on either of those wires must still be able
+			// to match on the reason string.
+			"your API quota has been exhausted (quota_exceeded). Please upgrade your plan or top up credits",
+		),
+		types.ErrorCodeQuotaExceeded,
+		http.StatusTooManyRequests,
+		types.ErrOptionWithUpgradeURL(),
+	)
+	// This gate keys on identity_account_id (one platform account), not our
+	// tenant concept, so the honest scope label is "account", not "tenant" —
+	// see doc/product-integration-guide.md §E for the callout that not every
+	// 429 carries these two headers.
+	c.Writer.Header().Set("X-RateLimit-Scope", "account")
+	c.Writer.Header().Set("X-RateLimit-Type", "quota")
 	renderRejection(c, apiErr)
 	c.Abort()
 }

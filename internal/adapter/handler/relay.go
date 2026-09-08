@@ -11,25 +11,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/app/hub"
+	"github.com/LurusTech/lurus-hub/internal/app/openrouter_pool"
+	"github.com/LurusTech/lurus-hub/internal/app/relay"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/resilience"
-	"github.com/LurusTech/lurus-hub/internal/pkg/tracing"
-	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
-	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
-	"github.com/LurusTech/lurus-hub/internal/app/governance"
-	"github.com/LurusTech/lurus-hub/internal/app/relay"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
-	"github.com/LurusTech/lurus-hub/internal/app/hub"
-	"github.com/LurusTech/lurus-hub/internal/app/openrouter_pool"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/tracing"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -164,7 +164,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			// WHICH provider failed and with what status, BEFORE the request-id wrap
 			// below. MaskSensitiveInfo still runs in ToOpenAIError/ToClaudeError after
 			// this, so no upstream secret leaks; envelope shape/status/code unchanged.
-			// The all-keys-cooling branch builds + returns its own message → unaffected.
+			// The all-keys-cooling branch (below) overwrites the message with its
+			// own text and falls through — it does not return early — so this
+			// upstream-attributable rewrite is simply superseded there, not skipped.
 			if types.IsUpstreamFailure(newAPIError) {
 				newAPIError.SetMessage(fmt.Sprintf("upstream provider %s returned %d: %s",
 					provider, newAPIError.StatusCode, newAPIError.Error()))
@@ -174,21 +176,23 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 			// All-keys-cooling (every key in an OpenRouter pool is rate-limited):
 			// translate to 503 + Retry-After so clients back off intelligently
-			// instead of seeing a misleading 429.
+			// instead of seeing a misleading 429. Falls through to the
+			// relayFormat switch below (instead of a hardcoded OpenAI-shaped
+			// "service_unavailable" c.JSON) so every wire gets its own native
+			// envelope and WireErrorType(503, wire)'s taxonomy — api_error on
+			// the OpenAI wire, overloaded_error on the Claude wire — same as
+			// every other gateway rejection this cycle standardised on.
 			if newAPIError.GetErrorCode() == types.ErrorCodeChannelAllKeysCooling && newAPIError.RetryAfterUnix > 0 {
 				secs := newAPIError.RetryAfterUnix - time.Now().Unix()
 				if secs < 1 {
 					secs = 30
 				}
 				c.Header("Retry-After", strconv.FormatInt(secs, 10))
-				c.JSON(http.StatusServiceUnavailable, gin.H{
-					"error": gin.H{
-						"type":    "service_unavailable",
-						"code":    string(types.ErrorCodeChannelAllKeysCooling),
-						"message": fmt.Sprintf("All keys in the OpenRouter pool are rate-limited; retry in ~%ds", secs),
-					},
-				})
-				return
+				newAPIError.StatusCode = http.StatusServiceUnavailable
+				newAPIError.SetMessage(common.MessageWithRequestId(
+					fmt.Sprintf("All keys in the OpenRouter pool are rate-limited; retry in ~%ds", secs),
+					requestId,
+				))
 			}
 
 			// Surface RetryAfterUnix as Retry-After for any error that carries it
@@ -198,6 +202,30 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if newAPIError.RetryAfterUnix > 0 {
 				if secs := newAPIError.RetryAfterUnix - time.Now().Unix(); secs > 0 {
 					c.Header("Retry-After", strconv.FormatInt(secs, 10))
+				}
+			}
+
+			// C01-RL-HEADROOM item 4: an admitted request may already carry the
+			// gateway's own admit-path headroom headers on this writer —
+			// BusinessRateLimit / BusinessModelRateLimit write X-RateLimit-*
+			// before c.Next() ever reaches this handler. Once the failure this
+			// defer is about to render is attributable to the upstream provider,
+			// those headers describe an unrelated earlier snapshot, not this
+			// response: a client would misread "X-RateLimit-Scope: token" on a
+			// provider outage as our own gateway throttling it. The design
+			// rationale is borrowed from the same "don't emit ambiguous limit
+			// headers on someone else's failure" convention API gateways like
+			// Kong/LiteLLM follow; this codebase has no distinguishing-prefix
+			// mechanism of its own, so strip instead. The provider's own
+			// Retry-After (if it sent one — RelayErrorHandler stashed it on
+			// UpstreamHeader) takes the stripped headers' place: it is the one
+			// retry hint that IS actually about this response.
+			if isUpstreamOriginatedError(newAPIError) {
+				middleware.ClearRateLimitHeadroomHeaders(c)
+				if c.Writer.Header().Get("Retry-After") == "" && newAPIError.UpstreamHeader != nil {
+					if ra := newAPIError.UpstreamHeader.Get("Retry-After"); ra != "" {
+						c.Header("Retry-After", ra)
+					}
 				}
 			}
 
@@ -352,7 +380,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			metrics.RecordRelayOverhead(time.Since(requestStart).Seconds())
 		}
 		channelSelectStart := time.Now()
-		channel, channelErr := getChannel(c, relayInfo, retryParam)
+		channel, channelErr := getChannelFn(c, relayInfo, retryParam)
 		metrics.ChannelSelectDuration.Observe(time.Since(channelSelectStart).Seconds())
 
 		if channelErr != nil {
@@ -549,6 +577,13 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	return meta
 }
 
+// getChannelFn is a call seam for getChannel — package-level var so hermetic
+// tests can force a specific channel-selection failure (e.g. the all-keys-
+// cooling 503 special-case in Relay()'s error defer) without a live,
+// DB-backed multi-key channel round trip. Mirrors the returnPreConsumedQuota
+// seam above. Production code does not reassign it.
+var getChannelFn = getChannel
+
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *app.RetryParam) (*repo.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
@@ -578,7 +613,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *app.Ret
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, types.NewError(fmt.Errorf("failed to select an available channel for model %s in group %s (retry): %s", info.OriginModelName, selectGroup, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -589,6 +624,23 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *app.Ret
 		return nil, newAPIError
 	}
 	return channel, nil
+}
+
+// isUpstreamOriginatedError reports whether newAPIError's response is
+// attributable to the upstream provider — the class C01-RL-HEADROOM item 4
+// says must never inherit the gateway's own admit-path X-RateLimit-*
+// headroom headers (see the defer in Relay). types.IsUpstreamFailure already
+// covers 5xx/408/504/524 and channel: errors, but by design excludes plain
+// 4xx: that predicate feeds the circuit breaker, which must not trip on a
+// client-caused 429. A provider that itself returned 429 is not a client
+// error from the gateway's point of view — RelayErrorHandler (app/error.go)
+// sets StatusCode straight from the upstream response — so it is included
+// here explicitly, on top of (not instead of) IsUpstreamFailure.
+func isUpstreamOriginatedError(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	return types.IsUpstreamFailure(err) || err.StatusCode == http.StatusTooManyRequests
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
@@ -776,9 +828,9 @@ func RelayMidjourney(c *gin.Context) {
 func RelayNotImplemented(c *gin.Context) {
 	err := types.OpenAIError{
 		Message: "API not implemented",
-		Type:    "new_api_error",
+		Type:    types.WireErrorType(http.StatusNotImplemented, types.ErrorTypeOpenAIError),
 		Param:   "",
-		Code:    "api_not_implemented",
+		Code:    string(types.ErrorCodeAPINotImplemented),
 	}
 	c.JSON(http.StatusNotImplemented, gin.H{
 		"error": err,

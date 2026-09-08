@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -19,17 +20,20 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 		codeStr = code[0]
 	}
 	userId := c.GetInt("id")
-	// ErrorTypeOpenAIError (via WithOpenAIError) rather than the plainer
-	// NewErrorWithStatusCode: its ToClaudeError/ToOpenAIError branches key
-	// off the RelayError payload we set below instead of stamping the
-	// ErrorType constant ("new_api_error") into every wire — see
-	// renderRejection's godoc. The OpenAI-wire fields below (message/type/
-	// code) are byte-for-byte what this helper always emitted.
-	apiErr := types.WithOpenAIError(types.OpenAIError{
-		Message: common.MessageWithRequestId(message, c.GetString(common.RequestIdKey)),
-		Type:    "new_api_error",
-		Code:    codeStr,
-	}, statusCode)
+	// NewErrorWithStatusCode (ErrorTypeNewAPIError) rather than
+	// WithOpenAIError: it lets ToOpenAIError/ToClaudeError derive the
+	// wire-native "type" from the status code via types.WireErrorType
+	// instead of stamping the literal "new_api_error" into every wire — see
+	// renderRejection's godoc and WireErrorType's. Both wire converters read
+	// this same NewAPIError, so the OpenAI and Claude envelopes now diverge
+	// correctly on 402/503/529 (WireErrorType: billing_error vs
+	// insufficient_quota on 402, overloaded_error vs api_error on 503/529)
+	// instead of sharing one hardcoded type.
+	apiErr := types.NewErrorWithStatusCode(
+		errors.New(common.MessageWithRequestId(message, c.GetString(common.RequestIdKey))),
+		types.ErrorCode(codeStr),
+		statusCode,
+	)
 	renderRejection(c, apiErr)
 	c.Abort()
 	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", userId, message))

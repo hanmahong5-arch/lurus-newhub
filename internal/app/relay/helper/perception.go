@@ -1,7 +1,6 @@
 package helper
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -152,14 +151,4 @@ func SetPerceptionHeaders(c *gin.Context, info *relaycommon.RelayInfo, ext *type
 
 func perceptionFormatFloat(f float64) string {
 	return strconv.FormatFloat(f, 'f', -1, 64)
-}
-
-// SetRateLimitHeaders writes standard rate-limit headers on 429 responses.
-func SetRateLimitHeaders(c *gin.Context, limit int, remaining int, retryAfterSec int64) {
-	if c == nil {
-		return
-	}
-	c.Writer.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfterSec))
-	c.Writer.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limit))
-	c.Writer.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
 }

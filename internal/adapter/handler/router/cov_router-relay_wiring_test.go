@@ -45,8 +45,8 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/web"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -443,6 +443,9 @@ func TestSetDashboardRouter_NoToken_Rejected(t *testing.T) {
 		{http.MethodGet, "/v1/dashboard/billing/subscription"},
 		{http.MethodGet, "/dashboard/billing/usage"},
 		{http.MethodGet, "/v1/dashboard/billing/usage"},
+		// L2-REQUEST-IDENTITY: same TokenAuth group, must reject the same way.
+		{http.MethodGet, "/v1/generation"},
+		{http.MethodGet, "/v1/key"},
 	}
 	for _, r := range routes {
 		req := httptest.NewRequest(r.method, r.path, nil)

@@ -10,6 +10,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -42,16 +43,20 @@ import (
 const (
 	concurrencyTokenKeyPrefix  = "cc:tok:"
 	concurrencyTenantKeyPrefix = "cc:tenant:"
-	// concurrencyLimitErrorCode is the machine-readable code in the 429 body,
-	// distinct from the RPM/TPM limiter so clients can tell "too many at once"
-	// from "too many per minute" — the correct client reaction differs
-	// (drain in-flight work vs. back off on the clock).
-	concurrencyLimitErrorCode = "concurrency_limit_exceeded"
 	// concurrencyDefaultLeaseTTL bounds how long a leaked slot can survive.
 	// Deliberately longer than any legitimate relay: reclaiming a slot from a
 	// still-streaming request would let the limit be exceeded.
 	concurrencyDefaultLeaseTTLSeconds = 1800
 )
+
+// concurrencyLimitErrorCode is the machine-readable code in the 429 body,
+// distinct from the RPM/TPM limiter so clients can tell "too many at once"
+// from "too many per minute" — the correct client reaction differs (drain
+// in-flight work vs. back off on the clock). Defined from
+// types.ErrorCodeConcurrencyLimitExceeded (not re-declared as its own
+// literal) so the two cannot drift — see business_rate_limit.go's
+// bizRateLimitErrorCode for the same pattern and the lock it feeds.
+var concurrencyLimitErrorCode = string(types.ErrorCodeConcurrencyLimitExceeded)
 
 // RelayMaxConcurrentPerToken / PerTenant read their env on every call so an
 // operator can flip the cap without a restart in the same way SYNC_FREQUENCY
@@ -186,15 +191,27 @@ func ccAcquire(ctx context.Context, key, leaseID string, limit int, ttl time.Dur
 	return true, func() { ccLocalRelease(key, leaseID) }, true
 }
 
+// ccReject emits the 429. This dimension runs after BusinessRateLimit but
+// BEFORE Distribute/BusinessModelRateLimit in the chain (gate order:
+// ... -> BusinessRateLimit -> RelayConcurrencyLimit -> Distribute ->
+// BusinessModelRateLimit — relay-router.go), so an admitted request may
+// already carry BusinessRateLimit's headroom snapshot on the writer — most
+// notably X-RateLimit-Reset, which concurrency has no equivalent for (there
+// is no per-minute window to report a reset against, only a slot that frees
+// whenever some in-flight request finishes). Clear it before writing this
+// reject's own fields.
 func ccReject(c *gin.Context, scope string, limit int) {
 	metrics.RecordRateLimited(scope, "concurrency")
 	scopeLabel := "令牌"
 	if scope == "tenant" {
 		scopeLabel = "租户"
 	}
+	ClearRateLimitHeadroomHeaders(c)
 	// Retry-After 1s: unlike a per-minute window there is no deterministic
 	// reset instant — a slot frees when some in-flight request finishes.
 	setRateLimitResponseHeaders(c, limit, 0, 1)
+	c.Writer.Header().Set("X-RateLimit-Scope", scope)
+	c.Writer.Header().Set("X-RateLimit-Type", "concurrency")
 	abortWithOpenAiMessage(c, http.StatusTooManyRequests,
 		fmt.Sprintf("%s并发请求数已达上限（%d），请等待进行中的请求完成后重试", scopeLabel, limit),
 		concurrencyLimitErrorCode)

@@ -10,9 +10,12 @@ package app
 // production sources (middleware.TokenAuth and PreConsumeQuota's
 // ErrTokenQuotaInsufficient branch) build the error via
 // types.NewErrorWithStatusCode(..., types.ErrorCodeTokenQuotaExhausted, ...),
-// whose ToOpenAIError() default branch ALWAYS sets Type to the ErrorType
-// constant ("new_api_error"), never to the ErrorCode. So the wire body this
-// service actually sends is {"type":"new_api_error","code":"token_quota_exhausted"},
+// whose ToOpenAIError() default branch stamps the ErrorCode into Code, never
+// into Type — pre-L3-CONTRACT-TAXONOMY that Type was always the bare
+// ErrorType constant ("new_api_error"); as of that lane's WireErrorType fix
+// it is the vendor-taxonomy value for the status (402 → "insufficient_quota"
+// on the OpenAI wire), still never the ErrorCode. Either way the wire body
+// this service actually sends is {"type":<vendor type>,"code":"token_quota_exhausted"},
 // not the reverse. The hand-built shape made the old test pass while the
 // real ShouldDisableChannel(channelType, realErr) call — reachable when this
 // newhub relays through ANOTHER newhub/newapi instance as an upstream
@@ -97,5 +100,29 @@ func TestR2ShouldDisableChannel_TokenQuotaExhausted_HandBuiltShapeAlsoTrue(t *te
 
 	if !ShouldDisableChannel(1, apiErr) {
 		t.Error("expected true for token_quota_exhausted code")
+	}
+}
+
+// TestR2ShouldDisableChannel_TokenQuotaExhausted_TaxonomyType_AlsoTrue is the
+// L3-CONTRACT-TAXONOMY companion to the round-trip test above: after that
+// lane's root-converter fix, the wire body this service actually sends for
+// the same 402 is {"type":"insufficient_quota","code":"token_quota_exhausted"}
+// (types.WireErrorType, not the retired new_api_error literal). channel.go's
+// Code switch already catches "token_quota_exhausted" independent of Type,
+// and its Type switch independently catches "insufficient_quota" — this pins
+// that BOTH keep answering true for the new shape without any change to
+// channel.go itself (:88-120 untouched).
+func TestR2ShouldDisableChannel_TokenQuotaExhausted_TaxonomyType_AlsoTrue(t *testing.T) {
+	saveAndRestoreAutoBanFlags(t)
+	common.AutomaticDisableChannelEnabled = true
+
+	apiErr := types.WithOpenAIError(types.OpenAIError{
+		Message: "该令牌额度已用尽",
+		Type:    "insufficient_quota",
+		Code:    "token_quota_exhausted",
+	}, http.StatusPaymentRequired)
+
+	if !ShouldDisableChannel(1, apiErr) {
+		t.Error("expected true for the vendor-taxonomy 402 body (type=insufficient_quota, code=token_quota_exhausted)")
 	}
 }

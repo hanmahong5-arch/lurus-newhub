@@ -10,6 +10,9 @@
       "name": "获取模型列表"
     },
     {
+      "name": "Key/用量内省"
+    },
+    {
       "name": "OpenAI格式(Chat)"
     },
     {
@@ -153,6 +156,168 @@
         ]
       }
     },
+    "/v1/key": {
+      "get": {
+        "summary": "查询令牌自身信息",
+        "deprecated": false,
+        "description": "只持有一把中转 key、没有控制台权限的调用方一次拿到该 key 的额度/剩余/限流/所属租户资金池状态。镜像 OpenRouter 的 GET /api/v1/key。只读，无 flag。\n",
+        "operationId": "getKeyInfo",
+        "tags": [
+          "Key/用量内省"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功获取 key 信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "label": { "type": "string" },
+                        "tenant_id": { "type": "string" },
+                        "project_id": { "type": "integer" },
+                        "group": { "type": "string" },
+                        "scopes": { "type": "array", "items": { "type": "string" } },
+                        "model_limits": { "type": "array", "items": { "type": "string" } },
+                        "limit": { "type": "integer", "nullable": true, "description": "这把 key 的总额度上限（剩余+已用；quota 整数，非 USD），null 表示不限额（token.UnlimitedQuota）" },
+                        "limit_remaining": { "type": "integer", "nullable": true, "description": "剩余可用额度（quota 整数，非 USD），null 表示不限额，与 limit 同为 null" },
+                        "usage": { "type": "integer", "description": "已用额度（quota 整数，非 USD）。quota 与 USD 的换算：USD = quota / quota_per_unit，quota_per_unit 是管理员可改的选项（默认 500000），当前值以 GET /api/status 返回的 quota_per_unit 为准" },
+                        "expires_at": { "type": "integer", "nullable": true },
+                        "rate_limit": {
+                          "type": "object",
+                          "properties": {
+                            "rpm": { "type": "integer" },
+                            "tpm": { "type": "integer" },
+                            "tenant_rpm": { "type": "integer" },
+                            "tenant_tpm": { "type": "integer" }
+                          }
+                        },
+                        "pool": {
+                          "type": "object",
+                          "nullable": true,
+                          "description": "所属租户资金池未配置时为 null（约定：无池行 = 不限额，非错误）",
+                          "properties": {
+                            "balance": { "type": "integer", "description": "租户资金池当前余额（quota 整数，非 USD）" },
+                            "max_balance": { "type": "integer", "description": "租户资金池上限（quota 整数，非 USD；-1 表示不限）" },
+                            "health": { "type": "string" }
+                          }
+                        },
+                        "default_product": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "401": {
+            "description": "令牌无效",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "success": { "type": "boolean" }, "message": { "type": "string" } } }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/generation": {
+      "get": {
+        "summary": "按 request id 反查一次调用的费用/供应商/用量",
+        "deprecated": false,
+        "description": "调用方凭自己发出的入站 X-Request-Id，或网关在原始响应上回显的 X-Request-Id，反查该次调用的成本/供应商/用量——无需控制台权限。镜像 OpenRouter 的 GET /api/v1/generation。只读，无 flag。id 不匹配存量格式时直接 404（不是 400），与\"无此 id\"不可区分，避免向未持有该 id 的调用方泄露格式探测信号。\n",
+        "operationId": "getGeneration",
+        "tags": [
+          "Key/用量内省"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "description": "X-Request-Id 值（8-36 位 [A-Za-z0-9._-]）",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取该次调用详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string" },
+                        "request_id": { "type": "string" },
+                        "model": { "type": "string" },
+                        "upstream_model": { "type": "string" },
+                        "provider_name": { "type": "string" },
+                        "quota": { "type": "integer", "description": "本次调用消耗的 quota 整数（DB 单位，非 USD）" },
+                        "total_cost": { "type": "number", "description": "quota / quota_per_unit（管理员可改的选项，默认 500000，当前值以 GET /api/status 的 quota_per_unit 为准；该值未设置时为 0）——本响应体唯一 USD 计价字段" },
+                        "usage": {
+                          "type": "object",
+                          "properties": {
+                            "prompt_tokens": { "type": "integer" },
+                            "completion_tokens": { "type": "integer" },
+                            "cached_tokens": { "type": "integer", "nullable": true }
+                          }
+                        },
+                        "latency_ms": { "type": "integer" },
+                        "first_token_ms": { "type": "integer" },
+                        "streamed": { "type": "boolean" },
+                        "source_product": { "type": "string" },
+                        "project_id": { "type": "integer" },
+                        "session_id": { "type": "string" },
+                        "created_at": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "404": {
+            "description": "id 格式不匹配或不属于调用方的令牌/租户",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "success": { "type": "boolean" }, "message": { "type": "string" } } }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1beta/models": {
       "get": {
         "summary": "Gemini 格式获取",
@@ -213,29 +378,114 @@
                 }
               }
             },
-            "headers": {}
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "X-Model-Provider": { "$ref": "#/components/headers/XModelProvider" },
+              "X-RateLimit-Limit": { "$ref": "#/components/headers/XRateLimitLimit" },
+              "X-RateLimit-Remaining": { "$ref": "#/components/headers/XRateLimitRemaining" },
+              "X-RateLimit-Reset": { "$ref": "#/components/headers/XRateLimitReset" },
+              "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
+              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" },
+              "X-Request-Cost": { "$ref": "#/components/headers/XRequestCost" },
+              "X-Quota-Remaining": { "$ref": "#/components/headers/XQuotaRemaining" }
+            }
           },
           "400": {
             "description": "请求参数错误",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/GatewayError"
                 }
               }
             },
-            "headers": {}
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "401": {
+            "description": "认证失败（如 API key 无效）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "402": {
+            "description": "余额/租户信用池不足",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+            }
+          },
+          "403": {
+            "description": "权限不足（IP/分组/模型/渠道限制）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "404": {
+            "description": "模型未找到（分组下从未配置该模型）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "413": {
+            "description": "请求体过大",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
           },
           "429": {
             "description": "请求频率限制",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/GatewayError"
                 }
               }
             },
-            "headers": {}
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
+              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
+            }
+          },
+          "503": {
+            "description": "无可用渠道 / 全部密钥冷却中",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+            }
           }
         },
         "security": [
@@ -1285,7 +1535,97 @@
                 }
               }
             },
-            "headers": {}
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "X-Model-Provider": { "$ref": "#/components/headers/XModelProvider" },
+              "X-RateLimit-Limit": { "$ref": "#/components/headers/XRateLimitLimit" },
+              "X-RateLimit-Remaining": { "$ref": "#/components/headers/XRateLimitRemaining" },
+              "X-RateLimit-Reset": { "$ref": "#/components/headers/XRateLimitReset" },
+              "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
+              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
+            }
+          },
+          "401": {
+            "description": "认证失败（如 API key 无效）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "402": {
+            "description": "余额/租户信用池不足",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+            }
+          },
+          "403": {
+            "description": "权限不足（IP/分组/模型/渠道限制）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "404": {
+            "description": "模型未找到（分组下从未配置该模型）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "413": {
+            "description": "请求体过大",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "429": {
+            "description": "限流（网关侧或产品配额）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
+              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
+            }
+          },
+          "503": {
+            "description": "无可用渠道 / 全部密钥冷却中",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+            }
           }
         },
         "security": [
@@ -1501,7 +1841,99 @@
                 }
               }
             },
-            "headers": {}
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "X-Model-Provider": { "$ref": "#/components/headers/XModelProvider" },
+              "X-RateLimit-Limit": { "$ref": "#/components/headers/XRateLimitLimit" },
+              "X-RateLimit-Remaining": { "$ref": "#/components/headers/XRateLimitRemaining" },
+              "X-RateLimit-Reset": { "$ref": "#/components/headers/XRateLimitReset" },
+              "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
+              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" },
+              "X-Request-Cost": { "$ref": "#/components/headers/XRequestCost" },
+              "X-Quota-Remaining": { "$ref": "#/components/headers/XQuotaRemaining" }
+            }
+          },
+          "401": {
+            "description": "认证失败（如 API key 无效）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "402": {
+            "description": "余额/租户信用池不足",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+            }
+          },
+          "403": {
+            "description": "权限不足（IP/分组/模型/渠道限制）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "404": {
+            "description": "模型未找到（分组下从未配置该模型）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "413": {
+            "description": "请求体过大",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
+              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
+            }
+          },
+          "503": {
+            "description": "无可用渠道 / 全部密钥冷却中",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+            }
           }
         },
         "security": [
@@ -1541,7 +1973,99 @@
                 }
               }
             },
-            "headers": {}
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "X-Model-Provider": { "$ref": "#/components/headers/XModelProvider" },
+              "X-RateLimit-Limit": { "$ref": "#/components/headers/XRateLimitLimit" },
+              "X-RateLimit-Remaining": { "$ref": "#/components/headers/XRateLimitRemaining" },
+              "X-RateLimit-Reset": { "$ref": "#/components/headers/XRateLimitReset" },
+              "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
+              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" },
+              "X-Request-Cost": { "$ref": "#/components/headers/XRequestCost" },
+              "X-Quota-Remaining": { "$ref": "#/components/headers/XQuotaRemaining" }
+            }
+          },
+          "401": {
+            "description": "认证失败（如 API key 无效）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "402": {
+            "description": "余额/租户信用池不足",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+            }
+          },
+          "403": {
+            "description": "权限不足（IP/分组/模型/渠道限制）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "404": {
+            "description": "模型未找到（分组下从未配置该模型）",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "413": {
+            "description": "请求体过大",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
+              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
+            }
+          },
+          "503": {
+            "description": "无可用渠道 / 全部密钥冷却中",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+            }
           }
         },
         "security": [
@@ -1944,7 +2468,7 @@
         ]
       }
     },
-    "/v1/fine-tunes/{fine_tune_id}": {
+    "/v1/fine-tunes/{id}": {
       "get": {
         "summary": "获取微调任务详情 (未实现)",
         "deprecated": false,
@@ -1955,7 +2479,7 @@
         ],
         "parameters": [
           {
-            "name": "fine_tune_id",
+            "name": "id",
             "in": "path",
             "description": "",
             "required": true,
@@ -1985,7 +2509,7 @@
         ]
       }
     },
-    "/v1/fine-tunes/{fine_tune_id}/cancel": {
+    "/v1/fine-tunes/{id}/cancel": {
       "post": {
         "summary": "取消微调任务 (未实现)",
         "deprecated": false,
@@ -1996,7 +2520,7 @@
         ],
         "parameters": [
           {
-            "name": "fine_tune_id",
+            "name": "id",
             "in": "path",
             "description": "",
             "required": true,
@@ -2026,7 +2550,7 @@
         ]
       }
     },
-    "/v1/fine-tunes/{fine_tune_id}/events": {
+    "/v1/fine-tunes/{id}/events": {
       "get": {
         "summary": "获取微调任务事件 (未实现)",
         "deprecated": false,
@@ -2037,7 +2561,7 @@
         ],
         "parameters": [
           {
-            "name": "fine_tune_id",
+            "name": "id",
             "in": "path",
             "description": "",
             "required": true,
@@ -2145,7 +2669,7 @@
         ]
       }
     },
-    "/v1/files/{file_id}": {
+    "/v1/files/{id}": {
       "get": {
         "summary": "获取文件信息 (未实现)",
         "deprecated": false,
@@ -2156,7 +2680,7 @@
         ],
         "parameters": [
           {
-            "name": "file_id",
+            "name": "id",
             "in": "path",
             "description": "",
             "required": true,
@@ -2195,7 +2719,7 @@
         ],
         "parameters": [
           {
-            "name": "file_id",
+            "name": "id",
             "in": "path",
             "description": "",
             "required": true,
@@ -2225,7 +2749,7 @@
         ]
       }
     },
-    "/v1/files/{file_id}/content": {
+    "/v1/files/{id}/content": {
       "get": {
         "summary": "获取文件内容 (未实现)",
         "deprecated": false,
@@ -2236,7 +2760,7 @@
         ],
         "parameters": [
           {
-            "name": "file_id",
+            "name": "id",
             "in": "path",
             "description": "",
             "required": true,
@@ -2292,6 +2816,106 @@
                 "type": "string",
                 "description": "错误代码",
                 "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "GatewayError": {
+        "description": "网关自身（非上游供应商）拒绝请求时的信封：OpenAI 线为 {error:{message,type,code,param}}，Anthropic 线为 {type:\"error\",error:{type,message}}，Gemini 线为 {error:{code,message,status}}。type 取值随调用方使用的 wire 而不同（OpenAI 语义 vs Anthropic 语义，402/503/529 三处分叉），code 是跨 wire 稳定的机器可读值。",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "OpenAI 线：invalid_request_error / authentication_error / insufficient_quota / permission_error / not_found_error / request_too_large / rate_limit_error / api_error。Anthropic 线同名，但 402→billing_error、503/529→overloaded_error（含 channel:all_keys_cooling 503）。",
+            "enum": [
+              "invalid_request_error",
+              "authentication_error",
+              "insufficient_quota",
+              "billing_error",
+              "permission_error",
+              "not_found_error",
+              "request_too_large",
+              "rate_limit_error",
+              "overloaded_error",
+              "api_error"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "description": "机器可读的拒绝原因，跨 wire 稳定；见 internal/pkg/types/error.go 的 ErrorCode 常量表。",
+            "enum": [
+              "invalid_request",
+              "sensitive_words_detected",
+              "count_token_failed",
+              "model_price_error",
+              "invalid_api_type",
+              "json_marshal_failed",
+              "do_request_failed",
+              "get_channel_failed",
+              "gen_relay_info_failed",
+              "channel:no_available_key",
+              "channel:all_keys_cooling",
+              "channel:param_override_invalid",
+              "channel:header_override_invalid",
+              "channel:model_mapped_error",
+              "channel:aws_client_error",
+              "channel:invalid_key",
+              "channel:response_time_exceeded",
+              "read_request_body_failed",
+              "convert_request_failed",
+              "access_denied",
+              "bad_request_body",
+              "read_response_body_failed",
+              "bad_response_status_code",
+              "bad_response",
+              "bad_response_body",
+              "empty_response",
+              "upstream_stream_incomplete",
+              "aws_invoke_error",
+              "model_not_found",
+              "prompt_blocked",
+              "query_data_error",
+              "update_data_error",
+              "insufficient_user_quota",
+              "pre_consume_token_quota_failed",
+              "tenant_quota_exceeded",
+              "token_quota_exhausted",
+              "model_blocked",
+              "token_disabled",
+              "user_banned",
+              "tenant_suspended",
+              "ip_not_allowed",
+              "group_not_allowed",
+              "session_required",
+              "channel_specify_forbidden",
+              "scope_not_granted",
+              "request_rate_limit_exceeded",
+              "gateway_internal",
+              "pool_exhausted",
+              "pool_not_configured",
+              "quota_exceeded",
+              "cost_spike_limit_exceeded",
+              "business_rate_limit_exceeded",
+              "concurrency_limit_exceeded",
+              "api_not_implemented"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "人类可读的错误信息，末尾附 (request id: X-Request-Id 同值) 便于对账。"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "仅 OpenAI 线可能携带；Claude/Gemini 信封没有对应位置。",
+            "properties": {
+              "topup_url": {
+                "type": "string",
+                "description": "402 余额不足时的钱包充值链接。"
+              },
+              "upgrade_url": {
+                "type": "string",
+                "description": "429 产品配额超限时的订阅升级链接。"
               }
             }
           }
@@ -4444,6 +5068,48 @@
       }
     },
     "responses": {},
+    "headers": {
+      "XRequestId": {
+        "description": "本次请求的关联 id。有合法的入站 X-Request-Id（8-36 位 [A-Za-z0-9._-]，上限对齐 audit_events.request_id 的 varchar(36) 列宽，超长值不回显只会被重新铸造）时原样回显，否则回退取 traceparent 的 32 位 trace id（恒 ≤36 位），都没有则由网关生成。成功/失败响应均有此头。GET /v1/generation?id=<此值> 可反查费用/供应商/用量。",
+        "schema": { "type": "string" }
+      },
+      "XModelProvider": {
+        "description": "服务本次请求的上游供应商名（如 openai、anthropic）。OpenAI 线非流式响应与任意 wire 的流式响应上必有；Claude/Gemini 原生非流式响应上不保证存在。",
+        "schema": { "type": "string" }
+      },
+      "XRateLimitLimit": {
+        "description": "命中的限流层级里最紧的那一档配置上限（放行响应与限流类 429 拒绝响应均有）。",
+        "schema": { "type": "integer" }
+      },
+      "XRateLimitRemaining": {
+        "description": "该层级当前窗口剩余可用次数，钳制到 >= 0。",
+        "schema": { "type": "integer" }
+      },
+      "XRateLimitReset": {
+        "description": "窗口重置时间（Unix 秒）。",
+        "schema": { "type": "integer" }
+      },
+      "XRateLimitScope": {
+        "description": "限流键所属主体：ip | key（网关 internal API key 桶）| user | token | tenant | model | account（entitlement 配额闸门）。ip/key 只出现在 /internal/* 与非中转路由上，/v1 中转路由不会发这两个值。",
+        "schema": { "type": "string" }
+      },
+      "XRateLimitType": {
+        "description": "限流维度：requests | rpm（每分钟请求数）| tpm（每分钟 token 数，同样以 429 强制执行；Remaining 按已结算用量计算，可能滞后一次尖峰）| concurrency | quota（entitlement 配额闸门）| cost（成本尖峰熔断）。",
+        "schema": { "type": "string" }
+      },
+      "XRequestCost": {
+        "description": "本次请求消耗的钱包配额（浮点数的字符串形式）。仅 OpenAI 线非流式响应携带。",
+        "schema": { "type": "string" }
+      },
+      "XQuotaRemaining": {
+        "description": "本次请求后调用方的剩余余额，单位同 X-Request-Cost。仅 OpenAI 线非流式响应携带。",
+        "schema": { "type": "string" }
+      },
+      "RetryAfter": {
+        "description": "建议等待多少秒后重试。携带已知恢复时间的 402/429/503 拒绝上出现。",
+        "schema": { "type": "integer" }
+      }
+    },
     "securitySchemes": {
       "BearerAuth": {
         "type": "http",
@@ -7132,6 +7798,18 @@
       }
     }
   },
+  "x-lurus-enforcement-order": [
+    "StampRelayFormat",
+    "TokenAuth",
+    "PoolBalanceCheck",
+    "CostSpikeLimit",
+    "EntitlementCheck",
+    "ModelRequestRateLimit",
+    "BusinessRateLimit",
+    "RelayConcurrencyLimit",
+    "Distribute",
+    "BusinessModelRateLimit"
+  ],
   "servers": [],
   "security": [
     {

@@ -579,8 +579,8 @@ func TestR2Bill_GetSubscription_RepoErrorIs500(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected an OpenAI-native error envelope, got %s", w.Body.String())
 	}
-	if errBody["type"] != "new_api_error" {
-		t.Errorf("error.type = %v, want new_api_error", errBody["type"])
+	if errBody["type"] != "api_error" {
+		t.Errorf("error.type = %v, want api_error", errBody["type"])
 	}
 }
 
@@ -611,8 +611,8 @@ func TestR2Bill_GetUsage_RepoErrorIs500(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected an OpenAI-native error envelope, got %s", w.Body.String())
 	}
-	if errBody["type"] != "new_api_error" {
-		t.Errorf("error.type = %v, want new_api_error", errBody["type"])
+	if errBody["type"] != "api_error" {
+		t.Errorf("error.type = %v, want api_error", errBody["type"])
 	}
 }
 

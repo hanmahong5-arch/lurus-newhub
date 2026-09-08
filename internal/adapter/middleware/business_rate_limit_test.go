@@ -144,8 +144,11 @@ func TestBusinessRateLimit_TokenRPM_EnforcesAndSlides(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatalf("429 body not JSON: %v (%s)", err, w.Body.String())
 		}
-		if body.Error.Type != "new_api_error" || body.Error.Code != bizRateLimitErrorCode || body.Error.Message == "" {
-			t.Errorf("429 body = %+v, want type=new_api_error code=%s non-empty message", body.Error, bizRateLimitErrorCode)
+		// L3-CONTRACT-TAXONOMY: abortWithOpenAiMessage now maps the wire type
+		// off the status via types.WireErrorType (root converter fix) instead
+		// of the retired new_api_error literal — 429 -> rate_limit_error.
+		if body.Error.Type != "rate_limit_error" || body.Error.Code != bizRateLimitErrorCode || body.Error.Message == "" {
+			t.Errorf("429 body = %+v, want type=rate_limit_error code=%s non-empty message", body.Error, bizRateLimitErrorCode)
 		}
 		after := testutil.ToFloat64(metrics.RateLimitedTotal.WithLabelValues("token", "rpm"))
 		if after-before != 1 {
@@ -283,10 +286,10 @@ func TestBizMemoryLimiter_PruneAndRetryAfter(t *testing.T) {
 	l := bizMemoryLimiter{entries: make(map[string][]int64)}
 	base := time.Unix(1_700_000_000, 0)
 
-	if ok, _ := l.allow("k", 1, time.Minute, base); !ok {
+	if ok, _, _ := l.allow("k", 1, time.Minute, base); !ok {
 		t.Fatalf("first admission must pass")
 	}
-	ok, retry := l.allow("k", 1, time.Minute, base.Add(10*time.Second))
+	ok, retry, _ := l.allow("k", 1, time.Minute, base.Add(10*time.Second))
 	if ok {
 		t.Fatalf("second admission within window must be denied")
 	}
@@ -295,7 +298,7 @@ func TestBizMemoryLimiter_PruneAndRetryAfter(t *testing.T) {
 		t.Errorf("Retry-After = %d, want 50", retry)
 	}
 	// After the window slides the same key admits again and holds ONE entry.
-	if ok, _ := l.allow("k", 1, time.Minute, base.Add(61*time.Second)); !ok {
+	if ok, _, _ := l.allow("k", 1, time.Minute, base.Add(61*time.Second)); !ok {
 		t.Fatalf("post-window admission must pass")
 	}
 	l.mu.Lock()
