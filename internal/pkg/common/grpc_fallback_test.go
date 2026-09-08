@@ -111,8 +111,15 @@ func TestGRPC_FallsBackToHTTP(t *testing.T) {
 	if err := ReleasePreAuthGRPC(ctx, 1); err != nil {
 		t.Errorf("ReleasePreAuthGRPC fallback: %v", err)
 	}
+	debitBefore := billingDebitSampleCount(t, "prod", "debit")
 	if res, err := DebitWalletGRPC(ctx, 1, 1.0, "spend", "d", "prod", "idem"); err != nil || res == nil || !res.Success {
 		t.Errorf("DebitWalletGRPC fallback: %+v err=%v", res, err)
+	}
+	// Empty gRPC address -> nil client -> DebitWalletGRPC calls the HTTP twin
+	// (DebitWallet) directly, not via its own internal fallback branch. That
+	// HTTP path previously observed nothing on a confirmed debit.
+	if got := billingDebitSampleCount(t, "prod", "debit") - debitBefore; got != 1 {
+		t.Errorf("billing_debit_amount_cny{product=prod,op=debit} delta = %d, want 1", got)
 	}
 	if err := CreditWalletGRPC(ctx, 1, 1.0, "refund", "d", "prod", "idem"); err != nil {
 		t.Errorf("CreditWalletGRPC fallback: %v", err)

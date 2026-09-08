@@ -1,8 +1,31 @@
 # ADR: Observability Stack
 
-**Status**: Accepted (partial implementation)
+**Status**: Accepted (partial implementation) — **superseded on tracing/dashboarding, see 2026-09-07 update below**
 **Date**: 2026-02-03
 **Relates to**: ADR-API-008 (architecture.md), Epic 4
+
+> **UPDATE 2026-09-07**: the stack this ADR describes never fully landed and
+> has since been overtaken by a platform-wide decision (root `lurus/CLAUDE.md`
+> HARD RULE): monitoring is self-hosted Netdata, service-side zero changes.
+> Concretely, as of this date:
+> - **Jaeger is no longer deployed (the OTLP collector was stopped)** — the
+>   architecture diagram below still shows "staging: deployed", but the
+>   OTLP→jaeger-collector export path has been stopped, and
+>   `OTEL_TRACING_ENABLED` defaults to false and deploy/ never sets it.
+>   Distributed tracing is Not Implemented, same as the Current State table
+>   already said in 2026-02.
+> - **Grafana: no kustomization in this repo applies it.** `deploy/grafana/` held 3 dashboard/
+>   alert JSON+YAML files that no kustomization ever applied; they were deleted
+>   2026-09-07 rather than continue to describe a Grafana instance that does
+>   not exist.
+> - Prometheus `/metrics` (the one piece of this ADR that IS real) is scraped
+>   directly by the host netdata `go.d` job, not by a Prometheus server this
+>   repo deploys — see `internal/pkg/metrics/alert_wiring_honesty_test.go` for
+>   the gate that keeps Go source from re-describing either of the above as
+>   live.
+> The Architecture diagram and References section below are left as originally
+> written (historical record of the 2026-02 decision); read them against this
+> update, not as current state.
 
 ## Context
 

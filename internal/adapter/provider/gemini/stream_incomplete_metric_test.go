@@ -15,7 +15,7 @@ import (
 // through helper.ReportIncompleteStream so the abandoned stream lands in
 // relay_errors_total instead of counting as a success.
 func TestGeminiStreamHandlers_Incomplete_CountInRelayErrorsTotal(t *testing.T) {
-	series := metrics.RelayErrorsTotal.WithLabelValues("Gemini", "gemini-x", "upstream_5xx")
+	series := metrics.RelayErrorsTotal.WithLabelValues("Gemini", "gemini-x", "upstream_5xx", "unknown")
 
 	t.Run("converted (openai wire)", func(t *testing.T) {
 		before := testutil.ToFloat64(series)

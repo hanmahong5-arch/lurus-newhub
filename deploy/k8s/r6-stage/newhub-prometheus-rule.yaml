@@ -7,12 +7,15 @@
 #   2. Adding it there would not fix that. `PrometheusRule` is a custom resource
 #      owned by the Prometheus Operator, and R6 runs no Prometheus Operator —
 #      the apply would be rejected for an unknown kind. R6's monitoring is host
-#      netdata (deploy/r6-host-netdata/).
+#      netdata, scraping this service's /metrics directly (go.d job "newhub");
+#      that config is host-level, not tracked under deploy/ in this repo — the
+#      nearest thing this repo does own is deploy/r6-host-nginx/, which is the
+#      edge vhost, not the monitoring config.
 #
 # It is kept as the record of what we decided was worth alerting on. Do not
 # read a rule here as an alert that fires, and do not cite this file from Go
 # source as if it were live — internal/pkg/metrics/alert_wiring_honesty_test.go
-# fails the build if that happens again.
+# fails go test if that happens again.
 #
 # Two rules below are also wrong on their own terms and are left as written so
 # the correction is visible when they are ported:

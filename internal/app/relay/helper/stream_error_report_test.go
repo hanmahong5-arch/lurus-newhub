@@ -19,7 +19,7 @@ func TestReportIncompleteStream_CountsInRelayErrorsTotal(t *testing.T) {
 	c, _ := newStreamCtx()
 
 	t.Run("upstream closed → upstream_5xx", func(t *testing.T) {
-		series := metrics.RelayErrorsTotal.WithLabelValues("OpenAI", "gpt-x", "upstream_5xx")
+		series := metrics.RelayErrorsTotal.WithLabelValues("OpenAI", "gpt-x", "upstream_5xx", "unknown")
 		before := testutil.ToFloat64(series)
 		info := &relaycommon.RelayInfo{
 			ChannelMeta:     &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI},
@@ -36,7 +36,7 @@ func TestReportIncompleteStream_CountsInRelayErrorsTotal(t *testing.T) {
 	})
 
 	t.Run("idle timeout → upstream_timeout", func(t *testing.T) {
-		series := metrics.RelayErrorsTotal.WithLabelValues("Anthropic", "claude-x", "upstream_timeout")
+		series := metrics.RelayErrorsTotal.WithLabelValues("Anthropic", "claude-x", "upstream_timeout", "unknown")
 		before := testutil.ToFloat64(series)
 		info := &relaycommon.RelayInfo{
 			ChannelMeta:     &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeAnthropic},
@@ -52,7 +52,7 @@ func TestReportIncompleteStream_CountsInRelayErrorsTotal(t *testing.T) {
 	})
 
 	t.Run("nil info still counts under Unknown/unknown", func(t *testing.T) {
-		series := metrics.RelayErrorsTotal.WithLabelValues("Unknown", "unknown", "upstream_5xx")
+		series := metrics.RelayErrorsTotal.WithLabelValues("Unknown", "unknown", "upstream_5xx", "unknown")
 		before := testutil.ToFloat64(series)
 		if err := ReportIncompleteStream(c, nil); err == nil {
 			t.Fatal("nil info must still return the error")

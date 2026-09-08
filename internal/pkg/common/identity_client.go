@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 )
 
 // IdentityServiceURL is the base URL for the lurus-platform core service.
@@ -489,6 +491,13 @@ func DebitWallet(ctx context.Context, accountID int64, amount float64, txType, d
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+	// Same observation as the gRPC twin's confirmed-success branch
+	// (identity_grpc_client.go DebitWalletGRPC) — this HTTP path is reached
+	// either directly (no gRPC client configured) or as DebitWalletGRPC's own
+	// fallback, and previously recorded nothing in either case.
+	if result.Success {
+		metrics.RecordBillingDebit(productID, "debit", amount)
+	}
 	return &result, nil
 }
 
@@ -560,7 +569,7 @@ func (e *CheckoutError) Error() string {
 }
 
 // CreateCheckout creates a checkout session on lurus-platform for wallet topup.
-// The sourceService identifies which product initiated the checkout (e.g., "lurus-api").
+// The sourceService identifies which product initiated the checkout (e.g., "llm-api").
 func CreateCheckout(ctx context.Context, accountID int64, amountCNY float64, paymentMethod, sourceService, idempotencyKey, returnURL string) (*CheckoutResult, error) {
 	if IdentityServiceURL == "" {
 		return nil, fmt.Errorf("identity service not configured")

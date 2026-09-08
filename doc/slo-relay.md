@@ -16,6 +16,24 @@ Status: W1 baseline (2026-05-09); revisit after 7 days of stage data.
 
 **Total** = end-to-end `Relay()` including all retries + upstream wall time. The number that matters to the customer.
 
+> **[2026-09-07] Numerator change — `status="success"` no longer includes abandoned streams.**
+> The success-rate SLI above reads `relay_total_duration_seconds_count{status="success"}` /
+> total. Before `observeRelayOutcome` (`internal/adapter/handler/relay_outcome.go`), a stream
+> the caller disconnected from mid-flight had `apiErr == nil` (there is nobody left to write an
+> error frame to) and so was counted as an ordinary `"success"`. That request now gets its own
+> status label, `"client_gone"`, and is excluded from the `"success"` numerator — so a rise in
+> client-side disconnects (client timeouts, users cancelling generations) now shows up as a drop
+> in the SLI even though nothing on our side changed. To compute the old (pre-2026-09-07)
+> series for a continuous before/after comparison, sum both labels:
+> `(relay_total_duration_seconds_count{status="success"} + relay_total_duration_seconds_count{status="client_gone"})`
+> / total.
+>
+> Unchanged and still counted as `"success"`: a stream the upstream truncated while the caller
+> was still listening. That request gets `relay_errors_total{error_type="upstream_5xx"|"upstream_timeout"}`
+> +1 and a 502/504 frame on the wire, but the relay helper then returns without an error, so on
+> `relay_total_duration_seconds` / `relay_requests_total` it is a `"success"`. The SLI numerator
+> therefore still overstates success by that share; use `relay_errors_total` to see it.
+
 ## Why these targets
 
 - **50ms overhead P99**: most enterprise B2B integrations budget 100-200ms of platform overhead on top of actual work. We target half that to leave headroom for ingress + their client-side processing.
@@ -90,12 +108,11 @@ When **overhead P99** crosses 50ms:
 
 When **total P99** spikes but **overhead** is flat: upstream is slow. Cross-reference `relay_duration_seconds{provider}` to identify the bad channel; circuit breaker should auto-trip after `CB_THRESHOLD=5` consecutive failures.
 
-When **success rate** drops below 99.5%: check `circuit_breaker_state` (open breakers) and `channel_consecutive_errors` for the offending channel. Verify retries are firing via `retry_attempts_total`.
+When **success rate** drops below 99.5%: check `circuit_breaker_state` (open breakers) and `relay_errors_total{error_type,provider,model,product}` (breaks down WHY a provider is failing — upstream_5xx / upstream_timeout / upstream_rate_limit / insufficient_quota / etc., see `types.RelayErrorType`) for the offending channel. Verify retries are firing via `retry_attempts_total`.
 
 ## Verification — first 7 days
 
 - [ ] STAGE pod scrape `:3000/metrics` returns `relay_overhead_duration_seconds` and `relay_total_duration_seconds`
-- [ ] Grafana dashboard renders P50/P95/P99 panels for both
 - [ ] Overhead distribution lands within `[1ms, 20ms]` for steady-state load
 - [ ] Total distribution matches expected provider mix (Anthropic ~3-8s P99, OpenAI ~2-5s P99)
 - [ ] Alert wired: page if overhead P99 > 100ms (2× SLO target) for 5 minutes

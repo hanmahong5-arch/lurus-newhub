@@ -8,12 +8,37 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
 	identityv1 "github.com/LurusTech/lurus-proto-go/identity/v1"
 )
+
+// billingDebitSampleCount reads the cumulative sample_count for one
+// (product, op) series of billing_debit_amount_cny. Shared by
+// identity_grpc_bufconn_test.go and grpc_fallback_test.go (same package).
+func billingDebitSampleCount(t *testing.T, product, op string) int {
+	t.Helper()
+	metric, ok := metrics.BillingDebitAmountCNY.WithLabelValues(product, op).(prometheus.Metric)
+	if !ok {
+		t.Fatalf("BillingDebitAmountCNY observer does not implement prometheus.Metric")
+	}
+	var m dto.Metric
+	if err := metric.Write(&m); err != nil {
+		t.Fatalf("write metric: %v", err)
+	}
+	hist := m.GetHistogram()
+	if hist == nil {
+		t.Fatalf("metric is not a histogram")
+	}
+	return int(hist.GetSampleCount())
+}
 
 // withInjectedGRPCClient replaces the package gRPC-client singleton with a REAL
 // grpc.ClientConn dialed over an in-process bufconn, then restores the prior
@@ -124,8 +149,17 @@ func TestGRPC_LiveClientFallsBackToHTTP(t *testing.T) {
 	if err := ReleasePreAuthGRPC(ctx, 11); err != nil {
 		t.Errorf("ReleasePreAuthGRPC live-fallback: %v", err)
 	}
+	debitBefore := billingDebitSampleCount(t, "prod", "debit")
 	if res, err := DebitWalletGRPC(ctx, 1, 3.0, "spend", "d", "prod", "idem"); err != nil || res == nil || !res.Success {
 		t.Errorf("DebitWalletGRPC live-fallback: %+v err=%v", res, err)
+	}
+	// The codec failure sends this call down its HTTP fallback (see
+	// withInjectedGRPCClient's doc comment), which must observe the same
+	// billing_debit_amount_cny{product,op="debit"} series as the gRPC
+	// success branch — one money-moving call, one metric, regardless of
+	// which transport actually confirmed it.
+	if got := billingDebitSampleCount(t, "prod", "debit") - debitBefore; got != 1 {
+		t.Errorf("billing_debit_amount_cny{product=prod,op=debit} delta = %d, want 1", got)
 	}
 	if err := CreditWalletGRPC(ctx, 1, 3.0, "refund", "d", "prod", "idem"); err != nil {
 		t.Errorf("CreditWalletGRPC live-fallback: %v", err)

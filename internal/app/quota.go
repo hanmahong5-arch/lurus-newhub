@@ -46,6 +46,12 @@ var AsyncGo = gopool.Go
 // stay gated while the debit silently loses its gate.
 var debitWalletGRPC = common.DebitWalletGRPC
 
+// settleWithBreaker is a test seam over the pre-auth settlement call, same
+// convention as debitWalletGRPC above — the platform-preauth branch of
+// PostConsumeQuota needs to be exercisable without a real gRPC/HTTP round
+// trip to lurus-platform.
+var settleWithBreaker = common.SettleWithBreaker
+
 type TokenDetails struct {
 	TextTokens  int
 	AudioTokens int
@@ -998,7 +1004,7 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				// the meter loss was already counted above — dropping revenue
 				// over a shadow-bookkeeping failure would invert the hierarchy.
 				settleCtx, settleCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_, settleErr := common.SettleWithBreaker(settleCtx, relayInfo.PlatformPreAuthID, amountLB)
+				_, settleErr := settleWithBreaker(settleCtx, relayInfo.PlatformPreAuthID, amountLB)
 				settleCancel()
 				charged = true
 
@@ -1013,6 +1019,11 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 					}
 				} else {
 					metrics.BillingSettleTotal.WithLabelValues("success").Inc()
+					// This settlement leg never observed billing_debit_amount_cny —
+					// only the direct DebitWalletGRPC call sites did, so a request
+					// that paid through the pre-auth branch (the pre-auth → settle
+					// path) moved real money with zero histogram trace.
+					metrics.RecordBillingDebit(relayInfo.SourceProduct, "settle", amountLB)
 					// Invalidate cached balance so next request gets fresh data
 					common.InvalidateCachedWalletBalance(accountID)
 				}
@@ -1264,7 +1275,7 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 		}
 		if quotaTooLow {
 			prompt := "您的额度即将用尽"
-			topUpLink := fmt.Sprintf("%s/console/topup", system_setting.ServerAddress)
+			topUpLink := fmt.Sprintf("%s/console/v2/billing", system_setting.ServerAddress)
 
 			// 根据通知方式生成不同的内容格式
 			var content string

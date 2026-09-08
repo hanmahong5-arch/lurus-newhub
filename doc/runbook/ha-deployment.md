@@ -58,9 +58,13 @@ ArgoCD `automated + selfHeal` 会把它们回滚,只会制造「改了没生效�
 
 ## 告警阈值
 
-`deploy/grafana/newhub-alerts.yaml` 与 `deploy/k8s/r6-stage/newhub-prometheus-rule.yaml` 是真源;
-指标由 `/metrics` 暴露、Netdata go.d `prometheus` collector 主动抓
-(**禁为换监控栈改业务代码**)。
+监控栈已切 Netdata 自托管:指标由 `/metrics` 暴露、Netdata go.d `prometheus`
+collector 主动抓(**禁为换监控栈改业务代码**)。告警阈值若存在,只会在 R6 主机侧的
+netdata 配置里——本 repo 不跟踪它,也不能证明任何 newhub 阈值已经配好。`deploy/grafana/newhub-alerts.yaml`(连同其余
+`deploy/grafana/*`)已删除,不再是真源。`deploy/k8s/r6-stage/newhub-prometheus-rule.yaml`
+仍保留在 repo 里,但文件头已标注 **NOT DEPLOYED**——它不在
+`deploy/k8s/r6-stage/kustomization.yaml` 的 `resources:` 列表里,且 R6 未跑
+Prometheus Operator,所以没有任何东西在求值这些规则;只作为「曾经决定值得告警」的记录留存。
 
 ## 排障
 
