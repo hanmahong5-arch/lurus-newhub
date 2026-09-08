@@ -86,7 +86,7 @@ cleanup() {
         log "  container: $CONTAINER"
         log "  volume:    $VOL"
         log "  port:      $PORT"
-        log "  connect:   docker exec -it $CONTAINER psql -U ${POSTGRES_USER:-lurus} -d ${POSTGRES_DB:-lurus_hub}"
+        log "  connect:   docker exec -it $CONTAINER psql -U ${POSTGRES_USER:-lurus} -d ${POSTGRES_DB:-newhub}"
         log "  cleanup:   docker rm -f $CONTAINER && docker volume rm $VOL"
         return
     fi
@@ -166,7 +166,7 @@ log "starting $CONTAINER on port $PORT"
 docker run -d --name "$CONTAINER" \
     -e POSTGRES_USER="${POSTGRES_USER:-lurus}" \
     -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-    -e POSTGRES_DB="${POSTGRES_DB:-lurus_hub}" \
+    -e POSTGRES_DB="${POSTGRES_DB:-newhub}" \
     -e WALG_S3_PREFIX -e AWS_ENDPOINT="$WALG_AWS_ENDPOINT" \
     -e AWS_ACCESS_KEY_ID="$WALG_AWS_ACCESS_KEY_ID" \
     -e AWS_SECRET_ACCESS_KEY="$WALG_AWS_SECRET_ACCESS_KEY" \
@@ -180,7 +180,7 @@ docker run -d --name "$CONTAINER" \
 recovered=0
 for i in $(seq 1 "$RTO_TARGET_SECONDS"); do
     if docker exec "$CONTAINER" pg_isready -U "${POSTGRES_USER:-lurus}" >/dev/null 2>&1; then
-        in_recovery=$(docker exec "$CONTAINER" psql -U "${POSTGRES_USER:-lurus}" -d "${POSTGRES_DB:-lurus_hub}" \
+        in_recovery=$(docker exec "$CONTAINER" psql -U "${POSTGRES_USER:-lurus}" -d "${POSTGRES_DB:-newhub}" \
             -t -A -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo "?")
         if [ "$in_recovery" = "f" ]; then
             log "PG ready, recovery complete (${i}s)"
@@ -195,10 +195,10 @@ if [ "$recovered" -ne 1 ]; then
 fi
 
 # ── 6. Sanity SQL ────────────────────────────────────────────────────────
-# Tables expected to exist on a healthy lurus_hub DB. Adjust if schema changes.
+# Tables expected to exist on a healthy newhub DB. Adjust if schema changes.
 EXPECTED_TABLES="users tokens channels logs tenants"
 for t in $EXPECTED_TABLES; do
-    if ! docker exec "$CONTAINER" psql -U "${POSTGRES_USER:-lurus}" -d "${POSTGRES_DB:-lurus_hub}" \
+    if ! docker exec "$CONTAINER" psql -U "${POSTGRES_USER:-lurus}" -d "${POSTGRES_DB:-newhub}" \
             -t -A -c "SELECT 1 FROM information_schema.tables WHERE table_name='$t';" 2>/dev/null \
             | grep -q "^1$"; then
         fail "expected table '$t' missing in restored DB — backup is incomplete or schema drifted"
@@ -208,7 +208,7 @@ log "sanity check: all expected tables present ($EXPECTED_TABLES)"
 
 # Row count snapshot (informational; not asserted — counts vary by deploy)
 for t in $EXPECTED_TABLES; do
-    count=$(docker exec "$CONTAINER" psql -U "${POSTGRES_USER:-lurus}" -d "${POSTGRES_DB:-lurus_hub}" \
+    count=$(docker exec "$CONTAINER" psql -U "${POSTGRES_USER:-lurus}" -d "${POSTGRES_DB:-newhub}" \
         -t -A -c "SELECT count(*) FROM $t;" 2>/dev/null)
     log "  $t: $count rows"
 done

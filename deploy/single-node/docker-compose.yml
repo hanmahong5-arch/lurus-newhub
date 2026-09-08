@@ -24,7 +24,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
 
-      SQL_DSN: "postgresql://lurus:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-lurus_hub}?sslmode=disable"
+      SQL_DSN: "postgresql://lurus:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-newhub}?sslmode=disable"
       REDIS_CONN_STRING: "redis://redis:6379"
 
       SESSION_SECRET: ${SESSION_SECRET}
@@ -86,7 +86,7 @@ services:
     environment:
       POSTGRES_USER: lurus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-lurus_hub}
+      POSTGRES_DB: ${POSTGRES_DB:-newhub}
       TZ: ${TZ:-Asia/Shanghai}
 
       # ── wal-g target (S3-compatible: MinIO / Aliyun OSS / AWS S3) ──
@@ -150,7 +150,7 @@ services:
       - -c
       - archive_timeout=60
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U lurus -d ${POSTGRES_DB:-lurus_hub}"]
+      test: ["CMD-SHELL", "pg_isready -U lurus -d ${POSTGRES_DB:-newhub}"]
       interval: 10s
       timeout: 5s
       retries: 5

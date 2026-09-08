@@ -6,8 +6,10 @@
 # Called by stage-smoke.sh; also runnable standalone.
 #
 # Required env (one of):
-#   PG_DSN   full libpq URL, e.g. postgres://user:pass@host:5432/lurus_hub
-#   R6_HOST  SSH target (e.g. 100.98.57.55) — uses kubectl exec into PG pod
+#   PG_DSN   full libpq URL, e.g. postgres://user:pass@host:5432/newhub
+#   R6_HOST  SSH target (e.g. 100.122.83.20, R6's Tailscale IP) — uses
+#            kubectl exec into the PG pod (StatefulSet lurus-pg, pod
+#            lurus-pg-0, ns database — doc/runbook/database.md)
 #
 # Exit codes:
 #   0 — all 3 queries returned
@@ -45,20 +47,23 @@ run_psql_local() {
 
 run_psql_remote() {
     # R6_HOST path: SSH and kubectl exec into the PG pod, then pipe SQL in.
-    # Pod label per CLAUDE.md: app.kubernetes.io/name=postgresql in lurus-system.
+    # StatefulSet lurus-pg, pod lurus-pg-0, ns database — doc/runbook/database.md
+    # (live-verified 2026-08-24; the ns used to be misdocumented as
+    # lurus-system, which is newhub's own namespace, not PG's).
     log "running psql via ssh root@$R6_HOST → kubectl exec PG pod"
     # shellcheck disable=SC2087
     ssh -o BatchMode=yes "root@$R6_HOST" bash -s <<REMOTE_EOF < "$SQL_FILE"
 set -e
-POD=\$(kubectl -n lurus-system get pods -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-if [ -z "\$POD" ]; then
-    echo "[remote] no PG pod found with label app.kubernetes.io/name=postgresql" >&2
+POD="\${POSTGRES_POD:-lurus-pg-0}"
+NS="\${POSTGRES_NS:-database}"
+if ! kubectl -n "\$NS" get pod "\$POD" >/dev/null 2>&1; then
+    echo "[remote] PG pod \$POD not found in ns \$NS" >&2
     exit 1
 fi
-DB="\${POSTGRES_DB:-lurus_hub}"
-USR="\${POSTGRES_USER:-lurus}"
+DB="\${POSTGRES_DB:-newhub}"
+USR="\${POSTGRES_USER:-postgres}"
 # Feed SQL from stdin into kubectl exec → psql
-kubectl -n lurus-system exec -i "\$POD" -- psql -U "\$USR" -d "\$DB" --no-psqlrc 2>&1
+kubectl -n "\$NS" exec -i "\$POD" -- psql -U "\$USR" -d "\$DB" --no-psqlrc 2>&1
 REMOTE_EOF
 }
 

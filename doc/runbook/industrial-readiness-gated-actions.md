@@ -64,7 +64,7 @@ staging and that the backup gap was a flag flip):
 
 ## In-cluster validation 2026-06-13 (PASS) + a deploy-blocking ns bug
 
-The merged PR #17 image was actually deployed to R6 (`ssh root@100.98.57.55`, a disposable
+The merged PR #17 image was actually deployed to R6 (SSH to the node, a disposable
 PG-whitelisted ns, a self-assembled secret) and torn down clean (zero footprint). **The
 hardening works on real K8s:**
 
@@ -140,10 +140,10 @@ Then add the element (note `selfHeal: false` + explicit `revision: main`):
 ```bash
 # 1. Land the diff in the root governance repo on a branch, open PR, owner merges.
 # 2. ArgoCD picks up the new Application (manual-sync, will show OutOfSync):
-ssh root@100.98.57.55 "argocd app get lurus-newhub"
+ssh root@100.122.83.20 "argocd app get lurus-newhub"
 # 3. First sync is DELIBERATE and reviewed (not automatic):
-ssh root@100.98.57.55 "argocd app sync lurus-newhub --dry-run"   # inspect plan
-ssh root@100.98.57.55 "argocd app sync lurus-newhub"             # apply for real
+ssh root@100.122.83.20 "argocd app sync lurus-newhub --dry-run"   # inspect plan
+ssh root@100.122.83.20 "argocd app sync lurus-newhub"             # apply for real
 # 4. Only after the hardened manifest set is verified in PROD AND P1-2 is live,
 #    owner may flip selfHeal:true for drift auto-recovery.
 ```
@@ -240,8 +240,8 @@ executes late: an unverified-coverage DB vs an enterprise SLA is non-negotiable.
 
 ```bash
 # Does any backup path include the newhub DB, or only identity?
-ssh root@100.98.57.55 "kubectl -n database get cm lurus-platform-backup-config -o yaml 2>/dev/null"
-ssh root@100.98.57.55 "kubectl -n database get cronjob -o wide"   # daily-pg-dump target DB?
+ssh root@100.122.83.20 "kubectl -n database get cm lurus-platform-backup-config -o yaml 2>/dev/null"
+ssh root@100.122.83.20 "kubectl -n database get cronjob -o wide"   # daily-pg-dump target DB?
 # Inspect the dump job's --dbname / -d arg in pg-backup.yaml: if it is 'identity'
 # only, the newhub DB is UNPROTECTED and the CronJob must add a newhub dump.
 ```

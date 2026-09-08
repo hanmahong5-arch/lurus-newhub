@@ -9,7 +9,7 @@ alert / signal comes from), **Triggered by** (the literal condition),
 
 | Runbook | Trigger | Severity |
 |---|---|---|
-| [pool-threshold-alert](pool-threshold-alert.md) | `CreditPoolBalanceLow` / `CreditPoolExhausted` Prometheus rules | warning / page |
+| [pool-threshold-alert](pool-threshold-alert.md) | `CreditPoolBalanceLow` / `CreditPoolExhausted` rules in `deploy/k8s/r6-stage/newhub-prometheus-rule.yaml` — **NOT DEPLOYED**, nothing evaluates them; today the trigger is a human reading `credit_pool_balance` on the host netdata | warning / page (intended) |
 | [wallet-revert-stranded](wallet-revert-stranded.md) | log line `STRANDED wallet debit` from `tenant_credit_pool.go` | page |
 
 | [release-download-gate](release-download-gate.md) | `RELEASE_GATED_PRODUCTS` entitlement gate (mechanism shipped, default OFF) | activation |
@@ -22,7 +22,6 @@ alert / signal comes from), **Triggered by** (the literal condition),
 | [deployment](deployment.md) | Cutting a new image to R6 stage / R1 prod |
 | [staging-deploy](staging-deploy.md) | Deploying newhub to R6 STAGE via the working SSH path (`scripts/deploy-stage.sh`; GHA deploy is dead) |
 | [ha-deployment](ha-deployment.md) | Multi-replica considerations (session secret, batch updates) |
-| [staging-environment](staging-environment.md) | Bringing up STAGE on R6 from scratch |
 | [database](database.md) | DB shape, common queries, GORM auto-migrate gotchas |
 | [pg-restore](pg-restore.md) | Restoring PostgreSQL from backup |
 | [incident-response](incident-response.md) | General incident response framework |

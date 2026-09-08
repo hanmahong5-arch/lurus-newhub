@@ -27,7 +27,7 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 	for _, m := range []interface{}{
 		&repo.User{}, &repo.Token{}, &repo.Log{},
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
-		&entity.PrivacyErasureRequest{},
+		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -85,6 +85,13 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 		t.Fatalf("seed mapping: %v", err)
 	}
 
+	if err := db.Create(&entity.UserTOTP{
+		UserId: user.Id, SecretEncrypted: "ct-fixture", Enabled: true,
+		CreatedAt: time.Now().Unix(), ConfirmedAt: time.Now().Unix(),
+	}).Error; err != nil {
+		t.Fatalf("seed totp: %v", err)
+	}
+
 	for i := 0; i < logCount; i++ {
 		if err := db.Create(&entity.Log{
 			UserId: user.Id, Username: "victim", TokenName: "tok-0",
@@ -116,9 +123,6 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 // asserts every disposition from the contracts table. Then re-runs — must be
 // a no-op (idempotent / crash-safe).
 func TestExecuteErasure_FullCascade(t *testing.T) {
-	if testing.Short() {
-		t.Skip("seeds 1200 logs; covered by the CI run")
-	}
 	db := openErasureTestDB(t)
 	userID, row := seedErasureFixture(t, db, 1200)
 
@@ -138,6 +142,13 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 	db.Unscoped().Model(&entity.UserIdentityMapping{}).Where("lurus_user_id = ?", userID).Count(&mapCount)
 	if mapCount != 0 {
 		t.Errorf("identity mappings remaining = %d, want 0", mapCount)
+	}
+
+	// totp: hard-deleted (SEC-C — security-adjacent, same step as tokens)
+	var totpCount int64
+	db.Unscoped().Model(&entity.UserTOTP{}).Where("user_id = ?", userID).Count(&totpCount)
+	if totpCount != 0 {
+		t.Errorf("totp rows remaining = %d, want 0", totpCount)
 	}
 
 	// logs: pseudonymized, billing fields retained

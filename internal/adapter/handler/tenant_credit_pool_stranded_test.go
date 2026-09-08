@@ -308,3 +308,41 @@ func TestTopupCreditPool_FreshKeyStillCreditsNormally(t *testing.T) {
 		t.Errorf("fund events = %d, want 0 on the normal path", n)
 	}
 }
+
+// TestTopupCreditPool_ManuallyClosedIntentIs409: after an operator closes a
+// stranded event by hand (source = topup_manually_closed, per
+// doc/runbook/wallet-revert-stranded.md), a client retry with the original
+// Idempotency-Key must be refused with 409 — not settled, and not routed to a
+// fresh TopupPool whose wallet debit the platform would dedupe (free credit).
+func TestTopupCreditPool_ManuallyClosedIntentIs409(t *testing.T) {
+	ctx := setupStrandedCtx(t, 100)
+	stubWalletSeams(t, fmt.Errorf("simulated revert outage"))
+
+	if w := topupWithKey(ctx, 200, "idem-manual-1"); w.Code != http.StatusConflict {
+		t.Fatalf("strand step: status = %d, body: %s", w.Code, w.Body.String())
+	}
+	if err := ctx.db.Model(&repo.CreditPoolFundEvent{}).
+		Where("event_id = ? AND tenant_id = ?", "idem-manual-1", ctx.tenantID).
+		Update("source", app.FundEventSourceManuallyClosed).Error; err != nil {
+		t.Fatalf("manual close: %v", err)
+	}
+	// Ceiling raised afterwards — a fresh TopupPool would now succeed, which
+	// is exactly the path this retry must not take.
+	if err := ctx.db.Model(&repo.TenantCreditPool{}).
+		Where("tenant_id = ?", ctx.tenantID).
+		Update("max_balance", 10_000).Error; err != nil {
+		t.Fatalf("raise ceiling: %v", err)
+	}
+
+	w := topupWithKey(ctx, 200, "idem-manual-1")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("retry status = %d, want 409, body: %s", w.Code, w.Body.String())
+	}
+	if resp := decodeJSON(t, w); resp["error_code"] != "POOL_TOPUP_INTENT_CLOSED" {
+		t.Errorf("error_code = %v, want POOL_TOPUP_INTENT_CLOSED", resp["error_code"])
+	}
+	pool, _ := repo.GetTenantCreditPool(ctx.tenantID)
+	if pool.CurrentBalance != 0 {
+		t.Errorf("balance = %d, want 0 (a manually closed intent must credit nothing)", pool.CurrentBalance)
+	}
+}

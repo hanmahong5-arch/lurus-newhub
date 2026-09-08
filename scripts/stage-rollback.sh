@@ -29,7 +29,13 @@ set -euo pipefail
 # prefer `git revert` of the auto-pin commit (see doc/runbook/staging-deploy.md).
 NAMESPACE="${NAMESPACE:-lurus-newhub}"
 readonly DEPLOYMENT="lurus-newhub"
-readonly HEALTH_URL="https://test-newhub.lurus.cn/api/status"
+# hub.lurus.cn is the production newhub instance on R6 (r6-stage IS
+# production; the isolated UAT instance in ns lurus-newhub-uat is separate);
+# test-newhub.lurus.cn was retired as a newhub alias 2026-08-30 when that
+# domain was cut over to the isolated UAT instance on a different
+# NodePort/namespace. /api/health (not /api/status) matches deploy-stage.sh's
+# deep health probe.
+readonly HEALTH_URL="${HEALTH_URL:-https://hub.lurus.cn/api/health}"
 readonly WAIT_TIMEOUT="120s"
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }

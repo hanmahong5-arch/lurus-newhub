@@ -31,7 +31,7 @@ AI 数据处理枢纽 — Platform 产品组核心成员。在 New API 开源基
 | Backend | Go 1.25.1, Gin, GORM |
 | Frontend | React 18, Vite, Semi UI (`web/`), Bun |
 | DB | PostgreSQL（runtime 唯一；glebarez SQLite 仅 hermetic 单测 tier） |
-| Cache | Redis DB 0 (session + channel cache + quota sync) |
+| Cache | Redis — session + channel cache + quota sync all follow the DSN's DB (prod `/2`, UAT `/3`; see the "DB" line above) |
 | Search | Meilisearch (log full-text, 可选) |
 | Observability | Prometheus `/metrics` (Netdata go.d 主动抓，**禁为换栈改业务代码**) |
 | Providers | 30+ LLM vendors（`internal/adapter/provider/<vendor>/`：openai/claude/gemini/aws/baidu/cohere/zhipu/… 详见目录） |

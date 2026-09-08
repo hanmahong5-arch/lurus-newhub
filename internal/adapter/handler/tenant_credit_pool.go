@@ -336,6 +336,13 @@ func TopupCreditPool(c *gin.Context) {
 				status = http.StatusConflict
 				code = "POOL_CEILING_EXCEEDED"
 			}
+			if errors.Is(ferr, app.ErrStrandedTopupManuallyClosed) {
+				// The operator already settled this intent by hand (refund or
+				// manual credit). The wallet debit for this key was deduped
+				// upstream, so crediting the pool now would be free money.
+				status = http.StatusConflict
+				code = "POOL_TOPUP_INTENT_CLOSED"
+			}
 			c.JSON(status, gin.H{"success": false, "message": ferr.Error(), "error_code": code})
 			return
 		}

@@ -4,10 +4,9 @@
 > Service `lurus-pg-rw.database.svc.cluster.local:5432`(headless) · DB **`newhub`**,表在 **`public`** schema(40 张)。
 > DSN 不写在文档里,真源 = Secret `lurus-newhub-secrets` 的 `SQL_DSN`。
 >
-> 2026-08-24 全文按 live 重核。旧版每一项都是 2026-04-23 退役的 `lurus-api`:
-> 主机 `100.94.177.10:30543`、库 `lurusapi`、`kubectl exec -n lurus-system deploy/lurus-api`,
-> 并教人手搭一条 crontab —— 而集群里**早已有**自动备份 CronJob(见下)。照旧版做备份/恢复
-> 会打向一个不存在的库。
+> 2026-08-24 全文按 live 重核。旧版每一项都是 2026-04-23 退役服务的配置(不同主机、
+> 不同库名、不同 kubectl 目标),并教人手搭一条 crontab —— 而集群里**早已有**自动
+> 备份 CronJob(见下)。照旧版做备份/恢复会打向一个不存在的库。历史内容从 git 历史取。
 
 ## Connection
 

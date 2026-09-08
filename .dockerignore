@@ -8,7 +8,7 @@ docs
 .eslintcache
 .gocache
 # Was `/web/node_modules`. Anchored to one path, so a second dependency tree
-# anywhere else (electron/, tooling) still shipped. `**/` is layout-independent.
+# anywhere else in the repo still shipped. `**/` is layout-independent.
 **/node_modules
 
 # Runtime log output. Measured 2026-08-11 with a probe image

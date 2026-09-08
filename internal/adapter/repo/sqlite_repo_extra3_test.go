@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 )
 
@@ -428,17 +427,3 @@ func TestChannelPool_MarkMultiKeyCooldown(t *testing.T) {
 }
 
 // ─── UserMapping: ensureUniqueUsername (private, covered indirectly via CreateUserMapping) ─
-
-// ─── entity import anchor ─────────────────────────────────────────────────────
-
-func TestEntityImport_AuditEvent(t *testing.T) {
-	ev := &entity.AuditEvent{Action: "test"}
-	_ = ev
-}
-
-// ─── time import anchor ───────────────────────────────────────────────────────
-
-func TestTimeImport_Since(t *testing.T) {
-	since := time.Now().Add(-time.Hour)
-	_ = since
-}

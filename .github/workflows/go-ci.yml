@@ -72,52 +72,6 @@ jobs:
           bash scripts/check-entverify-vendor.sh
           go test -tags=entitlement_token_gate ./internal/pkg/entverify/ -run EntitlementTokenConformance -v
 
-  test-handler:
-    name: handler audit + governance tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # `actions/checkout` refuses paths outside GITHUB_WORKSPACE, so check
-      # the sibling repos into the workspace and relocate to ../shared to
-      # satisfy the relative `replace` directives in go.mod.
-      - uses: actions/checkout@v4
-        with:
-          repository: LurusTech/lurus-proto-go
-          path: _sibling/lurus-proto-go
-          fetch-depth: 1
-      - uses: actions/checkout@v4
-        with:
-          repository: hanmahong5-arch/zita-sdk-go
-          ref: e2611da1e01ef77b8227571204d6780a6364fea3
-          path: _sibling/zita-sdk-go
-          fetch-depth: 1
-      - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
-        run: |
-          mkdir -p ../shared
-          mv _sibling/lurus-proto-go ../shared/lurus-proto-go
-          mv _sibling/zita-sdk-go ../shared/zita-sdk-go
-          rmdir _sibling
-      - name: Stub web/dist for //go:embed in web/embed.go
-        # The Go binary embeds web/dist via //go:embed (see web/embed.go).
-        # Production builds run `bun run build` to populate dist; for a
-        # Go-only verify, a placeholder dist/index.html satisfies the embed
-        # without paying the frontend build cost.
-        run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25.x'
-          cache: true
-      # Scoped run: covers the audit + governance + v2 token pagination paths
-      # added/repaired in Lane D. Broader `go test -short ./...` is deferred
-      # until baseline OAuth/JWKS test debt is cleaned —
-      # see _bmad-output/planning-artifacts/test-debt-findings.md.
-      - run: |
-          go test -count=1 -short -v -timeout=5m \
-            ./internal/adapter/handler/ \
-            -run 'TestGetAuditEvents|TestGetGovernance|TestListTokensV2_Pagination'
-
   coverage-gate:
     name: coverage gate (app/repo/handler baselines)
     runs-on: ubuntu-latest

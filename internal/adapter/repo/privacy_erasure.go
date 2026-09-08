@@ -171,6 +171,21 @@ func HardDeleteUserTokens(ctx context.Context, userID int) (int64, error) {
 	return result.RowsAffected, nil
 }
 
+// HardDeleteUserTOTP removes the user's TOTP (RFC 6238) enrollment, if any —
+// the shared secret is security-adjacent personal data and was previously
+// left behind by the erasure cascade (SEC-C: a purged account could still
+// have a live step-up factor in user_totps). No-op (0, nil) when the user
+// never enrolled.
+func HardDeleteUserTOTP(ctx context.Context, userID int) (int64, error) {
+	result := WithoutTenantIsolationCtx(ctx, DB).Unscoped().
+		Where("user_id = ?", userID).
+		Delete(&entity.UserTOTP{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("hard delete user totp: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
 // HardDeleteUserIdentityMappings removes the OIDC identity binding rows
 // (email / display name / preferred username), including soft-deleted rows.
 func HardDeleteUserIdentityMappings(ctx context.Context, userID int) (int64, error) {

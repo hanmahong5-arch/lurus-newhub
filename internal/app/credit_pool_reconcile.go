@@ -53,7 +53,19 @@ import (
 const (
 	FundEventSourceStranded   = "topup_stranded"
 	FundEventSourceReconciled = "topup_reconciled"
+	// FundEventSourceManuallyClosed is written by an operator following
+	// doc/runbook/wallet-revert-stranded.md (refund or hand-credit). It is
+	// terminal: the sweep ignores it and an online retry with the same
+	// Idempotency-Key is refused (ErrStrandedTopupManuallyClosed) instead of
+	// falling through to a fresh TopupPool, which would credit the pool a
+	// second time against a wallet debit that was deduped upstream.
+	FundEventSourceManuallyClosed = "topup_manually_closed"
 )
+
+// ErrStrandedTopupManuallyClosed is returned by TryFinalizeStrandedTopup for
+// an Idempotency-Key whose stranded event an operator closed by hand. The
+// caller must use a new key; the handler maps this to 409.
+var ErrStrandedTopupManuallyClosed = errors.New("stranded topup was closed manually; retry with a new Idempotency-Key")
 
 // creditPoolReconcileDefaultInterval is the sweep period when
 // CREDIT_POOL_RECONCILE_INTERVAL_SECONDS is unset. Minutes-scale is right:
@@ -136,11 +148,14 @@ func RecordStrandedTopup(ctx context.Context, eventID, tenantID string, poolID, 
 //     evt.NewBalance is the settled balance. Caller responds 200.
 //   - (evt, true, err)  — the event exists but compensation failed again
 //     (e.g. pool ceiling). It remains stranded; caller maps err to a status.
+//   - (evt, true, ErrStrandedTopupManuallyClosed) — an operator closed the
+//     event by hand; nothing is credited and the caller must not fall
+//     through to a fresh TopupPool.
 func TryFinalizeStrandedTopup(ctx context.Context, eventID, tenantID string) (*repo.CreditPoolFundEvent, bool, error) {
 	var evt repo.CreditPoolFundEvent
 	err := repo.DB.WithContext(ctx).
 		Where("event_id = ? AND tenant_id = ? AND source IN ?", eventID, tenantID,
-			[]string{FundEventSourceStranded, FundEventSourceReconciled}).
+			[]string{FundEventSourceStranded, FundEventSourceReconciled, FundEventSourceManuallyClosed}).
 		First(&evt).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -151,6 +166,9 @@ func TryFinalizeStrandedTopup(ctx context.Context, eventID, tenantID string) (*r
 
 	if evt.Source == FundEventSourceReconciled {
 		return &evt, true, nil // idempotent replay — already settled
+	}
+	if evt.Source == FundEventSourceManuallyClosed {
+		return &evt, true, ErrStrandedTopupManuallyClosed
 	}
 
 	settled, ferr := finalizeStrandedTopup(ctx, eventID, tenantID)

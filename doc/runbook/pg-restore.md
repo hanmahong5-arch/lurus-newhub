@@ -89,8 +89,8 @@ docker compose up -d lurus-api
 
 Verify:
 ```bash
-docker exec lurus-postgres psql -U lurus -d lurus_hub -c "SELECT pg_is_in_recovery();"  # should be f
-docker exec lurus-postgres psql -U lurus -d lurus_hub -c "SELECT count(*) FROM users;"
+docker exec lurus-postgres psql -U lurus -d newhub -c "SELECT pg_is_in_recovery();"  # should be f
+docker exec lurus-postgres psql -U lurus -d newhub -c "SELECT count(*) FROM users;"
 ```
 
 ---
@@ -118,10 +118,10 @@ Start PG (step 5), then once recovery pauses at the target:
 
 ```bash
 # Verify state at target time
-docker exec lurus-postgres psql -U lurus -d lurus_hub -c "SELECT count(*) FROM users;"
+docker exec lurus-postgres psql -U lurus -d newhub -c "SELECT count(*) FROM users;"
 
 # If correct, promote
-docker exec lurus-postgres psql -U lurus -d lurus_hub -c "SELECT pg_wal_replay_resume();"
+docker exec lurus-postgres psql -U lurus -d newhub -c "SELECT pg_wal_replay_resume();"
 docker exec lurus-postgres pg_ctl promote -D /var/lib/postgresql/data
 
 # If wrong, target was too late/early — stop PG, edit recovery_target_time, restart
@@ -147,11 +147,11 @@ docker run -d --name lurus-postgres-restore \
 # 2. Inside it, do § B PITR to the target timestamp.
 # 3. Once promoted, dump the wanted table:
 docker exec lurus-postgres-restore pg_dump \
-  -U lurus -d lurus_hub -t public.tokens --data-only \
+  -U lurus -d newhub -t public.tokens --data-only \
   > tokens_at_target.sql
 
 # 4. Reload into the live PG.
-docker exec -i lurus-postgres psql -U lurus -d lurus_hub < tokens_at_target.sql
+docker exec -i lurus-postgres psql -U lurus -d newhub < tokens_at_target.sql
 
 # 5. Tear down the restore container.
 docker rm -f lurus-postgres-restore
