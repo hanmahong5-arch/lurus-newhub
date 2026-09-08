@@ -5,7 +5,7 @@
 # self-contained and idempotent; failure of one does not abort the rest.
 #
 # Usage:
-#   HUB_BASE=https://hub-stage.lurus.cn \
+#   HUB_BASE=https://hub.lurus.cn \
 #   ADMIN_TOKEN=sk-admin-... \
 #   USER_TOKEN=sk-...  \
 #   USER_TOKEN_QUOTA_EXHAUSTED=sk-... \
@@ -18,7 +18,7 @@
 #
 # Env (optional):
 #   CURL_TIMEOUT       per-curl timeout, default 10
-#   NS                 newhub kube namespace, default lurus-system
+#   NS                 newhub kube namespace, default lurus-newhub
 #   APP_LABEL          newhub kube label, default app=lurus-newhub
 #   PG_DSN, R6_HOST    forwarded to story-9-1-tier3-audit-drill.sh
 #
@@ -45,13 +45,13 @@ fi
 set -u  # don't set -e — we want to run every check, not abort early
 set -o pipefail
 
-HUB_BASE="${HUB_BASE:-https://hub-stage.lurus.cn}"
+HUB_BASE="${HUB_BASE:-https://hub.lurus.cn}"
 ADMIN_TOKEN="${ADMIN_TOKEN:-}"
 USER_TOKEN="${USER_TOKEN:-}"
 USER_TOKEN_QUOTA_EXHAUSTED="${USER_TOKEN_QUOTA_EXHAUSTED:-}"
 TEST_USER_ID="${TEST_USER_ID:-}"
 PLATFORM_NS="${PLATFORM_NS:-lurus-platform}"
-NS="${NS:-lurus-system}"
+NS="${NS:-lurus-newhub}"
 APP_LABEL="${APP_LABEL:-app=lurus-newhub}"
 CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
 

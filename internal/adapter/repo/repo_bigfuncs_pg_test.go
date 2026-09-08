@@ -223,7 +223,11 @@ func TestTokenAutoRotate_PG(t *testing.T) {
 	}
 }
 
-func TestBatchSetChannelTag_PG(t *testing.T) {
+// Named off "BatchSetChannelTag" (TI-2): that name used to also match two
+// SQLite skip stubs ("deadlocks on SQLite single-writer" / "requires
+// PostgreSQL") that never ran anything. Those are gone; this is the real
+// PG-backed coverage of the function they punted to.
+func TestChannelRepo_SetTagsBatch_PG(t *testing.T) {
 	SetupTestDB(t)
 	c1 := &Channel{Id: 6001, Type: 1, Status: common.ChannelStatusEnabled, Name: "a", Models: "m", Group: "default", TenantId: "default"}
 	c2 := &Channel{Id: 6002, Type: 1, Status: common.ChannelStatusEnabled, Name: "b", Models: "m", Group: "default", TenantId: "default"}

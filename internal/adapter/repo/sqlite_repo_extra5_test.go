@@ -263,12 +263,6 @@ func TestChannel_BatchDeleteChannels_Empty(t *testing.T) {
 	}
 }
 
-func TestChannel_BatchSetChannelTag(t *testing.T) {
-	// BatchSetChannelTag opens a transaction then queries the global DB inside —
-	// SQLite single-writer mode deadlocks. Skip in unit-test environment.
-	t.Skip("BatchSetChannelTag requires PostgreSQL (SQLite single-writer deadlock)")
-}
-
 // ---------------------------------------------------------------------------
 // Channel — GetNextEnabledKey
 // ---------------------------------------------------------------------------

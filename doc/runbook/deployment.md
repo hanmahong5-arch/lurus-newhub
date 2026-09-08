@@ -14,7 +14,7 @@ service `lurus-api` · ns `lurus-system` · host `api.lurus.cn` · ssh `100.98.5
 | 项 | 值 |
 |----|-----|
 | Service / ns | `lurus-newhub` / `lurus-newhub` |
-| Host | `test-newhub.lurus.cn`（STAGE=R6) |
+| Host | `hub.lurus.cn`（生产;跑在 R6/r6-stage overlay — 那是唯一的 newhub 部署。`test-newhub.lurus.cn` 自 2026-08-30 起是独立的 UAT 实例,不是这个) |
 | SSH | `root@100.122.83.20`（Tailscale;备用 `ssh -p 12222 root@43.226.45.87`) |
 | 镜像 | `ghcr.io/hanmahong5-arch/lurus-newhub`（digest 钉版) |
 | Secret | `lurus-newhub-secrets` |

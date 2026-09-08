@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -263,5 +264,46 @@ func TestTryFinalizeStrandedTopup(t *testing.T) {
 	}
 	if got := poolBalance(t, "t-strand-fin"); got != 300 {
 		t.Errorf("sweep double-credited: balance = %d, want 300", got)
+	}
+}
+
+// TestTryFinalizeStrandedTopup_ManuallyClosedIsTerminal: once an operator has
+// closed a stranded event by hand (doc/runbook/wallet-revert-stranded.md),
+// an online retry with the same key must be refused — not settled, and not
+// passed through to the normal topup path — and the sweep must not touch it.
+func TestTryFinalizeStrandedTopup_ManuallyClosedIsTerminal(t *testing.T) {
+	db, pool := setupReconcileDB(t, "t-strand-manual", 10_000)
+	ctx := context.Background()
+
+	if err := RecordStrandedTopup(ctx, "evt-manual-1", "t-strand-manual", pool.ID, 300); err != nil {
+		t.Fatalf("record stranded: %v", err)
+	}
+	// The runbook's manual close: only the source flips; no pool credit here.
+	if err := db.Model(&repo.CreditPoolFundEvent{}).
+		Where("event_id = ? AND tenant_id = ?", "evt-manual-1", "t-strand-manual").
+		Update("source", FundEventSourceManuallyClosed).Error; err != nil {
+		t.Fatalf("manual close: %v", err)
+	}
+
+	evt, handled, err := TryFinalizeStrandedTopup(ctx, "evt-manual-1", "t-strand-manual")
+	if !handled {
+		t.Fatalf("manually closed event must be handled (never fall through to a fresh topup)")
+	}
+	if !errors.Is(err, ErrStrandedTopupManuallyClosed) {
+		t.Fatalf("err = %v, want ErrStrandedTopupManuallyClosed", err)
+	}
+	if evt == nil || evt.Source != FundEventSourceManuallyClosed {
+		t.Fatalf("evt = %+v, want the manually closed row", evt)
+	}
+	if got := poolBalance(t, "t-strand-manual"); got != 0 {
+		t.Errorf("balance = %d, want 0 (a closed intent must credit nothing)", got)
+	}
+
+	reconciled, failed, serr := ReconcileStrandedTopups(ctx)
+	if serr != nil || reconciled != 0 || failed != 0 {
+		t.Errorf("sweep over a manually closed event = (%d, %d, %v), want (0, 0, nil)", reconciled, failed, serr)
+	}
+	if got := poolBalance(t, "t-strand-manual"); got != 0 {
+		t.Errorf("sweep credited a manually closed event: balance = %d, want 0", got)
 	}
 }

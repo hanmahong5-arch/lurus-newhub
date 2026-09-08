@@ -398,11 +398,6 @@ func TestTaskRepo_TaskBulkUpdateByID(t *testing.T) {
 	}
 }
 
-func TestTaskRepo_SumUsedTaskQuota(t *testing.T) {
-	// SumUsedTaskQuota queries a "mode" column not in the SQLite-migrated Task schema.
-	t.Skip("SumUsedTaskQuota requires 'mode' column absent from SQLite migration")
-}
-
 // ─── Log: extra functions ─────────────────────────────────────────────────────
 
 func TestLogRepo_GetLogByKey(t *testing.T) {

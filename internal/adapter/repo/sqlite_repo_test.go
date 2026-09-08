@@ -2818,13 +2818,6 @@ func TestChannelRepo_GetParamAndHeaderOverride(t *testing.T) {
 	}
 }
 
-// TestChannelRepo_BatchSetChannelTag is skipped: BatchSetChannelTag opens a tx
-// then calls GetChannelsByIds on the global DB, which deadlocks on SQLite's single-writer
-// mode. This function is covered by handler integration tests.
-func TestChannelRepo_BatchSetChannelTag(t *testing.T) {
-	t.Skip("BatchSetChannelTag deadlocks on SQLite single-connection: covered by handler tests")
-}
-
 func TestChannelRepo_CountAllTags(t *testing.T) {
 	cleanup := setupSQLiteDB(t)
 	defer cleanup()
@@ -2841,8 +2834,8 @@ func TestChannelRepo_CountAllTags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CountAllTags: %v", err)
 	}
-	if count < 2 {
-		t.Errorf("CountAllTags = %d, want >= 2", count)
+	if count != 2 {
+		t.Errorf("CountAllTags = %d, want 2 (exactly the 2 seeded)", count)
 	}
 }
 

@@ -137,13 +137,12 @@ recovers it compares live against git and finds them equal — no extra roll.
 
 ## Rollback
 
-⚠️ **Do not use `scripts/stage-rollback.sh` as-is.** It hardcodes
-`readonly NAMESPACE="lurus-staging"` (no env override) — a namespace this
-cluster does not use; the workload is in ns `lurus-newhub` (`deploy/k8s/r6-stage/README.md`
-2026-07-07 revert, live-re-verified 2026-08-22 in `doc/runbook/seam-s1-activation.md`).
-Every run therefore dies at `kubectl rollout undo` with `namespaces
-"lurus-staging" not found`. Fixing that script is tracked in the ADR's
-残留缺口 section; until then use the commands below.
+`scripts/stage-rollback.sh` defaults `NAMESPACE` to `lurus-newhub` (env
+overridable) and `HEALTH_URL` to `https://hub.lurus.cn/api/health` — both
+match the live cluster. Note, though: with the ArgoCD Application synced
+(automated + selfHeal), a `kubectl rollout undo` gets reverted by the next
+sync — pause/delete the Application first if you actually need a manual
+`rollout undo`.
 
 Preferred rollback = **git**, because that is what ArgoCD converges to:
 
@@ -230,8 +229,15 @@ ssh root@100.122.83.20 "kubectl -n lurus-newhub get deploy lurus-newhub \
 ## Notes / verify-before-trust
 
 - `100.122.83.20` is R6's Tailscale IP (`lurus/CLAUDE.md` Server Landing
-  SSOT). Older docs reference `100.98.57.55` — that is a different host, not
-  R6; if it doesn't reach kubectl, use the Tailscale IP above.
+  SSOT). Some older docs reference a different, retired host by IP for what
+  used to be `lurus-api` — that IP is not R6; if a command doesn't reach
+  kubectl, use the Tailscale IP above.
 - The seed DB name is `newhub` (owner-confirmed 2026-06-14). Its tables are in the
   **`public`** schema (measured 2026-08-24, 40 tables) — the `lurus_api` schema
   that the service CLAUDE.md used to name does not exist; that claim is corrected.
+- Session store (2026-09-07): browser sessions are written to the Redis DB named
+  in `REDIS_CONN_STRING` (prod `/2`, UAT `/3`), no longer to DB 0. The first
+  deploy carrying that change invalidates every existing browser session once
+  (users re-login). Old `session_*` keys left in DB 0 expire on their own TTL
+  (≤ 90 days); to clear them early:
+  `redis-cli -n 0 --scan --pattern 'session_*' | xargs -r redis-cli -n 0 DEL`.

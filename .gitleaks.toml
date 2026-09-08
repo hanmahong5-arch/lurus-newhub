@@ -147,9 +147,6 @@ paths = [
   # ("postgres", not a routable host) with fixed dev-only passwords.
   '''(^|/)docker-compose[\w.-]*\.yml$''',
   '''(^|/)\.github/workflows/''',
-  # generic MySQL->Postgres migration tool docs — vendor example DSNs,
-  # no Lurus infra referenced (all localhost / "user:pass" placeholders).
-  '''(^|/)scripts/migrate/''',
   # demo showcase script, not a deployed service
   '''(^|/)demo/''',
   # planning/decision docs: commit hashes and image-tag fragments read as

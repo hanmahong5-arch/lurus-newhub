@@ -6,7 +6,6 @@ package repo
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -1235,24 +1234,4 @@ func TestMidjourneyRepo_GetUnfinished(t *testing.T) {
 
 	unfinished := GetAllUnFinishTasks()
 	_ = unfinished
-}
-
-// ─── json encoding sanity (anchors the json import) ──────────────────────────
-
-func TestJsonImport_Roundtrip(t *testing.T) {
-	data := map[string]interface{}{"a": 1}
-	b, err := json.Marshal(data)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	var out map[string]interface{}
-	if err := json.Unmarshal(b, &out); err != nil {
-		t.Fatalf("json.Unmarshal: %v", err)
-	}
-}
-
-// ─── constant import anchor ───────────────────────────────────────────────────
-
-func TestConstantImport_TaskPlatform(t *testing.T) {
-	_ = constant.TaskPlatform("suno")
 }

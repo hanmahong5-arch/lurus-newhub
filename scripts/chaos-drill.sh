@@ -90,7 +90,13 @@ PROM_URL="${PROM_URL:-}"
 # 2026-09-03: was lurus-system, the namespace of the service retired in
 # 2026-04. Every `kubectl logs` in this script therefore failed to match, and
 # the log assertions degraded to warnings.
-NS="${NS:-lurus-newhub}"
+# NS must track HUB_BASE's default above: HUB_BASE defaults to
+# test-newhub.lurus.cn, which is the isolated UAT instance (ns
+# lurus-newhub-uat), not PROD (ns lurus-newhub) — a NS default of
+# lurus-newhub here would `kubectl logs`/exec against the wrong pods for
+# every scenario run with default env, silently degrading the same way the
+# lurus-system default did.
+NS="${NS:-lurus-newhub-uat}"
 # The fault-injection upstream (internal/adapter/handler/faultsim.go), which is
 # what finally makes Scenario B automatable. Both must be set for it to run:
 # the token the UAT instance was started with, and the id of a channel seeded

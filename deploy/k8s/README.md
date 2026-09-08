@@ -4,15 +4,15 @@
 
 | 路径 | 作用 |
 |------|------|
-| `r6-stage/` | **唯一的 newhub manifest**（ns `lurus-newhub`,`test-newhub.lurus.cn`) |
+| `r6-stage/` | **唯一的 newhub manifest**（ns `lurus-newhub`,生产域 `hub.lurus.cn`；`r6-uat/` 是独立的隔离 UAT 实例,不是这个 overlay) |
 | `argocd/` | ArgoCD Application 定义,`path: deploy/k8s/r6-stage` |
 
 > 2026-08-24 删除了同级的 `deployment.yaml` / `service.yaml` / `ingress.yaml` /
 > `hpa.yaml` / `pdb.yaml` / `servicemonitor.yaml` / `secrets.yaml` /
-> `meilisearch.yaml` / `kustomization.yaml`。它们描述的是 **2026-04-23 退役的
-> `lurus-api`**（ns `lurus-system`、镜像名 `lurus-api`、secret `lurus-api-secrets`),
-> 集群里已无任何对应对象,而本文件旧版还在教人 `kubectl apply -k deploy/k8s/` ——
-> 那会把退役镜像部署进一个正跑着 redis/memorus 的命名空间,并注入一个**不存在的
+> `meilisearch.yaml` / `kustomization.yaml`。它们描述的是 **2026-04-23 退役的服务**
+> （不同镜像名、不同 ns、不同 secret 名 —— 详情见 `doc/runbook/deployment.md` 的
+> 历史记账),集群里已无任何对应对象,而本文件旧版还在教人 `kubectl apply -k deploy/k8s/`
+> —— 那会把退役镜像部署进一个正跑着 redis/memorus 的命名空间,并注入一个**不存在的
 > 出站代理地址**。需要历史内容从 git 历史取。
 
 ## 部署流程（不要手工 apply）
@@ -56,10 +56,10 @@ ssh root@100.122.83.20 "kubectl get pods -n lurus-newhub"
 ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=100"
 
 # 健康：database / redis / billing / schema_migrations 四检
-curl -s https://test-newhub.lurus.cn/api/health
+curl -s https://hub.lurus.cn/api/health
 
 # migration 漂移信号
-curl -s https://test-newhub.lurus.cn/metrics | grep schema_migrations
+curl -s https://hub.lurus.cn/metrics | grep schema_migrations
 ```
 
 ## 相关文档

@@ -37,8 +37,9 @@ design, fail-closed).
    ```
    RELEASE_GATED_PRODUCTS=lurus-switch,lurus-creator
    ```
-   (K8s: add to `lurus-api-secrets` / deployment env — **add, never remove**
-   existing env per the cluster three-rules.)
+   (K8s: `RELEASE_GATED_PRODUCTS` is a plain deployment env var, not a
+   Secret key — add it to `deploy/k8s/r6-stage/deployment.yaml` — **add,
+   never remove** existing env per the cluster three-rules.)
 3. Roll the deployment. Startup logs `release download gate ENABLED for products: ...`.
 4. Verify:
    ```bash

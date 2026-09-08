@@ -36,7 +36,6 @@ import (
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
-	sessionredis "github.com/gin-contrib/sessions/redis"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"golang.org/x/sync/errgroup"
@@ -365,30 +364,13 @@ func run(ctx context.Context, startTime time.Time) error {
 	}
 	var store sessions.Store
 	if redisURL := os.Getenv("REDIS_CONN_STRING"); redisURL != "" {
-		// Parse redis://host:port format to extract address and password
-		redisAddr := "127.0.0.1:6379"
-		redisPassword := ""
-		if strings.HasPrefix(redisURL, "redis://") {
-			parsed := strings.TrimPrefix(redisURL, "redis://")
-			// Handle redis://password@host:port or redis://host:port
-			if atIdx := strings.LastIndex(parsed, "@"); atIdx >= 0 {
-				redisPassword = parsed[:atIdx]
-				redisAddr = parsed[atIdx+1:]
-			} else {
-				redisAddr = parsed
-			}
-			// Remove trailing path if present
-			if slashIdx := strings.Index(redisAddr, "/"); slashIdx >= 0 {
-				redisAddr = redisAddr[:slashIdx]
-			}
-		}
-		var err error
-		store, err = sessionredis.NewStore(10, "tcp", redisAddr, "", redisPassword, []byte(common.SessionSecret))
+		redisStore, redisAddr, redisDB, err := newRedisSessionStore(redisURL, []byte(common.SessionSecret))
 		if err != nil {
 			common.SysLog("Failed to create Redis session store, falling back to cookie: " + err.Error())
 			store = cookie.NewStore([]byte(common.SessionSecret))
 		} else {
-			common.SysLog("Session store: Redis (" + redisAddr + ")")
+			store = redisStore
+			common.SysLog(fmt.Sprintf("Session store: Redis (%s db=%d)", redisAddr, redisDB))
 		}
 	} else {
 		store = cookie.NewStore([]byte(common.SessionSecret))
