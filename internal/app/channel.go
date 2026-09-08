@@ -95,14 +95,18 @@ func ShouldDisableChannel(channelType int, err *types.NewAPIError) bool {
 	case "Arrearage":
 		return true
 	// token_quota_exhausted (R2/B2): auth.go and PreConsumeQuota both emit
-	// this error with type="new_api_error"/code="token_quota_exhausted" (see
-	// NewErrorWithStatusCode + ToOpenAIError's default branch, which always
-	// sets Type to the ErrorType constant, never the ErrorCode). A downstream
-	// newhub instance relaying through this one as an upstream channel
-	// therefore observes it here, not in the oaiErr.Type switch below — it
-	// belongs in this Code switch, not the Type one (verified by round-trip:
-	// marshal the real 402 body, re-parse via RelayErrorHandler, see
-	// r2_channel_token_quota_test.go).
+	// this error with code="token_quota_exhausted" (NewErrorWithStatusCode +
+	// ToOpenAIError's default branch). Since L3-CONTRACT-TAXONOMY (2026-09)
+	// that default branch's Type is no longer the bare "new_api_error"
+	// ErrorType literal — it's WireErrorType(statusCode, wire), so a 402
+	// here reads Type="insufficient_quota" (OpenAI wire), same string
+	// OpenAI's own upstream 402s use. Code stays specific to and stable for
+	// our taxonomy on this path (Type no longer is, since it now collides
+	// with OpenAI's own "insufficient_quota"), so a downstream newhub
+	// instance relaying through this one as an upstream channel must still
+	// match on Code, not Type — it belongs in this Code switch, not the
+	// Type one below (verified by round-trip: marshal the real 402 body,
+	// re-parse via RelayErrorHandler, see r2_channel_token_quota_test.go).
 	case "token_quota_exhausted":
 		return true
 	}

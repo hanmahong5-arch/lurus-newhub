@@ -109,12 +109,15 @@ func TestRelay_NonStreamErrorEnvelope_IsWireNative(t *testing.T) {
 		{
 			types.RelayFormatClaude, "/v1/messages",
 			[]string{`"type":"error"`, `"error":{`},
-			[]string{`"status":"INVALID_ARGUMENT"`},
+			[]string{`"status":"INVALID_ARGUMENT"`, `"new_api_error"`},
 		},
 		{
+			// L3-CONTRACT-TAXONOMY: the root converter now maps a 400
+			// ErrorTypeNewAPIError to the vendor-taxonomy invalid_request_error
+			// on the OpenAI wire instead of the retired new_api_error literal.
 			types.RelayFormatOpenAI, "/v1/chat/completions",
-			[]string{`{"error":{`, `"message":`},
-			[]string{`"status":"INVALID_ARGUMENT"`},
+			[]string{`{"error":{`, `"message":`, `"type":"invalid_request_error"`},
+			[]string{`"status":"INVALID_ARGUMENT"`, `"new_api_error"`},
 		},
 	}
 	for _, tc := range cases {

@@ -70,14 +70,18 @@ func PoolBalanceCheck() gin.HandlerFunc {
 				case setting.CreditPoolRequiredEnforce:
 					app.RecordPoolNotConfigured(tenantID, "enforce")
 					// Wire-native envelope (renderRejection): a Claude/Gemini caller
-					// hitting this gate must see its own error shape, not always
-					// OpenAI's. tenant_id has no home in types.OpenAIError, so it
-					// rides the OpenAI-wire-only extra map (see wire_format.go).
-					apiErr := types.WithOpenAIError(types.OpenAIError{
-						Message: "Tenant credit pool is not configured",
-						Type:    "new_api_error",
-						Code:    "pool_not_configured",
-					}, http.StatusPaymentRequired)
+					// hitting this gate must see its own error shape (billing_error,
+					// not insufficient_quota/pool_not_configured leaking through
+					// error.type) — routed through the same root mapping
+					// (NewErrorWithStatusCode + WireErrorType) every other gateway
+					// rejection uses instead of a hand-built OpenAI-shaped body.
+					// tenant_id has no home in types.OpenAIError, so it rides the
+					// OpenAI-wire-only extra map (see wire_format.go).
+					apiErr := types.NewErrorWithStatusCode(
+						errors.New("tenant credit pool is not configured"),
+						types.ErrorCodePoolNotConfigured,
+						http.StatusPaymentRequired,
+					)
 					renderRejection(c, apiErr, gin.H{"tenant_id": tenantID})
 					c.Abort()
 					return
@@ -111,12 +115,13 @@ func PoolBalanceCheck() gin.HandlerFunc {
 		if pool.IsExhausted() {
 			app.RecordPoolExhausted(tenantID, "relay")
 			// See the pool_not_configured branch above for why this goes
-			// through renderRejection instead of a raw OpenAI-shaped c.JSON.
-			apiErr := types.WithOpenAIError(types.OpenAIError{
-				Message: "Tenant credit pool exhausted",
-				Type:    "new_api_error",
-				Code:    "pool_exhausted",
-			}, http.StatusPaymentRequired)
+			// through the root mapping (NewErrorWithStatusCode + WireErrorType
+			// via renderRejection) instead of a hand-built OpenAI-shaped body.
+			apiErr := types.NewErrorWithStatusCode(
+				errors.New("tenant credit pool exhausted"),
+				types.ErrorCodePoolExhausted,
+				http.StatusPaymentRequired,
+			)
 			renderRejection(c, apiErr, gin.H{"tenant_id": tenantID})
 			c.Abort()
 			return

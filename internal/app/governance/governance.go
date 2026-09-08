@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 
 	"github.com/gin-gonic/gin"
 )
@@ -108,6 +108,17 @@ func EnrichLogParams(c *gin.Context, info *relaycommon.RelayInfo, params *entity
 		sourceProduct = ratio_setting.DefaultSourceProduct
 	}
 	params.Other["source_product"] = sourceProduct
+	// L2-REQUEST-IDENTITY: session_id/end_user, like source_product above,
+	// only exist on RelayInfo — the settlement path has no gin.Context.
+	// Written only when non-empty: an absent conversation id / end-user
+	// field is not the same signal as "we failed to resolve it", and an
+	// empty string in Other would still be a key every row carries.
+	if info.SessionId != "" {
+		params.Other["session_id"] = info.SessionId
+	}
+	if info.EndUserHash != "" {
+		params.Other["end_user"] = info.EndUserHash
+	}
 	// NOTE: client_ip is NOT written here — it is controlled by the user's
 	// RecordIpLog setting and handled in RecordConsumeLog / RecordErrorLog.
 }

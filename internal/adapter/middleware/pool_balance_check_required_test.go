@@ -61,6 +61,48 @@ func TestPoolBalanceCheck_EnforceWithoutPool_Returns402(t *testing.T) {
 	}
 }
 
+// TestPoolBalanceCheck_EnforceWithoutPool_ClaudeWire is
+// TestPoolBalanceCheck_EnforceWithoutPool_Returns402's Claude-wire sibling
+// (L3-CONTRACT-TAXONOMY item 4): before the root-mapping fix this 402 was
+// built via types.WithOpenAIError, so ToClaudeError's ErrorTypeOpenAIError
+// branch stamped the raw Code string ("pool_not_configured") into
+// error.type instead of the Anthropic vendor taxonomy — a Claude SDK would
+// see an unrecognised type value where it expects billing_error.
+func TestPoolBalanceCheck_EnforceWithoutPool_ClaudeWire(t *testing.T) {
+	_, cleanup := setupCoverDB(t)
+	defer cleanup()
+	t.Setenv("CREDIT_POOL_REQUIRED", setting.CreditPoolRequiredEnforce)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(StampRelayFormat())
+	r.Use(func(c *gin.Context) {
+		c.Set("tenant_context", &TenantContext{TenantID: "t-enforce-nopool-claude"})
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+		c.Next()
+	})
+	r.Use(PoolBalanceCheck())
+	r.POST("/v1/messages", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want 402; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"type":"error"`) {
+		t.Errorf(`body = %s, want a Claude envelope ("type":"error")`, body)
+	}
+	if !strings.Contains(body, `"type":"billing_error"`) {
+		t.Errorf(`body = %s, want the nested error.type "billing_error" (not the leaked pool_not_configured code)`, body)
+	}
+	if strings.Contains(body, "new_api_error") {
+		t.Errorf("body = %s, must not leak the retired new_api_error literal", body)
+	}
+}
+
 // TestPoolBalanceCheck_OffWithoutPool_Bypasses guards the default ("off",
 // including unset env) path: request must pass through unchanged — the
 // legacy bypass behaviour must be byte-identical.

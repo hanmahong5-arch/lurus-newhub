@@ -105,8 +105,14 @@ type LogQueryParams struct {
 	// TokenName, Username) rather than ProjectID's 0-means-unfiltered int
 	// convention.
 	SourceProduct string
-	Offset        int // Pagination offset
-	Limit         int // Pagination limit
+	// RequestID/SessionID filter by the Other.request_id / Other.session_id
+	// JSON keys (L2-REQUEST-IDENTITY), same empty-means-unfiltered convention
+	// as SourceProduct above and the same extraction machinery
+	// (repo.OtherTextExpr).
+	RequestID string
+	SessionID string
+	Offset    int // Pagination offset
+	Limit     int // Pagination limit
 }
 
 type Stat struct {

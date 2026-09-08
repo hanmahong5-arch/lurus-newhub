@@ -137,7 +137,7 @@ func TestPlaygroundAuth_DisabledUser_Rejected(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 for disabled owning user; body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "封禁") {
+	if !strings.Contains(w.Body.String(), "banned") {
 		t.Errorf("expected disabled-user message; body=%s", w.Body.String())
 	}
 }

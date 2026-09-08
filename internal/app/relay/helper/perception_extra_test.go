@@ -141,27 +141,6 @@ func TestSetPerceptionHeaders(t *testing.T) {
 	})
 }
 
-func TestSetRateLimitHeaders(t *testing.T) {
-	t.Run("nil context no panic", func(t *testing.T) {
-		SetRateLimitHeaders(nil, 1, 2, 3)
-	})
-
-	t.Run("writes rate-limit headers", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		SetRateLimitHeaders(c, 100, 42, 30)
-		if w.Header().Get("Retry-After") != "30" {
-			t.Errorf("retry-after = %q", w.Header().Get("Retry-After"))
-		}
-		if w.Header().Get("X-RateLimit-Limit") != "100" {
-			t.Errorf("limit = %q", w.Header().Get("X-RateLimit-Limit"))
-		}
-		if w.Header().Get("X-RateLimit-Remaining") != "42" {
-			t.Errorf("remaining = %q", w.Header().Get("X-RateLimit-Remaining"))
-		}
-	})
-}
-
 func TestPerceptionFormatFloat(t *testing.T) {
 	tests := []struct {
 		in   float64

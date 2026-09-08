@@ -96,6 +96,15 @@ var wantUserVisible = map[string]string{
 	// repo.internalOtherKeys — it is meant to reach the caller (a sibling
 	// product team reading its own spend via ?source_product=).
 	"source_product": "which product (switch/lutu/kova/…) sent this request — Workstream 0 cross-product attribution, their own call",
+
+	// L2-REQUEST-IDENTITY: caller-controlled correlation ids. request_id is
+	// either the X-Request-Id the caller sent us or the one we minted and
+	// already echoed on the response headers; session_id is the X-Session-Id
+	// they sent. Both TierPublic in governance/classification.go — the
+	// caller already has these values, so stripping them would block the
+	// GET /v1/generation lookup this lane ships without hiding anything.
+	"request_id": "the id they sent us or we already echoed back on the response headers",
+	"session_id": "the conversation id they sent us on X-Session-Id",
 }
 
 // wantInternal: keys that must never reach a non-admin. Predominantly our
@@ -142,6 +151,12 @@ var wantInternal = map[string]string{
 	// value, one field over.
 	"channel_id":   "which upstream account served them",
 	"channel_name": "our upstream account name; TierInternal",
+
+	// L2-REQUEST-IDENTITY: a one-way hash of a THIRD PARTY's identifier (the
+	// caller's own end-user, from OpenAI `user` / Anthropic
+	// `metadata.user_id`) — not the caller's own data the way request_id/
+	// session_id above are. TierConfidential in governance/classification.go.
+	"end_user": "hash of the caller's own end-user identifier — a third party's identity, not the caller's own data",
 }
 
 // driveGenerators runs every Other-producing generator with non-zero inputs and
@@ -234,7 +249,11 @@ func driveGenerators(t *testing.T) map[string]struct{} {
 	// None of those three were reachable from the generators alone, which is
 	// exactly how they shipped unclassified.
 	enrichParams := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
-	governance.EnrichLogParams(newCtx(), &relaycommon.RelayInfo{SourceProduct: "switch"}, enrichParams)
+	governance.EnrichLogParams(newCtx(), &relaycommon.RelayInfo{
+		SourceProduct: "switch",
+		SessionId:     "conv-42",
+		EndUserHash:   "0123456789abcdef",
+	}, enrichParams)
 	collect(enrichParams.Other)
 
 	return keys

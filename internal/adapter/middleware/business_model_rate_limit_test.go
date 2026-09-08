@@ -89,6 +89,12 @@ func TestBusinessModelRateLimit_RPM_PerTenantPerModel(t *testing.T) {
 		if lim := w.Header().Get("X-RateLimit-Limit"); lim != "2" {
 			t.Errorf("X-RateLimit-Limit = %q, want 2", lim)
 		}
+		if scope := w.Header().Get("X-RateLimit-Scope"); scope != "model" {
+			t.Errorf("X-RateLimit-Scope = %q, want model", scope)
+		}
+		if typ := w.Header().Get("X-RateLimit-Type"); typ != "rpm" {
+			t.Errorf("X-RateLimit-Type = %q, want rpm", typ)
+		}
 		after := testutil.ToFloat64(metrics.RateLimitedTotal.WithLabelValues("model", "rpm"))
 		if after-before != 1 {
 			t.Errorf("rate_limited_total{model,rpm} delta = %v, want 1", after-before)

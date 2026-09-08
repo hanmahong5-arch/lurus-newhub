@@ -124,6 +124,9 @@ func GetLogsV2(c *gin.Context) {
 	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
 	// Cross-product attribution filter (Workstream 0); "" = no filter.
 	sourceProduct := c.Query("source_product")
+	// L2-REQUEST-IDENTITY correlation-id filters; "" = no filter.
+	requestID := c.Query("request_id")
+	sessionID := c.Query("session_id")
 
 	if page < 1 {
 		page = 1
@@ -145,6 +148,8 @@ func GetLogsV2(c *gin.Context) {
 		AfterID:       afterID,
 		ProjectID:     projectID,
 		SourceProduct: sourceProduct,
+		RequestID:     requestID,
+		SessionID:     sessionID,
 		Offset:        offset,
 		Limit:         pageSize,
 	}
@@ -208,6 +213,9 @@ func GetAllLogsV2(c *gin.Context) {
 	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
 	// Cross-product attribution filter (Workstream 0); "" = no filter.
 	sourceProduct := c.Query("source_product")
+	// L2-REQUEST-IDENTITY correlation-id filters; "" = no filter.
+	requestID := c.Query("request_id")
+	sessionID := c.Query("session_id")
 
 	if page < 1 {
 		page = 1
@@ -229,6 +237,8 @@ func GetAllLogsV2(c *gin.Context) {
 		Username:      username,
 		ProjectID:     projectID,
 		SourceProduct: sourceProduct,
+		RequestID:     requestID,
+		SessionID:     sessionID,
 		Offset:        offset,
 		Limit:         pageSize,
 	}

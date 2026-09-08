@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 )
 
 // CostSpikeLimit is a Gin middleware that watches LLM relay requests against
@@ -98,13 +100,28 @@ func CostSpikeLimit() gin.HandlerFunc {
 		if disableErr := repo.DisableUserById(userID); disableErr != nil {
 			common.SysLog(fmt.Sprintf("cost_spike disable user %d failed: %s", userID, disableErr.Error()))
 		}
-		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-			"error": gin.H{
-				"message": "cost spike limit exceeded; account temporarily disabled for safety",
-				"type":    "new_api_error",
-				"code":    "cost_spike_limit_exceeded",
-			},
-		})
+		// Routed through the root mapping (NewErrorWithStatusCode +
+		// WireErrorType via renderRejection) instead of a hand-built
+		// OpenAI-shaped c.AbortWithStatusJSON body, so the Claude wire gets
+		// rate_limit_error instead of an OpenAI-shaped envelope.
+		apiErr := types.NewErrorWithStatusCode(
+			// "cost_spike_limit_exceeded" appears in the message text (not
+			// just Code) because the Gemini/Claude wire envelopes
+			// (types.ToGeminiError/ToClaudeError) carry Message but drop
+			// Code — a caller on either of those wires must still be able
+			// to match on the reason string (same pattern as entitlement.go's
+			// abortQuotaExceeded).
+			errors.New("cost spike limit exceeded (cost_spike_limit_exceeded); account temporarily disabled for safety"),
+			types.ErrorCodeCostSpikeLimitExceeded,
+			http.StatusTooManyRequests,
+		)
+		// This gate keys on the single userID it just disabled — see
+		// doc/product-integration-guide.md §E for the callout that not every
+		// 429 carries these two headers.
+		c.Writer.Header().Set("X-RateLimit-Scope", "user")
+		c.Writer.Header().Set("X-RateLimit-Type", "cost")
+		renderRejection(c, apiErr)
+		c.Abort()
 	}
 }
 

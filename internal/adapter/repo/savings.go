@@ -49,7 +49,7 @@ func GetSpendByProduct(startTime int64) ([]ProductSpendRow, error) {
 	// The default literal is injected as a trusted compile-time constant.
 	sel := fmt.Sprintf(`COALESCE(%s, '%s') as product,
 		COALESCE(SUM(quota), 0) as total_quota,
-		COUNT(*) as count`, jsonSourceProductExpr(), ratio_setting.DefaultSourceProduct)
+		COUNT(*) as count`, jsonOtherTextExpr("source_product"), ratio_setting.DefaultSourceProduct)
 	var rows []ProductSpendRow
 	err := LOG_DB.Model(&entity.Log{}).
 		Select(sel).
@@ -60,19 +60,26 @@ func GetSpendByProduct(startTime int64) ([]ProductSpendRow, error) {
 	return rows, err
 }
 
-// jsonSourceProductExpr returns a dialect-specific SQL fragment that extracts
-// Other.source_product as text. The Other column is TEXT that holds either a
-// JSON object (relay rows) or an empty string (some error/legacy rows), so the
+// jsonOtherTextExpr returns a dialect-specific SQL fragment that extracts
+// Other.<key> as text. The Other column is TEXT that holds either a JSON
+// object (relay rows) or an empty string (some error/legacy rows), so the
 // extract must be guarded against non-JSON input or it errors mid-query.
-func jsonSourceProductExpr() string {
+//
+// key MUST be a compile-time constant a caller wrote into their own source —
+// never a value derived from request input. It is interpolated straight into
+// the SQL text (the JSON path operators here take no bind-parameter form),
+// so passing it a caller-controlled string would be a SQL-injection hole.
+// Every current call site (savings.go, log.go, L5's OtherTextExpr callers)
+// passes a literal.
+func jsonOtherTextExpr(key string) string {
 	switch LOG_DB.Name() {
 	case "postgres":
 		// newhub always persists Other as a valid JSON object or "" — NULLIF
 		// guards the empty case so the ::jsonb cast never sees invalid input.
-		return `NULLIF(other, '')::jsonb ->> 'source_product'`
+		return fmt.Sprintf(`NULLIF(other, '')::jsonb ->> '%s'`, key)
 	case "mysql":
-		return `CASE WHEN JSON_VALID(other) THEN JSON_UNQUOTE(JSON_EXTRACT(other, '$.source_product')) END`
+		return fmt.Sprintf(`CASE WHEN JSON_VALID(other) THEN JSON_UNQUOTE(JSON_EXTRACT(other, '$.%s')) END`, key)
 	default: // sqlite (incl. test DB) — JSON1 is built into modern SQLite
-		return `CASE WHEN json_valid(other) THEN json_extract(other, '$.source_product') END`
+		return fmt.Sprintf(`CASE WHEN json_valid(other) THEN json_extract(other, '$.%s') END`, key)
 	}
 }

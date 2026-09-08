@@ -3,7 +3,7 @@ package governance
 import "testing"
 
 func TestIsExportSafe_PublicFields(t *testing.T) {
-	publicFields := []string{"model_name", "channel_type", "relay_mode", "total_latency_ms", "quota", "prompt_tokens", "completion_tokens"}
+	publicFields := []string{"model_name", "channel_type", "relay_mode", "total_latency_ms", "quota", "prompt_tokens", "completion_tokens", "request_id", "session_id"}
 	for _, f := range publicFields {
 		if !IsExportSafe(f) {
 			t.Errorf("expected field %q to be export-safe (Public tier)", f)
@@ -21,7 +21,7 @@ func TestIsExportSafe_InternalFields(t *testing.T) {
 }
 
 func TestIsExportSafe_ConfidentialFields(t *testing.T) {
-	confidentialFields := []string{"user_id", "username", "token_id", "token_name", "ip", "client_ip", "tenant_id"}
+	confidentialFields := []string{"user_id", "username", "token_id", "token_name", "ip", "client_ip", "tenant_id", "end_user"}
 	for _, f := range confidentialFields {
 		if IsExportSafe(f) {
 			t.Errorf("expected field %q to NOT be export-safe (Confidential tier)", f)

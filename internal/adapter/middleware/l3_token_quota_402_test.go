@@ -199,6 +199,21 @@ func TestL3TokenAuth_Disabled_Still401(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (disabled token must NOT be rerouted to 402); body=%s", w.Code, w.Body.String())
 	}
+	// L3-CONTRACT-TAXONOMY item 3: repo.ErrTokenDisabled (repo/token.go) now
+	// gives this plainly-disabled-token 401 a distinct, non-empty code —
+	// before that sentinel existed this 401 fell through to the generic
+	// invalid_request every other ValidateUserToken failure gets, and a
+	// caller could not tell "token disabled" apart from "malformed key"
+	// without parsing the human-readable message.
+	if !strings.Contains(w.Body.String(), `"code":"token_disabled"`) {
+		t.Errorf(`body = %s, want error.code "token_disabled"`, w.Body.String())
+	}
+	// L3-CONTRACT-TAXONOMY residual item 6: repo.ErrTokenDisabled's own text
+	// (forwarded verbatim by auth.go's err.Error() onto this 401's message)
+	// must render in English on the wire, not the retired Chinese sentinel.
+	if !strings.Contains(w.Body.String(), "token status unavailable") {
+		t.Errorf(`body = %s, want the English "token status unavailable" message`, w.Body.String())
+	}
 }
 
 // TestR2TokenAuth_QuotaExhausted_NoWalletTopupURL is the B2 regression lock:

@@ -134,6 +134,7 @@ var RelayMaxIdleConnsPerHost int
 //     hung provider that never responds now surfaces as a transport error
 //     (ErrorCodeDoRequestFailed → 500) that trips the breaker and fails over.
 //   - RelayDialTimeout caps TCP connection establishment.
+//
 // Tune via RELAY_RESPONSE_HEADER_TIMEOUT / RELAY_DIAL_TIMEOUT (seconds).
 var (
 	RelayResponseHeaderTimeout = 90 * time.Second
@@ -170,7 +171,16 @@ var GeminiSafetySetting string
 var CohereSafetySetting string
 
 const (
+	// RequestIdKey is the gin context key AND the legacy response header name
+	// a request id is stored/echoed under. Kept as-is (not renamed) because it
+	// is read from dozens of call sites via c.GetString(RequestIdKey) — see
+	// RequestIdHeader below for the header this cycle adds alongside it.
 	RequestIdKey = "X-Oneapi-Request-Id"
+	// RequestIdHeader is the header middleware.RequestId() now also writes,
+	// and the one an inbound caller-supplied X-Request-Id is honoured under.
+	// RequestIdKey/"X-Oneapi-Request-Id" keeps going out as an alias for one
+	// release so existing consumers (switch/lutu) do not break mid-cycle.
+	RequestIdHeader = "X-Request-Id"
 )
 
 const (

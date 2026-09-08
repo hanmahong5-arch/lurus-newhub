@@ -65,6 +65,13 @@ var FieldClassification = map[string]DataTier{
 	// it was public. (It was also a sentinel -1000 on every non-streaming
 	// request until the same day, so nobody had reason to question the tier.)
 	"frt": TierPublic,
+	// request_id/session_id are caller-controlled correlation ids (an
+	// inbound X-Request-Id/X-Session-Id, or one we minted and already
+	// echoed back on the response headers) — the caller already has them,
+	// so hiding them from the row would plug zero bits while blocking the
+	// exact use case (correlate their own log by request_id) L2 ships.
+	"request_id": TierPublic,
+	"session_id": TierPublic,
 
 	// Internal — admin only
 	"channel_id":          TierInternal,
@@ -88,6 +95,12 @@ var FieldClassification = map[string]DataTier{
 	"ip":         TierConfidential,
 	"client_ip":  TierConfidential,
 	"tenant_id":  TierConfidential,
+	// end_user is a one-way hash of the CALLER'S OWN customer identifier
+	// (OpenAI `user` / Anthropic `metadata.user_id`), not our economics —
+	// but it is still an identity of a third party the caller told us about,
+	// not the caller's own data the way request_id/session_id above are, so
+	// it stays admin-only rather than round-tripping to every relay caller.
+	"end_user": TierConfidential,
 }
 
 // IsExportSafe returns true if the field can be safely exported to

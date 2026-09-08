@@ -188,7 +188,7 @@ func GetSubscription(c *gin.Context) {
 			// so an SDK keying on the status code treated it as success;
 			// now it is a 500 with the gateway's own error type, the same
 			// shape GetUsage uses.
-			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: types.WireErrorType(http.StatusInternalServerError, types.ErrorTypeOpenAIError), Code: string(types.ErrorCodeGatewayInternal)}})
 			return
 		}
 		totalAmount = calculateDisplayAmount(token.RemainQuota + token.UsedQuota)
@@ -205,12 +205,12 @@ func GetSubscription(c *gin.Context) {
 		if err != nil {
 			// See the DisplayTokenStatEnabled branch above: a repo lookup
 			// failure surfaces as a 500, not a 200 carrying an error body.
-			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: types.WireErrorType(http.StatusInternalServerError, types.ErrorTypeOpenAIError), Code: string(types.ErrorCodeGatewayInternal)}})
 			return
 		}
 		usedQuota, err := repo.GetUserUsedQuota(userId)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: types.WireErrorType(http.StatusInternalServerError, types.ErrorTypeOpenAIError), Code: string(types.ErrorCodeGatewayInternal)}})
 			return
 		}
 		totalAmount = calculateDisplayAmount(remainQuota + usedQuota)
@@ -239,7 +239,7 @@ func GetUsage(c *gin.Context) {
 			// billable-zero usage response — 200 here previously told the
 			// caller "you have used $0" instead of "we could not compute
 			// this", indistinguishable from a genuinely idle key.
-			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: types.WireErrorType(http.StatusInternalServerError, types.ErrorTypeOpenAIError), Code: string(types.ErrorCodeGatewayInternal)}})
 			return
 		}
 		quota = token.UsedQuota
@@ -251,7 +251,7 @@ func GetUsage(c *gin.Context) {
 			// billable-zero usage response — 200 here previously told the
 			// caller "you have used $0" instead of "we could not compute
 			// this", indistinguishable from a genuinely idle key.
-			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: types.WireErrorType(http.StatusInternalServerError, types.ErrorTypeOpenAIError), Code: string(types.ErrorCodeGatewayInternal)}})
 			return
 		}
 	}

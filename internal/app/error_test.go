@@ -87,11 +87,14 @@ func TestClaudeErrorWrapper(t *testing.T) {
 		expectedStatusCode int
 	}{
 		{
+			// L3-CONTRACT-TAXONOMY: ClaudeErrorWrapper now stamps the
+			// Anthropic vendor type via types.WireErrorType(statusCode, ...)
+			// instead of the retired new_api_error literal.
 			name:               "basic error",
 			err:                errors.New("something went wrong"),
 			code:               "error_code",
 			statusCode:         http.StatusBadRequest,
-			expectedType:       "new_api_error",
+			expectedType:       "invalid_request_error",
 			containsMessage:    true,
 			expectedStatusCode: http.StatusBadRequest,
 		},
@@ -100,16 +103,22 @@ func TestClaudeErrorWrapper(t *testing.T) {
 			err:                errors.New("Post request failed to endpoint"),
 			code:               "network_error",
 			statusCode:         http.StatusBadGateway,
-			expectedType:       "new_api_error",
+			expectedType:       "api_error",
 			containsMessage:    false, // should be masked
 			expectedStatusCode: http.StatusBadGateway,
 		},
 		{
+			// L3-CONTRACT-TAXONOMY item 7: 503 now diverges the same way 529
+			// does — types.WireErrorType(503, ClaudeError) answers
+			// overloaded_error, not the plain 5xx api_error fallback, so the
+			// Claude wire sees one consistent "temporarily unavailable"
+			// vendor type regardless of which internal cause (all-keys-
+			// cooling, or this generic dial failure) produced the 503.
 			name:               "network error with dial",
 			err:                errors.New("dial tcp connection refused"),
 			code:               "connection_error",
 			statusCode:         http.StatusServiceUnavailable,
-			expectedType:       "new_api_error",
+			expectedType:       "overloaded_error",
 			containsMessage:    false, // should be masked
 			expectedStatusCode: http.StatusServiceUnavailable,
 		},
@@ -118,7 +127,7 @@ func TestClaudeErrorWrapper(t *testing.T) {
 			err:                errors.New("http timeout exceeded"),
 			code:               "timeout",
 			statusCode:         http.StatusGatewayTimeout,
-			expectedType:       "new_api_error",
+			expectedType:       "api_error",
 			containsMessage:    false, // should be masked
 			expectedStatusCode: http.StatusGatewayTimeout,
 		},
@@ -127,7 +136,7 @@ func TestClaudeErrorWrapper(t *testing.T) {
 			err:                errors.New("get file base64 from url failed"),
 			code:               "file_error",
 			statusCode:         http.StatusBadRequest,
-			expectedType:       "new_api_error",
+			expectedType:       "invalid_request_error",
 			containsMessage:    true, // should NOT be masked
 			expectedStatusCode: http.StatusBadRequest,
 		},
@@ -175,8 +184,8 @@ func TestClaudeErrorWrapperLocal(t *testing.T) {
 	if !result.LocalError {
 		t.Error("LocalError should be true for ClaudeErrorWrapperLocal")
 	}
-	if result.Error.Type != "new_api_error" {
-		t.Errorf("Error.Type = %q, want new_api_error", result.Error.Type)
+	if result.Error.Type != "invalid_request_error" {
+		t.Errorf("Error.Type = %q, want invalid_request_error", result.Error.Type)
 	}
 }
 

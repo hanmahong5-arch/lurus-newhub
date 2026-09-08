@@ -129,8 +129,11 @@ func TestEntitlementCheck_DeniedEntry_TypedEnvelopeBothWires(t *testing.T) {
 		if body.Error.Code != "quota_exceeded" {
 			t.Errorf("error.code = %q, want quota_exceeded", body.Error.Code)
 		}
-		if body.Error.Type != "new_api_error" {
-			t.Errorf("error.type = %q, want new_api_error", body.Error.Type)
+		// L3-CONTRACT-TAXONOMY: the OpenAI wire now reports the vendor type
+		// for a 429 (rate_limit_error) instead of the retired new_api_error
+		// literal — see types.WireErrorType.
+		if body.Error.Type != "rate_limit_error" {
+			t.Errorf("error.type = %q, want rate_limit_error", body.Error.Type)
 		}
 		// The OpenAI wire is the one shape with room for a metadata object
 		// (types.OpenAIError.Metadata) — abortQuotaExceeded's upgrade_url
@@ -138,6 +141,16 @@ func TestEntitlementCheck_DeniedEntry_TypedEnvelopeBothWires(t *testing.T) {
 		// straight to the pricing page.
 		if !strings.Contains(string(body.Error.Metadata), "upgrade_url") {
 			t.Errorf("error.metadata = %s, want it to contain upgrade_url", body.Error.Metadata)
+		}
+		// L3-CONTRACT-TAXONOMY item 6: this gate keys on identity_account_id
+		// (one platform account), not the tenant concept, so the honest
+		// scope label is "account" — see doc/product-integration-guide.md
+		// §E for the callout that not every 429 carries these two headers.
+		if got := w.Header().Get("X-RateLimit-Scope"); got != "account" {
+			t.Errorf("X-RateLimit-Scope = %q, want account", got)
+		}
+		if got := w.Header().Get("X-RateLimit-Type"); got != "quota" {
+			t.Errorf("X-RateLimit-Type = %q, want quota", got)
 		}
 	})
 
@@ -168,6 +181,15 @@ func TestEntitlementCheck_DeniedEntry_TypedEnvelopeBothWires(t *testing.T) {
 		}
 		if body.Type != "error" {
 			t.Errorf("top-level type = %q, want \"error\" (Claude wire)", body.Type)
+		}
+		// L3-CONTRACT-TAXONOMY item 4: before the root-mapping fix,
+		// abortQuotaExceeded built its error via types.WithOpenAIError, so
+		// ToClaudeError's ErrorTypeOpenAIError branch stamped the raw Code
+		// string ("quota_exceeded") into error.type instead of the vendor
+		// taxonomy — a Claude SDK would see an unrecognised type value. Pin
+		// the correct vendor value here.
+		if body.Error.Type != "rate_limit_error" {
+			t.Errorf("error.type = %q, want the Anthropic-wire vendor taxonomy value rate_limit_error (not the leaked quota_exceeded code)", body.Error.Type)
 		}
 		if !strings.Contains(body.Error.Message, "quota_exceeded") {
 			t.Errorf("error.message = %q, want it to contain quota_exceeded (Gemini/Claude envelopes drop Code)", body.Error.Message)

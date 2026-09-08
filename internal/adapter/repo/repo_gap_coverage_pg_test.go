@@ -617,7 +617,7 @@ func TestBatchDeleteTokens_IsolatesByUser_PG(t *testing.T) {
 	}
 }
 
-// ─── savings.go jsonSourceProductExpr — sqlite (default) dialect branch ───────
+// ─── savings.go jsonOtherTextExpr — sqlite (default) dialect branch ───────
 
 func TestJSONSourceProductExpr_SQLiteDefaultBranch(t *testing.T) {
 	cleanup := setupSQLiteDB(t)

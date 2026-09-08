@@ -110,6 +110,25 @@ func resolveLogTenantID(ginTenantID string, userId int) string {
 	return "default"
 }
 
+// setRequestIdIfAbsent stamps other["request_id"] from the request-scoped id
+// (middleware.RequestId, read via common.RequestIdKey) when the caller
+// hasn't already put one there. Shared by RecordConsumeLog and
+// RecordErrorLog so both the success and error rows carry it (relay.go's
+// error path and utils.go's abort helper build their own `other` maps
+// upstream of here — this is the single place both funnel through).
+func setRequestIdIfAbsent(c *gin.Context, other map[string]interface{}) map[string]interface{} {
+	if other == nil {
+		other = make(map[string]interface{})
+	}
+	if _, exists := other["request_id"]; exists {
+		return other
+	}
+	if reqId := c.GetString(common.RequestIdKey); reqId != "" {
+		other["request_id"] = reqId
+	}
+	return other
+}
+
 func formatUserLogs(logs []*Log) {
 	for i := range logs {
 		logs[i].ChannelName = ""
@@ -224,6 +243,12 @@ var internalOtherKeys = []string{
 	"image_generation_call_price",
 	"data_flow_source",
 	"data_flow_dest",
+	// L2-REQUEST-IDENTITY: a one-way hash of the CALLER's own end-user
+	// identifier (OpenAI `user` / Anthropic `metadata.user_id`) — a third
+	// party's identity, unlike request_id/session_id right below it, which
+	// stay visible because they are the caller's own values. See
+	// governance/classification.go (TierConfidential).
+	"end_user",
 }
 
 // GetLogByKey returns the history of the ONE token identified by its
@@ -283,6 +308,35 @@ func GetLogByKey(key string, callerUserID int, callerTenantID string) (logs []*L
 	err = LOG_DB.Model(&Log{}).Where("token_id=?", tk.Id).Find(&logs).Error
 	formatUserLogs(logs)
 	return logs, err
+}
+
+// GetLogByRequestID looks up the single log row carrying the given
+// Other.request_id, for GET /v1/generation. Ownership is stricter than
+// GetLogByKey above: there is no caller-supplied key to look up first — the
+// caller's own token/tenant/user identity already came from TokenAuth's
+// context — so the query filters on all three directly rather than
+// resolving a row and comparing after the fact. callerTokenID<=0 denies
+// outright rather than matching token_id=0 rows: that value is a legitimate
+// default for pre-migration/legacy rows, not "no token", so it must never
+// be reachable by an unauthenticated/misconfigured caller.
+//
+// Returns gorm.ErrRecordNotFound both when no row exists and when a row
+// exists but belongs to someone else — the caller cannot distinguish "never
+// happened" from "not yours" by request id alone.
+func GetLogByRequestID(requestID string, callerUserID int, callerTenantID string, callerTokenID int) (*Log, error) {
+	if requestID == "" || callerTokenID <= 0 || callerTenantID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var log Log
+	err := LOG_DB.Model(&Log{}).
+		Where("token_id = ? AND tenant_id = ? AND user_id = ?", callerTokenID, callerTenantID, callerUserID).
+		Where(jsonOtherTextExpr("request_id")+" = ?", requestID).
+		Order("id DESC").
+		First(&log).Error
+	if err != nil {
+		return nil, err
+	}
+	return &log, nil
 }
 
 // recordLogTx writes an audit log within a DB transaction when LOG_DB == DB (single-database setup).
@@ -395,6 +449,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	isStream bool, group string, other map[string]interface{}) {
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, content))
 	username := c.GetString("username")
+	other = setRequestIdIfAbsent(c, other)
 	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -467,6 +522,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
+	params.Other = setRequestIdIfAbsent(c, params.Other)
 	otherStr := common.MapToJsonStr(params.Other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -763,13 +819,22 @@ func DeleteOldLog(ctx context.Context, scope TenantScope, targetTimestamp int64,
 // ============================================================================
 
 // SourceProductExpr exposes the dialect-specific Other.source_product JSON
-// extraction (savings.go's jsonSourceProductExpr, unexported) to callers
+// extraction (savings.go's jsonOtherTextExpr, unexported) to callers
 // outside this package — namely v2_log_stat.go's by_product breakdown, which
 // hand-writes its own aggregate query rather than going through
 // GetUserLogsWithParams. One definition, so every reader of the tag agrees on
 // how to extract it.
 func SourceProductExpr() string {
-	return jsonSourceProductExpr()
+	return jsonOtherTextExpr("source_product")
+}
+
+// OtherTextExpr exposes jsonOtherTextExpr to callers outside this package —
+// the general form of SourceProductExpr above, for any other Other.<key>
+// text extraction (request_id/session_id filters here, more in future
+// lanes). key MUST be a literal the caller wrote into their own source; see
+// jsonOtherTextExpr's doc comment.
+func OtherTextExpr(key string) string {
+	return jsonOtherTextExpr(key)
 }
 
 // GetUserLogsWithParams retrieves logs for a user with tenant isolation.
@@ -824,7 +889,16 @@ func GetUserLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []*L
 	// Same JSON extraction the tenant-wide spend aggregate uses (savings.go),
 	// so a caller's filtered total here always agrees with that aggregate.
 	if params.SourceProduct != "" {
-		tx = tx.Where(jsonSourceProductExpr()+" = ?", params.SourceProduct)
+		tx = tx.Where(jsonOtherTextExpr("source_product")+" = ?", params.SourceProduct)
+	}
+
+	// L2-REQUEST-IDENTITY: correlation-id filters. Same empty-means-unfiltered
+	// convention and JSON extraction as SourceProduct above.
+	if params.RequestID != "" {
+		tx = tx.Where(jsonOtherTextExpr("request_id")+" = ?", params.RequestID)
+	}
+	if params.SessionID != "" {
+		tx = tx.Where(jsonOtherTextExpr("session_id")+" = ?", params.SessionID)
 	}
 
 	// Count total matching records
@@ -879,7 +953,15 @@ func GetTenantLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []
 
 	// Cross-product attribution filter (Workstream 0). Empty = no filter.
 	if params.SourceProduct != "" {
-		tx = tx.Where(jsonSourceProductExpr()+" = ?", params.SourceProduct)
+		tx = tx.Where(jsonOtherTextExpr("source_product")+" = ?", params.SourceProduct)
+	}
+
+	// L2-REQUEST-IDENTITY: correlation-id filters.
+	if params.RequestID != "" {
+		tx = tx.Where(jsonOtherTextExpr("request_id")+" = ?", params.RequestID)
+	}
+	if params.SessionID != "" {
+		tx = tx.Where(jsonOtherTextExpr("session_id")+" = ?", params.SessionID)
 	}
 
 	// Count total matching records

@@ -454,11 +454,14 @@ func TestToClaudeError_Serialization(t *testing.T) {
 		}
 	})
 
-	t.Run("default type uses errorType", func(t *testing.T) {
+	t.Run("default type maps the status via WireErrorType", func(t *testing.T) {
+		// L3-CONTRACT-TAXONOMY: NewError defaults StatusCode to 500, so the
+		// default branch now reports the Anthropic vendor type for a 5xx
+		// (api_error) instead of the retired new_api_error literal.
 		e := NewError(errors.New("internal boom"), ErrorCodeBadResponse)
 		out := e.ToClaudeError()
-		if out.Type != string(ErrorTypeNewAPIError) {
-			t.Errorf("Type = %q, want new_api_error", out.Type)
+		if out.Type != "api_error" {
+			t.Errorf("Type = %q, want api_error", out.Type)
 		}
 	})
 

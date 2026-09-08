@@ -55,15 +55,26 @@ const DefaultAuditRetentionSeconds int64 = 7 * 365 * 24 * 60 * 60
 func NewAuditEvent(c *gin.Context, actorType string, actorID int, action, resource string, resourceID int, details string) *entity.AuditEvent {
 	ts := common.GetTimestamp()
 	event := &entity.AuditEvent{
-		TenantID:       c.GetString("tenant_id"),
-		Timestamp:      ts,
-		ActorType:      actorType,
-		ActorID:        actorID,
-		Action:         action,
-		Resource:       resource,
-		ResourceID:     resourceID,
-		Details:        details,
-		IP:             c.ClientIP(),
+		TenantID:   c.GetString("tenant_id"),
+		Timestamp:  ts,
+		ActorType:  actorType,
+		ActorID:    actorID,
+		Action:     action,
+		Resource:   resource,
+		ResourceID: resourceID,
+		Details:    details,
+		IP:         c.ClientIP(),
+		// RequestID is a correlation convenience, not a trust anchor: since
+		// middleware.RequestId() honours a well-formed caller-supplied
+		// X-Request-Id (charset-guarded and length-guarded to <= 36 chars —
+		// this column's width, entity.AuditEvent.RequestID varchar(36) — so
+		// this INSERT cannot fail on an oversized id; but the id is still
+		// caller-chosen and therefore reusable/non-unique — a hostile caller
+		// can send the same id on every request), this field can collide
+		// across rows. Tamper evidence and ordering come from ID
+		// (autoincrement) and the
+		// PrevHash/RowHash chain, not from RequestID; do not use RequestID
+		// as a uniqueness or ordering key when auditing the audit log.
 		RequestID:      c.GetString(common.RequestIdKey),
 		RetentionUntil: ts + DefaultAuditRetentionSeconds,
 	}

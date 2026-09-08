@@ -118,7 +118,22 @@ type RelayInfo struct {
 	// SourceProduct above: the settlement path (PostConsumeQuota ->
 	// EnrichLogParams -> RecordConsumeLog) has no gin.Context to read from.
 	// It is a label, never an authorization input.
-	ProjectId          int
+	ProjectId int
+	// SessionId is the caller-supplied X-Session-Id header, validated
+	// (printable ASCII, <=200 bytes) but never hashed: unlike EndUserHash it
+	// carries no persistent user identity, only a conversation-scoped
+	// correlation id the caller chose to send. Written verbatim to the log
+	// row's Other JSON. Distinct from — and must not replace — the hashed
+	// channel-affinity binding session_affinity.go derives from the same
+	// header for a different purpose (sticky routing, not correlation).
+	SessionId string
+	// EndUserHash is a one-way, tenant-scoped HMAC of the end-user identifier
+	// the caller sent on the request (OpenAI `user`, Anthropic-wire
+	// `metadata.user_id`), truncated to 16 hex chars. The raw value is never
+	// persisted — only this hash, so per-end-user cost is queryable (?
+	// session_id / a future end_user filter) without newhub becoming a store
+	// of the caller's own customers' PII.
+	EndUserHash        string
 	RequestURLPath     string
 	ShouldIncludeUsage bool
 	DisablePing        bool // 是否禁止向下游发送自定义 Ping
@@ -411,6 +426,55 @@ func GenRelayInfoOpenAI(c *gin.Context, request dto.Request) *RelayInfo {
 	return info
 }
 
+// deriveSessionId reads X-Session-Id and bounds what it may contain: bytes
+// must be printable ASCII (0x20-0x7E) and the value at most 200 bytes.
+// Anything outside that comes back "" — the field is descriptive metadata on
+// the log row, not a trust boundary, but it must not carry control
+// characters or an unbounded blob into JSON/log rendering.
+func deriveSessionId(c *gin.Context) string {
+	raw := strings.TrimSpace(c.GetHeader("X-Session-Id"))
+	if raw == "" || len(raw) > 200 {
+		return ""
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < 0x20 || raw[i] > 0x7E {
+			return ""
+		}
+	}
+	return raw
+}
+
+// deriveEndUserHash extracts the caller's own end-user identifier from the
+// request body — OpenAI's `user` field or Anthropic-wire `metadata.user_id`
+// — and returns a tenant-scoped, non-reversible hash of it. The raw value is
+// never returned or stored anywhere; "" when the request carries no such
+// field.
+func deriveEndUserHash(c *gin.Context, tenantID string, request dto.Request) string {
+	var raw string
+	switch r := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		raw = r.User
+	case *dto.OpenAIResponsesRequest:
+		raw = r.User
+	case *dto.ClaudeRequest:
+		if len(r.Metadata) > 0 {
+			var meta dto.ClaudeMetadata
+			if err := json.Unmarshal(r.Metadata, &meta); err == nil {
+				raw = meta.UserId
+			}
+		}
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	hash := common.GenerateHMAC("end_user|" + tenantID + "|" + raw)
+	if len(hash) > 16 {
+		hash = hash[:16]
+	}
+	return hash
+}
+
 func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 	//channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
@@ -464,6 +528,11 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		// which build RelayInfo directly and never pass through Relay().
 		// Unknown/absent header -> the default product id.
 		SourceProduct: ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader)),
+		// L2-REQUEST-IDENTITY: request-scoped identity carried the same way
+		// SourceProduct is — resolved once here so every entry point
+		// (including MJ/Task, which build RelayInfo directly) has it.
+		SessionId:   deriveSessionId(c),
+		EndUserHash: deriveEndUserHash(c, c.GetString("tenant_id"), request),
 
 		isFirstResponse: true,
 		RelayMode:       relayconstant.Path2RelayMode(c.Request.URL.Path),

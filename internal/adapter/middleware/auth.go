@@ -471,7 +471,20 @@ func TokenAuth() func(c *gin.Context) {
 			governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorToken, 0,
 				governance.ActionAuthFailed, governance.ResourceToken, 0,
 				fmt.Sprintf(`{"reason":"invalid_token"}`)))
-			abortWithOpenAiMessage(c, http.StatusUnauthorized, err.Error())
+			// ErrTokenQuotaExhausted is handled above and never reaches here;
+			// this errors.Is stays as the defensive twin of that branch (a
+			// future refactor of the block above must not silently start
+			// leaking the sentinel down to a bare invalid_request 401).
+			// ErrTokenDisabled (repo/token.go) covers the plain
+			// TokenStatusDisabled case — mapped to token_disabled instead of
+			// the generic invalid_request fallback below.
+			tokenErrCode := types.ErrorCodeInvalidRequest
+			if errors.Is(err, repo.ErrTokenQuotaExhausted) {
+				tokenErrCode = types.ErrorCodeTokenQuotaExhausted
+			} else if errors.Is(err, repo.ErrTokenDisabled) {
+				tokenErrCode = types.ErrorCodeTokenDisabled
+			}
+			abortWithOpenAiMessage(c, http.StatusUnauthorized, err.Error(), string(tokenErrCode))
 			return
 		}
 
@@ -481,14 +494,14 @@ func TokenAuth() func(c *gin.Context) {
 			logger.LogDebug(c, "Token has IP restrictions, checking client IP %s", clientIp)
 			ip := net.ParseIP(clientIp)
 			if ip == nil {
-				abortWithOpenAiMessage(c, http.StatusForbidden, "无法解析客户端 IP 地址")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "Unable to parse client IP address", string(types.ErrorCodeIpNotAllowed))
 				return
 			}
 			if common.IsIpInCIDRList(ip, allowIps) == false {
 				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorToken, token.UserId,
 					governance.ActionAuthIPRejected, governance.ResourceToken, token.Id,
 					fmt.Sprintf(`{"ip":%q}`, clientIp)))
-				abortWithOpenAiMessage(c, http.StatusForbidden, "您的 IP 不在令牌允许访问的列表中")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "Your IP is not in the token's allowed list", string(types.ErrorCodeIpNotAllowed))
 				return
 			}
 			logger.LogDebug(c, "Client IP %s passed the token IP restrictions check", clientIp)
@@ -504,7 +517,7 @@ func TokenAuth() func(c *gin.Context) {
 					governance.ActionAuthScopeRejected, governance.ResourceToken, token.Id,
 					fmt.Sprintf(`{"required_scope":%q,"path":%q}`, requiredScope, c.Request.URL.Path)))
 				abortWithOpenAiMessage(c, http.StatusForbidden,
-					fmt.Sprintf("令牌未授权 %s 范围的请求", requiredScope))
+					fmt.Sprintf("Token is not authorized for scope %s", requiredScope), string(types.ErrorCodeScopeNotGranted))
 				return
 			}
 		}
@@ -534,12 +547,12 @@ func TokenAuth() func(c *gin.Context) {
 			var cacheErr error
 			userCache, cacheErr = repo.GetUserCache(token.UserId)
 			if cacheErr != nil {
-				abortWithOpenAiMessage(c, http.StatusInternalServerError, cacheErr.Error())
+				abortWithOpenAiMessage(c, http.StatusInternalServerError, cacheErr.Error(), string(types.ErrorCodeGatewayInternal))
 				return
 			}
 			userEnabled := userCache.Status == common.UserStatusEnabled
 			if !userEnabled {
-				abortWithOpenAiMessage(c, http.StatusForbidden, "用户已被封禁")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "User is banned", string(types.ErrorCodeUserBanned))
 				return
 			}
 
@@ -572,7 +585,7 @@ func TokenAuth() func(c *gin.Context) {
 				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorToken, token.UserId,
 					governance.ActionAuthFailed, governance.ResourceToken, token.Id,
 					fmt.Sprintf(`{"reason":"tenant_disabled","tenant_id":%q}`, tokenTenantId)))
-				abortWithOpenAiMessage(c, http.StatusForbidden, "所属租户已被禁用或暂停")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "Owning tenant is disabled or suspended", string(types.ErrorCodeTenantSuspended))
 				return
 			}
 		}
@@ -621,13 +634,13 @@ func TokenAuth() func(c *gin.Context) {
 			if tokenGroup != "" {
 				// check common.UserUsableGroups[userGroup]
 				if _, ok := app.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
-					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("Not authorized to access group %s", tokenGroup), string(types.ErrorCodeGroupNotAllowed))
 					return
 				}
 				// check group in common.GroupRatio
 				if !ratio_setting.ContainsGroupRatio(tokenGroup) {
 					if tokenGroup != "auto" {
-						abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
+						abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("Group %s has been deprecated", tokenGroup), string(types.ErrorCodeGroupNotAllowed))
 						return
 					}
 				}
@@ -695,8 +708,8 @@ func SetupContextForToken(c *gin.Context, token *repo.Token, parts ...string) er
 				common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelRootOverride, true)
 			}
 		} else {
-			abortWithOpenAiMessage(c, http.StatusForbidden, "普通用户不支持指定渠道")
-			return fmt.Errorf("普通用户不支持指定渠道")
+			abortWithOpenAiMessage(c, http.StatusForbidden, "Regular users cannot specify a channel", string(types.ErrorCodeChannelSpecifyForbidden))
+			return fmt.Errorf("regular users cannot specify a channel")
 		}
 	}
 	return nil
@@ -718,12 +731,12 @@ func PlaygroundAuth() func(c *gin.Context) {
 		session := sessions.Default(c)
 		id := session.Get("id")
 		if id == nil {
-			abortWithOpenAiMessage(c, http.StatusUnauthorized, "未登录，请先登录")
+			abortWithOpenAiMessage(c, http.StatusUnauthorized, "Not logged in, please log in first", string(types.ErrorCodeSessionRequired))
 			return
 		}
 		userId, ok := id.(int)
 		if !ok {
-			abortWithOpenAiMessage(c, http.StatusUnauthorized, "会话无效")
+			abortWithOpenAiMessage(c, http.StatusUnauthorized, "Invalid session", string(types.ErrorCodeSessionRequired))
 			return
 		}
 
@@ -734,7 +747,7 @@ func PlaygroundAuth() func(c *gin.Context) {
 			token, createErr := repo.AutoCreateDefaultToken(userId)
 			if createErr != nil {
 				common.SysError(fmt.Sprintf("PlaygroundAuth: failed to auto-create token for user %d: %v", userId, createErr))
-				abortWithOpenAiMessage(c, http.StatusInternalServerError, "无法创建默认令牌")
+				abortWithOpenAiMessage(c, http.StatusInternalServerError, "Unable to create default token", string(types.ErrorCodeGatewayInternal))
 				return
 			}
 			tokens = []*repo.Token{token}
@@ -743,7 +756,7 @@ func PlaygroundAuth() func(c *gin.Context) {
 
 		token := tokens[0]
 		if token.Status != common.TokenStatusEnabled {
-			abortWithOpenAiMessage(c, http.StatusForbidden, "令牌已禁用，请到令牌管理中启用或创建新令牌")
+			abortWithOpenAiMessage(c, http.StatusForbidden, "Token is disabled, please enable it or create a new one in token management", string(types.ErrorCodeTokenDisabled))
 			return
 		}
 
@@ -763,7 +776,7 @@ func PlaygroundAuth() func(c *gin.Context) {
 		userCache, cacheErr := repo.GetUserCache(userId)
 		if cacheErr == nil && userCache != nil {
 			if userCache.Status == common.UserStatusDisabled {
-				abortWithOpenAiMessage(c, http.StatusForbidden, "用户已被封禁")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "User is banned", string(types.ErrorCodeUserBanned))
 				return
 			}
 			if userCache.TenantId != "" {
@@ -814,7 +827,7 @@ func PlaygroundAuth() func(c *gin.Context) {
 		// Set up token context for relay.
 		c.Set("id", token.UserId)
 		if err := SetupContextForToken(c, token); err != nil {
-			abortWithOpenAiMessage(c, http.StatusInternalServerError, "令牌上下文初始化失败")
+			abortWithOpenAiMessage(c, http.StatusInternalServerError, "Token context initialization failed", string(types.ErrorCodeGatewayInternal))
 			return
 		}
 

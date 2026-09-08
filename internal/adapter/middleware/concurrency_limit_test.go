@@ -103,6 +103,12 @@ func TestRelayConcurrencyLimit_RejectsOverTokenCap(t *testing.T) {
 	if ra := w.Header().Get("Retry-After"); ra == "" {
 		t.Error("429 must carry Retry-After")
 	}
+	if scope := w.Header().Get("X-RateLimit-Scope"); scope != "token" {
+		t.Errorf("X-RateLimit-Scope = %q, want token", scope)
+	}
+	if typ := w.Header().Get("X-RateLimit-Type"); typ != "concurrency" {
+		t.Errorf("X-RateLimit-Type = %q, want concurrency", typ)
+	}
 
 	close(block)
 	wg.Wait()
@@ -133,8 +139,12 @@ func TestRelayConcurrencyLimit_TenantDimensionIndependent(t *testing.T) {
 	}()
 	waitForLocalSlots(t, "cc:tenant:acme", 1)
 
-	if w := ccDo(r2); w.Code != http.StatusTooManyRequests {
-		t.Errorf("second token under the same tenant: status = %d, want 429", w.Code)
+	w2 := ccDo(r2)
+	if w2.Code != http.StatusTooManyRequests {
+		t.Errorf("second token under the same tenant: status = %d, want 429", w2.Code)
+	}
+	if scope := w2.Header().Get("X-RateLimit-Scope"); scope != "tenant" {
+		t.Errorf("X-RateLimit-Scope = %q, want tenant", scope)
 	}
 
 	// A different tenant is unaffected.
@@ -199,6 +209,60 @@ func TestRelayConcurrencyLimit_ZeroLimitDisablesDimension(t *testing.T) {
 		}()
 	}
 	time.Sleep(50 * time.Millisecond)
+	close(block)
+	wg.Wait()
+}
+
+// TestRelayConcurrencyLimit_ClearsStaleHeadroomReset is the item-3 lock for
+// this dimension: concurrency has no per-minute window, so ccReject has no
+// Reset value of its own to overwrite one an earlier check in the same
+// chain (BusinessRateLimit) already wrote. A stale Reset from that earlier,
+// unrelated admit-path snapshot must not survive next to this 429.
+func TestRelayConcurrencyLimit_ClearsStaleHeadroomReset(t *testing.T) {
+	withoutRedis(t)
+	t.Setenv("RELAY_MAX_CONCURRENT_PER_TOKEN", "1")
+
+	block := make(chan struct{})
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		common.SetContextKey(c, constant.ContextKeyTokenId, 7)
+		// Simulate BusinessRateLimit's admit-path write from earlier in the
+		// SAME chain (rate-limit.go:setRateLimitHeadroomHeaders) — an RPM
+		// check's Reset ~60s in the future.
+		c.Writer.Header().Set("X-RateLimit-Reset", "9999999999")
+		c.Writer.Header().Set("X-RateLimit-Scope", "token")
+		c.Writer.Header().Set("X-RateLimit-Type", "rpm")
+		c.Next()
+	})
+	r.Use(RelayConcurrencyLimit())
+	r.POST("/v1/chat/completions", func(c *gin.Context) {
+		<-block
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ccDo(r) // occupies the one slot, held open by block
+	}()
+	waitForLocalSlots(t, "cc:tok:7", 1)
+
+	w := ccDo(r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("second concurrent request = %d, want 429", w.Code)
+	}
+	if reset := w.Header().Get("X-RateLimit-Reset"); reset != "" {
+		t.Errorf("429 X-RateLimit-Reset = %q, want absent (stale admit-path snapshot must be cleared)", reset)
+	}
+	if scope := w.Header().Get("X-RateLimit-Scope"); scope != "token" {
+		t.Errorf("429 X-RateLimit-Scope = %q, want token (this reject's own value, not the stale rpm check's)", scope)
+	}
+	if typ := w.Header().Get("X-RateLimit-Type"); typ != "concurrency" {
+		t.Errorf("429 X-RateLimit-Type = %q, want concurrency (this reject's own value, not the stale rpm check's)", typ)
+	}
+
 	close(block)
 	wg.Wait()
 }

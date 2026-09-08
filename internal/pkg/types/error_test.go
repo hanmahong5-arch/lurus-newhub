@@ -179,3 +179,91 @@ func TestRelayErrorType_UpstreamInsufficientBalance(t *testing.T) {
 		}
 	})
 }
+
+// TestWireErrorType drives the real WireErrorType table directly: every
+// status this lane's 29+13-site sweep can produce, on both wires, plus the
+// three divergence points (402, 503, 529) between them.
+func TestWireErrorType(t *testing.T) {
+	cases := []struct {
+		status int
+		wire   ErrorType
+		want   string
+	}{
+		{http.StatusBadRequest, ErrorTypeOpenAIError, "invalid_request_error"},
+		{http.StatusBadRequest, ErrorTypeClaudeError, "invalid_request_error"},
+		{http.StatusUnauthorized, ErrorTypeOpenAIError, "authentication_error"},
+		{http.StatusUnauthorized, ErrorTypeClaudeError, "authentication_error"},
+		// 402 diverges: OpenAI's insufficient_quota vs Anthropic's billing_error.
+		{http.StatusPaymentRequired, ErrorTypeOpenAIError, "insufficient_quota"},
+		{http.StatusPaymentRequired, ErrorTypeClaudeError, "billing_error"},
+		{http.StatusForbidden, ErrorTypeOpenAIError, "permission_error"},
+		{http.StatusForbidden, ErrorTypeClaudeError, "permission_error"},
+		{http.StatusNotFound, ErrorTypeOpenAIError, "not_found_error"},
+		{http.StatusNotFound, ErrorTypeClaudeError, "not_found_error"},
+		{http.StatusRequestEntityTooLarge, ErrorTypeOpenAIError, "request_too_large"},
+		{http.StatusRequestEntityTooLarge, ErrorTypeClaudeError, "request_too_large"},
+		{http.StatusTooManyRequests, ErrorTypeOpenAIError, "rate_limit_error"},
+		{http.StatusTooManyRequests, ErrorTypeClaudeError, "rate_limit_error"},
+		// 529 diverges: Anthropic-only overloaded_error; OpenAI has no 529 in
+		// practice, so the fallback (5xx -> api_error) applies on that wire.
+		{529, ErrorTypeOpenAIError, "api_error"},
+		{529, ErrorTypeClaudeError, "overloaded_error"},
+		{http.StatusInternalServerError, ErrorTypeOpenAIError, "api_error"},
+		{http.StatusInternalServerError, ErrorTypeClaudeError, "api_error"},
+		{http.StatusBadGateway, ErrorTypeOpenAIError, "api_error"},
+		// 503 also diverges (L3-CONTRACT-TAXONOMY item 7,
+		// channel:all_keys_cooling): OpenAI's 503 stays the plain 5xx
+		// api_error bucket, Anthropic's uses overloaded_error like 529 does.
+		{http.StatusServiceUnavailable, ErrorTypeOpenAIError, "api_error"},
+		{http.StatusServiceUnavailable, ErrorTypeClaudeError, "overloaded_error"},
+		{http.StatusGatewayTimeout, ErrorTypeOpenAIError, "api_error"},
+		// Unmapped 4xx falls back to invalid_request_error, never the retired
+		// new_api_error literal.
+		{http.StatusConflict, ErrorTypeOpenAIError, "invalid_request_error"},
+		{http.StatusNotImplemented, ErrorTypeOpenAIError, "api_error"},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%d/%s", tc.status, tc.wire), func(t *testing.T) {
+			if got := WireErrorType(tc.status, tc.wire); got != tc.want {
+				t.Errorf("WireErrorType(%d, %s) = %q, want %q", tc.status, tc.wire, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestToOpenAIError_DefaultBranch_UsesWireErrorType pins the root-converter
+// fix through the real NewAPIError/ToOpenAIError path (not a hand-built
+// OpenAIError): a gateway-originated (ErrorTypeNewAPIError) rejection must
+// report the vendor-taxonomy type keyed off StatusCode, never the bare
+// "new_api_error" literal — while a non-NewAPIError default-falling type
+// (e.g. midjourney_error) must keep stamping its own literal unchanged.
+func TestToOpenAIError_DefaultBranch_UsesWireErrorType(t *testing.T) {
+	t.Run("ErrorTypeNewAPIError maps via WireErrorType", func(t *testing.T) {
+		e := NewErrorWithStatusCode(errors.New("boom"), ErrorCodeModelBlocked, http.StatusForbidden)
+		out := e.ToOpenAIError()
+		if out.Type != "permission_error" {
+			t.Errorf("Type = %q, want permission_error", out.Type)
+		}
+		if out.Code != ErrorCodeModelBlocked {
+			t.Errorf("Code = %v, want %q", out.Code, ErrorCodeModelBlocked)
+		}
+	})
+
+	t.Run("other default-falling ErrorTypes keep their own literal", func(t *testing.T) {
+		e := &NewAPIError{errorType: ErrorTypeMidjourneyError, errorCode: ErrorCodeBadResponse, StatusCode: http.StatusForbidden, Err: errors.New("mj boom")}
+		out := e.ToOpenAIError()
+		if out.Type != "midjourney_error" {
+			t.Errorf("Type = %q, want midjourney_error (unchanged)", out.Type)
+		}
+	})
+}
+
+// TestToClaudeError_DefaultBranch_UsesWireErrorType mirrors the OpenAI test
+// above for the Anthropic converter, including the 402 divergence.
+func TestToClaudeError_DefaultBranch_UsesWireErrorType(t *testing.T) {
+	e := NewErrorWithStatusCode(errors.New("boom"), ErrorCodeTokenQuotaExhausted, http.StatusPaymentRequired)
+	out := e.ToClaudeError()
+	if out.Type != "billing_error" {
+		t.Errorf("Type = %q, want billing_error", out.Type)
+	}
+}

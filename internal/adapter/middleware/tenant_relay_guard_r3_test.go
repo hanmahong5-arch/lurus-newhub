@@ -152,7 +152,7 @@ func TestDistribute_Override_CrossTenant_NonRoot_Denied(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 for cross-tenant channel override; body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "其他租户") {
+	if !strings.Contains(w.Body.String(), "another tenant's channel") {
 		t.Errorf("expected cross-tenant rejection message; body=%s", w.Body.String())
 	}
 }
@@ -219,7 +219,7 @@ func TestTokenAuth_DisabledTenant_Rejected(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 for disabled-tenant token; body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "租户") {
+	if !strings.Contains(w.Body.String(), "tenant") {
 		t.Errorf("expected tenant-disabled message; body=%s", w.Body.String())
 	}
 }

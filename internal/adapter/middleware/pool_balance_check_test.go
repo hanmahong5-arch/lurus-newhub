@@ -58,7 +58,7 @@ func TestPoolGate402BodyShape(t *testing.T) {
 		c.JSON(http.StatusPaymentRequired, gin.H{
 			"error": gin.H{
 				"code":      "pool_exhausted",
-				"message":   "Tenant credit pool exhausted",
+				"message":   "tenant credit pool exhausted",
 				"tenant_id": "t-test",
 			},
 		})
