@@ -114,7 +114,7 @@ func TestPublishPoolThreshold_FiresWhenBothDedupOpen(t *testing.T) {
 	db := &mockPoolDB{} // lastFiredAt == nil
 	now := time.Now().UTC()
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-A", 42, 100, 1000, 80,
 		pub, rdb, db, now,
@@ -146,7 +146,7 @@ func TestPublishPoolThreshold_BlockedBySchemaDedup(t *testing.T) {
 	recent := now.Add(-10 * time.Minute) // within poolSchemaDedupWindow (1h)
 	db := &mockPoolDB{lastFiredAt: &recent}
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-B", 7, 50, 1000, 80,
 		pub, rdb, db, now,
@@ -171,7 +171,7 @@ func TestPublishPoolThreshold_AllowedWhenSchemaDedupExpired(t *testing.T) {
 	stale := now.Add(-2 * time.Hour)
 	db := &mockPoolDB{lastFiredAt: &stale}
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-B2", 7, 50, 1000, 80,
 		pub, rdb, db, now,
@@ -194,7 +194,7 @@ func TestPublishPoolThreshold_BlockedByRedisDedup(t *testing.T) {
 	// Pre-load the key so SETNX returns false.
 	rdb.setKeys[poolDedupKey("tenant-C", 99)] = true
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-C", 99, 25, 1000, 80,
 		pub, rdb, db, time.Now().UTC(),
@@ -218,7 +218,7 @@ func TestPublishPoolThreshold_WritesAlertFiredAtOnSuccess(t *testing.T) {
 	db := &mockPoolDB{}
 	now := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-D", 1, 10, 1000, 80,
 		pub, rdb, db, now,
@@ -243,7 +243,7 @@ func TestPublishPoolThreshold_MarksEvenWhenPublishFails(t *testing.T) {
 	pub := &mockPoolPublisher{failErr: errors.New("simulated NATS down")}
 	db := &mockPoolDB{}
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-E", 5, 10, 1000, 80,
 		pub, rdb, db, time.Now().UTC(),
@@ -268,7 +268,7 @@ func TestPublishPoolThreshold_DoesNotPublishWhenMarkFails(t *testing.T) {
 	pub := &mockPoolPublisher{}
 	db := &mockPoolDB{markErr: errors.New("simulated postgres write failure")}
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-E2", 9, 10, 1000, 80,
 		pub, rdb, db, time.Now().UTC(),
@@ -290,7 +290,7 @@ func TestPublishPoolThreshold_RedisFailureFallsThroughToSchema(t *testing.T) {
 	pub := &mockPoolPublisher{}
 	db := &mockPoolDB{}
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-F", 11, 10, 1000, 80,
 		pub, rdb, db, time.Now().UTC(),

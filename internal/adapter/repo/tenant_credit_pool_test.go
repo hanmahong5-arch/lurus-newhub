@@ -1,11 +1,13 @@
 package repo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/glebarez/sqlite"
@@ -190,5 +192,252 @@ func TestTopupPool_Unlimited(t *testing.T) {
 	}
 	if _, err := TopupPool(pool.ID, "t-inf", 1_000_000_000, 1, "big"); err != nil {
 		t.Errorf("unlimited pool should accept any topup, got %v", err)
+	}
+}
+
+// timePtrEqual compares two *time.Time for the same instant, treating two
+// nils as equal — used by the observe-mode byte-identical assertion below,
+// where a naive `*a != *b` would compare struct pointer identity instead of
+// the pointee value.
+func timePtrEqual(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
+// Test 7: ResetDuePools(enforce=true) refills a due pool to its ceiling,
+// clears alert_fired_at, advances next_reset_at to the next period boundary,
+// and writes exactly one PoolDrawReasonReset credit draw for the refill delta.
+func TestResetDuePools_EnforceRefillsAndDraws(t *testing.T) {
+	cleanup := setupPoolTestDB(t)
+	defer cleanup()
+
+	pool, err := CreateTenantCreditPool("t-reset-enf", 1, 1000, PoolResetDaily, 80)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	now := time.Now().UTC()
+	due := now.Add(-time.Hour)
+	fired := now.Add(-2 * time.Hour)
+	if err := DB.Model(&TenantCreditPool{}).Where("id = ?", pool.ID).
+		Updates(map[string]interface{}{
+			"current_balance": 100,
+			"next_reset_at":   due,
+			"alert_fired_at":  fired,
+		}).Error; err != nil {
+		t.Fatalf("seed due state: %v", err)
+	}
+
+	results, err := ResetDuePools(context.Background(), now, true)
+	if err != nil {
+		t.Fatalf("ResetDuePools: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	r := results[0]
+	if r.Action != PoolResetActionReset || r.Delta != 900 || r.TenantID != "t-reset-enf" || r.PoolID != pool.ID {
+		t.Errorf("result = %+v, want action=reset delta=900 tenant=t-reset-enf pool=%d", r, pool.ID)
+	}
+
+	got, err := GetTenantCreditPool("t-reset-enf")
+	if err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if got.CurrentBalance != 1000 {
+		t.Errorf("balance = %d, want 1000 (refilled to ceiling)", got.CurrentBalance)
+	}
+	if got.AlertFiredAt != nil {
+		t.Errorf("alert_fired_at = %v, want nil (reset clears it)", got.AlertFiredAt)
+	}
+	wantNext := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
+	if got.NextResetAt == nil || !got.NextResetAt.Equal(wantNext) {
+		t.Errorf("next_reset_at = %v, want %v (next UTC midnight)", got.NextResetAt, wantNext)
+	}
+
+	draws, total, derr := ListPoolDraws(pool.ID, 0, 50)
+	if derr != nil {
+		t.Fatalf("list draws: %v", derr)
+	}
+	if total != 1 {
+		t.Fatalf("draw count = %d, want 1", total)
+	}
+	if draws[0].Reason != PoolDrawReasonReset || draws[0].Amount != 900 || draws[0].Direction != PoolDrawDirectionCredit {
+		t.Errorf("draw = %+v, want reason=reset amount=900 direction=credit", draws[0])
+	}
+}
+
+// Test 8: ResetDuePools(enforce=false) reports the would-be delta but the
+// pool row is byte-identical afterwards and zero draws are written — the
+// rehearsal mode must be provably inert.
+func TestResetDuePools_ObserveNoOp(t *testing.T) {
+	cleanup := setupPoolTestDB(t)
+	defer cleanup()
+
+	pool, err := CreateTenantCreditPool("t-reset-obs", 1, 1000, PoolResetDaily, 80)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	now := time.Now().UTC()
+	due := now.Add(-time.Hour)
+	if err := DB.Model(&TenantCreditPool{}).Where("id = ?", pool.ID).
+		Updates(map[string]interface{}{
+			"current_balance": 100,
+			"next_reset_at":   due,
+		}).Error; err != nil {
+		t.Fatalf("seed due state: %v", err)
+	}
+	before, err := GetTenantCreditPool("t-reset-obs")
+	if err != nil {
+		t.Fatalf("read before: %v", err)
+	}
+
+	results, err := ResetDuePools(context.Background(), now, false)
+	if err != nil {
+		t.Fatalf("ResetDuePools observe: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	if results[0].Action != PoolResetActionObserved || results[0].Delta != 900 {
+		t.Errorf("result = %+v, want action=observed delta=900", results[0])
+	}
+
+	after, err := GetTenantCreditPool("t-reset-obs")
+	if err != nil {
+		t.Fatalf("read after: %v", err)
+	}
+	if after.CurrentBalance != before.CurrentBalance ||
+		after.MaxBalance != before.MaxBalance ||
+		after.ResetPeriod != before.ResetPeriod ||
+		!after.LastResetAt.Equal(before.LastResetAt) ||
+		!timePtrEqual(after.NextResetAt, before.NextResetAt) ||
+		after.AlertThresholdPct != before.AlertThresholdPct ||
+		!timePtrEqual(after.AlertFiredAt, before.AlertFiredAt) {
+		t.Errorf("observe mode wrote to the pool row: before=%+v after=%+v", *before, *after)
+	}
+
+	_, total, derr := ListPoolDraws(pool.ID, 0, 50)
+	if derr != nil {
+		t.Fatalf("list draws: %v", derr)
+	}
+	if total != 0 {
+		t.Errorf("observe mode must write zero draws, got %d", total)
+	}
+}
+
+// Test 9: reset_period "none" and max_balance -1 (unlimited) pools are never
+// selected, in either mode — even when forced into a "due" state.
+func TestResetDuePools_SkipsNoneAndUnlimitedPools(t *testing.T) {
+	cleanup := setupPoolTestDB(t)
+	defer cleanup()
+
+	nonePool, err := CreateTenantCreditPool("t-reset-none", 1, 1000, PoolResetNone, 80)
+	if err != nil {
+		t.Fatalf("create none-period pool: %v", err)
+	}
+	unlimPool, err := CreateTenantCreditPool("t-reset-unlim", 1, PoolMaxBalanceUnlimited, PoolResetDaily, 80)
+	if err != nil {
+		t.Fatalf("create unlimited pool: %v", err)
+	}
+
+	now := time.Now().UTC()
+	due := now.Add(-time.Hour)
+	if err := DB.Model(&TenantCreditPool{}).Where("id = ?", nonePool.ID).
+		Updates(map[string]interface{}{"current_balance": 50, "next_reset_at": due}).Error; err != nil {
+		t.Fatalf("seed none pool: %v", err)
+	}
+	if err := DB.Model(&TenantCreditPool{}).Where("id = ?", unlimPool.ID).
+		Updates(map[string]interface{}{"current_balance": 50, "next_reset_at": due}).Error; err != nil {
+		t.Fatalf("seed unlimited pool: %v", err)
+	}
+
+	for _, enforce := range []bool{false, true} {
+		results, rerr := ResetDuePools(context.Background(), now, enforce)
+		if rerr != nil {
+			t.Fatalf("ResetDuePools enforce=%v: %v", enforce, rerr)
+		}
+		if len(results) != 0 {
+			t.Errorf("enforce=%v: results = %+v, want none (none-period / unlimited pools must be skipped)", enforce, results)
+		}
+	}
+
+	gotNone, err := GetTenantCreditPool("t-reset-none")
+	if err != nil {
+		t.Fatalf("readback none pool: %v", err)
+	}
+	if gotNone.CurrentBalance != 50 {
+		t.Errorf("none-period pool balance = %d, want 50 (untouched)", gotNone.CurrentBalance)
+	}
+	gotUnlim, err := GetTenantCreditPool("t-reset-unlim")
+	if err != nil {
+		t.Fatalf("readback unlimited pool: %v", err)
+	}
+	if gotUnlim.CurrentBalance != 50 {
+		t.Errorf("unlimited pool balance = %d, want 50 (untouched)", gotUnlim.CurrentBalance)
+	}
+}
+
+// Test 10: two concurrent enforce callers racing the same due pool must
+// produce exactly one reset — the CAS on next_reset_at serializes them.
+func TestResetDuePools_ConcurrentEnforceOnlyOneDraw(t *testing.T) {
+	cleanup := setupPoolTestDB(t)
+	defer cleanup()
+
+	pool, err := CreateTenantCreditPool("t-reset-race", 1, 1000, PoolResetDaily, 80)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	now := time.Now().UTC()
+	due := now.Add(-time.Hour)
+	if err := DB.Model(&TenantCreditPool{}).Where("id = ?", pool.ID).
+		Updates(map[string]interface{}{"current_balance": 100, "next_reset_at": due}).Error; err != nil {
+		t.Fatalf("seed due state: %v", err)
+	}
+
+	const callers = 2
+	var wg sync.WaitGroup
+	errs := make([]error, callers)
+	resultsPerCall := make([][]PoolResetResult, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			res, rerr := ResetDuePools(context.Background(), now, true)
+			resultsPerCall[idx] = res
+			errs[idx] = rerr
+		}(i)
+	}
+	wg.Wait()
+
+	for i, e := range errs {
+		if e != nil {
+			t.Fatalf("goroutine %d: %v", i, e)
+		}
+	}
+
+	totalApplied := 0
+	for _, res := range resultsPerCall {
+		totalApplied += len(res)
+	}
+	if totalApplied != 1 {
+		t.Errorf("total applied resets across %d concurrent callers = %d, want 1 (CAS must allow only one)", callers, totalApplied)
+	}
+
+	got, err := GetTenantCreditPool("t-reset-race")
+	if err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if got.CurrentBalance != 1000 {
+		t.Errorf("balance = %d, want 1000", got.CurrentBalance)
+	}
+
+	_, total, derr := ListPoolDraws(pool.ID, 0, 50)
+	if derr != nil {
+		t.Fatalf("list draws: %v", derr)
+	}
+	if total != 1 {
+		t.Errorf("draw rows = %d, want exactly 1 (no double reset)", total)
 	}
 }

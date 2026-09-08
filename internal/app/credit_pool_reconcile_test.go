@@ -16,6 +16,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -305,5 +306,57 @@ func TestTryFinalizeStrandedTopup_ManuallyClosedIsTerminal(t *testing.T) {
 	}
 	if got := poolBalance(t, "t-strand-manual"); got != 0 {
 		t.Errorf("sweep credited a manually closed event: balance = %d, want 0", got)
+	}
+}
+
+// TestRunCreditPoolReconcileTick_LeaderInvokesResetSeamOnceAfterSweep locks
+// the wiring described in the plan doc: the scheduled-reset seam must be
+// called exactly once per leader tick, after ReconcileStrandedTopups. The DB
+// has no stranded events and no due pools — this test is about the CALL, not
+// about what either pass finds.
+func TestRunCreditPoolReconcileTick_LeaderInvokesResetSeamOnceAfterSweep(t *testing.T) {
+	_, _ = setupReconcileDB(t, "t-tick-wiring", 1000)
+
+	prevLeader := common.IsLeader()
+	common.SetLeader(true)
+	t.Cleanup(func() { common.SetLeader(prevLeader) })
+
+	prevSeam := resetDuePoolsSeam
+	calls := 0
+	resetDuePoolsSeam = func(ctx context.Context) ([]repo.PoolResetResult, error) {
+		calls++
+		return nil, nil
+	}
+	t.Cleanup(func() { resetDuePoolsSeam = prevSeam })
+
+	runCreditPoolReconcileTick(context.Background())
+
+	if calls != 1 {
+		t.Errorf("resetDuePoolsSeam called %d times on a leader tick, want 1", calls)
+	}
+}
+
+// TestRunCreditPoolReconcileTick_NonLeaderSkipsResetSeam mirrors the existing
+// stranded-sweep leader gate: a non-leader replica must not invoke the reset
+// seam either (the ticker's per-tick work is entirely leader-gated).
+func TestRunCreditPoolReconcileTick_NonLeaderSkipsResetSeam(t *testing.T) {
+	_, _ = setupReconcileDB(t, "t-tick-wiring-nonleader", 1000)
+
+	prevLeader := common.IsLeader()
+	common.SetLeader(false)
+	t.Cleanup(func() { common.SetLeader(prevLeader) })
+
+	prevSeam := resetDuePoolsSeam
+	calls := 0
+	resetDuePoolsSeam = func(ctx context.Context) ([]repo.PoolResetResult, error) {
+		calls++
+		return nil, nil
+	}
+	t.Cleanup(func() { resetDuePoolsSeam = prevSeam })
+
+	runCreditPoolReconcileTick(context.Background())
+
+	if calls != 0 {
+		t.Errorf("resetDuePoolsSeam called %d times on a non-leader tick, want 0", calls)
 	}
 }

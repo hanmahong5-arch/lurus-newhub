@@ -353,6 +353,30 @@ func refreshStrandedOpenGauge(ctx context.Context) {
 	metrics.CreditPoolStrandedOpen.Set(float64(open))
 }
 
+// resetDuePoolsSeam is the scheduled credit-pool reset entry point, invoked
+// once per leader tick right after ReconcileStrandedTopups. A package-level
+// var (not a direct call to ResetDuePools) so credit_pool_reconcile_test.go
+// can substitute a spy and assert the tick wiring without waiting on a real
+// ticker or seeding due pools through the full reset code path.
+var resetDuePoolsSeam = ResetDuePools
+
+// runCreditPoolReconcileTick is the leader-gated body of one reconcile tick:
+// stranded-topup compensation followed by the scheduled pool reset pass.
+// Extracted from StartCreditPoolReconcileWithContext so the wiring — "the
+// reset seam runs after the stranded sweep, only when leader" — is testable
+// without a live time.Ticker.
+func runCreditPoolReconcileTick(ctx context.Context) {
+	if !common.IsLeader() {
+		return
+	}
+	if _, _, err := ReconcileStrandedTopups(ctx); err != nil {
+		common.SysError("credit-pool reconcile sweep: " + err.Error())
+	}
+	if _, err := resetDuePoolsSeam(ctx); err != nil {
+		common.SysError("credit-pool scheduled reset sweep: " + err.Error())
+	}
+}
+
 // StartCreditPoolReconcileWithContext launches the periodic stranded-topup
 // sweep. Registered from cmd/server on master-capable nodes (matching the
 // audit-cleanup / secret-rotation convention); each tick is additionally
@@ -378,12 +402,7 @@ func StartCreditPoolReconcileWithContext(ctx context.Context) {
 				common.SysLog("credit-pool stranded reconcile stopped")
 				return
 			case <-ticker.C:
-				if !common.IsLeader() {
-					continue
-				}
-				if _, _, err := ReconcileStrandedTopups(c); err != nil {
-					common.SysError("credit-pool reconcile sweep: " + err.Error())
-				}
+				runCreditPoolReconcileTick(c)
 			}
 		}
 	})

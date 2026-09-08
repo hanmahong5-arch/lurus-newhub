@@ -21,7 +21,7 @@ func TestPublishPoolThreshold_DedupReadErrorPropagates(t *testing.T) {
 	pub := &mockPoolPublisher{}
 	db := &mockPoolDB{readErr: errors.New("connection reset by peer")}
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-RE", 77, 10, 1000, 80,
 		pub, rdb, db, time.Now().UTC(),
@@ -51,7 +51,7 @@ func TestPublishPoolThreshold_RecordNotFoundFallsThrough(t *testing.T) {
 	pub := &mockPoolPublisher{}
 	db := &mockPoolDB{readErr: gorm.ErrRecordNotFound}
 
-	err := publishPoolThreshold(
+	_, _, err := publishPoolThreshold(
 		context.Background(),
 		"tenant-NF", 88, 10, 1000, 80,
 		pub, rdb, db, time.Now().UTC(),

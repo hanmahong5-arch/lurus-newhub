@@ -30,6 +30,8 @@ func TestIsValidAuditAction(t *testing.T) {
 		{ActionTenantMappingDeleted, true},
 		{ActionWhitelabelKeyAccessed, true},
 		{ActionBillingDebit, true},
+		{ActionBillingPoolReset, true},
+		{ActionBillingPoolThreshold, true},
 		{ActionSystemStartup, true},
 
 		// Unknown actions — must reject. These probe the most likely typos:
