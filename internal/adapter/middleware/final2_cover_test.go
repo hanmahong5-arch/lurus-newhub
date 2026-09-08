@@ -8,6 +8,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -134,8 +135,9 @@ func TestEntitlementCheck_CacheMiss_AllowsFreePlan(t *testing.T) {
 	// With no IdentityServiceURL configured, GetEntitlements returns the free
 	// plan (quota_remaining defaults to -1 = unlimited) → allowed → cached.
 	const acct = int64(880099)
-	entitlementCache.Delete(acct)
-	defer entitlementCache.Delete(acct)
+	key := entitlementCacheKey{accountID: acct, product: ratio_setting.DefaultSourceProduct}
+	entitlementCache.Delete(key)
+	defer entitlementCache.Delete(key)
 
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("identity_account_id", acct); c.Next() })
@@ -146,7 +148,7 @@ func TestEntitlementCheck_CacheMiss_AllowsFreePlan(t *testing.T) {
 		t.Errorf("status = %d, want 200 for free-plan entitlement", w.Code)
 	}
 	// Result should now be cached.
-	if _, ok := entitlementCache.Load(acct); !ok {
+	if _, ok := entitlementCache.Load(key); !ok {
 		t.Errorf("entitlement result not cached after miss")
 	}
 }

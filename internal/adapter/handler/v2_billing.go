@@ -12,6 +12,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -112,7 +113,7 @@ func CreateBillingCheckout(c *gin.Context) {
 		accountID,
 		req.AmountCNY,
 		req.PaymentMethod,
-		"lurus-api",
+		ratio_setting.DefaultSourceProduct,
 		idempotencyKey,
 		req.ReturnURL,
 	)
@@ -298,8 +299,8 @@ func TopUpV2(c *gin.Context) {
 	debitResult, err := common.DebitWalletGRPC(
 		c.Request.Context(), accountID, req.AmountCNY,
 		"product_purchase",
-		fmt.Sprintf("Wallet to lurus-api quota transfer (%.2f CNY)", req.AmountCNY),
-		"lurus-api", idempotencyKey,
+		fmt.Sprintf("Wallet to %s quota transfer (%.2f CNY)", ratio_setting.DefaultSourceProduct, req.AmountCNY),
+		ratio_setting.DefaultSourceProduct, idempotencyKey,
 	)
 	if err != nil {
 		status := http.StatusServiceUnavailable
@@ -323,7 +324,7 @@ func TopUpV2(c *gin.Context) {
 			c.Request.Context(), accountID, req.AmountCNY,
 			"refund",
 			fmt.Sprintf("Rollback: quota credit failed for transfer %.2f CNY", req.AmountCNY),
-			"lurus-api", idempotencyKey+":rollback",
+			ratio_setting.DefaultSourceProduct, idempotencyKey+":rollback",
 		)
 		if rollbackErr != nil {
 			slog.Error("CRITICAL: wallet debited but quota credit AND rollback both failed",

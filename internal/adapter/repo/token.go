@@ -307,15 +307,10 @@ func AutoCreateDefaultToken(userId int) (*Token, error) {
 	}
 
 	tenantId := "default"
-	var identityAccountID int64
-	if owner, err := GetUserById(userId); err == nil {
-		if owner.TenantId != "" {
-			tenantId = owner.TenantId
-		}
-		if owner.LurusAccountID != nil {
-			identityAccountID = *owner.LurusAccountID
-		}
+	if owner, err := GetUserById(userId); err == nil && owner.TenantId != "" {
+		tenantId = owner.TenantId
 	}
+	identityAccountID := IdentityAccountIDForUser(userId)
 
 	token := &Token{
 		UserId:            userId,

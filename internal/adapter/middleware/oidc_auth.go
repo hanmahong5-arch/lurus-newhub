@@ -814,9 +814,25 @@ func OIDCAuth() gin.HandlerFunc {
 		}
 
 		// Sync account to lurus-platform (upsert) and carry identity_account_id
-		// for wallet bridging. Best-effort: platform unavailability does not block auth.
+		// for wallet bridging. Best-effort: platform unavailability does not
+		// block auth, and a link collision never blocks auth either — see
+		// repo.LinkUserPlatformAccount's never-re-bind guard. Without this
+		// persisted link a JWT-only user's tokens (minted via BuildCleanToken,
+		// which re-reads the user row) would never pick up the account id, no
+		// matter how many requests carry a valid identity_account_id in context.
+		// backfillTokens=false: a JWT request must never silently strip an
+		// admin-set quota cap off an existing token.
 		if im, _ := common.UpsertAccountGRPC(c.Request.Context(), claims.Subject, claims.Email, claims.Name, ""); im != nil {
 			c.Set("identity_account_id", im.ID)
+			// lurusUser was loaded above (line ~797) before this account sync —
+			// once lurus_account_id is set, every later request for this user
+			// costs zero DB writes here instead of re-running the (harmless but
+			// wasted) UPDATE ... WHERE lurus_account_id IS NULL on every request.
+			if lurusUser.LurusAccountID == nil {
+				if linkErr := repo.LinkUserPlatformAccount(lurusUserID, im.ID, false); linkErr != nil {
+					common.SysLog(fmt.Sprintf("oidc jwt: account link failed for user %d (account=%d): %v", lurusUserID, im.ID, linkErr))
+				}
+			}
 		}
 
 		// Extract roles from claims

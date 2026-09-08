@@ -14,6 +14,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -115,8 +116,9 @@ func TestTokenAuth_MjApiSecretBearerExtraction(t *testing.T) {
 
 func TestEntitlementCheck_LiveFetch_QuotaExhausted_429(t *testing.T) {
 	const acct = int64(990077)
-	entitlementCache.Delete(acct)
-	defer entitlementCache.Delete(acct)
+	key := entitlementCacheKey{accountID: acct, product: ratio_setting.DefaultSourceProduct}
+	entitlementCache.Delete(key)
+	defer entitlementCache.Delete(key)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -138,7 +140,7 @@ func TestEntitlementCheck_LiveFetch_QuotaExhausted_429(t *testing.T) {
 		t.Fatalf("status = %d, want 429 when platform reports quota exhausted; body=%s", w.Code, w.Body.String())
 	}
 	// The deny decision must be cached so the next request short-circuits.
-	val, ok := entitlementCache.Load(acct)
+	val, ok := entitlementCache.Load(key)
 	if !ok || val.(entitlementEntry).allowed {
 		t.Errorf("expected cached deny entry after live exhausted fetch, got %+v (ok=%v)", val, ok)
 	}

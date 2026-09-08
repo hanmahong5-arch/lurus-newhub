@@ -12,7 +12,6 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 var usernameRegexp = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -397,7 +396,7 @@ func InternalProvisionUser(c *gin.Context) {
 		// engages on the next relay. Best-effort — a backfill hiccup must not
 		// fail the idempotent response.
 		if linkedAccountID > 0 && existingUser.LurusAccountID == nil {
-			if healErr := backfillUserAccountLink(existingUser.Id, linkedAccountID); healErr != nil {
+			if healErr := repo.LinkUserPlatformAccount(existingUser.Id, linkedAccountID, true); healErr != nil {
 				common.SysLog(fmt.Sprintf("provision: self-heal link failed for user %d (account=%d): %v", existingUser.Id, linkedAccountID, healErr))
 			} else {
 				common.SysLog(fmt.Sprintf("provision: self-healed link for user %d → account %d", existingUser.Id, linkedAccountID))
@@ -639,31 +638,6 @@ func respondExistingProvisionedUser(c *gin.Context, user *repo.User, mapping *re
 			"is_existing": true,
 			"mapping_id":  mappingID,
 		},
-	})
-}
-
-// backfillUserAccountLink links an existing user to a platform account and
-// propagates the account id onto that user's not-yet-linked tokens. Mirrors the
-// /internal/admin/backfill-token-accounts batch path for the single-user case.
-// Both updates are guarded so this is a no-op once linked (idempotent).
-func backfillUserAccountLink(userID int, accountID int64) error {
-	// Atomic: user link and token propagation commit together or not at all. A
-	// non-transactional two-step would leave the user linked but tokens stranded
-	// on a mid-way failure — and the `lurus_account_id IS NULL` guard above would
-	// then never re-trigger the heal on retry, permanently orphaning the tokens.
-	return repo.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&repo.User{}).
-			Where("id = ? AND lurus_account_id IS NULL", userID).
-			Update("lurus_account_id", accountID).Error; err != nil {
-			return err
-		}
-		// Set unlimited_quota too, matching the fresh-provision linked-token path
-		// (the commit invariant "linked tokens get UnlimitedQuota=true"). Without
-		// it a self-healed token keeps its local RemainQuota cap, so a wallet-funded
-		// user is both wallet-debited AND 402-stranded once that cap drains.
-		return tx.Model(&repo.Token{}).
-			Where("user_id = ? AND (identity_account_id = 0 OR identity_account_id IS NULL)", userID).
-			Updates(map[string]interface{}{"identity_account_id": accountID, "unlimited_quota": true}).Error
 	})
 }
 

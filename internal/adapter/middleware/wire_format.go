@@ -43,8 +43,8 @@ func relayFormatForPath(path string) types.RelayFormat {
 }
 
 // renderRejection writes a middleware-stage rejection (apiErr) in the
-// caller's own wire shape, mirroring the switch handler.Relay's deferred
-// error handler runs (relay.go:213-233) so a 401 from TokenAuth or a 402
+// caller's own wire shape, mirroring the per-wire switch handler.Relay's
+// deferred error handler runs, so a 401 from TokenAuth or a 402
 // from PoolBalanceCheck looks identical, to the client's SDK, to a
 // relay-stage failure. Falls back to the OpenAI shape (today's behaviour)
 // when no format was stamped — every caller of this outside a stamped

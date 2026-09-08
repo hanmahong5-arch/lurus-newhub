@@ -254,10 +254,7 @@ func CreateTokenV2(c *gin.Context) {
 	// PostConsumeQuota's wallet-debit gate never fires for a v2-created
 	// token, no matter how the caller's platform account is linked. No link
 	// leaves the field at zero, same as an unlinked v1 token.
-	var identityAccountID int64
-	if owner, err := repo.GetUserById(tenantCtx.UserID); err == nil && owner.LurusAccountID != nil {
-		identityAccountID = *owner.LurusAccountID
-	}
+	identityAccountID := repo.IdentityAccountIDForUser(tenantCtx.UserID)
 
 	// Create token with tenant context
 	token := repo.Token{

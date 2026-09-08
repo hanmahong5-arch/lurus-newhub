@@ -553,6 +553,69 @@ func TestR2Bill_GetSubscriptionAndUsage(t *testing.T) {
 	}
 }
 
+// TestR2Bill_GetSubscription_RepoErrorIs500: a repo lookup failure must
+// answer 500 with the gateway's error type, not the old HTTP 200 whose body
+// carried {"error":{"type":"upstream_error"}} — a status code an SDK reads
+// as success. GetTokenById(0) is the deterministic error trigger (explicit
+// "id 为空" guard, no DB flakiness needed).
+func TestR2Bill_GetSubscription_RepoErrorIs500(t *testing.T) {
+	ctx := r2billSetup(t)
+	defer ctx.Cleanup()
+
+	prev := common.DisplayTokenStatEnabled
+	common.DisplayTokenStatEnabled = true
+	defer func() { common.DisplayTokenStatEnabled = prev }()
+
+	c, w := r2chanNewCtx(http.MethodGet, "/", nil)
+	c.Set("id", ctx.NormalUser.Id)
+	// token_id intentionally left unset (GetInt defaults to 0) so
+	// repo.GetTokenById(0) fails deterministically.
+	GetSubscription(c)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("subscription code=%d, want 500 for a repo lookup failure; body=%s", w.Code, w.Body.String())
+	}
+	resp := r2chanParseBody(t, w)
+	errBody, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected an OpenAI-native error envelope, got %s", w.Body.String())
+	}
+	if errBody["type"] != "new_api_error" {
+		t.Errorf("error.type = %v, want new_api_error", errBody["type"])
+	}
+}
+
+// TestR2Bill_GetUsage_RepoErrorIs500 locks L4's honesty fix: a repo lookup
+// failure is a real server-side error, not billable-zero usage — it must
+// answer 500, not the old 200 that told the caller "you have used $0"
+// indistinguishably from a genuinely idle key. GetTokenById(0) is the
+// deterministic error trigger (explicit "id 为空" guard, no DB flakiness
+// needed).
+func TestR2Bill_GetUsage_RepoErrorIs500(t *testing.T) {
+	ctx := r2billSetup(t)
+	defer ctx.Cleanup()
+
+	prev := common.DisplayTokenStatEnabled
+	common.DisplayTokenStatEnabled = true
+	defer func() { common.DisplayTokenStatEnabled = prev }()
+
+	c, w := r2chanNewCtx(http.MethodGet, "/", nil)
+	c.Set("id", ctx.NormalUser.Id)
+	// token_id intentionally left unset (GetInt defaults to 0) so
+	// repo.GetTokenById(0) fails deterministically.
+	GetUsage(c)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("usage code=%d, want 500 for a repo lookup failure; body=%s", w.Code, w.Body.String())
+	}
+	resp := r2chanParseBody(t, w)
+	errBody, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected an OpenAI-native error envelope, got %s", w.Body.String())
+	}
+	if errBody["type"] != "new_api_error" {
+		t.Errorf("error.type = %v, want new_api_error", errBody["type"])
+	}
+}
+
 func TestR2Bill_GetIdentityOverview(t *testing.T) {
 	ctx := r2billSetup(t)
 	defer ctx.Cleanup()

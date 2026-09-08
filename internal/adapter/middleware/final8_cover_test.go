@@ -8,6 +8,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -72,8 +73,9 @@ func TestTokenAuth_PropagatesIdentityAccountID(t *testing.T) {
 // with no identity URL the refresh yields the free plan → allowed.
 func TestEntitlementCheck_StaleCache_Refreshes(t *testing.T) {
 	const acct = int64(880123)
-	entitlementCache.Store(acct, entitlementEntry{allowed: false, checkedAt: timeMinus(entitlementCacheTTL + 1)})
-	defer entitlementCache.Delete(acct)
+	key := entitlementCacheKey{accountID: acct, product: ratio_setting.DefaultSourceProduct}
+	entitlementCache.Store(key, entitlementEntry{allowed: false, checkedAt: timeMinus(entitlementCacheTTL + 1)})
+	defer entitlementCache.Delete(key)
 
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("identity_account_id", acct); c.Next() })

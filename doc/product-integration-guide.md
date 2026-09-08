@@ -74,7 +74,7 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 - **Q1 登录后看不到我的产品?** Lurus 是 AI 网关不是产品平台。用户登录→建 Token→配置到产品。无缝体验用方式 3。
 - **Q2 多产品数据会混吗?** 不会。账号 SSO 共享,但每产品独立 `tenant_id`,Token 绑定租户,日志/计费按租户隔离,A 产品 Token 不能在 B 用。
 - **Q3 为产品配专属模型?** 联系管理员 `INSERT INTO tenant_channels (tenant_id, channel_id, priority) VALUES (...)`。
-- **Q4 额度不足?** API 返回 402 `insufficient_quota` `quota_exceeded`;提示用户去钱包充值或订阅。
+- **Q4 额度不足?** 两处独立的额度闸,响应不同:(a) 钱包/Token 本地额度耗尽 → 402 `insufficient_quota`;(b) 平台侧 entitlement 校验(按 `X-Lurus-Product` 归属的产品配额)拒绝 → 429,OpenAI 线 body 为 `{"error":{"message","type":"new_api_error","code":"quota_exceeded","metadata":{"upgrade_url":...}}}`;Claude/Gemini 调用方走各自原生信封(`{"type":"error","error":{...}}` / `{"error":{...}}`),两者均**不带** `upgrade_url`(信封结构没有 metadata 位置),只能靠 message 文案里的 `quota_exceeded` 判定,不要依赖顶层 `upgrade_url` 字段。都提示用户去钱包充值或订阅。
 - **Q5 限制调用频率?** Lurus 内置 `daily_quota` 日限额;或产品侧自实现限流。
 - **Q6 白标?** 当前不支持完全白标,可:自定义 Zitadel 登录页主题、用方式 3、隐藏控制台 (Token 自动管理)。
 - **Q7 支持哪些模型?** 列表 https://api.lurus.cn/console/models。常用: OpenAI gpt-4o/gpt-4o-mini、Anthropic claude-3-5-sonnet、Google gemini-1.5-pro、国内 qwen-max/glm-4/deepseek-chat。
@@ -103,7 +103,14 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 | 402 | `insufficient_quota` | 额度不足 | 提示充值 |
 | 429 | `rate_limit_exceeded` | 超速率 | 稍后重试 |
 | 500 | `upstream_error` | AI 服务商故障 | 重试 / 切模型 |
+| 500 | `new_api_error` | 网关自身查询失败(如 `/v1/dashboard/billing/usage`、`/subscription` 读库失败;2026-09-07 前这两条以 HTTP 200 + `error.type=upstream_error` 返回) | 重试;持续出现联系运维 |
 | 503 | `service_unavailable` | 维护中 | 等待恢复 |
+
+### B2. 账号绑定与计费归属(2026-09-07 起)
+
+- 用户经 OIDC 浏览器登录或首个 JWT 请求时,hub 把平台账号写入 `users.lurus_account_id`(只写一次;已绑定不同账号的用户跳过并记日志)。
+- **之后**铸造的令牌带 `identity_account_id`,统一计费开启时按平台钱包预授权/扣款;**绑定之前**已存在的令牌保持本地额度计费,管理员设的令牌上限不变。同一用户因此可能同时存在两种计费制:对账时按令牌的 `identity_account_id` 区分。
+- 钱包治理的令牌不再消耗用户的本地欢迎额度;钱包余额不足直接拒绝,不回落到本地额度。
 
 ### C. Webhook 通知 (可选)
 
@@ -111,12 +118,13 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 
 ### D. 跨产品归因 (`X-Lurus-Product`)
 
-兄弟产品经 hub 中转时在每个请求带 `X-Lurus-Product: <product>` 头,值须在服务端 allow-list 内(`lurus-api` 默认、`kova`、`lutu`、`lucrum`、`switch`、`creator`、`memorus`、`tally`);未知或缺省值**静默**折算为默认产品,不报错、不回显。归因贯穿三处:
+兄弟产品经 hub 中转时在每个请求带 `X-Lurus-Product: <product>` 头,值须在服务端 allow-list 内(`llm-api` 默认、`kova`、`lutu`、`lucrum`、`switch`、`creator`、`memorus`、`tally`);未知或缺省值**静默**折算为默认产品,不报错、不回显。归因贯穿三处:
 
 | 落点 | 说明 |
 |------|------|
 | 平台钱包 `WalletDebit` / `WalletPreAuthorize` 的 `product_id` | 钱按产品入账;`ReportUsage` 无该字段(proto 待补) |
 | 日志行 `other.source_product` | 成功行、handler 层与中间件层的错误行都带;归因早于任何模型/渠道解析,绑定失败也能落对产品 |
 | `GET /api/v2/{tenant}/logs?source_product=switch`、`GET /api/v2/{tenant}/logs/stat?source_product=switch` | 普通用户即可查自己产品的份额,无需 root |
+| `/metrics` 的 `relay_requests_total` / `relay_errors_total` / `relay_total_duration` | 三者均带 `product` label;`billing_debit_amount_cny` 带 `product,op` label。仅宿主 netdata 直连抓取,不对公网/兄弟产品开放读取权限 |
 
 `logs/stat` 的 `by_product` 语义**不对称**,集成时注意:总量字段(`total_quota` 等)受 `source_product` 过滤,而 `by_product` 明细**始终**是同一时间窗内全部产品的拆分(不受该过滤影响),用来看"我之外的花销去了哪"。未打标的历史行归入默认产品,不会出现空名分组。
