@@ -151,9 +151,7 @@ func BuildCleanToken(userId int, tenantId string, token *repo.Token, key string)
 	// used elsewhere in this codebase, e.g. lifecycle boot ordering).
 	var identityAccountID int64
 	if repo.DB != nil {
-		if owner, err := repo.GetUserById(userId); err == nil && owner.LurusAccountID != nil {
-			identityAccountID = *owner.LurusAccountID
-		}
+		identityAccountID = repo.IdentityAccountIDForUser(userId)
 	}
 	return repo.Token{
 		UserId:             userId,

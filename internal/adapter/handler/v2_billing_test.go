@@ -1,13 +1,17 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -439,4 +443,106 @@ func setupNoAccountRouter(t *testing.T, ctx *V2TestContext) *gin.Engine {
 	}
 
 	return router
+}
+
+// ============================================================================
+// TopUpV2 — product-id SSOT (L4 / PRODUCT-ID-SSOT): the wallet debit — and
+// the rollback credit on a mid-flight failure — must be filed under
+// ratio_setting.DefaultSourceProduct ("llm-api"), not the retired "lurus-api"
+// literal. A platform reading the wallet ledger by product_id must see the
+// SAME id newhub's own entitlement gate asks about.
+// ============================================================================
+
+func TestTopUpV2_DebitRecordsDefaultSourceProduct(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	var gotProductIDs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ProductID string `json:"product_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotProductIDs = append(gotProductIDs, body.ProductID)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":       true,
+			"balance_after": 990.0,
+		})
+	}))
+	defer srv.Close()
+
+	prevURL := common.IdentityServiceURL
+	common.IdentityServiceURL = srv.URL
+	defer func() { common.IdentityServiceURL = prevURL }()
+
+	body := map[string]interface{}{"amount_cny": 10.0}
+	headers := map[string]string{
+		"X-Test-Tenant-ID":  ctx.TenantID,
+		"X-Test-User-ID":    fmt.Sprintf("%d", ctx.UserID),
+		"X-Idempotency-Key": "test-ik-product-debit",
+	}
+	w := V2Request(ctx.Router, http.MethodPost,
+		fmt.Sprintf("/api/v2/%s/billing/topup", ctx.TenantID), body, headers)
+
+	AssertV2Status(t, w, http.StatusOK)
+	if len(gotProductIDs) != 1 {
+		t.Fatalf("identity server hit %d times, want 1 (debit only); product_ids=%v", len(gotProductIDs), gotProductIDs)
+	}
+	if gotProductIDs[0] != ratio_setting.DefaultSourceProduct {
+		t.Errorf("debit product_id = %q, want %q", gotProductIDs[0], ratio_setting.DefaultSourceProduct)
+	}
+}
+
+func TestTopUpV2_RollbackCreditRecordsDefaultSourceProduct(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	var gotProductIDs []string
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ProductID string `json:"product_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotProductIDs = append(gotProductIDs, body.ProductID)
+		gotPaths = append(gotPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":       true,
+			"balance_after": 990.0,
+		})
+	}))
+	defer srv.Close()
+
+	prevURL := common.IdentityServiceURL
+	common.IdentityServiceURL = srv.URL
+	defer func() { common.IdentityServiceURL = prevURL }()
+
+	// Force repo.IncreaseUserQuota to fail deterministically (quotaAmount goes
+	// negative) so TopUpV2 takes the rollback branch without touching DB
+	// integrity — increaseUserQuota rejects a negative quota outright.
+	prevRatio := common.QuotaPerUnit
+	common.QuotaPerUnit = -1
+	defer func() { common.QuotaPerUnit = prevRatio }()
+
+	body := map[string]interface{}{"amount_cny": 10.0}
+	headers := map[string]string{
+		"X-Test-Tenant-ID":  ctx.TenantID,
+		"X-Test-User-ID":    fmt.Sprintf("%d", ctx.UserID),
+		"X-Idempotency-Key": "test-ik-product-rollback",
+	}
+	w := V2Request(ctx.Router, http.MethodPost,
+		fmt.Sprintf("/api/v2/%s/billing/topup", ctx.TenantID), body, headers)
+
+	AssertV2Error(t, w, http.StatusInternalServerError)
+	if len(gotProductIDs) != 2 {
+		t.Fatalf("identity server hit %d times, want 2 (debit + rollback credit); paths=%v", len(gotProductIDs), gotPaths)
+	}
+	if gotPaths[1] == "" || !strings.HasSuffix(gotPaths[1], "/wallet/credit") {
+		t.Fatalf("second call path = %q, want the wallet/credit rollback endpoint", gotPaths[1])
+	}
+	if gotProductIDs[1] != ratio_setting.DefaultSourceProduct {
+		t.Errorf("rollback credit product_id = %q, want %q", gotProductIDs[1], ratio_setting.DefaultSourceProduct)
+	}
 }

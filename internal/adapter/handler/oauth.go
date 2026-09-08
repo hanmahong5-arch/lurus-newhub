@@ -387,6 +387,24 @@ func OIDCCallback(c *gin.Context) {
 		return
 	}
 
+	// Resolve platform account ID for billing integration and persist the
+	// link onto the user row BEFORE the auto-create-token step below, so a
+	// brand-new user's very first token is minted already wallet-linked
+	// (AutoCreateDefaultToken re-reads the user row and stamps
+	// IdentityAccountID from it). Store in session too so billing endpoints
+	// work without JWT. Best-effort: an identity platform outage or a link
+	// collision must never fail login — mirrors every other newhub→platform
+	// caller (see repo.LinkUserPlatformAccount for the never-re-bind guard).
+	// backfillTokens=false: a login must never silently strip an admin-set
+	// quota cap off an existing token — only the /internal provisioning
+	// self-heal path (internal_api_ext.go) backfills tokens.
+	if im, _ := common.GetAccountByZitadelSubGRPC(c.Request.Context(), claims.Subject); im != nil {
+		session.Set("identity_account_id", im.ID)
+		if linkErr := repo.LinkUserPlatformAccount(user.Id, im.ID, false); linkErr != nil {
+			common.SysLog(fmt.Sprintf("oidc callback: account link failed for user %d (account=%d): %v", user.Id, im.ID, linkErr))
+		}
+	}
+
 	// Ensure user has at least one API token (auto-create if none).
 	tokenCount, _ := repo.CountUserTokens(user.Id)
 	if tokenCount == 0 {
@@ -395,12 +413,6 @@ func OIDCCallback(c *gin.Context) {
 		} else {
 			common.SysLog(fmt.Sprintf("Auto-created default token for user %s (id=%d, key_prefix=%s)", user.Username, user.Id, defaultToken.Key[:8]))
 		}
-	}
-
-	// Resolve platform account ID for billing integration.
-	// Store in session so billing endpoints work without JWT.
-	if im, _ := common.GetAccountByZitadelSubGRPC(c.Request.Context(), claims.Subject); im != nil {
-		session.Set("identity_account_id", im.ID)
 	}
 
 	// Clear PKCE and nonce from session (one-time use)

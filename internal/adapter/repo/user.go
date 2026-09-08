@@ -325,6 +325,94 @@ func GetUserByLurusAccountID(accountID int64) (*User, error) {
 	return &user, err
 }
 
+// IdentityAccountIDForUser resolves the lurus-platform account id linked to
+// a user, or 0 if unlinked (or on lookup failure). The single implementation
+// behind every token-mint path that stamps Token.IdentityAccountID
+// (BuildCleanToken, AutoCreateDefaultToken, the v2 create-token handler) —
+// they must all resolve the same way, or the wallet-debit gate (quota.go,
+// keyed on relayInfo.IdentityAccountID > 0) becomes a function of which code
+// path minted the token instead of who owns it.
+func IdentityAccountIDForUser(userID int) int64 {
+	owner, err := GetUserById(userID)
+	if err != nil || owner.LurusAccountID == nil {
+		return 0
+	}
+	return *owner.LurusAccountID
+}
+
+// LinkUserPlatformAccount binds userID to a lurus-platform accountID. When
+// backfillTokens is true it ALSO propagates the link onto that user's
+// not-yet-linked tokens (unlimited_quota = true, matching the
+// fresh-provision linked-token path — without it a self-healed token keeps
+// its local RemainQuota cap, so a wallet-funded user is both wallet-debited
+// AND 402-stranded once that cap drains). backfillTokens=false links only
+// the users row and leaves every existing token's quota cap untouched — a
+// freshly minted token still picks up the link on its own, through
+// IdentityAccountIDForUser reading the now-linked user row, but an
+// admin-capped pre-existing token keeps its cap.
+//
+// Pass backfillTokens=true only from the /internal provisioning self-heal
+// path (internal_api_ext.go), which is explicitly repairing tokens stranded
+// before their account existed. The SSO callback (oauth.go) and the JWT
+// middleware (oidc_auth.go) pass false: a login request must never silently
+// strip an admin-set quota cap off an existing token.
+//
+// Three guards, all silent no-ops (logged, not returned as an error):
+//   - if accountID is already bound to a DIFFERENT user, nothing is written —
+//     mirroring provisionRaceWinner's collision guard (handler/
+//     internal_api_ext.go).
+//   - if this user is already linked to a DIFFERENT account, nothing is
+//     written either — in particular the token backfill below must not stamp
+//     account B onto tokens whose owner row says account A.
+//   - the `lurus_account_id IS NULL` clause on the user UPDATE makes a
+//     repeat call for an already-linked user affect zero rows (idempotent).
+//
+// The first two are read-then-write checks, not atomic. What actually stops
+// two concurrent callers from binding the same account to two users is the
+// unique index on users.lurus_account_id: the loser's UPDATE fails and that
+// error is returned to the caller.
+//
+// Callers treat this as best-effort: a link failure must never fail login or
+// provisioning.
+func LinkUserPlatformAccount(userID int, accountID int64, backfillTokens bool) error {
+	if accountID <= 0 {
+		return nil
+	}
+	if existing, err := GetUserByLurusAccountID(accountID); err == nil && existing != nil && existing.Id != userID {
+		common.SysLog(fmt.Sprintf(
+			"LinkUserPlatformAccount: account %d already bound to user %d — skipping link for user %d",
+			accountID, existing.Id, userID))
+		return nil
+	}
+	if owner, err := GetUserById(userID, false); err == nil && owner != nil &&
+		owner.LurusAccountID != nil && *owner.LurusAccountID > 0 && *owner.LurusAccountID != accountID {
+		common.SysLog(fmt.Sprintf(
+			"LinkUserPlatformAccount: user %d is already linked to account %d — skipping link to account %d",
+			userID, *owner.LurusAccountID, accountID))
+		return nil
+	}
+	if !backfillTokens {
+		return DB.Model(&User{}).
+			Where("id = ? AND lurus_account_id IS NULL", userID).
+			Update("lurus_account_id", accountID).Error
+	}
+	// Atomic: user link and token propagation commit together or not at all. A
+	// non-transactional two-step would leave the user linked but tokens
+	// stranded on a mid-way failure — and the `lurus_account_id IS NULL` guard
+	// above would then never re-trigger the heal on retry, permanently
+	// orphaning the tokens.
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&User{}).
+			Where("id = ? AND lurus_account_id IS NULL", userID).
+			Update("lurus_account_id", accountID).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Token{}).
+			Where("user_id = ? AND (identity_account_id = 0 OR identity_account_id IS NULL)", userID).
+			Updates(map[string]interface{}{"identity_account_id": accountID, "unlimited_quota": true}).Error
+	})
+}
+
 // DeleteUserById soft-deletes the user AND revokes every one of their relay
 // tokens. Before this fix it only called User.Delete() (a bare soft delete
 // of the users row): middleware.TokenAuth resolves a token to its owner via

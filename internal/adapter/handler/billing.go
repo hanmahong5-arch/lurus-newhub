@@ -8,6 +8,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -30,7 +31,12 @@ func GetIdentityOverview(c *gin.Context) {
 		return
 	}
 
-	productID := c.DefaultQuery("product_id", "lurus-api")
+	// Fold an unrecognised/absent product_id to the allow-listed default
+	// instead of trusting an arbitrary caller-supplied string — the same
+	// allow-list ratio_setting.ResolveSourceProduct enforces for the
+	// X-Lurus-Product header, so this query param can't smuggle an
+	// unattributed id past the platform's product catalog.
+	productID := ratio_setting.ResolveSourceProduct(c.Query("product_id"))
 	ov, _ := common.GetAccountOverview(c.Request.Context(), im.ID, productID)
 	if ov == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "identity service unavailable"})
@@ -177,7 +183,12 @@ func GetSubscription(c *gin.Context) {
 	if common.DisplayTokenStatEnabled {
 		token, err := repo.GetTokenById(tokenId)
 		if err != nil {
-			c.JSON(200, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "upstream_error"}})
+			// A repo lookup failure is a server-side error. Previously this
+			// answered HTTP 200 with an error body (type "upstream_error"),
+			// so an SDK keying on the status code treated it as success;
+			// now it is a 500 with the gateway's own error type, the same
+			// shape GetUsage uses.
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
 			return
 		}
 		totalAmount = calculateDisplayAmount(token.RemainQuota + token.UsedQuota)
@@ -192,12 +203,14 @@ func GetSubscription(c *gin.Context) {
 	} else {
 		remainQuota, err := repo.GetUserQuota(userId, false)
 		if err != nil {
-			c.JSON(200, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "upstream_error"}})
+			// See the DisplayTokenStatEnabled branch above: a repo lookup
+			// failure surfaces as a 500, not a 200 carrying an error body.
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
 			return
 		}
 		usedQuota, err := repo.GetUserUsedQuota(userId)
 		if err != nil {
-			c.JSON(200, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "upstream_error"}})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
 			return
 		}
 		totalAmount = calculateDisplayAmount(remainQuota + usedQuota)
@@ -222,7 +235,11 @@ func GetUsage(c *gin.Context) {
 	if common.DisplayTokenStatEnabled {
 		token, err := repo.GetTokenById(tokenId)
 		if err != nil {
-			c.JSON(200, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
+			// A repo lookup failure is a real server-side error, not a
+			// billable-zero usage response — 200 here previously told the
+			// caller "you have used $0" instead of "we could not compute
+			// this", indistinguishable from a genuinely idle key.
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
 			return
 		}
 		quota = token.UsedQuota
@@ -230,7 +247,11 @@ func GetUsage(c *gin.Context) {
 		var err error
 		quota, err = repo.GetUserUsedQuota(userId)
 		if err != nil {
-			c.JSON(200, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
+			// A repo lookup failure is a real server-side error, not a
+			// billable-zero usage response — 200 here previously told the
+			// caller "you have used $0" instead of "we could not compute
+			// this", indistinguishable from a genuinely idle key.
+			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: "new_api_error"}})
 			return
 		}
 	}

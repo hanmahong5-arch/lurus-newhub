@@ -224,3 +224,37 @@ func TestAutoCreateDefaultToken_PoolDebit_ChargesOwnerTenantOnly(t *testing.T) {
 		t.Errorf("default pool balance = %d, want untouched 1000 — settlement charged the wrong tenant", defaultAfter.CurrentBalance)
 	}
 }
+
+// TestMintPaths_AgreeOnIdentityAccountID locks the L4 consolidation: every
+// token-mint path (BuildCleanToken here, AutoCreateDefaultToken, and the v2
+// create-token handler which is not reachable from this package without an
+// import cycle) now resolves IdentityAccountID through the single
+// repo.IdentityAccountIDForUser — no path may carry its own inline copy of
+// the owner lookup that could silently drift from the others.
+func TestMintPaths_AgreeOnIdentityAccountID(t *testing.T) {
+	setupServiceTestDB(t)
+	userId := seedLinkedUser(t, 88_002)
+
+	want := repo.IdentityAccountIDForUser(userId)
+	if want != 88_002 {
+		t.Fatalf("repo.IdentityAccountIDForUser = %d, want 88002 (test fixture broken)", want)
+	}
+
+	src := &repo.Token{RemainQuota: 10, UnlimitedQuota: false}
+	key, err := GenerateTokenKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	clean := BuildCleanToken(userId, "", src, key)
+	if clean.IdentityAccountID != want {
+		t.Errorf("BuildCleanToken.IdentityAccountID = %d, want %d (repo.IdentityAccountIDForUser)", clean.IdentityAccountID, want)
+	}
+
+	autoTok, err := repo.AutoCreateDefaultToken(userId)
+	if err != nil {
+		t.Fatalf("AutoCreateDefaultToken: %v", err)
+	}
+	if autoTok.IdentityAccountID != want {
+		t.Errorf("AutoCreateDefaultToken.IdentityAccountID = %d, want %d (repo.IdentityAccountIDForUser)", autoTok.IdentityAccountID, want)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -284,8 +285,9 @@ func TestEntitlementCheck_NonPositiveAccountID_Passes(t *testing.T) {
 
 func TestEntitlementCheck_CacheHitAllowed_Passes(t *testing.T) {
 	const acct = int64(555001)
-	entitlementCache.Store(acct, entitlementEntry{allowed: true, checkedAt: time.Now()})
-	defer entitlementCache.Delete(acct)
+	key := entitlementCacheKey{accountID: acct, product: ratio_setting.DefaultSourceProduct}
+	entitlementCache.Store(key, entitlementEntry{allowed: true, checkedAt: time.Now()})
+	defer entitlementCache.Delete(key)
 	r := mountEntitlement(acct)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/e", nil))
@@ -296,8 +298,9 @@ func TestEntitlementCheck_CacheHitAllowed_Passes(t *testing.T) {
 
 func TestEntitlementCheck_CacheHitDenied_429(t *testing.T) {
 	const acct = int64(555002)
-	entitlementCache.Store(acct, entitlementEntry{allowed: false, checkedAt: time.Now()})
-	defer entitlementCache.Delete(acct)
+	key := entitlementCacheKey{accountID: acct, product: ratio_setting.DefaultSourceProduct}
+	entitlementCache.Store(key, entitlementEntry{allowed: false, checkedAt: time.Now()})
+	defer entitlementCache.Delete(key)
 	r := mountEntitlement(acct)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/e", nil))
