@@ -363,7 +363,8 @@ Oracle：`success=true`，且 `GET /v1/models` 随后能列出该模型。⚠️
 | 8 | `curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/billing/usage?period=today"` | `200`；`(q1 + q2) / $QPU == total_cost_lb − $USAGE_0`（**围绕步骤 5-6 取 delta**，绝对值会被同用户当日其他流量污染） |
 
 > **~~已知缺陷~~ 已修复（2026-08-31，随下一次镜像部署生效）**
-> `/console/topup` 的兑换入口曾 POST 到未注册的 `/api/v2/{slug}/redemptions/redeem`（必然 404）；现已改打 `POST /api/v2/:slug/redeem` 并按 v2 响应形状（`data.quota_added`）入账。**新镜像上验收改为正向断言**：充值页输码提交 → 成功弹窗含兑换额度、页面余额上升该额度。旧镜像仍按缺陷单处理。
+> 兑换入口曾 POST 到未注册的 `/api/v2/{slug}/redemptions/redeem`（必然 404）；现已改打 `POST /api/v2/:slug/redeem` 并按 v2 响应形状（`data.quota_added`）入账。**新镜像上验收改为正向断言**：充值页输码提交 → 成功弹窗含兑换额度、页面余额上升该额度。旧镜像仍按缺陷单处理。
+> **【2026-09-07 订正】**`/console/topup` 已不再渲染自己的页面——它是一条 `<Navigate to='/console/v2/billing' replace />`；上面的输码流程发生在 `/console/v2/billing`，验收步骤按该路径操作。
 
 **回归防守**：SPA 路由守卫只看 localStorage（只灌 cookie 会被弹回登录页，看起来像"登录坏了"）；`quota_usd` 这种不存在的字段被静默忽略导致 token 零额度；Log 页与账单接口的单位（整数 quota vs USD）混算。
 
@@ -400,7 +401,7 @@ Oracle：`success=true`，且 `GET /v1/models` 随后能列出该模型。⚠️
 - **env**：UAT · **优先级**：P1
 - **串联功能点**：（租户 admin）铸码 → 用户钱包读数 → `POST /redeem` → `quota_added` 与钱包 delta 三方对账 → 铸码列表状态 → 重放 400 + 金额不动
 - **前置**：§0.2.1 会话；一枚未使用的 32 位 `$CODE`（面额 `$CODE_QUOTA`，整数 quota 单位）
-- ⚠️ **UI 与 API 的分工**：`/console/v2/redemption` 是**管理员铸码页**（只发 `POST /api/v2/:slug/redemptions {name,count,quota}`），**没有"输码兑换"输入框**；用户侧兑换只有 API `POST /api/v2/:slug/redeem`，字段名是 **`key`**。唯一的兑换 UI 在 `/console/topup`——2026-08-31 前它打到未注册路由（必 404），已修复为同一条 `/redeem`（见 TC-C1 的修复框）。
+- ⚠️ **UI 与 API 的分工**：`/console/v2/redemption` 是**管理员铸码页**（只发 `POST /api/v2/:slug/redemptions {name,count,quota}`），**没有"输码兑换"输入框**；用户侧兑换只有 API `POST /api/v2/:slug/redeem`，字段名是 **`key`**。唯一的兑换 UI 在 `/console/v2/billing`（`/console/topup` 自 2026-09 起是一条重定向到该页的路由，不再有自己的页面）——2026-08-31 前它打到未注册路由（必 404），已修复为同一条 `/redeem`（见 TC-C1 的修复框）。
 
 | # | 动作 | Oracle |
 |---|------|--------|
@@ -630,7 +631,7 @@ Oracle：`success=true`，且 `GET /v1/models` 随后能列出该模型。⚠️
 |------|------|----|------|
 | **P0 阻断** | 核心路径不可用 / 边界失守 | TC-S1、TC-S4（`/metrics` 200）、TC-M1、TC-C5、TC-G2 步骤 1 FAIL | 停测、立即报开发 |
 | **P1 严重** | 主功能受损或有绕过 | 计价偏差、缓存双计、限流缺位、错误日志不落库 | 当日修 |
-| **P2 一般** | 体验问题 | 死按钮（`/console/topup` 404）、跳转到不存在的页面、文案 | 排期 |
+| **P2 一般** | 体验问题 | 死按钮、跳转到不存在的页面、文案（历史例：`/console/topup` 曾 404，现已改为重定向到 `/console/v2/billing`） | 排期 |
 | **P3 建议** | 优化项 | — | 记录 |
 
 **回归规则**：

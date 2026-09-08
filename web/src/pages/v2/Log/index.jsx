@@ -40,6 +40,24 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 const LOG_TYPE_ERROR = 5;
 
+// Cross-product attribution (PR #168, 2026-09-07). Every relay format writes
+// Other.source_product; a row without one predates that PR or hit an
+// unlabelled code path, and folds to the same default the backend resolves —
+// mirrors ratio_setting.DefaultSourceProduct / the allow-list in
+// internal/pkg/setting/ratio_setting/model_equivalence.go. Update both sides
+// together if a product onboards.
+const DEFAULT_SOURCE_PRODUCT = 'llm-api';
+const SOURCE_PRODUCTS = [
+  DEFAULT_SOURCE_PRODUCT,
+  'kova',
+  'lutu',
+  'lucrum',
+  'switch',
+  'creator',
+  'memorus',
+  'tally',
+];
+
 // Outcome derived from the log type — error logs (type 5) must not render as a
 // green "200". We do not store the upstream HTTP status, so this reports the
 // recorded outcome class, not a fabricated status code. `label` doubles as the
@@ -189,6 +207,10 @@ const HFLog = () => {
   const [filterToken, setFilterToken] = useState(
     () => new URLSearchParams(window.location.search).get('token_name') || '',
   );
+  const [filterProduct, setFilterProduct] = useState(
+    () =>
+      new URLSearchParams(window.location.search).get('source_product') || '',
+  );
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
   // errors-only maps to the API's type filter (5 = error rows).
@@ -203,7 +225,7 @@ const HFLog = () => {
   const [tenantWide, setTenantWide] = useState(false);
 
   const fetchLogs = useCallback(
-    async (currentPage, model, token, start, end, errOnly, wide) => {
+    async (currentPage, model, token, start, end, errOnly, wide, product) => {
       setLoading(true);
       try {
         const params = new URLSearchParams({
@@ -212,6 +234,7 @@ const HFLog = () => {
         });
         if (model) params.set('model_name', model);
         if (token) params.set('token_name', token);
+        if (product) params.set('source_product', product);
         if (errOnly) params.set('type', String(LOG_TYPE_ERROR));
         if (start)
           params.set(
@@ -248,12 +271,13 @@ const HFLog = () => {
   );
 
   const fetchStat = useCallback(
-    async (model, token, start, end, errOnly, wide) => {
+    async (model, token, start, end, errOnly, wide, product) => {
       setStatLoading(true);
       try {
         const params = new URLSearchParams();
         if (model) params.set('model_name', model);
         if (token) params.set('token_name', token);
+        if (product) params.set('source_product', product);
         if (errOnly) params.set('type', String(LOG_TYPE_ERROR));
         if (start)
           params.set(
@@ -291,6 +315,7 @@ const HFLog = () => {
         filterEnd,
         errorsOnly,
         tenantWide,
+        filterProduct,
       );
       fetchStat(
         filterModel,
@@ -299,6 +324,7 @@ const HFLog = () => {
         filterEnd,
         errorsOnly,
         tenantWide,
+        filterProduct,
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -410,6 +436,7 @@ const HFLog = () => {
       filterEnd,
       errorsOnly,
       tenantWide,
+      filterProduct,
     );
     fetchStat(
       filterModel,
@@ -418,6 +445,7 @@ const HFLog = () => {
       filterEnd,
       errorsOnly,
       tenantWide,
+      filterProduct,
     );
   };
 
@@ -431,6 +459,7 @@ const HFLog = () => {
       filterEnd,
       errorsOnly,
       tenantWide,
+      filterProduct,
     );
   };
 
@@ -446,6 +475,7 @@ const HFLog = () => {
       filterEnd,
       next,
       tenantWide,
+      filterProduct,
     );
     fetchStat(
       filterModel,
@@ -454,6 +484,7 @@ const HFLog = () => {
       filterEnd,
       next,
       tenantWide,
+      filterProduct,
     );
   };
 
@@ -469,6 +500,7 @@ const HFLog = () => {
       filterEnd,
       errorsOnly,
       next,
+      filterProduct,
     );
     // Stat header follows the scope: /logs/stat/all summarises the same rows
     // /logs/all lists.
@@ -479,6 +511,7 @@ const HFLog = () => {
       filterEnd,
       errorsOnly,
       next,
+      filterProduct,
     );
   };
 
@@ -541,6 +574,21 @@ const HFLog = () => {
           onChange={(e) => setFilterToken(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
         />
+        <select
+          style={{ ...inputStyle, width: 130 }}
+          data-testid='log-product-filter'
+          value={filterProduct}
+          onChange={(e) => setFilterProduct(e.target.value)}
+        >
+          <option value=''>
+            {tr('console.log.ph_product_all', 'all products')}
+          </option>
+          {SOURCE_PRODUCTS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
         <input
           style={{ ...inputStyle, width: 160 }}
           type='datetime-local'
@@ -585,12 +633,13 @@ const HFLog = () => {
           onClick={() => {
             setFilterModel('');
             setFilterToken('');
+            setFilterProduct('');
             setFilterStart('');
             setFilterEnd('');
             setErrorsOnly(false);
             setPage(1);
-            fetchLogs(1, '', '', '', '', false, tenantWide);
-            fetchStat('', '', '', '', false);
+            fetchLogs(1, '', '', '', '', false, tenantWide, '');
+            fetchStat('', '', '', '', false, tenantWide, '');
           }}
         >
           {tr('console.log.clear', 'clear')}
@@ -673,6 +722,50 @@ const HFLog = () => {
           </div>
         ))}
       </div>
+
+      {/* Per-product spend strip — GET /logs/stat's by_product, which (per
+          the API contract) always summarises the FULL window regardless of
+          the source_product filter above, so a caller narrowed to one
+          product can still see where the rest of the spend went. */}
+      {tab === 'trace' && (
+        <div
+          data-testid='log-by-product-strip'
+          style={{
+            display: 'flex',
+            gap: 18,
+            padding: '8px 28px',
+            borderBottom: '1px solid var(--hf-rule)',
+            background: 'var(--hf-paper)',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+          }}
+        >
+          <span className='lbl'>
+            {tr('console.log.by_product_title', 'by product')}
+          </span>
+          {!statLoading && (stat?.by_product?.length ?? 0) === 0 && (
+            <span className='muted' style={{ fontSize: 11 }}>
+              {tr(
+                'console.log.by_product_empty',
+                'No product breakdown for this window.',
+              )}
+            </span>
+          )}
+          {(stat?.by_product ?? []).map((row) => (
+            <span
+              key={row.source_product || DEFAULT_SOURCE_PRODUCT}
+              className='pill mono'
+              style={{ fontSize: 11 }}
+            >
+              {row.source_product || DEFAULT_SOURCE_PRODUCT}
+              <span className='faint' style={{ marginLeft: 6 }}>
+                {Number(row.total_requests ?? 0).toLocaleString()} ·{' '}
+                {formatUSD(Number(row.total_quota ?? 0))}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Tabs */}
       <div
@@ -757,13 +850,14 @@ const HFLog = () => {
 
               {!loading && logs.length > 0 && (
                 <div className='hf-table-scroll'>
-                  <table className='t'>
+                  <table className='t' data-testid='trace-table'>
                     <thead>
                       <tr>
                         <th>{tr('console.log.th_timestamp', 'timestamp')}</th>
                         <th>{tr('console.log.th_dur', 'dur')}</th>
                         <th>{tr('console.log.th_ttft', 'ttft')}</th>
                         <th>{tr('console.log.th_model', 'model')}</th>
+                        <th>{tr('console.log.th_product', 'product')}</th>
                         <th>{tr('console.log.th_upstream', 'upstream')}</th>
                         <th>{tr('console.log.th_token', 'token')}</th>
                         <th>{tr('console.log.th_tok', 'tok')}</th>
@@ -799,6 +893,10 @@ const HFLog = () => {
                             <TtftCell row={r} />
                           </td>
                           <td className='strong'>{r.model_name || '—'}</td>
+                          <td className='mono muted'>
+                            {parseOther(r)?.source_product ||
+                              DEFAULT_SOURCE_PRODUCT}
+                          </td>
                           <td className='mono muted'>
                             {r.channel_name ? (
                               r.channel_name

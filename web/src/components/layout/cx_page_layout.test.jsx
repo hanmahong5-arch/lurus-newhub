@@ -181,7 +181,6 @@ describe('PageLayout — chrome selection', () => {
   it.each([
     '/console/channel',
     '/console/log',
-    '/console/redemption',
     '/console/user',
     '/console/token',
     '/console/midjourney',

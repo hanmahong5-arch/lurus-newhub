@@ -61,11 +61,12 @@ func GetSelfV2(c *gin.Context) {
 		}
 	}
 
-	// This response is a strict SUPERSET of the v1 GetSelf projection, because
-	// the v2 route used to be wired to GetSelf and two legacy-shell consumers
-	// (components/topup/index.jsx and hooks/dashboard/useDashboardData.js) push
-	// the whole payload into the global user state — dropping setting /
-	// sidebar_modules / permissions here would break the legacy top-up page.
+	// This response is a strict SUPERSET of the v1 GetSelf projection: the
+	// route used to be wired to GetSelf, and dropping setting / sidebar_modules
+	// / permissions would change the response shape out from under whichever
+	// caller parses it next (today: pages/v2/Dashboard/index.jsx and
+	// pages/v2/Settings/index.jsx, which read remaining_quota / used_quota /
+	// token_count from this same payload).
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	// Admin remarks are not the user's to see (same rule as GetSelf).
@@ -98,7 +99,7 @@ func GetSelfV2(c *gin.Context) {
 			"idp_user":        tenantCtx.IDPSubject,
 			"roles":           tenantCtx.Roles,
 			"daily_quota":     dailyQuota,
-			// v1 GetSelf parity (legacy shell reads these off the shared store)
+			// v1 GetSelf parity (kept so this payload stays a strict superset)
 			"setting":         user.Setting,
 			"sidebar_modules": userSetting.SidebarModules,
 			"permissions":     permissions,

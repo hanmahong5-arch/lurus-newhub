@@ -802,7 +802,9 @@ describe('UserArea', () => {
   it.each([
     ['个人设置', '/console/personal'],
     ['令牌管理', '/console/token'],
-    ['额度管理', '/console/topup'],
+    // The legacy Semi UI topup shell is retired (console-one-surface,
+    // 2026-09-07); this entry now goes straight to the v2 billing page.
+    ['额度管理', '/console/v2/billing'],
   ])('routes the %s menu entry to %s', (label, path) => {
     const navigate = vi.fn();
     render(

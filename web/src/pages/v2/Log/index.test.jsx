@@ -24,6 +24,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 
 // Mock helpers BEFORE importing the component — vi.mock is hoisted.
@@ -711,5 +712,117 @@ describe('Log page', () => {
     ]) {
       expect(screen.queryByTestId(id)).toBeNull();
     }
+  });
+});
+
+// ── Cross-product attribution (console-one-surface, 2026-09-07) ────────────
+//
+// PR #168 made newhub relay traffic carry a source_product tag through to
+// logs.other. This page surfaces it per-request without calling the API by
+// hand: a URL-seedable filter, a column per row, and a by_product strip on
+// the stat header (Admin/CostIntelligence's spend_by_product strip covers
+// the aggregate spend view; this is the per-log-row view).
+describe('Log page — cross-product attribution', () => {
+  it('seeds the source_product filter from the URL and sends it on the first fetch', async () => {
+    const prevLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...prevLocation, search: '?source_product=kova' },
+    });
+    try {
+      render(<HFLog />);
+      await waitFor(() => expect(API.get).toHaveBeenCalled());
+
+      const firstLogsCall = API.get.mock.calls
+        .map(([u]) => u)
+        .find((u) => u.includes('/logs?'));
+      expect(firstLogsCall).toContain('source_product=kova');
+    } finally {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: prevLocation,
+      });
+    }
+  });
+
+  const productBaseLog = {
+    id: 1,
+    type: 2,
+    model_name: 'gpt-4o',
+    total_latency_ms: 120,
+    prompt_tokens: 100,
+    completion_tokens: 200,
+    quota: 1000,
+    created_at: Math.floor(Date.now() / 1000),
+    channel: 7,
+  };
+
+  it('renders the product column from row.other.source_product, and the default label when the row has none', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/logs/stat')) {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      return Promise.resolve({
+        data: {
+          success: true,
+          data: {
+            logs: [
+              {
+                ...productBaseLog,
+                id: 1,
+                other: JSON.stringify({ source_product: 'switch' }),
+              },
+              { ...productBaseLog, id: 2, other: null },
+            ],
+            total: 2,
+          },
+        },
+      });
+    });
+
+    render(<HFLog />);
+
+    const table = await screen.findByTestId('trace-table');
+    await waitFor(() => expect(within(table).getByText('switch')).toBeTruthy());
+    expect(within(table).getByText('llm-api')).toBeTruthy();
+  });
+
+  it('renders one by_product strip entry per product from /logs/stat', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/logs/stat')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              total_requests: 3,
+              total_quota: 300,
+              by_product: [
+                {
+                  source_product: 'llm-api',
+                  total_requests: 2,
+                  total_quota: 200,
+                },
+                {
+                  source_product: 'switch',
+                  total_requests: 1,
+                  total_quota: 100,
+                },
+              ],
+            },
+          },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { logs: [], total: 0 } },
+      });
+    });
+
+    render(<HFLog />);
+
+    await waitFor(() => {
+      const strip = screen.getByTestId('log-by-product-strip');
+      expect(strip.textContent).toContain('llm-api');
+      expect(strip.textContent).toContain('switch');
+    });
   });
 });

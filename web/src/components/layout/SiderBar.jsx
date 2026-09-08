@@ -35,8 +35,10 @@ const routerMap = {
   channel: '/console/channel',
   'openrouter-sync': '/console/openrouter-sync',
   token: '/console/token',
-  redemption: '/console/redemption',
-  topup: '/console/topup',
+  // Legacy Semi UI shells retired (console-one-surface, 2026-09-07) — these
+  // nav entries now point straight at the v2 pages that replaced them.
+  redemption: '/console/v2/redemption',
+  topup: '/console/v2/billing',
   user: '/console/user',
   log: '/console/log',
   midjourney: '/console/midjourney',

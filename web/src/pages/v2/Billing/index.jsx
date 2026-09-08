@@ -78,9 +78,13 @@ const HFBilling = () => {
   const [selectedMethod, setSelectedMethod] = useState('');
   const [amount, setAmount] = useState(String(AMOUNT_PRESETS_CNY[0]));
 
-  // Redemption. v2 had no entry point for this at all — the only one lived on
-  // the legacy /console/topup shell, which the v2 navigation cannot reach, so a
-  // customer holding a valid code had nowhere in the console to spend it.
+  // Redemption. Until 2026-09-03 v2 had no entry point for this at all — the
+  // only one lived on the legacy /console/topup Semi UI shell, which the v2
+  // navigation could not reach, so a customer holding a valid code had
+  // nowhere in the console to spend it. That shell is now retired entirely
+  // (console-one-surface, 2026-09-07); this is the only place in the console
+  // to REDEEM a code — /console/v2/redemption is the admin-only page that
+  // MINTS codes and has no "enter a code" input of its own.
   const [redeemCode, setRedeemCode] = useState('');
   const [redeeming, setRedeeming] = useState(false);
   const [redeemResult, setRedeemResult] = useState(null);
@@ -162,9 +166,9 @@ const HFBilling = () => {
   const amountInvalid = parsedAmount === null;
   const noPaymentMethods = methodsLoaded && methods.length === 0;
 
-  // Same endpoint and same response shape the legacy topup component already
-  // speaks (components/topup/index.jsx): POST /api/v2/:slug/redeem with a
-  // `key` field, answering { quota_added }. Logic reused, component not.
+  // Same endpoint and response shape the retired legacy Semi UI topup card
+  // used to speak: POST /api/v2/:slug/redeem with a `key` field, answering
+  // { quota_added }.
   const redeem = async () => {
     if (redeeming || redeemCode.length !== REDEEM_CODE_LENGTH) return;
     setRedeeming(true);
@@ -660,15 +664,13 @@ const HFBilling = () => {
           </div>
 
           {/* Redeem a code.
-              v2 had no redemption entry point at all: the only one lived on the
-              legacy /console/topup shell, which the v2 navigation cannot reach
-              (see console-ia-2026-08-31.md), so a customer holding a valid code
-              had nowhere in the console to spend it.
-
-              This reuses the LOGIC, not the component: the same
-              POST /api/v2/:slug/redeem and the same { quota_added } response
-              the legacy topup component already speaks — no Semi UI card gets
-              dragged into the hi-fi shell. */}
+              Until 2026-09-03 v2 had no redemption entry point at all: the
+              only one lived on the legacy /console/topup Semi UI shell, which
+              the v2 navigation could not reach (see console-ia-2026-08-31.md),
+              so a customer holding a valid code had nowhere in the console to
+              spend it. That shell is now deleted (console-one-surface,
+              2026-09-07); this speaks the same POST /api/v2/:slug/redeem and
+              the same { quota_added } response it used to. */}
           <div className='panel' style={{ padding: 18 }}>
             <div className='lbl'>
               {tr('console.billing.redeem_title', 'redeem a code')}
