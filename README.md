@@ -1,110 +1,121 @@
-<div align="center">
-
-![lurus-hub](/web/public/logo.png)
+[中文](./README.zh-CN.md) | English
 
 # Lurus Hub
 
-**AI Data Processing Hub & Multi-Tenant LLM Gateway · AI 数据处理枢纽 · 多租户大模型网关**
+A multi-tenant LLM gateway: one API in front of 30+ model providers, with per-tenant isolation, usage analytics, and optional billing integration.
 
-![Go](https://img.shields.io/badge/Go-1.25-blue?logo=go) ![License](https://img.shields.io/badge/License-MIT-brightgreen) ![Meilisearch](https://img.shields.io/badge/Meilisearch-v1.10+-orange?logo=meilisearch) ![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker) ![K3s](https://img.shields.io/badge/K3s-Production-green?logo=kubernetes)
+## What it is
 
-</div>
+Lurus Hub (module `lurus-hub`, repository `lurus-newhub`) is a customized derivative of the [New API](https://github.com/QuantumNous/new-api) relay, itself descended from [One API](https://github.com/songquanpeng/one-api). On top of the relay it adds a data-processing layer: per-channel scoring, usage aggregation, multi-tenant OIDC auth, and an optional gRPC hook for reporting usage to an external billing service.
 
-## Overview / 项目简介
+It runs as the production LLM gateway behind Lurus's own products (`hub.lurus.cn`), so the relay path, multi-tenant routing, and V1/V2 REST API are exercised continuously. Some capabilities ship disabled by default and are opt-in per deployment: Meilisearch log search (`MEILISEARCH_ENABLED=false`), OpenTelemetry tracing (`OTEL_TRACING_ENABLED=false`), OIDC login (`OIDC_ENABLED=false`), and the external billing integration (`BILLING_UNIFIED_ENABLED=false`). Treat those as available-but-off, not as delivered end-to-end for your deployment until you turn them on and verify.
 
-**Lurus Hub** is an AI data processing hub built on top of a multi-tenant LLM relay. Beyond unified API access to every major model provider, it adds real-time usage analytics, cost optimization, per-product routing, and platform-grade billing — turning a relay into a data plane.
+## Core capabilities
 
-基于 [New API](https://github.com/QuantumNous/new-api) / [One API](https://github.com/songquanpeng/one-api) 开源基座深度定制:实时用量分析、成本优化、按产品个性化路由,集成 Meilisearch 搜索、OIDC 多租户认证（厂商中性）、Prometheus/OpenTelemetry 可观测性,与 lurus-platform 通过 gRPC 完成计费打通。
+- **Unified multi-provider relay** — OpenAI-compatible endpoints in front of 20+ model providers, with automatic request/response format conversion across three provider API shapes (`internal/adapter/provider/`, `internal/adapter/handler/router/relay-router.go`).
+- **Channel scoring and usage aggregation** — the "data hub" layer: weighted channel selection, health scoring, and rolling usage aggregation independent of the relay path itself (`internal/app/hub/channel_scorer.go`, `internal/app/hub/usage_aggregator.go`).
+- **Multi-tenant REST API** — `tenant_slug`-scoped V2 API with role-based access (admin/user/billing_manager) plus a V1 single-tenant-compatible surface for existing integrations (`internal/adapter/handler/router/api-v2-router.go`, `api-router.go`).
+- **Vendor-neutral OIDC auth** — login against any standards-compliant identity provider via discovery (`.well-known/openid-configuration`); off by default, config in `.env.example` (`OIDC_*`).
+- **Optional billing hook** — reports usage over gRPC/HTTP to a companion account-and-billing service; the server runs standalone with its own session auth when this is unset (`internal/pkg/common/identity_grpc_client.go`, `usage_report.go`).
+- **Prometheus metrics** — `/metrics` in Prometheus text format, gated by an auth check when the request carries proxy-forwarded headers (`internal/adapter/handler/router/main.go:37,85`; metric definitions in `internal/pkg/metrics/metrics.go`).
 
-## Core Features
+## Quick start
 
-- **Multi-Tenant**: OIDC auth + tenant isolation (shared DB + GORM plugin auto-inject `tenant_id`); V2 API `/api/v2/:tenant_slug/*` with RBAC (admin/user/billing_manager); V1 backward-compat; platform-admin cross-tenant API.
-- **AI Gateway**: unified API for OpenAI/Claude/Gemini/DeepSeek/Qwen/GLM/Moonshot/+; format auto-conversion (OpenAI ↔ Claude ↔ Gemini); weighted LB + auto-retry + priority channel selection; embeddings/rerank/TTS/STT/image/video; OpenAI Realtime (WebSocket).
-- **Search & Performance**: Meilisearch (<50ms search across logs/users/channels); object pooling (BufferPool/IntSlicePool/MapPool); gateway overhead p95 <50ms (benchmark-verified); HA (2-replica rolling + PDB).
-- **Observability**: Prometheus `/metrics` (11 metric types); OpenTelemetry tracing + Jaeger + X-Trace-Id; 10 alerting rules; structured JSON logging (slog).
-- **Billing & Security**: per-token/per-request/time-based billing + cache billing; online top-up (Creem/Stripe); model-level permissions + IP whitelist + token quotas; audit logging.
+```bash
+# --- Backend ---
+cp .env.example .env                # fill in SQL_DSN and SESSION_SECRET (both required, no default)
+go run ./cmd/server                  # listens on :3000 (PORT)
 
-## Tech Stack
+# --- Frontend console (Bun; web/ has its own package.json) ---
+cd web && bun install && bun run dev # :5173, proxies API calls to :3000
 
-| Layer | Technology |
-|-------|-----------|
-| Backend | Go 1.25, Gin, GORM, PostgreSQL/SQLite |
-| Frontend | React 18, Vite, Semi UI, TailwindCSS (Bun) |
-| Search / Cache | Meilisearch v1.10+ / Redis |
-| Auth | OIDC + JWT (vendor-neutral) |
-| Observability | Prometheus, OpenTelemetry, Jaeger |
-| Deployment | K3s, ArgoCD (GitOps), Docker; CI/CD: GitHub Actions → GHCR → ArgoCD sync |
+# --- Tests ---
+go test -short ./...                 # unit only, skips integration (testing.Short())
+go test -short -race -count=1 -timeout=15m ./...  # CI's required merge gate (.github/workflows/go-ci.yml)
+cd web && bun run test && bun run lint && bun run eslint
+
+# --- Docker Compose (self-contained: server + Postgres + Redis) ---
+docker-compose up -d                 # http://localhost:3000
+
+# --- Production build ---
+CGO_ENABLED=0 go build -ldflags "-s -w -X 'github.com/LurusTech/lurus-hub/internal/pkg/common.Version=$(cat VERSION)'" -o lurus-api ./cmd/server
+```
+
+Notes:
+- `SQL_DSN` must be `postgres://` or `postgresql://` — any other scheme (or an unset one) refuses to boot; the MySQL and SQLite dev fallbacks have been removed. `REDIS_CONN_STRING` is recommended but optional (falls back to cookie-only sessions, dev only).
+- `go.mod` pins `github.com/LurusTech/lurus-proto-go` through a local `replace ... => ../shared/lurus-proto-go` directive. Building outside this monorepo requires that sibling module to be present (see the two-stage `Dockerfile` for how CI stages it in) or the `replace` line removed.
+- Never run a single `_test.go` file directly — table-driven tests share package-level fixtures; use `go test ./<package>/...` or `go test ./...`.
 
 ## Architecture
 
 ```
-Lurus Hub Gateway (Hexagonal / Go+Gin)
-  ├── V1 API (compat) · V2 API (multi-tenant) · Relay API (/v1/chat/*)
-  ├── OIDC · PostgreSQL (tenant_id) · Meilisearch
-  ├── Redis cache · Prometheus · Jaeger
-  └── upstream: OpenAI/Azure · Claude/DeepSeek · Gemini/Qwen/GLM
-```
-
-```
+cmd/server/main.go        # entrypoint
 internal/
-├── domain/entity/     # Domain models (no deps)
-├── app/               # Business logic (relay/, passkey/)
-├── adapter/           # handler/ (+ router/ v1,v2,v2-admin), middleware/, repo/, provider/
-├── lifecycle/         # init, shutdown, background tasks
-└── pkg/               # config, logger, metrics, tracing, search
+├── domain/entity/        # GORM models: channel, token, tenant, user, log, pricing, ability, credit pool…
+├── app/                  # business logic
+│   ├── relay/             # request dispatch across 30+ provider adapters
+│   ├── hub/                # ChannelScorer + UsageAggregator (the "data hub" core)
+│   └── governance/         # audit trail
+├── adapter/
+│   ├── handler/           # HTTP controllers + router/ (v1, v2, relay, internal, web)
+│   ├── middleware/         # auth, CORS, rate limiting, distributor
+│   ├── repo/                # GORM repositories
+│   └── provider/            # per-vendor adapters (openai/, claude/, gemini/, aws/, baidu/, …)
+├── lifecycle/             # leader election, graceful shutdown, secret rotation
+└── pkg/                   # config, logger, metrics, tracing, search, migration, nats, resilience
+web/                       # React 18 + Vite + Semi UI console (Bun; 6 locales, see web/src/i18n/locales/)
+migrations/                # PostgreSQL SQL migrations (001-020 are legacy record-only baselines, some MySQL-only; 021+ is the live PG-only, idempotent lineage)
+deploy/k8s/                # Kubernetes manifests (staging/UAT overlays)
 ```
 
-## Quick Start
+## Configuration
 
-```bash
-# Dev
-go build -o lurus-api ./cmd/server && ./lurus-api
-cd web && bun install && bun run dev
+Full reference: [`.env.example`](./.env.example). Selected variables:
 
-# Tests (see TESTING.md). IMPORTANT: test by package or ./... — never a single _test.go file (missing deps).
-go test ./...                                   # all
-go test -short ./...                            # unit only (skip integration)
-go test -race ./...                             # race detector (before merge)
-go test -v ./internal/app/ -run TestCompareVersions
-cd web && bun run test && bun run lint && bun run eslint   # no typecheck script: plain JS
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SQL_DSN` | Yes | — | PostgreSQL connection string; non-Postgres DSNs refuse to boot |
+| `SESSION_SECRET` | Yes | — | Session signing key; must match across all nodes in a multi-node deployment |
+| `REDIS_CONN_STRING` | Recommended | `redis://redis:6379` | Session store + channel cache; cookie-only session fallback if unset |
+| `PORT` | No | `3000` | HTTP listen port |
+| `GIN_MODE` | No | `debug` | `debug` or `release` |
+| `MIGRATIONS_AUTO_RUN` | No | `true` | Run the embedded SQL migration runner on boot |
+| `OIDC_ENABLED` | No | `false` | Enable OIDC login; `OIDC_ISSUER`/`OIDC_JWKS_URI`/`OIDC_CLIENT_ID` become required when true |
+| `MEILISEARCH_ENABLED` | No | `false` | Full-text log search |
+| `IDENTITY_SERVICE_URL` / `IDENTITY_GRPC_ADDR` | No | — | Optional companion billing/identity service (usage reporting, wallet debit) |
+| `BILLING_UNIFIED_ENABLED` | No | `false` | Switch to the pre-authorize/freeze/settle billing flow instead of post-hoc debit |
+| `OTEL_TRACING_ENABLED` | No | `false` | Export traces via OTLP |
+| `METRICS_AUTH_TOKEN` | No | (empty) | Required to read `/metrics` through a reverse proxy that adds forwarding headers; direct connections without such headers are always allowed |
 
-# Docker Compose
-docker-compose up -d                            # http://localhost:3000
+## API overview
 
-# Production (K3s + ArgoCD) — see doc/runbook/staging-deploy.md
-# Deploy = merge to main; CI builds :main and auto-pins deploy/k8s/r6-stage,
-# ArgoCD (selfHeal) converges. Do NOT kubectl set image / rollout restart —
-# selfHeal reverts it. Rollback = revert the auto-pin commit.
-CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -o app ./cmd/server
-ssh root@100.122.83.20 "kubectl get pods -n lurus-newhub"
-```
+| Surface | Path prefix | Notes |
+|---|---|---|
+| V1 (legacy, single-tenant compat) | `/api/{user,token,channel,redemption,log,data,wallet}/*` | `router/api-router.go` |
+| V2 (multi-tenant) | `/api/v2/:tenant_slug/{tokens,projects,channels,logs,redemptions,sessions,models,pricing,billing,chat}/*`, `/api/v2/admin/{tenants,mappings,internal-keys,users,governance}/*` | RBAC (admin/user/billing_manager); `router/api-v2-router.go` |
+| Relay (OpenAI-compatible + native provider formats) | `POST /v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/*`, `/v1/rerank`; `GET /v1/models`, `/v1beta/models` | `router/relay-router.go` |
+| Internal (service-to-service) | `/internal/{user,token,quota,balance,currency,log,models,admin}/*` | Requires `X-API-Key` header matched against a scope, not `Authorization: Bearer`; `router/internal-api-router.go` |
 
-## API Endpoints
+Full OpenAPI spec: [`docs/openapi/api-v2.yaml`](./docs/openapi/api-v2.yaml).
 
-- **V2 Multi-Tenant (OIDC JWT)**: `GET /api/v2/:slug/auth/login`, `GET /api/v2/:slug/user/self`, `CRUD /api/v2/:slug/token/`, `CRUD /api/v2/:slug/channel/`, `GET /api/v2/:slug/log/`, `POST /api/v2/admin/tenants`.
-- **Relay (OpenAI-compatible)**: `POST /v1/chat/completions`, `POST /v1/messages` (Claude), `POST /v1/embeddings`, `POST /v1/images/generations`.
-- **V1 Legacy**: `POST /api/user/login`, `GET /api/user/self`, `CRUD /api/token/`, `GET /api/log/search` (Meilisearch).
+## Development conventions
 
-Full API: [docs.lurus.cn](https://docs.lurus.cn/) · [OpenAPI Spec](./docs/openapi/api-v2.yaml) (45 endpoints, 30+ schemas).
+- Test files follow `*_test.go` / `*_integration_test.go` / `*_benchmark_test.go`; test functions are named `Test<Subject>_<Method>_<Behavior>` and prefer table-driven cases (see [`TESTING.md`](./TESTING.md)).
+- CI enforces a coverage floor per layer, ratcheted upward as coverage improves: `internal/app/` ≥ 86%, `internal/adapter/repo/` ≥ 77%, `internal/adapter/handler/` ≥ 64% (`.github/workflows/go-ci.yml`).
+- `web/` is plain JS, not TypeScript — there is no `typecheck` script; the real frontend gates are `bun run lint` (prettier) and `bun run eslint`.
+- Database schema changes ship as new files under `migrations/`, PostgreSQL-only and idempotent from `021_` onward.
+- Deployment is GitOps: merging to `main` builds and publishes an image, and a separate reconciler converges the cluster state — this repo does not itself drive `kubectl` (see [`DEPLOY.md`](./DEPLOY.md)).
 
-## Documentation
+## Related projects
 
-| Doc | Description |
-|-----|-------------|
-| [Deployment Runbook](./doc/runbook/staging-deploy.md) | Build, deploy, verify, rollback |
-| [Database Runbook](./doc/runbook/database.md) | Backup, restore, migration |
-| [Tenant Onboarding](./doc/runbook/tenant-onboarding.md) | New tenant setup |
-| [Incident Response](./doc/runbook/incident-response.md) | Triage, escalation, postmortem |
-| [HA Deployment](./doc/runbook/ha-deployment.md) | High availability guide |
-| [OIDC Setup](./doc/oidc-setup-guide.md) | OIDC auth configuration (vendor-neutral) |
-| [Development Log](./doc/process.md) | Change history |
+Within the Lurus platform, this service exposes a dedicated route group, `/api/v2/switch/*` (`router/api-v2-router.go`), consumed by the Switch desktop client (repository `lurus-switch`) for activation-code redemption and channel/token management. The optional billing hook (`IDENTITY_GRPC_ADDR`, above) talks to a companion account-and-billing core service; both integrations are off unless explicitly configured, so this repository is fully usable standalone.
 
-## Environment Variables
+## License and upstream attribution
 
-Required: `SQL_DSN` (PostgreSQL), `SESSION_SECRET` (session encryption). Recommended: `REDIS_CONN_STRING`. Optional: `MEILISEARCH_ENABLED`/`MEILISEARCH_HOST`/`MEILISEARCH_API_KEY`, `OIDC_ISSUER`/`OIDC_CLIENT_ID`, `OTEL_TRACING_ENABLED`/`OTEL_EXPORTER_OTLP_ENDPOINT`.
+Licensed under the terms in [`LICENSE`](./LICENSE): **AGPLv3 by default**, with a **commercial license** required for scenarios such as removing upstream branding or avoiding the AGPLv3 network-source-disclosure obligation (see the file for the full scenario list). This licensing model, including the additional branding-retention restriction under the open-source tier, is inherited from the upstream project.
 
-Full config: [.env.meilisearch.example](./.env.meilisearch.example), [.env.oidc.example](./.env.oidc.example), and `2b-svc-newhub/CLAUDE.md` § Environment Variables.
+This project is a customized derivative of:
+- [New API](https://github.com/QuantumNous/new-api) (AGPLv3, dual-licensed) — the direct upstream base this project tracks and cherry-picks from.
+- [One API](https://github.com/songquanpeng/one-api) (MIT) — the earlier project New API itself derives from.
 
-## License
-
-MIT. See [LICENSE](./LICENSE). Based on [One API](https://github.com/songquanpeng/one-api) (MIT).
+See [`NOTICE`](./NOTICE) for a summary of bundled third-party component licenses (Go modules and `web/` frontend packages).
