@@ -25,6 +25,8 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // Reads tenant slug from localStorage — same pattern as Token/Channel/Models pages.
 
+const PAGE_SIZE = 50;
+
 const fmtTime = (ts) => {
   if (!ts || ts === 0) return '—';
   return new Date(ts * 1000).toLocaleString();
@@ -287,38 +289,50 @@ const HFRedemption = () => {
 
   const [redemptions, setRedemptions] = useState([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newCodes, setNewCodes] = useState(null); // codes shown in banner after create
   const [deleteTarget, setDeleteTarget] = useState(null); // { id, name }
 
-  const fetchRedemptions = useCallback(async () => {
-    if (!tenantSlug || tenantSlug === 'default') return;
-    setLoading(true);
-    try {
-      const res = await API.get(
-        `/api/v2/${tenantSlug}/redemptions?page=1&page_size=50`,
-      );
-      if (res?.data?.success) {
-        const d = res.data.data;
-        setRedemptions(d.redemptions ?? []);
-        setTotal(d.total ?? 0);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const fetchRedemptions = useCallback(
+    async (targetPage = 1) => {
+      if (!tenantSlug || tenantSlug === 'default') return;
+      setLoading(true);
+      try {
+        const res = await API.get(
+          `/api/v2/${tenantSlug}/redemptions?page=${targetPage}&page_size=${PAGE_SIZE}`,
+        );
+        if (res?.data?.success) {
+          const d = res.data.data;
+          setRedemptions(d.redemptions ?? []);
+          setTotal(d.total ?? 0);
+          setPage(targetPage);
+        }
+      } catch (_) {
+        // error toast handled by API interceptor
+      } finally {
+        setLoading(false);
       }
-    } catch (_) {
-      // error toast handled by API interceptor
-    } finally {
-      setLoading(false);
-    }
-  }, [tenantSlug]);
+    },
+    [tenantSlug],
+  );
 
   useEffect(() => {
-    fetchRedemptions();
-  }, [fetchRedemptions]);
+    fetchRedemptions(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantSlug]);
+
+  const goPage = (next) => {
+    fetchRedemptions(next);
+  };
 
   const handleCreated = async (codes) => {
     setCreating(false);
     setNewCodes(codes);
-    await fetchRedemptions();
+    await fetchRedemptions(1);
   };
 
   const handleDelete = async () => {
@@ -332,7 +346,11 @@ const HFRedemption = () => {
           tr('console.redemption.toast_deleted', 'Redemption code deleted'),
         );
         setDeleteTarget(null);
-        await fetchRedemptions();
+        // Re-fetch the current page; if that page is now past the end
+        // (the deleted row was the only one on the last page), step back
+        // one page instead of showing the empty state while codes remain.
+        const lastPage = Math.max(1, Math.ceil((total - 1) / PAGE_SIZE));
+        await fetchRedemptions(Math.min(page, lastPage));
       }
     } catch (_) {
       // error toast handled by API interceptor
@@ -385,84 +403,129 @@ const HFRedemption = () => {
         )}
 
         {redemptions.length > 0 && (
-          <table
-            style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}
-          >
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--hf-rule)' }}>
-                {[
-                  tr('console.redemption.th_key', 'key'),
-                  tr('console.redemption.th_name', 'name'),
-                  tr('console.redemption.th_quota', 'quota'),
-                  tr('console.redemption.th_status', 'status'),
-                  tr('console.redemption.th_created', 'created'),
-                  tr('console.redemption.th_expires', 'expires'),
-                  tr('console.redemption.th_used_by', 'used by'),
-                  tr('console.redemption.th_actions', 'actions'),
-                ].map((h) => (
-                  <th
-                    key={h}
-                    className='lbl'
-                    style={{ padding: '8px 10px', textAlign: 'left' }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {redemptions.map((r) => (
-                <tr
-                  key={r.id}
-                  style={{ borderBottom: '1px solid var(--hf-rule)' }}
-                  data-testid={`redemption-row-${r.id}`}
-                >
-                  <td
-                    className='mono'
-                    style={{ padding: '8px 10px', fontSize: 11 }}
-                  >
-                    {r.key}
-                  </td>
-                  <td style={{ padding: '8px 10px' }}>{r.name}</td>
-                  <td className='mono' style={{ padding: '8px 10px' }}>
-                    {r.quota}
-                  </td>
-                  <td style={{ padding: '8px 10px' }}>
-                    <span className={statusClass(r.status)}>
-                      {statusLabel(r.status, tr)}
-                    </span>
-                  </td>
-                  <td className='mono' style={{ padding: '8px 10px' }}>
-                    {fmtTime(r.created_time)}
-                  </td>
-                  <td className='mono' style={{ padding: '8px 10px' }}>
-                    {r.expired_time
-                      ? fmtTime(r.expired_time)
-                      : tr('console.redemption.never', 'never')}
-                  </td>
-                  <td className='mono' style={{ padding: '8px 10px' }}>
-                    {r.used_user_id ? `#${r.used_user_id}` : '—'}
-                  </td>
-                  <td style={{ padding: '8px 10px' }}>
-                    <button
-                      type='button'
-                      className='btn ghost sm'
-                      style={{
-                        color: 'var(--hf-err)',
-                        borderColor: 'var(--hf-err)',
-                      }}
-                      onClick={() =>
-                        setDeleteTarget({ id: r.id, name: r.name })
-                      }
-                      data-testid={`redemption-delete-btn-${r.id}`}
+          <>
+            <table
+              style={{
+                width: '100%',
+                borderCollapse: 'collapse',
+                fontSize: 12,
+              }}
+            >
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--hf-rule)' }}>
+                  {[
+                    tr('console.redemption.th_key', 'key'),
+                    tr('console.redemption.th_name', 'name'),
+                    tr('console.redemption.th_quota', 'quota'),
+                    tr('console.redemption.th_status', 'status'),
+                    tr('console.redemption.th_created', 'created'),
+                    tr('console.redemption.th_expires', 'expires'),
+                    tr('console.redemption.th_used_by', 'used by'),
+                    tr('console.redemption.th_actions', 'actions'),
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      className='lbl'
+                      style={{ padding: '8px 10px', textAlign: 'left' }}
                     >
-                      {tr('console.common.delete', 'delete')}
-                    </button>
-                  </td>
+                      {h}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {redemptions.map((r) => (
+                  <tr
+                    key={r.id}
+                    style={{ borderBottom: '1px solid var(--hf-rule)' }}
+                    data-testid={`redemption-row-${r.id}`}
+                  >
+                    <td
+                      className='mono'
+                      style={{ padding: '8px 10px', fontSize: 11 }}
+                    >
+                      {r.key}
+                    </td>
+                    <td style={{ padding: '8px 10px' }}>{r.name}</td>
+                    <td className='mono' style={{ padding: '8px 10px' }}>
+                      {r.quota}
+                    </td>
+                    <td style={{ padding: '8px 10px' }}>
+                      <span className={statusClass(r.status)}>
+                        {statusLabel(r.status, tr)}
+                      </span>
+                    </td>
+                    <td className='mono' style={{ padding: '8px 10px' }}>
+                      {fmtTime(r.created_time)}
+                    </td>
+                    <td className='mono' style={{ padding: '8px 10px' }}>
+                      {r.expired_time
+                        ? fmtTime(r.expired_time)
+                        : tr('console.redemption.never', 'never')}
+                    </td>
+                    <td className='mono' style={{ padding: '8px 10px' }}>
+                      {r.used_user_id ? `#${r.used_user_id}` : '—'}
+                    </td>
+                    <td style={{ padding: '8px 10px' }}>
+                      <button
+                        type='button'
+                        className='btn ghost sm'
+                        style={{
+                          color: 'var(--hf-err)',
+                          borderColor: 'var(--hf-err)',
+                        }}
+                        onClick={() =>
+                          setDeleteTarget({ id: r.id, name: r.name })
+                        }
+                        data-testid={`redemption-delete-btn-${r.id}`}
+                      >
+                        {tr('console.common.delete', 'delete')}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '10px 0',
+                fontSize: 12,
+              }}
+            >
+              <button
+                type='button'
+                className='btn ghost sm'
+                disabled={page <= 1 || loading}
+                onClick={() => goPage(page - 1)}
+                data-testid='redemption-prev-btn'
+              >
+                {tr('console.redemption.prev', '← prev')}
+              </button>
+              <span className='mono muted' data-testid='redemption-range-label'>
+                {tr(
+                  'console.redemption.range_of_total',
+                  '{{start}}–{{end}} of {{total}}',
+                  {
+                    start: total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1,
+                    end: Math.min(page * PAGE_SIZE, total),
+                    total,
+                  },
+                )}
+              </span>
+              <button
+                type='button'
+                className='btn ghost sm'
+                disabled={page >= totalPages || loading}
+                onClick={() => goPage(page + 1)}
+                data-testid='redemption-next-btn'
+              >
+                {tr('console.redemption.next', 'next →')}
+              </button>
+            </div>
+          </>
         )}
       </div>
 

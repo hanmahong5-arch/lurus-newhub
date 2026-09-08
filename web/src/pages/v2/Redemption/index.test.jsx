@@ -270,7 +270,112 @@ describe('Redemption page', () => {
     expect(API.delete).not.toHaveBeenCalled();
   });
 
-  // 6. API error on list fetch — does not crash.
+  // 6. Pagination — 120 codes over 3 pages of 50; clicking "next" requests
+  // page=2 and the range label reflects the new page.
+  it('paginates through 120 codes across 3 pages', async () => {
+    const page1Items = Array.from({ length: 50 }, (_, i) =>
+      makeRedemption(i + 1, `code-${i + 1}`),
+    );
+    const page2Items = Array.from({ length: 50 }, (_, i) =>
+      makeRedemption(i + 51, `code-${i + 51}`),
+    );
+
+    API.get.mockImplementation((url) => {
+      const params = new URLSearchParams(url.split('?')[1]);
+      const page = Number(params.get('page'));
+      const items = page === 2 ? page2Items : page1Items;
+      return Promise.resolve({
+        data: {
+          success: true,
+          data: { redemptions: items, total: 120, page, page_size: 50 },
+        },
+      });
+    });
+
+    render(React.createElement(HFRedemption));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('redemption-row-1')).toBeDefined();
+    });
+
+    // First page: prev disabled, next enabled, range label is 1-50 of 120.
+    expect(screen.getByTestId('redemption-prev-btn')).toBeDisabled();
+    expect(screen.getByTestId('redemption-next-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('redemption-range-label').textContent).toBe(
+      '1–50 of 120',
+    );
+
+    fireEvent.click(screen.getByTestId('redemption-next-btn'));
+
+    await waitFor(() => {
+      expect(API.get).toHaveBeenLastCalledWith(
+        expect.stringContaining('page=2'),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('redemption-row-51')).toBeDefined();
+    });
+
+    // Page 2 of 3 (120 rows / 50 per page = ceil(2.4) = 3 pages): prev is
+    // now enabled, and the range label covers rows 51-100.
+    expect(screen.getByTestId('redemption-prev-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('redemption-next-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('redemption-range-label').textContent).toBe(
+      '51–100 of 120',
+    );
+  });
+
+  // 6a. Deleting the only row on the last page steps back one page instead
+  // of showing the empty state while codes remain.
+  it('deleting the last row on the last page steps back to the previous page', async () => {
+    const page1Items = Array.from({ length: 50 }, (_, i) =>
+      makeRedemption(i + 1, `code-${i + 1}`),
+    );
+    let total = 51;
+    API.get.mockImplementation((url) => {
+      const params = new URLSearchParams(url.split('?')[1]);
+      const page = Number(params.get('page'));
+      const items =
+        page === 2
+          ? total > 50
+            ? [makeRedemption(51, 'code-51')]
+            : []
+          : page1Items;
+      return Promise.resolve({
+        data: {
+          success: true,
+          data: { redemptions: items, total, page, page_size: 50 },
+        },
+      });
+    });
+    API.delete.mockImplementation(() => {
+      total = 50;
+      return Promise.resolve({ data: { success: true } });
+    });
+
+    render(React.createElement(HFRedemption));
+    await waitFor(() => screen.getByTestId('redemption-row-1'));
+    fireEvent.click(screen.getByTestId('redemption-next-btn'));
+    await waitFor(() => screen.getByTestId('redemption-row-51'));
+
+    fireEvent.click(screen.getByTestId('redemption-delete-btn-51'));
+    await waitFor(() => screen.getByTestId('confirm-dialog'));
+    fireEvent.click(screen.getByTestId('confirm-ok'));
+
+    await waitFor(() => {
+      expect(API.get).toHaveBeenLastCalledWith(
+        expect.stringContaining('page=1'),
+      );
+    });
+    await waitFor(() => screen.getByTestId('redemption-row-1'));
+    expect(screen.queryByTestId('redemption-empty')).toBeNull();
+    expect(screen.getByTestId('redemption-range-label').textContent).toBe(
+      '1–50 of 50',
+    );
+  });
+
+  // 6b. API error on list fetch — does not crash.
   it('handles API error on list fetch gracefully', async () => {
     API.get.mockRejectedValue(new Error('network error'));
 

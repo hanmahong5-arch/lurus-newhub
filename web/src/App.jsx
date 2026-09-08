@@ -30,8 +30,6 @@ import Setting from './pages/Setting';
 import { StatusContext } from './context/Status';
 
 import OpenRouterSync from './pages/OpenRouterSync';
-import Redemption from './pages/Redemption';
-import TopUp from './pages/TopUp';
 import Chat from './pages/Chat';
 import Chat2Link from './pages/Chat2Link';
 import Midjourney from './pages/Midjourney';
@@ -159,11 +157,18 @@ function App() {
             </AdminRoute>
           }
         />
+        {/* Legacy Semi UI redemption shell retired (console-one-surface,
+            2026-09-07) — the v2 redemption page supersedes it. The target
+            route is PrivateRoute-only (admin is enforced server-side by the
+            redemptions API, not by the route), so this redirect keeps the
+            AdminRoute wrapper the legacy path had: a non-admin following an
+            old link still gets the Forbidden page instead of an admin page
+            shell whose list call answers 403. */}
         <Route
           path='/console/redemption'
           element={
             <AdminRoute>
-              <Redemption />
+              <Navigate to='/console/v2/redemption' replace />
             </AdminRoute>
           }
         />
@@ -231,15 +236,12 @@ function App() {
             </PrivateRoute>
           }
         />
+        {/* Legacy Semi UI topup shell retired (console-one-surface,
+            2026-09-07) — the v2 billing page (which also carries the
+            redeem-a-code flow this shell used to own) supersedes it. */}
         <Route
           path='/console/topup'
-          element={
-            <PrivateRoute>
-              <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <TopUp />
-              </Suspense>
-            </PrivateRoute>
-          }
+          element={<Navigate to='/console/v2/billing' replace />}
         />
         {/* Entry-level /console routes go to v2. */}
         <Route

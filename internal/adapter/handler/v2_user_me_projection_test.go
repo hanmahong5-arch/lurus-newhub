@@ -101,11 +101,11 @@ func TestGetSelfV2_TokenCountIsTenantScoped(t *testing.T) {
 	}
 }
 
-// TestGetSelfV2_IsSupersetOfV1Projection guards the route swap. Two legacy-shell
-// consumers (components/topup/index.jsx, hooks/dashboard/useDashboardData.js)
-// push this whole payload into the shared user store, so anything the v1
-// GetSelf used to provide must still be here or the legacy top-up page loses
-// its sidebar config and permission gating.
+// TestGetSelfV2_IsSupersetOfV1Projection guards the route swap: the response
+// shape must stay a strict superset of what v1 GetSelf returned, because
+// whichever page reads this payload next (currently
+// pages/v2/Dashboard/index.jsx and pages/v2/Settings/index.jsx) should not
+// have to special-case a narrower v2 response.
 func TestGetSelfV2_IsSupersetOfV1Projection(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()

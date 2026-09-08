@@ -51,7 +51,6 @@ const PageLayout = () => {
   const cardProPages = [
     '/console/channel',
     '/console/log',
-    '/console/redemption',
     '/console/user',
     '/console/token',
     '/console/midjourney',

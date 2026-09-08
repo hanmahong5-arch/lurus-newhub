@@ -88,7 +88,7 @@ const UserArea = ({
               </Dropdown.Item>
               <Dropdown.Item
                 onClick={() => {
-                  navigate('/console/topup');
+                  navigate('/console/v2/billing');
                 }}
                 className='!px-3 !py-1.5 !text-sm !text-semi-color-text-0 hover:!bg-semi-color-fill-1 dark:!text-gray-200 dark:hover:!bg-blue-500 dark:hover:!text-white'
               >

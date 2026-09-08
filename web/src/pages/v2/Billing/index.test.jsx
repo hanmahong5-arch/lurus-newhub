@@ -326,8 +326,9 @@ describe('Billing page', () => {
 // ── Redeem a code (2026-09-03) ──────────────────────────────────────────────
 //
 // v2 had no redemption entry point at all. The only one lived on the legacy
-// /console/topup shell, which the v2 navigation cannot reach, so a customer
-// holding a valid code had nowhere in the console to spend it.
+// /console/topup shell, which the v2 navigation could not reach, so a
+// customer holding a valid code had nowhere in the console to spend it. That
+// shell is now deleted entirely (console-one-surface, 2026-09-07).
 describe('Billing — redeem a code', () => {
   const CODE = 'a'.repeat(32);
 

@@ -20,15 +20,29 @@ import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
+import {
+  MemoryRouter,
+  Navigate,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
 
 // App.jsx is a route table. Every page it mounts is replaced by a marker so
 // the assertions are about ROUTING (which path lands where, and which guard
 // wraps it) rather than about page internals.
-const { stub } = vi.hoisted(() => ({
+//
+// `<Navigate>` fires its redirect in a passive effect that render()'s
+// synchronous act() flush has already resolved by the time render() returns
+// — so a route whose element is `<AdminRoute><Navigate .../></AdminRoute>`
+// never shows an `admin-gate` node in the final DOM, only in the target
+// route's own guard. adminRouteChildren records what AdminRoute was called
+// with (the child element, before it redirects away) so a test can still
+// prove the wrapper was there even though the DOM has already moved on.
+const { stub, adminRouteChildren } = vi.hoisted(() => ({
   stub: (testId) => ({
     default: () => <div data-testid={testId} />,
   }),
+  adminRouteChildren: [],
 }));
 
 vi.mock('./components/layout/SetupCheck', () => ({
@@ -40,7 +54,10 @@ vi.mock('./helpers', () => ({
   PrivateRoute: ({ children }) => (
     <div data-testid='private-gate'>{children}</div>
   ),
-  AdminRoute: ({ children }) => <div data-testid='admin-gate'>{children}</div>,
+  AdminRoute: ({ children }) => {
+    adminRouteChildren.push(children);
+    return <div data-testid='admin-gate'>{children}</div>;
+  },
   AuthRedirect: ({ children }) => <div data-testid='auth-gate'>{children}</div>,
 }));
 
@@ -49,8 +66,6 @@ vi.mock('./pages/NotFound', () => stub('page-not-found'));
 vi.mock('./pages/Forbidden', () => stub('page-forbidden'));
 vi.mock('./pages/Setting', () => stub('page-setting'));
 vi.mock('./pages/OpenRouterSync', () => stub('page-openrouter-sync'));
-vi.mock('./pages/Redemption', () => stub('page-redemption'));
-vi.mock('./pages/TopUp', () => stub('page-topup'));
 vi.mock('./pages/Chat', () => stub('page-chat'));
 vi.mock('./pages/Chat2Link', () => stub('page-chat2link'));
 vi.mock('./pages/Midjourney', () => stub('page-midjourney'));
@@ -118,6 +133,7 @@ const pathname = () => screen.getByTestId('pathname').textContent;
 
 afterEach(() => {
   vi.restoreAllMocks();
+  adminRouteChildren.length = 0;
 });
 
 describe('App — legacy console redirects', () => {
@@ -217,7 +233,6 @@ describe('App — route guards', () => {
 
   it.each([
     ['/console/user', 'page-user'],
-    ['/console/redemption', 'page-redemption'],
     ['/console/openrouter-sync', 'page-openrouter-sync'],
     ['/console/setting', 'page-setting'],
   ])('%s is admin-only', async (path, testId) => {
@@ -227,9 +242,39 @@ describe('App — route guards', () => {
     expect(screen.queryByTestId('private-gate')).toBeNull();
   });
 
+  // The legacy Semi UI shells are gone (console-one-surface, 2026-09-07) —
+  // both routes now redirect straight into the v2 pages that replaced them,
+  // same as the other /console/* -> /console/v2/* redirects above.
+  it.each([
+    ['/console/topup', '/console/v2/billing', 'v2-billing'],
+    ['/console/redemption', '/console/v2/redemption', 'v2-redemption'],
+  ])('%s redirects to %s', async (from, to, testId) => {
+    renderAt(from);
+    expect(pathname()).toBe(to);
+    expect(await screen.findByTestId(testId)).toBeInTheDocument();
+    expect(screen.getByTestId('private-gate')).toBeInTheDocument();
+  });
+
+  // /console/redemption was AdminRoute-gated at HEAD; the redirect must stay
+  // wrapped in AdminRoute too, or a non-admin reaches
+  // /console/v2/redemption's PrivateRoute-only gate through the legacy path
+  // even though the same page is unreachable to them from anywhere else in
+  // the console. The final DOM after the redirect completes only shows the
+  // TARGET route's guard (private-gate) — see the adminRouteChildren comment
+  // above — so this asserts on what AdminRoute was invoked with instead.
+  it('/console/redemption stays behind AdminRoute even though it only redirects', () => {
+    renderAt('/console/redemption');
+    const wrapped = adminRouteChildren.find(
+      (child) =>
+        React.isValidElement(child) &&
+        child.type === Navigate &&
+        child.props.to === '/console/v2/redemption',
+    );
+    expect(wrapped).toBeTruthy();
+  });
+
   it.each([
     ['/console/personal', 'page-personal'],
-    ['/console/topup', 'page-topup'],
     ['/console/midjourney', 'page-midjourney'],
     ['/console/task', 'page-task'],
     ['/chat2link', 'page-chat2link'],
