@@ -27,6 +27,40 @@
 > written (historical record of the 2026-02 decision); read them against this
 > update, not as current state.
 
+> **UPDATE 2026-09-08 (C08-TTFT-CACHE-SERIES)**: two additive observability
+> pieces, both zero-collector-change (Netdata scrapes `/metrics` unchanged):
+> - `lurus_gateway_relay_time_to_first_token_seconds{provider,model,product}`
+>   (histogram) — wall-clock time from relay start to the first token
+>   received from upstream, stamped by whichever streaming adaptor's first
+>   `RelayInfo.SetFirstResponseTime()` call fires for that request. The
+>   capture point is provider-side and varies by adaptor: the
+>   shared stream scanner (most text/chat providers) stamps it before
+>   forwarding the first non-terminal SSE event to the caller, the Cloudflare
+>   adaptor stamps it after forwarding, and the AWS/Cohere adaptors stamp it
+>   at their own first-chunk point — none of them measure the byte reaching
+>   the caller's socket. Written once per request from
+>   `handler.observeRelayOutcome`'s end-to-end site, only when
+>   `RelayInfo.HasSendResponse()` is true (streamed and actually received a
+>   first token) and the computed duration is positive; non-streaming and
+>   failed-before-first-byte requests correctly contribute nothing, while a
+>   request that received a first token and then failed or had the client
+>   disconnect still contributes. OpenAI Realtime sessions
+>   (`RelayFormatOpenAIRealtime`) are excluded outright — a long-lived
+>   bidirectional websocket session is a different traffic shape from a
+>   request/response call and does not belong in this histogram.
+>   `internal/pkg/metrics/ttft.go`.
+> - `GET /api/v2/:tenant_slug/logs/stat` (and `/stat/all`) gained
+>   `cache_read_tokens` / `cache_write_tokens` on both the window totals and
+>   each `by_product` row — SUMs of the existing `other.cache_tokens` /
+>   `other.cache_creation_tokens` JSON fields `log_info_generate.go` already
+>   wrote onto text/claude consume rows (Wss/Audio rows carry `cache_tokens`
+>   as 0 via the shared base generator but never `cache_creation_tokens`;
+>   Midjourney rows carry neither key), extracted the same way
+>   `source_product` is (`repo.OtherTextExpr`). Zero for a window with no
+>   reported cache hits; upstream-reported except on OpenRouter channels,
+>   where `cache_creation_tokens` may be derived from the upstream-reported
+>   cost instead (`quota.go` `CalcOpenRouterCacheCreateTokens`).
+
 ## Context
 
 Production Lurus API needs metrics, tracing, and alerting for incident response and performance optimization. The team is 2 people running on a single K3s node, so the stack must be lightweight and optional (feature-flagged).

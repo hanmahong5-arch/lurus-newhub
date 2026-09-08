@@ -297,3 +297,42 @@ func TestGetLogStatV2_SourceProductFilterAndBreakdown(t *testing.T) {
 		t.Errorf("expected unfiltered total_quota=55, got %d", got)
 	}
 }
+
+// TestGetLogStatV2_CacheTokenTotals covers the prompt-cache reporting fields
+// (C08-TTFT-CACHE-SERIES): cache_read_tokens sums other.cache_tokens and
+// cache_write_tokens sums other.cache_creation_tokens, both extracted via
+// repo.OtherTextExpr the same way source_product is — including a row whose
+// Other is the empty string (unpriced/legacy rows), which must not error the
+// query (the NULLIF-on-empty-other guard in the SQL) or contribute a phantom cache total.
+func TestGetLogStatV2_CacheTokenTotals(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	now := common.GetTimestamp()
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "gpt-4o", 10, 1, 1, now, `{"cache_tokens":120}`)
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "claude-3.5", 10, 1, 1, now, `{"cache_tokens":30,"cache_creation_tokens":7}`)
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "gpt-4o", 10, 1, 1, now, "")
+
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs/stat", nil, nil)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+
+	if got := int(data["cache_read_tokens"].(float64)); got != 150 {
+		t.Errorf("expected cache_read_tokens=150 (120+30), got %d", got)
+	}
+	if got := int(data["cache_write_tokens"].(float64)); got != 7 {
+		t.Errorf("expected cache_write_tokens=7, got %d", got)
+	}
+
+	byProduct, ok := data["by_product"].([]interface{})
+	if !ok || len(byProduct) == 0 {
+		t.Fatalf("by_product missing or empty: %v", data["by_product"])
+	}
+	row := byProduct[0].(map[string]interface{})
+	if got := int(row["cache_read_tokens"].(float64)); got != 150 {
+		t.Errorf("by_product[0].cache_read_tokens = %d, want 150", got)
+	}
+	if got := int(row["cache_write_tokens"].(float64)); got != 7 {
+		t.Errorf("by_product[0].cache_write_tokens = %d, want 7", got)
+	}
+}

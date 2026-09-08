@@ -43,6 +43,22 @@ func relayOutcome(apiErr *types.NewAPIError, endReason string) string {
 // produced a RelayInfo, e.g. request-binding failures). A nil info or an
 // empty SourceProduct yields product="unknown" — the same fallback
 // helper.ReportIncompleteStream uses for relay_errors_total.
+//
+// The total=true (end-to-end) call is also the one place time-to-first-token
+// is observed: it fires once per request regardless of retries, whereas the
+// total=false site runs once per channel attempt and would double-count a
+// request that failed over. HasSendResponse() (relay_info.go) tells apart a
+// request that actually received a first token from upstream from the
+// "never happened" sentinel non-streaming and failed-before-first-byte
+// requests seed FirstResponseTime with — only the former gets an
+// observation; a request that got a first token and then failed or had the
+// client disconnect still observes, since HasSendResponse only asks whether
+// a first token arrived, not how the request ended. The duration is also
+// guarded explicitly (> 0) below so a future change to the sentinel or to
+// HasSendResponse's comparison cannot resurrect a zero/negative observation.
+// OpenAI Realtime sessions (RelayFormatOpenAIRealtime) are excluded even
+// when HasSendResponse is true — see ttft.go for why a bidirectional
+// websocket session doesn't belong in a request-latency histogram.
 func observeRelayOutcome(provider, model string, info *relaycommon.RelayInfo, apiErr *types.NewAPIError, seconds float64, total bool) {
 	endReason := ""
 	product := "unknown"
@@ -55,6 +71,11 @@ func observeRelayOutcome(provider, model string, info *relaycommon.RelayInfo, ap
 	status := relayOutcome(apiErr, endReason)
 	if total {
 		metrics.RecordRelayTotal(provider, model, status, product, seconds)
+		if info != nil && info.RelayFormat != types.RelayFormatOpenAIRealtime && info.HasSendResponse() {
+			if ttft := info.FirstResponseTime.Sub(info.StartTime).Seconds(); ttft > 0 {
+				metrics.RecordTimeToFirstToken(provider, model, product, ttft)
+			}
+		}
 	} else {
 		metrics.RecordRelayRequest(provider, model, status, product, seconds)
 	}

@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -240,6 +242,19 @@ func GetChannelV2(c *gin.Context) {
 	})
 }
 
+// channelConfigErrorResponse builds the 400 body for a channel config-document
+// validation failure, surfacing the field-naming code from
+// relaycommon.ChannelConfigValidationError when the error came from one of the
+// four validators, so a console/API caller can branch on the code instead of
+// parsing the message.
+func channelConfigErrorResponse(err error) gin.H {
+	var verr *relaycommon.ChannelConfigValidationError
+	if errors.As(err, &verr) {
+		return gin.H{"success": false, "code": verr.Code, "message": verr.Message}
+	}
+	return gin.H{"success": false, "message": err.Error()}
+}
+
 // CreateChannelV2 creates a new channel (admin only)
 // Route: POST /api/v2/:tenant_slug/channels
 func CreateChannelV2(c *gin.Context) {
@@ -328,10 +343,7 @@ func CreateChannelV2(c *gin.Context) {
 	// VertexAI channel with no/invalid region). Egress (SSRF) is validated
 	// separately below; see validateChannelContent for why it is kept out.
 	if err := validateChannelContent(&channel, true); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, channelConfigErrorResponse(err))
 		return
 	}
 
@@ -483,12 +495,26 @@ func UpdateChannelV2(c *gin.Context) {
 		existingChannel.HeaderOverride = updateReq.HeaderOverride
 	}
 
-	// Validate settings
-	if err := existingChannel.ValidateSettings(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+	// Validate the four config documents (param_override, header_override,
+	// model_mapping, setting) on the fields THIS request touches, not
+	// existingChannel's merged state — so a partial update that edits only
+	// e.g. the name doesn't get re-rejected by a pre-existing document with a
+	// structural defect it isn't editing (that document keeps working via
+	// the relay-time ErrorCodeChannelParamOverrideInvalid backstop until it
+	// is itself next saved). param_override runs a structural pre-pass
+	// (channel_config_validate.go: validateOperationsStructure) over the
+	// parsed operations array before dry-running the engine, so it rejects a
+	// non-object operation entry, a missing/unknown mode, move/copy with an
+	// empty from or to, any other path-based mode with an empty path, an
+	// unparseable regex_replace pattern, and a missing trim/ensure value or
+	// replace from — independently of whether the targeted path exists on
+	// the probe — plus whatever the dry-run itself still rejects
+	// (unsupported comparison mode). It does not check whether a path the
+	// probe does not carry exists on a real request body: an operation
+	// whose target field is absent from the {model, messages} probe but
+	// would be present on a real request body still saves.
+	if err := validateChannelConfigDocuments(&updateReq); err != nil {
+		c.JSON(http.StatusBadRequest, channelConfigErrorResponse(err))
 		return
 	}
 
