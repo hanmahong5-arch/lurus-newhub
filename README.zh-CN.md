@@ -10,6 +10,11 @@ Lurus Hub（Go module 名 `lurus-hub`，仓库名 `lurus-newhub`）是在 [New A
 
 它是 Lurus 自家产品线的生产大模型网关（`hub.lurus.cn`），因此中转链路、多租户路由、V1/V2 REST API 都在持续实跑。但部分能力默认关闭、按部署环境自行开启：Meilisearch 日志搜索（`MEILISEARCH_ENABLED=false`）、OpenTelemetry 链路追踪（`OTEL_TRACING_ENABLED=false`）、OIDC 登录（`OIDC_ENABLED=false`）、外部计费对接（`BILLING_UNIFIED_ENABLED=false`）。这些是"代码已具备、默认关闭"，不代表在你的部署环境里已经端到端交付——开启后请自行验证。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/architecture-dark.svg">
+  <img alt="架构图：OpenAI 兼容的调用方进入中转路由后分发给 20+ 家供应商适配器并把结果写入打分与用量数据枢纽，另一条并行的多租户 REST API 共享 PostgreSQL 与 Redis，并可选择通过 gRPC 把用量上报给配套的计费服务。" src="docs/diagrams/architecture.svg">
+</picture>
+
 ## 核心能力
 
 - **统一多供应商中转** — 在 20+ 家模型供应商前提供 OpenAI 兼容接口，并在三种供应商 API 格式间自动转换（`internal/adapter/provider/`、`internal/adapter/handler/router/relay-router.go`）。
