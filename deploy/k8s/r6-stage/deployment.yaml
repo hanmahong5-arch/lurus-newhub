@@ -52,8 +52,8 @@ spec:
           # ArgoCD sync / apply -k). Hand-edit only for an emergency pin, and
           # expect the next build to overwrite it.
           # GHCR repository name follows the GitHub repo name (hanmahong5-arch/lurus-newhub).
-          # pin: main-20260908-53040db run=34291984003
-          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:016705bb5d7aa8dd4e87d7b5742923964713269cab9d1b9b3ae80841b3f0264b
+          # pin: main-20260909-258d5a3 run=34293546349
+          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:19dd8b3597b2aec2d1cc6915f0f0614f8bc8233bd4418b681d1026e13ec47349
           imagePullPolicy: IfNotPresent
           # Container hardening: no priv-escalation, read-only root FS (writes go
           # to the /data + /tmp emptyDirs below), drop all caps.
