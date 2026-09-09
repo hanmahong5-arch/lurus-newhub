@@ -276,18 +276,38 @@ var (
 	)
 
 	// CreditPoolBalance reflects the current_balance column of each pool.
-	// Set from DebitPoolInTx + TopupPool call-sites.
+	// Set from DebitPoolInTx + TopupPool call-sites, and from the scheduled
+	// reset pass (internal/app/credit_pool_reset.go) whenever
+	// CREDIT_POOL_RESET_MODE=enforce actually refills a pool.
 	//
 	// ⚠️ NOT ALERTED, NOT DASHBOARDED. This used to say "Resellers watch this
 	// on their Grafana panel; the CreditPoolBalanceLow alert fires under 20%
 	// ceiling" — neither one is true. The Grafana dashboard was undeployed
 	// JSON (never applied by any kustomization) and has been deleted; the rule
 	// of that name is a PrometheusRule CRD no kustomization deploys, and R6
-	// has no Prometheus Operator to accept it anyway. A low or exhausted
-	// tenant credit pool notifies nobody today; it is visible only by reading
-	// this gauge or the admin credit-pool endpoints. See
-	// alert_wiring_honesty_test.go, which fails go test if this drifts
-	// back.
+	// has no Prometheus Operator to accept it anyway.
+	//
+	// What the pool-reset/alert lane DID wire: crossing a pool's
+	// alert_threshold_pct runs the threshold publisher
+	// (internal/pkg/nats/pool_threshold.go), subject to a caller-side
+	// precheck (internal/app/quota.go maybeAlertPoolThreshold) that skips
+	// the call outright while the pool's alert_fired_at is inside the same
+	// 1h dedup window — it does not run on every crossing, only the ones
+	// the precheck lets through. When it does run and both of the
+	// publisher's own dedup layers also let it through, it marks
+	// tenant_credit_pools.alert_fired_at and the caller writes a
+	// billing.pool_threshold audit row either way (delivered or not); it
+	// increments CreditPoolAlertTotal{delivery="nats"} only when
+	// LLM_QUOTA_NATS_ENABLED and the publish itself succeeds, and
+	// CreditPoolAlertTotal{delivery="recorded_only"} when NATS is disabled or
+	// no publisher is configured — a crossing that is marked/audited but
+	// whose publish attempt fails increments neither label and is counted via
+	// CreditPoolAlertHookErrorTotal instead. None of that
+	// reaches an on-call rotation. A low or exhausted tenant credit pool
+	// stays visible only by reading this gauge, the audit trail, the
+	// counter, or the admin
+	// credit-pool endpoints. See alert_wiring_honesty_test.go, which fails go
+	// test if this drifts back.
 	CreditPoolBalance = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -296,6 +316,62 @@ var (
 			Help:      "Current tenant credit pool balance",
 		},
 		[]string{"tenant_id"},
+	)
+
+	// CreditPoolResetTotal counts every pool the scheduled reset pass
+	// (internal/app/credit_pool_reset.go, CREDIT_POOL_RESET_MODE) evaluated
+	// as due, labeled by tenant and action: "reset" (enforce mode, balance
+	// actually refilled to ceiling) or "observed" (observe mode, or the
+	// rehearsal endpoint's ?mode=observe — no write). The default mode is
+	// observe, so a fresh deployment's series is all "observed" until an
+	// operator turns enforcement on.
+	CreditPoolResetTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "credit_pool_reset_total",
+			Help:      "Tenant credit pools evaluated by the scheduled reset pass, by tenant and action (reset/observed)",
+		},
+		[]string{"tenant_id", "action"},
+	)
+
+	// CreditPoolAlertTotal counts every time the pool-threshold publisher
+	// (internal/pkg/nats/pool_threshold.go) actually fires — its own schema
+	// + Redis dedup let the crossing through — labeled by tenant and
+	// delivery: "nats" is incremented only after the payload has actually
+	// been handed to nats.Publish without error; "recorded_only" is
+	// incremented right after alert_fired_at is durably marked, for the
+	// case NATS is disabled (or no publisher wired). A publish that is
+	// attempted but fails does NOT increment either label — that crossing
+	// is still marked/audited (fired=true reaches the caller with
+	// delivery="recorded_only" and a non-nil error) but is counted as an
+	// honest delivery failure via CreditPoolAlertHookErrorTotal instead, so
+	// this series never claims "nats" for a payload that never left the
+	// process. Suppressed (deduped) crossings are not counted here — that
+	// is the point of dedup.
+	CreditPoolAlertTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "credit_pool_alert_total",
+			Help:      "Tenant credit pool threshold crossings that fired (post-dedup), by tenant and delivery (nats/recorded_only)",
+		},
+		[]string{"tenant_id", "delivery"},
+	)
+
+	// CreditPoolAlertHookErrorTotal counts post-consume debits where the
+	// threshold-crossing alert hook (internal/app/quota.go maybeAlertPoolThreshold)
+	// itself failed (infrastructure error from PublishPoolThreshold — DB
+	// unreachable, publish enqueue failed). Never blocks or alters the debit
+	// that triggered it; this counter is the honest signal that a crossing
+	// went undelivered.
+	CreditPoolAlertHookErrorTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "credit_pool_alert_hook_error_total",
+			Help:      "Post-consume debits whose pool-threshold alert hook failed (debit itself unaffected)",
+		},
 	)
 
 	// CreditPoolOverdraftTotal counts post-consume debits that found the pool

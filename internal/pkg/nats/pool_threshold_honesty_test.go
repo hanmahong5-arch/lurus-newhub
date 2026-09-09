@@ -85,7 +85,7 @@ func TestPoolThreshold_DedupInteractionMatrix(t *testing.T) {
 				rdb.failErr = errors.New("redis dial timeout")
 			}
 
-			err := publishPoolThreshold(context.Background(), "t", 1, 10, 1000, 80, pub, rdb, db, now)
+			_, _, err := publishPoolThreshold(context.Background(), "t", 1, 10, 1000, 80, pub, rdb, db, now)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -119,7 +119,7 @@ func TestPoolThreshold_WireContractAndGuards(t *testing.T) {
 
 	// Happy path: assert every payload field is what a consumer renders.
 	pub := &mockPoolPublisher{}
-	if err := publishPoolThreshold(context.Background(), "acme", 77, 150, 1000, 80, pub, newMockPoolRedis(), &mockPoolDB{}, now); err != nil {
+	if _, _, err := publishPoolThreshold(context.Background(), "acme", 77, 150, 1000, 80, pub, newMockPoolRedis(), &mockPoolDB{}, now); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if pub.count() != 1 {
@@ -147,5 +147,5 @@ func TestPoolThreshold_WireContractAndGuards(t *testing.T) {
 	// core level (the <=0 guard is in the wrapper). So here we only assert the
 	// core does not PANIC and behaves deterministically — locking that the core
 	// is total, with the input guard documented as living in the wrapper.
-	_ = publishPoolThreshold(context.Background(), "acme", 0, 10, 1000, 80, pubZero, newMockPoolRedis(), &mockPoolDB{}, now)
+	_, _, _ = publishPoolThreshold(context.Background(), "acme", 0, 10, 1000, 80, pubZero, newMockPoolRedis(), &mockPoolDB{}, now)
 }

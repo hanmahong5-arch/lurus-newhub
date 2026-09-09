@@ -110,6 +110,17 @@ const (
 	// alongside the llm.quota.threshold NATS publish so the audit trail records
 	// the crossing even when NATS dispatch fails.
 	ActionBillingQuotaThreshold = "billing.quota_threshold"
+	// ActionBillingPoolReset is recorded for every tenant credit pool the
+	// scheduled reset pass actually refilled (CREDIT_POOL_RESET_MODE=enforce
+	// only — observe mode never writes this). Details carry {pool_id, delta,
+	// next_reset_at}.
+	ActionBillingPoolReset = "billing.pool_reset"
+	// ActionBillingPoolThreshold is recorded whenever the pool-threshold
+	// publisher (internal/pkg/nats/pool_threshold.go) actually fires — i.e.
+	// its own schema+Redis dedup let this crossing through — regardless of
+	// whether NATS itself is enabled (delivery is "nats" or "recorded_only").
+	// Details carry {pool_id, balance, max_balance, threshold_pct, delivery}.
+	ActionBillingPoolThreshold = "billing.pool_threshold"
 
 	// System lifecycle.
 	ActionSystemStartup  = "system.startup"
@@ -201,6 +212,8 @@ var validAuditActions = map[string]struct{}{
 	ActionBillingCredit:            {},
 	ActionBillingQuotaConsumed:     {},
 	ActionBillingQuotaThreshold:    {},
+	ActionBillingPoolReset:         {},
+	ActionBillingPoolThreshold:     {},
 	ActionSystemStartup:            {},
 	ActionSystemShutdown:           {},
 }

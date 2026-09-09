@@ -507,3 +507,129 @@ func nextResetAt(period string, from time.Time) *time.Time {
 	}
 	return &next
 }
+
+// Scheduled-reset action values on PoolResetResult.Action — mirrors the
+// handler's JSON contract for POST /internal/admin/reset-due-pools.
+const (
+	PoolResetActionReset    = "reset"
+	PoolResetActionObserved = "observed"
+)
+
+// PoolResetResult describes one due pool's scheduled-reset outcome.
+// Delta is the credit amount (would-be in observe mode, actually applied in
+// enforce mode) = max_balance − current_balance at the moment it was read —
+// refill-to-ceiling, so a negative (overdrawn) balance is forgiven by a
+// reset. MaxBalance carries the pool's ceiling, which is also the post-reset
+// balance when Action == PoolResetActionReset.
+type PoolResetResult struct {
+	TenantID    string
+	PoolID      int64
+	Delta       int64
+	MaxBalance  int64
+	Action      string
+	NextResetAt *time.Time
+}
+
+// ResetDuePools finds every tenant credit pool whose scheduled reset is due
+// (next_reset_at <= now) and, when enforce is true, refills each to its
+// ceiling. Unlimited pools (max_balance = PoolMaxBalanceUnlimited) and pools
+// with reset_period "" or "none" are never selected — the switch tenant pool
+// (migration 030, reset_period="none") is the permanent example, not an edge
+// case that might change.
+//
+// enforce=false (observe) makes no write: every due pool is reported with the
+// delta that WOULD be applied, so POST /internal/admin/reset-due-pools?mode=observe
+// can rehearse the pass safely against production data.
+//
+// enforce=true applies each pool's reset in its own transaction, guarded by a
+// conditional UPDATE keyed on the next_reset_at value just read (compare-and-
+// swap, no FOR UPDATE so the SQLite hermetic tier can run it): two concurrent
+// enforcers — the leader ticker racing an operator's rehearsal call, or two
+// replicas mid leadership handover — can only have one of them win the swap;
+// the loser's RowsAffected is 0 and it is skipped rather than double-crediting
+// the pool. A won CAS inserts one PoolDrawReasonReset credit draw row so the
+// ledger conservation law (seed − Σdraws == balance) keeps holding through a
+// reset, same as every other balance-changing event.
+func ResetDuePools(ctx context.Context, now time.Time, enforce bool) ([]PoolResetResult, error) {
+	var due []TenantCreditPool
+	if err := DB.WithContext(ctx).
+		Where("next_reset_at IS NOT NULL AND next_reset_at <= ? AND reset_period NOT IN (?, ?) AND max_balance > 0",
+			now, PoolResetNone, "").
+		Find(&due).Error; err != nil {
+		return nil, fmt.Errorf("list due pools: %w", err)
+	}
+
+	results := make([]PoolResetResult, 0, len(due))
+	for _, pool := range due {
+		delta := pool.MaxBalance - pool.CurrentBalance
+		next := nextResetAt(pool.ResetPeriod, now)
+
+		if !enforce {
+			results = append(results, PoolResetResult{
+				TenantID: pool.TenantID, PoolID: pool.ID,
+				Delta: delta, MaxBalance: pool.MaxBalance,
+				Action: PoolResetActionObserved, NextResetAt: next,
+			})
+			continue
+		}
+
+		applied, err := resetOnePoolInTx(ctx, pool, delta, now, next)
+		if err != nil {
+			return results, fmt.Errorf("reset pool %d (tenant %s): %w", pool.ID, pool.TenantID, err)
+		}
+		if !applied {
+			// Lost the CAS race — another actor already reset this pool
+			// between the list and the claim. Not an error; nothing to report.
+			continue
+		}
+		results = append(results, PoolResetResult{
+			TenantID: pool.TenantID, PoolID: pool.ID,
+			Delta: delta, MaxBalance: pool.MaxBalance,
+			Action: PoolResetActionReset, NextResetAt: next,
+		})
+	}
+	return results, nil
+}
+
+// resetOnePoolInTx applies one pool's scheduled reset — conditional UPDATE
+// plus draw insert — inside its own transaction. Returns applied=false (no
+// error) when the CAS lost the race, so the caller treats it as "someone else
+// already reset this pool" rather than a failure.
+func resetOnePoolInTx(ctx context.Context, pool TenantCreditPool, delta int64, now time.Time, next *time.Time) (bool, error) {
+	applied := false
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&TenantCreditPool{}).
+			Where("id = ? AND next_reset_at = ?", pool.ID, pool.NextResetAt).
+			Updates(map[string]interface{}{
+				"current_balance": pool.MaxBalance,
+				"last_reset_at":   now,
+				"next_reset_at":   next,
+				"alert_fired_at":  nil,
+				"updated_at":      now,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("reset update: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		applied = true
+
+		draw := &TenantCreditPoolDraw{
+			PoolID:    pool.ID,
+			TenantID:  pool.TenantID,
+			Direction: PoolDrawDirectionCredit,
+			Amount:    delta,
+			Reason:    PoolDrawReasonReset,
+			CreatedAt: now,
+		}
+		if err := tx.Create(draw).Error; err != nil {
+			return fmt.Errorf("reset draw insert: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return applied, nil
+}

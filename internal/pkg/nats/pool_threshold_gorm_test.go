@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gorm.io/gorm"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 )
 
 var natsSQLiteCounter atomic.Int64
@@ -143,28 +145,80 @@ func TestRedisCommonDeduper_NoRedisAlwaysAcquires(t *testing.T) {
 
 // --- PublishPoolThreshold wrapper: guard branches ---
 
-func TestPublishPoolThreshold_NoOpWhenDisabled(t *testing.T) {
+// TestPublishPoolThreshold_DisabledStillMarksRecordedOnly locks the lane's
+// core behaviour change: LLM_QUOTA_NATS_ENABLED=false no longer short-
+// circuits before dedup/mark. The crossing must still be marked, audited
+// (by the caller), and counted with delivery="recorded_only" — only the
+// wire leg (fj.mu.calls) is skipped. See pool_threshold.go's PublishPoolThreshold
+// doc comment; NoOpWhenDisabled/NoOpWhenPublisherNil (the pre-lane names)
+// described the OLD "return nil immediately" behaviour this replaces.
+func TestPublishPoolThreshold_DisabledStillMarksRecordedOnly(t *testing.T) {
 	t.Setenv("LLM_QUOTA_NATS_ENABLED", "false")
-	// Even with a publisher installed, disabled must short-circuit to nil.
+	// Even with a publisher installed, disabled must not reach the wire.
 	fj := &fakeJS{}
 	withGlobal(t, fj)
 
-	if err := PublishPoolThreshold(context.Background(), "t", 1, 10, 1000, 80); err != nil {
-		t.Fatalf("disabled must return nil, got %v", err)
+	db := newPoolSQLite(t)
+	if err := db.Create(&tcpRow{ID: 61, AlertFiredAt: nil}).Error; err != nil {
+		t.Fatalf("seed pool: %v", err)
+	}
+	prevDB := repo.DB
+	repo.DB = db
+	t.Cleanup(func() { repo.DB = prevDB })
+
+	beforeCounter := testutil.ToFloat64(metrics.CreditPoolAlertTotal.WithLabelValues("t-disabled", "recorded_only"))
+
+	fired, delivery, err := PublishPoolThreshold(context.Background(), "t-disabled", 61, 10, 1000, 80)
+	if err != nil {
+		t.Fatalf("disabled must not error, got %v", err)
+	}
+	if !fired {
+		t.Error("disabled must still report fired=true (dedup let it through, mark landed)")
+	}
+	if delivery != "recorded_only" {
+		t.Errorf("delivery = %q, want recorded_only", delivery)
 	}
 	if fj.mu.calls != 0 {
 		t.Errorf("disabled must not publish, got %d calls", fj.mu.calls)
 	}
+
+	g := &gormPoolDB{db: db}
+	last, lerr := g.LastAlertFiredAt(context.Background(), 61)
+	if lerr != nil {
+		t.Fatalf("read alert_fired_at: %v", lerr)
+	}
+	if last == nil {
+		t.Error("alert_fired_at must be marked even when NATS is disabled")
+	}
+	if delta := testutil.ToFloat64(metrics.CreditPoolAlertTotal.WithLabelValues("t-disabled", "recorded_only")) - beforeCounter; delta != 1 {
+		t.Errorf("CreditPoolAlertTotal{recorded_only} delta = %v, want 1", delta)
+	}
 }
 
-func TestPublishPoolThreshold_NoOpWhenPublisherNil(t *testing.T) {
+// TestPublishPoolThreshold_NilGlobalPublisherStillMarksRecordedOnly is the
+// sibling case: LLM_QUOTA_NATS_ENABLED=true but the global Publisher was
+// never wired (global == nil). Must behave identically to the disabled case
+// — recorded_only, no panic from a typed-nil *Publisher reaching Publish().
+func TestPublishPoolThreshold_NilGlobalPublisherStillMarksRecordedOnly(t *testing.T) {
 	t.Setenv("LLM_QUOTA_NATS_ENABLED", "true")
 	prev := global
 	global = nil
 	t.Cleanup(func() { global = prev })
 
-	if err := PublishPoolThreshold(context.Background(), "t", 1, 10, 1000, 80); err != nil {
-		t.Fatalf("nil publisher must return nil, got %v", err)
+	db := newPoolSQLite(t)
+	if err := db.Create(&tcpRow{ID: 62, AlertFiredAt: nil}).Error; err != nil {
+		t.Fatalf("seed pool: %v", err)
+	}
+	prevDB := repo.DB
+	repo.DB = db
+	t.Cleanup(func() { repo.DB = prevDB })
+
+	fired, delivery, err := PublishPoolThreshold(context.Background(), "t-nilpub", 62, 10, 1000, 80)
+	if err != nil {
+		t.Fatalf("nil publisher must not error, got %v", err)
+	}
+	if !fired || delivery != "recorded_only" {
+		t.Errorf("fired=%v delivery=%q, want fired=true delivery=recorded_only", fired, delivery)
 	}
 }
 
@@ -184,7 +238,7 @@ func TestPublishPoolThreshold_NoOpOnBadArgs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := PublishPoolThreshold(context.Background(), tc.tenantID, tc.poolID, 10, 1000, 80); err != nil {
+			if _, _, err := PublishPoolThreshold(context.Background(), tc.tenantID, tc.poolID, 10, 1000, 80); err != nil {
 				t.Fatalf("bad args must return nil, got %v", err)
 			}
 		})
@@ -223,8 +277,17 @@ func TestPublishPoolThreshold_EndToEnd(t *testing.T) {
 	fj := &fakeJS{}
 	withGlobal(t, fj)
 
-	if err := PublishPoolThreshold(context.Background(), "tenant-Z", 55, 120, 1000, 80); err != nil {
+	beforeCounter := testutil.ToFloat64(metrics.CreditPoolAlertTotal.WithLabelValues("tenant-Z", "nats"))
+
+	fired, delivery, err := PublishPoolThreshold(context.Background(), "tenant-Z", 55, 120, 1000, 80)
+	if err != nil {
 		t.Fatalf("PublishPoolThreshold: %v", err)
+	}
+	if !fired || delivery != "nats" {
+		t.Errorf("fired=%v delivery=%q, want fired=true delivery=nats", fired, delivery)
+	}
+	if delta := testutil.ToFloat64(metrics.CreditPoolAlertTotal.WithLabelValues("tenant-Z", "nats")) - beforeCounter; delta != 1 {
+		t.Errorf("CreditPoolAlertTotal{nats} delta = %v, want 1", delta)
 	}
 
 	if fj.mu.calls != 1 {
@@ -254,10 +317,76 @@ func TestPublishPoolThreshold_EndToEnd(t *testing.T) {
 	}
 
 	// Second call within the dedup window must suppress (no second publish).
-	if err := PublishPoolThreshold(context.Background(), "tenant-Z", 55, 120, 1000, 80); err != nil {
+	fired2, delivery2, err := PublishPoolThreshold(context.Background(), "tenant-Z", 55, 120, 1000, 80)
+	if err != nil {
 		t.Fatalf("second PublishPoolThreshold: %v", err)
+	}
+	if fired2 || delivery2 != "" {
+		t.Errorf("suppressed call = fired=%v delivery=%q, want fired=false delivery=\"\"", fired2, delivery2)
 	}
 	if fj.mu.calls != 1 {
 		t.Errorf("schema dedup must suppress the repeat fire; got %d total calls", fj.mu.calls)
+	}
+}
+
+// TestPublishPoolThreshold_PublishFailureNotCountedAsNats is the metrics
+// honesty lock (findings L4 item 1): a crossing whose schema mark succeeds
+// but whose NATS publish fails must NOT increment
+// credit_pool_alert_total{delivery="nats"} — that label means the payload
+// actually reached the wire. It must still report fired=true (mark+audit
+// landed) with delivery="recorded_only", and the caller sees a non-nil
+// error to drive CreditPoolAlertHookErrorTotal instead. Revert the ordering
+// in publishPoolThreshold (increment "nats" before checking pub.Publish's
+// error) and this goes red.
+func TestPublishPoolThreshold_PublishFailureNotCountedAsNats(t *testing.T) {
+	t.Setenv("LLM_QUOTA_NATS_ENABLED", "true")
+
+	db := newPoolSQLite(t)
+	if err := db.Create(&tcpRow{ID: 56, AlertFiredAt: nil}).Error; err != nil {
+		t.Fatalf("seed pool: %v", err)
+	}
+	prevDB := repo.DB
+	repo.DB = db
+	t.Cleanup(func() { repo.DB = prevDB })
+
+	prevEnabled := common.RedisEnabled
+	prevRDB := common.RDB
+	common.RedisEnabled = false
+	common.RDB = nil
+	t.Cleanup(func() {
+		common.RedisEnabled = prevEnabled
+		common.RDB = prevRDB
+	})
+
+	fj := &fakeJS{failErr: fmt.Errorf("simulated NATS down")}
+	withGlobal(t, fj)
+
+	beforeNats := testutil.ToFloat64(metrics.CreditPoolAlertTotal.WithLabelValues("tenant-fail", "nats"))
+	beforeRecordedOnly := testutil.ToFloat64(metrics.CreditPoolAlertTotal.WithLabelValues("tenant-fail", "recorded_only"))
+
+	fired, delivery, err := PublishPoolThreshold(context.Background(), "tenant-fail", 56, 120, 1000, 80)
+	if err == nil {
+		t.Fatal("expected error from failed publish, got nil")
+	}
+	if !fired {
+		t.Error("expected fired=true — schema mark landed even though the wire leg failed")
+	}
+	if delivery != "recorded_only" {
+		t.Errorf("delivery = %q, want recorded_only (publish never reached the wire)", delivery)
+	}
+	if delta := testutil.ToFloat64(metrics.CreditPoolAlertTotal.WithLabelValues("tenant-fail", "nats")) - beforeNats; delta != 0 {
+		t.Errorf("CreditPoolAlertTotal{nats} delta = %v, want 0 — a failed publish must never be counted as delivered", delta)
+	}
+	if delta := testutil.ToFloat64(metrics.CreditPoolAlertTotal.WithLabelValues("tenant-fail", "recorded_only")) - beforeRecordedOnly; delta != 0 {
+		t.Errorf("CreditPoolAlertTotal{recorded_only} delta = %v, want 0 — a failed nats attempt is not the same as a nil-publisher recorded_only fire", delta)
+	}
+
+	g := &gormPoolDB{db: db}
+	last, lerr := g.LastAlertFiredAt(context.Background(), 56)
+	if lerr != nil {
+		t.Fatalf("read alert_fired_at: %v", lerr)
+	}
+	if last == nil {
+		t.Error("alert_fired_at must still be marked when the publish fails (fail-closed dedup)")
 	}
 }

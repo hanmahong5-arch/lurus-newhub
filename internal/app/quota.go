@@ -10,15 +10,15 @@ import (
 	"sync"
 	"time"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	hubnats "github.com/LurusTech/lurus-hub/internal/pkg/nats"
-	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
@@ -790,11 +790,13 @@ func debitTenantPool(relayInfo *relaycommon.RelayInfo, quota int) {
 	derr := repo.DebitPool(pool.ID, tok.TenantId, int64(quota), relayInfo.TokenId, 0)
 	if derr == nil {
 		metrics.CreditPoolDebitTotal.WithLabelValues(tok.TenantId).Inc()
-		metrics.CreditPoolBalance.WithLabelValues(tok.TenantId).Set(float64(pool.CurrentBalance - int64(quota)))
+		after := pool.CurrentBalance - int64(quota)
+		metrics.CreditPoolBalance.WithLabelValues(tok.TenantId).Set(float64(after))
 		governance.RecordAuditEvent(governance.NewDetachedAuditEvent(
 			tok.TenantId, governance.ActorSystem, relayInfo.UserId,
 			governance.ActionBillingDebit, governance.ResourceTenant, int(pool.ID),
 			fmt.Sprintf(`{"quota":%d,"pool_id":%d,"token_id":%d}`, quota, pool.ID, relayInfo.TokenId)))
+		maybeAlertPoolThreshold(pool, after)
 		return
 	}
 
@@ -806,6 +808,7 @@ func debitTenantPool(relayInfo *relaycommon.RelayInfo, quota int) {
 			common.SysLog(fmt.Sprintf(
 				`{"event":"pool_overdraft","who":"tenant:%s","what":"post-consume debit %d on exhausted pool %d (token %d)","result":"recorded as relay_overdraft, new_balance=%d"}`,
 				tok.TenantId, quota, pool.ID, relayInfo.TokenId, newBalance))
+			maybeAlertPoolThreshold(pool, newBalance)
 			return
 		}
 		derr = oerr
@@ -817,6 +820,77 @@ func debitTenantPool(relayInfo *relaycommon.RelayInfo, quota int) {
 	common.SysError(fmt.Sprintf(
 		`{"event":"pool_debit_lost","who":"tenant:%s","what":"post-consume debit %d on pool %d (token %d) failed","result":"debit NOT recorded, conservation broken: %s"}`,
 		tok.TenantId, quota, pool.ID, relayInfo.TokenId, derr.Error()))
+}
+
+// creditPoolAlertHookTimeout bounds the detached pool-threshold publish
+// below. AMENDMENT (plan doc §14, L4): this hook runs only after the debit
+// has already succeeded (it can never alter the debit result or the HTTP
+// response — the response has typically already been written by the time
+// this runs) and MUST use a detached context, never the inbound request's:
+// post-response work on the request context is cancelled the instant the
+// client disconnects, which would silently drop the alert on the most
+// common case (client got its answer and closed the connection).
+const creditPoolAlertHookTimeout = 2 * time.Second
+
+// publishPoolThresholdSeam is hubnats.PublishPoolThreshold behind a
+// package-level var (same pattern as resetDuePoolsSeam in
+// credit_pool_reconcile.go) so pool_debit_test.go can substitute a fake that
+// returns fired=true with a non-nil error — the one combination
+// (schema mark landed, NATS wire leg failed) that real NATS failure
+// injection cannot reach in this hermetic tier — and assert the audit-row
+// behaviour below without a live NATS server.
+var publishPoolThresholdSeam = hubnats.PublishPoolThreshold
+
+// maybeAlertPoolThreshold fires the pool-threshold publisher (best-effort)
+// when a just-applied debit crosses the pool's alert_threshold_pct and the
+// schema dedup window has elapsed since the last fire. It never alters the
+// debit result: publisher errors are logged + counted, not returned or
+// retried here — hubnats.PublishPoolThreshold's own schema+Redis dedup
+// (internal/pkg/nats/pool_threshold.go) remains authoritative; this precheck
+// only avoids a DB read on every below-threshold debit.
+//
+// pool is the pre-debit snapshot read earlier in debitTenantPool; newBalance
+// is the post-debit balance from the branch that just committed (normal
+// DebitPool: pool.CurrentBalance-quota; overdraft: OverdraftDebitPool's
+// returned balance).
+func maybeAlertPoolThreshold(pool *repo.TenantCreditPool, newBalance int64) {
+	after := *pool
+	after.CurrentBalance = newBalance
+	if !after.ShouldAlert() {
+		return
+	}
+	if pool.AlertFiredAt != nil && time.Since(*pool.AlertFiredAt) < hubnats.SchemaDedupWindow() {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), creditPoolAlertHookTimeout)
+	defer cancel()
+	fired, delivery, err := publishPoolThresholdSeam(ctx, pool.TenantID, pool.ID, after.CurrentBalance, pool.MaxBalance, pool.AlertThresholdPct)
+	if err != nil {
+		metrics.CreditPoolAlertHookErrorTotal.Inc()
+		common.SysError(fmt.Sprintf(
+			`{"event":"pool_threshold_alert_failed","who":"tenant:%s","what":"pool %d threshold publish failed","result":"debit unaffected, alert not delivered: %s"}`,
+			pool.TenantID, pool.ID, err.Error()))
+	}
+	// fired==true means the schema mark (durable dedup) already landed even
+	// when err != nil (e.g. the NATS publish itself failed after marking —
+	// see hubnats.publishPoolThreshold step 3 vs 4). The dedup window is
+	// already consumed either way, so this crossing must leave a durable
+	// audit trace now — returning early here would suppress the pool for
+	// the whole window with nothing but a log line to show for it.
+	if !fired {
+		return
+	}
+	details := fmt.Sprintf(`{"pool_id":%d,"balance":%d,"max_balance":%d,"threshold_pct":%d,"delivery":%q}`,
+		pool.ID, after.CurrentBalance, pool.MaxBalance, pool.AlertThresholdPct, delivery)
+	if err != nil {
+		details = fmt.Sprintf(`{"pool_id":%d,"balance":%d,"max_balance":%d,"threshold_pct":%d,"delivery":%q,"error":%q}`,
+			pool.ID, after.CurrentBalance, pool.MaxBalance, pool.AlertThresholdPct, delivery, err.Error())
+	}
+	governance.RecordAuditEvent(governance.NewDetachedAuditEvent(
+		pool.TenantID, governance.ActorSystem, 0,
+		governance.ActionBillingPoolThreshold, governance.ResourceTenant, int(pool.ID),
+		details))
 }
 
 func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int, sendEmail bool) (err error) {
@@ -881,8 +955,6 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	// paired pre-request rejection belongs in a middleware.ProjectBudgetGate()
 	// mounted after TokenAuth. Migration 029 deliberately ships NO budget
 	// column: showback (per-project reporting) is what exists today.
-
-
 
 	// Phase 3: Update token quota with compensation on failure.
 	// If token quota update fails, we release the platform pre-auth rather than

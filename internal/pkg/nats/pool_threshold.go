@@ -12,6 +12,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 )
 
 // poolDedupTTL is the lifetime of the Redis SETNX dedup lock.
@@ -110,37 +111,66 @@ func (redisCommonDeduper) SetNXBool(ctx context.Context, key string, expiration 
 	return common.RDB.SetNX(ctx, key, "1", expiration).Result()
 }
 
-// PublishPoolThreshold emits one llm.pool.threshold event for the tenant's
-// credit pool, subject to two independent dedup layers:
+// SchemaDedupWindow exposes poolSchemaDedupWindow — the minimum interval a
+// caller must wait since a pool's alert_fired_at before treating it as
+// eligible to fire again. quota.go's precheck (before calling
+// PublishPoolThreshold on every debit that crosses the threshold) uses this
+// so it does not have to duplicate the constant; PublishPoolThreshold's own
+// schema-dedup step (below) remains the authoritative check either way.
+func SchemaDedupWindow() time.Duration {
+	return poolSchemaDedupWindow
+}
+
+// PublishPoolThreshold runs the pool-threshold dedup + delivery pass for the
+// tenant's credit pool, subject to two independent dedup layers:
 //
 //  1. Schema dedup: tenant_credit_pools.alert_fired_at < poolSchemaDedupWindow
-//     ago → no-op. Authoritative for ops visibility.
+//     ago → suppressed. Authoritative for ops visibility.
 //  2. Redis SETNX dedup: pool:threshold:<tenantID>:<poolID> with 1h TTL.
 //     Best-effort; protects against the (rare) race where two pods both
 //     pass the schema check before either updates alert_fired_at.
 //
-// Both checks are required (per Lane δ spec). Reason: Redis may be down or
-// reset; the DB column is the durable record. On success the function:
+// Unlike the original design, LLM_QUOTA_NATS_ENABLED being false (or the
+// global Publisher not being wired) no longer short-circuits before either
+// dedup layer runs: alert_fired_at is marked by this function whenever the
+// two dedup layers let the crossing through, NATS or not — only the wire
+// delivery itself (Step 4 in publishPoolThreshold) is skipped when there is
+// no publisher. Returns fired=true and delivery="recorded_only" for that
+// case; "nats" when the payload actually reached the wire.
 //
-//   - sets tenant_credit_pools.alert_fired_at = NOW() for the pool (FIRST,
-//     fail-closed: if the schema mark cannot be written, the event must not
-//     be published — otherwise schema dedup loses track and we risk an
-//     alert storm when the Redis SETNX expires)
-//   - publishes the JSON payload to SubjectPoolThreshold
+// Two things this function does NOT do unconditionally, despite "fired"
+// being true: this package does not write the billing.pool_threshold audit
+// row — that is the caller's job (internal/app/quota.go
+// maybeAlertPoolThreshold) — and metrics.CreditPoolAlertTotal is only
+// incremented for the "recorded_only" (no publisher) and "nats" (publish
+// succeeded) outcomes; a crossing where Publish is attempted and fails is
+// reported to the caller as fired=true, delivery="recorded_only", err!=nil
+// and does NOT increment this counter (see the "nats" vs error-counter note
+// at Step 4 below). Also note: the caller has its own precheck
+// (maybeAlertPoolThreshold, gated on the same poolSchemaDedupWindow via
+// SchemaDedupWindow()) that can skip calling this function entirely while a
+// pool's alert_fired_at is inside the window — "every crossing that dedup
+// let through" therefore means dedup at both layers, caller precheck
+// included, not just the two checks inside this function.
 //
 // Returns an error only for genuine infrastructure failures the caller can
 // usefully report (DB unreachable, publish enqueue failed). Suppressions
-// (either dedup layer) return nil — the publish is a no-op by design.
-func PublishPoolThreshold(ctx context.Context, tenantID string, poolID int64, currentBalance, maxBalance int64, thresholdPct int) error {
-	if !Enabled() {
-		return nil
-	}
-	pub := Get()
-	if pub == nil {
-		return nil
-	}
+// (either dedup layer, or the tenantID/poolID guard below) return
+// fired=false, delivery="", err=nil — a no-op by design.
+func PublishPoolThreshold(ctx context.Context, tenantID string, poolID int64, currentBalance, maxBalance int64, thresholdPct int) (fired bool, delivery string, err error) {
 	if tenantID == "" || poolID <= 0 {
-		return nil
+		return false, "", nil
+	}
+
+	// pub stays a nil poolPublisher interface (not a typed-nil *Publisher)
+	// when NATS is disabled or the global Publisher hasn't been set — Step 4
+	// below checks pub != nil, which only works correctly against a truly
+	// nil interface value.
+	var pub poolPublisher
+	if Enabled() {
+		if p := Get(); p != nil {
+			pub = p
+		}
 	}
 
 	return publishPoolThreshold(
@@ -156,6 +186,8 @@ func PublishPoolThreshold(ctx context.Context, tenantID string, poolID int64, cu
 // publishPoolThreshold is the testable core. Dependencies are injected so
 // the test suite can substitute mocks without touching real Redis / NATS /
 // gorm. now is also injected to keep behaviour deterministic across runs.
+// pub may be nil (NATS disabled / no global Publisher) — Step 4 is skipped
+// in that case, everything else runs unchanged.
 //
 // Order of operations is load-bearing (2026-05-19 Phase 2 self-audit
 // reordered Steps 3/4 — see below):
@@ -163,11 +195,24 @@ func PublishPoolThreshold(ctx context.Context, tenantID string, poolID int64, cu
 //  1. Schema dedup check — cheapest path to no-op, also the durable record
 //  2. Redis SETNX — short-window race guard between pods
 //  3. Schema mark fired — write FIRST so dedup state is durable before
-//     anything reaches the wire. If this fails we never publish and the
-//     caller sees an error; the next call re-attempts cleanly.
-//  4. NATS publish — only after the dedup state is committed. If publish
-//     fails, schema dedup has already locked the slot for the window:
-//     ops sees an error and can replay manually, but we won't double-fire.
+//     anything reaches the wire (or is skipped). If this fails we never
+//     mark fired and the caller sees an error; the next call re-attempts
+//     cleanly. "fired" from here on means "dedup let it through and the
+//     schema mark landed", independent of whether the wire delivery below
+//     also succeeds. When pub == nil, metrics.CreditPoolAlertTotal{delivery=
+//     "recorded_only"} is incremented right here, since there is no further
+//     step.
+//  4. NATS publish — only when pub != nil, and only after the dedup state is
+//     committed. metrics.CreditPoolAlertTotal{delivery="nats"} is
+//     incremented only once Publish returns without error — a crossing that
+//     was marked/audited but failed to reach the wire is never counted as
+//     "nats" delivered. If publish fails, schema dedup has already locked
+//     the slot for the window: ops sees an error (and the caller's
+//     CreditPoolAlertHookErrorTotal is the honest delivery-failure signal)
+//     and can replay manually, but we won't double-fire within the window.
+//     When pub == nil this step is skipped entirely (delivery stays
+//     "recorded_only") — NATS being off must not make the crossing
+//     invisible.
 //
 // Errors from steps 1, 3, 4 propagate to the caller. Errors from step 2
 // (Redis transient failure) are NOT fatal: the schema check has already
@@ -187,22 +232,22 @@ func publishPoolThreshold(
 	rdb poolRedisDeduper,
 	db poolDB,
 	now time.Time,
-) error {
+) (fired bool, delivery string, err error) {
 	// Step 1: schema-level dedup. Pool row missing → fall through (no
 	// prior alert recorded, treat as ok to fire). Other DB errors abort.
-	prev, err := db.LastAlertFiredAt(ctx, poolID)
+	prev, lerr := db.LastAlertFiredAt(ctx, poolID)
 	switch {
-	case err == nil:
+	case lerr == nil:
 		if prev != nil && now.Sub(*prev) < poolSchemaDedupWindow {
 			slog.Debug("pool threshold suppressed by schema dedup",
 				"tenant_id", tenantID, "pool_id", poolID,
 				"last_fired_at", prev, "window", poolSchemaDedupWindow)
-			return nil
+			return false, "", nil
 		}
-	case errors.Is(err, gorm.ErrRecordNotFound):
+	case errors.Is(lerr, gorm.ErrRecordNotFound):
 		// No row — treat as never-fired. Continue.
 	default:
-		return fmt.Errorf("pool threshold dedup read: %w", err)
+		return false, "", fmt.Errorf("pool threshold dedup read: %w", lerr)
 	}
 
 	// Step 2: Redis SETNX race guard. Transient Redis failure does not
@@ -216,23 +261,38 @@ func publishPoolThreshold(
 		} else if !acquired {
 			slog.Debug("pool threshold suppressed by redis dedup",
 				"tenant_id", tenantID, "pool_id", poolID, "key", key)
-			return nil
+			return false, "", nil
 		}
 	}
 
-	// Step 3: durable schema mark FIRST (fail-closed). If this fails we
-	// never publish — caller sees the error and the next call re-attempts.
-	// Trades a rare false-suppress (mark succeeded, publish later failed
-	// inside the dedup window) for the more severe alert-storm scenario
-	// the audit closed.
-	if err := db.MarkAlertFired(ctx, poolID, now); err != nil {
-		return fmt.Errorf("pool threshold mark fired: %w", err)
+	// Step 3: durable schema mark FIRST (fail-closed). If this fails nothing
+	// downstream (metric, publish) runs — caller sees the error and the next
+	// call re-attempts. Trades a rare false-suppress (mark succeeded, publish
+	// later failed inside the dedup window) for the more severe alert-storm
+	// scenario the audit closed.
+	if merr := db.MarkAlertFired(ctx, poolID, now); merr != nil {
+		return false, "", fmt.Errorf("pool threshold mark fired: %w", merr)
+	}
+
+	fired = true
+
+	if pub == nil {
+		// NATS disabled or no global Publisher — the crossing is still
+		// marked/audited (by the caller, via fired+delivery); only the wire
+		// leg is skipped. Counted here since this is the only step left.
+		delivery = "recorded_only"
+		metrics.CreditPoolAlertTotal.WithLabelValues(tenantID, delivery).Inc()
+		return fired, delivery, nil
 	}
 
 	// Step 4: publish to NATS. Use the canonical envelope shape used by
 	// other LLM events for downstream notification consumers. If publish
 	// fails, schema dedup has already locked the slot — caller may want to
-	// replay manually, but we won't double-fire within the window.
+	// replay manually, but we won't double-fire within the window. The
+	// crossing is reported as "recorded_only" (that is what actually
+	// happened — mark+audit landed, the wire leg did not) and is NOT
+	// counted under credit_pool_alert_total{delivery="nats"}; the caller's
+	// CreditPoolAlertHookErrorTotal is the honest signal for this case.
 	payload := PoolThresholdPayload{
 		TenantID:       tenantID,
 		PoolID:         poolID,
@@ -241,9 +301,12 @@ func publishPoolThreshold(
 		ThresholdPct:   thresholdPct,
 		FiredAt:        now,
 	}
-	if err := pub.Publish(ctx, SubjectPoolThreshold, payload); err != nil {
-		return fmt.Errorf("pool threshold publish: %w", err)
+	if perr := pub.Publish(ctx, SubjectPoolThreshold, payload); perr != nil {
+		return fired, "recorded_only", fmt.Errorf("pool threshold publish: %w", perr)
 	}
+
+	delivery = "nats"
+	metrics.CreditPoolAlertTotal.WithLabelValues(tenantID, delivery).Inc()
 
 	slog.Info("pool threshold event published",
 		"event_id", uuid.NewString(),
@@ -253,7 +316,7 @@ func publishPoolThreshold(
 		"max_balance", maxBalance,
 		"threshold_pct", thresholdPct)
 
-	return nil
+	return fired, delivery, nil
 }
 
 // poolDedupKey returns the canonical Redis key for pool-threshold dedup.
