@@ -146,11 +146,13 @@ func healthSnapshotAll(t *testing.T) {
 	prevDB := repo.DB
 	prevRedisEnabled, prevRDB := common.RedisEnabled, common.RDB
 	prevBillingUnified := common.BillingUnifiedEnabled()
+	prevLeader := common.IsLeader()
 	common.BillingBreakerSuccess() // force closed before the test runs
 	t.Cleanup(func() {
 		repo.DB = prevDB
 		common.RedisEnabled, common.RDB = prevRedisEnabled, prevRDB
 		common.SetBillingUnifiedEnabled(prevBillingUnified)
+		common.SetLeader(prevLeader)
 		common.BillingBreakerSuccess() // force closed after the test too
 	})
 }
@@ -286,6 +288,7 @@ func TestGetHealthDetailed_BodyStatus_IntentionalOffStatesStayHealthy(t *testing
 	repo.DB = nil                          // database -> not_configured (intentional off-state)
 	common.RedisEnabled = false            // redis -> disabled (intentional off-state)
 	common.SetBillingUnifiedEnabled(false) // billing -> legacy_mode (intentional off-state)
+	common.SetLeader(false)                // leader -> standby (intentional off-state)
 
 	w, _ := callHealth(t)
 	if w.Code != http.StatusOK {
@@ -294,5 +297,73 @@ func TestGetHealthDetailed_BodyStatus_IntentionalOffStatesStayHealthy(t *testing
 	status, checks := healthFullBody(t, w)
 	if status != "healthy" {
 		t.Errorf("status = %q, want healthy — intentional off-states must not be misreported as degraded, checks=%v", status, checks)
+	}
+	if checks["leader"] != "standby" {
+		t.Errorf("checks.leader = %q, want standby", checks["leader"])
+	}
+}
+
+// TestGetHealthDetailed_Leader_HeldAndStandbyBothHealthy is the direct
+// oracle for the HA drill: a replica that holds the lease and one that
+// doesn't must both answer 200/"healthy" — only checks.leader tells them
+// apart. Before this, checks.leader did not exist and there was no way to
+// tell a leader from a follower by hitting /api/health.
+func TestGetHealthDetailed_Leader_HeldAndStandbyBothHealthy(t *testing.T) {
+	healthSnapshotAll(t)
+	repo.DB = nil
+	common.RedisEnabled = false
+	common.SetBillingUnifiedEnabled(false)
+
+	common.SetLeader(true)
+	w, _ := callHealth(t)
+	if w.Code != http.StatusOK {
+		t.Fatalf("held: expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	status, checks := healthFullBody(t, w)
+	if checks["leader"] != "held" {
+		t.Errorf("held: checks.leader = %q, want held", checks["leader"])
+	}
+	if status != "healthy" {
+		t.Errorf("held: status = %q, want healthy", status)
+	}
+
+	common.SetLeader(false)
+	w2, _ := callHealth(t)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("standby: expected 200, got %d (body=%s)", w2.Code, w2.Body.String())
+	}
+	status2, checks2 := healthFullBody(t, w2)
+	if checks2["leader"] != "standby" {
+		t.Errorf("standby: checks.leader = %q, want standby", checks2["leader"])
+	}
+	if status2 != "healthy" {
+		t.Errorf("standby: status = %q, want healthy — a follower must never be reported unhealthy", status2)
+	}
+}
+
+// TestGetHealthDetailed_NoInstanceLeak locks the fix for L3 finding #1:
+// GET /api/health is registered under the public (no-authentication) route
+// group (router/api-router.go) and proxied by the host vhost with no
+// forwarding-header gate, unlike /metrics (metricsAuthMiddleware). Publishing
+// this pod's identity there would make it readable by anyone on the public
+// internet, so the body must carry no "instance" key and no X-Lurus-Instance
+// header — only the coarse checks.leader role.
+func TestGetHealthDetailed_NoInstanceLeak(t *testing.T) {
+	healthSnapshotAll(t)
+	repo.DB = nil
+	common.RedisEnabled = false
+	common.SetBillingUnifiedEnabled(false)
+	t.Setenv("POD_NAME", "health-test-pod")
+
+	w, _ := callHealth(t)
+	if got := w.Header().Get("X-Lurus-Instance"); got != "" {
+		t.Errorf("X-Lurus-Instance header = %q, want absent", got)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("parse health body: %v, raw=%s", err, w.Body.String())
+	}
+	if _, present := body["instance"]; present {
+		t.Errorf("body has an \"instance\" key: %s", w.Body.String())
 	}
 }

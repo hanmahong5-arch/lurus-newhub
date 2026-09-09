@@ -88,6 +88,18 @@ spec:
                   key: SQL_DSN
             - name: REDIS_CONN_STRING
               value: "redis://redis.lurus-system.svc.cluster.local:6379/3"
+            # Downward API: this pod's own identity, published on /metrics
+            # (lurus_gateway_instance_info, X-Lurus-Instance header) — see
+            # r6-stage/deployment.yaml for the same addition. /api/health is
+            # public and deliberately does not carry this identity.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             # Host-only session cookie. The code default Domain=.lurus.cn made
             # localhost tunnel clients silently DROP the cookie — bridge login
             # returned 200 but every authenticated call after it was a 401

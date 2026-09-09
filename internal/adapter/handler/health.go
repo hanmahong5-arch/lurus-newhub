@@ -84,6 +84,15 @@ func GetHealthDetailed(c *gin.Context) {
 		checks["billing"] = "legacy_mode"
 	}
 
+	// HA leadership. "standby" is the steady state for every replica but
+	// one — registered in healthIntentionalOffStates below so a follower is
+	// never reported as degraded for simply not holding the lease.
+	if common.IsLeader() {
+		checks["leader"] = "held"
+	} else {
+		checks["leader"] = "standby"
+	}
+
 	status := http.StatusOK
 	if !healthy {
 		status = http.StatusServiceUnavailable
@@ -103,6 +112,7 @@ var healthIntentionalOffStates = map[string]map[string]bool{
 	"billing":           {"legacy_mode": true},
 	"database":          {"not_configured": true},
 	"schema_migrations": {"unknown": true},
+	"leader":            {"held": true, "standby": true},
 }
 
 // healthBodyStatus derives the human-facing "status" word from the full set

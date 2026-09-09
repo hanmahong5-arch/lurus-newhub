@@ -140,6 +140,11 @@ CREATE INDEX CONCURRENTLY idx_logs_tenant_id ON logs(tenant_id);   -- 大表必�
 ALTER TABLE tokens ALTER COLUMN quota TYPE bigint;
 ```
 
+`logs`/`audit_events` 的 retention 删除已分批(`id IN (SELECT id … ORDER BY id LIMIT ?)`
+子查询,而非裸 `.Limit().Delete()`——gorm 两种方言的 DeleteClauses 都不渲染 LIMIT,后者会退化
+成一条无界 DELETE 锁住整表)。`AUDIT_CLEANUP_INTERVAL_SECONDS` 现在真的生效(见
+`internal/lifecycle/audit_cleanup.go`)。
+
 变更前:先备份 · 先在 STAGE 验 · 查长事务(`SELECT * FROM pg_stat_activity WHERE state='active';`)。
 
 ## Monitoring

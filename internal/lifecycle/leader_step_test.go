@@ -18,8 +18,10 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/glebarez/sqlite"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -76,6 +78,9 @@ func TestLeaderManagerStep_AcquiresFreeLeaseAndPromotes(t *testing.T) {
 	if !common.IsLeader() {
 		t.Error("common.IsLeader() = false after acquiring the lease")
 	}
+	if got := testutil.ToFloat64(metrics.Leader); got != 1 {
+		t.Errorf("metrics.Leader = %v after acquiring the lease, want 1 (real step path, not a hand-built call to common.SetLeader)", got)
+	}
 	if m.localExpiry != 1000+m.ttlSeconds {
 		t.Errorf("localExpiry = %d, want %d", m.localExpiry, 1000+m.ttlSeconds)
 	}
@@ -120,6 +125,9 @@ func TestLeaderManagerStep_DemotesWhenAnotherHolderOwnsTheLease(t *testing.T) {
 	}
 	if common.IsLeader() {
 		t.Error("common.IsLeader() = true while another node holds a valid lease")
+	}
+	if got := testutil.ToFloat64(metrics.Leader); got != 0 {
+		t.Errorf("metrics.Leader = %v after losing the lease to a live holder, want 0", got)
 	}
 }
 

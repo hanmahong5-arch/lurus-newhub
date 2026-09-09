@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import fs from 'node:fs';
+import path from 'node:path';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -93,7 +95,6 @@ const fakeInvoices = [
 const fakeSummary = {
   wallet_balance_cny: 1210.5,
   mtd_spend_cny: 16.84,
-  subscription_plan: 'pro',
 };
 
 const fakePaymentMethods = [
@@ -407,5 +408,32 @@ describe('Billing — redeem a code', () => {
     });
     // No credited figure may appear for a rejected code.
     expect(screen.queryByTestId('redeem-result')).toBeNull();
+  });
+});
+
+// Source lock: `subscription_plan` is a field the Go BillingSummary struct
+// (identity_client.go:705) does not carry — grep -rn subscription_plan
+// internal --include=*.go returns 0. The Settings Subscription tab used to
+// probe for it too; both fabricated-plan code paths are gone. This lock
+// keeps either from silently coming back under web/src/pages/v2.
+describe('subscription_plan source lock', () => {
+  it('no v2 console page reads summary.subscription_plan', () => {
+    const dir = path.resolve(process.cwd(), 'src/pages/v2');
+    const files = [];
+    const walk = (d) => {
+      for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else if (/\.jsx?$/.test(entry.name) && !/\.test\./.test(entry.name))
+          files.push(p);
+      }
+    };
+    walk(dir);
+    expect(files.length).toBeGreaterThan(0);
+
+    const offenders = files.filter((f) =>
+      fs.readFileSync(f, 'utf8').includes('subscription_plan'),
+    );
+    expect(offenders).toEqual([]);
   });
 });

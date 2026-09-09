@@ -140,6 +140,11 @@ func TestListModels_AnthropicBranch_NonEmptyCatalogueUnchanged(t *testing.T) {
 // Mutation 2 (restore `c.JSON(200, ...)` in the else branch) makes this red
 // on the status code assertion.
 func TestRetrieveModel_UnknownModel_OpenAIWire(t *testing.T) {
+	// visibleModels (L2) resolves the caller's group via repo.GetUserGroup
+	// even for a userId-0/no-context caller — needs a real repo.DB (not the
+	// package-level nil default) rather than Redis, hence
+	// setupModelTenantScopeDB (model_tenant_scope_test.go, same package).
+	defer setupModelTenantScopeDB(t)()
 	c, w := modelDiscoveryNewCtx(http.MethodGet, "/v1/models/no-such-model-xyz")
 	c.Params = gin.Params{{Key: "model", Value: "no-such-model-xyz"}}
 	RetrieveModel(c, constant.ChannelTypeOpenAI)
@@ -159,6 +164,7 @@ func TestRetrieveModel_UnknownModel_OpenAIWire(t *testing.T) {
 // Mutation 3 (drop the modelType switch so the else branch always emits the
 // OpenAI envelope) makes this red on the "param" absence check.
 func TestRetrieveModel_UnknownModel_AnthropicWire(t *testing.T) {
+	defer setupModelTenantScopeDB(t)()
 	c, w := modelDiscoveryNewCtx(http.MethodGet, "/v1/models/no-such-model-xyz")
 	c.Params = gin.Params{{Key: "model", Value: "no-such-model-xyz"}}
 	RetrieveModel(c, constant.ChannelTypeAnthropic)
@@ -181,7 +187,21 @@ func TestRetrieveModel_UnknownModel_AnthropicWire(t *testing.T) {
 // RetrieveModel: an existing model on both wires must keep answering 200
 // with its established shape, proving the 404 fix is scoped to the
 // unknown-model branch only.
+//
+// "Known" is now "routable for this caller" (visibleModels, L2), not merely
+// "present in the static per-vendor catalogue" — so this row must seed the
+// model as routable. Done via the token model_limit context keys (same
+// mechanism TestListModels_AnthropicBranch_NonEmptyCatalogueUnchanged above
+// uses) rather than a DB-backed ability row, so this row needs no seeded
+// channel of its own (other rows in this file do call setupModelTenantScopeDB).
 func TestRetrieveModel_KnownModel_Unchanged(t *testing.T) {
+	// Force acceptUnsetRatioModel=true so `existing`'s inclusion does not
+	// depend on whether it happens to have a configured ratio/price in this
+	// unit-test process — orthogonal to what this test proves.
+	prevSelfUse := operation_setting.SelfUseModeEnabled
+	operation_setting.SelfUseModeEnabled = true
+	defer func() { operation_setting.SelfUseModeEnabled = prevSelfUse }()
+
 	var existing string
 	for id := range openAIModelsMap {
 		existing = id
@@ -193,6 +213,8 @@ func TestRetrieveModel_KnownModel_Unchanged(t *testing.T) {
 
 	c, w := modelDiscoveryNewCtx(http.MethodGet, fmt.Sprintf("/v1/models/%s", existing))
 	c.Params = gin.Params{{Key: "model", Value: existing}}
+	common.SetContextKey(c, constant.ContextKeyTokenModelLimitEnabled, true)
+	common.SetContextKey(c, constant.ContextKeyTokenModelLimit, map[string]bool{existing: true})
 	RetrieveModel(c, constant.ChannelTypeOpenAI)
 	if w.Code != http.StatusOK {
 		t.Fatalf("OpenAI wire, known model: status = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -200,8 +222,25 @@ func TestRetrieveModel_KnownModel_Unchanged(t *testing.T) {
 
 	c2, w2 := modelDiscoveryNewCtx(http.MethodGet, fmt.Sprintf("/v1/models/%s", existing))
 	c2.Params = gin.Params{{Key: "model", Value: existing}}
+	common.SetContextKey(c2, constant.ContextKeyTokenModelLimitEnabled, true)
+	common.SetContextKey(c2, constant.ContextKeyTokenModelLimit, map[string]bool{existing: true})
 	RetrieveModel(c2, constant.ChannelTypeAnthropic)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("Anthropic wire, known model: status = %d, want 200; body=%s", w2.Code, w2.Body.String())
+	}
+}
+
+// TestRetrieveModel_TokenModelLimit_NotInLimit404s covers the spec's added
+// row: a token whose model_limit only names "existing-limit-a" must 404 on a
+// different model, even though that other model may be perfectly routable
+// for other callers — the token's own allow-list narrows discovery too.
+func TestRetrieveModel_TokenModelLimit_NotInLimit404s(t *testing.T) {
+	c, w := modelDiscoveryNewCtx(http.MethodGet, "/v1/models/existing-limit-b")
+	c.Params = gin.Params{{Key: "model", Value: "existing-limit-b"}}
+	common.SetContextKey(c, constant.ContextKeyTokenModelLimitEnabled, true)
+	common.SetContextKey(c, constant.ContextKeyTokenModelLimit, map[string]bool{"existing-limit-a": true})
+	RetrieveModel(c, constant.ChannelTypeOpenAI)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for a model outside the token's model_limit; body=%s", w.Code, w.Body.String())
 	}
 }

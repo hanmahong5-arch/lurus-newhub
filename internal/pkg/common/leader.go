@@ -3,6 +3,8 @@ package common
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 )
 
 // isLeader caches whether this process currently holds the HA leader lease.
@@ -18,10 +20,14 @@ func IsLeader() bool {
 	return isLeader.Load()
 }
 
-// SetLeader caches the current leadership state. Only the lifecycle
-// LeaderManager renewal loop should call this.
+// SetLeader caches the current leadership state and publishes the
+// lurus_gateway_leader gauge. It is the sole writer of isLeader, and the
+// three call sites that change leadership (boot lease acquisition in
+// repo/main.go, LeaderManager.step, and release-on-shutdown) all go through
+// it, so the gauge cannot drift from the cached flag.
 func SetLeader(v bool) {
 	isLeader.Store(v)
+	metrics.SetLeader(v)
 }
 
 var (

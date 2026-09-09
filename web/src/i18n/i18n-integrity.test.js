@@ -35,6 +35,7 @@ import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 
 import en from './locales/en.json';
+import zh from './locales/zh.json';
 
 const SRC = path.resolve(process.cwd(), 'src');
 const HAN = /[一-鿿]/;
@@ -318,6 +319,46 @@ describe('i18n integrity', () => {
         `Chinese on screen for every operator. Wrap each in t() and add the ` +
         `English to en.json.\n  ` +
         offenders.join('\n  '),
+    ).toEqual([]);
+  });
+
+  /*
+   * The Chinese-source scan above only catches t() calls keyed by literal
+   * Han text — it cannot see the v2 console's `console.*` dotted keys
+   * (t('console.playground.no_models', 'no models available')), because the
+   * key itself carries no Han characters to trigger the check. For that
+   * family, an English key silently missing while zh.json still carries it
+   * would fall back through fallbackLng: 'zh' and show Chinese on the
+   * English console with no red test anywhere. This closes that gap for the
+   * `console.*` namespace specifically (0 violations on HEAD).
+   */
+  it('every console.* key present in zh.json also resolves in en.json', () => {
+    const flatten = (obj, prefix, out) => {
+      for (const k of Object.keys(obj)) {
+        const v = obj[k];
+        const p = prefix ? `${prefix}.${k}` : k;
+        if (v && typeof v === 'object') flatten(v, p, out);
+        else out.push(p);
+      }
+    };
+    const zhKeys = [];
+    flatten(zh.translation, '', zhKeys);
+    const resolvesNested = (root, dottedKey) =>
+      dottedKey
+        .split('.')
+        .reduce(
+          (node, part) =>
+            node && typeof node === 'object' ? node[part] : undefined,
+          root,
+        ) !== undefined;
+    const missing = zhKeys.filter(
+      (k) => k.startsWith('console.') && !resolvesNested(en.translation, k),
+    );
+    expect(
+      missing,
+      `These console.* keys exist in zh.json but not en.json. Under ` +
+        `fallbackLng: 'zh' an English-locale operator sees Chinese for each:\n  ` +
+        missing.join('\n  '),
     ).toEqual([]);
   });
 

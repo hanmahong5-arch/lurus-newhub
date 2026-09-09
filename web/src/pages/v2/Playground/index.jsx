@@ -22,6 +22,7 @@ import HFShell from '../../../components/hifi/HFShell';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
+import { useTenantModels } from '../../../hooks/models/useTenantModels';
 
 // HiFi 5 — Playground multi-model compare. Wired to
 // POST /api/v2/:tenant_slug/playground/run (2026-05-19).
@@ -120,7 +121,14 @@ const HFPlayground = () => {
   const [presets, setPresets] = useState(null); // null = not yet loaded
   const [blankOpen, setBlankOpen] = useState(false);
   const [swapOpen, setSwapOpen] = useState(null); // colIdx | null
-  const [availableModels, setAvailableModels] = useState([]);
+  // Lazy — the hook's fetch does not fire until the swap▾ menu is opened once.
+  const [modelsRequested, setModelsRequested] = useState(false);
+  const {
+    items: modelItems,
+    loading: modelsLoading,
+    error: modelsError,
+  } = useTenantModels(tenantSlug, { enabled: modelsRequested });
+  const availableModels = modelItems.map((m) => m.model_name).filter(Boolean);
   const blankRef = useRef(null);
   const swapRef = useRef(null);
 
@@ -154,20 +162,6 @@ const HFPlayground = () => {
       setPresets([]);
     }
   }, [presets, tenantSlug]);
-
-  // ── Fetch available models (lazy — only when swap▾ is opened) ──
-  const fetchModels = useCallback(async () => {
-    if (availableModels.length > 0) return;
-    try {
-      const res = await API.get(`/api/v2/${tenantSlug}/models`);
-      if (res?.data?.success) {
-        const names = (res.data.data || [])
-          .map((m) => m.model_name || m.name)
-          .filter(Boolean);
-        setAvailableModels(names);
-      }
-    } catch (_) {}
-  }, [availableModels.length, tenantSlug]);
 
   const runAll = useCallback(async () => {
     if (!form.user.trim()) {
@@ -333,16 +327,16 @@ const HFPlayground = () => {
 
   // ── swap▾ toggle handler ──
   const handleSwapToggle = useCallback(
-    async (colIdx) => {
+    (colIdx) => {
       if (swapOpen === colIdx) {
         setSwapOpen(null);
         return;
       }
-      await fetchModels();
+      setModelsRequested(true);
       setSwapOpen(colIdx);
       setBlankOpen(false);
     },
-    [swapOpen, fetchModels],
+    [swapOpen],
   );
 
   const toggleModel = useCallback(
@@ -761,8 +755,9 @@ const HFPlayground = () => {
                           padding: '4px 0',
                         }}
                       >
-                        {availableModels.length === 0 && (
+                        {modelsLoading && (
                           <div
+                            data-testid='playground-swap-loading'
                             style={{
                               padding: '6px 12px',
                               color: 'var(--hf-ink-2)',
@@ -772,31 +767,65 @@ const HFPlayground = () => {
                             {tr('console.common.loading', 'loading…')}
                           </div>
                         )}
-                        {availableModels.map((m) => {
-                          const selected = form.models.includes(m);
-                          return (
-                            <button
-                              key={m}
-                              type='button'
-                              className='btn ghost sm'
-                              data-testid={`playground-swap-model-${m}`}
-                              onClick={() => {
-                                toggleModel(m);
-                                setSwapOpen(null);
-                              }}
+                        {!modelsLoading && modelsError && (
+                          <div
+                            data-testid='playground-swap-error'
+                            style={{
+                              padding: '6px 12px',
+                              color: 'var(--hf-err)',
+                              fontSize: 11,
+                            }}
+                          >
+                            {tr(
+                              'console.playground.models_load_failed',
+                              'failed to load models',
+                            )}
+                          </div>
+                        )}
+                        {!modelsLoading &&
+                          !modelsError &&
+                          availableModels.length === 0 && (
+                            <div
+                              data-testid='playground-swap-empty'
                               style={{
-                                display: 'block',
-                                width: '100%',
-                                textAlign: 'left',
                                 padding: '6px 12px',
-                                fontWeight: selected ? 700 : 400,
+                                color: 'var(--hf-ink-2)',
+                                fontSize: 11,
                               }}
                             >
-                              {selected ? '✓ ' : ''}
-                              {m}
-                            </button>
-                          );
-                        })}
+                              {tr(
+                                'console.playground.no_models',
+                                'no models available',
+                              )}
+                            </div>
+                          )}
+                        {!modelsLoading &&
+                          !modelsError &&
+                          availableModels.map((m) => {
+                            const selected = form.models.includes(m);
+                            return (
+                              <button
+                                key={m}
+                                type='button'
+                                className='btn ghost sm'
+                                data-testid={`playground-swap-model-${m}`}
+                                onClick={() => {
+                                  toggleModel(m);
+                                  setSwapOpen(null);
+                                }}
+                                style={{
+                                  display: 'block',
+                                  width: '100%',
+                                  textAlign: 'left',
+                                  padding: '6px 12px',
+                                  fontWeight: selected ? 700 : 400,
+                                }}
+                              >
+                                {selected ? '✓ ' : ''}
+                                {m}
+                              </button>
+                            );
+                          })}
                       </div>
                     )}
                   </div>

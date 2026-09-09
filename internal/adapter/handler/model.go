@@ -5,17 +5,18 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/common"
-	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
-	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
-	"github.com/LurusTech/lurus-hub/internal/app/relay"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/ai360"
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/lingyiwanwu"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/minimax"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/moonshot"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay"
+	"github.com/LurusTech/lurus-hub/internal/app/tenantpolicy"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
@@ -109,7 +110,26 @@ func init() {
 	})
 }
 
-func ListModels(c *gin.Context, modelType int) {
+// visibleModels builds the set of models this caller (relay token, scoped to
+// its owning tenant) may see in discovery. Both ListModels and RetrieveModel
+// call this, so the list and the retrieve answer come from one construction
+// instead of the two the handler used to keep separately (list used the
+// tenant-blind query, retrieve used the static catalogue regardless of
+// routability).
+//
+// Non-goal: a token carrying an explicit model_limit list (the branch below)
+// answers from that list as-is, with no tenant-routability intersection —
+// task-family models (e.g. mj_blend and friends) legitimately have no
+// ability row and would disappear from a token's discovery if they were
+// intersected against it. The tenant-routability narrowing below applies
+// only to the group path (the else branch).
+//
+// Under TENANT_MODEL_ALLOWLIST_MODE=enforce, with a configured tenant
+// allow-list, the set is additionally narrowed by tenantpolicy.ModelAllowed;
+// observe (the default) leaves it untouched — hiding under enforce only was
+// the owner's L1 answer, carried over here so discovery and the 403 the
+// relay path would give under enforce agree.
+func visibleModels(c *gin.Context) ([]dto.OpenAIModels, error) {
 	userOpenAiModels := make([]dto.OpenAIModels, 0)
 
 	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
@@ -122,6 +142,12 @@ func ListModels(c *gin.Context, modelType int) {
 			}
 		}
 	}
+
+	// Every caller today reaches this through middleware.TokenAuth
+	// (relay-router.go:18-60), which injects the tenant id at auth.go:601.
+	// The empty-string branch is kept because abilityTenantScope with an
+	// empty tenant is defined as the unscoped query (ability.go).
+	tenantID, _ := repo.GetTenantID(c)
 
 	modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
 	if modelLimitEnable {
@@ -156,11 +182,7 @@ func ListModels(c *gin.Context, modelType int) {
 		userId := c.GetInt("id")
 		userGroup, err := repo.GetUserGroup(userId, false)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "get user group failed",
-			})
-			return
+			return nil, err
 		}
 		group := userGroup
 		tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
@@ -170,7 +192,7 @@ func ListModels(c *gin.Context, modelType int) {
 		var models []string
 		if tokenGroup == "auto" {
 			for _, autoGroup := range app.GetUserAutoGroup(userGroup) {
-				groupModels := repo.GetGroupEnabledModels(autoGroup)
+				groupModels := repo.GetGroupEnabledModelsForTenant(autoGroup, tenantID)
 				for _, g := range groupModels {
 					if !common.StringsContains(models, g) {
 						models = append(models, g)
@@ -178,7 +200,7 @@ func ListModels(c *gin.Context, modelType int) {
 				}
 			}
 		} else {
-			models = repo.GetGroupEnabledModels(group)
+			models = repo.GetGroupEnabledModelsForTenant(group, tenantID)
 		}
 		for _, modelName := range models {
 			if !acceptUnsetRatioModel {
@@ -200,6 +222,32 @@ func ListModels(c *gin.Context, modelType int) {
 				})
 			}
 		}
+	}
+
+	if tenantpolicy.Mode() == tenantpolicy.ModeEnforce {
+		allowed, configured, err := tenantpolicy.LoadModelAllowlist(tenantID)
+		if err == nil && configured {
+			filtered := make([]dto.OpenAIModels, 0, len(userOpenAiModels))
+			for _, m := range userOpenAiModels {
+				if tenantpolicy.ModelAllowed(allowed, m.Id) {
+					filtered = append(filtered, m)
+				}
+			}
+			userOpenAiModels = filtered
+		}
+	}
+
+	return userOpenAiModels, nil
+}
+
+func ListModels(c *gin.Context, modelType int) {
+	userOpenAiModels, err := visibleModels(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "get user group failed",
+		})
+		return
 	}
 
 	switch modelType {
@@ -272,7 +320,47 @@ func EnabledListModels(c *gin.Context) {
 
 func RetrieveModel(c *gin.Context, modelType int) {
 	modelId := c.Param("model")
-	if aiModel, ok := openAIModelsMap[modelId]; ok {
+	// "Known" here means "routable for this caller", not "present in the
+	// static per-vendor catalogue" — both answers are built from
+	// visibleModels, so the list and the retrieve answer come from one
+	// construction.
+	models, err := visibleModels(c)
+	if err != nil {
+		// A visibleModels failure (repo.GetUserGroup DB/Redis fault) is a
+		// backend fault, not "this model does not exist" — answering 404
+		// here would tell an SDK the model was deleted when the real cause
+		// is this gateway's own state being unreachable. Same wire-native
+		// envelope shape the not-found branch below uses, status 500.
+		switch modelType {
+		case constant.ChannelTypeAnthropic:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"type": "error",
+				"error": types.ClaudeError{
+					Type:    types.WireErrorType(http.StatusInternalServerError, types.ErrorTypeClaudeError),
+					Message: "failed to resolve caller's visible models",
+				},
+			})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": types.OpenAIError{
+					Message: "failed to resolve caller's visible models",
+					Type:    types.WireErrorType(http.StatusInternalServerError, types.ErrorTypeOpenAIError),
+					Code:    string(types.ErrorCodeGatewayInternal),
+				},
+			})
+		}
+		return
+	}
+	var aiModel dto.OpenAIModels
+	found := false
+	for _, m := range models {
+		if m.Id == modelId {
+			aiModel = m
+			found = true
+			break
+		}
+	}
+	if found {
 		switch modelType {
 		case constant.ChannelTypeAnthropic:
 			c.JSON(200, dto.AnthropicModel{

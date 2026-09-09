@@ -813,14 +813,20 @@ func UpdateImageRatioByJSONString(jsonStr string) error {
 	return nil
 }
 
+// GetImageRatio looks up the raw name first so an operator entry keyed by
+// the exact model name still wins, then FormatMatchingModelName's
+// normalised name so a gizmo or gemini thinking-budget family entry is not
+// silently skipped.
 func GetImageRatio(name string) (float64, bool) {
 	imageRatioMapMutex.RLock()
 	defer imageRatioMapMutex.RUnlock()
-	ratio, ok := imageRatioMap[name]
-	if !ok {
-		return 1, false // Default to 1 if not found
+	if ratio, ok := imageRatioMap[name]; ok {
+		return ratio, true
 	}
-	return ratio, true
+	if ratio, ok := imageRatioMap[FormatMatchingModelName(name)]; ok {
+		return ratio, true
+	}
+	return 1, false // Default to 1 if not found
 }
 
 func AudioRatio2JSONString() string {

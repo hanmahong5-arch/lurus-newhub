@@ -145,23 +145,39 @@ func UpdateCacheRatioByJSONString(jsonStr string) error {
 	return nil
 }
 
-// GetCacheRatio returns the cache ratio for a model
+// GetCacheRatio returns the cache ratio for a model. The raw name is tried
+// first so an operator entry keyed by the exact model name still wins, then
+// FormatMatchingModelName's normalised name. That normalisation collapses
+// only the thinking-budget and gizmo families into five literal keys
+// (see FormatMatchingModelName), so an entry written against one of those
+// five is found instead of being skipped; arbitrary wildcard keys such as
+// "gpt-4o-*" are not a supported form here.
 func GetCacheRatio(name string) (float64, bool) {
 	cacheRatioMapMutex.RLock()
 	defer cacheRatioMapMutex.RUnlock()
-	ratio, ok := cacheRatioMap[name]
-	if !ok {
-		return 1, false // Default to 1 if not found
+	if ratio, ok := cacheRatioMap[name]; ok {
+		return ratio, true
 	}
-	return ratio, true
+	if ratio, ok := cacheRatioMap[FormatMatchingModelName(name)]; ok {
+		return ratio, true
+	}
+	return 1, false // Default to 1 if not found
 }
 
+// GetCreateCacheRatio tries the raw name first, then FormatMatchingModelName's
+// normalised family key, matching the lookup order of the two getters above.
+// defaultCreateCacheRatio is a compile-time map with no runtime write path
+// (no admin endpoint updates it), so this ordering is a consistency fix only:
+// it changes no billing outcome today, and no operator-configured entry can
+// exist here to win or lose.
 func GetCreateCacheRatio(name string) (float64, bool) {
-	ratio, ok := defaultCreateCacheRatio[name]
-	if !ok {
-		return 1.25, false // Default to 1.25 if not found
+	if ratio, ok := defaultCreateCacheRatio[name]; ok {
+		return ratio, true
 	}
-	return ratio, true
+	if ratio, ok := defaultCreateCacheRatio[FormatMatchingModelName(name)]; ok {
+		return ratio, true
+	}
+	return 1.25, false // Default to 1.25 if not found
 }
 
 func GetCacheRatioCopy() map[string]float64 {

@@ -16,7 +16,7 @@
 
 | 项 | 值 |
 |----|-----|
-| replicas | **3**(leader election 演练:杀掉 leader,看备用在 lease TTL 内接管) |
+| replicas | **3**(leader election 演练:杀掉 leader,看备用在 lease TTL 内接管——用 `lurus_gateway_leader` gauge/`checks.leader`,配 `/metrics` 的 `lurus_gateway_instance_info` 的 `pod` label 区分哪个副本;`/api/health` 是公网端点,不带 pod 身份,见下方演练命令) |
 | strategy | RollingUpdate,`maxUnavailable: 0` / `maxSurge: 1` |
 | PodDisruptionBudget | **无**(单节点集群,PDB 挡不住节点级中断;不要照旧版去建一个) |
 | podAntiAffinity | **无**(单节点,反亲和会让副本永远 Pending) |
@@ -55,6 +55,34 @@ curl -s https://test-newhub.lurus.cn/api/health                     # 四检全 
 
 🔴 `kubectl scale` / `kubectl rollout restart` / `kubectl set image` 在本服务上**无效**:
 ArgoCD `automated + selfHeal` 会把它们回滚,只会制造「改了没生效」的假象。
+
+## leader election 演练
+
+通过 `/metrics` 鉴权闸门的抓取会带 `X-Lurus-Instance` 头(值 = pod 名,downward API
+`POD_NAME`;被闸门拒掉的抓取不带),同一个 pod 身份也作为 `lurus_gateway_instance_info`
+的 `pod` label 出现在响应体里,据此把 `lurus_gateway_leader` gauge 归到具体副本;
+`/api/health` 只暴露粗粒度的
+`checks.leader`(`held`|`standby`,不带 pod 身份——该端点公网可达,无鉴权网关)——
+`standby` 是跟随者的正常态,**不会**被判 degraded/unhealthy。
+
+🔴 一个被降级的副本会**永远**保留它最后一次成功时打的
+`lurus_gateway_leader_task_last_success_timestamp_seconds{task}` 时间戳(该 series 不会因
+降级而清零或消失),所以任何基于它的告警(`time() - last_success > X`)必须同时限定
+`lurus_gateway_leader == 1`,否则一个早已下台的副本的陈旧时间戳会一直压着告警不触发。
+
+```bash
+# 逐 pod 直连 NodePort(host nginx 只转发一个 Service,单次 curl 落在哪个副本不确定)
+for p in $(kubectl get pods -n lurus-newhub -l app=lurus-newhub -o jsonpath='{.items[*].metadata.name}'); do
+  kubectl exec -n lurus-newhub "$p" -- wget -qO- http://localhost:3000/api/health | grep -o '"leader":"[^"]*"'
+done
+# 或直接看 pod 自己的 /metrics。instance_info 的 pod label 在响应体里,不依赖看响应头,
+# 所以这一条同时给出"是哪个副本"和"它是不是 leader"
+kubectl exec -n lurus-newhub <leader-pod> -- wget -qO- http://localhost:3000/metrics \
+  | grep -E '^lurus_gateway_(leader |instance_info)'
+
+# 杀掉持锁的那个副本,在 lease TTL 内应看到另一个副本的 lurus_gateway_leader 从 0 变 1
+kubectl delete pod -n lurus-newhub <leader-pod>
+```
 
 ## 告警阈值
 

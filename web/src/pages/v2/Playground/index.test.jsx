@@ -376,16 +376,20 @@ describe('Playground page', () => {
   // 11. swap▾ — opens model dropdown, clicking a model toggles it in/out of
   //     form.models. Model already present → removed; absent → appended.
   it('swap: toggles model in the models array', async () => {
-    // Provide a model list that includes a model not in DEFAULT_MODELS.
+    // Real wire shape from GET /api/v2/:tenant_slug/models
+    // (v2_models.go:108-116): data is an object with an `items` array, never
+    // the array itself.
     API.get.mockResolvedValueOnce({
       data: {
         success: true,
-        data: [
-          { model_name: 'gpt-4o' },
-          { model_name: 'claude-3.5-sonnet' },
-          { model_name: 'gemini-1.5-pro' },
-          { model_name: 'o1-mini' },
-        ],
+        data: {
+          items: [
+            { model_name: 'gpt-4o' },
+            { model_name: 'claude-3.5-sonnet' },
+            { model_name: 'gemini-1.5-pro' },
+            { model_name: 'o1-mini' },
+          ],
+        },
       },
     });
 
@@ -398,12 +402,110 @@ describe('Playground page', () => {
       expect(screen.getByTestId('playground-swap-dropdown-0')).toBeTruthy();
     });
 
-    // Click o1-mini (not in default models) to add it.
+    // Click o1-mini (not in default models) to add it — the request is async,
+    // so the button only appears once the hook resolves.
+    await waitFor(() => {
+      expect(screen.getByTestId('playground-swap-model-o1-mini')).toBeTruthy();
+    });
     fireEvent.click(screen.getByTestId('playground-swap-model-o1-mini'));
 
     // After clicking, the model count in the header should have increased.
     await waitFor(() => {
       expect(screen.getByText(/4 models, one prompt/i)).toBeTruthy();
     });
+  });
+
+  // 12. swap▾ with a tenant that has no models — the loading text must not
+  //     linger forever (that was the original bug); an honest "no models
+  //     available" line replaces it once the fetch resolves empty.
+  it('swap: shows "no models available" once loaded with an empty catalog', async () => {
+    API.get.mockResolvedValueOnce({
+      data: { success: true, data: { items: [] } },
+    });
+
+    render(<HFPlayground />);
+
+    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('playground-swap-dropdown-0')).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('no models available')).toBeTruthy();
+    });
+    expect(screen.queryByText('loading…')).toBeNull();
+  });
+
+  // Lock for the loading block itself (Playground/index.jsx:757-767) — while
+  // the request is in flight the dropdown must show the loading line, not
+  // jump straight to the empty state.
+  it('swap: shows the loading line while the models request is in flight', async () => {
+    let resolveGet;
+    API.get.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveGet = r;
+      }),
+    );
+
+    render(<HFPlayground />);
+
+    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('playground-swap-loading')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('playground-swap-empty')).toBeNull();
+
+    resolveGet({ data: { success: true, data: { items: [] } } });
+    await waitFor(() => {
+      expect(screen.getByTestId('playground-swap-empty')).toBeTruthy();
+    });
+  });
+
+  // Lock for the .filter(Boolean) on availableModels (Playground/index.jsx
+  // ~130) — a catalogue entry with no model_name must not render a blank
+  // swap row.
+  it('swap: drops a catalogue entry with no model_name instead of rendering a blank row', async () => {
+    API.get.mockResolvedValueOnce({
+      data: {
+        success: true,
+        data: {
+          items: [
+            { model_name: 'gpt-4o' },
+            { vendor: 'OpenAI' },
+            { model_name: '' },
+          ],
+        },
+      },
+    });
+
+    render(<HFPlayground />);
+
+    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('playground-swap-model-gpt-4o')).toBeTruthy();
+    });
+    const dropdown = screen.getByTestId('playground-swap-dropdown-0');
+    // Exactly one row rendered — the entry with no name and the entry with
+    // an empty-string name are both dropped, not rendered as blank buttons.
+    expect(dropdown.querySelectorAll('button').length).toBe(1);
+  });
+
+  // Lock for the distinct failure line (item 2) — a failed fetch must not
+  // read as "no models available".
+  it('swap: shows a failure line, not the empty-catalog line, when the fetch fails', async () => {
+    API.get.mockRejectedValueOnce(new Error('network down'));
+
+    render(<HFPlayground />);
+
+    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('playground-swap-error')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('playground-swap-empty')).toBeNull();
+    expect(screen.queryByText('no models available')).toBeNull();
   });
 });
