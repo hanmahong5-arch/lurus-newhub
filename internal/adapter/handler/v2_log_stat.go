@@ -26,6 +26,16 @@ type logStatView struct {
 	TotalQuota       int64 `json:"total_quota"`
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
+	// CacheReadTokens / CacheWriteTokens report prompt-cache savings
+	// (C08-TTFT-CACHE-SERIES): the same other.cache_tokens /
+	// other.cache_creation_tokens keys log_info_generate.go writes onto
+	// text/claude consume rows, summed over the window. Zero for a window
+	// with no cache hits. Upstream-reported except on OpenRouter channels,
+	// where cache_creation_tokens may instead be derived from the
+	// upstream-reported cost (quota.go CalcOpenRouterCacheCreateTokens) when
+	// the wire itself did not report a cache-creation count.
+	CacheReadTokens  int64 `json:"cache_read_tokens"`
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
 	Rpm              int64 `json:"rpm"`
 	Tpm              int64 `json:"tpm"`
 	StartTime        int64 `json:"start_time"`
@@ -44,6 +54,8 @@ type productSpendView struct {
 	TotalQuota       int64  `json:"total_quota"`
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
 }
 
 // GetLogStatV2 returns aggregate usage stats for the current user over the
@@ -150,12 +162,16 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 		TotalQuota       int64 `gorm:"column:total_quota"`
 		PromptTokens     int64 `gorm:"column:prompt_tokens"`
 		CompletionTokens int64 `gorm:"column:completion_tokens"`
+		CacheReadTokens  int64 `gorm:"column:cache_read_tokens"`
+		CacheWriteTokens int64 `gorm:"column:cache_write_tokens"`
 	}
 	if err := windowQuery.
 		Select("COUNT(*) AS total_requests, " +
 			"COALESCE(SUM(quota), 0) AS total_quota, " +
 			"COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, " +
-			"COALESCE(SUM(completion_tokens), 0) AS completion_tokens").
+			"COALESCE(SUM(completion_tokens), 0) AS completion_tokens, " +
+			"COALESCE(SUM(CAST(" + repo.OtherTextExpr("cache_tokens") + " AS BIGINT)), 0) AS cache_read_tokens, " +
+			"COALESCE(SUM(CAST(" + repo.OtherTextExpr("cache_creation_tokens") + " AS BIGINT)), 0) AS cache_write_tokens").
 		Scan(&window).Error; err != nil {
 		common.SysError("serveLogStatV2: window aggregate failed: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -246,7 +262,9 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 			"COUNT(*) AS total_requests, " +
 			"COALESCE(SUM(quota), 0) AS total_quota, " +
 			"COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, " +
-			"COALESCE(SUM(completion_tokens), 0) AS completion_tokens").
+			"COALESCE(SUM(completion_tokens), 0) AS completion_tokens, " +
+			"COALESCE(SUM(CAST(" + repo.OtherTextExpr("cache_tokens") + " AS BIGINT)), 0) AS cache_read_tokens, " +
+			"COALESCE(SUM(CAST(" + repo.OtherTextExpr("cache_creation_tokens") + " AS BIGINT)), 0) AS cache_write_tokens").
 		Group("source_product").
 		Scan(&byProduct).Error; err != nil {
 		common.SysError("serveLogStatV2: by_product aggregate failed: " + err.Error())
@@ -264,6 +282,8 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 			TotalQuota:       window.TotalQuota,
 			PromptTokens:     window.PromptTokens,
 			CompletionTokens: window.CompletionTokens,
+			CacheReadTokens:  window.CacheReadTokens,
+			CacheWriteTokens: window.CacheWriteTokens,
 			Rpm:              rate.Rpm,
 			Tpm:              rate.Tpm,
 			StartTime:        startTime,

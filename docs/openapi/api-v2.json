@@ -384,7 +384,7 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/BadRequest"
+            "$ref": "#/components/responses/ChannelConfigInvalid"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -479,7 +479,7 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/BadRequest"
+            "$ref": "#/components/responses/ChannelConfigInvalid"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -1991,6 +1991,16 @@
             }
           }
         }
+      },
+      "ChannelConfigInvalid": {
+        "description": "Invalid request body. Includes a channel config document (param_override, header_override, model_mapping, or setting) that failed save-time validation, in which case the body carries a code identifying which field.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ChannelConfigValidationError"
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -2004,6 +2014,29 @@
           "message": {
             "type": "string",
             "example": "Invalid request"
+          }
+        }
+      },
+      "ChannelConfigValidationError": {
+        "type": "object",
+        "description": "400 body for POST/PUT channel. code is present only when the request body's param_override (structural pre-pass + dry-run of the relay override engine), header_override, model_mapping, or setting document (shape validators) failed save-time validation; it is absent for other 400s on this endpoint (missing required field, malformed request JSON, etc).",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": false
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "channel:param_override_invalid",
+              "channel:header_override_invalid",
+              "channel:model_mapping_invalid",
+              "channel:setting_invalid"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "example": "param_override must be valid JSON"
           }
         }
       },

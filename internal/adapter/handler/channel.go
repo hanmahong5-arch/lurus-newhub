@@ -2,12 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/ollama"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
@@ -680,6 +682,71 @@ func GetChannelKey(c *gin.Context) {
 	})
 }
 
+// validateChannelConfigDocuments runs the four save-time document validators
+// (param_override, header_override, model_mapping, setting) against a
+// channel's non-nil fields. param_override runs a structural pre-pass over
+// the parsed "operations" array (internal/adapter/provider/common/
+// channel_config_validate.go: validateOperationsStructure) before dry-running
+// the same override engine the relay path uses against a probe body ({model,
+// messages}). What is caught, invalid JSON aside: a non-object operation
+// entry, a missing/unknown mode, move/copy with an empty from or to, any
+// other path-based mode with an empty path, an unparseable regex_replace
+// pattern, and a missing trim_prefix/trim_suffix/ensure_prefix/ensure_suffix
+// value or replace from — all checked independently of whether the targeted
+// path exists on the probe, plus whatever the dry-run itself still rejects
+// (an unsupported comparison mode). What is not checked: whether a path the
+// probe does not carry exists on a real request body — that stays
+// request-dependent, so an operation that only fails because the probe
+// lacks the field it targets (e.g. a move from max_tokens) saves. A nil
+// field means "not being written" — a row carrying a document with a
+// structural defect from before this validator existed keeps working until
+// it is next edited (relay-time ErrorCodeChannelParamOverrideInvalid stays
+// the backstop).
+func validateChannelConfigDocuments(channel *repo.Channel) error {
+	if channel.ParamOverride != nil {
+		if err := relaycommon.ValidateParamOverride(*channel.ParamOverride); err != nil {
+			return err
+		}
+	}
+	if channel.HeaderOverride != nil {
+		if err := relaycommon.ValidateHeaderOverride(*channel.HeaderOverride); err != nil {
+			return err
+		}
+	}
+	if channel.ModelMapping != nil {
+		if err := relaycommon.ValidateModelMapping(*channel.ModelMapping); err != nil {
+			return err
+		}
+	}
+	if channel.Setting != nil {
+		if err := relaycommon.ValidateChannelSetting(*channel.Setting); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// legacyChannelConfigErrorResponse builds the {success:false} body for the
+// legacy v1 console save path (AddChannel/UpdateChannel below), which keeps
+// the historic 200 + success:false shape (unlike v2's 400; see
+// channelConfigErrorResponse in v2_channel.go). It surfaces the same
+// field-naming code onto a "code" field, and — because some legacy console
+// callers only render the message string — also prefixes the code onto the
+// message text. Errors that did not come from the four config-document
+// validators (relaycommon.ChannelConfigValidationError) fall back to the
+// bare message with no code, unchanged from before.
+func legacyChannelConfigErrorResponse(err error) gin.H {
+	var verr *relaycommon.ChannelConfigValidationError
+	if errors.As(err, &verr) {
+		return gin.H{
+			"success": false,
+			"code":    verr.Code,
+			"message": fmt.Sprintf("[%s] %s", verr.Code, verr.Message),
+		}
+	}
+	return gin.H{"success": false, "message": err.Error()}
+}
+
 // validateChannelContent runs the vendor/config validations shared by the v1 and
 // v2 channel write paths: channel-setting format, model-name length (on add), and
 // the VertexAI deployment-region rules. It deliberately EXCLUDES the SSRF egress
@@ -690,9 +757,12 @@ func GetChannelKey(c *gin.Context) {
 // helper lets each caller apply the egress gate that fits its update semantics
 // while the content rules stay single-sourced.
 func validateChannelContent(channel *repo.Channel, isAdd bool) error {
-	// 校验 channel settings
-	if err := channel.ValidateSettings(); err != nil {
-		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
+	// 校验 channel 的四个 JSON 文档（setting/param_override/header_override/
+	// model_mapping）：param_override/header_override 对 relay 实际使用的 override
+	// 引擎做 dry-run，避免语法合法但语义错误的文档存下来后只在真实流量打到该
+	// 渠道时才在 relay 侧暴露（此前只校验 setting，其余三个文档存进去从不检查）。
+	if err := validateChannelConfigDocuments(channel); err != nil {
+		return err
 	}
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
@@ -803,10 +873,7 @@ func AddChannel(c *gin.Context) {
 
 	// 使用统一的校验函数
 	if err := validateChannel(addChannelRequest.Channel, true); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		c.JSON(http.StatusOK, legacyChannelConfigErrorResponse(err))
 		return
 	}
 
@@ -1040,10 +1107,16 @@ func EditTagChannels(c *gin.Context) {
 	}
 	if channelTag.ParamOverride != nil {
 		trimmed := strings.TrimSpace(*channelTag.ParamOverride)
-		if trimmed != "" && !json.Valid([]byte(trimmed)) {
+		// Dry-run against the same override engine the relay path uses (not a
+		// bare json.Valid), so an unknown operation mode or another structural
+		// defect is rejected here rather than at relay time; an operation that
+		// only fails because the probe body ({model, messages}) does not carry
+		// the targeted field is request-dependent and is accepted (see
+		// dryRunErrorIsRequestDependent in channel_config_validate.go).
+		if err := relaycommon.ValidateParamOverride(trimmed); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "参数覆盖必须是合法的 JSON 格式",
+				"message": "参数覆盖格式错误：" + err.Error(),
 			})
 			return
 		}
@@ -1051,14 +1124,25 @@ func EditTagChannels(c *gin.Context) {
 	}
 	if channelTag.HeaderOverride != nil {
 		trimmed := strings.TrimSpace(*channelTag.HeaderOverride)
-		if trimmed != "" && !json.Valid([]byte(trimmed)) {
+		if err := relaycommon.ValidateHeaderOverride(trimmed); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "请求头覆盖必须是合法的 JSON 格式",
+				"message": "请求头覆盖格式错误：" + err.Error(),
 			})
 			return
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
+	}
+	if channelTag.ModelMapping != nil {
+		trimmed := strings.TrimSpace(*channelTag.ModelMapping)
+		if err := relaycommon.ValidateModelMapping(trimmed); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "模型映射格式错误：" + err.Error(),
+			})
+			return
+		}
+		channelTag.ModelMapping = common.GetPointer[string](trimmed)
 	}
 	// A per-tenant admin (also passes AdminAuth) may only edit channels sharing
 	// this tag within its own tenant; root edits the tag across every tenant.
@@ -1156,10 +1240,7 @@ func UpdateChannel(c *gin.Context) {
 
 	// 使用统一的校验函数
 	if err := validateChannel(&channel.Channel, false); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		c.JSON(http.StatusOK, legacyChannelConfigErrorResponse(err))
 		return
 	}
 	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
