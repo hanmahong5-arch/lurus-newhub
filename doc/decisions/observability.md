@@ -61,6 +61,28 @@
 >   where `cache_creation_tokens` may be derived from the upstream-reported
 >   cost instead (`quota.go` `CalcOpenRouterCacheCreateTokens`).
 
+> **UPDATE 2026-09-09 (L3 operator signals)**: three additive series, still
+> zero-collector-change:
+> - `lurus_gateway_leader` (gauge) — 1 while this process holds the HA
+>   leader lease, 0 otherwise. Single writer: `common.SetLeader`.
+> - `lurus_gateway_leader_task_last_success_timestamp_seconds{task}`
+>   (gauge) — unix timestamp of the last successful run of a leader-gated
+>   periodic task (`lifecycle.LeaderTask`); initialised to 0 for each task
+>   name at registration so a task that has never once succeeded still
+>   exports a series (rather than none at all) for a `time() - last_success
+>   > X` alert to catch. 🔴 A demoted leader keeps exporting its *last*
+>   timestamp forever — the series is not cleared or reset on step-down —
+>   so any alert on it must be qualified with `lurus_gateway_leader == 1`,
+>   or a follower's stale-but-once-real timestamp will mask the condition.
+> - `lurus_gateway_instance_info{pod,namespace,version}` (gauge, constant
+>   1) — this pod's identity, set once at boot from the k8s downward API
+>   (`POD_NAME`/`POD_NAMESPACE`) before `/metrics` is mounted. `/metrics`
+>   also gains an `X-Lurus-Instance` response header (same pod value),
+>   mounted after `metricsAuthMiddleware` so a rejected scrape never leaks
+>   it. `GET /api/health` gains only the coarse `checks.leader`
+>   (`held`|`standby`) — it is a public, unauthenticated endpoint, so it
+>   deliberately does not carry the pod identity.
+
 ## Context
 
 Production Lurus API needs metrics, tracing, and alerting for incident response and performance optimization. The team is 2 people running on a single K3s node, so the stack must be lightweight and optional (feature-flagged).

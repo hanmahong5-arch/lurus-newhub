@@ -203,7 +203,7 @@ const GLOBAL_ALLOWLIST = new Set([
   // Billing invoice sub-fields (billing/invoices internal endpoint)
   'month', 'amount_cny', 'amount_usd', 'request_count',
   // Billing summary sub-fields (user/billing/summary internal endpoint)
-  'wallet_balance_cny', 'mtd_spend_cny', 'subscription_plan',
+  'wallet_balance_cny', 'mtd_spend_cny',
   'balance', 'frozen', 'available', 'lifetime_topup', 'lifetime_spend',
   'active_pre_auths', 'pending_orders',
   // Sessions endpoint (internal, not in v2 spec)

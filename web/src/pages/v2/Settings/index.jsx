@@ -74,7 +74,7 @@ const formatRelativeTime = (unixSec, tr) => {
 const SECTIONS = [
   ['profile', 'Profile', 'name, email, avatar'],
   ['security', 'Security', 'password, mfa, sessions'],
-  ['subscription', 'Subscription', 'plan tier & entitlements'],
+  ['subscription', 'Subscription', 'routing group & entitlements'],
   ['billing', 'Billing', 'wallet balance & usage'],
   ['notifications', 'Notifications', 'email & webhook alerts'],
   ['team', 'Team & roles', 'members and permissions'],
@@ -82,44 +82,6 @@ const SECTIONS = [
   ['region', 'Region & data', 'where data lives'],
   ['danger', 'Danger zone', 'export, transfer, delete'],
 ];
-
-// Wave A Squad 5A (2026-05-20): read-only entitlement summary. Values are
-// derived locally from the existing /user/me `group` field — backend
-// entitlement registry not yet implemented. See caveats in commit body.
-// Order: [label, value]. Tooltip on the upgrade button explains scope.
-// Translatable values are [key, fallback] pairs resolved at render via tr()
-// (module scope has no i18n context); plain strings (e.g. "99.5%") render
-// verbatim.
-const ENTITLEMENT_BY_GROUP = {
-  default: {
-    label: ['tier_free', 'Free'],
-    routing: ['ent_routing_shared', 'shared pool'],
-    sla: ['ent_sla_best_effort', 'best effort'],
-    auditDays: 7,
-    support: ['ent_support_community', 'community'],
-  },
-  vip: {
-    label: ['tier_pro', 'Pro'],
-    routing: ['ent_routing_priority', 'priority routing'],
-    sla: '99.5%',
-    auditDays: 30,
-    support: ['ent_support_business_hours', 'business hours'],
-  },
-  pro: {
-    label: ['tier_pro', 'Pro'],
-    routing: ['ent_routing_priority', 'priority routing'],
-    sla: '99.5%',
-    auditDays: 30,
-    support: ['ent_support_business_hours', 'business hours'],
-  },
-  enterprise: {
-    label: ['tier_enterprise', 'Enterprise'],
-    routing: ['ent_routing_dedicated', 'dedicated pool'],
-    sla: '99.95%',
-    auditDays: 365,
-    support: ['ent_support_dedicated', '24/7 dedicated'],
-  },
-};
 
 // Wave A Squad 5A: 3 read-only notification channels with placeholder events.
 // Toggle switches are disabled — mutation flow lands in Wave B per
@@ -295,11 +257,12 @@ const HFSettings = () => {
     }
   }, []);
 
-  // Subscription tab (Wave A Squad 5A) — derived from /user/me + best-effort
-  // /user/billing/summary. No dedicated subscription endpoint yet.
+  // Subscription tab (Wave A Squad 5A) — derived from /user/me only. No
+  // dedicated subscription endpoint exists, so this tab does not call
+  // /user/billing/summary (the Billing tab below owns that call).
   const [subLoading, setSubLoading] = useState(false);
   const [subError, setSubError] = useState(false);
-  const [subData, setSubData] = useState(null); // { tier, group, source }
+  const [subData, setSubData] = useState(null); // { group }
 
   // Billing tab (Wave A Squad 5A) — wallet summary + last-30d aggregate +
   // recent transactions (synthesised from /billing/topups; full ClickHouse
@@ -338,10 +301,10 @@ const HFSettings = () => {
   }, [tenantSlug]);
 
   // Subscription tab loader — reuses the cached profile when present (Profile
-  // tab fetches it on mount), otherwise refetches. Falls back to a placeholder
-  // if no group field is exposed. Best-effort enrichment via billing summary
-  // (subscription_plan field is currently absent on the Go BillingSummary
-  // struct — guard accordingly).
+  // tab fetches it on mount), otherwise refetches. There is no backend
+  // entitlement registry: the tab reads exactly the `group` field /user/me
+  // already exposes and does not enrich it from anywhere else — a plan name
+  // invented from that string would be a claim this deployment cannot back.
   const fetchSubscription = useCallback(async () => {
     setSubLoading(true);
     setSubError(false);
@@ -354,27 +317,9 @@ const HFSettings = () => {
           setProfile(p);
         }
       }
-      // Best-effort: try platform billing summary for subscription_plan hint.
-      let planHint = null;
-      try {
-        const sumRes = await API.get('/api/v2/user/billing/summary');
-        if (sumRes?.data?.success) {
-          planHint = sumRes.data.data?.subscription_plan ?? null;
-        }
-      } catch (_) {
-        // non-fatal — subscription_plan field optional
-      }
 
       if (p) {
-        setSubData({
-          group: p.group ?? null,
-          planHint,
-          source: planHint
-            ? 'platform'
-            : p.group
-              ? 'user_group'
-              : 'placeholder',
-        });
+        setSubData({ group: p.group ?? null });
       } else {
         setSubError(true);
       }
@@ -974,133 +919,74 @@ const HFSettings = () => {
 
               {!subLoading && !subError && subData && (
                 <>
-                  {(() => {
-                    const ent =
-                      ENTITLEMENT_BY_GROUP[subData.group] ??
-                      ENTITLEMENT_BY_GROUP.default;
-                    // Resolve [key, fallback] pairs via tr(); plain strings
-                    // (e.g. "99.5%") pass through verbatim.
-                    const tx = (v) =>
-                      Array.isArray(v)
-                        ? tr(`console.settings.${v[0]}`, v[1])
-                        : v;
-                    const tierName = subData.planHint || tx(ent.label);
-                    const isPlaceholder = subData.source === 'placeholder';
-
-                    return (
-                      <>
-                        <div
-                          className='panel'
-                          style={{ padding: 18, marginBottom: 14 }}
-                        >
-                          <div className='lbl'>
-                            {tr(
-                              'console.settings.current_plan',
-                              'current plan',
+                  <div
+                    className='panel'
+                    style={{ padding: 18, marginBottom: 14 }}
+                  >
+                    <div className='lbl'>
+                      {tr(
+                        'console.settings.routing_group_label',
+                        'routing group',
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        marginTop: 10,
+                      }}
+                    >
+                      <span
+                        className='tag ok'
+                        data-testid='subscription-tier-badge'
+                        style={{
+                          fontFamily: 'var(--hf-mono)',
+                          fontSize: 12,
+                          padding: '3px 10px',
+                        }}
+                      >
+                        <span data-testid='subscription-group'>
+                          {subData.group ||
+                            tr(
+                              'console.settings.group_none',
+                              'no group assigned',
                             )}
-                          </div>
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 10,
-                              marginTop: 10,
-                            }}
-                          >
-                            <span
-                              className='tag ok'
-                              data-testid='subscription-tier-badge'
-                              style={{
-                                fontFamily: 'var(--hf-mono)',
-                                fontSize: 12,
-                                padding: '3px 10px',
-                              }}
-                            >
-                              {tierName}
-                            </span>
-                            {isPlaceholder && (
-                              <span
-                                className='faint mono'
-                                style={{ fontSize: 11 }}
-                              >
-                                {tr(
-                                  'console.settings.free_tier_note',
-                                  'Free tier — entitlement API not yet wired',
-                                )}
-                              </span>
-                            )}
-                            <span style={{ flex: 1 }} />
-                            <button
-                              type='button'
-                              className='btn sm'
-                              disabled
-                              data-testid='subscription-upgrade-btn'
-                              title={tr(
-                                'console.settings.upgrade_plan_title',
-                                'Plan upgrades available in Wave B',
-                              )}
-                            >
-                              {tr(
-                                'console.settings.upgrade_plan',
-                                'Upgrade plan',
-                              )}
-                            </button>
-                          </div>
-                        </div>
+                        </span>
+                      </span>
+                      <span className='faint mono' style={{ fontSize: 11 }}>
+                        {tr(
+                          'console.settings.group_source_user_group',
+                          "from your account's routing group",
+                        )}
+                      </span>
+                      <span style={{ flex: 1 }} />
+                      <button
+                        type='button'
+                        className='btn sm'
+                        disabled
+                        data-testid='subscription-upgrade-btn'
+                        title={tr(
+                          'console.settings.upgrade_plan_title',
+                          'Contact your administrator',
+                        )}
+                      >
+                        {tr('console.settings.upgrade_request', 'Upgrade')}
+                      </button>
+                    </div>
+                  </div>
 
-                        <div className='panel'>
-                          {[
-                            [
-                              tr(
-                                'console.settings.ent_routing_modes',
-                                'routing modes',
-                              ),
-                              tx(ent.routing),
-                            ],
-                            [
-                              tr('console.settings.ent_sla_tier', 'SLA tier'),
-                              tx(ent.sla),
-                            ],
-                            [
-                              tr(
-                                'console.settings.ent_audit_retention',
-                                'audit retention',
-                              ),
-                              tr('console.settings.audit_days', {
-                                count: ent.auditDays,
-                              }),
-                            ],
-                            [
-                              tr(
-                                'console.settings.ent_support_tier',
-                                'support tier',
-                              ),
-                              tx(ent.support),
-                            ],
-                          ].map(([k, v], i, a) => (
-                            <div
-                              key={k}
-                              style={{
-                                display: 'grid',
-                                gridTemplateColumns: '180px 1fr',
-                                padding: '12px 16px',
-                                borderBottom:
-                                  i < a.length - 1
-                                    ? '1px dashed var(--hf-rule)'
-                                    : 0,
-                                alignItems: 'center',
-                              }}
-                            >
-                              <span className='lbl'>{k}</span>
-                              <span className='strong' style={{ fontSize: 13 }}>
-                                {v}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    );
-                  })()}
+                  <div className='panel'>
+                    <div
+                      data-testid='subscription-entitlements-unpublished'
+                      style={{ padding: '12px 16px', fontSize: 13 }}
+                    >
+                      {tr(
+                        'console.settings.entitlements_not_published',
+                        'SLA, audit retention and support terms are not published by this deployment',
+                      )}
+                    </div>
+                  </div>
                 </>
               )}
             </div>

@@ -7,6 +7,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 )
 
 // renewDivisor renews at ttl/renewDivisor so a couple of transient renewal
@@ -131,6 +132,13 @@ func NewLeaderTask(name string, interval time.Duration, fn func(ctx context.Cont
 	if poll > leaderTaskPollInterval {
 		poll = leaderTaskPollInterval
 	}
+	// Initialise the last-success series to 0 at registration, before the
+	// task has ever run. A GaugeVec with no series for {task="x"} exports
+	// nothing for that label at all, so an alert of the shape
+	// `time() - lurus_gateway_leader_task_last_success_timestamp_seconds > X`
+	// can never fire for a task that has never once succeeded — exactly the
+	// failure it exists to catch.
+	metrics.LeaderTaskLastSuccess.WithLabelValues(name).Set(0)
 	return &LeaderTask{
 		name:     name,
 		interval: interval,
@@ -166,8 +174,13 @@ func (t *LeaderTask) Run(ctx context.Context) error {
 			}
 			lastRun = time.Now()
 			// fn errors are swallowed so a single failure does not stop the
-			// loop; fn itself is responsible for logging.
-			_ = t.fn(ctx)
+			// loop; fn itself is responsible for logging. Only a nil error
+			// stamps the last-success gauge, so a stuck task shows up as a
+			// timestamp that stops advancing rather than one that keeps
+			// ticking regardless of outcome.
+			if err := t.fn(ctx); err == nil {
+				metrics.RecordLeaderTaskSuccess(t.name)
+			}
 		}
 	}
 }

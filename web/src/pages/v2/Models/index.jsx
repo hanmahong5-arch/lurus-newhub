@@ -24,6 +24,7 @@ import WIPBanner from '../../../components/hifi/WIPBanner';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
+import { useTenantModels } from '../../../hooks/models/useTenantModels';
 
 /* HiFi 7 — Models catalog. Wired to GET /api/v2/:tenant_slug/models (2026-05-19).
    Wave 3 Phase 1 (2026-05-20): add-model modal + try ↗ navigate wired. */
@@ -69,10 +70,28 @@ const HFModels = () => {
   const { t: tr } = useTranslation();
 
   const [vendor, setVendor] = useState('');
-  const [models, setModels] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [vendorCounts, setVendorCounts] = useState({});
-  const [loading, setLoading] = useState(false);
+  const {
+    items: models,
+    total,
+    vendorCounts,
+    loading,
+    error: modelsError,
+    refetch: refetchModels,
+  } = useTenantModels(tenantSlug, { limit: 100, offset: 0, vendor });
+
+  // Surface load failures as one toast per failed fetch, message from the
+  // response body when the backend sent one. Before the shared hook the page
+  // toasted only on a rejected request; a 200 body with success:false left
+  // the list empty and silent.
+  useEffect(() => {
+    if (!modelsError) return;
+    const msg =
+      modelsError?.response?.data?.message ??
+      modelsError?.message ??
+      (typeof modelsError === 'string' ? modelsError : null) ??
+      tr('console.models.load_failed', 'Failed to load models');
+    showError(msg);
+  }, [modelsError, tr]);
 
   // Add-model modal state.
   const [addOpen, setAddOpen] = useState(false);
@@ -91,59 +110,6 @@ const HFModels = () => {
       if (el.open && typeof el.close === 'function') el.close();
     }
   }, [addOpen]);
-
-  const fetchModels = async (slug, vendorFilter) => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ limit: '100', offset: '0' });
-      if (vendorFilter) params.set('vendor', vendorFilter);
-      const res = await API.get(`/api/v2/${slug}/models?${params.toString()}`);
-      const d = res?.data?.data ?? {};
-      setModels(d.items ?? []);
-      setTotal(d.total ?? 0);
-      if (d.vendor_counts) setVendorCounts(d.vendor_counts);
-    } catch (err) {
-      const msg =
-        err?.response?.data?.message ??
-        err?.message ??
-        tr('console.models.load_failed', 'Failed to load models');
-      showError(msg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      setLoading(true);
-      try {
-        const params = new URLSearchParams({ limit: '100', offset: '0' });
-        if (vendor) params.set('vendor', vendor);
-        const res = await API.get(
-          `/api/v2/${tenantSlug}/models?${params.toString()}`,
-        );
-        if (cancelled) return;
-        const d = res?.data?.data ?? {};
-        setModels(d.items ?? []);
-        setTotal(d.total ?? 0);
-        if (d.vendor_counts) setVendorCounts(d.vendor_counts);
-      } catch (err) {
-        if (cancelled) return;
-        const msg =
-          err?.response?.data?.message ??
-          err?.message ??
-          tr('console.models.load_failed', 'Failed to load models');
-        showError(msg);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [tenantSlug, vendor]);
 
   // Build vendor filter pills from vendor_counts; add "all" pseudo-entry.
   const vendorNames = Object.keys(vendorCounts).filter(Boolean).sort();
@@ -182,7 +148,7 @@ const HFModels = () => {
       clearDraft();
       setAddOpen(false);
       // Refresh list.
-      await fetchModels(tenantSlug, vendor);
+      refetchModels();
     } catch (err) {
       const msg =
         err?.response?.data?.message ??

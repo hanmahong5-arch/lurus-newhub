@@ -86,6 +86,7 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
+| `/v1/models` `/v1/models/:model` | GET | 模型发现:列表原本就从(租户盲的)ability 集作答,2026-09-09 起改为按调用方所属租户可路由的模型集(不再看得到别的租户的渠道);`:model` 单条查询原本直接答静态目录、与路由是否可达无关,现在改用同一个租户可路由集判断——查询一个该租户路由不到的模型返回 404 而不是静态目录里的 200,OpenAI 线 `type=invalid_request_error`、`param=model`、`code=model_not_found`(注意与下方 B 表 404 行的 `type=not_found_error` 不同);Anthropic 线 `type=not_found_error`,与 B 表一致,但该信封**没有 `code` 字段**——这一条要按 `type` 判,不要按本文其余各处推荐的 `code` 判;token 自带 `model_limit` 列表时,列表/单条查询按该列表作答,不做租户可路由性交叉;若该租户的模型白名单处于 `enforce` 模式,列表与单条查询都再按白名单收窄(两者共用同一个可见集,所以被白名单挡掉的模型单条查询也返回 404) |
 | `/v1/chat/completions` | POST | 对话模型 |
 | `/v1/embeddings` | POST | 文本向量化 |
 | `/v1/images/generations` | POST | 图片生成 |
@@ -106,15 +107,17 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 | 400 | `invalid_request_error` | `invalid_request_error` | `invalid_request` 等 | 请求本身有问题(缺模型名/渠道 id 格式错/请求体解析失败) | 检查请求体 |
 | 401 | `authentication_error` | `authentication_error` | `invalid_request` / `session_required` / `token_disabled`(令牌被禁用,主鉴权路径) | Key 无效、未登录、令牌被禁用 | 检查 Token / 重新登录 / 在令牌管理里启用或换一把 |
 | 402 | `insufficient_quota` | `billing_error` | `insufficient_user_quota` / `token_quota_exhausted` / `pool_exhausted` / `pool_not_configured`(租户信用池未配置,`CREDIT_POOL_REQUIRED=enforce` 时) / `tenant_quota_exceeded`(租户月度配额超限) | 钱包/Token/租户资金池额度不足 | 提示充值,`metadata.topup_url` 见 §F |
-| 403 | `permission_error` | `permission_error` | `model_blocked` / `group_not_allowed` / `ip_not_allowed` / `channel_specify_forbidden` / `scope_not_granted` / `user_banned` / `tenant_suspended` / `token_disabled`(令牌被禁用,playground 鉴权路径) | 模型/分组/IP/scope 未授权,账号或租户被封禁,或(playground 路径)令牌被禁用 | 按 `code` 定位具体原因,联系管理员放开 |
+| 403 | `permission_error` | `permission_error` | `model_blocked` / `group_not_allowed` / `ip_not_allowed` / `channel_specify_forbidden` / `scope_not_granted` / `user_banned` / `tenant_suspended` / `token_disabled`(令牌被禁用,playground 鉴权路径) | 模型/分组/IP/scope 未授权,账号或租户被封禁,或(playground 路径)令牌被禁用。`model_blocked` 除了令牌自身模型白名单,`TENANT_MODEL_ALLOWLIST_MODE=enforce` 时也会由租户级模型白名单触发(默认 `observe` 只记录不拒绝) | 按 `code` 定位具体原因,联系管理员放开 |
 | 404 | `not_found_error` | `not_found_error` | `model_not_found` | 模型未配置任何可用渠道(区别于"渠道全部暂时不可用"的 503) | 换模型 |
 | 413 | `request_too_large` | `request_too_large` | `read_request_body_failed` | 请求体超限 | 缩小请求 |
-| 429 | `rate_limit_error` | `rate_limit_error` | `request_rate_limit_exceeded` / `quota_exceeded` / `cost_spike_limit_exceeded` / `business_rate_limit_exceeded` / `concurrency_limit_exceeded` 等 | 限流(见下方 Q4 的另一类 429) | 稍后重试,读 `Retry-After`/`X-RateLimit-*`(见 §E,并非全部 429 都携带 —— `quota_exceeded` 与 `cost_spike_limit_exceeded` 也带 `X-RateLimit-Scope`/`Type`,见 §E 表) |
+| 429 | `rate_limit_error` | `rate_limit_error` | `request_rate_limit_exceeded` / `quota_exceeded` / `cost_spike_limit_exceeded` / `business_rate_limit_exceeded` / `concurrency_limit_exceeded` 等 | 限流(见下方 Q4 的另一类 429)。**仅限中转路径**(`/v1/*` 等 relay 路由)网关自身发起的这类 429,`error.message` 都是英文句子,不要拿它做文本匹配——判定读 `code`。其中限流/并发中间件的拒绝(`request_rate_limit_exceeded`/`business_rate_limit_exceeded`/`concurrency_limit_exceeded`)统一是 `<scope> <requests\|tokens\|concurrency> limit exceeded: <n> ...(<code>)` 这一种形状;`quota_exceeded`(entitlement)与 `cost_spike_limit_exceeded`(cost spike)同样是英文,但句式不同、不含 `<n>`。`/api/*` 控制台路由与 `/internal/*` 内部路由上的 ip/key 限流器(`rate-limit.go` 的 keyed 拒绝点)429 只带头,**没有 body**,不要假设那类 429 存在 `error.message` | 稍后重试,读 `Retry-After`/`X-RateLimit-*`(见 §E,并非全部 429 都携带 —— `quota_exceeded` 与 `cost_spike_limit_exceeded` 也带 `X-RateLimit-Scope`/`Type`,见 §E 表) |
 | 500 | `api_error` | `api_error` | `gateway_internal` | 网关自身处理失败(非上游供应商故障) | 重试;持续出现联系运维 |
 | 500 | `upstream_error` | `upstream_error` | 供应商原样透传 | AI 服务商故障 | 重试 / 切模型 |
 | 503 | `api_error` | `overloaded_error` | `channel:all_keys_cooling` / `model_not_found`(无可用渠道时复用此状态码) 等 | 模型配置存在但渠道暂时全部不可用/维护中 | 等待恢复,读 `Retry-After` |
 
 完整 `code` 枚举(所有网关自身可能返回的机器码,不含上游供应商透传值)见 `docs/openapi/relay.json` 的 `components.schemas.GatewayError.code.enum`,由 CI 锁与 `internal/pkg/types` 的 `ErrorCode` 常量表逐条互校,新增/改名任一侧都会挂红。
+
+定价:仅 cache-read(`GetCacheRatio`)与 image(`GetImageRatio`)这两个折扣的查找——先按调用方发来的原始模型名精确匹配,查不到再退化到 `FormatMatchingModelName` 收敛出的固定族名(仅 `gemini-2.5-flash-lite-thinking-*`/`gemini-2.5-flash-thinking-*`/`gemini-2.5-pro-thinking-*`/`gpt-4-gizmo-*`/`gpt-4o-gizmo-*` 这五个字面量,不是任意通配符——运营方要按这五个字面量配价才会命中,配 `gpt-4o-*` 之类自定义通配符不会生效)。调用方发的是某个 thinking-budget/gizmo 变体名(未单独配价)时,这两项折扣现在会回落到上述族名条目的价格,而不是默认值——`X-Request-Cost`/`x_lurus.cost_lb`/`GET /v1/generation` 的 `quota` 会随之更贴近价目表。cache-write(`GetCreateCacheRatio`)做了同样的查找一致性修正,但该价目表目前没有任何管理端点可写,所以没有运营方可见的计费变化。模型价格本身(`GetModelPrice`/`GetModelRatio`,定价里最大的组成部分)与 completion 比例**不**遵循这条"精确匹配始终优先"规则——它们无条件先做 `FormatMatchingModelName` 归一化,带 thinking-budget 后缀的精确模型名价格条目不会被读到。
 
 ### B2. 账号绑定与计费归属(2026-09-07 起)
 
@@ -142,16 +145,18 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 
 ### E. 响应头目录
 
+浏览器跨域调用方(允许源见 `ALLOWED_ORIGINS`,当前 `hub.lurus.cn`/`identity.lurus.cn`):本表全部出站头都在 `Access-Control-Expose-Headers` 里,`response.headers.get(...)` 可读;**同源请求**(`Origin` 与被请求主机一致)按 CORS 规范根本不需要这套头,网关也不会发 `Access-Control-*`,`response.headers.get(...)` 直接就能读到——用同源地址做"跨域头是否生效"的探针会得到假阴性,要用另一个在允许源列表里的域名去验;`X-Request-Id`/`X-Session-Id`/`X-Lurus-Product`/`traceparent`/`tracestate` 在 `Access-Control-Allow-Headers` 里,预检不会剥掉这五个入站头(`tracestate` 与 `traceparent` 同时放行,是同一个 W3C trace-context 传播器会同时设置的一对——只放行前者会让整个请求在预检就被拒)。未在允许源列表内的调用方两者都拿不到。
+
 | 头 | 方向 | 说明 |
 |------|------|------|
 | `X-Request-Id` | 入站(可选)/出站(恒有) | 入站:调用方自己传的 id(8-36 位 `[A-Za-z0-9._-]`,上限对齐审计表 `audit_events.request_id` 的 `varchar(36)` 列宽——超过 36 位不会被原样回显,只会被网关重新铸造,否则该次请求的审计行会因写入超长值失败而被静默丢弃)会被原样回显,方便调用方不做往返查询就能自行关联;不传或格式不对时网关退回读 `traceparent`(W3C Trace Context)的 32 位 trace id(恒 ≤36 位),再退回自己生成。出站:成功/失败响应上恒有此头,是 `GET /v1/generation?id=` 的查询键(见 §F)。遗留别名 `X-Oneapi-Request-Id` 同值双发,计划一个发布周期后下线,新集成不要依赖它。 |
 | `X-Model-Provider` | 出站(尽力而为) | 服务本次请求的上游供应商名。OpenAI 线非流式响应与任意 wire 的流式响应上必有;Claude/Gemini 原生非流式响应路径不保证存在,不要用来做强判断。 |
-| `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` | 出站(放行响应,尽力而为) | 命中的限流层级里最紧的一档:上限/当前窗口剩余/窗口重置时间(Unix 秒)。 |
-| `X-RateLimit-Scope` | 出站(限流/配额类 429 拒绝响应必有,放行响应尽力而为) | 限流键所属主体:`ip` / `key`(网关 internal API key 桶,rate-limit.go 的 keyed 拒绝点)/ `user`(ModelRequestRateLimit,model-rate-limit.go)/ `token` / `tenant` / `model`(BusinessRateLimit / BusinessModelRateLimit,均按 rpm\|tpm)/ `account`(平台 entitlement 429)。**不是每个 429 都带**——`quota_exceeded`(entitlement)带 `account`,`cost_spike_limit_exceeded`(cost spike)带 `user`,并发类拒绝(concurrency_limit.go)带 `token`/`tenant`,其余限流层级见下一行 `Type` 对应关系。放行前就被拒的请求(TokenAuth/资金池/entitlement 之前的 401/402/403)和上游归因的失败(供应商 5xx/429、`channel:*` 含 503 cooling)不带网关自己的 `X-RateLimit-*`;放行之后才被拒的非限流错误(如 413 请求体过大、Distribute 的 400/403)可能仍带着放行时的余量快照——把它当"上一次放行的快照"读,不是对这次拒绝的说明。`ip`/`key` 只出现在 `/internal/*` 与非中转路由上,`/v1` 中转路由不会发这两个值。 |
+| `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` | 出站(放行响应,尽力而为) | 命中的限流层级里最紧的一档:上限/当前窗口剩余/窗口重置时间(Unix 秒)。`Limit`/`Remaining` 这一对由中转链上的限流/并发中间件(BusinessRateLimit、BusinessModelRateLimit、RelayConcurrencyLimit、ModelRequestRateLimit——`token`/`tenant`/`model`/`user` 四个 scope;`ip`/`key` 属于只挂在 `/api/*` 与 `/internal/*` 上的 keyed 限流器,`/v1` 路由不会走到)写出的 429 拒绝响应上也必带(`Remaining` 恒为 0);entitlement 配额闸门(`account`)与 cost spike 熔断(`user`/`cost`)的 429 只带下一行的 `Scope`/`Type`,不带这一对。`Reset` 不在任何 429 上发——拒绝携带的是 `Retry-After`,不是一个窗口重置时刻。 |
+| `X-RateLimit-Scope` | 出站(限流/配额类 429 拒绝响应必有,放行响应尽力而为) | 限流键所属主体:`ip` / `key`(网关 internal API key 桶,rate-limit.go 的 keyed 拒绝点)/ `user`(ModelRequestRateLimit,model-rate-limit.go)/ `token` / `tenant` / `model`(BusinessRateLimit / BusinessModelRateLimit,均按 rpm\|tpm)/ `account`(平台 entitlement 429)。**不是每个 429 都带**——`quota_exceeded`(entitlement)带 `account`,`cost_spike_limit_exceeded`(cost spike)带 `user`,并发类拒绝(concurrency_limit.go)带 `token`/`tenant`,其余限流层级见下一行 `Type` 对应关系。放行前就被拒的请求(TokenAuth/资金池/entitlement 之前的 401/402/403)和上游归因的失败(供应商 5xx/429、`channel:*` 含 503 cooling)不带网关自己的 `X-RateLimit-*`;放行之后才被拒的非限流错误(如 413 请求体过大、Distribute 的 400/403)可能仍带着放行时的余量快照——把它当"上一次放行的快照"读,不是对这次拒绝的说明。`ip`/`key` 只出现在 `/api/*` 控制台与 `/internal/*` 内部路由上,`/v1` 中转路由不会发这两个值——且那两个限流器(`rate-limit.go` 的 keyed 拒绝点)的 429 只写头,响应体是空的,`X-RateLimit-Scope: ip`/`key` 是那次拒绝唯一可读的信息,不要期待 `error.*`。 |
 | `X-RateLimit-Type` | 出站(限流/配额类 429 拒绝响应必有,放行响应尽力而为) | 限流维度:`requests` / `rpm`(每分钟请求数,BusinessRateLimit/BusinessModelRateLimit)/ `tpm`(每分钟 token 数,同样以 429 强制执行;`Remaining` 按已结算用量计算,可能滞后一次尖峰)/ `concurrency` / `quota`(entitlement)/ `cost`(cost spike)。 |
 | `Retry-After` | 出站(402/429/503 拒绝,携带已知恢复时间时) | 建议等待秒数。 |
 | `X-Request-Cost` / `X-Quota-Remaining` | 出站(仅 OpenAI 线非流式成功响应) | 本次请求消耗的钱包配额 / 调用方本次后的剩余余额,同单位,浮点数的字符串形式。 |
-| `X-Session-Id` | 入站(可选) | 调用方自带的会话粘滞键,用于把同一会话的多轮请求尽量路由到同一渠道(减少上下文缓存失效)。网关只存它的 HMAC(按调用方+分组+模型加盐),原始值不落库,不回显。 |
+| `X-Session-Id` | 入站(可选) | 调用方自带的会话粘滞键,两条独立用途:(1) 存储/回显——原始值只要 ≤200 字节可打印 ASCII,就原样写入这次调用日志行的 `session_id` 字段(公开可读级别,不是管理员专属),超限或含控制字符时整体丢弃、不截断;`GET /v1/generation`(见 §F)原样回显,`GET /api/v2/{tenant}/logs`可按它过滤(`logs/stat` 没有这个查询参数)——**只放不透明的会话/对话 id,不要放个人身份信息**,它会被落库和回显。(2) 渠道亲和——网关另外用 (调用方+分组+模型) 加盐对它做 HMAC,决定同一会话的多轮请求是否尽量路由回同一渠道(减少上游 prompt-cache 失效);这条 HMAC 只用于路由决策,与上面落库/回显的明文 `session_id` 字段是两回事。 |
 | 用户维度哈希 | 内部/日志 | 网关不落调用方传入的终端用户原始标识——`EndUserHash` 是按租户加盐的 HMAC(取前 16 字符),只用于按用户维度聚合成本查询,不可逆推原始标识。 |
 
 ### F. 只持一把 key 的调用方(无控制台权限)
@@ -159,6 +164,6 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 某些集成场景下调用方只拿到一把 `sk-...`,没有登录控制台的身份(如后端服务转发)。两个只读端点让这类调用方不经控制台也能自查:
 
 - **`GET /v1/key`** — 一次拿到这把 key 自身的额度上限/已用/剩余、所属分组与模型白名单、RPM/TPM 限流(自身 + 所属租户)、所属租户资金池状态(`pool` 为 `null` 表示未配置资金池 = 不限额,不是错误)。`limit` 是总额度上限(剩余+已用),`limit_remaining` 是剩余可用,`usage` 是已用——三者均为 **quota 整数**(DB 计价单位,不是 USD);`token.UnlimitedQuota` 为真时 `limit`/`limit_remaining` 都是 `null`。镜像 OpenRouter 的 `GET /api/v1/key`。
-- **`GET /v1/generation?id=<X-Request-Id>`** — 用自己发出的入站 `X-Request-Id`,或网关在原始响应上回显的 `X-Request-Id`(见 §E),反查该次调用的费用/供应商/用量/首字延迟,不必等 `/logs` 分页查询。`quota` 字段是 quota 整数,`total_cost` 是本响应体里**唯一** USD 计价字段(`quota / quota_per_unit`;`quota_per_unit` 是管理员可改的选项,默认 500000,当前值以 `GET /api/status` 返回的 `quota_per_unit` 为准;该值未设置时 `total_cost` 为 0)。`id` 不属于调用方自己的 token/租户,或从未出现过,一律 404(不是 400/403),避免向未持有该 id 的调用方泄露"格式对/不对"的探测信号。镜像 OpenRouter 的 `GET /api/v1/generation`。
+- **`GET /v1/generation?id=<X-Request-Id>`** — 用自己发出的入站 `X-Request-Id`,或网关在原始响应上回显的 `X-Request-Id`(见 §E),反查该次调用的费用/供应商/用量/首字延迟/`session_id`(该次请求带的 `X-Session-Id`,见 §E),不必等 `/logs` 分页查询。`quota` 字段是 quota 整数,`total_cost` 是本响应体里**唯一** USD 计价字段(`quota / quota_per_unit`;`quota_per_unit` 是管理员可改的选项,默认 500000,当前值以 `GET /api/status` 返回的 `quota_per_unit` 为准;该值未设置时 `total_cost` 为 0)。`id` 不属于调用方自己的 token/租户,或从未出现过,一律 404(不是 400/403),避免向未持有该 id 的调用方泄露"格式对/不对"的探测信号。镜像 OpenRouter 的 `GET /api/v1/generation`。
 
 两者均走标准 `Authorization: Bearer sk-...`,无需 flag,无写副作用。单位约定:`/v1/key` 的 `limit`/`limit_remaining`/`usage` 与 `/v1/generation` 的 `quota` 都是 quota 整数;`/v1/generation` 的 `total_cost` 是本指南里这两个端点唯一的 USD 计价字段。

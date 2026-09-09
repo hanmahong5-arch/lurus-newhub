@@ -35,6 +35,26 @@ func GetGroupEnabledModels(group string) []string {
 	return models
 }
 
+// GetGroupEnabledModelsForTenant is GetGroupEnabledModels narrowed to the
+// channels abilityTenantScope makes visible to this tenant (the same scope
+// route-time selection uses), so /v1/models discovery (handler/model.go)
+// lists only those instead of every model any tenant's channel happens to
+// serve. Route-time selection also applies channel status, priority,
+// pinning and the token gate, none of which this function touches; the
+// token model_limit gate and the tenant allow-list are applied by the
+// caller (handler.visibleModels), not here. tenantID == "" reproduces
+// GetGroupEnabledModels byte-for-byte (abilityTenantScope's own contract) —
+// kept as a separate function, not a default-arg rename, because
+// GetGroupEnabledModels still has its own tenant-blind caller (user.go:336).
+func GetGroupEnabledModelsForTenant(group, tenantID string) []string {
+	var models []string
+	scope, scopeArgs := abilityTenantScope(tenantID)
+	where := commonGroupCol + " = ? and enabled = ?" + scope
+	args := append([]interface{}{group, true}, scopeArgs...)
+	DB.Table("abilities").Where(where, args...).Distinct("model").Pluck("model", &models)
+	return models
+}
+
 func GetEnabledModels() []string {
 	var models []string
 	// Find distinct models
@@ -49,8 +69,8 @@ func GetAllEnableAbilities() []Ability {
 }
 
 // abilityTenantScope narrows an abilities query to channels visible to
-// tenantID: platform-shared channels (channels.tenant_id 'default' or '')
-// plus channels owned by tenantID itself. abilities carries no tenant column
+// tenantID: platform-shared channels (channels.tenant_id set to 'default' or
+// left as the empty string) plus channels owned by tenantID itself. abilities carries no tenant column
 // of its own, so the restriction goes through a channel_id subquery.
 //
 // tenantID == "" means "no tenant filter" — this is what GetChannel's

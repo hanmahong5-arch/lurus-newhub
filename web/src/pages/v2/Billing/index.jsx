@@ -813,18 +813,6 @@ const HFBilling = () => {
                   gap: 6,
                 }}
               >
-                {summary.subscription_plan && (
-                  <div
-                    style={{ display: 'flex', justifyContent: 'space-between' }}
-                  >
-                    <span className='muted'>
-                      {tr('console.billing.plan', 'plan')}
-                    </span>
-                    <span className='mono strong'>
-                      {summary.subscription_plan}
-                    </span>
-                  </div>
-                )}
                 {walletBalance != null && (
                   <div
                     style={{ display: 'flex', justifyContent: 'space-between' }}

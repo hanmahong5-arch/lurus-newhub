@@ -12,10 +12,12 @@ import (
 	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/tenantpolicy"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -43,6 +45,26 @@ func Distribute() func(c *gin.Context) {
 		// but only on the success path.
 		if modelRequest != nil && modelRequest.Model != "" {
 			c.Set("original_model", modelRequest.Model)
+		}
+		// Per-tenant model allow-list (internal/app/tenantpolicy). Sits before
+		// the pinned-vs-selection branch so BOTH the sk-<key>-<channelId>
+		// override below and the ordinary weighted-selection path further
+		// down are covered by one check. configured=false (no row, or a read
+		// failure downgraded to fail-open) means unrestricted — this must
+		// never turn a read fault into an outage.
+		if tc, terr := GetTenantContext(c); terr == nil && tc != nil && tc.TenantID != "" && modelRequest != nil && modelRequest.Model != "" {
+			allowlist, configured, aerr := tenantpolicy.LoadModelAllowlist(tc.TenantID)
+			if aerr != nil {
+				common.SysLog("tenant model allow-list read failed for tenant " + tc.TenantID + ", failing open: " + aerr.Error())
+			} else if configured && !tenantpolicy.ModelAllowed(allowlist, modelRequest.Model) {
+				if tenantpolicy.Mode() == tenantpolicy.ModeEnforce {
+					metrics.RecordTenantModelDenied(tc.TenantID, "enforced")
+					abortWithOpenAiMessage(c, http.StatusForbidden, "Model "+modelRequest.Model+" is not allowed for this tenant", string(types.ErrorCodeModelBlocked))
+					return
+				}
+				metrics.RecordTenantModelDenied(tc.TenantID, "observed")
+				common.SysLog("tenant model allow-list would deny model " + modelRequest.Model + " for tenant " + tc.TenantID + " (observe mode)")
+			}
 		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))

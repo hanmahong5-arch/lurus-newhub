@@ -78,7 +78,7 @@
       "get": {
         "summary": "获取模型列表",
         "deprecated": false,
-        "description": "获取当前可用的模型列表。\n\n根据请求头自动识别返回格式：\n- 包含 `x-api-key` 和 `anthropic-version` 头时返回 Anthropic 格式\n- 包含 `x-goog-api-key` 头或 `key` 查询参数时返回 Gemini 格式\n- 其他情况返回 OpenAI 格式\n",
+        "description": "获取当前可用的模型列表。\n\n根据请求头自动识别返回格式：\n- 包含 `x-api-key` 和 `anthropic-version` 头时返回 Anthropic 格式\n- 包含 `x-goog-api-key` 头或 `key` 查询参数时返回 Gemini 格式\n- 其他情况返回 OpenAI 格式\n\n列表按调用方所属租户可路由的模型集作答；`/v1/models/{model}` 单条查询一个该租户路由不到的模型返回 404（`code=model_not_found`），而不是静态目录里的 200。\n",
         "operationId": "listModels",
         "tags": [
           "获取模型列表"
@@ -460,7 +460,7 @@
             }
           },
           "429": {
-            "description": "请求频率限制",
+            "description": "请求频率限制。X-RateLimit-Limit/Remaining/Scope/Type + Retry-After are written by the rate-limit and concurrency middlewares on this relay chain (BusinessRateLimit and BusinessModelRateLimit, RelayConcurrencyLimit, ModelRequestRateLimit; scopes token/tenant/model/user — the ip and key scopes come from the keyed limiters that guard /api/* and /internal/*, never a /v1 route) — Remaining is 0 and Reset is not sent on a reject. The account/quota (entitlement) and user/cost (cost-spike) 429s on this same path write only X-RateLimit-Scope/Type, no Retry-After or Limit/Remaining.",
             "content": {
               "application/json": {
                 "schema": {
@@ -471,6 +471,8 @@
             "headers": {
               "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
               "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-RateLimit-Limit": { "$ref": "#/components/headers/XRateLimitLimit" },
+              "X-RateLimit-Remaining": { "$ref": "#/components/headers/XRateLimitRemaining" },
               "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
               "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
             }
@@ -1602,7 +1604,7 @@
             }
           },
           "429": {
-            "description": "限流（网关侧或产品配额）",
+            "description": "限流（网关侧或产品配额）。X-RateLimit-Limit/Remaining/Scope/Type + Retry-After are written by the rate-limit and concurrency middlewares on this relay chain (BusinessRateLimit and BusinessModelRateLimit, RelayConcurrencyLimit, ModelRequestRateLimit; scopes token/tenant/model/user — the ip and key scopes come from the keyed limiters that guard /api/* and /internal/*, never a /v1 route) — Remaining is 0 and Reset is not sent on a reject. The account/quota (entitlement) and user/cost (cost-spike) 429s on this same path write only X-RateLimit-Scope/Type, no Retry-After or Limit/Remaining.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/GatewayError" }
@@ -1611,6 +1613,8 @@
             "headers": {
               "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
               "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-RateLimit-Limit": { "$ref": "#/components/headers/XRateLimitLimit" },
+              "X-RateLimit-Remaining": { "$ref": "#/components/headers/XRateLimitRemaining" },
               "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
               "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
             }
@@ -1910,7 +1914,7 @@
             }
           },
           "429": {
-            "description": "请求频率限制",
+            "description": "请求频率限制。X-RateLimit-Limit/Remaining/Scope/Type + Retry-After are written by the rate-limit and concurrency middlewares on this relay chain (BusinessRateLimit and BusinessModelRateLimit, RelayConcurrencyLimit, ModelRequestRateLimit; scopes token/tenant/model/user — the ip and key scopes come from the keyed limiters that guard /api/* and /internal/*, never a /v1 route) — Remaining is 0 and Reset is not sent on a reject. The account/quota (entitlement) and user/cost (cost-spike) 429s on this same path write only X-RateLimit-Scope/Type, no Retry-After or Limit/Remaining.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/GatewayError" }
@@ -1919,6 +1923,8 @@
             "headers": {
               "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
               "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-RateLimit-Limit": { "$ref": "#/components/headers/XRateLimitLimit" },
+              "X-RateLimit-Remaining": { "$ref": "#/components/headers/XRateLimitRemaining" },
               "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
               "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
             }
@@ -2042,7 +2048,7 @@
             }
           },
           "429": {
-            "description": "请求频率限制",
+            "description": "请求频率限制。X-RateLimit-Limit/Remaining/Scope/Type + Retry-After are written by the rate-limit and concurrency middlewares on this relay chain (BusinessRateLimit and BusinessModelRateLimit, RelayConcurrencyLimit, ModelRequestRateLimit; scopes token/tenant/model/user — the ip and key scopes come from the keyed limiters that guard /api/* and /internal/*, never a /v1 route) — Remaining is 0 and Reset is not sent on a reject. The account/quota (entitlement) and user/cost (cost-spike) 429s on this same path write only X-RateLimit-Scope/Type, no Retry-After or Limit/Remaining.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/GatewayError" }
@@ -2051,6 +2057,8 @@
             "headers": {
               "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
               "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-RateLimit-Limit": { "$ref": "#/components/headers/XRateLimitLimit" },
+              "X-RateLimit-Remaining": { "$ref": "#/components/headers/XRateLimitRemaining" },
               "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
               "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
             }

@@ -1,0 +1,150 @@
+<svg viewBox="0 0 1160 624" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="newhub-arch-dark-title newhub-arch-dark-desc">
+  <title id="newhub-arch-dark-title">Lurus Hub gateway architecture</title>
+  <desc id="newhub-arch-dark-desc">OpenAI-compatible callers reach a relay router that dispatches across 20+ provider adapters and records outcomes into a data hub, while a separate multi-tenant REST API shares Postgres and Redis and can optionally report usage to a companion billing service over gRPC.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#D6D2C2"/></marker>
+    <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#FF5D1F"/></marker>
+    <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5A7BC7"/></marker>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#14130F"/>
+
+  <!-- ===== Arrows (drawn before nodes) ===== -->
+
+  <!-- A1: API Callers -> Relay Router (primary relay flow) -->
+  <path d="M 400,104 V 144 Q 400,152 392,152 H 168 Q 160,152 160,160 V 200"
+        fill="none" stroke="#FF5D1F" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+  <!-- A2: API Callers -> Multi-tenant API (management HTTP) -->
+  <path d="M 480,104 V 144 Q 480,152 488,152 H 712 Q 720,152 720,160 V 200"
+        fill="none" stroke="#5A7BC7" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+  <!-- A3: Relay Router -> Provider Adapters (primary relay flow, straight) -->
+  <line x1="160" y1="264" x2="160" y2="340" stroke="#FF5D1F" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+  <!-- A4: Relay Router -> Data Hub (outcome recording) -->
+  <path d="M 260,220 H 432 Q 440,220 440,228 V 340"
+        fill="none" stroke="#D6D2C2" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <!-- A5: Relay Router -> Redis (channel cache), hop over A4 at x=440 -->
+  <path d="M 260,248 H 432 a 8,8 0 0,1 16,0 H 572 Q 580,248 580,256 V 364 Q 580,372 588,372 H 620"
+        fill="none" stroke="#D6D2C2" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <!-- A6: Multi-tenant API -> Redis (session store, straight) -->
+  <line x1="720" y1="264" x2="720" y2="340" stroke="#D6D2C2" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <!-- A7: Data Hub -> PostgreSQL (aggregated usage flush, straight) -->
+  <line x1="440" y1="404" x2="440" y2="480" stroke="#D6D2C2" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <!-- A8: Multi-tenant API -> Billing Service (optional gRPC hook, off by default) -->
+  <line x1="820" y1="232" x2="900" y2="232" stroke="#D6D2C2" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+  <!-- ===== Arrow labels ===== -->
+  <rect x="256" y="132" width="48" height="12" rx="2" fill="#14130F"/>
+  <text x="280" y="141" fill="#FF5D1F" font-size="8" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.06em">RELAY</text>
+
+  <rect x="576" y="132" width="48" height="12" rx="2" fill="#14130F"/>
+  <text x="600" y="141" fill="#5A7BC7" font-size="8" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.06em">REST</text>
+
+  <rect x="172" y="296" width="60" height="12" rx="2" fill="#14130F"/>
+  <text x="202" y="305" fill="#A19C89" font-size="8" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.06em">DISPATCH</text>
+
+  <rect x="318" y="200" width="56" height="12" rx="2" fill="#14130F"/>
+  <text x="346" y="209" fill="#A19C89" font-size="8" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.06em">OUTCOME</text>
+
+  <rect x="392" y="228" width="48" height="12" rx="2" fill="#14130F"/>
+  <text x="416" y="237" fill="#A19C89" font-size="8" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.06em">CACHE</text>
+
+  <rect x="732" y="296" width="52" height="12" rx="2" fill="#14130F"/>
+  <text x="758" y="305" fill="#A19C89" font-size="8" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.06em">SESSION</text>
+
+  <rect x="452" y="436" width="40" height="12" rx="2" fill="#14130F"/>
+  <text x="472" y="445" fill="#A19C89" font-size="8" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.06em">FLUSH</text>
+
+  <rect x="828" y="212" width="48" height="12" rx="2" fill="#14130F"/>
+  <text x="852" y="221" fill="#A19C89" font-size="8" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.06em">USAGE</text>
+
+  <!-- ===== Nodes ===== -->
+
+  <!-- N1: API Callers (input) -->
+  <rect x="340" y="40" width="200" height="64" rx="6" fill="#14130F"/>
+  <rect x="340" y="40" width="200" height="64" rx="6" fill="rgba(214,210,194,0.10)" stroke="#A19C89" stroke-width="1"/>
+  <rect x="348" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(161,156,137,0.40)" stroke-width="0.8"/>
+  <text x="362" y="55" fill="#A19C89" font-size="7" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+  <text x="440" y="74" fill="#F0EDE4" font-size="12" font-weight="600" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif" text-anchor="middle">API Callers</text>
+  <text x="440" y="90" fill="#A19C89" font-size="9" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle">apps · Switch · console</text>
+
+  <!-- N2: Relay Router (focal) -->
+  <rect x="60" y="200" width="200" height="64" rx="6" fill="#14130F"/>
+  <rect x="60" y="200" width="200" height="64" rx="6" fill="rgba(255,93,31,0.12)" stroke="#FF5D1F" stroke-width="1"/>
+  <rect x="68" y="206" width="32" height="12" rx="2" fill="transparent" stroke="rgba(255,93,31,0.50)" stroke-width="0.8"/>
+  <text x="84" y="215" fill="#FF5D1F" font-size="7" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.08em">CORE</text>
+  <text x="160" y="234" fill="#F0EDE4" font-size="12" font-weight="600" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif" text-anchor="middle">Relay Router</text>
+  <text x="160" y="250" fill="#A19C89" font-size="9" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle">OpenAI-compatible</text>
+
+  <!-- N3: Multi-tenant API (backend) -->
+  <rect x="620" y="200" width="200" height="64" rx="6" fill="#14130F"/>
+  <rect x="620" y="200" width="200" height="64" rx="6" fill="rgba(240,237,228,0.06)" stroke="#F0EDE4" stroke-width="1"/>
+  <rect x="628" y="206" width="28" height="12" rx="2" fill="transparent" stroke="rgba(240,237,228,0.40)" stroke-width="0.8"/>
+  <text x="642" y="215" fill="#A19C89" font-size="7" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+  <text x="720" y="234" fill="#F0EDE4" font-size="12" font-weight="600" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif" text-anchor="middle">Multi-tenant API</text>
+  <text x="720" y="250" fill="#A19C89" font-size="9" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle">V1 + V2 · tenant_slug</text>
+
+  <!-- N4: Billing Service (optional / off by default) -->
+  <rect x="900" y="200" width="200" height="64" rx="6" fill="#14130F"/>
+  <rect x="900" y="200" width="200" height="64" rx="6" fill="rgba(240,237,228,0.02)" stroke="rgba(240,237,228,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="908" y="206" width="28" height="12" rx="2" fill="transparent" stroke="rgba(240,237,228,0.30)" stroke-width="0.8"/>
+  <text x="922" y="215" fill="#A19C89" font-size="7" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.08em">OPT</text>
+  <text x="1000" y="234" fill="#F0EDE4" font-size="12" font-weight="600" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif" text-anchor="middle">Billing Service</text>
+  <text x="1000" y="250" fill="#A19C89" font-size="9" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle">gRPC · off by default</text>
+
+  <!-- N5: Provider Adapters (backend) -->
+  <rect x="60" y="340" width="200" height="64" rx="6" fill="#14130F"/>
+  <rect x="60" y="340" width="200" height="64" rx="6" fill="rgba(240,237,228,0.06)" stroke="#F0EDE4" stroke-width="1"/>
+  <rect x="68" y="346" width="32" height="12" rx="2" fill="transparent" stroke="rgba(240,237,228,0.40)" stroke-width="0.8"/>
+  <text x="84" y="355" fill="#A19C89" font-size="7" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.08em">ADPT</text>
+  <text x="160" y="374" fill="#F0EDE4" font-size="12" font-weight="600" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif" text-anchor="middle">Provider Adapters</text>
+  <text x="160" y="390" fill="#A19C89" font-size="9" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle">20+ vendors · 3 formats</text>
+
+  <!-- N6: Data Hub (backend) -->
+  <rect x="340" y="340" width="200" height="64" rx="6" fill="#14130F"/>
+  <rect x="340" y="340" width="200" height="64" rx="6" fill="rgba(240,237,228,0.06)" stroke="#F0EDE4" stroke-width="1"/>
+  <rect x="348" y="346" width="28" height="12" rx="2" fill="transparent" stroke="rgba(240,237,228,0.40)" stroke-width="0.8"/>
+  <text x="362" y="355" fill="#A19C89" font-size="7" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.08em">HUB</text>
+  <text x="440" y="374" fill="#F0EDE4" font-size="12" font-weight="600" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif" text-anchor="middle">Data Hub</text>
+  <text x="440" y="390" fill="#A19C89" font-size="9" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle">scoring + usage agg.</text>
+
+  <!-- N7: Redis (store) -->
+  <rect x="620" y="340" width="200" height="64" rx="6" fill="#14130F"/>
+  <rect x="620" y="340" width="200" height="64" rx="6" fill="rgba(240,237,228,0.05)" stroke="#D6D2C2" stroke-width="1"/>
+  <rect x="628" y="346" width="24" height="12" rx="2" fill="transparent" stroke="rgba(214,210,194,0.40)" stroke-width="0.8"/>
+  <text x="640" y="355" fill="#A19C89" font-size="7" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.08em">KV</text>
+  <text x="720" y="374" fill="#F0EDE4" font-size="12" font-weight="600" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif" text-anchor="middle">Redis</text>
+  <text x="720" y="390" fill="#A19C89" font-size="9" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle">session + channel cache</text>
+
+  <!-- N8: PostgreSQL (store) -->
+  <rect x="340" y="480" width="200" height="64" rx="6" fill="#14130F"/>
+  <rect x="340" y="480" width="200" height="64" rx="6" fill="rgba(240,237,228,0.05)" stroke="#D6D2C2" stroke-width="1"/>
+  <rect x="348" y="486" width="28" height="12" rx="2" fill="transparent" stroke="rgba(214,210,194,0.40)" stroke-width="0.8"/>
+  <text x="362" y="495" fill="#A19C89" font-size="7" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle" letter-spacing="0.08em">SQL</text>
+  <text x="440" y="514" fill="#F0EDE4" font-size="12" font-weight="600" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif" text-anchor="middle">PostgreSQL</text>
+  <text x="440" y="530" fill="#A19C89" font-size="9" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" text-anchor="middle">system of record</text>
+
+  <!-- ===== Legend ===== -->
+  <line x1="60" y1="564" x2="1100" y2="564" stroke="rgba(240,237,228,0.12)" stroke-width="0.8"/>
+  <text x="60" y="580" fill="#D6D2C2" font-size="8" font-family="'JetBrains Mono','Consolas','SFMono-Regular',monospace" letter-spacing="0.18em">LEGEND</text>
+
+  <rect x="60" y="596" width="14" height="10" rx="2" fill="rgba(214,210,194,0.10)" stroke="#A19C89" stroke-width="1"/>
+  <text x="80" y="604" fill="#D6D2C2" font-size="8.5" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif">Caller</text>
+
+  <rect x="180" y="596" width="14" height="10" rx="2" fill="rgba(255,93,31,0.12)" stroke="#FF5D1F" stroke-width="1"/>
+  <text x="200" y="604" fill="#D6D2C2" font-size="8.5" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif">Focal / core</text>
+
+  <rect x="310" y="596" width="14" height="10" rx="2" fill="rgba(240,237,228,0.06)" stroke="#F0EDE4" stroke-width="1"/>
+  <text x="330" y="604" fill="#D6D2C2" font-size="8.5" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif">Backend logic</text>
+
+  <rect x="460" y="596" width="14" height="10" rx="2" fill="rgba(240,237,228,0.05)" stroke="#D6D2C2" stroke-width="1"/>
+  <text x="480" y="604" fill="#D6D2C2" font-size="8.5" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif">Data store</text>
+
+  <rect x="580" y="596" width="14" height="10" rx="2" fill="rgba(240,237,228,0.02)" stroke="rgba(240,237,228,0.30)" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="600" y="604" fill="#D6D2C2" font-size="8.5" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif">Optional</text>
+
+  <line x1="740" y1="600" x2="768" y2="600" stroke="#FF5D1F" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+  <text x="776" y="604" fill="#D6D2C2" font-size="8.5" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif">Relay path</text>
+
+  <line x1="900" y1="600" x2="928" y2="600" stroke="#5A7BC7" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+  <text x="936" y="604" fill="#D6D2C2" font-size="8.5" font-family="'Inter Tight',Arial,'Helvetica Neue',sans-serif">REST call</text>
+</svg>

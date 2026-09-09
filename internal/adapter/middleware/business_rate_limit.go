@@ -390,19 +390,12 @@ func bizReject(c *gin.Context, scope, limitType string, limit int, retryAfter in
 	setRateLimitResponseHeaders(c, limit, 0, retryAfter)
 	c.Writer.Header().Set("X-RateLimit-Scope", scope)
 	c.Writer.Header().Set("X-RateLimit-Type", limitType)
-	scopeLabel := "令牌"
-	switch scope {
-	case "tenant":
-		scopeLabel = "租户"
-	case "model":
-		scopeLabel = "模型"
-	}
-	measure := "请求数"
+	measure := "requests"
 	if limitType == "tpm" {
-		measure = " token 用量"
+		measure = "tokens"
 	}
 	abortWithOpenAiMessage(c, http.StatusTooManyRequests,
-		fmt.Sprintf("%s每分钟%s已达上限（%d/min），请 %d 秒后重试", scopeLabel, measure, limit, retryAfter),
+		fmt.Sprintf("%s %s limit exceeded: %d per minute (%s); retry after %d s", scope, measure, limit, bizRateLimitErrorCode, retryAfter),
 		bizRateLimitErrorCode)
 }
 

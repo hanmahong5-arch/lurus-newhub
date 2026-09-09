@@ -22,13 +22,21 @@ const (
 	ConfigTypeFloat  = entity.ConfigTypeFloat
 )
 
+// ErrTenantConfigNotFound is returned by GetTenantConfig when no row matches
+// (tenant_id, config_key). Callers that need to tell "unconfigured" apart
+// from a genuine DB fault use errors.Is(err, ErrTenantConfigNotFound) — a
+// bare errors.New here would make that distinction impossible (2026-09-09
+// L1 operator amendment: this used to re-wrap gorm.ErrRecordNotFound into a
+// fresh error every call, so no caller's errors.Is check could ever match).
+var ErrTenantConfigNotFound = errors.New("config not found")
+
 // GetTenantConfig retrieves a configuration value by tenant ID and key
 func GetTenantConfig(tenantID string, key string) (*TenantConfig, error) {
 	var config TenantConfig
 	err := DB.Where("tenant_id = ? AND config_key = ?", tenantID, key).First(&config).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("config not found")
+			return nil, ErrTenantConfigNotFound
 		}
 		return nil, err
 	}

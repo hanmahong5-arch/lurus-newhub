@@ -280,4 +280,37 @@ describe('CommandPalette — real data', () => {
       expect(body).not.toContain(fake);
     }
   });
+
+  // Lock for `const loading = otherLoading || modelsLoading` — the palette
+  // must still report "loading…" while only the models request (routed
+  // through the shared hook) is still in flight.
+  it('reports loading while only the models request is still in flight', async () => {
+    let resolveModels;
+    API.get.mockImplementation((url) => {
+      const ok = (data) => Promise.resolve({ data: { success: true, data } });
+      if (url.includes('/models'))
+        return new Promise((r) => {
+          resolveModels = r;
+        });
+      if (url.includes('/pricing')) return ok({ pricing: [] });
+      if (url.includes('/tokens')) return ok({ items: [] });
+      if (url.includes('/logs')) return ok({ logs: [] });
+      return ok({});
+    });
+
+    render(<HFCmdK />);
+
+    // Let the other three requests (already-resolved mocks) fully settle
+    // through Promise.allSettled — otherLoading becomes false — while the
+    // models request (routed through the hook) is still pending. If
+    // `loading` dropped the modelsLoading half of the union, this is exactly
+    // the window where it would flip to false too early.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText('loading…')).toBeTruthy();
+
+    resolveModels({ data: { success: true, data: { items: [] } } });
+    await waitFor(() => {
+      expect(screen.queryByText('loading…')).toBeNull();
+    });
+  });
 });

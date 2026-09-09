@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell, { NAV_SECTIONS } from '../../../components/hifi/HFShell';
 import { API, isAdmin } from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
+import { useTenantModels } from '../../../hooks/models/useTenantModels';
 
 /*
  * HiFi 6 — Cmd-K command palette.
@@ -73,22 +74,27 @@ const HFCmdK = () => {
   const [hover, setHover] = useState(0);
   const admin = isAdmin();
 
-  const [models, setModels] = useState([]);
+  // Models come from the shared hook. skipErrorHandler:true here matches the
+  // rest of this page's requests (allSettled degrade-per-source below) — a
+  // failed models fetch must not trigger a 401 self-heal/toast that would
+  // fight the palette's own degrade-independently design.
+  const { items: models, loading: modelsLoading } = useTenantModels(
+    tenantSlug,
+    { limit: 50, skipErrorHandler: true },
+  );
   const [pricing, setPricing] = useState([]);
   const [tokens, setTokens] = useState([]);
   const [recent, setRecent] = useState([]);
   const [channels, setChannels] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [otherLoading, setOtherLoading] = useState(true);
+  const loading = otherLoading || modelsLoading;
 
   const fetchAll = useCallback(async () => {
     if (!tenantSlug) return;
-    setLoading(true);
+    setOtherLoading(true);
     // allSettled: one slow or forbidden source must not blank the whole
     // palette. Each group degrades independently to "not loaded".
     const requests = [
-      API.get(`/api/v2/${tenantSlug}/models?limit=50`, {
-        skipErrorHandler: true,
-      }),
       API.get(`/api/v2/${tenantSlug}/pricing`, { skipErrorHandler: true }),
       API.get(`/api/v2/${tenantSlug}/tokens?p=1&size=${MAX_PER_GROUP}`, {
         skipErrorHandler: true,
@@ -104,20 +110,19 @@ const HFCmdK = () => {
         }),
       );
     }
-    const [mRes, pRes, tRes, lRes, cRes] = await Promise.allSettled(requests);
+    const [pRes, tRes, lRes, cRes] = await Promise.allSettled(requests);
 
     const payload = (res) =>
       res?.status === 'fulfilled' && res.value?.data?.success
         ? res.value.data.data
         : null;
 
-    setModels(payload(mRes)?.items ?? []);
     const pricingData = payload(pRes);
     setPricing(Array.isArray(pricingData?.pricing) ? pricingData.pricing : []);
     setTokens(payload(tRes)?.items ?? []);
     setRecent(payload(lRes)?.logs ?? []);
     setChannels(admin ? (payload(cRes)?.items ?? []) : []);
-    setLoading(false);
+    setOtherLoading(false);
   }, [tenantSlug, admin]);
 
   useEffect(() => {

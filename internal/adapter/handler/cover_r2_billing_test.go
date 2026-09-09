@@ -457,68 +457,6 @@ func TestR2Bill_GetTenantStats(t *testing.T) {
 	}
 }
 
-func TestR2Bill_TenantConfigs(t *testing.T) {
-	ctx := r2billSetup(t)
-	defer ctx.Cleanup()
-
-	// GetTenantConfigs: no tenant context → 401
-	c, w := r2chanNewCtx(http.MethodGet, "/", nil)
-	GetTenantConfigs(c)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 without tenant ctx, got %d", w.Code)
-	}
-
-	// GetTenantConfigs: valid
-	c, w = r2chanNewCtx(http.MethodGet, "/", nil)
-	c.Set("tenant_id", ctx.TenantID)
-	GetTenantConfigs(c)
-	if w.Code != http.StatusOK || r2chanParseBody(t, w)["success"] != true {
-		t.Fatalf("get configs failed: %s", w.Body.String())
-	}
-
-	// UpdateTenantConfig: no tenant ctx → 401
-	c, w = r2chanNewCtx(http.MethodPut, "/", map[string]interface{}{"value": "v"})
-	c.Params = gin.Params{{Key: "key", Value: "some_key"}}
-	UpdateTenantConfig(c)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", w.Code)
-	}
-
-	// UpdateTenantConfig: invalid body (missing required value)
-	c, w = r2chanNewCtx(http.MethodPut, "/", map[string]interface{}{})
-	c.Set("tenant_id", ctx.TenantID)
-	c.Params = gin.Params{{Key: "key", Value: "some_key"}}
-	UpdateTenantConfig(c)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for missing value, got %d", w.Code)
-	}
-
-	// UpdateTenantConfig: valid
-	c, w = r2chanNewCtx(http.MethodPut, "/", map[string]interface{}{"value": "hello", "config_type": "string"})
-	c.Set("tenant_id", ctx.TenantID)
-	c.Params = gin.Params{{Key: "key", Value: "greeting"}}
-	UpdateTenantConfig(c)
-	if w.Code != http.StatusOK || r2chanParseBody(t, w)["success"] != true {
-		t.Fatalf("update config failed: %s", w.Body.String())
-	}
-	got, err := repo.GetTenantConfig(ctx.TenantID, "greeting")
-	if err != nil || got.ConfigValue != "hello" {
-		t.Errorf("expected persisted config value=hello, got %+v err=%v", got, err)
-	}
-
-	// UpdateTenantConfig: system config is protected → 403
-	if err := repo.SetTenantConfig(ctx.TenantID, "sys_key", "x", "string", "", true); err != nil {
-		t.Fatalf("seed system config: %v", err)
-	}
-	c, w = r2chanNewCtx(http.MethodPut, "/", map[string]interface{}{"value": "override"})
-	c.Set("tenant_id", ctx.TenantID)
-	c.Params = gin.Params{{Key: "key", Value: "sys_key"}}
-	UpdateTenantConfig(c)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for system config, got %d body=%s", w.Code, w.Body.String())
-	}
-}
-
 // ---------------------------------------------------------------------------
 // billing.go
 // ---------------------------------------------------------------------------

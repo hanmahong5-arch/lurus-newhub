@@ -12,6 +12,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -652,8 +653,21 @@ func TestR2Chan_RetrieveModel(t *testing.T) {
 	if existing == "" {
 		t.Skip("no models registered")
 	}
+
+	// RetrieveModel now answers from visibleModels (L2: "known" == "routable
+	// for this caller"), not the static catalogue alone — seed `existing` as
+	// routable via the token model_limit context keys (DB-free, mirrors
+	// model_discovery_contract_test.go's pattern) and force
+	// acceptUnsetRatioModel so the pick above doesn't depend on an unrelated
+	// ratio/price fixture.
+	prevSelfUse := operation_setting.SelfUseModeEnabled
+	operation_setting.SelfUseModeEnabled = true
+	defer func() { operation_setting.SelfUseModeEnabled = prevSelfUse }()
+
 	c, w := r2chanNewCtx(http.MethodGet, "/", nil)
 	c.Params = gin.Params{{Key: "model", Value: existing}}
+	common.SetContextKey(c, constant.ContextKeyTokenModelLimitEnabled, true)
+	common.SetContextKey(c, constant.ContextKeyTokenModelLimit, map[string]bool{existing: true})
 	RetrieveModel(c, constant.ChannelTypeOpenAI)
 	resp := r2chanParseBody(t, w)
 	if resp["id"] != existing {
@@ -663,6 +677,8 @@ func TestR2Chan_RetrieveModel(t *testing.T) {
 	// non-existent → error object
 	c, w = r2chanNewCtx(http.MethodGet, "/", nil)
 	c.Params = gin.Params{{Key: "model", Value: "no-such-model-xyz"}}
+	common.SetContextKey(c, constant.ContextKeyTokenModelLimitEnabled, true)
+	common.SetContextKey(c, constant.ContextKeyTokenModelLimit, map[string]bool{existing: true})
 	RetrieveModel(c, constant.ChannelTypeOpenAI)
 	if _, ok := r2chanParseBody(t, w)["error"]; !ok {
 		t.Error("expected error object for missing model")

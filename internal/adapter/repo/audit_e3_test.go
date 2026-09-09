@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -60,7 +61,9 @@ func TestDeleteExpiredAuditEvents_OnlyExpired(t *testing.T) {
 
 // TestDeleteExpiredAuditEvents_BatchesCorrectly asserts the cleanup loops
 // across batches until none remain. With limit=2 and 5 expired rows the
-// function should issue 3 DELETE statements (2 + 2 + 1) and return 5 total.
+// function should issue 3 DELETE statements (2 + 2 + 1) and return 5 total —
+// not one unbounded DELETE, which is what `.Limit(n).Delete(...)` alone
+// silently produces (gorm's DeleteClauses render no LIMIT).
 func TestDeleteExpiredAuditEvents_BatchesCorrectly(t *testing.T) {
 	cleanup := setupSQLiteDB(t)
 	defer cleanup()
@@ -77,12 +80,83 @@ func TestDeleteExpiredAuditEvents_BatchesCorrectly(t *testing.T) {
 		}
 	}
 
+	prevDB := DB
+	scoped, counter := countDeletes(DB)
+	DB = scoped
+	defer func() { DB = prevDB }()
+
 	deleted, err := DeleteExpiredAuditEvents(context.Background(), now, 2)
 	if err != nil {
 		t.Fatalf("DeleteExpiredAuditEvents: %v", err)
 	}
 	if deleted != 5 {
 		t.Errorf("expected 5 deletions, got %d", deleted)
+	}
+	if counter.deletes != 3 {
+		t.Errorf("DELETE statement count = %d, want 3 (2+2+1 bounded pages, not one unbounded DELETE)", counter.deletes)
+	}
+	for _, sql := range counter.deleteSQL {
+		if !strings.Contains(sql, "ORDER BY") {
+			t.Errorf("DELETE subquery has no ORDER BY (non-deterministic pages): %s", sql)
+		}
+	}
+}
+
+// TestDeleteOldAuditEvents_BatchesCorrectly locks L3 finding #2: the
+// timestamp-based sibling of DeleteExpiredAuditEvents on the same table must
+// use the same bounded id-subquery batching, not a raw `.Limit(n).Delete()`
+// (silently unbounded on both dialects — see the comment on
+// DeleteOldAuditEvents). limit=2 against 5 old rows must issue 3 DELETE
+// statements (2 + 2 + 1), never one.
+func TestDeleteOldAuditEvents_BatchesCorrectly(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+
+	cutoff := int64(2_000_000_000)
+	for i := 0; i < 5; i++ {
+		if err := DB.Create(&entity.AuditEvent{
+			Action:    "old",
+			Timestamp: cutoff - 100,
+			TenantID:  "default",
+		}).Error; err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	if err := DB.Create(&entity.AuditEvent{
+		Action:    "new",
+		Timestamp: cutoff + 100,
+		TenantID:  "default",
+	}).Error; err != nil {
+		t.Fatalf("seed newer row: %v", err)
+	}
+
+	prevDB := DB
+	scoped, counter := countDeletes(DB)
+	DB = scoped
+	defer func() { DB = prevDB }()
+
+	deleted, err := DeleteOldAuditEvents(context.Background(), cutoff, 2)
+	if err != nil {
+		t.Fatalf("DeleteOldAuditEvents: %v", err)
+	}
+	if deleted != 5 {
+		t.Errorf("deleted = %d, want 5", deleted)
+	}
+	if counter.deletes != 3 {
+		t.Errorf("DELETE statement count = %d, want 3 (2+2+1 bounded pages, not one unbounded DELETE)", counter.deletes)
+	}
+	for _, sql := range counter.deleteSQL {
+		if !strings.Contains(sql, "ORDER BY") {
+			t.Errorf("DELETE subquery has no ORDER BY (non-deterministic pages): %s", sql)
+		}
+	}
+
+	var remaining int64
+	if err := prevDB.Model(&entity.AuditEvent{}).Count(&remaining).Error; err != nil {
+		t.Fatalf("count remaining: %v", err)
+	}
+	if remaining != 1 {
+		t.Errorf("remaining rows = %d, want 1 (the newer row must survive)", remaining)
 	}
 }
 

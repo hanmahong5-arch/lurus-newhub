@@ -197,7 +197,7 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 			setRateLimitResponseHeaders(c, successMaxCount, 0, duration)
 			c.Writer.Header().Set("X-RateLimit-Scope", "user")
 			c.Writer.Header().Set("X-RateLimit-Type", "requests")
-			abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", setting.ModelRequestRateLimitDurationMinutes, successMaxCount), string(types.ErrorCodeRequestRateLimitExceeded))
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("user requests limit exceeded: %d per %d min (%s)", successMaxCount, setting.ModelRequestRateLimitDurationMinutes, string(types.ErrorCodeRequestRateLimitExceeded)), string(types.ErrorCodeRequestRateLimitExceeded))
 			return
 		}
 
@@ -226,7 +226,7 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 				setRateLimitResponseHeaders(c, totalMaxCount, 0, duration)
 				c.Writer.Header().Set("X-RateLimit-Scope", "user")
 				c.Writer.Header().Set("X-RateLimit-Type", "requests")
-				abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", setting.ModelRequestRateLimitDurationMinutes, totalMaxCount), string(types.ErrorCodeRequestRateLimitExceeded))
+				abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("user total requests limit exceeded: %d per %d min including failed requests (%s)", totalMaxCount, setting.ModelRequestRateLimitDurationMinutes, string(types.ErrorCodeRequestRateLimitExceeded)), string(types.ErrorCodeRequestRateLimitExceeded))
 			}
 		}
 
@@ -272,8 +272,15 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 			setRateLimitResponseHeaders(c, totalMaxCount, 0, duration)
 			c.Writer.Header().Set("X-RateLimit-Scope", "user")
 			c.Writer.Header().Set("X-RateLimit-Type", "requests")
-			c.Status(http.StatusTooManyRequests)
-			c.Abort()
+			// Same wire-native JSON envelope as the redis twin above. This
+			// branch is reached only with common.RedisEnabled=false, which
+			// no deployed environment uses today; the message lock drives it
+			// directly. A bare c.Status+c.Abort here used to leave the 429
+			// with no body at all; the keyed/IP limiters in rate-limit.go
+			// still do.
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests,
+				fmt.Sprintf("user total requests limit exceeded: %d per %d min including failed requests (%s)", totalMaxCount, setting.ModelRequestRateLimitDurationMinutes, string(types.ErrorCodeRequestRateLimitExceeded)),
+				string(types.ErrorCodeRequestRateLimitExceeded))
 			return
 		}
 
@@ -284,8 +291,9 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 			setRateLimitResponseHeaders(c, successMaxCount, 0, duration)
 			c.Writer.Header().Set("X-RateLimit-Scope", "user")
 			c.Writer.Header().Set("X-RateLimit-Type", "requests")
-			c.Status(http.StatusTooManyRequests)
-			c.Abort()
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests,
+				fmt.Sprintf("user requests limit exceeded: %d per %d min (%s)", successMaxCount, setting.ModelRequestRateLimitDurationMinutes, string(types.ErrorCodeRequestRateLimitExceeded)),
+				string(types.ErrorCodeRequestRateLimitExceeded))
 			return
 		}
 

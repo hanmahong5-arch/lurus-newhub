@@ -84,6 +84,19 @@ spec:
                   key: SQL_DSN
             - name: REDIS_CONN_STRING
               value: "redis://redis.lurus-system.svc.cluster.local:6379/2"
+            # Downward API: this pod's own identity, published on /metrics
+            # (lurus_gateway_instance_info, X-Lurus-Instance header) so a
+            # scrape on the shared NodePort can be attributed to a specific
+            # replica. /api/health is public (no auth gate) and deliberately
+            # does not carry this identity — see checks.leader instead.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             # Host-only session cookie (2026-08-30 domain cutover). The old
             # value test-newhub.lurus.cn made every browser on hub.lurus.cn
             # silently DROP the session cookie (domain mismatch), which broke

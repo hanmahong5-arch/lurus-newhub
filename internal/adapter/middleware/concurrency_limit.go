@@ -202,10 +202,6 @@ func ccAcquire(ctx context.Context, key, leaseID string, limit int, ttl time.Dur
 // reject's own fields.
 func ccReject(c *gin.Context, scope string, limit int) {
 	metrics.RecordRateLimited(scope, "concurrency")
-	scopeLabel := "令牌"
-	if scope == "tenant" {
-		scopeLabel = "租户"
-	}
 	ClearRateLimitHeadroomHeaders(c)
 	// Retry-After 1s: unlike a per-minute window there is no deterministic
 	// reset instant — a slot frees when some in-flight request finishes.
@@ -213,7 +209,7 @@ func ccReject(c *gin.Context, scope string, limit int) {
 	c.Writer.Header().Set("X-RateLimit-Scope", scope)
 	c.Writer.Header().Set("X-RateLimit-Type", "concurrency")
 	abortWithOpenAiMessage(c, http.StatusTooManyRequests,
-		fmt.Sprintf("%s并发请求数已达上限（%d），请等待进行中的请求完成后重试", scopeLabel, limit),
+		fmt.Sprintf("%s concurrency limit exceeded: %d in-flight requests (%s); wait for an in-flight request to finish", scope, limit, concurrencyLimitErrorCode),
 		concurrencyLimitErrorCode)
 }
 

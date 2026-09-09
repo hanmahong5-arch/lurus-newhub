@@ -376,6 +376,13 @@ func SetApiV2Router(router *gin.Engine) {
 				tenantMgmt.PUT("/:id/model-limits", handler.UpsertTenantModelLimit)
 				tenantMgmt.DELETE("/:id/model-limits", handler.DeleteTenantModelLimit)
 
+				// Per-tenant model allow-list (observe-first, typed 403 under
+				// enforce; internal/app/tenantpolicy). Sole writer of the
+				// tenant_configs "models.allowlist" row.
+				tenantMgmt.GET("/:id/model-allowlist", handler.ListTenantModelAllowlist)
+				tenantMgmt.PUT("/:id/model-allowlist", handler.UpsertTenantModelAllowlist)
+				tenantMgmt.DELETE("/:id/model-allowlist", handler.DeleteTenantModelAllowlist)
+
 				// Reseller credit-pool admin (ADR 2026-05-18 §4.1)
 				tenantMgmt.POST("/:id/credit-pool", handler.CreateCreditPool)
 				tenantMgmt.GET("/:id/credit-pool", handler.GetCreditPool)

@@ -18,13 +18,18 @@ package router
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/config"
 	"github.com/LurusTech/lurus-hub/web"
 
 	"github.com/gin-gonic/gin"
@@ -233,6 +238,27 @@ func TestOpenAPIContract_429sDocumentRetryAfterAndScope(t *testing.T) {
 			if _, ok := headers["X-RateLimit-Scope"]; !ok {
 				t.Errorf("%s %s: 429 response does not document X-RateLimit-Scope", method, docPath)
 			}
+			// L6: this doc's per-path 429 entry documents the header set
+			// the rate-limit and concurrency middlewares on the relay chain
+			// write (BusinessRateLimit and BusinessModelRateLimit,
+			// RelayConcurrencyLimit, ModelRequestRateLimit - scopes
+			// token/tenant/model/user; the ip and key scopes belong to the
+			// keyed limiters guarding /api/* and /internal/*, which no /v1
+			// route mounts): X-RateLimit-Limit/-Remaining
+			// alongside Scope/Type, via setRateLimitResponseHeaders (Remaining is
+			// 0 on a reject). It does NOT hold for every 429 origin on the same
+			// path - the entitlement gate (account/quota, entitlement.go:132-133)
+			// and the cost-spike fuse (user/cost, cost_spike.go:121-122) write
+			// only Scope/Type and no Retry-After/Limit/Remaining; relay.json's
+			// description says so. Reset is deliberately NOT required here:
+			// bizReject clears it (business_rate_limit.go) because a reject
+			// carries Retry-After, not a window reset.
+			if _, ok := headers["X-RateLimit-Limit"]; !ok {
+				t.Errorf("%s %s: 429 response does not document X-RateLimit-Limit", method, docPath)
+			}
+			if _, ok := headers["X-RateLimit-Remaining"]; !ok {
+				t.Errorf("%s %s: 429 response does not document X-RateLimit-Remaining", method, docPath)
+			}
 		}
 	}
 	// L3-CONTRACT-TAXONOMY residual item 1: /v1/chat/completions, /v1/completions
@@ -378,4 +404,228 @@ func joinLines(lines []string) string {
 		out += "  " + l + "\n"
 	}
 	return out
+}
+
+// TestOpenAPIContract_DocumentedResponseHeadersAreCORSExposed is L6's new
+// lock: every header name documented under any response's "headers" object
+// in relay.json must actually reach Access-Control-Expose-Headers on a real
+// request through the real middleware.CORS() middleware — not just be
+// listed in the middleware.CORSExposedHeaders Go slice, which a deleted
+// `corsConfig.ExposeHeaders = CORSExposedHeaders` assignment (cors.go)
+// would leave populated while the wire response carried nothing. A header
+// the docs promise but the response never exposes is invisible to a
+// browser SDK reading response.headers.get(...) — a silent trap, not a
+// real contract. The reverse (exposed but undocumented) is fine: not every
+// internal header rises to public API.
+func TestOpenAPIContract_DocumentedResponseHeadersAreCORSExposed(t *testing.T) {
+	doc := loadRelayOpenAPIDoc(t)
+	paths := doc["paths"].(map[string]any)
+
+	cfg := config.Get()
+	prevOrigins := cfg.CORS.AllowedOrigins
+	cfg.CORS.AllowedOrigins = []string{"https://contract-lock.example"}
+	t.Cleanup(func() { cfg.CORS.AllowedOrigins = prevOrigins })
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(middleware.CORS())
+	engine.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Origin", "https://contract-lock.example")
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	exposed := map[string]bool{}
+	for _, h := range strings.Split(w.Header().Get("Access-Control-Expose-Headers"), ",") {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			exposed[h] = true
+		}
+	}
+	if len(exposed) == 0 {
+		t.Fatal("Access-Control-Expose-Headers is empty on a real CORS()-mounted request from an allowed origin — the scan has nothing real to compare against")
+	}
+
+	documented := map[string]bool{}
+	for _, v := range paths {
+		methods, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		for method, opAny := range methods {
+			if _, isMethod := contractLockHTTPMethods[method]; !isMethod {
+				continue
+			}
+			op, ok := opAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			responses, ok := op["responses"].(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, respAny := range responses {
+				resp, ok := respAny.(map[string]any)
+				if !ok {
+					continue
+				}
+				headers, ok := resp["headers"].(map[string]any)
+				if !ok {
+					continue
+				}
+				for h := range headers {
+					documented[strings.ToLower(h)] = true
+				}
+			}
+		}
+	}
+
+	// Scanner-honesty floor: relay.json documents well over a dozen distinct
+	// response headers today; a broken scan that walked zero paths would
+	// otherwise vacuously pass.
+	const minDocumentedHeaders = 5
+	if len(documented) < minDocumentedHeaders {
+		t.Fatalf("scanned %d distinct documented response header name(s), want at least %d — the scan is broken, not the doc thin", len(documented), minDocumentedHeaders)
+	}
+
+	var missing []string
+	for h := range documented {
+		if !exposed[h] {
+			missing = append(missing, h)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("relay.json documents %d response header(s) not in middleware.CORSExposedHeaders: %v", len(missing), missing)
+	}
+}
+
+// rateLimitScopeLiteral / rateLimitTypeLiteral / bizRejectLiterals /
+// ccRejectLiteral scan middleware/*.go non-test sources for the literal
+// scope/type strings a reject site actually writes on the wire.
+//
+// bizRejectVarScopeLiteralType additionally catches bizTPMAdmit's own
+// bizReject(c, scope, "tpm", ...) call (business_rate_limit.go): scope
+// there is the enclosing function's own parameter, not a quoted literal, so
+// bizRejectLiterals (which requires BOTH args quoted) never matches it —
+// without this second pattern "tpm" was never scanned even though it is a
+// real X-RateLimit-Type value on the wire.
+//
+// rateLimitScopeForIdentReturnLiteral catches the "ip"/"key" values
+// rate-limit.go's rateLimitScopeForIdent computes and returns dynamically
+// (rate-limit.go:77/:98 call Set("X-RateLimit-Scope", rateLimitScopeForIdent(ident))
+// — a function call, not a quoted literal, so rateLimitScopeLiteral never
+// matches those two sites either); it reads the return literals straight out
+// of that one function's body instead of guessing from the call sites.
+var (
+	rateLimitScopeLiteral               = regexp.MustCompile(`Set\("X-RateLimit-Scope",\s*"([^"]+)"\)`)
+	rateLimitTypeLiteral                = regexp.MustCompile(`Set\("X-RateLimit-Type",\s*"([^"]+)"\)`)
+	bizRejectLiterals                   = regexp.MustCompile(`bizReject\(c,\s*"([^"]+)",\s*"([^"]+)"`)
+	bizRejectVarScopeLiteralType        = regexp.MustCompile(`bizReject\(c,\s*\w+,\s*"([^"]+)"`)
+	ccRejectLiteral                     = regexp.MustCompile(`ccReject\(c,\s*"([^"]+)"`)
+	rateLimitScopeForIdentFunc          = regexp.MustCompile(`(?s)func rateLimitScopeForIdent\([^)]*\)[^{]*\{(.*?)\n}`)
+	rateLimitScopeForIdentReturnLiteral = regexp.MustCompile(`return "([^"]+)"`)
+)
+
+// TestOpenAPIContract_RateLimitScopeTypeEnumsMatchMiddleware is L6's new
+// lock: every X-RateLimit-Scope/-Type value the reject sites in
+// internal/adapter/middleware actually write — whether the call site passes
+// a quoted literal directly (Set(...,"token") / bizReject(c,"tenant","rpm")
+// / ccReject(c,"token")) or a variable whose value this scan can still pin
+// to a literal (bizTPMAdmit's bizReject(c, scope, "tpm", ...), and
+// rateLimitScopeForIdent's own "ip"/"key" return statements) — must appear
+// in relay.json's XRateLimitScope/XRateLimitType header descriptions, so
+// the documented value set cannot silently drift from what the code emits.
+// A go/regexp scan over the real source files (not a hand-maintained list),
+// same posture as TestOpenAPIContract_ErrorCodeEnumMatchesTypesPackage; it
+// still cannot see a scope/type computed by logic this scan does not know
+// about (e.g. a brand-new dynamic-value helper), only literals and the two
+// named exceptions above.
+func TestOpenAPIContract_RateLimitScopeTypeEnumsMatchMiddleware(t *testing.T) {
+	middlewareDir := filepath.Join(repoRootFromRouterPkg(), "internal", "adapter", "middleware")
+	entries, err := os.ReadDir(middlewareDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", middlewareDir, err)
+	}
+
+	scopes := map[string]bool{}
+	types := map[string]bool{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(middlewareDir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		s := string(src)
+		for _, m := range rateLimitScopeLiteral.FindAllStringSubmatch(s, -1) {
+			scopes[m[1]] = true
+		}
+		for _, m := range rateLimitTypeLiteral.FindAllStringSubmatch(s, -1) {
+			types[m[1]] = true
+		}
+		for _, m := range bizRejectLiterals.FindAllStringSubmatch(s, -1) {
+			scopes[m[1]] = true
+			types[m[2]] = true
+		}
+		for _, m := range bizRejectVarScopeLiteralType.FindAllStringSubmatch(s, -1) {
+			types[m[1]] = true
+		}
+		for _, m := range ccRejectLiteral.FindAllStringSubmatch(s, -1) {
+			scopes[m[1]] = true
+		}
+		if fn := rateLimitScopeForIdentFunc.FindStringSubmatch(s); fn != nil {
+			for _, m := range rateLimitScopeForIdentReturnLiteral.FindAllStringSubmatch(fn[1], -1) {
+				scopes[m[1]] = true
+			}
+		}
+	}
+	if len(scopes) == 0 || len(types) == 0 {
+		t.Fatalf("scanned 0 scope/type literal(s) (scopes=%d types=%d) — the scan is broken, not the codebase clean", len(scopes), len(types))
+	}
+
+	doc := loadRelayOpenAPIDoc(t)
+	headers, ok := doc["components"].(map[string]any)["headers"].(map[string]any)
+	if !ok {
+		t.Fatal("components.headers missing")
+	}
+	scopeDesc := strings.ToLower(headerDescription(t, headers, "XRateLimitScope"))
+	typeDesc := strings.ToLower(headerDescription(t, headers, "XRateLimitType"))
+
+	var scopeList, typeList []string
+	for s := range scopes {
+		scopeList = append(scopeList, s)
+	}
+	for ty := range types {
+		typeList = append(typeList, ty)
+	}
+	sort.Strings(scopeList)
+	sort.Strings(typeList)
+	t.Logf("scope literals: %v; type literals: %v", scopeList, typeList)
+
+	for _, s := range scopeList {
+		if !strings.Contains(scopeDesc, strings.ToLower(s)) {
+			t.Errorf("X-RateLimit-Scope literal %q written by middleware is not in relay.json's XRateLimitScope description", s)
+		}
+	}
+	for _, ty := range typeList {
+		if !strings.Contains(typeDesc, strings.ToLower(ty)) {
+			t.Errorf("X-RateLimit-Type literal %q written by middleware is not in relay.json's XRateLimitType description", ty)
+		}
+	}
+}
+
+// headerDescription reads components.headers.<name>.description as a string.
+func headerDescription(t *testing.T, headers map[string]any, name string) string {
+	t.Helper()
+	h, ok := headers[name].(map[string]any)
+	if !ok {
+		t.Fatalf("components.headers.%s missing", name)
+	}
+	desc, ok := h["description"].(string)
+	if !ok {
+		t.Fatalf("components.headers.%s.description missing", name)
+	}
+	return desc
 }

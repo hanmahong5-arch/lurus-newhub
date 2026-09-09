@@ -33,11 +33,17 @@ func SetRouter(router *gin.Engine, buildFS embed.FS, indexPage []byte) {
 	// routes registered by SetApiRouter/SetApiV2Router/etc.
 	router.Use(middleware.SecurityHeaders())
 
-	// Expose /metrics endpoint for Prometheus scraping (restricted to private/loopback IPs)
-	router.GET("/metrics", metricsAuthMiddleware(), gin.WrapH(promhttp.Handler()))
+	// Publish this pod's identity once, before /metrics is mounted, so the
+	// info-gauge and the header below are consistent from the first scrape.
+	metrics.SetInstanceInfo(common.InstanceID(), os.Getenv("POD_NAMESPACE"), common.Version)
+
+	// Expose /metrics endpoint for Prometheus scraping (restricted to private/loopback IPs).
+	// instanceHeader runs after the auth gate so a rejected scrape never
+	// leaks which pod answered it.
+	router.GET("/metrics", metricsAuthMiddleware(), instanceHeader(), gin.WrapH(promhttp.Handler()))
 
 	SetApiRouter(router)
-	SetApiV2Router(router)  // Multi-tenant v2 API routes
+	SetApiV2Router(router) // Multi-tenant v2 API routes
 	SetDashboardRouter(router)
 	SetRelayRouter(router)
 	SetVideoRouter(router)
@@ -121,6 +127,18 @@ func metricsAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		c.Next()
+	}
+}
+
+// instanceHeader stamps /metrics responses that pass the auth gate with
+// X-Lurus-Instance so a scrape landing on the shared NodePort (three
+// replicas, one Service) can be attributed to the pod that answered it — the
+// same identity published in the lurus_gateway_instance_info series. Mounted
+// after metricsAuthMiddleware, so a scrape it rejects never gets this header.
+func instanceHeader() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Lurus-Instance", common.InstanceID())
 		c.Next()
 	}
 }

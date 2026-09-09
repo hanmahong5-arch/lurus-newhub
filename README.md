@@ -10,6 +10,11 @@ Lurus Hub (module `lurus-hub`, repository `lurus-newhub`) is a customized deriva
 
 It runs as the production LLM gateway behind Lurus's own products (`hub.lurus.cn`), so the relay path, multi-tenant routing, and V1/V2 REST API are exercised continuously. Some capabilities ship disabled by default and are opt-in per deployment: Meilisearch log search (`MEILISEARCH_ENABLED=false`), OpenTelemetry tracing (`OTEL_TRACING_ENABLED=false`), OIDC login (`OIDC_ENABLED=false`), and the external billing integration (`BILLING_UNIFIED_ENABLED=false`). Treat those as available-but-off, not as delivered end-to-end for your deployment until you turn them on and verify.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/architecture-dark.svg">
+  <img alt="Architecture diagram: OpenAI-compatible callers hit a relay router that fans out to 20+ provider adapters and feeds a scoring/usage data hub, while a parallel multi-tenant REST API shares Postgres and Redis and can optionally report usage to a companion billing service over gRPC." src="docs/diagrams/architecture.svg">
+</picture>
+
 ## Core capabilities
 
 - **Unified multi-provider relay** — OpenAI-compatible endpoints in front of 20+ model providers, with automatic request/response format conversion across three provider API shapes (`internal/adapter/provider/`, `internal/adapter/handler/router/relay-router.go`).

@@ -791,6 +791,14 @@ func SumUsedToken(scope TenantScope, logType int, startTimestamp int64, endTimes
 // DeleteOldLog batch-deletes logs older than targetTimestamp. scope is the
 // explicit tenant decision: retention cleanup (platform-admin) passes
 // AllTenantsForAdmin(); a tenant-facing purge must pass ForTenant.
+//
+// Each pass deletes by `id IN (SELECT id ... ORDER BY id LIMIT ?)` rather
+// than `.Limit(n).Delete(...)` directly on the logs table: gorm's
+// DeleteClauses (both the postgres and glebarez/sqlite drivers) render
+// DELETE/FROM/WHERE only — no LIMIT — so a plain `.Limit(n).Delete(&Log{})`
+// is silently unbounded and one call removes every matching row in a single
+// transaction. The id subquery is where the LIMIT actually takes effect on
+// both dialects.
 func DeleteOldLog(ctx context.Context, scope TenantScope, targetTimestamp int64, limit int) (int64, error) {
 	var total int64 = 0
 
@@ -799,7 +807,10 @@ func DeleteOldLog(ctx context.Context, scope TenantScope, targetTimestamp int64,
 			return total, ctx.Err()
 		}
 
-		result := scope.apply(LOG_DB.Where("created_at < ?", targetTimestamp)).Limit(limit).Delete(&Log{})
+		idQuery := scope.apply(LOG_DB.Model(&Log{}).Select("id").Where("created_at < ?", targetTimestamp)).
+			Order("id").
+			Limit(limit)
+		result := LOG_DB.Where("id IN (?)", idQuery).Delete(&Log{})
 		if nil != result.Error {
 			return total, result.Error
 		}

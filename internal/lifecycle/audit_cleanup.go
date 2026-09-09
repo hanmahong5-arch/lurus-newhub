@@ -3,6 +3,9 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -20,6 +23,34 @@ const auditCleanupBatchSize = 500
 // years, so sub-day enforcement granularity carries no business value.
 const auditCleanupDefaultInterval = 24 * time.Hour
 
+// AuditCleanupInterval resolves the sweep period: AUDIT_CLEANUP_INTERVAL_SECONDS
+// when set to a positive integer, else auditCleanupDefaultInterval. Mirrors
+// CreditPoolReconcile's CREDIT_POOL_RECONCILE_INTERVAL_SECONDS resolution
+// (credit_pool_reconcile.go) so the two operator-tunable background tasks
+// behave the same way. Exported for the lifecycle test suite; production has
+// one call site (StartAuditCleanupWithContext below).
+func AuditCleanupInterval() time.Duration {
+	if raw := os.Getenv("AUDIT_CLEANUP_INTERVAL_SECONDS"); raw != "" {
+		if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return auditCleanupDefaultInterval
+}
+
+// auditCleanupActiveInterval records the interval the most recently started
+// StartAuditCleanupWithContext goroutine is actually ticking on. A test that
+// only called AuditCleanupInterval() directly could not tell whether the
+// production entry point actually plumbed the result into its ticker — this
+// lets a test start the real goroutine and read back what it resolved to.
+var auditCleanupActiveInterval atomic.Int64 // nanoseconds
+
+// AuditCleanupActiveInterval returns the interval most recently used by
+// StartAuditCleanupWithContext, for tests.
+func AuditCleanupActiveInterval() time.Duration {
+	return time.Duration(auditCleanupActiveInterval.Load())
+}
+
 // StartAuditCleanupWithContext launches the daily audit retention sweep.
 // On each tick it deletes audit_events rows whose retention_until has
 // passed; rows with retention_until = 0 are preserved (treated as
@@ -29,7 +60,8 @@ const auditCleanupDefaultInterval = 24 * time.Hour
 // governance.NewAuditEvent assigns, plus any shorter or longer
 // retention_until callers override after construction.
 func StartAuditCleanupWithContext(ctx context.Context) {
-	interval := auditCleanupDefaultInterval
+	interval := AuditCleanupInterval()
+	auditCleanupActiveInterval.Store(int64(interval))
 	common.SysLog(fmt.Sprintf("audit retention cleanup started, interval=%s", interval))
 
 	ticker := time.NewTicker(interval)

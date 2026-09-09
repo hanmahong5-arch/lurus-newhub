@@ -140,6 +140,20 @@ describe('Models page', () => {
     });
   });
 
+  // Lock for the hook's error effect (Models/index.jsx:84-92) — the page's
+  // only failure surface for a load that came back but reported failure.
+  it('shows an error toast when the models hook reports success:false', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: 'tenant not found' },
+    });
+
+    render(<HFModels />);
+
+    await waitFor(() => {
+      expect(showError).toHaveBeenCalledWith('tenant not found');
+    });
+  });
+
   it('filters by vendor', async () => {
     const allItems = [
       { id: 1, model_name: 'gpt-4o', vendor: 'OpenAI', status: 1 },

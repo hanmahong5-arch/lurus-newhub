@@ -295,29 +295,93 @@ describe('Settings page', () => {
     });
   });
 
-  // 6. Subscription tab — Wave A Squad 5A read-only.
-  //    Asserts: loading state then data renders; upgrade button is disabled
-  //    with the Wave B tooltip. Profile is already in state from mount, so
-  //    fetchSubscription enriches via /user/billing/summary.
-  it('subscription tab loads tier and disables upgrade button', async () => {
+  // 6. Subscription tab — reads only the account's routing `group` from
+  //    /user/me (cached from mount) and states plainly that no entitlement
+  //    terms are published. No fabricated tier/SLA/audit/support numbers,
+  //    and no separate call to /user/billing/summary (that stays the
+  //    Billing tab's call — see the source lock in Billing/index.test.jsx).
+  it('subscription tab shows the literal routing group and an unpublished-entitlements line', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.resolve({
+          data: { success: true, data: { ...fakeProfile, group: 'vip' } },
+        });
+      }
+      if (url.includes('/user/billing/summary')) {
+        return Promise.resolve({
+          data: { success: true, data: fakeBillingSummary },
+        });
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+
     render(<HFSettings />);
 
     screen.getByText('Subscription').click();
 
-    // Loading state appears
     await waitFor(() => {
       expect(screen.getByTestId('subscription-section')).toBeTruthy();
     });
 
-    // Data renders — tier badge appears
     await waitFor(() => {
-      expect(screen.getByTestId('subscription-tier-badge')).toBeTruthy();
+      expect(screen.getByTestId('subscription-group').textContent).toBe('vip');
     });
 
-    // Upgrade button is disabled with Wave B tooltip
+    const section = screen.getByTestId('subscription-section');
+    for (const fabricated of [
+      '99.5',
+      '99.95',
+      'dedicated',
+      'business hours',
+      '365',
+      'community',
+      'Free',
+    ]) {
+      expect(section.textContent).not.toContain(fabricated);
+    }
+    // The panel used to call the routing group a "plan"/"套餐" — that claim
+    // must not silently come back.
+    expect(section.textContent).not.toMatch(/plan|套餐/i);
+
+    expect(
+      screen.getByTestId('subscription-entitlements-unpublished'),
+    ).toBeTruthy();
+
+    // The caption naming the routing group as the source of the badge value
+    // must render — it is the honesty statement this tab exists to make.
+    expect(section.textContent).toContain("from your account's routing group");
+
     const upgradeBtn = screen.getByTestId('subscription-upgrade-btn');
     expect(upgradeBtn.disabled).toBe(true);
-    expect(upgradeBtn.title).toMatch(/wave b/i);
+    expect(upgradeBtn.title).toMatch(/administrator/i);
+
+    expect(
+      API.get.mock.calls.some((c) =>
+        String(c[0]).includes('/user/billing/summary'),
+      ),
+    ).toBe(false);
+  });
+
+  // No group on the account → an explicit placeholder, never "Free".
+  it('subscription tab shows "no group assigned" when the account has no group', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.resolve({
+          data: { success: true, data: { ...fakeProfile, group: '' } },
+        });
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+
+    render(<HFSettings />);
+
+    screen.getByText('Subscription').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('subscription-group').textContent).toBe(
+        'no group assigned',
+      );
+    });
   });
 
   // 7. Billing tab — Wave A Squad 5A read-only.

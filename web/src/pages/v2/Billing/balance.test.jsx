@@ -104,7 +104,7 @@ describe('Billing page — wallet balance', () => {
   });
 
   it('shows an em dash when neither key is present', async () => {
-    wire({ subscription_plan: 'pro' });
+    wire({ mtd_spend_cny: 16.84 });
 
     render(<HFBilling />);
 
