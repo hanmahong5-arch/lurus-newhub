@@ -26,8 +26,10 @@ func TestMain(m *testing.M) {
 	// package otherwise passed, and only on a full, unfiltered run — a
 	// deliberate `-test.run` selecting a subset of tests (e.g. mutation
 	// verification driving one Test function at a time) legitimately
-	// exercises fewer sites and must not be reported as a regression.
-	if code == 0 && !hasTestRunFilter() {
+	// exercises fewer sites and must not be reported as a regression, and a
+	// `-test.list` invocation (go test -list, used by the security-suite
+	// selector guard in CI) never executes a test at all.
+	if code == 0 && !hasTestRunFilter() && !hasTestListFlag() {
 		if ok, seen, sites := requireRateLimitMessageSitesFloorMet(); !ok {
 			fmt.Fprintf(os.Stderr, "rate_limit_message_lock_test.go: only %d distinct reject sites exercised (want >= %d): %v\n", seen, rlMessageSitesFloor, sites)
 			code = 1
@@ -42,6 +44,18 @@ func TestMain(m *testing.M) {
 func hasTestRunFilter() bool {
 	for _, a := range os.Args[1:] {
 		if a == "-test.run" || strings.HasPrefix(a, "-test.run=") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasTestListFlag reports whether the binary was invoked with -test.list
+// (`go test -list`), which prints matching test names and runs nothing — so
+// zero recorded sites is the expected outcome, not a regression.
+func hasTestListFlag() bool {
+	for _, a := range os.Args[1:] {
+		if a == "-test.list" || strings.HasPrefix(a, "-test.list=") {
 			return true
 		}
 	}
