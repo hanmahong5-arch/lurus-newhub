@@ -24,10 +24,15 @@ import (
 //	return_to (optional) — must be a *.lurus.cn URL or rejected as
 //	                       invalid_return_to (open-redirect guard).
 func ZitaLogin(c *gin.Context) {
+	// Unauthenticated endpoint: say that sign-on is off, not which settings
+	// are missing. The console asks GET /api/status
+	// (login_methods.sso.enabled) before sending anyone here, so a browser
+	// reaching this body means it is running against a different deployment
+	// than the page it came from.
 	if common.ZitaClient == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":   "zita_disabled",
-			"message": "zita SDK not configured (IDENTITY_PUBLIC_URL/IDENTITY_SESSION_SECRET)",
+			"error":   "sso_not_configured",
+			"message": "single sign-on is not configured on this instance",
 		})
 		return
 	}

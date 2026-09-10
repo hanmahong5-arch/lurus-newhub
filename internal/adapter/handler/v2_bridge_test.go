@@ -217,23 +217,23 @@ func TestBridgeExchange_Success(t *testing.T) {
 	}
 }
 
-// TestResolveTenantSlug_FallbacksOnMissing covers the three fallback paths
-// the resolver guards: empty input, "default" sentinel, and DB miss. The
-// bridge is on the login critical path so a slug lookup miss must NOT
-// fail the request — it must return "default" so the frontend has a
-// routable value.
-func TestResolveTenantSlug_FallbacksOnMissing(t *testing.T) {
+// TestResolveTenantSlug_UnresolvableTenantYieldsNoSlug covers the inputs the
+// resolver cannot turn into a routing slug: empty tenant id, and ids with no
+// tenants row (including "default", which is an id — the row that carries it
+// is not seeded here). These used to answer the literal "default" on the
+// grounds that the frontend needed "a routable value"; "default" is a
+// tenants.id, and TenantSlugGuard resolves the path segment by slug, so that
+// answer 404s wherever no row is slugged "default". The bridge stays on the
+// login critical path either way: a miss returns "" and the login still
+// succeeds.
+func TestResolveTenantSlug_UnresolvableTenantYieldsNoSlug(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
-	if got := resolveTenantSlug(""); got != "default" {
-		t.Errorf("resolveTenantSlug(\"\") = %q, want \"default\"", got)
-	}
-	if got := resolveTenantSlug("default"); got != "default" {
-		t.Errorf("resolveTenantSlug(\"default\") = %q, want \"default\"", got)
-	}
-	if got := resolveTenantSlug("nonexistent-tenant-id"); got != "default" {
-		t.Errorf("resolveTenantSlug(unknown) = %q, want \"default\"", got)
+	for _, tenantID := range []string{"", "default", "nonexistent-tenant-id"} {
+		if got := resolveTenantSlug(tenantID); got != "" {
+			t.Errorf("resolveTenantSlug(%q) = %q, want \"\" (no tenants row carries a slug for it)", tenantID, got)
+		}
 	}
 }
 

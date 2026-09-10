@@ -19,9 +19,36 @@ For commercial licensing, please contact support@quantumnous.com
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Loading from '../common/ui/Loading';
-import { Card, Typography } from '@douyinfe/semi-ui';
+import { Button, Card, Typography } from '@douyinfe/semi-ui';
 import { API } from '../../helpers';
 import { setTenantSlug } from '../../helpers/apiMode';
+
+/**
+ * What this deployment can actually sign someone in with.
+ *
+ * login_methods.oidc answers a different question (the legacy OAuth
+ * settings block) and reads false even where sign-on works, so it cannot be
+ * used here. login_methods.sso is the login handler's own nil check.
+ *
+ * Only a definite "no" changes the destination: an unreachable /api/status,
+ * or a payload with no sso entry at all, still redirects. That is the path
+ * this screen has always taken and the one that reports its own failure, so
+ * an absent flag must not be read as "cannot sign in". The bridge flag is
+ * the opposite — absent means do not offer it, because offering a sign-in
+ * form for a route that is not registered collects a token and 404s.
+ */
+async function loginCapability() {
+  try {
+    const res = await API.get('/api/status', { skipErrorHandler: true });
+    const methods = res?.data?.data?.login_methods ?? {};
+    return {
+      sso: methods.sso?.enabled !== false,
+      bridge: methods.bridge?.enabled === true,
+    };
+  } catch (_) {
+    return { sso: true, bridge: false };
+  }
+}
 
 // register prop kept for backward compat with the route declaration in
 // App.jsx; platform identity.lurus.cn renders a unified "登录/注册" UI
@@ -31,6 +58,9 @@ import { setTenantSlug } from '../../helpers/apiMode';
 const OidcRedirect = (_props) => {
   const { t } = useTranslation();
   const [showFallback, setShowFallback] = useState(false);
+  // Set only when the instance reports no single sign-on, so this screen
+  // stops instead of navigating into a 503 it cannot come back from.
+  const [noSSO, setNoSSO] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +114,16 @@ const OidcRedirect = (_props) => {
       }
       if (cancelled) return;
 
+      // The isolated acceptance instance runs with sign-on off on purpose.
+      // Sending a browser to /api/v2/auth/zita-login there ends on a raw
+      // 503, so ask what this instance supports before navigating.
+      const capability = await loginCapability();
+      if (cancelled) return;
+      if (!capability.sso) {
+        setNoSSO(capability);
+        return;
+      }
+
       const returnTo = `${window.location.origin}/console/v2/dashboard`;
       const url = `/api/v2/auth/zita-login?return_to=${encodeURIComponent(returnTo)}`;
       timer = setTimeout(() => setShowFallback(true), 3000);
@@ -96,6 +136,32 @@ const OidcRedirect = (_props) => {
       if (timer) clearTimeout(timer);
     };
   }, []);
+
+  if (noSSO) {
+    return (
+      <div className='flex flex-col items-center justify-center min-h-screen bg-gray-50'>
+        <Card className='p-6 shadow-lg'>
+          <Typography.Text className='text-gray-600 block text-center'>
+            {t('此实例未启用统一登录')}
+          </Typography.Text>
+          {noSSO.bridge && (
+            <div className='mt-4 flex justify-center'>
+              <Button
+                theme='solid'
+                onClick={() =>
+                  window.location.replace(
+                    window.location.origin + '/bridge-login',
+                  )
+                }
+              >
+                {t('前往验收登录')}
+              </Button>
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className='flex flex-col items-center justify-center min-h-screen bg-gray-50'>

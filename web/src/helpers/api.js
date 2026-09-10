@@ -135,6 +135,38 @@ function addResponseInterceptor(instance) {
           // which shows the toast or redirects to /login.
         }
       }
+      // Tenant-slug self-heal. The slug in a v2 path comes from this
+      // browser's own storage, put there by whichever login established the
+      // session. A login before this fix stored the tenant *id* where the
+      // routing slug belonged — "default" for a tenant slugged "lurus" —
+      // and TenantSlugGuard has answered 404 TENANT_NOT_FOUND to every
+      // panel of that browser ever since, with no way for the operator to
+      // tell what went wrong. Ask the server who this session belongs to,
+      // adopt the slug it names, and replay the request against it. Once
+      // per request; if the bootstrap cannot answer (a bridge session
+      // carries no platform cookie) the normal handler takes over.
+      if (
+        error.response?.status === 404 &&
+        error.response?.data?.error_code === 'TENANT_NOT_FOUND' &&
+        config &&
+        !config._retriedAfterSlugRepair &&
+        /^\/api\/v2\/[^/]+\//.test(String(config.url || ''))
+      ) {
+        try {
+          const refreshed = await ensureSession(instance);
+          if (refreshed?.tenant_slug) {
+            config._retriedAfterSlugRepair = true;
+            config.skipErrorHandler = true;
+            config.url = String(config.url).replace(
+              /^\/api\/v2\/[^/]+\//,
+              `/api/v2/${refreshed.tenant_slug}/`,
+            );
+            return await instance(config);
+          }
+        } catch (e) {
+          // Bootstrap declined, or the replay failed too — fall through.
+        }
+      }
       showError(error);
       return Promise.reject(error);
     },

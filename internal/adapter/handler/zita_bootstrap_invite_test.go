@@ -112,6 +112,8 @@ func TestZitaBootstrap_ReplayedInvite_SecondNewUserFallsBackToDefault(t *testing
 		t.Fatalf("pre-consume by first winner: %v", err)
 	}
 
+	seedFallbackTenant(t, ctx)
+
 	const accountID = int64(700002)
 	r := handlerDeepCZitaRouter(t, &zita.Identity{AccountID: accountID}, true)
 	w := handlerDeepCDoZitaBootstrapWithInvite(r, invite.Code)
@@ -120,8 +122,8 @@ func TestZitaBootstrap_ReplayedInvite_SecondNewUserFallsBackToDefault(t *testing
 	}
 	resp := handlerDeployParseBody(t, w)
 	data := resp["data"].(map[string]interface{})
-	if data["tenant_slug"] != "default" {
-		t.Errorf("tenant_slug = %v, want default (replayed code must not re-grant the invited tenant)", data["tenant_slug"])
+	if data["tenant_slug"] != "lurus" {
+		t.Errorf("tenant_slug = %v, want lurus — the fallback tenant's slug (replayed code must not re-grant the invited tenant)", data["tenant_slug"])
 	}
 
 	var persisted repo.User
@@ -160,6 +162,8 @@ func TestZitaBootstrap_ExpiredInvite_NewUserFallsBackToDefault(t *testing.T) {
 		t.Fatalf("force-expire: %v", err)
 	}
 
+	seedFallbackTenant(t, ctx)
+
 	const accountID = int64(700003)
 	r := handlerDeepCZitaRouter(t, &zita.Identity{AccountID: accountID}, true)
 	w := handlerDeepCDoZitaBootstrapWithInvite(r, invite.Code)
@@ -168,8 +172,8 @@ func TestZitaBootstrap_ExpiredInvite_NewUserFallsBackToDefault(t *testing.T) {
 	}
 	resp := handlerDeployParseBody(t, w)
 	data := resp["data"].(map[string]interface{})
-	if data["tenant_slug"] != "default" {
-		t.Errorf("tenant_slug = %v, want default (expired code must fall back)", data["tenant_slug"])
+	if data["tenant_slug"] != "lurus" {
+		t.Errorf("tenant_slug = %v, want lurus — the fallback tenant's slug (expired code must fall back)", data["tenant_slug"])
 	}
 }
 
@@ -182,6 +186,8 @@ func TestZitaBootstrap_GarbageInvite_NewUserFallsBackToDefault(t *testing.T) {
 		t.Fatalf("migrate TenantInvite: %v", err)
 	}
 
+	seedFallbackTenant(t, ctx)
+
 	const accountID = int64(700004)
 	r := handlerDeepCZitaRouter(t, &zita.Identity{AccountID: accountID}, true)
 	w := handlerDeepCDoZitaBootstrapWithInvite(r, "not-a-real-code-at-all")
@@ -190,8 +196,8 @@ func TestZitaBootstrap_GarbageInvite_NewUserFallsBackToDefault(t *testing.T) {
 	}
 	resp := handlerDeployParseBody(t, w)
 	data := resp["data"].(map[string]interface{})
-	if data["tenant_slug"] != "default" {
-		t.Errorf("tenant_slug = %v, want default (garbage code must fall back, never 500)", data["tenant_slug"])
+	if data["tenant_slug"] != "lurus" {
+		t.Errorf("tenant_slug = %v, want lurus — the fallback tenant's slug (garbage code must fall back, never 500)", data["tenant_slug"])
 	}
 }
 

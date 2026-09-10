@@ -122,7 +122,7 @@ ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=
 
 ## UAT Instance (2026-08-30 起)
 
-隔离 UAT 实例 `ns lurus-newhub-uat` / **NodePort 30851** / 域名 **`https://test-newhub.lurus.cn`**(2026-08-30 nginx 切换,原指生产 30850):独立 PG 库 `newhub_uat`、Redis DB 3、与生产**同 digest**(auto-pin 双写两个 manifest)。有意差异:OIDC/billing-unified/NATS 关、`E2E_BRIDGE_TOKEN` 开(bridge 登录)、web 限流 600、注册关(`options.RegisterEnabled=false`,代码默认开)。session cookie host-only + **Secure**(⇒ 隧道 `http://localhost:30851` 的浏览器流会丢 cookie,浏览器/e2e 走域名;API 级隧道照旧)。真源 = `deploy/k8s/r6-uat/`(README 有对照表)。**e2e**:`cd web && E2E_BRIDGE_TOKEN=$(ssh … kubectl -n lurus-newhub-uat get secret …) bun run test:e2e`(E2E_BASE_URL 默认即 test-newhub 域;2026-08-30 域名双跑 33 passed/1 legit skip×2,状态幂等)。**CI 夜跑**:web-ci.yml schedule 19:00 UTC(03:00 北京)跑 e2e job,repo secret `E2E_BRIDGE_TOKEN`(R6 侧生成,轮换后要 `gh secret set` 同步)。
+隔离 UAT 实例 `ns lurus-newhub-uat` / **NodePort 30851** / 域名 **`https://test-newhub.lurus.cn`**(2026-08-30 nginx 切换,原指生产 30850):独立 PG 库 `newhub_uat`、Redis DB 3、与生产**同 digest**(auto-pin 双写两个 manifest)。有意差异:OIDC/billing-unified/NATS 关、`E2E_BRIDGE_TOKEN` 开(bridge 登录;浏览器走 `/bridge-login`,`#t=<token>` 可一键进,见 `deploy/k8s/r6-uat/README.md`)、web 限流 600、注册关(`options.RegisterEnabled=false`,代码默认开)。session cookie host-only + **Secure**(⇒ 隧道 `http://localhost:30851` 的浏览器流会丢 cookie,浏览器/e2e 走域名;API 级隧道照旧)。真源 = `deploy/k8s/r6-uat/`(README 有对照表)。**e2e**:`cd web && E2E_BRIDGE_TOKEN=$(ssh … kubectl -n lurus-newhub-uat get secret …) bun run test:e2e`(E2E_BASE_URL 默认即 test-newhub 域;2026-08-30 域名双跑 33 passed/1 legit skip×2,状态幂等)。**CI 夜跑**:web-ci.yml schedule 19:00 UTC(03:00 北京)跑 e2e job,repo secret `E2E_BRIDGE_TOKEN`(R6 侧生成,轮换后要 `gh secret set` 同步)。
 
 ## Environment Variables
 

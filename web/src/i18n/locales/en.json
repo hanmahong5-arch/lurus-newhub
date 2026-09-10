@@ -3829,6 +3829,14 @@
     "已删除 {{n}} 个系统公告，请及时点击“保存设置”进行保存": "Deleted {{n}} announcements — click \"Save Settings\" to persist the change.",
     "已删除 {{n}} 个API信息，请及时点击“保存设置”进行保存": "Deleted {{n}} API entries — click \"Save Settings\" to persist the change.",
     "已删除 {{n}} 个常见问答，请及时点击“保存设置”进行保存": "Deleted {{n}} FAQ entries — click \"Save Settings\" to persist the change.",
-    "已删除 {{n}} 个分类，请及时点击“保存设置”进行保存": "Deleted {{n}} groups — click \"Save Settings\" to persist the change."
+    "已删除 {{n}} 个分类，请及时点击“保存设置”进行保存": "Deleted {{n}} groups — click \"Save Settings\" to persist the change.",
+    "验收登录": "Acceptance sign-in",
+    "此实例未开放验收登录": "Acceptance sign-in is not available on this instance",
+    "正在登录，请稍候...": "Signing in, please wait…",
+    "登录令牌无效": "That sign-in token was rejected",
+    "粘贴验收令牌": "Paste the acceptance token",
+    "进入控制台": "Open the console",
+    "此实例未启用统一登录": "Single sign-on is not enabled on this instance",
+    "前往验收登录": "Go to acceptance sign-in"
   }
 }
