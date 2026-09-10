@@ -77,6 +77,7 @@ vi.mock('./pages/About', () => stub('page-about'));
 vi.mock('./pages/UserAgreement', () => stub('page-user-agreement'));
 vi.mock('./pages/PrivacyPolicy', () => stub('page-privacy-policy'));
 vi.mock('./components/auth/OidcRedirect', () => stub('oidc-redirect'));
+vi.mock('./components/auth/BridgeLogin', () => stub('page-bridge-login'));
 vi.mock('./components/auth/OidcCallback', () => stub('oidc-callback'));
 vi.mock('./components/settings/PersonalSetting', () => stub('page-personal'));
 
@@ -311,6 +312,10 @@ describe('App — public routes', () => {
     ['/user-agreement', 'page-user-agreement'],
     ['/privacy-policy', 'page-privacy-policy'],
     ['/console/chat/42', 'page-chat'],
+    // Sign-in for a deployment with no single sign-on. It has to be
+    // reachable by a browser that is not signed in — that is the whole
+    // situation it exists for — so no guard may sit in front of it.
+    ['/bridge-login', 'page-bridge-login'],
   ])('%s renders without a guard', async (path, testId) => {
     renderAt(path);
     expect(await screen.findByTestId(testId)).toBeInTheDocument();

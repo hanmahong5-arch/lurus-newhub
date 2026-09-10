@@ -89,12 +89,12 @@ func TestAutoCreateBridgedUser_GenuineInsertFailure_PropagatesError(t *testing.T
 	}
 }
 
-// TestResolveTenantSlug_TenantRowExistsButSlugEmpty_FallsBackToDefault
-// covers the branch where the tenant lookup itself succeeds but the row's
-// Slug column is empty — a defensive fallback distinct from the
-// lookup-error path (already covered) and the literal-"default" fast path
-// (already covered).
-func TestResolveTenantSlug_TenantRowExistsButSlugEmpty_FallsBackToDefault(t *testing.T) {
+// TestResolveTenantSlug_TenantRowExistsButSlugEmpty_YieldsNoSlug covers the
+// branch where the tenant lookup succeeds but the row's Slug column is empty
+// — distinct from the lookup-error path (also covered). An unslugged tenant
+// has no value the console could route with, so the resolver reports that
+// rather than substituting one.
+func TestResolveTenantSlug_TenantRowExistsButSlugEmpty_YieldsNoSlug(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
@@ -107,7 +107,7 @@ func TestResolveTenantSlug_TenantRowExistsButSlugEmpty_FallsBackToDefault(t *tes
 	}
 
 	got := resolveTenantSlug(tenant.Id)
-	if got != "default" {
-		t.Errorf("resolveTenantSlug(%q) = %q, want \"default\" (empty-slug fallback)", tenant.Id, got)
+	if got != "" {
+		t.Errorf("resolveTenantSlug(%q) = %q, want \"\" (row has no slug to route with)", tenant.Id, got)
 	}
 }

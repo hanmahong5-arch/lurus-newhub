@@ -38,6 +38,17 @@ There was no environment where UAT/e2e could run without touching production
   default is open registration), bridge rejects bad tokens (403), and the
   `users` table carries no password column — password login is structurally
   absent, bridge is the only local login.
+- **Signing in from a browser**: `https://test-newhub.lurus.cn/bridge-login`.
+  With single sign-on off, `/login` used to redirect into
+  `/api/v2/auth/zita-login`, which answers 503 here — a dead end with no way
+  back, so the only way in was pasting a fetch into the devtools console. That
+  page now asks `/api/status` first and offers this route instead. Paste the
+  token, or open `/bridge-login#t=<E2E_BRIDGE_TOKEN>` to sign in with one
+  click (`&u=<user_id>` picks the user; it defaults to 1, the seeded root).
+  A fragment never reaches the server or its logs, and the page strips it from
+  the address bar once exchanged — it is still a credential in a link, so
+  share it the way you would share the token itself. Read the token with:
+  `ssh -p 12222 root@43.226.45.87 "kubectl get secret -n lurus-newhub-uat lurus-newhub-uat-secrets -o jsonpath='{.data.E2E_BRIDGE_TOKEN}' | base64 -d"`.
 - ~~Owner-gated follow-up: pointing `test-newhub.lurus.cn` here~~ **DONE
   2026-08-30**: prod SSO moved to `hub.lurus.cn` (r6-stage deployment env +
   platform `config/apps.yaml` domain PATCH, client_id unchanged), then the

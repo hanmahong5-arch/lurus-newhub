@@ -40,6 +40,8 @@ vi.mock('@douyinfe/semi-ui', () => {
   Typography.Text = ({ children, ...rest }) =>
     React.createElement('span', rest, children);
   return {
+    Button: ({ children, onClick, ...rest }) =>
+      React.createElement('button', { onClick, ...rest }, children),
     Card: ({ children, ...rest }) =>
       React.createElement('section', rest, children),
     Typography,
@@ -47,9 +49,21 @@ vi.mock('@douyinfe/semi-ui', () => {
 });
 
 const apiPost = vi.fn();
+const apiGet = vi.fn();
 vi.mock('../../helpers', () => ({
-  API: { post: (...a) => apiPost(...a) },
+  API: { post: (...a) => apiPost(...a), get: (...a) => apiGet(...a) },
 }));
+
+// What /api/status says this deployment can sign someone in with. Every test
+// below that reaches the redirect decision goes through it, so the default is
+// the deployment shape those tests assume: sign-on wired, no bridge.
+const capability = (sso, bridge) => ({
+  data: {
+    data: {
+      login_methods: { sso: { enabled: sso }, bridge: { enabled: bridge } },
+    },
+  },
+});
 
 const setTenantSlug = vi.fn();
 vi.mock('../../helpers/apiMode', () => ({
@@ -86,6 +100,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   installLocation();
+  apiGet.mockResolvedValue(capability(true, false));
 });
 
 afterEach(() => {
@@ -99,8 +114,7 @@ afterEach(() => {
 
 const flush = async () => {
   await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 6; i++) await Promise.resolve();
   });
 };
 
@@ -189,6 +203,53 @@ describe('OidcRedirect — session bridge', () => {
 
     expect(localStorage.getItem('user')).toBeNull();
     expect(hrefWrites).toHaveLength(1);
+  });
+
+  // The isolated acceptance instance runs with sign-on off on purpose, and
+  // /api/v2/auth/zita-login answers 503 there. Navigating anyway left the
+  // browser on a raw JSON error with no way back.
+  it('stops instead of redirecting where the instance reports no single sign-on', async () => {
+    apiPost.mockRejectedValue({ response: { status: 401 } });
+    apiGet.mockResolvedValue(capability(false, true));
+    render(React.createElement(OidcRedirect, null));
+    await flush();
+
+    expect(hrefWrites).toEqual([]);
+    expect(screen.getByText('此实例未启用统一登录')).toBeInTheDocument();
+    expect(screen.getByText('前往验收登录')).toBeInTheDocument();
+  });
+
+  it('omits the acceptance route where that instance has no bridge either', async () => {
+    apiPost.mockRejectedValue({ response: { status: 401 } });
+    apiGet.mockResolvedValue(capability(false, false));
+    render(React.createElement(OidcRedirect, null));
+    await flush();
+
+    expect(hrefWrites).toEqual([]);
+    expect(screen.getByText('此实例未启用统一登录')).toBeInTheDocument();
+    expect(screen.queryByText('前往验收登录')).not.toBeInTheDocument();
+  });
+
+  it('redirects as usual when the payload carries no sso entry at all', async () => {
+    apiPost.mockRejectedValue({ response: { status: 401 } });
+    apiGet.mockResolvedValue({ data: { data: { login_methods: {} } } });
+    render(React.createElement(OidcRedirect, null));
+    await flush();
+
+    expect(hrefWrites).toHaveLength(1);
+    expect(hrefWrites[0]).toContain('/api/v2/auth/zita-login?return_to=');
+  });
+
+  // A status endpoint that cannot be reached must not become a third
+  // outcome: the redirect is still the only path worth trying.
+  it('redirects as usual when the capability probe itself fails', async () => {
+    apiPost.mockRejectedValue({ response: { status: 401 } });
+    apiGet.mockRejectedValue(new Error('offline'));
+    render(React.createElement(OidcRedirect, null));
+    await flush();
+
+    expect(hrefWrites).toHaveLength(1);
+    expect(hrefWrites[0]).toContain('/api/v2/auth/zita-login?return_to=');
   });
 
   it('parks a disabled account on the terminal page instead of retrying login forever', async () => {

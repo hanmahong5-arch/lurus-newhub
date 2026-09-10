@@ -156,13 +156,15 @@ func TestZitaBootstrap_DisabledUser_Forbidden(t *testing.T) {
 // TestZitaBootstrap_UnknownAccountID_AutoCreatesUser_DefaultTenantSlug
 // covers the auto-create path (repo.GetUserByLurusAccountID returns
 // ErrRecordNotFound) end to end: a real row must be persisted with
-// username "lurus_<account_id>", TenantId "default" (resolveTenantSlug's
-// literal-"default" fast path — no DB lookup needed), and the SAME id must
-// come back on a second bootstrap call for the same account (no duplicate
+// username "lurus_<account_id>", TenantId "default" — whose routing slug is
+// "lurus", the value the response must carry — and the SAME id must come
+// back on a second bootstrap call for the same account (no duplicate
 // provisioning).
 func TestZitaBootstrap_UnknownAccountID_AutoCreatesUser_DefaultTenantSlug(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
+
+	seedFallbackTenant(t, ctx)
 
 	const accountID = int64(777001)
 	r := handlerDeepCZitaRouter(t, &zita.Identity{AccountID: accountID}, true)
@@ -178,8 +180,8 @@ func TestZitaBootstrap_UnknownAccountID_AutoCreatesUser_DefaultTenantSlug(t *tes
 	if data["username"] != "lurus_777001" {
 		t.Errorf("username = %v, want lurus_777001 (derived from account_id)", data["username"])
 	}
-	if data["tenant_slug"] != "default" {
-		t.Errorf("tenant_slug = %v, want default (auto-created user's TenantId is literally 'default')", data["tenant_slug"])
+	if data["tenant_slug"] != "lurus" {
+		t.Errorf("tenant_slug = %v, want lurus (auto-created user's TenantId is \"default\", whose slug is \"lurus\")", data["tenant_slug"])
 	}
 
 	var persisted repo.User

@@ -143,22 +143,29 @@ func ZitaBootstrap(c *gin.Context) {
 	})
 }
 
-// resolveTenantSlug converts a tenant UUID into its human-readable slug.
-// On lookup failure (tenant deleted, "default" placeholder, DB hiccup) it
-// returns "default" rather than failing the bootstrap — the bridge is on
-// the login critical path and we'd rather log the user in with a fallback
-// slug than block them from the console entirely.
+// resolveTenantSlug reads the routing slug of the tenant a login belongs to.
+// The console stores it and puts it in the path of every
+// /api/v2/:tenant_slug/* call, where middleware.TenantSlugGuard resolves that
+// segment with repo.GetTenantBySlug — so the only value worth returning is
+// one that lookup can find again.
+//
+// It used to answer the literal "default" for tenant id "default" without
+// reading the row, and to fall back to "default" whenever the lookup failed.
+// Both live deployments seed that tenant with slug "lurus", so the console
+// was handed a slug no row carries and answered 404 TENANT_NOT_FOUND on
+// every panel after an SSO login. No slug is safe to invent: when the tenant
+// cannot be resolved this returns "" and the callers pass it through, which
+// leaves whatever slug the browser already had alone instead of overwriting
+// it with one that is known to 404. Login is never blocked on this — the
+// slug is one field of the response, not a gate.
 func resolveTenantSlug(tenantID string) string {
-	if tenantID == "" || tenantID == "default" {
-		return "default"
+	if tenantID == "" {
+		return ""
 	}
 	tenant, err := repo.GetTenantByID(tenantID)
 	if err != nil || tenant == nil {
 		common.SysError(fmt.Sprintf("zita-bootstrap: tenant slug lookup failed for tenant_id=%s: %v", tenantID, err))
-		return "default"
-	}
-	if tenant.Slug == "" {
-		return "default"
+		return ""
 	}
 	return tenant.Slug
 }

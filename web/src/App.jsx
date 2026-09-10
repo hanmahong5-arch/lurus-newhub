@@ -40,6 +40,10 @@ import PersonalSetting from './components/settings/PersonalSetting';
 import Setup from './pages/Setup';
 import SetupCheck from './components/layout/SetupCheck';
 
+// Lazy like the routes below, not a static import: this screen is reached
+// only on a deployment without single sign-on, and pulling its editor
+// widgets into the app entry would load them for everyone.
+const BridgeLogin = lazy(() => import('./components/auth/BridgeLogin'));
 const Home = lazy(() => import('./pages/Home'));
 const About = lazy(() => import('./pages/About'));
 const UserAgreement = lazy(() => import('./pages/UserAgreement'));
@@ -195,6 +199,19 @@ function App() {
             <AuthRedirect>
               <OidcRedirect />
             </AuthRedirect>
+          }
+        />
+        {/* Sign-in for a deployment with no single sign-on (the isolated
+            acceptance instance). Deliberately outside AuthRedirect: a stale
+            or half-established session is exactly when this page is needed,
+            and bouncing it away would leave no way back in. The route the
+            page calls exists only where the backend registered it. */}
+        <Route
+          path='/bridge-login'
+          element={
+            <Suspense fallback={<Loading></Loading>} key={location.pathname}>
+              <BridgeLogin />
+            </Suspense>
           }
         />
         {/* Legacy /register/password removed — registration delegated to OIDC IdP */}

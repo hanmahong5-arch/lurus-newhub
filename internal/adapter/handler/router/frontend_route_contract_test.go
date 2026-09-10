@@ -62,6 +62,12 @@ var conditionallyRegistered = map[string]string{
 		"test process, so the route is absent here for a reason this test " +
 		"cannot distinguish from a missing handler. Whether it exists at " +
 		"runtime is a deploy-config question, not a routing one.",
+	"POST /api/v2/bridge/exchange": "api-v2-router.go:61-62 registers this " +
+		"inside `if handler.BridgeEnabled()`, which reads env " +
+		"E2E_BRIDGE_TOKEN — empty in a unit test process and in production, " +
+		"set on the isolated acceptance instance. The console screen that " +
+		"calls it (components/auth/BridgeLogin.jsx) asks /api/status first " +
+		"and says so instead of calling where the route is absent.",
 }
 
 func collectRoutes(t *testing.T) map[string][]string {

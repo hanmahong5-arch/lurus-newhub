@@ -234,6 +234,89 @@ describe('401 session self-heal interceptor', () => {
   });
 });
 
+describe('tenant slug self-heal interceptor', () => {
+  const tenantNotFound = (url = '/api/v2/default/user/me') => ({
+    response: { status: 404, data: { error_code: 'TENANT_NOT_FOUND' } },
+    config: { url },
+  });
+
+  it('adopts the slug the server names and replays the request against it', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    API.post.mockResolvedValue({
+      data: { success: true, data: { id: 9, tenant_slug: 'lurus' } },
+    });
+    const err = tenantNotFound();
+
+    const res = await onRejected()(err);
+
+    // The replayed URL must carry the resolved slug, not the stored one.
+    expect(err.config.url).toBe('/api/v2/lurus/user/me');
+    expect(err.config._retriedAfterSlugRepair).toBe(true);
+    expect(API).toHaveBeenCalledWith(err.config);
+    expect(res).toEqual({ data: { replayed: true } });
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it('rewrites only the tenant segment, leaving the rest of the path intact', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    API.post.mockResolvedValue({
+      data: { success: true, data: { id: 9, tenant_slug: 'lurus' } },
+    });
+    const err = tenantNotFound('/api/v2/default/logs/self?page=2');
+
+    await onRejected()(err);
+
+    expect(err.config.url).toBe('/api/v2/lurus/logs/self?page=2');
+  });
+
+  it('leaves a 404 that is not about the tenant alone', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    const err = {
+      response: { status: 404, data: { error_code: 'NOT_FOUND' } },
+      config: { url: '/api/v2/default/user/me' },
+    };
+
+    await expect(onRejected()(err)).rejects.toBe(err);
+    expect(API.post).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith(err);
+  });
+
+  it('does not touch a path with no tenant segment to repair', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    const err = tenantNotFound('/api/status');
+
+    await expect(onRejected()(err)).rejects.toBe(err);
+    expect(API.post).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith(err);
+  });
+
+  it('gives up rather than replaying when the server names no slug', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    API.post.mockResolvedValue({
+      data: { success: true, data: { id: 9 } },
+    });
+    const err = tenantNotFound();
+
+    await expect(onRejected()(err)).rejects.toBe(err);
+    expect(API).not.toHaveBeenCalled();
+    expect(err.config.url).toBe('/api/v2/default/user/me');
+    expect(showError).toHaveBeenCalledWith(err);
+  });
+
+  it('repairs a given request only once', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    API.post.mockResolvedValue({
+      data: { success: true, data: { id: 9, tenant_slug: 'lurus' } },
+    });
+    const err = tenantNotFound();
+    err.config._retriedAfterSlugRepair = true;
+
+    await expect(onRejected()(err)).rejects.toBe(err);
+    expect(API.post).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith(err);
+  });
+});
+
 describe('updateAPI', () => {
   it('builds a fresh instance and re-applies both patches', () => {
     const before = axios.create.mock.calls.length;

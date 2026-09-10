@@ -92,6 +92,23 @@ func GetStatus(c *gin.Context) {
 			"client_id":              system_setting.GetOIDCSettings().ClientId,
 			"authorization_endpoint": system_setting.GetOIDCSettings().AuthorizationEndpoint,
 		},
+		// The v2 console signs in through the platform identity SDK
+		// (GET /api/v2/auth/zita-login), which is wired only where the
+		// deployment supplies the identity endpoint and session secret. The
+		// oidc entry above reports the legacy OAuth settings block, which
+		// reads false even on the deployment whose SSO works, so it cannot
+		// answer "can this instance sign anyone in?". This can: it is the
+		// same nil check the login handler itself makes.
+		"sso": gin.H{
+			"enabled": common.ZitaClient != nil,
+		},
+		// The e2e bridge is the only other way in. It exists only where
+		// E2E_BRIDGE_TOKEN is set — the route is not registered otherwise —
+		// so the console can use this to decide whether offering its
+		// token sign-in form would lead anywhere.
+		"bridge": gin.H{
+			"enabled": BridgeEnabled(),
+		},
 	}
 
 	// Build registration configuration

@@ -10,9 +10,13 @@ import { expect, type Page, type APIRequestContext } from '@playwright/test';
  * Contract (verified against internal/adapter/handler/v2_bridge.go, 2026-06-20):
  *   - METHOD IS POST (not GET) and user_id is REQUIRED.
  *   - Returns 200 + Set-Cookie + JSON {data:{id, role, tenant_slug, ...}}.
- *   - tenant_slug in the response is "default" for the seeded default tenant,
- *     but the tenant's REAL routable slug is `lurus` (migrations/001+021).
- *     All /api/v2/:tenant_slug/* routes must use `lurus`, NOT "default".
+ *   - tenant_slug used to come back as "default" — the tenant *id* — for the
+ *     seeded default tenant, whose routable slug is `lurus`
+ *     (migrations/001+021); /api/v2/default/* is answered 404
+ *     TENANT_NOT_FOUND. resolveTenantSlug now reads the row, so the response
+ *     carries the routable slug. E2E_TENANT_SLUG still wins here so this
+ *     suite pins one known value rather than trusting whatever the instance
+ *     under test happens to answer.
  *
  * Why we also seed localStorage: the v2 SPA gates /console/v2/* behind
  * PrivateRoute (checks localStorage `user`) and builds API paths from
