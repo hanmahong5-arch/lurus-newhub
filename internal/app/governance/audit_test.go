@@ -254,3 +254,55 @@ func TestNewAuditEvent_MarksContext(t *testing.T) {
 		t.Fatal("RecordAuditEvent must set AuditedContextKey=true on the context the event was built from")
 	}
 }
+
+// TestForgetPending_RemovesUnrecordedEvent locks ForgetPending's leak bound:
+// a caller that builds an event with NewAuditEvent(c, …) and never hands it
+// to RecordAuditEvent must not leave that entry in pendingAuditContexts once
+// ForgetPending(c) runs — middleware.AuditWriteGuard calls this once per
+// request so a dropped construct-without-record call does not pin the
+// request's *gin.Context forever.
+func TestForgetPending_RemovesUnrecordedEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest("POST", "/test", nil)
+
+	event := NewAuditEvent(c, ActorAdmin, 1, ActionTokenCreated, ResourceToken, 1, "")
+	if _, ok := pendingAuditContexts.Load(event); !ok {
+		t.Fatal("expected a pending entry immediately after NewAuditEvent")
+	}
+
+	ForgetPending(c)
+	if _, ok := pendingAuditContexts.Load(event); ok {
+		t.Fatal("ForgetPending(c) should have removed the entry built from c")
+	}
+}
+
+// TestForgetPending_LeavesOtherContextsAlone proves ForgetPending is scoped
+// to the *gin.Context passed in — it must not sweep a pending entry that
+// belongs to a different, still in-flight request.
+func TestForgetPending_LeavesOtherContextsAlone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w1, w2 := httptest.NewRecorder(), httptest.NewRecorder()
+	c1, _ := gin.CreateTestContext(w1)
+	c1.Request, _ = http.NewRequest("POST", "/test1", nil)
+	c2, _ := gin.CreateTestContext(w2)
+	c2.Request, _ = http.NewRequest("POST", "/test2", nil)
+
+	event1 := NewAuditEvent(c1, ActorAdmin, 1, ActionTokenCreated, ResourceToken, 1, "")
+	event2 := NewAuditEvent(c2, ActorAdmin, 2, ActionTokenCreated, ResourceToken, 2, "")
+	defer func() {
+		// Clean up regardless of assertion outcome so this test cannot leak
+		// into PendingAuditContextCount-based assertions elsewhere.
+		ForgetPending(c1)
+		ForgetPending(c2)
+	}()
+
+	ForgetPending(c1)
+	if _, ok := pendingAuditContexts.Load(event1); ok {
+		t.Fatal("ForgetPending(c1) should have removed event1")
+	}
+	if _, ok := pendingAuditContexts.Load(event2); !ok {
+		t.Fatal("ForgetPending(c1) must not remove event2, which belongs to c2")
+	}
+}

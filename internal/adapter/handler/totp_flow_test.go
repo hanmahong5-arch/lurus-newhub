@@ -256,6 +256,19 @@ func TestTotpStepUp_EndToEnd(t *testing.T) {
 		t.Fatalf("enrollment should be deleted after disable: %+v", rec)
 	}
 
+	// 9b. Disable must also purge the backup codes minted at confirm (step
+	// 3c) — a factor that no longer exists must not leave recovery codes
+	// behind for it. Mutation: deleting repo.DeleteUserTOTPBackupCodes's
+	// call site in TotpDisable leaves this count at 10.
+	var remainingBackupCodes int64
+	if err := repo.DB.Model(&entity.UserTOTPBackupCode{}).
+		Where("user_id = ?", 1).Count(&remainingBackupCodes).Error; err != nil {
+		t.Fatalf("count backup codes after disable: %v", err)
+	}
+	if remainingBackupCodes != 0 {
+		t.Fatalf("backup code rows after disable = %d, want 0", remainingBackupCodes)
+	}
+
 	// 10. Back to legacy behavior: session verify passes again.
 	w, _ = doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"session"}`, nil)
 	if w.Code != http.StatusOK {
@@ -408,6 +421,74 @@ func TestTotpConfirm_ReturnsBackupCodesOnce(t *testing.T) {
 				t.Fatalf("plaintext backup code %q stored verbatim as code_hash", plain)
 			}
 		}
+	}
+}
+
+// TestTotpConfirm_BackupCodeMintFailureLeavesEnrollmentPending locks the
+// ordering fix: if minting backup codes fails, the enrollment must stay
+// pending (Enabled=false), not go live with zero backup codes stored and no
+// way to self-service recover. Mutation: swapping issueBackupCodesFn's call
+// back to AFTER the rec.Enabled=true/UpsertUserTOTP write (the original
+// order) makes the post-failure GetUserTOTP assertion below fail (rec.Enabled
+// would be true).
+func TestTotpConfirm_BackupCodeMintFailureLeavesEnrollmentPending(t *testing.T) {
+	cleanup := setupTotpFlowDB(t, 12)
+	defer cleanup()
+	r := buildTotpFlowRouter(12)
+
+	w, env := doJSON(t, r, http.MethodPost, "/api/user/totp/enroll", `{}`, nil)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("enroll: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var enrollData struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(env.Data, &enrollData); err != nil || enrollData.Secret == "" {
+		t.Fatalf("enroll data missing secret: %s", w.Body.String())
+	}
+
+	code1, err := pqtotp.GenerateCode(enrollData.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("generate code: %v", err)
+	}
+
+	prevIssue := issueBackupCodesFn
+	issueBackupCodesFn = func(int) ([]string, error) {
+		return nil, fmt.Errorf("simulated backup-code mint failure")
+	}
+	w, env = doJSON(t, r, http.MethodPost, "/api/user/totp/confirm", `{"code":"`+code1+`"}`, nil)
+	issueBackupCodesFn = prevIssue
+	// common.ApiError responds 200/success:false (this codebase's error
+	// convention — see internal/pkg/common/gin.go), not an HTTP 5xx.
+	if w.Code != http.StatusOK || env.Success {
+		t.Fatalf("confirm with a forced mint failure: status=%d body=%s (want 200/success:false)", w.Code, w.Body.String())
+	}
+
+	rec, err := repo.GetUserTOTP(12)
+	if err != nil {
+		t.Fatalf("GetUserTOTP after failed confirm: %v", err)
+	}
+	if rec == nil || rec.Enabled {
+		t.Fatalf("enrollment must stay PENDING after a mint failure, got %+v", rec)
+	}
+	var codeRows int64
+	repo.DB.Model(&entity.UserTOTPBackupCode{}).Where("user_id = ?", 12).Count(&codeRows)
+	if codeRows != 0 {
+		t.Fatalf("no backup code rows should exist after a mint failure, got %d", codeRows)
+	}
+
+	// The pending enrollment must still be confirmable with a fresh code
+	// once minting works again — the failure above must not have wedged it.
+	code2, err := pqtotp.GenerateCode(enrollData.Secret, time.Now().Add(-30*time.Second))
+	if err != nil {
+		t.Fatalf("generate second code: %v", err)
+	}
+	if code2 == code1 {
+		t.Skip("clock landed on a step boundary collision; rerun-safe skip")
+	}
+	w, env = doJSON(t, r, http.MethodPost, "/api/user/totp/confirm", `{"code":"`+code2+`"}`, nil)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("retry confirm after mint failure: status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

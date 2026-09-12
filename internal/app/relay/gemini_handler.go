@@ -7,14 +7,14 @@ import (
 	"net/http"
 	"strings"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/gemini"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider/gemini"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -254,14 +254,12 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	// apply param override
+	// apply param override — routed through relaycommon.ApplyParamOverride
+	// (same call as the chat path at :159) so this path also skips
+	// __lurus_-prefixed internal keys (e.g. __lurus_force_http1) instead of
+	// merging them straight into the upstream body (L5 repair, finding #17).
 	if len(info.ParamOverride) > 0 {
-		reqMap := make(map[string]interface{})
-		_ = common.Unmarshal(jsonData, &reqMap)
-		for key, value := range info.ParamOverride {
-			reqMap[key] = value
-		}
-		jsonData, err = common.Marshal(reqMap)
+		jsonData, err = relaycommon.ApplyParamOverride(jsonData, info.ParamOverride, relaycommon.BuildParamOverrideContext(info))
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid, types.ErrOptionWithSkipRetry())
 		}

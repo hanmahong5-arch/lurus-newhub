@@ -205,7 +205,7 @@ func TestDoRequest_CapturesUpstreamRequestId(t *testing.T) {
 			wantCaptured: "ray-4",
 		},
 		{
-			name:         "none of the four headers present -> empty, not a defect",
+			name:         "none of the upstreamRequestIdHeaders present -> empty, not a defect",
 			respHeaders:  map[string]string{},
 			wantCaptured: "",
 		},
@@ -251,6 +251,60 @@ func TestDoRequest_CapturesUpstreamRequestId(t *testing.T) {
 	}
 }
 
+// TestDoRequest_ClearsStaleUpstreamRequestIdBeforeEachAttempt guards against
+// cross-attempt contamination: a retry can land on a different channel than
+// the previous attempt, and the previous attempt's captured id must not
+// survive onto this attempt's gin.Context / RelayInfo — otherwise a failed
+// attempt (or a header-less success) on channel B would still carry channel
+// A's vendor id into whatever error/log row this attempt produces.
+func TestDoRequest_ClearsStaleUpstreamRequestIdBeforeEachAttempt(t *testing.T) {
+	app.InitHttpClient()
+	provReqCovAllowPrivateIP(t)
+
+	t.Run("client.Do failure clears the previous attempt's id", func(t *testing.T) {
+		adaptor := &provReqCovAdaptor{url: provReqCovClosedPortURL(t) + "/v1/x"}
+		info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{}, UpstreamRequestId: "stale-channel-a"}
+		c, _ := provReqCovNewGinContext(t, http.MethodGet, "/x", nil)
+		c.Set("upstream_request_id", "stale-channel-a")
+
+		_, err := DoApiRequest(adaptor, c, info, nil)
+		if err == nil {
+			t.Fatalf("DoApiRequest() error = nil, want a do-request-failed error against a closed port")
+		}
+		if info.UpstreamRequestId != "" {
+			t.Errorf("info.UpstreamRequestId = %q after a failed attempt, want \"\" (must not leak the previous channel's id onto this attempt's error row)", info.UpstreamRequestId)
+		}
+		if got := c.GetString("upstream_request_id"); got != "" {
+			t.Errorf(`c.GetString("upstream_request_id") = %q after a failed attempt, want ""`, got)
+		}
+	})
+
+	t.Run("header-less 200 clears the previous attempt's id", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		adaptor := &provReqCovAdaptor{url: server.URL + "/v1/x"}
+		info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{}, UpstreamRequestId: "stale-channel-a"}
+		c, _ := provReqCovNewGinContext(t, http.MethodGet, "/x", nil)
+		c.Set("upstream_request_id", "stale-channel-a")
+
+		resp, err := DoApiRequest(adaptor, c, info, nil)
+		if err != nil {
+			t.Fatalf("DoApiRequest() error = %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if info.UpstreamRequestId != "" {
+			t.Errorf("info.UpstreamRequestId = %q, want \"\" (upstream sent no id header)", info.UpstreamRequestId)
+		}
+		if got := c.GetString("upstream_request_id"); got != "" {
+			t.Errorf(`c.GetString("upstream_request_id") = %q, want ""`, got)
+		}
+	})
+}
+
 // TestBoundUpstreamRequestId_NonPrintableASCIIDropped exercises the character-
 // class half of the bound directly: a control byte embedded in a header
 // value is not guaranteed to survive real HTTP framing (\r\n would corrupt
@@ -282,6 +336,20 @@ func TestBoundUpstreamRequestId_NonPrintableASCIIDropped(t *testing.T) {
 // HTTP/2, with ChannelSetting.ForceHTTP1 set — the response must come back
 // over HTTP/1.1 despite the server's h2 support. This is the seam L5 exists
 // for: an operator pinning one flaky-HTTP/2 channel to H1.
+//
+// KNOWN INSENSITIVITY (L5 repair, findings routing-resilience-limits-13#3/
+// #11/#27/#39, disclosed rather than hidden): the plan's prescribed mutation
+// for this test ("drop TLSNextProto") does NOT turn the ProtoMajor==1
+// assertion below red on this machine's net/http — the "" proxyURL path's
+// guarded DialContext plus this test's own TLSClientConfig assignment
+// already suppress h2 negotiation once ForceAttemptHTTP2 is false,
+// regardless of TLSNextProto. The two field assertions on tr immediately
+// below ARE sensitive to that mutation (and to a ForceAttemptHTTP2 flip);
+// TestGetHttpClientFor_ForceHTTP1Transport (http_client_test.go) is the
+// designated §7 oracle for it — this integration test proves the wiring
+// (doRequest actually calls GetHttpClientFor with forceHTTP1=true and gets a
+// working, negotiating client back), not the transport's internal ALPN
+// suppression mechanism.
 func TestDoRequest_ForceHTTP1NegotiatesHTTP1(t *testing.T) {
 	app.InitHttpClient()
 	provReqCovAllowPrivateIP(t)
@@ -293,6 +361,9 @@ func TestDoRequest_ForceHTTP1NegotiatesHTTP1(t *testing.T) {
 	server.StartTLS()
 	defer server.Close()
 
+	certPool := x509.NewCertPool()
+	certPool.AddCert(server.Certificate())
+
 	client, err := app.GetHttpClientFor("", true)
 	if err != nil {
 		t.Fatalf("GetHttpClientFor: %v", err)
@@ -301,12 +372,21 @@ func TestDoRequest_ForceHTTP1NegotiatesHTTP1(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *http.Transport, got %T", client.Transport)
 	}
+	if tr.ForceAttemptHTTP2 {
+		t.Errorf("forced-H1 transport ForceAttemptHTTP2 = true, want false")
+	}
+	if tr.TLSNextProto == nil || len(tr.TLSNextProto) != 0 {
+		t.Errorf("forced-H1 transport TLSNextProto = %v, want a non-nil EMPTY map", tr.TLSNextProto)
+	}
 	// Trust the test server's self-signed cert while leaving TLSNextProto as
 	// GetHttpClientFor set it (non-nil empty), so no ALPN "h2" offer goes out
-	// regardless of what the server supports.
-	certPool := x509.NewCertPool()
-	certPool.AddCert(server.Certificate())
+	// regardless of what the server supports. This mutates the process-
+	// global cached client in place — there is no seam to inject a stand-in
+	// client into doRequest — so t.Cleanup resets the cache afterward:
+	// otherwise every later GetHttpClientFor("", true) caller in this
+	// process would inherit a test-only RootCAs pool (finding #10).
 	tr.TLSClientConfig = &tls.Config{RootCAs: certPool}
+	t.Cleanup(app.ResetForceH1ClientCache)
 
 	adaptor := &provReqCovAdaptor{url: server.URL + "/v1/x"}
 	info := &common.RelayInfo{ChannelMeta: &common.ChannelMeta{
@@ -322,5 +402,32 @@ func TestDoRequest_ForceHTTP1NegotiatesHTTP1(t *testing.T) {
 
 	if resp.ProtoMajor != 1 {
 		t.Errorf("resp.Proto = %q, ProtoMajor = %d, want HTTP/1.1 (server offers h2, client must refuse it)", resp.Proto, resp.ProtoMajor)
+	}
+
+	// Sibling (finding #3a): a channel with ForceHTTP1 false must still
+	// negotiate real HTTP/2 against the SAME h2-capable server, proving the
+	// forced client above — not some property of the server or of this
+	// test's TLS setup — is what changed the outcome. Exercised via a CLONE
+	// of the shared default transport (never the shared *http.Transport
+	// itself, and not through DoApiRequest/doRequest), so this assertion
+	// never mutates the process-global default client every other test and
+	// every non-forced relay call shares.
+	siblingClient, err := app.GetHttpClientFor("", false)
+	if err != nil {
+		t.Fatalf("GetHttpClientFor(forceHTTP1=false): %v", err)
+	}
+	siblingTr, ok := siblingClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", siblingClient.Transport)
+	}
+	siblingClone := siblingTr.Clone()
+	siblingClone.TLSClientConfig = &tls.Config{RootCAs: certPool}
+	siblingResp, err := (&http.Client{Transport: siblingClone}).Get(server.URL + "/v1/x")
+	if err != nil {
+		t.Fatalf("sibling (default transport) request failed: %v", err)
+	}
+	defer func() { _ = siblingResp.Body.Close() }()
+	if siblingResp.ProtoMajor != 2 {
+		t.Errorf("sibling resp.Proto = %q, ProtoMajor = %d, want HTTP/2.0 (default transport must still negotiate h2)", siblingResp.Proto, siblingResp.ProtoMajor)
 	}
 }

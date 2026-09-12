@@ -113,7 +113,7 @@ func UniversalVerify(c *gin.Context) {
 				totp.RecordFailure(c.Request.Context(), userId)
 				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
 					governance.ActionAuthFailed, governance.ResourceUser, userId, `{"step":"secure_verify","reason":"totp_backup_invalid_or_replayed"}`))
-				c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "恢复码无效或已被使用"})
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Invalid or already-used backup code"})
 				return
 			}
 			remainingBackupCodes, err = repo.CountUnusedUserTOTPBackupCodes(userId)

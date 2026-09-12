@@ -47,18 +47,29 @@ func rankingsAbs(n int) int {
 }
 
 // rankingsCacheEntry is one cached response snapshot: the whole payload
-// (window + rows) is cached, not just the rows, so a cache hit is byte-for-
-// byte identical (including cached_at) until it expires.
+// (window + rows + totals) is cached, not just the rows, so a cache hit is
+// byte-for-byte identical (including cached_at) until it expires.
 type rankingsCacheEntry struct {
-	cachedAt               int64
-	windowStart, windowEnd int64
-	rows                   []repo.RankingRow
+	cachedAt                int64
+	windowStart, windowEnd  int64
+	rows                    []repo.RankingRow
+	totalTokens, totalQuota int64
 }
 
 // rankingsCache is per-pod (in-process sync.Map, no shared backing store):
-// the 3 replicas can each report a different cached_at, which is documented
-// in the plan's Risk paragraph as expected, not a bug.
+// replicas can each report a different cached_at, which is documented in
+// the plan's Risk paragraph as expected, not a bug.
 var rankingsCache sync.Map // key: tenantID+"|"+by+"|"+hours -> *rankingsCacheEntry
+
+// resetRankingsCacheForTest wipes rankingsCache so a test's first call is a
+// proven miss regardless of test order or -count (mirrors
+// resetWebSearchClientForTesting's pattern in web_search.go).
+func resetRankingsCacheForTest() {
+	rankingsCache.Range(func(k, _ any) bool {
+		rankingsCache.Delete(k)
+		return true
+	})
+}
 
 func rankingsCacheKey(tenantID, by string, hours int) string {
 	return tenantID + "|" + by + "|" + strconv.Itoa(hours)
@@ -78,7 +89,7 @@ func getCachedRankings(tenantID, by string, hours int) (*rankingsCacheEntry, err
 
 	end := time.Now().Unix()
 	start := end - int64(hours)*3600
-	rows, err := repo.GetRankings(start, end, tenantID, by, rankingsDefaultLimit)
+	rows, totalTokens, totalQuota, err := repo.GetRankings(start, end, tenantID, by, rankingsDefaultLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -87,21 +98,31 @@ func getCachedRankings(tenantID, by string, hours int) (*rankingsCacheEntry, err
 		windowStart: start,
 		windowEnd:   end,
 		rows:        rows,
+		totalTokens: totalTokens,
+		totalQuota:  totalQuota,
 	}
 	rankingsCache.Store(key, entry)
 	return entry, nil
 }
 
 // parseRankingsParams reads and validates the `by`/`hours` query params
-// shared by the root and tenant rankings routes. `by` defaults to (and
-// falls back to, on any other value) "model"; `hours` is clamped to [1,720]
-// then snapped to a cache-friendly preset.
-func parseRankingsParams(c *gin.Context) (by string, hours int) {
+// shared by the root and tenant rankings routes. `by` must be "model" or
+// "vendor" — any other value is rejected with a non-empty errMsg (unknown
+// `by` used to fall back to "model" silently, which let a typo mint an
+// unbounded number of cache-key dimensions; now the caller must ask for one
+// of the two the leaderboard actually supports). `hours` is clamped to
+// [1,720] then snapped to a cache-friendly preset; an unparsable `hours`
+// (empty string, non-integer) falls back to rankingsDefaultHours rather
+// than silently clamping to the 1-hour preset.
+func parseRankingsParams(c *gin.Context) (by string, hours int, errMsg string) {
 	by = c.DefaultQuery("by", "model")
 	if by != "model" && by != "vendor" {
-		by = "model"
+		return "", 0, "by must be model or vendor"
 	}
-	h, _ := strconv.Atoi(c.DefaultQuery("hours", strconv.Itoa(rankingsDefaultHours)))
+	h, atoiErr := strconv.Atoi(c.DefaultQuery("hours", strconv.Itoa(rankingsDefaultHours)))
+	if atoiErr != nil {
+		h = rankingsDefaultHours
+	}
 	if h < 1 {
 		h = 1
 	}
@@ -109,20 +130,23 @@ func parseRankingsParams(c *gin.Context) (by string, hours int) {
 		h = 720
 	}
 	hours = snapRankingHours(h)
-	return
+	return by, hours, ""
 }
 
-func writeRankingsResponse(c *gin.Context, by string, entry *rankingsCacheEntry) {
+func writeRankingsResponse(c *gin.Context, by string, hours int, entry *rankingsCacheEntry) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"by": by,
+			"by":    by,
+			"hours": hours,
 			"window": gin.H{
 				"start": entry.windowStart,
 				"end":   entry.windowEnd,
 			},
-			"cached_at": entry.cachedAt,
-			"rows":      entry.rows,
+			"cached_at":    entry.cachedAt,
+			"rows":         entry.rows,
+			"total_tokens": entry.totalTokens,
+			"total_quota":  entry.totalQuota,
 		},
 	})
 }
@@ -153,7 +177,14 @@ func GetTenantRankingsV2(c *gin.Context) {
 		return
 	}
 
-	by, hours := parseRankingsParams(c)
+	by, hours, errMsg := parseRankingsParams(c)
+	if errMsg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": errMsg,
+		})
+		return
+	}
 	entry, err := getCachedRankings(tenantCtx.TenantID, by, hours)
 	if err != nil {
 		common.SysError("GetTenantRankingsV2: aggregate failed: " + err.Error())
@@ -163,5 +194,5 @@ func GetTenantRankingsV2(c *gin.Context) {
 		})
 		return
 	}
-	writeRankingsResponse(c, by, entry)
+	writeRankingsResponse(c, by, hours, entry)
 }

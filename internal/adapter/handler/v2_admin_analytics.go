@@ -82,7 +82,14 @@ func GetModelPerformanceV2(c *gin.Context) {
 //
 // Root-only (router applies RootJWTAuth + CriticalRateLimit on the route).
 func GetRankingsV2(c *gin.Context) {
-	by, hours := parseRankingsParams(c)
+	by, hours, errMsg := parseRankingsParams(c)
+	if errMsg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": errMsg,
+		})
+		return
+	}
 	tenantID := c.Query("tenant_id")
 
 	entry, err := getCachedRankings(tenantID, by, hours)
@@ -94,5 +101,5 @@ func GetRankingsV2(c *gin.Context) {
 		})
 		return
 	}
-	writeRankingsResponse(c, by, entry)
+	writeRankingsResponse(c, by, hours, entry)
 }

@@ -107,7 +107,7 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"DELETE /api/v2/:tenant_slug/models/:id": "DeleteModelV2: same — global catalog entry, mirrors v1's POST /api/channel/fix \"global maintenance, not a per-tenant data mutation\" exemption",
 
 		// ---- read-only preview: computes a diff, never persists ----
-		"POST /api/v2/:tenant_slug/pricing/preview": "PreviewPricingV2: read-only dry-run of the same batch UpdatePricingV2 accepts — never calls repo.UpdateOption, never bumps PricingVersion; root-gated (requirePlatformRoot) for the same reason as the write route above",
+		"POST /api/v2/:tenant_slug/pricing/preview": "PreviewPricingV2: read-only dry-run of the same batch UpdatePricingV2 accepts — does not call repo.UpdateOption and does not bump PricingVersion (TestV2PricingPreview_NeverPersists); root-gated (requirePlatformRoot) for the same reason as the write route above",
 
 		// ---- conditionally-registered routes (only present under specific env/config; exempted defensively) ----
 		"GET /api/v2/me/zita":              "guarded by common.ZitaClient.AuthMiddleware(); resolves the caller's own SDK identity, no resource id",

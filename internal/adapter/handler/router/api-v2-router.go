@@ -199,7 +199,8 @@ func SetApiV2Router(router *gin.Engine) {
 		// Tenant-scoped Analytics (L4, 2026-09-12) — model/vendor rankings
 		// leaderboard. Admin gate lives inside the handler (requireTenantAdmin),
 		// same pattern as GetAllLogStatV2 above; CriticalRateLimit here mirrors
-		// the root route (two GROUP BY aggregates per call).
+		// the root route (two GROUP BY aggregates per cache miss — a hit
+		// within the 5-minute in-process cache runs no query at all).
 		// ================================================================
 
 		tenantAnalytics := apiV2.Group("/:tenant_slug/analytics")
@@ -278,9 +279,11 @@ func SetApiV2Router(router *gin.Engine) {
 			// enforces requirePlatformRoot inside the handler (same rationale
 			// as tenantModels above).
 			tenantPricing.POST("", handler.UpdatePricingV2)
-			// L1 (2026-09-12): dry-run diff of the same batch — never writes,
-			// same root gate (the maps it reads are process-global, not
-			// tenant-scoped, same rationale as the write above).
+			// L1 (2026-09-12): dry-run diff of the same batch — does not call
+			// repo.UpdateOption or bump PricingVersion (TestV2PricingPreview_
+			// NeverPersists), same root gate (the maps it reads are
+			// process-global, not tenant-scoped, same rationale as the write
+			// above).
 			tenantPricing.POST("/preview", handler.PreviewPricingV2)
 		}
 
@@ -517,7 +520,8 @@ func SetApiV2Router(router *gin.Engine) {
 			adminRoute.GET("/analytics/model-performance", middleware.CriticalRateLimit(), handler.GetModelPerformanceV2)
 			// L4 (2026-09-12): period-over-period model/vendor leaderboard,
 			// optionally filtered to one tenant. Same rate-limit rationale —
-			// each call runs two GROUP BY aggregates over logs.
+			// each cache miss runs two GROUP BY aggregates over logs; a hit
+			// within the 5-minute in-process cache runs none.
 			adminRoute.GET("/analytics/rankings", middleware.CriticalRateLimit(), handler.GetRankingsV2)
 			adminRoute.GET("/logs/export", middleware.CriticalRateLimit(), handler.ExportAdminLogsV2)
 

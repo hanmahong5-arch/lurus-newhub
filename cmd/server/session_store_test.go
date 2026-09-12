@@ -101,9 +101,10 @@ func TestNewRedisSessionStore_UsesConfiguredDB(t *testing.T) {
 // TestRedisSessionKeyFormat_Canary pins the assumption L7's per-device
 // session registry depends on: the Redis session store's own key for a
 // session is "session_" + session.ID() (boj/redistore's default keyPrefix,
-// redistore.go:293/410). repo.RevokeSessionByIDV2/RevokeOtherSessionsV2
-// build that exact string themselves to delete a revoked session out of
-// Redis — they have no other way to ask the store "what key did you use for
+// redistore.go:293/410). handler.redisDeleteSessionKey (called by
+// RevokeSessionByIDV2 / RevokeOtherSessionsV2 / RevokeUserSessionsAdminV2)
+// builds that exact string itself to delete a revoked session out of
+// Redis — it has no other way to ask the store "what key did you use for
 // this session id?". If a future library bump changes the prefix (or moves
 // key construction so it no longer matches session.ID() 1:1), this goes red
 // in CI, not as a production revoke that silently fails to log anyone out.

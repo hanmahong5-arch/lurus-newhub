@@ -305,7 +305,13 @@ func lookupAffinityChannel(param *RetryParam, affinityKey string) (*repo.Channel
 // Prometheus counter, it keeps a plain in-process atomic triple: the admin
 // routing panel (GET /api/v2/admin/routing/affinity, L5) reads THIS, not
 // Prometheus, so it works identically whether or not a scrape pipeline is
-// wired up.
+// wired up. These three counters — and MemEntries — are per-replica
+// in-process state, not cluster-wide: production runs 3 replicas behind one
+// NodePort (deploy/k8s/r6-stage/deployment.yaml), so a single GET only sees
+// whichever replica happened to answer it. Summing across replicas requires
+// reading the Prometheus counter (`lurus_gateway_session_affinity_total`)
+// instead. The UAT probe (1 replica, deploy/k8s/r6-uat/deployment.yaml) does
+// not exercise this gap.
 func recordAffinityOutcome(result string) {
 	switch result {
 	case "hit":
@@ -335,8 +341,13 @@ func resetAffinityCountersForTest() {
 // AffinityStats is the admin-facing snapshot of session-affinity behaviour:
 // how often a pin was found and honoured (Hit), found nothing (Miss), or
 // found a binding that was no longer eligible (Stale); MemEntries/Backend
-// report which storage tier is actually live right now.
+// report which storage tier is actually live right now. Enabled/TTLSeconds
+// mirror SessionAffinityEnabled()/affinityTTL() so an operator does not have
+// to cross-reference env vars to know whether the feature is even live and
+// how long a pin survives.
 type AffinityStats struct {
+	Enabled    bool   `json:"enabled"`
+	TTLSeconds int    `json:"ttl_seconds"`
 	Hit        int64  `json:"hit"`
 	Miss       int64  `json:"miss"`
 	Stale      int64  `json:"stale"`
@@ -346,8 +357,11 @@ type AffinityStats struct {
 
 // AffinityStatsSnapshot reads the counters above plus the live fallback-map
 // size. Never touches Redis — MemEntries is the bounded in-process map's own
-// size, reported regardless of backend so an operator can see it drain to 0
-// after switching backends.
+// size; it and the hit/miss/stale counters are per-process (see
+// GetAffinityStatsV2's doc comment), reported regardless of backend so an
+// operator can see the fallback map itself drain to 0 (e.g. after a TTL
+// sweep) even though RedisEnabled is only ever assigned at boot and cannot
+// actually flip while a process is running.
 func AffinityStatsSnapshot() AffinityStats {
 	backend := "memory"
 	if common.RedisEnabled {
@@ -357,6 +371,8 @@ func AffinityStatsSnapshot() AffinityStats {
 	memEntries := len(affinityMem)
 	affinityMemMu.Unlock()
 	return AffinityStats{
+		Enabled:    SessionAffinityEnabled(),
+		TTLSeconds: int(affinityTTL().Seconds()),
 		Hit:        affinityHitCount.Load(),
 		Miss:       affinityMissCount.Load(),
 		Stale:      affinityStaleCount.Load(),
@@ -366,26 +382,29 @@ func AffinityStatsSnapshot() AffinityStats {
 }
 
 // PurgeAffinityKey removes one binding by its HMAC key (the value the caller
-// got back via AffinityKeyResponseHeader). Returns true only if a binding
-// actually existed and was removed — callers use this to distinguish "purged"
-// from "nothing to purge" (the admin handler 404s on false).
-func PurgeAffinityKey(c *gin.Context, key string) bool {
+// got back via AffinityKeyResponseHeader). found is true only if a binding
+// actually existed and was removed. err is non-nil only for a genuine Redis
+// failure — callers MUST NOT treat err!=nil as "not found": a Redis outage
+// must surface to the caller as a failure, not be reported as a 404 that
+// would lead an operator to (wrongly) conclude the pin is already gone
+// (L5 repair, finding routing-resilience-limits-11#6/#20/#47).
+func PurgeAffinityKey(c *gin.Context, key string) (found bool, err error) {
 	if common.RedisEnabled {
 		n, err := common.RDB.Del(c.Request.Context(), affinityRedisPrefix+key).Result()
 		if err != nil {
 			logger.LogDebug(c, "session affinity purge failed: %s", err.Error())
-			return false
+			return false, err
 		}
-		return n > 0
+		return n > 0, nil
 	}
 
 	affinityMemMu.Lock()
 	defer affinityMemMu.Unlock()
 	if _, ok := affinityMem[key]; !ok {
-		return false
+		return false, nil
 	}
 	delete(affinityMem, key)
-	return true
+	return true, nil
 }
 
 // affinityPurgeAllScanCount is the SCAN COUNT hint per round — a hint to

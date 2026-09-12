@@ -293,11 +293,17 @@ func TestAffinityStats_ReflectsMemoryEntries(t *testing.T) {
 	if stats.MemEntries != 2 {
 		t.Errorf("MemEntries = %d, want 2 (both stored keys still live)", stats.MemEntries)
 	}
+	if stats.Enabled != SessionAffinityEnabled() {
+		t.Errorf("Enabled = %v, want %v (must read the live SessionAffinityEnabled())", stats.Enabled, SessionAffinityEnabled())
+	}
+	if stats.TTLSeconds != int(affinityTTL().Seconds()) {
+		t.Errorf("TTLSeconds = %d, want %d (must read the live affinityTTL())", stats.TTLSeconds, int(affinityTTL().Seconds()))
+	}
 
 	// Purging one entry must be reflected on the very next snapshot — proves
 	// this isn't a cached/point-in-time value.
-	if !PurgeAffinityKey(c, "stat-key-1") {
-		t.Fatal("precondition: purge of a live key must report true")
+	if found, err := PurgeAffinityKey(c, "stat-key-1"); err != nil || !found {
+		t.Fatalf("precondition: purge of a live key must report true, got found=%v err=%v", found, err)
 	}
 	if got := AffinityStatsSnapshot().MemEntries; got != 1 {
 		t.Errorf("MemEntries after purge = %d, want 1", got)
@@ -321,8 +327,8 @@ func TestAffinityPurge_KeyRemovedThenMiss(t *testing.T) {
 		t.Fatal("precondition: binding must exist before purge")
 	}
 
-	if !PurgeAffinityKey(c, "purge-key") {
-		t.Fatal("expected PurgeAffinityKey to report the key existed")
+	if found, err := PurgeAffinityKey(c, "purge-key"); err != nil || !found {
+		t.Fatalf("expected PurgeAffinityKey to report the key existed, got found=%v err=%v", found, err)
 	}
 
 	if _, ok := affinityLoad(c, "purge-key"); ok {
@@ -341,8 +347,42 @@ func TestAffinityPurge_Unknown404(t *testing.T) {
 	resetAffinityMemForTest()
 
 	c := affinityCtx(t, 1, 1, "default", "gpt-4o")
-	if PurgeAffinityKey(c, "never-existed") {
-		t.Error("purging an unknown key must report false")
+	if found, err := PurgeAffinityKey(c, "never-existed"); err != nil || found {
+		t.Errorf("purging an unknown key must report found=false, err=nil; got found=%v err=%v", found, err)
+	}
+}
+
+// TestAffinityPurge_RedisError_ReturnsError is the lock for finding
+// routing-resilience-limits-11#6/#20/#47: a genuine Redis failure must come
+// back as a non-nil error, never silently folded into found=false — the
+// admin handler relies on this distinction to 500 instead of 404ing a
+// backend outage as "nothing to purge".
+func TestAffinityPurge_RedisError_ReturnsError(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("start miniredis: %v", err)
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer func() { _ = rdb.Close() }()
+
+	prevRDB := common.RDB
+	prevEnabled := common.RedisEnabled
+	common.RDB = rdb
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		common.RDB = prevRDB
+		common.RedisEnabled = prevEnabled
+	})
+
+	mr.Close() // simulate an outage: rdb can no longer reach the server
+
+	c := affinityCtx(t, 1, 1, "default", "gpt-4o")
+	found, err := PurgeAffinityKey(c, "irrelevant-key")
+	if err == nil {
+		t.Fatal("expected a non-nil error when Redis is unreachable, got nil")
+	}
+	if found {
+		t.Error("found must be false on error, not true")
 	}
 }
 

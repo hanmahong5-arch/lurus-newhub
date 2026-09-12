@@ -180,6 +180,16 @@ func TestHashBackupCode_DeterministicAndUserScoped(t *testing.T) {
 	if h1 != h4 {
 		t.Fatal("HashBackupCode must normalize case/whitespace")
 	}
+	// A user retyping a code without the dash, or with a space in place of
+	// it (both plausible when copying from a printed sheet), must still
+	// match the canonical "XXXX-XXXX" hash — otherwise they burn one of
+	// the 5 throttle attempts on a code that is actually valid.
+	if h5 := HashBackupCode(1, "abcdefgh"); h5 != h1 {
+		t.Fatal("HashBackupCode must match a dash-less retype of the same code")
+	}
+	if h6 := HashBackupCode(1, "abcd efgh"); h6 != h1 {
+		t.Fatal("HashBackupCode must match a space-separated retype of the same code")
+	}
 	// Never equal to the plaintext-adjacent EncryptSecret scheme's output
 	// shape (sanity: this is a hash, not a reversible ciphertext).
 	if strings.HasPrefix(h1, encVersionPrefix) {

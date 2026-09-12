@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,13 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
+
+// rawIPPattern matches a dotted-quad IPv4 address whose LAST octet is
+// non-zero — MaskIP always zeroes the last octet (/24), so a match here can
+// only be a raw, unmasked address, never a legitimately-masked one. Used by
+// both whitelist tests in this file (flag-off and flag-on) so a raw-IP
+// regression is caught on whichever code path it appears on.
+var rawIPPattern = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){2}\.(?:[1-9]|[1-9]\d|1\d\d|2[0-5]\d)\b`)
 
 var sessionsTestDBCounter atomic.Int64
 
@@ -266,6 +274,18 @@ func TestV2Sessions_WhitelistEnforced(t *testing.T) {
 		if strings.Contains(body, f) {
 			t.Errorf("response body contains forbidden field %q — whitelist violated. body: %s", f, body)
 		}
+	}
+	// The flag-off (legacy synthetic-row) path renders no ip/user_agent at
+	// all today, so these never match here — but the assertion must live in
+	// THIS test too, not only in the flag-on masking test below: if a future
+	// change ever added a raw ip/UA field to the legacy path, this is what
+	// would catch it (mirrors §8's raw-pattern requirement, applied to both
+	// code paths rather than only the one that already carries them).
+	if rawIPPattern.MatchString(body) {
+		t.Errorf("response body contains what looks like a raw (unmasked) IP address. body: %s", body)
+	}
+	if strings.Contains(body, "Mozilla/") {
+		t.Errorf("response body contains a raw User-Agent token (\"Mozilla/\"). body: %s", body)
 	}
 }
 

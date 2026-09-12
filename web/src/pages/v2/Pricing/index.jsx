@@ -26,9 +26,12 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 /* v2 Pricing — GET /api/v2/:tenant_slug/pricing (2026-05-19)
    Write path — POST /api/v2/:tenant_slug/pricing (Epic 12, 2026-05-20).
    Optimistic lock + preview (L1, 2026-09-12): GET returns data.version; POST
-   sends it back as If-Match-Pricing-Version so two admins editing at once
-   cannot silently clobber each other — a stale header gets 409 and this page
-   refetches instead of saving. Preview runs the same batch read-only first. */
+   sends it back as If-Match-Pricing-Version — a stale header gets 409 (the
+   PricingVersion row the server compares against) and this page refetches
+   instead of saving. The header only guards the version counter, not the
+   underlying ratio maps a concurrent writer on another replica may have
+   changed for a different model (see v2_pricing_write.go's UpdatePricingV2
+   comment). Preview runs the same batch read-only first. */
 
 const DRAFT_KEY = 'v2-pricing-edits';
 
@@ -45,8 +48,10 @@ const PricingPage = () => {
   const [vendorFilter, setVendorFilter] = useState('');
   // PricingVersion read from the last GET; sent back on the next POST.
   const [version, setVersion] = useState(0);
-  // Diff rows from the last preview call; null until Preview is clicked,
-  // cleared on every successful save so a stale preview cannot linger.
+  // Diff rows from the last preview call; null until Preview is clicked.
+  // handleSave and handleFieldChange both clear it (on a successful save, or
+  // on any further edit) so a stale preview cannot linger, but neither path
+  // has a test asserting the clear — see the lane report.
   const [previewDiffs, setPreviewDiffs] = useState(null);
   // fetchTick increments trigger a re-fetch without remounting.
   const [fetchTick, setFetchTick] = useState(0);
@@ -114,7 +119,9 @@ const PricingPage = () => {
   };
 
   // Build the batch: only send changed rows with their model_name. Shared by
-  // Save and Preview so preview provably shows what save would apply.
+  // Save and Preview so both send the same request body — the server still
+  // computes preview's diff against its own baseline, which can differ from
+  // what the write applies (see UpdatePricingV2's comment).
   const buildBatch = () =>
     Object.entries(edits)
       .map(([modelName, fields]) => {
@@ -414,15 +421,22 @@ const PricingPage = () => {
                       )}
                     </td>
                     <td>
-                      {/* GET pricing does not project a current cache_ratio
-                          value (no column to prefill from), so this is
-                          write-only: blank unless the admin has typed one. */}
+                      {/* GET pricing (v2_pricing.go) projects the model's
+                          current cache_ratio when one is explicitly
+                          configured, so this prefills from row.cache_ratio
+                          like the other three fields; a model with no
+                          configured entry starts blank instead of showing a
+                          fabricated value. */}
                       <input
                         type='number'
                         className='field'
                         step='0.0001'
                         min='0.0001'
-                        value={edits[row.model_name]?.cache_ratio ?? ''}
+                        value={
+                          edits[row.model_name]?.cache_ratio ??
+                          row.cache_ratio ??
+                          ''
+                        }
                         onChange={(e) =>
                           handleFieldChange(
                             row.model_name,

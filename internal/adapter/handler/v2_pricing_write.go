@@ -27,7 +27,6 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
-	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -63,16 +62,21 @@ const pricingVersionHeader = "If-Match-Pricing-Version"
 // PRICING_VERSION_CONFLICT after the transaction rolls back.
 var errPricingVersionConflict = errors.New("pricing version conflict")
 
-// currentPricingVersion reads PricingVersion from the in-memory option cache
-// that every other option getter reads (common.OptionMap), defaulting to 0
-// when the key has never been written — GET pricing's documented default for
-// a brand-new deployment.
+// currentPricingVersion reads PricingVersion straight from the database
+// (repo.GetOptionValue against repo.DB) rather than the per-process option
+// cache: the cache (common.OptionMap) is only refreshed on the
+// SYNC_FREQUENCY ticker (repo/option.go loadOptionsFromDatabase), so on the
+// multi-replica production deployment a cache read here could keep answering
+// a stale version — and drive the console's 409-refetch-retry loop into
+// hitting 409 again — for up to that interval after another replica's
+// commit. Defaults to 0 when the row has never been written.
 func currentPricingVersion() int64 {
-	common.OptionMapRWMutex.RLock()
-	raw := common.OptionMap["PricingVersion"]
-	common.OptionMapRWMutex.RUnlock()
-	v, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
+	raw, found, err := repo.GetOptionValue(repo.DB, "PricingVersion")
+	if err != nil || !found {
+		return 0
+	}
+	v, perr := strconv.ParseInt(raw, 10, 64)
+	if perr != nil {
 		return 0
 	}
 	return v
@@ -106,12 +110,12 @@ func validatePricingBatch(items []updatePricingRequest) (index int, errCode, msg
 	return -1, "", "", true
 }
 
-// pricingComputation is the result of applying a batch on top of copies of
-// the four live ratio maps: the candidate maps (for persistence), a diff per
-// touched (model, field) pair (for the preview response and the audit
-// details), and a touched flag per field (so the caller persists only the
-// maps the batch actually changed, matching the original
-// persistRatioMapIfChanged behaviour).
+// pricingComputation is the result of applying a batch on top of the base
+// copies of the four ratio maps a caller supplied: the candidate maps (for
+// persistence), a diff per touched (model, field) pair (for the preview
+// response and the audit details), and a touched flag per field (so the
+// caller persists only the maps the batch actually changed, matching the
+// original persistRatioMapIfChanged behaviour this replaces).
 type pricingComputation struct {
 	Diffs                  []map[string]interface{}
 	ModelRatioCopy         map[string]float64
@@ -125,44 +129,53 @@ type pricingComputation struct {
 	UpdatedCount           int
 }
 
-// computePricingDiffs is the single computation UpdatePricingV2 and
-// PreviewPricingV2 both call: preview provably shows exactly what write
-// would do because they share this function rather than two hand-maintained
-// copies of the same loop.
-func computePricingDiffs(items []updatePricingRequest) pricingComputation {
+// computePricingDiffsFromMaps applies items on top of the four base maps the
+// caller supplies and returns the resulting computation. It takes the base
+// maps as parameters — rather than reading ratio_setting's live copies
+// itself — so UpdatePricingV2 can apply a batch on top of the maps it just
+// read from the database inside its transaction (the write's true baseline
+// on a multi-replica deployment), while PreviewPricingV2 (which does not
+// read the database — see computePricingDiffs below) reuses the same merge
+// logic on top of the live process maps instead. The base maps are mutated
+// in place and returned as part of the computation; callers must pass
+// copies they own.
+func computePricingDiffsFromMaps(
+	items []updatePricingRequest,
+	modelRatioBase, completionRatioBase, modelPriceBase, cacheRatioBase map[string]float64,
+) pricingComputation {
 	out := pricingComputation{
-		ModelRatioCopy:      ratio_setting.GetModelRatioCopy(),
-		CompletionRatioCopy: ratio_setting.GetCompletionRatioCopy(),
-		ModelPriceCopy:      ratio_setting.GetModelPriceCopy(),
-		CacheRatioCopy:      ratio_setting.GetCacheRatioCopy(),
+		ModelRatioCopy:      modelRatioBase,
+		CompletionRatioCopy: completionRatioBase,
+		ModelPriceCopy:      modelPriceBase,
+		CacheRatioCopy:      cacheRatioBase,
 	}
 	for _, item := range items {
 		touched := false
 		if item.ModelRatio != nil {
-			old := out.ModelRatioCopy[item.ModelName]
+			old, explicit := effectiveOldModelRatio(out.ModelRatioCopy, item.ModelName)
 			out.ModelRatioCopy[item.ModelName] = *item.ModelRatio
-			out.Diffs = append(out.Diffs, pricingDiffEntry(item.ModelName, "model_ratio", old, *item.ModelRatio))
+			out.Diffs = append(out.Diffs, pricingDiffEntry(item.ModelName, "model_ratio", old, *item.ModelRatio, explicit))
 			out.TouchedModelRatio = true
 			touched = true
 		}
 		if item.CompletionRatio != nil {
-			old := out.CompletionRatioCopy[item.ModelName]
+			old, explicit := effectiveOldCompletionRatio(out.CompletionRatioCopy, item.ModelName)
 			out.CompletionRatioCopy[item.ModelName] = *item.CompletionRatio
-			out.Diffs = append(out.Diffs, pricingDiffEntry(item.ModelName, "completion_ratio", old, *item.CompletionRatio))
+			out.Diffs = append(out.Diffs, pricingDiffEntry(item.ModelName, "completion_ratio", old, *item.CompletionRatio, explicit))
 			out.TouchedCompletionRatio = true
 			touched = true
 		}
 		if item.ModelPrice != nil {
-			old := out.ModelPriceCopy[item.ModelName]
+			old, explicit := effectiveOldModelPrice(out.ModelPriceCopy, item.ModelName)
 			out.ModelPriceCopy[item.ModelName] = *item.ModelPrice
-			out.Diffs = append(out.Diffs, pricingDiffEntry(item.ModelName, "model_price", old, *item.ModelPrice))
+			out.Diffs = append(out.Diffs, pricingDiffEntry(item.ModelName, "model_price", old, *item.ModelPrice, explicit))
 			out.TouchedModelPrice = true
 			touched = true
 		}
 		if item.CacheRatio != nil {
-			old := out.CacheRatioCopy[item.ModelName]
+			old, explicit := effectiveOldCacheRatio(out.CacheRatioCopy, item.ModelName)
 			out.CacheRatioCopy[item.ModelName] = *item.CacheRatio
-			out.Diffs = append(out.Diffs, pricingDiffEntry(item.ModelName, "cache_ratio", old, *item.CacheRatio))
+			out.Diffs = append(out.Diffs, pricingDiffEntry(item.ModelName, "cache_ratio", old, *item.CacheRatio, explicit))
 			out.TouchedCacheRatio = true
 			touched = true
 		}
@@ -173,13 +186,104 @@ func computePricingDiffs(items []updatePricingRequest) pricingComputation {
 	return out
 }
 
-func pricingDiffEntry(modelName, field string, oldValue, newValue float64) map[string]interface{} {
-	return map[string]interface{}{
-		"model_name": modelName,
-		"field":      field,
-		"old":        oldValue,
-		"new":        newValue,
+// computePricingDiffs is PreviewPricingV2's entry point: it applies items on
+// top of the live process ratio maps (ratio_setting's Get*Copy functions),
+// the same maps UpdatePricingV2 falls back to when the database has no
+// baseline row yet. Preview does not read the database, so on a replica
+// whose memory has not resynced from a recent write on another replica (see
+// currentPricingVersion's comment) the diff it shows can lag what a
+// concurrent write would actually apply.
+func computePricingDiffs(items []updatePricingRequest) pricingComputation {
+	return computePricingDiffsFromMaps(
+		items,
+		ratio_setting.GetModelRatioCopy(),
+		ratio_setting.GetCompletionRatioCopy(),
+		ratio_setting.GetModelPriceCopy(),
+		ratio_setting.GetCacheRatioCopy(),
+	)
+}
+
+// effectiveOldModelRatio reports the ratio a model was actually billed at
+// before this batch: the base map's own entry when the admin (or a prior
+// write) had configured one explicitly, otherwise
+// ratio_setting.GetModelRatio's family-fallback value — so the diff/audit
+// trail says "from the fallback" instead of a misleading "from 0" for a
+// model nobody has priced explicitly. explicit is false whenever the value
+// came from the fallback getter rather than the base map.
+func effectiveOldModelRatio(base map[string]float64, modelName string) (value float64, explicit bool) {
+	if v, ok := base[modelName]; ok {
+		return v, true
 	}
+	if v, found, _ := ratio_setting.GetModelRatio(modelName); found {
+		return v, false
+	}
+	return 0, false
+}
+
+// effectiveOldCompletionRatio mirrors effectiveOldModelRatio for
+// completion_ratio. ratio_setting.GetCompletionRatio has no "found" return
+// (it resolves to either a configured entry or a hard-coded fallback, with
+// no way to tell the caller which), so explicit is derived from the base
+// map lookup alone.
+func effectiveOldCompletionRatio(base map[string]float64, modelName string) (value float64, explicit bool) {
+	if v, ok := base[modelName]; ok {
+		return v, true
+	}
+	return ratio_setting.GetCompletionRatio(modelName), false
+}
+
+// effectiveOldModelPrice mirrors effectiveOldModelRatio for model_price.
+// ratio_setting.GetModelPrice has no family-fallback chain of its own; when
+// the model has no explicit entry there either, the reported old value is 0.
+func effectiveOldModelPrice(base map[string]float64, modelName string) (value float64, explicit bool) {
+	if v, ok := base[modelName]; ok {
+		return v, true
+	}
+	if v, found := ratio_setting.GetModelPrice(modelName, false); found {
+		return v, false
+	}
+	return 0, false
+}
+
+// effectiveOldCacheRatio mirrors effectiveOldModelRatio for cache_ratio.
+// ratio_setting.GetCacheRatio defaults an absent model to 1, matching the
+// ratio actually applied at relay time (cache_ratio.go).
+func effectiveOldCacheRatio(base map[string]float64, modelName string) (value float64, explicit bool) {
+	if v, ok := base[modelName]; ok {
+		return v, true
+	}
+	v, _ := ratio_setting.GetCacheRatio(modelName)
+	return v, false
+}
+
+func pricingDiffEntry(modelName, field string, oldValue, newValue float64, oldExplicit bool) map[string]interface{} {
+	return map[string]interface{}{
+		"model_name":   modelName,
+		"field":        field,
+		"old":          oldValue,
+		"new":          newValue,
+		"old_explicit": oldExplicit,
+	}
+}
+
+// readBaselineRatioMap reads key's option row inside tx with a row-level
+// lock (repo.GetOptionValueForUpdate) and unmarshals it into a ratio map.
+// When the row does not exist yet (no write has ever persisted this key),
+// it returns fallback — a live ratio_setting copy — instead: there is
+// nothing in the database to be stale against.
+func readBaselineRatioMap(tx *gorm.DB, key string, fallback map[string]float64) (map[string]float64, error) {
+	raw, found, err := repo.GetOptionValueForUpdate(tx, key)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return fallback, nil
+	}
+	out := make(map[string]float64)
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // UpdatePricingV2 handles bulk pricing patches for the model catalogue.
@@ -191,11 +295,16 @@ func pricingDiffEntry(modelName, field string, oldValue, newValue float64) map[s
 // At least one item is required; model_name is mandatory per item; ratios must be > 0.
 //
 // Optimistic lock: the optional If-Match-Pricing-Version header pins the
-// write to the PricingVersion the caller last read. The four ratio-map
-// persists plus the PricingVersion compare-and-swap commit inside one
-// repo.DB.Transaction; the in-memory ratio maps (and the option cache) are
-// only updated after that transaction commits, so a failed persist never
-// leaves this process serving a ratio the database does not hold.
+// write to the PricingVersion the caller last read. Inside one
+// repo.DB.Transaction: the four ratio-map rows are read with a row-level
+// lock (repo.GetOptionValueForUpdate) so the batch is applied on top of the
+// database's committed baseline — not this process's possibly-stale
+// in-memory copies (TestV2PricingWrite_BatchAppliesOnDBBaseline_NotStaleMemory)
+// — then the touched maps plus the PricingVersion compare-and-swap are
+// persisted; the in-memory ratio maps (and the option cache) are updated
+// after that transaction commits, not before, so a failed persist leaves
+// this process still serving the ratio the database holds
+// (TestV2PricingWrite_DBFailure_LeavesMemoryUntouched).
 func UpdatePricingV2(c *gin.Context) {
 	slug := c.Param("tenant_slug")
 	if slug == "" {
@@ -222,8 +331,10 @@ func UpdatePricingV2(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Tenant context not found"})
 		return
 	}
-	// Root, not tenant-admin: the writes below replace the process-wide ratio maps
-	// and the single global option row, so they reprice every tenant at once.
+	// Root, not tenant-admin: the writes below replace the process-wide ratio
+	// maps and the single global option row (no tenant_id column on either),
+	// so a write made through any one tenant's slug changes that model's
+	// price regardless of which tenant's slug the request used.
 	if !requirePlatformRoot(c, tenantCtx) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Root role required"})
 		return
@@ -242,7 +353,7 @@ func UpdatePricingV2(c *gin.Context) {
 	if idx, code, msg, ok := validatePricingBatch(items); !ok {
 		full := msg
 		if idx >= 0 {
-			full = "item[" + itoa(idx) + "]: " + msg
+			full = "item[" + strconv.Itoa(idx) + "]: " + msg
 		}
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success":    false,
@@ -268,12 +379,30 @@ func UpdatePricingV2(c *gin.Context) {
 		hasHeader = true
 	}
 
-	comp := computePricingDiffs(items)
-
+	var comp pricingComputation
 	var modelRatioJSON, completionRatioJSON, modelPriceJSON, cacheRatioJSON string
 	var expectedVersion, newVersion int64
 
 	txErr := repo.DB.Transaction(func(tx *gorm.DB) error {
+		modelRatioBase, berr := readBaselineRatioMap(tx, "ModelRatio", ratio_setting.GetModelRatioCopy())
+		if berr != nil {
+			return berr
+		}
+		completionRatioBase, berr := readBaselineRatioMap(tx, "CompletionRatio", ratio_setting.GetCompletionRatioCopy())
+		if berr != nil {
+			return berr
+		}
+		modelPriceBase, berr := readBaselineRatioMap(tx, "ModelPrice", ratio_setting.GetModelPriceCopy())
+		if berr != nil {
+			return berr
+		}
+		cacheRatioBase, berr := readBaselineRatioMap(tx, "CacheRatio", ratio_setting.GetCacheRatioCopy())
+		if berr != nil {
+			return berr
+		}
+
+		comp = computePricingDiffsFromMaps(items, modelRatioBase, completionRatioBase, modelPriceBase, cacheRatioBase)
+
 		if comp.TouchedModelRatio {
 			b, jerr := json.Marshal(comp.ModelRatioCopy)
 			if jerr != nil {
@@ -321,11 +450,21 @@ func UpdatePricingV2(c *gin.Context) {
 			// possibly-stale in-memory cache read outside this transaction.
 			expectedVersion = headerVersion
 		} else {
-			// Guard skipped (no header): read the baseline inside this same
-			// transaction rather than trust the outer cache, then always
-			// win the CAS against that freshly-read value — the write must
-			// not be rejected just because the rollout guard is off.
-			raw, _, gerr := repo.GetOptionValue(tx, "PricingVersion")
+			// Guard skipped (no header): read the baseline with a row-level
+			// lock inside this same transaction rather than trust the outer
+			// cache or a plain (non-locking) read. Under READ COMMITTED on
+			// PostgreSQL a plain SELECT here could see the pre-commit value
+			// of a concurrently mid-transaction writer; this SELECT ... FOR
+			// UPDATE instead blocks until that writer commits or rolls back
+			// and reads its result, so this write's CAS is evaluated
+			// against the latest committed value rather than a
+			// possibly-stale one, and — since the guard is off — is not
+			// rejected just because a concurrent header-less writer got
+			// there first. Not reproducible against SQLite (the hermetic
+			// test tier serializes at the whole-database level regardless
+			// of this lock) — PLAUSIBLE on PostgreSQL, unverified by a
+			// red/green test in this lane.
+			raw, _, gerr := repo.GetOptionValueForUpdate(tx, "PricingVersion")
 			if gerr != nil {
 				return gerr
 			}
@@ -367,10 +506,16 @@ func UpdatePricingV2(c *gin.Context) {
 		return
 	}
 
-	// Commit succeeded: only now apply the in-memory side effects, so a
-	// reader in this process never observes a ratio the database does not
-	// (yet) hold — the DB-first ordering this replaces the old
-	// memory-first persistRatioMapIfChanged with.
+	// Commit succeeded: apply the in-memory side effects after the
+	// transaction, in the DB-first order the old memory-first
+	// persistRatioMapIfChanged (which this handler replaces) got backwards —
+	// TestV2PricingWrite_DBFailure_LeavesMemoryUntouched asserts memory stays
+	// on the old value when the commit fails. Because the maps just
+	// persisted were built on the database's committed baseline
+	// (readBaselineRatioMap above), applying them here also heals this
+	// replica's memory for any model another replica priced since this
+	// process's last SYNC_FREQUENCY resync, for the fields this batch
+	// touched (TestV2PricingWrite_BatchAppliesOnDBBaseline_NotStaleMemory).
 	if comp.TouchedModelRatio {
 		_ = ratio_setting.UpdateModelRatioByJSONString(modelRatioJSON)
 	}
@@ -385,7 +530,12 @@ func UpdatePricingV2(c *gin.Context) {
 	}
 	_ = repo.SetOptionMapValue("PricingVersion", strconv.FormatInt(newVersion, 10))
 
-	// Force pricing cache refresh on next read.
+	// Force pricing cache refresh on next read. repo.GetPricing() keeps a
+	// separate ~1-minute cache (repo/pricing.go, outside this lane's file
+	// scope) that this call does not invalidate, so the console's
+	// model_ratio/model_price columns (not model names or vendors) can still
+	// show pre-write values for up to that long after a save — a known,
+	// undocumented-elsewhere gap, not fixed by this lane.
 	ratio_setting.InvalidateExposedDataCache()
 
 	details, _ := json.Marshal(gin.H{
@@ -410,10 +560,12 @@ func UpdatePricingV2(c *gin.Context) {
 // PreviewPricingV2 shows the diff a POST with the same body would apply,
 // without ever writing it. Route: POST /api/v2/:tenant_slug/pricing/preview.
 // Same auth chain as UpdatePricingV2 (root-gated for the same reason: the
-// underlying maps are process-global). It never calls repo.UpdateOption,
-// never calls ratio_setting.InvalidateExposedDataCache, and never bumps
-// PricingVersion — computePricingDiffs' returned maps are local copies the
-// caller here simply discards.
+// underlying maps are process-global). It does not call repo.UpdateOption,
+// does not call ratio_setting.InvalidateExposedDataCache, and does not bump
+// PricingVersion — TestV2PricingPreview_NeverPersists asserts the options
+// row count and the version are unchanged after a call; the maps
+// computePricingDiffs returns are local copies this handler simply
+// discards.
 func PreviewPricingV2(c *gin.Context) {
 	slug := c.Param("tenant_slug")
 	if slug == "" {
@@ -458,7 +610,7 @@ func PreviewPricingV2(c *gin.Context) {
 	if idx, code, msg, ok := validatePricingBatch(items); !ok {
 		full := msg
 		if idx >= 0 {
-			full = "item[" + itoa(idx) + "]: " + msg
+			full = "item[" + strconv.Itoa(idx) + "]: " + msg
 		}
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success":    false,
@@ -478,18 +630,4 @@ func PreviewPricingV2(c *gin.Context) {
 			"updated_count": comp.UpdatedCount,
 		},
 	})
-}
-
-// itoa converts a non-negative integer to its decimal string representation.
-// stdlib strconv.Itoa is identical; this avoids an import for a single callsite.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := make([]byte, 0, 10)
-	for n > 0 {
-		buf = append([]byte{byte('0' + n%10)}, buf...)
-		n /= 10
-	}
-	return string(buf)
 }

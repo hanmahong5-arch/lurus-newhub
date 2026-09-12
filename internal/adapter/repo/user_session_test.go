@@ -8,12 +8,16 @@ package repo
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+
+	"gorm.io/gorm"
 )
 
 // TestUserSessionRegistry_UpsertThrottled60s: two touches within 60s produce
@@ -125,13 +129,49 @@ func TestUserSessionRegistry_UpsertThrottled60s_FlagIndependent(t *testing.T) {
 	}
 }
 
+// sessionAuditRowWriter implements governance.AuditWriter against a fixed
+// *gorm.DB — the repo-package equivalent of handler's pinnedAuditWriter (this
+// package has no such helper of its own yet).
+type sessionAuditRowWriter struct{ db *gorm.DB }
+
+func (w *sessionAuditRowWriter) CreateAuditEvent(event *entity.AuditEvent) error {
+	return w.db.Create(event).Error
+}
+
+// pollCapExceededAuditRow polls for the first auth.session_revoked row whose
+// details mention cap_exceeded — RecordAuditEvent persists via gopool.Go, so
+// the row is not guaranteed to exist the instant the call returns.
+func pollCapExceededAuditRow(t *testing.T, timeout time.Duration) *entity.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		events, _, err := GetAuditEvents("", governance.ActionAuthSessionRevoked, 0, "", 0, 0, 0, 10)
+		if err == nil {
+			for _, ev := range events {
+				if strings.Contains(ev.Details, entity.SessionRevokeReasonCapExceeded) {
+					return ev
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // TestEnforceSessionCap_RevokesOldestBeyondCap: with SESSION_MAX_ACTIVE_PER_USER=2,
 // registering a 3rd distinct device revokes the OLDEST (lowest last_seen_at)
-// active session with reason "cap_exceeded", leaving exactly 2 active.
+// active session with reason "cap_exceeded", leaving exactly 2 active; the
+// capped session's Redis key is deleted (same authoritative logout an
+// explicit revoke gets) and a durable auth.session_revoked audit row records
+// the cap_exceeded reason.
 func TestEnforceSessionCap_RevokesOldestBeyondCap(t *testing.T) {
 	defer setupSQLiteDB(t)()
-	redeemCacheMiniRedis(t)
+	mr := redeemCacheMiniRedis(t)
 	ctx := context.Background()
+
+	governance.SetAuditWriter(&sessionAuditRowWriter{db: DB})
 
 	t.Setenv("SESSION_MAX_ACTIVE_PER_USER", "2")
 
@@ -148,6 +188,10 @@ func TestEnforceSessionCap_RevokesOldestBeyondCap(t *testing.T) {
 	}
 	seedSession("sess-cap-old", now-300)
 	seedSession("sess-cap-mid", now-100)
+
+	// Seed the oldest session's Redis key directly (as if it were a real
+	// login) so the deletion assertion below has something to check.
+	mr.Set("session_sess-cap-old", "seeded-session-payload")
 
 	// Third distinct device -> first-sight insert -> cap enforcement fires.
 	if err := UpsertUserSessionSeen(ctx, "sess-cap-new", 9, "default", "1.2.3.4", "ua", "session"); err != nil {
@@ -173,6 +217,82 @@ func TestEnforceSessionCap_RevokesOldestBeyondCap(t *testing.T) {
 	}
 	if newRow.RevokedAt != 0 {
 		t.Errorf("newly-registered session unexpectedly revoked: revoked_at=%d", newRow.RevokedAt)
+	}
+
+	if mr.Exists("session_sess-cap-old") {
+		t.Error("capped session's Redis key still exists — enforceSessionCap must delete it, same as an explicit revoke")
+	}
+
+	event := pollCapExceededAuditRow(t, 2*time.Second)
+	if event == nil {
+		t.Fatal("no auth.session_revoked audit row with reason cap_exceeded appeared")
+	}
+	if event.ActorType != governance.ActorSystem {
+		t.Errorf("cap-exceeded audit row actor_type = %q, want %q", event.ActorType, governance.ActorSystem)
+	}
+}
+
+// TestShouldThrottleSessionTouch_FallbackWithoutRedis: with common.RedisEnabled
+// forced false (the single-process dev/test deployment shape, distinct from
+// every other test in this file which runs against a real miniredis), the
+// in-process sync.Map fallback throttles a SECOND touch of the same key
+// within the window and admits it again once we advance past the window —
+// mirrors the Redis-backed guard's own two-call shape in
+// TestUserSessionRegistry_UpsertThrottled60s above, but exercises the OTHER
+// branch of ShouldThrottleSessionTouch (user_session.go's "Redis reachable
+// but erroring... in-process fallback below" comment describes when this
+// branch runs).
+func TestShouldThrottleSessionTouch_FallbackWithoutRedis(t *testing.T) {
+	prevRDB, prevEnabled := common.RDB, common.RedisEnabled
+	common.RDB, common.RedisEnabled = nil, false
+	t.Cleanup(func() { common.RDB, common.RedisEnabled = prevRDB, prevEnabled })
+
+	ctx := context.Background()
+	key := "sess-fallback-throttle-key"
+
+	if throttled := ShouldThrottleSessionTouch(ctx, key); throttled {
+		t.Fatal("first call must not be throttled (no prior touch recorded)")
+	}
+	if throttled := ShouldThrottleSessionTouch(ctx, key); !throttled {
+		t.Fatal("second call within the window must be throttled by the in-process fallback")
+	}
+
+	// Fake the elapsed window by backdating the recorded touch directly —
+	// the fallback has no clock to fast-forward like miniredis does, so we
+	// reach into the package-level map it uses.
+	sessionTouchFallback.Store(key, time.Now().Add(-sessionLastSeenThrottleWindow-time.Second))
+	if throttled := ShouldThrottleSessionTouch(ctx, key); throttled {
+		t.Error("call after the window elapsed must NOT be throttled by the in-process fallback")
+	}
+}
+
+// TestListActiveUserSessions_90DayWindowMatchesStoreLifetime: a session last
+// seen 40 days ago (well past the OLD 30-day list window, well within the
+// session store's real 90-day cookie lifetime — cmd/server/main.go's
+// sessionOpts.MaxAge) must still be listed: it is a genuinely live,
+// revocable session, and hiding it from its own owner would make it
+// unrevokable by id.
+func TestListActiveUserSessions_90DayWindowMatchesStoreLifetime(t *testing.T) {
+	defer setupSQLiteDB(t)()
+
+	now := common.GetTimestamp()
+	seedAt := func(key string, lastSeen int64) {
+		if err := DB.Create(&entity.UserSession{
+			SessionKey: key, UserId: 55, TenantId: "default",
+			CreatedAt: lastSeen, LastSeenAt: lastSeen,
+		}).Error; err != nil {
+			t.Fatalf("seed %s: %v", key, err)
+		}
+	}
+	seedAt("sess-40d-old", now-int64(40*24*time.Hour/time.Second))
+	seedAt("sess-recent", now-60)
+
+	rows, err := ListActiveUserSessions(55)
+	if err != nil {
+		t.Fatalf("ListActiveUserSessions: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 — a session 40 days old is still within the store's 90-day lifetime and must be listed", len(rows))
 	}
 }
 

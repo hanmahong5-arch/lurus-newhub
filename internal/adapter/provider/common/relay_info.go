@@ -135,8 +135,10 @@ type RelayInfo struct {
 	// of the caller's own customers' PII.
 	EndUserHash string
 	// UpstreamRequestId is the vendor's own request/trace id, captured from
-	// the upstream HTTP response headers in provider.doRequest (the single
-	// seam every relay path's outbound call funnels through). "" when the
+	// the upstream HTTP response headers in provider.doRequest — the seam
+	// DoApiRequest/DoFormRequest/DoTaskApiRequest funnel through for the main
+	// upstream call; adapters that call client.Do themselves (ali image,
+	// coze, dify, ollama) leave it empty. "" when the
 	// upstream sent none of the headers we look for — that is a legitimate
 	// outcome, not a capture failure. Carried here for the same reason
 	// SessionId/EndUserHash are: the settlement path (PostConsumeQuota ->

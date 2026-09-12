@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -171,6 +172,18 @@ func TestAdminTotpStats_TenantScoped(t *testing.T) {
 	}
 	seedUserRow(t, repo.DB, 104, "alpha", "alpha-nomfa")
 
+	// A soft-deleted, still-enrolled user must not inflate Enrolled past a
+	// TotalUsers denominator that (via GORM's automatic soft-delete scope on
+	// the Model(&entity.User{}) count) already excludes them — the join-based
+	// totpTenantFilteredQuery must filter u.deleted_at IS NULL explicitly, the
+	// same way. Mutation: removing that filter makes alpha's Enrolled/adoption
+	// counts below wrong (5 enrolled over 4 total users, >100% adoption).
+	seedUserRow(t, repo.DB, 105, "alpha", "alpha-deleted")
+	seedEnrolledTotp(t, 105, 1, 1)
+	if err := repo.DB.Delete(&repo.User{Id: 105}).Error; err != nil {
+		t.Fatalf("soft-delete user 105: %v", err)
+	}
+
 	// Tenant "beta": 1 user, enrolled, no backup codes ever issued.
 	seedUserRow(t, repo.DB, 201, "beta", "beta-nocode")
 	seedEnrolledTotp(t, 201, 0, 0)
@@ -210,6 +223,9 @@ func TestAdminTotpStats_TenantScoped(t *testing.T) {
 	}
 	if stats.NoCodesIssued != 0 {
 		t.Errorf("alpha no_codes_issued = %d, want 0 (user 101 has unused codes, not zero-issued)", stats.NoCodesIssued)
+	}
+	if stats.AdoptionPct > 100 {
+		t.Errorf("alpha adoption_pct = %v, must never exceed 100 (soft-deleted user 105 must not count in enrolled)", stats.AdoptionPct)
 	}
 
 	w2 := httptest.NewRecorder()
@@ -315,6 +331,21 @@ func TestAdminTotpForceDisable_RemovesRowAndCodes_AuditsAndNotifies(t *testing.T
 		t.Errorf("notify target = %d, want %d", captured.userID, targetID)
 	}
 
+	// The handler must surface whether the notify attempt errored — both in
+	// the response (so the console can tell support) and in the audit
+	// detail (so a later reviewer can tell, without re-deriving it from the
+	// notifyUserFn spy the way this test does). The spy above returns nil,
+	// so this must be true.
+	var respData struct {
+		Notified bool `json:"notified"`
+	}
+	if err := json.Unmarshal(env.Data, &respData); err != nil {
+		t.Fatalf("unmarshal response data: %v", err)
+	}
+	if !respData.Notified {
+		t.Error("response data.notified = false, want true (notifyUserFn returned nil)")
+	}
+
 	// RecordAuditEvent persists via gopool.Go (async) — poll like
 	// TestV2PricingWrite_AuditRow does, not a single immediate read.
 	ev := pollAuditRow(t, governance.ActionTotpAdminDisabled, 2*time.Second)
@@ -326,6 +357,9 @@ func TestAdminTotpForceDisable_RemovesRowAndCodes_AuditsAndNotifies(t *testing.T
 	}
 	if ev.ActorID != actorID {
 		t.Errorf("audit actor_id = %d, want %d (the acting root, not the target)", ev.ActorID, actorID)
+	}
+	if !strings.Contains(ev.Details, `"notified":true`) {
+		t.Errorf("audit details = %q, want it to carry notified:true", ev.Details)
 	}
 	if !strings.Contains(ev.Details, "lost their phone") {
 		t.Errorf("audit details = %q, want it to carry the reason", ev.Details)
@@ -349,5 +383,38 @@ func TestAdminTotpForceDisable_404NoEnrollment(t *testing.T) {
 	}
 	if env.Success {
 		t.Fatalf("force-disable with no enrollment must not report success: %s", w.Body.String())
+	}
+}
+
+// TestAdminTotpForceDisable_CJKReasonUpTo200Runes locks the byte-vs-rune
+// finding: the console textarea's maxLength={200} counts characters, so a
+// 200-character (not byte) CJK reason must be accepted. Mutation: reverting
+// the handler's check from utf8.RuneCountInString(req.Reason) > 200 back to
+// len(req.Reason) > 200 makes this 400 (each CJK rune is 3 bytes, so 200
+// runes = 600 bytes).
+func TestAdminTotpForceDisable_CJKReasonUpTo200Runes(t *testing.T) {
+	cleanup := setupAdminSecurityDB(t)
+	defer cleanup()
+	r := buildAdminSecurityRouter(1)
+	seedUserRow(t, repo.DB, 1, "default", "root")
+	seedUserRow(t, repo.DB, 601, "default", "cjk-reason-target")
+	seedEnrolledTotp(t, 601, 1, 1)
+
+	cookies := stepUpAsActor(t, r)
+
+	reasonRune := "用"
+	reason := strings.Repeat(reasonRune, 200)
+	if utf8.RuneCountInString(reason) != 200 {
+		t.Fatalf("fixture broken: reason has %d runes, want 200", utf8.RuneCountInString(reason))
+	}
+	body, err := json.Marshal(map[string]string{"reason": reason})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	w, env := doJSON(t, r, http.MethodPost, "/api/v2/admin/security/users/601/totp/force-disable",
+		string(body), cookies)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("force-disable with a 200-rune CJK reason: status=%d body=%s (want 200 success)", w.Code, w.Body.String())
 	}
 }

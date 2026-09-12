@@ -24,12 +24,16 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
@@ -81,13 +85,13 @@ func setupModelsWriteRouter(t *testing.T) *modelsWriteTestCtx {
 
 	// Seed tenant.
 	tenant := &repo.Tenant{
-		Id:           fmt.Sprintf("tenant-mw-%d", n),
-		Slug:         "acme",
-		Name:         "Acme Corp",
-		Status:       repo.TenantStatusEnabled,
-		IDPOrgID: fmt.Sprintf("org_mw_%d", n),
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		Id:        fmt.Sprintf("tenant-mw-%d", n),
+		Slug:      "acme",
+		Name:      "Acme Corp",
+		Status:    repo.TenantStatusEnabled,
+		IDPOrgID:  fmt.Sprintf("org_mw_%d", n),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	if err := db.Create(tenant).Error; err != nil {
 		t.Fatalf("seed tenant: %v", err)
@@ -362,4 +366,98 @@ func TestV2ModelsWrite_DeleteRootGate(t *testing.T) {
 			t.Fatalf("expected 200 for root caller, got %d — body: %s", w.Code, w.Body.String())
 		}
 	})
+}
+
+// modelsWriteAuditRecorder is a minimal governance.AuditWriter capturing
+// every event handed to it, safe for concurrent use since RecordAuditEvent
+// dispatches the actual persist on a gopool goroutine.
+type modelsWriteAuditRecorder struct {
+	mu     sync.Mutex
+	events []*entity.AuditEvent
+}
+
+func (w *modelsWriteAuditRecorder) CreateAuditEvent(event *entity.AuditEvent) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.events = append(w.events, event)
+	return nil
+}
+
+func (w *modelsWriteAuditRecorder) snapshot() []*entity.AuditEvent {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]*entity.AuditEvent, len(w.events))
+	copy(out, w.events)
+	return out
+}
+
+func waitForModelsWriteAuditEvent(t *testing.T, w *modelsWriteAuditRecorder) *entity.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := w.snapshot(); len(got) > 0 {
+			return got[0]
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for an audit event")
+	return nil
+}
+
+// 8. L2 audit-completeness: CreateModelV2 is a root-gated, process-global
+// write outside /api/v2/admin (named explicitly as an in-scope gap) — it
+// must call governance.RecordAuditEvent itself, not rely on
+// middleware.AuditWriteGuard's fallback (which is not mounted on this
+// route). Mutation lock: deleting the RecordAuditEvent call in
+// CreateModelV2 turns this red, and also turns router.TestAdminWriteRoutesAreAudited
+// red (the AST walk stops finding a governance call on this route).
+func TestV2ModelsWrite_CreateRecordsAuditEvent(t *testing.T) {
+	ctx := setupModelsWriteRouter(t)
+
+	writer := &modelsWriteAuditRecorder{}
+	governance.SetAuditWriter(writer)
+	t.Cleanup(func() { governance.SetAuditWriter(&modelsWriteAuditRecorder{}) })
+
+	w := postModel(ctx, map[string]interface{}{"model_name": "audit-lock-model"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d — body: %s", w.Code, w.Body.String())
+	}
+
+	ev := waitForModelsWriteAuditEvent(t, writer)
+	if ev.Action != governance.ActionModelCreated {
+		t.Errorf("action = %q, want %q", ev.Action, governance.ActionModelCreated)
+	}
+	if ev.Resource != governance.ResourceModel {
+		t.Errorf("resource = %q, want %q", ev.Resource, governance.ResourceModel)
+	}
+	if !strings.Contains(ev.Details, `"model_name":"audit-lock-model"`) {
+		t.Errorf("details = %q, want to contain the created model name", ev.Details)
+	}
+}
+
+// 9. Same rationale as above, for DeleteModelV2.
+func TestV2ModelsWrite_DeleteRecordsAuditEvent(t *testing.T) {
+	ctx := setupModelsWriteRouter(t)
+
+	m := &repo.Model{ModelName: "audit-lock-delete-model", Status: 1}
+	if err := ctx.db.Create(m).Error; err != nil {
+		t.Fatalf("seed model: %v", err)
+	}
+
+	writer := &modelsWriteAuditRecorder{}
+	governance.SetAuditWriter(writer)
+	t.Cleanup(func() { governance.SetAuditWriter(&modelsWriteAuditRecorder{}) })
+
+	w := deleteModel(ctx, m.Id)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", w.Code, w.Body.String())
+	}
+
+	ev := waitForModelsWriteAuditEvent(t, writer)
+	if ev.Action != governance.ActionModelDeleted {
+		t.Errorf("action = %q, want %q", ev.Action, governance.ActionModelDeleted)
+	}
+	if !strings.Contains(ev.Details, `"model_name":"audit-lock-delete-model"`) {
+		t.Errorf("details = %q, want to contain the deleted model name", ev.Details)
+	}
 }

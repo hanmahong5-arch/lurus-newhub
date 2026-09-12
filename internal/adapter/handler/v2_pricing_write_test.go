@@ -336,6 +336,28 @@ func TestV2PricingWrite_RootGate(t *testing.T) {
 			t.Fatalf("status = %d, want 200 for root caller, body: %s", w.Code, w.Body.String())
 		}
 	})
+
+	// PreviewPricingV2 shares UpdatePricingV2's rationale (the maps it reads
+	// are process-global) so it must reject the same non-root caller with
+	// 403 and return no diff — mutation: deleting PreviewPricingV2's
+	// requirePlatformRoot check keeps every other Pricing test green.
+	t.Run("preview_non_admin_forbidden", func(t *testing.T) {
+		w := postPricingPreview(ctx, ctx.tenantSlug, batch, map[string]string{"X-Test-Role": "user"})
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("preview status = %d, want 403, body: %s", w.Code, w.Body.String())
+		}
+		resp := parsePricingWrite(t, w)
+		if _, present := resp["data"]; present {
+			t.Errorf("preview returned data for a forbidden caller: %v", resp["data"])
+		}
+	})
+
+	t.Run("preview_root_allowed", func(t *testing.T) {
+		w := postPricingPreview(ctx, ctx.tenantSlug, batch)
+		if w.Code != http.StatusOK {
+			t.Fatalf("preview status = %d, want 200 for root caller, body: %s", w.Code, w.Body.String())
+		}
+	})
 }
 
 // seedPricingVersion writes PricingVersion directly through repo.UpdateOption
@@ -438,6 +460,36 @@ func TestV2PricingWrite_NoHeader_SkipsGuard(t *testing.T) {
 	}
 }
 
+// 8b. MalformedVersionHeader — a non-numeric If-Match-Pricing-Version header
+// must be rejected with 400 INVALID_VERSION_HEADER before any write, not
+// silently treated as absent (guard-skipped) or as 0.
+func TestV2PricingWrite_MalformedVersionHeader(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	model := "malformed-header-probe-model"
+
+	w := postPricing(ctx, ctx.tenantSlug,
+		[]map[string]interface{}{{"model_name": model, "model_ratio": 1.0}},
+		map[string]string{"If-Match-Pricing-Version": "abc"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
+	}
+	resp := parsePricingWrite(t, w)
+	if resp["error_code"] != "INVALID_VERSION_HEADER" {
+		t.Errorf("error_code = %v, want INVALID_VERSION_HEADER", resp["error_code"])
+	}
+
+	var opt repo.Option
+	err := ctx.db.Where("key = ?", "ModelRatio").First(&opt).Error
+	if err == nil {
+		t.Errorf("ModelRatio option row was written despite a malformed header: %s", opt.Value)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("unexpected error querying ModelRatio row: %v", err)
+	}
+	if got := ratio_setting.GetModelRatioCopy()[model]; got != 0 {
+		t.Errorf("in-memory model_ratio changed despite a malformed header: got %v want 0", got)
+	}
+}
+
 // 9. DBFailure_LeavesMemoryUntouched — a DB write failure must surface as 500
 // and never leave the in-memory ratio ahead of the (now unwritten) database.
 // Mutation: restoring the old memory-first order turns this red.
@@ -491,15 +543,21 @@ func TestV2PricingWrite_CacheRatioRoundTrip(t *testing.T) {
 }
 
 // 11. AuditRow — a successful commit produces one pricing.updated audit row
-// carrying from_version/to_version. RecordAuditEvent persists via
-// gopool.Go (asynchronously), so this polls rather than reading once.
-// Mutation: dropping the RecordAuditEvent call turns this red.
+// whose Details carry the real from_version/to_version pair and the
+// changed model's diff, not merely the substrings "from_version"/
+// "to_version" — swapping or zeroing those values in the handler must go
+// red here even though a substring-only check would stay green.
+// RecordAuditEvent persists via gopool.Go (asynchronously), so this polls
+// rather than reading once. Mutation: dropping the RecordAuditEvent call
+// turns this red.
 func TestV2PricingWrite_AuditRow(t *testing.T) {
 	ctx := setupPricingWriteRouter(t)
+	seedPricingVersion(t, 3)
 	model := "audit-row-probe-model"
 
 	w := postPricing(ctx, ctx.tenantSlug,
-		[]map[string]interface{}{{"model_name": model, "model_ratio": 1.23}})
+		[]map[string]interface{}{{"model_name": model, "model_ratio": 1.23}},
+		map[string]string{"If-Match-Pricing-Version": "3"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}
@@ -508,8 +566,26 @@ func TestV2PricingWrite_AuditRow(t *testing.T) {
 	if ev == nil {
 		t.Fatal("no pricing.updated audit row appeared within the poll window")
 	}
-	if !strings.Contains(ev.Details, "from_version") || !strings.Contains(ev.Details, "to_version") {
-		t.Errorf("audit details = %s, want from_version/to_version", ev.Details)
+
+	var details struct {
+		FromVersion int64                    `json:"from_version"`
+		ToVersion   int64                    `json:"to_version"`
+		Diffs       []map[string]interface{} `json:"diffs"`
+	}
+	if err := json.Unmarshal([]byte(ev.Details), &details); err != nil {
+		t.Fatalf("unmarshal audit details: %v — raw: %s", err, ev.Details)
+	}
+	if details.FromVersion != 3 {
+		t.Errorf("from_version = %d, want 3", details.FromVersion)
+	}
+	if details.ToVersion != 4 {
+		t.Errorf("to_version = %d, want 4", details.ToVersion)
+	}
+	if len(details.Diffs) == 0 {
+		t.Fatal("audit details.diffs is empty")
+	}
+	if details.Diffs[0]["model_name"] != model {
+		t.Errorf("diffs[0].model_name = %v, want %q", details.Diffs[0]["model_name"], model)
 	}
 }
 
@@ -618,5 +694,123 @@ func TestV2PricingWrite_PartialBatchFailure_RollsBackEarlierFields(t *testing.T)
 	}
 	if got := ratio_setting.GetModelPriceCopy()[modelFail]; got != baselinePrice {
 		t.Errorf("ModelPrice mutated despite rollback: got %v want %v", got, baselinePrice)
+	}
+}
+
+// 14. BatchAppliesOnDBBaseline_NotStaleMemory — the batch must be applied on
+// top of the database's committed ModelRatio row, not this process's
+// (possibly stale) in-memory copy: a model another replica already priced
+// and committed, which this process's memory has never seen, must survive a
+// write that touches a different model. Mutation: reading the base map from
+// ratio_setting.GetModelRatioCopy() instead of the database row (the old,
+// memory-first behaviour) turns this red — the seeded model disappears from
+// the persisted JSON.
+func TestV2PricingWrite_BatchAppliesOnDBBaseline_NotStaleMemory(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+
+	dbOnlyModel := "db-only-committed-by-another-replica"
+	newModel := "db-baseline-probe-new-model"
+
+	// Simulate "another replica already committed this" by writing the
+	// ModelRatio option row directly through the test's *gorm.DB, bypassing
+	// ratio_setting entirely — this process's in-memory ModelRatio map never
+	// learns about dbOnlyModel.
+	seedJSON, err := json.Marshal(map[string]float64{dbOnlyModel: 42.0})
+	if err != nil {
+		t.Fatalf("marshal seed: %v", err)
+	}
+	if err := ctx.db.Create(&repo.Option{Key: "ModelRatio", Value: string(seedJSON)}).Error; err != nil {
+		t.Fatalf("seed ModelRatio row: %v", err)
+	}
+	if got := ratio_setting.GetModelRatioCopy()[dbOnlyModel]; got != 0 {
+		t.Fatalf("test setup invariant broken: in-memory map already knows dbOnlyModel (%v)", got)
+	}
+
+	w := postPricing(ctx, ctx.tenantSlug,
+		[]map[string]interface{}{{"model_name": newModel, "model_ratio": 9.9}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	var opt repo.Option
+	if err := ctx.db.Where("key = ?", "ModelRatio").First(&opt).Error; err != nil {
+		t.Fatalf("read ModelRatio row: %v", err)
+	}
+	var persisted map[string]float64
+	if err := json.Unmarshal([]byte(opt.Value), &persisted); err != nil {
+		t.Fatalf("unmarshal persisted ModelRatio: %v — raw: %s", err, opt.Value)
+	}
+	if persisted[dbOnlyModel] != 42.0 {
+		t.Errorf("persisted ModelRatio lost the other replica's committed entry: got %v, want 42.0 (full row: %v)", persisted[dbOnlyModel], persisted)
+	}
+	if persisted[newModel] != 9.9 {
+		t.Errorf("persisted ModelRatio missing this write's own entry: got %v, want 9.9", persisted[newModel])
+	}
+
+	// The post-commit in-memory apply replaces the whole map with the
+	// persisted JSON, so memory should now also know about dbOnlyModel.
+	if got := ratio_setting.GetModelRatioCopy()[dbOnlyModel]; got != 42.0 {
+		t.Errorf("in-memory ModelRatio did not heal to the DB baseline: got %v, want 42.0", got)
+	}
+}
+
+// 15. PreviewDiff_OldReflectsEffectiveDefault — a model with no explicit
+// cache_ratio entry must show the effective default (1, ratio_setting's
+// GetCacheRatio fallback) as "old", not a misleading 0, and old_explicit
+// must be false; a model with an explicit entry must show that entry with
+// old_explicit true.
+func TestV2PricingPreview_OldReflectsEffectiveDefault(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+
+	noEntryModel := "preview-default-no-cache-ratio-entry"
+	explicitModel := "preview-default-explicit-cache-ratio-entry"
+
+	seedJSON, err := json.Marshal(map[string]float64{explicitModel: 0.42})
+	if err != nil {
+		t.Fatalf("marshal seed: %v", err)
+	}
+	if err := ratio_setting.UpdateCacheRatioByJSONString(string(seedJSON)); err != nil {
+		t.Fatalf("seed live CacheRatio map: %v", err)
+	}
+
+	w := postPricingPreview(ctx, ctx.tenantSlug, []map[string]interface{}{
+		{"model_name": noEntryModel, "cache_ratio": 0.9},
+		{"model_name": explicitModel, "cache_ratio": 0.9},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	resp := parsePricingWrite(t, w)
+	data, _ := resp["data"].(map[string]interface{})
+	diffs, _ := data["diffs"].([]interface{})
+	byModel := make(map[string]map[string]interface{}, len(diffs))
+	for _, d := range diffs {
+		entry, _ := d.(map[string]interface{})
+		if entry != nil {
+			byModel[fmt.Sprint(entry["model_name"])] = entry
+		}
+	}
+
+	noEntry, ok := byModel[noEntryModel]
+	if !ok {
+		t.Fatalf("no diff entry for %q, diffs: %v", noEntryModel, diffs)
+	}
+	if old, _ := noEntry["old"].(float64); old != 1 {
+		t.Errorf("%s: old = %v, want the GetCacheRatio default 1", noEntryModel, noEntry["old"])
+	}
+	if explicit, _ := noEntry["old_explicit"].(bool); explicit {
+		t.Errorf("%s: old_explicit = true, want false (no configured entry)", noEntryModel)
+	}
+
+	explicitEntry, ok := byModel[explicitModel]
+	if !ok {
+		t.Fatalf("no diff entry for %q, diffs: %v", explicitModel, diffs)
+	}
+	if old, _ := explicitEntry["old"].(float64); old != 0.42 {
+		t.Errorf("%s: old = %v, want the configured 0.42", explicitModel, explicitEntry["old"])
+	}
+	if explicit, _ := explicitEntry["old_explicit"].(bool); !explicit {
+		t.Errorf("%s: old_explicit = false, want true (configured entry)", explicitModel)
 	}
 }

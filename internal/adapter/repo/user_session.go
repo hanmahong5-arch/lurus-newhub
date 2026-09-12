@@ -1,8 +1,8 @@
 package repo
 
 // user_session.go — persistence + policy for the per-device session
-// registry (L7, auth-security-08/26/29/20). Every write path in this file
-// is gated by SessionRegistryEnabled(); the write CALLERS (authHelper,
+// registry (L7, auth-security-08/26/29/20). No function in this file
+// checks SessionRegistryEnabled() itself; the write CALLERS (authHelper,
 // the /sessions handlers) are responsible for checking the flag before
 // calling in — this file's own functions do not re-check it, so that the
 // throttle/mutation-test oracles can drive them directly without needing
@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 )
@@ -145,8 +146,59 @@ func UpsertUserSessionSeen(ctx context.Context, sessionKey string, userId int, t
 		return err
 	}
 
-	enforceSessionCap(userId)
+	if capped := enforceSessionCap(userId); len(capped) > 0 {
+		deleteCappedSessionKeys(ctx, capped)
+		recordCapExceededAuditEvent(userId, capped)
+	}
 	return nil
+}
+
+// deleteCappedSessionKeys deletes the Redis-backed session store's own key
+// for each capped-out row, mirroring handler.redisDeleteSessionKey's exact
+// key format ("session_"+session_key — boj/redistore's default prefix) so a
+// device revoked by the cap is logged out the same authoritative way an
+// explicit revoke-by-id is, not left relying solely on authHelper's
+// revoked_at re-check. Best-effort: never blocks the login this cap
+// enforcement ran alongside.
+func deleteCappedSessionKeys(ctx context.Context, capped []entity.UserSession) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	for _, s := range capped {
+		if s.SessionKey == "" {
+			continue
+		}
+		if err := common.RedisDel(ctx, "session_"+s.SessionKey); err != nil {
+			common.SysLog("session cap enforcement: RedisDel failed for session_" + s.SessionKey + ": " + err.Error())
+		}
+	}
+}
+
+// recordCapExceededAuditEvent leaves one auth.session_revoked audit row per
+// capped-out session, actor=system (this fires from inside authHelper's
+// registration path, not from a user-initiated request the way the other
+// revoke reasons are) — so an operator reading the audit trail can tell
+// "the cap auto-revoked this" apart from every user/admin-initiated reason.
+// Built by hand rather than via governance.NewAuditEvent because this call
+// site has no *gin.Context (enforceSessionCap runs deep in the repo layer);
+// governance.RecordAuditEvent accepts a hand-built *entity.AuditEvent fine —
+// NewAuditEvent's context enrichment (tenant_id/ip/request_id) is the only
+// thing skipped.
+func recordCapExceededAuditEvent(userId int, capped []entity.UserSession) {
+	ts := common.GetTimestamp()
+	for _, s := range capped {
+		governance.RecordAuditEvent(&entity.AuditEvent{
+			TenantID:       s.TenantId,
+			Timestamp:      ts,
+			ActorType:      governance.ActorSystem,
+			ActorID:        userId,
+			Action:         governance.ActionAuthSessionRevoked,
+			Resource:       governance.ResourceUser,
+			ResourceID:     userId,
+			Details:        `{"session_id":` + strconv.Itoa(s.Id) + `,"reason":"` + entity.SessionRevokeReasonCapExceeded + `"}`,
+			RetentionUntil: ts + governance.DefaultAuditRetentionSeconds,
+		})
+	}
 }
 
 // truncateForColumn bounds s to n bytes so a caller-supplied header (IP
@@ -160,41 +212,60 @@ func truncateForColumn(s string, n int) string {
 }
 
 // enforceSessionCap revokes the oldest active sessions of userId beyond
-// SESSION_MAX_ACTIVE_PER_USER (0 = unlimited, the default — no-op). Called
-// only from the first-sight branch of UpsertUserSessionSeen: the cap is
-// evaluated when a NEW device shows up, not on every touch of an existing
-// one. Best-effort — a lookup/update failure here must never block the
-// login this row belongs to.
-func enforceSessionCap(userId int) {
+// SESSION_MAX_ACTIVE_PER_USER (0 = unlimited, the default — no-op), returning
+// the rows it revoked so the caller can delete their Redis keys and record an
+// audit trail — a capped-out session must be logged out the same way an
+// explicit revoke is (RedisDel + an auth.session_revoked row), not left to
+// rely on authHelper's revoked_at re-check alone catching it eventually.
+// Called only from the first-sight branch of UpsertUserSessionSeen: the cap
+// is evaluated when a NEW device shows up, not on every touch of an existing
+// one. The DB update is best-effort — a lookup/update failure here must
+// never block the login this row belongs to; the returned slice reflects
+// only rows actually revoked.
+func enforceSessionCap(userId int) []entity.UserSession {
 	maxActive := sessionMaxActivePerUser()
 	if maxActive <= 0 {
-		return
+		return nil
 	}
 	var active []entity.UserSession
 	if err := DB.Where("user_id = ? AND revoked_at = 0", userId).
 		Order("last_seen_at DESC").Find(&active).Error; err != nil {
-		return
+		return nil
 	}
 	if len(active) <= maxActive {
-		return
+		return nil
 	}
 	now := common.GetTimestamp()
-	for _, s := range active[maxActive:] {
-		_ = DB.Model(&entity.UserSession{}).Where("id = ?", s.Id).Updates(map[string]any{
+	capped := active[maxActive:]
+	revoked := make([]entity.UserSession, 0, len(capped))
+	for _, s := range capped {
+		if err := DB.Model(&entity.UserSession{}).Where("id = ?", s.Id).Updates(map[string]any{
 			"revoked_at":    now,
 			"revoke_reason": entity.SessionRevokeReasonCapExceeded,
-		}).Error
+		}).Error; err == nil {
+			revoked = append(revoked, s)
+		}
 	}
+	return revoked
 }
 
-// sessionActiveWindow bounds ListActiveUserSessions to sessions seen in the
-// last 30 days — mirrors ListSessionsV2's existing request_count window
-// (v2_sessions.go), so "active" means the same thing everywhere on this
-// page.
-const sessionActiveWindow = 30 * 24 * time.Hour
+// sessionActiveWindow bounds ListActiveUserSessions to sessions seen within
+// the session store's own cookie lifetime — 90 days, the sessionOpts.MaxAge
+// literal at cmd/server/main.go:~357 ("90 days" comment there). This MUST be
+// at least that long: the Redis-backed store keeps a login's cookie (and
+// therefore its ability to authenticate) alive for the full 90 days from its
+// last Save, so a shorter list window here would hide a genuinely live,
+// revocable session from its own owner — a stolen session idle for longer
+// than the window but still inside the store's lifetime would become
+// invisible and therefore unrevokable by id (only "sign out other devices",
+// which does not need the list, would still catch it). cmd/server is
+// package main and cannot be imported here, so this duplicates the literal
+// rather than sharing a constant; if main.go's MaxAge ever changes, this
+// must be updated to match.
+const sessionActiveWindow = 90 * 24 * time.Hour
 
 // ListActiveUserSessions returns userId's non-revoked sessions seen within
-// the last 30 days, most-recently-seen first. Filters by UserId only, not
+// sessionActiveWindow, most-recently-seen first. Filters by UserId only, not
 // TenantId: a user account belongs to exactly one tenant for its whole
 // life in this system, so UserId is already a stricter isolation key than
 // TenantId would add.

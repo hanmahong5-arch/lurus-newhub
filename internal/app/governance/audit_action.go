@@ -86,15 +86,25 @@ const (
 
 	// System options (global config keys).
 	ActionOptionUpdated = "option.updated"
-	// ActionPricingUpdated is recorded for every successful
-	// POST /api/v2/:tenant_slug/pricing commit (v2_pricing_write.go). Pricing
-	// moves live billing ratios for every tenant at once, so it gets its own
-	// action — distinct from the generic ActionOptionUpdated — carrying
-	// from_version/to_version and the per-field diff in Details.
+	// ActionPricingUpdated is recorded after a committed
+	// POST /api/v2/:tenant_slug/pricing (v2_pricing_write.go). Pricing moves
+	// live billing ratios that apply regardless of which tenant's slug the
+	// request used, so it gets its own action — distinct from the generic
+	// ActionOptionUpdated — carrying from_version/to_version and the
+	// per-field diff in Details.
 	ActionPricingUpdated = "pricing.updated"
 
 	// Model sync and registry.
 	ActionModelSyncTriggered = "model.sync_triggered"
+	// ActionModelCreated / ActionModelDeleted cover POST/DELETE
+	// /api/v2/:tenant_slug/models(/:id) — root-gated catalog writes outside
+	// /api/v2/admin (the catalog has no tenant_id; requirePlatformRoot is
+	// enforced inside the handler, same shape as pricing's tenant-slug
+	// route). L2 audit-completeness named these as an in-scope gap: the
+	// model catalog and its pricing are process-global, so an unaudited
+	// write here is as consequential as one under /admin.
+	ActionModelCreated = "model.created"
+	ActionModelDeleted = "model.deleted"
 
 	// Tenant administration.
 	ActionTenantCreated        = "tenant.created"
@@ -148,12 +158,15 @@ const (
 	// not by a handler — when an admin/internal-admin mutating request (POST/
 	// PUT/PATCH/DELETE under /api/v2/admin or /internal/admin) completes
 	// without the handler ever calling governance.RecordAuditEvent. It fires
-	// on every response status, including rejected (non-2xx) writes: a write
-	// that failed is still a write attempt and must not vanish from the
-	// audit trail just because it didn't succeed. Details carry
-	// {"route","method","status"} and, when the caller is an OIDC-JWT root
-	// admin (RootJWTAuth's Bearer branch never populates the "id" context key
-	// — a pre-existing gap, not fixed by this action), "admin_sub" too.
+	// regardless of the response status the handler wrote, including
+	// rejected (non-2xx) writes (TestAuditWriteGuard_FallbackRowWhenHandlerSilent
+	// covers 201, _FiresOnRejectedWrite covers 403): a write that failed is
+	// still a write attempt and must not vanish from the audit trail just
+	// because it didn't succeed. Details carry {"route","method","status"},
+	// the matched route's path parameters under "params" when present, and,
+	// when the caller is an OIDC-JWT root admin (RootJWTAuth's Bearer branch
+	// never populates the "id" context key — a pre-existing gap, not fixed
+	// by this action), "admin_sub" too.
 	ActionAdminWriteUnaudited = "admin.write_unaudited"
 
 	// Reseller tenant credit pools (ADR 2026-05-18 §4.1). Creating, topping
@@ -276,6 +289,8 @@ var validAuditActions = map[string]struct{}{
 	ActionOptionUpdated:             {},
 	ActionPricingUpdated:            {},
 	ActionModelSyncTriggered:        {},
+	ActionModelCreated:              {},
+	ActionModelDeleted:              {},
 	ActionTenantCreated:             {},
 	ActionTenantUpdated:             {},
 	ActionTenantDeleted:             {},

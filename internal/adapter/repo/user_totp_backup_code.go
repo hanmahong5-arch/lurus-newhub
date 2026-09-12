@@ -20,10 +20,13 @@ func ensureUserTOTPBackupCodeTable() error {
 // ReplaceUserTOTPBackupCodes deletes every existing code for the user and
 // inserts rows in their place inside one transaction — replace, not append,
 // so TotpConfirm's first issuance and the regenerate endpoint share one code
-// path and a reader can never observe a lingering old code beside a fresh
-// set. rows must already carry UserId/CodeHash/CreatedAt (UsedAt left at the
-// zero value); the caller (handler) owns timestamp generation, mirroring how
-// UpsertUserTOTP's caller sets CreatedAt/ConfirmedAt.
+// path. Delete+insert run inside one transaction, so a committed read sees
+// either the old set or the new set, never a mix (this is a transaction-
+// isolation property of the delete+insert pair, not something proven by a
+// concurrent-reader test here). rows must already carry
+// UserId/CodeHash/CreatedAt (UsedAt left at the zero value); the caller
+// (handler) owns timestamp generation, mirroring how UpsertUserTOTP's
+// caller sets CreatedAt/ConfirmedAt.
 func ReplaceUserTOTPBackupCodes(userId int, rows []entity.UserTOTPBackupCode) error {
 	if err := ensureUserTOTPBackupCodeTable(); err != nil {
 		return err
@@ -83,8 +86,17 @@ func ConsumeUserTOTPBackupCode(userId int, codeHash string, usedAt int64) (bool,
 // optionally filtered to one tenant. Used by GetTOTPAdoptionStats — a new
 // *gorm.DB session per call, so the returned builder is never shared/reused
 // across the several counts the caller runs.
+//
+// This is a raw Table()+Joins() query, so GORM's automatic soft-delete
+// scope (which Model(&entity.User{}) queries get for free) does NOT apply
+// here — it must be filtered explicitly, matching GetTOTPAdoptionStats'
+// TotalUsers count (a Model(&entity.User{}) query, soft-delete-scoped by
+// GORM), so a soft-deleted user's TOTP row cannot inflate Enrolled/Pending/
+// Exhausted/NoCodesIssued past a TotalUsers denominator that excludes them.
 func totpTenantFilteredQuery(tenantID string) *gorm.DB {
-	q := DB.Table("user_totps AS ut").Joins("JOIN users u ON u.id = ut.user_id")
+	q := DB.Table("user_totps AS ut").
+		Joins("JOIN users u ON u.id = ut.user_id").
+		Where("u.deleted_at IS NULL")
 	if tenantID != "" {
 		q = q.Where("u.tenant_id = ?", tenantID)
 	}

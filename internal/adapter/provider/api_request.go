@@ -265,11 +265,11 @@ func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
 // wins; an upstream sending none of them is not a defect.
 var upstreamRequestIdHeaders = []string{"x-request-id", "request-id", "openai-request-id", "cf-ray"}
 
-// boundUpstreamRequestId enforces the same bound X-Session-Id gets
-// (relay_info.go deriveSessionId): printable ASCII only, at most 128 bytes,
-// drop rather than truncate. A cut vendor id looks valid but will never match
-// a support ticket, so anything outside the bound comes back "" instead of a
-// prefix.
+// boundUpstreamRequestId shares the drop-not-truncate rule deriveSessionId
+// (relay_info.go) applies to X-Session-Id: printable ASCII only, drop rather
+// than truncate. The byte cap here is 128, tighter than deriveSessionId's 200
+// — a cut vendor id looks valid but will never match a support ticket, so
+// anything outside the bound comes back "" instead of a prefix.
 func boundUpstreamRequestId(raw string) string {
 	if raw == "" || len(raw) > 128 {
 		return ""
@@ -337,6 +337,15 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	// private-IP policy at dial time (app/relay_dial_guard.go): it re-resolves the
 	// destination and refuses internal addresses, defeating NO_PROXY-direct
 	// internal targets and already-in-effect DNS rebinding.
+	// A retry can land on a different channel than the previous attempt.
+	// Clear the slot before this attempt runs so a failure inside client.Do
+	// below (or a resp with no captured id) does not leave the PREVIOUS
+	// attempt's vendor id on the shared gin.Context / RelayInfo — otherwise
+	// this attempt's error row (recordRelayErrorLog reads the same key)
+	// would carry channel A's id under channel B's row.
+	c.Set("upstream_request_id", "")
+	info.UpstreamRequestId = ""
+
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
@@ -352,8 +361,8 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	// gin.Context there); c.Set beside it feeds the error-log path
 	// (relay.go recordRelayErrorLog reads it back via c.GetString, the same
 	// pattern original_model/channel_id already use) without changing either
-	// function's signature. Absent on every upstream that sends none of the
-	// four headers — that is not a defect.
+	// function's signature. Absent when the upstream sends none of the
+	// headers in upstreamRequestIdHeaders — that is not a defect.
 	upstreamRequestId := captureUpstreamRequestId(resp)
 	info.UpstreamRequestId = upstreamRequestId
 	c.Set("upstream_request_id", upstreamRequestId)

@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -40,6 +42,7 @@ func setupPricingRouter(t *testing.T) *pricingCtx {
 	}
 	for _, tbl := range []interface{}{
 		&repo.User{}, &repo.Token{}, &repo.Tenant{}, &repo.Option{},
+		&repo.Channel{}, &repo.Ability{},
 	} {
 		if err := db.AutoMigrate(tbl); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("auto migrate %T: %v", tbl, err)
@@ -58,6 +61,9 @@ func setupPricingRouter(t *testing.T) *pricingCtx {
 	common.UsingSQLite = true
 	common.UsingPostgreSQL = false
 	common.RedisEnabled = false
+	// Bootstrap OptionMap so repo.UpdateOption (used by tests that seed
+	// PricingVersion) does not panic writing into a nil map.
+	repo.InitOptionMap()
 
 	slug := "acme-pricing"
 	tenant := &repo.Tenant{
@@ -66,7 +72,7 @@ func setupPricingRouter(t *testing.T) *pricingCtx {
 		Name: "Acme Pricing Test",
 		// ZitadelOrgID must be unique; use a stable value per test DB
 		IDPOrgID: fmt.Sprintf("zitadel-pricing-%d", pricingTestDBCounter.Load()),
-		Status:       1,
+		Status:   1,
 	}
 	if err := db.Create(tenant).Error; err != nil {
 		t.Fatalf("seed tenant: %v", err)
@@ -165,5 +171,97 @@ func TestV2Pricing_WhitelistEnforced(t *testing.T) {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("response body must not contain %q (admin-only field leaked)", forbidden)
 		}
+	}
+}
+
+// 4. Version — data.version reflects the database's PricingVersion row (via
+// repo.UpdateOption, the same write path the pricing CAS uses), not a value
+// baked in at zero. Mutation: deleting the "version" key from GetPricingV2's
+// response (or reverting currentPricingVersion to a hard-coded 0) turns
+// this red.
+func TestGetPricingV2_Version(t *testing.T) {
+	ctx := setupPricingRouter(t)
+
+	if err := repo.UpdateOption("PricingVersion", strconv.FormatInt(7, 10)); err != nil {
+		t.Fatalf("seed PricingVersion: %v", err)
+	}
+
+	w := getPricing(ctx, ctx.tenantSlug)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	resp := parsePricing(t, w)
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data missing, body: %s", w.Body.String())
+	}
+	if v, _ := data["version"].(float64); int64(v) != 7 {
+		t.Errorf("data.version = %v, want 7", data["version"])
+	}
+}
+
+// 5. CacheRatioPrefill — a model with an explicit cache_ratio entry gets it
+// projected into the pricing row so the console can prefill its input
+// instead of editing blind; a model with no entry (same catalogue, seeded
+// alongside it) omits the field rather than fabricating a value. Mutation:
+// deleting the CacheRatio field/population in GetPricingV2 turns this red.
+func TestGetPricingV2_CacheRatioPrefill(t *testing.T) {
+	ctx := setupPricingRouter(t)
+
+	withRatio := "cache-ratio-prefill-with-entry"
+	withoutRatio := "cache-ratio-prefill-without-entry"
+
+	// A minimal enabled ability + channel is enough for repo.GetPricing to
+	// list a model — no repo.Model metadata row is required (model_tenant_
+	// scope_test.go's seeding pattern).
+	ch := &repo.Channel{Type: 1, Status: common.ChannelStatusEnabled, Name: "cache-ratio-prefill-channel", Models: withRatio + "," + withoutRatio, Group: "default"}
+	if err := ctx.db.Create(ch).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	for _, model := range []string{withRatio, withoutRatio} {
+		if err := ctx.db.Create(&repo.Ability{Group: "default", Model: model, ChannelId: ch.Id, Enabled: true}).Error; err != nil {
+			t.Fatalf("seed ability for %q: %v", model, err)
+		}
+	}
+
+	if err := ratio_setting.UpdateCacheRatioByJSONString(`{"` + withRatio + `":0.42}`); err != nil {
+		t.Fatalf("seed live CacheRatio map: %v", err)
+	}
+
+	w := getPricing(ctx, ctx.tenantSlug)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	resp := parsePricing(t, w)
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data missing, body: %s", w.Body.String())
+	}
+	rows, ok := data["pricing"].([]interface{})
+	if !ok {
+		t.Fatalf("data.pricing missing/wrong type, body: %s", w.Body.String())
+	}
+	byModel := make(map[string]map[string]interface{}, len(rows))
+	for _, r := range rows {
+		row, _ := r.(map[string]interface{})
+		if row != nil {
+			byModel[fmt.Sprint(row["model_name"])] = row
+		}
+	}
+
+	withRow, ok := byModel[withRatio]
+	if !ok {
+		t.Fatalf("no pricing row for %q, rows: %v", withRatio, rows)
+	}
+	if cr, _ := withRow["cache_ratio"].(float64); cr != 0.42 {
+		t.Errorf("%s: cache_ratio = %v, want 0.42", withRatio, withRow["cache_ratio"])
+	}
+
+	withoutRow, ok := byModel[withoutRatio]
+	if !ok {
+		t.Fatalf("no pricing row for %q, rows: %v", withoutRatio, rows)
+	}
+	if _, present := withoutRow["cache_ratio"]; present {
+		t.Errorf("%s: cache_ratio = %v, want omitted (no configured entry)", withoutRatio, withoutRow["cache_ratio"])
 	}
 }

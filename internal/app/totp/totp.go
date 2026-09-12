@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
@@ -175,12 +176,40 @@ func generateOneBackupCode() (string, error) {
 // (hex SHA-256 of "<user_id>:<normalized code>"). The user id is mixed in
 // as a domain separator so identical codes minted for two different users
 // cannot collide on the unique index (entity.UserTOTPBackupCode.CodeHash).
-// Normalization uppercases and trims the input so a user pasting a code in
-// lowercase, or with surrounding whitespace, still matches.
+// Normalization (see normalizeBackupCode) uppercases, strips the dash and
+// any internal whitespace, and re-inserts the canonical dash — so a user
+// who types "abcd efgh" or "ABCDEFGH" from a printed sheet, not just one
+// who mistypes case or leaves surrounding whitespace, still matches the
+// stored hash.
 func HashBackupCode(userId int, code string) string {
-	normalized := strings.ToUpper(strings.TrimSpace(code))
+	normalized := normalizeBackupCode(code)
 	sum := sha256.Sum256([]byte(strconv.Itoa(userId) + ":" + normalized))
 	return hex.EncodeToString(sum[:])
+}
+
+// normalizeBackupCode canonicalizes user-typed backup-code input before
+// hashing: uppercase, strip the dash and any whitespace, then — only when
+// exactly 8 alphabet characters remain — re-insert the dash at "XXXX-XXXX"
+// position to match GenerateBackupCodes' output shape. Input that does not
+// reduce to exactly 8 characters (too short, too long, or containing other
+// punctuation) is returned uppercased/trimmed but otherwise unchanged: it
+// will simply not match any stored hash, which is the correct fail-closed
+// outcome rather than a specially-handled error.
+func normalizeBackupCode(code string) string {
+	trimmed := strings.ToUpper(strings.TrimSpace(code))
+	var b strings.Builder
+	for _, r := range trimmed {
+		if r == '-' || unicode.IsSpace(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	stripped := b.String()
+	if len([]rune(stripped)) != 8 {
+		return trimmed
+	}
+	runes := []rune(stripped)
+	return string(runes[:4]) + "-" + string(runes[4:])
 }
 
 // ---------------------------------------------------------------------------

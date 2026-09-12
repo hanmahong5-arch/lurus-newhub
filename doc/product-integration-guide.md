@@ -96,7 +96,10 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 | `/api/v2/{tenant}/user/me` | GET | 用户信息 |
 | `/api/v2/{tenant}/tokens` | GET / POST | 查询 / 创建 Token |
 | `/api/v2/{tenant}/logs` | GET | 使用日志 |
+| `/api/v2/{tenant}/logs/all?upstream_request_id=` | GET | 租户管理员(`requireTenantAdmin`)专用的日志列表,可按供应商自己的 request/trace id 精确匹配过滤:取上游响应头 `x-request-id` / `request-id` / `openai-request-id` / `cf-ray` 中第一个非空的值(≤128 字节可打印 ASCII,否则视为未发送),落在管理员可见字段 `other.upstream_request_id` 上(普通用户 `/api/v2/{tenant}/logs` 看不到该字段,也不支持这个查询参数)。根管理员导出 `GET /api/v2/admin/logs/export` 接受同名参数、同语义;供应商完全没发送这四个头之一时该字段为空,不算缺陷 |
+| `/api/v2/{tenant}/analytics/rankings?by=model\|vendor&hours=` | GET | 租户管理员(`requireTenantAdmin`)专用的模型/供应商用量排行榜:按 token 用量降序给出 rank/环比 rank_delta(新上榜的 is_new=true、rank_delta=0)/requests_growth_pct(无上一窗口基线时为 null)/token_share_pct/quota_share_pct(份额基于当前窗口全部分组的总量,不是仅返回的最多 20 行);`by=vendor` 按 `channel_type` 聚合(名称经 `constant.GetChannelTypeName` 解析,`channel_type=0` 的历史行不计入任何 vendor 行);`hours` 会被收敛到 `{1,6,24,168,720}` 五档之一再作为缓存键,未知 `by` 值返回 400。响应体在进程内缓存 5 分钟(`cached_at` 可看出是否命中缓存;3 个副本各自维护自己的缓存,`cached_at` 在副本间可能不同,是预期行为不是缺陷)。根管理员等价端点 `GET /api/v2/admin/analytics/rankings?by=&hours=&tenant_id=` 额外接受 `tenant_id`(留空=跨租户)。目前没有兄弟产品接入这两个端点 |
 | `/api/v2/{tenant}/billing/topup` | POST | 发起充值 |
+| `/api/v2/{tenant}/sessions` | GET / DELETE(`:id`、`others`、`current`) | 控制台会话列表与撤销,整体挂在 `SESSION_REGISTRY_ENABLED`(默认关)后面:关闭时列表只返回一条代表当前请求的合成行,`DELETE :id` 一律 404、`DELETE others` 一律 `{"revoked":0}`,均不触碰数据库(2026-09-12 起,回滚或某次开关期遗留的行都不会被这两个端点动到);打开后列表按已登录设备逐条返回(`is_current`/`created_at`/`last_seen_at`、`ip` 按 /24(v4)或 /48(v6)掩码、`user_agent_family` 粗粒度),`DELETE :id` 撤销自己名下的一台设备(IDOR 404 语义,不属于自己的 id 与不存在的 id 同样 404)、`others` 一键撤销除当前设备外的全部。根管理员等价端点 `DELETE /api/v2/admin/users/:id/sessions`(压缩账号处置步骤,同样受该 flag 门控)。目前没有兄弟产品接入这组端点 |
 
 ### B. 错误码
 
@@ -168,3 +171,24 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 - **`GET /v1/generation?id=<X-Request-Id>`** — 用自己发出的入站 `X-Request-Id`,或网关在原始响应上回显的 `X-Request-Id`(见 §E),反查该次调用的费用/供应商/用量/首字延迟/`session_id`(该次请求带的 `X-Session-Id`,见 §E),不必等 `/logs` 分页查询。`quota` 字段是 quota 整数,`total_cost` 是本响应体里**唯一** USD 计价字段(`quota / quota_per_unit`;`quota_per_unit` 是管理员可改的选项,默认 500000,当前值以 `GET /api/status` 返回的 `quota_per_unit` 为准;该值未设置时 `total_cost` 为 0)。`id` 不属于调用方自己的 token/租户,或从未出现过,一律 404(不是 400/403),避免向未持有该 id 的调用方泄露"格式对/不对"的探测信号。镜像 OpenRouter 的 `GET /api/v1/generation`。
 
 两者均走标准 `Authorization: Bearer sk-...`,无需 flag,无写副作用。单位约定:`/v1/key` 的 `limit`/`limit_remaining`/`usage` 与 `/v1/generation` 的 `quota` 都是 quota 整数;`/v1/generation` 的 `total_cost` 是本指南里这两个端点唯一的 USD 计价字段。
+
+### G. 单渠道强制 HTTP/1.1 与会话亲和运维(root 专用)
+
+**强制 HTTP/1.1** — 渠道 `param_override`(旧版参数覆盖编辑器,控制台里没有独立开关)里加一个内部控制键 `"__lurus_force_http1": true`,把这一个渠道的出站传输锁定为 HTTP/1.1(常见场景:某上游的 HTTP/2 实现时断时续,和真正的下线区分不出来)。该键本身不会进入发往上游的请求体——`ApplyParamOverride`/`applyOperationsLegacy` 在合并前会跳过所有 `__lurus_` 前缀键;值必须是 JSON 布尔,写成字符串或其它 `__lurus_` 未知键都会在保存时被 `ValidateParamOverride` 拒绝(400),不会被静默当作 false 收下。
+
+**范围缺口(明确,不是后来发现)**:该开关只覆盖经 `provider.doRequest`(`internal/adapter/provider/api_request.go`)调用 `app.GetHttpClientFor` 建出的客户端(OpenAI 兼容线 / Claude / Gemini 等经这条路径的中转)。以下渠道类型自己直接建客户端,完全不读这个键,设置了也不会有任何效果:
+
+| 渠道类型 | 直接建客户端处 |
+|---|---|
+| AWS Bedrock | `internal/adapter/provider/aws/relay-aws.go:46` |
+| Coze | `internal/adapter/provider/coze/relay-coze.go:284` |
+| Vertex AI(service account 换 token) | `internal/adapter/provider/vertex/service_account.go:117`、`:160` |
+| Midjourney proxy | `internal/app/relay/mjproxy_handler.go:42` |
+| Task 类渠道(`internal/adapter/provider/task/*`,如 suno/kling/vidu/jimeng/sora 等) | 各自 `provider/task/*` 目录内 |
+
+**会话亲和(session affinity)统计与清理** — root 专用管理端点,读/清 `internal/app/session_affinity.go` 维护的多轮会话粘滞绑定:
+
+- `GET /api/v2/admin/routing/affinity` — `data` 内 `enabled`/`ttl_seconds`(`SESSION_AFFINITY_ENABLED`/`SESSION_AFFINITY_TTL` 的实时读数)+ hit/miss/stale 计数 + 当前存储后端(`redis`/`memory`)+ 内存兜底条目数;顶层附带 `"scope":"replica"`。**这些计数是应答该请求的那个副本的进程内计数**(生产 3 副本 behind 同一 NodePort,同一时刻 GET 落到哪个副本随机),不是集群汇总;要看全集群总量,读 `/metrics` 的 `lurus_gateway_session_affinity_total{result}`。
+- `DELETE /api/v2/admin/routing/affinity/:key` — 用中转响应头 `X-Lurus-Affinity-Key`(见 §E)拿到的 HMAC 键清掉这一条绑定,204;键不存在 404;**Redis 故障时返回 5xx 而不是 404**——404 只代表"确认查过、没有这条",不代表"没查就假定没有"。
+- `DELETE /api/v2/admin/routing/affinity?all=true` — 清空当前后端的全部绑定(Redis 用有界 `SCAN`+`UNLINK`,不用 `KEYS`),200 + `{"success":true,"data":{"purged":n}}`,不带 `?all=true` 返回 400。
+- 两个清理端点都写审计动作 `routing.affinity_purged`。

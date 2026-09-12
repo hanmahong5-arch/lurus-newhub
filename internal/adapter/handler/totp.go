@@ -164,18 +164,24 @@ func TotpConfirm(c *gin.Context) {
 	}
 	totp.ClearFailures(c.Request.Context(), userId)
 
-	rec.Enabled = true
-	rec.ConfirmedAt = common.GetTimestamp()
-	if err := repo.UpsertUserTOTP(rec); err != nil {
+	// Mint the recovery codes BEFORE flipping Enabled — deliberately, not
+	// just for ordering's sake: if issueBackupCodes fails, the enrollment
+	// must stay pending (Enabled still false) rather than live with zero
+	// backup codes stored. A live-with-no-codes state on a 500 would leave
+	// the user one lost phone away from a support ticket with no self-
+	// service recovery, and a retried confirm would hit the "already
+	// enabled" 400 above instead of getting another chance to mint codes.
+	// With this order, a failure here simply leaves confirm retriable with
+	// a fresh code, same as any other failure before this point.
+	backupCodes, err := issueBackupCodesFn(userId)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
-	// Mint the recovery codes the moment TOTP goes live — a user with no
-	// authenticator-app backup and no recovery codes is one lost phone away
-	// from a support ticket. Returned once; only the hash is stored.
-	backupCodes, err := issueBackupCodes(userId)
-	if err != nil {
+	rec.Enabled = true
+	rec.ConfirmedAt = common.GetTimestamp()
+	if err := repo.UpsertUserTOTP(rec); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -192,6 +198,13 @@ func TotpConfirm(c *gin.Context) {
 		},
 	})
 }
+
+// issueBackupCodesFn is a call seam over issueBackupCodes so tests can force
+// the confirm-time minting step to fail deterministically (crypto/rand and a
+// unique-index collision essentially never fail on demand otherwise) and
+// assert what TotpConfirm does about it — mirrors notifyUserFn in
+// v2_admin_security.go. Production code does not reassign it.
+var issueBackupCodesFn = issueBackupCodes
 
 // issueBackupCodes mints a fresh set of totp.BackupCodeCount recovery codes
 // for userId, replacing any existing set (used or not), and returns the
@@ -235,7 +248,7 @@ func RegenerateTotpBackupCodes(c *gin.Context) {
 		return
 	}
 	if rec == nil || !rec.Enabled {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "两步验证未启用"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Two-factor authentication is not enabled"})
 		return
 	}
 

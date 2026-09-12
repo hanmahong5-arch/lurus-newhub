@@ -11,9 +11,10 @@ package router
 // — directly, or one level of same-package delegation (e.g.
 // UpdateAdminOptionV2 → UpdateOption). A route with neither must be listed
 // in knownFallbackRoutes with a reason; any other unaudited route fails the
-// test naming the route and handler. knownFallbackRoutes may never contain a
-// money-moving route (asserted against moneyRouteDenyList below) — those
-// gaps must be closed with a real audit call, not documented away.
+// test naming the route and handler. knownFallbackRoutes may not contain a
+// route listed in moneyRouteDenyList (asserted below) — those specific gaps
+// must be closed with a real audit call, not documented away; the AST walk
+// itself has a known blind spot (see the note beside knownFallbackRoutes).
 //
 // It also cross-checks handler.AuditExplicitRoutes (the static map the
 // production coverage endpoint reads, since a deployed binary cannot parse
@@ -47,6 +48,17 @@ import (
 // it must shrink, never grow silently — a reviewer sees every addition in
 // the PR diff. It is intentionally empty right now: every admin write route
 // this lane could find gained (or already had) an explicit audit call.
+//
+// AST-walk limitation (not closeable by CI alone): bodyCallsGovernanceAudit
+// checks for the *presence* of a governance call anywhere in the handler's
+// (or one delegate's) body — it cannot tell a call reached on every branch
+// from one reached on only some. A branch that forgets to call
+// RecordAuditEvent — e.g. one outcome of a role-change handler — reads as
+// "audited" here even though that specific request path is not. Runtime
+// coverage for that gap is AuditWriteGuard itself (it checks the flag on
+// the actual request, not the source); this test proves only "the handler
+// somewhere calls governance.NewAuditEvent/RecordAuditEvent", not "every
+// branch does".
 var knownFallbackRoutes = map[string]string{}
 
 // moneyRouteDenyList is a small, explicit list of routes that move or gate a
@@ -181,12 +193,14 @@ func TestAdminWriteRoutesAreAudited(t *testing.T) {
 	decls := handlerFuncDecls(t, "../")
 
 	scanned := 0
+	var scannedRoutes []string
 	for _, rt := range engine.Routes() {
 		if !handler.IsAdminWriteRoute(rt.Method, rt.Path) {
 			continue
 		}
 		scanned++
 		key := rt.Method + " " + rt.Path
+		scannedRoutes = append(scannedRoutes, key)
 		name := handlerShortName(rt.Handler)
 		audited := handlerAudits(name, decls)
 
@@ -209,6 +223,28 @@ func TestAdminWriteRoutesAreAudited(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("scanned zero admin/internal-admin write routes — the scan itself is measuring nothing")
+	}
+
+	// Lock for mutation 3 (delete the captureAdminWriteRoutes(router) call,
+	// or its handler.SetAdminWriteRoutes(routes) line, from
+	// router/internal-api-router.go's SetInternalApiRouter): without either,
+	// GetAdminWriteRoutes() answers a stale or empty list forever, and a
+	// deployed binary's GET /api/v2/admin/audit/coverage would silently
+	// report total_admin_write_routes=0 (or a wrong number) while every
+	// assertion above — which reads engine.Routes() directly, not the
+	// captured snapshot — still passes.
+	gotRoutes := handler.GetAdminWriteRoutes()
+	if len(gotRoutes) != scanned {
+		t.Errorf("handler.GetAdminWriteRoutes() captured %d routes, want %d (this test's own live scan) — production route capture has drifted from IsAdminWriteRoute's scan", len(gotRoutes), scanned)
+	}
+	gotSet := make(map[string]bool, len(gotRoutes))
+	for _, r := range gotRoutes {
+		gotSet[r] = true
+	}
+	for _, key := range scannedRoutes {
+		if !gotSet[key] {
+			t.Errorf("handler.GetAdminWriteRoutes() is missing %q — captureAdminWriteRoutes did not pick up a route the live scan finds", key)
+		}
 	}
 
 	// The reverse direction: every route AuditExplicitRoutes claims explicit

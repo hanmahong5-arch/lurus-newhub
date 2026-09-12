@@ -256,6 +256,24 @@ func (ctx *sessionRegistryTestCtx) probe(cookie string) *httptest.ResponseRecord
 	return w
 }
 
+// loginRaw is login's more general sibling: it optionally replays an
+// existing Cookie header on the /login request (simulating a real browser's
+// jar sending whatever cookie it currently holds), and returns the raw
+// recorder instead of asserting 200 — TestAuthHelper_ReloginAfterRemoteRevoke_
+// NotLockedOut needs both the Set-Cookie list AND the ability to send an
+// EMPTY cookie (a jar that already dropped a Set-Cookie:...Max-Age=0
+// response, unlike login/probe above which never simulate that).
+func (ctx *sessionRegistryTestCtx) loginRaw(t *testing.T, userId int, cookie string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/login?id=%d", userId), nil)
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	w := httptest.NewRecorder()
+	ctx.router.ServeHTTP(w, req)
+	return w
+}
+
 // TestAuthHelper_FlagOff_NoRegistryWrites: with SESSION_REGISTRY_ENABLED
 // unset (default observe/off — mirrors the CostSpikeLimit precedent), a
 // normal cookie-authenticated request through the REAL UserAuth() must
@@ -301,5 +319,72 @@ func TestAuthHelper_FlagOn_RegistersSession(t *testing.T) {
 	}
 	if rows[0].SessionKey == "" {
 		t.Error("registered row has an empty session_key")
+	}
+}
+
+// TestAuthHelper_ReloginAfterRemoteRevoke_NotLockedOut: a session revoked
+// REMOTELY (another device/admin sets revoked_at on this browser's own row
+// — simulated here with repo.RevokeUserSessionByKey, independent of whether
+// the Redis key was also deleted) must not permanently lock this browser
+// out. boj/redistore's Session.Save keeps whatever id an incoming cookie
+// already carries, so without authHelper clearing the cookie in its
+// SESSION_REVOKED branch, a re-login replaying the SAME (never-cleared)
+// cookie would recreate session_<sameID> — whose row is permanently
+// revoked — and 401 forever. This test's "jar" honours a real browser's
+// actual behaviour: it resends the OLD cookie unless the previous response
+// carried a cookie-clearing Set-Cookie, in which case it sends none.
+func TestAuthHelper_ReloginAfterRemoteRevoke_NotLockedOut(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
+	ctx := setupSessionRegistryTestRouter(t)
+
+	cookieA := ctx.login(t, 5151)
+	probeA := ctx.probe(cookieA)
+	if probeA.Code != http.StatusOK {
+		t.Fatalf("probe after login status = %d, body=%s", probeA.Code, probeA.Body.String())
+	}
+
+	var rows []entity.UserSession
+	if err := ctx.db.Find(&rows).Error; err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("registered rows = %d, want 1", len(rows))
+	}
+
+	// Simulate a REMOTE revoke (a different device, or an admin) — the
+	// row's revoked_at is set directly, independent of whether that other
+	// caller's RedisDel also ran.
+	if err := repo.RevokeUserSessionByKey(rows[0].SessionKey, entity.SessionRevokeReasonAdminRevoked); err != nil {
+		t.Fatalf("RevokeUserSessionByKey: %v", err)
+	}
+
+	revokedProbe := ctx.probe(cookieA)
+	if revokedProbe.Code != http.StatusUnauthorized {
+		t.Fatalf("probe after remote revoke status = %d, want 401, body=%s", revokedProbe.Code, revokedProbe.Body.String())
+	}
+	// A real jar drops a cookie the server told it to clear (Set-Cookie with
+	// an expired/zero Max-Age); it keeps a cookie the server said nothing
+	// about. Decide which this response did:
+	jarCookie := cookieA
+	if len(revokedProbe.Header().Values("Set-Cookie")) > 0 {
+		jarCookie = "" // the jar honours the clear and drops it
+	}
+
+	reloginW := ctx.loginRaw(t, 5151, jarCookie)
+	if reloginW.Code != http.StatusOK {
+		t.Fatalf("re-login status = %d, want 200, body=%s", reloginW.Code, reloginW.Body.String())
+	}
+	newCookies := reloginW.Header().Values("Set-Cookie")
+	if len(newCookies) == 0 {
+		t.Fatal("re-login produced no Set-Cookie header")
+	}
+	newCookie := newCookies[0]
+	if newCookie == cookieA {
+		t.Fatal("re-login reused the SAME (permanently revoked) cookie — the fix did not take effect")
+	}
+
+	finalProbe := ctx.probe(newCookie)
+	if finalProbe.Code != http.StatusOK {
+		t.Fatalf("probe after re-login status = %d, want 200 (must NOT be locked out), body=%s", finalProbe.Code, finalProbe.Body.String())
 	}
 }

@@ -25,9 +25,11 @@ package handler
 //  2. adminWriteRoutes is the actual mutating admin-route table, captured
 //     once at router-build time. *gin.Context has no Engine() accessor in
 //     gin v1.12.0, so GetAuditCoverageV2 (which only has a *gin.Context)
-//     cannot enumerate router.Routes() itself; router.SetApiV2Router /
-//     SetInternalApiRouter DO hold the *gin.Engine and call SetAdminWriteRoutes
-//     once, after every route is registered, with the real table.
+//     cannot enumerate router.Routes() itself; router.SetInternalApiRouter
+//     DOES hold the *gin.Engine and calls SetAdminWriteRoutes once, after
+//     every route from both SetApiV2Router and itself is registered on it
+//     (main.go calls SetApiV2Router first) — SetApiV2Router itself never
+//     calls SetAdminWriteRoutes.
 
 import (
 	"net/http"
@@ -87,8 +89,12 @@ var AuditExplicitRoutes = map[string]bool{
 	"POST /internal/admin/rotate-due-tokens":       true,
 	"POST /internal/admin/reset-due-pools":         true,
 
-	// The one root-gated write outside /admin (L1, v2_pricing_write.go).
-	"POST /api/v2/:tenant_slug/pricing": true,
+	// The root-gated writes outside /admin (v2_pricing_write.go, L1;
+	// v2_models_write.go, L2 repair round — the model catalog is
+	// process-global like pricing, same requirePlatformRoot rationale).
+	"POST /api/v2/:tenant_slug/pricing":      true,
+	"POST /api/v2/:tenant_slug/models":       true,
+	"DELETE /api/v2/:tenant_slug/models/:id": true,
 }
 
 // isMutatingWriteMethod reports whether method is one AuditWriteGuard treats
@@ -104,17 +110,31 @@ func isMutatingWriteMethod(method string) bool {
 	}
 }
 
+// rootGatedWritesOutsideAdmin is the literal allow-list of mutating routes
+// outside /api/v2/admin and /internal/admin that IsAdminWriteRoute still
+// treats as in scope: each enforces requirePlatformRoot inside the handler
+// (not via a RootJWTAuth-gated group) because the resource it writes is
+// process-global (pricing ratios / the model catalog), not tenant-scoped —
+// see v2_pricing_write.go and v2_models_write.go. Grown by hand, not by
+// prefix, so a new tenant-scoped route never falls into this bucket by
+// accident.
+var rootGatedWritesOutsideAdmin = map[string]bool{
+	"POST /api/v2/:tenant_slug/pricing":      true,
+	"POST /api/v2/:tenant_slug/models":       true,
+	"DELETE /api/v2/:tenant_slug/models/:id": true,
+}
+
 // IsAdminWriteRoute reports whether (method, path) is in scope for the L2
 // audit-completeness guard: a mutating request under /api/v2/admin or
-// /internal/admin, or the one root-gated write outside /admin. Shared by the
-// router setup (to build the captured route list) and by
-// router/audit_coverage_test.go (so both sides of "what counts" cannot
-// drift apart).
+// /internal/admin, or one of the root-gated writes outside /admin listed in
+// rootGatedWritesOutsideAdmin. Shared by the router setup (to build the
+// captured route list) and by router/audit_coverage_test.go (so both sides
+// of "what counts" cannot drift apart).
 func IsAdminWriteRoute(method, path string) bool {
 	if !isMutatingWriteMethod(method) {
 		return false
 	}
-	if path == "/api/v2/:tenant_slug/pricing" {
+	if rootGatedWritesOutsideAdmin[method+" "+path] {
 		return true
 	}
 	return strings.HasPrefix(path, "/api/v2/admin/") || strings.HasPrefix(path, "/internal/admin/")
@@ -126,9 +146,10 @@ var (
 )
 
 // SetAdminWriteRoutes replaces the captured admin-write route list. Called
-// once by router.SetApiV2Router / SetInternalApiRouter after all routes are
-// registered on the real *gin.Engine (see package doc above for why this
-// can't happen inside the request handler itself). Callers pass raw
+// once by router.SetInternalApiRouter (the sole caller — see package doc
+// above) after all routes from both SetApiV2Router and SetInternalApiRouter
+// are registered on the real *gin.Engine (see package doc above for why
+// this can't happen inside the request handler itself). Callers pass raw
 // "METHOD PATH" entries already filtered by IsAdminWriteRoute — this setter
 // does not re-filter, so tests can also use it to inject a synthetic route.
 func SetAdminWriteRoutes(routes []string) {

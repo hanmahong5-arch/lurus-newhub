@@ -371,7 +371,8 @@ func TestEnrichLogParams_EndUserAbsentWhenEmpty(t *testing.T) {
 // TestEnrichLogParams_UpstreamRequestId_WrittenOnlyWhenPresent covers the
 // vendor-request-id capture's settlement-path half: written verbatim when
 // provider.doRequest populated RelayInfo.UpstreamRequestId, absent (not an
-// empty string) when the upstream sent none of the four headers it looks for.
+// empty string) when the upstream sent none of the headers in
+// upstreamRequestIdHeaders.
 func TestEnrichLogParams_UpstreamRequestId_WrittenOnlyWhenPresent(t *testing.T) {
 	c := newTestContext()
 	info := &relaycommon.RelayInfo{StartTime: time.Now(), UpstreamRequestId: "vend-req-abc123"}

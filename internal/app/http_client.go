@@ -59,8 +59,9 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 // applyRelayTransportTimeouts bounds the two upstream hang vectors on a relay
 // transport (B1/R3) so a wedged provider cannot pin a client connection forever
 // — WITHOUT capping legitimate long streams (the SSE body is governed per-chunk
-// by streamingTimeout, not here). Factored so the three transport construction
-// sites (default + http/https proxy + socks5 proxy) cannot drift.
+// by streamingTimeout, not here). Factored so the transport construction sites
+// (default, http/https proxy, socks5 proxy, and the forced-HTTP/1.1 transport
+// in newForceHTTP1Transport) cannot drift.
 //
 //   - ResponseHeaderTimeout caps time-to-first-response-header; it is satisfied
 //     for the request lifetime once 200+headers arrive, so an in-flight stream is
@@ -191,6 +192,24 @@ func resetProxyClientsLocked() {
 	proxyClients = make(map[string]*http.Client)
 }
 
+// ResetForceH1ClientCache closes idle connections on every cached forced-
+// HTTP/1.1 client and replaces the cache with a fresh empty map, mirroring
+// ResetProxyClientCache. Tests that must temporarily mutate a cached client
+// in place (e.g. to install a test-only TLSClientConfig, since there is no
+// seam to inject a stand-in client into doRequest) call this in t.Cleanup so
+// no later GetHttpClientFor(_, true) caller in the process inherits the
+// test-only state.
+func ResetForceH1ClientCache() {
+	forceH1ClientLock.Lock()
+	defer forceH1ClientLock.Unlock()
+	for _, client := range forceH1Clients {
+		if transport, ok := client.Transport.(*http.Transport); ok && transport != nil {
+			transport.CloseIdleConnections()
+		}
+	}
+	forceH1Clients = make(map[string]*http.Client)
+}
+
 // storeProxyClient caches client under proxyURL, enforcing maxProxyClients.
 // When the cache is already at the bound it is dropped wholesale (idle
 // connections closed) before the new entry is inserted, so len(proxyClients)
@@ -295,8 +314,9 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 //
 // Honest scope: only relay calls that go through provider.doRequest via this
 // function are covered. AWS/Coze/Vertex-SA/MJ-proxy/task relays build their
-// own clients directly and never consult this seam — documented in
-// doc/product-integration-guide.md, not silently assumed.
+// own clients directly and never consult this seam — named with their exact
+// client-construction sites in doc/product-integration-guide.md §G, not
+// silently assumed.
 func GetHttpClientFor(proxyURL string, forceHTTP1 bool) (*http.Client, error) {
 	if !forceHTTP1 {
 		return GetHttpClientWithProxy(proxyURL)

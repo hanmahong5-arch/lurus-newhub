@@ -81,87 +81,11 @@ func GetModelPerformance(startTime, endTime int64, tenantID, modelName string) (
 			r.ErrorRate = float64(r.Errors) / float64(r.Requests)
 		}
 		if r.LatencySamples > 0 {
-			p50, err := latencyPercentileNearestRank(startTime, endTime, tenantID, "model_name", r.ModelName, r.LatencySamples, 0.50)
+			p50, err := latencyPercentileNearestRank(startTime, endTime, tenantID, r.ModelName, r.LatencySamples, 0.50)
 			if err != nil {
 				return nil, err
 			}
-			p95, err := latencyPercentileNearestRank(startTime, endTime, tenantID, "model_name", r.ModelName, r.LatencySamples, 0.95)
-			if err != nil {
-				return nil, err
-			}
-			r.P50LatencyMs = p50
-			r.P95LatencyMs = p95
-		}
-	}
-	return results, nil
-}
-
-// VendorPerformanceStat is GetVendorPerformance's per-vendor aggregate — the
-// channel_type analogue of ModelPerformanceStat. ChannelName is resolved via
-// constant.GetChannelTypeName, the same lookup GetChannelDistribution
-// (governance.go:46) uses.
-type VendorPerformanceStat struct {
-	ChannelType      int     `json:"channel_type"`
-	ChannelName      string  `json:"channel_name"`
-	Requests         int64   `json:"requests"`
-	Errors           int64   `json:"errors"`
-	ErrorRate        float64 `json:"error_rate"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	TotalTokens      int64   `json:"total_tokens"`
-	Quota            int64   `json:"quota"`
-	LatencySamples   int64   `json:"latency_samples"`
-	AvgLatencyMs     float64 `json:"avg_latency_ms"`
-	P50LatencyMs     int     `json:"p50_latency_ms"`
-	P95LatencyMs     int     `json:"p95_latency_ms"`
-}
-
-// GetVendorPerformance is GetModelPerformance's channel_type rollup: the
-// same aggregate shape (requests/errors/tokens/quota/latency percentiles),
-// grouped by channel_type instead of model_name. channel_type=0 (rows
-// recorded before the governance column existed) is excluded, mirroring
-// GetChannelDistribution's filter.
-func GetVendorPerformance(startTime, endTime int64, tenantID string) ([]VendorPerformanceStat, error) {
-	base := LOG_DB.Model(&entity.Log{}).
-		Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
-		Where("created_at >= ? AND created_at <= ?", startTime, endTime).
-		Where("channel_type > 0")
-	if tenantID != "" {
-		base = base.Where("tenant_id = ?", tenantID)
-	}
-
-	var results []VendorPerformanceStat
-	err := base.
-		Select(`channel_type,
-			COUNT(*) AS requests,
-			SUM(CASE WHEN type = ? THEN 1 ELSE 0 END) AS errors,
-			COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-			COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-			COALESCE(SUM(quota), 0) AS quota,
-			SUM(CASE WHEN type = ? AND total_latency_ms > 0 THEN 1 ELSE 0 END) AS latency_samples,
-			COALESCE(AVG(CASE WHEN type = ? AND total_latency_ms > 0 THEN total_latency_ms END), 0) AS avg_latency_ms`,
-			LogTypeError, LogTypeConsume, LogTypeConsume).
-		Group("channel_type").
-		Order("requests DESC").
-		Limit(modelPerformanceMaxModels).
-		Find(&results).Error
-	if err != nil {
-		return nil, err
-	}
-
-	for i := range results {
-		r := &results[i]
-		r.ChannelName = constant.GetChannelTypeName(r.ChannelType)
-		r.TotalTokens = r.PromptTokens + r.CompletionTokens
-		if r.Requests > 0 {
-			r.ErrorRate = float64(r.Errors) / float64(r.Requests)
-		}
-		if r.LatencySamples > 0 {
-			p50, err := latencyPercentileNearestRank(startTime, endTime, tenantID, "channel_type", r.ChannelType, r.LatencySamples, 0.50)
-			if err != nil {
-				return nil, err
-			}
-			p95, err := latencyPercentileNearestRank(startTime, endTime, tenantID, "channel_type", r.ChannelType, r.LatencySamples, 0.95)
+			p95, err := latencyPercentileNearestRank(startTime, endTime, tenantID, r.ModelName, r.LatencySamples, 0.95)
 			if err != nil {
 				return nil, err
 			}
@@ -173,17 +97,23 @@ func GetVendorPerformance(startTime, endTime int64, tenantID string) ([]VendorPe
 }
 
 // latencyPercentileNearestRank returns the q-th percentile (nearest-rank) of
-// total_latency_ms for one group's (model_name or channel_type, per
-// groupCol) consume rows in the window. samples must be the count of rows
-// matching the same predicate (latency > 0) so the OFFSET lands inside the
-// result set.
-func latencyPercentileNearestRank(startTime, endTime int64, tenantID, groupCol string, groupVal interface{}, samples int64, q float64) (int, error) {
+// total_latency_ms for one model's consume rows in the window. samples must
+// be the count of rows matching the same predicate (latency > 0) so the
+// OFFSET lands inside the result set.
+//
+// GetModelPerformance is its only caller today — a channel_type-keyed
+// vendor rollup with the same percentile shape was drafted for this lane
+// (cycle-7 plan §3/L4 spec item 1) and then dropped in favour of the
+// latency-free GetRankings path (§8's "no latency subqueries" correction),
+// so the helper stays model_name-only rather than carrying an unused
+// group-column generalisation.
+func latencyPercentileNearestRank(startTime, endTime int64, tenantID, modelName string, samples int64, q float64) (int, error) {
 	rank := int64(math.Ceil(q * float64(samples)))
 	if rank < 1 {
 		rank = 1
 	}
 	tx := LOG_DB.Model(&entity.Log{}).
-		Where(groupCol+" = ? AND total_latency_ms > 0", groupVal).
+		Where("model_name = ? AND total_latency_ms > 0", modelName).
 		Where("type = ?", LogTypeConsume).
 		Where("created_at >= ? AND created_at <= ?", startTime, endTime)
 	if tenantID != "" {
@@ -251,9 +181,9 @@ type vendorUsageRow struct {
 	Quota            int64
 }
 
-// getVendorUsageTotals is GetVendorPerformance's latency-free sibling,
-// grouped by channel_type. Unexported: GetRankings is its only caller today
-// (GetModelUsageTotals is the one named in the plan as a public seam).
+// getVendorUsageTotals is GetModelUsageTotals' channel_type-keyed sibling.
+// Unexported: GetRankings is its only caller today (GetModelUsageTotals is
+// the one named in the plan as a public seam).
 func getVendorUsageTotals(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
 	base := LOG_DB.Model(&entity.Log{}).
 		Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
@@ -318,8 +248,11 @@ const rankingsMaxRows = 20
 // window gets rank_delta=0, is_new=true, and a nil requests_growth_pct (no
 // baseline to divide by). token_share_pct/quota_share_pct are shares of the
 // CURRENT window's full total across every group in that window — true
-// market share, not a share of just the returned top `limit` rows.
-func GetRankings(startTime, endTime int64, tenantID, by string, limit int) ([]RankingRow, error) {
+// market share, not a share of just the returned top `limit` rows. The two
+// returned totals (totalTokens, totalQuota) are that same full-window sum,
+// for a caller that wants to show it — the returned rows are capped at
+// `limit` and must not be re-summed to recover it.
+func GetRankings(startTime, endTime int64, tenantID, by string, limit int) (rows []RankingRow, totalTokens, totalQuota int64, err error) {
 	if limit <= 0 || limit > rankingsMaxRows {
 		limit = rankingsMaxRows
 	}
@@ -334,11 +267,11 @@ func GetRankings(startTime, endTime int64, tenantID, by string, limit int) ([]Ra
 
 	current, err := fetch(startTime, endTime, tenantID)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	previous, err := fetch(prevStart, prevEnd, tenantID)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 
 	sortRankingTotalsByTokens(previous)
@@ -351,7 +284,6 @@ func GetRankings(startTime, endTime int64, tenantID, by string, limit int) ([]Ra
 
 	sortRankingTotalsByTokens(current)
 
-	var totalTokens, totalQuota int64
 	for _, row := range current {
 		totalTokens += row.PromptTokens + row.CompletionTokens
 		totalQuota += row.Quota
@@ -389,7 +321,7 @@ func GetRankings(startTime, endTime int64, tenantID, by string, limit int) ([]Ra
 		}
 		out[i] = r
 	}
-	return out, nil
+	return out, totalTokens, totalQuota, nil
 }
 
 // sortRankingTotalsByTokens orders by total tokens desc (GetRankings' rank

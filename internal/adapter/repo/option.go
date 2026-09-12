@@ -266,6 +266,30 @@ func GetOptionValue(db *gorm.DB, key string) (value string, found bool, err erro
 	return opt.Value, true, nil
 }
 
+// GetOptionValueForUpdate reads a single option row within tx with a
+// row-level lock (SELECT ... FOR UPDATE via clause.Locking — the same idiom
+// as GetChannelForUpdate in channel.go). tx must be an open transaction. On
+// PostgreSQL this blocks a concurrent reader of the same key until the
+// holder of the lock commits or rolls back, then returns that committed
+// value, instead of a plain SELECT's read-committed snapshot that could
+// still see the pre-commit value; on SQLite (hermetic test tier) the clause
+// is a no-op but the surrounding transaction still serializes writers.
+// Used where a caller must evaluate a compare-and-set (or merge a base map)
+// against the true latest committed value rather than risk racing a
+// concurrent writer of the same row — the pricing-version CAS's no-header
+// branch and the four ratio-map baseline reads in v2_pricing_write.go.
+func GetOptionValueForUpdate(tx *gorm.DB, key string) (value string, found bool, err error) {
+	var opt entity.Option
+	err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("key = ?", key).First(&opt).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return opt.Value, true, nil
+}
+
 // CASPricingVersionTx performs the compare-and-swap that guards concurrent
 // admin pricing edits: UPDATE options SET value=newVersion WHERE
 // key='PricingVersion' AND value=expected. rows-affected must be exactly 1
@@ -273,12 +297,13 @@ func GetOptionValue(db *gorm.DB, key string) (value string, found bool, err erro
 // won first or the caller's `expected` (typically the client's
 // If-Match-Pricing-Version header) is stale.
 //
-// expected==0 additionally means "never written" (GetPricingVersion's
-// documented zero-value default), so a bootstrap row is inserted first — ON
-// CONFLICT DO NOTHING, idempotent against a concurrent bootstrap — before the
-// CAS UPDATE runs against it. Without this the very first pricing write in a
-// process's lifetime would always lose the CAS: there is no row yet to match
-// key='PricingVersion' AND value='0' against.
+// expected==0 additionally means "not written yet" (currentPricingVersion's
+// zero default, v2_pricing_write.go), so a bootstrap row is inserted first —
+// ON CONFLICT DO NOTHING, idempotent against a concurrent bootstrap — before
+// the CAS UPDATE runs against it. Without this the first pricing write in
+// the database's lifetime (the row persists across process restarts) has no
+// row to match key='PricingVersion' AND value='0' against, so its CAS UPDATE
+// affects 0 rows and loses.
 func CASPricingVersionTx(tx *gorm.DB, expected, newVersion int64) (bool, error) {
 	if expected == 0 {
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
@@ -298,8 +323,8 @@ func CASPricingVersionTx(tx *gorm.DB, expected, newVersion int64) (bool, error) 
 // SetOptionMapValue updates only the in-memory OptionMap for key, issuing no
 // database write. Callers that already persisted key through their own
 // transaction (e.g. the pricing CAS above) use this to refresh the process
-// cache after commit, reusing the exact same key-dispatch updateOptionMap
-// applies for every other option write.
+// cache after commit, reusing the same key-dispatch updateOptionMap applies
+// to a plain UpdateOption write.
 func SetOptionMapValue(key, value string) error {
 	return updateOptionMap(key, value)
 }

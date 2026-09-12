@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('../../../helpers', () => ({
@@ -31,6 +31,7 @@ vi.mock('../../../components/hifi/HFShell', () => ({
 
 import HFRankings from './Rankings';
 import { API } from '../../../helpers';
+import i18n from '../../../i18n/i18n';
 
 const payload = (over = {}) => ({
   data: {
@@ -130,6 +131,58 @@ describe('Rankings page', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('rankings-empty')).toBeInTheDocument();
+    });
+  });
+
+  it('clears the previous rows and shows an error on a 429 from a later fetch', async () => {
+    API.get.mockResolvedValueOnce(payload());
+    render(<HFRankings />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('rankings-row')).toHaveLength(2);
+    });
+
+    API.get.mockRejectedValueOnce({ response: { status: 429 } });
+    fireEvent.click(screen.getByTestId('rankings-hours-6'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('rankings-error')).toBeInTheDocument();
+    });
+    // The stale table from the previous (hours=24) fetch must not survive
+    // under the newly selected (hours=6) tab.
+    expect(screen.queryByTestId('rankings-row')).toBeNull();
+    expect(screen.queryByTestId('rankings-table')).toBeNull();
+  });
+
+  it('renders the API-provided total_tokens, not a sum of only the returned (max 20) rows', async () => {
+    // rows sum to 900+300=1200; the API's own window total (42) must win.
+    API.get.mockResolvedValue(payload({ total_tokens: 42 }));
+    render(<HFRankings />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('rankings-row')).toHaveLength(2);
+    });
+    expect(screen.getByText(/total tokens in window: 42/)).toBeInTheDocument();
+  });
+
+  // Proves the Trend cell's "new"/flat-dash text is a real translation call
+  // (tr(key, fallback)), not a bare literal: a literal string would render
+  // identically in every language, but this asserts the zh-locale text
+  // differs from the English fallback used elsewhere in this file.
+  describe('Trend cell goes through i18n, not a bare literal', () => {
+    afterEach(async () => {
+      await i18n.changeLanguage('en');
+    });
+
+    it('renders the zh translation for is_new under the zh locale', async () => {
+      await i18n.changeLanguage('zh');
+      API.get.mockResolvedValue(payload());
+      render(<HFRankings />);
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('rankings-row')).toHaveLength(2);
+      });
+      expect(screen.getByText('新上榜')).toBeInTheDocument();
+      expect(screen.queryByText('new')).toBeNull();
     });
   });
 });

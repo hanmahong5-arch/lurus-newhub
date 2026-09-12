@@ -79,6 +79,12 @@ func setupTenantRankingsRouter(t *testing.T) *tenantRankingsCtx {
 	}
 	router.GET("/api/v2/:tenant_slug/analytics/rankings", mockAuth, GetTenantRankingsV2)
 
+	// Each test uses a fresh, unique tenantID (tenant-rankings-N), so it
+	// cannot collide with another test's cache entries, but reset anyway
+	// for symmetry with setupAnalyticsRouter and to keep the seam obvious.
+	t.Cleanup(resetRankingsCacheForTest)
+	resetRankingsCacheForTest()
+
 	return &tenantRankingsCtx{
 		router:   router,
 		db:       db,
@@ -135,10 +141,14 @@ func TestTenantRankingsV2_ForbiddenForNormalUser(t *testing.T) {
 
 // TestTenantRankingsV2_AdminSeesOwnTenantOnly: a tenant admin's rankings
 // must reflect only their own tenant's usage, even when another tenant logs
-// the same model name at a much larger volume. The mutation named in the
-// plan (drop tenant_id where clause) is exercised at the repo layer by
-// TestGetRankings_TenantIsolation; this test proves the same guarantee
-// holds end-to-end through the HTTP handler.
+// the same model name at a much larger volume, AND even when the request
+// itself tries to ask for the other tenant via a `tenant_id` query param —
+// the handler must resolve tenant id from the tenant context only (never
+// from the query; see GetTenantRankingsV2's doc comment). The mutation
+// named in the plan (drop tenant_id where clause) is exercised at the repo
+// layer by TestGetRankings_TenantIsolation; this test proves the same
+// guarantee holds end-to-end through the HTTP handler, including against a
+// handler that reads `tenant_id` from the query as a fallback.
 func TestTenantRankingsV2_AdminSeesOwnTenantOnly(t *testing.T) {
 	ctx := setupTenantRankingsRouter(t)
 	defer ctx.cleanup()
@@ -147,7 +157,7 @@ func TestTenantRankingsV2_AdminSeesOwnTenantOnly(t *testing.T) {
 	seedTenantRankingsLog(t, ctx.db, ctx.tenantID, "shared-model", 100, 50, 30, now-60)
 	seedTenantRankingsLog(t, ctx.db, "other-tenant", "shared-model", 100_000, 50_000, 30_000, now-60)
 
-	w := doGETWithHeaders(ctx.router, "/api/v2/acme/analytics/rankings?by=model&hours=1",
+	w := doGETWithHeaders(ctx.router, "/api/v2/acme/analytics/rankings?by=model&hours=1&tenant_id=other-tenant",
 		map[string]string{"X-Test-Role": "admin"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
@@ -193,5 +203,151 @@ func TestTenantRankingsV2_RootRoleAlsoAdmitted(t *testing.T) {
 		map[string]string{"X-Test-Role": "root"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("root caller should be admitted, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestSnapRankingHours locks the preset-snap table: an arbitrary `hours`
+// must land on one of {1,6,24,168,720}, ties resolving to the smaller
+// preset. Mutation target: `hours = h` (skip snapping) — this test alone
+// pins the function's output for values on both sides of every tie.
+func TestSnapRankingHours(t *testing.T) {
+	cases := []struct{ in, want int }{
+		{1, 1},
+		{3, 1},
+		{4, 6},
+		{15, 6},  // tie between 6 (diff 9) and 24 (diff 9) -> smaller
+		{96, 24}, // tie between 24 (diff 72) and 168 (diff 72) -> smaller
+		{100, 168},
+		{500, 720},
+	}
+	for _, c := range cases {
+		if got := snapRankingHours(c.in); got != c.want {
+			t.Errorf("snapRankingHours(%d) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+// newRankingsParamsContext builds a *gin.Context around a GET request to
+// the given query string, for exercising parseRankingsParams directly
+// without a full router.
+func newRankingsParamsContext(query string) *gin.Context {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/x?"+query, nil)
+	return c
+}
+
+// TestParseRankingsParams_SnapsToPresets: hours clamps to [1,720] then
+// snaps to a preset; an unparsable/empty hours falls back to the 24h
+// default rather than silently clamping to 1h; an unknown `by` is rejected
+// (errMsg non-empty) rather than silently falling back to "model".
+func TestParseRankingsParams_SnapsToPresets(t *testing.T) {
+	cases := []struct {
+		name      string
+		query     string
+		wantHours int
+		wantErr   bool
+	}{
+		{"snaps up to nearest preset", "hours=100", 168, false},
+		{"clamps below 1 then snaps", "hours=0", 1, false},
+		{"clamps above 720 then snaps", "hours=9999", 720, false},
+		{"omitted hours falls back to the 24h default", "", 24, false},
+		{"empty hours value falls back to the 24h default", "hours=", 24, false},
+		{"unparsable hours falls back to the 24h default", "hours=abc", 24, false},
+		{"unknown by is rejected", "by=x", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newRankingsParamsContext(tc.query)
+			_, hours, errMsg := parseRankingsParams(c)
+			if tc.wantErr {
+				if errMsg == "" {
+					t.Fatalf("query=%q: want a non-empty errMsg, got none (hours=%d)", tc.query, hours)
+				}
+				return
+			}
+			if errMsg != "" {
+				t.Fatalf("query=%q: unexpected errMsg %q", tc.query, errMsg)
+			}
+			if hours != tc.wantHours {
+				t.Errorf("query=%q: hours = %d, want %d", tc.query, hours, tc.wantHours)
+			}
+		})
+	}
+}
+
+// TestRankingsV2_UnknownByRejected: the root route returns 400 for an
+// unrecognized `by` value instead of silently answering as if `by=model`
+// had been requested.
+func TestRankingsV2_UnknownByRejected(t *testing.T) {
+	ctx := setupAnalyticsRouter(t)
+	defer ctx.cleanup()
+
+	w := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by=foo")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("by=foo: want 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestRankingsV2_HoursSnapSharesCacheEntry: two different `hours` query
+// values that snap to the same preset (168) must land on the same cache
+// entry — identical cached_at across both calls, and a window spanning
+// exactly 168 hours. Mutation target: `hours = h` (skip snapping) would
+// give each of these two calls its own cache key and a differently sized
+// window.
+func TestRankingsV2_HoursSnapSharesCacheEntry(t *testing.T) {
+	ctx := setupAnalyticsRouter(t)
+	defer ctx.cleanup()
+
+	seedPerfLog(t, ctx.db, "test-tenant", "alpha", entity.LogTypeConsume, 0, 10, 5, 100, time.Now().Unix()-60)
+
+	w1 := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by=model&hours=100")
+	if w1.Code != http.StatusOK {
+		t.Fatalf("hours=100: status %d body=%s", w1.Code, w1.Body.String())
+	}
+	body1 := parseJSON(t, w1)
+	data1 := body1["data"].(map[string]interface{})
+
+	w2 := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by=model&hours=168")
+	if w2.Code != http.StatusOK {
+		t.Fatalf("hours=168: status %d body=%s", w2.Code, w2.Body.String())
+	}
+	body2 := parseJSON(t, w2)
+	data2 := body2["data"].(map[string]interface{})
+
+	if data1["cached_at"] != data2["cached_at"] {
+		t.Errorf("cached_at differs across hours=100 and hours=168 (both snap to 168): %v vs %v", data1["cached_at"], data2["cached_at"])
+	}
+	// The reported `hours` (the snapped value) must be 168 for BOTH calls —
+	// this is the assertion the mutation actually breaks: with snapping
+	// skipped, the hours=100 call reports hours=100.
+	if got := data1["hours"]; got != float64(168) {
+		t.Errorf("hours=100 request: data.hours = %v, want 168 (snapped)", got)
+	}
+	if got := data2["hours"]; got != float64(168) {
+		t.Errorf("hours=168 request: data.hours = %v, want 168", got)
+	}
+	// Same for the window span of the call that actually exercises snapping
+	// (hours=100 -> 168h window, not a 100h one).
+	window1 := data1["window"].(map[string]interface{})
+	if got := window1["end"].(float64) - window1["start"].(float64); got != 168*3600 {
+		t.Errorf("hours=100 request: window span = %v seconds, want %v (168h, snapped)", got, 168*3600)
+	}
+	window2 := data2["window"].(map[string]interface{})
+	if got := window2["end"].(float64) - window2["start"].(float64); got != 168*3600 {
+		t.Errorf("hours=168 request: window span = %v seconds, want %v (168h)", got, 168*3600)
+	}
+}
+
+// TestResetRankingsCacheForTest_ClearsEntries: a direct unit test of the
+// reset seam itself (rather than relying on cross-test -count=N ordering to
+// observe pollution) — mutation target: a no-op resetRankingsCacheForTest
+// body leaves the probe key in place.
+func TestResetRankingsCacheForTest_ClearsEntries(t *testing.T) {
+	rankingsCache.Store("probe-key", &rankingsCacheEntry{cachedAt: 1})
+	resetRankingsCacheForTest()
+	if _, ok := rankingsCache.Load("probe-key"); ok {
+		t.Fatal("resetRankingsCacheForTest must clear every entry, found a leftover probe key")
 	}
 }

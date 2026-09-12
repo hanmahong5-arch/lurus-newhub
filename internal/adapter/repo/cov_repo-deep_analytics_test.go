@@ -199,6 +199,46 @@ func TestCountAdminExportLogs_And_ExportAdminLogsBatch_CursorPagination(t *testi
 	}
 }
 
+// TestAdminExportFilter_UpstreamRequestId locks the jsonOtherTextExpr
+// upstream_request_id clause in adminExportFilter: it must narrow both
+// CountAdminExportLogs and ExportAdminLogsBatch to exactly the row whose
+// Other JSON carries the given vendor id, and leave every other row (a
+// different id, or no key at all) out.
+func TestAdminExportFilter_UpstreamRequestId(t *testing.T) {
+	SetupTestDB(t)
+	start := common.GetTimestamp() - 3600
+	end := common.GetTimestamp() + 3600
+
+	match := repoDeepSeedAnalyticsLog(t, "default", "gpt-4", LogTypeConsume, 10, 1, 1, 5, start+1)
+	match.Other = `{"upstream_request_id":"vend-x"}`
+	if err := LOG_DB.Save(match).Error; err != nil {
+		t.Fatalf("save match row: %v", err)
+	}
+	other := repoDeepSeedAnalyticsLog(t, "default", "gpt-4", LogTypeConsume, 10, 1, 1, 5, start+2)
+	other.Other = `{"upstream_request_id":"vend-y"}`
+	if err := LOG_DB.Save(other).Error; err != nil {
+		t.Fatalf("save other-vendor row: %v", err)
+	}
+	// No upstream_request_id key at all — must never match a non-empty filter.
+	repoDeepSeedAnalyticsLog(t, "default", "gpt-4", LogTypeConsume, 10, 1, 1, 5, start+3)
+
+	total, err := CountAdminExportLogs("", 0, "", start, end, "vend-x")
+	if err != nil {
+		t.Fatalf("CountAdminExportLogs: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("count with upstream_request_id=vend-x must be 1, got %d", total)
+	}
+
+	rows, err := ExportAdminLogsBatch(0, "", 0, "", start, end, "vend-x", 10)
+	if err != nil {
+		t.Fatalf("ExportAdminLogsBatch: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Id != match.Id {
+		t.Fatalf("ExportAdminLogsBatch(upstream_request_id=vend-x) = %+v, want exactly row %d", rows, match.Id)
+	}
+}
+
 // adminExportFilter with all-zero/empty selectors must apply NO filter
 // (returns everything) — this is exercised indirectly via Count with the
 // most permissive call shape.

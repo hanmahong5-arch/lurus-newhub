@@ -2,8 +2,10 @@ package relay
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -249,6 +251,61 @@ func TestGeminiEmbeddingHandler_BatchUpstreamError(t *testing.T) {
 	}
 	if !info.IsGeminiBatchEmbedding {
 		t.Errorf("expected IsGeminiBatchEmbedding=true for batch path")
+	}
+}
+
+// TestGeminiEmbeddingHandler_ParamOverride_SkipsLurusKeys is the lock for L5
+// repair finding #17/#40/#46: GeminiEmbeddingHandler used to merge
+// info.ParamOverride into the outbound body with a bespoke loop that never
+// skipped __lurus_-prefixed internal control keys — unlike every other relay
+// handler (chat/claude/compatible/embedding/image/rerank/responses), which
+// routes through relaycommon.ApplyParamOverride. Setting
+// __lurus_force_http1 on a Gemini channel would leak that key into the
+// request Google actually receives. This drives GeminiEmbeddingHandler
+// end-to-end against a real httptest server that captures the raw request
+// body, so a regression here (reverting to the direct-merge loop) turns
+// this red rather than being caught only by a lower-level override.go test
+// that this handler does not even call into.
+func TestGeminiEmbeddingHandler_ParamOverride_SkipsLurusKeys(t *testing.T) {
+	cleanup := setupRelayDB(t)
+	defer cleanup()
+	app.InitHttpClient()
+
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(upstreamErrBody))
+	}))
+	defer srv.Close()
+
+	body := []byte(`{"model":"text-embedding-004","content":{"parts":[{"text":"hello"}]}}`)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/text-embedding-004:embedContent", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, srv.URL)
+	common.SetContextKey(c, constant.ContextKeyChannelKey, "sk-test")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "text-embedding-004")
+	common.SetContextKey(c, constant.ContextKeyChannelParamOverride, map[string]interface{}{
+		"__lurus_force_http1":  true,
+		"outputDimensionality": float64(256),
+	})
+
+	info := &relaycommon.RelayInfo{OriginModelName: "text-embedding-004", RequestURLPath: "/v1/embeddings", StartTime: time.Now()}
+	if err := GeminiEmbeddingHandler(c, info); err == nil {
+		t.Fatalf("expected upstream error from GeminiEmbeddingHandler, got nil")
+	}
+
+	if capturedBody == nil {
+		t.Fatal("upstream never received a request body")
+	}
+	if strings.Contains(string(capturedBody), "__lurus_force_http1") {
+		t.Errorf("__lurus_force_http1 leaked into the upstream request body: %s", capturedBody)
+	}
+	if !strings.Contains(string(capturedBody), "outputDimensionality") {
+		t.Errorf("a real override key must still apply: %s", capturedBody)
 	}
 }
 

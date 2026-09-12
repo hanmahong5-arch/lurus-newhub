@@ -73,6 +73,38 @@ func RecordAuditEvent(event *entity.AuditEvent) {
 	})
 }
 
+// ForgetPending removes any pending (constructed-via-NewAuditEvent-but-never-
+// recorded) entry still attributed to c. Called by middleware.AuditWriteGuard
+// once per request, after the handler returns, so a caller that built an
+// event and never passed it to RecordAuditEvent does not pin this request's
+// *gin.Context — and the abandoned event — in pendingAuditContexts forever;
+// gin pools and resets *gin.Context values between requests (gin@v1.12.0
+// context.go), so an unswept entry could eventually let a stale c.Set land
+// on an unrelated later request reusing the same pooled context. This is a
+// bound on routes mounted behind AuditWriteGuard only — a construct-without-
+// record call on an unguarded route (none exists today by grep) is not swept
+// by anything.
+func ForgetPending(c *gin.Context) {
+	pendingAuditContexts.Range(func(k, v any) bool {
+		if v == c {
+			pendingAuditContexts.Delete(k)
+		}
+		return true
+	})
+}
+
+// PendingAuditContextCount reports how many constructed-but-not-yet-recorded
+// audit events pendingAuditContexts currently holds. Test observability only
+// (for ForgetPending's leak-bound); no production caller.
+func PendingAuditContextCount() int {
+	n := 0
+	pendingAuditContexts.Range(func(_, _ any) bool {
+		n++
+		return true
+	})
+	return n
+}
+
 // DefaultAuditRetentionSeconds is the default per-event retention window
 // applied by NewAuditEvent — seven years, matching the SOC 2 / industry-norm
 // retention for security-relevant access logs. Override per-event by setting
@@ -83,6 +115,14 @@ const DefaultAuditRetentionSeconds int64 = 7 * 365 * 24 * 60 * 60
 // NewAuditEvent creates an AuditEvent from gin context with common fields pre-filled.
 // The default RetentionUntil is Timestamp + 7 years; callers may override after
 // construction for shorter or indefinite retention.
+//
+// Invariant: an event built here must be passed to RecordAuditEvent in the
+// same request (no such caller exists today by grep for
+// "NewAuditEvent(" outside "RecordAuditEvent("). Building one and dropping
+// it — instead of calling RecordAuditEvent — leaves an entry in
+// pendingAuditContexts that only middleware.AuditWriteGuard's per-request
+// ForgetPending(c) call sweeps; on a route not behind that guard the entry
+// (and the *gin.Context it points at) is never cleaned up.
 func NewAuditEvent(c *gin.Context, actorType string, actorID int, action, resource string, resourceID int, details string) *entity.AuditEvent {
 	ts := common.GetTimestamp()
 	event := &entity.AuditEvent{

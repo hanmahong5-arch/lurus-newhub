@@ -275,6 +275,7 @@ func setupAdminSessionsRevokeRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
 // leaves a durable audit.session_revoked row carrying that reason — distinct
 // from a user's own self-service revoke-others.
 func TestAdminRevokeUserSessions_AuditsReason(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
 	r, db := setupAdminSessionsRevokeRouter(t)
 	const targetUserID = 321
 
@@ -315,5 +316,44 @@ func TestAdminRevokeUserSessions_AuditsReason(t *testing.T) {
 	}
 	if !strings.Contains(event.Details, entity.SessionRevokeReasonAdminRevoked) {
 		t.Errorf("audit event details = %q, want it to contain %q", event.Details, entity.SessionRevokeReasonAdminRevoked)
+	}
+}
+
+// TestAdminRevokeUserSessions_FlagOff: with SESSION_REGISTRY_ENABLED unset
+// (default off), DELETE /api/v2/admin/users/:id/sessions answers
+// {"revoked":0} WITHOUT touching the DB, even when rows exist (left over
+// from a prior flag-on soak) — a rollback must not let this endpoint revoke
+// anything.
+func TestAdminRevokeUserSessions_FlagOff(t *testing.T) {
+	r, db := setupAdminSessionsRevokeRouter(t)
+	const targetUserID = 322
+
+	now := time.Now().Unix()
+	if err := db.Create(&entity.UserSession{
+		SessionKey: "admin-target-flagoff", UserId: targetUserID, TenantId: "default",
+		CreatedAt: now, LastSeenAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/v2/admin/users/%d/sessions", targetUserID), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	resp := ParseV2Response(t, w)
+	data := resp["data"].(map[string]interface{})
+	if data["revoked"].(float64) != 0 {
+		t.Errorf("revoked = %v, want 0 — the flag-off endpoint must not touch the DB", data["revoked"])
+	}
+
+	var row entity.UserSession
+	if err := db.Where("session_key = ?", "admin-target-flagoff").First(&row).Error; err != nil {
+		t.Fatalf("reload row: %v", err)
+	}
+	if row.RevokedAt != 0 {
+		t.Errorf("row revoked_at = %d, want 0", row.RevokedAt)
 	}
 }

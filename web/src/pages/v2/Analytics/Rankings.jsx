@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import { API } from '../../../helpers';
@@ -54,15 +54,20 @@ const usd = (quota) => `$${(quota / getQuotaPerUSD()).toFixed(2)}`;
 // Trend cell: is_new gets a distinct badge (there is no previous-window
 // baseline to compare against); otherwise show the signed rank delta.
 const Trend = ({ row }) => {
+  const { t: tr } = useTranslation();
   if (row.is_new) {
-    return <span className='muted'>new</span>;
+    return (
+      <span className='muted'>{tr('console.rankings.trend_new', 'new')}</span>
+    );
   }
   const d = row.rank_delta ?? 0;
   if (d > 0)
     return <span style={{ color: 'var(--hf-positive, #2a9d5c)' }}>▲{d}</span>;
   if (d < 0)
     return <span style={{ color: 'var(--hf-negative, #d64545)' }}>▼{-d}</span>;
-  return <span className='muted'>—</span>;
+  return (
+    <span className='muted'>{tr('console.rankings.trend_flat', '—')}</span>
+  );
 };
 
 const HFRankings = () => {
@@ -72,13 +77,19 @@ const HFRankings = () => {
   const [hours, setHours] = useState(24);
   const [rows, setRows] = useState([]);
   const [cachedAt, setCachedAt] = useState(null);
+  const [totalTokens, setTotalTokens] = useState(0);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  // null | 'load_failed' | 'rate_limited' — set on any non-403 fetch
+  // failure so a stale table from a previous tab/preset never survives
+  // under the newly selected one; see the render branch below.
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setForbidden(false);
+    setError(null);
     const params = new URLSearchParams({ by, hours: String(hours) });
     API.get(`/api/v2/${tenantSlug}/analytics/rankings?${params}`, {
       skipErrorHandler: true,
@@ -88,10 +99,20 @@ const HFRankings = () => {
         if (res?.data?.success) {
           setRows(res.data.data?.rows ?? []);
           setCachedAt(res.data.data?.cached_at ?? null);
+          setTotalTokens(res.data.data?.total_tokens ?? 0);
         }
       })
       .catch((err) => {
-        if (!cancelled && err?.response?.status === 403) setForbidden(true);
+        if (cancelled) return;
+        const status = err?.response?.status;
+        if (status === 403) {
+          setForbidden(true);
+          return;
+        }
+        // Setting `error` switches the render below off the rows/table
+        // branch entirely, so the previous tab/preset's stale rows never
+        // stay on screen under the newly selected one.
+        setError(status === 429 ? 'rate_limited' : 'load_failed');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -100,11 +121,6 @@ const HFRankings = () => {
       cancelled = true;
     };
   }, [tenantSlug, by, hours]);
-
-  const totalTokens = useMemo(
-    () => rows.reduce((s, r) => s + (r.total_tokens || 0), 0),
-    [rows],
-  );
 
   const thStyle = {
     padding: '6px 10px',
@@ -160,6 +176,26 @@ const HFRankings = () => {
                 'console.rankings.forbidden_body',
                 'You do not have permission to view rankings.',
               )}
+            </div>
+          </div>
+        </div>
+      ) : error ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='rankings-error'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {error === 'rate_limited'
+                ? tr(
+                    'console.rankings.rate_limited',
+                    'Rate limited, try again shortly.',
+                  )
+                : tr(
+                    'console.rankings.load_failed',
+                    'Failed to load rankings.',
+                  )}
             </div>
           </div>
         </div>

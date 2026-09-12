@@ -1,19 +1,23 @@
 package entity
 
 // UserTOTPBackupCode is a one-time recovery code for the TOTP step-up
-// factor: 10 are minted on TotpConfirm success (and on every regenerate),
-// returned to the caller once, and consumed one at a time via
-// UniversalVerify's method:"totp_backup" branch.
+// factor: totp.BackupCodeCount are minted on TotpConfirm success and on
+// each call to the regenerate endpoint, returned to the caller once, and
+// consumed one at a time via UniversalVerify's method:"totp_backup" branch.
 //
 // CodeHash is a one-way SHA-256 digest of "<user_id>:<code>" (see
-// internal/app/totp.HashBackupCode) — never reversible. This is
-// deliberately different from UserTOTP.SecretEncrypted, which is AES-256-GCM
-// (reversible) because the server must recover the live TOTP secret to
+// internal/app/totp.HashBackupCode) — not reversible the way
+// UserTOTP.SecretEncrypted's AES-256-GCM ciphertext is (that field must be
+// reversible because the server has to recover the live TOTP secret to
 // validate a freshly-generated 6-digit code; a backup code is presented
-// once and consumed, so the server never needs the plaintext back, and a
-// one-way hash means not even an admin with the deployment's CRYPTO_SECRET
-// can recover an unused code. The user id is mixed into the hash input as a
-// domain separator so identical codes minted for two different users cannot
+// once and consumed, so the server never needs the plaintext back). This is
+// one-way in construction, not a secrecy guarantee by itself: the code
+// space is 31^8 (backupCodeAlphabet, 8 chars) ≈ 2^40, so a DB reader (or
+// backup holder) who obtains code_hash can brute-force an unused code
+// offline in commodity time — treat this column as sensitive, the same as
+// a password-hash column, not as something an unkeyed SHA-256 alone makes
+// safe to leak. The user id is mixed into the hash input as a domain
+// separator so identical codes minted for two different users cannot
 // collide on the unique index below.
 //
 // Table user_totp_backup_codes, created lazily by

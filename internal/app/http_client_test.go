@@ -307,6 +307,50 @@ func TestProxyClientCacheBounded(t *testing.T) {
 	}
 }
 
+// TestForceH1ClientCacheBounded mirrors TestProxyClientCacheBounded for the
+// SEPARATE forceH1Clients map: without this oracle, forcing the bound check
+// at http_client.go's forceH1Clients eviction block to false (e.g. deleting
+// or short-circuiting it) leaves every other GetHttpClientFor test green,
+// because none of them insert enough distinct keys to notice (L5 repair,
+// finding routing-resilience-limits-13#7).
+func TestForceH1ClientCacheBounded(t *testing.T) {
+	common.RelayTimeout = 0
+	common.RelayMaxIdleConns = 100
+	common.RelayMaxIdleConnsPerHost = 50
+
+	ResetForceH1ClientCache()
+	t.Cleanup(ResetForceH1ClientCache)
+
+	// http scheme builds a client with no network call, so this is hermetic.
+	const inserts = maxForceH1Clients + 50
+	for i := 0; i < inserts; i++ {
+		url := fmt.Sprintf("http://force-h1-proxy-%d.invalid:8080", i)
+		client, err := GetHttpClientFor(url, true)
+		if err != nil {
+			t.Fatalf("GetHttpClientFor(%q, true): %v", url, err)
+		}
+		if client == nil {
+			t.Fatalf("nil client for %q", url)
+		}
+		forceH1ClientLock.Lock()
+		size := len(forceH1Clients)
+		forceH1ClientLock.Unlock()
+		if size > maxForceH1Clients {
+			t.Fatalf("after %d inserts the cache holds %d entries, exceeds bound %d", i+1, size, maxForceH1Clients)
+		}
+	}
+
+	forceH1ClientLock.Lock()
+	final := len(forceH1Clients)
+	forceH1ClientLock.Unlock()
+	if final == 0 || final > maxForceH1Clients {
+		t.Fatalf("final cache size %d not in (0, %d]", final, maxForceH1Clients)
+	}
+	if final >= inserts {
+		t.Fatalf("cache never evicted: holds %d of %d inserts (unbounded)", final, inserts)
+	}
+}
+
 // TestGetHttpClientFor_DefaultIsSharedPointer proves GetHttpClientFor(proxy,
 // false) is a purely additive seam: with forceHTTP1 off it must return the
 // EXACT SAME *http.Client the pre-existing callers get (GetHttpClient() for

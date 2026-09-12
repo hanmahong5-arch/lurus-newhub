@@ -40,6 +40,8 @@ func TestIsValidAuditAction(t *testing.T) {
 		{ActionCreditPoolDeleted, true},
 		{ActionSwitchPresetCreated, true},
 		{ActionAdminMaintenanceTriggered, true},
+		{ActionAuthTotpBackupRegenerated, true},
+		{ActionTotpAdminDisabled, true},
 
 		// Unknown actions — must reject. These probe the most likely typos:
 		// trailing whitespace, near-misses, empty string, invented terms.
@@ -78,14 +80,16 @@ func TestAllAuditActions_Sorted(t *testing.T) {
 func TestAllAuditActions_ContainsKnown(t *testing.T) {
 	got := AllAuditActions()
 	wantSet := map[string]struct{}{
-		ActionAuthLoginSuccess:         {},
-		ActionTokenStatusChanged:       {},
-		ActionUserQuotaAdjusted:        {},
-		ActionRedemptionInvalidDeleted: {},
-		ActionTenantBrandUpdated:       {},
-		ActionSystemShutdown:           {},
-		ActionPricingUpdated:           {},
-		ActionAdminWriteUnaudited:      {},
+		ActionAuthLoginSuccess:          {},
+		ActionTokenStatusChanged:        {},
+		ActionUserQuotaAdjusted:         {},
+		ActionRedemptionInvalidDeleted:  {},
+		ActionTenantBrandUpdated:        {},
+		ActionSystemShutdown:            {},
+		ActionPricingUpdated:            {},
+		ActionAdminWriteUnaudited:       {},
+		ActionAuthTotpBackupRegenerated: {},
+		ActionTotpAdminDisabled:         {},
 	}
 	for _, a := range got {
 		delete(wantSet, a)

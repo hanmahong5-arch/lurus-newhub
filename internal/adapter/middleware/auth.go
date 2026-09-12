@@ -190,13 +190,28 @@ func authHelper(c *gin.Context, minRole int) {
 	// a revoke's Redis DEL landing and this replica admitting one more
 	// request on the stale cookie, plus any future non-Redis store that
 	// never gets a DEL at all — see repo.IsUserSessionRevoked. Flag-gated
-	// (SESSION_REGISTRY_ENABLED, default false) and scoped to a genuine
-	// cookie-session login only: the bearer/access-token and SDK-bridge
-	// branches above already re-validate against the DB every request and
-	// carry no session_key of their own to check.
+	// (SESSION_REGISTRY_ENABLED, default false) and scoped to !useAccessToken:
+	// the bearer/access-token branch above has no gin session at all, and
+	// the SDK-bridge branch self-heals into one (session.Set+Save a few
+	// lines above) but is itself marked useAccessToken, so it is checked as
+	// a cookie session only from its NEXT request on, once it has a
+	// session_key of its own.
 	if repo.SessionRegistryEnabled() && !useAccessToken {
 		if sid := session.ID(); sid != "" {
 			if revoked, revErr := repo.IsUserSessionRevoked(sid); revErr == nil && revoked {
+				// Expire the stale cookie before responding: boj/redistore's
+				// Session.Save keeps whatever id the incoming cookie already
+				// carried (it never mints a fresh one for a non-empty id), so
+				// without this a browser that logs back in with this same
+				// cookie would recreate session_<sid> — whose registry row
+				// is permanently revoked — and be locked out of every
+				// request with SESSION_REVOKED forever, never able to log
+				// back in until it manually clears cookies. Clearing here
+				// forces the NEXT login to start from an empty cookie, which
+				// the store answers with a brand-new id.
+				session.Clear()
+				session.Options(sessions.Options{Path: "/", MaxAge: -1})
+				_ = session.Save()
 				c.JSON(http.StatusUnauthorized, gin.H{
 					"success":    false,
 					"message":    "Session has been revoked",

@@ -80,6 +80,84 @@ func TestRelay_PreChannelBindingError_RecordsErrorLog(t *testing.T) {
 	}
 }
 
+// TestRelay_PreChannelBindingError_CopiesUpstreamRequestIdWhenSet drives the
+// same pre-channel binding-error path as TestRelay_PreChannelBindingError_
+// RecordsErrorLog, but pre-seeds "upstream_request_id" the way provider.
+// doRequest would have left it from an EARLIER channel attempt in the same
+// request's retry loop (recordRelayErrorLog reads it unconditionally via
+// c.GetString — it does not require simulating a channel-stage error; this
+// is the exact same function the sibling test above already drives). A 5xx
+// from upstream on attempt 1 followed by a terminal pre-channel-style error
+// is not how retries actually fail, but the read is on the shared
+// gin.Context regardless of which stage set it, so this is a faithful lock
+// on relay.go's copy at :780.
+func TestRelay_PreChannelBindingError_CopiesUpstreamRequestIdWhenSet(t *testing.T) {
+	db, cleanup := handlerRelaySetupDB(t)
+	defer cleanup()
+	errorLogFallbackEnable(t)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{not-json`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", 55)
+	c.Set("token_id", 77)
+	c.Set("tenant_id", "acme-corp")
+	c.Set("original_model", "gpt-4o")
+	c.Set("upstream_request_id", "vend-err-1")
+
+	Relay(c, types.RelayFormatOpenAI)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for malformed body; body=%s", w.Code, w.Body.String())
+	}
+	var logs []repo.Log
+	if err := db.Where("type = ?", repo.LogTypeError).Find(&logs).Error; err != nil {
+		t.Fatalf("query error logs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("error log rows = %d, want 1", len(logs))
+	}
+	if !strings.Contains(logs[0].Other, `"upstream_request_id":"vend-err-1"`) {
+		t.Errorf("Other = %q, want upstream_request_id vend-err-1 copied onto the error row", logs[0].Other)
+	}
+}
+
+// TestRelay_PreChannelBindingError_OmitsUpstreamRequestIdWhenUnset is the
+// mirror of the test above: when no attempt ever reached provider.doRequest,
+// the error row must not carry the key at all (not even empty-string) —
+// matching the "written only when present" rule the success path follows.
+func TestRelay_PreChannelBindingError_OmitsUpstreamRequestIdWhenUnset(t *testing.T) {
+	db, cleanup := handlerRelaySetupDB(t)
+	defer cleanup()
+	errorLogFallbackEnable(t)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{not-json`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", 55)
+	c.Set("token_id", 77)
+	c.Set("tenant_id", "acme-corp")
+	c.Set("original_model", "gpt-4o")
+
+	Relay(c, types.RelayFormatOpenAI)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for malformed body; body=%s", w.Code, w.Body.String())
+	}
+	var logs []repo.Log
+	if err := db.Where("type = ?", repo.LogTypeError).Find(&logs).Error; err != nil {
+		t.Fatalf("query error logs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("error log rows = %d, want 1", len(logs))
+	}
+	if strings.Contains(logs[0].Other, "upstream_request_id") {
+		t.Errorf("Other = %q, want no upstream_request_id key when no attempt ever reached doRequest", logs[0].Other)
+	}
+}
+
 // TestRecordTerminalRelayError_SkipsWhenChannelStageHandled proves the
 // no-double-write contract: after processChannelError has owned an error
 // (recording it), the deferred fallback must NOT add a second row for the

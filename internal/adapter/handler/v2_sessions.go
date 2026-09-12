@@ -29,7 +29,7 @@ func currentSessionID(c *gin.Context) string {
 }
 
 // ListSessionsV2 returns session information for the authenticated user within
-// a tenant. Route (registered by Opus):
+// a tenant. Route (registered in api-v2-router.go):
 //
 //	GET /api/v2/:tenant_slug/sessions
 //	Auth: UserAuth middleware

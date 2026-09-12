@@ -202,3 +202,152 @@ func TestAuditWriteGuard_MetricIncrementsOnFallback(t *testing.T) {
 		t.Errorf("lurus_gateway_admin_write_unaudited_total{route=/fake/admin/widgets} = %v, want %v", after, before+1)
 	}
 }
+
+// TestAuditWriteGuard_InternalGroupAttributesSystemActor proves the guard
+// tells the internal-admin mount point apart from adminRoute by the presence
+// of "internal_api_key_id" (set by middleware.InternalApiAuth) and attributes
+// the fallback row to ActorSystem using that key's id, not "id"/ActorAdmin.
+func TestAuditWriteGuard_InternalGroupAttributesSystemActor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := &recordingAuditWriter{}
+	governance.SetAuditWriter(writer)
+	t.Cleanup(func() { governance.SetAuditWriter(&recordingAuditWriter{}) })
+
+	engine := gin.New()
+	internalAdmin := engine.Group("/fake/internal/admin")
+	internalAdmin.Use(func(c *gin.Context) { c.Set("internal_api_key_id", 5); c.Next() })
+	internalAdmin.Use(AuditWriteGuard())
+	internalAdmin.POST("/widgets", func(c *gin.Context) {
+		c.JSON(http.StatusCreated, gin.H{"success": true})
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/fake/internal/admin/widgets", nil)
+	engine.ServeHTTP(w, req)
+
+	events := waitForEvents(t, writer, 1)
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	ev := events[0]
+	if ev.ActorType != governance.ActorSystem {
+		t.Errorf("actor_type = %q, want %q (internal_api_key_id present)", ev.ActorType, governance.ActorSystem)
+	}
+	if ev.ActorID != 5 {
+		t.Errorf("actor_id = %d, want 5 (from internal_api_key_id)", ev.ActorID)
+	}
+}
+
+// TestAuditWriteGuard_JWTRootRecordsAdminSub covers RootJWTAuth's Bearer-JWT
+// branch (admin_jwt_auth.go), which never populates the "id" context key —
+// so c.GetInt("id") is 0 and the fallback must fall back further, to
+// admin_sub, rather than silently attributing the row to actor id 0 with no
+// other identifying detail.
+func TestAuditWriteGuard_JWTRootRecordsAdminSub(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := &recordingAuditWriter{}
+	governance.SetAuditWriter(writer)
+	t.Cleanup(func() { governance.SetAuditWriter(&recordingAuditWriter{}) })
+
+	engine := gin.New()
+	admin := engine.Group("/fake/admin")
+	admin.Use(func(c *gin.Context) { c.Set("admin_sub", "sub-x"); c.Next() }) // no "id" set
+	admin.Use(AuditWriteGuard())
+	admin.POST("/widgets", func(c *gin.Context) {
+		c.JSON(http.StatusCreated, gin.H{"success": true})
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/fake/admin/widgets", nil)
+	engine.ServeHTTP(w, req)
+
+	events := waitForEvents(t, writer, 1)
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	ev := events[0]
+	if ev.ActorType != governance.ActorAdmin {
+		t.Errorf("actor_type = %q, want %q", ev.ActorType, governance.ActorAdmin)
+	}
+	if ev.ActorID != 0 {
+		t.Errorf("actor_id = %d, want 0 (\"id\" was never set on this context)", ev.ActorID)
+	}
+	if !strings.Contains(ev.Details, `"admin_sub":"sub-x"`) {
+		t.Errorf("details = %q, want to contain admin_sub:sub-x", ev.Details)
+	}
+}
+
+// TestAuditWriteGuard_FallbackRecordsRouteParams proves the fallback details
+// carry the matched route's path parameters (not query/body) — without
+// them, a fallback row for a parameterised route like DELETE
+// /fake/admin/widgets/:id cannot identify which widget the request touched.
+func TestAuditWriteGuard_FallbackRecordsRouteParams(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := &recordingAuditWriter{}
+	governance.SetAuditWriter(writer)
+	t.Cleanup(func() { governance.SetAuditWriter(&recordingAuditWriter{}) })
+
+	engine := gin.New()
+	admin := engine.Group("/fake/admin")
+	admin.Use(func(c *gin.Context) { c.Set("id", 7); c.Next() })
+	admin.Use(AuditWriteGuard())
+	admin.DELETE("/widgets/:id", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"success": true})
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/fake/admin/widgets/42?extra=should-not-appear", nil)
+	engine.ServeHTTP(w, req)
+
+	events := waitForEvents(t, writer, 1)
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	details := events[0].Details
+	if !strings.Contains(details, `"params":{"id":"42"}`) {
+		t.Errorf("details = %q, want to contain params:{id:42}", details)
+	}
+	if strings.Contains(details, "should-not-appear") {
+		t.Errorf("details = %q, must not leak the query string", details)
+	}
+}
+
+// TestAuditWriteGuard_ForgetsPendingConstructWithoutRecord locks the
+// governance.ForgetPending sweep: a handler that builds an event via
+// governance.NewAuditEvent(c, …) and drops it without ever calling
+// RecordAuditEvent (the decoupled construct/record shape at
+// internal_privacy_erase.go:153-156) must not leave that entry in
+// governance's pendingAuditContexts once the request finishes — the guard's
+// own fallback still fires (no AuditedContextKey was set), but the dropped
+// event's own pending slot must be swept.
+func TestAuditWriteGuard_ForgetsPendingConstructWithoutRecord(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := &recordingAuditWriter{}
+	governance.SetAuditWriter(writer)
+	t.Cleanup(func() { governance.SetAuditWriter(&recordingAuditWriter{}) })
+
+	before := governance.PendingAuditContextCount()
+
+	engine := gin.New()
+	admin := engine.Group("/fake/admin")
+	admin.Use(func(c *gin.Context) { c.Set("id", 7); c.Next() })
+	admin.Use(AuditWriteGuard())
+	admin.POST("/orphan", func(c *gin.Context) {
+		_ = governance.NewAuditEvent(c, governance.ActorAdmin, 7,
+			governance.ActionTokenCreated, governance.ResourceToken, 1, "")
+		c.JSON(http.StatusCreated, gin.H{"success": true})
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/fake/admin/orphan", nil)
+	engine.ServeHTTP(w, req)
+
+	// The fallback row still gets written (the dropped event never marked
+	// AuditedContextKey).
+	waitForEvents(t, writer, 1)
+
+	after := governance.PendingAuditContextCount()
+	if after > before {
+		t.Errorf("PendingAuditContextCount grew from %d to %d — the dropped NewAuditEvent(c,…) call was never swept by ForgetPending", before, after)
+	}
+}

@@ -27,6 +27,12 @@ func setupAnalyticsRouter(t *testing.T) *adminGovCtx {
 	})
 	admin.GET("/analytics/model-performance", GetModelPerformanceV2)
 	admin.GET("/analytics/rankings", GetRankingsV2)
+	// rankingsCache is package-global; without this, a rankings test run
+	// after another one in the same package (or the same test under
+	// -count=N) can observe a warm cache and silently skip the query it
+	// meant to exercise.
+	t.Cleanup(resetRankingsCacheForTest)
+	resetRankingsCacheForTest()
 	return ctx
 }
 

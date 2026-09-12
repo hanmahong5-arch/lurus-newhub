@@ -513,13 +513,18 @@ var (
 	)
 
 	// AdminWriteUnauditedTotal counts admin/internal-admin write requests
-	// (POST/PUT/PATCH/DELETE under /api/v2/admin or /internal/admin, plus the
-	// root-gated POST /api/v2/:tenant_slug/pricing route) where the handler
-	// completed the request without ever calling governance.RecordAuditEvent
-	// — middleware.AuditWriteGuard's fallback path. Any nonzero value means a
-	// route is producing typed admin.write_unaudited rows instead of its own
-	// action-specific audit event; label cardinality is bounded by the
-	// (small, admin-only) route table, never the raw request path.
+	// (POST/PUT/PATCH/DELETE under /api/v2/admin or /internal/admin) where
+	// the handler completed the request without ever calling
+	// governance.RecordAuditEvent — middleware.AuditWriteGuard's fallback
+	// path. It is mounted on adminRoute and the internal adminGroup only;
+	// the root-gated POST /api/v2/:tenant_slug/pricing route is covered by
+	// its own audit call and the CI structural test
+	// (router/audit_coverage_test.go), not by this guard or this counter.
+	// Any nonzero value means a route is producing typed
+	// admin.write_unaudited rows instead of its own action-specific audit
+	// event; the label is the route's registered gin pattern
+	// (c.FullPath(), e.g. "/api/v2/admin/tenants/:id"), so cardinality is
+	// bounded by the (small, admin-only) route table.
 	AdminWriteUnauditedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,

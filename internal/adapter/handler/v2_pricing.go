@@ -38,11 +38,15 @@ func GetPricingV2(c *gin.Context) {
 
 	rawPricing := repo.GetPricing()
 	type pricingItem struct {
-		ModelName              interface{} `json:"model_name"`
-		Vendor                 interface{} `json:"vendor"`
-		QuotaType              interface{} `json:"quota_type"`
-		ModelRatio             interface{} `json:"model_ratio"`
-		ModelPrice             interface{} `json:"model_price"`
+		ModelName  interface{} `json:"model_name"`
+		Vendor     interface{} `json:"vendor"`
+		QuotaType  interface{} `json:"quota_type"`
+		ModelRatio interface{} `json:"model_ratio"`
+		ModelPrice interface{} `json:"model_price"`
+		// CacheRatio is nil (omitted) when the model has no explicit
+		// cache_ratio entry — the console prefills its editable input from
+		// this field, closing the write-only gap the field used to have.
+		CacheRatio             *float64    `json:"cache_ratio,omitempty"`
 		EnableGroups           interface{} `json:"enable_groups"`
 		SupportedEndpointTypes interface{} `json:"supported_endpoint_types"`
 	}
@@ -54,9 +58,10 @@ func GetPricingV2(c *gin.Context) {
 		vendorByID[v.ID] = v.Name
 	}
 
+	cacheRatios := ratio_setting.GetCacheRatioCopy()
 	pricing := make([]pricingItem, 0, len(rawPricing))
 	for _, p := range rawPricing {
-		pricing = append(pricing, pricingItem{
+		item := pricingItem{
 			ModelName:              p.ModelName,
 			Vendor:                 vendorByID[p.VendorID],
 			QuotaType:              p.QuotaType,
@@ -64,7 +69,11 @@ func GetPricingV2(c *gin.Context) {
 			ModelPrice:             p.ModelPrice,
 			EnableGroups:           p.EnableGroup,
 			SupportedEndpointTypes: p.SupportedEndpointTypes,
-		})
+		}
+		if cr, ok := cacheRatios[p.ModelName]; ok {
+			item.CacheRatio = &cr
+		}
+		pricing = append(pricing, item)
 	}
 
 	// Build group_ratio scoped to all groups (no per-user narrowing — this is

@@ -175,8 +175,16 @@ func HardDeleteUserTokens(ctx context.Context, userID int) (int64, error) {
 // the shared secret is security-adjacent personal data and was previously
 // left behind by the erasure cascade (SEC-C: a purged account could still
 // have a live step-up factor in user_totps). No-op (0, nil) when the user
-// never enrolled.
+// never enrolled — and, just as importantly, when the user_totps table
+// itself does not exist yet: it is created lazily on first enroll
+// (ensureUserTOTPTable in user_totp.go), so on a fresh deploy where nobody
+// has ever hit that path this DELETE would otherwise fail every erasure
+// request at this exact step ("relation user_totps does not exist"),
+// retried forever on every lifecycle tick without ever completing.
 func HardDeleteUserTOTP(ctx context.Context, userID int) (int64, error) {
+	if !DB.Migrator().HasTable(&entity.UserTOTP{}) {
+		return 0, nil
+	}
 	result := WithoutTenantIsolationCtx(ctx, DB).Unscoped().
 		Where("user_id = ?", userID).
 		Delete(&entity.UserTOTP{})
@@ -188,8 +196,14 @@ func HardDeleteUserTOTP(ctx context.Context, userID int) (int64, error) {
 
 // HardDeleteUserTOTPBackupCodes removes the user's TOTP recovery codes (used
 // and unused), if any — same security-adjacent-personal-data class as the
-// TOTP secret above, so it rides the same erasure step (SEC-C).
+// TOTP secret above, so it rides the same erasure step (SEC-C). Same lazy-
+// table guard as HardDeleteUserTOTP above and for the same reason: the
+// user_totp_backup_codes table only exists once someone has confirmed
+// enrollment, regenerated, or been force-disabled at least once.
 func HardDeleteUserTOTPBackupCodes(ctx context.Context, userID int) (int64, error) {
+	if !DB.Migrator().HasTable(&entity.UserTOTPBackupCode{}) {
+		return 0, nil
+	}
 	result := WithoutTenantIsolationCtx(ctx, DB).Unscoped().
 		Where("user_id = ?", userID).
 		Delete(&entity.UserTOTPBackupCode{})

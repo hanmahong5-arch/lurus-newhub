@@ -22,6 +22,26 @@ func CloseResponseBodyGracefully(httpResponse *http.Response) {
 	}
 }
 
+// upstreamHeadersNotForwarded lists response header names IOCopyBytesGracefully
+// must not copy from the upstream vendor onto the client-facing response.
+// X-Request-Id/X-Oneapi-Request-Id are the gateway's own minted id
+// (middleware.RequestId sets them on c.Writer before this runs); some
+// vendors send their own value under the identically-named "X-Request-Id"
+// (the OpenAI-wire convention), which would otherwise silently overwrite it
+// here. The other three are the remaining headers
+// provider.upstreamRequestIdHeaders already captures into
+// other.upstream_request_id for admins — forwarding them raw would just
+// duplicate that value under a second, undocumented channel with no tier
+// gate. http.Header canonicalizes header names (net/http, textproto), so
+// these must be written in canonical form to match src.Header's keys.
+var upstreamHeadersNotForwarded = map[string]bool{
+	"X-Request-Id":        true,
+	"X-Oneapi-Request-Id": true,
+	"Request-Id":          true,
+	"Openai-Request-Id":   true,
+	"Cf-Ray":              true,
+}
+
 func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	if c.Writer == nil {
 		return
@@ -35,8 +55,10 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	// For example, Postman will report error, and we cannot check the response at all.
 	if src != nil {
 		for k, v := range src.Header {
-			// avoid setting Content-Length
-			if k == "Content-Length" {
+			// avoid setting Content-Length, and never let the vendor's own
+			// request-id headers clobber the gateway's (see
+			// upstreamHeadersNotForwarded).
+			if k == "Content-Length" || upstreamHeadersNotForwarded[k] {
 				continue
 			}
 			c.Writer.Header().Set(k, v[0])

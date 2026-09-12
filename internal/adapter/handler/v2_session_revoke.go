@@ -109,6 +109,9 @@ func RevokeCurrentSessionV2(c *gin.Context) {
 
 // RevokeSessionByIDV2 revokes ONE of the caller's own registered devices.
 // Route: DELETE /api/v2/:tenant_slug/sessions/:id — Auth: UserAuth middleware.
+// With SESSION_REGISTRY_ENABLED off this 404s SESSION_NOT_FOUND without
+// touching the DB — a rollback or a row left over from a prior flag-on
+// soak cannot make this endpoint act on anything.
 //
 // Ownership is enforced with the same not-found-shaped IDOR pattern
 // repo.GetUserSessionByID documents (mirrors ConsumeTenantInvite/project.go):
@@ -117,7 +120,10 @@ func RevokeCurrentSessionV2(c *gin.Context) {
 // depth (the mutation this pairs with): BOTH the DB revoke (checked by
 // authHelper's revoked_at lookup) AND the Redis key deletion happen — either
 // one alone leaves a real window for the still-valid other mechanism to keep
-// admitting the revoked device.
+// admitting the revoked device. Revoking the caller's OWN current device
+// additionally clears this request's session cookie (same as
+// RevokeCurrentSessionV2) so this browser is not locked out on its next
+// request by the very row it just revoked.
 func RevokeSessionByIDV2(c *gin.Context) {
 	userID := c.GetInt("id")
 	if userID == 0 {
@@ -125,6 +131,18 @@ func RevokeSessionByIDV2(c *gin.Context) {
 			"success":    false,
 			"message":    "Not authenticated",
 			"error_code": "UNAUTHENTICATED",
+		})
+		return
+	}
+
+	// With the flag off no row was ever registered — 404 without touching
+	// the DB, so a rollback (or a soak-period row left over from a prior
+	// flag-on window) cannot make this endpoint act on anything.
+	if !repo.SessionRegistryEnabled() {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success":    false,
+			"message":    "Session not found",
+			"error_code": "SESSION_NOT_FOUND",
 		})
 		return
 	}
@@ -169,6 +187,18 @@ func RevokeSessionByIDV2(c *gin.Context) {
 	}
 	redisDeleteSessionKey(c, row.SessionKey)
 
+	// If the caller just revoked THEIR OWN current device (as opposed to a
+	// different one of their own devices), also clear this very request's
+	// cookie — same as RevokeCurrentSessionV2 — so this browser is not left
+	// holding a cookie whose id now maps to a permanently-revoked row (the
+	// re-login lockout this pairs with in authHelper's revoked_at check).
+	if sid := currentSessionID(c); sid != "" && sid == row.SessionKey {
+		session := sessions.Default(c)
+		session.Clear()
+		session.Options(sessions.Options{Path: "/", MaxAge: -1})
+		_ = session.Save()
+	}
+
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userID,
 		governance.ActionAuthSessionRevoked, governance.ResourceUser, userID,
 		fmt.Sprintf(`{"session_id":%d,"reason":%q}`, row.Id, entity.SessionRevokeReasonUserRevoked)))
@@ -180,7 +210,10 @@ func RevokeSessionByIDV2(c *gin.Context) {
 // "sign out other devices". Route: DELETE /api/v2/:tenant_slug/sessions/others
 // — Auth: UserAuth middleware. Registered before /:id in api-v2-router.go
 // (a literal path segment, not an addressable resource id — mirrors
-// /sessions/current's own exemption in v2_completeness_test.go).
+// /sessions/current's own exemption in v2_completeness_test.go). With
+// SESSION_REGISTRY_ENABLED off this answers {"revoked":0} without touching
+// the DB — a rollback or rows left over from a prior flag-on soak cannot
+// make this endpoint revoke anything.
 func RevokeOtherSessionsV2(c *gin.Context) {
 	userID := c.GetInt("id")
 	if userID == 0 {
@@ -188,6 +221,17 @@ func RevokeOtherSessionsV2(c *gin.Context) {
 			"success":    false,
 			"message":    "Not authenticated",
 			"error_code": "UNAUTHENTICATED",
+		})
+		return
+	}
+
+	// With the flag off no rows were ever registered — answer revoked:0
+	// without touching the DB, so a rollback (or leftover rows from a prior
+	// flag-on soak) cannot make this endpoint revoke anything.
+	if !repo.SessionRegistryEnabled() {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    gin.H{"revoked": 0},
 		})
 		return
 	}

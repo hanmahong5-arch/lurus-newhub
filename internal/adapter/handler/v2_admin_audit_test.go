@@ -49,6 +49,13 @@ func TestAuditCoverageV2_ReportsFallbackRoutes(t *testing.T) {
 	explicitRoute := "POST /api/v2/admin/tenants" // known-explicit per AuditExplicitRoutes
 	SetAdminWriteRoutes([]string{explicitRoute, fakeFallbackRoute})
 
+	// One admin.write_unaudited row inside the 24h window and one just
+	// outside it, so fallback_events_last_24h has a real oracle instead of
+	// only a key-presence check (a constant 0 stayed green before this):
+	// the response must count exactly the in-window row.
+	seedAuditEvent(t, ctx.db, "admin.write_unaudited", "route", 0, -1*time.Minute)
+	seedAuditEvent(t, ctx.db, "admin.write_unaudited", "route", 0, -25*time.Hour)
+
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/admin/audit/coverage", nil)
 	ctx.router.ServeHTTP(w, req)
@@ -79,8 +86,12 @@ func TestAuditCoverageV2_ReportsFallbackRoutes(t *testing.T) {
 		t.Errorf("routes_relying_on_fallback = %v, must not contain the known-explicit route %q", fallback, explicitRoute)
 	}
 
-	if _, ok := data["fallback_events_last_24h"]; !ok {
-		t.Error("response missing fallback_events_last_24h")
+	fallbackEvents24h, ok := data["fallback_events_last_24h"].(float64)
+	if !ok {
+		t.Fatal("response missing fallback_events_last_24h")
+	}
+	if int(fallbackEvents24h) != 1 {
+		t.Errorf("fallback_events_last_24h = %v, want 1 (one seeded row inside the 24h window, one seeded 25h ago must be excluded)", fallbackEvents24h)
 	}
 }
 

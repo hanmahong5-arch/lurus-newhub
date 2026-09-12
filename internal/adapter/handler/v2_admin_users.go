@@ -305,6 +305,17 @@ func RevokeUserSessionsAdminV2(c *gin.Context) {
 		return
 	}
 
+	// With the flag off no rows were ever registered — answer revoked:0
+	// without touching the DB, so a rollback (or leftover rows from a prior
+	// flag-on soak) cannot make this endpoint revoke anything.
+	if !repo.SessionRegistryEnabled() {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    gin.H{"revoked": 0},
+		})
+		return
+	}
+
 	rows, err := repo.RevokeAllUserSessions(userID, entity.SessionRevokeReasonAdminRevoked)
 	if err != nil {
 		common.SysError("RevokeUserSessionsAdminV2: failed: " + err.Error())

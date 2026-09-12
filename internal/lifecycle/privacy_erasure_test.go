@@ -236,6 +236,78 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 	}
 }
 
+// openErasureTestDBNoTOTPTables mirrors openErasureTestDB but deliberately
+// omits entity.UserTOTP / entity.UserTOTPBackupCode from the migrated set —
+// reproducing the default post-deploy state where nobody has ever hit
+// either table's lazy AutoMigrate path (TotpEnroll / TotpConfirm /
+// RegenerateTotpBackupCodes / ForceDisableTotpV2), so neither table exists
+// when the erasure cascade runs.
+func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := fmt.Sprintf("file:erasure_no_totp%d?mode=memory&cache=shared", erasureDBCounter.Add(1))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, m := range []interface{}{
+		&repo.User{}, &repo.Token{}, &repo.Log{},
+		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
+		&entity.PrivacyErasureRequest{},
+	} {
+		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("migrate %T: %v", m, err)
+		}
+	}
+
+	prevDB, prevLogDB := repo.DB, repo.LOG_DB
+	repo.DB, repo.LOG_DB = db, db
+	t.Cleanup(func() {
+		repo.DB, repo.LOG_DB = prevDB, prevLogDB
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}
+
+// TestExecuteErasure_TOTPTablesNeverCreated is the lock for the L6 repair
+// finding: before repo.HardDeleteUserTOTP/HardDeleteUserTOTPBackupCodes
+// guarded on DB.Migrator().HasTable, this step of the cascade errored with
+// "relation user_totps does not exist" on any deployment where the lazily-
+// created table had never been touched — every pending erasure request
+// failed at step 1 and was retried forever, never completing. Mutation:
+// removing either HasTable guard makes this executeErasure call error.
+func TestExecuteErasure_TOTPTablesNeverCreated(t *testing.T) {
+	db := openErasureTestDBNoTOTPTables(t)
+
+	accountID := int64(9999)
+	user := repo.User{
+		Username: "no-totp-victim", Email: "no-totp@example.com",
+		Status: common.UserStatusEnabled, Group: "default", LurusAccountID: &accountID,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	row, err := repo.CreateErasureRequestIdempotent(context.Background(),
+		"evt-erase-no-totp", accountID, "", "user_requested",
+		user.Id, "default", repo.ErasureStatusPending)
+	if err != nil {
+		t.Fatalf("seed erasure request: %v", err)
+	}
+
+	if err := executeErasure(context.Background(), row); err != nil {
+		t.Fatalf("executeErasure must complete even when user_totp(s) tables were never created: %v", err)
+	}
+
+	final, err := repo.GetErasureRequestByEventID(context.Background(), "evt-erase-no-totp")
+	if err != nil {
+		t.Fatalf("get request: %v", err)
+	}
+	if final.Status != repo.ErasureStatusCompleted || final.CompletedAt == nil {
+		t.Errorf("request status = %q completed_at=%v, want completed", final.Status, final.CompletedAt)
+	}
+}
+
 // TestExecuteErasure_ResumesFromStepCursor verifies crash-resume: a request
 // persisted at step logs_anonymized must NOT re-run the earlier steps —
 // tokens seeded after the (simulated) crash survive untouched.

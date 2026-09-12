@@ -202,6 +202,47 @@ func dryRunErrorIsRequestDependent(err error) bool {
 		strings.Contains(msg, "operation not supported for type: Null")
 }
 
+// lurusKnownControlKeys lists the __lurus_-prefixed param_override keys
+// newhub itself reads (see lurusInternalOverrideKeyPrefix, override.go) and
+// the JSON kind each must be. A key with this prefix that is either not in
+// this map (unknown control key — most likely a typo of a real one, e.g.
+// "__lurus_force_http_1") or present with the wrong JSON type (e.g. a string
+// instead of a bool) is silently treated as false by
+// paramOverrideBool/relay_info.go — this validator turns that into a
+// save-time 400 instead of a channel that looks configured but never
+// actually engages the feature.
+var lurusKnownControlKeys = map[string]string{
+	lurusForceHTTP1ParamKey: "bool",
+}
+
+// validateLurusControlKeys rejects a param_override document containing an
+// unknown __lurus_-prefixed key, or a known one with the wrong JSON type.
+func validateLurusControlKeys(m map[string]interface{}) error {
+	for key, value := range m {
+		if !strings.HasPrefix(key, lurusInternalOverrideKeyPrefix) {
+			continue
+		}
+		kind, known := lurusKnownControlKeys[key]
+		if !known {
+			return &ChannelConfigValidationError{
+				Field:   "param_override",
+				Code:    types.ErrorCodeChannelParamOverrideInvalid,
+				Message: fmt.Sprintf("param_override key %q is not a recognised internal control key", key),
+			}
+		}
+		if kind == "bool" {
+			if _, ok := value.(bool); !ok {
+				return &ChannelConfigValidationError{
+					Field:   "param_override",
+					Code:    types.ErrorCodeChannelParamOverrideInvalid,
+					Message: fmt.Sprintf("param_override key %q must be a JSON boolean", key),
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // ValidateParamOverride dry-runs raw against the same override engine the
 // relay path uses (ApplyParamOverride's two branches: the "operations" format
 // via applyOperations, or the legacy flat-merge via applyOperationsLegacy), so
@@ -232,6 +273,10 @@ func ValidateParamOverride(raw string) error {
 	}
 
 	if err := validateOperationsStructure(m); err != nil {
+		return err
+	}
+
+	if err := validateLurusControlKeys(m); err != nil {
 		return err
 	}
 

@@ -25,11 +25,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
@@ -157,10 +160,14 @@ type sessionRevokeDBCtx struct {
 	db     *gorm.DB
 }
 
-// setupSessionRevokeDBRouter wires DELETE .../sessions/:id and
-// .../sessions/others against a real sqlite-backed repo.DB, with a mock auth
-// that sets both "id" and a currentSessionFake (so currentSessionID(c)
-// resolves to currentKey).
+// setupSessionRevokeDBRouter wires DELETE .../sessions/:id, .../sessions
+// /others and .../sessions/current against a real sqlite-backed repo.DB
+// (also carrying AuditEvent/AuditChainHead so pollAuditRow works), with a
+// mock auth that sets both "id" and a currentSessionFake (so
+// currentSessionID(c) resolves to currentKey), and a pinnedAuditWriter
+// (defined in v2_pricing_write_test.go, same package) so
+// governance.RecordAuditEvent actually persists a row here instead of
+// no-op'ing against an unconfigured writer.
 func setupSessionRevokeDBRouter(t *testing.T, callerID int, currentKey string) *sessionRevokeDBCtx {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -170,13 +177,16 @@ func setupSessionRevokeDBRouter(t *testing.T, callerID int, currentKey string) *
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&entity.UserSession{}); err != nil {
-		t.Fatalf("auto migrate UserSession: %v", err)
+	for _, tbl := range []interface{}{&entity.UserSession{}, &entity.AuditEvent{}, &entity.AuditChainHead{}} {
+		if err := db.AutoMigrate(tbl); err != nil {
+			t.Fatalf("auto migrate %T: %v", tbl, err)
+		}
 	}
 
 	prevDB := repo.DB
 	prevRedisEnabled := common.RedisEnabled
 	repo.DB = db
+	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
 	common.RedisEnabled = false // exercised separately with a real miniredis below
 
 	r := gin.New()
@@ -190,6 +200,7 @@ func setupSessionRevokeDBRouter(t *testing.T, callerID int, currentKey string) *
 		c.Next()
 	}
 	r.DELETE("/api/v2/:tenant_slug/sessions/others", mockAuth, RevokeOtherSessionsV2)
+	r.DELETE("/api/v2/:tenant_slug/sessions/current", mockAuth, RevokeCurrentSessionV2)
 	r.DELETE("/api/v2/:tenant_slug/sessions/:id", mockAuth, RevokeSessionByIDV2)
 
 	t.Cleanup(func() {
@@ -220,6 +231,7 @@ func seedRevokeTestSession(t *testing.T, db *gorm.DB, key string, userID int) *e
 // status code to enumerate other users' session ids), and the row itself is
 // left untouched (revoked_at stays 0).
 func TestV2SessionRevokeByID_NotOwned404(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
 	ctx := setupSessionRevokeDBRouter(t, 100, "")
 	victimRow := seedRevokeTestSession(t, ctx.db, "sess-victim", 200) // owned by user 200, not the caller (100)
 
@@ -249,6 +261,7 @@ func TestV2SessionRevokeByID_NotOwned404(t *testing.T) {
 // the caller's own session id succeeds (204) and the row is revoked with
 // reason "user_revoked".
 func TestV2SessionRevokeByID_OwnedSucceeds(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
 	ctx := setupSessionRevokeDBRouter(t, 100, "")
 	row := seedRevokeTestSession(t, ctx.db, "sess-mine", 100)
 
@@ -268,11 +281,71 @@ func TestV2SessionRevokeByID_OwnedSucceeds(t *testing.T) {
 	}
 }
 
+// TestV2SessionRevokeByID_FlagOff_NotFound: with SESSION_REGISTRY_ENABLED
+// unset (default off), DELETE .../sessions/:id 404s SESSION_NOT_FOUND WITHOUT
+// touching the DB, even for a row the caller genuinely owns — a rollback (or
+// a row left over from a prior flag-on soak) must not let this endpoint
+// revoke anything.
+func TestV2SessionRevokeByID_FlagOff_NotFound(t *testing.T) {
+	ctx := setupSessionRevokeDBRouter(t, 100, "")
+	row := seedRevokeTestSession(t, ctx.db, "sess-mine-flagoff", 100)
+
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/v2/acme/sessions/%d", row.Id), nil)
+	w := httptest.NewRecorder()
+	ctx.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error_code"] != "SESSION_NOT_FOUND" {
+		t.Errorf("error_code = %v, want SESSION_NOT_FOUND", resp["error_code"])
+	}
+	var reloaded entity.UserSession
+	if err := ctx.db.Where("id = ?", row.Id).First(&reloaded).Error; err != nil {
+		t.Fatalf("reload row: %v", err)
+	}
+	if reloaded.RevokedAt != 0 {
+		t.Errorf("row revoked_at = %d, want 0 — the flag-off endpoint must not touch the DB", reloaded.RevokedAt)
+	}
+}
+
+// TestV2SessionRevokeCurrent_MarksLogoutReason: with SESSION_REGISTRY_ENABLED
+// on and a registered row whose session_key matches this request's
+// currentSessionFake id, DELETE .../sessions/current must mark that row's
+// own reason "logout" — distinct from "user_revoked"/"user_revoked_others",
+// so the audit/registry trail can tell an ordinary logout apart from the
+// caller revoking a DIFFERENT device of their own.
+func TestV2SessionRevokeCurrent_MarksLogoutReason(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
+	const userID = 100
+	ctx := setupSessionRevokeDBRouter(t, userID, "sess-current-logout")
+	row := seedRevokeTestSession(t, ctx.db, "sess-current-logout", userID)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v2/acme/sessions/current", nil)
+	w := httptest.NewRecorder()
+	ctx.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	var reloaded entity.UserSession
+	if err := ctx.db.Where("id = ?", row.Id).First(&reloaded).Error; err != nil {
+		t.Fatalf("reload row: %v", err)
+	}
+	if reloaded.RevokedAt == 0 || reloaded.RevokeReason != entity.SessionRevokeReasonLogout {
+		t.Errorf("row not marked logout as expected: revoked_at=%d reason=%q", reloaded.RevokedAt, reloaded.RevokeReason)
+	}
+}
+
 // TestV2SessionsOthers_KeepsCurrent: revoking "other devices" leaves the
 // CALLER'S OWN current session (matched by session_key, via
 // currentSessionID(c)) active, and revokes every other active session of
 // that same user with reason "user_revoked_others", returning the count.
 func TestV2SessionsOthers_KeepsCurrent(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
 	const userID = 100
 	ctx := setupSessionRevokeDBRouter(t, userID, "sess-current")
 
@@ -313,6 +386,49 @@ func TestV2SessionsOthers_KeepsCurrent(t *testing.T) {
 	if stranger.RevokedAt != 0 {
 		t.Errorf("a different user's session was revoked by this call: revoked_at=%d", stranger.RevokedAt)
 	}
+
+	event := pollAuditRow(t, governance.ActionAuthSessionRevoked, 2*time.Second)
+	if event == nil {
+		t.Fatal("no auth.session_revoked audit row appeared for revoke-others")
+	}
+	if !strings.Contains(event.Details, "user_revoked_others") {
+		t.Errorf("audit event details = %q, want it to contain %q", event.Details, "user_revoked_others")
+	}
+	if !strings.Contains(event.Details, `"revoked":2`) {
+		t.Errorf("audit event details = %q, want it to contain %q", event.Details, `"revoked":2`)
+	}
+}
+
+// TestV2SessionsOthers_FlagOff: with SESSION_REGISTRY_ENABLED unset (default
+// off), DELETE .../sessions/others answers {"revoked":0} WITHOUT touching
+// the DB, even when rows exist (left over from a prior flag-on soak) — a
+// rollback must not let this endpoint revoke anything.
+func TestV2SessionsOthers_FlagOff(t *testing.T) {
+	const userID = 101
+	ctx := setupSessionRevokeDBRouter(t, userID, "sess-current-flagoff")
+	seedRevokeTestSession(t, ctx.db, "sess-current-flagoff", userID)
+	other := seedRevokeTestSession(t, ctx.db, "sess-other-flagoff", userID)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v2/acme/sessions/others", nil)
+	w := httptest.NewRecorder()
+	ctx.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	data := resp["data"].(map[string]interface{})
+	if data["revoked"].(float64) != 0 {
+		t.Errorf("revoked = %v, want 0 — the flag-off endpoint must not touch the DB", data["revoked"])
+	}
+	var reloaded entity.UserSession
+	if err := ctx.db.Where("id = ?", other.Id).First(&reloaded).Error; err != nil {
+		t.Fatalf("reload row: %v", err)
+	}
+	if reloaded.RevokedAt != 0 {
+		t.Errorf("row revoked_at = %d, want 0", reloaded.RevokedAt)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +458,7 @@ func setupSessionE2ERouter(t *testing.T) *sessionE2ECtx {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	for _, tbl := range []interface{}{&repo.User{}, &repo.Tenant{}, &entity.UserSession{}} {
+	for _, tbl := range []interface{}{&repo.User{}, &repo.Tenant{}, &entity.UserSession{}, &repo.Token{}, &repo.Log{}} {
 		if err := db.AutoMigrate(tbl); err != nil {
 			t.Fatalf("auto migrate %T: %v", tbl, err)
 		}
@@ -365,12 +481,14 @@ func setupSessionE2ERouter(t *testing.T) *sessionE2ECtx {
 	}
 
 	prevDB := repo.DB
+	prevLogDB := repo.LOG_DB
 	prevSQLite := common.UsingSQLite
 	prevPG := common.UsingPostgreSQL
 	prevRedisEnabled := common.RedisEnabled
 	prevRDB := common.RDB
 
 	repo.DB = db
+	repo.LOG_DB = db
 	common.UsingSQLite = true
 	common.UsingPostgreSQL = false
 	common.RedisEnabled = true // governs the throttle guard AND RedisDel
@@ -399,6 +517,7 @@ func setupSessionE2ERouter(t *testing.T) *sessionE2ECtx {
 
 	t.Cleanup(func() {
 		repo.DB = prevDB
+		repo.LOG_DB = prevLogDB
 		common.UsingSQLite = prevSQLite
 		common.UsingPostgreSQL = prevPG
 		common.RedisEnabled = prevRedisEnabled
@@ -457,6 +576,42 @@ func TestV2SessionRevokeByID_DeletesRedisKeyAnd401(t *testing.T) {
 	bID := rows[1].Id // second login registered second — B's row.
 	bSessionKey := rows[1].SessionKey
 
+	// Before any revoke: GET .../sessions as A must list BOTH rows, with
+	// is_current true on EXACTLY the one whose id is A's own row (not B's) —
+	// this is the half of ListSessionsV2's contract no other test in this
+	// package asserts (v2_sessions_test.go's hermetic router never mounts
+	// real session middleware, so it can only ever prove is_current==false).
+	listW := ctx.do(http.MethodGet, "/api/v2/e2e-tenant/sessions", cookieA)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("GET sessions as A status = %d, want 200, body=%s", listW.Code, listW.Body.String())
+	}
+	var listResp struct {
+		Data struct {
+			Items []struct {
+				ID        float64 `json:"id"`
+				IsCurrent bool    `json:"is_current"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(listW.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("parse GET sessions body: %v — raw: %s", err, listW.Body.String())
+	}
+	if len(listResp.Data.Items) != 2 {
+		t.Fatalf("GET sessions as A items = %d, want 2", len(listResp.Data.Items))
+	}
+	currentCount := 0
+	for _, item := range listResp.Data.Items {
+		if item.IsCurrent {
+			currentCount++
+			if int(item.ID) == bID {
+				t.Errorf("is_current=true on id=%d, which is B's row — A's own row must be the current one", bID)
+			}
+		}
+	}
+	if currentCount != 1 {
+		t.Errorf("exactly one item must have is_current=true, got %d", currentCount)
+	}
+
 	// A revokes B's session by id.
 	delW := ctx.do(http.MethodDelete, fmt.Sprintf("/api/v2/e2e-tenant/sessions/%d", bID), cookieA)
 	if delW.Code != http.StatusNoContent {
@@ -491,5 +646,93 @@ func TestV2SessionRevokeByID_DeletesRedisKeyAnd401(t *testing.T) {
 	probeA := ctx.do(http.MethodGet, "/probe", cookieA)
 	if probeA.Code != http.StatusOK {
 		t.Errorf("probe as A after revoking B's session status = %d, want 200, body=%s", probeA.Code, probeA.Body.String())
+	}
+}
+
+// TestRevokeSessionByID_RedisKeyGone is the HARD oracle for the Redis
+// deletion half of the defence-in-depth pair — deliberately a SEPARATE test
+// from TestV2SessionRevokeByID_DeletesRedisKeyAnd401 above (which only logs
+// the key's presence, on purpose, so that mutating away RedisDel ALONE
+// leaves it green via the revoked_at check). This test asserts the key is
+// actually gone under UNMUTATED code; it is not the mutation-pairing test.
+func TestRevokeSessionByID_RedisKeyGone(t *testing.T) {
+	const userID = 8
+	ctx := setupSessionE2ERouter(t)
+
+	cookieA := ctx.loginAndProbe(t, userID)
+	cookieB := ctx.loginAndProbe(t, userID)
+
+	var rows []entity.UserSession
+	if err := ctx.db.Where("user_id = ?", userID).Order("id ASC").Find(&rows).Error; err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("registered rows = %d, want 2 (one per login)", len(rows))
+	}
+	bID := rows[1].Id
+	bSessionKey := rows[1].SessionKey
+
+	if n, err := ctx.rdb.Exists(context.Background(), "session_"+bSessionKey).Result(); err != nil || n == 0 {
+		t.Fatalf("precondition failed: session_%s must exist before the revoke (err=%v, exists=%d)", bSessionKey, err, n)
+	}
+
+	delW := ctx.do(http.MethodDelete, fmt.Sprintf("/api/v2/e2e-tenant/sessions/%d", bID), cookieA)
+	if delW.Code != http.StatusNoContent {
+		t.Fatalf("revoke status = %d, want 204, body=%s", delW.Code, delW.Body.String())
+	}
+
+	n, err := ctx.rdb.Exists(context.Background(), "session_"+bSessionKey).Result()
+	if err != nil {
+		t.Fatalf("redis EXISTS session_%s: %v", bSessionKey, err)
+	}
+	if n != 0 {
+		t.Errorf("session_%s still exists in Redis after revoke — RedisDel must actually delete it", bSessionKey)
+	}
+
+	_ = cookieB // used only to distinguish A/B logins above; the 401 half is covered by the sibling test.
+}
+
+// TestV2SessionRevokeByID_OwnCurrentRow_ClearsCookieAndAllowsRelogin: when
+// the caller revokes-by-id THEIR OWN current device (not a different one of
+// their own devices — see TestV2SessionsOthers_KeepsCurrent /
+// TestRevokeSessionByID_RedisKeyGone for that), the response must clear this
+// browser's own session cookie (a Set-Cookie header), and — pairing with
+// authHelper's SESSION_REVOKED branch fix — a subsequent login from a jar
+// that honoured that Set-Cookie (i.e. sends NO cookie, exactly like a real
+// browser that just dropped an expired one) must succeed and NOT be locked
+// out by the now-permanently-revoked old row.
+func TestV2SessionRevokeByID_OwnCurrentRow_ClearsCookieAndAllowsRelogin(t *testing.T) {
+	const userID = 9
+	ctx := setupSessionE2ERouter(t)
+
+	cookieA := ctx.loginAndProbe(t, userID)
+
+	var rows []entity.UserSession
+	if err := ctx.db.Where("user_id = ?", userID).Order("id ASC").Find(&rows).Error; err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("registered rows = %d, want 1", len(rows))
+	}
+	ownID := rows[0].Id
+
+	delW := ctx.do(http.MethodDelete, fmt.Sprintf("/api/v2/e2e-tenant/sessions/%d", ownID), cookieA)
+	if delW.Code != http.StatusNoContent {
+		t.Fatalf("revoke status = %d, want 204, body=%s", delW.Code, delW.Body.String())
+	}
+	if len(delW.Header().Values("Set-Cookie")) == 0 {
+		t.Error("revoking one's own current session must clear this browser's cookie (Set-Cookie expected, got none)")
+	}
+
+	// A real jar that honoured that Set-Cookie sends no cookie on its next
+	// request — re-login "with an empty jar" must mint a fresh id and must
+	// NOT be locked out by the row just revoked above.
+	newCookie := ctx.loginAndProbe(t, userID)
+	if newCookie == cookieA {
+		t.Fatal("re-login produced the SAME cookie as before the revoke — the store did not mint a fresh id")
+	}
+	probe := ctx.do(http.MethodGet, "/probe", newCookie)
+	if probe.Code != http.StatusOK {
+		t.Fatalf("probe after re-login status = %d, want 200, body=%s", probe.Code, probe.Body.String())
 	}
 }

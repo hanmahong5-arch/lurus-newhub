@@ -528,7 +528,9 @@
                 }
               }
             },
-            "headers": {}
+            "headers": {
+              "X-Lurus-Affinity-Key": { "$ref": "#/components/headers/XLurusAffinityKey" }
+            }
           }
         },
         "security": [
@@ -5120,7 +5122,7 @@
         "schema": { "type": "integer" }
       },
       "XLurusAffinityKey": {
-        "description": "会话亲和性绑定的 HMAC 派生键。仅当本次请求携带可识别的会话来源（X-Session-Id 请求头 / OpenAI prompt_cache_key / Claude metadata.user_id）时才出现；一次性调用（无会话来源）不携带此头。可原样传给 DELETE /api/v2/admin/routing/affinity/{key} 清除该绑定。",
+        "description": "会话亲和性绑定的 HMAC 派生键。仅当本次请求携带可识别的会话来源（X-Session-Id 请求头 / OpenAI prompt_cache_key / Claude metadata.user_id）时才出现；一次性调用（无会话来源）不携带此头。可原样传给 DELETE /api/v2/admin/routing/affinity/{key} 清除该绑定。任何经 relay 主路径且带上述会话来源之一的路由都可能出现此头，不限于本文档逐条列出 headers 的端点（例如带 X-Session-Id 的 embeddings/images/rerank 请求）。",
         "schema": { "type": "string" }
       }
     },

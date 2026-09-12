@@ -164,10 +164,13 @@ func TestGetAffinityStatsV2_ReturnsLiveSnapshot(t *testing.T) {
 	if data["backend"] != "memory" {
 		t.Errorf("backend = %v, want memory (RedisEnabled=false in this test)", data["backend"])
 	}
-	for _, field := range []string{"hit", "miss", "stale", "mem_entries"} {
+	for _, field := range []string{"enabled", "ttl_seconds", "hit", "miss", "stale", "mem_entries"} {
 		if _, present := data[field]; !present {
 			t.Errorf("missing field %q in response: %v", field, data)
 		}
+	}
+	if body["scope"] != "replica" {
+		t.Errorf("top-level scope = %v, want %q (these counters are per-replica)", body["scope"], "replica")
 	}
 }
 
@@ -256,8 +259,16 @@ func TestPurgeAllAffinityBindingsV2_Redis_RemovesEveryBindingAndAudits(t *testin
 	}
 
 	w := doRouting(ctx, http.MethodDelete, "/api/v2/admin/routing/affinity?all=true")
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204, body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", w.Code, w.Body.String())
+	}
+	body := parseRoutingBody(t, w)
+	data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data is not a map: %T", body["data"])
+	}
+	if got, _ := data["purged"].(float64); got != 3 {
+		t.Errorf("data.purged = %v, want 3", data["purged"])
 	}
 
 	for _, key := range []string{"all-purge-1", "all-purge-2", "all-purge-3"} {
@@ -275,6 +286,65 @@ func TestPurgeAllAffinityBindingsV2_Redis_RemovesEveryBindingAndAudits(t *testin
 	}
 	if !strings.Contains(row.Details, `"scope":"all"`) {
 		t.Errorf("audit Details = %q, want scope:all", row.Details)
+	}
+	if !strings.Contains(row.Details, `"purged":3`) {
+		t.Errorf("audit Details = %q, want purged count 3", row.Details)
+	}
+}
+
+// TestPurgeAffinityBindingV2_RedisError_Returns500 is the lock for finding
+// routing-resilience-limits-11#6/#20/#47: a Redis failure while purging one
+// binding must surface as 500, never as the same 404 an operator would read
+// as "nothing to purge". Closing miniredis before the DELETE forces
+// app.PurgeAffinityKey's Del call to return a real error.
+func TestPurgeAffinityBindingV2_RedisError_Returns500(t *testing.T) {
+	ctx := setupRoutingTestRouter(t, true)
+	ctx.mr.Close() // simulate a Redis outage: the client can no longer reach it
+
+	w := doRouting(ctx, http.MethodDelete, "/api/v2/admin/routing/affinity/some-key")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 on a Redis failure, body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestPurgeAffinityBindingV2_JWTActorZero_RecordsAdminSub is the lock for
+// finding routing-resilience-limits-11#23: RootJWTAuth's Bearer-JWT branch
+// never sets "id" in context (admin_jwt_auth.go), so the mock here matches
+// that shape (admin_sub set, "id" left at its zero value) rather than the
+// session-shaped mock every other test in this file uses — proving the
+// audit row still attributes the actor via admin_sub instead of recording
+// ActorID=0 with no other trace of who purged the binding.
+func TestPurgeAffinityBindingV2_JWTActorZero_RecordsAdminSub(t *testing.T) {
+	ctx := setupRoutingTestRouter(t, true)
+	// Rebuild the router with a JWT-shaped mock actor (no "id" key) instead
+	// of setupRoutingTestRouter's session-shaped mockRoot.
+	router := gin.New()
+	mockJWTRoot := func(c *gin.Context) {
+		c.Set("admin_sub", "zitadel|root-actor-42")
+		c.Next()
+	}
+	router.DELETE("/api/v2/admin/routing/affinity/:key", mockJWTRoot, PurgeAffinityBindingV2)
+	ctx.router = router
+
+	const key = "jwt-actor-purge-key"
+	if err := ctx.rdb.Set(t.Context(), "session_affinity:"+key, "5|default", time.Hour).Err(); err != nil {
+		t.Fatalf("seed redis key: %v", err)
+	}
+
+	w := doRouting(ctx, http.MethodDelete, "/api/v2/admin/routing/affinity/"+key)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204, body=%s", w.Code, w.Body.String())
+	}
+
+	row := pollAuditRow(t, governance.ActionRoutingAffinityPurged, 2*time.Second)
+	if row == nil {
+		t.Fatal("expected a routing.affinity_purged audit row, found none")
+	}
+	if row.ActorID != 0 {
+		t.Errorf("audit ActorID = %d, want 0 (RootJWTAuth's Bearer-JWT branch never sets \"id\")", row.ActorID)
+	}
+	if !strings.Contains(row.Details, `"admin_sub":"zitadel|root-actor-42"`) {
+		t.Errorf("audit Details = %q, want admin_sub to attribute the JWT-authenticated actor", row.Details)
 	}
 }
 

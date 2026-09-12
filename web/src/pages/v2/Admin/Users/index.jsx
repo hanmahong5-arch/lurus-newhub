@@ -263,9 +263,14 @@ const HFAdminUsers = () => {
   const [deleting, setDeleting] = useState(null);
   const [actioning, setActioning] = useState(false);
   // Force-disable TOTP (L6): a reason prompt gates the call, and the call
-  // itself is gated behind the acting root's OWN step-up verification —
-  // never a bare session/role check (mitigates a stolen root session
-  // stripping any user's 2FA with one click).
+  // itself is gated behind the acting root's OWN step-up verification. This
+  // mitigates a stolen root Bearer JWT (RootJWTAuth's bearer branch never
+  // sets the session "id" key SecureVerificationRequired reads, so a bare
+  // JWT 401s before reaching the handler). It does NOT mitigate a stolen
+  // root SESSION cookie for a root who has no TOTP of their own enrolled:
+  // that root's step-up is POST /api/verify {"method":"session"} with no
+  // credential at all (secure_verification.go's unenrolled branch), so the
+  // gate is only as strong as the acting root's own 2FA enrollment.
   const [disabling2FA, setDisabling2FA] = useState(null); // the target user row
   const [reason2FA, setReason2FA] = useState('');
   const searchRef = useRef(null);
