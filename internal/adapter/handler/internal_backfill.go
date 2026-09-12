@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
@@ -30,6 +31,9 @@ func InternalBackfillTokenAccountIDs(c *gin.Context) {
 	}
 
 	if len(tokens) == 0 {
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorSystem, c.GetInt("internal_api_key_id"),
+			governance.ActionAdminMaintenanceTriggered, governance.ResourceSystem, 0,
+			`{"op":"backfill-token-accounts","tokens_updated":0}`))
 		c.JSON(http.StatusOK, gin.H{"message": "no tokens to backfill", "updated": 0})
 		return
 	}
@@ -81,11 +85,15 @@ func InternalBackfillTokenAccountIDs(c *gin.Context) {
 		updated++
 	}
 
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorSystem, c.GetInt("internal_api_key_id"),
+		governance.ActionAdminMaintenanceTriggered, governance.ResourceSystem, 0,
+		fmt.Sprintf(`{"op":"backfill-token-accounts","total_tokens":%d,"tokens_updated":%d}`, len(tokens), updated)))
+
 	c.JSON(http.StatusOK, gin.H{
-		"message":       "backfill complete",
-		"total_tokens":  len(tokens),
-		"unique_users":  len(userIDs),
-		"users_matched": len(userToAccount),
+		"message":        "backfill complete",
+		"total_tokens":   len(tokens),
+		"unique_users":   len(userIDs),
+		"users_matched":  len(userToAccount),
 		"tokens_updated": updated,
 	})
 }

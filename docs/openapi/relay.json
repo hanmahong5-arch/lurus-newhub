@@ -387,7 +387,8 @@
               "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
               "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" },
               "X-Request-Cost": { "$ref": "#/components/headers/XRequestCost" },
-              "X-Quota-Remaining": { "$ref": "#/components/headers/XQuotaRemaining" }
+              "X-Quota-Remaining": { "$ref": "#/components/headers/XQuotaRemaining" },
+              "X-Lurus-Affinity-Key": { "$ref": "#/components/headers/XLurusAffinityKey" }
             }
           },
           "400": {
@@ -1544,7 +1545,8 @@
               "X-RateLimit-Remaining": { "$ref": "#/components/headers/XRateLimitRemaining" },
               "X-RateLimit-Reset": { "$ref": "#/components/headers/XRateLimitReset" },
               "X-RateLimit-Scope": { "$ref": "#/components/headers/XRateLimitScope" },
-              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
+              "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" },
+              "X-Lurus-Affinity-Key": { "$ref": "#/components/headers/XLurusAffinityKey" }
             }
           },
           "401": {
@@ -5116,6 +5118,10 @@
       "RetryAfter": {
         "description": "建议等待多少秒后重试。携带已知恢复时间的 402/429/503 拒绝上出现。",
         "schema": { "type": "integer" }
+      },
+      "XLurusAffinityKey": {
+        "description": "会话亲和性绑定的 HMAC 派生键。仅当本次请求携带可识别的会话来源（X-Session-Id 请求头 / OpenAI prompt_cache_key / Claude metadata.user_id）时才出现；一次性调用（无会话来源）不携带此头。可原样传给 DELETE /api/v2/admin/routing/affinity/{key} 清除该绑定。",
+        "schema": { "type": "string" }
       }
     },
     "securitySchemes": {

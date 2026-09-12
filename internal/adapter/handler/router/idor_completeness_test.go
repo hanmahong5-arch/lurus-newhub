@@ -79,12 +79,13 @@ func TestV1IDOR_Completeness(t *testing.T) {
 		"POST /api/channel/fix":          "FixChannelsAbilities rebuilds ability rows idempotently; global maintenance, not a per-tenant data mutation",
 		"POST /api/redemption/":          "AddRedemption stamps the caller's tenant_id; cannot target another tenant",
 		// user self-service (UserAuth; operate on the authenticated principal, no id)
-		"PUT /api/user/self":          "self-service: updates the authenticated user only",
-		"PUT /api/user/setting":       "self-service: updates the authenticated user's settings only",
-		"POST /api/user/topup":        "self-service: redeems into the authenticated user's own balance",
-		"POST /api/user/totp/enroll":  "self-service: manages the authenticated user's own TOTP factor",
-		"POST /api/user/totp/confirm": "self-service: manages the authenticated user's own TOTP factor",
-		"POST /api/user/totp/disable": "self-service: manages the authenticated user's own TOTP factor",
+		"PUT /api/user/self":                          "self-service: updates the authenticated user only",
+		"PUT /api/user/setting":                       "self-service: updates the authenticated user's settings only",
+		"POST /api/user/topup":                        "self-service: redeems into the authenticated user's own balance",
+		"POST /api/user/totp/enroll":                  "self-service: manages the authenticated user's own TOTP factor",
+		"POST /api/user/totp/confirm":                 "self-service: manages the authenticated user's own TOTP factor",
+		"POST /api/user/totp/disable":                 "self-service: manages the authenticated user's own TOTP factor",
+		"POST /api/user/totp/backup-codes/regenerate": "self-service: manages the authenticated user's own TOTP backup codes",
 	}
 
 	isMutation := func(m string) bool {

@@ -155,9 +155,9 @@ func TestCountAdminExportLogs_And_ExportAdminLogsBatch_CursorPagination(t *testi
 	}
 	repoDeepSeedAnalyticsLog(t, "other-tenant", "gpt-4", LogTypeConsume, 10, 1, 1, 5, start+1) // wrong tenant
 	repoDeepSeedAnalyticsLog(t, "default", "claude-3", LogTypeConsume, 10, 1, 1, 5, start+1)   // wrong model
-	repoDeepSeedAnalyticsLog(t, "default", "gpt-4", LogTypeError, 10, 1, 1, 5, start+1)         // wrong type
+	repoDeepSeedAnalyticsLog(t, "default", "gpt-4", LogTypeError, 10, 1, 1, 5, start+1)        // wrong type
 
-	total, err := CountAdminExportLogs("default", LogTypeConsume, "gpt-4", start, end)
+	total, err := CountAdminExportLogs("default", LogTypeConsume, "gpt-4", start, end, "")
 	if err != nil {
 		t.Fatalf("CountAdminExportLogs: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestCountAdminExportLogs_And_ExportAdminLogsBatch_CursorPagination(t *testi
 	var collected []int
 	afterID := 0
 	for i := 0; i < 10; i++ { // bounded loop guard against an infinite-pagination bug
-		page, err := ExportAdminLogsBatch(afterID, "default", LogTypeConsume, "gpt-4", start, end, 2)
+		page, err := ExportAdminLogsBatch(afterID, "default", LogTypeConsume, "gpt-4", start, end, "", 2)
 		if err != nil {
 			t.Fatalf("ExportAdminLogsBatch: %v", err)
 		}
@@ -207,7 +207,7 @@ func TestAdminExportFilter_EmptySelectorsMatchEverything(t *testing.T) {
 	repoDeepSeedAnalyticsLog(t, "tenant-x", "any-model", LogTypeConsume, 1, 1, 1, 1, 1)
 	repoDeepSeedAnalyticsLog(t, "tenant-y", "other-model", LogTypeError, 1, 1, 1, 1, 2)
 
-	total, err := CountAdminExportLogs("", 0, "", 0, 0)
+	total, err := CountAdminExportLogs("", 0, "", 0, 0, "")
 	if err != nil {
 		t.Fatalf("CountAdminExportLogs unfiltered: %v", err)
 	}

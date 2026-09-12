@@ -132,3 +132,57 @@ func TestFailureThrottle(t *testing.T) {
 		t.Fatal("ClearFailures should reset the budget")
 	}
 }
+
+func TestGenerateBackupCodes_CountFormatAndUniqueness(t *testing.T) {
+	codes, err := GenerateBackupCodes(BackupCodeCount)
+	if err != nil {
+		t.Fatalf("GenerateBackupCodes: %v", err)
+	}
+	if len(codes) != BackupCodeCount {
+		t.Fatalf("len(codes) = %d, want %d", len(codes), BackupCodeCount)
+	}
+	seen := map[string]bool{}
+	for _, c := range codes {
+		if len(c) != 9 || c[4] != '-' {
+			t.Fatalf("code %q not in XXXX-XXXX form", c)
+		}
+		for _, ch := range strings.ReplaceAll(c, "-", "") {
+			if strings.ContainsRune("0O1I", ch) {
+				t.Fatalf("code %q uses an excluded ambiguous character %q", c, ch)
+			}
+		}
+		if seen[c] {
+			t.Fatalf("duplicate code generated in one batch: %q", c)
+		}
+		seen[c] = true
+	}
+}
+
+func TestHashBackupCode_DeterministicAndUserScoped(t *testing.T) {
+	h1 := HashBackupCode(1, "ABCD-EFGH")
+	h2 := HashBackupCode(1, "ABCD-EFGH")
+	if h1 != h2 {
+		t.Fatalf("HashBackupCode not deterministic: %q vs %q", h1, h2)
+	}
+	if len(h1) != 64 {
+		t.Fatalf("hash length = %d, want 64 (hex sha256)", len(h1))
+	}
+	// Same code, different user -> different hash (domain separation, so
+	// two users who are independently issued the same code string cannot
+	// collide on the unique index).
+	h3 := HashBackupCode(2, "ABCD-EFGH")
+	if h1 == h3 {
+		t.Fatal("HashBackupCode must be user-scoped: same code for two users hashed identically")
+	}
+	// Case/whitespace-insensitive normalization: a user pasting lowercase or
+	// with stray whitespace must still match what was stored.
+	h4 := HashBackupCode(1, "  abcd-efgh  ")
+	if h1 != h4 {
+		t.Fatal("HashBackupCode must normalize case/whitespace")
+	}
+	// Never equal to the plaintext-adjacent EncryptSecret scheme's output
+	// shape (sanity: this is a hash, not a reversible ciphertext).
+	if strings.HasPrefix(h1, encVersionPrefix) {
+		t.Fatal("HashBackupCode output must not look like an EncryptSecret ciphertext")
+	}
+}

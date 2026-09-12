@@ -20,9 +20,28 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
+// The page now lazily mounts SecureVerificationModal (force-disable 2FA
+// step-up) — its Semi UI import chain pulls in lottie, which throws on
+// jsdom's canvas stub-less getContext(). vi.hoisted runs before the imports
+// below, early enough for lottie's own top-level code to find a context.
+// Same stub as k3_english_render.test.jsx (OpenRouterSync) — a mock cannot
+// tell us what the real modal renders, so this stubs the canvas, not Semi.
+vi.hoisted(() => {
+  const ctx = new Proxy(
+    {},
+    {
+      get: (target, prop) =>
+        prop in target ? target[prop] : () => ({ data: [] }),
+      set: (target, prop, value) => ((target[prop] = value), true),
+    },
+  );
+  HTMLCanvasElement.prototype.getContext = () => ctx;
+});
+
 vi.mock('../../../../helpers', () => ({
   API: {
     get: vi.fn(),
+    post: vi.fn(),
     put: vi.fn(),
     delete: vi.fn(),
   },
@@ -87,6 +106,7 @@ const listResponse = (users) => ({
 
 beforeEach(() => {
   API.get.mockReset();
+  API.post.mockReset();
   API.put.mockReset();
   API.delete.mockReset();
 });
@@ -148,6 +168,61 @@ describe('Admin Users page', () => {
 
     await waitFor(() => {
       expect(API.delete).toHaveBeenCalledWith('/api/v2/admin/users/7');
+    });
+  });
+
+  it("force-disables a user's 2FA behind a reason prompt and the acting root's own step-up", async () => {
+    API.get.mockImplementation((url) => {
+      if (url === '/api/verify/status') {
+        return Promise.resolve({
+          data: { success: true, data: { totp_enrolled: false } },
+        });
+      }
+      return Promise.resolve(listResponse([makeUser()]));
+    });
+    API.post.mockImplementation((url) => {
+      if (url === '/api/verify') {
+        return Promise.resolve({ data: { success: true } });
+      }
+      if (url === '/api/v2/admin/security/users/7/totp/force-disable') {
+        return Promise.resolve({ data: { success: true } });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+
+    render(<HFAdminUsers />);
+    await waitFor(() => screen.getByTestId('user-disable-2fa-btn-7'));
+
+    fireEvent.click(screen.getByTestId('user-disable-2fa-btn-7'));
+    await waitFor(() => screen.getByTestId('disable-2fa-reason'));
+
+    // The confirm button must not fire without a reason.
+    expect(screen.getByTestId('disable-2fa-confirm')).toBeDisabled();
+    fireEvent.change(screen.getByTestId('disable-2fa-reason'), {
+      target: { value: 'support ticket #4242, user lost their device' },
+    });
+    expect(screen.getByTestId('disable-2fa-confirm')).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId('disable-2fa-confirm'));
+
+    // The step-up modal appears (unenrolled acting root -> "session confirmation" tab).
+    await waitFor(() => screen.getByText('Confirm'));
+    fireEvent.click(screen.getByText('Confirm'));
+
+    await waitFor(() => {
+      expect(API.post).toHaveBeenCalledWith('/api/verify', {
+        method: 'session',
+        code: '',
+      });
+    });
+    await waitFor(() => {
+      expect(API.post).toHaveBeenCalledWith(
+        '/api/v2/admin/security/users/7/totp/force-disable',
+        { reason: 'support ticket #4242, user lost their device' },
+      );
+    });
+    // The reason prompt closes on success and the list refetches.
+    await waitFor(() => {
+      expect(screen.queryByTestId('disable-2fa-reason')).toBeNull();
     });
   });
 

@@ -267,6 +267,49 @@ describe('TotpService', () => {
     await expect(TotpService.confirm('000000')).rejects.toThrow('invalid code');
   });
 
+  it('confirm returns the one-time backup codes on success', async () => {
+    API.post.mockResolvedValue({
+      data: {
+        success: true,
+        data: { backup_codes: ['ABCD-EFGH', 'IJKL-MNOP'] },
+      },
+    });
+
+    await expect(TotpService.confirm('654321')).resolves.toEqual({
+      backup_codes: ['ABCD-EFGH', 'IJKL-MNOP'],
+    });
+  });
+
+  it('regenerateBackupCodes posts to the dedicated endpoint and returns the fresh codes', async () => {
+    API.post.mockResolvedValue({
+      data: { success: true, data: { backup_codes: ['WXYZ-1234'] } },
+    });
+
+    await expect(TotpService.regenerateBackupCodes()).resolves.toEqual({
+      backup_codes: ['WXYZ-1234'],
+    });
+    expect(API.post).toHaveBeenCalledWith(
+      '/api/user/totp/backup-codes/regenerate',
+      {},
+    );
+  });
+
+  it('regenerateBackupCodes rejects with the backend message on failure', async () => {
+    API.post.mockResolvedValue({
+      data: { success: false, message: 'verification required' },
+    });
+    await expect(TotpService.regenerateBackupCodes()).rejects.toThrow(
+      'verification required',
+    );
+  });
+
+  it('regenerateBackupCodes rejects with a generic message when none is supplied', async () => {
+    API.post.mockResolvedValue({ data: { success: false } });
+    await expect(TotpService.regenerateBackupCodes()).rejects.toThrow(
+      'Failed to regenerate backup codes',
+    );
+  });
+
   // DEFECT (see report): disable() is the only TotpService method that does
   // NOT check `success`. A server-side refusal resolves normally, so a
   // caller written like the other three (`await TotpService.disable()` then

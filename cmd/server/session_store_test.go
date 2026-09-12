@@ -97,3 +97,55 @@ func TestNewRedisSessionStore_UsesConfiguredDB(t *testing.T) {
 		t.Errorf("expected Redis DB 0 to stay empty (session store must not silently default to DB 0), found keys: %v", keys)
 	}
 }
+
+// TestRedisSessionKeyFormat_Canary pins the assumption L7's per-device
+// session registry depends on: the Redis session store's own key for a
+// session is "session_" + session.ID() (boj/redistore's default keyPrefix,
+// redistore.go:293/410). repo.RevokeSessionByIDV2/RevokeOtherSessionsV2
+// build that exact string themselves to delete a revoked session out of
+// Redis — they have no other way to ask the store "what key did you use for
+// this session id?". If a future library bump changes the prefix (or moves
+// key construction so it no longer matches session.ID() 1:1), this goes red
+// in CI, not as a production revoke that silently fails to log anyone out.
+func TestRedisSessionKeyFormat_Canary(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	store, _, _, err := newRedisSessionStore("redis://"+mr.Addr()+"/0", []byte("canary-secret"))
+	if err != nil {
+		t.Fatalf("newRedisSessionStore: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", store))
+	var capturedID string
+	engine.GET("/set", func(c *gin.Context) {
+		s := sessions.Default(c)
+		s.Set("probe", "value")
+		if err := s.Save(); err != nil {
+			c.String(http.StatusInternalServerError, "save: %v", err)
+			return
+		}
+		capturedID = s.ID()
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/set", nil)
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("request failed: %d body=%s", w.Code, w.Body.String())
+	}
+	if capturedID == "" {
+		t.Fatal("session.ID() was empty after Save() — the canary has nothing to check")
+	}
+
+	wantKey := "session_" + capturedID
+	if !mr.Exists(wantKey) {
+		t.Errorf("expected Redis key %q (\"session_\"+session.ID()) to exist; it does not — a session revoke's RedisDel would be deleting the wrong key", wantKey)
+	}
+}

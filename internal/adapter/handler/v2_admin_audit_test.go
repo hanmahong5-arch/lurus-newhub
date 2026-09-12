@@ -27,7 +27,79 @@ func setupAuditExportRouter(t *testing.T) *adminGovCtx {
 	})
 	admin.GET("/audit/actions", ListAuditActionsV2)
 	admin.GET("/audit/export", ExportAuditEventsV2)
+	admin.GET("/audit/coverage", GetAuditCoverageV2)
 	return ctx
+}
+
+// TestAuditCoverageV2_ReportsFallbackRoutes drives GetAuditCoverageV2 against
+// a synthetic route list injected via SetAdminWriteRoutes (the mechanism
+// router.SetInternalApiRouter uses in production — see audit_coverage_gen.go
+// for why the handler can't discover its own route table). One route is a
+// known-explicit one (present in AuditExplicitRoutes); the other is a fake
+// route absent from that map, so it must be reported under
+// routes_relying_on_fallback.
+func TestAuditCoverageV2_ReportsFallbackRoutes(t *testing.T) {
+	ctx := setupAuditExportRouter(t)
+	defer ctx.cleanup()
+
+	prevRoutes := GetAdminWriteRoutes()
+	t.Cleanup(func() { SetAdminWriteRoutes(prevRoutes) })
+
+	const fakeFallbackRoute = "POST /internal/admin/fake-coverage-probe"
+	explicitRoute := "POST /api/v2/admin/tenants" // known-explicit per AuditExplicitRoutes
+	SetAdminWriteRoutes([]string{explicitRoute, fakeFallbackRoute})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/admin/audit/coverage", nil)
+	ctx.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+
+	body := parseJSON(t, w)
+	data := body["data"].(map[string]interface{})
+
+	if got := int(data["total_admin_write_routes"].(float64)); got != 2 {
+		t.Errorf("total_admin_write_routes = %d, want 2", got)
+	}
+
+	explicit := toStringSlice(data["routes_with_explicit_audit"])
+	if !containsString(explicit, explicitRoute) {
+		t.Errorf("routes_with_explicit_audit = %v, want to contain %q", explicit, explicitRoute)
+	}
+	if containsString(explicit, fakeFallbackRoute) {
+		t.Errorf("routes_with_explicit_audit = %v, must not contain the fake fallback route %q", explicit, fakeFallbackRoute)
+	}
+
+	fallback := toStringSlice(data["routes_relying_on_fallback"])
+	if !containsString(fallback, fakeFallbackRoute) {
+		t.Errorf("routes_relying_on_fallback = %v, want to contain %q", fallback, fakeFallbackRoute)
+	}
+	if containsString(fallback, explicitRoute) {
+		t.Errorf("routes_relying_on_fallback = %v, must not contain the known-explicit route %q", fallback, explicitRoute)
+	}
+
+	if _, ok := data["fallback_events_last_24h"]; !ok {
+		t.Error("response missing fallback_events_last_24h")
+	}
+}
+
+func toStringSlice(v interface{}) []string {
+	raw, _ := v.([]interface{})
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		out = append(out, r.(string))
+	}
+	return out
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestListAuditActionsV2_ReturnsSortedRegistry(t *testing.T) {
@@ -50,10 +122,10 @@ func TestListAuditActionsV2_ReturnsSortedRegistry(t *testing.T) {
 
 	// Spot-check a few sentinel actions exist.
 	wantPresent := map[string]bool{
-		"auth.login_success":            false,
-		"token.created":                 false,
-		"user.role_changed":             false,
-		"redemption.redeemed":           false,
+		"auth.login_success":               false,
+		"token.created":                    false,
+		"user.role_changed":                false,
+		"redemption.redeemed":              false,
 		"security.whitelabel_key_accessed": false,
 	}
 	for _, a := range actions {

@@ -216,6 +216,9 @@ func GetAllLogsV2(c *gin.Context) {
 	// L2-REQUEST-IDENTITY correlation-id filters; "" = no filter.
 	requestID := c.Query("request_id")
 	sessionID := c.Query("session_id")
+	// The vendor's own request/trace id (TierInternal) — admin-only, so it
+	// is bound HERE (the tenant-admin route) and nowhere in GetLogsV2 above.
+	upstreamRequestID := c.Query("upstream_request_id")
 
 	if page < 1 {
 		page = 1
@@ -229,18 +232,19 @@ func GetAllLogsV2(c *gin.Context) {
 	// Build log query params (no user filter for all logs; tenant isolation
 	// via the explicit scope arg)
 	params := &repo.LogQueryParams{
-		LogType:       logType,
-		ModelName:     modelName,
-		StartTime:     startTime,
-		EndTime:       endTime,
-		TokenName:     tokenName,
-		Username:      username,
-		ProjectID:     projectID,
-		SourceProduct: sourceProduct,
-		RequestID:     requestID,
-		SessionID:     sessionID,
-		Offset:        offset,
-		Limit:         pageSize,
+		LogType:           logType,
+		ModelName:         modelName,
+		StartTime:         startTime,
+		EndTime:           endTime,
+		TokenName:         tokenName,
+		Username:          username,
+		ProjectID:         projectID,
+		SourceProduct:     sourceProduct,
+		RequestID:         requestID,
+		SessionID:         sessionID,
+		UpstreamRequestID: upstreamRequestID,
+		Offset:            offset,
+		Limit:             pageSize,
 	}
 
 	// Get all logs for tenant

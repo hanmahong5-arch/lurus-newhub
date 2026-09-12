@@ -475,6 +475,9 @@ func migrateDB() error {
 		// that route a first-time zita-bridge login into a specific tenant
 		// instead of "default" (handler.ZitaBootstrap's auto-create branch)
 		&entity.TenantInvite{},
+		// Per-device session registry (migration 033, L7) — behind
+		// SESSION_REGISTRY_ENABLED; see entity.UserSession's doc comment.
+		&entity.UserSession{},
 	)
 	if err != nil {
 		return err

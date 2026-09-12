@@ -771,6 +771,15 @@ func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
 	if upModel := c.GetString("original_model"); upModel != "" {
 		other["upstream_model"] = upModel
 	}
+	// The vendor's own request/trace id, set by provider.doRequest via
+	// c.Set beside its RelayInfo.UpstreamRequestId write — this is how a
+	// 5xx from upstream still gets it onto the error row without a new
+	// parameter on processChannelError/recordTerminalRelayError. Absent
+	// when the failure happened before any channel attempt reached
+	// doRequest (request validation, channel selection, etc).
+	if upstreamReqId := c.GetString("upstream_request_id"); upstreamReqId != "" {
+		other["upstream_request_id"] = upstreamReqId
+	}
 	adminInfo := make(map[string]interface{})
 	adminInfo["use_channel"] = c.GetStringSlice("use_channel")
 	isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)

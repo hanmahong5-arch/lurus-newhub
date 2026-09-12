@@ -302,6 +302,39 @@ describe('SecureVerificationModal — 2FA', () => {
     expect(props.onCancel).not.toHaveBeenCalled();
     expect(input).toBeDisabled();
   });
+
+  it('toggling "use a recovery code" swaps the input hint and submits method totp_backup', () => {
+    const props = secureProps({ has2FA: true }, { code: 'WXYZ-4242' });
+    render(<SecureVerificationModal {...props} />);
+
+    // Default: live authenticator-code input.
+    expect(screen.getByPlaceholderText('请输入6位验证码')).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: '丢失了验证器？使用备用恢复码' }),
+    );
+
+    // Toggling clears whatever code was typed for the other factor, and
+    // swaps the placeholder/length hint to the recovery-code shape.
+    expect(props.onCodeChange).toHaveBeenCalledWith('');
+    expect(
+      screen.getByPlaceholderText('请输入备用恢复码（形如 XXXX-XXXX）'),
+    ).toHaveAttribute('maxLength', '9');
+    expect(
+      screen.getByRole('button', { name: '改用验证器应用的验证码' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '验证' }));
+    expect(props.onVerify).toHaveBeenCalledWith('totp_backup', 'WXYZ-4242');
+  });
+
+  it('does not submit totp_backup when the toggle was never used', () => {
+    const props = secureProps({ has2FA: true }, { code: '654321' });
+    render(<SecureVerificationModal {...props} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '验证' }));
+    expect(props.onVerify).toHaveBeenCalledWith('2fa', '654321');
+  });
 });
 
 describe('SecureVerificationModal — session tab', () => {

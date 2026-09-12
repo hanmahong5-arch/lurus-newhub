@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +21,14 @@ var (
 	httpClient      *http.Client
 	proxyClientLock sync.Mutex
 	proxyClients    = make(map[string]*http.Client)
+
+	// forceH1ClientLock/forceH1Clients cache HTTP/1.1-only clients, keyed by
+	// proxyURL ("" for no proxy). Deliberately a SEPARATE map from
+	// proxyClients (not just a different key namespace within it) so every
+	// existing NewProxyHttpClient caller — and its cache-bound behaviour — is
+	// untouched by this feature (L5, routing-resilience-limits-13).
+	forceH1ClientLock sync.Mutex
+	forceH1Clients    = make(map[string]*http.Client)
 )
 
 // maxProxyClients caps the proxy-client cache. Keys are configured proxy URLs
@@ -28,6 +37,12 @@ var (
 // is dropped wholesale (idle connections closed first) and rebuilt on demand;
 // entries are cheap to reconstruct, so a coarse reset beats per-key LRU here.
 const maxProxyClients = 256
+
+// maxForceH1Clients bounds the forced-HTTP/1.1 client cache for the same
+// reason maxProxyClients bounds proxyClients — the same coarse-reset
+// treatment applies since keys are operator-configured proxy URLs, not
+// attacker-controlled.
+const maxForceH1Clients = 256
 
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	fetchSetting := system_setting.GetFetchSetting()
@@ -266,4 +281,120 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 	default:
 		return nil, fmt.Errorf("unsupported proxy scheme: %s, must be http, https, socks5 or socks5h", parsedURL.Scheme)
 	}
+}
+
+// GetHttpClientFor is the single seam api_request.go's doRequest uses to pick
+// a relay transport (L5, routing-resilience-limits-13). With forceHTTP1
+// false it is a pure pass-through to the pre-existing clients — pointer-
+// identical to GetHttpClient()/NewProxyHttpClient's cached entry — so a
+// channel with no override set behaves byte-for-byte as before. With
+// forceHTTP1 true it returns an HTTP/1.1-only transport cached in its own
+// map (forceH1Clients), so a channel with a flaky HTTP/2 upstream can be
+// pinned to H1 without affecting any sibling channel — including one that
+// shares the same proxyURL.
+//
+// Honest scope: only relay calls that go through provider.doRequest via this
+// function are covered. AWS/Coze/Vertex-SA/MJ-proxy/task relays build their
+// own clients directly and never consult this seam — documented in
+// doc/product-integration-guide.md, not silently assumed.
+func GetHttpClientFor(proxyURL string, forceHTTP1 bool) (*http.Client, error) {
+	if !forceHTTP1 {
+		return GetHttpClientWithProxy(proxyURL)
+	}
+	return getOrBuildForceHTTP1Client(proxyURL)
+}
+
+// getOrBuildForceHTTP1Client returns the cached HTTP/1.1-only client for
+// proxyURL ("" for no proxy), building and caching one on first use.
+func getOrBuildForceHTTP1Client(proxyURL string) (*http.Client, error) {
+	forceH1ClientLock.Lock()
+	if client, ok := forceH1Clients[proxyURL]; ok {
+		forceH1ClientLock.Unlock()
+		return client, nil
+	}
+	forceH1ClientLock.Unlock()
+
+	transport, err := newForceHTTP1Transport(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{
+		Transport:     transport,
+		CheckRedirect: checkRedirect,
+	}
+	if common.RelayTimeout != 0 {
+		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
+	}
+
+	forceH1ClientLock.Lock()
+	defer forceH1ClientLock.Unlock()
+	if existing, ok := forceH1Clients[proxyURL]; ok {
+		// Lost a race with another goroutine building the same entry; keep
+		// theirs so callers observe one stable client per key.
+		return existing, nil
+	}
+	if len(forceH1Clients) >= maxForceH1Clients {
+		for _, c := range forceH1Clients {
+			if t, ok := c.Transport.(*http.Transport); ok && t != nil {
+				t.CloseIdleConnections()
+			}
+		}
+		forceH1Clients = make(map[string]*http.Client)
+	}
+	forceH1Clients[proxyURL] = client
+	return client, nil
+}
+
+// newForceHTTP1Transport builds a transport that cannot negotiate HTTP/2.
+// ForceAttemptHTTP2:false alone is not sufficient — net/http.Transport
+// otherwise auto-wires HTTP/2 support (adding "h2" to the TLS ALPN offer)
+// whenever TLSNextProto is nil; setting it to a non-nil EMPTY map is what
+// actually suppresses that wiring, which is why the mutation
+// "drop TLSNextProto" is the one that must turn this red.
+//
+// proxyURL == "" mirrors InitHttpClient's default transport (SSRF-guarded
+// dial context, ProxyFromEnvironment); a configured proxyURL mirrors
+// NewProxyHttpClient's http/https/socks5 branches, minus HTTP/2.
+func newForceHTTP1Transport(proxyURL string) (*http.Transport, error) {
+	tr := &http.Transport{
+		MaxIdleConns:        common.RelayMaxIdleConns,
+		MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
+		ForceAttemptHTTP2:   false,
+		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{},
+	}
+
+	if proxyURL == "" {
+		tr.Proxy = http.ProxyFromEnvironment
+		tr.DialContext = newRelayGuardedDialContext(&net.Dialer{Timeout: common.RelayDialTimeout})
+		applyRelayTransportTimeouts(tr)
+		return tr, nil
+	}
+
+	parsedURL, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	switch parsedURL.Scheme {
+	case "http", "https":
+		tr.Proxy = http.ProxyURL(parsedURL)
+	case "socks5", "socks5h":
+		var auth *proxy.Auth
+		if parsedURL.User != nil {
+			auth = &proxy.Auth{User: parsedURL.User.Username()}
+			if password, ok := parsedURL.User.Password(); ok {
+				auth.Password = password
+			}
+		}
+		dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, auth, proxy.Direct)
+		if err != nil {
+			return nil, err
+		}
+		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.Dial(network, addr)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported proxy scheme: %s, must be http, https, socks5 or socks5h", parsedURL.Scheme)
+	}
+	applyRelayTransportTimeouts(tr)
+	return tr, nil
 }

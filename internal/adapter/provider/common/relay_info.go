@@ -133,7 +133,18 @@ type RelayInfo struct {
 	// persisted — only this hash, so per-end-user cost is queryable (?
 	// session_id / a future end_user filter) without newhub becoming a store
 	// of the caller's own customers' PII.
-	EndUserHash        string
+	EndUserHash string
+	// UpstreamRequestId is the vendor's own request/trace id, captured from
+	// the upstream HTTP response headers in provider.doRequest (the single
+	// seam every relay path's outbound call funnels through). "" when the
+	// upstream sent none of the headers we look for — that is a legitimate
+	// outcome, not a capture failure. Carried here for the same reason
+	// SessionId/EndUserHash are: the settlement path (PostConsumeQuota ->
+	// EnrichLogParams -> RecordConsumeLog) has no gin.Context, and the error
+	// path reads the equivalent value back off the gin.Context instead
+	// (relay.go recordRelayErrorLog, set by doRequest via c.Set beside this
+	// field so both paths agree without threading a new parameter).
+	UpstreamRequestId  string
 	RequestURLPath     string
 	ShouldIncludeUsage bool
 	DisablePing        bool // 是否禁止向下游发送自定义 Ping
@@ -186,6 +197,22 @@ type RelayInfo struct {
 	*TaskRelayInfo
 }
 
+// lurusForceHTTP1ParamKey is the param_override key an operator sets to
+// force a single channel's outbound relay transport to HTTP/1.1 (L5,
+// routing-resilience-limits-13). See ApplyParamOverride/applyOperationsLegacy
+// (override.go) for the matching skip that keeps this control key out of the
+// upstream request body.
+const lurusForceHTTP1ParamKey = "__lurus_force_http1"
+
+// paramOverrideBool reads a boolean control key out of a channel's raw
+// param_override map. Any non-bool value (missing key, wrong JSON type) is
+// treated as false — a malformed override must never be mistaken for an
+// explicit opt-in.
+func paramOverrideBool(paramOverride map[string]interface{}, key string) bool {
+	v, ok := paramOverride[key].(bool)
+	return ok && v
+}
+
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
@@ -219,6 +246,16 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	channelSetting, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
 	if ok {
 		channelMeta.ChannelSetting = channelSetting
+	}
+	// __lurus_force_http1 (L5): an internal control key an operator sets via
+	// the channel's existing param_override editor, not a real upstream
+	// request field — paramOverrideBool reads it here (before
+	// ApplyParamOverride strips __lurus_* keys from the outgoing body) and
+	// folds it into ChannelSetting.ForceHTTP1, which provider.doRequest reads
+	// to pick app.GetHttpClientFor's HTTP/1.1-only transport for this channel
+	// only. Absent/false leaves ChannelSetting exactly as loaded above.
+	if paramOverrideBool(paramOverride, lurusForceHTTP1ParamKey) {
+		channelMeta.ChannelSetting.ForceHTTP1 = true
 	}
 
 	channelOtherSettings, ok := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)

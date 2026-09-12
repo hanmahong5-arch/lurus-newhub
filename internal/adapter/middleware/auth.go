@@ -184,6 +184,30 @@ func authHelper(c *gin.Context, minRole int) {
 		return
 	}
 
+	// L7 (auth-security-08/26/29) defence in depth: reject a session whose
+	// registry row is already revoked, even if this browser's cookie/Redis
+	// session data has not been invalidated yet. Closes the window between
+	// a revoke's Redis DEL landing and this replica admitting one more
+	// request on the stale cookie, plus any future non-Redis store that
+	// never gets a DEL at all — see repo.IsUserSessionRevoked. Flag-gated
+	// (SESSION_REGISTRY_ENABLED, default false) and scoped to a genuine
+	// cookie-session login only: the bearer/access-token and SDK-bridge
+	// branches above already re-validate against the DB every request and
+	// carry no session_key of their own to check.
+	if repo.SessionRegistryEnabled() && !useAccessToken {
+		if sid := session.ID(); sid != "" {
+			if revoked, revErr := repo.IsUserSessionRevoked(sid); revErr == nil && revoked {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"success":    false,
+					"message":    "Session has been revoked",
+					"error_code": "SESSION_REVOKED",
+				})
+				c.Abort()
+				return
+			}
+		}
+	}
+
 	// Re-validate status and role against the user cache (DB-backed) on
 	// every request. The gin session cookie snapshots status/role at login
 	// and is trusted for its whole lifetime, so without this an admin
@@ -309,6 +333,24 @@ func authHelper(c *gin.Context, minRole int) {
 		Username: usernameVal,
 		Roles:    []string{},
 	})
+
+	// L7 (auth-security-08/26/29) per-device session registry: registers or
+	// touches this session's row so it shows up in GET .../sessions and can
+	// be revoked by id. Same flag/scope gate as the revoked-check above.
+	// session.ID() is "" on a cookie-only session store (no Redis
+	// configured) — those deployments register nothing, the documented
+	// no-op case, not a bug. Best-effort: a write failure must never block
+	// the request it belongs to (the throttle inside UpsertUserSessionSeen
+	// already keeps this off the hot path — at most once per 60s per key).
+	if repo.SessionRegistryEnabled() && !useAccessToken {
+		if sid := session.ID(); sid != "" {
+			if err := repo.UpsertUserSessionSeen(c.Request.Context(), sid, userId, tenantId,
+				c.ClientIP(), c.Request.Header.Get("User-Agent"), "session"); err != nil {
+				logger.LogWarnKV(c.Request.Context(), "session registry upsert failed",
+					"user_id", userId, "result", err.Error())
+			}
+		}
+	}
 
 	c.Next()
 }

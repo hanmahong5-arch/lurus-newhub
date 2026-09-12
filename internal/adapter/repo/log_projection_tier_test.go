@@ -42,7 +42,7 @@ func TestInternalOtherKeys_NoPublicField(t *testing.T) {
 // contract in terms of an actual payload: the caller keeps their own timing,
 // and never sees what it cost us.
 func TestSanitizeOtherForUser_KeepsLatencyStripsPricing(t *testing.T) {
-	const payload = `{"frt":118,"cache_tokens":3456,"model_ratio":0.135,"group_ratio":1,"admin_info":{"use_channel":["25"]}}`
+	const payload = `{"frt":118,"cache_tokens":3456,"model_ratio":0.135,"group_ratio":1,"admin_info":{"use_channel":["25"]},"upstream_request_id":"vend-req-abc123"}`
 
 	got := SanitizeOtherForUser(payload)
 
@@ -55,7 +55,11 @@ func TestSanitizeOtherForUser_KeepsLatencyStripsPricing(t *testing.T) {
 				}[keep])
 		}
 	}
-	for _, strip := range []string{"model_ratio", "group_ratio", "admin_info"} {
+	// upstream_request_id: mutation target. Moving this key to
+	// wantUserVisible in log_other_projection_lock_test.go describes a policy
+	// this list must contradict — the vendor's own request id names OUR
+	// upstream account, not the caller's data, so it belongs stripped here.
+	for _, strip := range []string{"model_ratio", "group_ratio", "admin_info", "upstream_request_id"} {
 		if containsKey(t, got, strip) {
 			t.Errorf("user projection leaked %q — that is our pricing/routing, not the caller's data", strip)
 		}

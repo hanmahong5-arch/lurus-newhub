@@ -151,6 +151,12 @@ func SetInternalApiRouter(router *gin.Engine) {
 	// HasScope's wildcard, so existing platform-admin keys keep working).
 	adminGroup := internalGroup.Group("/admin")
 	adminGroup.Use(middleware.RequireScope(repo.ScopeAdmin))
+	// L2 audit-completeness: same fail-closed fallback as adminRoute in
+	// api-v2-router.go. AuditWriteGuard tells the two mount points apart by
+	// the presence of "internal_api_key_id" (set by InternalApiAuth, which
+	// runs on internalGroup above), attributing the fallback to
+	// governance.ActorSystem instead of ActorAdmin.
+	adminGroup.Use(middleware.AuditWriteGuard())
 	{
 		adminGroup.POST("/backfill-token-accounts", handler.InternalBackfillTokenAccountIDs)
 		adminGroup.GET("/convergence-stats", handler.InternalConvergenceStats)
@@ -201,4 +207,27 @@ func SetInternalApiRouter(router *gin.Engine) {
 	{
 		privacyReadGroup.GET("/erase/:event_id", handler.InternalGetPrivacyErasure)
 	}
+
+	// L2 audit-completeness coverage endpoint (handler.GetAuditCoverageV2)
+	// needs the admin-write route list, but *gin.Context has no Engine()
+	// accessor in gin v1.12.0 — so it can't discover this itself at request
+	// time. Capture it here instead: router/main.go calls SetApiV2Router
+	// before SetInternalApiRouter, so by this point router.Routes() already
+	// contains both admin route groups this lane guards.
+	captureAdminWriteRoutes(router)
+}
+
+// captureAdminWriteRoutes filters the engine's full route table down to the
+// admin/internal-admin write surface (handler.IsAdminWriteRoute — shared with
+// router/audit_coverage_test.go so "what counts" cannot drift between the
+// production endpoint and the CI structural gate) and hands the result to
+// handler.SetAdminWriteRoutes for GetAuditCoverageV2 to read.
+func captureAdminWriteRoutes(router *gin.Engine) {
+	var routes []string
+	for _, rt := range router.Routes() {
+		if handler.IsAdminWriteRoute(rt.Method, rt.Path) {
+			routes = append(routes, rt.Method+" "+rt.Path)
+		}
+	}
+	handler.SetAdminWriteRoutes(routes)
 }

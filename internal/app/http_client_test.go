@@ -306,3 +306,104 @@ func TestProxyClientCacheBounded(t *testing.T) {
 		t.Fatalf("cache never evicted: holds %d of %d inserts (unbounded)", final, inserts)
 	}
 }
+
+// TestGetHttpClientFor_DefaultIsSharedPointer proves GetHttpClientFor(proxy,
+// false) is a purely additive seam: with forceHTTP1 off it must return the
+// EXACT SAME *http.Client the pre-existing callers get (GetHttpClient() for
+// no proxy, NewProxyHttpClient's cached entry for a proxy) — pointer
+// identity, not just equal behaviour, is the bar because a byte-for-byte
+// unchanged default is the L5 acceptance criterion.
+func TestGetHttpClientFor_DefaultIsSharedPointer(t *testing.T) {
+	common.RelayTimeout = 0
+	common.RelayMaxIdleConns = 100
+	common.RelayMaxIdleConnsPerHost = 50
+	InitHttpClient()
+	ResetProxyClientCache()
+
+	c1, err := GetHttpClientFor("", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c1 != GetHttpClient() {
+		t.Fatal("expected pointer-identical to GetHttpClient() when neither override is set")
+	}
+
+	const proxyURL = "http://proxy-getfor-default.invalid:8080"
+	pc1, err := NewProxyHttpClient(proxyURL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	pc2, err := GetHttpClientFor(proxyURL, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pc1 != pc2 {
+		t.Fatal("expected pointer-identical to NewProxyHttpClient's cached client when forceHTTP1 is false")
+	}
+}
+
+// TestGetHttpClientFor_ForceHTTP1Transport proves the forceHTTP1=true branch
+// builds a transport that cannot negotiate HTTP/2: ForceAttemptHTTP2 must be
+// false AND TLSNextProto must be a non-nil empty map (net/http's Transport
+// only skips its own automatic h2 wiring when TLSNextProto is already
+// non-nil — leaving it nil would silently re-enable h2 despite
+// ForceAttemptHTTP2:false, since that flag alone doesn't disable an ALPN
+// upgrade the server offers).
+func TestGetHttpClientFor_ForceHTTP1Transport(t *testing.T) {
+	common.RelayTimeout = 5
+	common.RelayMaxIdleConns = 10
+	common.RelayMaxIdleConnsPerHost = 5
+
+	client, err := GetHttpClientFor("", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.Transport)
+	}
+	if tr.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2 must be false for a forced-HTTP/1.1 transport")
+	}
+	if tr.TLSNextProto == nil {
+		t.Error("TLSNextProto must be non-nil (empty map disables the automatic h2 ALPN upgrade) — nil silently falls back to the default h2-enabled table")
+	}
+	if len(tr.TLSNextProto) != 0 {
+		t.Errorf("TLSNextProto must be empty, got %d entries", len(tr.TLSNextProto))
+	}
+}
+
+// TestGetHttpClientFor_CacheKeyIncludesProtocol proves the forced-HTTP/1.1
+// client cache is keyed separately from the regular proxyClients cache: the
+// same proxyURL must yield a DIFFERENT client when forceHTTP1 flips (so one
+// flaky-HTTP/2 channel's override cannot leak an H1-only transport onto a
+// sibling channel sharing the same proxy), while two calls with the same
+// (proxyURL, true) pair must return the identical cached client.
+func TestGetHttpClientFor_CacheKeyIncludesProtocol(t *testing.T) {
+	common.RelayTimeout = 0
+	common.RelayMaxIdleConns = 10
+	common.RelayMaxIdleConnsPerHost = 5
+	ResetProxyClientCache()
+
+	const proxyURL = "http://proxy-getfor-protocol.invalid:8080"
+
+	normal, err := GetHttpClientFor(proxyURL, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	h1a, err := GetHttpClientFor(proxyURL, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	h1b, err := GetHttpClientFor(proxyURL, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if normal == h1a {
+		t.Fatal("forceHTTP1 client must not share a cache entry with the normal proxy client for the same proxyURL")
+	}
+	if h1a != h1b {
+		t.Fatal("two calls with forceHTTP1=true for the same proxyURL must return the cached (pointer-identical) client")
+	}
+}

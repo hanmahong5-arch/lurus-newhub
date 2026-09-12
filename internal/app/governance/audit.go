@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -19,6 +20,24 @@ type AuditWriter interface {
 // auditWriterRef stores the global audit writer atomically for safe concurrent access.
 var auditWriterRef atomic.Pointer[AuditWriter]
 
+// AuditedContextKey is the gin context key RecordAuditEvent sets to true the
+// moment it is called for a request-scoped event — see middleware.AuditWriteGuard,
+// which checks this after an admin write handler runs to catch writes that
+// forgot to call governance.RecordAuditEvent.
+const AuditedContextKey = "governance_audited"
+
+// pendingAuditContexts associates an event built by NewAuditEvent with the
+// *gin.Context it came from, keyed by the event's pointer identity — so
+// RecordAuditEvent (the persisting call) can mark that request audited
+// without entity.AuditEvent itself needing a gin.Context field (the entity
+// package has no framework dependency today; this keeps it that way).
+// LoadAndDelete means an entry only lives between NewAuditEvent(c, …) and the
+// matching RecordAuditEvent call — the decoupled construct/record shape at
+// internal_privacy_erase.go:153-156 is why marking happens here and not
+// inside NewAuditEvent: a caller that builds an event and never records it
+// must not mark the request as covered.
+var pendingAuditContexts sync.Map // map[*entity.AuditEvent]*gin.Context
+
 // SetAuditWriter sets the global audit event writer (called once during startup).
 // It also wires the entity-level audit-chain fallback logger so fail-open
 // chain degradations (entity.AuditEvent.BeforeCreate) surface in the system log.
@@ -28,10 +47,22 @@ func SetAuditWriter(w AuditWriter) {
 }
 
 // RecordAuditEvent asynchronously persists an audit event.
-// Safe to call even if no writer is configured (no-op).
+// Safe to call even if no writer is configured (no-op). If event was built by
+// NewAuditEvent(c, …), this call also marks c with AuditedContextKey — see
+// pendingAuditContexts — regardless of whether a writer is configured, since
+// what AuditWriteGuard cares about is "did the handler attempt to audit",
+// not "did the write succeed".
 func RecordAuditEvent(event *entity.AuditEvent) {
+	if event == nil {
+		return
+	}
+	if v, ok := pendingAuditContexts.LoadAndDelete(event); ok {
+		if c, ok := v.(*gin.Context); ok {
+			c.Set(AuditedContextKey, true)
+		}
+	}
 	wp := auditWriterRef.Load()
-	if wp == nil || event == nil {
+	if wp == nil {
 		return
 	}
 	writer := *wp
@@ -81,6 +112,7 @@ func NewAuditEvent(c *gin.Context, actorType string, actorID int, action, resour
 	if event.TenantID == "" {
 		event.TenantID = "default"
 	}
+	pendingAuditContexts.Store(event, c)
 	return event
 }
 

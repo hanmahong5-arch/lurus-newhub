@@ -39,12 +39,21 @@ func GetTotpStatus(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	var backupCodesRemaining int64
+	if rec != nil && rec.Enabled {
+		backupCodesRemaining, err = repo.CountUnusedUserTOTPBackupCodes(userId)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"enrolled": rec != nil && rec.Enabled,
-			"pending":  rec != nil && !rec.Enabled,
+			"enrolled":               rec != nil && rec.Enabled,
+			"pending":                rec != nil && !rec.Enabled,
+			"backup_codes_remaining": backupCodesRemaining,
 		},
 	})
 }
@@ -162,11 +171,91 @@ func TotpConfirm(c *gin.Context) {
 		return
 	}
 
+	// Mint the recovery codes the moment TOTP goes live — a user with no
+	// authenticator-app backup and no recovery codes is one lost phone away
+	// from a support ticket. Returned once; only the hash is stored.
+	backupCodes, err := issueBackupCodes(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
 		governance.ActionUserSelfUpdated, governance.ResourceUser, userId, `{"change":"totp_enrolled"}`))
 	repo.RecordLog(userId, repo.LogTypeSystem, "两步验证已启用")
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "两步验证启用成功"})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "两步验证启用成功",
+		"data": gin.H{
+			"backup_codes": backupCodes,
+		},
+	})
+}
+
+// issueBackupCodes mints a fresh set of totp.BackupCodeCount recovery codes
+// for userId, replacing any existing set (used or not), and returns the
+// plaintext codes — the only place they ever leave the server. Shared by
+// TotpConfirm (first issuance) and RegenerateTotpBackupCodes.
+func issueBackupCodes(userId int) ([]string, error) {
+	codes, err := totp.GenerateBackupCodes(totp.BackupCodeCount)
+	if err != nil {
+		return nil, err
+	}
+	now := common.GetTimestamp()
+	rows := make([]entity.UserTOTPBackupCode, 0, len(codes))
+	for _, code := range codes {
+		rows = append(rows, entity.UserTOTPBackupCode{
+			UserId:    userId,
+			CodeHash:  totp.HashBackupCode(userId, code),
+			CreatedAt: now,
+		})
+	}
+	if err := repo.ReplaceUserTOTPBackupCodes(userId, rows); err != nil {
+		return nil, err
+	}
+	return codes, nil
+}
+
+// RegenerateTotpBackupCodes invalidates every existing backup code and
+// issues a fresh set of totp.BackupCodeCount codes, returned once. Mounted
+// behind UserAuth + its own "TB" rate-limit bucket + SecureVerificationRequired
+// (router/api-router.go) — a fresh step-up is required because this call
+// silently burns any codes the user (or an attacker who glimpsed one) still
+// held unused.
+func RegenerateTotpBackupCodes(c *gin.Context) {
+	userId := c.GetInt("id")
+	if userId == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "未登录"})
+		return
+	}
+	rec, err := repo.GetUserTOTP(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if rec == nil || !rec.Enabled {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "两步验证未启用"})
+		return
+	}
+
+	backupCodes, err := issueBackupCodes(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
+		governance.ActionAuthTotpBackupRegenerated, governance.ResourceUser, userId, `{}`))
+	repo.RecordLog(userId, repo.LogTypeSystem, "两步验证恢复码已重新生成")
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data": gin.H{
+			"backup_codes": backupCodes,
+		},
+	})
 }
 
 // TotpDisable removes the user's enrollment. The route mounts
@@ -188,6 +277,10 @@ func TotpDisable(c *gin.Context) {
 		return
 	}
 	if err := repo.DeleteUserTOTP(userId); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := repo.DeleteUserTOTPBackupCodes(userId); err != nil {
 		common.ApiError(c, err)
 		return
 	}

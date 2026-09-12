@@ -7,6 +7,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
@@ -34,6 +35,14 @@ func InternalRotateDueTokens(c *gin.Context) {
 
 	keyName := c.GetString("internal_api_key_name")
 	common.SysLog(fmt.Sprintf("manual rotate-due-tokens via key %q rotated %d token(s)", keyName, rotated))
+
+	// Per-token detail (which token, old key prefix) is already audited by
+	// app.RotateDueTokens itself (token_rotation.go, via NewDetachedAuditEvent
+	// — same call the unattended daily schedule uses); this event is the
+	// "who/when triggered a manual pass" record this request-scoped call adds.
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorSystem, c.GetInt("internal_api_key_id"),
+		governance.ActionAdminMaintenanceTriggered, governance.ResourceSystem, 0,
+		fmt.Sprintf(`{"op":"rotate-due-tokens","key_name":%q,"rotated":%d}`, keyName, rotated)))
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -103,6 +112,15 @@ func respondResetDuePools(c *gin.Context, mode string, results []repo.PoolResetR
 
 	keyName := c.GetString("internal_api_key_name")
 	common.SysLog(fmt.Sprintf("manual reset-due-pools via key %q mode=%s pools=%d", keyName, mode, len(pools)))
+
+	// Per-pool detail is already audited by app.ResetDuePoolsWithMode itself
+	// (credit_pool_reset.go, enforce mode only, via NewDetachedAuditEvent —
+	// same call the scheduled reconcile ticker uses); this event is the
+	// "who/when triggered a manual pass" record, recorded for both modes so
+	// an observe-mode rehearsal is traceable too.
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorSystem, c.GetInt("internal_api_key_id"),
+		governance.ActionAdminMaintenanceTriggered, governance.ResourceSystem, 0,
+		fmt.Sprintf(`{"op":"reset-due-pools","key_name":%q,"mode":%q,"pools":%d}`, keyName, mode, len(pools))))
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

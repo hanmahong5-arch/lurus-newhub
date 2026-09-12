@@ -47,6 +47,15 @@ const TwoFactorAuth = ({ t }) => {
   const [enrollment, setEnrollment] = useState(null); // { secret, otpauth_url }
   const [confirmCode, setConfirmCode] = useState('');
   const [loading, setLoading] = useState(false);
+  // Backup codes are returned exactly once — by confirm() or by regenerate()
+  // — and never fetched again. This state is the only place they ever live
+  // client-side; it is cleared on unmount by never being persisted anywhere.
+  const [newBackupCodes, setNewBackupCodes] = useState(null);
+  // Which step-up-gated action is in flight — useSecureVerification's
+  // onSuccess callback is shared across every action routed through it
+  // (currently disable and regenerate), so it needs to know which one to
+  // react to.
+  const [pendingAction, setPendingAction] = useState(null);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -72,14 +81,27 @@ const TwoFactorAuth = ({ t }) => {
     switchVerificationMethod,
   } = useSecureVerification({
     onSuccess: async (result) => {
+      if (pendingAction === 'regenerate') {
+        if (result?.success) {
+          showSuccess(t('恢复码已重新生成'));
+          setNewBackupCodes(result.data?.backup_codes ?? null);
+          await refreshStatus();
+        } else if (result) {
+          showError(result.message || t('操作失败'));
+        }
+        setPendingAction(null);
+        return;
+      }
       if (result?.success) {
         showSuccess(t('两步验证已禁用'));
         setEnrollment(null);
         setConfirmCode('');
+        setNewBackupCodes(null);
         await refreshStatus();
       } else if (result) {
         showError(result.message || t('操作失败'));
       }
+      setPendingAction(null);
     },
   });
 
@@ -104,10 +126,11 @@ const TwoFactorAuth = ({ t }) => {
     }
     setLoading(true);
     try {
-      await TotpService.confirm(confirmCode);
+      const data = await TotpService.confirm(confirmCode);
       showSuccess(t('两步验证启用成功！'));
       setEnrollment(null);
       setConfirmCode('');
+      setNewBackupCodes(data?.backup_codes ?? null);
       await refreshStatus();
     } catch (e) {
       showError(e.message);
@@ -119,11 +142,26 @@ const TwoFactorAuth = ({ t }) => {
   const handleDisable = async () => {
     // Disable is gated by step-up verification: the modal collects the TOTP
     // code, POST /api/verify stamps the session, then the disable call runs.
+    setPendingAction('disable');
     await startVerification(
       createApiCalls.custom('/api/user/totp/disable', 'POST'),
       {
         title: t('禁用两步验证'),
         description: t('禁用前需要先完成一次安全验证。'),
+      },
+    );
+  };
+
+  const handleRegenerateBackupCodes = async () => {
+    // Regenerate silently burns every unused code, so it is gated behind
+    // the same step-up flow as disable — a stale session cannot spend the
+    // last resort recovery mechanism.
+    setPendingAction('regenerate');
+    await startVerification(
+      createApiCalls.custom('/api/user/totp/backup-codes/regenerate', 'POST'),
+      {
+        title: t('重新生成恢复码'),
+        description: t('重新生成后，旧的恢复码将立即失效。'),
       },
     );
   };
@@ -157,6 +195,54 @@ const TwoFactorAuth = ({ t }) => {
       </div>
 
       <div className='py-2'>
+        {newBackupCodes && (
+          <Banner
+            type='warning'
+            closeIcon={null}
+            className='mb-3'
+            title={t('恢复码（仅显示一次）')}
+            description={
+              <div className='flex flex-col gap-2'>
+                <Typography.Text type='tertiary' className='text-xs'>
+                  {t(
+                    '请立即保存这些恢复码。丢失验证器设备时，每个恢复码可使用一次以完成安全验证；离开此页面后将无法再次查看。',
+                  )}
+                </Typography.Text>
+                <div
+                  className='grid grid-cols-2 gap-1 font-mono text-sm'
+                  data-testid='totp-backup-codes'
+                >
+                  {newBackupCodes.map((c) => (
+                    <span
+                      key={c}
+                      className='cursor-pointer'
+                      onClick={() => handleCopy(c)}
+                    >
+                      {c}
+                    </span>
+                  ))}
+                </div>
+                <div>
+                  <Button
+                    size='small'
+                    onClick={() => handleCopy(newBackupCodes.join('\n'))}
+                  >
+                    {t('复制全部')}
+                  </Button>
+                  <Button
+                    size='small'
+                    type='tertiary'
+                    className='ml-2'
+                    onClick={() => setNewBackupCodes(null)}
+                  >
+                    {t('我已保存')}
+                  </Button>
+                </div>
+              </div>
+            }
+          />
+        )}
+
         {status.enrolled ? (
           <div className='flex flex-col gap-3'>
             <Typography.Text type='tertiary' className='text-sm'>
@@ -164,9 +250,17 @@ const TwoFactorAuth = ({ t }) => {
                 '两步验证已启用。执行敏感操作时需要输入验证器应用中的验证码。',
               )}
             </Typography.Text>
-            <div>
+            <Typography.Text type='tertiary' className='text-xs'>
+              {t('剩余恢复码：{{count}}', {
+                count: status.backup_codes_remaining ?? 0,
+              })}
+            </Typography.Text>
+            <div className='flex gap-2'>
               <Button type='danger' theme='solid' onClick={handleDisable}>
                 {t('禁用两步验证')}
+              </Button>
+              <Button onClick={handleRegenerateBackupCodes}>
+                {t('重新生成恢复码')}
               </Button>
             </div>
           </div>

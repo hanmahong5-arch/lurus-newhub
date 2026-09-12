@@ -26,6 +26,7 @@ func setupAnalyticsRouter(t *testing.T) *adminGovCtx {
 		c.Next()
 	})
 	admin.GET("/analytics/model-performance", GetModelPerformanceV2)
+	admin.GET("/analytics/rankings", GetRankingsV2)
 	return ctx
 }
 
@@ -260,5 +261,64 @@ func TestGetModelPerformanceV2_UnauthenticatedRejected(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401 for anonymous request, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// getRankingsPayload extracts cached_at and rows from a rankings response.
+func getRankingsPayload(t *testing.T, w *httptest.ResponseRecorder) (cachedAt float64, rows []interface{}) {
+	t.Helper()
+	body := parseJSON(t, w)
+	data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing data object: %s", w.Body.String())
+	}
+	cachedAt, ok = data["cached_at"].(float64)
+	if !ok {
+		t.Fatalf("missing cached_at: %s", w.Body.String())
+	}
+	rows, ok = data["rows"].([]interface{})
+	if !ok {
+		t.Fatalf("missing rows array: %s", w.Body.String())
+	}
+	return
+}
+
+// TestRankingsV2_CacheHitWithin5Min: a second call within the 5-minute TTL
+// must reuse the cached snapshot rather than re-querying logs. The
+// production code has no query-count seam to spy on, so this proves it
+// directly instead: seed a second, heavily-weighted row BETWEEN the two
+// calls (large enough to visibly change the aggregate if it were re-run),
+// then assert the second response is identical to the first anyway —
+// including cached_at, which a re-query would refresh.
+func TestRankingsV2_CacheHitWithin5Min(t *testing.T) {
+	ctx := setupAnalyticsRouter(t)
+	defer ctx.cleanup()
+
+	now := time.Now().Unix()
+	seedPerfLog(t, ctx.db, "test-tenant", "alpha", entity.LogTypeConsume, 0, 10, 5, 100, now-60)
+
+	w1 := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by=model&hours=1")
+	if w1.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w1.Code, w1.Body.String())
+	}
+	cachedAt1, rows1 := getRankingsPayload(t, w1)
+
+	// Would dominate the token-share/rank order if the cache were bypassed.
+	seedPerfLog(t, ctx.db, "test-tenant", "beta", entity.LogTypeConsume, 0, 99999, 99999, 5, now-60)
+
+	w2 := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by=model&hours=1")
+	if w2.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w2.Code, w2.Body.String())
+	}
+	cachedAt2, rows2 := getRankingsPayload(t, w2)
+
+	if cachedAt1 != cachedAt2 {
+		t.Errorf("cached_at changed across calls within TTL: %v -> %v (cache was bypassed)", cachedAt1, cachedAt2)
+	}
+	if len(rows1) != 1 || len(rows2) != 1 {
+		t.Fatalf("want 1 row on both calls (the second row must not be visible yet), got %d then %d", len(rows1), len(rows2))
+	}
+	if fmt.Sprint(rows1) != fmt.Sprint(rows2) {
+		t.Errorf("rows changed across a cache hit — cache was bypassed:\nfirst:  %v\nsecond: %v", rows1, rows2)
 	}
 }

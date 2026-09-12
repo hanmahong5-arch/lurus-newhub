@@ -221,3 +221,36 @@ func TestSetAuditWriter_AtomicSafety(t *testing.T) {
 	// so the reset can't race with a still-running SetAuditWriter/RecordAuditEvent.
 	wg.Wait()
 }
+
+// TestNewAuditEvent_MarksContext is the L2 audit-completeness oracle: after
+// governance.NewAuditEvent(c, …) is handed to governance.RecordAuditEvent,
+// the request's gin.Context must carry AuditedContextKey=true so
+// middleware.AuditWriteGuard can tell "this write audited itself" from "this
+// write forgot to". Per the operator amendment (cycle7 plan §8, L2): the flag
+// is set inside RecordAuditEvent — the persisting call — not inside
+// NewAuditEvent's construction, so a caller that builds an event and then
+// decides not to record it (the decoupled construct/record shape at
+// internal_privacy_erase.go:153-156) never marks the request as covered.
+func TestNewAuditEvent_MarksContext(t *testing.T) {
+	defer auditWriterRef.Store(nil)
+	SetAuditWriter(&mockAuditWriter{})
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest("POST", "/test", nil)
+
+	if c.GetBool(AuditedContextKey) {
+		t.Fatal("AuditedContextKey should be unset before any audit call")
+	}
+
+	event := NewAuditEvent(c, ActorAdmin, 1, ActionTokenCreated, ResourceToken, 1, "")
+	if c.GetBool(AuditedContextKey) {
+		t.Fatal("construction alone (NewAuditEvent) must not mark the context — only RecordAuditEvent may")
+	}
+
+	RecordAuditEvent(event)
+	if !c.GetBool(AuditedContextKey) {
+		t.Fatal("RecordAuditEvent must set AuditedContextKey=true on the context the event was built from")
+	}
+}

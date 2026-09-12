@@ -511,6 +511,24 @@ var (
 		},
 		[]string{"action"},
 	)
+
+	// AdminWriteUnauditedTotal counts admin/internal-admin write requests
+	// (POST/PUT/PATCH/DELETE under /api/v2/admin or /internal/admin, plus the
+	// root-gated POST /api/v2/:tenant_slug/pricing route) where the handler
+	// completed the request without ever calling governance.RecordAuditEvent
+	// — middleware.AuditWriteGuard's fallback path. Any nonzero value means a
+	// route is producing typed admin.write_unaudited rows instead of its own
+	// action-specific audit event; label cardinality is bounded by the
+	// (small, admin-only) route table, never the raw request path.
+	AdminWriteUnauditedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "admin_write_unaudited_total",
+			Help:      "Admin/internal-admin write requests where no explicit governance.RecordAuditEvent call happened during the request",
+		},
+		[]string{"route"},
+	)
 )
 
 // RecordRelayRequest records a relay request with its outcome and the

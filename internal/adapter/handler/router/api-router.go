@@ -74,6 +74,10 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/user/totp/enroll", middleware.UserAuth(), middleware.CriticalRateLimit(), handler.TotpEnroll)
 		apiRouter.POST("/user/totp/confirm", middleware.UserAuth(), middleware.CriticalRateLimit(), handler.TotpConfirm)
 		apiRouter.POST("/user/totp/disable", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), handler.TotpDisable)
+		// Recovery-code regeneration gets its own "TB" rate-limit bucket
+		// (not CriticalRateLimit's shared "CT" bucket used by disable/
+		// channel-key-reveal above) — §8 L6 amendment.
+		apiRouter.POST("/user/totp/backup-codes/regenerate", middleware.UserAuth(), middleware.TotpBackupCodesRateLimit(), middleware.SecureVerificationRequired(), handler.RegenerateTotpBackupCodes)
 
 		// -- Platform wallet integration --
 		apiRouter.GET("/wallet/info", middleware.UserAuth(), handler.GetWalletInfo)

@@ -62,6 +62,8 @@ func setupSQLiteDB(t *testing.T) func() {
 		// exercise is CreateProject's explicit pre-check, which is what
 		// guarantees the behaviour on every dialect.
 		&entity.Project{},
+		// Per-device session registry (migration 033, L7).
+		&entity.UserSession{},
 	}
 	for _, tbl := range tables {
 		if err := db.AutoMigrate(tbl); err != nil {

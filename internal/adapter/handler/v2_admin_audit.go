@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -25,6 +26,53 @@ func ListAuditActionsV2(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"actions": actions,
+		},
+	})
+}
+
+// GetAuditCoverageV2 reports how much of the admin/internal-admin write
+// surface produces its own audit event (governance.RecordAuditEvent called
+// by the handler) versus relying on middleware.AuditWriteGuard's typed
+// admin.write_unaudited fallback. The route list itself comes from
+// GetAdminWriteRoutes (captured at router build time — see
+// audit_coverage_gen.go for why this handler can't just walk the engine's
+// route table itself); classification comes from the AuditExplicitRoutes
+// map the CI structural test (router/audit_coverage_test.go) keeps honest.
+//
+// GET /api/v2/admin/audit/coverage
+//
+// Response data: {total_admin_write_routes, routes_with_explicit_audit,
+// routes_relying_on_fallback, fallback_events_last_24h}.
+//
+// Root-only (router applies RootJWTAuth on the /api/v2/admin/* group).
+func GetAuditCoverageV2(c *gin.Context) {
+	routes := GetAdminWriteRoutes()
+	explicit := make([]string, 0, len(routes))
+	fallback := make([]string, 0, len(routes))
+	for _, r := range routes {
+		if AuditExplicitRoutes[r] {
+			explicit = append(explicit, r)
+		} else {
+			fallback = append(fallback, r)
+		}
+	}
+	sort.Strings(explicit)
+	sort.Strings(fallback)
+
+	since := common.GetTimestamp() - 24*60*60
+	_, fallbackEvents24h, err := repo.GetAuditEvents("", governance.ActionAdminWriteUnaudited, 0, "", since, 0, 0, 1)
+	if err != nil {
+		common.SysError(fmt.Sprintf("audit coverage: count fallback events failed: %v", err))
+		fallbackEvents24h = 0
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"total_admin_write_routes":   len(routes),
+			"routes_with_explicit_audit": explicit,
+			"routes_relying_on_fallback": fallback,
+			"fallback_events_last_24h":   fallbackEvents24h,
 		},
 	})
 }

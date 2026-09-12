@@ -223,13 +223,26 @@ const HFSettings = () => {
   const [editField, setEditField] = useState(null); // 'display_name' | 'email'
   const [saving, setSaving] = useState(false);
 
-  // Session state — single-session for now (backend has no device list)
+  // Session state. With SESSION_REGISTRY_ENABLED off (or on but this login
+  // registered no row — e.g. a bearer/token-authenticated visit), `sessions`
+  // stays the single synthetic row it always was; with the flag on it can
+  // hold one row per registered device (L7).
   const [sessions, setSessions] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(false);
 
-  // Revoke session confirm dialog
+  // Revoke session confirm dialog — used for BOTH "revoke my current
+  // session" (revokeTargetId === null, hits /sessions/current) and "revoke
+  // this other device" (revokeTargetId = that row's numeric id, hits
+  // /sessions/:id). Kept as one dialog since the two only differ in which
+  // endpoint handleRevokeSession calls.
   const [revokeVisible, setRevokeVisible] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [revokeTargetId, setRevokeTargetId] = useState(null);
+
+  // "Sign out other devices" confirm dialog (L7) — only ever shown when the
+  // registry returned more than one row, so there is something to sign out.
+  const [revokeOthersVisible, setRevokeOthersVisible] = useState(false);
+  const [revokingOthers, setRevokingOthers] = useState(false);
 
   // Real TOTP state. This panel used to render a green dot and the words
   // "authenticator app · enabled" unconditionally — for every user, whether or
@@ -403,27 +416,78 @@ const HFSettings = () => {
     }
   }, [section, tenantSlug, fetchBilling]);
 
+  // handleRevokeSession serves both dialogs the confirm at the bottom of
+  // this component wires to: revokeTargetId === null means "revoke MY OWN
+  // current session" (the original Wave 3 behaviour — logs the caller out
+  // and redirects to /login); a numeric revokeTargetId means "revoke that
+  // OTHER device by id" (L7) — the caller stays logged in, so this just
+  // refetches the list instead of navigating away.
   const handleRevokeSession = async () => {
     if (revoking) return;
     setRevoking(true);
     try {
-      const res = await API.delete(`/api/v2/${tenantSlug}/sessions/current`);
-      if (res?.data?.success) {
-        // Fallback must be a route that exists: the SPA's only login route is
-        // /login ('/console/v2/login' is not in the v2 route table).
-        const redirect = res.data.data?.redirect ?? '/login';
-        navigate(redirect);
+      if (revokeTargetId == null) {
+        const res = await API.delete(`/api/v2/${tenantSlug}/sessions/current`);
+        if (res?.data?.success) {
+          // Fallback must be a route that exists: the SPA's only login route
+          // is /login ('/console/v2/login' is not in the v2 route table).
+          const redirect = res.data.data?.redirect ?? '/login';
+          navigate(redirect);
+        } else {
+          showError(
+            res?.data?.message ||
+              tr('console.settings.revoke_failed', 'Failed to revoke session'),
+          );
+        }
       } else {
-        showError(
-          res?.data?.message ||
-            tr('console.settings.revoke_failed', 'Failed to revoke session'),
+        // 204 No Content on success — there is no res.data to check.
+        await API.delete(`/api/v2/${tenantSlug}/sessions/${revokeTargetId}`);
+        showSuccess(
+          tr('console.settings.revoke_session_success', 'Session revoked'),
         );
+        fetchSessions();
       }
     } catch (_) {
       // interceptor handles toast
     } finally {
       setRevoking(false);
       setRevokeVisible(false);
+      setRevokeTargetId(null);
+    }
+  };
+
+  // handleRevokeOthers (L7): "sign out other devices" — revokes every
+  // session of the caller except the current one and refetches the list so
+  // the table reflects the new (singleton) state.
+  const handleRevokeOthers = async () => {
+    if (revokingOthers) return;
+    setRevokingOthers(true);
+    try {
+      const res = await API.delete(`/api/v2/${tenantSlug}/sessions/others`);
+      if (res?.data?.success) {
+        const revoked = res.data.data?.revoked ?? 0;
+        showSuccess(
+          tr(
+            'console.settings.revoke_others_success',
+            '{{count}} other session(s) revoked',
+            { count: revoked },
+          ),
+        );
+        fetchSessions();
+      } else {
+        showError(
+          res?.data?.message ||
+            tr(
+              'console.settings.revoke_others_failed',
+              'Failed to sign out other devices',
+            ),
+        );
+      }
+    } catch (_) {
+      // interceptor handles toast
+    } finally {
+      setRevokingOthers(false);
+      setRevokeOthersVisible(false);
     }
   };
 
@@ -715,14 +779,57 @@ const HFSettings = () => {
                       : tr('console.settings.mfa_enable', 'set up')}
                   </button>
                 </div>
+                {/* backup_codes_remaining only appears on the status
+                    response once TOTP is enrolled — a self-service escape
+                    hatch (issued once, shown once) so this panel is honest
+                    about how many are left, not just whether TOTP is on. */}
+                {totpStatus && totpStatus.enrolled && (
+                  <div
+                    className='muted mono'
+                    style={{ fontSize: 11, marginTop: 8 }}
+                    data-testid='mfa-backup-codes-remaining'
+                  >
+                    {tr(
+                      'console.settings.mfa_backup_codes_remaining',
+                      'backup codes remaining: {{count}}',
+                      { count: totpStatus.backup_codes_remaining ?? 0 },
+                    )}
+                  </div>
+                )}
               </div>
 
               <div
                 className='panel'
                 style={{ padding: 18, marginTop: 14, marginBottom: 14 }}
               >
-                <div className='lbl' style={{ marginBottom: 12 }}>
-                  {tr('console.settings.sessions_title', 'sessions')}
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: 12,
+                  }}
+                >
+                  <div className='lbl'>
+                    {tr('console.settings.sessions_title', 'sessions')}
+                  </div>
+                  {/* L7: only worth showing once the registry proves there is
+                      more than one device to sign out — with the flag off
+                      (or no other device registered) there is nothing for
+                      this button to do. */}
+                  {!sessionLoading && sessions && sessions.length > 1 && (
+                    <button
+                      type='button'
+                      className='btn sm'
+                      data-testid='revoke-others-btn'
+                      onClick={() => setRevokeOthersVisible(true)}
+                    >
+                      {tr(
+                        'console.settings.revoke_others_btn',
+                        'sign out other devices',
+                      )}
+                    </button>
+                  )}
                 </div>
                 {sessionLoading && (
                   <div
@@ -763,6 +870,15 @@ const HFSettings = () => {
                           }}
                         >
                           {tr('console.settings.th_auth_method', 'auth method')}
+                        </th>
+                        <th
+                          style={{
+                            textAlign: 'left',
+                            padding: '4px 8px',
+                            fontWeight: 500,
+                          }}
+                        >
+                          {tr('console.settings.th_device', 'device')}
                         </th>
                         <th
                           style={{
@@ -824,6 +940,16 @@ const HFSettings = () => {
                                 )}
                             </span>
                           </td>
+                          <td className='faint' style={{ padding: '8px 8px' }}>
+                            {/* ip/user_agent_family only exist once the
+                                registry is enabled (L7) — the legacy
+                                synthetic row has neither. */}
+                            {s.ip || s.user_agent_family
+                              ? [s.ip, s.user_agent_family]
+                                  .filter(Boolean)
+                                  .join(' · ')
+                              : '—'}
+                          </td>
                           <td style={{ padding: '8px 8px' }}>
                             {s.current && (
                               <span className='tag ok'>
@@ -853,8 +979,19 @@ const HFSettings = () => {
                             <button
                               type='button'
                               className='btn sm'
-                              data-testid='revoke-session-btn'
-                              onClick={() => setRevokeVisible(true)}
+                              data-testid={
+                                s.current
+                                  ? 'revoke-session-btn'
+                                  : `revoke-session-btn-${s.id}`
+                              }
+                              onClick={() => {
+                                // s.current -> the caller's own session
+                                // (/sessions/current, unchanged behaviour);
+                                // otherwise -> revoke-by-id (L7) for a
+                                // registered device that is not this one.
+                                setRevokeTargetId(s.current ? null : s.id);
+                                setRevokeVisible(true);
+                              }}
                             >
                               {tr('console.settings.revoke', 'revoke')}
                             </button>
@@ -866,23 +1003,42 @@ const HFSettings = () => {
                 )}
               </div>
 
-              {/* Revoke current session confirm dialog */}
+              {/* Revoke session confirm dialog — shared by "revoke my
+                  current session" (revokeTargetId === null) and "revoke
+                  this other device by id" (L7, revokeTargetId set) since
+                  they only differ in copy and in which endpoint is called. */}
               <ConfirmDialog
                 visible={revokeVisible}
-                title={tr(
-                  'console.settings.confirm_revoke_title',
-                  'Revoke current session',
-                )}
-                consequenceList={[
-                  tr(
-                    'console.settings.confirm_revoke_c1',
-                    'This browser session will be invalidated immediately.',
-                  ),
-                  tr(
-                    'console.settings.confirm_revoke_c2',
-                    'You will be redirected to the login page and must sign in again.',
-                  ),
-                ]}
+                title={
+                  revokeTargetId == null
+                    ? tr(
+                        'console.settings.confirm_revoke_title',
+                        'Revoke current session',
+                      )
+                    : tr(
+                        'console.settings.confirm_revoke_other_title',
+                        'Revoke this session',
+                      )
+                }
+                consequenceList={
+                  revokeTargetId == null
+                    ? [
+                        tr(
+                          'console.settings.confirm_revoke_c1',
+                          'This browser session will be invalidated immediately.',
+                        ),
+                        tr(
+                          'console.settings.confirm_revoke_c2',
+                          'You will be redirected to the login page and must sign in again.',
+                        ),
+                      ]
+                    : [
+                        tr(
+                          'console.settings.confirm_revoke_other_c1',
+                          'That device will be signed out immediately.',
+                        ),
+                      ]
+                }
                 confirmText='revoke'
                 confirmButtonText={tr(
                   'console.settings.revoke_session_btn',
@@ -890,7 +1046,37 @@ const HFSettings = () => {
                 )}
                 confirmButtonType='danger'
                 onConfirm={handleRevokeSession}
-                onCancel={() => setRevokeVisible(false)}
+                onCancel={() => {
+                  setRevokeVisible(false);
+                  setRevokeTargetId(null);
+                }}
+              />
+
+              {/* "Sign out other devices" confirm dialog (L7). */}
+              <ConfirmDialog
+                visible={revokeOthersVisible}
+                title={tr(
+                  'console.settings.confirm_revoke_others_title',
+                  'Sign out other devices',
+                )}
+                consequenceList={[
+                  tr(
+                    'console.settings.confirm_revoke_others_c1',
+                    'Every OTHER session on your account will be invalidated immediately.',
+                  ),
+                  tr(
+                    'console.settings.confirm_revoke_others_c2',
+                    'This browser stays signed in.',
+                  ),
+                ]}
+                confirmText='revoke'
+                confirmButtonText={tr(
+                  'console.settings.revoke_others_btn',
+                  'sign out other devices',
+                )}
+                confirmButtonType='danger'
+                onConfirm={handleRevokeOthers}
+                onCancel={() => setRevokeOthersVisible(false)}
               />
             </div>
           )}

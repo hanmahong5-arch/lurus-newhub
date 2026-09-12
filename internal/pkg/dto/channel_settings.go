@@ -7,6 +7,13 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// ForceHTTP1 is never persisted directly — there is no console field or
+	// JSON key for it in this struct's own document. It is derived at relay
+	// time (RelayInfo.InitChannelMeta, provider/common/relay_info.go) from the
+	// channel's param_override key __lurus_force_http1:true, and read by
+	// provider.doRequest to select app.GetHttpClientFor's HTTP/1.1-only
+	// transport for this one channel without affecting siblings.
+	ForceHTTP1 bool `json:"-"`
 }
 
 type VertexKeyType string

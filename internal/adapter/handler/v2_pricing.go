@@ -85,6 +85,7 @@ func GetPricingV2(c *gin.Context) {
 			"pricing":     pricing,
 			"vendors":     vendorNames,
 			"group_ratio": groupRatio,
+			"version":     currentPricingVersion(),
 		},
 	})
 }

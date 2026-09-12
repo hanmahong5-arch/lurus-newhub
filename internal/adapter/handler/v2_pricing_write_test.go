@@ -21,16 +21,22 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -38,6 +44,15 @@ import (
 )
 
 // Hermetic SQLite setup mirrors the pattern used in v2_pricing_test.go.
+
+// pinnedAuditWriter implements governance.AuditWriter against a fixed *gorm.DB
+// captured at construction, instead of the mutable package-global repo.DB —
+// see the comment at its call site in setupPricingWriteRouter for why.
+type pinnedAuditWriter struct{ db *gorm.DB }
+
+func (w *pinnedAuditWriter) CreateAuditEvent(event *entity.AuditEvent) error {
+	return w.db.Create(event).Error
+}
 
 var pricingWriteTestDBCounter atomic.Int64
 
@@ -59,6 +74,7 @@ func setupPricingWriteRouter(t *testing.T) *pricingWriteCtx {
 	}
 	for _, tbl := range []interface{}{
 		&repo.User{}, &repo.Token{}, &repo.Tenant{}, &repo.Option{},
+		&entity.AuditEvent{}, &entity.AuditChainHead{},
 	} {
 		if err := db.AutoMigrate(tbl); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("auto migrate %T: %v", tbl, err)
@@ -79,14 +95,24 @@ func setupPricingWriteRouter(t *testing.T) *pricingWriteCtx {
 	common.RedisEnabled = false
 	// Bootstrap OptionMap so repo.UpdateOption does not panic on nil map.
 	repo.InitOptionMap()
+	// Real audit-writer wiring (mirrors cmd/server/main.go's
+	// governance.SetAuditWriter(&repo.AuditEventRepo{})), but pinned to THIS
+	// test's db via closure rather than the mutable package-global repo.DB:
+	// RecordAuditEvent runs on a gopool goroutine that can still be in flight
+	// after this test returns and t.Cleanup swaps repo.DB back and closes
+	// this connection. A plain &repo.AuditEventRepo{} would then dereference
+	// whatever repo.DB has become (nil, or another test's db) and panic
+	// inside the pool; writing to this closed *gorm.DB instead just returns
+	// an ordinary "database is closed" error that RecordAuditEvent logs.
+	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
 
 	slug := "acme-write"
 	tenant := &repo.Tenant{
-		Id:           "acme-write-id",
-		Slug:         slug,
-		Name:         "Acme Write Test",
+		Id:       "acme-write-id",
+		Slug:     slug,
+		Name:     "Acme Write Test",
 		IDPOrgID: fmt.Sprintf("zitadel-write-%d", pricingWriteTestDBCounter.Load()),
-		Status:       1,
+		Status:   1,
 	}
 	if err := db.Create(tenant).Error; err != nil {
 		t.Fatalf("seed tenant: %v", err)
@@ -115,6 +141,7 @@ func setupPricingWriteRouter(t *testing.T) *pricingWriteCtx {
 		c.Next()
 	}
 	router.POST("/api/v2/:tenant_slug/pricing", mockAuth, UpdatePricingV2)
+	router.POST("/api/v2/:tenant_slug/pricing/preview", mockAuth, PreviewPricingV2)
 
 	ctx := &pricingWriteCtx{
 		router:     router,
@@ -136,9 +163,17 @@ func setupPricingWriteRouter(t *testing.T) *pricingWriteCtx {
 }
 
 func postPricing(ctx *pricingWriteCtx, slug string, body interface{}, headers ...map[string]string) *httptest.ResponseRecorder {
+	return postPricingPath(ctx, "/api/v2/"+slug+"/pricing", body, headers...)
+}
+
+func postPricingPreview(ctx *pricingWriteCtx, slug string, body interface{}, headers ...map[string]string) *httptest.ResponseRecorder {
+	return postPricingPath(ctx, "/api/v2/"+slug+"/pricing/preview", body, headers...)
+}
+
+func postPricingPath(ctx *pricingWriteCtx, path string, body interface{}, headers ...map[string]string) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	_ = json.NewEncoder(&buf).Encode(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v2/"+slug+"/pricing", &buf)
+	req := httptest.NewRequest(http.MethodPost, path, &buf)
 	req.Header.Set("Content-Type", "application/json")
 	for _, h := range headers {
 		for k, v := range h {
@@ -148,6 +183,24 @@ func postPricing(ctx *pricingWriteCtx, slug string, body interface{}, headers ..
 	w := httptest.NewRecorder()
 	ctx.router.ServeHTTP(w, req)
 	return w
+}
+
+// pollAuditRow polls repo.GetAuditEvents (bounded) for the first row with the
+// given action — RecordAuditEvent persists via gopool.Go, so the row is not
+// guaranteed to exist yet when ServeHTTP returns.
+func pollAuditRow(t *testing.T, action string, timeout time.Duration) *entity.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		events, _, err := repo.GetAuditEvents("", action, 0, "", 0, 0, 0, 10)
+		if err == nil && len(events) > 0 {
+			return events[0]
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func parsePricingWrite(t *testing.T, w *httptest.ResponseRecorder) map[string]interface{} {
@@ -283,4 +336,287 @@ func TestV2PricingWrite_RootGate(t *testing.T) {
 			t.Fatalf("status = %d, want 200 for root caller, body: %s", w.Code, w.Body.String())
 		}
 	})
+}
+
+// seedPricingVersion writes PricingVersion directly through repo.UpdateOption
+// (package-global repo.DB, which setupPricingWriteRouter has already swapped
+// to this test's db) so a test can start from a known baseline version.
+func seedPricingVersion(t *testing.T, v int64) {
+	t.Helper()
+	if err := repo.UpdateOption("PricingVersion", strconv.FormatInt(v, 10)); err != nil {
+		t.Fatalf("seed PricingVersion: %v", err)
+	}
+}
+
+// 6. VersionConflict_NoWrite — a stale If-Match-Pricing-Version header must
+// be rejected with 409 before any write, reporting the DB's real version.
+func TestV2PricingWrite_VersionConflict_NoWrite(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	seedPricingVersion(t, 3)
+
+	model := "version-conflict-probe-model"
+	baseline := ratio_setting.GetModelRatioCopy()[model]
+
+	batch := []map[string]interface{}{
+		{"model_name": model, "model_ratio": 9.9},
+	}
+	w := postPricing(ctx, ctx.tenantSlug, batch, map[string]string{"If-Match-Pricing-Version": "2"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body: %s", w.Code, w.Body.String())
+	}
+
+	resp := parsePricingWrite(t, w)
+	if resp["error_code"] != "PRICING_VERSION_CONFLICT" {
+		t.Errorf("error_code = %v, want PRICING_VERSION_CONFLICT", resp["error_code"])
+	}
+	if cv, _ := resp["current_version"].(float64); int64(cv) != 3 {
+		t.Errorf("current_version = %v, want 3", resp["current_version"])
+	}
+
+	if got := ratio_setting.GetModelRatioCopy()[model]; got != baseline {
+		t.Errorf("model_ratio map mutated despite version conflict: got %v want %v", got, baseline)
+	}
+
+	var opt repo.Option
+	err := ctx.db.Where("key = ?", "ModelRatio").First(&opt).Error
+	if err == nil {
+		t.Errorf("ModelRatio option row was written despite version conflict: %s", opt.Value)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("unexpected error querying ModelRatio row: %v", err)
+	}
+}
+
+// 7. VersionRace_SecondWriterLoses — two sequential POSTs pinned to the same
+// baseline version: the first wins and bumps the version, the second (still
+// holding the now-stale header) loses with 409, and the final map holds only
+// the first writer's value.
+func TestV2PricingWrite_VersionRace_SecondWriterLoses(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	seedPricingVersion(t, 3)
+
+	model := "version-race-probe-model"
+
+	w1 := postPricing(ctx, ctx.tenantSlug,
+		[]map[string]interface{}{{"model_name": model, "model_ratio": 1.11}},
+		map[string]string{"If-Match-Pricing-Version": "3"})
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first writer status = %d, want 200, body: %s", w1.Code, w1.Body.String())
+	}
+	resp1 := parsePricingWrite(t, w1)
+	data1, _ := resp1["data"].(map[string]interface{})
+	if nv, _ := data1["new_version"].(float64); int64(nv) != 4 {
+		t.Fatalf("first writer new_version = %v, want 4", data1["new_version"])
+	}
+
+	w2 := postPricing(ctx, ctx.tenantSlug,
+		[]map[string]interface{}{{"model_name": model, "model_ratio": 2.22}},
+		map[string]string{"If-Match-Pricing-Version": "3"})
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("second writer status = %d, want 409, body: %s", w2.Code, w2.Body.String())
+	}
+	resp2 := parsePricingWrite(t, w2)
+	if cv, _ := resp2["current_version"].(float64); int64(cv) != 4 {
+		t.Errorf("second writer current_version = %v, want 4", resp2["current_version"])
+	}
+
+	if got := ratio_setting.GetModelRatioCopy()[model]; got != 1.11 {
+		t.Errorf("final map[%q] = %v, want the first writer's value 1.11", model, got)
+	}
+}
+
+// 8. NoHeader_SkipsGuard — rollout compatibility (O1): a legacy caller that
+// never sends the header must still succeed. Deleted the release O1 flips
+// the header to mandatory.
+func TestV2PricingWrite_NoHeader_SkipsGuard(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	model := "no-header-probe-model"
+
+	w := postPricing(ctx, ctx.tenantSlug,
+		[]map[string]interface{}{{"model_name": model, "model_ratio": 4.4}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+}
+
+// 9. DBFailure_LeavesMemoryUntouched — a DB write failure must surface as 500
+// and never leave the in-memory ratio ahead of the (now unwritten) database.
+// Mutation: restoring the old memory-first order turns this red.
+func TestV2PricingWrite_DBFailure_LeavesMemoryUntouched(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	model := "db-failure-probe-model"
+	baseline := ratio_setting.GetModelRatioCopy()[model]
+
+	if err := ctx.db.Exec("DROP TABLE options").Error; err != nil {
+		t.Fatalf("drop options table: %v", err)
+	}
+
+	w := postPricing(ctx, ctx.tenantSlug,
+		[]map[string]interface{}{{"model_name": model, "model_ratio": 7.7}})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body: %s", w.Code, w.Body.String())
+	}
+	resp := parsePricingWrite(t, w)
+	if resp["error_code"] != "PERSIST_FAILED" {
+		t.Errorf("error_code = %v, want PERSIST_FAILED", resp["error_code"])
+	}
+
+	if got := ratio_setting.GetModelRatioCopy()[model]; got != baseline {
+		t.Errorf("in-memory model_ratio changed despite a DB failure: got %v want %v", got, baseline)
+	}
+}
+
+// 10. CacheRatioRoundTrip — cache_ratio can be edited from the console, not
+// only imported from the upstream sync whitelist.
+func TestV2PricingWrite_CacheRatioRoundTrip(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	model := "cache-ratio-roundtrip-probe"
+
+	w := postPricing(ctx, ctx.tenantSlug,
+		[]map[string]interface{}{{"model_name": model, "cache_ratio": 0.35}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	if got := ratio_setting.GetCacheRatioCopy()[model]; got != 0.35 {
+		t.Errorf("GetCacheRatioCopy()[%q] = %v, want 0.35", model, got)
+	}
+
+	var opt repo.Option
+	if err := ctx.db.Where("key = ?", "CacheRatio").First(&opt).Error; err != nil {
+		t.Fatalf("CacheRatio option row not persisted: %v", err)
+	}
+	if !strings.Contains(opt.Value, model) {
+		t.Errorf("CacheRatio option row = %s, want it to contain %q", opt.Value, model)
+	}
+}
+
+// 11. AuditRow — a successful commit produces one pricing.updated audit row
+// carrying from_version/to_version. RecordAuditEvent persists via
+// gopool.Go (asynchronously), so this polls rather than reading once.
+// Mutation: dropping the RecordAuditEvent call turns this red.
+func TestV2PricingWrite_AuditRow(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	model := "audit-row-probe-model"
+
+	w := postPricing(ctx, ctx.tenantSlug,
+		[]map[string]interface{}{{"model_name": model, "model_ratio": 1.23}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	ev := pollAuditRow(t, governance.ActionPricingUpdated, 2*time.Second)
+	if ev == nil {
+		t.Fatal("no pricing.updated audit row appeared within the poll window")
+	}
+	if !strings.Contains(ev.Details, "from_version") || !strings.Contains(ev.Details, "to_version") {
+		t.Errorf("audit details = %s, want from_version/to_version", ev.Details)
+	}
+}
+
+// 12. PricingPreview_NeverPersists — preview returns diffs/updated_count and
+// leaves the options table, PricingVersion, and the live ratio maps
+// untouched.
+func TestV2PricingPreview_NeverPersists(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	model := "preview-never-persists-probe"
+
+	var before int64
+	ctx.db.Model(&repo.Option{}).Count(&before)
+	versionBefore := currentPricingVersion()
+
+	w := postPricingPreview(ctx, ctx.tenantSlug,
+		[]map[string]interface{}{{"model_name": model, "model_ratio": 5.5}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	resp := parsePricingWrite(t, w)
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data missing, body: %s", w.Body.String())
+	}
+	diffs, ok := data["diffs"].([]interface{})
+	if !ok || len(diffs) == 0 {
+		t.Fatalf("diffs missing/empty, body: %s", w.Body.String())
+	}
+	if uc, _ := data["updated_count"].(float64); int(uc) != 1 {
+		t.Errorf("updated_count = %v, want 1", data["updated_count"])
+	}
+
+	var after int64
+	ctx.db.Model(&repo.Option{}).Count(&after)
+	if after != before {
+		t.Errorf("options row count changed: before=%d after=%d — preview must never persist", before, after)
+	}
+	if got := currentPricingVersion(); got != versionBefore {
+		t.Errorf("PricingVersion changed by preview: before=%d after=%d", versionBefore, got)
+	}
+	if got := ratio_setting.GetModelRatioCopy()[model]; got != 0 {
+		t.Errorf("preview mutated the live ratio map: got %v, want untouched (0)", got)
+	}
+}
+
+// 13. PartialBatchFailure_RollsBackEarlierFields — a failure on the third
+// field in a batch that touches three fields must roll back the first two as
+// well: the four ratio-map persists plus the version CAS are one
+// transaction, not four independent repo.UpdateOption calls.
+func TestV2PricingWrite_PartialBatchFailure_RollsBackEarlierFields(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+
+	modelA := "partial-fail-ratio-model"
+	modelB := "partial-fail-completion-model"
+	modelFail := "partial-fail-FAILPROBE-model"
+
+	baselineRatio := ratio_setting.GetModelRatioCopy()[modelA]
+	baselineCompletion := ratio_setting.GetCompletionRatioCopy()[modelB]
+	baselinePrice := ratio_setting.GetModelPriceCopy()[modelFail]
+
+	// Surgical failure on ONLY the ModelPrice persist: a SQLite trigger keyed
+	// to a sentinel substring in the marshaled JSON value. DROP TABLE (used by
+	// the DBFailure test above) would fail every persist and could not prove
+	// that the first two, having genuinely succeeded inside the transaction,
+	// were rolled back rather than never attempted.
+	for _, stmt := range []string{
+		`CREATE TRIGGER pricing_partial_fail_insert BEFORE INSERT ON options
+		 WHEN NEW.key='ModelPrice' AND NEW.value LIKE '%FAILPROBE%'
+		 BEGIN SELECT RAISE(ABORT,'injected failure'); END;`,
+		`CREATE TRIGGER pricing_partial_fail_update BEFORE UPDATE ON options
+		 WHEN NEW.key='ModelPrice' AND NEW.value LIKE '%FAILPROBE%'
+		 BEGIN SELECT RAISE(ABORT,'injected failure'); END;`,
+	} {
+		if err := ctx.db.Exec(stmt).Error; err != nil {
+			t.Fatalf("install fail-probe trigger: %v", err)
+		}
+	}
+
+	batch := []map[string]interface{}{
+		{"model_name": modelA, "model_ratio": 8.1},
+		{"model_name": modelB, "completion_ratio": 8.2},
+		{"model_name": modelFail, "model_price": 8.3},
+	}
+	w := postPricing(ctx, ctx.tenantSlug, batch)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body: %s", w.Code, w.Body.String())
+	}
+
+	// (a) DB: this is a fresh per-test database, so any of these three rows
+	// existing at all proves a persist that should have rolled back did not.
+	var count int64
+	ctx.db.Model(&repo.Option{}).
+		Where("key IN ?", []string{"ModelRatio", "CompletionRatio", "ModelPrice"}).
+		Count(&count)
+	if count != 0 {
+		t.Errorf("options rows survived a rolled-back transaction: count=%d, want 0", count)
+	}
+
+	// (b) memory: none of the three in-memory maps were mutated either.
+	if got := ratio_setting.GetModelRatioCopy()[modelA]; got != baselineRatio {
+		t.Errorf("ModelRatio mutated despite rollback: got %v want %v", got, baselineRatio)
+	}
+	if got := ratio_setting.GetCompletionRatioCopy()[modelB]; got != baselineCompletion {
+		t.Errorf("CompletionRatio mutated despite rollback: got %v want %v", got, baselineCompletion)
+	}
+	if got := ratio_setting.GetModelPriceCopy()[modelFail]; got != baselinePrice {
+		t.Errorf("ModelPrice mutated despite rollback: got %v want %v", got, baselinePrice)
+	}
 }

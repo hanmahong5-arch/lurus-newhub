@@ -12,7 +12,7 @@ func TestIsExportSafe_PublicFields(t *testing.T) {
 }
 
 func TestIsExportSafe_InternalFields(t *testing.T) {
-	internalFields := []string{"channel_id", "model_ratio", "group_ratio", "model_price", "admin_info", "frt", "data_flow_source"}
+	internalFields := []string{"channel_id", "model_ratio", "group_ratio", "model_price", "admin_info", "frt", "data_flow_source", "upstream_request_id"}
 	for _, f := range internalFields {
 		if !IsExportSafe(f) {
 			t.Errorf("expected field %q to be export-safe (Internal tier, admin-visible)", f)

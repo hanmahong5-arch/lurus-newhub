@@ -27,7 +27,7 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 	for _, m := range []interface{}{
 		&repo.User{}, &repo.Token{}, &repo.Log{},
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
-		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{},
+		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{}, &entity.UserTOTPBackupCode{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -91,6 +91,19 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 	}).Error; err != nil {
 		t.Fatalf("seed totp: %v", err)
 	}
+	// One unused + one already-consumed backup code — both must be gone
+	// after erasure, not just the unused one.
+	if err := db.Create(&entity.UserTOTPBackupCode{
+		UserId: user.Id, CodeHash: "erase-fixture-hash-unused", CreatedAt: time.Now().Unix(),
+	}).Error; err != nil {
+		t.Fatalf("seed unused backup code: %v", err)
+	}
+	if err := db.Create(&entity.UserTOTPBackupCode{
+		UserId: user.Id, CodeHash: "erase-fixture-hash-used",
+		CreatedAt: time.Now().Unix(), UsedAt: time.Now().Unix(),
+	}).Error; err != nil {
+		t.Fatalf("seed used backup code: %v", err)
+	}
 
 	for i := 0; i < logCount; i++ {
 		if err := db.Create(&entity.Log{
@@ -149,6 +162,14 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 	db.Unscoped().Model(&entity.UserTOTP{}).Where("user_id = ?", userID).Count(&totpCount)
 	if totpCount != 0 {
 		t.Errorf("totp rows remaining = %d, want 0", totpCount)
+	}
+
+	// totp backup codes: hard-deleted too — both the unused and the
+	// already-consumed one (SEC-C rides the same step).
+	var backupCodeCount int64
+	db.Unscoped().Model(&entity.UserTOTPBackupCode{}).Where("user_id = ?", userID).Count(&backupCodeCount)
+	if backupCodeCount != 0 {
+		t.Errorf("totp backup code rows remaining = %d, want 0", backupCodeCount)
 	}
 
 	// logs: pseudonymized, billing fields retained

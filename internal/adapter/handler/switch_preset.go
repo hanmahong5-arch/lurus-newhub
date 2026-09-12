@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/gin-gonic/gin"
 )
 
@@ -81,6 +83,10 @@ func CreateSwitchPreset(c *gin.Context) {
 		})
 		return
 	}
+
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+		governance.ActionSwitchPresetCreated, governance.ResourceSwitchPreset, 0,
+		fmt.Sprintf(`{"preset_id":%q,"tool":%q,"name":%q,"is_official":%t}`, preset.ID, body.Tool, body.Name, body.IsOfficial)))
 
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,

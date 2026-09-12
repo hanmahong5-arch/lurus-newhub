@@ -186,6 +186,19 @@ func HardDeleteUserTOTP(ctx context.Context, userID int) (int64, error) {
 	return result.RowsAffected, nil
 }
 
+// HardDeleteUserTOTPBackupCodes removes the user's TOTP recovery codes (used
+// and unused), if any — same security-adjacent-personal-data class as the
+// TOTP secret above, so it rides the same erasure step (SEC-C).
+func HardDeleteUserTOTPBackupCodes(ctx context.Context, userID int) (int64, error) {
+	result := WithoutTenantIsolationCtx(ctx, DB).Unscoped().
+		Where("user_id = ?", userID).
+		Delete(&entity.UserTOTPBackupCode{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("hard delete user totp backup codes: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
 // HardDeleteUserIdentityMappings removes the OIDC identity binding rows
 // (email / display name / preferred username), including soft-deleted rows.
 func HardDeleteUserIdentityMappings(ctx context.Context, userID int) (int64, error) {

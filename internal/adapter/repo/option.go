@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,9 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Option = entity.Option
@@ -227,6 +231,76 @@ func UpdateOption(key string, value string) error {
 		return err
 	}
 	// Update OptionMap
+	return updateOptionMap(key, value)
+}
+
+// UpdateOptionTx persists a single option row through the given transaction,
+// without touching the in-memory OptionMap. Plain UpdateOption cannot be
+// composed into a larger transaction: it calls DB (the package-global
+// handle) directly, so wrapping calls to it in a repo.DB.Transaction closure
+// does not route the write through that transaction at all. Callers that
+// need several option rows to commit or roll back together — the pricing
+// write's four ratio maps plus the PricingVersion CAS below,
+// v2_pricing_write.go — call this once per row inside their own
+// repo.DB.Transaction, then apply the in-memory side effects themselves only
+// after the transaction commits.
+func UpdateOptionTx(tx *gorm.DB, key, value string) error {
+	return tx.Save(&entity.Option{Key: key, Value: value}).Error
+}
+
+// GetOptionValue reads a single option row directly from the database,
+// bypassing the in-memory OptionMap. db may be the package-global DB or an
+// open transaction. Used where the cache cannot be trusted for the value —
+// after a lost pricing-version CAS race (OptionMap has not been refreshed,
+// but the caller needs the value the winning writer just committed) or
+// inside a transaction that must read its own not-yet-committed baseline.
+func GetOptionValue(db *gorm.DB, key string) (value string, found bool, err error) {
+	var opt entity.Option
+	err = db.Where("key = ?", key).First(&opt).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return opt.Value, true, nil
+}
+
+// CASPricingVersionTx performs the compare-and-swap that guards concurrent
+// admin pricing edits: UPDATE options SET value=newVersion WHERE
+// key='PricingVersion' AND value=expected. rows-affected must be exactly 1
+// for the caller to treat the write as won — 0 means either a racing writer
+// won first or the caller's `expected` (typically the client's
+// If-Match-Pricing-Version header) is stale.
+//
+// expected==0 additionally means "never written" (GetPricingVersion's
+// documented zero-value default), so a bootstrap row is inserted first — ON
+// CONFLICT DO NOTHING, idempotent against a concurrent bootstrap — before the
+// CAS UPDATE runs against it. Without this the very first pricing write in a
+// process's lifetime would always lose the CAS: there is no row yet to match
+// key='PricingVersion' AND value='0' against.
+func CASPricingVersionTx(tx *gorm.DB, expected, newVersion int64) (bool, error) {
+	if expected == 0 {
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
+			Create(&entity.Option{Key: "PricingVersion", Value: "0"}).Error; err != nil {
+			return false, err
+		}
+	}
+	res := tx.Model(&entity.Option{}).
+		Where("key = ? AND value = ?", "PricingVersion", strconv.FormatInt(expected, 10)).
+		Update("value", strconv.FormatInt(newVersion, 10))
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// SetOptionMapValue updates only the in-memory OptionMap for key, issuing no
+// database write. Callers that already persisted key through their own
+// transaction (e.g. the pricing CAS above) use this to refresh the process
+// cache after commit, reusing the exact same key-dispatch updateOptionMap
+// applies for every other option write.
+func SetOptionMapValue(key, value string) error {
 	return updateOptionMap(key, value)
 }
 

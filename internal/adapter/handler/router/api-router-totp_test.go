@@ -31,6 +31,7 @@ func TestSetApiRouter_TotpWiring(t *testing.T) {
 		{"POST", "/api/user/totp/enroll"},
 		{"POST", "/api/user/totp/confirm"},
 		{"POST", "/api/user/totp/disable"},
+		{"POST", "/api/user/totp/backup-codes/regenerate"},
 	} {
 		if !has(c.method, c.path) {
 			t.Errorf("route %s %s not registered", c.method, c.path)

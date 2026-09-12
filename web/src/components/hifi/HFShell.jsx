@@ -41,6 +41,7 @@ import {
   LuTicket,
   LuTimer,
   LuTrendingDown,
+  LuTrophy,
   LuUserCog,
   LuUsers,
   LuWallet,
@@ -340,6 +341,16 @@ export const NAV_SECTIONS = [
         glyph: LuActivity,
         label: 'Model performance',
         key: 'console.nav.model_performance',
+        badge: '',
+      },
+      // Period-over-period model/vendor leaderboard (rank/trend/share) —
+      // L4, 2026-09-12. Beside admin-analytics per the plan's §8 correction.
+      {
+        id: 'admin-rankings',
+        href: '/console/v2/admin/rankings',
+        glyph: LuTrophy,
+        label: 'Rankings',
+        key: 'console.nav.rankings',
         badge: '',
       },
       {
