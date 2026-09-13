@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -68,13 +71,13 @@ func setupFundRouter(t *testing.T) (*gin.Engine, func(), *repo.Tenant, *repo.Ten
 
 	// Seed tenant. ZitadelOrgID must satisfy the NOT NULL + UNIQUE constraint.
 	tenant := &repo.Tenant{
-		Id:           "tenant-fund-test",
-		Name:         "Fund Test Tenant",
-		Slug:         "fund-test",
-		Status:       repo.TenantStatusEnabled,
-		IDPOrgID: "org_fund_test_unique",
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		Id:        "tenant-fund-test",
+		Name:      "Fund Test Tenant",
+		Slug:      "fund-test",
+		Status:    repo.TenantStatusEnabled,
+		IDPOrgID:  "org_fund_test_unique",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	if err := db.Create(tenant).Error; err != nil {
 		t.Fatalf("create test tenant: %v", err)
@@ -357,13 +360,13 @@ func TestInternalFundCreditPool_NoPool(t *testing.T) {
 
 	// Add a tenant with no pool row. ZitadelOrgID must be unique across the DB.
 	noPoolTenant := &repo.Tenant{
-		Id:           "tenant-no-pool",
-		Name:         "No Pool Tenant",
-		Slug:         "no-pool",
-		Status:       repo.TenantStatusEnabled,
-		IDPOrgID: "org_no_pool_unique",
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		Id:        "tenant-no-pool",
+		Name:      "No Pool Tenant",
+		Slug:      "no-pool",
+		Status:    repo.TenantStatusEnabled,
+		IDPOrgID:  "org_no_pool_unique",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	if err := repo.DB.Create(noPoolTenant).Error; err != nil {
 		t.Fatalf("create no-pool tenant: %v", err)
@@ -392,4 +395,116 @@ func TestInternalFundCreditPool_NoPool(t *testing.T) {
 func mustJSON(v interface{}) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// fundAuditRecorder is a minimal governance.AuditWriter capturing every
+// event handed to it, safe for concurrent use since RecordAuditEvent
+// dispatches the actual persist on a gopool goroutine (same pattern as
+// v2_models_write_test.go's modelsWriteAuditRecorder).
+type fundAuditRecorder struct {
+	mu     sync.Mutex
+	events []*entity.AuditEvent
+}
+
+func (w *fundAuditRecorder) CreateAuditEvent(event *entity.AuditEvent) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.events = append(w.events, event)
+	return nil
+}
+
+func (w *fundAuditRecorder) snapshot() []*entity.AuditEvent {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]*entity.AuditEvent, len(w.events))
+	copy(out, w.events)
+	return out
+}
+
+func waitForFundAuditEvents(t *testing.T, w *fundAuditRecorder, min int) []*entity.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := w.snapshot(); len(got) >= min {
+			time.Sleep(50 * time.Millisecond) // settle window for stragglers
+			return w.snapshot()
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for >= %d audit event(s), got %d", min, len(w.snapshot()))
+	return nil
+}
+
+// L2 audit-completeness follow-up: InternalFundCreditPool moves a real
+// wallet-backed balance (the platform BillingOutbox supply path) and this
+// route is neither under /api/v2/admin, /internal/admin, nor in
+// handler.IsAdminWriteRoute's rootGatedWritesOutsideAdmin allow-list, so
+// middleware.AuditWriteGuard's fallback never covers it — the only trail is
+// whatever this handler calls directly. Mutation lock: deleting the
+// governance.RecordAuditEvent call in InternalFundCreditPool's non-replay
+// branch turns this test red without turning any other test red (this
+// route has no coverage-endpoint or AuditWriteGuard oracle to catch it).
+func TestInternalFundCreditPool_RecordsAuditEvent(t *testing.T) {
+	router, cleanup, tenant, pool := setupFundRouter(t)
+	t.Cleanup(cleanup)
+
+	writer := &fundAuditRecorder{}
+	governance.SetAuditWriter(writer)
+	t.Cleanup(func() { governance.SetAuditWriter(&fundAuditRecorder{}) })
+
+	w := internalRequest(router, "POST",
+		"/internal/v1/provisioning/tenants/"+tenant.Slug+"/credit-pool/fund",
+		map[string]interface{}{
+			"event_id": "evt-audit-lock",
+			"amount":   2500,
+			"source":   "platform-billing-outbox",
+		},
+		map[string]string{"X-API-Key": testApiKeyAllScopes},
+	)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	events := waitForFundAuditEvents(t, writer, 1)
+	if len(events) != 1 {
+		t.Fatalf("got %d audit events, want exactly 1", len(events))
+	}
+	ev := events[0]
+	if ev.Action != governance.ActionCreditPoolFunded {
+		t.Errorf("action = %q, want %q", ev.Action, governance.ActionCreditPoolFunded)
+	}
+	if ev.Resource != governance.ResourceCreditPool {
+		t.Errorf("resource = %q, want %q", ev.Resource, governance.ResourceCreditPool)
+	}
+	if ev.ResourceID != int(pool.ID) {
+		t.Errorf("resource_id = %d, want %d", ev.ResourceID, pool.ID)
+	}
+	if ev.ActorType != governance.ActorSystem {
+		t.Errorf("actor_type = %q, want %q (caller is an internal API key, not an admin session)", ev.ActorType, governance.ActorSystem)
+	}
+	if ev.ActorID != 10 {
+		t.Errorf("actor_id = %d, want 10 (the seeded all-scopes internal API key id)", ev.ActorID)
+	}
+	if !strings.Contains(ev.Details, `"event_id":"evt-audit-lock"`) || !strings.Contains(ev.Details, `"amount":2500`) {
+		t.Errorf("details = %q, want to contain event_id and amount", ev.Details)
+	}
+
+	// A replay of the same event_id must not produce a second row — no
+	// balance moved, so nothing new to audit.
+	w2 := internalRequest(router, "POST",
+		"/internal/v1/provisioning/tenants/"+tenant.Slug+"/credit-pool/fund",
+		map[string]interface{}{
+			"event_id": "evt-audit-lock",
+			"amount":   2500,
+			"source":   "platform-billing-outbox",
+		},
+		map[string]string{"X-API-Key": testApiKeyAllScopes},
+	)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 on replay, got %d body=%s", w2.Code, w2.Body.String())
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := len(writer.snapshot()); got != 1 {
+		t.Errorf("after a replay, got %d audit events, want still exactly 1 (a replay must not double-audit)", got)
+	}
 }

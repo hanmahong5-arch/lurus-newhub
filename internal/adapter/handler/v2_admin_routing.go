@@ -18,10 +18,12 @@ import (
 
 // routingAuditDetails builds the JSON Details blob for both purge routes,
 // mirroring middleware.AuditWriteGuard's convention: RootJWTAuth's
-// Bearer-JWT branch never sets the "id" context key (admin_jwt_auth.go), so
-// c.GetInt("id") is 0 for that path and the audit row would otherwise record
-// an unattributable actor. AdminSub is only populated in that case, exactly
-// like audit_write_guard.go's auditFallbackDetails.
+// Bearer-JWT branch does not set the "id" context key today
+// (admin_jwt_auth.go sets admin_sub/admin_email/admin_roles/
+// identity_account_id only), so c.GetInt("id") is 0 for that path and the
+// audit row would otherwise record an unattributable actor. AdminSub is
+// only populated in that case, exactly like audit_write_guard.go's
+// auditFallbackDetails.
 type routingAuditDetails struct {
 	Scope    string `json:"scope"`
 	Key      string `json:"key,omitempty"`

@@ -64,12 +64,15 @@ var errPricingVersionConflict = errors.New("pricing version conflict")
 
 // currentPricingVersion reads PricingVersion straight from the database
 // (repo.GetOptionValue against repo.DB) rather than the per-process option
-// cache: the cache (common.OptionMap) is only refreshed on the
-// SYNC_FREQUENCY ticker (repo/option.go loadOptionsFromDatabase), so on the
-// multi-replica production deployment a cache read here could keep answering
-// a stale version — and drive the console's 409-refetch-retry loop into
-// hitting 409 again — for up to that interval after another replica's
-// commit. Defaults to 0 when the row has never been written.
+// cache: on this replica the cache (common.OptionMap) is refreshed by the
+// SYNC_FREQUENCY ticker (repo/option.go loadOptionsFromDatabase), but it can
+// also be stale in between ticks — a plain write from another replica lands
+// only in that replica's OptionMap, and even this replica's own
+// repo.UpdateOption/SetOptionMapValue writes refresh the cache no sooner
+// than the write itself, so a cache read here right after another replica's
+// commit could still answer a stale version — and drive the console's
+// 409-refetch-retry loop into hitting 409 again — until this replica's own
+// next resync. Defaults to 0 when the row has never been written.
 func currentPricingVersion() int64 {
 	raw, found, err := repo.GetOptionValue(repo.DB, "PricingVersion")
 	if err != nil || !found {
@@ -113,9 +116,11 @@ func validatePricingBatch(items []updatePricingRequest) (index int, errCode, msg
 // pricingComputation is the result of applying a batch on top of the base
 // copies of the four ratio maps a caller supplied: the candidate maps (for
 // persistence), a diff per touched (model, field) pair (for the preview
-// response and the audit details), and a touched flag per field (so the
-// caller persists only the maps the batch actually changed, matching the
-// original persistRatioMapIfChanged behaviour this replaces).
+// response and the audit details), and a touched flag per field so the
+// caller persists only the maps the batch actually touched — "touched"
+// meaning the batch carried a non-nil value for that field, not that the
+// value differs from the map's current entry (a batch that re-submits an
+// unchanged value still sets the touched flag and gets persisted).
 type pricingComputation struct {
 	Diffs                  []map[string]interface{}
 	ModelRatioCopy         map[string]float64
@@ -247,7 +252,10 @@ func effectiveOldModelPrice(base map[string]float64, modelName string) (value fl
 
 // effectiveOldCacheRatio mirrors effectiveOldModelRatio for cache_ratio.
 // ratio_setting.GetCacheRatio defaults an absent model to 1, matching the
-// ratio actually applied at relay time (cache_ratio.go).
+// ratio actually applied at relay time (cache_ratio.go). explicit here means
+// "present in the in-memory/DB map", which includes ratio_setting's shipped
+// defaultCacheRatio entries seeded at boot (InitRatioSettings) — it does not
+// mean an admin configured the value through this handler.
 func effectiveOldCacheRatio(base map[string]float64, modelName string) (value float64, explicit bool) {
 	if v, ok := base[modelName]; ok {
 		return v, true
@@ -507,8 +515,8 @@ func UpdatePricingV2(c *gin.Context) {
 	}
 
 	// Commit succeeded: apply the in-memory side effects after the
-	// transaction, in the DB-first order the old memory-first
-	// persistRatioMapIfChanged (which this handler replaces) got backwards —
+	// transaction, in the DB-first order this handler's predecessor (which
+	// wrote memory before the database) got backwards —
 	// TestV2PricingWrite_DBFailure_LeavesMemoryUntouched asserts memory stays
 	// on the old value when the commit fails. Because the maps just
 	// persisted were built on the database's committed baseline
@@ -558,7 +566,7 @@ func UpdatePricingV2(c *gin.Context) {
 }
 
 // PreviewPricingV2 shows the diff a POST with the same body would apply,
-// without ever writing it. Route: POST /api/v2/:tenant_slug/pricing/preview.
+// but does not itself write it. Route: POST /api/v2/:tenant_slug/pricing/preview.
 // Same auth chain as UpdatePricingV2 (root-gated for the same reason: the
 // underlying maps are process-global). It does not call repo.UpdateOption,
 // does not call ratio_setting.InvalidateExposedDataCache, and does not bump

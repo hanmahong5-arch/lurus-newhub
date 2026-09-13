@@ -287,6 +287,8 @@ func TestAuditWriteGuard_FallbackRecordsRouteParams(t *testing.T) {
 	governance.SetAuditWriter(writer)
 	t.Cleanup(func() { governance.SetAuditWriter(&recordingAuditWriter{}) })
 
+	beforeMetric := testutil.ToFloat64(metrics.AdminWriteUnauditedTotal.WithLabelValues("/fake/admin/widgets/:id"))
+
 	engine := gin.New()
 	admin := engine.Group("/fake/admin")
 	admin.Use(func(c *gin.Context) { c.Set("id", 7); c.Next() })
@@ -304,11 +306,77 @@ func TestAuditWriteGuard_FallbackRecordsRouteParams(t *testing.T) {
 		t.Fatalf("got %d events, want 1", len(events))
 	}
 	details := events[0].Details
+	// The recorded route must be the registered pattern
+	// ("/fake/admin/widgets/:id"), not the raw request path
+	// ("/fake/admin/widgets/42") — this is the assertion that distinguishes
+	// FullPath() (pattern) from c.Request.URL.Path (raw); a route with no
+	// parameters cannot tell the two apart.
+	if !strings.Contains(details, `"route":"/fake/admin/widgets/:id"`) {
+		t.Errorf("details = %q, want route:/fake/admin/widgets/:id (the registered pattern, not the raw path /fake/admin/widgets/42)", details)
+	}
 	if !strings.Contains(details, `"params":{"id":"42"}`) {
 		t.Errorf("details = %q, want to contain params:{id:42}", details)
 	}
 	if strings.Contains(details, "should-not-appear") {
 		t.Errorf("details = %q, must not leak the query string", details)
+	}
+	// metrics.AdminWriteUnauditedTotal's label is documented as "the route's
+	// registered gin pattern" too (metrics.go) — same c.FullPath() value, so
+	// a parameterised route is the only case that can tell a pattern label
+	// apart from a raw-path label.
+	afterMetric := testutil.ToFloat64(metrics.AdminWriteUnauditedTotal.WithLabelValues("/fake/admin/widgets/:id"))
+	if afterMetric != beforeMetric+1 {
+		t.Errorf("lurus_gateway_admin_write_unaudited_total{route=/fake/admin/widgets/:id} = %v, want %v (metric label must be the pattern, not the raw path /fake/admin/widgets/42)", afterMetric, beforeMetric+1)
+	}
+}
+
+// TestAuditWriteGuard_ForgetsPendingOnPanic locks the defer-before-c.Next()
+// ordering: governance.ForgetPending must be registered before the guard
+// calls c.Next(), not after, so it still runs while a handler panic unwinds
+// through this frame on its way to an outer recovery middleware (mirroring
+// the engine-level gin.CustomRecovery in cmd/server/main.go). If the defer
+// were registered only after c.Next() returned (it never does, on this
+// path), the pending entry built by NewAuditEvent(c, …) below would never be
+// swept and PendingAuditContextCount would grow permanently.
+func TestAuditWriteGuard_ForgetsPendingOnPanic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := &recordingAuditWriter{}
+	governance.SetAuditWriter(writer)
+	t.Cleanup(func() { governance.SetAuditWriter(&recordingAuditWriter{}) })
+
+	before := governance.PendingAuditContextCount()
+
+	engine := gin.New()
+	// Outer recovery middleware, standing in for the engine-level
+	// gin.CustomRecovery mounted above every route in cmd/server/main.go.
+	engine.Use(func(c *gin.Context) {
+		defer func() {
+			if r := recover(); r != nil {
+				c.AbortWithStatus(http.StatusInternalServerError)
+			}
+		}()
+		c.Next()
+	})
+	admin := engine.Group("/fake/admin")
+	admin.Use(func(c *gin.Context) { c.Set("id", 7); c.Next() })
+	admin.Use(AuditWriteGuard())
+	admin.POST("/panics", func(c *gin.Context) {
+		_ = governance.NewAuditEvent(c, governance.ActorAdmin, 7,
+			governance.ActionTokenCreated, governance.ResourceToken, 1, "")
+		panic("boom")
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/fake/admin/panics", nil)
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (outer recovery must have caught the panic)", w.Code)
+	}
+
+	after := governance.PendingAuditContextCount()
+	if after > before {
+		t.Errorf("PendingAuditContextCount grew from %d to %d — a panicking handler's NewAuditEvent(c,…) entry was not swept by ForgetPending", before, after)
 	}
 }
 

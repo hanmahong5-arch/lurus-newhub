@@ -200,6 +200,41 @@ func TestGetPricingV2_Version(t *testing.T) {
 	}
 }
 
+// 4b. VersionIgnoresStaleProcessCache — data.version must come from the
+// database, not the per-process option cache. TestGetPricingV2_Version alone
+// cannot prove this: it seeds through repo.UpdateOption, which writes both
+// the DB row and common.OptionMap, so a handler that reads either source
+// would pass it. This test seeds the DB row directly through ctx.db
+// (bypassing repo.UpdateOption/OptionMap entirely) while leaving
+// common.OptionMap holding a different, stale value, so only a DB read can
+// return the right answer. Mutation: reverting currentPricingVersion to read
+// common.OptionMap["PricingVersion"] turns this red (it would return the
+// stale 999 instead of 7).
+func TestGetPricingV2_Version_DBOnly_NotProcessCache(t *testing.T) {
+	ctx := setupPricingRouter(t)
+
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap["PricingVersion"] = "999"
+	common.OptionMapRWMutex.Unlock()
+
+	if err := ctx.db.Create(&repo.Option{Key: "PricingVersion", Value: "7"}).Error; err != nil {
+		t.Fatalf("seed PricingVersion row directly: %v", err)
+	}
+
+	w := getPricing(ctx, ctx.tenantSlug)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	resp := parsePricing(t, w)
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data missing, body: %s", w.Body.String())
+	}
+	if v, _ := data["version"].(float64); int64(v) != 7 {
+		t.Errorf("data.version = %v, want 7 (the DB row) — common.OptionMap held a stale 999", data["version"])
+	}
+}
+
 // 5. CacheRatioPrefill — a model with an explicit cache_ratio entry gets it
 // projected into the pricing row so the console can prefill its input
 // instead of editing blind; a model with no entry (same catalogue, seeded

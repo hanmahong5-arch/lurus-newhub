@@ -2840,48 +2840,55 @@ const EditChannelModal = (props) => {
                           handleInputChange('param_override', value)
                         }
                         extraText={
-                          <div className='flex gap-2 flex-wrap'>
-                            <Text
-                              className='!text-semi-color-primary cursor-pointer'
-                              onClick={() =>
-                                handleInputChange(
-                                  'param_override',
-                                  JSON.stringify({ temperature: 0 }, null, 2),
-                                )
-                              }
-                            >
-                              {t('旧格式模板')}
-                            </Text>
-                            <Text
-                              className='!text-semi-color-primary cursor-pointer'
-                              onClick={() =>
-                                handleInputChange(
-                                  'param_override',
-                                  JSON.stringify(
-                                    {
-                                      operations: [
-                                        {
-                                          path: 'temperature',
-                                          mode: 'set',
-                                          value: 0.7,
-                                          conditions: [
-                                            {
-                                              path: 'model',
-                                              mode: 'prefix',
-                                              value: 'gpt',
-                                            },
-                                          ],
-                                          logic: 'AND',
-                                        },
-                                      ],
-                                    },
-                                    null,
-                                    2,
-                                  ),
-                                )
-                              }
-                            >
-                              {t('新格式模板')}
+                          <div className='flex flex-col gap-1'>
+                            <div className='flex gap-2 flex-wrap'>
+                              <Text
+                                className='!text-semi-color-primary cursor-pointer'
+                                onClick={() =>
+                                  handleInputChange(
+                                    'param_override',
+                                    JSON.stringify({ temperature: 0 }, null, 2),
+                                  )
+                                }
+                              >
+                                {t('旧格式模板')}
+                              </Text>
+                              <Text
+                                className='!text-semi-color-primary cursor-pointer'
+                                onClick={() =>
+                                  handleInputChange(
+                                    'param_override',
+                                    JSON.stringify(
+                                      {
+                                        operations: [
+                                          {
+                                            path: 'temperature',
+                                            mode: 'set',
+                                            value: 0.7,
+                                            conditions: [
+                                              {
+                                                path: 'model',
+                                                mode: 'prefix',
+                                                value: 'gpt',
+                                              },
+                                            ],
+                                            logic: 'AND',
+                                          },
+                                        ],
+                                      },
+                                      null,
+                                      2,
+                                    ),
+                                  )
+                                }
+                              >
+                                {t('新格式模板')}
+                              </Text>
+                            </div>
+                            <Text type='tertiary' size='small'>
+                              {t(
+                                '内部控制键 __lurus_force_http1：设为 true 可把该渠道的出站请求锁定为 HTTP/1.1（键本身不会转发给上游）。仅覆盖经统一转发路径发出的主请求；AWS AKSK 凭证模式、Coze 结果轮询、Vertex 换取 token、Midjourney 图片拉取、hailuo 任务查询等旁路调用不受影响，详见产品对接文档「单渠道强制 HTTP/1.1 与会话亲和运维」一节。',
+                              )}
                             </Text>
                           </div>
                         }

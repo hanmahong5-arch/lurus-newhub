@@ -28,8 +28,8 @@ package handler
 //     cannot enumerate router.Routes() itself; router.SetInternalApiRouter
 //     DOES hold the *gin.Engine and calls SetAdminWriteRoutes once, after
 //     every route from both SetApiV2Router and itself is registered on it
-//     (main.go calls SetApiV2Router first) — SetApiV2Router itself never
-//     calls SetAdminWriteRoutes.
+//     (router/main.go calls SetApiV2Router before SetInternalApiRouter) —
+//     SetApiV2Router itself never calls SetAdminWriteRoutes.
 
 import (
 	"net/http"

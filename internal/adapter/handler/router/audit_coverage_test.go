@@ -71,6 +71,19 @@ var moneyRouteDenyList = map[string]bool{
 	"DELETE /api/v2/admin/tenants/:id/credit-pool":     true,
 }
 
+// catalogAuditRequiredRoutes is moneyRouteDenyList's sibling for the two
+// root-gated, process-global catalog writes outside /admin
+// (rootGatedWritesOutsideAdmin in audit_coverage_gen.go): they move no
+// wallet balance, but the model catalog and its pricing apply regardless of
+// tenant, so an unaudited write here is — per audit_action.go's own
+// ActionModelCreated doc — "as consequential as one under /admin". Same
+// invariant as moneyRouteDenyList: a route listed here must never be parked
+// in knownFallbackRoutes.
+var catalogAuditRequiredRoutes = map[string]bool{
+	"POST /api/v2/:tenant_slug/models":       true,
+	"DELETE /api/v2/:tenant_slug/models/:id": true,
+}
+
 // handlerFuncDecls parses every non-test .go file directly under dir and
 // returns a map of exported-or-not top-level func name -> its *ast.FuncDecl.
 func handlerFuncDecls(t *testing.T, dir string) map[string]*ast.FuncDecl {
@@ -184,6 +197,12 @@ func TestAdminWriteRoutesAreAudited(t *testing.T) {
 		}
 	}
 
+	for catalog := range catalogAuditRequiredRoutes {
+		if reason, ok := knownFallbackRoutes[catalog]; ok {
+			t.Errorf("catalog route %q is in knownFallbackRoutes (reason: %q) — process-global catalog writes must have a real governance.RecordAuditEvent call, not a documented fallback", catalog, reason)
+		}
+	}
+
 	common.RedisEnabled = false
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
@@ -253,6 +272,10 @@ func TestAdminWriteRoutesAreAudited(t *testing.T) {
 	for key, explicit := range handler.AuditExplicitRoutes {
 		if !explicit {
 			continue
+		}
+		parts := strings.SplitN(key, " ", 2)
+		if len(parts) == 2 && !handler.IsAdminWriteRoute(parts[0], parts[1]) {
+			t.Errorf("handler.AuditExplicitRoutes lists %q but handler.IsAdminWriteRoute excludes it from scope — the coverage endpoint's GetAdminWriteRoutes() capture never includes this route, so GET /api/v2/admin/audit/coverage will never report it even though the map says it is explicitly audited", key)
 		}
 		found := false
 		for _, rt := range engine.Routes() {

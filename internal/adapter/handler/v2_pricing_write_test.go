@@ -340,7 +340,9 @@ func TestV2PricingWrite_RootGate(t *testing.T) {
 	// PreviewPricingV2 shares UpdatePricingV2's rationale (the maps it reads
 	// are process-global) so it must reject the same non-root caller with
 	// 403 and return no diff — mutation: deleting PreviewPricingV2's
-	// requirePlatformRoot check keeps every other Pricing test green.
+	// requirePlatformRoot check left every Pricing test in this file green
+	// when last checked; that is a property of the current suite, not a
+	// guarantee this comment can make about tests added later.
 	t.Run("preview_non_admin_forbidden", func(t *testing.T) {
 		w := postPricingPreview(ctx, ctx.tenantSlug, batch, map[string]string{"X-Test-Role": "user"})
 		if w.Code != http.StatusForbidden {
@@ -630,6 +632,54 @@ func TestV2PricingPreview_NeverPersists(t *testing.T) {
 	if got := ratio_setting.GetModelRatioCopy()[model]; got != 0 {
 		t.Errorf("preview mutated the live ratio map: got %v, want untouched (0)", got)
 	}
+}
+
+// 12b. PricingPreview_InvalidBatch_Rejected — the preview route runs the same
+// validatePricingBatch UpdatePricingV2 does, before computing any diff.
+// Every other call to postPricingPreview in this file sends a valid batch,
+// so without this test the validation branch in PreviewPricingV2 could be
+// deleted and the suite would stay green. Mutation: short-circuiting that
+// branch (e.g. `if false && !ok`) turns this red.
+func TestV2PricingPreview_InvalidBatch_Rejected(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+
+	t.Run("empty_batch", func(t *testing.T) {
+		w := postPricingPreview(ctx, ctx.tenantSlug, []map[string]interface{}{})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
+		}
+		resp := parsePricingWrite(t, w)
+		if resp["error_code"] != "EMPTY_BATCH" {
+			t.Errorf("error_code = %v, want EMPTY_BATCH", resp["error_code"])
+		}
+		if _, present := resp["data"]; present {
+			t.Errorf("preview returned data for a rejected batch: %v", resp["data"])
+		}
+	})
+
+	t.Run("missing_model_name", func(t *testing.T) {
+		w := postPricingPreview(ctx, ctx.tenantSlug,
+			[]map[string]interface{}{{"model_ratio": 1.0}})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
+		}
+		resp := parsePricingWrite(t, w)
+		if resp["error_code"] != "MISSING_MODEL_NAME" {
+			t.Errorf("error_code = %v, want MISSING_MODEL_NAME", resp["error_code"])
+		}
+	})
+
+	t.Run("non_positive_ratio", func(t *testing.T) {
+		w := postPricingPreview(ctx, ctx.tenantSlug,
+			[]map[string]interface{}{{"model_name": "preview-invalid-ratio-model", "model_ratio": 0}})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
+		}
+		resp := parsePricingWrite(t, w)
+		if resp["error_code"] != "INVALID_RATIO" {
+			t.Errorf("error_code = %v, want INVALID_RATIO", resp["error_code"])
+		}
+	})
 }
 
 // 13. PartialBatchFailure_RollsBackEarlierFields — a failure on the third

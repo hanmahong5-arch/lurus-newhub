@@ -75,15 +75,19 @@ func RecordAuditEvent(event *entity.AuditEvent) {
 
 // ForgetPending removes any pending (constructed-via-NewAuditEvent-but-never-
 // recorded) entry still attributed to c. Called by middleware.AuditWriteGuard
-// once per request, after the handler returns, so a caller that built an
-// event and never passed it to RecordAuditEvent does not pin this request's
-// *gin.Context — and the abandoned event — in pendingAuditContexts forever;
-// gin pools and resets *gin.Context values between requests (gin@v1.12.0
-// context.go), so an unswept entry could eventually let a stale c.Set land
-// on an unrelated later request reusing the same pooled context. This is a
-// bound on routes mounted behind AuditWriteGuard only — a construct-without-
-// record call on an unguarded route (none exists today by grep) is not swept
-// by anything.
+// via a defer registered before the handler runs (c.Next()), so it fires
+// once per request whether the handler returns normally or panics and is
+// recovered by an outer recovery middleware (gin's defer-during-unwind
+// semantics still run a defer registered before the panic even though the
+// guard's own post-c.Next() fallback-audit logic does not) — so a caller
+// that built an event and never passed it to RecordAuditEvent does not pin
+// this request's *gin.Context — and the abandoned event — in
+// pendingAuditContexts forever; gin pools and resets *gin.Context values
+// between requests (gin@v1.12.0 context.go), so an unswept entry could
+// eventually let a stale c.Set land on an unrelated later request reusing
+// the same pooled context. This is a bound on routes mounted behind
+// AuditWriteGuard only — a construct-without-record call on an unguarded
+// route (none exists today by grep) is not swept by anything.
 func ForgetPending(c *gin.Context) {
 	pendingAuditContexts.Range(func(k, v any) bool {
 		if v == c {

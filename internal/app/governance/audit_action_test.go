@@ -38,6 +38,7 @@ func TestIsValidAuditAction(t *testing.T) {
 		{ActionCreditPoolCreated, true},
 		{ActionCreditPoolToppedUp, true},
 		{ActionCreditPoolDeleted, true},
+		{ActionCreditPoolFunded, true},
 		{ActionSwitchPresetCreated, true},
 		{ActionAdminMaintenanceTriggered, true},
 		{ActionAuthTotpBackupRegenerated, true},

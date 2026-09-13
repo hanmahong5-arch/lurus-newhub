@@ -179,28 +179,12 @@ const HFRankings = () => {
             </div>
           </div>
         </div>
-      ) : error ? (
-        <div style={{ padding: 24 }}>
-          <div
-            className='panel'
-            style={{ padding: '20px 24px' }}
-            data-testid='rankings-error'
-          >
-            <div className='strong' style={{ marginBottom: 6 }}>
-              {error === 'rate_limited'
-                ? tr(
-                    'console.rankings.rate_limited',
-                    'Rate limited, try again shortly.',
-                  )
-                : tr(
-                    'console.rankings.load_failed',
-                    'Failed to load rankings.',
-                  )}
-            </div>
-          </div>
-        </div>
       ) : (
         <div style={{ padding: 24, overflow: 'auto' }}>
+          {/* Tab/preset controls render above the error branch too: a
+              transient 5xx/429 must not strand the tenant admin in a
+              dead-end panel with no way to switch tab/preset or retry
+              (cycle-7 findings round 2, item 9). */}
           <div
             style={{
               display: 'flex',
@@ -239,89 +223,114 @@ const HFRankings = () => {
             ))}
           </div>
 
-          {cachedAt ? (
-            <div className='muted' style={{ fontSize: 11, marginBottom: 10 }}>
-              {tr('console.rankings.cached_at', 'cached at')}{' '}
-              {new Date(cachedAt * 1000).toLocaleTimeString()}
-            </div>
-          ) : null}
-
-          {loading ? (
-            <div className='muted' data-testid='rankings-loading'>
-              {tr('console.common.loading', 'loading…')}
-            </div>
-          ) : rows.length === 0 ? (
-            <div className='muted' data-testid='rankings-empty'>
-              {tr('console.common.no_data', 'no data')}
+          {error ? (
+            <div
+              className='panel'
+              style={{ padding: '20px 24px' }}
+              data-testid='rankings-error'
+            >
+              <div className='strong' style={{ marginBottom: 6 }}>
+                {error === 'rate_limited'
+                  ? tr(
+                      'console.rankings.rate_limited',
+                      'Rate limited, try again shortly.',
+                    )
+                  : tr(
+                      'console.rankings.load_failed',
+                      'Failed to load rankings.',
+                    )}
+              </div>
             </div>
           ) : (
-            <table
-              className='hf-table'
-              style={{ width: '100%', borderCollapse: 'collapse' }}
-              data-testid='rankings-table'
-            >
-              <thead>
-                <tr>
-                  <th style={thStyle}>
-                    {tr('console.rankings.col_rank', 'rank')}
-                  </th>
-                  <th style={thStyle}>
-                    {tr('console.rankings.col_name', 'name')}
-                  </th>
-                  <th style={thStyle}>
-                    {tr('console.rankings.col_trend', 'trend')}
-                  </th>
-                  <th style={thStyle}>
-                    {tr('console.rankings.col_requests', 'requests')}
-                  </th>
-                  <th style={thStyle}>
-                    {tr('console.rankings.col_growth', 'growth')}
-                  </th>
-                  <th style={thStyle}>
-                    {tr('console.rankings.col_tokens', 'tokens')}
-                  </th>
-                  <th style={thStyle}>
-                    {tr('console.rankings.col_token_share', 'token share')}
-                  </th>
-                  <th style={thStyle}>
-                    {tr('console.rankings.col_quota', 'spend')}
-                  </th>
-                  <th style={thStyle}>
-                    {tr('console.rankings.col_quota_share', 'spend share')}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.name} data-testid='rankings-row'>
-                    <td style={tdStyle}>{r.rank}</td>
-                    <td style={tdStyle}>{r.name}</td>
-                    <td style={tdStyle}>
-                      <Trend row={r} />
-                    </td>
-                    <td style={tdStyle}>{fmtInt(r.requests)}</td>
-                    <td style={tdStyle}>
-                      {r.requests_growth_pct == null
-                        ? '—'
-                        : `${r.requests_growth_pct >= 0 ? '+' : ''}${r.requests_growth_pct.toFixed(1)}%`}
-                    </td>
-                    <td style={tdStyle}>{fmtInt(r.total_tokens)}</td>
-                    <td style={tdStyle}>{fmtPct(r.token_share_pct)}</td>
-                    <td style={tdStyle}>{usd(r.quota)}</td>
-                    <td style={tdStyle}>{fmtPct(r.quota_share_pct)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          {rows.length > 0 && (
-            <div className='muted' style={{ fontSize: 11, marginTop: 10 }}>
-              {tr(
-                'console.rankings.total_tokens_in_window',
-                'total tokens in window',
+            <>
+              {cachedAt ? (
+                <div
+                  className='muted'
+                  style={{ fontSize: 11, marginBottom: 10 }}
+                >
+                  {tr('console.rankings.cached_at', 'cached at')}{' '}
+                  {new Date(cachedAt * 1000).toLocaleTimeString()}
+                </div>
+              ) : null}
+
+              {loading ? (
+                <div className='muted' data-testid='rankings-loading'>
+                  {tr('console.common.loading', 'loading…')}
+                </div>
+              ) : rows.length === 0 ? (
+                <div className='muted' data-testid='rankings-empty'>
+                  {tr('console.common.no_data', 'no data')}
+                </div>
+              ) : (
+                <table
+                  className='hf-table'
+                  style={{ width: '100%', borderCollapse: 'collapse' }}
+                  data-testid='rankings-table'
+                >
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>
+                        {tr('console.rankings.col_rank', 'rank')}
+                      </th>
+                      <th style={thStyle}>
+                        {tr('console.rankings.col_name', 'name')}
+                      </th>
+                      <th style={thStyle}>
+                        {tr('console.rankings.col_trend', 'trend')}
+                      </th>
+                      <th style={thStyle}>
+                        {tr('console.rankings.col_requests', 'requests')}
+                      </th>
+                      <th style={thStyle}>
+                        {tr('console.rankings.col_growth', 'growth')}
+                      </th>
+                      <th style={thStyle}>
+                        {tr('console.rankings.col_tokens', 'tokens')}
+                      </th>
+                      <th style={thStyle}>
+                        {tr('console.rankings.col_token_share', 'token share')}
+                      </th>
+                      <th style={thStyle}>
+                        {tr('console.rankings.col_quota', 'spend')}
+                      </th>
+                      <th style={thStyle}>
+                        {tr('console.rankings.col_quota_share', 'spend share')}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr key={r.name} data-testid='rankings-row'>
+                        <td style={tdStyle}>{r.rank}</td>
+                        <td style={tdStyle}>{r.name}</td>
+                        <td style={tdStyle}>
+                          <Trend row={r} />
+                        </td>
+                        <td style={tdStyle}>{fmtInt(r.requests)}</td>
+                        <td style={tdStyle}>
+                          {r.requests_growth_pct == null
+                            ? tr('console.rankings.growth_flat', '—')
+                            : `${r.requests_growth_pct >= 0 ? '+' : ''}${r.requests_growth_pct.toFixed(1)}%`}
+                        </td>
+                        <td style={tdStyle}>{fmtInt(r.total_tokens)}</td>
+                        <td style={tdStyle}>{fmtPct(r.token_share_pct)}</td>
+                        <td style={tdStyle}>{usd(r.quota)}</td>
+                        <td style={tdStyle}>{fmtPct(r.quota_share_pct)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
-              : {fmtInt(totalTokens)}
-            </div>
+              {rows.length > 0 && (
+                <div className='muted' style={{ fontSize: 11, marginTop: 10 }}>
+                  {tr(
+                    'console.rankings.total_tokens_in_window',
+                    'total tokens in window',
+                  )}
+                  : {fmtInt(totalTokens)}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

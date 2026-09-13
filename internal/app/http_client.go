@@ -312,11 +312,17 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 // pinned to H1 without affecting any sibling channel — including one that
 // shares the same proxyURL.
 //
-// Honest scope: only relay calls that go through provider.doRequest via this
-// function are covered. AWS/Coze/Vertex-SA/MJ-proxy/task relays build their
-// own clients directly and never consult this seam — named with their exact
-// client-construction sites in doc/product-integration-guide.md §G, not
-// silently assumed.
+// Honest scope: covers every call that goes through provider.doRequest,
+// which is provider.DoApiRequest AND provider.DoTaskApiRequest — so it
+// includes AWS Bedrock in API-key mode (aws/adaptor.go DoApiRequest branch),
+// Coze, Vertex (chat), and every provider/task/*/adaptor.go relay (they all
+// call DoTaskApiRequest). Bypassed only by side calls that build their own
+// client directly: AWS's AKSK-credential mode (aws/relay-aws.go), Coze's
+// result-poll call (coze/relay-coze.go), Vertex's service-account token
+// exchange (vertex/service_account.go), MJ-proxy's own image fetch
+// (relay/mjproxy_handler.go) and hailuo's task-status fetch
+// (task/hailuo/adaptor.go). Exact sites listed in
+// doc/product-integration-guide.md §G, not silently assumed.
 func GetHttpClientFor(proxyURL string, forceHTTP1 bool) (*http.Client, error) {
 	if !forceHTTP1 {
 		return GetHttpClientWithProxy(proxyURL)

@@ -202,8 +202,8 @@ func TestCountAdminExportLogs_And_ExportAdminLogsBatch_CursorPagination(t *testi
 // TestAdminExportFilter_UpstreamRequestId locks the jsonOtherTextExpr
 // upstream_request_id clause in adminExportFilter: it must narrow both
 // CountAdminExportLogs and ExportAdminLogsBatch to exactly the row whose
-// Other JSON carries the given vendor id, and leave every other row (a
-// different id, or no key at all) out.
+// Other JSON carries the given vendor id, and leave the other seeded rows in
+// this fixture (a different id, and no key at all) out.
 func TestAdminExportFilter_UpstreamRequestId(t *testing.T) {
 	SetupTestDB(t)
 	start := common.GetTimestamp() - 3600
@@ -219,7 +219,7 @@ func TestAdminExportFilter_UpstreamRequestId(t *testing.T) {
 	if err := LOG_DB.Save(other).Error; err != nil {
 		t.Fatalf("save other-vendor row: %v", err)
 	}
-	// No upstream_request_id key at all — must never match a non-empty filter.
+	// No upstream_request_id key at all — must not match the non-empty filter below.
 	repoDeepSeedAnalyticsLog(t, "default", "gpt-4", LogTypeConsume, 10, 1, 1, 5, start+3)
 
 	total, err := CountAdminExportLogs("", 0, "", start, end, "vend-x")

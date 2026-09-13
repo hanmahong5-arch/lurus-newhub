@@ -7,14 +7,20 @@ package handler
 // error returned 400 with the logs table untouched.
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -84,9 +90,10 @@ func TestRelay_PreChannelBindingError_RecordsErrorLog(t *testing.T) {
 // same pre-channel binding-error path as TestRelay_PreChannelBindingError_
 // RecordsErrorLog, but pre-seeds "upstream_request_id" the way provider.
 // doRequest would have left it from an EARLIER channel attempt in the same
-// request's retry loop (recordRelayErrorLog reads it unconditionally via
-// c.GetString — it does not require simulating a channel-stage error; this
-// is the exact same function the sibling test above already drives). A 5xx
+// request's retry loop (recordRelayErrorLog reads it via c.GetString
+// regardless of which stage set it — it does not require simulating a
+// channel-stage error; this is the exact same function the sibling test
+// above already drives). A 5xx
 // from upstream on attempt 1 followed by a terminal pre-channel-style error
 // is not how retries actually fail, but the read is on the shared
 // gin.Context regardless of which stage set it, so this is a faithful lock
@@ -206,5 +213,106 @@ func TestRecordTerminalRelayError_RespectsNoRecordOptOut(t *testing.T) {
 	db.Model(&repo.Log{}).Where("type = ?", repo.LogTypeError).Count(&count)
 	if count != 0 {
 		t.Errorf("error log rows = %d, want 0 for an opted-out error", count)
+	}
+}
+
+// TestRelay_RetryAcrossChannels_DoesNotLeakPreviousAttemptsUpstreamRequestId
+// is the round-2 residual lock (findings 8/11/15): provider.doRequest only
+// clears the shared "upstream_request_id" key right before its own
+// client.Do call, so an attempt that fails BEFORE ever reaching doRequest —
+// header/param override validation, GetRequestURL, request conversion — must
+// not let recordRelayErrorLog stamp its error row with the id an EARLIER
+// attempt captured from a DIFFERENT channel. Two real attempts run through
+// the retry loop via the getChannelFn seam (the same seam
+// rate_limit_headroom_strip_test.go's TestRelay_AllKeysCooling_* uses):
+// attempt 1 (channel A) reaches a real httptest upstream, gets a 500 with
+// x-request-id, and is retried; attempt 2 (channel B) carries a header
+// override with a non-string value, so provider.processHeaderOverride
+// rejects it before doRequest is ever called. The fix under test is
+// relay.go's per-iteration reset placed right after addUsedChannel.
+func TestRelay_RetryAcrossChannels_DoesNotLeakPreviousAttemptsUpstreamRequestId(t *testing.T) {
+	db, cleanup := handlerRelaySetupDB(t)
+	defer cleanup()
+	errorLogFallbackEnable(t)
+
+	prevRetryTimes := common.RetryTimes
+	common.RetryTimes = 1
+	t.Cleanup(func() { common.RetryTimes = prevRetryTimes })
+
+	// The relay egress client and SSRF dial guard are boot-time singletons
+	// (cmd/server/main.go); a hermetic test process never runs boot, and the
+	// guard defaults to blocking the httptest upstream's private 127.0.0.1
+	// address. Same recipe as relay_success_fixture_test.go.
+	app.InitHttpClient()
+	fs := system_setting.GetFetchSetting()
+	prevFetchSetting := *fs
+	fs.AllowPrivateIp = true
+	t.Cleanup(func() { *fs = prevFetchSetting })
+
+	const model = "l3-retry-leak-test-model"
+	ratioSnapshot := ratio_setting.ModelRatio2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateModelRatioByJSONString(ratioSnapshot) })
+	if err := ratio_setting.UpdateModelRatioByJSONString(`{"` + model + `":0}`); err != nil {
+		t.Fatalf("seed model ratio: %v", err)
+	}
+	qs := operation_setting.GetQuotaSetting()
+	prevFreeConsume := qs.EnableFreeModelPreConsume
+	qs.EnableFreeModelPreConsume = false
+	t.Cleanup(func() { qs.EnableFreeModelPreConsume = prevFreeConsume })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-request-id", "vend-A-500")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"upstream boom"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	prevGetChannel := getChannelFn
+	t.Cleanup(func() { getChannelFn = prevGetChannel })
+	getChannelFn = func(c *gin.Context, info *relaycommon.RelayInfo, retryParam *app.RetryParam) (*repo.Channel, *types.NewAPIError) {
+		id := 601
+		headerOverride := map[string]interface{}{}
+		if retryParam.GetRetry() > 0 {
+			id = 602
+			// Non-string value: provider.processHeaderOverride rejects this
+			// before client.Do ever runs (api_request.go).
+			headerOverride = map[string]interface{}{"X-Bad-Override": 42}
+		}
+		common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+		common.SetContextKey(c, constant.ContextKeyChannelId, id)
+		common.SetContextKey(c, constant.ContextKeyChannelName, fmt.Sprintf("fixture-%d", id))
+		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, srv.URL)
+		common.SetContextKey(c, constant.ContextKeyChannelKey, "sk-test-key")
+		common.SetContextKey(c, constant.ContextKeyChannelParamOverride, map[string]interface{}{})
+		common.SetContextKey(c, constant.ContextKeyChannelHeaderOverride, headerOverride)
+		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, false)
+		autoBanInt := 0
+		return &repo.Channel{Id: id, Type: constant.ChannelTypeOpenAI, Name: fmt.Sprintf("fixture-%d", id), AutoBan: &autoBanInt}, nil
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := `{"model":"` + model + `","messages":[{"role":"user","content":"hi"}]}`
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", 55)
+	c.Set("token_id", 77)
+	c.Set("tenant_id", "acme-corp")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, model)
+
+	Relay(c, types.RelayFormatOpenAI)
+
+	var logs []repo.Log
+	if err := db.Where("type = ?", repo.LogTypeError).Order("id asc").Find(&logs).Error; err != nil {
+		t.Fatalf("query error logs: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("error log rows = %d, want 2 (one per attempt); logs=%+v", len(logs), logs)
+	}
+	if !strings.Contains(logs[0].Other, `"upstream_request_id":"vend-A-500"`) {
+		t.Errorf("attempt 1 (channel A, failed inside doRequest) Other = %q, want upstream_request_id vend-A-500", logs[0].Other)
+	}
+	if strings.Contains(logs[1].Other, "upstream_request_id") {
+		t.Errorf("attempt 2 (channel B, failed BEFORE doRequest on a bad header override) Other = %q, want no upstream_request_id key — channel A's vendor id must not leak onto channel B's row", logs[1].Other)
 	}
 }

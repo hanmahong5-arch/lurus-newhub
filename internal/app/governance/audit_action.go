@@ -86,12 +86,16 @@ const (
 
 	// System options (global config keys).
 	ActionOptionUpdated = "option.updated"
-	// ActionPricingUpdated is recorded after a committed
+	// ActionPricingUpdated is queued asynchronously via gopool.Go
+	// (governance.RecordAuditEvent) after a committed
 	// POST /api/v2/:tenant_slug/pricing (v2_pricing_write.go). Pricing moves
 	// live billing ratios that apply regardless of which tenant's slug the
 	// request used, so it gets its own action — distinct from the generic
 	// ActionOptionUpdated — carrying from_version/to_version and the
-	// per-field diff in Details.
+	// per-field diff in Details. Not covered: the legacy PUT /api/option/
+	// (ModelRatio|CompletionRatio|ModelPrice|CacheRatio) and POST
+	// /api/option/rest_model_ratio routes rewrite the same maps without
+	// producing this action or bumping PricingVersion.
 	ActionPricingUpdated = "pricing.updated"
 
 	// Model sync and registry.
@@ -177,6 +181,16 @@ const (
 	ActionCreditPoolCreated  = "credit_pool.created"
 	ActionCreditPoolToppedUp = "credit_pool.topped_up"
 	ActionCreditPoolDeleted  = "credit_pool.deleted"
+	// ActionCreditPoolFunded is recorded by InternalFundCreditPool (POST
+	// /internal/v1/provisioning/tenants/:slug/credit-pool/fund,
+	// internal_credit_pool_fund.go) — the platform BillingOutbox supply
+	// call, distinct from ActionCreditPoolToppedUp because the actor is
+	// ActorSystem (the calling internal API key), not an admin operator, and
+	// the caller is unauthenticated-by-session (a bespoke internal key
+	// scope) rather than RootJWTAuth. Recorded only when the fund actually
+	// moved the balance (fundErr == nil && !replayed) — an idempotent replay
+	// changes nothing, so it produces no second row.
+	ActionCreditPoolFunded = "credit_pool.funded"
 
 	// ActionSwitchPresetCreated is recorded for every admin-authored Switch
 	// config preset (POST /api/v2/admin/switch/presets) — a platform-wide
@@ -315,6 +329,7 @@ var validAuditActions = map[string]struct{}{
 	ActionCreditPoolCreated:         {},
 	ActionCreditPoolToppedUp:        {},
 	ActionCreditPoolDeleted:         {},
+	ActionCreditPoolFunded:          {},
 	ActionSwitchPresetCreated:       {},
 	ActionAdminMaintenanceTriggered: {},
 	ActionRoutingAffinityPurged:     {},

@@ -257,10 +257,13 @@ func TestGeminiEmbeddingHandler_BatchUpstreamError(t *testing.T) {
 // TestGeminiEmbeddingHandler_ParamOverride_SkipsLurusKeys is the lock for L5
 // repair finding #17/#40/#46: GeminiEmbeddingHandler used to merge
 // info.ParamOverride into the outbound body with a bespoke loop that never
-// skipped __lurus_-prefixed internal control keys — unlike every other relay
-// handler (chat/claude/compatible/embedding/image/rerank/responses), which
-// routes through relaycommon.ApplyParamOverride. Setting
-// __lurus_force_http1 on a Gemini channel would leak that key into the
+// skipped __lurus_-prefixed internal control keys. As of this fix, the other
+// non-test call sites in this package (claude/compatible/embedding/gemini
+// (x2)/image/rerank/responses — `grep -rn 'ApplyParamOverride(' internal/app/relay
+// | grep -v _test`) route through relaycommon.ApplyParamOverride instead;
+// this file adds none of the structural enumeration those sites would need
+// to stay true automatically, so re-grep before trusting this list again.
+// Setting __lurus_force_http1 on a Gemini channel would leak that key into the
 // request Google actually receives. This drives GeminiEmbeddingHandler
 // end-to-end against a real httptest server that captures the raw request
 // body, so a regression here (reverting to the direct-merge loop) turns

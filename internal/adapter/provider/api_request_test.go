@@ -331,6 +331,27 @@ func TestBoundUpstreamRequestId_NonPrintableASCIIDropped(t *testing.T) {
 	}
 }
 
+// TestUpstreamRequestIdHeaders_AllSkippedFromClientResponse is the round-2
+// cross-package sync lock (findings 1/12/17): app.UpstreamHeadersNotForwarded
+// (internal/app/http.go, consumed by IOCopyBytesGracefully) is a second,
+// independently-maintained copy of this package's own upstreamRequestIdHeaders
+// list, in canonical http.Header form. provider already imports app, so the
+// reverse import to assert this from app's own test package would cycle —
+// this test is the one place that CAN hold both lists and fails the moment
+// they drift, instead of the comment-only "the other three/remaining names"
+// claim the findings flagged as an unverified hard-coded count.
+func TestUpstreamRequestIdHeaders_AllSkippedFromClientResponse(t *testing.T) {
+	if len(upstreamRequestIdHeaders) == 0 {
+		t.Fatal("upstreamRequestIdHeaders is empty — nothing to check")
+	}
+	for _, h := range upstreamRequestIdHeaders {
+		canon := http.CanonicalHeaderKey(h)
+		if !app.UpstreamHeadersNotForwarded[canon] {
+			t.Errorf("upstreamRequestIdHeaders has %q (canonical %q), which app.UpstreamHeadersNotForwarded does not skip — a vendor sending it would reach the client raw AND be captured into other.upstream_request_id under a second, undocumented channel", h, canon)
+		}
+	}
+}
+
 // TestDoRequest_ForceHTTP1NegotiatesHTTP1 drives doRequest through the real
 // DoApiRequest entry point against a live httptest upstream that offers
 // HTTP/2, with ChannelSetting.ForceHTTP1 set — the response must come back

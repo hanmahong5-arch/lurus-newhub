@@ -406,6 +406,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		addUsedChannel(c, channel.Id)
+		// L3 residual (round-2 findings 8/11/15): provider.doRequest only
+		// clears the shared "upstream_request_id" key just before its own
+		// client.Do call, so a failure THIS attempt hits before ever reaching
+		// doRequest — GetRequestURL, header/param override, request
+		// conversion/marshal (compatible_handler.go), SetupRequestHeader —
+		// would otherwise still read back the PREVIOUS attempt's vendor id
+		// (recordRelayErrorLog's c.GetString) and stamp channel B's error row
+		// with channel A's id. Reset once per iteration, here, so every
+		// attempt starts clean regardless of which stage (if any) fails
+		// before doRequest gets a chance to overwrite it with its own catch.
+		c.Set("upstream_request_id", "")
 		requestBody, bodyErr := common.GetRequestBody(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)

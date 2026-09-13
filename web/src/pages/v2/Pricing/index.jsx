@@ -28,10 +28,13 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
    Optimistic lock + preview (L1, 2026-09-12): GET returns data.version; POST
    sends it back as If-Match-Pricing-Version — a stale header gets 409 (the
    PricingVersion row the server compares against) and this page refetches
-   instead of saving. The header only guards the version counter, not the
-   underlying ratio maps a concurrent writer on another replica may have
-   changed for a different model (see v2_pricing_write.go's UpdatePricingV2
-   comment). Preview runs the same batch read-only first. */
+   instead of saving. The header guards the version counter against a lost
+   update to the SAME field on the SAME model. It does not need to guard a
+   concurrent writer's edit to a DIFFERENT model: the server applies this
+   page's batch on top of the database's committed rows read under a
+   row-level lock (see v2_pricing_write.go's UpdatePricingV2 comment), so
+   that other edit survives in the persisted result instead of being
+   clobbered. Preview runs the same batch read-only first. */
 
 const DRAFT_KEY = 'v2-pricing-edits';
 
@@ -422,11 +425,12 @@ const PricingPage = () => {
                     </td>
                     <td>
                       {/* GET pricing (v2_pricing.go) projects the model's
-                          current cache_ratio when one is explicitly
-                          configured, so this prefills from row.cache_ratio
-                          like the other three fields; a model with no
-                          configured entry starts blank instead of showing a
-                          fabricated value. */}
+                          current cache_ratio when the live map has an entry
+                          for it (an admin edit or a shipped default — both
+                          look the same here), so this prefills from
+                          row.cache_ratio like the other three fields; a
+                          model with no entry at all starts blank instead of
+                          showing a fabricated value. */}
                       <input
                         type='number'
                         className='field'

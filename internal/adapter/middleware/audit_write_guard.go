@@ -65,14 +65,19 @@ type auditFallbackDetails struct {
 // ahead of adminRoute sets that key today, so its callers do not carry it).
 func AuditWriteGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Next()
-		// Sweep any audit event this request's handler constructed via
-		// governance.NewAuditEvent(c, …) but never handed to RecordAuditEvent
-		// (the decoupled construct/record shape at internal_privacy_erase.go:
-		// 153-156 shows the pattern exists) — see governance.ForgetPending's
-		// doc for why an unswept entry would otherwise pin this *gin.Context
-		// forever. This only bounds the leak on routes behind this guard.
+		// Registered before c.Next() (not after) so it still runs while a
+		// panic from the handler unwinds through this frame — the
+		// engine-level gin.CustomRecovery (cmd/server/main.go) recovers
+		// above this middleware, and a defer registered only after c.Next()
+		// returns would never fire on that path, leaking the pending entry
+		// (and pinning this *gin.Context — see governance.ForgetPending's
+		// doc) and skipping the fallback row for that write attempt. The
+		// sweep is idempotent and safe to run whether or not the handler's
+		// own RecordAuditEvent already fired: it LoadAndDeletes, so a
+		// prior successful record leaves nothing here to forget.
 		defer governance.ForgetPending(c)
+
+		c.Next()
 
 		if !auditGuardedMethods[c.Request.Method] {
 			return

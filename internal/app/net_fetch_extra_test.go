@@ -483,10 +483,10 @@ func TestIOCopyBytesGracefully_WritesBodyAndHeaders(t *testing.T) {
 }
 
 // TestIOCopyBytesGracefully_GatewayRequestIdSurvivesVendorHeader locks the
-// upstreamHeadersNotForwarded skip: a vendor that sends its own value under
+// UpstreamHeadersNotForwarded skip: a vendor that sends its own value under
 // the identically-named "X-Request-Id" header (the OpenAI-wire convention)
 // must not overwrite the gateway's own id, already set on c.Writer before
-// this runs (middleware.RequestId). The other three headers
+// this runs (middleware.RequestId). The remaining names
 // provider.upstreamRequestIdHeaders also captures must likewise not reach
 // the client raw.
 func TestIOCopyBytesGracefully_GatewayRequestIdSurvivesVendorHeader(t *testing.T) {

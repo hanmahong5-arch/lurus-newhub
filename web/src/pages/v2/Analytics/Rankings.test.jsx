@@ -153,6 +153,61 @@ describe('Rankings page', () => {
     expect(screen.queryByTestId('rankings-table')).toBeNull();
   });
 
+  // Lock for cycle-7 findings round 2 item 9: a transient 429/5xx must not
+  // strip the tab/preset row, otherwise the only recovery is a full page
+  // reload (which also resets to model/24h). The controls — including the
+  // by=vendor tab and the hours=6 preset just clicked — must stay usable
+  // while the error panel is showing.
+  it('keeps the tab/preset controls usable after a 429 (no dead-end panel)', async () => {
+    API.get.mockResolvedValueOnce(payload());
+    render(<HFRankings />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('rankings-row')).toHaveLength(2);
+    });
+
+    API.get.mockRejectedValueOnce({ response: { status: 429 } });
+    fireEvent.click(screen.getByTestId('rankings-hours-6'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('rankings-error')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('rankings-by-vendor')).toBeInTheDocument();
+    expect(screen.getByTestId('rankings-by-model')).toBeInTheDocument();
+    expect(screen.getByTestId('rankings-hours-24')).toBeInTheDocument();
+
+    // The controls are not just present but still wired: clicking the
+    // vendor tab from the error state must trigger a new fetch.
+    API.get.mockResolvedValueOnce(payload({ by: 'vendor' }));
+    fireEvent.click(screen.getByTestId('rankings-by-vendor'));
+    await waitFor(() => {
+      const lastCall = API.get.mock.calls[API.get.mock.calls.length - 1];
+      expect(lastCall[0]).toContain('by=vendor');
+    });
+  });
+
+  // Lock for cycle-7 findings round 2 item 8: the console's hour presets
+  // must stay in lockstep with the backend's snap targets
+  // (rankingsHourPresets in v2_analytics_rankings.go). There is no shared
+  // import across the Go/JS boundary, so this pins the literal list on
+  // this side; a change to either side without the other must be caught
+  // by a human reading this comment, and this test at least catches an
+  // accidental edit to the JS list alone.
+  it('renders exactly the backend snap presets {1,6,24,168,720}', async () => {
+    API.get.mockResolvedValue(payload());
+    render(<HFRankings />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('rankings-row')).toHaveLength(2);
+    });
+    const backendRankingsHourPresets = [1, 6, 24, 168, 720];
+    for (const h of backendRankingsHourPresets) {
+      expect(screen.getByTestId(`rankings-hours-${h}`)).toBeInTheDocument();
+    }
+    // No extra preset buttons beyond the five above.
+    expect(
+      screen.queryAllByTestId(/^rankings-hours-/).map((el) => el.textContent),
+    ).toHaveLength(backendRankingsHourPresets.length);
+  });
+
   it('renders the API-provided total_tokens, not a sum of only the returned (max 20) rows', async () => {
     // rows sum to 900+300=1200; the API's own window total (42) must win.
     API.get.mockResolvedValue(payload({ total_tokens: 42 }));
@@ -183,6 +238,23 @@ describe('Rankings page', () => {
       });
       expect(screen.getByText('新上榜')).toBeInTheDocument();
       expect(screen.queryByText('new')).toBeNull();
+    });
+
+    // Lock for cycle-7 findings round 2 item 4: the growth cell's "no
+    // previous-window baseline" glyph must be a real tr() call, not the
+    // bare '—' literal it used to be — a bare literal renders identically
+    // under every locale, this does not (zh: 无基线, en fallback: —).
+    it('renders the zh translation for the growth cell "no baseline" case', async () => {
+      await i18n.changeLanguage('zh');
+      // deepseek-chat's requests_growth_pct is null in the shared fixture.
+      API.get.mockResolvedValue(payload());
+      render(<HFRankings />);
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('rankings-row')).toHaveLength(2);
+      });
+      expect(screen.getByText('无基线')).toBeInTheDocument();
+      expect(screen.queryByText('—')).toBeNull();
     });
   });
 });
