@@ -118,23 +118,31 @@ func ForceDisableTotpV2(c *gin.Context) {
 
 	actorID := c.GetInt("id")
 
-	// notified only means notifyUserFn (app.NotifyUser) returned no error —
-	// NOT confirmed delivery. NotifyUser itself returns nil (success) when
-	// the user has no email/webhook configured for their NotifyType, so
-	// this is "notification attempted and the send path did not error", the
-	// same caveat that applies to every other NotifyUser call site in this
-	// codebase. Surfaced in both the audit trail and the response so
-	// support can tell whether the target was actually reachable, instead
-	// of a bare 200 that looks identical either way.
+	// notified means both (a) the target had a configured delivery target for
+	// their NotifyType (app.HasNotifyTarget — email/webhook/bark/gotify) and
+	// (b) notifyUserFn (app.NotifyUser) returned no error for that target.
+	// NotifyUser itself returns nil (success, not an error) when the user has
+	// no email/webhook/bark/gotify configured for their NotifyType — without
+	// the HasNotifyTarget check, that "skipped, nothing to send" case would
+	// be indistinguishable from a real send and would report notified:true.
+	// This is still not confirmed delivery (SendEmail/webhook/etc. can 200
+	// and never reach an inbox), only "a target existed and the send path
+	// did not error". Surfaced in both the audit trail and the response so
+	// support can tell a reachable target apart from an unreachable one,
+	// instead of a bare 200 that looks identical either way.
 	notified := false
 	target := &repo.User{Id: targetID}
 	if ferr := target.FillUserById(); ferr == nil {
+		setting := target.GetSetting()
+		hasTarget := app.HasNotifyTarget(target.Email, setting)
 		notify := dto.NewNotify("totp_admin_disabled", "两步验证已被管理员关闭",
 			"您的账户两步验证已被管理员关闭。如非本人操作，请立即联系管理员。", nil)
-		if notifyErr := notifyUserFn(c.Request.Context(), targetID, target.Email, target.GetSetting(), notify); notifyErr != nil {
+		if notifyErr := notifyUserFn(c.Request.Context(), targetID, target.Email, setting, notify); notifyErr != nil {
 			common.SysLog("ForceDisableTotpV2: notify target failed: " + notifyErr.Error())
-		} else {
+		} else if hasTarget {
 			notified = true
+		} else {
+			common.SysLog("ForceDisableTotpV2: target has no configured notify target, skip")
 		}
 	} else {
 		common.SysLog("ForceDisableTotpV2: could not load target user to notify: " + ferr.Error())

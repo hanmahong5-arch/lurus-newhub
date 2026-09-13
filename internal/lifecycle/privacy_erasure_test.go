@@ -239,9 +239,13 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 // openErasureTestDBNoTOTPTables mirrors openErasureTestDB but deliberately
 // omits entity.UserTOTP / entity.UserTOTPBackupCode from the migrated set —
 // reproducing the default post-deploy state where nobody has ever hit
-// either table's lazy AutoMigrate path (TotpEnroll / TotpConfirm /
-// RegenerateTotpBackupCodes / ForceDisableTotpV2), so neither table exists
-// when the erasure cascade runs.
+// either table's lazy AutoMigrate path (any of GetUserTOTP/UpsertUserTOTP/
+// DeleteUserTOTP for user_totps; CountUnusedUserTOTPBackupCodes/
+// ConsumeUserTOTPBackupCode/DeleteUserTOTPBackupCodes/GetTOTPAdoptionStats
+// for user_totp_backup_codes — reached via GetTotpStatus, TotpConfirm,
+// UniversalVerify method totp_backup, TotpDisable, RegenerateTotpBackupCodes,
+// ForceDisableTotpV2 or the admin totp-stats endpoint), so neither table
+// exists when the erasure cascade runs.
 func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:erasure_no_totp%d?mode=memory&cache=shared", erasureDBCounter.Add(1))
@@ -273,10 +277,12 @@ func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
 // TestExecuteErasure_TOTPTablesNeverCreated is the lock for the L6 repair
 // finding: before repo.HardDeleteUserTOTP/HardDeleteUserTOTPBackupCodes
 // guarded on DB.Migrator().HasTable, this step of the cascade errored with
-// "relation user_totps does not exist" on any deployment where the lazily-
-// created table had never been touched — every pending erasure request
-// failed at step 1 and was retried forever, never completing. Mutation:
-// removing either HasTable guard makes this executeErasure call error.
+// "relation user_totps does not exist" on a deployment where the lazily-
+// created table had never been touched — the erasure request would fail at
+// step 1 and be retried on the next lifecycle tick (runErasurePass records
+// the error and moves on; it does not halt), never completing on its own.
+// Mutation: removing either HasTable guard makes this executeErasure call
+// error.
 func TestExecuteErasure_TOTPTablesNeverCreated(t *testing.T) {
 	db := openErasureTestDBNoTOTPTables(t)
 

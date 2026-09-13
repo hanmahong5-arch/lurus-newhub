@@ -176,11 +176,14 @@ func HardDeleteUserTokens(ctx context.Context, userID int) (int64, error) {
 // left behind by the erasure cascade (SEC-C: a purged account could still
 // have a live step-up factor in user_totps). No-op (0, nil) when the user
 // never enrolled — and, just as importantly, when the user_totps table
-// itself does not exist yet: it is created lazily on first enroll
-// (ensureUserTOTPTable in user_totp.go), so on a fresh deploy where nobody
-// has ever hit that path this DELETE would otherwise fail every erasure
-// request at this exact step ("relation user_totps does not exist"),
-// retried forever on every lifecycle tick without ever completing.
+// itself does not exist yet. The table is created lazily (ensureUserTOTPTable
+// in user_totp.go), and not only on enroll: GetUserTOTP calls it too, and
+// GetTotpStatus (handler/totp.go) calls GetUserTOTP for every caller of the
+// Settings TOTP card, enrolled or not. Without this guard, a deployment where
+// the table has never been created would fail this DELETE at this exact step
+// ("relation user_totps does not exist"); runErasurePass (lifecycle/
+// privacy_erasure.go) records the error and retries the request on the next
+// tick, per its own comment there.
 func HardDeleteUserTOTP(ctx context.Context, userID int) (int64, error) {
 	if !DB.Migrator().HasTable(&entity.UserTOTP{}) {
 		return 0, nil
@@ -198,8 +201,13 @@ func HardDeleteUserTOTP(ctx context.Context, userID int) (int64, error) {
 // and unused), if any — same security-adjacent-personal-data class as the
 // TOTP secret above, so it rides the same erasure step (SEC-C). Same lazy-
 // table guard as HardDeleteUserTOTP above and for the same reason: the
-// user_totp_backup_codes table only exists once someone has confirmed
-// enrollment, regenerated, or been force-disabled at least once.
+// user_totp_backup_codes table is created lazily by
+// ensureUserTOTPBackupCodeTable, reached from more than confirm/regenerate/
+// force-disable — CountUnusedUserTOTPBackupCodes (GetTotpStatus, for any
+// already-enrolled user), ConsumeUserTOTPBackupCode (UniversalVerify method
+// totp_backup), DeleteUserTOTPBackupCodes (self-service disable) and
+// GetTOTPAdoptionStats (the admin stats endpoint, unconditionally) all call
+// it too.
 func HardDeleteUserTOTPBackupCodes(ctx context.Context, userID int) (int64, error) {
 	if !DB.Migrator().HasTable(&entity.UserTOTPBackupCode{}) {
 		return 0, nil

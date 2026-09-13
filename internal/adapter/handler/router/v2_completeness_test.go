@@ -166,7 +166,7 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		// /admin/users/:id above — root manages any user's 2FA enrollment by
 		// design, additionally gated by SecureVerificationRequired (the
 		// acting root's own step-up), not a per-tenant ownership check.
-		"POST /api/v2/admin/security/users/:id/totp/force-disable": "RootJWTAuth-gated: root manages any user's TOTP enrollment by design, same class as /admin/users/:id; additionally requires the acting root's own SecureVerificationRequired step-up (TestAdminTotpForceDisable_RequiresStepUp)",
+		"POST /api/v2/admin/security/users/:id/totp/force-disable": "RootJWTAuth-gated: root manages any user's TOTP enrollment by design, same class as /admin/users/:id; additionally requires the acting root's own SecureVerificationRequired step-up wired on the real route (TestSetApiV2Router_ForceDisableTotp_RequiresOwnStepUp in router/v2_admin_security_wiring_test.go — TestAdminTotpForceDisable_RequiresStepUp hand-mounts the middleware and stays green if the real route loses it)",
 	}
 
 	isMutation := func(m string) bool {

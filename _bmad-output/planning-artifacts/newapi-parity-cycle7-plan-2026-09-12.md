@@ -849,10 +849,13 @@ L2 delete one existing `RecordAuditEvent` in `v2_admin_users.go` → `TestAdminW
 names the route; remove the `c.Set` in `NewAuditEvent` → `_NoDuplicateWhenHandlerAudits`.
 L3 move the key to `wantUserVisible` → tier test red; blank the header list → capture test red.
 L4 drop `tenant_id` where clause → `TestGetRankings_TenantIsolation`.
-L5 drop `TLSNextProto` → `TestDoRequest_ForceHTTP1NegotiatesHTTP1`; skip the map delete →
+L5 drop `TLSNextProto` → `TestGetHttpClientFor_ForceHTTP1Transport` (unit oracle) and
+`TestDoRequest_ForceHTTP1NegotiatesHTTP1` (integration, same mutation); skip the map delete →
 `TestAffinityPurge_KeyRemovedThenMiss`.
-L6 remove `AND used_at=0` → `_BackupCodeConsumedOnce`; remove the step-up middleware →
-`_RequiresStepUp`.
+L6 remove `AND used_at=0` → `_BackupCodeConsumedOnce`; remove the step-up middleware from the
+real route (`api-v2-router.go`) → `TestSetApiV2Router_ForceDisableTotp_RequiresOwnStepUp`
+(`router/v2_admin_security_wiring_test.go`) — `_RequiresStepUp` hand-mounts the middleware and
+stays green under this mutation.
 L7 remove `RedisDel` and the `revoked_at` check → `_DeletesRedisKeyAnd401` (each alone stays green;
 both → red).
 Rule from the repo's own memory: commit before mutating; never `git checkout --` over uncommitted
@@ -928,6 +931,18 @@ formally refuted by one refuter each (L1, L5, L7); all are salvageable. Amendmen
   alias — the struct is `internal/domain/entity/log.go:85-115`. The `upstream_model` tier entry
   is `classification.go:79`. `openai/audio.go:32` copies all upstream headers to the client
   writer (TTS pass-through) — unrelated, leave it.
+- **Round-2 scope ratification.** The round-2 repair added `internal/app/http.go`
+  (`UpstreamHeadersNotForwarded`, consumed by `IOCopyBytesGracefully`) and
+  `internal/app/net_fetch_extra_test.go` to close the finding that a vendor sending its own
+  `X-Request-Id`/`X-Oneapi-Request-Id` under the OpenAI-wire header name could overwrite the
+  gateway's minted id on the non-stream copy path. Operator ratifies this file-list extension;
+  `provider.upstreamRequestIdHeaders` (`api_request.go:266`) and `app.UpstreamHeadersNotForwarded`
+  are kept in sync by `TestUpstreamRequestIdHeaders_AllSkippedFromClientResponse`
+  (`api_request_test.go`), not by comment convention. `openai/audio.go`, `minimax/tts.go`,
+  `task/suno/adaptor.go` and `handler/video_proxy.go` copy every upstream header verbatim and are
+  intentionally left outside this skip-set (same "leave it" amendment above); documented as a
+  known gap in `doc/product-integration-guide.md` (§E, `X-Request-Id` row) rather than fixed in
+  code this cycle.
 
 ### L4 — rankings
 - **No latency subqueries.** Rankings never surface p50/p95; add a latency-free aggregate

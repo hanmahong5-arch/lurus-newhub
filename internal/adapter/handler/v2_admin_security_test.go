@@ -13,10 +13,12 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	apptotp "github.com/LurusTech/lurus-hub/internal/app/totp"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 
 	"github.com/gin-contrib/sessions"
@@ -172,16 +174,22 @@ func TestAdminTotpStats_TenantScoped(t *testing.T) {
 	}
 	seedUserRow(t, repo.DB, 104, "alpha", "alpha-nomfa")
 
-	// A soft-deleted, still-enrolled user must not inflate Enrolled past a
-	// TotalUsers denominator that (via GORM's automatic soft-delete scope on
-	// the Model(&entity.User{}) count) already excludes them — the join-based
-	// totpTenantFilteredQuery must filter u.deleted_at IS NULL explicitly, the
-	// same way. Mutation: removing that filter makes alpha's Enrolled/adoption
-	// counts below wrong (5 enrolled over 4 total users, >100% adoption).
-	seedUserRow(t, repo.DB, 105, "alpha", "alpha-deleted")
-	seedEnrolledTotp(t, 105, 1, 1)
-	if err := repo.DB.Delete(&repo.User{Id: 105}).Error; err != nil {
-		t.Fatalf("soft-delete user 105: %v", err)
+	// Three soft-deleted, still-enrolled users must not inflate Enrolled past
+	// a TotalUsers denominator that (via GORM's automatic soft-delete scope
+	// on the Model(&entity.User{}) count) already excludes them — the
+	// join-based totpTenantFilteredQuery must filter u.deleted_at IS NULL
+	// explicitly, the same way. Mutation: removing that filter adds users
+	// 105/106/107 to Enrolled (101, 102, 105, 106, 107 = 5) while TotalUsers
+	// stays 4 (101-104, soft-deleted users excluded regardless), so
+	// adoption_pct becomes 125% — the AdoptionPct>100 assertion below only
+	// fires with three soft-deleted enrolled users, not one: with a single
+	// one (Enrolled=3/TotalUsers=4=75%) that assertion cannot go red.
+	for _, id := range []int{105, 106, 107} {
+		seedUserRow(t, repo.DB, id, "alpha", fmt.Sprintf("alpha-deleted-%d", id))
+		seedEnrolledTotp(t, id, 1, 1)
+		if err := repo.DB.Delete(&repo.User{Id: id}).Error; err != nil {
+			t.Fatalf("soft-delete user %d: %v", id, err)
+		}
 	}
 
 	// Tenant "beta": 1 user, enrolled, no backup codes ever issued.
@@ -363,6 +371,73 @@ func TestAdminTotpForceDisable_RemovesRowAndCodes_AuditsAndNotifies(t *testing.T
 	}
 	if !strings.Contains(ev.Details, "lost their phone") {
 		t.Errorf("audit details = %q, want it to carry the reason", ev.Details)
+	}
+}
+
+// TestAdminTotpForceDisable_NoNotifyTarget_NotFalsePositive is the lock for
+// the L6 repair finding: a target with no email/webhook/bark/gotify
+// configured makes app.NotifyUser skip the send and return nil (not an
+// error) — before this repair the handler could not tell that apart from a
+// real send and reported notified:true anyway. Mutation: dropping the
+// app.HasNotifyTarget check (i.e. going back to "notified := notifyErr ==
+// nil") makes this red.
+func TestAdminTotpForceDisable_NoNotifyTarget_NotFalsePositive(t *testing.T) {
+	cleanup := setupAdminSecurityDB(t)
+	defer cleanup()
+	const actorID = 1
+	const targetID = 402
+	r := buildAdminSecurityRouter(actorID)
+	seedUserRow(t, repo.DB, actorID, "default", "root")
+	// No Email set (unlike seedUserRow's fixture) and no webhook/bark/gotify
+	// in Setting, so NotifyType defaults to email and HasNotifyTarget must
+	// see nothing to send to.
+	if err := repo.DB.Create(&repo.User{
+		Id: targetID, TenantId: "default", Username: "no-notify-target",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
+	}).Error; err != nil {
+		t.Fatalf("seed target user: %v", err)
+	}
+	seedEnrolledTotp(t, targetID, 2, 1)
+
+	cookies := stepUpAsActor(t, r)
+
+	// Use the real app.NotifyUser (not the spy) so the no-target skip path
+	// (user_notify.go's "user has no email, skip sending email" branch)
+	// actually runs and returns nil. constant.NotifyLimitCount defaults to
+	// the Go zero value (0) outside common.SysInit's env-driven assignment,
+	// which would make CheckNotificationLimit itself deny the very first
+	// send attempt ("notification limit exceeded") — a false-negative reason
+	// for notified=false that has nothing to do with the fix under test, so
+	// raise the limit for this test only.
+	prevLimit := constant.NotifyLimitCount
+	constant.NotifyLimitCount = 100
+	defer func() { constant.NotifyLimitCount = prevLimit }()
+	prevNotify := notifyUserFn
+	notifyUserFn = app.NotifyUser
+	defer func() { notifyUserFn = prevNotify }()
+
+	w, env := doJSON(t, r, http.MethodPost, fmt.Sprintf("/api/v2/admin/security/users/%d/totp/force-disable", targetID),
+		`{"reason":"user lost their phone, no contact method on file"}`, cookies)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("force-disable: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	var respData struct {
+		Notified bool `json:"notified"`
+	}
+	if err := json.Unmarshal(env.Data, &respData); err != nil {
+		t.Fatalf("unmarshal response data: %v", err)
+	}
+	if respData.Notified {
+		t.Error("response data.notified = true, want false: NotifyUser skipped (no email/webhook/bark/gotify configured), nothing was sent")
+	}
+
+	ev := pollAuditRow(t, governance.ActionTotpAdminDisabled, 2*time.Second)
+	if ev == nil {
+		t.Fatal("no auth.totp_admin_disabled audit row appeared within the poll window")
+	}
+	if !strings.Contains(ev.Details, `"notified":false`) {
+		t.Errorf("audit details = %q, want it to carry notified:false (no target existed to notify)", ev.Details)
 	}
 }
 

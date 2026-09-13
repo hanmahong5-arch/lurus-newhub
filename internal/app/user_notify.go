@@ -23,6 +23,33 @@ func NotifyRootUser(ctx context.Context, t string, subject string, content strin
 	}
 }
 
+// HasNotifyTarget reports whether NotifyUser has anywhere to actually send
+// this user's configured NotifyType — the same per-type emptiness checks
+// NotifyUser itself runs before sending, exposed so a caller can tell "sent"
+// apart from "returned nil because there was no email/webhook/bark/gotify
+// target configured" (NotifyUser returns nil, not an error, in that case).
+func HasNotifyTarget(userEmail string, userSetting dto.UserSetting) bool {
+	notifyType := userSetting.NotifyType
+	if notifyType == "" {
+		notifyType = dto.NotifyTypeEmail
+	}
+	switch notifyType {
+	case dto.NotifyTypeEmail:
+		emailToUse := userSetting.NotificationEmail
+		if emailToUse == "" {
+			emailToUse = userEmail
+		}
+		return emailToUse != ""
+	case dto.NotifyTypeWebhook:
+		return userSetting.WebhookUrl != ""
+	case dto.NotifyTypeBark:
+		return userSetting.BarkUrl != ""
+	case dto.NotifyTypeGotify:
+		return userSetting.GotifyUrl != "" && userSetting.GotifyToken != ""
+	}
+	return false
+}
+
 func NotifyUser(ctx context.Context, userId int, userEmail string, userSetting dto.UserSetting, data dto.Notify) error {
 	notifyType := userSetting.NotifyType
 	if notifyType == "" {
