@@ -330,13 +330,6 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
-	// #nosec G704 — the request URL derives from channel.BaseURL, which a tenant
-	// admin can set. It is SSRF-validated at write time (CreateChannelV2/
-	// UpdateChannelV2) and at the admin test/fetch sinks. For channels with no
-	// explicit proxy, the default relay client additionally enforces the SSRF
-	// private-IP policy at dial time (app/relay_dial_guard.go): it re-resolves the
-	// destination and refuses internal addresses, defeating NO_PROXY-direct
-	// internal targets and already-in-effect DNS rebinding.
 	// A retry can land on a different channel than the previous attempt.
 	// Clear the slot before this attempt runs so a failure inside client.Do
 	// below (or a resp with no captured id) does not leave the PREVIOUS
@@ -346,6 +339,13 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	c.Set("upstream_request_id", "")
 	info.UpstreamRequestId = ""
 
+	// #nosec G704 — the request URL derives from channel.BaseURL, which a tenant
+	// admin can set. It is SSRF-validated at write time (CreateChannelV2/
+	// UpdateChannelV2) and at the admin test/fetch sinks. For channels with no
+	// explicit proxy, the default relay client additionally enforces the SSRF
+	// private-IP policy at dial time (app/relay_dial_guard.go): it re-resolves the
+	// destination and refuses internal addresses, defeating NO_PROXY-direct
+	// internal targets and already-in-effect DNS rebinding.
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
