@@ -243,7 +243,7 @@ func TestV2SessionRevokeByID_NotOwned404(t *testing.T) {
 		t.Fatalf("status = %d, want 404, body: %s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["error_code"] != "SESSION_NOT_FOUND" {
 		t.Errorf("error_code = %v, want SESSION_NOT_FOUND", resp["error_code"])
 	}
@@ -299,7 +299,7 @@ func TestV2SessionRevokeByID_FlagOff_NotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404, body: %s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["error_code"] != "SESSION_NOT_FOUND" {
 		t.Errorf("error_code = %v, want SESSION_NOT_FOUND", resp["error_code"])
 	}
@@ -364,7 +364,7 @@ func TestV2SessionsOthers_KeepsCurrent(t *testing.T) {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	data := resp["data"].(map[string]interface{})
 	if data["revoked"].(float64) != 2 {
 		t.Errorf("revoked = %v, want 2", data["revoked"])
@@ -419,7 +419,7 @@ func TestV2SessionsOthers_FlagOff(t *testing.T) {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	data := resp["data"].(map[string]interface{})
 	if data["revoked"].(float64) != 0 {
 		t.Errorf("revoked = %v, want 0 — the flag-off endpoint must not touch the DB", data["revoked"])

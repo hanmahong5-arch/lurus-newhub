@@ -191,7 +191,9 @@ func TestEnforceSessionCap_RevokesOldestBeyondCap(t *testing.T) {
 
 	// Seed the oldest session's Redis key directly (as if it were a real
 	// login) so the deletion assertion below has something to check.
-	mr.Set("session_sess-cap-old", "seeded-session-payload")
+	if err := mr.Set("session_sess-cap-old", "seeded-session-payload"); err != nil {
+		t.Fatalf("seed redis: %v", err)
+	}
 
 	// Third distinct device -> first-sight insert -> cap enforcement fires.
 	if err := UpsertUserSessionSeen(ctx, "sess-cap-new", 9, "default", "1.2.3.4", "ua", "session"); err != nil {

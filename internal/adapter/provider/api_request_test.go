@@ -267,7 +267,10 @@ func TestDoRequest_ClearsStaleUpstreamRequestIdBeforeEachAttempt(t *testing.T) {
 		c, _ := provReqCovNewGinContext(t, http.MethodGet, "/x", nil)
 		c.Set("upstream_request_id", "stale-channel-a")
 
-		_, err := DoApiRequest(adaptor, c, info, nil)
+		resp, err := DoApiRequest(adaptor, c, info, nil)
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		if err == nil {
 			t.Fatalf("DoApiRequest() error = nil, want a do-request-failed error against a closed port")
 		}
