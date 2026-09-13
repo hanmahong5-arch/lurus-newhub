@@ -1011,3 +1011,60 @@ One PR with one commit per lane (L1→L7), like cycle 6; the L2 CI test therefor
 HEAD without L1. Cycle 8 planning (large parity items: async task artefacts, stateful Responses,
 entitlement plans, RBAC catalogue, passkey in the platform IdP) starts from
 `newapi-parity-matrix-2026-09-12.md` §"Gap list by value".
+
+## 9. Post-repair amendments (what shipped differs from §3/§8 here)
+
+Three acceptance rounds (dev → repair → repair) plus an operator pass changed the following
+against the text above. Where they conflict, this section is authoritative.
+
+- **L1 scope widened.** The legacy root writes to the four ratio maps — `PUT /api/option/`
+  (also reached through `PUT /api/v2/admin/options`) and `POST /api/option/rest_model_ratio` —
+  go through the same transaction, `PricingVersion` compare-and-swap and `pricing.updated`
+  audit row as the console batch (`writePricingOptionVersioned`, details carry
+  `source: legacy_option_api | legacy_reset`). `repo.InvalidatePricingCache` drops the
+  catalogue cache after a versioned write. The batch is merged on the database's committed
+  baseline (`SELECT … FOR UPDATE` on the four rows), not on this replica's memory; the version
+  the console reads comes from the row, not the option cache. The audit/preview `old` value is
+  the effective ratio (family fallback or the catalogue default), never a placeholder 0.
+  Consumer notes for the PR body: a DB error while reading the version makes the console send
+  header 0, which the next CAS rejects with 409 (retry after refetch); each POST takes five
+  row locks; header-less writers serialise on the version row (PostgreSQL behaviour, not
+  reproducible in the SQLite tier); preview diffs are computed from this replica's memory while
+  the write merges on the DB rows.
+- **L2.** `credit_pool.funded` (resource `credit_pool`, actor `system` = the internal API key
+  id) is emitted by the internal fund route; the round-1 note that it was "explicitly not
+  audited" is withdrawn. A guarded handler that panics still produces no fallback row and no
+  counter increment (the code after `c.Next()` is skipped during the unwind) — the sweep only
+  keeps the pending entry from leaking. Root admins authenticated by Bearer JWT are recorded
+  with actor id 0 plus `admin_sub` (pre-existing gap, owner item).
+- **L3.** The captured id is reset at the top of each retry iteration so channel B's error row
+  cannot carry channel A's id. The vendor-side `X-Request-Id` family is stripped from client
+  responses on the shared copy path; the raw-copy paths that remain are listed in the
+  integration guide with their exact behaviour (`Set` replaces the gateway id, the video proxy's
+  `Add` appends a second value). The capture-list/skip-set lock is one-directional.
+- **L5, coverage of `__lurus_force_http1` corrected twice.** Final truth: every request that
+  goes through `provider.doRequest` (`DoApiRequest`, `DoTaskApiRequest`) and, after round 3,
+  the task adaptors' `FetchTask` polls (`app.GetHttpClientFor` with the channel's flag; a
+  structural test enumerates `provider/task/*/adaptor.go`). Not covered: baidu access-token
+  fetch, dify and replicate uploads, the ali image poll, AWS signing, Coze result poll, Vertex
+  service-account token exchange, MJ-proxy image fetch, and the v2 channel-test route
+  (`channelTestHTTPClient`); only the legacy `GET /api/channel/test/:id` path exercises the
+  pin. §8's sentence "the task relays are not covered" is superseded. `DELETE
+  …/routing/affinity?all=true` returns `complete:false` when the SCAN round cap is hit and the
+  audit row says so; the console help text names the uncovered categories.
+- **L6.** Backup codes live in a lazily created table (`UserTOTP` precedent) and the privacy
+  erasure guards on `HasTable`; `notified` in the force-disable response is true only when a
+  notification target existed; the admin stat splits `no_codes_issued` from `exhausted`.
+- **L7.** After a remote revoke the browser is not locked out: both 401 branches of
+  `authHelper` clear the cookie with the store's own Domain/Secure/SameSite
+  (`middleware.SessionCookieBaseOptions`), so the next login mints a new session id — the UAT
+  probe gains a "re-login from the revoked jar → 200 with a new id" step. `user_sessions` rows
+  are hard-deleted by the privacy-erasure cascade and by `DeleteUserById`, and a daily
+  leader-gated sweep (`lifecycle.StartSessionSweepWithContext`) removes rows revoked more
+  than 30 days ago or idle more than 90 days. Listing is bounded by `created_at` as well as
+  `last_seen_at` because the Redis TTL is fixed at login. With the flag off, the new DELETE
+  routes answer JSON 404 `SESSION_NOT_FOUND` / `{"revoked":0}` (they did not exist before this
+  lane); pre-existing endpoints are unchanged. The response is additive (old keys kept).
+- **Prose rule applied across all lanes:** absolute words (every/never/always/only/all/exactly)
+  and counts of enumerated lists were removed from comments and docs unless a test in the same
+  package proves them.
