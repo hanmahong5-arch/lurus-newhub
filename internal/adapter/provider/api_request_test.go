@@ -337,9 +337,21 @@ func TestBoundUpstreamRequestId_NonPrintableASCIIDropped(t *testing.T) {
 // independently-maintained copy of this package's own upstreamRequestIdHeaders
 // list, in canonical http.Header form. provider already imports app, so the
 // reverse import to assert this from app's own test package would cycle —
-// this test is the one place that CAN hold both lists and fails the moment
-// they drift, instead of the comment-only "the other three/remaining names"
-// claim the findings flagged as an unverified hard-coded count.
+// this is a place that can hold both lists without an import cycle, and it
+// fails the moment upstreamRequestIdHeaders gains a name
+// UpstreamHeadersNotForwarded does not skip, instead of the comment-only
+// "the other three/remaining names" claim the findings flagged as an
+// unverified hard-coded count.
+//
+// One-directional, matching what http.go's own comment on
+// UpstreamHeadersNotForwarded already says: this proves
+// upstreamRequestIdHeaders is a subset of UpstreamHeadersNotForwarded, not
+// the reverse. UpstreamHeadersNotForwarded carries one name outside that
+// subset on purpose — X-Oneapi-Request-Id, the gateway's own legacy alias
+// set by middleware.RequestId, not a vendor-sent id
+// upstreamRequestIdHeaders is meant to capture — so a reverse assertion
+// would have to carve that name out rather than treat it as a real gap; a
+// round-3 repair item chose the cheaper reword instead of adding it.
 func TestUpstreamRequestIdHeaders_AllSkippedFromClientResponse(t *testing.T) {
 	if len(upstreamRequestIdHeaders) == 0 {
 		t.Fatal("upstreamRequestIdHeaders is empty — nothing to check")

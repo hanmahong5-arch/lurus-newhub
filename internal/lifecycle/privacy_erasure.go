@@ -90,7 +90,7 @@ func runErasurePass(ctx context.Context) {
 // executeErasure advances one request through the disposition steps in order,
 // persisting the cursor after each completed step (crash-resume). Steps:
 //
-//  1. tokens               hard delete (incl. soft-deleted) + user_totps + user_totp_backup_codes hard delete
+//  1. tokens               hard delete (incl. soft-deleted) + user_totps + user_totp_backup_codes + user_sessions hard delete
 //  2. user_identity_mapping hard delete
 //  3. logs                 pseudonymize in batches + best-effort Meili purge
 //  4. audit_events         scrub ip/details in batches
@@ -109,6 +109,12 @@ func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error 
 			return err
 		}
 		if _, err := repo.HardDeleteUserTOTPBackupCodes(ctx, req.UserID); err != nil {
+			return err
+		}
+		// user_sessions rides the same step — same personal-adjacent-data
+		// class as the tokens/TOTP rows above (L7 repair round 3, finding
+		// routing-resilience-limits-13#11).
+		if _, err := repo.HardDeleteUserSessions(ctx, req.UserID); err != nil {
 			return err
 		}
 		if err := repo.AdvanceErasureStep(ctx, req.ID, repo.ErasureStepTokensDeleted, 0); err != nil {

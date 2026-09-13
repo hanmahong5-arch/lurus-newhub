@@ -10,6 +10,7 @@ package repo
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"strconv"
@@ -36,9 +37,14 @@ const sessionTouchThrottleKeyPrefix = "session_touch:"
 // defence-in-depth revoked check) is active. Read fresh from the
 // environment on every call — same "no caching, so an operator's env change
 // takes effect on the next request, not the next restart" convention as
-// CREDIT_POOL_RESET_MODE / TENANT_MODEL_ALLOWLIST_MODE. Default false: with
-// the flag off every session endpoint behaves exactly as it did before this
-// lane (single synthetic row, /current revoke only).
+// CREDIT_POOL_RESET_MODE / TENANT_MODEL_ALLOWLIST_MODE. Default false: the
+// pre-lane session endpoints (list-self, /current revoke) fall back to their
+// single-synthetic-row/current-only behaviour, which predates this flag. The
+// list/revoke-by-id/revoke-others routes this lane ADDED did not exist
+// before it, so there is no prior behaviour for them to fall back to —
+// RevokeSessionByIDV2 answers 404 SESSION_NOT_FOUND and RevokeOtherSessionsV2
+// answers 200 {"revoked":0}, both without touching the DB, when the flag is
+// off (see those handlers' own doc comments in v2_session_revoke.go).
 func SessionRegistryEnabled() bool {
 	return os.Getenv("SESSION_REGISTRY_ENABLED") == "true"
 }
@@ -179,25 +185,19 @@ func deleteCappedSessionKeys(ctx context.Context, capped []entity.UserSession) {
 // registration path, not from a user-initiated request the way the other
 // revoke reasons are) — so an operator reading the audit trail can tell
 // "the cap auto-revoked this" apart from every user/admin-initiated reason.
-// Built by hand rather than via governance.NewAuditEvent because this call
-// site has no *gin.Context (enforceSessionCap runs deep in the repo layer);
-// governance.RecordAuditEvent accepts a hand-built *entity.AuditEvent fine —
-// NewAuditEvent's context enrichment (tenant_id/ip/request_id) is the only
-// thing skipped.
+// Built via governance.NewDetachedAuditEvent, the same constructor
+// credit_pool_reset.go/quota.go/quota_threshold.go/token_rotation.go's five
+// existing *gin.Context-less callers use (enforceSessionCap runs deep in the
+// repo layer with no request context either), so this inherits the same
+// empty-tenant → "default" fallback and RetentionUntil convention instead of
+// re-deriving them by hand.
 func recordCapExceededAuditEvent(userId int, capped []entity.UserSession) {
-	ts := common.GetTimestamp()
 	for _, s := range capped {
-		governance.RecordAuditEvent(&entity.AuditEvent{
-			TenantID:       s.TenantId,
-			Timestamp:      ts,
-			ActorType:      governance.ActorSystem,
-			ActorID:        userId,
-			Action:         governance.ActionAuthSessionRevoked,
-			Resource:       governance.ResourceUser,
-			ResourceID:     userId,
-			Details:        `{"session_id":` + strconv.Itoa(s.Id) + `,"reason":"` + entity.SessionRevokeReasonCapExceeded + `"}`,
-			RetentionUntil: ts + governance.DefaultAuditRetentionSeconds,
-		})
+		governance.RecordAuditEvent(governance.NewDetachedAuditEvent(
+			s.TenantId, governance.ActorSystem, userId,
+			governance.ActionAuthSessionRevoked, governance.ResourceUser, userId,
+			`{"session_id":`+strconv.Itoa(s.Id)+`,"reason":"`+entity.SessionRevokeReasonCapExceeded+`"}`,
+		))
 	}
 }
 
@@ -269,10 +269,27 @@ const sessionActiveWindow = 90 * 24 * time.Hour
 // TenantId: a user account belongs to exactly one tenant for its whole
 // life in this system, so UserId is already a stricter isolation key than
 // TenantId would add.
+//
+// Bounded by BOTH last_seen_at and created_at against the same cutoff (L7
+// repair round 3, finding routing-resilience-limits-13#17). The store's
+// Redis key gets its MaxAge TTL from a Save() — login, or the rare
+// SDK-self-heal branch in authHelper — not from
+// UpsertUserSessionSeen/ordinary requests, so a session's real deadline is a
+// fixed created_at+sessionActiveWindow, while last_seen_at grows as the
+// session is used. A last_seen_at-only filter would list a row for up to
+// sessionActiveWindow AFTER its last real touch even when that touch itself
+// landed well after created_at — i.e. up to (last_seen_at-created_at) past
+// the Redis key's actual expiry, showing a session as active/revocable when
+// the cookie backing it can no longer authenticate anything. Requiring
+// created_at within the window too closes that gap; it does not narrow the
+// last_seen_at bound's own purpose in the case that invariant holds (rows
+// are seen because their cookie authenticated, so last_seen_at is not
+// expected to exceed created_at+sessionActiveWindow) — this is defence
+// against that invariant being violated, not a routine narrowing.
 func ListActiveUserSessions(userId int) ([]entity.UserSession, error) {
 	cutoff := common.GetTimestamp() - int64(sessionActiveWindow/time.Second)
 	var rows []entity.UserSession
-	err := DB.Where("user_id = ? AND revoked_at = 0 AND last_seen_at > ?", userId, cutoff).
+	err := DB.Where("user_id = ? AND revoked_at = 0 AND last_seen_at > ? AND created_at > ?", userId, cutoff, cutoff).
 		Order("last_seen_at DESC").Find(&rows).Error
 	return rows, err
 }
@@ -381,6 +398,37 @@ func IsUserSessionRevoked(sessionKey string) (bool, error) {
 		return false, nil
 	}
 	return row.RevokedAt > 0, nil
+}
+
+// sessionSweepRevokedRetention/sessionSweepInactiveRetention are the two
+// independent retention windows SweepExpiredUserSessions enforces (L7
+// repair round 3, finding routing-resilience-limits-13#11): a revoked row
+// carries no ongoing purpose past a short retroactive-audit window, while an
+// unrevoked-but-abandoned row (browser closed, never revoked) still ages out
+// eventually so a per-device list does not grow forever for an inactive
+// account.
+const (
+	sessionSweepRevokedRetention  = 30 * 24 * time.Hour
+	sessionSweepInactiveRetention = 90 * 24 * time.Hour
+)
+
+// SweepExpiredUserSessions hard-deletes user_sessions rows that are either
+// revoked and older than sessionSweepRevokedRetention (by RevokedAt), or
+// unrevoked and idle past sessionSweepInactiveRetention (by LastSeenAt).
+// Returns the number of rows removed. Called from a leader-gated
+// lifecycle.LeaderTask (StartSessionSweepWithContext), same pattern as
+// StartSecretRotationWithContext — this function itself does no leader
+// check, so tests can call it directly.
+func SweepExpiredUserSessions(now time.Time) (int64, error) {
+	revokedCutoff := now.Add(-sessionSweepRevokedRetention).Unix()
+	inactiveCutoff := now.Add(-sessionSweepInactiveRetention).Unix()
+	result := DB.Unscoped().
+		Where("(revoked_at > 0 AND revoked_at < ?) OR (revoked_at = 0 AND last_seen_at < ?)", revokedCutoff, inactiveCutoff).
+		Delete(&entity.UserSession{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("sweep expired user sessions: %w", result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 // MaskIP coarsens an IP address before it is ever serialised to a client:

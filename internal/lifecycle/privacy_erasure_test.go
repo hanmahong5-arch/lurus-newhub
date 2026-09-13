@@ -28,6 +28,7 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 		&repo.User{}, &repo.Token{}, &repo.Log{},
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
 		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{}, &entity.UserTOTPBackupCode{},
+		&entity.UserSession{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -104,6 +105,14 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 	}).Error; err != nil {
 		t.Fatalf("seed used backup code: %v", err)
 	}
+	// A per-device session-registry row (L7) — must not survive erasure
+	// either (cycle7 L7 repair round 3, finding routing-resilience-limits-13#11).
+	if err := db.Create(&entity.UserSession{
+		SessionKey: "erase-fixture-session-key", UserId: user.Id, TenantId: "default",
+		CreatedAt: time.Now().Unix(), LastSeenAt: time.Now().Unix(),
+	}).Error; err != nil {
+		t.Fatalf("seed user session: %v", err)
+	}
 
 	for i := 0; i < logCount; i++ {
 		if err := db.Create(&entity.Log{
@@ -170,6 +179,14 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 	db.Unscoped().Model(&entity.UserTOTPBackupCode{}).Where("user_id = ?", userID).Count(&backupCodeCount)
 	if backupCodeCount != 0 {
 		t.Errorf("totp backup code rows remaining = %d, want 0", backupCodeCount)
+	}
+
+	// user_sessions: hard-deleted too, same step (L7 repair round 3, finding
+	// routing-resilience-limits-13#11).
+	var sessionCount int64
+	db.Unscoped().Model(&entity.UserSession{}).Where("user_id = ?", userID).Count(&sessionCount)
+	if sessionCount != 0 {
+		t.Errorf("user_sessions rows remaining = %d, want 0", sessionCount)
 	}
 
 	// logs: pseudonymized, billing fields retained
@@ -239,13 +256,14 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 // openErasureTestDBNoTOTPTables mirrors openErasureTestDB but deliberately
 // omits entity.UserTOTP / entity.UserTOTPBackupCode from the migrated set —
 // reproducing the default post-deploy state where nobody has ever hit
-// either table's lazy AutoMigrate path (any of GetUserTOTP/UpsertUserTOTP/
-// DeleteUserTOTP for user_totps; CountUnusedUserTOTPBackupCodes/
-// ConsumeUserTOTPBackupCode/DeleteUserTOTPBackupCodes/GetTOTPAdoptionStats
-// for user_totp_backup_codes — reached via GetTotpStatus, TotpConfirm,
-// UniversalVerify method totp_backup, TotpDisable, RegenerateTotpBackupCodes,
-// ForceDisableTotpV2 or the admin totp-stats endpoint), so neither table
-// exists when the erasure cascade runs.
+// either table's lazy AutoMigrate path. That path is any repo function that
+// calls ensureUserTOTPTable (user_totp.go, for user_totps) or
+// ensureUserTOTPBackupCodeTable (user_totp_backup_code.go, for
+// user_totp_backup_codes) — grep those two names in internal/adapter/repo
+// rather than trusting an enumerated list here, since GetTOTPAdoptionStats
+// alone calls both and a caller list drifts as callers are added (this
+// comment's own previous version omitted ReplaceUserTOTPBackupCodes). So
+// neither table exists when the erasure cascade runs.
 func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:erasure_no_totp%d?mode=memory&cache=shared", erasureDBCounter.Add(1))
@@ -256,7 +274,7 @@ func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
 	for _, m := range []interface{}{
 		&repo.User{}, &repo.Token{}, &repo.Log{},
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
-		&entity.PrivacyErasureRequest{},
+		&entity.PrivacyErasureRequest{}, &entity.UserSession{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -280,7 +298,8 @@ func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
 // "relation user_totps does not exist" on a deployment where the lazily-
 // created table had never been touched — the erasure request would fail at
 // step 1 and be retried on the next lifecycle tick (runErasurePass records
-// the error and moves on; it does not halt), never completing on its own.
+// the error and moves on; it does not halt), stuck retrying that same step
+// instead of completing.
 // Mutation: removing either HasTable guard makes this executeErasure call
 // error.
 func TestExecuteErasure_TOTPTablesNeverCreated(t *testing.T) {

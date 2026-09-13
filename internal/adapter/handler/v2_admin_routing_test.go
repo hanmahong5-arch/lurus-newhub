@@ -309,12 +309,13 @@ func TestPurgeAffinityBindingV2_RedisError_Returns500(t *testing.T) {
 
 // TestPurgeAffinityBindingV2_JWTActorZero_RecordsAdminSub is the lock for
 // finding routing-resilience-limits-11#23: RootJWTAuth's Bearer-JWT branch
-// does not set "id" in context today (admin_jwt_auth.go sets admin_sub/
-// admin_email/admin_roles/identity_account_id only), so the mock here
-// matches that shape (admin_sub set, "id" left at its zero value) rather
-// than the session-shaped mock every other test in this file uses — proving the
-// audit row still attributes the actor via admin_sub instead of recording
-// ActorID=0 with no other trace of who purged the binding.
+// does not set "id" in context today (admin_jwt_auth.go's context keys are
+// admin_sub/admin_email/admin_roles/identity_account_id; it does not set
+// "id"), so the mock here matches that shape (admin_sub set, "id" left at
+// its zero value) rather than the session-shaped mock setupRoutingTestRouter
+// gives the other tests in this file — proving the audit row still
+// attributes the actor via admin_sub instead of recording ActorID=0 with no
+// other trace of who purged the binding.
 func TestPurgeAffinityBindingV2_JWTActorZero_RecordsAdminSub(t *testing.T) {
 	ctx := setupRoutingTestRouter(t, true)
 	// Rebuild the router with a JWT-shaped mock actor (no "id" key) instead

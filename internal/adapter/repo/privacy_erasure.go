@@ -178,8 +178,9 @@ func HardDeleteUserTokens(ctx context.Context, userID int) (int64, error) {
 // never enrolled — and, just as importantly, when the user_totps table
 // itself does not exist yet. The table is created lazily (ensureUserTOTPTable
 // in user_totp.go), and not only on enroll: GetUserTOTP calls it too, and
-// GetTotpStatus (handler/totp.go) calls GetUserTOTP for every caller of the
-// Settings TOTP card, enrolled or not. Without this guard, a deployment where
+// GetTotpStatus (handler/totp.go) calls GetUserTOTP for each authenticated
+// caller of the Settings TOTP card (unconditional after the auth check),
+// enrolled or not. Without this guard, a deployment where
 // the table has never been created would fail this DELETE at this exact step
 // ("relation user_totps does not exist"); runErasurePass (lifecycle/
 // privacy_erasure.go) records the error and retries the request on the next
@@ -229,6 +230,30 @@ func HardDeleteUserIdentityMappings(ctx context.Context, userID int) (int64, err
 		Delete(&UserIdentityMapping{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("hard delete identity mappings: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// HardDeleteUserSessions removes the user's per-device session-registry rows
+// (entity.UserSession — L7, auth-security-08/26/29): IP,
+// user-agent and session-key are personal-adjacent data, same class as the
+// tokens/TOTP rows the erasure cascade already hard-deletes at this step.
+// entity.UserSession has no soft-delete column (see its own doc comment) and
+// is registered in the boot-time AutoMigrate list (repo/main.go), unlike the
+// lazily-created TOTP tables above, so this does not need their HasTable
+// guard. Called from the privacy-erasure cascade (lifecycle/privacy_erasure.go
+// executeErasure, same step as HardDeleteUserTokens/HardDeleteUserTOTP*) and
+// from DeleteUserById (the live user-delete path InternalDeleteUser's
+// platform-core user:delete scope calls) — cycle7 L7 repair round 3, finding
+// routing-resilience-limits-13#11. (repo.HardDeleteUserById /
+// (*User).HardDelete are a separate, currently uncalled hard-delete path;
+// this function is not wired into those.)
+func HardDeleteUserSessions(ctx context.Context, userID int) (int64, error) {
+	result := WithoutTenantIsolationCtx(ctx, DB).Unscoped().
+		Where("user_id = ?", userID).
+		Delete(&entity.UserSession{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("hard delete user sessions: %w", result.Error)
 	}
 	return result.RowsAffected, nil
 }

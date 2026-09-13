@@ -410,49 +410,57 @@ func PurgeAffinityKey(c *gin.Context, key string) (found bool, err error) {
 // affinityPurgeAllScanCount is the SCAN COUNT hint per round — a hint to
 // Redis about how much server-side work to do per call, not a hard cap on
 // total keys scanned. SCAN itself (unlike KEYS) never blocks the server for
-// the duration of the whole keyspace; this just keeps each round small.
-const affinityPurgeAllScanCount = 500
+// the duration of the whole keyspace; this just keeps each round small. A
+// var, not a const, so tests can shrink it to force a real Redis keyspace to
+// span multiple SCAN pages without seeding thousands of keys.
+var affinityPurgeAllScanCount = 500
 
 // affinityPurgeAllMaxRounds bounds total SCAN round-trips so a cursor bug or
 // an adversarially huge keyspace cannot spin this call forever. Real
 // affinity keyspaces are orders of magnitude smaller than what this allows.
-const affinityPurgeAllMaxRounds = 10000
+// A var, not a const, so TestPurgeAllAffinity_RoundCapHit_ReportsIncomplete
+// can force the cap to bite with a small, fast keyspace.
+var affinityPurgeAllMaxRounds = 10000
 
-// PurgeAllAffinity drops every session-affinity binding on whichever backend
-// is currently live. The Redis path uses bounded SCAN+UNLINK — never KEYS,
-// which blocks the server for the size of the whole keyspace — matching the
+// PurgeAllAffinity drops the session-affinity bindings it can reach on
+// whichever backend is currently live within affinityPurgeAllMaxRounds SCAN
+// round-trips. The Redis path uses bounded SCAN+UNLINK — never KEYS, which
+// blocks the server for the size of the whole keyspace — matching the
 // enterprise-acceptance requirement for this purge-all path. Returns the
-// number of bindings removed.
-func PurgeAllAffinity(c *gin.Context) (int, error) {
+// number of bindings removed and complete=true only if the scan actually
+// reached cursor 0; complete=false (round cap hit, or a scan/unlink error)
+// means bindings may remain even though purged rows were removed. The
+// pre-repair version of this function silently reported success whenever
+// the round cap was hit instead of surfacing the cutoff to the caller (L5
+// repair round 3, finding routing-resilience-limits-13#6) — callers must
+// not assume complete=true just because err==nil.
+func PurgeAllAffinity(c *gin.Context) (purged int, complete bool, err error) {
 	if !common.RedisEnabled {
 		affinityMemMu.Lock()
 		n := len(affinityMem)
 		affinityMem = make(map[string]affinityMemEntry)
 		affinityMemMu.Unlock()
-		return n, nil
+		return n, true, nil
 	}
 
 	ctx := c.Request.Context()
 	pattern := affinityRedisPrefix + "*"
-	var (
-		cursor uint64
-		purged int
-	)
+	var cursor uint64
 	for round := 0; round < affinityPurgeAllMaxRounds; round++ {
-		keys, next, err := common.RDB.Scan(ctx, cursor, pattern, affinityPurgeAllScanCount).Result()
-		if err != nil {
-			return purged, err
+		keys, next, scanErr := common.RDB.Scan(ctx, cursor, pattern, int64(affinityPurgeAllScanCount)).Result()
+		if scanErr != nil {
+			return purged, false, scanErr
 		}
 		if len(keys) > 0 {
-			if err := common.RDB.Unlink(ctx, keys...).Err(); err != nil {
-				return purged, err
+			if unlinkErr := common.RDB.Unlink(ctx, keys...).Err(); unlinkErr != nil {
+				return purged, false, unlinkErr
 			}
 			purged += len(keys)
 		}
 		cursor = next
 		if cursor == 0 {
-			break
+			return purged, true, nil
 		}
 	}
-	return purged, nil
+	return purged, false, nil
 }

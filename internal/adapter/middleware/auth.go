@@ -86,6 +86,26 @@ func authHelper(c *gin.Context, minRole int) {
 		// Check access token
 		accessToken := c.Request.Header.Get("Authorization")
 		if accessToken == "" {
+			// L7 repair round 3, finding routing-resilience-limits-13#10:
+			// this is the branch a browser hits when its cookie's Redis
+			// session key was deleted by a remote revoke
+			// (repo.RevokeUserSessionByKey/redisDeleteSessionKey) — session.Get
+			// above returned nil, there is no Authorization header (a normal
+			// browser flow does not send one), so this 401 fires. Without
+			// clearing here, the SAME stale cookie keeps coming back on every
+			// retry, and redistore/boj's Save keeps whatever id an incoming
+			// cookie already carried (it does not mint a fresh one for a
+			// non-empty id) — so a fresh login attempt from this browser would
+			// recreate the identical session_<sid> key and look revoked again
+			// the moment SESSION_REGISTRY_ENABLED's check further down runs on
+			// a later request. Clearing here, exactly like the SESSION_REVOKED
+			// branch below, forces the next login to start from an empty
+			// cookie.
+			if sid := session.ID(); sid != "" {
+				session.Clear()
+				session.Options(SessionClearOptions())
+				_ = session.Save()
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
 				"message": "无权进行此操作，未登录且未提供 access token",
@@ -201,16 +221,15 @@ func authHelper(c *gin.Context, minRole int) {
 			if revoked, revErr := repo.IsUserSessionRevoked(sid); revErr == nil && revoked {
 				// Expire the stale cookie before responding: boj/redistore's
 				// Session.Save keeps whatever id the incoming cookie already
-				// carried (it never mints a fresh one for a non-empty id), so
+				// carried (it does not mint a fresh one for a non-empty id), so
 				// without this a browser that logs back in with this same
 				// cookie would recreate session_<sid> — whose registry row
-				// is permanently revoked — and be locked out of every
-				// request with SESSION_REVOKED forever, never able to log
-				// back in until it manually clears cookies. Clearing here
-				// forces the NEXT login to start from an empty cookie, which
-				// the store answers with a brand-new id.
+				// is permanently revoked — and keep getting SESSION_REVOKED on
+				// every subsequent request until it manually clears cookies.
+				// Clearing here forces the NEXT login to start from an empty
+				// cookie, which the store answers with a brand-new id.
 				session.Clear()
-				session.Options(sessions.Options{Path: "/", MaxAge: -1})
+				session.Options(SessionClearOptions())
 				_ = session.Save()
 				c.JSON(http.StatusUnauthorized, gin.H{
 					"success":    false,

@@ -329,10 +329,14 @@ func TestAuthHelper_FlagOn_RegistersSession(t *testing.T) {
 // out. boj/redistore's Session.Save keeps whatever id an incoming cookie
 // already carries, so without authHelper clearing the cookie in its
 // SESSION_REVOKED branch, a re-login replaying the SAME (never-cleared)
-// cookie would recreate session_<sameID> — whose row is permanently
-// revoked — and 401 forever. This test's "jar" honours a real browser's
-// actual behaviour: it resends the OLD cookie unless the previous response
-// carried a cookie-clearing Set-Cookie, in which case it sends none.
+// cookie would recreate session_<sameID> — whose row stays revoked — and
+// keep answering SESSION_REVOKED on every subsequent request. This test's
+// fake "jar" is a simplification, not a real cookie jar: it resends the OLD
+// cookie unless the previous response carried ANY Set-Cookie header, in
+// which case it sends none — it does not check Max-Age/Expires, so it would
+// also (incorrectly, for a real jar) drop a cookie the server merely
+// refreshed. That simplification holds here only because every Set-Cookie
+// this flow's server sends IS a clearing one; it is not a general jar.
 func TestAuthHelper_ReloginAfterRemoteRevoke_NotLockedOut(t *testing.T) {
 	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
 	ctx := setupSessionRegistryTestRouter(t)
@@ -362,12 +366,12 @@ func TestAuthHelper_ReloginAfterRemoteRevoke_NotLockedOut(t *testing.T) {
 	if revokedProbe.Code != http.StatusUnauthorized {
 		t.Fatalf("probe after remote revoke status = %d, want 401, body=%s", revokedProbe.Code, revokedProbe.Body.String())
 	}
-	// A real jar drops a cookie the server told it to clear (Set-Cookie with
-	// an expired/zero Max-Age); it keeps a cookie the server said nothing
-	// about. Decide which this response did:
+	// Fake-jar simplification (see this test's doc comment above): drop the
+	// cookie if the response carried any Set-Cookie at all, not specifically
+	// one with an expired/zero Max-Age.
 	jarCookie := cookieA
 	if len(revokedProbe.Header().Values("Set-Cookie")) > 0 {
-		jarCookie = "" // the jar honours the clear and drops it
+		jarCookie = "" // treated as a clear
 	}
 
 	reloginW := ctx.loginRaw(t, 5151, jarCookie)
@@ -381,6 +385,75 @@ func TestAuthHelper_ReloginAfterRemoteRevoke_NotLockedOut(t *testing.T) {
 	newCookie := newCookies[0]
 	if newCookie == cookieA {
 		t.Fatal("re-login reused the SAME (permanently revoked) cookie — the fix did not take effect")
+	}
+
+	finalProbe := ctx.probe(newCookie)
+	if finalProbe.Code != http.StatusOK {
+		t.Fatalf("probe after re-login status = %d, want 200 (must NOT be locked out), body=%s", finalProbe.Code, finalProbe.Body.String())
+	}
+}
+
+// TestAuthHelper_ReloginAfterRedisKeyDeleted_NotLockedOut is the lock for L5
+// repair round 3, finding routing-resilience-limits-13#10: a DIFFERENT
+// revoke shape than TestAuthHelper_ReloginAfterRemoteRevoke_NotLockedOut
+// above. That test revokes by setting revoked_at on the DB row while the
+// session's own Redis key is left alone, so session.Get still returns
+// "username" and authHelper's SESSION_REVOKED branch (which already cleared
+// the cookie pre-repair) fires. This test instead deletes the session's
+// Redis key directly — mirroring what a real revoke-by-id/logout endpoint
+// does (redisDeleteSessionKey) — so session.Get returns nil and authHelper's
+// username==nil, no-Authorization-header 401 branch fires instead: the
+// branch this repair item added the clear to. Before the fix that branch
+// never cleared the cookie, so jar B's replayed cookie would recreate the
+// identical session key on re-login and could still be treated as reused by
+// anything keying off the session id.
+func TestAuthHelper_ReloginAfterRedisKeyDeleted_NotLockedOut(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
+	ctx := setupSessionRegistryTestRouter(t)
+
+	cookieA := ctx.login(t, 6161)
+	probeA := ctx.probe(cookieA)
+	if probeA.Code != http.StatusOK {
+		t.Fatalf("probe after login status = %d, body=%s", probeA.Code, probeA.Body.String())
+	}
+
+	var rows []entity.UserSession
+	if err := ctx.db.Find(&rows).Error; err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("registered rows = %d, want 1", len(rows))
+	}
+
+	// Simulate the real-revoke shape: delete the store's own Redis key
+	// (same key format redisDeleteSessionKey/v2_session_revoke.go uses),
+	// independent of the DB row's revoked_at.
+	if !ctx.mr.Del("session_" + rows[0].SessionKey) {
+		t.Fatalf("session_%s did not exist in miniredis before delete", rows[0].SessionKey)
+	}
+
+	revokedProbe := ctx.probe(cookieA)
+	if revokedProbe.Code != http.StatusUnauthorized {
+		t.Fatalf("probe after Redis key deletion status = %d, want 401, body=%s", revokedProbe.Code, revokedProbe.Body.String())
+	}
+	if len(revokedProbe.Header().Values("Set-Cookie")) == 0 {
+		t.Fatal("probe after Redis key deletion produced no Set-Cookie header — jar B's stale cookie was never cleared")
+	}
+	// The probe above already asserted a Set-Cookie was sent; a jar that
+	// honours it sends nothing on the next request.
+	jarCookie := ""
+
+	reloginW := ctx.loginRaw(t, 6161, jarCookie)
+	if reloginW.Code != http.StatusOK {
+		t.Fatalf("re-login status = %d, want 200, body=%s", reloginW.Code, reloginW.Body.String())
+	}
+	newCookies := reloginW.Header().Values("Set-Cookie")
+	if len(newCookies) == 0 {
+		t.Fatal("re-login produced no Set-Cookie header")
+	}
+	newCookie := newCookies[0]
+	if newCookie == cookieA {
+		t.Fatal("re-login reused the SAME cookie the deleted-key probe should have cleared")
 	}
 
 	finalProbe := ctx.probe(newCookie)

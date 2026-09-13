@@ -234,14 +234,16 @@ func TestEnforceSessionCap_RevokesOldestBeyondCap(t *testing.T) {
 
 // TestShouldThrottleSessionTouch_FallbackWithoutRedis: with common.RedisEnabled
 // forced false (the single-process dev/test deployment shape, distinct from
-// every other test in this file which runs against a real miniredis), the
+// the other tests in this file which run against a real miniredis), the
 // in-process sync.Map fallback throttles a SECOND touch of the same key
 // within the window and admits it again once we advance past the window —
 // mirrors the Redis-backed guard's own two-call shape in
 // TestUserSessionRegistry_UpsertThrottled60s above, but exercises the OTHER
-// branch of ShouldThrottleSessionTouch (user_session.go's "Redis reachable
-// but erroring... in-process fallback below" comment describes when this
-// branch runs).
+// branch of ShouldThrottleSessionTouch: the fallback runs when Redis is not
+// configured (RedisEnabled false or RDB nil) — a reachable-but-erroring
+// Redis call takes the enabled branch's own fail-open `return false` instead
+// and does not reach the fallback map (see that branch's own comment in
+// user_session.go).
 func TestShouldThrottleSessionTouch_FallbackWithoutRedis(t *testing.T) {
 	prevRDB, prevEnabled := common.RDB, common.RedisEnabled
 	common.RDB, common.RedisEnabled = nil, false
@@ -296,6 +298,49 @@ func TestListActiveUserSessions_90DayWindowMatchesStoreLifetime(t *testing.T) {
 	}
 }
 
+// TestListActiveUserSessions_ExcludesRowsPastCreatedAtWindow is the lock for
+// L7 repair round 3, finding routing-resilience-limits-13#17: the store's
+// Redis key gets its MaxAge TTL from a Save() (login), not from an ordinary
+// last-seen touch (UpsertUserSessionSeen is a plain DB write), so a
+// row's real deadline is created_at+90d even though last_seen_at can be
+// updated right up to that deadline. Before this fix, the list filtered on
+// last_seen_at alone, so a row created 95 days ago (Redis key already dead)
+// but last touched only 10 days ago (well inside the 90-day last_seen_at
+// window) was still listed as active/revocable — even though its cookie can
+// no longer authenticate anything. Seeds exactly that shape plus a
+// genuinely-live row (created recently, touched recently) and asserts only
+// the live one is listed.
+func TestListActiveUserSessions_ExcludesRowsPastCreatedAtWindow(t *testing.T) {
+	defer setupSQLiteDB(t)()
+
+	now := common.GetTimestamp()
+	day := int64(24 * time.Hour / time.Second)
+
+	if err := DB.Create(&entity.UserSession{
+		SessionKey: "sess-stale-createdat", UserId: 56, TenantId: "default",
+		CreatedAt: now - 95*day, LastSeenAt: now - 10*day,
+	}).Error; err != nil {
+		t.Fatalf("seed stale-createdat session: %v", err)
+	}
+	if err := DB.Create(&entity.UserSession{
+		SessionKey: "sess-genuinely-live", UserId: 56, TenantId: "default",
+		CreatedAt: now - 5*day, LastSeenAt: now - 1*day,
+	}).Error; err != nil {
+		t.Fatalf("seed genuinely-live session: %v", err)
+	}
+
+	rows, err := ListActiveUserSessions(56)
+	if err != nil {
+		t.Fatalf("ListActiveUserSessions: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].SessionKey != "sess-genuinely-live" {
+		t.Errorf("listed session_key = %q, want %q (the row whose Redis key structurally expired 5 days ago must be excluded)", rows[0].SessionKey, "sess-genuinely-live")
+	}
+}
+
 // TestMaskIP: /24 for IPv4, /48 for IPv6, "" for garbage — the ONLY path ip
 // reaches a client response, so a whitelist test never has to re-check the
 // output shape.
@@ -331,5 +376,59 @@ func TestUserAgentFamily(t *testing.T) {
 		if got := UserAgentFamily(in); in != "" && got == in {
 			t.Errorf("UserAgentFamily(%q) echoed the raw string back", in)
 		}
+	}
+}
+
+// TestSweepExpiredUserSessions_OnlyOldRowsGo is the lock for L7 repair round
+// 3, finding routing-resilience-limits-13#11: seeds four rows — a revoked
+// row older than the 30-day revoked-retention window, a revoked row inside
+// it, an unrevoked row older than the 90-day inactive-retention window, and
+// an unrevoked row inside it — and asserts SweepExpiredUserSessions removes
+// only the two that are past their respective window, leaving the two that
+// are not.
+func TestSweepExpiredUserSessions_OnlyOldRowsGo(t *testing.T) {
+	defer setupSQLiteDB(t)()
+
+	now := time.Now()
+	day := 24 * time.Hour
+	seed := func(key string, revokedAt, lastSeenAt int64) {
+		if err := DB.Create(&entity.UserSession{
+			SessionKey: key, UserId: 66, TenantId: "default",
+			CreatedAt: lastSeenAt, LastSeenAt: lastSeenAt, RevokedAt: revokedAt,
+		}).Error; err != nil {
+			t.Fatalf("seed %s: %v", key, err)
+		}
+	}
+
+	nowUnix := now.Unix()
+	seed("revoked-old", now.Add(-31*day).Unix(), nowUnix)   // revoked 31 days ago: must go
+	seed("revoked-recent", now.Add(-1*day).Unix(), nowUnix) // revoked 1 day ago: must stay
+	seed("inactive-old", 0, now.Add(-91*day).Unix())        // never revoked, idle 91 days: must go
+	seed("inactive-recent", 0, now.Add(-1*day).Unix())      // never revoked, idle 1 day: must stay
+
+	removed, err := SweepExpiredUserSessions(now)
+	if err != nil {
+		t.Fatalf("SweepExpiredUserSessions: %v", err)
+	}
+	if removed != 2 {
+		t.Errorf("removed = %d, want 2", removed)
+	}
+
+	var remaining []entity.UserSession
+	if err := DB.Find(&remaining).Error; err != nil {
+		t.Fatalf("query remaining: %v", err)
+	}
+	remainingKeys := map[string]bool{}
+	for _, r := range remaining {
+		remainingKeys[r.SessionKey] = true
+	}
+	if len(remaining) != 2 {
+		t.Fatalf("remaining rows = %d, want 2: %+v", len(remaining), remainingKeys)
+	}
+	if !remainingKeys["revoked-recent"] || !remainingKeys["inactive-recent"] {
+		t.Errorf("remaining keys = %v, want exactly {revoked-recent, inactive-recent}", remainingKeys)
+	}
+	if remainingKeys["revoked-old"] || remainingKeys["inactive-old"] {
+		t.Errorf("remaining keys = %v, must not contain revoked-old or inactive-old", remainingKeys)
 	}
 }

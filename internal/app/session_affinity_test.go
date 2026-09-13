@@ -416,12 +416,15 @@ func TestAffinityPurgeAll_Redis(t *testing.T) {
 		t.Fatalf("seed unrelated key: %v", err)
 	}
 
-	purged, err := PurgeAllAffinity(c)
+	purged, complete, err := PurgeAllAffinity(c)
 	if err != nil {
 		t.Fatalf("PurgeAllAffinity: %v", err)
 	}
 	if purged != 3 {
 		t.Errorf("purged = %d, want 3", purged)
+	}
+	if !complete {
+		t.Error("complete = false, want true: the scan finished within the round cap")
 	}
 
 	for _, key := range []string{"redis-purge-1", "redis-purge-2", "redis-purge-3"} {
@@ -431,5 +434,66 @@ func TestAffinityPurgeAll_Redis(t *testing.T) {
 	}
 	if v, err := rdb.Get(c.Request.Context(), "unrelated:other-feature-key").Result(); err != nil || v != "keep-me" {
 		t.Errorf("unrelated key must survive purge-all (SCAN must be pattern-scoped, not KEYS/FLUSHALL): got %q, err=%v", v, err)
+	}
+}
+
+// TestPurgeAllAffinity_RoundCapHit_ReportsIncomplete is the lock for L5
+// repair round 3, finding routing-resilience-limits-13#6: the pre-repair
+// PurgeAllAffinity had no way to tell a caller "the round cap cut this off
+// before the cursor reached 0" apart from "the scan actually finished" — it
+// just returned whatever count it had and a nil error either way, so an
+// operator reading a 200 with a purged count had no signal that bindings
+// might remain.
+//
+// The finding's suggested repro (shrink affinityPurgeAllScanCount, seed more
+// keys than one SCAN page, cap rounds at 1) does not reproduce against
+// miniredis: miniredis's SCAN returns every matching key with cursor=0 on
+// the first call regardless of the COUNT hint (tried with
+// affinityPurgeAllScanCount=1 and 20 seeded keys — complete came back true).
+// COUNT is documented as advisory in the real Redis protocol too, so this is
+// not a miniredis-only quirk this test can route around by seeding more
+// keys. Instead this locks the round-cap branch directly:
+// affinityPurgeAllMaxRounds=0 makes the `for round := 0; round <
+// affinityPurgeAllMaxRounds` loop body never run, so PurgeAllAffinity must
+// fall through to its final `return purged, false, nil` — the exact branch
+// the pre-repair code lacked. Revert that fall-through to `return purged,
+// true, nil` to see this test go red.
+func TestPurgeAllAffinity_RoundCapHit_ReportsIncomplete(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("start miniredis: %v", err)
+	}
+	defer mr.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer func() { _ = rdb.Close() }()
+
+	prevRDB := common.RDB
+	prevEnabled := common.RedisEnabled
+	common.RDB = rdb
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		common.RDB = prevRDB
+		common.RedisEnabled = prevEnabled
+	})
+
+	prevMaxRounds := affinityPurgeAllMaxRounds
+	affinityPurgeAllMaxRounds = 0
+	t.Cleanup(func() { affinityPurgeAllMaxRounds = prevMaxRounds })
+
+	c := affinityCtx(t, 1, 1, "default", "gpt-4o")
+	affinityStore(c, "cap-purge-1", affinityRecord{ChannelID: 1, Group: "default"})
+
+	purged, complete, err := PurgeAllAffinity(c)
+	if err != nil {
+		t.Fatalf("PurgeAllAffinity: %v", err)
+	}
+	if complete {
+		t.Error("complete = true, want false: affinityPurgeAllMaxRounds=0 must not let a single SCAN round run")
+	}
+	if purged != 0 {
+		t.Errorf("purged = %d, want 0: the round cap fired before any SCAN round could remove anything", purged)
+	}
+	if _, ok := affinityLoad(c, "cap-purge-1"); !ok {
+		t.Error("binding must survive: the round cap fired before it could be removed")
 	}
 }

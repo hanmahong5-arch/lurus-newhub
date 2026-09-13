@@ -133,7 +133,7 @@ func (a *TaskAdaptor) GetChannelName() string {
 	return ChannelName
 }
 
-func (a *TaskAdaptor) FetchTask(baseURL, key string, body map[string]any, proxy string) (*http.Response, error) {
+func (a *TaskAdaptor) FetchTask(baseURL, key string, body map[string]any, proxy string, forceHTTP1 ...bool) (*http.Response, error) {
 	requestURL := fmt.Sprintf("%s/suno/fetch", baseURL)
 	byteBody, err := json.Marshal(body)
 	if err != nil {
@@ -152,7 +152,7 @@ func (a *TaskAdaptor) FetchTask(baseURL, key string, body map[string]any, proxy 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 
-	client, err := app.GetHttpClientWithProxy(proxy)
+	client, err := app.GetHttpClientFor(proxy, len(forceHTTP1) > 0 && forceHTTP1[0])
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client: %w", err)
 	}

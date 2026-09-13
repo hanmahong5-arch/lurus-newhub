@@ -256,8 +256,8 @@ func TestGeminiEmbeddingHandler_BatchUpstreamError(t *testing.T) {
 
 // TestGeminiEmbeddingHandler_ParamOverride_SkipsLurusKeys is the lock for L5
 // repair finding #17/#40/#46: GeminiEmbeddingHandler used to merge
-// info.ParamOverride into the outbound body with a bespoke loop that never
-// skipped __lurus_-prefixed internal control keys. As of this fix, the other
+// info.ParamOverride into the outbound body with a bespoke loop that did not
+// skip __lurus_-prefixed internal control keys. As of this fix, the other
 // non-test call sites in this package (claude/compatible/embedding/gemini
 // (x2)/image/rerank/responses — `grep -rn 'ApplyParamOverride(' internal/app/relay
 // | grep -v _test`) route through relaycommon.ApplyParamOverride instead;

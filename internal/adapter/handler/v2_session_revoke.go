@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -57,9 +58,8 @@ func redisDeleteSessionKey(c *gin.Context, sessionKey string) {
 //	Auth: UserAuth middleware
 //
 // Revocation clears the gin session cookie and the platform lurus_session
-// cookie — this alone is sufficient on every deployment, registry-enabled or
-// not: RediStore.Save with MaxAge<=0 (what session.Options{MaxAge:-1} below
-// triggers) deletes the store's own Redis key itself, and both UserAuth (v1
+// cookie: RediStore.Save with MaxAge<=0 (what middleware.SessionClearOptions
+// below triggers) deletes the store's own Redis key itself, and both UserAuth (v1
 // session) and the OIDC bridge read the session from the same cookie, so
 // clearing it makes every subsequent authenticated endpoint return 401 until
 // the user logs in again. When SESSION_REGISTRY_ENABLED is on, this
@@ -195,7 +195,7 @@ func RevokeSessionByIDV2(c *gin.Context) {
 	if sid := currentSessionID(c); sid != "" && sid == row.SessionKey {
 		session := sessions.Default(c)
 		session.Clear()
-		session.Options(sessions.Options{Path: "/", MaxAge: -1})
+		session.Options(middleware.SessionClearOptions())
 		_ = session.Save()
 	}
 

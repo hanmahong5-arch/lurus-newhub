@@ -7,9 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app/relay"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 )
 
 func getGeminiVideoURL(channel *repo.Channel, task *repo.Task, apiKey string) (string, error) {
@@ -36,10 +37,11 @@ func getGeminiVideoURL(channel *repo.Channel, task *repo.Task, apiKey string) (s
 	}
 
 	proxy := channel.GetSetting().Proxy
+	forceHTTP1 := dto.ParamOverrideForceHTTP1(channel.GetParamOverride())
 	resp, err := adaptor.FetchTask(baseURL, apiKey, map[string]any{
 		"task_id": task.TaskID,
 		"action":  task.Action,
-	}, proxy)
+	}, proxy, forceHTTP1)
 	if err != nil {
 		return "", fmt.Errorf("fetch task failed: %w", err)
 	}

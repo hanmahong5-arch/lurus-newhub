@@ -302,27 +302,37 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 	}
 }
 
-// GetHttpClientFor is the single seam api_request.go's doRequest uses to pick
-// a relay transport (L5, routing-resilience-limits-13). With forceHTTP1
-// false it is a pure pass-through to the pre-existing clients — pointer-
-// identical to GetHttpClient()/NewProxyHttpClient's cached entry — so a
-// channel with no override set behaves byte-for-byte as before. With
-// forceHTTP1 true it returns an HTTP/1.1-only transport cached in its own
-// map (forceH1Clients), so a channel with a flaky HTTP/2 upstream can be
-// pinned to H1 without affecting any sibling channel — including one that
-// shares the same proxyURL.
+// GetHttpClientFor is the seam api_request.go's doRequest uses to pick a
+// relay transport (L5, routing-resilience-limits-13); the provider/task/*
+// FetchTask polls also call it directly, passing the same channel's
+// ForceHTTP1 (see dto.ParamOverrideForceHTTP1). With forceHTTP1 false it is a
+// pure pass-through to the pre-existing clients — pointer-identical to
+// GetHttpClient()/NewProxyHttpClient's cached entry — so a channel with no
+// override set behaves byte-for-byte as before. With forceHTTP1 true it
+// returns an HTTP/1.1-only transport cached in its own map
+// (forceH1Clients), so a channel with a flaky HTTP/2 upstream can be pinned
+// to H1 without affecting any sibling channel — including one that shares
+// the same proxyURL.
 //
-// Honest scope: covers every call that goes through provider.doRequest,
-// which is provider.DoApiRequest AND provider.DoTaskApiRequest — so it
-// includes AWS Bedrock in API-key mode (aws/adaptor.go DoApiRequest branch),
-// Coze, Vertex (chat), and every provider/task/*/adaptor.go relay (they all
-// call DoTaskApiRequest). Bypassed only by side calls that build their own
+// Honest scope: covers each call that goes through provider.doRequest
+// (provider.DoApiRequest and provider.DoTaskApiRequest — AWS Bedrock in
+// API-key mode, Coze, Vertex chat, the provider/task/*/adaptor.go relay
+// calls) plus, since L5's repair round, the provider/task/*/adaptor.go
+// FetchTask polls (checked by
+// TestProviderTaskAdaptors_FetchTaskUsesGetHttpClientFor in
+// internal/adapter/provider — a different package from this file, so that
+// check is not "in this package" for this comment's own purposes; read it
+// there, not assumed here). Bypassed by side calls that build their own
 // client directly: AWS's AKSK-credential mode (aws/relay-aws.go), Coze's
 // result-poll call (coze/relay-coze.go), Vertex's service-account token
 // exchange (vertex/service_account.go), MJ-proxy's own image fetch
-// (relay/mjproxy_handler.go) and hailuo's task-status fetch
-// (task/hailuo/adaptor.go). Exact sites listed in
-// doc/product-integration-guide.md §G, not silently assumed.
+// (relay/mjproxy_handler.go), baidu's access-token fetch
+// (baidu/relay-baidu.go), dify's and replicate's file uploads
+// (dify/relay-dify.go, replicate/adaptor.go), ali's image-task poll
+// (ali/image.go) and the v2 channel-test route's own client
+// (handler/v2_channel_actions.go channelTestHTTPClient) — this bypass list
+// itself is not test-enumerated, so this comment is the source of truth for
+// it; it is also listed in doc/product-integration-guide.md §G.
 func GetHttpClientFor(proxyURL string, forceHTTP1 bool) (*http.Client, error) {
 	if !forceHTTP1 {
 		return GetHttpClientWithProxy(proxyURL)

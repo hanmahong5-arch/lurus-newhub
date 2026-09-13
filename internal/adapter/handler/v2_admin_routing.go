@@ -19,15 +19,20 @@ import (
 // routingAuditDetails builds the JSON Details blob for both purge routes,
 // mirroring middleware.AuditWriteGuard's convention: RootJWTAuth's
 // Bearer-JWT branch does not set the "id" context key today
-// (admin_jwt_auth.go sets admin_sub/admin_email/admin_roles/
-// identity_account_id only), so c.GetInt("id") is 0 for that path and the
-// audit row would otherwise record an unattributable actor. AdminSub is
-// only populated in that case, exactly like audit_write_guard.go's
-// auditFallbackDetails.
+// (admin_jwt_auth.go's context keys are admin_sub/admin_email/admin_roles/
+// identity_account_id; it does not set "id"), so c.GetInt("id") is 0 for
+// that path and the audit row would otherwise record an unattributable
+// actor. AdminSub is populated for that path, exactly like
+// audit_write_guard.go's auditFallbackDetails.
 type routingAuditDetails struct {
-	Scope    string `json:"scope"`
-	Key      string `json:"key,omitempty"`
-	Purged   *int   `json:"purged,omitempty"`
+	Scope  string `json:"scope"`
+	Key    string `json:"key,omitempty"`
+	Purged *int   `json:"purged,omitempty"`
+	// Complete is set only for Scope "all": false means
+	// app.PurgeAllAffinity's SCAN loop hit its round cap before the cursor
+	// returned to 0, so bindings may remain uncollected by this call (L5
+	// repair round 3, finding routing-resilience-limits-13#6).
+	Complete *bool  `json:"complete,omitempty"`
 	AdminSub string `json:"admin_sub,omitempty"`
 }
 
@@ -96,13 +101,16 @@ func PurgeAffinityBindingV2(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// PurgeAllAffinityBindingsV2 drops every session-affinity binding on
-// whichever backend is currently live (bounded SCAN+UNLINK on Redis, a map
-// reset on the in-process fallback). Requires the explicit ?all=true query
-// so a bare DELETE against the collection path can never wipe every binding
-// by accident. Responds 200 with {"purged":n} so an operator sees how many
-// pins were actually dropped without having to go find the audit row (L5
-// repair, finding routing-resilience-limits-11#5/#21).
+// PurgeAllAffinityBindingsV2 drops the session-affinity bindings it can
+// reach on whichever backend is currently live (bounded SCAN+UNLINK on
+// Redis, a map reset on the in-process fallback). Requires the explicit
+// ?all=true query so a bare DELETE against the collection path does not
+// wipe bindings by accident. Responds 200 with {"purged":n,"complete":bool}
+// so an operator sees how many pins were actually dropped, and — since L5's
+// round-3 repair — whether app.PurgeAllAffinity's SCAN loop actually
+// finished (complete=false means its round cap was hit first and bindings
+// may remain) without having to go find the audit row (L5 repair, finding
+// routing-resilience-limits-11#5/#21, routing-resilience-limits-13#6).
 //
 // DELETE /api/v2/admin/routing/affinity?all=true — root only.
 func PurgeAllAffinityBindingsV2(c *gin.Context) {
@@ -114,7 +122,7 @@ func PurgeAllAffinityBindingsV2(c *gin.Context) {
 		return
 	}
 
-	purged, err := app.PurgeAllAffinity(c)
+	purged, complete, err := app.PurgeAllAffinity(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
@@ -122,6 +130,6 @@ func PurgeAllAffinityBindingsV2(c *gin.Context) {
 
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
 		governance.ActionRoutingAffinityPurged, governance.ResourceSessionAffinity, 0,
-		routingAuditDetailsJSON(c, routingAuditDetails{Scope: "all", Purged: &purged})))
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"purged": purged}})
+		routingAuditDetailsJSON(c, routingAuditDetails{Scope: "all", Purged: &purged, Complete: &complete})))
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"purged": purged, "complete": complete}})
 }

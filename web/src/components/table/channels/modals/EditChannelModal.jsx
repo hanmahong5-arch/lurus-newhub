@@ -2887,7 +2887,7 @@ const EditChannelModal = (props) => {
                             </div>
                             <Text type='tertiary' size='small'>
                               {t(
-                                '内部控制键 __lurus_force_http1：设为 true 可把该渠道的出站请求锁定为 HTTP/1.1（键本身不会转发给上游）。仅覆盖经统一转发路径发出的主请求；AWS AKSK 凭证模式、Coze 结果轮询、Vertex 换取 token、Midjourney 图片拉取、hailuo 任务查询等旁路调用不受影响，详见产品对接文档「单渠道强制 HTTP/1.1 与会话亲和运维」一节。',
+                                '内部控制键 __lurus_force_http1：设为 true 可把该渠道的出站请求锁定为 HTTP/1.1（键本身不会转发给上游）。覆盖经统一转发路径发出的主请求，以及该渠道 task 类适配器的任务状态轮询；AWS AKSK 凭证模式、Coze 结果轮询、Vertex 换取 token、Midjourney 图片拉取、baidu 换取 token、dify/replicate 文件上传、阿里图片任务轮询、v2 渠道测试路由等旁路调用不受影响，完整清单见产品对接文档「单渠道强制 HTTP/1.1 与会话亲和运维」一节。',
                               )}
                             </Text>
                           </div>

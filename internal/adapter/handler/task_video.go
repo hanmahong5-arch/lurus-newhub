@@ -7,14 +7,14 @@ import (
 	"io"
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider"
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/relay"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
-	"github.com/LurusTech/lurus-hub/internal/app/relay"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 )
 
@@ -80,10 +80,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor provider.TaskAdaptor, ch
 	if privateData.Key != "" {
 		key = privateData.Key
 	}
+	forceHTTP1 := dto.ParamOverrideForceHTTP1(channel.GetParamOverride())
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": taskId,
 		"action":  task.Action,
-	}, proxy)
+	}, proxy, forceHTTP1)
 	if err != nil {
 		return fmt.Errorf("fetchTask failed for task %s: %w", taskId, err)
 	}

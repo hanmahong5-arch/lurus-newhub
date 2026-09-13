@@ -16,6 +16,23 @@ type ChannelSettings struct {
 	ForceHTTP1 bool `json:"-"`
 }
 
+// ForceHTTP1ParamKey is the param_override key an operator sets, via the
+// channel's existing param_override editor, to force that channel's outbound
+// transport to HTTP/1.1 (L5). Shared here so relay_info.go's InitChannelMeta
+// and any other reader of a channel's raw param_override map (e.g. the task
+// FetchTask polls, which run outside a live RelayInfo) derive the same value
+// from one definition instead of duplicating the key string.
+const ForceHTTP1ParamKey = "__lurus_force_http1"
+
+// ParamOverrideForceHTTP1 reads the ForceHTTP1ParamKey control key out of a
+// channel's raw param_override map. Any non-bool value (missing key, wrong
+// JSON type) is treated as false — a malformed override must never be
+// mistaken for an explicit opt-in.
+func ParamOverrideForceHTTP1(paramOverride map[string]interface{}) bool {
+	v, ok := paramOverride[ForceHTTP1ParamKey].(bool)
+	return ok && v
+}
+
 type VertexKeyType string
 
 const (

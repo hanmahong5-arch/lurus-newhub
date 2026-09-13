@@ -203,8 +203,10 @@ type RelayInfo struct {
 // force a single channel's outbound relay transport to HTTP/1.1 (L5,
 // routing-resilience-limits-13). See ApplyParamOverride/applyOperationsLegacy
 // (override.go) for the matching skip that keeps this control key out of the
-// upstream request body.
-const lurusForceHTTP1ParamKey = "__lurus_force_http1"
+// upstream request body. Aliased to dto.ForceHTTP1ParamKey so this package
+// and the task FetchTask polls (which read the same channel param_override
+// map outside a live RelayInfo) cannot drift onto two different strings.
+const lurusForceHTTP1ParamKey = dto.ForceHTTP1ParamKey
 
 // paramOverrideBool reads a boolean control key out of a channel's raw
 // param_override map. Any non-bool value (missing key, wrong JSON type) is

@@ -325,6 +325,7 @@ func TestAdminRevokeUserSessions_AuditsReason(t *testing.T) {
 // from a prior flag-on soak) — a rollback must not let this endpoint revoke
 // anything.
 func TestAdminRevokeUserSessions_FlagOff(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "false")
 	r, db := setupAdminSessionsRevokeRouter(t)
 	const targetUserID = 322
 

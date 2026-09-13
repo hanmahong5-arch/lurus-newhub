@@ -10,16 +10,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
-	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider"
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 )
 
 // https://platform.minimaxi.com/docs/api-reference/video-generation-intro
@@ -110,7 +110,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	return hResp.TaskID, responseBody, nil
 }
 
-func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy string) (*http.Response, error) {
+func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy string, forceHTTP1 ...bool) (*http.Response, error) {
 	taskID, ok := body["task_id"].(string)
 	if !ok {
 		return nil, fmt.Errorf("invalid task_id")
@@ -126,7 +126,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 
-	client, err := app.GetHttpClientWithProxy(proxy)
+	client, err := app.GetHttpClientFor(proxy, len(forceHTTP1) > 0 && forceHTTP1[0])
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}

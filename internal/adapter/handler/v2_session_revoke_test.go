@@ -287,6 +287,7 @@ func TestV2SessionRevokeByID_OwnedSucceeds(t *testing.T) {
 // a row left over from a prior flag-on soak) must not let this endpoint
 // revoke anything.
 func TestV2SessionRevokeByID_FlagOff_NotFound(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "false")
 	ctx := setupSessionRevokeDBRouter(t, 100, "")
 	row := seedRevokeTestSession(t, ctx.db, "sess-mine-flagoff", 100)
 
@@ -404,6 +405,7 @@ func TestV2SessionsOthers_KeepsCurrent(t *testing.T) {
 // the DB, even when rows exist (left over from a prior flag-on soak) — a
 // rollback must not let this endpoint revoke anything.
 func TestV2SessionsOthers_FlagOff(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "false")
 	const userID = 101
 	ctx := setupSessionRevokeDBRouter(t, userID, "sess-current-flagoff")
 	seedRevokeTestSession(t, ctx.db, "sess-current-flagoff", userID)
