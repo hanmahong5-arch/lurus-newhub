@@ -97,7 +97,7 @@ func TestRelay_PreChannelBindingError_RecordsErrorLog(t *testing.T) {
 // from upstream on attempt 1 followed by a terminal pre-channel-style error
 // is not how retries actually fail, but the read is on the shared
 // gin.Context regardless of which stage set it, so this is a faithful lock
-// on relay.go's copy at :780.
+// on recordRelayErrorLog's copy in relay.go.
 func TestRelay_PreChannelBindingError_CopiesUpstreamRequestIdWhenSet(t *testing.T) {
 	db, cleanup := handlerRelaySetupDB(t)
 	defer cleanup()

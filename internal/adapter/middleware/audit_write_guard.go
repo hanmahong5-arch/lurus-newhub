@@ -68,11 +68,14 @@ func AuditWriteGuard() gin.HandlerFunc {
 		// Registered before c.Next() (not after) so it still runs while a
 		// panic from the handler unwinds through this frame — the
 		// engine-level gin.CustomRecovery (cmd/server/main.go) recovers
-		// above this middleware, and a defer registered only after c.Next()
-		// returns would never fire on that path, leaking the pending entry
+		// above this middleware, and a defer registered after c.Next()
+		// returns would not run on that path, leaking the pending entry
 		// (and pinning this *gin.Context — see governance.ForgetPending's
-		// doc) and skipping the fallback row for that write attempt. The
-		// sweep is idempotent and safe to run whether or not the handler's
+		// doc). The fallback row and the unaudited counter are still not
+		// emitted when a guarded handler panics: the code after c.Next()
+		// below is skipped during the unwind, so that write leaves no audit
+		// trail beyond the recovery log. The sweep is idempotent and safe to
+		// run whether or not the handler's
 		// own RecordAuditEvent already fired: it LoadAndDeletes, so a
 		// prior successful record leaves nothing here to forget.
 		defer governance.ForgetPending(c)

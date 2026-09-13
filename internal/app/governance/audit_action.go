@@ -186,7 +186,7 @@ const (
 	// internal_credit_pool_fund.go) — the platform BillingOutbox supply
 	// call, distinct from ActionCreditPoolToppedUp because the actor is
 	// ActorSystem (the calling internal API key), not an admin operator, and
-	// the caller is unauthenticated-by-session (a bespoke internal key
+	// the caller is unauthenticated-by-session (X-API-Key with the platform internal key's balance:write
 	// scope) rather than RootJWTAuth. Recorded only when the fund actually
 	// moved the balance (fundErr == nil && !replayed) — an idempotent replay
 	// changes nothing, so it produces no second row.

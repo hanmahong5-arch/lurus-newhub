@@ -126,7 +126,7 @@ func ForceDisableTotpV2(c *gin.Context) {
 	// the HasNotifyTarget check, that "skipped, nothing to send" case would
 	// be indistinguishable from a real send and would report notified:true.
 	// This is still not confirmed delivery (SendEmail/webhook/etc. can 200
-	// and never reach an inbox), only "a target existed and the send path
+	// without the message reaching an inbox), only "a target existed and the send path
 	// did not error". Surfaced in both the audit trail and the response so
 	// support can tell a reachable target apart from an unreachable one,
 	// instead of a bare 200 that looks identical either way.

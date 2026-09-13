@@ -413,7 +413,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		// conversion/marshal (compatible_handler.go), SetupRequestHeader —
 		// would otherwise still read back the PREVIOUS attempt's vendor id
 		// (recordRelayErrorLog's c.GetString) and stamp channel B's error row
-		// with channel A's id. Reset once per iteration, here, so every
+		// with channel A's id. Reset once per iteration, here, so an
 		// attempt starts clean regardless of which stage (if any) fails
 		// before doRequest gets a chance to overwrite it with its own catch.
 		c.Set("upstream_request_id", "")

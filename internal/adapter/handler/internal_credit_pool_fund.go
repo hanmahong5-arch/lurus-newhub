@@ -217,9 +217,9 @@ func InternalFundCreditPool(c *gin.Context) {
 		// Money moved: audit it. Actor is the calling internal API key
 		// (ActorSystem), not an admin operator — this route has no session,
 		// only middleware.InternalApiAuth's "internal_api_key_id". No row is
-		// written on a replay (fundErr == nil path above with replayed ==
-		// true never reaches this branch), since a replay changes no
-		// balance.
+		// written on a replay (the replayed branch above, fundErr ==
+		// repo.ErrFundEventExists, returns before this point), since a replay
+		// changes no balance.
 		governance.RecordAuditEvent(governance.NewAuditEvent(
 			c, governance.ActorSystem, c.GetInt("internal_api_key_id"),
 			governance.ActionCreditPoolFunded, governance.ResourceCreditPool, int(pool.ID),

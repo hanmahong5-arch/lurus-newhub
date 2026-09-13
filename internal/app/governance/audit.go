@@ -77,9 +77,9 @@ func RecordAuditEvent(event *entity.AuditEvent) {
 // recorded) entry still attributed to c. Called by middleware.AuditWriteGuard
 // via a defer registered before the handler runs (c.Next()), so it fires
 // once per request whether the handler returns normally or panics and is
-// recovered by an outer recovery middleware (gin's defer-during-unwind
-// semantics still run a defer registered before the panic even though the
-// guard's own post-c.Next() fallback-audit logic does not) — so a caller
+// recovered by an outer recovery middleware (Go runs a defer registered
+// before the panic while the stack unwinds; the guard's own post-c.Next()
+// fallback-audit logic does not run on that path) — so a caller
 // that built an event and never passed it to RecordAuditEvent does not pin
 // this request's *gin.Context — and the abandoned event — in
 // pendingAuditContexts forever; gin pools and resets *gin.Context values

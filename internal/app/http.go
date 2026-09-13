@@ -34,8 +34,9 @@ func CloseResponseBodyGracefully(httpResponse *http.Response) {
 // duplicate that value under a second, undocumented channel with no tier
 // gate. provider imports this package, so the reverse import would cycle —
 // TestUpstreamRequestIdHeaders_AllSkippedFromClientResponse (provider
-// package) is the cross-package lock that keeps the two lists in sync
-// instead of a comment. http.Header canonicalizes header names (net/http,
+// package) asserts the capture list is a subset of this one — one
+// direction; a name dropped from the capture list is not caught —
+// rather than a comment. http.Header canonicalizes header names (net/http,
 // textproto), so these must be written in canonical form to match
 // src.Header's keys.
 var UpstreamHeadersNotForwarded = map[string]bool{

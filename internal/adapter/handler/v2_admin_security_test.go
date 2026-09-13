@@ -233,7 +233,7 @@ func TestAdminTotpStats_TenantScoped(t *testing.T) {
 		t.Errorf("alpha no_codes_issued = %d, want 0 (user 101 has unused codes, not zero-issued)", stats.NoCodesIssued)
 	}
 	if stats.AdoptionPct > 100 {
-		t.Errorf("alpha adoption_pct = %v, must never exceed 100 (soft-deleted user 105 must not count in enrolled)", stats.AdoptionPct)
+		t.Errorf("alpha adoption_pct = %v, must not exceed 100 (soft-deleted users 105-107 must not count in enrolled)", stats.AdoptionPct)
 	}
 
 	w2 := httptest.NewRecorder()
