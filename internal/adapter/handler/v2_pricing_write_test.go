@@ -339,10 +339,9 @@ func TestV2PricingWrite_RootGate(t *testing.T) {
 
 	// PreviewPricingV2 shares UpdatePricingV2's rationale (the maps it reads
 	// are process-global) so it must reject the same non-root caller with
-	// 403 and return no diff — mutation: deleting PreviewPricingV2's
-	// requirePlatformRoot check left every Pricing test in this file green
-	// when last checked; that is a property of the current suite, not a
-	// guarantee this comment can make about tests added later.
+	// 403 and return no diff. This sub-case is the oracle for
+	// PreviewPricingV2's requirePlatformRoot check: deleting that check turns
+	// it red.
 	t.Run("preview_non_admin_forbidden", func(t *testing.T) {
 		w := postPricingPreview(ctx, ctx.tenantSlug, batch, map[string]string{"X-Test-Role": "user"})
 		if w.Code != http.StatusForbidden {
@@ -636,9 +635,8 @@ func TestV2PricingPreview_NeverPersists(t *testing.T) {
 
 // 12b. PricingPreview_InvalidBatch_Rejected — the preview route runs the same
 // validatePricingBatch UpdatePricingV2 does, before computing any diff.
-// Every other call to postPricingPreview in this file sends a valid batch,
-// so without this test the validation branch in PreviewPricingV2 could be
-// deleted and the suite would stay green. Mutation: short-circuiting that
+// This is the oracle for that validation branch in PreviewPricingV2 — the
+// invalid batch must be rejected before any diff is computed. Mutation: short-circuiting that
 // branch (e.g. `if false && !ok`) turns this red.
 func TestV2PricingPreview_InvalidBatch_Rejected(t *testing.T) {
 	ctx := setupPricingWriteRouter(t)

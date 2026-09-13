@@ -64,15 +64,13 @@ var errPricingVersionConflict = errors.New("pricing version conflict")
 
 // currentPricingVersion reads PricingVersion straight from the database
 // (repo.GetOptionValue against repo.DB) rather than the per-process option
-// cache: on this replica the cache (common.OptionMap) is refreshed by the
-// SYNC_FREQUENCY ticker (repo/option.go loadOptionsFromDatabase), but it can
-// also be stale in between ticks — a plain write from another replica lands
-// only in that replica's OptionMap, and even this replica's own
-// repo.UpdateOption/SetOptionMapValue writes refresh the cache no sooner
-// than the write itself, so a cache read here right after another replica's
-// commit could still answer a stale version — and drive the console's
-// 409-refetch-retry loop into hitting 409 again — until this replica's own
-// next resync. Defaults to 0 when the row has never been written.
+// cache. This replica's cache (common.OptionMap) is refreshed by its own
+// writes and by the SYNC_FREQUENCY ticker (repo/option.go
+// loadOptionsFromDatabase); a version committed by another replica reaches
+// this replica's cache no sooner than that ticker, so a cache read here right
+// after another replica's commit could answer a stale version and drive the
+// console's 409-refetch-retry loop into hitting 409 again until the next
+// resync. Defaults to 0 when the row has never been written.
 func currentPricingVersion() int64 {
 	raw, found, err := repo.GetOptionValue(repo.DB, "PricingVersion")
 	if err != nil || !found {
@@ -210,19 +208,22 @@ func computePricingDiffs(items []updatePricingRequest) pricingComputation {
 
 // effectiveOldModelRatio reports the ratio a model was actually billed at
 // before this batch: the base map's own entry when the admin (or a prior
-// write) had configured one explicitly, otherwise
-// ratio_setting.GetModelRatio's family-fallback value — so the diff/audit
-// trail says "from the fallback" instead of a misleading "from 0" for a
-// model nobody has priced explicitly. explicit is false whenever the value
-// came from the fallback getter rather than the base map.
+// write) had configured one explicitly, otherwise whatever
+// ratio_setting.GetModelRatio resolves — a family fallback or, for a model
+// it does not know at all, the getter's default (37.5 today, the same number
+// repo.GetPricing lists and the relay price helper bills) — so the
+// diff/audit trail says "from the fallback" instead of a misleading "from 0"
+// for a model nobody has priced explicitly. The getter's "found" flag is
+// deliberately ignored here: it is false for the unknown-model default when
+// self-use mode is off, but the catalogue and the relay use that default
+// regardless. explicit is false whenever the value came from the getter
+// rather than the base map.
 func effectiveOldModelRatio(base map[string]float64, modelName string) (value float64, explicit bool) {
 	if v, ok := base[modelName]; ok {
 		return v, true
 	}
-	if v, found, _ := ratio_setting.GetModelRatio(modelName); found {
-		return v, false
-	}
-	return 0, false
+	v, _, _ := ratio_setting.GetModelRatio(modelName)
+	return v, false
 }
 
 // effectiveOldCompletionRatio mirrors effectiveOldModelRatio for
@@ -538,13 +539,14 @@ func UpdatePricingV2(c *gin.Context) {
 	}
 	_ = repo.SetOptionMapValue("PricingVersion", strconv.FormatInt(newVersion, 10))
 
-	// Force pricing cache refresh on next read. repo.GetPricing() keeps a
-	// separate ~1-minute cache (repo/pricing.go, outside this lane's file
-	// scope) that this call does not invalidate, so the console's
-	// model_ratio/model_price columns (not model names or vendors) can still
-	// show pre-write values for up to that long after a save — a known,
-	// undocumented-elsewhere gap, not fixed by this lane.
+	// Drop the derived caches so the next read rebuilds from the maps just
+	// applied: the exposed-ratio cache, and repo.GetPricing's ~1-minute
+	// catalogue cache (repo/pricing.go) — without the second call the
+	// console's post-save refetch could list pre-write ratios beside the new
+	// version for up to a minute
+	// (TestVersionedPricingWrite_InvalidatesPricingCache).
 	ratio_setting.InvalidateExposedDataCache()
+	repo.InvalidatePricingCache()
 
 	details, _ := json.Marshal(gin.H{
 		"diffs":        comp.Diffs,
