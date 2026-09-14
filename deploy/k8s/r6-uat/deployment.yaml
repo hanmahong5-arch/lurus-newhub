@@ -152,6 +152,20 @@ spec:
                 secretKeyRef:
                   name: lurus-newhub-uat-secrets
                   key: E2E_BRIDGE_TOKEN
+            # Registers the in-process fault simulator under
+            # /api/v2/faultsim/* (handler/faultsim.go). Like the bridge token
+            # above, the routes do not exist when this env is unset, and it
+            # must never be set on the prod instance: it is an OpenAI-shaped
+            # stub upstream plus a task vendor a UAT channel can point at, so
+            # relay failure modes and the generic task round trip can be
+            # exercised without a vendor key. Reachable over loopback only —
+            # the UAT egress policy excludes RFC1918, and a channel pointed at
+            # http://127.0.0.1:3000/api/v2/faultsim stays inside the pod.
+            - name: FAULTSIM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-newhub-uat-secrets
+                  key: FAULTSIM_TOKEN
             - name: LURUS_WHITELABEL_MASTER_SECRET
               valueFrom:
                 secretKeyRef:
