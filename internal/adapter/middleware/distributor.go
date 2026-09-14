@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,6 +28,38 @@ import (
 type ModelRequest struct {
 	Model string `json:"model"`
 	Group string `json:"group,omitempty"`
+	// Conversation ids the session-affinity key can be derived from before the
+	// typed request body exists (see app.DeriveSessionAffinityKey for the
+	// precedence and the reasons these two fields).
+	PromptCacheKey json.RawMessage `json:"prompt_cache_key,omitempty"`
+	Metadata       *struct {
+		UserId string `json:"user_id"`
+	} `json:"metadata,omitempty"`
+}
+
+// sessionAffinityRawID mirrors the source precedence of
+// app.DeriveSessionAffinityKey on the light model request the distributor
+// parses: X-Session-Id header, then prompt_cache_key (accepted only as a JSON
+// string, like the typed Responses request), then metadata.user_id.
+func sessionAffinityRawID(c *gin.Context, m *ModelRequest) string {
+	if raw := strings.TrimSpace(c.GetHeader("X-Session-Id")); raw != "" {
+		return raw
+	}
+	if m == nil {
+		return ""
+	}
+	if len(m.PromptCacheKey) > 0 {
+		var s string
+		if json.Unmarshal(m.PromptCacheKey, &s) == nil {
+			if s = strings.TrimSpace(s); s != "" {
+				return s
+			}
+		}
+	}
+	if m.Metadata != nil {
+		return strings.TrimSpace(m.Metadata.UserId)
+	}
+	return ""
 }
 
 func Distribute() func(c *gin.Context) {
@@ -177,6 +210,16 @@ func Distribute() func(c *gin.Context) {
 				callerTenantID := ""
 				if tc, terr := GetTenantContext(c); terr == nil && tc != nil {
 					callerTenantID = tc.TenantID
+				}
+				// Session affinity is consulted inside this first selection
+				// (retry > 0 skips the lookup), so the conversation key must be
+				// on the context before the call. The relay handler derives the
+				// same key again after parsing the typed body; without this
+				// derivation the pin was neither looked up nor stored on the
+				// live path — only the header was emitted
+				// (TestDistribute_SessionAffinity_FirstSelectionUsesPin).
+				if key := app.DeriveSessionAffinityKeyFromRaw(c, sessionAffinityRawID(c, modelRequest)); key != "" {
+					common.SetContextKey(c, constant.ContextKeySessionAffinity, key)
 				}
 				channel, selectGroup, err = app.CacheGetRandomSatisfiedChannel(&app.RetryParam{
 					Ctx:        c,
