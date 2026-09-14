@@ -87,10 +87,12 @@ const switchEndUserUsernamePrefix = "sw-eu-"
 
 // SwitchRedeemAnonymous handles POST /api/v2/switch/redeem.
 //
-// No middleware should be attached: this endpoint is anonymous by design.
-// It validates the request, runs the redemption transaction, provisions
-// a relay token, and returns the standard {success, data, message}
-// envelope used by the rest of v2.
+// No auth middleware is attached: this endpoint is anonymous by design.
+// The IP-keyed middleware.RedemptionRateLimit() mounted in
+// api-v2-router.go (cycle-8 L1) is the guard in front of it. It validates
+// the request, runs the redemption transaction, provisions a relay token,
+// and returns the standard {success, data, message} envelope used by the
+// rest of v2.
 func SwitchRedeemAnonymous(c *gin.Context) {
 	var req switchRedeemRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

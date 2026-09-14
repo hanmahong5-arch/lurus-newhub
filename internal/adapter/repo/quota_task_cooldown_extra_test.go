@@ -70,7 +70,7 @@ func TestInitTask_GeminiAndNonGemini(t *testing.T) {
 			UpstreamModelName: "gemini-up",
 		},
 	}
-	task := InitTask(constant.TaskPlatformSuno, geminiInfo)
+	task := InitTask(nil, constant.TaskPlatformSuno, geminiInfo)
 	if task.UserId != 11 || task.Group != "grpA" || task.ChannelId != 77 {
 		t.Fatalf("task base fields wrong: %+v", task)
 	}
@@ -97,7 +97,7 @@ func TestInitTask_GeminiAndNonGemini(t *testing.T) {
 			ApiKey:      "openai-secret",
 		},
 	}
-	task2 := InitTask(constant.TaskPlatformSuno, otherInfo)
+	task2 := InitTask(nil, constant.TaskPlatformSuno, otherInfo)
 	if task2.PrivateData.Key != "" {
 		t.Errorf("non-Gemini key must be empty, got %q", task2.PrivateData.Key)
 	}

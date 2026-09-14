@@ -53,6 +53,22 @@ const (
 	RelayModeRealtime
 
 	RelayModeGemini
+
+	// RelayModeResponsesCompact is POST /v1/responses/compact
+	// (wire-formats-03) — appended at the END of this iota block, never
+	// inserted, so every ordinal above stays pinned; see
+	// TestRelayMode_ExistingOrdinalsPinned.
+	RelayModeResponsesCompact
+
+	// RelayModeResponsesRetrieve and RelayModeResponsesDelete are
+	// GET/DELETE /v1/responses/:response_id (cycle-8 L7, tasks-plugins-12).
+	// Neither is ever produced by Path2RelayMode — that function has no
+	// case for this route, because handler/relay_responses_registry.go sets
+	// info.RelayMode directly after building RelayInfo, bypassing the
+	// generic path-prefix resolution the POST routes above use. Appended at
+	// the END of the block, same reasoning as RelayModeResponsesCompact.
+	RelayModeResponsesRetrieve
+	RelayModeResponsesDelete
 )
 
 func Path2RelayMode(path string) int {
@@ -73,6 +89,8 @@ func Path2RelayMode(path string) int {
 		relayMode = RelayModeImagesEdits
 	} else if strings.HasPrefix(path, "/v1/edits") {
 		relayMode = RelayModeEdits
+	} else if strings.HasPrefix(path, "/v1/responses/compact") {
+		relayMode = RelayModeResponsesCompact
 	} else if strings.HasPrefix(path, "/v1/responses") {
 		relayMode = RelayModeResponses
 	} else if strings.HasPrefix(path, "/v1/audio/speech") {

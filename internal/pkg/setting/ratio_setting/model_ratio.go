@@ -383,6 +383,12 @@ func InitRatioSettings() {
 	audioCompletionRatioMapMutex.Lock()
 	audioCompletionRatioMap = defaultAudioCompletionRatio
 	audioCompletionRatioMapMutex.Unlock()
+
+	// initialize contextTiersMap (billing-pricing-14: default empty, see
+	// context_tiers.go)
+	contextTiersMapMutex.Lock()
+	contextTiersMap = defaultContextTiers
+	contextTiersMapMutex.Unlock()
 }
 
 func GetModelPriceMap() map[string]float64 {

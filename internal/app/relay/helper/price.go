@@ -61,6 +61,10 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var cacheCreationRatioDefaulted bool
 	var audioRatio float64
 	var audioCompletionRatio float64
+	var contextTierThreshold int
+	var baseModelRatio float64
+	var baseCompletionRatio float64
+	var baseCacheRatio float64
 	var freeModel bool
 	if !usePrice {
 		preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota)
@@ -90,6 +94,36 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		imageRatio, _ = ratio_setting.GetImageRatio(info.OriginModelName)
 		audioRatio = ratio_setting.GetAudioRatio(info.OriginModelName)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(info.OriginModelName)
+		// Snapshot the flat, non-tiered ratios BEFORE any tier override below.
+		// helper.ResettleContextTier re-derives the settled ratio starting
+		// from this snapshot rather than re-reading the live ratio_setting
+		// maps at settlement time, so a concurrent admin edit (or a routine
+		// repo.SyncOptions tick pulling another replica's write) cannot
+		// re-price a request that is already in flight (cycle-8 plan §8 L5
+		// B-F3).
+		baseModelRatio = modelRatio
+		baseCompletionRatio = completionRatio
+		baseCacheRatio = cacheRatio
+		// Declarative context-length pricing tier (billing-pricing-14): the
+		// pre-consume estimate decides which tier applies here; every
+		// settlement site re-evaluates against the actual context length
+		// derived from the upstream-reported usage (see ResettleContextTier
+		// and its callers) so the logged ratio and prompt_tokens land on the
+		// same side of a configured threshold. Default empty map (no
+		// operator-configured tiers) makes this a no-op — GetContextLengthTier
+		// returns nil and none of modelRatio/completionRatio/cacheRatio change.
+		if t := ratio_setting.GetContextLengthTier(info.OriginModelName, promptTokens); t != nil {
+			if t.ModelRatio != nil {
+				modelRatio = *t.ModelRatio
+			}
+			if t.CompletionRatio != nil {
+				completionRatio = *t.CompletionRatio
+			}
+			if t.CacheRatio != nil {
+				cacheRatio = *t.CacheRatio
+			}
+			contextTierThreshold = t.ThresholdTokens
+		}
 		ratio := modelRatio * groupRatioInfo.GroupRatio
 		preConsumedQuota = int(float64(preConsumedTokens) * ratio)
 	} else {
@@ -132,8 +166,13 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		CacheCreationRatio:          cacheCreationRatio,
 		CacheCreation5mRatio:        cacheCreationRatio5m,
 		CacheCreation1hRatio:        cacheCreationRatio1h,
+		ContextTierThreshold:        contextTierThreshold,
 		CacheCreationRatioDefaulted: cacheCreationRatioDefaulted,
 		QuotaToPreConsume:           preConsumedQuota,
+		BaseModelRatio:              baseModelRatio,
+		BaseCompletionRatio:         baseCompletionRatio,
+		BaseCacheRatio:              baseCacheRatio,
+		BaseRatiosSet:               true,
 	}
 
 	if common.DebugEnabled {
@@ -164,6 +203,73 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) types.
 		GroupRatioInfo: groupRatioInfo,
 	}
 	return priceData
+}
+
+// ResettleContextTier re-evaluates a declarative context-length pricing tier
+// (billing-pricing-14) against the actual context length of the call
+// (actualPromptTokens — callers on a wire where the prompt-token field
+// excludes cache read/creation must add those back in before calling this;
+// see usage.AsOpenAIWire().PromptTokens at each call site). ModelPriceHelper
+// chose (or did not choose) a tier from the pre-consume ESTIMATE; the
+// estimate and the actual context length can land on different sides of a
+// configured threshold, so every settlement site that reads
+// PriceData.ModelRatio for a !UsePrice model must call this before computing
+// the final quota — otherwise the logged model_ratio and prompt_tokens could
+// disagree about which tier applied. A no-op for UsePrice (per-call) models:
+// tiers only ever apply to the token-based branch
+// (TestModelPriceHelper_PerCallModelIgnoresTiers covers the pre-consume side
+// of that same rule).
+//
+// modelRatio/completionRatio/cacheRatio start from priceData's
+// Base{ModelRatio,CompletionRatio,CacheRatio} — the flat, non-tiered ratios
+// ModelPriceHelper snapshotted at pre-consume — rather than a fresh read of
+// the live ratio_setting maps. Re-reading live would let a concurrent admin
+// edit or a routine repo.SyncOptions tick re-price a request that is already
+// in flight (cycle-8 plan §8 L5 B-F3); the frozen snapshot is the only
+// record of the model's flat ratio once priceData may already carry the
+// pre-consume tier's override.
+func ResettleContextTier(priceData *types.PriceData, modelName string, actualPromptTokens int) {
+	if priceData.UsePrice {
+		return
+	}
+	// Short-circuit for every model with no tier list at all: this keeps
+	// settlement byte-identical to pre-consume for the default-empty
+	// mechanism (and for any model an admin has never given tiers), instead
+	// of re-deriving modelRatio/completionRatio/cacheRatio from the frozen
+	// snapshot on every settlement regardless of whether this lane's
+	// mechanism is in play for that model.
+	if !ratio_setting.HasContextLengthTiers(modelName) {
+		return
+	}
+	// The frozen snapshot is written by ModelPriceHelper's token-based branch.
+	// A PriceData that never went through it (a hand-built value, or a future
+	// settlement path that constructs its own) has no snapshot to start from,
+	// and overwriting the live ratios from its zero fields would charge the
+	// call at ratio 0. Leave such a value alone:
+	// TestResettleContextTier_NoBaseSnapshotIsNoOp pins it.
+	if !priceData.BaseRatiosSet {
+		return
+	}
+	modelRatio := priceData.BaseModelRatio
+	completionRatio := priceData.BaseCompletionRatio
+	cacheRatio := priceData.BaseCacheRatio
+	threshold := 0
+	if t := ratio_setting.GetContextLengthTier(modelName, actualPromptTokens); t != nil {
+		if t.ModelRatio != nil {
+			modelRatio = *t.ModelRatio
+		}
+		if t.CompletionRatio != nil {
+			completionRatio = *t.CompletionRatio
+		}
+		if t.CacheRatio != nil {
+			cacheRatio = *t.CacheRatio
+		}
+		threshold = t.ThresholdTokens
+	}
+	priceData.ModelRatio = modelRatio
+	priceData.CompletionRatio = completionRatio
+	priceData.CacheRatio = cacheRatio
+	priceData.ContextTierThreshold = threshold
 }
 
 func ContainPriceOrRatio(modelName string) bool {

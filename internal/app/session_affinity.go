@@ -152,6 +152,18 @@ func extractRequestAffinityID(request dto.Request) string {
 		if len(r.PromptCacheKey) > 0 && json.Unmarshal(r.PromptCacheKey, &s) == nil {
 			return strings.TrimSpace(s)
 		}
+	case *dto.OpenAIResponsesCompactionRequest:
+		// POST /v1/responses/compact (cycle-8 L6 repair-round finding B-F3):
+		// same field, same JSON-string-only decode, as *dto.OpenAIResponsesRequest
+		// above — a compact request carrying the same prompt_cache_key under
+		// the same (token, user, group, model) scope must derive the SAME
+		// affinity key as the plain /v1/responses request that started the
+		// conversation, so a multi-turn compact call actually pins the
+		// channel that produced the previous_response_id it is continuing.
+		var s string
+		if len(r.PromptCacheKey) > 0 && json.Unmarshal(r.PromptCacheKey, &s) == nil {
+			return strings.TrimSpace(s)
+		}
 	case *dto.ClaudeRequest:
 		var meta dto.ClaudeMetadata
 		if len(r.Metadata) > 0 && json.Unmarshal(r.Metadata, &meta) == nil {

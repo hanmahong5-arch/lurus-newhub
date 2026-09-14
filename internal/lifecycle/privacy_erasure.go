@@ -11,8 +11,14 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/search"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 )
+
+// privacyErasureTaskName is the "task" label this job stamps on
+// metrics.LeaderTaskLastSuccess and registers under in taskreg.
+const privacyErasureTaskName = "privacy-erasure"
 
 // AuditActionErasureCompleted marks the cascade's terminal audit event.
 const AuditActionErasureCompleted = "privacy.erasure.completed"
@@ -39,6 +45,9 @@ func StartPrivacyErasureWithContext(ctx context.Context) {
 		}
 	}
 	common.SysLog(fmt.Sprintf("privacy erasure executor started, interval=%s", interval))
+
+	metrics.LeaderTaskLastSuccess.WithLabelValues(privacyErasureTaskName).Set(0)
+	taskreg.Register(privacyErasureTaskName, func() time.Duration { return interval }, true, nil)
 
 	ticker := time.NewTicker(interval)
 	common.SafeGoWithContext(ctx, func(c context.Context) {
@@ -70,6 +79,11 @@ func runErasurePass(ctx context.Context) {
 		common.SysError(fmt.Sprintf("privacy erasure: list pending: %v", err))
 		return
 	}
+	// anyFailed tracks whether any request in this pass errored — the
+	// per-request error itself is swallowed below (crash-resume design: one
+	// stuck request must not halt the others), but the heartbeat must not
+	// advance on a pass that left work broken.
+	anyFailed := false
 	for _, req := range pending {
 		select {
 		case <-ctx.Done():
@@ -77,6 +91,7 @@ func runErasurePass(ctx context.Context) {
 		default:
 		}
 		if err := executeErasure(ctx, req); err != nil {
+			anyFailed = true
 			common.SysError(fmt.Sprintf(
 				`{"event":"privacy_erase_step_failed","who":"account:%d/user:%d","what":"erasure %s at step %q","result":"failed, will retry: %s"}`,
 				req.AccountID, req.UserID, req.EventID, req.Step, err.Error()))
@@ -85,12 +100,15 @@ func runErasurePass(ctx context.Context) {
 			}
 		}
 	}
+	if !anyFailed {
+		metrics.RecordLeaderTaskSuccess(privacyErasureTaskName)
+	}
 }
 
 // executeErasure advances one request through the disposition steps in order,
 // persisting the cursor after each completed step (crash-resume). Steps:
 //
-//  1. tokens               hard delete (incl. soft-deleted) + user_totps + user_totp_backup_codes + user_sessions hard delete
+//  1. tokens               hard delete (incl. soft-deleted) + user_totps + user_totp_backup_codes + user_sessions + response_registry hard delete
 //  2. user_identity_mapping hard delete
 //  3. logs                 pseudonymize in batches + best-effort Meili purge
 //  4. audit_events         scrub ip/details in batches
@@ -115,6 +133,22 @@ func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error 
 		// class as the tokens/TOTP rows above (L7 repair round 3, finding
 		// routing-resilience-limits-13#11).
 		if _, err := repo.HardDeleteUserSessions(ctx, req.UserID); err != nil {
+			return err
+		}
+		// response_registry rides the same step — same personal-adjacent-data
+		// class as user_sessions above: it holds user_id/token_id/vendor
+		// response ids for up to RESPONSE_REGISTRY_TTL_DAYS (default 30),
+		// which is longer than this cascade's own crash-resume latency
+		// (cycle-8 L7 repair round, finding B-F9).
+		if _, err := repo.HardDeleteUserResponseRegistry(ctx, req.UserID); err != nil {
+			return err
+		}
+		// Delegated permission grants (L4, admin_permission_grants) ride
+		// the same step: a grant is security-adjacent access, not billing
+		// data, so it is revoked alongside the tokens/sessions it sits next
+		// to rather than surviving into the anonymized user row (cycle-8 L4
+		// repair round, B-F5).
+		if _, err := repo.RevokePermissionGrantsForUser(req.UserID); err != nil {
 			return err
 		}
 		if err := repo.AdvanceErasureStep(ctx, req.ID, repo.ErasureStepTokensDeleted, 0); err != nil {

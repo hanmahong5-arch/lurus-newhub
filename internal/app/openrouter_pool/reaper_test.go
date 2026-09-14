@@ -1,12 +1,53 @@
 package openrouter_pool
 
 import (
+	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	entity "github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
+	"github.com/glebarez/sqlite"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"gorm.io/gorm"
 )
+
+// reaperHeartbeatDBCounter gives each hermetic sqlite DB in this file its
+// own named database — mirrors setupServiceTestDB (internal/app) and
+// openCleanupTestDB (internal/lifecycle); ListOpenRouterMultiKeyChannels
+// only touches the channels table, so migrating repo.Channel alone is
+// enough here (pgsetup_test.go's PostgreSQL harness is for the fuller
+// multi-key cooldown integration tests and skips without TEST_POSTGRES_DSN).
+var reaperHeartbeatDBCounter atomic.Int64
+
+func openReaperHeartbeatTestDB(t *testing.T) {
+	t.Helper()
+	dsn := fmt.Sprintf("file:reaperheartbeat%d?mode=memory&cache=shared", reaperHeartbeatDBCounter.Add(1))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	if err := db.AutoMigrate(&repo.Channel{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	prevDB := repo.DB
+	repo.DB = db
+	t.Cleanup(func() {
+		repo.DB = prevDB
+		_ = sqlDB.Close()
+	})
+}
 
 // reapChannel is the pure logic worth unit-testing without the full DB harness.
 // It mutates the channel in place; the tests check the post-conditions on
@@ -117,4 +158,89 @@ func joinNL(s []string) string {
 		out += v
 	}
 	return out
+}
+
+// TestOpenRouterPoolReap_SuccessfulTickStampsHeartbeat is the L3 heartbeat
+// oracle: a nil-error ReapOnce pass (here, trivially, zero OpenRouter
+// channels to scan) must advance
+// metrics.LeaderTaskLastSuccess{task="openrouter-pool-reap"} to "now".
+// Drives the real, exported ReapOnce entry point production uses.
+func TestOpenRouterPoolReap_SuccessfulTickStampsHeartbeat(t *testing.T) {
+	openReaperHeartbeatTestDB(t)
+
+	before := time.Now().Unix()
+	if err := ReapOnce(context.Background(), time.Now); err != nil {
+		t.Fatalf("ReapOnce: %v", err)
+	}
+	after := time.Now().Unix()
+
+	got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("openrouter-pool-reap"))
+	if got < float64(before) || got > float64(after) {
+		t.Errorf("LeaderTaskLastSuccess{task=openrouter-pool-reap} = %v, want within [%d, %d]", got, before, after)
+	}
+}
+
+// TestOpenRouterPoolReap_FailedTickDoesNotStamp: when the channel listing
+// itself errors, ReapOnce returns non-nil and the heartbeat must not move.
+func TestOpenRouterPoolReap_FailedTickDoesNotStamp(t *testing.T) {
+	openReaperHeartbeatTestDB(t)
+
+	// Sabotage: drop the channels table so ListOpenRouterMultiKeyChannels
+	// errors instead of returning an empty slice.
+	if err := repo.DB.Migrator().DropTable(&repo.Channel{}); err != nil {
+		t.Fatalf("drop channels: %v", err)
+	}
+
+	baseline := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("openrouter-pool-reap"))
+	if err := ReapOnce(context.Background(), time.Now); err == nil {
+		t.Fatal("ReapOnce: want error with channels table dropped, got nil")
+	}
+	got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("openrouter-pool-reap"))
+
+	if got != baseline {
+		t.Errorf("LeaderTaskLastSuccess{task=openrouter-pool-reap} moved from %v to %v after a failed pass, want unchanged", baseline, got)
+	}
+}
+
+// TestOpenRouterPoolReap_StartRegistersHeartbeat is the A-F1 oracle: the
+// boot-time Set(0) and taskreg.Register calls inside AutoReapWithContext
+// are otherwise deletable with every test in this package staying green.
+// Pre-stamps a distinctive non-zero value so the zero-assertion below
+// cannot pass merely from a GaugeVec's first-access default; forces
+// common.IsLeader() false so the "run once on startup" branch cannot race
+// the assertions with an async ReapOnce pass.
+func TestOpenRouterPoolReap_StartRegistersHeartbeat(t *testing.T) {
+	openReaperHeartbeatTestDB(t)
+
+	prevLeader := common.IsLeader()
+	common.SetLeader(false)
+	t.Cleanup(func() { common.SetLeader(prevLeader) })
+
+	metrics.LeaderTaskLastSuccess.WithLabelValues(openRouterPoolReapTaskName).Set(999999999)
+	before := len(taskreg.Snapshot())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	AutoReapWithContext(ctx)
+
+	if got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues(openRouterPoolReapTaskName)); got != 0 {
+		t.Errorf("LeaderTaskLastSuccess{task=openrouter-pool-reap} = %v immediately after AutoReapWithContext, want 0 (boot-time Set(0) resetting a pre-stamped series)", got)
+	}
+
+	snap := taskreg.Snapshot()
+	if len(snap) <= before {
+		t.Fatalf("taskreg.Snapshot() length did not grow: before=%d after=%d", before, len(snap))
+	}
+	found := false
+	for _, task := range snap {
+		if task.Name == openRouterPoolReapTaskName {
+			found = true
+			if !task.LeaderOnly {
+				t.Errorf("%s task.LeaderOnly = false, want true", openRouterPoolReapTaskName)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("taskreg.Snapshot() does not contain %q after AutoReapWithContext", openRouterPoolReapTaskName)
+	}
 }

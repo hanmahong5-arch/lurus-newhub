@@ -12,21 +12,21 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/ai360"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/lingyiwanwu"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider/ai360"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider/lingyiwanwu"
 
 	//"github.com/LurusTech/lurus-hub/internal/adapter/provider/minimax"
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/openrouter"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/xinference"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/common_handler"
-	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/common_handler"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -151,6 +151,16 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 			requestURL = fmt.Sprintf("%s?api-version=%s", subUrl, responsesApiVersion)
 			return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, requestURL, info.ChannelType), nil
+		}
+
+		// /v1/responses/compact never reaches this far in practice —
+		// common.SupportsResponsesCompact only allows ChannelTypeOpenAI this
+		// cycle, and relay.ResponsesHelper refuses everything else before any
+		// upstream call — but the generic Azure deployment URL below would
+		// otherwise silently build a nonsense path for it, so refuse
+		// explicitly rather than let a future gate change fall through here.
+		if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+			return "", fmt.Errorf("responses/compact is not supported on Azure channels")
 		}
 
 		model_ := info.UpstreamModelName
@@ -605,6 +615,8 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		} else {
 			usage, err = OaiResponsesHandler(c, info, resp)
 		}
+	case relayconstant.RelayModeResponsesCompact:
+		usage, err = OaiResponsesCompactHandler(c, info, resp)
 	default:
 		if info.IsStream {
 			usage, err = OaiStreamHandler(c, info, resp)

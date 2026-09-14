@@ -58,6 +58,9 @@ const PricingPage = () => {
   const [previewDiffs, setPreviewDiffs] = useState(null);
   // fetchTick increments trigger a re-fetch without remounting.
   const [fetchTick, setFetchTick] = useState(0);
+  // Per-model expand/collapse state for the context-tiers editor
+  // (billing-pricing-14) — a UI-only concern, not persisted in the draft.
+  const [expandedTiers, setExpandedTiers] = useState({});
 
   // Map of model_name → edited fields. Draft persists across page refresh.
   const [edits, setEdits, clearEdits, isDirty] = useFormDraft(
@@ -121,6 +124,35 @@ const PricingPage = () => {
     setPreviewDiffs(null);
   };
 
+  // Context-length pricing tier editor (billing-pricing-14): row already
+  // carries the merged (edits-over-server) context_tiers array via
+  // displayPricing's spread, so these helpers read/write it through the same
+  // handleFieldChange path as the flat ratio fields above — an explicit []
+  // (every tier removed) round-trips as item.context_tiers=[] on save, which
+  // the server treats as "clear this model's tiers".
+  const updateContextTier = (row, idx, field, value) => {
+    const tiers = Array.isArray(row.context_tiers) ? row.context_tiers : [];
+    const next = tiers.map((t, i) =>
+      i === idx ? { ...t, [field]: value } : t,
+    );
+    handleFieldChange(row.model_name, 'context_tiers', next);
+  };
+  const addContextTier = (row) => {
+    const tiers = Array.isArray(row.context_tiers) ? row.context_tiers : [];
+    handleFieldChange(row.model_name, 'context_tiers', [
+      ...tiers,
+      { threshold_tokens: 0 },
+    ]);
+  };
+  const removeContextTier = (row, idx) => {
+    const tiers = Array.isArray(row.context_tiers) ? row.context_tiers : [];
+    handleFieldChange(
+      row.model_name,
+      'context_tiers',
+      tiers.filter((_, i) => i !== idx),
+    );
+  };
+
   // Build the batch: only send changed rows with their model_name. Shared by
   // Save and Preview so both send the same request body — the server still
   // computes preview's diff against its own baseline, which can differ from
@@ -137,6 +169,25 @@ const PricingPage = () => {
           item.model_price = parseFloat(fields.model_price);
         if (fields.cache_ratio !== undefined)
           item.cache_ratio = parseFloat(fields.cache_ratio);
+        if (fields.context_tiers !== undefined) {
+          // Threshold defaults to 0 on a blank/invalid input (matches the
+          // server's own >=0 floor); the three ratio overrides are omitted
+          // (not sent as 0) when left blank, so the server's "nil field
+          // falls through to the flat ratio" semantics apply instead of
+          // silently zeroing that ratio.
+          item.context_tiers = fields.context_tiers.map((t) => {
+            const tier = {
+              threshold_tokens: parseInt(t.threshold_tokens, 10) || 0,
+            };
+            if (t.model_ratio !== undefined && t.model_ratio !== '')
+              tier.model_ratio = parseFloat(t.model_ratio);
+            if (t.completion_ratio !== undefined && t.completion_ratio !== '')
+              tier.completion_ratio = parseFloat(t.completion_ratio);
+            if (t.cache_ratio !== undefined && t.cache_ratio !== '')
+              tier.cache_ratio = parseFloat(t.cache_ratio);
+            return tier;
+          });
+        }
         return item;
       })
       .filter((item) => Object.keys(item).length > 1); // skip items with only model_name
@@ -321,150 +372,330 @@ const PricingPage = () => {
                   <th>{tr('console.pricing.th_model_price', 'model price')}</th>
                   <th>{tr('console.pricing.th_cache_ratio', 'cache ratio')}</th>
                   <th>
+                    {tr('console.pricing.th_context_tiers', 'context tiers')}
+                  </th>
+                  <th>
                     {tr('console.pricing.th_enable_groups', 'enabled groups')}
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {filteredPricing.map((row, i) => (
-                  <tr key={row.model_name ?? i}>
-                    <td className='strong mono' style={{ fontSize: 12 }}>
-                      {row.model_name}
-                    </td>
-                    <td>{row.vendor ?? '—'}</td>
-                    <td>
-                      <span className='tag'>
-                        {row.quota_type === 1
-                          ? tr(
-                              'console.pricing.quota_type_price',
-                              'per-call price',
-                            )
-                          : tr(
-                              'console.pricing.quota_type_ratio',
-                              'ratio-based',
-                            )}
-                      </span>
-                    </td>
-                    <td>
-                      {row.quota_type === 0 ? (
-                        <input
-                          type='number'
-                          className='field'
-                          step='0.0001'
-                          min='0.0001'
-                          value={
-                            edits[row.model_name]?.model_ratio ??
-                            row.model_ratio ??
-                            ''
-                          }
-                          onChange={(e) =>
-                            handleFieldChange(
-                              row.model_name,
-                              'model_ratio',
-                              e.target.value,
-                            )
-                          }
-                          style={{ width: 90, height: 24, fontSize: 11 }}
-                          data-testid={`field-model_ratio-${row.model_name}`}
-                        />
-                      ) : (
-                        <span className='mono muted'>—</span>
-                      )}
-                    </td>
-                    <td>
-                      {row.quota_type === 0 ? (
-                        <input
-                          type='number'
-                          className='field'
-                          step='0.0001'
-                          min='0.0001'
-                          value={
-                            edits[row.model_name]?.completion_ratio ??
-                            row.completion_ratio ??
-                            ''
-                          }
-                          onChange={(e) =>
-                            handleFieldChange(
-                              row.model_name,
-                              'completion_ratio',
-                              e.target.value,
-                            )
-                          }
-                          style={{ width: 90, height: 24, fontSize: 11 }}
-                          data-testid={`field-completion_ratio-${row.model_name}`}
-                        />
-                      ) : (
-                        <span className='mono muted'>—</span>
-                      )}
-                    </td>
-                    <td>
-                      {row.quota_type === 1 ? (
-                        <input
-                          type='number'
-                          className='field'
-                          step='0.000001'
-                          min='0.000001'
-                          value={
-                            edits[row.model_name]?.model_price ??
-                            row.model_price ??
-                            ''
-                          }
-                          onChange={(e) =>
-                            handleFieldChange(
-                              row.model_name,
-                              'model_price',
-                              e.target.value,
-                            )
-                          }
-                          style={{ width: 90, height: 24, fontSize: 11 }}
-                          data-testid={`field-model_price-${row.model_name}`}
-                        />
-                      ) : (
-                        <span className='mono muted'>—</span>
-                      )}
-                    </td>
-                    <td>
-                      {/* GET pricing (v2_pricing.go) projects the model's
+                {filteredPricing.map((row, i) => {
+                  const tiers = Array.isArray(row.context_tiers)
+                    ? row.context_tiers
+                    : [];
+                  return (
+                    <React.Fragment key={row.model_name ?? i}>
+                      <tr>
+                        <td className='strong mono' style={{ fontSize: 12 }}>
+                          {row.model_name}
+                        </td>
+                        <td>{row.vendor ?? '—'}</td>
+                        <td>
+                          <span className='tag'>
+                            {row.quota_type === 1
+                              ? tr(
+                                  'console.pricing.quota_type_price',
+                                  'per-call price',
+                                )
+                              : tr(
+                                  'console.pricing.quota_type_ratio',
+                                  'ratio-based',
+                                )}
+                          </span>
+                        </td>
+                        <td>
+                          {row.quota_type === 0 ? (
+                            <input
+                              type='number'
+                              className='field'
+                              step='0.0001'
+                              min='0.0001'
+                              value={
+                                edits[row.model_name]?.model_ratio ??
+                                row.model_ratio ??
+                                ''
+                              }
+                              onChange={(e) =>
+                                handleFieldChange(
+                                  row.model_name,
+                                  'model_ratio',
+                                  e.target.value,
+                                )
+                              }
+                              style={{ width: 90, height: 24, fontSize: 11 }}
+                              data-testid={`field-model_ratio-${row.model_name}`}
+                            />
+                          ) : (
+                            <span className='mono muted'>—</span>
+                          )}
+                        </td>
+                        <td>
+                          {row.quota_type === 0 ? (
+                            <input
+                              type='number'
+                              className='field'
+                              step='0.0001'
+                              min='0.0001'
+                              value={
+                                edits[row.model_name]?.completion_ratio ??
+                                row.completion_ratio ??
+                                ''
+                              }
+                              onChange={(e) =>
+                                handleFieldChange(
+                                  row.model_name,
+                                  'completion_ratio',
+                                  e.target.value,
+                                )
+                              }
+                              style={{ width: 90, height: 24, fontSize: 11 }}
+                              data-testid={`field-completion_ratio-${row.model_name}`}
+                            />
+                          ) : (
+                            <span className='mono muted'>—</span>
+                          )}
+                        </td>
+                        <td>
+                          {row.quota_type === 1 ? (
+                            <input
+                              type='number'
+                              className='field'
+                              step='0.000001'
+                              min='0.000001'
+                              value={
+                                edits[row.model_name]?.model_price ??
+                                row.model_price ??
+                                ''
+                              }
+                              onChange={(e) =>
+                                handleFieldChange(
+                                  row.model_name,
+                                  'model_price',
+                                  e.target.value,
+                                )
+                              }
+                              style={{ width: 90, height: 24, fontSize: 11 }}
+                              data-testid={`field-model_price-${row.model_name}`}
+                            />
+                          ) : (
+                            <span className='mono muted'>—</span>
+                          )}
+                        </td>
+                        <td>
+                          {/* GET pricing (v2_pricing.go) projects the model's
                           current cache_ratio when the live map has an entry
                           for it (an admin edit or a shipped default — both
                           look the same here), so this prefills from
                           row.cache_ratio like the other three fields; a
                           model with no entry at all starts blank instead of
                           showing a fabricated value. */}
-                      <input
-                        type='number'
-                        className='field'
-                        step='0.0001'
-                        min='0.0001'
-                        value={
-                          edits[row.model_name]?.cache_ratio ??
-                          row.cache_ratio ??
-                          ''
-                        }
-                        onChange={(e) =>
-                          handleFieldChange(
-                            row.model_name,
-                            'cache_ratio',
-                            e.target.value,
-                          )
-                        }
-                        style={{ width: 90, height: 24, fontSize: 11 }}
-                        data-testid={`field-cache_ratio-${row.model_name}`}
-                      />
-                    </td>
-                    <td>
-                      <span className='muted' style={{ fontSize: 11 }}>
-                        {Array.isArray(row.enable_groups)
-                          ? row.enable_groups.join(', ') || '—'
-                          : '—'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                          <input
+                            type='number'
+                            className='field'
+                            step='0.0001'
+                            min='0.0001'
+                            value={
+                              edits[row.model_name]?.cache_ratio ??
+                              row.cache_ratio ??
+                              ''
+                            }
+                            onChange={(e) =>
+                              handleFieldChange(
+                                row.model_name,
+                                'cache_ratio',
+                                e.target.value,
+                              )
+                            }
+                            style={{ width: 90, height: 24, fontSize: 11 }}
+                            data-testid={`field-cache_ratio-${row.model_name}`}
+                          />
+                        </td>
+                        <td>
+                          {/* Tiers only ever apply to the token-based (!UsePrice)
+                          branch (ModelPriceHelper's PerCallModelIgnoresTiers
+                          rule), so the editor is hidden for per-call models
+                          the same way the ratio columns already are. */}
+                          {row.quota_type === 0 ? (
+                            <button
+                              type='button'
+                              className='btn'
+                              style={{ fontSize: 10, padding: '2px 8px' }}
+                              data-testid={`context-tiers-toggle-${row.model_name}`}
+                              onClick={() =>
+                                setExpandedTiers((prev) => ({
+                                  ...prev,
+                                  [row.model_name]: !prev[row.model_name],
+                                }))
+                              }
+                            >
+                              {tr('console.pricing.context_tiers_count', {
+                                count: tiers.length,
+                              })}
+                            </button>
+                          ) : (
+                            <span className='mono muted'>—</span>
+                          )}
+                        </td>
+                        <td>
+                          <span className='muted' style={{ fontSize: 11 }}>
+                            {Array.isArray(row.enable_groups)
+                              ? row.enable_groups.join(', ') || '—'
+                              : '—'}
+                          </span>
+                        </td>
+                      </tr>
+                      {row.quota_type === 0 &&
+                        expandedTiers[row.model_name] && (
+                          <tr
+                            data-testid={`context-tiers-editor-${row.model_name}`}
+                          >
+                            <td
+                              colSpan={9}
+                              style={{
+                                padding: '10px 14px',
+                                background:
+                                  'var(--hf-panel-alt, rgba(0,0,0,0.02))',
+                              }}
+                            >
+                              {tiers.map((tItem, idx) => (
+                                <div
+                                  key={idx}
+                                  style={{
+                                    display: 'flex',
+                                    gap: 6,
+                                    marginBottom: 4,
+                                    alignItems: 'center',
+                                  }}
+                                >
+                                  <input
+                                    type='number'
+                                    className='field'
+                                    placeholder={tr(
+                                      'console.pricing.tier_threshold',
+                                      'threshold tokens',
+                                    )}
+                                    value={tItem.threshold_tokens ?? ''}
+                                    onChange={(e) =>
+                                      updateContextTier(
+                                        row,
+                                        idx,
+                                        'threshold_tokens',
+                                        e.target.value,
+                                      )
+                                    }
+                                    style={{
+                                      width: 110,
+                                      height: 22,
+                                      fontSize: 11,
+                                    }}
+                                    data-testid={`tier-threshold-${row.model_name}-${idx}`}
+                                  />
+                                  <input
+                                    type='number'
+                                    step='0.0001'
+                                    className='field'
+                                    placeholder={tr(
+                                      'console.pricing.th_model_ratio',
+                                      'model ratio',
+                                    )}
+                                    value={tItem.model_ratio ?? ''}
+                                    onChange={(e) =>
+                                      updateContextTier(
+                                        row,
+                                        idx,
+                                        'model_ratio',
+                                        e.target.value,
+                                      )
+                                    }
+                                    style={{
+                                      width: 90,
+                                      height: 22,
+                                      fontSize: 11,
+                                    }}
+                                    data-testid={`tier-model_ratio-${row.model_name}-${idx}`}
+                                  />
+                                  <input
+                                    type='number'
+                                    step='0.0001'
+                                    className='field'
+                                    placeholder={tr(
+                                      'console.pricing.th_completion_ratio',
+                                      'completion ratio',
+                                    )}
+                                    value={tItem.completion_ratio ?? ''}
+                                    onChange={(e) =>
+                                      updateContextTier(
+                                        row,
+                                        idx,
+                                        'completion_ratio',
+                                        e.target.value,
+                                      )
+                                    }
+                                    style={{
+                                      width: 90,
+                                      height: 22,
+                                      fontSize: 11,
+                                    }}
+                                    data-testid={`tier-completion_ratio-${row.model_name}-${idx}`}
+                                  />
+                                  <input
+                                    type='number'
+                                    step='0.0001'
+                                    className='field'
+                                    placeholder={tr(
+                                      'console.pricing.th_cache_ratio',
+                                      'cache ratio',
+                                    )}
+                                    value={tItem.cache_ratio ?? ''}
+                                    onChange={(e) =>
+                                      updateContextTier(
+                                        row,
+                                        idx,
+                                        'cache_ratio',
+                                        e.target.value,
+                                      )
+                                    }
+                                    style={{
+                                      width: 90,
+                                      height: 22,
+                                      fontSize: 11,
+                                    }}
+                                    data-testid={`tier-cache_ratio-${row.model_name}-${idx}`}
+                                  />
+                                  <button
+                                    type='button'
+                                    className='btn'
+                                    style={{ fontSize: 10 }}
+                                    onClick={() => removeContextTier(row, idx)}
+                                    data-testid={`tier-remove-${row.model_name}-${idx}`}
+                                  >
+                                    {tr(
+                                      'console.pricing.tier_remove',
+                                      'remove',
+                                    )}
+                                  </button>
+                                </div>
+                              ))}
+                              <button
+                                type='button'
+                                className='btn'
+                                style={{ fontSize: 10 }}
+                                onClick={() => addContextTier(row)}
+                                data-testid={`tier-add-${row.model_name}`}
+                              >
+                                {tr('console.pricing.tier_add', '+ add tier')}
+                              </button>
+                            </td>
+                          </tr>
+                        )}
+                    </React.Fragment>
+                  );
+                })}
                 {filteredPricing.length === 0 && !loading && (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={9}
                       className='muted'
                       style={{ textAlign: 'center', padding: 24 }}
                     >
@@ -507,10 +738,18 @@ const PricingPage = () => {
                         {d.field}
                       </td>
                       <td className='mono muted' style={{ fontSize: 11 }}>
-                        {d.old}
+                        {/* context_tiers carries a tier-list array/object,
+                            not a scalar — React cannot render an object
+                            directly as a child, so stringify only this
+                            field (the other three stay plain numbers). */}
+                        {d.field === 'context_tiers'
+                          ? JSON.stringify(d.old)
+                          : d.old}
                       </td>
                       <td className='mono' style={{ fontSize: 11 }}>
-                        {d.new}
+                        {d.field === 'context_tiers'
+                          ? JSON.stringify(d.new)
+                          : d.new}
                       </td>
                     </tr>
                   ))}

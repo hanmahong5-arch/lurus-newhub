@@ -61,6 +61,7 @@ var registeredModels = []interface{}{
 	&entity.BillingCheckoutOrder{},
 	&entity.Project{},
 	&entity.TenantInvite{},
+	&entity.ResponseRegistry{},
 }
 
 // tenantColumnExempt maps a GORM-derived table name (not on
@@ -114,6 +115,15 @@ var tenantColumnExempt = map[string]string{
 		"a first-time bridge login — has no tenant context yet, that's the " +
 		"whole point of the invite) inside WithoutTenantIsolation, same as " +
 		"Redeem — no call site routes this table through WithTenantID/GetTenantDB",
+	"response_registry": "every read/write in repo/response_registry.go " +
+		"(UpsertResponseRegistry/GetResponseRegistry/DeleteResponseRegistry/ " +
+		"SweepExpiredResponseRegistry) keys off the response_id PRIMARY KEY " +
+		"or expires_at alone — never tenant_id — and ownership is enforced " +
+		"explicitly by the caller (handler.RelayResponsesRetrieve/Delete " +
+		"compares row.TenantId against middleware.GetTenantContext(c).TenantID " +
+		"AND row.UserId against the caller before ever reading the row's " +
+		"payload); no call site routes this table through " +
+		"WithTenantID/GetTenantDB (cycle-8 L7 repair round, finding B-F7)",
 }
 
 // TestTenantPlugin_AllowListCoversEveryRegisteredTenantColumn is the

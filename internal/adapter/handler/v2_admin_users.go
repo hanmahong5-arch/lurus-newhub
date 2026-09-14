@@ -210,6 +210,18 @@ func UpdateAdminUserV2(c *gin.Context) {
 		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
 			governance.ActionUserRoleChanged, governance.ResourceUser, userID,
 			fmt.Sprintf(`{"old_role":%d,"new_role":%d}`, origin.Role, updated.Role)))
+
+		// A role demotion below RoleAdminUser must not leave a delegated
+		// permission grant (L4, admin_permission_grants) active: otherwise
+		// re-promoting the same user id would silently restore whatever
+		// narrow root-gated access they held before the demotion (cycle-8
+		// L4 repair round, B-F5). No-op (and no extra audit noise) when the
+		// user still holds RoleAdminUser or above, or held no grant.
+		if updated.Role < common.RoleAdminUser {
+			if _, grantErr := repo.RevokePermissionGrantsForUser(userID); grantErr != nil {
+				common.SysError(fmt.Sprintf("UpdateAdminUserV2: revoke permission grants for demoted user id=%d failed: %v", userID, grantErr))
+			}
+		}
 	}
 	if origin.Quota != updated.Quota {
 		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),

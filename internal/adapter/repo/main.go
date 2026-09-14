@@ -478,6 +478,15 @@ func migrateDB() error {
 		// Per-device session registry (migration 033, L7) — behind
 		// SESSION_REGISTRY_ENABLED; see entity.UserSession's doc comment.
 		&entity.UserSession{},
+		// Delegated admin permission grants (migration 034, L4) — NO
+		// uniqueIndex tag here on purpose; the partial active-grant unique
+		// index is created only by the SQL migration (031 lesson, see
+		// entity.AdminPermissionGrant's doc comment).
+		&entity.AdminPermissionGrant{},
+		// Response registry (migration 036, L7, tasks-plugins-12) — pins a
+		// POST /v1/responses id to the channel that produced it so
+		// GET/DELETE /v1/responses/:response_id can route back to it.
+		&entity.ResponseRegistry{},
 	)
 	if err != nil {
 		return err

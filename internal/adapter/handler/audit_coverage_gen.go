@@ -83,6 +83,9 @@ var AuditExplicitRoutes = map[string]bool{
 	"DELETE /api/v2/admin/routing/affinity/:key": true,
 	// v2_admin_security.go — L6, explicit as of this lane
 	"POST /api/v2/admin/security/users/:id/totp/force-disable": true,
+	// v2_admin_authz.go — L4, explicit as of this lane
+	"POST /api/v2/admin/authz/grants":       true,
+	"DELETE /api/v2/admin/authz/grants/:id": true,
 
 	// internal-api-router.go: adminGroup (ScopeAdmin) — explicit as of this lane
 	"POST /internal/admin/backfill-token-accounts": true,

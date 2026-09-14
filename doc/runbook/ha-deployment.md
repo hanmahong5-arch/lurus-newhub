@@ -67,8 +67,13 @@ ArgoCD `automated + selfHeal` 会把它们回滚,只会制造「改了没生效�
 
 🔴 一个被降级的副本会**永远**保留它最后一次成功时打的
 `lurus_gateway_leader_task_last_success_timestamp_seconds{task}` 时间戳(该 series 不会因
-降级而清零或消失),所以任何基于它的告警(`time() - last_success > X`)必须同时限定
+降级而清零或消失),所以针对**leader-gated**任务的告警(`time() - last_success > X`)必须同时限定
 `lurus_gateway_leader == 1`,否则一个早已下台的副本的陈旧时间戳会一直压着告警不触发。
+⚠️ 并非每个 task 都 leader-gated:`channel-health-test`(L3,2026-09-13)跑在**每个**
+master-capable 副本上,不是只跑在 leader 上——对它的告警**不能**加
+`lurus_gateway_leader == 1` 限定,否则会看不见非 leader 副本上的这个 series。哪个 task
+leader-gated 由 `GET /api/v2/admin/system/tasks`(root 专用,per-pod)的 `leader_only`
+字段逐条给出,不要凭印象假设。
 
 ```bash
 # 逐 pod 直连 NodePort(host nginx 只转发一个 Service,单次 curl 落在哪个副本不确定)

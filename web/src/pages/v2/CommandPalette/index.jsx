@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import HFShell, { NAV_SECTIONS } from '../../../components/hifi/HFShell';
+import HFShell, {
+  visibleNavItems,
+  useBridgedUser,
+} from '../../../components/hifi/HFShell';
 import { API, isAdmin } from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import { useTenantModels } from '../../../hooks/models/useTenantModels';
@@ -73,6 +76,10 @@ const HFCmdK = () => {
   const [q, setQ] = useState('');
   const [hover, setHover] = useState(0);
   const admin = isAdmin();
+  // The real bridged user, not the two-value isAdmin() bool — the nav
+  // group below needs the actual role (10 vs 100) to apply per-item
+  // minRole gates via visibleNavItems, which isAdmin() cannot express.
+  const bridgedUser = useBridgedUser();
 
   // Models come from the shared hook. skipErrorHandler:true here matches the
   // rest of this page's requests (allSettled degrade-per-source below) — a
@@ -146,11 +153,13 @@ const HFCmdK = () => {
     out.push({
       key: 'navigate',
       title: tr('console.palette.group_navigate', 'navigate'),
-      // Same source and same minRole gating as the rail itself, so the palette
-      // cannot offer an admin destination to a user who has no such nav entry.
-      rows: NAV_SECTIONS.filter(
-        (s) => !s.minRole || (admin ? 10 : 0) >= s.minRole,
-      ).flatMap((s) =>
+      // Same visibleNavItems helper the rail (HFShell.jsx) uses, keyed on
+      // the real bridged role — not the two-value isAdmin() bool, which
+      // cannot distinguish admin (10) from root (100) and previously let
+      // the palette offer a role-10 admin the root-only "Background tasks"
+      // destination (admin-system-tasks, minRole:100) that the rail itself
+      // correctly hid.
+      rows: visibleNavItems(bridgedUser).flatMap((s) =>
         s.items.map((it) => ({
           label: tr(it.key, it.label),
           hint: it.href,
@@ -234,7 +243,7 @@ const HFCmdK = () => {
     });
 
     return out.map((g) => ({ ...g, rows: g.rows.slice(0, MAX_PER_GROUP) }));
-  }, [tr, admin, models, priceByModel, tokens, recent, channels]);
+  }, [tr, admin, bridgedUser, models, priceByModel, tokens, recent, channels]);
 
   // The search box used to be inert — typing changed nothing. Filtering is
   // client-side over what is already loaded, which is honest about its scope:

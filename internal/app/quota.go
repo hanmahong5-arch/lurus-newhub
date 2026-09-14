@@ -13,6 +13,7 @@ import (
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
@@ -64,7 +65,13 @@ type QuotaInfo struct {
 	UsePrice      bool
 	ModelPrice    float64
 	ModelRatio    float64
-	GroupRatio    float64
+	// CompletionRatio is the caller's (already resettled, where applicable)
+	// PriceData.CompletionRatio. calculateAudioQuota uses this instead of
+	// re-deriving ratio_setting.GetCompletionRatio(ModelName) itself, so a
+	// context-length tier's completion_ratio override reaches the money here
+	// and not just the log line (cycle-8 plan §8 L5 B-F5).
+	CompletionRatio float64
+	GroupRatio      float64
 }
 
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
@@ -106,7 +113,12 @@ func calculateAudioQuota(info QuotaInfo) int {
 		return rounded
 	}
 
-	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
+	// info.CompletionRatio is the caller's ratio — either the plain
+	// ratio_setting.GetCompletionRatio(info.ModelName) value or, for a
+	// resettled !UsePrice PriceData, a context-length tier's override
+	// (cycle-8 plan §8 L5 B-F5). Audio/audio-completion ratios are not part
+	// of ContextTier and are still read straight from ratio_setting.
+	completionRatio := decimal.NewFromFloat(info.CompletionRatio)
 	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(info.ModelName))
 	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(info.ModelName))
 
@@ -190,7 +202,12 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		ModelName:  modelName,
 		UsePrice:   relayInfo.UsePrice,
 		ModelRatio: modelRatio,
-		GroupRatio: actualGroupRatio,
+		// This is a pre-consume estimate (no PriceData/tier involved — it
+		// reads ratio_setting.GetModelRatio directly above), so the
+		// completion ratio is the plain flat value, matching what
+		// calculateAudioQuota derived internally before this lane.
+		CompletionRatio: ratio_setting.GetCompletionRatio(modelName),
+		GroupRatio:      actualGroupRatio,
 	}
 
 	quota := calculateAudioQuota(quotaInfo)
@@ -221,8 +238,28 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	audioInputTokens := usage.InputTokenDetails.AudioTokens
 	audioOutTokens := usage.OutputTokenDetails.AudioTokens
 
+	// Context-length pricing tier re-evaluation (billing-pricing-14): see the
+	// identical note in relay/compatible_handler.go's postConsumeQuota.
+	// usage.InputTokens needs no cache-token adjustment here — the realtime
+	// API's input_tokens is already OpenAI-wire semantics (always includes
+	// any cached slice), unlike dto.Usage.PromptTokens on the Anthropic wire.
+	helper.ResettleContextTier(&relayInfo.PriceData, relayInfo.OriginModelName, usage.InputTokens)
+
 	tokenName := ctx.GetString("token_name")
-	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(modelName))
+	// The completion ratio keeps the model name this function has always
+	// priced by (the `modelName` argument, which websocket.go passes as the
+	// UPSTREAM name) — PriceData.CompletionRatio is keyed on the ORIGIN name,
+	// so reading it here would silently re-price every realtime call on a
+	// channel that maps the model. A context-length tier's completion
+	// override still reaches the money, applied on top (cycle-8 plan §8 L5
+	// B-F5); with no tier configured for the model the charge is the same as
+	// before this lane. TestPostWssConsumeQuota_UntieredChargeUnchanged and
+	// _TierCompletionOverrideApplies pin both halves.
+	completionRatioValue := ratio_setting.GetCompletionRatio(modelName)
+	if tier := ratio_setting.GetContextLengthTier(relayInfo.OriginModelName, usage.InputTokens); tier != nil && tier.CompletionRatio != nil {
+		completionRatioValue = *tier.CompletionRatio
+	}
+	completionRatio := decimal.NewFromFloat(completionRatioValue)
 	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(relayInfo.OriginModelName))
 	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(modelName))
 
@@ -240,10 +277,11 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:  modelName,
-		UsePrice:   usePrice,
-		ModelRatio: modelRatio,
-		GroupRatio: groupRatio,
+		ModelName:       modelName,
+		UsePrice:        usePrice,
+		ModelRatio:      modelRatio,
+		CompletionRatio: completionRatio.InexactFloat64(),
+		GroupRatio:      groupRatio,
 	}
 
 	quota := calculateAudioQuota(quotaInfo)
@@ -300,6 +338,14 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	promptTokens := usage.PromptTokens
 	completionTokens := usage.CompletionTokens
 	modelName := relayInfo.OriginModelName
+
+	// Context-length pricing tier re-evaluation (billing-pricing-14): see the
+	// identical note in relay/compatible_handler.go's postConsumeQuota. The
+	// Claude wire's promptTokens (input_tokens) always excludes cache
+	// read/creation (usage.PromptTokensIncludeCached is false here), so the
+	// tier must be selected on the full context length, not on promptTokens
+	// alone — usage.AsOpenAIWire().PromptTokens adds the cached slices back.
+	helper.ResettleContextTier(&relayInfo.PriceData, modelName, usage.AsOpenAIWire().PromptTokens)
 
 	tokenName := ctx.GetString("token_name")
 	completionRatio := relayInfo.PriceData.CompletionRatio
@@ -591,8 +637,18 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	audioInputTokens := usage.PromptTokensDetails.AudioTokens
 	audioOutTokens := usage.CompletionTokenDetails.AudioTokens
 
+	// Context-length pricing tier re-evaluation (billing-pricing-14): see the
+	// identical note in relay/compatible_handler.go's postConsumeQuota; the
+	// full-context-length note in PostClaudeConsumeQuota applies here too.
+	helper.ResettleContextTier(&relayInfo.PriceData, relayInfo.OriginModelName, usage.AsOpenAIWire().PromptTokens)
+
 	tokenName := ctx.GetString("token_name")
-	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(relayInfo.OriginModelName))
+	// This path already priced by the origin model name before cycle 8, and
+	// PriceData.CompletionRatio is keyed on that same name, so reading it here
+	// leaves an untiered model's charge as it was while letting a
+	// context-length tier's completion override reach the money instead of
+	// only the log line (cycle-8 plan §8 L5 B-F5).
+	completionRatio := decimal.NewFromFloat(relayInfo.PriceData.CompletionRatio)
 	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(relayInfo.OriginModelName))
 	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(relayInfo.OriginModelName))
 
@@ -610,10 +666,11 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:  relayInfo.OriginModelName,
-		UsePrice:   usePrice,
-		ModelRatio: modelRatio,
-		GroupRatio: groupRatio,
+		ModelName:       relayInfo.OriginModelName,
+		UsePrice:        usePrice,
+		ModelRatio:      modelRatio,
+		CompletionRatio: completionRatio.InexactFloat64(),
+		GroupRatio:      groupRatio,
 	}
 
 	quota := calculateAudioQuota(quotaInfo)

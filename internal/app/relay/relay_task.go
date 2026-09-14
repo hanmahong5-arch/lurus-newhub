@@ -265,7 +265,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	}
 	info.ConsumeQuota = true
 	// insert task
-	task := repo.InitTask(platform, info)
+	task := repo.InitTask(c, platform, info)
 	task.TaskID = taskID
 	task.Quota = quota
 	task.Data = taskData

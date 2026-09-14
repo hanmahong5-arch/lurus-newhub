@@ -12,8 +12,11 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 	"github.com/glebarez/sqlite"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gorm.io/gorm"
 )
 
@@ -290,6 +293,48 @@ func TestAutomaticallyTestChannelsWithContext_MasterEnabled(t *testing.T) {
 		// OK
 	case <-time.After(2 * time.Second):
 		t.Fatal("function did not exit after context timeout")
+	}
+}
+
+// TestChannelHealthTest_SuccessfulTickStampsHeartbeat is the L3 heartbeat
+// oracle for channel-health-test — the one job of the five that is gated by
+// common.IsMasterNode only, NOT leadership (spec explicitly forbids wrapping
+// it in NewLeaderTask, since that would turn a three-replica job leader-
+// only). Drives the real AutomaticallyTestChannelsWithContext ticker loop
+// with AutoTestChannelMinutes forced to 0 so its first tick fires almost
+// immediately, against an empty (real) channels table, and asserts
+// metrics.LeaderTaskLastSuccess{task="channel-health-test"} advances.
+func TestChannelHealthTest_SuccessfulTickStampsHeartbeat(t *testing.T) {
+	cleanup := setupContextTestDB(t)
+	defer cleanup()
+
+	prevMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	defer func() { common.IsMasterNode = prevMaster }()
+
+	ms := operation_setting.GetMonitorSetting()
+	prevEnabled, prevMinutes := ms.AutoTestChannelEnabled, ms.AutoTestChannelMinutes
+	ms.AutoTestChannelEnabled = true
+	ms.AutoTestChannelMinutes = 0 // rounds to a 0s wait — first tick fires immediately
+	defer func() {
+		ms.AutoTestChannelEnabled, ms.AutoTestChannelMinutes = prevEnabled, prevMinutes
+	}()
+
+	before := time.Now().Unix()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		AutomaticallyTestChannelsWithContext(ctx)
+		close(done)
+	}()
+	<-done
+
+	after := time.Now().Unix()
+	got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("channel-health-test"))
+	if got < float64(before) || got > float64(after) {
+		t.Errorf("LeaderTaskLastSuccess{task=channel-health-test} = %v, want within [%d, %d] (an empty channel table is a successful, trivial pass)", got, before, after)
 	}
 }
 
@@ -581,5 +626,178 @@ func BenchmarkUpdateMidjourneyWithDB_Cancel(b *testing.B) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		UpdateMidjourneyTaskBulkWithContext(ctx)
+	}
+}
+
+// TestChannelHealthTest_StartRegistersHeartbeat is the A-F1 oracle for
+// channel-health-test: the boot-time Set(0) and taskreg.Register calls
+// inside AutomaticallyTestChannelsWithContext are otherwise deletable with
+// every test in this package staying green (TestChannelHealthTest_SuccessfulTickStampsHeartbeat
+// above only observes a completed tick, not the pre-loop registration).
+// Pre-stamps a distinctive non-zero value so the zero-assertion below
+// cannot pass merely from a GaugeVec's first-access default.
+func TestChannelHealthTest_StartRegistersHeartbeat(t *testing.T) {
+	cleanup := setupContextTestDB(t)
+	defer cleanup()
+
+	prevMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	defer func() { common.IsMasterNode = prevMaster }()
+
+	metrics.LeaderTaskLastSuccess.WithLabelValues(channelHealthTestTaskName).Set(999999999)
+	before := len(taskreg.Snapshot())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	AutomaticallyTestChannelsWithContext(ctx)
+
+	if got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues(channelHealthTestTaskName)); got != 0 {
+		t.Errorf("LeaderTaskLastSuccess{task=channel-health-test} = %v immediately after AutomaticallyTestChannelsWithContext, want 0 (boot-time Set(0) resetting a pre-stamped series)", got)
+	}
+
+	snap := taskreg.Snapshot()
+	if len(snap) <= before {
+		t.Fatalf("taskreg.Snapshot() length did not grow: before=%d after=%d", before, len(snap))
+	}
+	found := false
+	for _, task := range snap {
+		if task.Name == channelHealthTestTaskName {
+			found = true
+			if task.LeaderOnly {
+				t.Errorf("%s task.LeaderOnly = true, want false (runs on every master-capable replica)", channelHealthTestTaskName)
+			}
+			if task.Active == nil {
+				t.Errorf("%s task.Active = nil, want a non-nil func (B-F1: must report standby/disabled when AutoTestChannelEnabled is off)", channelHealthTestTaskName)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("taskreg.Snapshot() does not contain %q after AutomaticallyTestChannelsWithContext", channelHealthTestTaskName)
+	}
+}
+
+// TestChannelHealthTest_ActiveFuncReflectsAutoTestSetting is the B-F1
+// oracle at the registration layer (the handler-level oracle lives in
+// v2_admin_system_tasks_test.go's TestSystemTasks_DisabledJobIsNotOverdue,
+// using a synthetic task — this drives the REAL registered Active func
+// channel-test.go builds). AutoTestChannelEnabled defaults to false
+// (operation_setting/monitor_setting.go), so on a default install this
+// task's Active() must read false; flipping the setting on must flip it to
+// true, and AutoTestChannelMinutes<=0 must keep it false even when enabled
+// is true (a 0-minute interval cannot be "active" — GetSystemTasksV2 divides
+// by it).
+func TestChannelHealthTest_ActiveFuncReflectsAutoTestSetting(t *testing.T) {
+	cleanup := setupContextTestDB(t)
+	defer cleanup()
+
+	prevMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	defer func() { common.IsMasterNode = prevMaster }()
+
+	ms := operation_setting.GetMonitorSetting()
+	prevEnabled, prevMinutes := ms.AutoTestChannelEnabled, ms.AutoTestChannelMinutes
+	t.Cleanup(func() { ms.AutoTestChannelEnabled, ms.AutoTestChannelMinutes = prevEnabled, prevMinutes })
+
+	ms.AutoTestChannelEnabled = false
+	ms.AutoTestChannelMinutes = 10
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	AutomaticallyTestChannelsWithContext(ctx)
+
+	snap := taskreg.Snapshot()
+	var active func() bool
+	for _, task := range snap {
+		if task.Name == channelHealthTestTaskName {
+			active = task.Active // last registration wins if this ran more than once in the binary
+		}
+	}
+	if active == nil {
+		t.Fatalf("%s not registered, or registered with a nil Active func", channelHealthTestTaskName)
+	}
+
+	if got := active(); got {
+		t.Errorf("Active() = true with AutoTestChannelEnabled=false, want false")
+	}
+
+	ms.AutoTestChannelEnabled = true
+	if got := active(); !got {
+		t.Errorf("Active() = false with AutoTestChannelEnabled=true, AutoTestChannelMinutes=10, want true")
+	}
+
+	ms.AutoTestChannelMinutes = 0
+	if got := active(); got {
+		t.Errorf("Active() = true with AutoTestChannelMinutes=0, want false (a 0-minute interval cannot be active)")
+	}
+}
+
+// TestChannelHealthTest_StampMeansLaunchedNotCompleted proves the B-F10 doc
+// comment claim: the heartbeat call site mirrored below — the same shape as
+// AutomaticallyTestChannelsWithContext's `if err := testAllChannels(false);
+// err == nil { metrics.RecordLeaderTaskSuccess(...) }` — stamps when
+// testAllChannels returns nil, i.e. when the async pass over every channel
+// is LAUNCHED (handed to gopool.Go), not when that pass actually finishes.
+// Seeds several Midjourney-type channels (an unsupported test type:
+// testChannel returns an immediate, network-free localErr — see
+// channel-test.go's unsupportedTestChannelTypes) with common.RequestInterval
+// inflated well beyond the launch+stamp round trip, so the async pass is
+// still measurably running (testAllChannelsRunning still true) at the
+// moment the stamp lands.
+func TestChannelHealthTest_StampMeansLaunchedNotCompleted(t *testing.T) {
+	cleanup := setupContextTestDB(t)
+	defer cleanup()
+
+	prevInterval := common.RequestInterval
+	common.RequestInterval = 200 * time.Millisecond
+	defer func() { common.RequestInterval = prevInterval }()
+
+	for i := 0; i < 4; i++ {
+		ch := &repo.Channel{
+			Name:   fmt.Sprintf("mj-slow-%d", i),
+			Type:   constant.ChannelTypeMidjourney,
+			Status: common.ChannelStatusEnabled,
+		}
+		if err := repo.DB.Create(ch).Error; err != nil {
+			t.Fatalf("seed channel %d: %v", i, err)
+		}
+	}
+	// Total pass duration is >= 4*200ms=800ms (one RequestInterval sleep per
+	// channel, including the last). testAllChannels itself must return long
+	// before that: it only launches the gopool.Go goroutine.
+
+	launchStart := time.Now()
+	if err := testAllChannels(false); err != nil {
+		t.Fatalf("testAllChannels() error = %v", err)
+	}
+	metrics.RecordLeaderTaskSuccess(channelHealthTestTaskName) // mirrors the production call site
+	launchElapsed := time.Since(launchStart)
+
+	testAllChannelsLock.Lock()
+	stillRunning := testAllChannelsRunning
+	testAllChannelsLock.Unlock()
+
+	// Drain before returning: the launched pass outlives this function by the
+	// better part of a second and keeps using repo.DB, which this test's
+	// cleanup is about to swap out from under it. Waiting here is also why
+	// the timing assertion above is taken first.
+	defer func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			testAllChannelsLock.Lock()
+			running := testAllChannelsRunning
+			testAllChannelsLock.Unlock()
+			if !running {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Log("async channel-test pass still running after 10s; leaving it to finish against the restored DB")
+	}()
+
+	if launchElapsed > 150*time.Millisecond {
+		t.Fatalf("testAllChannels()+stamp took %s, want well under the ~800ms async pass duration — the stamp must not block on the pass completing", launchElapsed)
+	}
+	if !stillRunning {
+		t.Skip("async pass already finished before the stamp — timing too tight on this machine to distinguish launch from completion semantics; not a functional assertion failure")
 	}
 }

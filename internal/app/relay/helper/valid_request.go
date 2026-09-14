@@ -7,10 +7,10 @@ import (
 	"math"
 	"strings"
 
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -34,6 +34,8 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 		request, err = GetAndValidateClaudeRequest(c)
 	case types.RelayFormatOpenAIResponses:
 		request, err = GetAndValidateResponsesRequest(c)
+	case types.RelayFormatOpenAIResponsesCompact:
+		request, err = GetAndValidateResponsesCompactionRequest(c)
 
 	case types.RelayFormatOpenAIImage:
 		request, err = GetAndValidOpenAIImageRequest(c, relayMode)
@@ -112,6 +114,26 @@ func GetAndValidateEmbeddingRequest(c *gin.Context, relayMode int) (*dto.Embeddi
 
 func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest, error) {
 	request := &dto.OpenAIResponsesRequest{}
+	err := common.UnmarshalBodyReusable(c, request)
+	if err != nil {
+		return nil, err
+	}
+	if request.Model == "" {
+		return nil, errors.New("model is required")
+	}
+	if request.Input == nil {
+		return nil, errors.New("input is required")
+	}
+	return request, nil
+}
+
+// GetAndValidateResponsesCompactionRequest decodes into the compact DTO —
+// the documented field subset for POST /v1/responses/compact (cycle-8 L6,
+// wire-formats-03). Model/Input validation mirrors GetAndValidateResponsesRequest;
+// the subset gate itself (channel-type allow-list) runs later, in
+// relay.ResponsesHelper, once a channel has been selected.
+func GetAndValidateResponsesCompactionRequest(c *gin.Context) (*dto.OpenAIResponsesCompactionRequest, error) {
+	request := &dto.OpenAIResponsesCompactionRequest{}
 	err := common.UnmarshalBodyReusable(c, request)
 	if err != nil {
 		return nil, err

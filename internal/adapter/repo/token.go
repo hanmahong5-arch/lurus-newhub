@@ -382,6 +382,28 @@ func (token *Token) SelectUpdate() (err error) {
 	return DB.Model(token).Select("accessed_time", "status").Updates(token).Error
 }
 
+// UpdateModelLimits writes only model_limits_enabled/model_limits and
+// refreshes the token's Redis cache entry (same cacheSetToken pattern as
+// Update()/SelectUpdate()). Narrower than Update(), which rewrites the whole
+// row from the caller's in-memory snapshot — for a caller that only read the
+// row to compare/change its model entitlement (e.g. ProvisionV2's replay
+// reconcile), the wider Update() risks losing a concurrent write to a column
+// it also rewrites (remain_quota, status, …) that changed between that read
+// and this write. This can update the ModelLimitsEnabled zero value (false).
+func (token *Token) UpdateModelLimits() (err error) {
+	defer func() {
+		if shouldUpdateRedis(true, err) {
+			AsyncGo(func() {
+				err := cacheSetToken(*token)
+				if err != nil {
+					common.SysLog("failed to update token cache: " + err.Error())
+				}
+			})
+		}
+	}()
+	return DB.Model(token).Select("model_limits_enabled", "model_limits").Updates(token).Error
+}
+
 // RotateKey replaces the token's key atomically, updating the cache entry. The
 // manual rotation path deliberately leaves rotated_at untouched.
 func (token *Token) RotateKey(newKey string) error {
@@ -519,6 +541,23 @@ func DisableModelLimits(tokenId int) error {
 	token.ModelLimitsEnabled = false
 	token.ModelLimits = ""
 	return token.Update()
+}
+
+// GetOtherEnabledSwitchProvisionTokens returns the user's enabled relay
+// tokens whose name starts with namePrefix (the ProvisionV2
+// switch-provision-<plan_code> family), excluding excludeName. Used to find
+// the sibling key(s) a plan change must revoke — the caller disables each
+// one individually through (*Token).Update() (never a bulk UPDATE against
+// this WHERE clause), because Update()/SelectUpdate() refresh the per-key
+// Redis cache entry and a bulk UPDATE does not; a bulk UPDATE would leave a
+// warm cache still authenticating the revoked key until it naturally
+// expires.
+func GetOtherEnabledSwitchProvisionTokens(userID int, namePrefix, excludeName string) ([]*Token, error) {
+	var tokens []*Token
+	err := DB.Where("user_id = ? AND name LIKE ? AND name <> ? AND status = ?",
+		userID, namePrefix+"%", excludeName, common.TokenStatusEnabled).
+		Find(&tokens).Error
+	return tokens, err
 }
 
 func DeleteTokenById(id int, userId int) (err error) {

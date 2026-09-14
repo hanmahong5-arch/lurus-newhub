@@ -11,6 +11,8 @@ Status definitions:
 
 Rows marked `[skeptic flipped X→Y: ...]` in the note column had their status changed during adversarial re-verification; the marker is preserved verbatim.
 
+> **Correction (2026-09-13, async-tasks re-run):** the `tasks-plugins` rows whose evidence reads "grep TaskPlugin → 0 hits" are wrong about the upstream side — upstream HEAD be36cbb8 ships a JS task-plugin protocol (86 files: `/v1/tasks/:key` submit/status/artifacts, signed artefact capability URLs, SSRF allow-lists, per-plugin billing expressions). The newhub-side status of those rows (missing) is re-verified and stands; the JS plugin runtime is out of scope by design, while the generic task surface and artefact listing are planned as cycle-8 lanes L8–L10. Upstream's artefact *store* is itself still a disabled stub (`service/task_artifact_store.go`), so row tasks-plugins-34 is a shared gap, not a newhub deficit.
+
 ## Totals (342 rows checked across 10 domains)
 
 | Status | Count |

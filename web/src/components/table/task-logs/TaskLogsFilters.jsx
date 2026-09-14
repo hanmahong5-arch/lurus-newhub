@@ -74,6 +74,27 @@ const TaskLogsFilters = ({
             size='small'
           />
 
+          {/* 项目 ID - 成本归因过滤(migration 035);普通用户只能看到自己名下的项目,
+              越权项目由后端 fail-closed 返回空列表,不在此处做额外校验 */}
+          <Form.Input
+            field='project_id'
+            prefix={<IconSearch />}
+            placeholder={t('项目 ID')}
+            showClear
+            pure
+            size='small'
+          />
+
+          {/* 请求 ID - 支持排查用(migration 035),精确匹配 */}
+          <Form.Input
+            field='request_id'
+            prefix={<IconSearch />}
+            placeholder={t('请求 ID')}
+            showClear
+            pure
+            size='small'
+          />
+
           {/* 渠道 ID - 仅管理员可见 */}
           {isAdminUser && (
             <Form.Input

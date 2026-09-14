@@ -460,6 +460,14 @@ func DeleteUserById(id int) (err error) {
 		common.SysLog(fmt.Sprintf("DeleteUserById: hard delete user sessions failed for id=%d: %v", id, sessErr))
 	}
 
+	// Delegated permission grants (L4, admin_permission_grants) must not
+	// outlive the deleted user either — otherwise re-creating a user with
+	// the same id would silently inherit a stale grant. Best-effort, same
+	// reasoning as the session revoke above.
+	if _, grantErr := RevokePermissionGrantsForUser(id); grantErr != nil {
+		common.SysLog(fmt.Sprintf("DeleteUserById: revoke permission grants failed for id=%d: %v", id, grantErr))
+	}
+
 	user := User{Id: id}
 	return user.Delete()
 }

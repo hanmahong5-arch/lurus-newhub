@@ -7,6 +7,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 )
 
 // secretRotationInterval is the scan cadence for due token rotations. Daily is
@@ -23,6 +24,12 @@ const secretRotationInterval = 24 * time.Hour
 // records an audit event per rotation, and emails the owner.
 func StartSecretRotationWithContext(ctx context.Context) {
 	common.SysLog(fmt.Sprintf("secret rotation started, interval=%s", secretRotationInterval))
+
+	// L3: NewLeaderTask already stamps metrics.LeaderTaskLastSuccess and
+	// Set(0)s it at construction (leader_election.go); this only adds the
+	// static registry entry the other five heartbeat jobs also register
+	// for GET /api/v2/admin/system/tasks.
+	taskreg.Register("secret-rotation", func() time.Duration { return secretRotationInterval }, true, nil)
 
 	task := NewLeaderTask("secret-rotation", secretRotationInterval, func(c context.Context) error {
 		n, err := app.RotateDueTokens(c, common.GetTimestamp(), common.SendEmail)

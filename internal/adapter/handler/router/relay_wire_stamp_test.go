@@ -106,3 +106,35 @@ func TestRelayRouter_StampsWireBeforeTokenAuth(t *testing.T) {
 		t.Errorf(`/v1beta 401 body = %s, want the Gemini envelope {"error":{"code":401,... — StampRelayFormat must run before TokenAuth on relayGeminiRouter`, body2)
 	}
 }
+
+// TestRelayRouter_StampsWireForResponsesCompact pins relayFormatForPath's
+// documented behaviour for wire-formats-03's new path: /v1/responses/compact
+// is neither /v1/messages(/count_tokens) nor under /v1beta/, so it falls to
+// the default case and answers in the OpenAI envelope — same as every other
+// /v1/responses-family path — through the real SetRelayRouter chain.
+func TestRelayRouter_StampsWireForResponsesCompact(t *testing.T) {
+	cleanup := relayWireStampEmptyDB(t)
+	defer cleanup()
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetRelayRouter(engine)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("/v1/responses/compact no key: status = %d, want 401; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, `"type":"error"`) {
+		t.Errorf("/v1/responses/compact 401 body = %s, must not be the Claude envelope", body)
+	}
+	if strings.HasPrefix(body, `{"error":{"code":401`) {
+		t.Errorf("/v1/responses/compact 401 body = %s, must not be the Gemini envelope", body)
+	}
+	if !strings.Contains(body, `"error":{`) {
+		t.Errorf(`/v1/responses/compact 401 body = %s, want the OpenAI envelope {"error":{...`, body)
+	}
+}

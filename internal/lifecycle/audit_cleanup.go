@@ -10,7 +10,14 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 )
+
+// auditCleanupTaskName is the "task" label this job stamps on
+// metrics.LeaderTaskLastSuccess and registers under in taskreg — must match
+// the string the L3 system-tasks endpoint expects.
+const auditCleanupTaskName = "audit-cleanup"
 
 // auditCleanupBatchSize bounds the per-DELETE row count so a long-overdue
 // cleanup doesn't lock the audit_events table in one giant transaction.
@@ -64,6 +71,12 @@ func StartAuditCleanupWithContext(ctx context.Context) {
 	auditCleanupActiveInterval.Store(int64(interval))
 	common.SysLog(fmt.Sprintf("audit retention cleanup started, interval=%s", interval))
 
+	// Boot-time zero + registry entry: see metrics.LeaderTaskLastSuccess's
+	// doc comment for why Set(0) has to happen here rather than only on
+	// first success.
+	metrics.LeaderTaskLastSuccess.WithLabelValues(auditCleanupTaskName).Set(0)
+	taskreg.Register(auditCleanupTaskName, AuditCleanupInterval, true, nil)
+
 	ticker := time.NewTicker(interval)
 	common.SafeGoWithContext(ctx, func(c context.Context) {
 		defer ticker.Stop()
@@ -102,4 +115,5 @@ func runAuditCleanup(ctx context.Context) {
 	if deleted > 0 {
 		common.SysLog(fmt.Sprintf("audit cleanup: deleted %d expired events", deleted))
 	}
+	metrics.RecordLeaderTaskSuccess(auditCleanupTaskName)
 }

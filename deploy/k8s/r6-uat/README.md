@@ -54,3 +54,44 @@ There was no environment where UAT/e2e could run without touching production
   platform `config/apps.yaml` domain PATCH, client_id unchanged), then the
   vhost flipped 30850 → 30851. Nightly e2e runs against this instance via
   `.github/workflows/web-ci.yml` (schedule 19:00 UTC).
+
+## Fault simulator (`FAULTSIM_TOKEN`) — task-vendor probe (cycle-8 L8)
+
+`internal/adapter/handler/faultsim.go` registers `POST
+/api/v2/faultsim/v1/chat/completions` (pre-existing) and, as of this lane,
+`POST /api/v2/faultsim/suno/submit/:action` + `POST
+/api/v2/faultsim/suno/fetch` — ONLY when the env var `FAULTSIM_TOKEN` is
+non-empty (`handler.FaultSimEnabled()`; absent by default, including here —
+grep-confirmed: `FAULTSIM_TOKEN` is not currently set in this overlay's
+`deployment.yaml`, so none of the faultsim routes exist on live UAT today).
+Enabling it is an **operator step** (generate the token value ON the R6
+host, same convention as the other UAT secrets above; this is NOT wired up
+by this lane, which only ships the route+handler code):
+
+1. `ssh -p 12222 root@43.226.45.87` (or Tailscale `100.122.83.20`), generate
+   a token with `openssl rand -hex 24`, and add it to
+   `lurus-newhub-uat-secrets` as `FAULTSIM_TOKEN`.
+2. Add `FAULTSIM_TOKEN` (from that secret key) to the deployment's env list
+   in `deploy/k8s/r6-uat/deployment.yaml` and let ArgoCD converge (or patch
+   live + commit the git source per the repo's K8s-manifest-is-truth rule).
+3. Seed a UAT channel via the admin API (same recipe as the other UAT
+   channels — admin API, not raw SQL):
+   - `type`: `ChannelTypeSunoAPI` (36) — the vendor the simulator imitates.
+   - `base_url`: `http://127.0.0.1:3000/api/v2/faultsim` (loopback only —
+     `netpol-egress.yaml` excludes RFC1918, so a real pod-to-pod address
+     would be unreachable; loopback is exempt and UAT runs 1 replica, so the
+     request lands back in the same process).
+   - `key`: the `FAULTSIM_TOKEN` value from step 1 (the simulator accepts a
+     bearer key the same way a real channel would send one).
+   - `models`: any model name you'll pass as `"model"` in the submit body.
+4. Round trip:
+   - `POST https://test-newhub.lurus.cn/v1/tasks/suno` with
+     `{"model":"<seeded model>","action":"MUSIC"}` and the caller's own
+     bearer token (not FAULTSIM_TOKEN — that authenticates the
+     simulator-as-upstream, not the relay caller) → `task_id`.
+   - `GET https://test-newhub.lurus.cn/v1/tasks/suno/<task_id>` — SUCCESS
+     within one poller tick (15s; `UpdateTaskBulkWithContext`), with two
+     `data:` URL artefacts (text/plain and image) in the task's `data`
+     field — no real Suno-compatible vendor key involved anywhere.
+   - The same GET with a different user's token → 404 `Task not found`,
+     byte-identical to a random `task_id`.

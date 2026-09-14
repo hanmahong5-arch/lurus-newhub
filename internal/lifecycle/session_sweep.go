@@ -7,6 +7,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 )
 
 // sessionSweepInterval is the scan cadence for the user_sessions retention
@@ -25,6 +26,13 @@ const sessionSweepInterval = 24 * time.Hour
 // wasted DB work. The goroutine exits when ctx is cancelled.
 func StartSessionSweepWithContext(ctx context.Context) {
 	common.SysLog(fmt.Sprintf("user_sessions retention sweep started, interval=%s", sessionSweepInterval))
+
+	// L3 repair round (A-F11/B-F8, operator-approved): NewLeaderTask already
+	// stamps metrics.LeaderTaskLastSuccess and Set(0)s it at construction
+	// (leader_election.go); this only adds the static registry entry so
+	// GET /api/v2/admin/system/tasks and /metrics agree on the task set —
+	// session-sweep was a live NewLeaderTask heartbeat the endpoint omitted.
+	taskreg.Register("session-sweep", func() time.Duration { return sessionSweepInterval }, true, nil)
 
 	task := NewLeaderTask("session-sweep", sessionSweepInterval, func(c context.Context) error {
 		n, err := repo.SweepExpiredUserSessions(time.Now())

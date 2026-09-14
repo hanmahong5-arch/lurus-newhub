@@ -346,21 +346,25 @@ func TestPostAudioConsumeQuota_Arithmetic(t *testing.T) {
 		StartTime:       time.Now(),
 		ChannelMeta:     &relaycommon.ChannelMeta{},
 		PriceData: types.PriceData{
-			ModelRatio:     2.0,
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1.0},
+			ModelRatio:      2.0,
+			CompletionRatio: ratio_setting.GetCompletionRatio(model),
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1.0},
 		},
 	}
 
 	// Expected value: reuse the production helper on the identical QuotaInfo so
 	// the test tracks the real ratio_setting values for `model` rather than
-	// hardcoding audio ratios that may drift.
+	// hardcoding audio ratios that may drift. CompletionRatio is set on both
+	// sides: settlement reads it from PriceData, so leaving it at its zero
+	// value would make the completion term 0 == 0 and assert nothing.
 	want := calculateAudioQuota(QuotaInfo{
-		InputDetails:  TokenDetails{TextTokens: 60, AudioTokens: 40},
-		OutputDetails: TokenDetails{TextTokens: 30, AudioTokens: 10},
-		ModelName:     model,
-		UsePrice:      false,
-		ModelRatio:    2.0,
-		GroupRatio:    1.0,
+		InputDetails:    TokenDetails{TextTokens: 60, AudioTokens: 40},
+		OutputDetails:   TokenDetails{TextTokens: 30, AudioTokens: 10},
+		ModelName:       model,
+		UsePrice:        false,
+		ModelRatio:      2.0,
+		CompletionRatio: ratio_setting.GetCompletionRatio(model),
+		GroupRatio:      1.0,
 	})
 
 	before := userQuota(t, db, userId)
@@ -422,13 +426,18 @@ func TestPostWssConsumeQuota_Arithmetic(t *testing.T) {
 		},
 	}
 
+	// CompletionRatio mirrors what PostWssConsumeQuota reads for this call: the
+	// ratio_setting entry for the model name the caller passes (the upstream
+	// name), not PriceData.CompletionRatio. Without it both sides would carry
+	// 0 and the completion term would assert nothing.
 	want := calculateAudioQuota(QuotaInfo{
-		InputDetails:  TokenDetails{TextTokens: 80, AudioTokens: 40},
-		OutputDetails: TokenDetails{TextTokens: 50, AudioTokens: 30},
-		ModelName:     model,
-		UsePrice:      false,
-		ModelRatio:    2.0,
-		GroupRatio:    1.0,
+		InputDetails:    TokenDetails{TextTokens: 80, AudioTokens: 40},
+		OutputDetails:   TokenDetails{TextTokens: 50, AudioTokens: 30},
+		ModelName:       model,
+		UsePrice:        false,
+		ModelRatio:      2.0,
+		CompletionRatio: ratio_setting.GetCompletionRatio(model),
+		GroupRatio:      1.0,
 	})
 	if want <= 0 {
 		t.Fatalf("wss want quota should be positive, got %d", want)
@@ -450,6 +459,262 @@ func TestPostWssConsumeQuota_Arithmetic(t *testing.T) {
 	}
 	if logRow.Quota != want {
 		t.Errorf("wss log quota = %d, want %d", logRow.Quota, want)
+	}
+}
+
+// TestPostAudioConsumeQuota_TierCompletionRatioAffectsMoney is the cycle-8
+// plan §8 L5 B-F5 oracle: a context-length tier's completion_ratio override
+// must reach calculateAudioQuota's money, not just the (unrelated) log
+// message — before the fix, PostAudioConsumeQuota re-derived completionRatio
+// straight from ratio_setting, so a tier's completion_ratio silently did
+// nothing here.
+func TestPostAudioConsumeQuota_TierCompletionRatioAffectsMoney(t *testing.T) {
+	db := setupServiceTestDB(t)
+	userId := seedTestUser(t, db, 10_000_000)
+	key, tokenId := seedTestToken(t, db, userId, 10_000_000, false)
+
+	c := createTestGinContext()
+
+	const model = "audio-tier-completion-probe"
+	prevTiers := ratio_setting.ContextLengthTiers2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateContextLengthTiersByJSONString(prevTiers) })
+	// Only completion_ratio is overridden — model_ratio falls through to
+	// PriceData.BaseModelRatio (the frozen pre-consume snapshot).
+	if err := ratio_setting.UpdateContextLengthTiersByJSONString(
+		`{"` + model + `":[{"threshold_tokens":0,"completion_ratio":9.0}]}`,
+	); err != nil {
+		t.Fatalf("seed context tiers: %v", err)
+	}
+
+	usage := &dto.Usage{
+		PromptTokens:     100,
+		CompletionTokens: 40,
+		TotalTokens:      140,
+		PromptTokensDetails: dto.InputTokenDetails{
+			TextTokens:  60,
+			AudioTokens: 40,
+		},
+		CompletionTokenDetails: dto.OutputTokenDetails{
+			TextTokens:  30,
+			AudioTokens: 10,
+		},
+	}
+
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:          userId,
+		TokenId:         tokenId,
+		TokenKey:        key,
+		OriginModelName: model,
+		StartTime:       time.Now(),
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+		PriceData: types.PriceData{
+			ModelRatio:     2.0,
+			BaseModelRatio: 2.0, // matches ModelRatio: this model has no model_ratio tier
+			BaseRatiosSet:  true,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1.0},
+		},
+	}
+
+	want := calculateAudioQuota(QuotaInfo{
+		InputDetails:    TokenDetails{TextTokens: 60, AudioTokens: 40},
+		OutputDetails:   TokenDetails{TextTokens: 30, AudioTokens: 10},
+		ModelName:       model,
+		UsePrice:        false,
+		ModelRatio:      2.0,
+		CompletionRatio: 9.0,
+		GroupRatio:      1.0,
+	})
+	// Fixture sanity: the flat (untiered) charge must differ from `want`, or
+	// this test would pass even if the tier's completion_ratio were ignored.
+	flatWant := calculateAudioQuota(QuotaInfo{
+		InputDetails:    TokenDetails{TextTokens: 60, AudioTokens: 40},
+		OutputDetails:   TokenDetails{TextTokens: 30, AudioTokens: 10},
+		ModelName:       model,
+		UsePrice:        false,
+		ModelRatio:      2.0,
+		CompletionRatio: ratio_setting.GetCompletionRatio(model),
+		GroupRatio:      1.0,
+	})
+	if want == flatWant {
+		t.Fatalf("degenerate fixture: tiered want (%d) equals flat want (%d)", want, flatWant)
+	}
+
+	before := userQuota(t, db, userId)
+	PostAudioConsumeQuota(c, relayInfo, usage, "extra")
+	after := userQuota(t, db, userId)
+
+	if before-after != want {
+		t.Errorf("audio debited %d, want %d (tier's completion_ratio=9.0 must reach the money, not just the log message)", before-after, want)
+	}
+}
+
+// TestPostWssConsumeQuota_TierCompletionRatioAffectsMoney mirrors
+// TestPostAudioConsumeQuota_TierCompletionRatioAffectsMoney for the realtime
+// (websocket) settlement path (cycle-8 plan §8 L5 B-F5).
+func TestPostWssConsumeQuota_TierCompletionRatioAffectsMoney(t *testing.T) {
+	db := setupServiceTestDB(t)
+	userId := seedTestUser(t, db, 10_000_000)
+	key, tokenId := seedTestToken(t, db, userId, 10_000_000, false)
+
+	c := createTestGinContext()
+	c.Set("token_name", "wss-tier-tkn")
+
+	const model = "wss-tier-completion-probe"
+	prevTiers := ratio_setting.ContextLengthTiers2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateContextLengthTiersByJSONString(prevTiers) })
+	if err := ratio_setting.UpdateContextLengthTiersByJSONString(
+		`{"` + model + `":[{"threshold_tokens":0,"completion_ratio":7.0}]}`,
+	); err != nil {
+		t.Fatalf("seed context tiers: %v", err)
+	}
+
+	usage := &dto.RealtimeUsage{
+		TotalTokens:  200,
+		InputTokens:  120,
+		OutputTokens: 80,
+		InputTokenDetails: dto.InputTokenDetails{
+			TextTokens:  80,
+			AudioTokens: 40,
+		},
+		OutputTokenDetails: dto.OutputTokenDetails{
+			TextTokens:  50,
+			AudioTokens: 30,
+		},
+	}
+
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:          userId,
+		TokenId:         tokenId,
+		TokenKey:        key,
+		OriginModelName: model,
+		StartTime:       time.Now(),
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+		PriceData: types.PriceData{
+			ModelRatio:     2.0,
+			BaseModelRatio: 2.0,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1.0},
+		},
+	}
+
+	want := calculateAudioQuota(QuotaInfo{
+		InputDetails:    TokenDetails{TextTokens: 80, AudioTokens: 40},
+		OutputDetails:   TokenDetails{TextTokens: 50, AudioTokens: 30},
+		ModelName:       model,
+		UsePrice:        false,
+		ModelRatio:      2.0,
+		CompletionRatio: 7.0,
+		GroupRatio:      1.0,
+	})
+	flatWant := calculateAudioQuota(QuotaInfo{
+		InputDetails:    TokenDetails{TextTokens: 80, AudioTokens: 40},
+		OutputDetails:   TokenDetails{TextTokens: 50, AudioTokens: 30},
+		ModelName:       model,
+		UsePrice:        false,
+		ModelRatio:      2.0,
+		CompletionRatio: ratio_setting.GetCompletionRatio(model),
+		GroupRatio:      1.0,
+	})
+	if want == flatWant {
+		t.Fatalf("degenerate fixture: tiered want (%d) equals flat want (%d)", want, flatWant)
+	}
+
+	PostWssConsumeQuota(c, relayInfo, model, usage, "")
+
+	var u repo.User
+	if err := db.First(&u, userId).Error; err != nil {
+		t.Fatalf("read user: %v", err)
+	}
+	if u.UsedQuota != want {
+		t.Errorf("wss used_quota = %d, want %d (tier's completion_ratio=7.0 must reach the money)", u.UsedQuota, want)
+	}
+}
+
+// TestPostWssConsumeQuota_UntieredChargeUnchanged pins which model name the
+// realtime path prices the completion term by when no context-length tier is
+// configured. websocket.go passes the UPSTREAM model name as this function's
+// modelName argument, while PriceData.CompletionRatio is keyed on the ORIGIN
+// name, so on a channel that maps the model the two are different rows of the
+// completion-ratio map. Reading PriceData here would silently re-price every
+// realtime call on such a channel; this test seeds the two names with
+// different ratios and asserts the charge follows the upstream one.
+func TestPostWssConsumeQuota_UntieredChargeUnchanged(t *testing.T) {
+	db := setupServiceTestDB(t)
+	userId := seedTestUser(t, db, 10_000_000)
+	key, tokenId := seedTestToken(t, db, userId, 10_000_000, false)
+
+	c := createTestGinContext()
+	c.Set("token_name", "wss-mapped-tkn")
+
+	const originModel = "wss-origin-probe"
+	const upstreamModel = "wss-upstream-probe"
+	prevCompletion := ratio_setting.CompletionRatio2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateCompletionRatioByJSONString(prevCompletion) })
+	if err := ratio_setting.UpdateCompletionRatioByJSONString(
+		`{"` + originModel + `":3.0,"` + upstreamModel + `":8.0}`,
+	); err != nil {
+		t.Fatalf("seed completion ratios: %v", err)
+	}
+
+	usage := &dto.RealtimeUsage{
+		TotalTokens:  200,
+		InputTokens:  120,
+		OutputTokens: 80,
+		InputTokenDetails: dto.InputTokenDetails{
+			TextTokens:  80,
+			AudioTokens: 40,
+		},
+		OutputTokenDetails: dto.OutputTokenDetails{
+			TextTokens:  50,
+			AudioTokens: 30,
+		},
+	}
+
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:          userId,
+		TokenId:         tokenId,
+		TokenKey:        key,
+		OriginModelName: originModel,
+		StartTime:       time.Now(),
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+		PriceData: types.PriceData{
+			ModelRatio: 2.0,
+			// What ModelPriceHelper would have stored for the ORIGIN name.
+			CompletionRatio: 3.0,
+			BaseModelRatio:  2.0,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1.0},
+		},
+	}
+
+	want := calculateAudioQuota(QuotaInfo{
+		InputDetails:    TokenDetails{TextTokens: 80, AudioTokens: 40},
+		OutputDetails:   TokenDetails{TextTokens: 50, AudioTokens: 30},
+		ModelName:       upstreamModel,
+		UsePrice:        false,
+		ModelRatio:      2.0,
+		CompletionRatio: 8.0,
+		GroupRatio:      1.0,
+	})
+	originWant := calculateAudioQuota(QuotaInfo{
+		InputDetails:    TokenDetails{TextTokens: 80, AudioTokens: 40},
+		OutputDetails:   TokenDetails{TextTokens: 50, AudioTokens: 30},
+		ModelName:       upstreamModel,
+		UsePrice:        false,
+		ModelRatio:      2.0,
+		CompletionRatio: 3.0,
+		GroupRatio:      1.0,
+	})
+	if want == originWant {
+		t.Fatalf("degenerate fixture: upstream-priced want (%d) equals origin-priced want (%d)", want, originWant)
+	}
+
+	PostWssConsumeQuota(c, relayInfo, upstreamModel, usage, "")
+
+	var u repo.User
+	if err := db.First(&u, userId).Error; err != nil {
+		t.Fatalf("read user: %v", err)
+	}
+	if u.UsedQuota != want {
+		t.Errorf("wss used_quota = %d, want %d (the completion term must stay priced by the upstream model name; %d would mean it followed PriceData's origin-keyed ratio)", u.UsedQuota, want, originWant)
 	}
 }
 

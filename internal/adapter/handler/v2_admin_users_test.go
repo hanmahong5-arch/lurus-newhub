@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -116,6 +118,37 @@ func TestUpdateAdminUserV2_RoleStatusQuota(t *testing.T) {
 	}
 	if d["group"] != "vip" {
 		t.Errorf("expected group=vip, got %v", d["group"])
+	}
+}
+
+// TestUpdateAdminUserV2_DemotionRevokesPermissionGrants is the B-F5 oracle
+// for the UpdateAdminUserV2 call site (cycle-8 L4 repair round): demoting a
+// grant-holding admin below common.RoleAdminUser must revoke their
+// delegated permission grant, not leave it active for a later
+// re-promotion to silently restore.
+func TestUpdateAdminUserV2_DemotionRevokesPermissionGrants(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	if _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "audit", "read", ctx.RootUser.Id); err != nil {
+		t.Fatalf("seed grant: %v", err)
+	}
+	granted, err := repo.HasActivePermissionGrant(ctx.AdminUser.Id, "audit", "read")
+	if err != nil || !granted {
+		t.Fatalf("HasActivePermissionGrant before demotion = (%v,%v), want (true,nil)", granted, err)
+	}
+
+	body := map[string]interface{}{"role": common.RoleCommonUser}
+	path := fmt.Sprintf("/api/v2/admin/users/%d", ctx.AdminUser.Id)
+	w := V2RequestAsUser(ctx, ctx.RootUser, http.MethodPut, path, body, []string{"root"})
+	AssertV2Status(t, w, http.StatusOK)
+
+	granted, err = repo.HasActivePermissionGrant(ctx.AdminUser.Id, "audit", "read")
+	if err != nil {
+		t.Fatalf("HasActivePermissionGrant after demotion: %v", err)
+	}
+	if granted {
+		t.Fatalf("permission grant still active after demoting the grantee below RoleAdminUser")
 	}
 }
 
@@ -356,5 +389,54 @@ func TestAdminRevokeUserSessions_FlagOff(t *testing.T) {
 	}
 	if row.RevokedAt != 0 {
 		t.Errorf("row revoked_at = %d, want 0", row.RevokedAt)
+	}
+}
+
+// TestUpdateUser_DemotionRevokesPermissionGrants covers the OTHER live admin
+// role-update path. PUT /api/user/ (router/api-router.go, AdminAuth) reaches
+// handler.UpdateUser, which is a separate code path from UpdateAdminUserV2 —
+// a grant that survives there is the same silent re-promotion hole B-F5
+// describes, just through the v1 console API.
+func TestUpdateUser_DemotionRevokesPermissionGrants(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	if _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "audit", "read", ctx.RootUser.Id); err != nil {
+		t.Fatalf("seed grant: %v", err)
+	}
+
+	// What AdminAuth puts on the context for a root caller.
+	body, err := json.Marshal(map[string]interface{}{
+		"id":           ctx.AdminUser.Id,
+		"username":     ctx.AdminUser.Username,
+		"display_name": ctx.AdminUser.DisplayName,
+		"role":         common.RoleCommonUser,
+		"quota":        ctx.AdminUser.Quota,
+		"group":        ctx.AdminUser.Group,
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/user/", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", ctx.RootUser.Id)
+	c.Set("role", common.RoleRootUser)
+
+	UpdateUser(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateUser status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"success":true`) {
+		t.Fatalf("UpdateUser body = %s, want success", w.Body.String())
+	}
+
+	granted, err := repo.HasActivePermissionGrant(ctx.AdminUser.Id, "audit", "read")
+	if err != nil {
+		t.Fatalf("HasActivePermissionGrant after demotion: %v", err)
+	}
+	if granted {
+		t.Fatalf("permission grant still active after demoting the grantee through PUT /api/user/")
 	}
 }

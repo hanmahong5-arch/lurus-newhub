@@ -175,6 +175,92 @@ func TestResetModelRatio_BumpsVersionAndAudits(t *testing.T) {
 	}
 }
 
+// The legacy PUT /api/option/ route must route a ContextLengthTiers write
+// (billing-pricing-14) through the same version bump and audit row as the
+// other four pricing keys — cycle-8 plan §8 L5 A-F1. This is the oracle for
+// both halves of the "gains the key so legacy writes stay versioned" spec
+// bullet: it goes red if "ContextLengthTiers": true is deleted from
+// pricingOptionKeys (the write would fall through to the unversioned
+// repo.UpdateOption path in option.go, leaving PricingVersion at 5), and it
+// goes red if the `if key == "ContextLengthTiers"` shape-aware probe branch
+// in writePricingOptionVersioned is deleted (a valid tier-list JSON would
+// then be probed as `map[string]float64`, fail to unmarshal, and be
+// rejected with a non-200 response).
+func TestLegacyOptionWrite_ContextLengthTiersBumpsVersionAndAudits(t *testing.T) {
+	setupPricingWriteRouter(t)
+	seedPricingVersion(t, 5)
+	model := "legacy-context-tiers-probe-model"
+
+	value := `{"` + model + `":[{"threshold_tokens":0,"model_ratio":1.0},{"threshold_tokens":3000,"model_ratio":2.0}]}`
+	w := callLegacyRootHandler(t, http.MethodPut, "/api/option/",
+		map[string]interface{}{"key": "ContextLengthTiers", "value": value}, UpdateOption)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	if got := readPricingVersionRow(t); got != 6 {
+		t.Errorf("PricingVersion row = %d, want 6 (legacy write must bump the version)", got)
+	}
+	tier := ratio_setting.GetContextLengthTier(model, 3000)
+	if tier == nil || tier.ModelRatio == nil || *tier.ModelRatio != 2.0 {
+		t.Errorf("GetContextLengthTier(%q,3000) after legacy write = %+v, want tier with ModelRatio=2.0", model, tier)
+	}
+
+	var opt repo.Option
+	if err := repo.DB.Where("key = ?", "ContextLengthTiers").First(&opt).Error; err != nil {
+		t.Fatalf("ContextLengthTiers option row not persisted: %v", err)
+	}
+
+	ev := pollAuditRow(t, governance.ActionPricingUpdated, 2*time.Second)
+	if ev == nil {
+		t.Fatal("no pricing.updated audit row for the legacy ContextLengthTiers write")
+	}
+	var details struct {
+		Source string `json:"source"`
+		Key    string `json:"key"`
+	}
+	if err := json.Unmarshal([]byte(ev.Details), &details); err != nil {
+		t.Fatalf("unmarshal details: %v — raw: %s", err, ev.Details)
+	}
+	if details.Source != "legacy_option_api" || details.Key != "ContextLengthTiers" {
+		t.Errorf("details = %+v, want source legacy_option_api / key ContextLengthTiers", details)
+	}
+}
+
+// A ContextLengthTiers value with non-ascending thresholds must be rejected
+// before the transaction opens: no options row, no version bump, and the
+// live tier map for the probe model stays whatever it was before the call
+// (cycle-8 plan §8 L5 A-F1(b)).
+func TestLegacyOptionWrite_ContextLengthTiersNonAscendingRejectedWithoutWrite(t *testing.T) {
+	setupPricingWriteRouter(t)
+	seedPricingVersion(t, 5)
+	model := "legacy-context-tiers-invalid-probe-model"
+	before := ratio_setting.GetContextLengthTier(model, 5000)
+
+	value := `{"` + model + `":[{"threshold_tokens":3000,"model_ratio":1.0},{"threshold_tokens":1000,"model_ratio":2.0}]}`
+	w := callLegacyRootHandler(t, http.MethodPut, "/api/option/",
+		map[string]interface{}{"key": "ContextLengthTiers", "value": value}, UpdateOption)
+	if w.Code == http.StatusOK {
+		var out map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		if out["success"] == true {
+			t.Fatalf("non-ascending tier list accepted: %s", w.Body.String())
+		}
+	}
+	if got := readPricingVersionRow(t); got != 5 {
+		t.Errorf("PricingVersion row = %d, want 5 (nothing may be written)", got)
+	}
+	var count int64
+	repo.DB.Model(&repo.Option{}).Where("key = ?", "ContextLengthTiers").Count(&count)
+	if count != 0 {
+		t.Errorf("ContextLengthTiers option row = %d rows, want 0 (rejected before the transaction opens)", count)
+	}
+	after := ratio_setting.GetContextLengthTier(model, 5000)
+	if after != before {
+		t.Errorf("in-memory context tiers for %q changed on a rejected write: before=%+v after=%+v", model, before, after)
+	}
+}
+
 // repo.GetPricing keeps its own ~1-minute cache; a versioned write must drop
 // it so the catalogue the console re-fetches right after saving shows the
 // new ratio instead of the pre-write one.

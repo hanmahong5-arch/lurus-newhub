@@ -74,6 +74,13 @@ func SetApiV2Router(router *gin.Engine) {
 		// not tenant data — it is a stand-in for a provider.
 		if handler.FaultSimEnabled() {
 			apiV2.POST("/faultsim/v1/chat/completions", handler.FaultSimChatCompletions)
+			// Task-vendor fault simulator (cycle-8 L8): imitates the Suno
+			// wire so a UAT channel (type ChannelTypeSunoAPI, base_url
+			// http://127.0.0.1:3000/api/v2/faultsim, key=FAULTSIM_TOKEN)
+			// can prove POST/GET /v1/tasks/:platform end-to-end with no
+			// vendor key. See faultsim.go for the shared safety properties.
+			apiV2.POST("/faultsim/suno/submit/:action", handler.FaultSimTaskSubmit)
+			apiV2.POST("/faultsim/suno/fetch", handler.FaultSimTaskFetch)
 		}
 
 		// Tenant-scoped user endpoint (session auth — called by frontend in V2 mode).
@@ -224,7 +231,10 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantRedemptions.POST("", handler.CreateRedemptionV2)
 			tenantRedemptions.DELETE("/:id", handler.DeleteRedemptionV2)
 		}
-		apiV2.POST("/:tenant_slug/redeem", middleware.UserAuth(), middleware.TenantSlugGuard(), handler.RedeemCodeV2)
+		// RedemptionRateLimit (5/60s/IP, "RD" bucket) guards code-guessing —
+		// see the identical rationale on the v1-compat POST /api/user/topup
+		// mount in api-router.go (cycle-8 L1).
+		apiV2.POST("/:tenant_slug/redeem", middleware.UserAuth(), middleware.TenantSlugGuard(), middleware.RedemptionRateLimit(), handler.RedeemCodeV2)
 
 		// P4 unified provisioning: exchange a platform entitlement token
 		// (verified OFFLINE against the platform JWKS) for a bounded relay
@@ -326,8 +336,11 @@ func SetApiV2Router(router *gin.Engine) {
 		{
 			switchGroup.GET("/tools/versions", handler.GetToolVersions)
 			switchGroup.GET("/presets", handler.ListSwitchPresets)
-			// Phase D Track 2.1: anonymous activation-code redemption (no auth)
-			switchGroup.POST("/redeem", handler.SwitchRedeemAnonymous)
+			// Phase D Track 2.1: anonymous activation-code redemption (no auth).
+			// Anonymous is exactly why this needs middleware.RedemptionRateLimit()
+			// (5/60s/IP, "RD" bucket) — there is no user/token identity to key a
+			// limiter on for this route, only the caller's IP (cycle-8 L1).
+			switchGroup.POST("/redeem", middleware.RedemptionRateLimit(), handler.SwitchRedeemAnonymous)
 			// Phase D Track 2.2: single-tenant fallback heartbeat (inline raw-token auth)
 			switchGroup.POST("/heartbeat", handler.UserHeartbeat)
 			// Wave 1 W1.1: public rate card for the Switch cost dashboard.
@@ -340,7 +353,9 @@ func SetApiV2Router(router *gin.Engine) {
 			// Redemption-code topup for the token owner (inline raw-token
 			// auth) — lets a Switch client credit its own account without
 			// an OIDC session (middleware.UserAuth() would reject it).
-			switchGroup.POST("/user/topup", handler.SwitchUserTopup)
+			// RedemptionRateLimit (5/60s/IP, "RD" bucket) guards code-guessing
+			// here too (cycle-8 L1).
+			switchGroup.POST("/user/topup", middleware.RedemptionRateLimit(), handler.SwitchUserTopup)
 			// CN-survivable self-update mirror: latest Switch desktop release
 			// (admin-published via switch_app.* options; 404 = unpublished,
 			// client falls back to GitHub Releases).
@@ -492,11 +507,13 @@ func SetApiV2Router(router *gin.Engine) {
 				// Phase 1: cost-aware-routing savings analyzer (read-only).
 				govRoute.GET("/savings", handler.GetGovernanceSavings)
 			}
-			adminRoute.GET("/audit/events", middleware.CriticalRateLimit(), handler.GetAuditEvents)
-			adminRoute.GET("/audit/actions", handler.ListAuditActionsV2)
-			adminRoute.GET("/audit/export", middleware.CriticalRateLimit(), handler.ExportAuditEventsV2)
-			// Tamper-evidence hash-chain verification (migration 024).
-			adminRoute.GET("/audit/chain-verify", middleware.CriticalRateLimit(), handler.VerifyAuditChainV2)
+			// L4 (2026-09-13): the four audit-feed GETs moved OFF adminRoute
+			// onto auditRoute (below, outside this block) — RootOrGranted, not
+			// RootJWTAuth, so a delegated audit:read grant can reach them
+			// without root. /audit/coverage stays here: it is L2's own
+			// admin/internal-admin write-audit COVERAGE report, a different
+			// surface from the audit EVENT feed the grant unlocks.
+			//
 			// L2 audit-completeness: explicit-vs-fallback coverage of the
 			// admin/internal-admin write surface (audit_coverage_gen.go).
 			adminRoute.GET("/audit/coverage", handler.GetAuditCoverageV2)
@@ -541,6 +558,48 @@ func SetApiV2Router(router *gin.Engine) {
 			adminRoute.GET("/security/totp-stats", middleware.CriticalRateLimit(), handler.GetAdminTotpStatsV2)
 			adminRoute.POST("/security/users/:id/totp/force-disable",
 				middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), handler.ForceDisableTotpV2)
+
+			// L3 (2026-09-13): per-pod heartbeat view of the periodic
+			// background jobs registered in taskreg (see taskreg.Register's
+			// call sites for the current list — it grows independently of
+			// this comment). Root-only, same class of plain aggregate read
+			// as /gateway/health above — no :id, no write.
+			adminRoute.GET("/system/tasks", handler.GetSystemTasksV2)
+
+			// L4 (2026-09-13, auth-security-17/18, console-ux-36): grant
+			// MANAGEMENT (who holds a delegated permission) stays root-only
+			// under adminRoute — only root decides who gets delegated
+			// access. What a grant UNLOCKS (auditRoute, below) is the
+			// separate, narrower RootOrGranted gate.
+			authzRoute := adminRoute.Group("/authz")
+			{
+				authzRoute.GET("/grants", handler.ListGrantsV2)
+				authzRoute.POST("/grants", handler.CreateGrantV2)
+				authzRoute.DELETE("/grants/:id", handler.RevokeGrantV2)
+				authzRoute.GET("/catalog", handler.GetAuthzCatalogV2)
+			}
+		}
+
+		// L4 (2026-09-13): the audit-feed GETs, gated by RootOrGranted
+		// instead of RootJWTAuth — a session-authenticated admin (role >=
+		// RoleAdminUser) holding an ACTIVE admin_permission_grants row for
+		// (audit, read) reaches these without root; a Bearer JWT and a
+		// role < RoleAdminUser session are rejected exactly as RootJWTAuth
+		// rejected them before this lane (root passes unconditionally). A
+		// role >= RoleAdminUser session WITHOUT a grant now gets HTTP 403
+		// {error_code:"PERMISSION_DENIED"} where RootJWTAuth previously
+		// answered HTTP 200 {"success":false,...} — a real shape change for
+		// that one caller class, not "rejected exactly as before". A
+		// deliberate, confined exception to "adminRoute is RootJWTAuth,
+		// full stop" — see root_or_granted.go.
+		auditRoute := apiV2.Group("/admin/audit")
+		auditRoute.Use(middleware.RootOrGranted("audit", "read"))
+		{
+			auditRoute.GET("/events", middleware.CriticalRateLimit(), handler.GetAuditEvents)
+			auditRoute.GET("/actions", handler.ListAuditActionsV2)
+			auditRoute.GET("/export", middleware.CriticalRateLimit(), handler.ExportAuditEventsV2)
+			// Tamper-evidence hash-chain verification (migration 024).
+			auditRoute.GET("/chain-verify", middleware.CriticalRateLimit(), handler.VerifyAuditChainV2)
 		}
 
 		// ================================================================

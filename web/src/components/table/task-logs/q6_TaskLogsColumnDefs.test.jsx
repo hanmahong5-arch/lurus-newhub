@@ -121,6 +121,7 @@ const COLUMN_KEYS = {
   PLATFORM: 'platform',
   TYPE: 'type',
   TASK_ID: 'task_id',
+  REQUEST_ID: 'request_id',
   TASK_STATUS: 'task_status',
   PROGRESS: 'progress',
   FAIL_REASON: 'fail_reason',
@@ -165,6 +166,7 @@ const SUBMIT = Math.floor(new Date(2024, 0, 2, 3, 4, 5).getTime() / 1000);
 const baseRecord = (over = {}) => ({
   id: 9001,
   task_id: 'task-abc-123',
+  request_id: 'req-abc-123',
   channel_id: 37,
   platform: 'suno',
   action: 'MUSIC',
@@ -179,7 +181,7 @@ const baseRecord = (over = {}) => ({
 beforeEach(() => vi.clearAllMocks());
 
 describe('column set', () => {
-  it('exposes the ten columns the screen renders, keyed by the caller’s map', () => {
+  it('exposes the eleven columns the screen renders, keyed by the caller’s map', () => {
     expect(cols().map((c) => c.key)).toEqual([
       'submit_time',
       'finish_time',
@@ -188,6 +190,7 @@ describe('column set', () => {
       'platform',
       'type',
       'task_id',
+      'request_id',
       'task_status',
       'progress',
       'fail_reason',
@@ -511,6 +514,24 @@ describe('task id cell — the raw record dump', () => {
     fireEvent.click(screen.getByTestId('ellipsis-text'));
     expect(H.openContentModal).toHaveBeenCalledTimes(1);
     expect(H.openContentModal.mock.calls[0][0]).toContain('task-abc-123');
+  });
+});
+
+describe('request id column', () => {
+  it('shows the request id and copies it when clicked (support lookup key, migration 035)', () => {
+    cell('request_id', baseRecord({ request_id: 'req-support-1' }));
+    const text = screen.getByTestId('ellipsis-text');
+    expect(text).toHaveTextContent('req-support-1');
+    fireEvent.click(text);
+    expect(H.copyText).toHaveBeenCalledWith('req-support-1');
+    // Copies, not the raw-record dump this column sits next to.
+    expect(H.openContentModal).not.toHaveBeenCalled();
+  });
+
+  it('shows a dash for a pre-migration row with no request_id', () => {
+    cell('request_id', baseRecord({ request_id: '' }));
+    expect(screen.getByTestId('cell')).toHaveTextContent('-');
+    expect(screen.queryByTestId('ellipsis-text')).not.toBeInTheDocument();
   });
 });
 

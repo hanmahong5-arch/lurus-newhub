@@ -214,3 +214,53 @@ func TestFaultSimModesProduceTheirFault(t *testing.T) {
 		}
 	})
 }
+
+// TestFaultSimTaskRoutesPresentWhenEnabled is the A-F6 lock: the UAT probe
+// (deploy/k8s/r6-uat/README.md) depends on the two fault-simulator task
+// routes (suno-shaped submit/fetch, cycle-8 L8) actually being registered
+// when FAULTSIM_TOKEN is set — TestFaultSimRoutePresentWhenEnabled above
+// only asserted the chat-completions path, so deleting
+// api-v2-router.go's two faultsim task route lines turned nothing red.
+// Mirrors TestFaultSimRouteAbsentByDefault/-PresentWhenEnabled's own/off
+// pairing for the same two routes.
+func TestFaultSimTaskRoutesPresentWhenEnabled(t *testing.T) {
+	t.Setenv("FAULTSIM_TOKEN", "test-token")
+
+	if !handler.FaultSimEnabled() {
+		t.Fatal("t.Setenv(FAULTSIM_TOKEN) did not take effect")
+	}
+	routes := faultSimRoutes(t)
+	want := map[string]bool{
+		"POST /api/v2/faultsim/suno/submit/:action": false,
+		"POST /api/v2/faultsim/suno/fetch":          false,
+	}
+	for _, rt := range routes {
+		key := rt.Method + " " + rt.Path
+		if _, ok := want[key]; ok {
+			want[key] = true
+		}
+	}
+	for k, found := range want {
+		if !found {
+			t.Errorf("route %q not registered with FAULTSIM_TOKEN set; got routes: %+v", k, routes)
+		}
+	}
+}
+
+// TestFaultSimTaskRoutesAbsentByDefault is the OFF-direction counterpart:
+// without FAULTSIM_TOKEN, neither task route may be reachable, same
+// guarantee TestFaultSimRouteAbsentByDefault gives the chat-completions
+// route.
+func TestFaultSimTaskRoutesAbsentByDefault(t *testing.T) {
+	t.Setenv("FAULTSIM_TOKEN", "")
+
+	if handler.FaultSimEnabled() {
+		t.Fatal("FaultSimEnabled() is true with an empty FAULTSIM_TOKEN")
+	}
+	routes := faultSimRoutes(t)
+	for _, rt := range routes {
+		if rt.Path == "/api/v2/faultsim/suno/submit/:action" || rt.Path == "/api/v2/faultsim/suno/fetch" {
+			t.Errorf("unexpected faultsim task route registered by default: %s %s", rt.Method, rt.Path)
+		}
+	}
+}

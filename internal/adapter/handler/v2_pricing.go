@@ -49,9 +49,13 @@ func GetPricingV2(c *gin.Context) {
 		// at boot — not necessarily admin-configured. The console prefills
 		// its editable input from this field either way, closing the
 		// write-only gap the field used to have.
-		CacheRatio             *float64    `json:"cache_ratio,omitempty"`
-		EnableGroups           interface{} `json:"enable_groups"`
-		SupportedEndpointTypes interface{} `json:"supported_endpoint_types"`
+		CacheRatio *float64 `json:"cache_ratio,omitempty"`
+		// ContextTiers is omitted for a model with no tier list — the
+		// mechanism ships default-empty (billing-pricing-14), so this is
+		// nil/omitted for every model until an admin writes one.
+		ContextTiers           []ratio_setting.ContextTier `json:"context_tiers,omitempty"`
+		EnableGroups           interface{}                 `json:"enable_groups"`
+		SupportedEndpointTypes interface{}                 `json:"supported_endpoint_types"`
 	}
 
 	// Build vendor id→name lookup once.
@@ -62,6 +66,7 @@ func GetPricingV2(c *gin.Context) {
 	}
 
 	cacheRatios := ratio_setting.GetCacheRatioCopy()
+	contextTiers := ratio_setting.GetContextLengthTiersCopy()
 	pricing := make([]pricingItem, 0, len(rawPricing))
 	for _, p := range rawPricing {
 		item := pricingItem{
@@ -75,6 +80,9 @@ func GetPricingV2(c *gin.Context) {
 		}
 		if cr, ok := cacheRatios[p.ModelName]; ok {
 			item.CacheRatio = &cr
+		}
+		if ct, ok := contextTiers[p.ModelName]; ok && len(ct) > 0 {
+			item.ContextTiers = ct
 		}
 		pricing = append(pricing, item)
 	}

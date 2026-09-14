@@ -300,3 +300,76 @@ func TestGetPricingV2_CacheRatioPrefill(t *testing.T) {
 		t.Errorf("%s: cache_ratio = %v, want omitted (no configured entry)", withoutRatio, withoutRow["cache_ratio"])
 	}
 }
+
+// 6. ContextTiersPrefill — a model with a configured context-length pricing
+// tier list gets it projected into the pricing row (billing-pricing-14); a
+// model with none (same catalogue, seeded alongside it) omits the field.
+// Mirrors TestGetPricingV2_CacheRatioPrefill for the new field.
+func TestGetPricingV2_ContextTiersPrefill(t *testing.T) {
+	ctx := setupPricingRouter(t)
+	prevTiers := ratio_setting.ContextLengthTiers2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateContextLengthTiersByJSONString(prevTiers) })
+
+	withTiers := "context-tiers-prefill-with-entry"
+	withoutTiers := "context-tiers-prefill-without-entry"
+
+	ch := &repo.Channel{Type: 1, Status: common.ChannelStatusEnabled, Name: "context-tiers-prefill-channel", Models: withTiers + "," + withoutTiers, Group: "default"}
+	if err := ctx.db.Create(ch).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	for _, model := range []string{withTiers, withoutTiers} {
+		if err := ctx.db.Create(&repo.Ability{Group: "default", Model: model, ChannelId: ch.Id, Enabled: true}).Error; err != nil {
+			t.Fatalf("seed ability for %q: %v", model, err)
+		}
+	}
+	// repo.GetPricing() caches its catalogue for ~1 minute process-wide
+	// (repo/pricing.go); this test's hermetic per-test DB is otherwise
+	// invisible to a cache warmed by an earlier test in the same run —
+	// without this, the row this test asserts on can come from whichever
+	// channel/ability rows a preceding test in this file seeded instead.
+	repo.InvalidatePricingCache()
+
+	if err := ratio_setting.UpdateContextLengthTiersByJSONString(
+		`{"` + withTiers + `":[{"threshold_tokens":0,"model_ratio":1},{"threshold_tokens":3000,"model_ratio":2}]}`,
+	); err != nil {
+		t.Fatalf("seed live ContextLengthTiers map: %v", err)
+	}
+
+	w := getPricing(ctx, ctx.tenantSlug)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	resp := parsePricing(t, w)
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data missing, body: %s", w.Body.String())
+	}
+	rows, ok := data["pricing"].([]interface{})
+	if !ok {
+		t.Fatalf("data.pricing missing/wrong type, body: %s", w.Body.String())
+	}
+	byModel := make(map[string]map[string]interface{}, len(rows))
+	for _, r := range rows {
+		row, _ := r.(map[string]interface{})
+		if row != nil {
+			byModel[fmt.Sprint(row["model_name"])] = row
+		}
+	}
+
+	withRow, ok := byModel[withTiers]
+	if !ok {
+		t.Fatalf("no pricing row for %q, rows: %v", withTiers, rows)
+	}
+	tiers, ok := withRow["context_tiers"].([]interface{})
+	if !ok || len(tiers) != 2 {
+		t.Fatalf("%s: context_tiers = %v, want a 2-entry list", withTiers, withRow["context_tiers"])
+	}
+
+	withoutRow, ok := byModel[withoutTiers]
+	if !ok {
+		t.Fatalf("no pricing row for %q, rows: %v", withoutTiers, rows)
+	}
+	if _, present := withoutRow["context_tiers"]; present {
+		t.Errorf("%s: context_tiers = %v, want omitted (no configured entry)", withoutTiers, withoutRow["context_tiers"])
+	}
+}

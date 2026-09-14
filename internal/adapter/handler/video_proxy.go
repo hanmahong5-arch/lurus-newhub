@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -13,9 +12,16 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/gin-gonic/gin"
 )
+
+// videoProxyMetricsRoute is the "route" label VideoProxy's rejections/
+// truncations carry on metrics.TaskMediaGuardRejectionsTotal, distinguishing
+// this legacy relay route from the generic artifact-content route
+// (task_media_guard.go's streamMediaContent uses "artifact_content").
+const videoProxyMetricsRoute = "video_proxy"
 
 func VideoProxy(c *gin.Context) {
 	taskID := c.Param("task_id")
@@ -172,8 +178,50 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
+	// Cycle-8 L9: the same self-URL/loop guard task_media_guard.go's
+	// streamMediaContent applies to the generic artifact-content route, now
+	// also gating this handler's resolved videoURL before it is dialed.
+	// This is new protection — video_proxy.go had neither check before this
+	// lane — not a port of pre-existing behaviour; the ownership check above
+	// and its 403 are what stays byte-identical (see
+	// TestVideoProxy_ForeignUser403 in task_generic_test.go).
+	//
+	// allowedArtifactScheme (task_media_guard.go), the same http/https-only
+	// predicate streamMediaContent uses, is observably a no-op for THIS
+	// handler: Go's http.Client already refuses to dial a non-http(s)
+	// scheme with no network I/O, landing in the same client.Do err!=nil
+	// branch below — which is why this branch keeps the OLD "Failed to
+	// fetch video content" message (the operator ruling's byte-identical
+	// requirement for "the previously-502 case") instead of a distinct
+	// message: there is no behaviour left to distinguish. It is kept
+	// anyway as defense-in-depth against a future change to the
+	// client/transport, and its rejection is still counted.
+	if !allowedArtifactScheme(req.URL.Scheme) {
+		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "scheme").Inc()
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Refusing unfetchable video URL scheme for task %s: %s", taskID, videoURL))
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{
+				"message": "Failed to fetch video content",
+				"type":    "server_error",
+			},
+		})
+		return
+	}
+	if isSelfOrLoopURL(c, req.URL) {
+		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "self_url").Inc()
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Refusing self-referential video URL for task %s: %s", taskID, videoURL))
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{
+				"message": "Refused to proxy a self-referential video URL",
+				"type":    "server_error",
+			},
+		})
+		return
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
+		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "upstream_error").Inc()
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to fetch video from %s: %s", videoURL, err.Error()))
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
@@ -186,10 +234,29 @@ func VideoProxy(c *gin.Context) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "upstream_error").Inc()
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Upstream returned status %d for %s", resp.StatusCode, videoURL))
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
 				"message": fmt.Sprintf("Upstream service returned status %d", resp.StatusCode),
+				"type":    "server_error",
+			},
+		})
+		return
+	}
+
+	// A KNOWN oversized Content-Length is rejected before any header is
+	// written to the client, same as the generic artifact-content route —
+	// see maxProxiedArtifactBytes' doc comment (task_media_guard.go) for why
+	// silently truncating under a 200 (this handler's previous behaviour)
+	// is not an option: the client would receive a corrupt file under a
+	// Content-Length header that still claims the full size.
+	if resp.ContentLength > maxProxiedArtifactBytes {
+		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "size_cap").Inc()
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Video content exceeds proxy size limit for task %s: content-length=%d", taskID, resp.ContentLength))
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{
+				"message": "Video content exceeds the proxy size limit",
 				"type":    "server_error",
 			},
 		})
@@ -203,9 +270,18 @@ func VideoProxy(c *gin.Context) {
 	}
 
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400") // Cache for 24 hours
+	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
 	c.Writer.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(c.Writer, resp.Body)
+	// copyCapped (task_media_guard.go): same body-size cap the generic
+	// artifact-content route uses, so neither proxy can turn one request
+	// into an unbounded transfer.
+	n, err := copyCapped(c.Writer, resp.Body, maxProxiedArtifactBytes)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
+	}
+	if resp.ContentLength < 0 && n >= maxProxiedArtifactBytes {
+		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "size_cap").Inc()
+		logger.LogError(c.Request.Context(), fmt.Sprintf(
+			"VideoProxy: unknown-length video stream truncated at %d bytes for task %s", maxProxiedArtifactBytes, taskID))
 	}
 }
