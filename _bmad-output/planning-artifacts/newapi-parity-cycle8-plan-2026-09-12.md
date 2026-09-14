@@ -1027,3 +1027,6 @@ preconditions: lanes L2, L6, L7 ship with hermetic + seeded-row proof and stay `
 UAT until those exist. O6 vendor tier numbers: mechanism ships empty. Migrations 034 → 035 →
 036 are reserved in the root ledger in that order before any SQL. Lane order for development:
 L1, L3, L4 (with the authHelper refactor first), L8, L9, L10, L2, L5, L6, L7.
+
+### Migration renumbering (operator, 2026-09-13, binding)
+The embedded-FS contiguity lock (`internal/pkg/migration/runner_more_unit_test.go`, strict `N == i+1`) fails on any tree where 036 exists without 035, and the development order runs L8 before L7. The root ledger was therefore swapped: **035 = `tasks_add_project_id`** (L8; adds `tasks.project_id` default 0 and `tasks.request_id` varchar(64) default empty with an index) and **036 = `create_response_registry`** (L7). Every §3/§8 reference to "035" for L7 reads 036, and "036" for L8 reads 035. Ledger order = development order = L4 (034) → L8 (035) → L7 (036).
