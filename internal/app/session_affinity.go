@@ -86,6 +86,16 @@ func affinityTTL() time.Duration {
 //     exactly this: steering requests that share a prompt prefix.
 //  3. metadata.user_id (Anthropic Messages) — coarser (user, not conversation)
 //     but the only stable handle the Messages API offers.
+//
+// Two callers derive the key for one request and must agree on it: the
+// distributor middleware, before the first channel selection (the only
+// selection that consults the pin — retries skip the lookup), from the header
+// and the raw body's prompt_cache_key / metadata.user_id; and the relay
+// handler, after the typed body is parsed, through this function. Both go
+// through DeriveSessionAffinityKeyFromRaw with the same precedence
+// (header, then body id) and the same scope, so the key the distributor
+// stored is the key the handler echoes in the response header and the key an
+// operator purges (TestDistribute_SessionAffinity_FirstSelectionUsesPin).
 func DeriveSessionAffinityKey(c *gin.Context, request dto.Request) string {
 	if c == nil || !SessionAffinityEnabled() {
 		return ""
@@ -95,6 +105,17 @@ func DeriveSessionAffinityKey(c *gin.Context, request dto.Request) string {
 	if raw == "" {
 		raw = extractRequestAffinityID(request)
 	}
+	return DeriveSessionAffinityKeyFromRaw(c, raw)
+}
+
+// DeriveSessionAffinityKeyFromRaw scopes and hashes an already-extracted
+// conversation id (see DeriveSessionAffinityKey for the sources) and sets the
+// response header. An empty raw id yields "" and sets nothing.
+func DeriveSessionAffinityKeyFromRaw(c *gin.Context, raw string) string {
+	if c == nil || !SessionAffinityEnabled() {
+		return ""
+	}
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
 	}

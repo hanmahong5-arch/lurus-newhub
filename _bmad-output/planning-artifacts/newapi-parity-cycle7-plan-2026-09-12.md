@@ -1068,3 +1068,10 @@ against the text above. Where they conflict, this section is authoritative.
 - **Prose rule applied across all lanes:** absolute words (every/never/always/only/all/exactly)
   and counts of enumerated lists were removed from comments and docs unless a test in the same
   package proves them.
+- **Post-deploy live finding (L5 probe, 2026-09-14).** The affinity pin was never looked up nor
+  stored on the live path: the relay handler derived the key after the distributor had already
+  made the first (and only pin-consulting) selection, so the UAT counters stayed 0 and a purge
+  by the echoed key answered 404 while the header was still emitted. Fixed in the follow-up PR:
+  the distributor derives the same key (header, then prompt_cache_key / metadata.user_id) before
+  the first selection; `TestDistribute_SessionAffinity_FirstSelectionUsesPin` drives the real
+  middleware with two channels and asserts miss → hit, same channel, and purge by the header key.
