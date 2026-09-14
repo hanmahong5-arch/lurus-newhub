@@ -22,6 +22,31 @@ func CloseResponseBodyGracefully(httpResponse *http.Response) {
 	}
 }
 
+// UpstreamHeadersNotForwarded lists response header names IOCopyBytesGracefully
+// must not copy from the upstream vendor onto the client-facing response.
+// X-Request-Id/X-Oneapi-Request-Id are the gateway's own minted id
+// (middleware.RequestId sets them on c.Writer before this runs); some
+// vendors send their own value under the identically-named "X-Request-Id"
+// (the OpenAI-wire convention), which would otherwise silently overwrite it
+// here. The remaining names are the ones
+// provider.upstreamRequestIdHeaders already captures into
+// other.upstream_request_id for admins — forwarding them raw would just
+// duplicate that value under a second, undocumented channel with no tier
+// gate. provider imports this package, so the reverse import would cycle —
+// TestUpstreamRequestIdHeaders_AllSkippedFromClientResponse (provider
+// package) asserts the capture list is a subset of this one — one
+// direction; a name dropped from the capture list is not caught —
+// rather than a comment. http.Header canonicalizes header names (net/http,
+// textproto), so these must be written in canonical form to match
+// src.Header's keys.
+var UpstreamHeadersNotForwarded = map[string]bool{
+	"X-Request-Id":        true,
+	"X-Oneapi-Request-Id": true,
+	"Request-Id":          true,
+	"Openai-Request-Id":   true,
+	"Cf-Ray":              true,
+}
+
 func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	if c.Writer == nil {
 		return
@@ -35,8 +60,10 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	// For example, Postman will report error, and we cannot check the response at all.
 	if src != nil {
 		for k, v := range src.Header {
-			// avoid setting Content-Length
-			if k == "Content-Length" {
+			// avoid setting Content-Length, and skip the vendor's own
+			// request-id headers so they do not clobber the gateway's (see
+			// UpstreamHeadersNotForwarded).
+			if k == "Content-Length" || UpstreamHeadersNotForwarded[k] {
 				continue
 			}
 			c.Writer.Header().Set(k, v[0])

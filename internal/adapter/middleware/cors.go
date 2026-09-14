@@ -22,6 +22,11 @@ var CORSExposedHeaders = []string{
 	"X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset",
 	"X-RateLimit-Scope", "X-RateLimit-Type", "Retry-After",
 	"X-Model-Provider", "X-Request-Cost", "X-Quota-Remaining",
+	// X-Lurus-Affinity-Key (L5, console-ux-30): set only when the request
+	// carried a session-affinity source (app.DeriveSessionAffinityKey);
+	// exposed so a browser caller/admin tool can read it back to purge that
+	// binding via DELETE /api/v2/admin/routing/affinity/:key.
+	"X-Lurus-Affinity-Key",
 }
 
 // X-Lurus-Instance is deliberately absent: its only emitter is /metrics,

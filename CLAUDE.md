@@ -11,7 +11,7 @@ AI 数据处理枢纽 — Platform 产品组核心成员。在 New API 开源基
 - **Namespace / Port**: `lurus-newhub`(R6;2026-07-15 live 核实,旧记载 `lurus-system` 已 rot)/ pod:3000, svc:8850(NodePort 30850)
 - **Image**: `ghcr.io/hanmahong5-arch/lurus-newhub`(digest 钉版,imagePullPolicy=IfNotPresent;`:main` 由 Publish workflow 更新)
 - **DB**: PostgreSQL **16.14**，库 `newhub`，表在 **`public`** schema（2026-08-24 实测 40 张；旧记载的 `lurus_api` schema 已 rot）。GORM auto-migrate + embedded migration runner；非 postgres:// DSN boot fast-fail（2026-06 起）。Redis **DB 2**（`redis.lurus-system.svc:6379/2`，旧记载 DB 0 已 rot）。Meilisearch 未部署（`MEILISEARCH_ENABLED=false`）
-- **Auth**: OIDC (vendor-neutral; issuer/clientId deploy-time owner-gated), Passkey, session cookie/Redis
+- **Auth**: OIDC (vendor-neutral; issuer/clientId deploy-time owner-gated), TOTP step-up (`internal/app/totp`), session cookie/Redis。Passkey 从未有过 handler/route(2026-09-01 清除 settings 空壳 34c665d9,见 `r5c_status_capability_test.go` N5)
 - **Product Group**: Platform (P0)
 
 ## Core Capabilities
@@ -42,7 +42,7 @@ AI 数据处理枢纽 — Platform 产品组核心成员。在 New API 开源基
 cmd/server/main.go           # Entry point
 internal/
 ├── domain/entity/           # Domain entities (channel, user, log, token, tenant, task…)
-├── app/                     # Business logic (relay/, passkey/, billing, quota, channel…)
+├── app/                     # Business logic (relay/, totp/, tenantpolicy/, governance/, billing, quota, channel…)
 │   └── relay/               # Multi-modal request dispatch (30+ providers)
 ├── adapter/
 │   ├── handler/             # HTTP controllers + router/ (v1/v2/relay/internal/web)

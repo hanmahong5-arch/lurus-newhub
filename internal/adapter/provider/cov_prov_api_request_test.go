@@ -96,7 +96,7 @@ func (a *provReqCovTaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, 
 }
 func (a *provReqCovTaskAdaptor) GetModelList() []string { return nil }
 func (a *provReqCovTaskAdaptor) GetChannelName() string { return "" }
-func (a *provReqCovTaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy string) (*http.Response, error) {
+func (a *provReqCovTaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy string, forceHTTP1 ...bool) (*http.Response, error) {
 	return nil, nil
 }
 func (a *provReqCovTaskAdaptor) ParseTaskResult(respBody []byte) (*common.TaskInfo, error) {

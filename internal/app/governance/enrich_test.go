@@ -367,3 +367,30 @@ func TestEnrichLogParams_EndUserAbsentWhenEmpty(t *testing.T) {
 		t.Error("Other[end_user] should be absent when RelayInfo carries no EndUserHash")
 	}
 }
+
+// TestEnrichLogParams_UpstreamRequestId_WrittenOnlyWhenPresent covers the
+// vendor-request-id capture's settlement-path half: written verbatim when
+// provider.doRequest populated RelayInfo.UpstreamRequestId, absent (not an
+// empty string) when the upstream sent none of the headers in
+// upstreamRequestIdHeaders.
+func TestEnrichLogParams_UpstreamRequestId_WrittenOnlyWhenPresent(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now(), UpstreamRequestId: "vend-req-abc123"}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if got := params.Other["upstream_request_id"]; got != "vend-req-abc123" {
+		t.Errorf("Other[upstream_request_id] = %v, want %q", got, "vend-req-abc123")
+	}
+}
+
+func TestEnrichLogParams_UpstreamRequestId_AbsentWhenEmpty(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now()}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+
+	if _, exists := params.Other["upstream_request_id"]; exists {
+		t.Error("Other[upstream_request_id] should be absent, not an empty string, when RelayInfo carries none")
+	}
+}

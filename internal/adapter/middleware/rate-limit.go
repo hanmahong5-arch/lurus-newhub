@@ -138,6 +138,15 @@ func CriticalRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+// TotpBackupCodesRateLimit limits backup-code regeneration to 5 per 20
+// minutes per IP — its own "TB" bucket, deliberately separate from
+// CriticalRateLimit's shared "CT" bucket (channel-key reveal, TOTP disable)
+// so a burst against one endpoint cannot throttle a caller out of the other
+// (§8 L6 amendment: "not CriticalRateLimit()'s IP-keyed 'CT' bucket").
+func TotpBackupCodesRateLimit() func(c *gin.Context) {
+	return rateLimitFactory(5, 20*60, "TB")
+}
+
 func DownloadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.DownloadRateLimitNum, common.DownloadRateLimitDuration, "DW")
 }

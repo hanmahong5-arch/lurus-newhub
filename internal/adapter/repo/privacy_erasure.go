@@ -175,13 +175,49 @@ func HardDeleteUserTokens(ctx context.Context, userID int) (int64, error) {
 // the shared secret is security-adjacent personal data and was previously
 // left behind by the erasure cascade (SEC-C: a purged account could still
 // have a live step-up factor in user_totps). No-op (0, nil) when the user
-// never enrolled.
+// never enrolled — and, just as importantly, when the user_totps table
+// itself does not exist yet. The table is created lazily (ensureUserTOTPTable
+// in user_totp.go), and not only on enroll: GetUserTOTP calls it too, and
+// GetTotpStatus (handler/totp.go) calls GetUserTOTP for each authenticated
+// caller of the Settings TOTP card (unconditional after the auth check),
+// enrolled or not. Without this guard, a deployment where
+// the table has never been created would fail this DELETE at this exact step
+// ("relation user_totps does not exist"); runErasurePass (lifecycle/
+// privacy_erasure.go) records the error and retries the request on the next
+// tick, per its own comment there.
 func HardDeleteUserTOTP(ctx context.Context, userID int) (int64, error) {
+	if !DB.Migrator().HasTable(&entity.UserTOTP{}) {
+		return 0, nil
+	}
 	result := WithoutTenantIsolationCtx(ctx, DB).Unscoped().
 		Where("user_id = ?", userID).
 		Delete(&entity.UserTOTP{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("hard delete user totp: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// HardDeleteUserTOTPBackupCodes removes the user's TOTP recovery codes (used
+// and unused), if any — same security-adjacent-personal-data class as the
+// TOTP secret above, so it rides the same erasure step (SEC-C). Same lazy-
+// table guard as HardDeleteUserTOTP above and for the same reason: the
+// user_totp_backup_codes table is created lazily by
+// ensureUserTOTPBackupCodeTable, reached from more than confirm/regenerate/
+// force-disable — CountUnusedUserTOTPBackupCodes (GetTotpStatus, for any
+// already-enrolled user), ConsumeUserTOTPBackupCode (UniversalVerify method
+// totp_backup), DeleteUserTOTPBackupCodes (self-service disable) and
+// GetTOTPAdoptionStats (the admin stats endpoint, unconditionally) all call
+// it too.
+func HardDeleteUserTOTPBackupCodes(ctx context.Context, userID int) (int64, error) {
+	if !DB.Migrator().HasTable(&entity.UserTOTPBackupCode{}) {
+		return 0, nil
+	}
+	result := WithoutTenantIsolationCtx(ctx, DB).Unscoped().
+		Where("user_id = ?", userID).
+		Delete(&entity.UserTOTPBackupCode{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("hard delete user totp backup codes: %w", result.Error)
 	}
 	return result.RowsAffected, nil
 }
@@ -194,6 +230,30 @@ func HardDeleteUserIdentityMappings(ctx context.Context, userID int) (int64, err
 		Delete(&UserIdentityMapping{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("hard delete identity mappings: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// HardDeleteUserSessions removes the user's per-device session-registry rows
+// (entity.UserSession — L7, auth-security-08/26/29): IP,
+// user-agent and session-key are personal-adjacent data, same class as the
+// tokens/TOTP rows the erasure cascade already hard-deletes at this step.
+// entity.UserSession has no soft-delete column (see its own doc comment) and
+// is registered in the boot-time AutoMigrate list (repo/main.go), unlike the
+// lazily-created TOTP tables above, so this does not need their HasTable
+// guard. Called from the privacy-erasure cascade (lifecycle/privacy_erasure.go
+// executeErasure, same step as HardDeleteUserTokens/HardDeleteUserTOTP*) and
+// from DeleteUserById (the live user-delete path InternalDeleteUser's
+// platform-core user:delete scope calls) — cycle7 L7 repair round 3, finding
+// routing-resilience-limits-13#11. (repo.HardDeleteUserById /
+// (*User).HardDelete are a separate, currently uncalled hard-delete path;
+// this function is not wired into those.)
+func HardDeleteUserSessions(ctx context.Context, userID int) (int64, error) {
+	result := WithoutTenantIsolationCtx(ctx, DB).Unscoped().
+		Where("user_id = ?", userID).
+		Delete(&entity.UserSession{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("hard delete user sessions: %w", result.Error)
 	}
 	return result.RowsAffected, nil
 }

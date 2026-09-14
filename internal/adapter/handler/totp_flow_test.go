@@ -34,7 +34,7 @@ func setupTotpFlowDB(t *testing.T, userId int) func() {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	for _, tbl := range []interface{}{&repo.User{}, &repo.Log{}, &repo.Option{}, &entity.UserTOTP{}} {
+	for _, tbl := range []interface{}{&repo.User{}, &repo.Log{}, &repo.Option{}, &entity.UserTOTP{}, &entity.UserTOTPBackupCode{}} {
 		if err := db.AutoMigrate(tbl); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("automigrate %T: %v", tbl, err)
 		}
@@ -92,6 +92,7 @@ func buildTotpFlowRouter(userId int) *gin.Engine {
 	r.POST("/api/user/totp/enroll", TotpEnroll)
 	r.POST("/api/user/totp/confirm", TotpConfirm)
 	r.POST("/api/user/totp/disable", middleware.SecureVerificationRequired(), TotpDisable)
+	r.POST("/api/user/totp/backup-codes/regenerate", middleware.SecureVerificationRequired(), RegenerateTotpBackupCodes)
 	return r
 }
 
@@ -255,6 +256,19 @@ func TestTotpStepUp_EndToEnd(t *testing.T) {
 		t.Fatalf("enrollment should be deleted after disable: %+v", rec)
 	}
 
+	// 9b. Disable must also purge the backup codes minted at confirm (step
+	// 3c) — a factor that no longer exists must not leave recovery codes
+	// behind for it. Mutation: deleting repo.DeleteUserTOTPBackupCodes's
+	// call site in TotpDisable leaves this count at 10.
+	var remainingBackupCodes int64
+	if err := repo.DB.Model(&entity.UserTOTPBackupCode{}).
+		Where("user_id = ?", 1).Count(&remainingBackupCodes).Error; err != nil {
+		t.Fatalf("count backup codes after disable: %v", err)
+	}
+	if remainingBackupCodes != 0 {
+		t.Fatalf("backup code rows after disable = %d, want 0", remainingBackupCodes)
+	}
+
 	// 10. Back to legacy behavior: session verify passes again.
 	w, _ = doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"session"}`, nil)
 	if w.Code != http.StatusOK {
@@ -307,5 +321,301 @@ func TestTotpVerify_FailureThrottle(t *testing.T) {
 	w, _ = doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"totp","code":"`+good+`"}`, nil)
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("correct code while throttled: status=%d (want 429)", w.Code)
+	}
+}
+
+// totpDataEnvelope decodes the {backup_codes, enrolled, pending,
+// backup_codes_remaining} shapes confirm/status/regenerate return, without
+// asserting on fields a given response does not carry.
+type totpDataEnvelope struct {
+	BackupCodes          []string `json:"backup_codes"`
+	Enrolled             bool     `json:"enrolled"`
+	Pending              bool     `json:"pending"`
+	BackupCodesRemaining *int64   `json:"backup_codes_remaining"`
+}
+
+// enrollAndConfirm drives TotpEnroll + TotpConfirm to an active enrollment
+// and returns the TOTP secret (for generating further codes) plus the
+// backup codes confirm minted.
+func enrollAndConfirm(t *testing.T, r *gin.Engine) (secret string, backupCodes []string) {
+	t.Helper()
+	w, env := doJSON(t, r, http.MethodPost, "/api/user/totp/enroll", `{}`, nil)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("enroll: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var enrollData struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(env.Data, &enrollData); err != nil || enrollData.Secret == "" {
+		t.Fatalf("enroll data missing secret: %s", w.Body.String())
+	}
+	code, err := pqtotp.GenerateCode(enrollData.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("generate confirm code: %v", err)
+	}
+	w, env = doJSON(t, r, http.MethodPost, "/api/user/totp/confirm", `{"code":"`+code+`"}`, nil)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("confirm: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var confirmData totpDataEnvelope
+	if err := json.Unmarshal(env.Data, &confirmData); err != nil {
+		t.Fatalf("unmarshal confirm data: %v", err)
+	}
+	return enrollData.Secret, confirmData.BackupCodes
+}
+
+// TestTotpConfirm_ReturnsBackupCodesOnce: confirm mints 10 codes and returns
+// them exactly once; status never carries the codes, only a remaining count;
+// the DB holds only hashes — none of the returned plaintext codes appear as
+// a stored code_hash value.
+func TestTotpConfirm_ReturnsBackupCodesOnce(t *testing.T) {
+	cleanup := setupTotpFlowDB(t, 10)
+	defer cleanup()
+	r := buildTotpFlowRouter(10)
+
+	_, backupCodes := enrollAndConfirm(t, r)
+	if len(backupCodes) != apptotp.BackupCodeCount {
+		t.Fatalf("confirm returned %d backup codes, want %d", len(backupCodes), apptotp.BackupCodeCount)
+	}
+	seen := map[string]bool{}
+	for _, c := range backupCodes {
+		if len(c) != 9 || c[4] != '-' {
+			t.Fatalf("backup code %q not in XXXX-XXXX form", c)
+		}
+		if seen[c] {
+			t.Fatalf("duplicate backup code in one issuance: %q", c)
+		}
+		seen[c] = true
+	}
+
+	// Status must report the remaining count, never the codes themselves.
+	w, _ := doJSON(t, r, http.MethodGet, "/api/user/totp/status", "", nil)
+	var statusEnv apiEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &statusEnv); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	var statusData totpDataEnvelope
+	if err := json.Unmarshal(statusEnv.Data, &statusData); err != nil {
+		t.Fatalf("unmarshal status data: %v", err)
+	}
+	if len(statusData.BackupCodes) != 0 {
+		t.Fatalf("status must never return backup codes, got %v", statusData.BackupCodes)
+	}
+	if statusData.BackupCodesRemaining == nil || *statusData.BackupCodesRemaining != int64(apptotp.BackupCodeCount) {
+		t.Fatalf("status backup_codes_remaining = %v, want %d", statusData.BackupCodesRemaining, apptotp.BackupCodeCount)
+	}
+
+	// DB holds only one-way hashes: none of the returned plaintext codes
+	// appear verbatim as a stored code_hash value.
+	var storedHashes []string
+	if err := repo.DB.Model(&entity.UserTOTPBackupCode{}).
+		Where("user_id = ?", 10).Pluck("code_hash", &storedHashes).Error; err != nil {
+		t.Fatalf("query stored hashes: %v", err)
+	}
+	if len(storedHashes) != apptotp.BackupCodeCount {
+		t.Fatalf("stored backup code rows = %d, want %d", len(storedHashes), apptotp.BackupCodeCount)
+	}
+	for _, stored := range storedHashes {
+		for _, plain := range backupCodes {
+			if stored == plain {
+				t.Fatalf("plaintext backup code %q stored verbatim as code_hash", plain)
+			}
+		}
+	}
+}
+
+// TestTotpConfirm_BackupCodeMintFailureLeavesEnrollmentPending locks the
+// ordering fix: if minting backup codes fails, the enrollment must stay
+// pending (Enabled=false), not go live with zero backup codes stored and no
+// way to self-service recover. Mutation: swapping issueBackupCodesFn's call
+// back to AFTER the rec.Enabled=true/UpsertUserTOTP write (the original
+// order) makes the post-failure GetUserTOTP assertion below fail (rec.Enabled
+// would be true).
+func TestTotpConfirm_BackupCodeMintFailureLeavesEnrollmentPending(t *testing.T) {
+	cleanup := setupTotpFlowDB(t, 12)
+	defer cleanup()
+	r := buildTotpFlowRouter(12)
+
+	w, env := doJSON(t, r, http.MethodPost, "/api/user/totp/enroll", `{}`, nil)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("enroll: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var enrollData struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(env.Data, &enrollData); err != nil || enrollData.Secret == "" {
+		t.Fatalf("enroll data missing secret: %s", w.Body.String())
+	}
+
+	code1, err := pqtotp.GenerateCode(enrollData.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("generate code: %v", err)
+	}
+
+	prevIssue := issueBackupCodesFn
+	issueBackupCodesFn = func(int) ([]string, error) {
+		return nil, fmt.Errorf("simulated backup-code mint failure")
+	}
+	w, env = doJSON(t, r, http.MethodPost, "/api/user/totp/confirm", `{"code":"`+code1+`"}`, nil)
+	issueBackupCodesFn = prevIssue
+	// common.ApiError responds 200/success:false (this codebase's error
+	// convention — see internal/pkg/common/gin.go), not an HTTP 5xx.
+	if w.Code != http.StatusOK || env.Success {
+		t.Fatalf("confirm with a forced mint failure: status=%d body=%s (want 200/success:false)", w.Code, w.Body.String())
+	}
+
+	rec, err := repo.GetUserTOTP(12)
+	if err != nil {
+		t.Fatalf("GetUserTOTP after failed confirm: %v", err)
+	}
+	if rec == nil || rec.Enabled {
+		t.Fatalf("enrollment must stay PENDING after a mint failure, got %+v", rec)
+	}
+	var codeRows int64
+	repo.DB.Model(&entity.UserTOTPBackupCode{}).Where("user_id = ?", 12).Count(&codeRows)
+	if codeRows != 0 {
+		t.Fatalf("no backup code rows should exist after a mint failure, got %d", codeRows)
+	}
+
+	// The pending enrollment must still be confirmable with a fresh code
+	// once minting works again — the failure above must not have wedged it.
+	code2, err := pqtotp.GenerateCode(enrollData.Secret, time.Now().Add(-30*time.Second))
+	if err != nil {
+		t.Fatalf("generate second code: %v", err)
+	}
+	if code2 == code1 {
+		t.Skip("clock landed on a step boundary collision; rerun-safe skip")
+	}
+	w, env = doJSON(t, r, http.MethodPost, "/api/user/totp/confirm", `{"code":"`+code2+`"}`, nil)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("retry confirm after mint failure: status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestUniversalVerify_BackupCodeConsumedOnce: a fresh backup code passes
+// UniversalVerify and stamps the session exactly like a TOTP code; replaying
+// the SAME code is refused (fail-closed anti-replay — mutation: removing
+// "AND used_at=0" from the consuming UPDATE turns the second call green too).
+func TestUniversalVerify_BackupCodeConsumedOnce(t *testing.T) {
+	cleanup := setupTotpFlowDB(t, 11)
+	defer cleanup()
+	r := buildTotpFlowRouter(11)
+
+	_, backupCodes := enrollAndConfirm(t, r)
+	code := backupCodes[0]
+
+	w, env := doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"totp_backup","code":"`+code+`"}`, nil)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("first backup-code verify: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(w.Result().Cookies()) == 0 {
+		t.Fatal("backup-code verify did not stamp the session")
+	}
+
+	w, _ = doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"totp_backup","code":"`+code+`"}`, nil)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("replayed backup code: status=%d body=%s (want 403)", w.Code, w.Body.String())
+	}
+
+	// The remaining count dropped by exactly one.
+	w, _ = doJSON(t, r, http.MethodGet, "/api/user/totp/status", "", nil)
+	var statusEnv apiEnvelope
+	_ = json.Unmarshal(w.Body.Bytes(), &statusEnv)
+	var statusData totpDataEnvelope
+	_ = json.Unmarshal(statusEnv.Data, &statusData)
+	if statusData.BackupCodesRemaining == nil || *statusData.BackupCodesRemaining != int64(apptotp.BackupCodeCount-1) {
+		t.Fatalf("backup_codes_remaining after one consume = %v, want %d", statusData.BackupCodesRemaining, apptotp.BackupCodeCount-1)
+	}
+}
+
+// TestUniversalVerify_BackupCodeThrottled proves wrong backup codes consume
+// the SAME per-user failure budget as wrong TOTP codes (§8 L6): 5 wrong
+// backup-code attempts throttle the endpoint even for a subsequently
+// presented, genuinely valid TOTP code.
+func TestUniversalVerify_BackupCodeThrottled(t *testing.T) {
+	cleanup := setupTotpFlowDB(t, 12)
+	defer cleanup()
+	r := buildTotpFlowRouter(12)
+
+	secret, _ := enrollAndConfirm(t, r)
+
+	for i := 0; i < 5; i++ {
+		w, _ := doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"totp_backup","code":"ZZZZ-ZZZZ"}`, nil)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("wrong backup code attempt %d: status=%d body=%s (want 403)", i+1, w.Code, w.Body.String())
+		}
+	}
+	w, _ := doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"totp_backup","code":"ZZZZ-ZZZZ"}`, nil)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("throttled backup-code attempt: status=%d body=%s (want 429)", w.Code, w.Body.String())
+	}
+
+	good, err := pqtotp.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatalf("generate code: %v", err)
+	}
+	w, _ = doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"totp","code":"`+good+`"}`, nil)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("correct TOTP code while backup-throttled: status=%d (want 429)", w.Code)
+	}
+}
+
+// TestBackupCodes_RegenerateInvalidatesUnused: regenerate requires step-up
+// (like disable), returns a fresh set of codes, and every old code — even
+// ones never consumed — stops working.
+func TestBackupCodes_RegenerateInvalidatesUnused(t *testing.T) {
+	cleanup := setupTotpFlowDB(t, 13)
+	defer cleanup()
+	r := buildTotpFlowRouter(13)
+
+	secret, oldCodes := enrollAndConfirm(t, r)
+
+	// Without step-up, regenerate is refused exactly like disable.
+	w, env := doJSON(t, r, http.MethodPost, "/api/user/totp/backup-codes/regenerate", `{}`, nil)
+	if w.Code != http.StatusForbidden || env.Code != "VERIFICATION_REQUIRED" {
+		t.Fatalf("regenerate without step-up: status=%d code=%q body=%s", w.Code, env.Code, w.Body.String())
+	}
+
+	// Step up with a real TOTP code (the confirm code already spent one).
+	verifyCode, err := pqtotp.GenerateCode(secret, time.Now().Add(-30*time.Second))
+	if err != nil {
+		t.Fatalf("generate verify code: %v", err)
+	}
+	w, env = doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"totp","code":"`+verifyCode+`"}`, nil)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Skip("clock landed on a step boundary collision; rerun-safe skip")
+	}
+	verifiedCookies := w.Result().Cookies()
+
+	w, env = doJSON(t, r, http.MethodPost, "/api/user/totp/backup-codes/regenerate", `{}`, verifiedCookies)
+	if w.Code != http.StatusOK || !env.Success {
+		t.Fatalf("regenerate with step-up: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var regenData totpDataEnvelope
+	if err := json.Unmarshal(env.Data, &regenData); err != nil {
+		t.Fatalf("unmarshal regenerate data: %v", err)
+	}
+	if len(regenData.BackupCodes) != apptotp.BackupCodeCount {
+		t.Fatalf("regenerate returned %d codes, want %d", len(regenData.BackupCodes), apptotp.BackupCodeCount)
+	}
+	for _, nc := range regenData.BackupCodes {
+		for _, oc := range oldCodes {
+			if nc == oc {
+				t.Fatalf("regenerate reissued an old code verbatim: %q", nc)
+			}
+		}
+	}
+
+	// Every old code — none of which was ever consumed — is now dead.
+	for i, oc := range oldCodes {
+		w, _ := doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"totp_backup","code":"`+oc+`"}`, nil)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("old code %d (%q) still works after regenerate: status=%d", i, oc, w.Code)
+		}
+		if i >= 3 {
+			// Stay well under the 5-attempt failure throttle for this test's
+			// purpose (proving invalidation, not re-testing the throttle).
+			break
+		}
 	}
 }

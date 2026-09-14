@@ -406,6 +406,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		addUsedChannel(c, channel.Id)
+		// L3 residual (round-2 findings 8/11/15): provider.doRequest only
+		// clears the shared "upstream_request_id" key just before its own
+		// client.Do call, so a failure THIS attempt hits before ever reaching
+		// doRequest — GetRequestURL, header/param override, request
+		// conversion/marshal (compatible_handler.go), SetupRequestHeader —
+		// would otherwise still read back the PREVIOUS attempt's vendor id
+		// (recordRelayErrorLog's c.GetString) and stamp channel B's error row
+		// with channel A's id. Reset once per iteration, here, so an
+		// attempt starts clean regardless of which stage (if any) fails
+		// before doRequest gets a chance to overwrite it with its own catch.
+		c.Set("upstream_request_id", "")
 		requestBody, bodyErr := common.GetRequestBody(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
@@ -770,6 +781,15 @@ func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
 	other["source_product"] = ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader))
 	if upModel := c.GetString("original_model"); upModel != "" {
 		other["upstream_model"] = upModel
+	}
+	// The vendor's own request/trace id, set by provider.doRequest via
+	// c.Set beside its RelayInfo.UpstreamRequestId write — this is how a
+	// 5xx from upstream still gets it onto the error row without a new
+	// parameter on processChannelError/recordTerminalRelayError. Absent
+	// when the failure happened before any channel attempt reached
+	// doRequest (request validation, channel selection, etc).
+	if upstreamReqId := c.GetString("upstream_request_id"); upstreamReqId != "" {
+		other["upstream_request_id"] = upstreamReqId
 	}
 	adminInfo := make(map[string]interface{})
 	adminInfo["use_channel"] = c.GetStringSlice("use_channel")

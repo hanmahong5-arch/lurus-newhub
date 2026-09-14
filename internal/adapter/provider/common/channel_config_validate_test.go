@@ -52,6 +52,49 @@ func TestValidateParamOverride_UnknownOperationMode(t *testing.T) {
 	}
 }
 
+// TestValidateParamOverride_ForceHTTP1WrongType_Rejected is the lock for
+// finding L5#26: a non-bool __lurus_force_http1 must be rejected at
+// save-time rather than silently read as false by paramOverrideBool
+// (relay_info.go), which would leave an operator believing the switch is set
+// when it never engages.
+func TestValidateParamOverride_ForceHTTP1WrongType_Rejected(t *testing.T) {
+	raw := `{"__lurus_force_http1":"true"}`
+	err := ValidateParamOverride(raw)
+	if err == nil {
+		t.Fatal("expected error for __lurus_force_http1 with a non-bool value, got nil")
+	}
+	if !strings.Contains(err.Error(), "__lurus_force_http1") || !strings.Contains(err.Error(), "boolean") {
+		t.Fatalf("expected error to name the key and require a boolean, got: %v", err)
+	}
+	var verr *ChannelConfigValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("expected *ChannelConfigValidationError, got %T", err)
+	}
+}
+
+// TestValidateParamOverride_UnknownLurusKey_Rejected is the lock for the
+// "unknown __lurus_* keys are also rejected" half of finding L5#26.
+func TestValidateParamOverride_UnknownLurusKey_Rejected(t *testing.T) {
+	raw := `{"__lurus_force_http_1":true}`
+	err := ValidateParamOverride(raw)
+	if err == nil {
+		t.Fatal("expected error for an unknown __lurus_ control key, got nil")
+	}
+	if !strings.Contains(err.Error(), "__lurus_force_http_1") {
+		t.Fatalf("expected error to name the offending key, got: %v", err)
+	}
+}
+
+// TestValidateParamOverride_ForceHTTP1Bool_Accepted proves the correct shape
+// still saves cleanly — the two rejection tests above must not have turned
+// this into a false positive.
+func TestValidateParamOverride_ForceHTTP1Bool_Accepted(t *testing.T) {
+	raw := `{"__lurus_force_http1":true,"temperature":0.3}`
+	if err := ValidateParamOverride(raw); err != nil {
+		t.Fatalf("expected nil for a well-formed __lurus_force_http1 bool, got %v", err)
+	}
+}
+
 func TestValidateHeaderOverride_NotAnObject(t *testing.T) {
 	if err := ValidateHeaderOverride("[1]"); err == nil {
 		t.Fatal("expected error for a JSON array, got nil")

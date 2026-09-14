@@ -223,7 +223,17 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	}
-	err = repo.UpdateOption(option.Key, option.Value.(string))
+	// The four ratio maps are guarded by the PricingVersion lock: rewriting
+	// one here goes through the same transaction, version bump and
+	// pricing.updated audit row as the console batch write
+	// (writePricingOptionVersioned), so this route cannot change a price
+	// behind the optimistic lock
+	// (TestLegacyOptionWrite_PricingKeyBumpsVersionAndAudits).
+	if pricingOptionKeys[option.Key] {
+		err = writePricingOptionVersioned(c, option.Key, option.Value.(string), "legacy_option_api")
+	} else {
+		err = repo.UpdateOption(option.Key, option.Value.(string))
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return

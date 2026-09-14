@@ -10,15 +10,15 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/common"
-	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
-	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider"
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -408,6 +408,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 			baseURL = channelModel.GetBaseURL()
 		}
 		proxy := channelModel.GetSetting().Proxy
+		forceHTTP1 := dto.ParamOverrideForceHTTP1(channelModel.GetParamOverride())
 		adaptor := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channelModel.Type)))
 		if adaptor == nil {
 			return
@@ -415,7 +416,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		resp, err2 := adaptor.FetchTask(baseURL, channelModel.Key, map[string]any{
 			"task_id": originTask.TaskID,
 			"action":  originTask.Action,
-		}, proxy)
+		}, proxy, forceHTTP1)
 		if err2 != nil || resp == nil {
 			return
 		}

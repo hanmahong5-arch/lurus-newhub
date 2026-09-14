@@ -4,9 +4,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -46,8 +46,15 @@ type TaskAdaptor interface {
 	GetModelList() []string
 	GetChannelName() string
 
-	// FetchTask
-	FetchTask(baseUrl, key string, body map[string]any, proxy string) (*http.Response, error)
+	// FetchTask polls a task's upstream status. forceHTTP1 is variadic so
+	// existing callers/fakes that predate the L5 force_http1 pin keep
+	// compiling unchanged; omitting it (or passing false) preserves the
+	// pre-L5 client selection. When true, implementations must resolve their
+	// http.Client via app.GetHttpClientFor(proxy, true) instead of
+	// app.GetHttpClientWithProxy(proxy) — see the structural test in
+	// internal/adapter/provider that enumerates provider/task/*/adaptor.go
+	// and checks this.
+	FetchTask(baseUrl, key string, body map[string]any, proxy string, forceHTTP1 ...bool) (*http.Response, error)
 
 	ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error)
 }

@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	common2 "github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/config"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
@@ -257,19 +257,57 @@ func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
 	}
 }
 
+// upstreamRequestIdHeaders is the ordered list of upstream response headers
+// that carry the vendor's own request/trace id: x-request-id is the
+// OpenAI-compatible convention, request-id is Anthropic's, openai-request-id
+// appears on some OpenAI-compatible relays, and cf-ray is added by any vendor
+// sitting behind Cloudflare. The first header the upstream actually sent
+// wins; an upstream sending none of them is not a defect.
+var upstreamRequestIdHeaders = []string{"x-request-id", "request-id", "openai-request-id", "cf-ray"}
+
+// boundUpstreamRequestId shares the drop-not-truncate rule deriveSessionId
+// (relay_info.go) applies to X-Session-Id: printable ASCII only, drop rather
+// than truncate. The byte cap here is 128, tighter than deriveSessionId's 200
+// — a cut vendor id looks valid but will never match a support ticket, so
+// anything outside the bound comes back "" instead of a prefix.
+func boundUpstreamRequestId(raw string) string {
+	if raw == "" || len(raw) > 128 {
+		return ""
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < 0x20 || raw[i] > 0x7E {
+			return ""
+		}
+	}
+	return raw
+}
+
+// captureUpstreamRequestId returns the first non-empty upstream response
+// header named in upstreamRequestIdHeaders, bounded via boundUpstreamRequestId.
+// Never errors; "" when the upstream sent none of them (or sent one outside
+// the bound).
+func captureUpstreamRequestId(resp *http.Response) string {
+	for _, h := range upstreamRequestIdHeaders {
+		if raw := resp.Header.Get(h); raw != "" {
+			return boundUpstreamRequestId(raw)
+		}
+	}
+	return ""
+}
+
 func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	return doRequest(c, req, info)
 }
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
-	var client *http.Client
-	var err error
-	if info.ChannelSetting.Proxy != "" {
-		client, err = app.NewProxyHttpClient(info.ChannelSetting.Proxy)
-		if err != nil {
-			return nil, fmt.Errorf("new proxy http client failed: %w", err)
-		}
-	} else {
-		client = app.GetHttpClient()
+	// GetHttpClientFor is a pure pass-through to GetHttpClient()/
+	// NewProxyHttpClient (pointer-identical) when ChannelSetting.ForceHTTP1 is
+	// false — the common case — so this is byte-for-byte the same client
+	// selection as before for every channel that never sets
+	// __lurus_force_http1. See relay_info.go InitChannelMeta for where that
+	// override key is translated into ForceHTTP1.
+	client, err := app.GetHttpClientFor(info.ChannelSetting.Proxy, info.ChannelSetting.ForceHTTP1)
+	if err != nil {
+		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
 
 	var stopPinger context.CancelFunc
@@ -292,6 +330,15 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	// A retry can land on a different channel than the previous attempt.
+	// Clear the slot before this attempt runs so a failure inside client.Do
+	// below (or a resp with no captured id) does not leave the PREVIOUS
+	// attempt's vendor id on the shared gin.Context / RelayInfo — otherwise
+	// this attempt's error row (recordRelayErrorLog reads the same key)
+	// would carry channel A's id under channel B's row.
+	c.Set("upstream_request_id", "")
+	info.UpstreamRequestId = ""
+
 	// #nosec G704 — the request URL derives from channel.BaseURL, which a tenant
 	// admin can set. It is SSRF-validated at write time (CreateChannelV2/
 	// UpdateChannelV2) and at the admin test/fetch sinks. For channels with no
@@ -307,6 +354,18 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if resp == nil {
 		return nil, errors.New("resp is nil")
 	}
+
+	// Capture the vendor's own request/trace id for support-ticket
+	// correlation ("we never saw that call" ends once the vendor's own id is
+	// on the row). info.UpstreamRequestId feeds the settlement path (no
+	// gin.Context there); c.Set beside it feeds the error-log path
+	// (relay.go recordRelayErrorLog reads it back via c.GetString, the same
+	// pattern original_model/channel_id already use) without changing either
+	// function's signature. Absent when the upstream sends none of the
+	// headers in upstreamRequestIdHeaders — that is not a defect.
+	upstreamRequestId := captureUpstreamRequestId(resp)
+	info.UpstreamRequestId = upstreamRequestId
+	c.Set("upstream_request_id", upstreamRequestId)
 
 	// Bound a stuck non-stream body read (RELAY_TIMEOUT=0 leaves it otherwise
 	// unbounded). Streams are excluded: their body is governed per-chunk by

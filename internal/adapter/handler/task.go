@@ -181,9 +181,10 @@ func updateSunoTaskAll(ctx context.Context, channelId int, taskIds []string, tas
 		return errors.New("adaptor not found")
 	}
 	proxy := channel.GetSetting().Proxy
+	forceHTTP1 := dto.ParamOverrideForceHTTP1(channel.GetParamOverride())
 	resp, err := adaptor.FetchTask(*channel.BaseURL, channel.Key, map[string]any{
 		"ids": taskIds,
-	}, proxy)
+	}, proxy, forceHTTP1)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("Get Task Do req error: %v", err))
 		return err

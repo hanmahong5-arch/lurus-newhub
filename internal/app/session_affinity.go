@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -15,6 +16,16 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/gin-gonic/gin"
 )
+
+// AffinityKeyResponseHeader carries the HMAC-derived affinity key (the same
+// value affinityLoad/affinityStore key their binding by) back to the caller,
+// but ONLY when the request carried a usable affinity source — a one-shot
+// call with no session id gets no header at all, never an empty one. An
+// operator or admin tool copies this value verbatim into
+// DELETE /api/v2/admin/routing/affinity/:key to purge that one binding.
+// Documented in docs/openapi/relay.json; exposed cross-origin via
+// middleware.CORSExposedHeaders (L5, console-ux-30).
+const AffinityKeyResponseHeader = "X-Lurus-Affinity-Key"
 
 // Session affinity — keep a multi-turn conversation on the channel that served
 // its first turn.
@@ -100,7 +111,12 @@ func DeriveSessionAffinityKey(c *gin.Context, request dto.Request) string {
 		c.GetString("group") + "|" +
 		common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
-	return common.GenerateHMAC(scope + "|" + raw)
+	key := common.GenerateHMAC(scope + "|" + raw)
+	// Set on every request that carries an affinity source, not only the one
+	// that ends up pinning a channel — the header is "does this conversation
+	// participate in affinity at all", not "did this specific turn hit".
+	c.Header(AffinityKeyResponseHeader, key)
+	return key
 }
 
 // extractRequestAffinityID pulls a stable conversation id out of the parsed
@@ -285,7 +301,166 @@ func lookupAffinityChannel(param *RetryParam, affinityKey string) (*repo.Channel
 	return channel, rec.Group
 }
 
-// recordAffinityOutcome keeps the counter names in one place.
+// recordAffinityOutcome keeps the counter names in one place. Besides the
+// Prometheus counter, it keeps a plain in-process atomic triple: the admin
+// routing panel (GET /api/v2/admin/routing/affinity, L5) reads THIS, not
+// Prometheus, so it works identically whether or not a scrape pipeline is
+// wired up. These three counters — and MemEntries — are per-replica
+// in-process state, not cluster-wide: production runs 3 replicas behind one
+// NodePort (deploy/k8s/r6-stage/deployment.yaml), so a single GET only sees
+// whichever replica happened to answer it. Summing across replicas requires
+// reading the Prometheus counter (`lurus_gateway_session_affinity_total`)
+// instead. The UAT probe (1 replica, deploy/k8s/r6-uat/deployment.yaml) does
+// not exercise this gap.
 func recordAffinityOutcome(result string) {
+	switch result {
+	case "hit":
+		affinityHitCount.Add(1)
+	case "miss":
+		affinityMissCount.Add(1)
+	case "stale":
+		affinityStaleCount.Add(1)
+	}
 	metrics.RecordSessionAffinity(result)
+}
+
+var (
+	affinityHitCount   atomic.Int64
+	affinityMissCount  atomic.Int64
+	affinityStaleCount atomic.Int64
+)
+
+// resetAffinityCountersForTest zeroes the hit/miss/stale counters between
+// tests, mirroring resetAffinityMemForTest.
+func resetAffinityCountersForTest() {
+	affinityHitCount.Store(0)
+	affinityMissCount.Store(0)
+	affinityStaleCount.Store(0)
+}
+
+// AffinityStats is the admin-facing snapshot of session-affinity behaviour:
+// how often a pin was found and honoured (Hit), found nothing (Miss), or
+// found a binding that was no longer eligible (Stale); MemEntries/Backend
+// report which storage tier is actually live right now. Enabled/TTLSeconds
+// mirror SessionAffinityEnabled()/affinityTTL() so an operator does not have
+// to cross-reference env vars to know whether the feature is even live and
+// how long a pin survives.
+type AffinityStats struct {
+	Enabled    bool   `json:"enabled"`
+	TTLSeconds int    `json:"ttl_seconds"`
+	Hit        int64  `json:"hit"`
+	Miss       int64  `json:"miss"`
+	Stale      int64  `json:"stale"`
+	Backend    string `json:"backend"`     // "redis" or "memory"
+	MemEntries int    `json:"mem_entries"` // affinityMem size; 0 and meaningless when Backend=="redis"
+}
+
+// AffinityStatsSnapshot reads the counters above plus the live fallback-map
+// size. Never touches Redis — MemEntries is the bounded in-process map's own
+// size; it and the hit/miss/stale counters are per-process (see
+// GetAffinityStatsV2's doc comment), reported regardless of backend so an
+// operator can see the fallback map itself drain to 0 (e.g. after a TTL
+// sweep) even though RedisEnabled is only ever assigned at boot and cannot
+// actually flip while a process is running.
+func AffinityStatsSnapshot() AffinityStats {
+	backend := "memory"
+	if common.RedisEnabled {
+		backend = "redis"
+	}
+	affinityMemMu.Lock()
+	memEntries := len(affinityMem)
+	affinityMemMu.Unlock()
+	return AffinityStats{
+		Enabled:    SessionAffinityEnabled(),
+		TTLSeconds: int(affinityTTL().Seconds()),
+		Hit:        affinityHitCount.Load(),
+		Miss:       affinityMissCount.Load(),
+		Stale:      affinityStaleCount.Load(),
+		Backend:    backend,
+		MemEntries: memEntries,
+	}
+}
+
+// PurgeAffinityKey removes one binding by its HMAC key (the value the caller
+// got back via AffinityKeyResponseHeader). found is true only if a binding
+// actually existed and was removed. err is non-nil only for a genuine Redis
+// failure — callers MUST NOT treat err!=nil as "not found": a Redis outage
+// must surface to the caller as a failure, not be reported as a 404 that
+// would lead an operator to (wrongly) conclude the pin is already gone
+// (L5 repair, finding routing-resilience-limits-11#6/#20/#47).
+func PurgeAffinityKey(c *gin.Context, key string) (found bool, err error) {
+	if common.RedisEnabled {
+		n, err := common.RDB.Del(c.Request.Context(), affinityRedisPrefix+key).Result()
+		if err != nil {
+			logger.LogDebug(c, "session affinity purge failed: %s", err.Error())
+			return false, err
+		}
+		return n > 0, nil
+	}
+
+	affinityMemMu.Lock()
+	defer affinityMemMu.Unlock()
+	if _, ok := affinityMem[key]; !ok {
+		return false, nil
+	}
+	delete(affinityMem, key)
+	return true, nil
+}
+
+// affinityPurgeAllScanCount is the SCAN COUNT hint per round — a hint to
+// Redis about how much server-side work to do per call, not a hard cap on
+// total keys scanned. SCAN itself (unlike KEYS) never blocks the server for
+// the duration of the whole keyspace; this just keeps each round small. A
+// var, not a const, so tests can shrink it to force a real Redis keyspace to
+// span multiple SCAN pages without seeding thousands of keys.
+var affinityPurgeAllScanCount = 500
+
+// affinityPurgeAllMaxRounds bounds total SCAN round-trips so a cursor bug or
+// an adversarially huge keyspace cannot spin this call forever. Real
+// affinity keyspaces are orders of magnitude smaller than what this allows.
+// A var, not a const, so TestPurgeAllAffinity_RoundCapHit_ReportsIncomplete
+// can force the cap to bite with a small, fast keyspace.
+var affinityPurgeAllMaxRounds = 10000
+
+// PurgeAllAffinity drops the session-affinity bindings it can reach on
+// whichever backend is currently live within affinityPurgeAllMaxRounds SCAN
+// round-trips. The Redis path uses bounded SCAN+UNLINK — never KEYS, which
+// blocks the server for the size of the whole keyspace — matching the
+// enterprise-acceptance requirement for this purge-all path. Returns the
+// number of bindings removed and complete=true only if the scan actually
+// reached cursor 0; complete=false (round cap hit, or a scan/unlink error)
+// means bindings may remain even though purged rows were removed. The
+// pre-repair version of this function silently reported success whenever
+// the round cap was hit instead of surfacing the cutoff to the caller (L5
+// repair round 3, finding routing-resilience-limits-13#6) — callers must
+// not assume complete=true just because err==nil.
+func PurgeAllAffinity(c *gin.Context) (purged int, complete bool, err error) {
+	if !common.RedisEnabled {
+		affinityMemMu.Lock()
+		n := len(affinityMem)
+		affinityMem = make(map[string]affinityMemEntry)
+		affinityMemMu.Unlock()
+		return n, true, nil
+	}
+
+	ctx := c.Request.Context()
+	pattern := affinityRedisPrefix + "*"
+	var cursor uint64
+	for round := 0; round < affinityPurgeAllMaxRounds; round++ {
+		keys, next, scanErr := common.RDB.Scan(ctx, cursor, pattern, int64(affinityPurgeAllScanCount)).Result()
+		if scanErr != nil {
+			return purged, false, scanErr
+		}
+		if len(keys) > 0 {
+			if unlinkErr := common.RDB.Unlink(ctx, keys...).Err(); unlinkErr != nil {
+				return purged, false, unlinkErr
+			}
+			purged += len(keys)
+		}
+		cursor = next
+		if cursor == 0 {
+			return purged, true, nil
+		}
+	}
+	return purged, false, nil
 }

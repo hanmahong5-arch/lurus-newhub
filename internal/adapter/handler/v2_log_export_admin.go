@@ -49,15 +49,20 @@ var adminLogCSVHeader = []string{
 
 // ExportAdminLogsV2 streams platform-wide usage logs as CSV for reporting.
 //
-// GET /api/v2/admin/logs/export?format=csv&tenant_id=&type=&model_name=&start_time=&end_time=&max_rows=
+// GET /api/v2/admin/logs/export?format=csv&tenant_id=&type=&model_name=&start_time=&end_time=&upstream_request_id=&max_rows=
 //
-//	format      string — only "csv" is supported (default csv)
-//	tenant_id   string — optional tenant filter (empty = all tenants)
-//	type        int    — log type filter (0 = all)
-//	model_name  string — exact model name filter
-//	start_time  int64  — unix seconds lower bound (inclusive)
-//	end_time    int64  — unix seconds upper bound (inclusive)
-//	max_rows    int    — row cap; clamped to 100000 if higher
+//	format              string — only "csv" is supported (default csv)
+//	tenant_id           string — optional tenant filter (empty = all tenants)
+//	type                int    — log type filter (0 = all)
+//	model_name          string — exact model name filter
+//	start_time          int64  — unix seconds lower bound (inclusive)
+//	end_time            int64  — unix seconds upper bound (inclusive)
+//	upstream_request_id string — exact match on the vendor's own request/trace
+//	                              id (TierInternal; not a CSV column — content
+//	                              and other are deliberately excluded from
+//	                              this export — but usable to narrow rows for
+//	                              a support ticket)
+//	max_rows            int    — row cap; clamped to 100000 if higher
 //
 // When more rows match than the cap, the response carries X-Truncated: true
 // (plus X-Total-Matched with the full match count). Headers are computed via
@@ -79,13 +84,16 @@ func ExportAdminLogsV2(c *gin.Context) {
 	modelName := c.Query("model_name")
 	startTime, _ := strconv.ParseInt(c.DefaultQuery("start_time", "0"), 10, 64)
 	endTime, _ := strconv.ParseInt(c.DefaultQuery("end_time", "0"), 10, 64)
+	// The vendor's own request/trace id (TierInternal) — this route is
+	// root-only, so it may filter by it; "" = no filter.
+	upstreamRequestID := c.Query("upstream_request_id")
 
 	maxRows, _ := strconv.Atoi(c.DefaultQuery("max_rows", strconv.Itoa(adminExportHardMaxRows)))
 	if maxRows <= 0 || maxRows > adminExportHardMaxRows {
 		maxRows = adminExportHardMaxRows
 	}
 
-	totalMatched, err := repo.CountAdminExportLogs(tenantID, logType, modelName, startTime, endTime)
+	totalMatched, err := repo.CountAdminExportLogs(tenantID, logType, modelName, startTime, endTime, upstreamRequestID)
 	if err != nil {
 		common.SysError("ExportAdminLogsV2: count failed: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -121,7 +129,7 @@ func ExportAdminLogsV2(c *gin.Context) {
 			batchLimit = remaining
 		}
 
-		logs, err := repo.ExportAdminLogsBatch(afterID, tenantID, logType, modelName, startTime, endTime, batchLimit)
+		logs, err := repo.ExportAdminLogsBatch(afterID, tenantID, logType, modelName, startTime, endTime, upstreamRequestID, batchLimit)
 		if err != nil {
 			common.SysError("ExportAdminLogsV2: query failed: " + err.Error())
 			return

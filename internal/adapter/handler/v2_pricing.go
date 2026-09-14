@@ -10,7 +10,7 @@ import (
 )
 
 // GetPricingV2 returns the public pricing catalogue for a tenant's users.
-// Route (registered by Opus): GET /api/v2/:tenant_slug/pricing
+// Route: GET /api/v2/:tenant_slug/pricing
 // Auth: UserAuth middleware (OIDC JWT).
 //
 // Fields returned are an explicit whitelist — no admin-only fields such as
@@ -38,11 +38,18 @@ func GetPricingV2(c *gin.Context) {
 
 	rawPricing := repo.GetPricing()
 	type pricingItem struct {
-		ModelName              interface{} `json:"model_name"`
-		Vendor                 interface{} `json:"vendor"`
-		QuotaType              interface{} `json:"quota_type"`
-		ModelRatio             interface{} `json:"model_ratio"`
-		ModelPrice             interface{} `json:"model_price"`
+		ModelName  interface{} `json:"model_name"`
+		Vendor     interface{} `json:"vendor"`
+		QuotaType  interface{} `json:"quota_type"`
+		ModelRatio interface{} `json:"model_ratio"`
+		ModelPrice interface{} `json:"model_price"`
+		// CacheRatio is nil (omitted) when the live cache_ratio map has no
+		// entry for this model; when present it can be either an admin edit
+		// or one of ratio_setting's shipped defaultCacheRatio entries seeded
+		// at boot — not necessarily admin-configured. The console prefills
+		// its editable input from this field either way, closing the
+		// write-only gap the field used to have.
+		CacheRatio             *float64    `json:"cache_ratio,omitempty"`
 		EnableGroups           interface{} `json:"enable_groups"`
 		SupportedEndpointTypes interface{} `json:"supported_endpoint_types"`
 	}
@@ -54,9 +61,10 @@ func GetPricingV2(c *gin.Context) {
 		vendorByID[v.ID] = v.Name
 	}
 
+	cacheRatios := ratio_setting.GetCacheRatioCopy()
 	pricing := make([]pricingItem, 0, len(rawPricing))
 	for _, p := range rawPricing {
-		pricing = append(pricing, pricingItem{
+		item := pricingItem{
 			ModelName:              p.ModelName,
 			Vendor:                 vendorByID[p.VendorID],
 			QuotaType:              p.QuotaType,
@@ -64,7 +72,11 @@ func GetPricingV2(c *gin.Context) {
 			ModelPrice:             p.ModelPrice,
 			EnableGroups:           p.EnableGroup,
 			SupportedEndpointTypes: p.SupportedEndpointTypes,
-		})
+		}
+		if cr, ok := cacheRatios[p.ModelName]; ok {
+			item.CacheRatio = &cr
+		}
+		pricing = append(pricing, item)
 	}
 
 	// Build group_ratio scoped to all groups (no per-user narrowing — this is
@@ -85,6 +97,7 @@ func GetPricingV2(c *gin.Context) {
 			"pricing":     pricing,
 			"vendors":     vendorNames,
 			"group_ratio": groupRatio,
+			"version":     currentPricingVersion(),
 		},
 	})
 }

@@ -2,9 +2,11 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
@@ -20,15 +22,18 @@ import (
 //
 // Route:  POST /internal/v1/provisioning/tenants/:slug/credit-pool/fund
 // Scope:  balance:write  (reuse — platform's internal key already carries this
-//         scope for wallet operations; adding a bespoke scope would require a
-//         key rotation with no security benefit because the caller set is the
-//         same: lurus-platform internal API key)
+//
+//	scope for wallet operations; adding a bespoke scope would require a
+//	key rotation with no security benefit because the caller set is the
+//	same: lurus-platform internal API key)
+//
 // Auth:   X-API-Key + middleware.RequireScope(repo.ScopeBalanceWrite)
-//         (applied in internal-api-router.go), AND a tenant-scope check:
-//         the key must carry repo.ScopeAll, OR have a row in
-//         internal_api_key_tenants for (api_key_id, tenant.Id). A key
-//         missing that row gets 403 TENANT_NOT_AUTHORIZED — see the
-//         Response 403 case below for how to unlock it.
+//
+//	(applied in internal-api-router.go), AND a tenant-scope check:
+//	the key must carry repo.ScopeAll, OR have a row in
+//	internal_api_key_tenants for (api_key_id, tenant.Id). A key
+//	missing that row gets 403 TENANT_NOT_AUTHORIZED — see the
+//	Response 403 case below for how to unlock it.
 //
 // Idempotency: event_id in the request body is stored with a composite UNIQUE
 // constraint on (tenant_id, event_id) in credit_pool_fund_events (migration 031,
@@ -208,6 +213,19 @@ func InternalFundCreditPool(c *gin.Context) {
 			" amount=" + formatInt64(req.Amount) +
 			" new_balance=" + formatInt64(event.NewBalance))
 		metrics.CreditPoolBalance.WithLabelValues(tenant.Id).Set(float64(event.NewBalance))
+
+		// Money moved: audit it. Actor is the calling internal API key
+		// (ActorSystem), not an admin operator — this route has no session,
+		// only middleware.InternalApiAuth's "internal_api_key_id". No row is
+		// written on a replay (the replayed branch above, fundErr ==
+		// repo.ErrFundEventExists, returns before this point), since a replay
+		// changes no balance.
+		governance.RecordAuditEvent(governance.NewAuditEvent(
+			c, governance.ActorSystem, c.GetInt("internal_api_key_id"),
+			governance.ActionCreditPoolFunded, governance.ResourceCreditPool, int(pool.ID),
+			fmt.Sprintf(`{"tenant_id":%q,"event_id":%q,"amount":%d,"new_balance":%d,"source":%q}`,
+				tenant.Id, req.EventID, req.Amount, event.NewBalance, req.Source),
+		))
 	}
 
 	c.JSON(http.StatusOK, gin.H{

@@ -111,8 +111,14 @@ type LogQueryParams struct {
 	// (repo.OtherTextExpr).
 	RequestID string
 	SessionID string
-	Offset    int // Pagination offset
-	Limit     int // Pagination limit
+	// UpstreamRequestID filters by the Other.upstream_request_id JSON key —
+	// the VENDOR's own request/trace id, TierInternal in
+	// governance/classification.go (unlike RequestID/SessionID above, which
+	// are the caller's own values and TierPublic). Bound only on the
+	// tenant-admin log list/export; the self-service list ignores it.
+	UpstreamRequestID string
+	Offset            int // Pagination offset
+	Limit             int // Pagination limit
 }
 
 type Stat struct {

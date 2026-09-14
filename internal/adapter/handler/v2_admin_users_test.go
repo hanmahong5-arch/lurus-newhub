@@ -3,10 +3,20 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 // ============================================================================
@@ -211,4 +221,140 @@ func TestAdminUsersV2_NonRootRejected(t *testing.T) {
 
 	w = V2RequestAsUser(ctx, ctx.NormalUser, http.MethodDelete, path, nil, nil)
 	AssertV2Error(t, w, http.StatusForbidden)
+}
+
+// ---------------------------------------------------------------------------
+// TestAdminRevokeUserSessions_AuditsReason (L7, auth-security-08/26/29) —
+// self-contained setup (mirrors setupRoutingTestRouter/setupPricingWriteRouter
+// in this package): SetupV2TestRouter's shared harness does not migrate
+// entity.AuditEvent/UserSession or register this route, so this test wires
+// its own tiny router+db+pinnedAuditWriter instead of extending the shared
+// one (which 20+ other tests in this file depend on staying exactly as-is).
+// ---------------------------------------------------------------------------
+
+var adminSessionsRevokeTestDBCounter atomic.Int64
+
+func setupAdminSessionsRevokeRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	dsn := fmt.Sprintf("file:adminsessionsrevoke%d?mode=memory&cache=shared", adminSessionsRevokeTestDBCounter.Add(1))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, tbl := range []interface{}{&entity.UserSession{}, &entity.AuditEvent{}, &entity.AuditChainHead{}} {
+		if err := db.AutoMigrate(tbl); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("auto migrate %T: %v", tbl, err)
+		}
+	}
+
+	prevDB := repo.DB
+	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
+	repo.DB = db
+
+	r := gin.New()
+	mockRoot := func(c *gin.Context) {
+		c.Set("id", 999)
+		c.Set("role", common.RoleRootUser)
+		c.Next()
+	}
+	r.DELETE("/api/v2/admin/users/:id/sessions", mockRoot, RevokeUserSessionsAdminV2)
+
+	t.Cleanup(func() {
+		repo.DB = prevDB
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return r, db
+}
+
+// TestAdminRevokeUserSessions_AuditsReason: root revoking a compromised
+// user's sessions revokes every active row with reason "admin_revoked" and
+// leaves a durable audit.session_revoked row carrying that reason — distinct
+// from a user's own self-service revoke-others.
+func TestAdminRevokeUserSessions_AuditsReason(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
+	r, db := setupAdminSessionsRevokeRouter(t)
+	const targetUserID = 321
+
+	now := time.Now().Unix()
+	for i, key := range []string{"admin-target-1", "admin-target-2"} {
+		if err := db.Create(&entity.UserSession{
+			SessionKey: key, UserId: targetUserID, TenantId: "default",
+			CreatedAt: now - int64(i), LastSeenAt: now - int64(i),
+		}).Error; err != nil {
+			t.Fatalf("seed %s: %v", key, err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/v2/admin/users/%d/sessions", targetUserID), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	resp := ParseV2Response(t, w)
+	data := resp["data"].(map[string]interface{})
+	if data["revoked"].(float64) != 2 {
+		t.Errorf("revoked = %v, want 2", data["revoked"])
+	}
+
+	var rows []entity.UserSession
+	db.Where("user_id = ?", targetUserID).Find(&rows)
+	for _, row := range rows {
+		if row.RevokedAt == 0 || row.RevokeReason != entity.SessionRevokeReasonAdminRevoked {
+			t.Errorf("session %s not revoked as expected: revoked_at=%d reason=%q", row.SessionKey, row.RevokedAt, row.RevokeReason)
+		}
+	}
+
+	event := pollAuditRow(t, governance.ActionAuthSessionRevoked, 2*time.Second)
+	if event == nil {
+		t.Fatal("no auth.session_revoked audit row appeared")
+	}
+	if !strings.Contains(event.Details, entity.SessionRevokeReasonAdminRevoked) {
+		t.Errorf("audit event details = %q, want it to contain %q", event.Details, entity.SessionRevokeReasonAdminRevoked)
+	}
+}
+
+// TestAdminRevokeUserSessions_FlagOff: with SESSION_REGISTRY_ENABLED unset
+// (default off), DELETE /api/v2/admin/users/:id/sessions answers
+// {"revoked":0} WITHOUT touching the DB, even when rows exist (left over
+// from a prior flag-on soak) — a rollback must not let this endpoint revoke
+// anything.
+func TestAdminRevokeUserSessions_FlagOff(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "false")
+	r, db := setupAdminSessionsRevokeRouter(t)
+	const targetUserID = 322
+
+	now := time.Now().Unix()
+	if err := db.Create(&entity.UserSession{
+		SessionKey: "admin-target-flagoff", UserId: targetUserID, TenantId: "default",
+		CreatedAt: now, LastSeenAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/v2/admin/users/%d/sessions", targetUserID), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	resp := ParseV2Response(t, w)
+	data := resp["data"].(map[string]interface{})
+	if data["revoked"].(float64) != 0 {
+		t.Errorf("revoked = %v, want 0 — the flag-off endpoint must not touch the DB", data["revoked"])
+	}
+
+	var row entity.UserSession
+	if err := db.Where("session_key = ?", "admin-target-flagoff").First(&row).Error; err != nil {
+		t.Fatalf("reload row: %v", err)
+	}
+	if row.RevokedAt != 0 {
+		t.Errorf("row revoked_at = %d, want 0", row.RevokedAt)
+	}
 }

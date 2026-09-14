@@ -196,6 +196,21 @@ func SetApiV2Router(router *gin.Engine) {
 		}
 
 		// ================================================================
+		// Tenant-scoped Analytics (L4, 2026-09-12) — model/vendor rankings
+		// leaderboard. Admin gate lives inside the handler (requireTenantAdmin),
+		// same pattern as GetAllLogStatV2 above; CriticalRateLimit here mirrors
+		// the root route (two GROUP BY aggregates per cache miss — a hit
+		// within the 5-minute in-process cache runs no query at all).
+		// ================================================================
+
+		tenantAnalytics := apiV2.Group("/:tenant_slug/analytics")
+		tenantAnalytics.Use(middleware.UserAuth())
+		tenantAnalytics.Use(middleware.TenantSlugGuard())
+		{
+			tenantAnalytics.GET("/rankings", middleware.CriticalRateLimit(), handler.GetTenantRankingsV2)
+		}
+
+		// ================================================================
 		// Tenant-scoped Redemption Codes (Wave 3 Phase 2 — 2026-05-20)
 		// List / Create / Delete enforce admin role inside the handler;
 		// /redeem is the user-facing redemption endpoint.
@@ -224,6 +239,11 @@ func SetApiV2Router(router *gin.Engine) {
 		{
 			tenantSessions.GET("", handler.ListSessionsV2)
 			tenantSessions.DELETE("/current", handler.RevokeCurrentSessionV2)
+			// L7 per-device session registry (SESSION_REGISTRY_ENABLED).
+			// "/others" is a literal path segment, registered ahead of the
+			// "/:id" wildcard below so it is never swallowed by it.
+			tenantSessions.DELETE("/others", handler.RevokeOtherSessionsV2)
+			tenantSessions.DELETE("/:id", handler.RevokeSessionByIDV2)
 		}
 
 		// ================================================================
@@ -259,6 +279,12 @@ func SetApiV2Router(router *gin.Engine) {
 			// enforces requirePlatformRoot inside the handler (same rationale
 			// as tenantModels above).
 			tenantPricing.POST("", handler.UpdatePricingV2)
+			// L1 (2026-09-12): dry-run diff of the same batch — does not call
+			// repo.UpdateOption or bump PricingVersion (TestV2PricingPreview_
+			// NeverPersists), same root gate (the maps it reads are
+			// process-global, not tenant-scoped, same rationale as the write
+			// above).
+			tenantPricing.POST("/preview", handler.PreviewPricingV2)
 		}
 
 		tenantBilling := apiV2.Group("/:tenant_slug/billing")
@@ -356,6 +382,14 @@ func SetApiV2Router(router *gin.Engine) {
 
 		adminRoute := apiV2.Group("/admin")
 		adminRoute.Use(middleware.RootJWTAuth())
+		// L2 audit-completeness: fail-closed backstop for every write on this
+		// group — records a typed admin.write_unaudited fallback event (and
+		// increments lurus_gateway_admin_write_unaudited_total) for any
+		// mutating request whose handler never called
+		// governance.RecordAuditEvent. Mounted after RootJWTAuth so the
+		// fallback's actor attribution can read the "id"/"admin_sub" context
+		// keys that auth sets.
+		adminRoute.Use(middleware.AuditWriteGuard())
 		{
 			tenantMgmt := adminRoute.Group("/tenants")
 			{
@@ -429,6 +463,9 @@ func SetApiV2Router(router *gin.Engine) {
 				adminUsers.GET("", handler.ListAdminUsersV2)
 				adminUsers.PUT("/:id", handler.UpdateAdminUserV2)
 				adminUsers.DELETE("/:id", handler.DeleteAdminUserV2)
+				// L7: "compromised account" runbook step — revoke every
+				// per-device session of a user (SESSION_REGISTRY_ENABLED).
+				adminUsers.DELETE("/:id/sessions", handler.RevokeUserSessionsAdminV2)
 			}
 
 			// System options panels (read + one-key-per-call write). Thin
@@ -460,15 +497,50 @@ func SetApiV2Router(router *gin.Engine) {
 			adminRoute.GET("/audit/export", middleware.CriticalRateLimit(), handler.ExportAuditEventsV2)
 			// Tamper-evidence hash-chain verification (migration 024).
 			adminRoute.GET("/audit/chain-verify", middleware.CriticalRateLimit(), handler.VerifyAuditChainV2)
+			// L2 audit-completeness: explicit-vs-fallback coverage of the
+			// admin/internal-admin write surface (audit_coverage_gen.go).
+			adminRoute.GET("/audit/coverage", handler.GetAuditCoverageV2)
 
 			// Live routing health: per-channel circuit-breaker state as this
 			// replica sees it. Read-only and side-effect free.
 			adminRoute.GET("/gateway/health", handler.GetGatewayHealthV2)
 
+			// Session-affinity stats + purge (L5, routing-resilience-limits-11 /
+			// console-ux-30). Two DELETE shapes on purpose: a bare
+			// /affinity/:key path param addresses one binding, while wiping
+			// every binding lives on the collection path and requires the
+			// explicit ?all=true guard (handler.PurgeAllAffinityBindingsV2)
+			// so a stray DELETE can never do it by accident.
+			adminRoute.GET("/routing/affinity", handler.GetAffinityStatsV2)
+			adminRoute.DELETE("/routing/affinity", handler.PurgeAllAffinityBindingsV2)
+			adminRoute.DELETE("/routing/affinity/:key", handler.PurgeAffinityBindingV2)
+
 			// Model performance analytics + platform-wide usage-log CSV export
 			// (rate-limited: heavy aggregation / bulk row scans over logs).
 			adminRoute.GET("/analytics/model-performance", middleware.CriticalRateLimit(), handler.GetModelPerformanceV2)
+			// L4 (2026-09-12): period-over-period model/vendor leaderboard,
+			// optionally filtered to one tenant. Same rate-limit rationale —
+			// each cache miss runs two GROUP BY aggregates over logs; a hit
+			// within the 5-minute in-process cache runs none.
+			adminRoute.GET("/analytics/rankings", middleware.CriticalRateLimit(), handler.GetRankingsV2)
 			adminRoute.GET("/logs/export", middleware.CriticalRateLimit(), handler.ExportAdminLogsV2)
+
+			// L6 (2026-09-12): TOTP adoption stats for the security reviewer,
+			// and the audited admin escape hatch for a lost-device user.
+			// Stats is a plain aggregate read (no :id) — RootJWTAuth is the
+			// only gate needed, same class as /analytics/rankings above.
+			//
+			// force-disable additionally requires SecureVerificationRequired:
+			// the acting root must have stepped up in THEIR OWN session, not
+			// merely present a Bearer JWT. RootJWTAuth's Bearer-JWT branch
+			// (admin_jwt_auth.go) never populates the "id" context key
+			// SecureVerificationRequired reads, so a pure Bearer-JWT caller
+			// 401s before reaching the handler at all — deliberately never a
+			// session-only gate, mitigating a stolen root JWT alone stripping
+			// another user's 2FA (§8 L6 amendment).
+			adminRoute.GET("/security/totp-stats", middleware.CriticalRateLimit(), handler.GetAdminTotpStatsV2)
+			adminRoute.POST("/security/users/:id/totp/force-disable",
+				middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), handler.ForceDisableTotpV2)
 		}
 
 		// ================================================================

@@ -281,6 +281,160 @@ describe('Settings page', () => {
     });
   });
 
+  // 4b. L7: multiple registered devices render a device column (masked
+  // ip/user_agent_family) and a "sign out other devices" button — neither
+  // exists with just the single legacy synthetic row (test 1 above).
+  it('renders multiple sessions with device info and a sign-out-other-devices button', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.resolve({ data: { success: true, data: fakeProfile } });
+      }
+      if (url.includes('/sessions')) {
+        return Promise.resolve(
+          fakeSessionsResponse([
+            {
+              id: 1,
+              current: true,
+              is_current: true,
+              auth_method: 'session',
+              active_tokens: 1,
+              request_count: 5,
+              last_seen: Math.floor(Date.now() / 1000) - 10,
+              ip: '203.0.113.0',
+              user_agent_family: 'Chrome',
+            },
+            {
+              id: 2,
+              current: false,
+              is_current: false,
+              auth_method: 'session',
+              active_tokens: 1,
+              request_count: 5,
+              last_seen: Math.floor(Date.now() / 1000) - 3600,
+              ip: '198.51.100.0',
+              user_agent_family: 'Firefox',
+            },
+          ]),
+        );
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+
+    render(<HFSettings />);
+    screen.getByText('Security').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sessions-table')).toBeTruthy();
+    });
+
+    const tableText = screen.getByTestId('sessions-table').textContent;
+    expect(tableText).toContain('203.0.113.0');
+    expect(tableText).toContain('Chrome');
+    expect(tableText).toContain('198.51.100.0');
+    expect(tableText).toContain('Firefox');
+    expect(screen.getByTestId('revoke-others-btn')).toBeTruthy();
+  });
+
+  // 4c. L7: revoking a NON-current device calls DELETE .../sessions/:id
+  // (not .../sessions/current) and refetches the list — the caller stays
+  // on the page, no navigate() to /login.
+  it('revoking a non-current session calls DELETE .../sessions/:id and refetches', async () => {
+    let deleteCalls = [];
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.resolve({ data: { success: true, data: fakeProfile } });
+      }
+      if (url.includes('/sessions')) {
+        return Promise.resolve(
+          fakeSessionsResponse([
+            { id: 1, current: true, is_current: true, auth_method: 'session' },
+            {
+              id: 2,
+              current: false,
+              is_current: false,
+              auth_method: 'session',
+            },
+          ]),
+        );
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+    API.delete.mockImplementation((url) => {
+      deleteCalls.push(url);
+      return Promise.resolve({ data: {} }); // 204 No Content shape
+    });
+
+    render(<HFSettings />);
+    screen.getByText('Security').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sessions-table')).toBeTruthy();
+    });
+
+    // Row 2 is the non-current device — its revoke button carries the row id.
+    fireEvent.click(screen.getByTestId('revoke-session-btn-2'));
+    await waitFor(() => {
+      expect(screen.getByTestId('confirm-dialog')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+    await waitFor(() => {
+      expect(deleteCalls.some((u) => u.includes('/sessions/2'))).toBe(true);
+    });
+    // Must NOT hit /sessions/current, and must not navigate away.
+    expect(deleteCalls.some((u) => u.includes('/sessions/current'))).toBe(
+      false,
+    );
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  // 4d. L7: "sign out other devices" calls DELETE .../sessions/others.
+  it('sign-out-other-devices button calls DELETE .../sessions/others', async () => {
+    let deleteCalls = [];
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.resolve({ data: { success: true, data: fakeProfile } });
+      }
+      if (url.includes('/sessions')) {
+        return Promise.resolve(
+          fakeSessionsResponse([
+            { id: 1, current: true, is_current: true, auth_method: 'session' },
+            {
+              id: 2,
+              current: false,
+              is_current: false,
+              auth_method: 'session',
+            },
+          ]),
+        );
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+    API.delete.mockImplementation((url) => {
+      deleteCalls.push(url);
+      return Promise.resolve({ data: { success: true, data: { revoked: 1 } } });
+    });
+
+    render(<HFSettings />);
+    screen.getByText('Security').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('revoke-others-btn')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('revoke-others-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('confirm-dialog')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+    await waitFor(() => {
+      expect(deleteCalls.some((u) => u.includes('/sessions/others'))).toBe(
+        true,
+      );
+    });
+  });
+
   // 5. Danger zone delete button is disabled with scope-cut tooltip.
   it('danger delete button is disabled with title tooltip', async () => {
     render(<HFSettings />);

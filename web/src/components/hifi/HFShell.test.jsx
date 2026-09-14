@@ -98,6 +98,19 @@ describe('HFShell deferred-surface nav placeholders', () => {
       '/console/v2/admin/settings',
     );
   });
+
+  // L4, 2026-09-12: the rankings leaderboard nav entry sits in the
+  // 'operations & insights' section (minRole 10) beside admin-analytics.
+  it('admin-rankings is a real nav link pointing at the rankings page', () => {
+    setBridgedUser(10);
+    renderShell();
+
+    const rankingsLink = screen.getByText('Rankings').closest('a');
+    expect(rankingsLink).toBeTruthy();
+    expect(rankingsLink.getAttribute('href')).toBe(
+      '/console/v2/admin/rankings',
+    );
+  });
 });
 
 describe('HFShell role-gated nav sections', () => {

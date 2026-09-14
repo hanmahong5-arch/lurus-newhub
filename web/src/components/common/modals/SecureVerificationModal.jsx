@@ -58,6 +58,11 @@ const SecureVerificationModal = ({
   const { t } = useTranslation();
   const [isAnimating, setIsAnimating] = useState(false);
   const [verifySuccess, setVerifySuccess] = useState(false);
+  // useBackupCode toggles the '2fa' tab between a live authenticator code
+  // and a one-time recovery code — same input, different verb sent to
+  // UniversalVerify ('totp' vs 'totp_backup'; secureVerification.js passes
+  // it through unchanged for any method other than '2fa').
+  const [useBackupCode, setUseBackupCode] = useState(false);
 
   const { has2FA, hasSession } = verificationMethods;
   const { method, loading, code } = verificationState;
@@ -68,12 +73,15 @@ const SecureVerificationModal = ({
       setVerifySuccess(false);
     } else {
       setIsAnimating(false);
+      setUseBackupCode(false);
     }
   }, [visible]);
 
+  const submitMethod = useBackupCode ? 'totp_backup' : method;
+
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && code.trim() && !loading && method === '2fa') {
-      onVerify(method, code);
+      onVerify(submitMethod, code);
     }
     if (e.key === 'Escape' && !loading) {
       onCancel();
@@ -164,11 +172,15 @@ const SecureVerificationModal = ({
               <div style={{ paddingTop: '20px' }}>
                 <div style={{ marginBottom: '12px' }}>
                   <Input
-                    placeholder={t('请输入6位验证码')}
+                    placeholder={
+                      useBackupCode
+                        ? t('请输入备用恢复码（形如 XXXX-XXXX）')
+                        : t('请输入6位验证码')
+                    }
                     value={code}
                     onChange={onCodeChange}
                     size='large'
-                    maxLength={6}
+                    maxLength={useBackupCode ? 9 : 6}
                     onKeyDown={handleKeyDown}
                     autoFocus={method === '2fa'}
                     disabled={loading}
@@ -199,13 +211,37 @@ const SecureVerificationModal = ({
                   size='small'
                   style={{
                     display: 'block',
-                    marginBottom: '20px',
+                    marginBottom: '8px',
                     fontSize: '13px',
                     lineHeight: '1.5',
                   }}
                 >
-                  {t('从认证器应用中获取当前验证码')}
+                  {useBackupCode
+                    ? t(
+                        '每个恢复码仅可使用一次；用完后可在安全设置中重新生成。',
+                      )
+                    : t('从认证器应用中获取当前验证码')}
                 </Typography.Text>
+
+                {/* "use a recovery code" toggle — lets a user who lost their
+                    authenticator app (but saved a backup code) recover
+                    without contacting an admin. */}
+                <Button
+                  type='tertiary'
+                  theme='borderless'
+                  size='small'
+                  disabled={loading}
+                  onClick={() => {
+                    setUseBackupCode((v) => !v);
+                    onCodeChange('');
+                  }}
+                  style={{ padding: 0, marginBottom: '12px' }}
+                  data-testid='secure-verify-backup-code-toggle'
+                >
+                  {useBackupCode
+                    ? t('改用验证器应用的验证码')
+                    : t('丢失了验证器？使用备用恢复码')}
+                </Button>
 
                 <div
                   style={{
@@ -223,7 +259,7 @@ const SecureVerificationModal = ({
                     type='primary'
                     loading={loading}
                     disabled={!code.trim() || loading}
-                    onClick={() => onVerify(method, code)}
+                    onClick={() => onVerify(submitMethod, code)}
                   >
                     {t('验证')}
                   </Button>

@@ -641,3 +641,50 @@ func TestGetLogsV2_SessionIdFilter(t *testing.T) {
 		t.Errorf("total = %d, want exactly 1 (only the conv-42 row)", total)
 	}
 }
+
+// TestGetAllLogsV2_UpstreamRequestIdFilter is the read side of L3's vendor
+// request-id capture: a tenant admin holding the vendor's own id (from a UAT
+// probe or a support ticket) must be able to pull back exactly that row,
+// scoped to their own tenant only. The field is TierInternal, so the
+// self-service list must ignore the same query parameter entirely rather
+// than silently filtering by it.
+func TestGetAllLogsV2_UpstreamRequestIdFilter(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	tenantB := ctx.TenantID + "-b"
+	seedOther := func(tenantID string, other string) {
+		lg := &repo.Log{
+			UserId:   ctx.NormalUser.Id,
+			TenantId: tenantID,
+			Type:     repo.LogTypeConsume,
+			Other:    other,
+		}
+		if err := ctx.DB.Create(lg).Error; err != nil {
+			t.Fatalf("seed log: %v", err)
+		}
+	}
+	seedOther(ctx.TenantID, `{"upstream_request_id":"vend-abc12345"}`)
+	seedOther(ctx.TenantID, `{"upstream_request_id":"vend-other0000"}`)
+	seedOther(tenantB, `{"upstream_request_id":"vend-abc12345"}`)
+
+	w := V2RequestAsUser(ctx, ctx.AdminUser, http.MethodGet, "/api/v2/test-tenant/logs/all?upstream_request_id=vend-abc12345", nil, []string{"admin"})
+	AssertV2Status(t, w, http.StatusOK)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+	if total := int(data["total"].(float64)); total != 1 {
+		t.Errorf("total = %d, want exactly 1 (tenant A's row only; tenant B's must never leak in)", total)
+	}
+
+	// Same parameter, self-service route: GetLogsV2 never binds
+	// UpstreamRequestID (TierInternal), so it must be a silent no-op rather
+	// than an accidental filter — both of the caller's own tenant-A rows
+	// come back.
+	wSelf := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs?upstream_request_id=vend-abc12345", nil, nil)
+	AssertV2Status(t, wSelf, http.StatusOK)
+	respSelf := AssertV2Success(t, wSelf)
+	dataSelf := respSelf["data"].(map[string]interface{})
+	if total := int(dataSelf["total"].(float64)); total != 2 {
+		t.Errorf("self-service total = %d, want 2 (both tenant-A rows; upstream_request_id must be ignored on /logs)", total)
+	}
+}

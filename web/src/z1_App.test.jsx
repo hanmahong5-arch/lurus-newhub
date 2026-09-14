@@ -105,6 +105,7 @@ vi.mock('./pages/v2/Admin/Gateway', () => stub('v2-admin-gateway'));
 vi.mock('./pages/v2/Admin/Settings', () => stub('v2-admin-settings'));
 vi.mock('./pages/v2/Admin/CostIntelligence', () => stub('v2-cost'));
 vi.mock('./pages/v2/Admin/ModelPerformance', () => stub('v2-model-perf'));
+vi.mock('./pages/v2/Analytics/Rankings', () => stub('v2-rankings'));
 vi.mock('./pages/v2/Admin/ModelRateLimits', () => stub('v2-model-limits'));
 
 import App from './App';
@@ -209,6 +210,7 @@ describe('App — route guards', () => {
       ['admin/settings', 'v2-admin-settings'],
       ['admin/cost-intelligence', 'v2-cost'],
       ['admin/model-performance', 'v2-model-perf'],
+      ['admin/rankings', 'v2-rankings'],
       ['admin/model-limits', 'v2-model-limits'],
     ];
 

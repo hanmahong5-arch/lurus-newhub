@@ -5,18 +5,27 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
+
+// rawIPPattern matches a dotted-quad IPv4 address whose LAST octet is
+// non-zero — MaskIP always zeroes the last octet (/24), so a match here can
+// only be a raw, unmasked address, never a legitimately-masked one. Used by
+// both whitelist tests in this file (flag-off and flag-on) so a raw-IP
+// regression is caught on whichever code path it appears on.
+var rawIPPattern = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){2}\.(?:[1-9]|[1-9]\d|1\d\d|2[0-5]\d)\b`)
 
 var sessionsTestDBCounter atomic.Int64
 
@@ -39,7 +48,7 @@ func setupSessionsRouter(t *testing.T) *sessionsCtx {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	for _, tbl := range []interface{}{
-		&repo.User{}, &repo.Token{}, &repo.Tenant{}, &repo.Log{},
+		&repo.User{}, &repo.Token{}, &repo.Tenant{}, &repo.Log{}, &entity.UserSession{},
 	} {
 		if err := db.AutoMigrate(tbl); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("auto migrate %T: %v", tbl, err)
@@ -63,11 +72,11 @@ func setupSessionsRouter(t *testing.T) *sessionsCtx {
 	n := sessionsTestDBCounter.Load()
 	tenantID := fmt.Sprintf("tid-%04d", n)
 	tenant := &repo.Tenant{
-		Id:           tenantID,
+		Id:       tenantID,
 		IDPOrgID: fmt.Sprintf("zorg-%04d", n),
-		Slug:         fmt.Sprintf("test-tenant-%04d", n),
-		Name:         "Test Tenant",
-		Status:       repo.TenantStatusEnabled,
+		Slug:     fmt.Sprintf("test-tenant-%04d", n),
+		Name:     "Test Tenant",
+		Status:   repo.TenantStatusEnabled,
 	}
 	if err := db.Create(tenant).Error; err != nil {
 		t.Fatalf("seed tenant: %v", err)
@@ -202,11 +211,11 @@ func TestV2Sessions_TenantIsolation(t *testing.T) {
 
 	// Seed a second tenant — needs a unique Id and ZitadelOrgID.
 	tenantB := &repo.Tenant{
-		Id:           "tid-b-isolation",
+		Id:       "tid-b-isolation",
 		IDPOrgID: "zorg-b-isolation",
-		Slug:         "tenant-b-isolation",
-		Name:         "Tenant B",
-		Status:       repo.TenantStatusEnabled,
+		Slug:     "tenant-b-isolation",
+		Name:     "Tenant B",
+		Status:   repo.TenantStatusEnabled,
 	}
 	ctx.db.Create(tenantB)
 
@@ -255,10 +264,134 @@ func TestV2Sessions_WhitelistEnforced(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	forbidden := []string{"access_token", "cookie", "ip"}
+	// "ip" itself is NOT checked as a bare substring: with the registry
+	// enabled (see below) the response legitimately carries an "ip" JSON
+	// KEY (a masked value) — the bare substring would false-trip on that
+	// key name alone. access_token/cookie have no legitimate reason to
+	// ever appear, raw or otherwise, so those stay as plain substrings.
+	forbidden := []string{"access_token", "cookie"}
 	for _, f := range forbidden {
 		if strings.Contains(body, f) {
 			t.Errorf("response body contains forbidden field %q — whitelist violated. body: %s", f, body)
+		}
+	}
+	// The flag-off (legacy synthetic-row) path renders no ip/user_agent at
+	// all today, so these never match here — but the assertion must live in
+	// THIS test too, not only in the flag-on masking test below: if a future
+	// change ever added a raw ip/UA field to the legacy path, this is what
+	// would catch it (mirrors §8's raw-pattern requirement, applied to both
+	// code paths rather than only the one that already carries them).
+	if rawIPPattern.MatchString(body) {
+		t.Errorf("response body contains what looks like a raw (unmasked) IP address. body: %s", body)
+	}
+	if strings.Contains(body, "Mozilla/") {
+		t.Errorf("response body contains a raw User-Agent token (\"Mozilla/\"). body: %s", body)
+	}
+}
+
+// TestV2Sessions_WhitelistEnforced_RegistryEnabled_MasksRawIPAndUA is the
+// registry-enabled counterpart of the test above: with a seeded session row
+// carrying a real IP and a fingerprint-able User-Agent, the response must
+// contain the MASKED ip and a coarse user_agent_family, and must NEVER
+// contain the raw IP octets or the raw User-Agent string.
+func TestV2Sessions_WhitelistEnforced_RegistryEnabled_MasksRawIPAndUA(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
+	ctx := setupSessionsRouter(t)
+
+	rawIP := "198.51.100.77"
+	rawUA := "MegaTrackerBrowser/9.9.9 (SecretBuildID-ABCDEF)"
+	now := common.GetTimestamp()
+	if err := ctx.db.Create(&entity.UserSession{
+		SessionKey: "sess-whitelist-1",
+		UserId:     ctx.userID,
+		TenantId:   ctx.tenantID,
+		IP:         rawIP,
+		UserAgent:  rawUA,
+		AuthMethod: "session",
+		CreatedAt:  now,
+		LastSeenAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	w := getSessions(ctx)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	if strings.Contains(body, rawIP) {
+		t.Errorf("response body leaks the raw IP %q — must be masked. body: %s", rawIP, body)
+	}
+	if strings.Contains(body, rawUA) || strings.Contains(body, "SecretBuildID") {
+		t.Errorf("response body leaks the raw User-Agent %q — must be reduced to a family. body: %s", rawUA, body)
+	}
+	if !strings.Contains(body, "198.51.100.0") {
+		t.Errorf("response body missing the masked /24 ip 198.51.100.0. body: %s", body)
+	}
+	if !strings.Contains(body, `"user_agent_family"`) {
+		t.Errorf("response body missing the user_agent_family field. body: %s", body)
+	}
+	for _, f := range []string{"access_token", "cookie"} {
+		if strings.Contains(body, f) {
+			t.Errorf("response body contains forbidden field %q. body: %s", f, body)
+		}
+	}
+}
+
+// TestV2Sessions_HappyPath_RegistryEnabled pins the flag-on key set: with
+// SESSION_REGISTRY_ENABLED on and 2 registered devices, GET .../sessions
+// returns 2 items, each carrying BOTH the original keys (current,
+// auth_method, active_tokens, request_count, last_seen) AND the new
+// additive ones (is_current, created_at, last_seen_at, ip, user_agent_family).
+func TestV2Sessions_HappyPath_RegistryEnabled(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
+	ctx := setupSessionsRouter(t)
+
+	now := common.GetTimestamp()
+	seed := func(key string, lastSeen int64) {
+		if err := ctx.db.Create(&entity.UserSession{
+			SessionKey: key, UserId: ctx.userID, TenantId: ctx.tenantID,
+			IP: "203.0.113.5", UserAgent: "curl/8.0", AuthMethod: "session",
+			CreatedAt: lastSeen, LastSeenAt: lastSeen,
+		}).Error; err != nil {
+			t.Fatalf("seed %s: %v", key, err)
+		}
+	}
+	seed("sess-happy-a", now-10)
+	seed("sess-happy-b", now-5)
+
+	w := getSessions(ctx)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	resp := parseSessions(t, w)
+	data := resp["data"].(map[string]interface{})
+	if data["total"].(float64) != 2 {
+		t.Fatalf("total = %v, want 2", data["total"])
+	}
+	items := data["items"].([]interface{})
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(items))
+	}
+	for _, raw := range items {
+		item := raw.(map[string]interface{})
+		for _, key := range []string{"current", "auth_method", "active_tokens", "request_count", "last_seen"} {
+			if _, ok := item[key]; !ok {
+				t.Errorf("item missing pre-existing key %q: %v", key, item)
+			}
+		}
+		for _, key := range []string{"is_current", "created_at", "last_seen_at", "ip", "user_agent_family"} {
+			if _, ok := item[key]; !ok {
+				t.Errorf("item missing new additive key %q: %v", key, item)
+			}
+		}
+		// No session middleware is mounted in this hermetic router, so
+		// currentSessionID(c) is always "" — every row must render as not
+		// current (a real cookie's is_current is covered by the
+		// middleware-level integration test).
+		if item["is_current"] != false {
+			t.Errorf("is_current = %v, want false (no session middleware mounted)", item["is_current"])
 		}
 	}
 }

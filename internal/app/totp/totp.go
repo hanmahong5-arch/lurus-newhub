@@ -15,11 +15,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"math/big"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
@@ -122,6 +125,91 @@ func ValidateCode(secret, code string) bool {
 		return false
 	}
 	return pqtotp.Validate(code, secret)
+}
+
+// ---------------------------------------------------------------------------
+// TOTP recovery (backup) codes. Minted on confirm/regenerate, each one is a
+// single-use credential that lets a user who lost their authenticator app
+// pass secure-verification without it. The server never needs the plaintext
+// back (a code is presented once and consumed), so these are hashed
+// one-way — never encrypted like the TOTP secret above.
+// ---------------------------------------------------------------------------
+
+// BackupCodeCount is how many recovery codes TotpConfirm and the regenerate
+// endpoint mint at once.
+const BackupCodeCount = 10
+
+// backupCodeAlphabet excludes 0/O/1/I to avoid transcription ambiguity when
+// a user copies a code down by hand.
+const backupCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+// GenerateBackupCodes returns n freshly generated recovery codes in
+// "XXXX-XXXX" form (crypto/rand). Nothing here persists them — the caller
+// hashes each with HashBackupCode before storing, and returns the plaintext
+// to the client exactly once.
+func GenerateBackupCodes(n int) ([]string, error) {
+	codes := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		code, err := generateOneBackupCode()
+		if err != nil {
+			return nil, err
+		}
+		codes = append(codes, code)
+	}
+	return codes, nil
+}
+
+func generateOneBackupCode() (string, error) {
+	b := make([]byte, 8)
+	alphabetLen := big.NewInt(int64(len(backupCodeAlphabet)))
+	for i := range b {
+		idx, err := rand.Int(rand.Reader, alphabetLen)
+		if err != nil {
+			return "", err
+		}
+		b[i] = backupCodeAlphabet[idx.Int64()]
+	}
+	return string(b[:4]) + "-" + string(b[4:]), nil
+}
+
+// HashBackupCode computes the one-way digest stored for a backup code
+// (hex SHA-256 of "<user_id>:<normalized code>"). The user id is mixed in
+// as a domain separator so identical codes minted for two different users
+// cannot collide on the unique index (entity.UserTOTPBackupCode.CodeHash).
+// Normalization (see normalizeBackupCode) uppercases, strips the dash and
+// any internal whitespace, and re-inserts the canonical dash — so a user
+// who types "abcd efgh" or "ABCDEFGH" from a printed sheet, not just one
+// who mistypes case or leaves surrounding whitespace, still matches the
+// stored hash.
+func HashBackupCode(userId int, code string) string {
+	normalized := normalizeBackupCode(code)
+	sum := sha256.Sum256([]byte(strconv.Itoa(userId) + ":" + normalized))
+	return hex.EncodeToString(sum[:])
+}
+
+// normalizeBackupCode canonicalizes user-typed backup-code input before
+// hashing: uppercase, strip the dash and any whitespace, then — only when
+// exactly 8 alphabet characters remain — re-insert the dash at "XXXX-XXXX"
+// position to match GenerateBackupCodes' output shape. Input that does not
+// reduce to exactly 8 characters (too short, too long, or containing other
+// punctuation) is returned uppercased/trimmed but otherwise unchanged: it
+// will simply not match any stored hash, which is the correct fail-closed
+// outcome rather than a specially-handled error.
+func normalizeBackupCode(code string) string {
+	trimmed := strings.ToUpper(strings.TrimSpace(code))
+	var b strings.Builder
+	for _, r := range trimmed {
+		if r == '-' || unicode.IsSpace(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	stripped := b.String()
+	if len([]rune(stripped)) != 8 {
+		return trimmed
+	}
+	runes := []rune(stripped)
+	return string(runes[:4]) + "-" + string(runes[4:])
 }
 
 // ---------------------------------------------------------------------------

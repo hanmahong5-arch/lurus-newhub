@@ -61,6 +61,11 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/:tenant_slug/projects/:id/restore": true, // TestRestoreProjectV2_CrossTenantNotFound
 		// playground presets (internal/adapter/handler/v2_cross_tenant_isolation_test.go)
 		"DELETE /api/v2/:tenant_slug/playground/presets/:id": true, // TestDeletePresetV2_CrossTenantIsolation
+		// per-device session registry (L7, internal/adapter/handler/v2_session_revoke_test.go).
+		// RevokeSessionByIDV2/repo.GetUserSessionByID mirror ConsumeTenantInvite's
+		// not-found-shaped IDOR pattern: a row belonging to a different user 404s
+		// exactly like a nonexistent id.
+		"DELETE /api/v2/:tenant_slug/sessions/:id": true, // TestV2SessionRevokeByID_NotOwned404
 		// pricing / self-profile (internal/adapter/handler/v2_cross_tenant_isolation_test.go)
 		"POST /api/v2/:tenant_slug/pricing": true, // TestUpdatePricingV2_CrossTenantIsolation
 		"PUT /api/v2/:tenant_slug/user/me":  true, // TestUpdateSelfV2_CrossTenantIsolation
@@ -78,6 +83,7 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/:tenant_slug/playground/run":     "self-service: runs the caller's own prompt against models, no stored per-id resource accessed",
 		"POST /api/v2/:tenant_slug/chat/send":          "self-service: sends the caller's own message, no stored per-id resource",
 		"DELETE /api/v2/:tenant_slug/sessions/current": "self-service: revokes the caller's own current session; literal \"current\" segment, not an :id param",
+		"DELETE /api/v2/:tenant_slug/sessions/others":  "self-service: RevokeOtherSessionsV2 revokes only the caller's OWN other sessions (repo.RevokeOtherUserSessions scopes by the caller's user_id); literal \"others\" segment, not an :id param",
 		"POST /api/v2/:tenant_slug/user/heartbeat":     "inline raw-token auth (UserHeartbeat resolves the caller's own Token.Key); self-scoped, no separate resource id",
 		"POST /api/v2/user/billing/checkout":           "CreateBillingCheckout scopes to getIdentityAccountID(c) — the caller's own linked platform account; cannot target another account",
 
@@ -99,6 +105,9 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		// ---- global catalog entities: no tenant_id column at all (verified: entity/model_meta.go) ----
 		"POST /api/v2/:tenant_slug/models":       "CreateModelV2: entity.Model has no tenant_id column (global catalog); tenant_slug is validated only for route existence, never as a data filter — and because the write is global the handler gates on requirePlatformRoot, not tenant-admin",
 		"DELETE /api/v2/:tenant_slug/models/:id": "DeleteModelV2: same — global catalog entry, mirrors v1's POST /api/channel/fix \"global maintenance, not a per-tenant data mutation\" exemption",
+
+		// ---- read-only preview: computes a diff, never persists ----
+		"POST /api/v2/:tenant_slug/pricing/preview": "PreviewPricingV2: read-only dry-run of the same batch UpdatePricingV2 accepts — does not call repo.UpdateOption and does not bump PricingVersion (TestV2PricingPreview_NeverPersists); root-gated (requirePlatformRoot) for the same reason as the write route above",
 
 		// ---- conditionally-registered routes (only present under specific env/config; exempted defensively) ----
 		"GET /api/v2/me/zita":              "guarded by common.ZitaClient.AuthMiddleware(); resolves the caller's own SDK identity, no resource id",
@@ -138,11 +147,26 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"DELETE /api/v2/admin/mappings/:id":                         "RootJWTAuth-gated: root manages platform user-identity mappings across every tenant by design",
 		"PUT /api/v2/admin/users/:id":                               "RootJWTAuth-gated: root manages platform admin users across every tenant by design",
 		"DELETE /api/v2/admin/users/:id":                            "RootJWTAuth-gated: root manages platform admin users across every tenant by design",
+		"DELETE /api/v2/admin/users/:id/sessions":                   "RootJWTAuth-gated: same class as /admin/users/:id above — root revokes any user's per-device sessions by design (L7 compromised-account runbook step), not a per-tenant ownership check",
 		"PUT /api/v2/admin/options":                                 "RootJWTAuth-gated: system-wide options, not a per-tenant resource",
 		"POST /api/v2/admin/switch/presets":                         "RootJWTAuth-gated: platform-wide Switch presets, not a per-tenant resource",
 		"GET /api/v2/admin/internal-keys/:id/tenants":               "RootJWTAuth-gated: :id addresses an internal_api_keys row (platform-wide credential), not a tenant's own data; root manages every key's whitelist by design",
 		"POST /api/v2/admin/internal-keys/:id/tenants":              "RootJWTAuth-gated: same as above — grants a tenant onto a platform-wide internal API key, not a per-tenant mutation",
 		"DELETE /api/v2/admin/internal-keys/:id/tenants/:tenant_id": "RootJWTAuth-gated: same as above — revokes a tenant from a platform-wide internal API key",
+
+		// Session-affinity purge (L5, routing-resilience-limits-11). Bindings
+		// live in session_affinity.go's own Redis/in-process store, not a
+		// tenant table — root purges any binding by design, same class as the
+		// internal-keys/tenants routes above.
+		"DELETE /api/v2/admin/routing/affinity":      "RootJWTAuth-gated: bulk purge-all of session-affinity bindings (requires ?all=true — PurgeAllAffinityBindingsV2 400s without it); a process-wide cache-steering optimisation, not a per-tenant resource",
+		"DELETE /api/v2/admin/routing/affinity/:key": "RootJWTAuth-gated: :key addresses one HMAC-derived affinity binding (session_affinity.go), not a tenant's own data — root purges any binding by design",
+
+		// TOTP admin escape hatch (L6, auth-security-06/07/25). :id addresses
+		// a user_totps row across every tenant, same class as
+		// /admin/users/:id above — root manages any user's 2FA enrollment by
+		// design, additionally gated by SecureVerificationRequired (the
+		// acting root's own step-up), not a per-tenant ownership check.
+		"POST /api/v2/admin/security/users/:id/totp/force-disable": "RootJWTAuth-gated: root manages any user's TOTP enrollment by design, same class as /admin/users/:id; additionally requires the acting root's own SecureVerificationRequired step-up wired on the real route (TestSetApiV2Router_ForceDisableTotp_RequiresOwnStepUp in router/v2_admin_security_wiring_test.go — TestAdminTotpForceDisable_RequiresStepUp hand-mounts the middleware and stays green if the real route loses it)",
 	}
 
 	isMutation := func(m string) bool {

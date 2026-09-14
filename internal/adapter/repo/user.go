@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -447,6 +448,16 @@ func DeleteUserById(id int) (err error) {
 		if err := tokens[i].Delete(); err != nil {
 			return fmt.Errorf("revoke token id=%d: %w", tokens[i].Id, err)
 		}
+	}
+
+	// user_sessions (L7 per-device session registry) must not survive a user
+	// deletion either — same personal-adjacent-data reasoning as the privacy-
+	// erasure cascade's HardDeleteUserSessions call (lifecycle/privacy_erasure.go),
+	// this is just the OTHER path that ends a user's account (cycle7 L7 repair
+	// round 3, finding routing-resilience-limits-13#11). Best-effort: a failure
+	// here must not block the user deletion this function exists to perform.
+	if _, sessErr := HardDeleteUserSessions(context.Background(), id); sessErr != nil {
+		common.SysLog(fmt.Sprintf("DeleteUserById: hard delete user sessions failed for id=%d: %v", id, sessErr))
 	}
 
 	user := User{Id: id}

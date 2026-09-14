@@ -85,22 +85,23 @@ vi.mock('react-i18next', () => ({
 }));
 
 import PricingPage from './index';
-import { API, showSuccess } from '../../../helpers';
+import { API, showError, showSuccess } from '../../../helpers';
 
-const fakePricingResponse = (models) => ({
+const fakePricingResponse = (models, version = 5) => ({
   data: {
     success: true,
     data: {
       pricing: models,
       vendors: [...new Set(models.map((m) => m.vendor).filter(Boolean))],
       group_ratio: { default: 1.0, vip: 0.85 },
+      version,
     },
   },
 });
 
 const THREE_MODELS = [
   {
-    model_name: 'gpt-4o',
+    model_name: 'model-a',
     vendor: 'OpenAI',
     quota_type: 0,
     model_ratio: 2.5,
@@ -110,7 +111,7 @@ const THREE_MODELS = [
     supported_endpoint_types: ['chat'],
   },
   {
-    model_name: 'claude-3.5-sonnet',
+    model_name: 'model-b',
     vendor: 'Anthropic',
     quota_type: 1,
     model_ratio: 0,
@@ -119,7 +120,7 @@ const THREE_MODELS = [
     supported_endpoint_types: ['chat'],
   },
   {
-    model_name: 'gemini-1.5-pro',
+    model_name: 'model-c',
     vendor: 'Google',
     quota_type: 0,
     model_ratio: 1.25,
@@ -134,6 +135,7 @@ beforeEach(() => {
   API.get.mockReset();
   API.post.mockReset();
   showSuccess.mockReset?.();
+  showError.mockReset?.();
   // Default: empty pricing so tests that don't exercise data still mount cleanly.
   API.get.mockResolvedValue(fakePricingResponse([]));
   window.localStorage.clear();
@@ -153,13 +155,13 @@ describe('Pricing page', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('pricing-table').textContent).toContain(
-        'gpt-4o',
+        'model-a',
       );
       expect(screen.getByTestId('pricing-table').textContent).toContain(
-        'claude-3.5-sonnet',
+        'model-b',
       );
       expect(screen.getByTestId('pricing-table').textContent).toContain(
-        'gemini-1.5-pro',
+        'model-c',
       );
     });
   });
@@ -173,11 +175,12 @@ describe('Pricing page', () => {
     expect(saveBtn).toBeDisabled();
   });
 
-  // 3. Save button becomes enabled after editing a field, then posts and refreshes.
-  it('save changes posts and refreshes list', async () => {
-    API.get.mockResolvedValue(fakePricingResponse(THREE_MODELS));
+  // 3. Save button becomes enabled after editing a field, then posts (with
+  // the If-Match-Pricing-Version header from the last GET) and refreshes.
+  it('save changes posts with the version header and refreshes list', async () => {
+    API.get.mockResolvedValue(fakePricingResponse(THREE_MODELS, 5));
     API.post.mockResolvedValue({
-      data: { success: true, data: { updated_count: 1 } },
+      data: { success: true, data: { updated_count: 1, new_version: 6 } },
     });
 
     render(<PricingPage />);
@@ -185,12 +188,12 @@ describe('Pricing page', () => {
     // Wait for the table to render with model data.
     await waitFor(() => {
       expect(screen.getByTestId('pricing-table').textContent).toContain(
-        'gpt-4o',
+        'model-a',
       );
     });
 
-    // Edit model_ratio for gpt-4o (quota_type 0 → ratio input is visible).
-    const ratioField = screen.getByTestId('field-model_ratio-gpt-4o');
+    // Edit model_ratio for model-a (quota_type 0 → ratio input is visible).
+    const ratioField = screen.getByTestId('field-model_ratio-model-a');
     fireEvent.change(ratioField, { target: { value: '3.0' } });
 
     // Save button must now be enabled.
@@ -200,13 +203,15 @@ describe('Pricing page', () => {
     // Click save.
     fireEvent.click(saveBtn);
 
-    // POST should be called with the changed row.
+    // POST should be called with the changed row AND the version header
+    // read from the last GET response (data.version === 5).
     await waitFor(() => {
       expect(API.post).toHaveBeenCalledWith(
         '/api/v2/acme/pricing',
         expect.arrayContaining([
-          expect.objectContaining({ model_name: 'gpt-4o', model_ratio: 3.0 }),
+          expect.objectContaining({ model_name: 'model-a', model_ratio: 3.0 }),
         ]),
+        { headers: { 'If-Match-Pricing-Version': '5' } },
       );
     });
 
@@ -217,5 +222,136 @@ describe('Pricing page', () => {
       // being the mount's placeholder-slug fetch.
       expect(API.get).toHaveBeenCalledTimes(2);
     });
+  });
+
+  // 4. A 409 PRICING_VERSION_CONFLICT shows the conflict toast and refetches
+  // instead of treating the save as successful.
+  it('shows the version-conflict toast and refetches on 409', async () => {
+    API.get.mockResolvedValue(fakePricingResponse(THREE_MODELS, 5));
+    API.post.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          success: false,
+          error_code: 'PRICING_VERSION_CONFLICT',
+          current_version: 6,
+        },
+      },
+    });
+
+    render(<PricingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pricing-table').textContent).toContain(
+        'model-a',
+      );
+    });
+
+    const ratioField = screen.getByTestId('field-model_ratio-model-a');
+    fireEvent.change(ratioField, { target: { value: '3.0' } });
+
+    const saveBtn = screen.getByTestId('pricing-save');
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(showError).toHaveBeenCalledWith(
+        'Pricing changed since you last loaded it — refreshing',
+      );
+    });
+
+    // The conflict path refetches (mount x2 + the post-conflict refresh).
+    await waitFor(() => {
+      expect(API.get).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // 5. Preview renders one diff row per changed field and never calls save's
+  // route — the diff table is populated straight from the preview response.
+  it('preview renders a diff row per changed field', async () => {
+    API.get.mockResolvedValue(fakePricingResponse(THREE_MODELS, 5));
+    API.post.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          version: 5,
+          updated_count: 2,
+          diffs: [
+            {
+              model_name: 'model-a',
+              field: 'model_ratio',
+              old: 2.5,
+              new: 3.0,
+            },
+            {
+              model_name: 'model-b',
+              field: 'model_price',
+              old: 3.0,
+              new: 4.0,
+            },
+          ],
+        },
+      },
+    });
+
+    render(<PricingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pricing-table').textContent).toContain(
+        'model-a',
+      );
+    });
+
+    fireEvent.change(screen.getByTestId('field-model_ratio-model-a'), {
+      target: { value: '3.0' },
+    });
+    fireEvent.change(screen.getByTestId('field-model_price-model-b'), {
+      target: { value: '4.0' },
+    });
+
+    const previewBtn = screen.getByTestId('pricing-preview');
+    await waitFor(() => expect(previewBtn).not.toBeDisabled());
+    fireEvent.click(previewBtn);
+
+    await waitFor(() => {
+      expect(API.post).toHaveBeenCalledWith(
+        '/api/v2/acme/pricing/preview',
+        expect.arrayContaining([
+          expect.objectContaining({ model_name: 'model-a' }),
+          expect.objectContaining({ model_name: 'model-b' }),
+        ]),
+      );
+    });
+
+    await waitFor(() => {
+      const diffTable = screen.getByTestId('pricing-preview-diff');
+      expect(diffTable.textContent).toContain('model-a');
+      expect(diffTable.textContent).toContain('model-b');
+      expect(diffTable.textContent).toContain('model_ratio');
+      expect(diffTable.textContent).toContain('model_price');
+    });
+  });
+
+  // 6. The cache_ratio input prefills from the row's own value when GET
+  // pricing projects one, instead of starting blank — a model with no
+  // configured cache_ratio still starts blank.
+  it('prefills the cache_ratio input from the row when GET returns one', async () => {
+    API.get.mockResolvedValue(
+      fakePricingResponse([
+        { ...THREE_MODELS[0], cache_ratio: 0.42 },
+        THREE_MODELS[1],
+      ]),
+    );
+
+    render(<PricingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pricing-table').textContent).toContain(
+        'model-a',
+      );
+    });
+
+    expect(screen.getByTestId('field-cache_ratio-model-a').value).toBe('0.42');
+    expect(screen.getByTestId('field-cache_ratio-model-b').value).toBe('');
   });
 });

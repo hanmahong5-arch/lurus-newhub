@@ -39,6 +39,26 @@ var (
 	modelSupportEndpointsLock = sync.RWMutex{}
 )
 
+// InvalidatePricingCache forces the next GetPricing/GetVendors call to
+// rebuild the catalogue instead of serving the ~1-minute cache. Called after
+// a versioned pricing write commits (handler v2_pricing_write.go,
+// pricing_write_legacy.go) so a console refetch right after a save shows the
+// ratios just written.
+func InvalidatePricingCache() {
+	updatePricingLock.Lock()
+	defer updatePricingLock.Unlock()
+	lastGetPricingTime = time.Time{}
+}
+
+// PricingCacheAge reports how long ago the catalogue cache was rebuilt; a
+// zero lastGetPricingTime (never built, or invalidated) reads as very old.
+// Test seam for the invalidation contract.
+func PricingCacheAge() time.Duration {
+	updatePricingLock.Lock()
+	defer updatePricingLock.Unlock()
+	return time.Since(lastGetPricingTime)
+}
+
 func GetPricing() []Pricing {
 	if time.Since(lastGetPricingTime) > time.Minute*1 || len(pricingMap) == 0 {
 		updatePricingLock.Lock()

@@ -41,7 +41,7 @@ FROM debian:bookworm-slim
 # the package set frozen at cache time, so a CVE fixed upstream (e.g.
 # CVE-2026-45447 libssl3 deb12u2) never reaches the image until the
 # instruction text changes. Bump the date whenever Trivy flags a fixed CVE.
-ARG SECURITY_REFRESH=2026-06-10
+ARG SECURITY_REFRESH=2026-09-14
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget \

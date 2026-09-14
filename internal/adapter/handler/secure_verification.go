@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -77,7 +78,7 @@ func UniversalVerify(c *gin.Context) {
 	enrolled := rec != nil && rec.Enabled
 
 	if enrolled {
-		if req.Method != "totp" {
+		if req.Method != "totp" && req.Method != "totp_backup" {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success":       false,
 				"message":       "已启用两步验证，请输入验证码",
@@ -86,32 +87,68 @@ func UniversalVerify(c *gin.Context) {
 			})
 			return
 		}
+		// Both factors share one per-user throttle: a lost-device attacker
+		// guessing backup codes burns the same failure budget as one
+		// guessing TOTP codes, so switching factors gains nothing.
 		if !totp.AllowAttempt(c.Request.Context(), userId) {
 			governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
 				governance.ActionAuthFailed, governance.ResourceUser, userId, `{"step":"secure_verify","reason":"totp_throttled"}`))
 			c.JSON(http.StatusTooManyRequests, gin.H{"success": false, "message": "验证失败次数过多，请稍后再试"})
 			return
 		}
-		secret, err := totp.DecryptSecret(rec.SecretEncrypted)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		if !totp.ValidateCode(secret, req.Code) {
-			totp.RecordFailure(c.Request.Context(), userId)
-			governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
-				governance.ActionAuthFailed, governance.ResourceUser, userId, `{"step":"secure_verify","reason":"totp_invalid_code"}`))
-			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "验证码错误，请重试"})
-			return
-		}
-		if !totp.MarkCodeUsed(c.Request.Context(), userId, req.Code) {
-			totp.RecordFailure(c.Request.Context(), userId)
-			governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
-				governance.ActionAuthFailed, governance.ResourceUser, userId, `{"step":"secure_verify","reason":"totp_code_replayed"}`))
-			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "该验证码已被使用，请等待新的验证码"})
-			return
+
+		var remainingBackupCodes int64
+		if req.Method == "totp_backup" {
+			codeHash := totp.HashBackupCode(userId, req.Code)
+			usedAt := common.GetTimestamp()
+			consumed, cErr := repo.ConsumeUserTOTPBackupCode(userId, codeHash, usedAt)
+			if cErr != nil {
+				common.ApiError(c, cErr)
+				return
+			}
+			if !consumed {
+				// Wrong code AND a legitimately-replayed one both fail closed
+				// here — the single atomic UPDATE (WHERE used_at=0) cannot
+				// distinguish "never existed" from "already spent", by design.
+				totp.RecordFailure(c.Request.Context(), userId)
+				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
+					governance.ActionAuthFailed, governance.ResourceUser, userId, `{"step":"secure_verify","reason":"totp_backup_invalid_or_replayed"}`))
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Invalid or already-used backup code"})
+				return
+			}
+			remainingBackupCodes, err = repo.CountUnusedUserTOTPBackupCodes(userId)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		} else {
+			secret, err := totp.DecryptSecret(rec.SecretEncrypted)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if !totp.ValidateCode(secret, req.Code) {
+				totp.RecordFailure(c.Request.Context(), userId)
+				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
+					governance.ActionAuthFailed, governance.ResourceUser, userId, `{"step":"secure_verify","reason":"totp_invalid_code"}`))
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "验证码错误，请重试"})
+				return
+			}
+			if !totp.MarkCodeUsed(c.Request.Context(), userId, req.Code) {
+				totp.RecordFailure(c.Request.Context(), userId)
+				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
+					governance.ActionAuthFailed, governance.ResourceUser, userId, `{"step":"secure_verify","reason":"totp_code_replayed"}`))
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "该验证码已被使用，请等待新的验证码"})
+				return
+			}
 		}
 		totp.ClearFailures(c.Request.Context(), userId)
+
+		if req.Method == "totp_backup" {
+			governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
+				governance.ActionAuthLoginSuccess, governance.ResourceUser, userId,
+				fmt.Sprintf(`{"step":"secure_verify","method":"totp_backup","remaining":%d}`, remainingBackupCodes)))
+		}
 	} else if req.Method != "session" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success":       false,

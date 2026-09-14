@@ -32,6 +32,14 @@ type ParamOperation struct {
 	Logic      string               `json:"logic,omitempty"`      // AND, OR (默认OR)
 }
 
+// lurusInternalOverrideKeyPrefix marks param_override keys that steer
+// newhub's own relay behaviour (e.g. __lurus_force_http1 — see
+// provider/common/relay_info.go InitChannelMeta) rather than the upstream
+// request body. applyOperationsLegacy below skips any key with this prefix
+// when merging; the "operations" document format never reads arbitrary
+// top-level keys in the first place, so it needs no equivalent skip.
+const lurusInternalOverrideKeyPrefix = "__lurus_"
+
 func ApplyParamOverride(jsonData []byte, paramOverride map[string]interface{}, conditionContext map[string]interface{}) ([]byte, error) {
 	if len(paramOverride) == 0 {
 		return jsonData, nil
@@ -302,6 +310,9 @@ func applyOperationsLegacy(jsonData []byte, paramOverride map[string]interface{}
 	}
 
 	for key, value := range paramOverride {
+		if strings.HasPrefix(key, lurusInternalOverrideKeyPrefix) {
+			continue
+		}
 		reqMap[key] = value
 	}
 

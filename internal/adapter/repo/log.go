@@ -249,6 +249,13 @@ var internalOtherKeys = []string{
 	// stay visible because they are the caller's own values. See
 	// governance/classification.go (TierConfidential).
 	"end_user",
+	// The vendor's own request/trace id (governance.EnrichLogParams;
+	// adapter/handler/relay.go recordRelayErrorLog copies it onto error rows
+	// too). TierInternal in governance/classification.go, same rationale as
+	// channel_id/channel_name above: it names the upstream, for
+	// support-ticket correlation — distinct from the caller's own request_id,
+	// which stays public and is not on this list.
+	"upstream_request_id",
 }
 
 // GetLogByKey returns the history of the ONE token identified by its
@@ -973,6 +980,13 @@ func GetTenantLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []
 	}
 	if params.SessionID != "" {
 		tx = tx.Where(jsonOtherTextExpr("session_id")+" = ?", params.SessionID)
+	}
+
+	// The vendor's own request/trace id (TierInternal) — this route is the
+	// tenant-admin view (requireTenantAdmin gates GetAllLogsV2), so unlike
+	// GetUserLogsWithParams above this one is allowed to bind it.
+	if params.UpstreamRequestID != "" {
+		tx = tx.Where(jsonOtherTextExpr("upstream_request_id")+" = ?", params.UpstreamRequestID)
 	}
 
 	// Count total matching records

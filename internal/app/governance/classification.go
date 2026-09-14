@@ -74,9 +74,16 @@ var FieldClassification = map[string]DataTier{
 	"session_id": TierPublic,
 
 	// Internal — admin only
-	"channel_id":          TierInternal,
-	"channel_name":        TierInternal,
-	"upstream_model":      TierInternal,
+	"channel_id":     TierInternal,
+	"channel_name":   TierInternal,
+	"upstream_model": TierInternal,
+	// The VENDOR's own request/trace id (x-request-id/request-id/
+	// openai-request-id/cf-ray on the upstream HTTP response), captured by
+	// provider.doRequest — not to be confused with request_id right above in
+	// the Public block, which is the CALLER's own correlation id. This one
+	// names the upstream we routed to, so it gets the same tier as
+	// upstream_model/channel_id: admin-only, for support-ticket correlation.
+	"upstream_request_id": TierInternal,
 	"group":               TierInternal,
 	"request_fingerprint": TierInternal,
 	"model_ratio":         TierInternal,

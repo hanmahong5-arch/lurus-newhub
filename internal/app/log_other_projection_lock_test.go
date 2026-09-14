@@ -157,6 +157,13 @@ var wantInternal = map[string]string{
 	// `metadata.user_id`) — not the caller's own data the way request_id/
 	// session_id above are. TierConfidential in governance/classification.go.
 	"end_user": "hash of the caller's own end-user identifier — a third party's identity, not the caller's own data",
+
+	// The VENDOR's own request/trace id (provider.doRequest, captured off the
+	// upstream HTTP response headers) — not the caller's own request_id right
+	// above in wantUserVisible. It names which upstream account served the
+	// call, same tier as channel_id/channel_name next to it, and exists for
+	// support-ticket correlation ("give the vendor their own id back").
+	"upstream_request_id": "the vendor's own request/trace id — names the upstream, TierInternal in governance/classification.go",
 }
 
 // driveGenerators runs every Other-producing generator with non-zero inputs and
@@ -250,9 +257,10 @@ func driveGenerators(t *testing.T) map[string]struct{} {
 	// exactly how they shipped unclassified.
 	enrichParams := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
 	governance.EnrichLogParams(newCtx(), &relaycommon.RelayInfo{
-		SourceProduct: "switch",
-		SessionId:     "conv-42",
-		EndUserHash:   "0123456789abcdef",
+		SourceProduct:     "switch",
+		SessionId:         "conv-42",
+		EndUserHash:       "0123456789abcdef",
+		UpstreamRequestId: "vend-req-abc123",
 	}, enrichParams)
 	collect(enrichParams.Other)
 

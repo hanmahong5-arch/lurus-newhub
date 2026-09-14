@@ -51,7 +51,9 @@ func GetPricing(c *gin.Context) {
 
 func ResetModelRatio(c *gin.Context) {
 	defaultStr := ratio_setting.DefaultModelRatio2JSONString()
-	err := repo.UpdateOption("ModelRatio", defaultStr)
+	// A reset is a pricing change like any other: versioned and audited
+	// (TestResetModelRatio_BumpsVersionAndAudits).
+	err := writePricingOptionVersioned(c, "ModelRatio", defaultStr, "legacy_reset")
 	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,

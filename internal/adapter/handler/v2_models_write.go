@@ -25,6 +25,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -187,6 +188,14 @@ func CreateModelV2(c *gin.Context) {
 		return
 	}
 
+	// L2 audit-completeness: root-gated, process-global catalog write outside
+	// /api/v2/admin — named explicitly as an in-scope gap (the pricing write
+	// beside it already has its own audit call).
+	if detailsJSON, err := json.Marshal(gin.H{"model_name": req.ModelName}); err == nil {
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+			governance.ActionModelCreated, governance.ResourceModel, m.Id, string(detailsJSON)))
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
 		"data": modelV2View{
@@ -299,6 +308,13 @@ func DeleteModelV2(c *gin.Context) {
 			"message": "failed to delete model: " + err.Error(),
 		})
 		return
+	}
+
+	// L2 audit-completeness: same rationale as CreateModelV2's audit call —
+	// this row is removed for every tenant at once, not scoped to slug.
+	if detailsJSON, err := json.Marshal(gin.H{"model_name": m.ModelName}); err == nil {
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+			governance.ActionModelDeleted, governance.ResourceModel, m.Id, string(detailsJSON)))
 	}
 
 	c.JSON(http.StatusOK, gin.H{

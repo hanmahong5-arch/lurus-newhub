@@ -8,6 +8,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
@@ -278,5 +279,61 @@ func DeleteAdminUserV2(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "User deleted successfully",
+	})
+}
+
+// RevokeUserSessionsAdminV2 revokes every active per-device session of a
+// user — the "compromised account" runbook step (L7, auth-security-08/26/29).
+// Route: DELETE /api/v2/admin/users/:id/sessions
+//
+// RootJWTAuth-gated, same platform-wide-by-design class as
+// DeleteAdminUserV2/UpdateAdminUserV2 above: root manages every user's
+// sessions across every tenant, not a per-tenant ownership check. reason is
+// always "admin_revoked" — distinct from a user's own self-service
+// revoke-others ("user_revoked_others") so the audit trail can tell an
+// operator-initiated revoke apart from a user-initiated one. A no-op (0
+// revoked, still 200) when the user has no active sessions — including when
+// SESSION_REGISTRY_ENABLED is off, since no rows are ever registered then.
+func RevokeUserSessionsAdminV2(c *gin.Context) {
+	if _, ok := requireRoot(c); !ok {
+		return
+	}
+
+	userID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid user ID"})
+		return
+	}
+
+	// With the flag off no rows were ever registered — answer revoked:0
+	// without touching the DB, so a rollback (or leftover rows from a prior
+	// flag-on soak) cannot make this endpoint revoke anything.
+	if !repo.SessionRegistryEnabled() {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    gin.H{"revoked": 0},
+		})
+		return
+	}
+
+	rows, err := repo.RevokeAllUserSessions(userID, entity.SessionRevokeReasonAdminRevoked)
+	if err != nil {
+		common.SysError("RevokeUserSessionsAdminV2: failed: " + err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to revoke sessions"})
+		return
+	}
+	for _, r := range rows {
+		redisDeleteSessionKey(c, r.SessionKey)
+	}
+
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+		governance.ActionAuthSessionRevoked, governance.ResourceUser, userID,
+		fmt.Sprintf(`{"revoked":%d,"reason":%q}`, len(rows), entity.SessionRevokeReasonAdminRevoked)))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"revoked": len(rows),
+		},
 	})
 }

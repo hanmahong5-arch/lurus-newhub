@@ -84,11 +84,28 @@ export class TotpService {
     if (!res.data?.success) {
       throw new Error(res.data?.message || 'Failed to confirm TOTP code');
     }
+    return res.data.data; // { backup_codes } — returned once, never again
   }
 
   static async disable() {
     const res = await API.post('/api/user/totp/disable', {});
     return res.data;
+  }
+
+  /**
+   * Invalidates every existing backup code and issues a fresh set of 10,
+   * returned once in the response — same "returned once, never again"
+   * contract as confirm(). Gated by SecureVerificationRequired on the
+   * backend; callers should route through the step-up flow (see
+   * TwoFactorAuth.jsx's handleRegenerateBackupCodes) rather than calling
+   * this directly, the same way disable() is only ever reached that way.
+   */
+  static async regenerateBackupCodes() {
+    const res = await API.post('/api/user/totp/backup-codes/regenerate', {});
+    if (!res.data?.success) {
+      throw new Error(res.data?.message || 'Failed to regenerate backup codes');
+    }
+    return res.data.data; // { backup_codes }
   }
 }
 

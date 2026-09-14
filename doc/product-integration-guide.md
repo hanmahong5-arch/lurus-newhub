@@ -96,7 +96,10 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 | `/api/v2/{tenant}/user/me` | GET | 用户信息 |
 | `/api/v2/{tenant}/tokens` | GET / POST | 查询 / 创建 Token |
 | `/api/v2/{tenant}/logs` | GET | 使用日志 |
+| `/api/v2/{tenant}/logs/all?upstream_request_id=` | GET | 租户管理员(`requireTenantAdmin`)专用的日志列表,可按供应商自己的 request/trace id 精确匹配过滤:取上游响应头 `x-request-id` / `request-id` / `openai-request-id` / `cf-ray` 中第一个非空的值(≤128 字节可打印 ASCII,否则视为未发送),落在管理员可见字段 `other.upstream_request_id` 上(普通用户 `/api/v2/{tenant}/logs` 看不到该字段,也不支持这个查询参数)。根管理员导出 `GET /api/v2/admin/logs/export` 接受同名参数、同语义;供应商完全没发送这些头时该字段为空,不算缺陷;该 CSV 导出没有 `other` 列(过滤只用来缩小行范围,字段本身不落进文件),v2 控制台日志页当前也没有这个过滤输入框或明细展示 |
+| `/api/v2/{tenant}/analytics/rankings?by=model\|vendor&hours=` | GET | 租户管理员(`requireTenantAdmin`)专用的模型/供应商用量排行榜:按 token 用量降序给出 rank/环比 rank_delta(新上榜的 is_new=true、rank_delta=0)/requests_growth_pct(无上一窗口基线时为 null)/token_share_pct/quota_share_pct(份额基于当前窗口全部分组的总量,不是仅返回的最多 20 行);`by=vendor` 按 `channel_type` 聚合(名称经 `constant.GetChannelTypeName` 解析,`channel_type=0` 的历史行不计入任何 vendor 行);`hours` 会被收敛到 `{1,6,24,168,720}` 五档之一再作为缓存键(空值/非整数回落到默认 24h,超出 [1,720] 先截断再收敛),未知 `by` 值返回 400。响应体除 `rows` 外还带 `hours`(实际命中的档位)、`total_tokens`/`total_quota`(当前窗口全部分组的总量,不是仅返回的最多 20 行的求和,`token_share_pct`/`quota_share_pct` 即基于这两个总量计算);在进程内缓存 5 分钟(`cached_at` 可看出是否命中缓存;各副本各自维护自己的缓存,`cached_at` 在副本间可能不同,是预期行为不是缺陷)。两条路由都挂在 `CriticalRateLimit`(每 IP 20 次/20 分钟的 `CT` 桶,与渠道 key 揭示、TOTP 禁用、`/analytics/model-performance` 等 CriticalRateLimit 路由共享同一限流桶)之后,超额返回 429。根管理员等价端点 `GET /api/v2/admin/analytics/rankings?by=&hours=&tenant_id=` 额外接受 `tenant_id`(留空=跨租户)。目前没有兄弟产品接入这两个端点 |
 | `/api/v2/{tenant}/billing/topup` | POST | 发起充值 |
+| `/api/v2/{tenant}/sessions` | GET / DELETE(`:id`、`others`、`current`) | 控制台会话列表与撤销,整体挂在 `SESSION_REGISTRY_ENABLED`(默认关)后面:关闭时列表只返回一条代表当前请求的合成行,`DELETE :id` 一律 404、`DELETE others` 一律 `{"revoked":0}`,均不触碰数据库(2026-09-12 起,回滚或某次开关期遗留的行都不会被这两个端点动到);打开后列表按已登录设备逐条返回(`is_current`/`created_at`/`last_seen_at`、`ip` 按 /24(v4)或 /48(v6)掩码、`user_agent_family` 粗粒度),`DELETE :id` 撤销自己名下的一台设备(IDOR 404 语义,不属于自己的 id 与不存在的 id 同样 404)、`others` 一键撤销除当前设备外的全部。根管理员等价端点 `DELETE /api/v2/admin/users/:id/sessions`(压缩账号处置步骤,同样受该 flag 门控)。目前没有兄弟产品接入这组端点 |
 
 ### B. 错误码
 
@@ -149,14 +152,15 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 
 | 头 | 方向 | 说明 |
 |------|------|------|
-| `X-Request-Id` | 入站(可选)/出站(恒有) | 入站:调用方自己传的 id(8-36 位 `[A-Za-z0-9._-]`,上限对齐审计表 `audit_events.request_id` 的 `varchar(36)` 列宽——超过 36 位不会被原样回显,只会被网关重新铸造,否则该次请求的审计行会因写入超长值失败而被静默丢弃)会被原样回显,方便调用方不做往返查询就能自行关联;不传或格式不对时网关退回读 `traceparent`(W3C Trace Context)的 32 位 trace id(恒 ≤36 位),再退回自己生成。出站:成功/失败响应上恒有此头,是 `GET /v1/generation?id=` 的查询键(见 §F)。遗留别名 `X-Oneapi-Request-Id` 同值双发,计划一个发布周期后下线,新集成不要依赖它。 |
+| `X-Request-Id` | 入站(可选)/出站(恒有) | 入站:调用方自己传的 id(8-36 位 `[A-Za-z0-9._-]`,上限对齐审计表 `audit_events.request_id` 的 `varchar(36)` 列宽——超过 36 位不会被原样回显,只会被网关重新铸造,否则该次请求的审计行会因写入超长值失败而被静默丢弃)会被原样回显,方便调用方不做往返查询就能自行关联;不传或格式不对时网关退回读 `traceparent`(W3C Trace Context)的 32 位 trace id(恒 ≤36 位),再退回自己生成。出站:成功/失败响应上恒有此头,是 `GET /v1/generation?id=` 的查询键(见 §F)。遗留别名 `X-Oneapi-Request-Id` 同值双发,计划一个发布周期后下线,新集成不要依赖它。该"恒为网关自铸 id"的保证只覆盖走 `IOCopyBytesGracefully` 的非流式转发路径(OpenAI/Claude/Gemini/ollama/ali/mokaai 等主 wire)。以下几条路径把上游响应头原样转发,按拷贝方式分两种效果:`POST /v1/audio/speech`(OpenAI TTS,`openai/audio.go`)、MiniMax TTS(`minimax/tts.go`)与 Suno(`task/suno/adaptor.go`)三处用的是逐 key `Set`(gin 的 `c.Header`/`Header().Set` 都是覆盖写),若供应商自己也发送同名 `X-Request-Id`,会**替换**掉网关先设的值,客户端读到的是供应商的值;`VideoProxy`(`handler/video_proxy.go`)用的是 `Header().Add`,供应商的值是**追加成第二个值**,`Header.Get`/大多数客户端库仍读到网关先设的那个——这几条路径按 cycle-7 计划 §8 L3 操作员批注刻意排除在这次修复之外。 |
 | `X-Model-Provider` | 出站(尽力而为) | 服务本次请求的上游供应商名。OpenAI 线非流式响应与任意 wire 的流式响应上必有;Claude/Gemini 原生非流式响应路径不保证存在,不要用来做强判断。 |
 | `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` | 出站(放行响应,尽力而为) | 命中的限流层级里最紧的一档:上限/当前窗口剩余/窗口重置时间(Unix 秒)。`Limit`/`Remaining` 这一对由中转链上的限流/并发中间件(BusinessRateLimit、BusinessModelRateLimit、RelayConcurrencyLimit、ModelRequestRateLimit——`token`/`tenant`/`model`/`user` 四个 scope;`ip`/`key` 属于只挂在 `/api/*` 与 `/internal/*` 上的 keyed 限流器,`/v1` 路由不会走到)写出的 429 拒绝响应上也必带(`Remaining` 恒为 0);entitlement 配额闸门(`account`)与 cost spike 熔断(`user`/`cost`)的 429 只带下一行的 `Scope`/`Type`,不带这一对。`Reset` 不在任何 429 上发——拒绝携带的是 `Retry-After`,不是一个窗口重置时刻。 |
 | `X-RateLimit-Scope` | 出站(限流/配额类 429 拒绝响应必有,放行响应尽力而为) | 限流键所属主体:`ip` / `key`(网关 internal API key 桶,rate-limit.go 的 keyed 拒绝点)/ `user`(ModelRequestRateLimit,model-rate-limit.go)/ `token` / `tenant` / `model`(BusinessRateLimit / BusinessModelRateLimit,均按 rpm\|tpm)/ `account`(平台 entitlement 429)。**不是每个 429 都带**——`quota_exceeded`(entitlement)带 `account`,`cost_spike_limit_exceeded`(cost spike)带 `user`,并发类拒绝(concurrency_limit.go)带 `token`/`tenant`,其余限流层级见下一行 `Type` 对应关系。放行前就被拒的请求(TokenAuth/资金池/entitlement 之前的 401/402/403)和上游归因的失败(供应商 5xx/429、`channel:*` 含 503 cooling)不带网关自己的 `X-RateLimit-*`;放行之后才被拒的非限流错误(如 413 请求体过大、Distribute 的 400/403)可能仍带着放行时的余量快照——把它当"上一次放行的快照"读,不是对这次拒绝的说明。`ip`/`key` 只出现在 `/api/*` 控制台与 `/internal/*` 内部路由上,`/v1` 中转路由不会发这两个值——且那两个限流器(`rate-limit.go` 的 keyed 拒绝点)的 429 只写头,响应体是空的,`X-RateLimit-Scope: ip`/`key` 是那次拒绝唯一可读的信息,不要期待 `error.*`。 |
 | `X-RateLimit-Type` | 出站(限流/配额类 429 拒绝响应必有,放行响应尽力而为) | 限流维度:`requests` / `rpm`(每分钟请求数,BusinessRateLimit/BusinessModelRateLimit)/ `tpm`(每分钟 token 数,同样以 429 强制执行;`Remaining` 按已结算用量计算,可能滞后一次尖峰)/ `concurrency` / `quota`(entitlement)/ `cost`(cost spike)。 |
 | `Retry-After` | 出站(402/429/503 拒绝,携带已知恢复时间时) | 建议等待秒数。 |
 | `X-Request-Cost` / `X-Quota-Remaining` | 出站(仅 OpenAI 线非流式成功响应) | 本次请求消耗的钱包配额 / 调用方本次后的剩余余额,同单位,浮点数的字符串形式。 |
-| `X-Session-Id` | 入站(可选) | 调用方自带的会话粘滞键,两条独立用途:(1) 存储/回显——原始值只要 ≤200 字节可打印 ASCII,就原样写入这次调用日志行的 `session_id` 字段(公开可读级别,不是管理员专属),超限或含控制字符时整体丢弃、不截断;`GET /v1/generation`(见 §F)原样回显,`GET /api/v2/{tenant}/logs`可按它过滤(`logs/stat` 没有这个查询参数)——**只放不透明的会话/对话 id,不要放个人身份信息**,它会被落库和回显。(2) 渠道亲和——网关另外用 (调用方+分组+模型) 加盐对它做 HMAC,决定同一会话的多轮请求是否尽量路由回同一渠道(减少上游 prompt-cache 失效);这条 HMAC 只用于路由决策,与上面落库/回显的明文 `session_id` 字段是两回事。 |
+| `X-Session-Id` | 入站(可选) | 调用方自带的会话粘滞键,两条独立用途:(1) 存储/回显——原始值只要 ≤200 字节可打印 ASCII,就原样写入这次调用日志行的 `session_id` 字段(公开可读级别,不是管理员专属),超限或含控制字符时整体丢弃、不截断;`GET /v1/generation`(见 §F)原样回显,`GET /api/v2/{tenant}/logs`可按它过滤(`logs/stat` 没有这个查询参数)——**只放不透明的会话/对话 id,不要放个人身份信息**,它会被落库和回显。(2) 渠道亲和——网关另外用 (调用方+分组+模型) 加盐对它做 HMAC,决定同一会话的多轮请求是否尽量路由回同一渠道(减少上游 prompt-cache 失效);这条 HMAC 从 2026-09 起会通过 `X-Lurus-Affinity-Key`(见下一行)回显,与上面落库/回显的明文 `session_id` 字段是两回事。 |
+| `X-Lurus-Affinity-Key` | 出站(仅当本次请求携带可识别的会话来源时) | 上一行渠道亲和 HMAC 的回显值。来源三选一,优先级从高到低:`X-Session-Id` 请求头 / OpenAI `prompt_cache_key` / Claude `metadata.user_id`;一次性调用(三者都没有)不带此头,不会出现一个空字符串。目前唯一的用途是给运营方按此值调用管理端点清除单条绑定,调用方无需读它,能读到只是因为它已在 `Access-Control-Expose-Headers` 里。 |
 | 用户维度哈希 | 内部/日志 | 网关不落调用方传入的终端用户原始标识——`EndUserHash` 是按租户加盐的 HMAC(取前 16 字符),只用于按用户维度聚合成本查询,不可逆推原始标识。 |
 
 ### F. 只持一把 key 的调用方(无控制台权限)
@@ -167,3 +171,49 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 - **`GET /v1/generation?id=<X-Request-Id>`** — 用自己发出的入站 `X-Request-Id`,或网关在原始响应上回显的 `X-Request-Id`(见 §E),反查该次调用的费用/供应商/用量/首字延迟/`session_id`(该次请求带的 `X-Session-Id`,见 §E),不必等 `/logs` 分页查询。`quota` 字段是 quota 整数,`total_cost` 是本响应体里**唯一** USD 计价字段(`quota / quota_per_unit`;`quota_per_unit` 是管理员可改的选项,默认 500000,当前值以 `GET /api/status` 返回的 `quota_per_unit` 为准;该值未设置时 `total_cost` 为 0)。`id` 不属于调用方自己的 token/租户,或从未出现过,一律 404(不是 400/403),避免向未持有该 id 的调用方泄露"格式对/不对"的探测信号。镜像 OpenRouter 的 `GET /api/v1/generation`。
 
 两者均走标准 `Authorization: Bearer sk-...`,无需 flag,无写副作用。单位约定:`/v1/key` 的 `limit`/`limit_remaining`/`usage` 与 `/v1/generation` 的 `quota` 都是 quota 整数;`/v1/generation` 的 `total_cost` 是本指南里这两个端点唯一的 USD 计价字段。
+
+### G. 单渠道强制 HTTP/1.1 与会话亲和运维(root 专用)
+
+**强制 HTTP/1.1** — 渠道 `param_override`(旧版参数覆盖编辑器,控制台里没有独立开关,入口见
+`web/src/components/table/channels/modals/EditChannelModal.jsx` 的"参数覆盖"字段)里加一个内部
+控制键 `"__lurus_force_http1": true`,把这一个渠道的出站传输锁定为 HTTP/1.1(常见场景:某上游的
+HTTP/2 实现时断时续,和真正的下线区分不出来)。该键本身不会进入发往上游的请求体——
+`ApplyParamOverride`/`applyOperationsLegacy` 在合并前会跳过所有 `__lurus_` 前缀键。值必须是 JSON
+布尔;写成字符串或其它 `__lurus_` 未知键会被 `ValidateParamOverride` 拒绝,不会被静默当作 false
+收下——但拒绝的 HTTP 形状取决于走哪条保存路径:v2 渠道 API(`PUT /api/v2/channel/:id`)返回
+**400**;上面这条旧版编辑器实际调用的 `/api/channel/`(新建 `POST`、编辑 `PUT`)返回的是
+**HTTP 200 `{"success":false,"code":...,"message":...}`**——脚本化对接时必须看 `success` 字段,
+不能只看 HTTP 状态码。
+
+**范围**:该开关覆盖的是"最终经
+`provider.doRequest`(`internal/adapter/provider/api_request.go`)调用 `app.GetHttpClientFor`
+建出的客户端"发出的请求,以及(cycle7 L5 修复轮起)每个 `provider/task/*/adaptor.go` 的
+`FetchTask` 轮询——这条路径不按渠道类型分,按"哪次调用"分,同一渠道类型下不同调用可能
+一个受影响、一个不受影响。下表由
+`internal/adapter/provider/task_adaptor_force_http1_structural_test.go` 的
+`TestProviderTaskAdaptors_FetchTaskUsesGetHttpClientFor` 对"覆盖"列里的 task 轮询逐个校验源码
+(反悔改回旧客户端会让该测试变红);其余行未被测试锁住,凡本表与代码不一致以代码为准:
+
+| 覆盖(会受这个键影响) | 不覆盖(该次调用自己建客户端,这个键对它没用) |
+|---|---|
+| AWS Bedrock,API Key 模式的主请求(`aws/adaptor.go` → `provider.DoApiRequest`) | AWS Bedrock,AKSK 凭证模式(`aws/relay-aws.go:46` 自建 `bedrockruntime.Client`) |
+| Coze,建对话 + 流式主请求(`coze/adaptor.go` → `provider.DoApiRequest`) | Coze,轮询结果的那次请求(`coze/relay-coze.go:284`) |
+| Vertex AI,聊天主请求(`vertex/adaptor.go` → `provider.DoApiRequest`) | Vertex AI,service-account 换 token(`vertex/service_account.go:117`、`:160`) |
+| Task 类渠道主请求(`internal/adapter/provider/task/*/adaptor.go` 均经 `provider.DoTaskApiRequest`,覆盖 ali/doubao/gemini/hailuo/jimeng/kling/music/sora/suno/vertex/vidu 等) | Midjourney proxy 自己的图片拉取(`internal/app/relay/mjproxy_handler.go:42`、`:51`) |
+| Task 类渠道的状态轮询(同一批 `provider/task/*/adaptor.go` 的 `FetchTask`,含 hailuo) | baidu 换 access token(`baidu/relay-baidu.go:226` `getBaiduAccessTokenHelper`) |
+| | dify 文件上传(`dify/relay-dify.go:100`)、replicate 图片上传(`replicate/adaptor.go:480`) |
+| | 阿里图片任务轮询(`ali/image.go:200` `updateTask`,自建裸 `&http.Client{}`) |
+| | v2 渠道测试路由自己的客户端(`handler/v2_channel_actions.go:64` `channelTestHTTPClient`,见下方 UAT 探针说明) |
+
+在"不覆盖"这一列的调用上设置这个键,保存会成功但对那次调用没有任何效果(不会报错,也不会生效)。
+
+**会话亲和(session affinity)统计与清理** — root 专用管理端点,读/清 `internal/app/session_affinity.go` 维护的多轮会话粘滞绑定:
+
+- `GET /api/v2/admin/routing/affinity` — `data` 是扁平对象(不是嵌套 `counters{}`):`{"enabled":bool,
+  "ttl_seconds":n,"hit":n,"miss":n,"stale":n,"backend":"redis"|"memory","mem_entries":n}`(`enabled`/
+  `ttl_seconds` 是 `SESSION_AFFINITY_ENABLED`/`SESSION_AFFINITY_TTL` 的实时读数,`mem_entries` 只在
+  `backend=="memory"` 时有意义,`backend=="redis"` 时恒为 0);顶层再附带 `"success":true,"scope":"replica"`。
+  **这些计数是应答该请求的那个副本的进程内计数**(生产 3 副本 behind 同一 NodePort,同一时刻 GET 落到哪个副本随机),不是集群汇总;要看全集群总量,读 `/metrics` 的 `lurus_gateway_session_affinity_total{result}`。
+- `DELETE /api/v2/admin/routing/affinity/:key` — 用中转响应头 `X-Lurus-Affinity-Key`(见 §E)拿到的 HMAC 键清掉这一条绑定,204;键不存在 404;**Redis 故障时返回 5xx 而不是 404**——404 只代表"确认查过、没有这条",不代表"没查就假定没有"。
+- `DELETE /api/v2/admin/routing/affinity?all=true` — 清理当前后端能扫到的绑定(Redis 用有界 `SCAN`+`UNLINK`,不用 `KEYS`;SCAN 有轮次上限,防止游标异常或超大 keyspace 让这次调用无限跑下去),200 + `{"success":true,"data":{"purged":n,"complete":bool}}`;`complete:false` 表示 SCAN 在游标归零前就撞到了轮次上限,可能还有绑定没清完(不带 `?all=true` 返回 400)。
+- 两个清理端点都写审计动作 `routing.affinity_purged`。

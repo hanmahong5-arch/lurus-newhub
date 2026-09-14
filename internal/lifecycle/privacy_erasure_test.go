@@ -27,7 +27,8 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 	for _, m := range []interface{}{
 		&repo.User{}, &repo.Token{}, &repo.Log{},
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
-		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{},
+		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{}, &entity.UserTOTPBackupCode{},
+		&entity.UserSession{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -91,6 +92,27 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 	}).Error; err != nil {
 		t.Fatalf("seed totp: %v", err)
 	}
+	// One unused + one already-consumed backup code — both must be gone
+	// after erasure, not just the unused one.
+	if err := db.Create(&entity.UserTOTPBackupCode{
+		UserId: user.Id, CodeHash: "erase-fixture-hash-unused", CreatedAt: time.Now().Unix(),
+	}).Error; err != nil {
+		t.Fatalf("seed unused backup code: %v", err)
+	}
+	if err := db.Create(&entity.UserTOTPBackupCode{
+		UserId: user.Id, CodeHash: "erase-fixture-hash-used",
+		CreatedAt: time.Now().Unix(), UsedAt: time.Now().Unix(),
+	}).Error; err != nil {
+		t.Fatalf("seed used backup code: %v", err)
+	}
+	// A per-device session-registry row (L7) — must not survive erasure
+	// either (cycle7 L7 repair round 3, finding routing-resilience-limits-13#11).
+	if err := db.Create(&entity.UserSession{
+		SessionKey: "erase-fixture-session-key", UserId: user.Id, TenantId: "default",
+		CreatedAt: time.Now().Unix(), LastSeenAt: time.Now().Unix(),
+	}).Error; err != nil {
+		t.Fatalf("seed user session: %v", err)
+	}
 
 	for i := 0; i < logCount; i++ {
 		if err := db.Create(&entity.Log{
@@ -149,6 +171,22 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 	db.Unscoped().Model(&entity.UserTOTP{}).Where("user_id = ?", userID).Count(&totpCount)
 	if totpCount != 0 {
 		t.Errorf("totp rows remaining = %d, want 0", totpCount)
+	}
+
+	// totp backup codes: hard-deleted too — both the unused and the
+	// already-consumed one (SEC-C rides the same step).
+	var backupCodeCount int64
+	db.Unscoped().Model(&entity.UserTOTPBackupCode{}).Where("user_id = ?", userID).Count(&backupCodeCount)
+	if backupCodeCount != 0 {
+		t.Errorf("totp backup code rows remaining = %d, want 0", backupCodeCount)
+	}
+
+	// user_sessions: hard-deleted too, same step (L7 repair round 3, finding
+	// routing-resilience-limits-13#11).
+	var sessionCount int64
+	db.Unscoped().Model(&entity.UserSession{}).Where("user_id = ?", userID).Count(&sessionCount)
+	if sessionCount != 0 {
+		t.Errorf("user_sessions rows remaining = %d, want 0", sessionCount)
 	}
 
 	// logs: pseudonymized, billing fields retained
@@ -212,6 +250,86 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 	again, _ := repo.GetErasureRequestByEventID(context.Background(), "evt-erase-1")
 	if again.LogsScrubbed != 1200 {
 		t.Errorf("re-run mutated logs_scrubbed: %d", again.LogsScrubbed)
+	}
+}
+
+// openErasureTestDBNoTOTPTables mirrors openErasureTestDB but deliberately
+// omits entity.UserTOTP / entity.UserTOTPBackupCode from the migrated set —
+// reproducing the default post-deploy state where nobody has ever hit
+// either table's lazy AutoMigrate path. That path is any repo function that
+// calls ensureUserTOTPTable (user_totp.go, for user_totps) or
+// ensureUserTOTPBackupCodeTable (user_totp_backup_code.go, for
+// user_totp_backup_codes) — grep those two names in internal/adapter/repo
+// rather than trusting an enumerated list here, since GetTOTPAdoptionStats
+// alone calls both and a caller list drifts as callers are added (this
+// comment's own previous version omitted ReplaceUserTOTPBackupCodes). So
+// neither table exists when the erasure cascade runs.
+func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := fmt.Sprintf("file:erasure_no_totp%d?mode=memory&cache=shared", erasureDBCounter.Add(1))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, m := range []interface{}{
+		&repo.User{}, &repo.Token{}, &repo.Log{},
+		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
+		&entity.PrivacyErasureRequest{}, &entity.UserSession{},
+	} {
+		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("migrate %T: %v", m, err)
+		}
+	}
+
+	prevDB, prevLogDB := repo.DB, repo.LOG_DB
+	repo.DB, repo.LOG_DB = db, db
+	t.Cleanup(func() {
+		repo.DB, repo.LOG_DB = prevDB, prevLogDB
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}
+
+// TestExecuteErasure_TOTPTablesNeverCreated is the lock for the L6 repair
+// finding: before repo.HardDeleteUserTOTP/HardDeleteUserTOTPBackupCodes
+// guarded on DB.Migrator().HasTable, this step of the cascade errored with
+// "relation user_totps does not exist" on a deployment where the lazily-
+// created table had never been touched — the erasure request would fail at
+// step 1 and be retried on the next lifecycle tick (runErasurePass records
+// the error and moves on; it does not halt), stuck retrying that same step
+// instead of completing.
+// Mutation: removing either HasTable guard makes this executeErasure call
+// error.
+func TestExecuteErasure_TOTPTablesNeverCreated(t *testing.T) {
+	db := openErasureTestDBNoTOTPTables(t)
+
+	accountID := int64(9999)
+	user := repo.User{
+		Username: "no-totp-victim", Email: "no-totp@example.com",
+		Status: common.UserStatusEnabled, Group: "default", LurusAccountID: &accountID,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	row, err := repo.CreateErasureRequestIdempotent(context.Background(),
+		"evt-erase-no-totp", accountID, "", "user_requested",
+		user.Id, "default", repo.ErasureStatusPending)
+	if err != nil {
+		t.Fatalf("seed erasure request: %v", err)
+	}
+
+	if err := executeErasure(context.Background(), row); err != nil {
+		t.Fatalf("executeErasure must complete even when user_totp(s) tables were never created: %v", err)
+	}
+
+	final, err := repo.GetErasureRequestByEventID(context.Background(), "evt-erase-no-totp")
+	if err != nil {
+		t.Fatalf("get request: %v", err)
+	}
+	if final.Status != repo.ErasureStatusCompleted || final.CompletedAt == nil {
+		t.Errorf("request status = %q completed_at=%v, want completed", final.Status, final.CompletedAt)
 	}
 }
 

@@ -293,6 +293,10 @@ func run(ctx context.Context, startTime time.Time) error {
 		// settled at most once via a conditional-UPDATE claim (money-safe even
 		// if two sweeps overlap). Interval: CREDIT_POOL_RECONCILE_INTERVAL_SECONDS.
 		app.StartCreditPoolReconcileWithContext(ctx)
+		// L7 per-device session registry retention sweep: hard-deletes rows
+		// revoked >30 days ago or idle (never revoked) >90 days. Leader-gated
+		// internally, same pattern as StartSecretRotationWithContext.
+		lifecycle.StartSessionSweepWithContext(ctx)
 	}
 
 	// pprof server
@@ -340,28 +344,17 @@ func run(ctx context.Context, startTime time.Time) error {
 	engine.Use(middleware.RequestId())
 	middleware.SetUpLogger(engine)
 
-	// Initialize session store (Redis if available, cookie fallback)
-	sessionSecure := os.Getenv("GIN_MODE") == "release"
-	if envSecure := os.Getenv("SESSION_SECURE"); envSecure != "" {
-		sessionSecure = envSecure == "true"
-	}
-	// Default to ".lurus.cn" so the lurus.cn deployments share session cookies
-	// across subdomains. Standalone deployments under a single host (especially
-	// when accessed via IP, where browsers reject mismatched Domain attributes
-	// and silently drop the cookie) should set SESSION_COOKIE_DOMAIN="" to opt
-	// into a host-only cookie.
-	cookieDomain := ".lurus.cn"
-	if d, ok := os.LookupEnv("SESSION_COOKIE_DOMAIN"); ok {
-		cookieDomain = d
-	}
-	sessionOpts := sessions.Options{
-		Path:     "/",
-		MaxAge:   7776000, // 90 days
-		HttpOnly: true,
-		Secure:   sessionSecure,
-		SameSite: http.SameSiteLaxMode,
-		Domain:   cookieDomain,
-	}
+	// Initialize session store (Redis if available, cookie fallback).
+	// middleware.SessionCookieBaseOptions computes Path/Domain/Secure/SameSite
+	// from the same env vars this used to read inline (SESSION_SECURE,
+	// GIN_MODE, SESSION_COOKIE_DOMAIN — see that function's doc for the
+	// ".lurus.cn" default and the SESSION_COOKIE_DOMAIN="" host-only opt-out);
+	// the session-clearing call sites (authHelper, RevokeCurrentSessionV2,
+	// RevokeSessionByIDV2) now build their clearing cookie from the same
+	// function so a revoke's Set-Cookie matches what this store issued
+	// instead of each guessing its own Domain/Secure/SameSite.
+	sessionOpts := middleware.SessionCookieBaseOptions()
+	sessionOpts.MaxAge = 7776000 // 90 days
 	var store sessions.Store
 	if redisURL := os.Getenv("REDIS_CONN_STRING"); redisURL != "" {
 		redisStore, redisAddr, redisDB, err := newRedisSessionStore(redisURL, []byte(common.SessionSecret))

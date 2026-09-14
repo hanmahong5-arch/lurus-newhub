@@ -2,12 +2,14 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
@@ -80,6 +82,10 @@ func CreateCreditPool(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to create pool: " + err.Error()})
 		return
 	}
+
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,
+		governance.ActionCreditPoolCreated, governance.ResourceCreditPool, int(pool.ID),
+		fmt.Sprintf(`{"tenant_id":%q,"max_balance":%d,"reset_period":%q}`, tenantID, req.MaxBalance, req.ResetPeriod)))
 
 	c.JSON(http.StatusCreated, gin.H{"success": true, "data": pool})
 }
@@ -347,6 +353,9 @@ func TopupCreditPool(c *gin.Context) {
 			return
 		}
 		metrics.CreditPoolBalance.WithLabelValues(tenantID).Set(float64(evt.NewBalance))
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,
+			governance.ActionCreditPoolToppedUp, governance.ResourceCreditPool, int(pool.ID),
+			fmt.Sprintf(`{"tenant_id":%q,"amount":%d,"new_balance":%d,"reconciled":true}`, tenantID, req.Amount, evt.NewBalance)))
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"data": gin.H{
@@ -394,6 +403,10 @@ func TopupCreditPool(c *gin.Context) {
 	}
 
 	metrics.CreditPoolBalance.WithLabelValues(tenantID).Set(float64(newBalance))
+
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,
+		governance.ActionCreditPoolToppedUp, governance.ResourceCreditPool, int(pool.ID),
+		fmt.Sprintf(`{"tenant_id":%q,"amount":%d,"new_balance":%d}`, tenantID, req.Amount, newBalance)))
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -473,5 +486,8 @@ func DeleteCreditPool(c *gin.Context) {
 	}
 
 	metrics.CreditPoolBalance.WithLabelValues(tenantID).Set(0)
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+		governance.ActionCreditPoolDeleted, governance.ResourceCreditPool, int(pool.ID),
+		fmt.Sprintf(`{"tenant_id":%q,"drained_balance":%d}`, tenantID, pool.CurrentBalance)))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Credit pool drained"})
 }

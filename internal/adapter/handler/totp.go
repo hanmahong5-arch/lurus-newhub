@@ -39,12 +39,21 @@ func GetTotpStatus(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	var backupCodesRemaining int64
+	if rec != nil && rec.Enabled {
+		backupCodesRemaining, err = repo.CountUnusedUserTOTPBackupCodes(userId)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"enrolled": rec != nil && rec.Enabled,
-			"pending":  rec != nil && !rec.Enabled,
+			"enrolled":               rec != nil && rec.Enabled,
+			"pending":                rec != nil && !rec.Enabled,
+			"backup_codes_remaining": backupCodesRemaining,
 		},
 	})
 }
@@ -155,6 +164,21 @@ func TotpConfirm(c *gin.Context) {
 	}
 	totp.ClearFailures(c.Request.Context(), userId)
 
+	// Mint the recovery codes BEFORE flipping Enabled — deliberately, not
+	// just for ordering's sake: if issueBackupCodes fails, the enrollment
+	// must stay pending (Enabled still false) rather than live with zero
+	// backup codes stored. A live-with-no-codes state on a 500 would leave
+	// the user one lost phone away from a support ticket with no self-
+	// service recovery, and a retried confirm would hit the "already
+	// enabled" 400 above instead of getting another chance to mint codes.
+	// With this order, a failure here simply leaves confirm retriable with
+	// a fresh code, same as any other failure before this point.
+	backupCodes, err := issueBackupCodesFn(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
 	rec.Enabled = true
 	rec.ConfirmedAt = common.GetTimestamp()
 	if err := repo.UpsertUserTOTP(rec); err != nil {
@@ -166,7 +190,85 @@ func TotpConfirm(c *gin.Context) {
 		governance.ActionUserSelfUpdated, governance.ResourceUser, userId, `{"change":"totp_enrolled"}`))
 	repo.RecordLog(userId, repo.LogTypeSystem, "两步验证已启用")
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "两步验证启用成功"})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "两步验证启用成功",
+		"data": gin.H{
+			"backup_codes": backupCodes,
+		},
+	})
+}
+
+// issueBackupCodesFn is a call seam over issueBackupCodes so tests can force
+// the confirm-time minting step to fail deterministically (crypto/rand and a
+// unique-index collision essentially never fail on demand otherwise) and
+// assert what TotpConfirm does about it — mirrors notifyUserFn in
+// v2_admin_security.go. Production code does not reassign it.
+var issueBackupCodesFn = issueBackupCodes
+
+// issueBackupCodes mints a fresh set of totp.BackupCodeCount recovery codes
+// for userId, replacing any existing set (used or not), and returns the
+// plaintext codes — the only place they ever leave the server. Shared by
+// TotpConfirm (first issuance) and RegenerateTotpBackupCodes.
+func issueBackupCodes(userId int) ([]string, error) {
+	codes, err := totp.GenerateBackupCodes(totp.BackupCodeCount)
+	if err != nil {
+		return nil, err
+	}
+	now := common.GetTimestamp()
+	rows := make([]entity.UserTOTPBackupCode, 0, len(codes))
+	for _, code := range codes {
+		rows = append(rows, entity.UserTOTPBackupCode{
+			UserId:    userId,
+			CodeHash:  totp.HashBackupCode(userId, code),
+			CreatedAt: now,
+		})
+	}
+	if err := repo.ReplaceUserTOTPBackupCodes(userId, rows); err != nil {
+		return nil, err
+	}
+	return codes, nil
+}
+
+// RegenerateTotpBackupCodes invalidates every existing backup code and
+// issues a fresh set of totp.BackupCodeCount codes, returned once. Mounted
+// behind UserAuth + its own "TB" rate-limit bucket + SecureVerificationRequired
+// (router/api-router.go) — a fresh step-up is required because this call
+// silently burns any codes the user (or an attacker who glimpsed one) still
+// held unused.
+func RegenerateTotpBackupCodes(c *gin.Context) {
+	userId := c.GetInt("id")
+	if userId == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "未登录"})
+		return
+	}
+	rec, err := repo.GetUserTOTP(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if rec == nil || !rec.Enabled {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Two-factor authentication is not enabled"})
+		return
+	}
+
+	backupCodes, err := issueBackupCodes(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
+		governance.ActionAuthTotpBackupRegenerated, governance.ResourceUser, userId, `{}`))
+	repo.RecordLog(userId, repo.LogTypeSystem, "两步验证恢复码已重新生成")
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data": gin.H{
+			"backup_codes": backupCodes,
+		},
+	})
 }
 
 // TotpDisable removes the user's enrollment. The route mounts
@@ -188,6 +290,10 @@ func TotpDisable(c *gin.Context) {
 		return
 	}
 	if err := repo.DeleteUserTOTP(userId); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := repo.DeleteUserTOTPBackupCodes(userId); err != nil {
 		common.ApiError(c, err)
 		return
 	}

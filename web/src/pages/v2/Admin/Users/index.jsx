@@ -16,12 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
-import { API, showSuccess } from '../../../../helpers';
+import { API, showError, showSuccess } from '../../../../helpers';
 import { getQuotaPerUSD } from '../../../../helpers/formatting';
+import { useSecureVerification } from '../../../../hooks/common/useSecureVerification';
+import { createApiCalls } from '../../../../services/secureVerification';
+// Lazy: SecureVerificationModal's Semi UI import chain (Tabs → lottie) crashes
+// jsdom's canvas stub when pulled in statically (App.jsx hit the same issue
+// with a static Semi Input import) — deferring the import until the modal is
+// actually rendered keeps this page's own test suite from crashing on load.
+const SecureVerificationModal = lazy(
+  () => import('../../../../components/common/modals/SecureVerificationModal'),
+);
 
 /*
  * v2 admin — user management. Wired to /api/v2/admin/users (RootJWTAuth, session
@@ -246,7 +262,44 @@ const HFAdminUsers = () => {
   const [editing, setEditing] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [actioning, setActioning] = useState(false);
+  // Force-disable TOTP (L6): a reason prompt gates the call, and the call
+  // itself is gated behind the acting root's OWN step-up verification. This
+  // mitigates a stolen root Bearer JWT (RootJWTAuth's bearer branch never
+  // sets the session "id" key SecureVerificationRequired reads, so a bare
+  // JWT 401s before reaching the handler). It does NOT mitigate a stolen
+  // root SESSION cookie for a root who has no TOTP of their own enrolled:
+  // that root's step-up is POST /api/verify {"method":"session"} with no
+  // credential at all (secure_verification.go's unenrolled branch), so the
+  // gate is only as strong as the acting root's own 2FA enrollment.
+  const [disabling2FA, setDisabling2FA] = useState(null); // the target user row
+  const [reason2FA, setReason2FA] = useState('');
   const searchRef = useRef(null);
+
+  const {
+    isModalVisible: totpVerifyVisible,
+    verificationMethods: totpVerifyMethods,
+    verificationState: totpVerifyState,
+    startVerification: startTotpStepUp,
+    executeVerification: executeTotpStepUp,
+    cancelVerification: cancelTotpStepUp,
+    setVerificationCode: setTotpStepUpCode,
+    switchVerificationMethod: switchTotpStepUpMethod,
+  } = useSecureVerification({
+    onSuccess: async (result) => {
+      if (result?.success) {
+        showSuccess(
+          tr('console.admin.users.toast_2fa_disabled', '2FA disabled'),
+        );
+        setDisabling2FA(null);
+        setReason2FA('');
+        await fetchUsers(keyword, statusFilter);
+      } else if (result) {
+        showError(
+          result.message || tr('console.common.error', 'Operation failed'),
+        );
+      }
+    },
+  });
 
   const fetchUsers = useCallback(async (kw = '', status = '') => {
     setLoading(true);
@@ -497,6 +550,24 @@ const HFAdminUsers = () => {
                             >
                               {tr('console.common.delete', 'delete')}
                             </button>
+                            <button
+                              type='button'
+                              className='btn ghost sm'
+                              data-testid={`user-disable-2fa-btn-${u.id}`}
+                              onClick={() => {
+                                setDisabling2FA(u);
+                                setReason2FA('');
+                              }}
+                              title={tr(
+                                'console.admin.users.disable_2fa_title',
+                                "Remove this user's TOTP enrollment and backup codes",
+                              )}
+                            >
+                              {tr(
+                                'console.admin.users.disable_2fa',
+                                'disable 2FA',
+                              )}
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -540,6 +611,128 @@ const HFAdminUsers = () => {
         onConfirm={performDelete}
         onCancel={() => !actioning && setDeleting(null)}
       />
+
+      {disabling2FA && (
+        <div
+          role='dialog'
+          aria-label={tr(
+            'console.admin.users.disable_2fa_title_short',
+            'Disable 2FA',
+          )}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className='panel'
+            style={{ padding: 20, width: 420, maxWidth: '90vw' }}
+          >
+            <div className='lbl' style={{ marginBottom: 10 }}>
+              {tr(
+                'console.admin.users.disable_2fa_title_full',
+                'Disable 2FA for "{{name}}"?',
+                { name: disabling2FA.username || '' },
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 10 }}>
+              {tr(
+                'console.admin.users.disable_2fa_reason_hint',
+                'Removes their TOTP enrollment and backup codes. A reason is required and is recorded in the audit log.',
+              )}
+            </div>
+            <textarea
+              data-testid='disable-2fa-reason'
+              value={reason2FA}
+              onChange={(e) => setReason2FA(e.target.value)}
+              maxLength={200}
+              rows={3}
+              placeholder={tr(
+                'console.admin.users.disable_2fa_reason_placeholder',
+                'e.g. support ticket #4242, user lost their device',
+              )}
+              style={{
+                width: '100%',
+                fontFamily: 'var(--hf-mono)',
+                fontSize: 12,
+                padding: '6px 10px',
+                border: '1px solid var(--hf-rule)',
+                background: 'var(--hf-sunken)',
+                color: 'var(--hf-ink)',
+                borderRadius: 2,
+                outline: 'none',
+                resize: 'vertical',
+              }}
+            />
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 8,
+                marginTop: 12,
+              }}
+            >
+              <button
+                type='button'
+                className='btn ghost sm'
+                onClick={() => {
+                  setDisabling2FA(null);
+                  setReason2FA('');
+                }}
+              >
+                {tr('console.common.cancel', 'cancel')}
+              </button>
+              <button
+                type='button'
+                className='btn sm'
+                style={{ color: 'var(--hf-err)' }}
+                disabled={!reason2FA.trim()}
+                data-testid='disable-2fa-confirm'
+                onClick={() =>
+                  startTotpStepUp(
+                    createApiCalls.custom(
+                      `/api/v2/admin/security/users/${disabling2FA.id}/totp/force-disable`,
+                      'POST',
+                      { reason: reason2FA.trim() },
+                    ),
+                    {
+                      title: tr(
+                        'console.admin.users.disable_2fa_stepup_title',
+                        'Confirm your own identity to continue',
+                      ),
+                      description: tr(
+                        'console.admin.users.disable_2fa_stepup_desc',
+                        'This removes another user’s 2FA — verify it is really you.',
+                      ),
+                    },
+                  )
+                }
+              >
+                {tr('console.admin.users.disable_2fa_confirm', 'disable 2FA')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Suspense fallback={null}>
+        <SecureVerificationModal
+          visible={totpVerifyVisible}
+          verificationMethods={totpVerifyMethods}
+          verificationState={totpVerifyState}
+          onVerify={executeTotpStepUp}
+          onCancel={cancelTotpStepUp}
+          onCodeChange={setTotpStepUpCode}
+          onMethodSwitch={switchTotpStepUpMethod}
+          title={totpVerifyState.title}
+          description={totpVerifyState.description}
+        />
+      </Suspense>
     </HFShell>
   );
 };

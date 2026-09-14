@@ -481,3 +481,53 @@ func TestIOCopyBytesGracefully_WritesBodyAndHeaders(t *testing.T) {
 		t.Errorf("Content-Length = %q, want 12 (len of payload)", got)
 	}
 }
+
+// TestIOCopyBytesGracefully_GatewayRequestIdSurvivesVendorHeader locks the
+// UpstreamHeadersNotForwarded skip: a vendor that sends its own value under
+// the identically-named "X-Request-Id" header (the OpenAI-wire convention)
+// must not overwrite the gateway's own id, already set on c.Writer before
+// this runs (middleware.RequestId). The remaining names
+// provider.upstreamRequestIdHeaders also captures must likewise not reach
+// the client raw.
+func TestIOCopyBytesGracefully_GatewayRequestIdSurvivesVendorHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	// Mirrors middleware.RequestId's c.Header calls, which run before any
+	// provider handler (and therefore before IOCopyBytesGracefully) does.
+	c.Header("X-Request-Id", "gateway-minted-id")
+	c.Header("X-Oneapi-Request-Id", "gateway-minted-id")
+
+	src := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"X-Request-Id":        {"vendor-id"},
+			"X-Oneapi-Request-Id": {"vendor-id"},
+			"Request-Id":          {"vendor-anthropic-id"},
+			"Openai-Request-Id":   {"vendor-relay-id"},
+			"Cf-Ray":              {"vendor-cf-ray"},
+			"X-Custom":            {"kept"},
+		},
+	}
+	IOCopyBytesGracefully(c, src, []byte("body"))
+
+	if got := w.Header().Get("X-Request-Id"); got != "gateway-minted-id" {
+		t.Errorf("X-Request-Id = %q, want the gateway's own id (vendor's must not overwrite it)", got)
+	}
+	if got := w.Header().Get("X-Oneapi-Request-Id"); got != "gateway-minted-id" {
+		t.Errorf("X-Oneapi-Request-Id = %q, want the gateway's own id", got)
+	}
+	if got := w.Header().Get("Request-Id"); got != "" {
+		t.Errorf("Request-Id = %q, want empty (vendor's own id header must not reach the client raw)", got)
+	}
+	if got := w.Header().Get("Openai-Request-Id"); got != "" {
+		t.Errorf("Openai-Request-Id = %q, want empty", got)
+	}
+	if got := w.Header().Get("Cf-Ray"); got != "" {
+		t.Errorf("Cf-Ray = %q, want empty", got)
+	}
+	// An unrelated header must still be copied through unaffected.
+	if got := w.Header().Get("X-Custom"); got != "kept" {
+		t.Errorf("X-Custom = %q, want kept (unrelated headers still copy)", got)
+	}
+}

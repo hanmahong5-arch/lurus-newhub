@@ -119,6 +119,17 @@ func EnrichLogParams(c *gin.Context, info *relaycommon.RelayInfo, params *entity
 	if info.EndUserHash != "" {
 		params.Other["end_user"] = info.EndUserHash
 	}
+	// UpstreamRequestId is the vendor's own request/trace id (provider.doRequest
+	// captures it off the upstream response headers). TierInternal in
+	// classification.go — it names the upstream, like channel_id — so it is
+	// written here without a role check (the role split happens in
+	// repo.SanitizeOtherForUser), the same split request_id/session_id above
+	// do NOT need (those are TierPublic). Written only when non-empty: an
+	// upstream that sent none of the headers in upstreamRequestIdHeaders is
+	// not the same signal as "we failed to capture it".
+	if info.UpstreamRequestId != "" {
+		params.Other["upstream_request_id"] = info.UpstreamRequestId
+	}
 	// NOTE: client_ip is NOT written here — it is controlled by the user's
 	// RecordIpLog setting and handled in RecordConsumeLog / RecordErrorLog.
 }
