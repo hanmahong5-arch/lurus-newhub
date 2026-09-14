@@ -23,6 +23,19 @@ func EstimateQuotaFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 		return 0
 	}
 
+	// Declarative context-length pricing tier (billing-pricing-14): the
+	// perception path (this function and ComputeLurusExtension, which reads
+	// relayInfo.PriceData.ModelRatio right after this call in every caller)
+	// runs strictly before postConsumeQuota settles the same request
+	// (adaptor.DoResponse precedes it in compatible_handler.go's TextHelper),
+	// so without this the X-Request-Cost header and x_lurus extension would
+	// report the stale pre-consume tier while the wallet debit uses the
+	// resettled one — half the real charge on a tier-crossing call (cycle-8
+	// plan §8 L5 B-F2). Idempotent and a no-op for UsePrice models and for
+	// any model with no tiers configured (helper.ResettleContextTier); the
+	// later postConsumeQuota call re-runs this with the same inputs.
+	ResettleContextTier(&relayInfo.PriceData, relayInfo.OriginModelName, usage.AsOpenAIWire().PromptTokens)
+
 	if relayInfo.PriceData.UsePrice {
 		q := decimal.NewFromFloat(relayInfo.PriceData.ModelPrice).
 			Mul(decimal.NewFromFloat(common.QuotaPerUnit)).

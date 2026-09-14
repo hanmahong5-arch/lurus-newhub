@@ -57,7 +57,11 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/user/self/groups", middleware.UserAuth(), handler.GetUserGroups)
 		apiRouter.GET("/user/token", middleware.UserAuth(), handler.GenerateAccessToken)
 		apiRouter.PUT("/user/setting", middleware.UserAuth(), handler.UpdateUserSetting)
-		apiRouter.POST("/user/topup", middleware.UserAuth(), handler.RedeemCodeV2)
+		// RedemptionRateLimit (5/60s/IP, "RD" bucket) adds a redemption-
+		// specific ceiling. The group-level GlobalAPIRateLimit mounted at :15
+		// (default enabled, 180 req/180s/IP) also applies here and is far too
+		// loose for code guessing (cycle-8 L1).
+		apiRouter.POST("/user/topup", middleware.UserAuth(), middleware.RedemptionRateLimit(), handler.RedeemCodeV2)
 		apiRouter.GET("/user/models", middleware.UserAuth(), handler.GetUserModels)
 
 		// -- Secure verification (session-based step-up re-confirmation) --

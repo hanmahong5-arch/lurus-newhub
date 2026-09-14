@@ -223,8 +223,9 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	}
-	// The four ratio maps are guarded by the PricingVersion lock: rewriting
-	// one here goes through the same transaction, version bump and
+	// The pricing option rows (pricingOptionKeys) are guarded by the
+	// PricingVersion lock: rewriting one here goes through the same
+	// transaction, version bump and
 	// pricing.updated audit row as the console batch write
 	// (writePricingOptionVersioned), so this route cannot change a price
 	// behind the optimistic lock

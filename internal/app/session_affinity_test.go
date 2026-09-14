@@ -99,6 +99,46 @@ func TestDeriveSessionAffinityKey_Sources(t *testing.T) {
 			t.Errorf("feature flag off must disable pinning, got %q", got)
 		}
 	})
+
+	// TestDeriveSessionAffinityKey_Sources/responses_compact_prompt_cache_key
+	// is the oracle for repair-round finding B-F3: POST /v1/responses/compact
+	// must be recognised as an affinity source at all (before the fix,
+	// extractRequestAffinityID's type switch had no case for
+	// *dto.OpenAIResponsesCompactionRequest and returned "").
+	t.Run("responses_compact_prompt_cache_key", func(t *testing.T) {
+		c := affinityCtx(t, 1, 1, "default", "gpt-4o")
+		raw, err := json.Marshal("conv-9")
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if got := DeriveSessionAffinityKey(c, &dto.OpenAIResponsesCompactionRequest{PromptCacheKey: raw}); got == "" {
+			t.Error("compact prompt_cache_key must produce a binding")
+		}
+	})
+
+	// TestDeriveSessionAffinityKey_Sources/responses_and_compact_same_key_same_scope
+	// is the other half of B-F3: a plain /v1/responses request and a
+	// /v1/responses/compact request carrying the SAME prompt_cache_key under
+	// the SAME (token, user, group, model) scope must derive the SAME
+	// affinity key — otherwise the compact endpoint, whose whole purpose is
+	// continuing a previous response, never pins the channel that produced
+	// it.
+	t.Run("responses_and_compact_same_key_same_scope", func(t *testing.T) {
+		raw, err := json.Marshal("conv-shared")
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		c1 := affinityCtx(t, 1, 1, "default", "gpt-4o")
+		fromResponses := DeriveSessionAffinityKey(c1, &dto.OpenAIResponsesRequest{PromptCacheKey: raw})
+		c2 := affinityCtx(t, 1, 1, "default", "gpt-4o")
+		fromCompact := DeriveSessionAffinityKey(c2, &dto.OpenAIResponsesCompactionRequest{PromptCacheKey: raw})
+		if fromResponses == "" || fromCompact == "" {
+			t.Fatalf("expected both to produce a binding, got responses=%q compact=%q", fromResponses, fromCompact)
+		}
+		if fromResponses != fromCompact {
+			t.Errorf("responses key %q != compact key %q for the same prompt_cache_key/scope", fromResponses, fromCompact)
+		}
+	})
 }
 
 // TestDeriveSessionAffinityKey_ScopeIsolation is the security-relevant case:

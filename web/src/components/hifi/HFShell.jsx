@@ -25,6 +25,7 @@ import {
   LuBoxes,
   LuFlaskConical,
   LuFolderKanban,
+  LuHeartPulse,
   LuImage,
   LuKeyRound,
   LuLayoutDashboard,
@@ -36,6 +37,7 @@ import {
   LuScrollText,
   LuSearch,
   LuSettings,
+  LuShieldCheck,
   LuSlidersHorizontal,
   LuTag,
   LuTicket,
@@ -301,6 +303,9 @@ export const NAV_SECTIONS = [
         badge: '',
       },
       // Audit trail + tamper-evidence chain verifier (migration 024 backend).
+      // Now reachable by a delegated admin holding an audit:read grant, not
+      // only root (L4, 2026-09-13) — RootOrGranted, not RootJWTAuth, gates
+      // the four GETs this page calls.
       {
         id: 'admin-audit',
         href: '/console/v2/admin/audit',
@@ -308,6 +313,20 @@ export const NAV_SECTIONS = [
         label: 'Audit trail',
         key: 'console.nav.admin_audit',
         badge: '',
+      },
+      // Delegated admin permission grants (L4, auth-security-17/18,
+      // console-ux-36). Grant MANAGEMENT itself stays root-only
+      // server-side (adminRoute/RootJWTAuth) — minRole:100 here mirrors
+      // admin-system-tasks' own per-item override for the same reason: the
+      // section itself is only minRole:10.
+      {
+        id: 'admin-authz',
+        href: '/console/v2/admin/authz',
+        glyph: LuShieldCheck,
+        label: 'Permission grants',
+        key: 'console.nav.admin_authz',
+        badge: '',
+        minRole: 100,
       },
     ],
   },
@@ -361,16 +380,49 @@ export const NAV_SECTIONS = [
         key: 'console.nav.admin_settings',
         badge: '',
       },
+      // Background-task heartbeats (L3, 2026-09-13): GET
+      // /api/v2/admin/system/tasks is RootJWTAuth-gated server-side, so this
+      // entry needs a per-item minRole=100 — the section itself is only
+      // minRole:10, which would otherwise show a root-only page link to
+      // any admin.
+      {
+        id: 'admin-system-tasks',
+        href: '/console/v2/admin/system-tasks',
+        glyph: LuHeartPulse,
+        label: 'Background tasks',
+        key: 'console.nav.system_tasks',
+        badge: '',
+        minRole: 100,
+      },
     ],
   },
 ];
+
+// visibleNavItems applies BOTH the section-level and the per-item minRole
+// gate for a given bridged user, in one place — the single source of truth
+// for "what nav destinations can this user see", so the rail (below) and
+// the command palette (CommandPalette/index.jsx) cannot drift apart. Before
+// this existed, the palette applied only the section-level filter with a
+// synthetic two-value role (`admin ? 10 : 0`), which cannot distinguish
+// admin (10) from root (100) — a role-10 admin was offered the root-only
+// "Background tasks" destination (admin-system-tasks, minRole:100) even
+// though the rail correctly hides it.
+export const visibleNavItems = (user) => {
+  const role = user?.role ?? 0;
+  return NAV_SECTIONS.filter((s) => !s.minRole || role >= s.minRole).map(
+    (s) => ({
+      ...s,
+      items: s.items.filter((it) => !it.minRole || role >= it.minRole),
+    }),
+  );
+};
 
 // Pull the bridged user identity directly from localStorage — set by
 // OidcRedirect/zita-bootstrap. The v2 hi-fi shell intentionally
 // avoids the StatusContext/UserContext used by the legacy chrome (those
 // pull a chunk of v1 state we don't need here); a thin localStorage
 // read is enough to surface "who am I" + a logout escape hatch.
-const useBridgedUser = () => {
+export const useBridgedUser = () => {
   // Lazy initializer, not an effect: the role-gated nav sections must be
   // decided on the FIRST paint, or an admin's rail visibly pops in a frame
   // late (and a user's flashes admin entries it then removes).
@@ -570,9 +622,7 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
           </span>
         </button>
 
-        {NAV_SECTIONS.filter(
-          (s) => !s.minRole || (user?.role ?? 0) >= s.minRole,
-        ).map((s) => (
+        {visibleNavItems(user).map((s) => (
           <div className='nav-section' key={s.h}>
             <div className='nav-h'>{t(s.hKey, s.h)}</div>
             {s.items.map((it) => {

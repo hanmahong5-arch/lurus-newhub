@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/gin-gonic/gin"
@@ -134,6 +135,45 @@ func TestLeaderState(t *testing.T) {
 	SetLeader(false)
 	if IsLeader() {
 		t.Error("SetLeader(false) not reflected")
+	}
+}
+
+// TestLeaderSince_StampsOnlyOnFalseToTrueEdge pins the L3 repair round
+// (B-F5) new-leader-grace mechanism: LeaderSince must advance on a
+// false→true edge, and must NOT advance on a redundant SetLeader(true)
+// call while already leader (the lease renewal / LeaderManager.step
+// heartbeat case) or on SetLeader(false).
+func TestLeaderSince_StampsOnlyOnFalseToTrueEdge(t *testing.T) {
+	origLeader := IsLeader()
+	origSince := LeaderSince()
+	t.Cleanup(func() {
+		SetLeader(origLeader)
+		leaderSince.Store(origSince)
+	})
+
+	SetLeader(false)
+	leaderSince.Store(0) // simulate "never held the lease in this process"
+
+	before := time.Now().Unix()
+	SetLeader(true)
+	after := time.Now().Unix()
+
+	got := LeaderSince()
+	if got < before || got > after {
+		t.Fatalf("LeaderSince() = %d, want within [%d, %d] after the false->true edge", got, before, after)
+	}
+
+	// Redundant SetLeader(true) (lease renewal) must not move leaderSince.
+	SetLeader(true)
+	if LeaderSince() != got {
+		t.Errorf("LeaderSince() moved from %d to %d on a redundant SetLeader(true) call — it must only stamp on the false->true edge", got, LeaderSince())
+	}
+
+	// SetLeader(false) must not move it either — LeaderSince records the
+	// most recent time leadership was WON, not released.
+	SetLeader(false)
+	if LeaderSince() != got {
+		t.Errorf("LeaderSince() moved from %d to %d on SetLeader(false)", got, LeaderSince())
 	}
 }
 

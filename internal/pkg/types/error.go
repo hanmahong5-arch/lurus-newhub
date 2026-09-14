@@ -133,6 +133,41 @@ const (
 	ErrorCodeBusinessRateLimitExceeded ErrorCode = "business_rate_limit_exceeded"
 	ErrorCodeConcurrencyLimitExceeded  ErrorCode = "concurrency_limit_exceeded"
 	ErrorCodeAPINotImplemented         ErrorCode = "api_not_implemented"
+	// ErrorCodeTaskPlatformUnknown is returned by the generic async-task
+	// surface (/v1/tasks/:platform) when :platform names no compiled
+	// provider/task/* adaptor (cycle-8 L8).
+	ErrorCodeTaskPlatformUnknown ErrorCode = "task_platform_unknown"
+	// ErrorCodeResponsesCompactUnsupported is returned by POST
+	// /v1/responses/compact (cycle-8 L6, wire-formats-03) when the selected
+	// channel's type is not in common.SupportsResponsesCompact's allow-list.
+	// Checked after channel selection but before any upstream call.
+	ErrorCodeResponsesCompactUnsupported ErrorCode = "responses_compact_unsupported"
+	// ErrorCodeResponseNotFound is returned by GET/DELETE
+	// /v1/responses/:response_id (cycle-8 L7, tasks-plugins-12) for three
+	// byte-identical cases: no response_registry row for the id, a row that
+	// belongs to a different user or tenant, and a row whose channel is
+	// missing or disabled. The handler never distinguishes these with a 403
+	// — see handler/relay_responses_registry.go.
+	ErrorCodeResponseNotFound ErrorCode = "response_not_found"
+	// ErrorCodeArtifactNotFound is returned by GET
+	// /v1/tasks/:platform/:task_id/artifacts/:key/content (cycle-8 L9,
+	// tasks-plugins-02/17/19) when :key is not one the sibling listing route
+	// would currently produce for this task. Deliberately distinct from the
+	// task-ownership 404 (task_generic.go's respondTaskNotFound, which stays
+	// codeless — see that function's doc comment), which this handler also
+	// uses unmodified for an absent/foreign task_id.
+	ErrorCodeArtifactNotFound ErrorCode = "artifact_not_found"
+	// ErrorCodeArtifactRequestRejected is returned by the artifact-content
+	// proxy (task_media_guard.go's streamMediaContent) when the request is
+	// refused by this gateway's own policy before any upstream fetch is
+	// attempted: an unfetchable scheme, a self-referential/loop URL, a
+	// fetch_setting egress-policy rejection, or a known Content-Length that
+	// exceeds the proxy's size cap.
+	ErrorCodeArtifactRequestRejected ErrorCode = "artifact_request_rejected"
+	// ErrorCodeArtifactUpstreamError is returned by the artifact-content
+	// proxy when the request itself was allowed but the upstream fetch
+	// failed or returned a non-200 status.
+	ErrorCodeArtifactUpstreamError ErrorCode = "artifact_upstream_error"
 )
 
 // WireErrorType maps an HTTP status code to the vendor-taxonomy "type" string

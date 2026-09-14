@@ -43,6 +43,9 @@ func TestIsValidAuditAction(t *testing.T) {
 		{ActionAdminMaintenanceTriggered, true},
 		{ActionAuthTotpBackupRegenerated, true},
 		{ActionTotpAdminDisabled, true},
+		{ActionResponseRetrieved, true},
+		{ActionResponseDeleted, true},
+		{ActionResponseDenied, true},
 
 		// Unknown actions — must reject. These probe the most likely typos:
 		// trailing whitespace, near-misses, empty string, invented terms.

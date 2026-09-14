@@ -33,15 +33,34 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
 }));
 
-// HFShell is stubbed, but NAV_SECTIONS is NOT: the navigate group is supposed
-// to reuse the rail's real section list, and stubbing it would let the palette
-// drift back to a hand-maintained copy without any test noticing.
+// HFShell is stubbed, but NAV_SECTIONS/visibleNavItems/useBridgedUser are
+// NOT: the navigate group is supposed to reuse the rail's real section list
+// and role-gating logic, and stubbing them would let the palette drift back
+// to a hand-maintained copy without any test noticing.
+//
+// visibleNavItems is wrapped in a spy (delegating to the real
+// implementation) so tests can assert what user object the palette actually
+// passed it — the wiring B-F2 was about. A DOM-text assertion on the
+// rendered "navigate" group cannot see this: HFCmdK slices every group's
+// rows to MAX_PER_GROUP=6 (index.jsx), and the two unconditional sections
+// (workspace + my account) alone already total 8 items, so anything in a
+// minRole-gated section — admin or root — is always past the visible cap
+// regardless of which role produced it. That truncation is pre-existing
+// and out of this lane's scope; the spy tests the actual mechanism instead.
+const { visibleNavItemsSpy } = vi.hoisted(() => ({
+  visibleNavItemsSpy: vi.fn(),
+}));
 vi.mock('../../../components/hifi/HFShell', async (importOriginal) => {
   const actual = await importOriginal();
+  visibleNavItemsSpy.mockImplementation((...args) =>
+    actual.visibleNavItems(...args),
+  );
   return {
     default: ({ children }) =>
       React.createElement('div', { 'data-testid': 'hf-shell' }, children),
     NAV_SECTIONS: actual.NAV_SECTIONS,
+    visibleNavItems: visibleNavItemsSpy,
+    useBridgedUser: actual.useBridgedUser,
   };
 });
 
@@ -88,9 +107,16 @@ beforeEach(() => {
   mockNavigate.mockReset();
   mockIsAdmin.mockReset();
   mockIsAdmin.mockReturnValue(false);
+  visibleNavItemsSpy.mockClear();
   window.localStorage.clear();
   window.localStorage.setItem('tenant_slug', 'acme');
 });
+
+const setBridgedUser = (role) =>
+  window.localStorage.setItem(
+    'user',
+    JSON.stringify({ role, username: 'palette-test' }),
+  );
 
 // Every group in this palette used to be hardcoded demo data invented on a
 // design canvas: channels "openai/main · $412.80 / 1h · 99.4% healthy", models
@@ -197,6 +223,62 @@ describe('CommandPalette — real data', () => {
     const rows = screen.getAllByTestId('palette-row-navigate');
     expect(rows.length).toBeGreaterThan(0);
     expect(document.body.textContent).toContain('/console/v2/dashboard');
+  });
+
+  // B-F2/A-F3 regression: the palette used to gate the navigate group on
+  // `admin ? 10 : 0`, a two-value stand-in that cannot distinguish admin
+  // (role 10) from root (role 100) — a role-10 admin was offered the
+  // root-only "Background tasks" destination (admin-system-tasks,
+  // minRole:100 within the minRole:10 "operations & insights" section)
+  // that the rail itself correctly hid.
+  //
+  // These assert against visibleNavItemsSpy's call arguments and return
+  // value directly, not the rendered DOM: HFCmdK slices the navigate
+  // group's rows to MAX_PER_GROUP=6, and the two unconditional sections
+  // (workspace + my account) already total 8 items, so "Background tasks"
+  // (deep in the fifth, last section) is never within the visible cap
+  // regardless of role — a DOM assertion here would pass or fail for
+  // reasons unrelated to role gating. Asserting on visibleNavItems' own
+  // input/output proves the actual mechanism this finding is about.
+  it('calls visibleNavItems with the real bridged role, and it excludes "Background tasks" for role 10', async () => {
+    setBridgedUser(10);
+    wireGet();
+
+    render(<HFCmdK />);
+
+    await waitFor(() =>
+      expect(screen.getAllByText('deepseek-chat').length).toBeGreaterThan(0),
+    );
+
+    expect(visibleNavItemsSpy).toHaveBeenCalled();
+    const [calledWith] = visibleNavItemsSpy.mock.calls[0];
+    expect(calledWith?.role).toBe(10);
+
+    const sections = visibleNavItemsSpy.mock.results[0].value;
+    const allHrefs = sections.flatMap((s) => s.items.map((it) => it.href));
+    // The section itself (minRole:10) is visible — a sibling item proves it.
+    expect(allHrefs).toContain('/console/v2/admin/gateway');
+    // The per-item minRole:100 destination is not.
+    expect(allHrefs).not.toContain('/console/v2/admin/system-tasks');
+  });
+
+  it('calls visibleNavItems with the real bridged role, and it includes "Background tasks" for role 100', async () => {
+    setBridgedUser(100);
+    wireGet();
+
+    render(<HFCmdK />);
+
+    await waitFor(() =>
+      expect(screen.getAllByText('deepseek-chat').length).toBeGreaterThan(0),
+    );
+
+    expect(visibleNavItemsSpy).toHaveBeenCalled();
+    const [calledWith] = visibleNavItemsSpy.mock.calls[0];
+    expect(calledWith?.role).toBe(100);
+
+    const sections = visibleNavItemsSpy.mock.results[0].value;
+    const allHrefs = sections.flatMap((s) => s.items.map((it) => it.href));
+    expect(allHrefs).toContain('/console/v2/admin/system-tasks');
   });
 
   it('filters as you type instead of ignoring the search box', async () => {

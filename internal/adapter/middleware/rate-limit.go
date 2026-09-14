@@ -162,6 +162,12 @@ func RedemptionRateLimit() func(c *gin.Context) {
 }
 
 // TopupRateLimit limits wallet-to-quota transfer to 5 per minute per IP.
+//
+// Deliberately unmounted (cycle-8 L1 operator decision): its intended
+// consumer is POST /api/v2/:tenant_slug/billing/topup (TopUpV2), which
+// api-v2-router.go leaves unrouted on purpose — see the comment beside
+// tenantBilling.GET("/topups", ...) there. Re-opening that money path,
+// and deciding whether this limiter guards it, is an owner's call.
 func TopupRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(5, 60, "TU")
 }

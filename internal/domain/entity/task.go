@@ -57,6 +57,17 @@ type Task struct {
 	Properties  Properties            `json:"properties" gorm:"type:json"`
 	PrivateData TaskPrivateData       `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage       `json:"data" gorm:"type:json"`
+	// ProjectId attributes this task's spend to a Project (migration 035),
+	// same cost-attribution convention as Token.ProjectId. The tag MUST stay
+	// byte-identical to repo.Task.ProjectId (see the convention comment at
+	// entity/token.go:52): both structs describe the same AutoMigrated
+	// "tasks" table, so a divergence makes the two boots fight over the
+	// column definition.
+	ProjectId int `json:"project_id" gorm:"not null;default:0"`
+	// RequestId is the gin request id (common.RequestIdKey) live when the
+	// task was submitted — a support/cost-attribution lookup key, not an
+	// upstream vendor id (that's TaskID above).
+	RequestId string `json:"request_id" gorm:"type:varchar(64);not null;default:'';index"`
 }
 
 func (t *Task) SetData(data any) {
@@ -132,6 +143,12 @@ type SyncTaskQueryParams struct {
 	StartTimestamp int64
 	EndTimestamp   int64
 	UserIDs        []int
+	// ProjectID and RequestID filter admin/user task listings by the
+	// cost-attribution columns migration 035 added (cycle-8 L8). L10 wires
+	// these onto the list handlers; the query builders in repo/task.go
+	// already apply them.
+	ProjectID string
+	RequestID string
 }
 
 type TaskQuotaUsage struct {

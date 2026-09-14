@@ -21,10 +21,11 @@ import (
 // through writePricingOptionVersioned so a legacy write cannot change a ratio
 // map without bumping the version and leaving a pricing.updated audit row.
 var pricingOptionKeys = map[string]bool{
-	"ModelRatio":      true,
-	"CompletionRatio": true,
-	"ModelPrice":      true,
-	"CacheRatio":      true,
+	"ModelRatio":         true,
+	"CompletionRatio":    true,
+	"ModelPrice":         true,
+	"CacheRatio":         true,
+	"ContextLengthTiers": true,
 }
 
 // writePricingOptionVersioned replaces one pricing option row (the whole
@@ -36,17 +37,32 @@ var pricingOptionKeys = map[string]bool{
 // legacy entry point in the audit row's details so a reviewer can tell these
 // writes apart from console batches.
 //
-// The value is validated as a JSON object of numbers before anything is
-// persisted; a malformed map is rejected without touching the database,
-// which is stricter than repo.UpdateOption (that persisted first and
-// reported the in-memory apply failure afterwards).
+// The value is validated against key's own shape (a JSON object of numbers
+// for the four ratio/price keys, ratio_setting.ValidateContextLengthTiersJSONString's
+// business-rule shape for ContextLengthTiers) before anything is persisted;
+// a malformed or out-of-contract value is rejected without touching the
+// database, which is stricter than repo.UpdateOption (that persisted first
+// and reported the in-memory apply failure afterwards).
 func writePricingOptionVersioned(c *gin.Context, key, value, source string) error {
 	if !pricingOptionKeys[key] {
 		return fmt.Errorf("%s is not a pricing option", key)
 	}
-	var probe map[string]float64
-	if err := json.Unmarshal([]byte(value), &probe); err != nil {
-		return fmt.Errorf("%s must be a JSON object of numbers: %w", key, err)
+	// ContextLengthTiers has a different shape (map[string][]ContextTier, not
+	// map[string]float64) and its own business-rule validation (ascending
+	// thresholds, positive ratios, <=8 tiers/model) — reuse
+	// ratio_setting.ValidateContextLengthTiersJSONString so a malformed or
+	// out-of-contract legacy write is rejected before the transaction opens,
+	// the same "reject before touching the database" contract the plain
+	// float-map probe below gives the other four keys.
+	if key == "ContextLengthTiers" {
+		if _, err := ratio_setting.ValidateContextLengthTiersJSONString(value); err != nil {
+			return fmt.Errorf("%s is invalid: %w", key, err)
+		}
+	} else {
+		var probe map[string]float64
+		if err := json.Unmarshal([]byte(value), &probe); err != nil {
+			return fmt.Errorf("%s must be a JSON object of numbers: %w", key, err)
+		}
 	}
 
 	var expected, next int64

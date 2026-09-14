@@ -11,7 +11,10 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 	"github.com/glebarez/sqlite"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gorm.io/gorm"
 )
 
@@ -28,7 +31,7 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 		&repo.User{}, &repo.Token{}, &repo.Log{},
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
 		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{}, &entity.UserTOTPBackupCode{},
-		&entity.UserSession{},
+		&entity.UserSession{}, &entity.AdminPermissionGrant{}, &entity.ResponseRegistry{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -113,6 +116,24 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 	}).Error; err != nil {
 		t.Fatalf("seed user session: %v", err)
 	}
+	// A delegated permission grant (L4) — must not survive erasure either
+	// (cycle-8 L4 repair round, B-F5): security-adjacent access, same class
+	// as the tokens/sessions/TOTP rows above.
+	if _, err := repo.CreatePermissionGrant(user.Id, "audit", "read", 1); err != nil {
+		t.Fatalf("seed permission grant: %v", err)
+	}
+	// A response_registry row (L7) — must not survive erasure either
+	// (cycle-8 L7 repair round, B-F9): personal-adjacent data (user_id,
+	// token_id, vendor response id), same class as the user_sessions row
+	// above, retained for up to RESPONSE_REGISTRY_TTL_DAYS otherwise.
+	now := time.Now().Unix()
+	if err := db.Create(&entity.ResponseRegistry{
+		ResponseId: "erase-fixture-resp-1", TenantId: "default", UserId: user.Id,
+		TokenId: 1, ChannelId: 1, UpstreamModel: "gpt-4o-mini",
+		CreatedAt: now, ExpiresAt: now + 86400,
+	}).Error; err != nil {
+		t.Fatalf("seed response registry row: %v", err)
+	}
 
 	for i := 0; i < logCount; i++ {
 		if err := db.Create(&entity.Log{
@@ -187,6 +208,25 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 	db.Unscoped().Model(&entity.UserSession{}).Where("user_id = ?", userID).Count(&sessionCount)
 	if sessionCount != 0 {
 		t.Errorf("user_sessions rows remaining = %d, want 0", sessionCount)
+	}
+
+	// response_registry: hard-deleted too, same step (cycle-8 L7 repair
+	// round, finding B-F9).
+	var responseRegistryCount int64
+	db.Unscoped().Model(&entity.ResponseRegistry{}).Where("user_id = ?", userID).Count(&responseRegistryCount)
+	if responseRegistryCount != 0 {
+		t.Errorf("response_registry rows remaining = %d, want 0", responseRegistryCount)
+	}
+
+	// permission grants: revoked (not hard-deleted — same "flip revoked_at"
+	// shape RevokeGrantV2 uses), so a re-promoted/re-created user id does
+	// not silently inherit the erased user's old grant.
+	granted, err := repo.HasActivePermissionGrant(userID, "audit", "read")
+	if err != nil {
+		t.Fatalf("HasActivePermissionGrant after erasure: %v", err)
+	}
+	if granted {
+		t.Errorf("permission grant still active after erasure — must be revoked")
 	}
 
 	// logs: pseudonymized, billing fields retained
@@ -274,7 +314,7 @@ func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
 	for _, m := range []interface{}{
 		&repo.User{}, &repo.Token{}, &repo.Log{},
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
-		&entity.PrivacyErasureRequest{}, &entity.UserSession{},
+		&entity.PrivacyErasureRequest{}, &entity.UserSession{}, &entity.AdminPermissionGrant{}, &entity.ResponseRegistry{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -389,5 +429,89 @@ func TestRunErasurePass_RecordsErrorAndContinues(t *testing.T) {
 	}
 	if failed.LastError == "" {
 		t.Errorf("last_error must record the failure for ops visibility")
+	}
+}
+
+// TestPrivacyErasure_SuccessfulTickStampsHeartbeat is the L3 heartbeat
+// oracle: a pass with zero pending requests (or all requests succeeding) is
+// "successful" and must advance
+// metrics.LeaderTaskLastSuccess{task="privacy-erasure"} to "now".
+func TestPrivacyErasure_SuccessfulTickStampsHeartbeat(t *testing.T) {
+	openErasureTestDB(t) // empty pending queue — still a successful pass
+
+	before := time.Now().Unix()
+	runErasurePass(context.Background())
+	after := time.Now().Unix()
+
+	got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("privacy-erasure"))
+	if got < float64(before) || got > float64(after) {
+		t.Errorf("LeaderTaskLastSuccess{task=privacy-erasure} = %v, want within [%d, %d]", got, before, after)
+	}
+}
+
+// TestPrivacyErasure_FailedRequestDoesNotStamp: per runAuditCleanup's
+// sibling contract, a pass where at least one request in the batch errored
+// must NOT advance the heartbeat — even though runErasurePass itself
+// swallows the per-request error and keeps going (crash-resume design).
+func TestPrivacyErasure_FailedRequestDoesNotStamp(t *testing.T) {
+	db := openErasureTestDB(t)
+	seedErasureFixture(t, db, 2)
+
+	// Sabotage: drop the tokens table so step 1 fails for this request —
+	// same fault injection as TestRunErasurePass_RecordsErrorAndContinues.
+	if err := db.Migrator().DropTable(&repo.Token{}); err != nil {
+		t.Fatalf("drop tokens: %v", err)
+	}
+
+	baseline := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("privacy-erasure"))
+	runErasurePass(context.Background())
+	got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("privacy-erasure"))
+
+	if got != baseline {
+		t.Errorf("LeaderTaskLastSuccess{task=privacy-erasure} moved from %v to %v after a pass with a failed request, want unchanged", baseline, got)
+	}
+}
+
+// TestPrivacyErasure_StartRegistersHeartbeat is the A-F1 oracle for
+// privacy-erasure, mirroring TestAuditCleanup_StartRegistersHeartbeat: the
+// boot-time Set(0) and taskreg.Register calls inside
+// StartPrivacyErasureWithContext are otherwise deletable with every test in
+// this package staying green. Pre-stamps a distinctive non-zero value so
+// the zero-assertion below cannot pass merely from a GaugeVec's
+// first-access default; forces common.IsLeader() false so the "run once on
+// startup" branch cannot race the assertions with an async pass.
+func TestPrivacyErasure_StartRegistersHeartbeat(t *testing.T) {
+	openErasureTestDB(t)
+
+	prevLeader := common.IsLeader()
+	common.SetLeader(false)
+	t.Cleanup(func() { common.SetLeader(prevLeader) })
+
+	metrics.LeaderTaskLastSuccess.WithLabelValues(privacyErasureTaskName).Set(999999999)
+	before := len(taskreg.Snapshot())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	StartPrivacyErasureWithContext(ctx)
+
+	if got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues(privacyErasureTaskName)); got != 0 {
+		t.Errorf("LeaderTaskLastSuccess{task=privacy-erasure} = %v immediately after StartPrivacyErasureWithContext, want 0 (boot-time Set(0) resetting a pre-stamped series)", got)
+	}
+
+	snap := taskreg.Snapshot()
+	if len(snap) <= before {
+		t.Fatalf("taskreg.Snapshot() length did not grow: before=%d after=%d", before, len(snap))
+	}
+	found := false
+	for _, task := range snap {
+		if task.Name == privacyErasureTaskName {
+			found = true
+			if !task.LeaderOnly {
+				t.Errorf("%s task.LeaderOnly = false, want true", privacyErasureTaskName)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("taskreg.Snapshot() does not contain %q after StartPrivacyErasureWithContext", privacyErasureTaskName)
 	}
 }

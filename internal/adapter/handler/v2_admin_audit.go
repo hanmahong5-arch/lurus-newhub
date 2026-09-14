@@ -90,7 +90,9 @@ func GetAuditCoverageV2(c *gin.Context) {
 // represents a single page; the Link header carries the next page URL
 // (rel="next") so curl-style consumers can drive pagination shell-side.
 //
-// Root-only (router applies RootAuth on the /api/v2/admin/* group).
+// Gated by middleware.RootOrGranted("audit","read") on auditRoute
+// (api-v2-router.go): root, or a session admin holding an active
+// audit:read grant.
 func ExportAuditEventsV2(c *gin.Context) {
 	format := c.DefaultQuery("format", "json")
 	if format != "json" && format != "csv" {
@@ -155,7 +157,9 @@ func ExportAuditEventsV2(c *gin.Context) {
 // reported, never failed. Pass next_cursor back as after_id to page; limit is
 // capped server-side so one call can never full-table-scan.
 //
-// Root-only (router applies RootJWTAuth on the /api/v2/admin/* group).
+// Gated by middleware.RootOrGranted("audit","read") on auditRoute
+// (api-v2-router.go): root, or a session admin holding an active
+// audit:read grant.
 func VerifyAuditChainV2(c *gin.Context) {
 	afterID, _ := strconv.ParseInt(c.Query("after_id"), 10, 64)
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "1000"))

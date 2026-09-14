@@ -86,7 +86,13 @@ func TestR1CalculateAudioQuota_SubHalfUnitFloorsToOne(t *testing.T) {
 		OutputDetails: TokenDetails{TextTokens: 2},
 		ModelName:     "r1-audio-floor-probe-model", // unregistered -> ratio_setting defaults (completionRatio=1, audioRatio=0)
 		ModelRatio:    0.02,
-		GroupRatio:    1.0,
+		// calculateAudioQuota no longer re-derives this from ModelName itself
+		// (cycle-8 plan §8 L5 B-F5 — it now takes the caller's already-
+		// resolved ratio so a context-length tier's override reaches the
+		// money); 1 is the ratio_setting default this unregistered model name
+		// would have resolved to before that change.
+		CompletionRatio: 1,
+		GroupRatio:      1.0,
 	}
 	const want = 1
 	if got := calculateAudioQuota(info); got != want {
@@ -98,11 +104,12 @@ func TestR1CalculateAudioQuota_NonUsePrice_RegressionGuards(t *testing.T) {
 	// A value already >=1 unit must be unchanged by adding the post-round
 	// floor (the floor only fires when rounded==0).
 	info := QuotaInfo{
-		InputDetails:  TokenDetails{TextTokens: 100},
-		OutputDetails: TokenDetails{TextTokens: 50},
-		ModelName:     "r1-audio-floor-probe-model-2",
-		ModelRatio:    1.0,
-		GroupRatio:    1.0,
+		InputDetails:    TokenDetails{TextTokens: 100},
+		OutputDetails:   TokenDetails{TextTokens: 50},
+		ModelName:       "r1-audio-floor-probe-model-2",
+		ModelRatio:      1.0,
+		CompletionRatio: 1, // ratio_setting default for an unregistered model
+		GroupRatio:      1.0,
 	}
 	// calc = (100 + 50*1) * 1 * 1 = 150, comfortably above the floor.
 	if got := calculateAudioQuota(info); got != 150 {
@@ -113,11 +120,12 @@ func TestR1CalculateAudioQuota_NonUsePrice_RegressionGuards(t *testing.T) {
 	// to 1 — the floor is gated on !ratio.IsZero(), same predicate as the
 	// pre-round guard it mirrors.
 	zeroRatioInfo := QuotaInfo{
-		InputDetails:  TokenDetails{TextTokens: 10},
-		OutputDetails: TokenDetails{TextTokens: 2},
-		ModelName:     "r1-audio-floor-probe-model-3",
-		ModelRatio:    0,
-		GroupRatio:    1.0,
+		InputDetails:    TokenDetails{TextTokens: 10},
+		OutputDetails:   TokenDetails{TextTokens: 2},
+		ModelName:       "r1-audio-floor-probe-model-3",
+		ModelRatio:      0,
+		CompletionRatio: 1,
+		GroupRatio:      1.0,
 	}
 	if got := calculateAudioQuota(zeroRatioInfo); got != 0 {
 		t.Errorf("calculateAudioQuota with modelRatio=0 = %d, want 0 (zero ratio must not be force-floored)", got)

@@ -119,6 +119,54 @@ describe('useTaskLogsData — querying', () => {
     expect(url).toContain('channel_id=3');
   });
 
+  it('sends project_id and request_id on the self-scoped route (migration 035)', async () => {
+    const hook = await mount();
+    await withRange(hook, { project_id: '5', request_id: 'req-support-1' });
+    API.get.mockClear();
+
+    await act(async () => {
+      await hook.result.current.loadLogs(1, 10);
+    });
+
+    const url = API.get.mock.calls[0][0];
+    expect(url).toContain('/api/task/self?p=1&page_size=10');
+    expect(url).toContain('project_id=5');
+    expect(url).toContain('request_id=req-support-1');
+  });
+
+  it('sends project_id and request_id on the admin route too', async () => {
+    isAdmin.mockReturnValue(true);
+    const hook = await mount();
+    await withRange(hook, { project_id: '7', request_id: 'req-admin-1' });
+    API.get.mockClear();
+
+    await act(async () => {
+      await hook.result.current.loadLogs(1, 10);
+    });
+
+    const url = API.get.mock.calls[0][0];
+    expect(url).toContain('/api/task/?p=1&page_size=10');
+    expect(url).toContain('project_id=7');
+    expect(url).toContain('request_id=req-admin-1');
+  });
+
+  it('URL-encodes project_id and request_id so &, # and + cannot rewrite the query (cycle-8 L10 repair, B-F3)', async () => {
+    const hook = await mount();
+    await withRange(hook, { project_id: '5&x=1', request_id: 'a&b#c+d' });
+    API.get.mockClear();
+
+    await act(async () => {
+      await hook.result.current.loadLogs(1, 10);
+    });
+
+    const url = API.get.mock.calls[0][0];
+    expect(url).toContain('project_id=5%26x%3D1');
+    expect(url).toContain('request_id=a%26b%23c%2Bd');
+    // The raw unencoded value must not appear as a query token boundary —
+    // proves the '&'/'#' cannot be read back out as separate params.
+    expect(url).not.toContain('request_id=a&b');
+  });
+
   it('sends whole-second timestamps, never fractions', async () => {
     const hook = await mount();
     await withRange(hook, {
@@ -264,6 +312,13 @@ describe('useTaskLogsData — column preferences', () => {
     ).toBeNull();
   });
 
+  it('shows the request_id column by default to any user (support lookup key)', async () => {
+    const { result } = await mount();
+    await waitFor(() =>
+      expect(result.current.visibleColumns.request_id).toBe(true),
+    );
+  });
+
   it('shows the channel column to an admin', async () => {
     isAdmin.mockReturnValue(true);
     const { result } = await mount();
@@ -387,6 +442,8 @@ describe('useTaskLogsData — modals and clipboard', () => {
     const values = result.current.getFormValues();
     expect(values.channel_id).toBe('');
     expect(values.task_id).toBe('');
+    expect(values.project_id).toBe('');
+    expect(values.request_id).toBe('');
     expect(Number.isNaN(Date.parse(values.start_timestamp))).toBe(false);
     expect(Date.parse(values.end_timestamp)).toBeGreaterThan(
       Date.parse(values.start_timestamp),

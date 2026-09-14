@@ -13,11 +13,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gorm.io/gorm"
@@ -358,5 +360,90 @@ func TestRunCreditPoolReconcileTick_NonLeaderSkipsResetSeam(t *testing.T) {
 
 	if calls != 0 {
 		t.Errorf("resetDuePoolsSeam called %d times on a non-leader tick, want 0", calls)
+	}
+}
+
+// TestCreditPoolReconcile_SuccessfulTickStampsHeartbeat is the L3 heartbeat
+// oracle: a leader tick whose ReconcileStrandedTopups call returns a nil
+// error (an empty stranded-events table is a successful, trivial sweep)
+// must advance metrics.LeaderTaskLastSuccess{task="credit-pool-reconcile"}
+// to "now". Drives the real runCreditPoolReconcileTick, not ReconcileStrandedTopups
+// directly, so a regression that only stamps from the wrong call site is
+// caught too.
+func TestCreditPoolReconcile_SuccessfulTickStampsHeartbeat(t *testing.T) {
+	setupReconcileDB(t, "t-heartbeat-ok", 1000)
+
+	prevLeader := common.IsLeader()
+	common.SetLeader(true)
+	t.Cleanup(func() { common.SetLeader(prevLeader) })
+
+	prevSeam := resetDuePoolsSeam
+	resetDuePoolsSeam = func(ctx context.Context) ([]repo.PoolResetResult, error) { return nil, nil }
+	t.Cleanup(func() { resetDuePoolsSeam = prevSeam })
+
+	before := time.Now().Unix()
+	runCreditPoolReconcileTick(context.Background())
+	after := time.Now().Unix()
+
+	got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("credit-pool-reconcile"))
+	if got < float64(before) || got > float64(after) {
+		t.Errorf("LeaderTaskLastSuccess{task=credit-pool-reconcile} = %v, want within [%d, %d]", got, before, after)
+	}
+}
+
+// TestCreditPoolReconcile_NonLeaderDoesNotStamp: runCreditPoolReconcileTick
+// returns before calling ReconcileStrandedTopups at all on a non-leader
+// replica, so the heartbeat must not move either — a non-leader silently
+// looking "healthy" would defeat the point of the leaderOnly distinction the
+// system-tasks endpoint (L3) draws between overdue and standby.
+func TestCreditPoolReconcile_NonLeaderDoesNotStamp(t *testing.T) {
+	setupReconcileDB(t, "t-heartbeat-nonleader", 1000)
+
+	prevLeader := common.IsLeader()
+	common.SetLeader(false)
+	t.Cleanup(func() { common.SetLeader(prevLeader) })
+
+	baseline := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("credit-pool-reconcile"))
+	runCreditPoolReconcileTick(context.Background())
+	got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues("credit-pool-reconcile"))
+
+	if got != baseline {
+		t.Errorf("LeaderTaskLastSuccess{task=credit-pool-reconcile} moved from %v to %v on a non-leader tick, want unchanged", baseline, got)
+	}
+}
+
+// TestCreditPoolReconcile_StartRegistersHeartbeat is the A-F1 oracle: the
+// boot-time Set(0) and taskreg.Register calls inside
+// StartCreditPoolReconcileWithContext are otherwise deletable with every
+// test in this package staying green. Pre-stamps a distinctive non-zero
+// value so the zero-assertion below cannot pass merely from a GaugeVec's
+// first-access default.
+func TestCreditPoolReconcile_StartRegistersHeartbeat(t *testing.T) {
+	metrics.LeaderTaskLastSuccess.WithLabelValues(creditPoolReconcileTaskName).Set(999999999)
+	before := len(taskreg.Snapshot())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	StartCreditPoolReconcileWithContext(ctx)
+
+	if got := testutil.ToFloat64(metrics.LeaderTaskLastSuccess.WithLabelValues(creditPoolReconcileTaskName)); got != 0 {
+		t.Errorf("LeaderTaskLastSuccess{task=credit-pool-reconcile} = %v immediately after StartCreditPoolReconcileWithContext, want 0 (boot-time Set(0) resetting a pre-stamped series)", got)
+	}
+
+	snap := taskreg.Snapshot()
+	if len(snap) <= before {
+		t.Fatalf("taskreg.Snapshot() length did not grow: before=%d after=%d", before, len(snap))
+	}
+	found := false
+	for _, task := range snap {
+		if task.Name == creditPoolReconcileTaskName {
+			found = true
+			if !task.LeaderOnly {
+				t.Errorf("%s task.LeaderOnly = false, want true", creditPoolReconcileTaskName)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("taskreg.Snapshot() does not contain %q after StartCreditPoolReconcileWithContext", creditPoolReconcileTaskName)
 	}
 }

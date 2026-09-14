@@ -33,7 +33,17 @@ func validUserInfo(username string, role int) bool {
 	return true
 }
 
-func authHelper(c *gin.Context, minRole int) {
+// resolveSessionIdentity is the shared body of authHelper: it resolves the
+// caller's identity (session cookie / SDK-bridge cookie / bearer or access
+// token), re-validates status/role/tenant on every request, and populates
+// the gin context ("id"/"role"/"username"/"tenant_context"/etc) the way
+// authHelper did before this split, including the per-request status/role
+// re-validation added in PR #167. It does NOT call c.Next() — callers that need to
+// branch on the resolved role (middleware.RootOrGranted) run after this
+// returns true instead of being forced through Next() themselves. On
+// failure it writes the existing response body and calls c.Abort() itself,
+// same as before the split; the caller only needs to stop and return.
+func resolveSessionIdentity(c *gin.Context, minRole int) bool {
 	session := sessions.Default(c)
 	username := session.Get("username")
 	role := session.Get("role")
@@ -111,7 +121,7 @@ func authHelper(c *gin.Context, minRole int) {
 				"message": "无权进行此操作，未登录且未提供 access token",
 			})
 			c.Abort()
-			return
+			return false
 		}
 
 		// Try lurus-platform session token first (HS256, zero network overhead).
@@ -146,7 +156,7 @@ func authHelper(c *gin.Context, minRole int) {
 						"message": "无权进行此操作，用户信息无效",
 					})
 					c.Abort()
-					return
+					return false
 				}
 				// Token is valid
 				username = user.Username
@@ -160,7 +170,7 @@ func authHelper(c *gin.Context, minRole int) {
 					"message": "无权进行此操作，access token 无效",
 				})
 				c.Abort()
-				return
+				return false
 			}
 		}
 	}
@@ -179,7 +189,7 @@ func authHelper(c *gin.Context, minRole int) {
 				"message": "无权进行此操作，用户 ID 格式错误",
 			})
 			c.Abort()
-			return
+			return false
 		}
 		if id != apiUserId {
 			c.JSON(http.StatusUnauthorized, gin.H{
@@ -187,7 +197,7 @@ func authHelper(c *gin.Context, minRole int) {
 				"message": "无权进行此操作，用户 ID 与登录用户不匹配",
 			})
 			c.Abort()
-			return
+			return false
 		}
 	}
 
@@ -201,7 +211,7 @@ func authHelper(c *gin.Context, minRole int) {
 			"message": "invalid session data: user ID is not an integer",
 		})
 		c.Abort()
-		return
+		return false
 	}
 
 	// L7 (auth-security-08/26/29) defence in depth: reject a session whose
@@ -237,7 +247,7 @@ func authHelper(c *gin.Context, minRole int) {
 					"error_code": "SESSION_REVOKED",
 				})
 				c.Abort()
-				return
+				return false
 			}
 		}
 	}
@@ -273,7 +283,7 @@ func authHelper(c *gin.Context, minRole int) {
 			"message": "invalid session data",
 		})
 		c.Abort()
-		return
+		return false
 	}
 	if statusVal == common.UserStatusDisabled {
 		c.JSON(http.StatusOK, gin.H{
@@ -281,7 +291,7 @@ func authHelper(c *gin.Context, minRole int) {
 			"message": "用户已被封禁",
 		})
 		c.Abort()
-		return
+		return false
 	}
 	roleVal, ok := role.(int)
 	if !ok {
@@ -290,7 +300,7 @@ func authHelper(c *gin.Context, minRole int) {
 			"message": "invalid session data",
 		})
 		c.Abort()
-		return
+		return false
 	}
 	if roleVal < minRole {
 		c.JSON(http.StatusOK, gin.H{
@@ -298,7 +308,7 @@ func authHelper(c *gin.Context, minRole int) {
 			"message": "无权进行此操作，权限不足",
 		})
 		c.Abort()
-		return
+		return false
 	}
 	usernameVal, ok := username.(string)
 	if !ok {
@@ -307,7 +317,7 @@ func authHelper(c *gin.Context, minRole int) {
 			"message": "invalid session data",
 		})
 		c.Abort()
-		return
+		return false
 	}
 	if !validUserInfo(usernameVal, roleVal) {
 		c.JSON(http.StatusOK, gin.H{
@@ -315,7 +325,7 @@ func authHelper(c *gin.Context, minRole int) {
 			"message": "无权进行此操作，用户信息无效",
 		})
 		c.Abort()
-		return
+		return false
 	}
 	c.Set("username", username)
 	c.Set("role", role)
@@ -349,7 +359,7 @@ func authHelper(c *gin.Context, minRole int) {
 				"error_code": "TENANT_DISABLED",
 			})
 			c.Abort()
-			return
+			return false
 		}
 	}
 
@@ -386,7 +396,18 @@ func authHelper(c *gin.Context, minRole int) {
 		}
 	}
 
-	c.Next()
+	return true
+}
+
+// authHelper preserves the pre-split calling contract (resolve, then
+// c.Next() on success, response-already-written + Abort() on failure) — the
+// existing middleware factories below (UserAuth/AdminAuth/RootAuth) keep
+// their prior calling behaviour and their tests were not changed for this
+// split.
+func authHelper(c *gin.Context, minRole int) {
+	if resolveSessionIdentity(c, minRole) {
+		c.Next()
+	}
 }
 
 func TryUserAuth() func(c *gin.Context) {

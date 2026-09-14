@@ -218,6 +218,29 @@ const (
 	// is a routing-affecting action worth a trail, distinct from the generic
 	// admin.write_unaudited fallback.
 	ActionRoutingAffinityPurged = "routing.affinity_purged"
+
+	// ActionPermissionGranted / ActionPermissionRevoked are recorded by the
+	// two write handlers in v2_admin_authz.go (L4, auth-security-17/18,
+	// console-ux-36) — a root operator delegating (or withdrawing) a
+	// narrow root-gated permission to a non-root admin. The grant that
+	// unlocks the audit feed is itself in the feed: a compliance reader
+	// who gains audit:read access can see the exact row that gave it to
+	// them.
+	ActionPermissionGranted = "authz.permission_granted"
+	ActionPermissionRevoked = "authz.permission_revoked"
+
+	// ActionResponseRetrieved / ActionResponseDeleted / ActionResponseDenied
+	// are recorded by relay_responses_registry.go (L7, cycle-8,
+	// tasks-plugins-12) — GET/DELETE /v1/responses/:response_id, the
+	// stateful half of the OpenAI Responses API. Retrieved/Deleted fire on
+	// a successful pass-through to the vendor (the response body itself is
+	// never in Details — only response_id/channel_id/upstream_status);
+	// Denied fires instead of either when the row belongs to a different
+	// user or tenant, so an operator can see who probed for whose response
+	// id without the caller ever getting anything but a 404.
+	ActionResponseRetrieved = "response.retrieved"
+	ActionResponseDeleted   = "response.deleted"
+	ActionResponseDenied    = "response.denied"
 )
 
 // Actor type constants — who performed the action.
@@ -251,6 +274,15 @@ const (
 	// affinity binding is keyed by an HMAC string, not a numeric row id, so
 	// ResourceID on that event is always 0; the key itself lives in Details.
 	ResourceSessionAffinity = "session_affinity"
+	// ResourceAuthz is used by ActionPermissionGranted/ActionPermissionRevoked
+	// (L4) — the resource acted on is an admin_permission_grants row.
+	ResourceAuthz = "authz"
+	// ResourceResponse is used by ActionResponseRetrieved/Deleted/Denied
+	// (L7) — the resource acted on is a response_registry row. ResourceID on
+	// these events is always 0 (like ResourceSessionAffinity above): the row
+	// is keyed by the vendor's string response_id, not a numeric id, and
+	// that string is already in Details.
+	ResourceResponse = "response"
 )
 
 // validAuditActions is the canonical registry, used by IsValidAuditAction.
@@ -333,6 +365,11 @@ var validAuditActions = map[string]struct{}{
 	ActionSwitchPresetCreated:       {},
 	ActionAdminMaintenanceTriggered: {},
 	ActionRoutingAffinityPurged:     {},
+	ActionPermissionGranted:         {},
+	ActionPermissionRevoked:         {},
+	ActionResponseRetrieved:         {},
+	ActionResponseDeleted:           {},
+	ActionResponseDenied:            {},
 }
 
 // IsValidAuditAction reports whether action is in the canonical taxonomy.

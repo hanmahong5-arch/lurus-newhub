@@ -167,6 +167,19 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		// design, additionally gated by SecureVerificationRequired (the
 		// acting root's own step-up), not a per-tenant ownership check.
 		"POST /api/v2/admin/security/users/:id/totp/force-disable": "RootJWTAuth-gated: root manages any user's TOTP enrollment by design, same class as /admin/users/:id; additionally requires the acting root's own SecureVerificationRequired step-up wired on the real route (TestSetApiV2Router_ForceDisableTotp_RequiresOwnStepUp in router/v2_admin_security_wiring_test.go — TestAdminTotpForceDisable_RequiresStepUp hand-mounts the middleware and stays green if the real route loses it)",
+
+		// Delegated admin permission grants (L4, auth-security-17/18,
+		// console-ux-36). Grant MANAGEMENT (who holds a grant) is
+		// RootJWTAuth-gated under adminRoute — only root decides who gets
+		// delegated access, mirrors every other /admin/* write above.
+		// Grants themselves are GLOBAL this cycle (CreateGrantV2 rejects a
+		// non-null tenant_id as GRANT_INVALID), so there is no tenant
+		// dimension to isolate. What a grant UNLOCKS (the four audit GETs,
+		// auditRoute) is a SEPARATE, narrower RootOrGranted gate, proven by
+		// TestRootOrGranted_* in the middleware package and
+		// TestAuditRoutes_MountedUnderRootOrGranted here.
+		"POST /api/v2/admin/authz/grants":       "RootJWTAuth-gated: root mints delegated permission grants for any user by design; grants are global (no tenant_id) this cycle",
+		"DELETE /api/v2/admin/authz/grants/:id": "RootJWTAuth-gated: root revokes any delegated permission grant by design, same not-found-shaped 404 for absent/already-revoked ids as RevokeTenantInvite above",
 	}
 
 	isMutation := func(m string) bool {

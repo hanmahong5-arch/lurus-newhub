@@ -1,10 +1,10 @@
 package router
 
 import (
-	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/handler"
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/app/relay"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -149,6 +149,12 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/responses", func(c *gin.Context) {
 			handler.Relay(c, types.RelayFormatOpenAIResponses)
 		})
+		// Documented-subset pass-through of /responses (cycle-8 L6,
+		// wire-formats-03) — same inherited chain (auth/pool/cost-spike/
+		// entitlement/rate-limit/concurrency/Distribute) as /responses above.
+		httpRouter.POST("/responses/compact", func(c *gin.Context) {
+			handler.Relay(c, types.RelayFormatOpenAIResponsesCompact)
+		})
 
 		// image related routes
 		httpRouter.POST("/edits", func(c *gin.Context) {
@@ -208,6 +214,31 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/fine-tunes/:id/cancel", handler.RelayNotImplemented)
 		httpRouter.GET("/fine-tunes/:id/events", handler.RelayNotImplemented)
 		httpRouter.DELETE("/models/:model", handler.RelayNotImplemented)
+	}
+
+	// Stateful GET/DELETE /v1/responses/:response_id (cycle-8 L7,
+	// tasks-plugins-12) — the stateful half of the OpenAI Responses API.
+	// Deliberately NOT mounted under relayV1Router's httpRouter sub-group:
+	// there is no Distribute() here (the response_registry row IS the
+	// routing decision — see handler.RelayResponsesRetrieve/Delete) and no
+	// request body, so the pool/cost-spike/entitlement/rate-limit chain that
+	// gates NEW billed requests does not apply to re-reading/deleting one
+	// that was already billed. middleware.ResponsesStateRateLimit — its own
+	// IP-keyed "RS" bucket, NOT CriticalRateLimit's shared "CT" bucket —
+	// still bounds abuse of the id-probing surface itself (cycle-8 L7 repair
+	// round, finding B-F1: the lane originally mounted CriticalRateLimit
+	// here on the stated precedent "same as modelsRouter", which is wrong —
+	// modelsRouter mounts TokenAuth only — and CT's shared bucket would have
+	// let relay traffic throttle an operator out of TOTP-disable/channel-key
+	// -reveal/audit-export from the same client IP, or vice versa; see
+	// responses_state_rate_limit.go's doc comment for the full rationale).
+	responsesStateRouter := router.Group("/v1/responses")
+	responsesStateRouter.Use(middleware.StampRelayFormat())
+	responsesStateRouter.Use(middleware.TokenAuth())
+	responsesStateRouter.Use(middleware.ResponsesStateRateLimit())
+	{
+		responsesStateRouter.GET("/:response_id", handler.RelayResponsesRetrieve)
+		responsesStateRouter.DELETE("/:response_id", handler.RelayResponsesDelete)
 	}
 
 	relayMjRouter := router.Group("/mj")

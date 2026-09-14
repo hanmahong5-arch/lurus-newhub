@@ -354,4 +354,129 @@ describe('Pricing page', () => {
     expect(screen.getByTestId('field-cache_ratio-model-a').value).toBe('0.42');
     expect(screen.getByTestId('field-cache_ratio-model-b').value).toBe('');
   });
+
+  // 7. Context-tiers editor: toggle badge shows the configured tier count,
+  // hidden entirely for a per-call (quota_type=1) model, and the "add tier"
+  // + field edits build a context_tiers entry that Save posts alongside the
+  // flat ratio fields.
+  it('context-tiers editor: toggle, add a tier, edit it, and save posts context_tiers', async () => {
+    API.get.mockResolvedValue(
+      fakePricingResponse(
+        [
+          {
+            ...THREE_MODELS[0],
+            context_tiers: [{ threshold_tokens: 0, model_ratio: 1 }],
+          },
+          THREE_MODELS[1], // quota_type: 1 — per-call model, no tier editor
+        ],
+        5,
+      ),
+    );
+    API.post.mockResolvedValue({
+      data: { success: true, data: { updated_count: 1, new_version: 6 } },
+    });
+
+    render(<PricingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pricing-table').textContent).toContain(
+        'model-a',
+      );
+    });
+
+    // The toggle button is rendered for the ratio-based model (the test
+    // i18n mock does not interpolate the plural-count key's real text — see
+    // the module's `model_count`/`toast_saved` calls, also untested for
+    // their literal string here — so this checks presence, not the "1
+    // tier" wording an English/Chinese build actually renders)...
+    expect(
+      screen.getByTestId('context-tiers-toggle-model-a'),
+    ).toBeInTheDocument();
+    // ...and is entirely absent for the per-call model.
+    expect(
+      screen.queryByTestId('context-tiers-toggle-model-b'),
+    ).not.toBeInTheDocument();
+
+    // Expand the editor and add a second tier.
+    fireEvent.click(screen.getByTestId('context-tiers-toggle-model-a'));
+    expect(
+      screen.getByTestId('context-tiers-editor-model-a'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('tier-add-model-a'));
+
+    // Fill in the new (index 1) tier's threshold and model_ratio.
+    fireEvent.change(screen.getByTestId('tier-threshold-model-a-1'), {
+      target: { value: '3000' },
+    });
+    fireEvent.change(screen.getByTestId('tier-model_ratio-model-a-1'), {
+      target: { value: '2' },
+    });
+
+    const saveBtn = screen.getByTestId('pricing-save');
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(API.post).toHaveBeenCalledWith(
+        '/api/v2/acme/pricing',
+        expect.arrayContaining([
+          expect.objectContaining({
+            model_name: 'model-a',
+            context_tiers: [
+              { threshold_tokens: 0, model_ratio: 1 },
+              { threshold_tokens: 3000, model_ratio: 2 },
+            ],
+          }),
+        ]),
+        { headers: { 'If-Match-Pricing-Version': '5' } },
+      );
+    });
+  });
+
+  // 8. Removing the only tier sends an explicit empty context_tiers array
+  // (the server's "clear this model's tiers" signal), not an omitted field.
+  it('removing the last tier posts an explicit empty context_tiers array', async () => {
+    API.get.mockResolvedValue(
+      fakePricingResponse(
+        [
+          {
+            ...THREE_MODELS[0],
+            context_tiers: [{ threshold_tokens: 0, model_ratio: 1 }],
+          },
+        ],
+        5,
+      ),
+    );
+    API.post.mockResolvedValue({
+      data: { success: true, data: { updated_count: 1, new_version: 6 } },
+    });
+
+    render(<PricingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pricing-table').textContent).toContain(
+        'model-a',
+      );
+    });
+
+    fireEvent.click(screen.getByTestId('context-tiers-toggle-model-a'));
+    fireEvent.click(screen.getByTestId('tier-remove-model-a-0'));
+
+    const saveBtn = screen.getByTestId('pricing-save');
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(API.post).toHaveBeenCalledWith(
+        '/api/v2/acme/pricing',
+        expect.arrayContaining([
+          expect.objectContaining({
+            model_name: 'model-a',
+            context_tiers: [],
+          }),
+        ]),
+        { headers: { 'If-Match-Pricing-Version': '5' } },
+      );
+    });
+  });
 });

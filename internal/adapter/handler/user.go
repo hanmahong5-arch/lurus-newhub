@@ -398,6 +398,15 @@ func UpdateUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// Same rule as the v2 admin user update (v2_admin_users.go): a demotion
+	// below RoleAdminUser revokes the user's delegated permission grants, so
+	// re-promoting the same id later does not silently restore the narrow
+	// root-gated access they held before (cycle-8 L4).
+	if originUser.Role >= common.RoleAdminUser && updatedUser.Role < common.RoleAdminUser {
+		if _, grantErr := repo.RevokePermissionGrantsForUser(updatedUser.Id); grantErr != nil {
+			common.SysError(fmt.Sprintf("UpdateUser: revoke permission grants for demoted user id=%d failed: %v", updatedUser.Id, grantErr))
+		}
+	}
 	if originUser.Quota != updatedUser.Quota {
 		repo.RecordLog(originUser.Id, repo.LogTypeManage, fmt.Sprintf("管理员将用户额度从 %s修改为 %s", logger.LogQuota(originUser.Quota), logger.LogQuota(updatedUser.Quota)))
 		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),

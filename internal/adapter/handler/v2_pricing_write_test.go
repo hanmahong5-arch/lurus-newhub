@@ -862,3 +862,322 @@ func TestV2PricingPreview_OldReflectsEffectiveDefault(t *testing.T) {
 		t.Errorf("%s: old_explicit = false, want true (configured entry)", explicitModel)
 	}
 }
+
+// 16. ContextTiers_PersistedInSameTx — a batch that includes a context_tiers
+// patch persists the ContextLengthTiers option row and updates the live
+// ratio_setting map, riding the same transaction/CAS/audit path as the other
+// four pricing maps (cycle-8 L5, extending cycle-7 L1's write).
+func TestV2PricingWrite_ContextTiers_PersistedInSameTx(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	prevTiers := ratio_setting.ContextLengthTiers2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateContextLengthTiersByJSONString(prevTiers) })
+	model := "context-tiers-persist-probe"
+
+	batch := []map[string]interface{}{
+		{
+			"model_name": model,
+			"context_tiers": []map[string]interface{}{
+				{"threshold_tokens": 0, "model_ratio": 1.0},
+				{"threshold_tokens": 3000, "model_ratio": 2.0},
+			},
+		},
+	}
+	w := postPricing(ctx, ctx.tenantSlug, batch)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	tier := ratio_setting.GetContextLengthTier(model, 3000)
+	if tier == nil || tier.ModelRatio == nil || *tier.ModelRatio != 2.0 {
+		t.Errorf("GetContextLengthTier(%q,3000) after write = %+v, want tier with ModelRatio=2.0", model, tier)
+	}
+
+	var opt repo.Option
+	if err := ctx.db.Where("key = ?", "ContextLengthTiers").First(&opt).Error; err != nil {
+		t.Fatalf("ContextLengthTiers option row not persisted: %v", err)
+	}
+	if !strings.Contains(opt.Value, model) {
+		t.Errorf("ContextLengthTiers option row = %s, want it to contain %q", opt.Value, model)
+	}
+}
+
+// 17. ContextTiers_RollsBackWithBatch — extends
+// TestV2PricingWrite_PartialBatchFailure_RollsBackEarlierFields: a batch
+// carrying both a context_tiers patch and a FAILPROBE-triggered ModelPrice
+// failure must roll back the ContextLengthTiers persist and the in-memory
+// tier map too, not just the four pre-existing maps.
+func TestV2PricingWrite_ContextTiers_RollsBackWithBatch(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	prevTiers := ratio_setting.ContextLengthTiers2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateContextLengthTiersByJSONString(prevTiers) })
+	model := "context-tiers-rollback-probe"
+	modelFail := "context-tiers-rollback-FAILPROBE-model"
+
+	for _, stmt := range []string{
+		`CREATE TRIGGER pricing_ctx_tier_fail_insert BEFORE INSERT ON options
+		 WHEN NEW.key='ModelPrice' AND NEW.value LIKE '%FAILPROBE%'
+		 BEGIN SELECT RAISE(ABORT,'injected failure'); END;`,
+		`CREATE TRIGGER pricing_ctx_tier_fail_update BEFORE UPDATE ON options
+		 WHEN NEW.key='ModelPrice' AND NEW.value LIKE '%FAILPROBE%'
+		 BEGIN SELECT RAISE(ABORT,'injected failure'); END;`,
+	} {
+		if err := ctx.db.Exec(stmt).Error; err != nil {
+			t.Fatalf("install fail-probe trigger: %v", err)
+		}
+	}
+
+	batch := []map[string]interface{}{
+		{
+			"model_name": model,
+			"context_tiers": []map[string]interface{}{
+				{"threshold_tokens": 0, "model_ratio": 1.0},
+			},
+		},
+		{"model_name": modelFail, "model_price": 8.3},
+	}
+	w := postPricing(ctx, ctx.tenantSlug, batch)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body: %s", w.Code, w.Body.String())
+	}
+
+	var count int64
+	ctx.db.Model(&repo.Option{}).Where("key = ?", "ContextLengthTiers").Count(&count)
+	if count != 0 {
+		t.Errorf("ContextLengthTiers option row survived a rolled-back transaction: count=%d, want 0", count)
+	}
+	if got := ratio_setting.GetContextLengthTier(model, 0); got != nil {
+		t.Errorf("in-memory context tiers mutated despite rollback: GetContextLengthTier(%q,0) = %+v, want nil", model, got)
+	}
+}
+
+// 18. ContextTiers_AuditDiff — the pricing.updated audit row's details carry
+// a context_tiers diff entry for a context_tiers-only patch (no ratio/price
+// fields touched), mirroring TestV2PricingWrite_AuditRow for the new field.
+func TestV2PricingWrite_ContextTiers_AuditDiff(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	prevTiers := ratio_setting.ContextLengthTiers2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateContextLengthTiersByJSONString(prevTiers) })
+	seedPricingVersion(t, 5)
+	model := "context-tiers-audit-probe"
+
+	batch := []map[string]interface{}{
+		{
+			"model_name": model,
+			"context_tiers": []map[string]interface{}{
+				{"threshold_tokens": 0, "model_ratio": 1.5},
+			},
+		},
+	}
+	w := postPricing(ctx, ctx.tenantSlug, batch, map[string]string{"If-Match-Pricing-Version": "5"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	ev := pollAuditRow(t, governance.ActionPricingUpdated, 2*time.Second)
+	if ev == nil {
+		t.Fatal("no pricing.updated audit row appeared within the poll window")
+	}
+
+	var details struct {
+		Diffs []map[string]interface{} `json:"diffs"`
+	}
+	if err := json.Unmarshal([]byte(ev.Details), &details); err != nil {
+		t.Fatalf("unmarshal audit details: %v — raw: %s", err, ev.Details)
+	}
+	var found bool
+	for _, d := range details.Diffs {
+		if d["model_name"] == model && d["field"] == "context_tiers" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("audit details.diffs has no context_tiers entry for %q: %v", model, details.Diffs)
+	}
+}
+
+// 19. ContextTiers_InvalidRejected — cycle-8 plan §8 L5 A-F2: a batch
+// carrying non-ascending thresholds must be rejected with 400
+// INVALID_CONTEXT_TIERS at the route, before validatePricingBatch's
+// business-rule check is bypassed. Without this check the invalid list would
+// be persisted by the fifth UpdateOptionTx inside the transaction while the
+// post-commit apply (ratio_setting.UpdateContextLengthTiersByJSONString)
+// silently rejects it — the database row and process memory would diverge.
+func TestV2PricingWrite_ContextTiers_InvalidRejected(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	prevTiers := ratio_setting.ContextLengthTiers2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateContextLengthTiersByJSONString(prevTiers) })
+	seedPricingVersion(t, 5)
+	model := "context-tiers-invalid-route-probe"
+
+	batch := []map[string]interface{}{
+		{
+			"model_name": model,
+			"context_tiers": []map[string]interface{}{
+				{"threshold_tokens": 3000, "model_ratio": 1.0},
+				{"threshold_tokens": 1000, "model_ratio": 2.0},
+			},
+		},
+	}
+	w := postPricing(ctx, ctx.tenantSlug, batch, map[string]string{"If-Match-Pricing-Version": "5"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if out["error_code"] != "INVALID_CONTEXT_TIERS" {
+		t.Errorf("error_code = %v, want INVALID_CONTEXT_TIERS", out["error_code"])
+	}
+
+	var count int64
+	ctx.db.Model(&repo.Option{}).Where("key = ?", "ContextLengthTiers").Count(&count)
+	if count != 0 {
+		t.Errorf("ContextLengthTiers option row = %d rows, want 0 (rejected before the transaction opens)", count)
+	}
+	if got := ratio_setting.GetContextLengthTier(model, 5000); got != nil {
+		t.Errorf("GetContextLengthTier(%q,5000) = %+v, want nil (invalid list must never reach memory)", model, got)
+	}
+	if got := readPricingVersionRow(t); got != 5 {
+		t.Errorf("PricingVersion row = %d, want 5 (rejected write must not bump the version)", got)
+	}
+}
+
+// 20. ContextTiers_RejectedForPerCallModel — cycle-8 plan §8 L5 B-F6: a tier
+// list on a per-call priced model can never take effect
+// (helper.ModelPriceHelper's tier branch only runs under !UsePrice), so the
+// write must reject it with a typed error instead of storing and echoing it
+// back. Covers both ways a batch item can be "per-call": the model already
+// has a price entry today, and this same item sets model_price.
+func TestV2PricingWrite_ContextTiers_RejectedForPerCallModel(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	prevTiers := ratio_setting.ContextLengthTiers2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateContextLengthTiersByJSONString(prevTiers) })
+	seedPricingVersion(t, 5)
+
+	t.Run("already per-call priced", func(t *testing.T) {
+		model := "context-tiers-percall-existing-probe"
+		prevPrice := ratio_setting.ModelPrice2JSONString()
+		t.Cleanup(func() { _ = ratio_setting.UpdateModelPriceByJSONString(prevPrice) })
+		if err := ratio_setting.UpdateModelPriceByJSONString(`{"` + model + `":0.02}`); err != nil {
+			t.Fatalf("seed model price: %v", err)
+		}
+
+		batch := []map[string]interface{}{
+			{
+				"model_name": model,
+				"context_tiers": []map[string]interface{}{
+					{"threshold_tokens": 0, "model_ratio": 1.0},
+				},
+			},
+		}
+		w := postPricing(ctx, ctx.tenantSlug, batch, map[string]string{"If-Match-Pricing-Version": "5"})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
+		}
+		var out map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		if out["error_code"] != "INVALID_CONTEXT_TIERS" {
+			t.Errorf("error_code = %v, want INVALID_CONTEXT_TIERS", out["error_code"])
+		}
+		if got := ratio_setting.GetContextLengthTier(model, 0); got != nil {
+			t.Errorf("GetContextLengthTier(%q,0) = %+v, want nil", model, got)
+		}
+	})
+
+	t.Run("made per-call by this same batch item", func(t *testing.T) {
+		model := "context-tiers-percall-newprice-probe"
+		batch := []map[string]interface{}{
+			{
+				"model_name":  model,
+				"model_price": 0.05,
+				"context_tiers": []map[string]interface{}{
+					{"threshold_tokens": 0, "model_ratio": 1.0},
+				},
+			},
+		}
+		w := postPricing(ctx, ctx.tenantSlug, batch, map[string]string{"If-Match-Pricing-Version": "5"})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
+		}
+		var out map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		if out["error_code"] != "INVALID_CONTEXT_TIERS" {
+			t.Errorf("error_code = %v, want INVALID_CONTEXT_TIERS", out["error_code"])
+		}
+	})
+
+	t.Run("explicit empty list still clears on a per-call model", func(t *testing.T) {
+		model := "context-tiers-percall-clear-probe"
+		prevPrice := ratio_setting.ModelPrice2JSONString()
+		t.Cleanup(func() { _ = ratio_setting.UpdateModelPriceByJSONString(prevPrice) })
+		if err := ratio_setting.UpdateModelPriceByJSONString(`{"` + model + `":0.02}`); err != nil {
+			t.Fatalf("seed model price: %v", err)
+		}
+		batch := []map[string]interface{}{
+			{"model_name": model, "context_tiers": []map[string]interface{}{}},
+		}
+		w := postPricing(ctx, ctx.tenantSlug, batch, map[string]string{"If-Match-Pricing-Version": "5"})
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (clearing an empty tier list is always allowed), body: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// 21. ContextTiers_PreviewIncludesDiff — cycle-8 plan §8 L5 A-F3: the
+// preview route (used by neither TestV2PricingWrite_ContextTiers_* test
+// above, which all post to the live save route) must surface a context_tiers
+// diff entry and must not write anything, matching the four ratio/price
+// fields' existing preview coverage.
+func TestV2PricingWrite_ContextTiers_PreviewIncludesDiff(t *testing.T) {
+	ctx := setupPricingWriteRouter(t)
+	prevTiers := ratio_setting.ContextLengthTiers2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateContextLengthTiersByJSONString(prevTiers) })
+	model := "context-tiers-preview-probe"
+
+	batch := []map[string]interface{}{
+		{
+			"model_name": model,
+			"context_tiers": []map[string]interface{}{
+				{"threshold_tokens": 0, "model_ratio": 1.0},
+				{"threshold_tokens": 4000, "model_ratio": 3.0},
+			},
+		},
+	}
+	w := postPricingPreview(ctx, ctx.tenantSlug, batch)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			Diffs []map[string]interface{} `json:"diffs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v — body: %s", err, w.Body.String())
+	}
+	var found bool
+	for _, d := range resp.Data.Diffs {
+		if d["model_name"] == model && d["field"] == "context_tiers" {
+			found = true
+			if _, ok := d["new"]; !ok {
+				t.Errorf("context_tiers diff entry has no \"new\" key: %v", d)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("preview response diffs has no context_tiers entry for %q: %v", model, resp.Data.Diffs)
+	}
+
+	// The preview route must never persist.
+	var count int64
+	ctx.db.Model(&repo.Option{}).Where("key = ?", "ContextLengthTiers").Count(&count)
+	if count != 0 {
+		t.Errorf("ContextLengthTiers option row = %d rows, want 0 (preview must never write)", count)
+	}
+	if got := ratio_setting.GetContextLengthTier(model, 4000); got != nil {
+		t.Errorf("GetContextLengthTier(%q,4000) = %+v, want nil (preview must never mutate the live map)", model, got)
+	}
+}

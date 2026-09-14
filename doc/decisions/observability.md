@@ -66,14 +66,26 @@
 > - `lurus_gateway_leader` (gauge) — 1 while this process holds the HA
 >   leader lease, 0 otherwise. Single writer: `common.SetLeader`.
 > - `lurus_gateway_leader_task_last_success_timestamp_seconds{task}`
->   (gauge) — unix timestamp of the last successful run of a leader-gated
->   periodic task (`lifecycle.LeaderTask`); initialised to 0 for each task
->   name at registration so a task that has never once succeeded still
->   exports a series (rather than none at all) for a `time() - last_success
->   > X` alert to catch. 🔴 A demoted leader keeps exporting its *last*
->   timestamp forever — the series is not cleared or reset on step-down —
->   so any alert on it must be qualified with `lurus_gateway_leader == 1`,
+>   (gauge) — unix timestamp of the last successful run of a periodic
+>   background task; initialised to 0 for each task name at registration so
+>   a task that has never once succeeded still exports a series (rather
+>   than none at all) for a `time() - last_success > X` alert to catch.
+>   🔴 A demoted leader keeps exporting its *last* timestamp forever — the
+>   series is not cleared or reset on step-down — so an alert on a
+>   leader-gated task must be qualified with `lurus_gateway_leader == 1`,
 >   or a follower's stale-but-once-real timestamp will mask the condition.
+>   **Not every task is leader-gated**: `lifecycle.NewLeaderTask` callers
+>   (secret rotation, session sweep, response-registry sweep) and the other
+>   L3 raw-ticker jobs (audit cleanup, privacy erasure, credit-pool
+>   reconcile, the OpenRouter pool reaper) run on the HA leader only, but
+>   `channel-health-test` (L3, 2026-09-13) runs on every master-capable
+>   replica — an alert qualified with `lurus_gateway_leader == 1` would
+>   blind itself to that task on the non-leader replicas. Per-task
+>   `leader_only` is queryable per-pod at `GET
+>   /api/v2/admin/system/tasks` (root-only), which also derives an
+>   `ok`|`overdue`|`standby` state from this series (`standby` covers both
+>   "leader-gated, not currently leader" and "administratively disabled" —
+>   see `doc/product-integration-guide.md` §H).
 > - `lurus_gateway_instance_info{pod,namespace,version}` (gauge, constant
 >   1) — this pod's identity, set once at boot from the k8s downward API
 >   (`POD_NAME`/`POD_NAMESPACE`) before `/metrics` is mounted. `/metrics`

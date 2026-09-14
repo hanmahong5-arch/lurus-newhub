@@ -512,6 +512,23 @@ var (
 		[]string{"action"},
 	)
 
+	// ResponseRegistryErrorsTotal counts response_registry write failures
+	// (cycle-8 L7, tasks-plugins-12): relay.ResponsesHelper's post-consume
+	// insert hook is best-effort on purpose — a registry write must never
+	// fail the billed POST /v1/responses it belongs to — so this counter is
+	// the ONLY visibility into a failing insert; nothing else surfaces it to
+	// the caller. Nonzero and rising means GET/DELETE
+	// /v1/responses/:response_id are silently unable to retrieve responses
+	// that were, in fact, billed and created.
+	ResponseRegistryErrorsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "response_registry_errors_total",
+			Help:      "response_registry write failures on the POST /v1/responses hot path (never fails the response itself)",
+		},
+	)
+
 	// AdminWriteUnauditedTotal counts admin/internal-admin write requests
 	// (POST/PUT/PATCH/DELETE under /api/v2/admin or /internal/admin) where
 	// the handler completed the request without ever calling
@@ -533,6 +550,32 @@ var (
 			Help:      "Admin/internal-admin write requests where no explicit governance.RecordAuditEvent call happened during the request",
 		},
 		[]string{"route"},
+	)
+
+	// TaskMediaGuardRejectionsTotal counts a task-media-proxy request refused
+	// (or truncated) by VideoProxy (GET /v1/videos/:task_id/content) or
+	// GetTaskArtifactContent (GET
+	// /v1/tasks/:platform/:task_id/artifacts/:key/content) — cycle-8 L9's
+	// operator ruling on the round-1 acceptance findings. route distinguishes
+	// the two handlers ("video_proxy" / "artifact_content"); reason is one
+	// of "scheme", "self_url", "size_cap" (checks both handlers run),
+	// "egress_check" (app.ValidateOutboundURL — GetTaskArtifactContent only,
+	// VideoProxy never calls it) or "upstream_error" (the fetch itself
+	// failed or returned non-200 — not a guard rejection, but counted here
+	// by both handlers too).
+	// "size_cap" also covers the unknown-Content-Length case where the
+	// stream is stopped at the cap after a 200 has already been written (see
+	// task_media_guard.go/video_proxy.go): the request was not rejected
+	// up front there, only truncated, but it is still counted so the cap
+	// being hit at all is visible to a scraper.
+	TaskMediaGuardRejectionsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "task_media_guard_rejections_total",
+			Help:      "Task/video media proxy requests refused (or truncated) by a scheme/self-URL/egress/size-cap check, or that failed upstream, by route and reason",
+		},
+		[]string{"route", "reason"},
 	)
 )
 
@@ -648,4 +691,9 @@ func RecordPoolNotConfigured(tenantID, action string) {
 // action must be "log" or "enforce" — never "off".
 func RecordConsumerAudienceMismatch(action string) {
 	ConsumerAudienceMismatchTotal.WithLabelValues(action).Inc()
+}
+
+// RecordResponseRegistryError increments ResponseRegistryErrorsTotal.
+func RecordResponseRegistryError() {
+	ResponseRegistryErrorsTotal.Inc()
 }

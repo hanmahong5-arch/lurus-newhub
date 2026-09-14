@@ -80,6 +80,8 @@ const V2ModelPerformance = lazy(
   () => import('./pages/v2/Admin/ModelPerformance'),
 );
 const V2Rankings = lazy(() => import('./pages/v2/Analytics/Rankings'));
+const V2SystemTasks = lazy(() => import('./pages/v2/Admin/SystemTasks'));
+const V2AdminAuthz = lazy(() => import('./pages/v2/Admin/Authz'));
 const V2Projects = lazy(() => import('./pages/v2/Projects'));
 const V2ModelRateLimits = lazy(
   () => import('./pages/v2/Admin/ModelRateLimits'),
@@ -394,6 +396,8 @@ function App() {
           ['admin/model-performance', V2ModelPerformance],
           ['admin/rankings', V2Rankings],
           ['admin/model-limits', V2ModelRateLimits],
+          ['admin/system-tasks', V2SystemTasks],
+          ['admin/authz', V2AdminAuthz],
         ].map(([slug, Component]) => (
           <Route
             key={slug}

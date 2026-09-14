@@ -297,6 +297,10 @@ func run(ctx context.Context, startTime time.Time) error {
 		// revoked >30 days ago or idle (never revoked) >90 days. Leader-gated
 		// internally, same pattern as StartSecretRotationWithContext.
 		lifecycle.StartSessionSweepWithContext(ctx)
+		// cycle-8 L7 (tasks-plugins-12): response_registry retention sweep —
+		// hard-deletes rows whose RESPONSE_REGISTRY_TTL_DAYS has elapsed.
+		// Leader-gated internally, same pattern as StartSecretRotationWithContext.
+		lifecycle.StartResponseRegistrySweepWithContext(ctx)
 	}
 
 	// pprof server

@@ -67,6 +67,8 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 		// here rests on CreateProject's explicit pre-check — the DDL itself is
 		// proven in internal/pkg/migration/projects_pg_test.go.
 		&entity.Project{},
+		// Delegated admin permission grants (migration 034, L4).
+		&entity.AdminPermissionGrant{},
 	}
 	for _, tbl := range tables {
 		if err := db.AutoMigrate(tbl); err != nil {

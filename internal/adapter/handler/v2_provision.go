@@ -47,6 +47,106 @@ var (
 	provisionVerifier   *entverify.Verifier // lazily built; tests inject via setProvisionVerifier
 )
 
+// parseEntitlementModels reads the platform entitlement's ent["models"]
+// claim (2l-svc-platform migrations/119_seed_claude_code_plans.sql
+// features.models, JSON-encoded into ent by anyToString) into the model
+// allowlist ProvisionV2 stamps onto the minted/refreshed/replayed relay
+// token. Returns (models, present): present is true whenever the raw claim
+// key is set to a non-empty string at all, independent of how many usable
+// model names survive normalization — this is what lets the caller fail
+// CLOSED (ModelLimitsEnabled=true with an empty ModelLimits, which
+// middleware.Distribute's model_blocked gate treats as "no model allowed",
+// not "unrestricted") for a present-but-blank claim. Three shapes:
+//   - absent or empty string: (nil, false) — unrestricted, today's behaviour.
+//   - a JSON array of strings: (trimmed/deduplicated list, true); an array of
+//     only blank strings normalizes to an empty list but present stays true.
+//   - present but not a JSON array (a malformed claim): fall back to a
+//     comma-separated read (still trimmed/deduplicated), log once, and
+//     present stays true. This degrades toward MORE restriction, never
+//     toward unrestricted, for every present claim — including one that
+//     normalizes to zero entries.
+func parseEntitlementModels(ent map[string]string) (models []string, present bool) {
+	raw, ok := ent["models"]
+	if !ok || raw == "" {
+		return nil, false
+	}
+	var arr []string
+	if err := json.Unmarshal([]byte(raw), &arr); err == nil {
+		return normalizeModelList(arr), true
+	}
+	common.SysError("ProvisionV2: malformed ent.models claim (not a JSON array), degrading to CSV split: " + raw)
+	return normalizeModelList(strings.Split(raw, ",")), true
+}
+
+// normalizeModelList trims whitespace, drops empty entries, and deduplicates
+// while preserving first-seen order — shared by both parseEntitlementModels
+// branches so the JSON-array path and the CSV-fallback path produce
+// identically shaped output.
+func normalizeModelList(models []string) []string {
+	seen := make(map[string]bool, len(models))
+	out := make([]string, 0, len(models))
+	for _, m := range models {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	return out
+}
+
+// reconcileSiblingProvisionTokens disables the OTHER enabled
+// switch-provision-* tokens this user holds (O4: one live switch-provision-*
+// token per user is the invariant) after this call's OWN mint/refresh/replay
+// action has already succeeded — callers must invoke this only from a
+// success path, never before it, so a failure earlier in the request can
+// never revoke a working key without also handing back a new one (B-F5).
+//
+// Each sibling is renamed away from its canonical switch-provision-<plan>
+// name in the same write that disables it (still through (*repo.Token).
+// Update(), never a bulk UPDATE, so the disabled key's Redis cache entry is
+// refreshed too — 2026-09-01 stale-cache lesson). The rename is what lets a
+// LATER re-provision of that same plan find no canonical-named row and mint
+// a fresh one, instead of hitting the TOKEN_REVOKED guard meant only for a
+// row an administrator disabled directly (which keeps its canonical name
+// and is therefore still refused — see TestProvisionV2_RevokedTokenNotResurrected).
+//
+// Failures here are logged, not fatal to the request: the caller's own token
+// action already succeeded, so the worst case is a stale sibling staying
+// enabled a little longer — never zero working keys.
+func reconcileSiblingProvisionTokens(c *gin.Context, user *repo.User, tokenName, planCode string) {
+	siblings, sibErr := repo.GetOtherEnabledSwitchProvisionTokens(user.Id, provisionTokenNamePrefix, tokenName)
+	if sibErr != nil {
+		common.SysError("ProvisionV2: sibling token lookup failed" +
+			" user_id=" + strconv.Itoa(user.Id) + " err=" + sibErr.Error())
+		return
+	}
+	for _, sib := range siblings {
+		oldName := sib.Name
+		newName := oldName + "-superseded-" + strconv.FormatInt(common.GetTimestamp(), 10)
+		sib.Name = newName
+		sib.Status = common.TokenStatusDisabled
+		if updErr := sib.Update(); updErr != nil {
+			common.SysError("ProvisionV2: sibling token disable failed" +
+				" user_id=" + strconv.Itoa(user.Id) + " token_id=" + strconv.Itoa(sib.Id) + " err=" + updErr.Error())
+			continue
+		}
+		sibDetails, _ := json.Marshal(map[string]any{
+			"reason": "plan_changed",
+			"from":   oldName,
+			"to":     planCode,
+			// The row no longer carries its canonical name, so the audit row
+			// is the only place that records where it went. Without this an
+			// operator reading the feed cannot match the disabled row in the
+			// tokens table back to the plan it used to serve.
+			"renamed_to": newName,
+		})
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, user.Id,
+			governance.ActionTokenStatusChanged, governance.ResourceToken, sib.Id, string(sibDetails)))
+	}
+}
+
 // getProvisionVerifier returns the shared entitlement verifier (JWKS cached
 // in-process for its TTL; *entverify.Verifier is safe for concurrent use).
 func getProvisionVerifier() *entverify.Verifier {
@@ -101,6 +201,39 @@ func setProvisionVerifier(v *entverify.Verifier) {
 // expiry is forward-looking from the entitlement's exp (exp + the entverify
 // offline-grace margin, never the raw claim verbatim — never immortal, never
 // in the past), so an unrenewed plan stops working on its own.
+// Model entitlement: ent.models (a JSON array of model names, or a
+// comma-separated fallback if malformed) sets the minted/refreshed/replayed
+// token's ModelLimits — enforced downstream by middleware.Distribute's
+// existing model_blocked gate, exact-match only (ratio_setting's
+// FormatMatchingModelName bridges gpts/thinking-* variants but not dated vs
+// undated aliases — a dated request for an undated plan model, e.g.
+// "model-a-20250929" against a plan listing "model-a", is blocked). Absent
+// ent.models keeps the token unrestricted (today's behaviour); a claim that
+// is PRESENT but empty/blank/comma-only fails CLOSED (ModelLimitsEnabled=true,
+// ModelLimits="", which blocks every model — see parseEntitlementModels). A
+// plan change (a different plan_code for the same platform account) disables
+// the OTHER enabled switch-provision-* token(s) GetOtherEnabledSwitchProvisionTokens
+// returns, one row at a time through (*repo.Token).Update() (Update() and
+// SelectUpdate() both refresh a token's Redis cache entry; a bare GORM
+// Updates() does not). This revocation runs only AFTER this call's own
+// mint/refresh/replay branch has already succeeded, so a failure earlier in
+// this call (bad claim, DB error) never revokes a key without also handing
+// back a working one. Each superseded sibling is renamed away from its
+// canonical switch-provision-<plan_code> name in the same write that
+// disables it, so a LATER re-provision of that same plan_code finds no
+// canonical row and mints a fresh one instead of hitting the TOKEN_REVOKED
+// guard below — that guard still fires for a row a human disabled directly,
+// which keeps its canonical name.
+//
+// Known consumer-visible edges of this gate (2026-09 cycle-8 L2): the
+// source-verified caller of this endpoint is the platform's own onboarding
+// guide (2l-svc-platform web/src/components/OnboardingGuide.jsx, main tree)
+// — a user who already pasted an old plan's key into their client gets
+// 401 token_disabled on their next relay call after a plan change and must
+// re-copy the new key from the guide. A local 2c-gui-switch checkout was
+// checked and calls a different, older endpoint (/internal/user/provision);
+// per lurus.yaml that checkout is stale, so switch's live call site was not
+// independently confirmed from source.
 //
 // Response 200:
 //
@@ -246,6 +379,27 @@ func ProvisionV2(c *gin.Context) {
 		return
 	}
 
+	// Model entitlement: ent.models gates which models the minted token may
+	// reach (middleware.Distribute already enforces Token.ModelLimits — see
+	// middleware/auth.go's ModelLimitsEnabled/ModelLimits context seed and
+	// middleware/distributor.go's model_blocked check). Absent claim = today's
+	// unrestricted behaviour; a PRESENT claim always sets ModelLimitsEnabled,
+	// even if it normalizes to zero usable names (fail closed — see
+	// parseEntitlementModels).
+	models, modelsPresent := parseEntitlementModels(claims.Ent)
+	modelLimitsEnabled := modelsPresent
+	modelLimitsCSV := strings.Join(models, ",")
+	if len(modelLimitsCSV) > 1024 { // tokens.model_limits is varchar(1024)
+		common.SysError("ProvisionV2: ent.models claim too long for model_limits column" +
+			" user_id=" + strconv.Itoa(user.Id) + " len=" + strconv.Itoa(len(modelLimitsCSV)))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success":    false,
+			"message":    "entitlement models claim exceeds the relay token's model_limits capacity",
+			"error_code": "PROVISION_FAILED",
+		})
+		return
+	}
+
 	baseURL := os.Getenv("RELAY_PUBLIC_BASE_URL")
 	if baseURL == "" {
 		baseURL = defaultRelayBaseURL
@@ -272,11 +426,37 @@ func ProvisionV2(c *gin.Context) {
 		Order("id desc").First(&existing).Error
 	if findErr == nil && existing.Status == common.TokenStatusEnabled &&
 		(existing.ExpiredTime == -1 || existing.ExpiredTime > common.GetTimestamp()) {
+		// Reconcile the model entitlement on replay: the entitlement's models
+		// claim can change (a plan's model list is edited) without the plan
+		// changing, so a plain replay must still keep the token's
+		// model_limits in sync rather than freezing it at mint time. Narrowed
+		// to just the two model-limit columns (repo.(*Token).UpdateModelLimits)
+		// rather than the full-row Update() this branch used before: Update()
+		// writes back EVERY column from this handler's in-memory `existing`
+		// snapshot (remain_quota included), which risks losing a concurrent
+		// relay's quota debit that landed between the read above and this
+		// write. UpdateModelLimits still refreshes the Redis cache entry.
+		if existing.ModelLimitsEnabled != modelLimitsEnabled || existing.ModelLimits != modelLimitsCSV {
+			existing.ModelLimitsEnabled = modelLimitsEnabled
+			existing.ModelLimits = modelLimitsCSV
+			if updErr := existing.UpdateModelLimits(); updErr != nil {
+				common.SysError("ProvisionV2: replay model-limits reconcile failed" +
+					" user_id=" + strconv.Itoa(user.Id) + " err=" + updErr.Error())
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success":    false,
+					"message":    "failed to reconcile relay token model entitlement",
+					"error_code": "PROVISION_FAILED",
+				})
+				return
+			}
+		}
+		reconcileSiblingProvisionTokens(c, user, tokenName, planCode)
 		common.SysLog("ProvisionV2: replayed" +
 			" tenant=" + tenant.Id +
 			" user_id=" + strconv.Itoa(user.Id) +
 			" plan=" + planCode +
 			" freshness=" + claims.Freshness.String() +
+			" models=" + modelLimitsCSV +
 			" fingerprint=" + req.Fingerprint)
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -301,10 +481,19 @@ func ProvisionV2(c *gin.Context) {
 	// instead: remain_quota/used_quota are left untouched, a net reconcile
 	// rather than an increment.
 	if findErr == nil && existing.Status == common.TokenStatusEnabled {
-		if updErr := repo.DB.Model(&existing).Updates(map[string]any{
-			"expired_time":  expiredAt,
-			"accessed_time": common.GetTimestamp(),
-		}).Error; updErr != nil {
+		// Cache-consistent write (B-F6): this branch used to write
+		// expired_time/model_limits* through a bare GORM map Updates(), which
+		// neither invalidates nor refreshes the token's Redis cache entry —
+		// masked today only because the cached row is already past its own
+		// (pre-refresh) expiry and gets rejected anyway. existing.Update()
+		// refreshes the cache like the mint and replay paths. accessed_time is
+		// intentionally not bumped here: it is not in Update()'s column list,
+		// and the relay's own auth path (repo.Token.SelectUpdate, called on
+		// every hit) already keeps it current once the refreshed key is used.
+		existing.ExpiredTime = expiredAt
+		existing.ModelLimitsEnabled = modelLimitsEnabled
+		existing.ModelLimits = modelLimitsCSV
+		if updErr := existing.Update(); updErr != nil {
 			common.SysError("ProvisionV2: token refresh failed" +
 				" user_id=" + strconv.Itoa(user.Id) + " err=" + updErr.Error())
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -314,11 +503,13 @@ func ProvisionV2(c *gin.Context) {
 			})
 			return
 		}
+		reconcileSiblingProvisionTokens(c, user, tokenName, planCode)
 		common.SysLog("ProvisionV2: refreshed expired token" +
 			" tenant=" + tenant.Id +
 			" user_id=" + strconv.Itoa(user.Id) +
 			" plan=" + planCode +
 			" freshness=" + claims.Freshness.String() +
+			" models=" + modelLimitsCSV +
 			" fingerprint=" + req.Fingerprint)
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -383,17 +574,19 @@ func ProvisionV2(c *gin.Context) {
 	}
 
 	token := repo.Token{
-		UserId:         user.Id,
-		TenantId:       user.TenantId,
-		Name:           tokenName,
-		Key:            key,
-		Status:         common.TokenStatusEnabled,
-		CreatedTime:    common.GetTimestamp(),
-		AccessedTime:   common.GetTimestamp(),
-		ExpiredTime:    expiredAt, // forward-looking: entitlement exp + offline grace, floored at now+grace — never immortal, never <= now
-		RemainQuota:    remainQuota,
-		UnlimitedQuota: unlimited,
-		Group:          "default",
+		UserId:             user.Id,
+		TenantId:           user.TenantId,
+		Name:               tokenName,
+		Key:                key,
+		Status:             common.TokenStatusEnabled,
+		CreatedTime:        common.GetTimestamp(),
+		AccessedTime:       common.GetTimestamp(),
+		ExpiredTime:        expiredAt, // forward-looking: entitlement exp + offline grace, floored at now+grace — never immortal, never <= now
+		RemainQuota:        remainQuota,
+		UnlimitedQuota:     unlimited,
+		Group:              "default",
+		ModelLimitsEnabled: modelLimitsEnabled,
+		ModelLimits:        modelLimitsCSV,
 	}
 	if insertErr := token.Insert(); insertErr != nil {
 		common.SysError("ProvisionV2: token insert failed" +
@@ -414,6 +607,7 @@ func ProvisionV2(c *gin.Context) {
 	})
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, user.Id,
 		governance.ActionTokenCreated, governance.ResourceToken, token.Id, string(details)))
+	reconcileSiblingProvisionTokens(c, user, tokenName, planCode)
 
 	common.SysLog("ProvisionV2: provisioned" +
 		" tenant=" + tenant.Id +
@@ -423,6 +617,7 @@ func ProvisionV2(c *gin.Context) {
 		" unlimited=" + strconv.FormatBool(unlimited) +
 		" quota=" + strconv.Itoa(remainQuota) +
 		" freshness=" + claims.Freshness.String() +
+		" models=" + modelLimitsCSV +
 		" fingerprint=" + req.Fingerprint)
 
 	c.JSON(http.StatusOK, gin.H{

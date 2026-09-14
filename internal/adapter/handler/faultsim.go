@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
 )
@@ -202,4 +204,89 @@ func FaultSimChatCompletions(c *gin.Context) {
 			},
 		})
 	}
+}
+
+// --- Task-vendor fault simulator (cycle-8 L8) ---
+//
+// FaultSimTaskSubmit/FaultSimTaskFetch imitate the Suno wire ONE compiled
+// adaptor already speaks (internal/adapter/provider/task/suno) — chosen
+// because it is the async-task adaptor with the simplest submit body (no
+// multipart) and because its batch fetch (task.go's updateSunoTaskAll,
+// driven every 15s by UpdateTaskBulkWithContext) needs only one HTTP round
+// trip regardless of how many tasks are pending. This does NOT add a new
+// TaskPlatform or adaptor — GetTaskAdaptor(constant.TaskPlatformSuno) is
+// unchanged; a UAT channel of type ChannelTypeSunoAPI simply points its
+// base_url at this process's own loopback address (see the SAFETY doc
+// comment above) instead of the real Suno-compatible vendor.
+//
+// Same two-artefact shape on every fetch: a data: URL text/plain payload
+// and a data: URL image — proving the round trip (and, once L9 lands, the
+// artefact-listing/proxy generalisation) needs no vendor key on UAT.
+const (
+	faultSimTaskArtefactText = "data:text/plain;base64,VGFzayBjb21wbGV0ZWQgYnkgdGhlIGZhdWx0IHNpbXVsYXRvcg=="
+	// 1x1 transparent PNG.
+	faultSimTaskArtefactImage = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+// FaultSimTaskSubmit serves POST /faultsim/suno/submit/:action — the same
+// path shape suno.TaskAdaptor.BuildRequestURL constructs
+// (baseURL + "/suno/submit/" + action). Always accepts and returns a fresh
+// task id in the TaskResponse[string] envelope suno.TaskAdaptor.DoResponse
+// expects.
+func FaultSimTaskSubmit(c *gin.Context) {
+	if !faultSimAuthorized(c) {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": gin.H{"message": "fault simulator token required", "type": "faultsim"},
+		})
+		return
+	}
+	taskID := "faultsim-task-" + common.GetRandomString(12)
+	c.JSON(http.StatusOK, gin.H{
+		"code":    "success",
+		"message": "",
+		"data":    taskID,
+	})
+}
+
+// FaultSimTaskFetch serves POST /faultsim/suno/fetch, the batch status poll
+// task.go's updateSunoTaskAll drives with body {"ids": [...]}. Every id
+// requested is answered SUCCESS immediately (no queued/in_progress
+// simulation — the point is a fast, deterministic UAT round trip, not
+// reproducing real generation latency), each with the two data: URL
+// artefacts described above.
+func FaultSimTaskFetch(c *gin.Context) {
+	if !faultSimAuthorized(c) {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": gin.H{"message": "fault simulator token required", "type": "faultsim"},
+		})
+		return
+	}
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	// A malformed/empty body just yields zero results — nothing to fault on.
+	_ = c.ShouldBindJSON(&req)
+
+	artefacts, _ := json.Marshal(gin.H{
+		"url":       faultSimTaskArtefactText,
+		"image_url": faultSimTaskArtefactImage,
+	})
+	now := time.Now().Unix()
+	items := make([]gin.H, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		items = append(items, gin.H{
+			"task_id":     id,
+			"status":      "SUCCESS",
+			"fail_reason": "",
+			"submit_time": now,
+			"start_time":  now,
+			"finish_time": now,
+			"data":        json.RawMessage(artefacts),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    "success",
+		"message": "",
+		"data":    items,
+	})
 }

@@ -12,8 +12,28 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
+
+// AsyncGo is package handler's own fire-and-forget spawn seam, same
+// convention as repo.AsyncGo (internal/adapter/repo/async.go) and
+// app.AsyncGo (internal/app/quota.go). SyncAllChannelsNow below is currently
+// the sole call site (grep AsyncGo( under this package): its bare `go
+// syncAllChannelModels(...)` outlived whichever test's TestMain swapped
+// repo.DB to a fresh *gorm.DB and back — the check inside
+// syncAllChannelModels ("if repo.DB == nil") passes at call time but the
+// package-level var can still be reassigned or closed by a concurrent
+// test's t.Cleanup before GetAllChannels actually runs, panicking on a nil
+// or already-closed handle (cycle-8 L10 repair, ruling A-F3). Forcing this
+// seam inline in a package's TestMain makes every such spawn finish before
+// the request handler returns, eliminating the race. Production is NOT
+// behaviourally identical to the bare `go` statement it replaces: the
+// default value here is gopool.Go, whose worker recovers a panic in the
+// spawned func and logs it (gopool@v0.1.3 util/gopool/worker.go's
+// run()) instead of letting it crash the process the way an unrecovered
+// panic in a bare `go` statement would.
+var AsyncGo = gopool.Go
 
 // GetAllModelsMeta 获取模型列表（分页）
 func GetAllModelsMeta(c *gin.Context) {
@@ -198,7 +218,7 @@ func GetModelsPricingInfo(c *gin.Context) {
 // SyncAllChannelsNow triggers an immediate model sync for all enabled channels.
 // Runs asynchronously so the HTTP response returns immediately.
 func SyncAllChannelsNow(c *gin.Context) {
-	go syncAllChannelModels(context.Background())
+	AsyncGo(func() { syncAllChannelModels(context.Background()) })
 	common.ApiSuccess(c, gin.H{"message": "channel model sync started"})
 }
 

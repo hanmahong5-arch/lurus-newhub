@@ -16,18 +16,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LurusTech/lurus-hub/internal/app/relay"
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/relay"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
-	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -368,6 +370,15 @@ func testChannel(channel *repo.Channel, testModel string, endpointType string) t
 	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
 
+	// Declarative context-length pricing tier (billing-pricing-14): priceData
+	// was built above (helper.ModelPriceHelper, promptTokens=0 estimate)
+	// before this channel-test call had an actual response; re-evaluate
+	// against the real usage before billing and writing the consume-log row
+	// below, matching every other settlement site (cycle-8 plan §8 L5
+	// A-F4/A-F5) — otherwise this writes a real log row from a stale tier.
+	// No-op for UsePrice models and for any model with no tiers configured.
+	helper.ResettleContextTier(&priceData, info.OriginModelName, usage.AsOpenAIWire().PromptTokens)
+
 	quota := 0
 	if !priceData.UsePrice {
 		quota = usage.PromptTokens + int(math.Round(float64(usage.CompletionTokens)*priceData.CompletionRatio))
@@ -668,11 +679,48 @@ func AutomaticallyTestChannels() {
 	})
 }
 
+// channelHealthTestTaskName is the "task" label this job stamps on
+// metrics.LeaderTaskLastSuccess and registers under in taskreg. Unlike the
+// leader-gated L3 heartbeat jobs this one is NOT leader-gated — it runs on
+// every master-capable replica (common.IsMasterNode), so taskreg.Register's
+// leaderOnly argument below is false.
+//
+// Stamp semantics (L3 repair round, B-F10): the heartbeat below fires when
+// testAllChannels returns nil — i.e. when the async pass over every channel
+// is LAUNCHED (testAllChannels hands the loop to gopool.Go and returns
+// immediately), not when that pass actually finishes testing the last
+// channel. Moving the stamp into the gopool.Go body would require
+// testAllChannels to signal completion back to a caller that today treats
+// it as fire-and-forget — a shape change to a function TestAllChannels
+// (the manual "test all channels" handler) also calls, which the L3 spec's
+// "no change to schedule/gating/error handling" line rules out doing as a
+// side effect of a heartbeat repair. TestChannelHealthTest_StampMeansLaunchedNotCompleted
+// (context_tasks_integration_test.go) proves this launch-not-completion
+// shape against the real function.
+//
+// Active semantics (L3 repair round, B-F1): registered with a non-nil
+// active func, not nil. AutoTestChannelEnabled defaults to false
+// (operation_setting/monitor_setting.go), so on a default install this
+// job never calls testAllChannels at all — GetSystemTasksV2 must report it
+// standby ("disabled"), never overdue, in that state; a nil active func
+// (meaning "always active") would make it report overdue after 2x the
+// nominal interval on every default install.
+const channelHealthTestTaskName = "channel-health-test"
+
 // AutomaticallyTestChannelsWithContext tests channels with context cancellation support.
 func AutomaticallyTestChannelsWithContext(ctx context.Context) {
 	if !common.IsMasterNode {
 		return
 	}
+
+	metrics.LeaderTaskLastSuccess.WithLabelValues(channelHealthTestTaskName).Set(0)
+	taskreg.Register(channelHealthTestTaskName, func() time.Duration {
+		frequency := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
+		return time.Duration(int(math.Round(frequency))) * time.Minute
+	}, false, func() bool {
+		ms := operation_setting.GetMonitorSetting()
+		return ms.AutoTestChannelEnabled && ms.AutoTestChannelMinutes > 0
+	})
 
 	for {
 		select {
@@ -700,7 +748,15 @@ func AutomaticallyTestChannelsWithContext(ctx context.Context) {
 		case <-time.After(time.Duration(int(math.Round(frequency))) * time.Minute):
 			common.SysLog(fmt.Sprintf("automatically test channels with interval %f minutes", frequency))
 			common.SysLog("automatically testing all channels")
-			_ = testAllChannels(false)
+			// testAllChannels takes no context: it launches its own detached
+			// pass and returns immediately, so there is nothing here to
+			// cancel. The heartbeat records that the pass was launched
+			// (see channelHealthTestTaskName's comment). Threading ctx into
+			// it is a separate change to the pass's own lifecycle.
+			//nolint:contextcheck // pre-existing call shape; only the stamp below is new
+			if err := testAllChannels(false); err == nil {
+				metrics.RecordLeaderTaskSuccess(channelHealthTestTaskName)
+			}
 			common.SysLog("automatically channel test finished")
 		}
 	}

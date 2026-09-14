@@ -29,11 +29,24 @@ package router
 //     tenant-mismatch sentinel in the response envelope and by zero
 //     anonymous accounts being created.
 //
-// What it does NOT prove: nothing here observes the middleware chain the
-// production group applies (api-v2-router.go's CORS / RequestBodySizeLimit /
-// OptionalZitaIdentity are attached to apiV2, and this test does exercise
-// them because it goes through SetApiV2Router — but it asserts nothing about
+// What it does NOT prove: nothing here observes the CORS / RequestBodySizeLimit /
+// OptionalZitaIdentity middleware attached to apiV2 (this test does exercise
+// them because it goes through SetApiV2Router — but asserts nothing about
 // them). It also does not cover repo.Redeem's other three callers.
+//
+// TestSetApiV2Router_SwitchRedeem_RateLimitMounted below closes ONE piece of
+// that gap (cycle-8 L1, gap topup-payments-subscriptions-35): it proves
+// middleware.RedemptionRateLimit() is mounted on this specific route through
+// the same SetApiV2Router entrypoint — a sixth POST /api/v2/switch/redeem
+// from one IP within 60s must get a 429, not a 6th pass through the G5a gate.
+// This route is the one the lane spec calls out by name as needing it most:
+// it is anonymous by design (no session, no token), and the apiV2 group it
+// sits under carries CORS / RequestBodySizeLimit / OptionalZitaIdentity
+// (api-v2-router.go:18, :23, :29) while switchGroup (:335) adds nothing of
+// its own, so an IP-keyed limiter is the throttle this lane attaches. The
+// four-route table test with the same oracle lives in
+// redemption_rate_limit_mount_test.go; this function is the route-specific
+// companion the G5a lock above asked for.
 
 import (
 	"bytes"
@@ -187,5 +200,91 @@ func TestSetApiV2Router_SwitchRedeem_MountedAndRejectsDefaultTenantCode(t *testi
 	}
 	if reloaded.Status != common.RedemptionCodeStatusEnabled {
 		t.Errorf("the code was consumed by a rejected attempt: status=%d, want %d", reloaded.Status, common.RedemptionCodeStatusEnabled)
+	}
+}
+
+// TestSetApiV2Router_SwitchRedeem_RateLimitMounted is the route-specific
+// companion to redemption_rate_limit_mount_test.go's four-route table,
+// scoped to this file because this is the route the cycle-8 L1 lane spec
+// names as needing an IP limiter most: it is anonymous by design (no
+// session, no token — see SwitchRedeemAnonymous's doc comment), and the
+// apiV2 group it sits under carries CORS / RequestBodySizeLimit /
+// OptionalZitaIdentity with nothing switch-specific added by switchGroup
+// (api-v2-router.go:18, :23, :29, :335), so middleware.RedemptionRateLimit()'s
+// "RD" bucket is the throttle this lane attaches to it.
+//
+// Enters through SetApiV2Router, same as the mount test above — a
+// regression that deletes the middleware.RedemptionRateLimit() argument
+// from api-v2-router.go's `switchGroup.POST("/redeem", ...)` line fails
+// here (the 6th request gets 200 instead of 429).
+//
+// Client identity: same production shape as redemption_rate_limit_mount_test.go
+// — RemoteAddr is fixed to the trusted nginx hop, the per-request source IP
+// travels only through X-Forwarded-For, and ConfigureTrustedProxies is what
+// makes gin honour it.
+func TestSetApiV2Router_SwitchRedeem_RateLimitMounted(t *testing.T) {
+	code, _, cleanup := r6dSeedDefaultTenantCode(t)
+	defer cleanup()
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	if err := ConfigureTrustedProxies(engine, []string{redemptionRateLimitTrustedCIDR}); err != nil {
+		t.Fatalf("ConfigureTrustedProxies() error = %v", err)
+	}
+	SetApiV2Router(engine)
+
+	const path = "/api/v2/switch/redeem"
+	// Fake source IP for this run. The two mount-test files in this package
+	// share one process and one in-memory "RD" bucket keyed by mark+IP, so
+	// they draw from disjoint ranges: this file uses the upper half of
+	// TEST-NET-2 (198.51.100.128/25) and redemption_rate_limit_mount_test.go
+	// the lower half plus TEST-NET-3. Avoiding TEST-NET-1 matters too:
+	// 192.0.2.1 is httptest.NewRequest's default RemoteAddr, which sibling
+	// tests in this package send without a forwarded-for header, and that
+	// would key the same bucket.
+	ip := fmt.Sprintf("198.51.100.%d", 128+r6dSwitchRedeemDBCounter.Load()%120)
+
+	fire := func() *httptest.ResponseRecorder {
+		body, err := json.Marshal(map[string]string{
+			"code":        code,
+			"fingerprint": "r6d-rate-limit-fp-0001",
+		})
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = redemptionRateLimitNginxHop
+		req.Header.Set("X-Forwarded-For", ip)
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+		return w
+	}
+
+	for i := 1; i <= 5; i++ {
+		w := fire()
+		if w.Code == http.StatusTooManyRequests {
+			t.Fatalf("request %d already got 429 — fixture broken (RD bucket should admit 5 before tripping); body=%s", i, w.Body.String())
+		}
+		// This code IS a default-tenant code (r6dSeedDefaultTenantCode), so
+		// the G5a gate rejects it every time with a 200 envelope — same
+		// baseline as TestSetApiV2Router_SwitchRedeem_MountedAndRejectsDefaultTenantCode
+		// above. Reusing that baseline here (rather than a fresh unknown
+		// code) is deliberate: it proves the rate limiter and the G5a gate
+		// are two independent, both-mounted checks on the same route.
+		if w.Code != http.StatusOK {
+			t.Fatalf("request %d: status=%d, want 200 (G5a gate answers inside a success=false envelope); body=%s", i, w.Code, w.Body.String())
+		}
+	}
+
+	w6 := fire()
+	if w6.Code != http.StatusTooManyRequests {
+		t.Fatalf("request 6: status=%d, want 429 — middleware.RedemptionRateLimit() must be mounted on POST %s; body=%s", w6.Code, path, w6.Body.String())
+	}
+	if got := w6.Header().Get("X-RateLimit-Scope"); got != "ip" {
+		t.Errorf("request 6: X-RateLimit-Scope=%q, want \"ip\"", got)
+	}
+	if got := w6.Header().Get("Retry-After"); got == "" {
+		t.Errorf("request 6: Retry-After header missing")
 	}
 }

@@ -64,6 +64,15 @@ func setupSQLiteDB(t *testing.T) func() {
 		&entity.Project{},
 		// Per-device session registry (migration 033, L7).
 		&entity.UserSession{},
+		// Delegated admin permission grants (migration 034, L4). Same
+		// caveat as Project above: AutoMigrate creates the bare table +
+		// plain user_id index only — the partial active-grant unique index
+		// (WHERE revoked_at IS NULL) exists only in the SQL migration, so
+		// CreatePermissionGrant's own transactional pre-check is what
+		// guarantees ErrGrantExists on this dialect.
+		&entity.AdminPermissionGrant{},
+		// Response registry (migration 036, L7).
+		&entity.ResponseRegistry{},
 	}
 	for _, tbl := range tables {
 		if err := db.AutoMigrate(tbl); err != nil {

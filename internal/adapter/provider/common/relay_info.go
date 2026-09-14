@@ -447,6 +447,18 @@ func GenRelayInfoResponses(c *gin.Context, request *dto.OpenAIResponsesRequest) 
 	return info
 }
 
+// GenRelayInfoResponsesCompact builds the RelayInfo for POST
+// /v1/responses/compact (cycle-8 L6, wire-formats-03). genBaseRelayInfo
+// already resolves RelayMode from the URL path via Path2RelayMode, so this
+// mirrors GenRelayInfoResponses' explicit set for clarity/parity rather than
+// relying on that alone.
+func GenRelayInfoResponsesCompact(c *gin.Context, request *dto.OpenAIResponsesCompactionRequest) *RelayInfo {
+	info := genBaseRelayInfo(c, request)
+	info.RelayMode = relayconstant.RelayModeResponsesCompact
+	info.RelayFormat = types.RelayFormatOpenAIResponsesCompact
+	return info
+}
+
 func GenRelayInfoGemini(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
 	info.RelayFormat = types.RelayFormatGemini
@@ -636,6 +648,11 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 			return GenRelayInfoResponses(c, request), nil
 		}
 		return nil, errors.New("request is not a OpenAIResponsesRequest")
+	case types.RelayFormatOpenAIResponsesCompact:
+		if request, ok := request.(*dto.OpenAIResponsesCompactionRequest); ok {
+			return GenRelayInfoResponsesCompact(c, request), nil
+		}
+		return nil, errors.New("request is not a OpenAIResponsesCompactionRequest")
 	case types.RelayFormatTask:
 		return genBaseRelayInfo(c, nil), nil
 	case types.RelayFormatMjProxy:

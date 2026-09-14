@@ -33,14 +33,47 @@ import (
 	"gorm.io/gorm"
 )
 
-// updatePricingRequest is the per-model patch sent by the console.
-// Whitelist: only the four admin-visible ratio/price fields are accepted.
-type updatePricingRequest struct {
-	ModelName       string   `json:"model_name"`
+// contextTierPatch is one rung of a model's declarative context-length
+// pricing tier list (billing-pricing-14, ratio_setting.ContextTier) as sent
+// by the console.
+type contextTierPatch struct {
+	ThresholdTokens int      `json:"threshold_tokens"`
 	ModelRatio      *float64 `json:"model_ratio,omitempty"`
 	CompletionRatio *float64 `json:"completion_ratio,omitempty"`
-	ModelPrice      *float64 `json:"model_price,omitempty"`
 	CacheRatio      *float64 `json:"cache_ratio,omitempty"`
+}
+
+// updatePricingRequest is the per-model patch sent by the console.
+// Whitelist: only the five admin-visible ratio/price/tier fields are
+// accepted. ContextTiers is a pointer to a slice so an explicit empty array
+// ("context_tiers":[]) — which clears the model's tier list — is
+// distinguishable from the field being absent (nil, "not touched" by this
+// batch): encoding/json only allocates the pointed-to slice when the key is
+// present in the request body.
+type updatePricingRequest struct {
+	ModelName       string              `json:"model_name"`
+	ModelRatio      *float64            `json:"model_ratio,omitempty"`
+	CompletionRatio *float64            `json:"completion_ratio,omitempty"`
+	ModelPrice      *float64            `json:"model_price,omitempty"`
+	CacheRatio      *float64            `json:"cache_ratio,omitempty"`
+	ContextTiers    *[]contextTierPatch `json:"context_tiers,omitempty"`
+}
+
+// contextTierPatchesToTiers converts the wire patch shape to
+// ratio_setting.ContextTier (identical field set — the wire type exists
+// separately only so this handler package, not ratio_setting, owns the JSON
+// tags of the admin-facing request body).
+func contextTierPatchesToTiers(patches []contextTierPatch) []ratio_setting.ContextTier {
+	out := make([]ratio_setting.ContextTier, len(patches))
+	for i, p := range patches {
+		out[i] = ratio_setting.ContextTier{
+			ThresholdTokens: p.ThresholdTokens,
+			ModelRatio:      p.ModelRatio,
+			CompletionRatio: p.CompletionRatio,
+			CacheRatio:      p.CacheRatio,
+		}
+	}
+	return out
 }
 
 // updatePricingResponse is the view struct returned on success.
@@ -107,12 +140,35 @@ func validatePricingBatch(items []updatePricingRequest) (index int, errCode, msg
 		if item.CacheRatio != nil && *item.CacheRatio <= 0 {
 			return i, "INVALID_RATIO", "cache_ratio must be > 0", false
 		}
+		if item.ContextTiers != nil {
+			if err := ratio_setting.ValidateContextTierList(contextTierPatchesToTiers(*item.ContextTiers)); err != nil {
+				return i, "INVALID_CONTEXT_TIERS", "context_tiers: " + err.Error(), false
+			}
+			// A tier list can never apply to a per-call priced model —
+			// helper.ModelPriceHelper's tier-override branch only runs under
+			// !UsePrice (price.go). Reject instead of silently storing and
+			// echoing back a config that will never take effect (cycle-8
+			// plan §8 L5 B-F6). Explicit [] (clearing) is always allowed,
+			// including for a per-call model, since it removes rather than
+			// adds an inert config. "Per-call" here means either this same
+			// batch item sets model_price, or the model already resolves to
+			// a per-call price today (ratio_setting.GetModelPrice).
+			if len(*item.ContextTiers) > 0 {
+				isPerCall := item.ModelPrice != nil
+				if !isPerCall {
+					_, isPerCall = ratio_setting.GetModelPrice(item.ModelName, false)
+				}
+				if isPerCall {
+					return i, "INVALID_CONTEXT_TIERS", "context_tiers cannot be set on a per-call priced model (model_price); tiers only apply to ratio-based (model_ratio) pricing", false
+				}
+			}
+		}
 	}
 	return -1, "", "", true
 }
 
 // pricingComputation is the result of applying a batch on top of the base
-// copies of the four ratio maps a caller supplied: the candidate maps (for
+// copies of the pricing option maps a caller supplied: the candidate maps (for
 // persistence), a diff per touched (model, field) pair (for the preview
 // response and the audit details), and a touched flag per field so the
 // caller persists only the maps the batch actually touched — "touched"
@@ -125,14 +181,16 @@ type pricingComputation struct {
 	CompletionRatioCopy    map[string]float64
 	ModelPriceCopy         map[string]float64
 	CacheRatioCopy         map[string]float64
+	ContextTiersCopy       map[string][]ratio_setting.ContextTier
 	TouchedModelRatio      bool
 	TouchedCompletionRatio bool
 	TouchedModelPrice      bool
 	TouchedCacheRatio      bool
+	TouchedContextTiers    bool
 	UpdatedCount           int
 }
 
-// computePricingDiffsFromMaps applies items on top of the four base maps the
+// computePricingDiffsFromMaps applies items on top of the base maps the
 // caller supplies and returns the resulting computation. It takes the base
 // maps as parameters — rather than reading ratio_setting's live copies
 // itself — so UpdatePricingV2 can apply a batch on top of the maps it just
@@ -145,12 +203,14 @@ type pricingComputation struct {
 func computePricingDiffsFromMaps(
 	items []updatePricingRequest,
 	modelRatioBase, completionRatioBase, modelPriceBase, cacheRatioBase map[string]float64,
+	contextTiersBase map[string][]ratio_setting.ContextTier,
 ) pricingComputation {
 	out := pricingComputation{
 		ModelRatioCopy:      modelRatioBase,
 		CompletionRatioCopy: completionRatioBase,
 		ModelPriceCopy:      modelPriceBase,
 		CacheRatioCopy:      cacheRatioBase,
+		ContextTiersCopy:    contextTiersBase,
 	}
 	for _, item := range items {
 		touched := false
@@ -182,11 +242,43 @@ func computePricingDiffsFromMaps(
 			out.TouchedCacheRatio = true
 			touched = true
 		}
+		if item.ContextTiers != nil {
+			oldList := out.ContextTiersCopy[item.ModelName]
+			newList := contextTierPatchesToTiers(*item.ContextTiers)
+			if len(newList) == 0 {
+				// Explicit empty list clears the model's tiers — delete
+				// rather than store an empty slice so a marshaled map never
+				// carries dead keys and GetContextLengthTier's "no list"
+				// branch (len==0 either way) stays the only code path.
+				delete(out.ContextTiersCopy, item.ModelName)
+			} else {
+				out.ContextTiersCopy[item.ModelName] = newList
+			}
+			out.Diffs = append(out.Diffs, contextTiersDiffEntry(item.ModelName, oldList, newList))
+			out.TouchedContextTiers = true
+			touched = true
+		}
 		if touched {
 			out.UpdatedCount++
 		}
 	}
 	return out
+}
+
+// contextTiersDiffEntry mirrors pricingDiffEntry's shape (model_name, field,
+// old, new) for the one non-float field this handler writes: old/new are the
+// tier lists themselves (nil/empty when the model had none), not a single
+// number, so the preview/audit consumer reads a list under "old"/"new"
+// instead of a float for this field. No old_explicit: unlike the four ratio
+// maps there is no map-wide fallback default a tier list can fall back to —
+// "no entry" and "empty list" are both simply "no tiers".
+func contextTiersDiffEntry(modelName string, oldTiers, newTiers []ratio_setting.ContextTier) map[string]interface{} {
+	return map[string]interface{}{
+		"model_name": modelName,
+		"field":      "context_tiers",
+		"old":        oldTiers,
+		"new":        newTiers,
+	}
 }
 
 // computePricingDiffs is PreviewPricingV2's entry point: it applies items on
@@ -203,6 +295,7 @@ func computePricingDiffs(items []updatePricingRequest) pricingComputation {
 		ratio_setting.GetCompletionRatioCopy(),
 		ratio_setting.GetModelPriceCopy(),
 		ratio_setting.GetCacheRatioCopy(),
+		ratio_setting.GetContextLengthTiersCopy(),
 	)
 }
 
@@ -295,6 +388,24 @@ func readBaselineRatioMap(tx *gorm.DB, key string, fallback map[string]float64) 
 	return out, nil
 }
 
+// readBaselineContextTiersMap mirrors readBaselineRatioMap for the
+// ContextLengthTiers option row, whose value is map[string][]ContextTier
+// rather than map[string]float64.
+func readBaselineContextTiersMap(tx *gorm.DB, fallback map[string][]ratio_setting.ContextTier) (map[string][]ratio_setting.ContextTier, error) {
+	raw, found, err := repo.GetOptionValueForUpdate(tx, "ContextLengthTiers")
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return fallback, nil
+	}
+	out := make(map[string][]ratio_setting.ContextTier)
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UpdatePricingV2 handles bulk pricing patches for the model catalogue.
 // Route: POST /api/v2/:tenant_slug/pricing
 // Auth: UserAuth middleware + platform root (requirePlatformRoot) — the write is
@@ -305,7 +416,7 @@ func readBaselineRatioMap(tx *gorm.DB, key string, fallback map[string]float64) 
 //
 // Optimistic lock: the optional If-Match-Pricing-Version header pins the
 // write to the PricingVersion the caller last read. Inside one
-// repo.DB.Transaction: the four ratio-map rows are read with a row-level
+// repo.DB.Transaction: the pricing option rows are read with a row-level
 // lock (repo.GetOptionValueForUpdate) so the batch is applied on top of the
 // database's committed baseline — not this process's possibly-stale
 // in-memory copies (TestV2PricingWrite_BatchAppliesOnDBBaseline_NotStaleMemory)
@@ -389,7 +500,7 @@ func UpdatePricingV2(c *gin.Context) {
 	}
 
 	var comp pricingComputation
-	var modelRatioJSON, completionRatioJSON, modelPriceJSON, cacheRatioJSON string
+	var modelRatioJSON, completionRatioJSON, modelPriceJSON, cacheRatioJSON, contextTiersJSON string
 	var expectedVersion, newVersion int64
 
 	txErr := repo.DB.Transaction(func(tx *gorm.DB) error {
@@ -409,8 +520,12 @@ func UpdatePricingV2(c *gin.Context) {
 		if berr != nil {
 			return berr
 		}
+		contextTiersBase, berr := readBaselineContextTiersMap(tx, ratio_setting.GetContextLengthTiersCopy())
+		if berr != nil {
+			return berr
+		}
 
-		comp = computePricingDiffsFromMaps(items, modelRatioBase, completionRatioBase, modelPriceBase, cacheRatioBase)
+		comp = computePricingDiffsFromMaps(items, modelRatioBase, completionRatioBase, modelPriceBase, cacheRatioBase, contextTiersBase)
 
 		if comp.TouchedModelRatio {
 			b, jerr := json.Marshal(comp.ModelRatioCopy)
@@ -449,6 +564,16 @@ func UpdatePricingV2(c *gin.Context) {
 			}
 			cacheRatioJSON = string(b)
 			if err := repo.UpdateOptionTx(tx, "CacheRatio", cacheRatioJSON); err != nil {
+				return err
+			}
+		}
+		if comp.TouchedContextTiers {
+			b, jerr := json.Marshal(comp.ContextTiersCopy)
+			if jerr != nil {
+				return jerr
+			}
+			contextTiersJSON = string(b)
+			if err := repo.UpdateOptionTx(tx, "ContextLengthTiers", contextTiersJSON); err != nil {
 				return err
 			}
 		}
@@ -536,6 +661,9 @@ func UpdatePricingV2(c *gin.Context) {
 	}
 	if comp.TouchedCacheRatio {
 		_ = ratio_setting.UpdateCacheRatioByJSONString(cacheRatioJSON)
+	}
+	if comp.TouchedContextTiers {
+		_ = ratio_setting.UpdateContextLengthTiersByJSONString(contextTiersJSON)
 	}
 	_ = repo.SetOptionMapValue("PricingVersion", strconv.FormatInt(newVersion, 10))
 

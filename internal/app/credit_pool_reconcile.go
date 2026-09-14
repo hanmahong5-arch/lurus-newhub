@@ -43,9 +43,14 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 
 	"gorm.io/gorm"
 )
+
+// creditPoolReconcileTaskName is the "task" label this job stamps on
+// metrics.LeaderTaskLastSuccess and registers under in taskreg.
+const creditPoolReconcileTaskName = "credit-pool-reconcile"
 
 // Fund-event Source values used as the stranded-topup state machine.
 // Regular fund events (platform BillingOutbox path) carry caller-supplied
@@ -371,6 +376,8 @@ func runCreditPoolReconcileTick(ctx context.Context) {
 	}
 	if _, _, err := ReconcileStrandedTopups(ctx); err != nil {
 		common.SysError("credit-pool reconcile sweep: " + err.Error())
+	} else {
+		metrics.RecordLeaderTaskSuccess(creditPoolReconcileTaskName)
 	}
 	if _, err := resetDuePoolsSeam(ctx); err != nil {
 		common.SysError("credit-pool scheduled reset sweep: " + err.Error())
@@ -392,6 +399,9 @@ func StartCreditPoolReconcileWithContext(ctx context.Context) {
 		}
 	}
 	common.SysLog(fmt.Sprintf("credit-pool stranded reconcile started, interval=%s", interval))
+
+	metrics.LeaderTaskLastSuccess.WithLabelValues(creditPoolReconcileTaskName).Set(0)
+	taskreg.Register(creditPoolReconcileTaskName, func() time.Duration { return interval }, true, nil)
 
 	ticker := time.NewTicker(interval)
 	common.SafeGoWithContext(ctx, func(c context.Context) {

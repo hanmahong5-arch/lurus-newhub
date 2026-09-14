@@ -1030,3 +1030,70 @@ L1, L3, L4 (with the authHelper refactor first), L8, L9, L10, L2, L5, L6, L7.
 
 ### Migration renumbering (operator, 2026-09-13, binding)
 The embedded-FS contiguity lock (`internal/pkg/migration/runner_more_unit_test.go`, strict `N == i+1`) fails on any tree where 036 exists without 035, and the development order runs L8 before L7. The root ledger was therefore swapped: **035 = `tasks_add_project_id`** (L8; adds `tasks.project_id` default 0 and `tasks.request_id` varchar(64) default empty with an index) and **036 = `create_response_registry`** (L7). Every §3/§8 reference to "035" for L7 reads 036, and "036" for L8 reads 035. Ledger order = development order = L4 (034) → L8 (035) → L7 (036).
+
+## 9. Operator rulings after the first acceptance round (2026-09-13/14, binding)
+
+Ten lanes were implemented on one shared tree (dev workflow, 40 agents). Seven lanes got their two
+adversarial acceptors; the other three lost theirs to a per-model usage limit and were accepted in
+the repair run instead. Both acceptors failed every lane — as in cycle 7, the verdict letter carries
+little information and the findings carry all of it. The rulings below are the operator's decisions
+on those findings; the full text lives in the repair workflow's per-lane prompt.
+
+### Exceptions granted to the cycle rules
+
+- **Hot-path rule, L8.** The two new 404s (`task_platform_unknown`, task-not-found) are on routes
+  this lane creates. They cannot reject existing traffic, so they ship without an observe flag and
+  without a counter. §8's exception list (L1/L6/L7) is extended to L8's new-route 404s.
+- **Hot-path rule, L9.** The new artefact routes' 502s are likewise new-surface and need no flag.
+  On the pre-existing video-proxy route the self-URL loop guard and the scheme refusal may stay
+  without a flag — both only affect requests that previously ended in a 502 from the upstream call
+  or in a self-fetch loop — on two conditions: the previous message text is preserved where the
+  status was already 502, and the rejections increment
+  `lurus_gateway_task_media_guard_rejections_total{route,reason}`, which must have a real production
+  writer.
+- **Body-size cap.** Silent truncation is not acceptable on either route: a known `Content-Length`
+  over the cap is refused before the response headers are written.
+
+### Design decisions taken during the round
+
+- **L2 supersession (the cycle's most severe defect).** The plan-change revocation wrote the same
+  token status that the pre-existing guard reads as an administrative revocation, so plan A → B → A
+  left the account with zero enabled keys and a permanent 403. The superseded token is renamed away
+  from the canonical idempotency name in the same write that disables it (the name column carries a
+  plain index, verified), so a later provision of that plan mints afresh while a human revocation
+  still answers 403. The revocation also moves after the mint/refresh/replay branch succeeds.
+- **L2 fail-closed parsing.** A present-but-blank `models` claim must restrict, not widen: the
+  parser returns "present" separately from the parsed list, and a present claim that yields no
+  usable names blocks every model.
+- **L3 task states.** `taskreg` entries carry an `active` predicate; the endpoint keeps the ternary
+  `ok|overdue|standby` and adds `standby_reason` ∈ `follower|disabled`. A job an operator has turned
+  off is `standby`, never `overdue` — the default install has channel auto-testing off, so without
+  this every console shows a permanent red badge. A replica that has just won the lease measures its
+  grace window from the moment it became leader, not from process start.
+- **L3 registry scope.** The session sweep registers itself in `taskreg`, so `/metrics` and the
+  console page describe the same task set.
+- **L4 grant lifecycle.** Grants are revoked when the grantee is deleted, erased or demoted below
+  admin, and a grant cannot be issued to a user id that does not exist or is not an admin. Grants
+  remain global this cycle; that is stated in the integration guide because a grantee reads every
+  tenant's audit rows. A grant written through the Bearer-JWT path records `granted_by = 0` and the
+  JWT subject in the audit details, which is documented rather than refused.
+- **L8 scoping and dispatch.** The status read is scoped by owner (a task id alone is not unique, so
+  another user's row could shadow the owner's), the dead privileged branch is removed, and the
+  submit leg reconciles the declared platform with the selected channel's type before any upstream
+  call. The status response is the projection the dedicated fetch routes already use, not the raw
+  row: a bearer-token surface does not return channel ids, quotas or internal user ids.
+- **L8 pricing.** The generic route prices the body `model`; the dedicated vendor routes keep their
+  action-derived names. Neither pricing path is rewritten; the divergence is documented.
+- **L9 artefact coverage.** The listing projects the resolved result URL that the poller stores
+  outside the data blob, so the nine video platforms are no longer an empty list. HEAD, Range and
+  conditional requests are a documented non-goal this cycle.
+- **L10 filters.** A non-numeric project filter answers an empty page without reaching the database,
+  and an over-length request id answers an empty page instead of being truncated into a value that
+  could match a real row.
+
+### Process notes
+
+- A per-model usage limit kills subagents silently. Every stage now names its model explicitly and
+  retries on another tier when an agent returns nothing.
+- Migration numbers follow the development order, not the lane order, because the embedded-migration
+  contiguity lock is strict.

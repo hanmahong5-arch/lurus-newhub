@@ -215,6 +215,22 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 
 	modelName := relayInfo.OriginModelName
 
+	// Declarative context-length pricing tier (billing-pricing-14): the
+	// pre-consume estimate may have chosen a different tier than the actual
+	// context length qualifies for; re-evaluate before reading
+	// ModelRatio/CompletionRatio/CacheRatio below so the logged ratio and
+	// prompt_tokens agree on which side of the threshold this call landed on.
+	// The tier must be chosen on the FULL context length, not the raw wire
+	// prompt-token field: on the Anthropic wire that field excludes cache
+	// read/creation tokens (usage.PromptTokensIncludeCached=false), so a
+	// heavily-cached long-context call would otherwise select the cheap tier
+	// (cycle-8 plan §8 L5 B-F1). usage.AsOpenAIWire().PromptTokens adds those
+	// back when the flag is false and is a no-op when it is already true.
+	// No-op for UsePrice models and for any model with no tiers configured
+	// (helper.ResettleContextTier).
+	contextLengthTokens := usage.AsOpenAIWire().PromptTokens
+	helper.ResettleContextTier(&relayInfo.PriceData, modelName, contextLengthTokens)
+
 	tokenName := ctx.GetString("token_name")
 	completionRatio := relayInfo.PriceData.CompletionRatio
 	cacheRatio := relayInfo.PriceData.CacheRatio

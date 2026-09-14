@@ -38,7 +38,7 @@ vi.mock('../../hooks/common/useFormDraft', () => ({
   clearAllDrafts: vi.fn(),
 }));
 
-import HFShell from './HFShell';
+import HFShell, { visibleNavItems } from './HFShell';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -138,6 +138,84 @@ describe('HFShell role-gated nav sections', () => {
     expect(screen.getByText('Tenants').closest('a')).toBeTruthy();
     expect(screen.getByText('Gateway health').closest('a')).toBeTruthy();
     expect(screen.getByText('Audit trail').closest('a')).toBeTruthy();
+  });
+
+  // A-F3 regression: HFShell.jsx:594's per-item minRole filter (added
+  // alongside admin-system-tasks, minRole:100 inside the minRole:10
+  // "operations & insights" section) had no test — deleting it kept every
+  // other test in this file green, which would have let a role-10 admin
+  // see the root-only "Background tasks" link with no test noticing.
+  it('hides the root-only "Background tasks" nav entry from an admin (role 10)', () => {
+    setBridgedUser(10);
+    renderShell();
+
+    // The section itself (minRole:10) is visible — a sibling item proves it.
+    expect(screen.getByText('Gateway health').closest('a')).toBeTruthy();
+    expect(screen.queryByText('Background tasks')).toBeNull();
+  });
+
+  it('shows the root-only "Background tasks" nav entry to root (role 100)', () => {
+    setBridgedUser(100);
+    renderShell();
+
+    const link = screen.getByText('Background tasks').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/v2/admin/system-tasks');
+  });
+
+  // Pure-function companion to the two DOM tests above: pins the actual
+  // mechanism (visibleNavItems) directly, independent of how HFShell.jsx
+  // renders it — this is what CommandPalette/index.jsx's own tests rely on
+  // being correct.
+  it('visibleNavItems applies both the section- and item-level minRole gate', () => {
+    const forAdmin = visibleNavItems({ role: 10 });
+    const opsForAdmin = forAdmin.find((s) => s.h === 'operations & insights');
+    expect(opsForAdmin).toBeTruthy();
+    expect(opsForAdmin.items.some((it) => it.id === 'admin-system-tasks')).toBe(
+      false,
+    );
+
+    const forRoot = visibleNavItems({ role: 100 });
+    const opsForRoot = forRoot.find((s) => s.h === 'operations & insights');
+    expect(opsForRoot.items.some((it) => it.id === 'admin-system-tasks')).toBe(
+      true,
+    );
+  });
+
+  // A-F7 (cycle-8 L4 repair round): the "admin-authz" (Permission grants)
+  // nav entry has the same per-item minRole:100 override as
+  // admin-system-tasks above, inside the same minRole:10 "governance"
+  // section — grant MANAGEMENT stays root-only server-side even though the
+  // section itself is reachable by a role-10 admin. Unpinned before this:
+  // deleting the item's minRole would have kept every other test in this
+  // file green.
+  it('hides the root-only "Permission grants" nav entry from an admin (role 10)', () => {
+    setBridgedUser(10);
+    renderShell();
+
+    // The section itself (minRole:10) is visible — a sibling item proves it.
+    expect(screen.getByText('Audit trail').closest('a')).toBeTruthy();
+    expect(screen.queryByText('Permission grants')).toBeNull();
+  });
+
+  it('shows the root-only "Permission grants" nav entry to root (role 100)', () => {
+    setBridgedUser(100);
+    renderShell();
+
+    const link = screen.getByText('Permission grants').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/v2/admin/authz');
+  });
+
+  it('visibleNavItems hides admin-authz from role 10 and shows it to root', () => {
+    const forAdmin = visibleNavItems({ role: 10 });
+    const govForAdmin = forAdmin.find((s) => s.h === 'governance');
+    expect(govForAdmin).toBeTruthy();
+    expect(govForAdmin.items.some((it) => it.id === 'admin-authz')).toBe(false);
+
+    const forRoot = visibleNavItems({ role: 100 });
+    const govForRoot = forRoot.find((s) => s.h === 'governance');
+    expect(govForRoot.items.some((it) => it.id === 'admin-authz')).toBe(true);
   });
 
   it('keeps account Settings in "my account", visible to a regular user', () => {

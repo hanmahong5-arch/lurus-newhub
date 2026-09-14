@@ -28,6 +28,33 @@ type PriceData struct {
 	UsePrice                    bool
 	QuotaToPreConsume           int // 预消耗额度
 	GroupRatioInfo              GroupRatioInfo
+	// ContextTierThreshold is the ThresholdTokens of the declarative
+	// context-length pricing tier (billing-pricing-14,
+	// ratio_setting.ContextTier) that overrode ModelRatio/CompletionRatio/
+	// CacheRatio for this call; 0 means no tier applied. Debug/ToSetting only
+	// — it is not projected into the consume-log "other" map (see the
+	// no-new-other.*-key rule in the cycle-8 plan), the effect is already
+	// visible in the logged ModelRatio itself.
+	ContextTierThreshold int
+	// BaseModelRatio/BaseCompletionRatio/BaseCacheRatio are the flat,
+	// non-tiered ratios as they stood at pre-consume (set by
+	// helper.ModelPriceHelper before any context-length tier override is
+	// applied). helper.ResettleContextTier re-evaluates the tier at
+	// settlement starting from THESE frozen values, not from a fresh read of
+	// the live ratio_setting maps — an admin edit or a routine option-sync
+	// tick landing between pre-consume and settlement must not re-price an
+	// in-flight request. Zero-valued (and unused) for UsePrice models and for
+	// any model ModelPriceHelper never ran against (e.g. a hand-built
+	// PriceData in a test that does not go through ModelPriceHelper).
+	BaseModelRatio      float64
+	BaseCompletionRatio float64
+	BaseCacheRatio      float64
+	// BaseRatiosSet marks the three fields above as written by
+	// helper.ModelPriceHelper. helper.ResettleContextTier refuses to overwrite
+	// the live ratios from an unset snapshot, which would charge the call at
+	// ratio 0; a zero value cannot say that on its own, because a free model
+	// legitimately carries a zero ratio.
+	BaseRatiosSet bool
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {
@@ -64,5 +91,5 @@ type PerCallPriceData struct {
 }
 
 func (p *PriceData) ToSetting() string {
-	return fmt.Sprintf("ModelPrice: %f, ModelRatio: %f, CompletionRatio: %f, CacheRatio: %f, GroupRatio: %f, UsePrice: %t, CacheCreationRatio: %f, CacheCreation5mRatio: %f, CacheCreation1hRatio: %f, QuotaToPreConsume: %d, ImageRatio: %f, AudioRatio: %f, AudioCompletionRatio: %f", p.ModelPrice, p.ModelRatio, p.CompletionRatio, p.CacheRatio, p.GroupRatioInfo.GroupRatio, p.UsePrice, p.CacheCreationRatio, p.CacheCreation5mRatio, p.CacheCreation1hRatio, p.QuotaToPreConsume, p.ImageRatio, p.AudioRatio, p.AudioCompletionRatio)
+	return fmt.Sprintf("ModelPrice: %f, ModelRatio: %f, CompletionRatio: %f, CacheRatio: %f, GroupRatio: %f, UsePrice: %t, CacheCreationRatio: %f, CacheCreation5mRatio: %f, CacheCreation1hRatio: %f, QuotaToPreConsume: %d, ImageRatio: %f, AudioRatio: %f, AudioCompletionRatio: %f, ContextTierThreshold: %d", p.ModelPrice, p.ModelRatio, p.CompletionRatio, p.CacheRatio, p.GroupRatioInfo.GroupRatio, p.UsePrice, p.CacheCreationRatio, p.CacheCreation5mRatio, p.CacheCreation1hRatio, p.QuotaToPreConsume, p.ImageRatio, p.AudioRatio, p.AudioCompletionRatio, p.ContextTierThreshold)
 }
