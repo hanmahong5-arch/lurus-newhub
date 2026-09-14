@@ -77,13 +77,20 @@ by this lane, which only ships the route+handler code):
 3. Seed a UAT channel via the admin API (same recipe as the other UAT
    channels — admin API, not raw SQL):
    - `type`: `ChannelTypeSunoAPI` (36) — the vendor the simulator imitates.
-   - `base_url`: `http://127.0.0.1:3000/api/v2/faultsim` (loopback only —
-     `netpol-egress.yaml` excludes RFC1918, so a real pod-to-pod address
-     would be unreachable; loopback is exempt and UAT runs 1 replica, so the
-     request lands back in the same process).
+   - `base_url`: `https://test-newhub.lurus.cn/api/v2/faultsim`. A loopback
+     address does NOT work even though the pod could reach it: the channel
+     validator refuses a private base URL outright (measured 2026-09-15 —
+     "channel base_url rejected: private IP address not allowed: 127.0.0.1",
+     the SSRF guard from cycle 6). The public host name goes out to the host
+     nginx and comes back to the same pod's NodePort, which is allowed by
+     `netpol-egress.yaml` (public 443) and lands in the same process because
+     UAT runs one replica.
    - `key`: the `FAULTSIM_TOKEN` value from step 1 (the simulator accepts a
      bearer key the same way a real channel would send one).
    - `models`: any model name you'll pass as `"model"` in the submit body.
+     Give it a price too (`POST /api/v2/<slug>/pricing` with an
+     `If-Match-Pricing-Version` header): an unpriced model is rejected by the
+     pre-consume price lookup before the relay reaches the simulator at all.
 4. Round trip:
    - `POST https://test-newhub.lurus.cn/v1/tasks/suno` with
      `{"model":"<seeded model>","action":"MUSIC"}` and the caller's own
