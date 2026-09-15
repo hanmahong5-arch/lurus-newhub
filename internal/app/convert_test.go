@@ -2,6 +2,8 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
@@ -280,5 +282,211 @@ func TestToJSONString_RoundTrip(t *testing.T) {
 	}
 	if decoded["bool"] != original["bool"] {
 		t.Errorf("bool mismatch: got %v, want %v", decoded["bool"], original["bool"])
+	}
+}
+
+// --- conversion_dropped diagnostics (cycle 9, L5) ---
+//
+// nonOpenRouterInfo (convert_claude_to_openai_test.go) and geminiInfo
+// (convert_gemini_to_openai_test.go) are reused here; same package, no
+// exports needed.
+
+func TestClaudeToOpenAI_ReportsDroppedFields(t *testing.T) {
+	temp := 0.7
+	req := dto.ClaudeRequest{
+		Model:       "claude-3-5-sonnet",
+		MaxTokens:   100,
+		Temperature: &temp,
+		TopP:        0.9,
+		TopK:        40,
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "hello"},
+		},
+		StopSequences:     []string{"STOP"},
+		ToolChoice:        map[string]interface{}{"type": "auto"},
+		ContextManagement: json.RawMessage(`{"edits":[]}`),
+		OutputConfig:      json.RawMessage(`{"x":1}`),
+		OutputFormat:      json.RawMessage(`{"type":"text"}`),
+		Container:         json.RawMessage(`{"id":"c1"}`),
+		McpServers:        json.RawMessage(`[{"name":"s1"}]`),
+		Metadata:          json.RawMessage(`{"user_id":"u1"}`),
+		ServiceTier:       "priority",
+		MaxTokensToSample: 200,
+		Prompt:            "legacy prompt",
+	}
+
+	info := nonOpenRouterInfo()
+	if _, err := ClaudeToOpenAIRequest(req, info); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Exact set: every field above that ClaudeToOpenAIRequest does not map,
+	// sorted — neither a missing name nor an invented one.
+	want := []string{
+		"container", "context_management", "max_tokens_to_sample",
+		"mcp_servers", "metadata", "output_config", "output_format",
+		"prompt", "service_tier", "tool_choice", "top_k",
+	}
+	if !reflect.DeepEqual(info.ConversionDropped, want) {
+		t.Errorf("ConversionDropped = %v, want %v", info.ConversionDropped, want)
+	}
+}
+
+func TestClaudeToOpenAI_MappedFieldsNotReportedAsDropped(t *testing.T) {
+	temp := 0.7
+	req := dto.ClaudeRequest{
+		Model:         "claude-3-5-sonnet",
+		MaxTokens:     100,
+		Temperature:   &temp,
+		TopP:          0.9,
+		Stream:        true,
+		StopSequences: []string{"STOP"},
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}
+
+	info := nonOpenRouterInfo()
+	if _, err := ClaudeToOpenAIRequest(req, info); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.ConversionDropped != nil {
+		t.Errorf("ConversionDropped = %v, want nil (this request set only fields the converter maps)", info.ConversionDropped)
+	}
+}
+
+func TestGeminiToOpenAI_ReportsDroppedFields(t *testing.T) {
+	thinkingBudget := 100
+	presence := float32(0.5)
+	frequency := float32(0.25)
+	logprobs := int32(3)
+
+	req := &dto.GeminiChatRequest{
+		Contents: []dto.GeminiChatContent{
+			{Role: "user", Parts: []dto.GeminiPart{{Text: "hello"}}},
+		},
+		SafetySettings: []dto.GeminiChatSafetySettings{
+			{Category: "HARM_CATEGORY_HARASSMENT", Threshold: "BLOCK_NONE"},
+		},
+		ToolConfig:    &dto.ToolConfig{FunctionCallingConfig: &dto.FunctionCallingConfig{Mode: "AUTO"}},
+		CachedContent: "cachedContents/abc123",
+		GenerationConfig: dto.GeminiChatGenerationConfig{
+			ResponseMimeType:   "application/json",
+			ResponseSchema:     map[string]interface{}{"type": "object"},
+			ResponseJsonSchema: json.RawMessage(`{"type":"object"}`),
+			PresencePenalty:    &presence,
+			FrequencyPenalty:   &frequency,
+			ResponseLogprobs:   true,
+			Logprobs:           &logprobs,
+			MediaResolution:    "MEDIA_RESOLUTION_HIGH",
+			Seed:               42,
+			ResponseModalities: []string{"TEXT"},
+			ThinkingConfig:     &dto.GeminiThinkingConfig{ThinkingBudget: &thinkingBudget},
+			SpeechConfig:       json.RawMessage(`{"voice":"x"}`),
+			ImageConfig:        json.RawMessage(`{"aspectRatio":"1:1"}`),
+		},
+	}
+
+	info := geminiInfo()
+	if _, err := GeminiToOpenAIRequest(req, info); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []string{
+		"cachedContent", "frequencyPenalty", "imageConfig", "logprobs",
+		"mediaResolution", "presencePenalty", "responseJsonSchema",
+		"responseLogprobs", "responseMimeType", "responseModalities",
+		"responseSchema", "safetySettings", "seed", "speechConfig",
+		"thinkingConfig", "toolConfig",
+	}
+	if !reflect.DeepEqual(info.ConversionDropped, want) {
+		t.Errorf("ConversionDropped = %v, want %v", info.ConversionDropped, want)
+	}
+}
+
+func TestGeminiToOpenAI_MappedFieldsNotReportedAsDropped(t *testing.T) {
+	temp := 0.5
+	req := &dto.GeminiChatRequest{
+		Contents: []dto.GeminiChatContent{
+			{Role: "user", Parts: []dto.GeminiPart{{Text: "hello"}}},
+		},
+		GenerationConfig: dto.GeminiChatGenerationConfig{
+			Temperature:     &temp,
+			TopP:            0.9,
+			TopK:            40,
+			MaxOutputTokens: 100,
+			StopSequences:   []string{"STOP"},
+			CandidateCount:  1,
+		},
+	}
+
+	info := geminiInfo()
+	if _, err := GeminiToOpenAIRequest(req, info); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.ConversionDropped != nil {
+		t.Errorf("ConversionDropped = %v, want nil (this request set only fields the converter maps)", info.ConversionDropped)
+	}
+}
+
+func TestConversionDiagnostics_EmptyWhenNothingDropped(t *testing.T) {
+	claudeInfo := nonOpenRouterInfo()
+	claudeReq := dto.ClaudeRequest{
+		Model:     "claude-3-5-sonnet",
+		MaxTokens: 100,
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "hi"},
+		},
+	}
+	if _, err := ClaudeToOpenAIRequest(claudeReq, claudeInfo); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if claudeInfo.ConversionDropped != nil {
+		t.Errorf("Claude: ConversionDropped = %v, want nil for a minimal request", claudeInfo.ConversionDropped)
+	}
+
+	gInfo := geminiInfo()
+	gReq := &dto.GeminiChatRequest{
+		Contents: []dto.GeminiChatContent{
+			{Role: "user", Parts: []dto.GeminiPart{{Text: "hi"}}},
+		},
+	}
+	if _, err := GeminiToOpenAIRequest(gReq, gInfo); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gInfo.ConversionDropped != nil {
+		t.Errorf("Gemini: ConversionDropped = %v, want nil for a minimal request", gInfo.ConversionDropped)
+	}
+}
+
+func TestConversionDiagnostics_Bounded(t *testing.T) {
+	names := make([]string, 0, 100)
+	for i := 0; i < 100; i++ {
+		names = append(names, fmt.Sprintf("field_%03d", i))
+	}
+
+	got := boundDroppedFields(names)
+
+	if len(got) != conversionDroppedMax {
+		t.Fatalf("len(got) = %d, want %d (the bound)", len(got), conversionDroppedMax)
+	}
+	if got[len(got)-1] != conversionDroppedTruncated {
+		t.Errorf("last element = %q, want the truncation marker %q", got[len(got)-1], conversionDroppedTruncated)
+	}
+	// The kept names must be the lexicographically-first 15, not an arbitrary
+	// subset — field_000..field_014 sort before field_015 and beyond.
+	for i := 0; i < conversionDroppedMax-1; i++ {
+		want := fmt.Sprintf("field_%03d", i)
+		if got[i] != want {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want)
+		}
+	}
+}
+
+func TestConversionDiagnostics_BoundedDeduplicatesAndSorts(t *testing.T) {
+	got := boundDroppedFields([]string{"top_k", "tool_choice", "top_k", "container"})
+	want := []string{"container", "tool_choice", "top_k"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("boundDroppedFields = %v, want %v", got, want)
 	}
 }

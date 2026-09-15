@@ -351,3 +351,91 @@ func TestResetRankingsCacheForTest_ClearsEntries(t *testing.T) {
 		t.Fatal("resetRankingsCacheForTest must clear every entry, found a leftover probe key")
 	}
 }
+
+// TestParseRankingsParams_AcceptsGroup: `by=group` is a valid dimension
+// alongside model/vendor (cycle-9 plan L7) — the logs table's `group`
+// column is populated and indexed; this was previously rejected with
+// "by must be model or vendor".
+func TestParseRankingsParams_AcceptsGroup(t *testing.T) {
+	c := newRankingsParamsContext("by=group")
+	by, _, errMsg := parseRankingsParams(c)
+	if errMsg != "" {
+		t.Fatalf("by=group: unexpected errMsg %q", errMsg)
+	}
+	if by != "group" {
+		t.Errorf("by = %q, want group", by)
+	}
+}
+
+// TestTenantRankingsV2_ByGroup_ScopedToOwnTenant drives the REAL tenant
+// rankings handler (through the router set up by setupTenantRankingsRouter,
+// same mockAuth-populated tenant_context every request through this route
+// carries in production) with by=group and asserts the response never
+// includes another tenant's group, mirroring
+// TestTenantRankingsV2_AdminSeesOwnTenantOnly for the new dimension.
+func TestTenantRankingsV2_ByGroup_ScopedToOwnTenant(t *testing.T) {
+	ctx := setupTenantRankingsRouter(t)
+	defer ctx.cleanup()
+
+	now := time.Now().Unix()
+	seedTenantRankingsGroupLog(t, ctx.db, ctx.tenantID, "premium", 100, 50, 30, now-60)
+	seedTenantRankingsGroupLog(t, ctx.db, "other-tenant", "premium", 100_000, 50_000, 30_000, now-60)
+
+	w := doGETWithHeaders(ctx.router, "/api/v2/acme/analytics/rankings?by=group&hours=1",
+		map[string]string{"X-Test-Role": "admin"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+	body := parseJSON(t, w)
+	data := body["data"].(map[string]interface{})
+	if got := data["by"]; got != "group" {
+		t.Errorf("data.by = %v, want group", got)
+	}
+	rows, ok := data["rows"].([]interface{})
+	if !ok {
+		t.Fatalf("missing rows array: %s", w.Body.String())
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row scoped to the caller's own tenant, got %d: %v", len(rows), rows)
+	}
+	row := rows[0].(map[string]interface{})
+	if row["name"] != "premium" {
+		t.Errorf("name = %v, want premium", row["name"])
+	}
+	if got := row["total_tokens"].(float64); got != 150 {
+		t.Errorf("total_tokens = %v, want 150 (other tenant's 150000 leaked in)", got)
+	}
+}
+
+// seedTenantRankingsGroupLog is seedTenantRankingsLog's sibling that also
+// sets the `group` field, for the by=group dimension tests.
+func seedTenantRankingsGroupLog(t *testing.T, db *gorm.DB, tenantID, group string, prompt, completion, quota int, createdAt int64) {
+	t.Helper()
+	l := &entity.Log{
+		UserId:           1,
+		TenantId:         tenantID,
+		Type:             entity.LogTypeConsume,
+		ModelName:        "irrelevant-model",
+		Group:            group,
+		Quota:            quota,
+		PromptTokens:     prompt,
+		CompletionTokens: completion,
+		CreatedAt:        createdAt,
+	}
+	if err := db.Create(l).Error; err != nil {
+		t.Fatalf("seed tenant rankings group log: %v", err)
+	}
+}
+
+// TestRankingsV2_UnknownByStillRejected_AfterGroupAdded: adding `group` as
+// a third accepted dimension must not widen the validator into accepting
+// anything — `by=whatever` still 400s.
+func TestRankingsV2_UnknownByStillRejected_AfterGroupAdded(t *testing.T) {
+	ctx := setupAnalyticsRouter(t)
+	defer ctx.cleanup()
+
+	w := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by=whatever")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("by=whatever: want 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}

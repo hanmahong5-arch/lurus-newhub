@@ -335,3 +335,39 @@ JWT 分支响应行为一致(仅服务端 SysError 日志前缀不同,见上"仅
 不受这次改动影响;上面写的"HTTP 200→403 形状变化"只发生在
 **session-认证的非 root 管理员**这一类调用方身上,`2c-gui-switch` 用的是 Bearer 头,不落在这
 个变化范围内。
+
+### J. 转换保真诊断 (`other.conversion_dropped`,cycle-9 L5)
+
+Claude-wire (`/v1/messages`) 与 Gemini-wire (`/v1beta/...`) 两条跨协议转换路径
+(`internal/app/convert.go` 的 `ClaudeToOpenAIRequest` / `GeminiToOpenAIRequest`)只把一部分请求
+字段映射到上游 OpenAI 格式请求,调用方设置了但转换器不认识的字段(如 Claude-wire 的 `top_k` /
+`tool_choice`,Gemini-wire 的 `toolConfig` / `thinkingConfig` 等)此前被静默丢弃,调用方无法从产品
+里得知。成功行的日志 `other` 现在带一个新键:
+
+| 字段 | 类型 | 语义 |
+|------|------|------|
+| `other.conversion_dropped` | `string[]`,可选 | 本次请求里调用方**自己设置过**但转换器未能映射到上游请求的字段名,按上游 wire 的原始命名(Claude-wire 用 `top_k`/`tool_choice` 这类 snake_case;Gemini-wire 用 `toolConfig`/`thinkingConfig` 这类 camelCase),排序去重,**只列真正被丢弃的字段**——请求没有触发任何丢弃时该键完全不出现(不是空数组)。上限 16 个名字,超出时保留前 15 个并追加一个显式截断标记作为第 16 个元素;单个名字超过 32 字节会被截断。TierPublic(`internal/app/governance/classification.go`),普通用户可见,`GET /api/v2/{tenant}/logs`(普通用户自查)与管理端的 `GET /api/v2/{tenant}/logs/all` 均不剥离这个键 |
+
+**范围边界,明确写出以免被当成疏漏**:只有成功结算的请求会带这个键——它在
+`app.GenerateTextOtherInfo`(即 `compatible_handler.go:490` 调 `PostConsumeQuota` 之后走的那条
+success-path 日志生成函数,Claude/audio/wss 三个变体生成器都会经过它)里投影。`internal/adapter/
+handler/relay.go` 的终态错误日志路径是另一套独立拼装 `other` 的代码,**不读取**这个字段——一次
+失败的请求(包括触发这段转换代码之后才失败的请求)不会有 `conversion_dropped`。这不是本 cycle
+计划做但没做完,是 L5 明确排除在范围外的部分。
+
+**目前没有兄弟产品接入这个字段**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均无
+`conversion_dropped` 命中)。
+
+### K. Rankings 新增 `by=group` 维度(cycle-9 L7)
+
+`/api/v2/{tenant}/analytics/rankings` 与根管理员端点 `/api/v2/admin/analytics/rankings` 的 `by`
+查询参数在既有 `model`/`vendor` 之外新接受第三个取值 `group`——按 `logs` 表已有、已建索引的
+`group` 列(渠道分组,`internal/domain/entity/log.go` 的 `Group` 字段)聚合,响应形状与
+`by=model`/`by=vendor` 完全一致(`rank`/`rank_delta`/`is_new`/`requests`/`requests_growth_pct`/
+`total_tokens`/`token_share_pct`/`quota`/`quota_share_pct`)。空字符串 `group` 的行会被合并成一个
+显式的 `(ungrouped)` 分组,不会以空名称单独出现,也不会被丢弃。未知 `by` 取值(既非
+`model`/`vendor` 也非 `group`)仍然 400。这是纯增量:不改变 `by=model`/`by=vendor` 的既有行为、
+不改变响应形状、不影响租户范围(`by=group` 同样只返回调用方自己租户内的分组)。
+
+**目前没有兄弟产品接入 `by=group`**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均未见对
+`analytics/rankings` 端点的调用)。

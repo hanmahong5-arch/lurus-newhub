@@ -72,6 +72,12 @@ var FieldClassification = map[string]DataTier{
 	// exact use case (correlate their own log by request_id) L2 ships.
 	"request_id": TierPublic,
 	"session_id": TierPublic,
+	// conversion_dropped names the caller's OWN request fields
+	// (internal/app/convert.go ClaudeToOpenAIRequest / GeminiToOpenAIRequest)
+	// that a cross-wire conversion could not map onto the upstream request —
+	// the caller set the field, so telling them it was ignored is the point,
+	// not a secret about our pricing or routing.
+	"conversion_dropped": TierPublic,
 
 	// Internal — admin only
 	"channel_id":     TierInternal,

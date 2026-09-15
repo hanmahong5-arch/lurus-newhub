@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
@@ -11,6 +12,169 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 )
+
+// --- Conversion-fidelity diagnostics (cycle 9, L5) ---
+//
+// ClaudeToOpenAIRequest and GeminiToOpenAIRequest each map a fixed subset of
+// the caller's wire request onto dto.GeneralOpenAIRequest; every other field
+// the caller actually set is silently discarded before the request reaches
+// the vendor. The helpers below compute, for each converter, exactly which
+// of the fields the CALLER set were dropped — never a static list of every
+// field the converter doesn't map, since an always-present list would be
+// noise on every request that used none of them.
+
+const (
+	// conversionDroppedMax bounds conversion_dropped so a request that sets
+	// many unmapped fields cannot grow the log row without limit.
+	conversionDroppedMax = 16
+	// conversionDroppedNameMax bounds a single field name. None of the wire
+	// names emitted below come close to this today; the cap exists so this
+	// function can never be the reason a log row grows unbounded.
+	conversionDroppedNameMax = 32
+	// conversionDroppedTruncated marks that the list was cut at
+	// conversionDroppedMax, so a name past the cap is never misread as "not
+	// dropped".
+	conversionDroppedTruncated = "…(truncated)"
+)
+
+// boundDroppedFields sorts, de-duplicates and caps a raw list of dropped wire
+// field names to the conversion_dropped contract. Shared by both converters
+// so the two wires cannot drift onto different shapes.
+func boundDroppedFields(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(names))
+	uniq := make([]string, 0, len(names))
+	for _, n := range names {
+		if n == "" {
+			continue
+		}
+		if len(n) > conversionDroppedNameMax {
+			n = n[:conversionDroppedNameMax]
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		uniq = append(uniq, n)
+	}
+	if len(uniq) == 0 {
+		return nil
+	}
+	sort.Strings(uniq)
+	if len(uniq) > conversionDroppedMax {
+		uniq = uniq[:conversionDroppedMax-1]
+		uniq = append(uniq, conversionDroppedTruncated)
+	}
+	return uniq
+}
+
+// claudeDroppedFields returns the caller-supplied dto.ClaudeRequest field
+// names ClaudeToOpenAIRequest does not map onto dto.GeneralOpenAIRequest.
+// Each check fires only when the caller actually set the field.
+func claudeDroppedFields(r dto.ClaudeRequest) []string {
+	var dropped []string
+	if r.TopK != 0 {
+		dropped = append(dropped, "top_k")
+	}
+	if r.ToolChoice != nil {
+		dropped = append(dropped, "tool_choice")
+	}
+	if len(r.ContextManagement) > 0 {
+		dropped = append(dropped, "context_management")
+	}
+	if len(r.OutputConfig) > 0 {
+		dropped = append(dropped, "output_config")
+	}
+	if len(r.OutputFormat) > 0 {
+		dropped = append(dropped, "output_format")
+	}
+	if len(r.Container) > 0 {
+		dropped = append(dropped, "container")
+	}
+	if len(r.McpServers) > 0 {
+		dropped = append(dropped, "mcp_servers")
+	}
+	if len(r.Metadata) > 0 {
+		dropped = append(dropped, "metadata")
+	}
+	if r.ServiceTier != "" {
+		dropped = append(dropped, "service_tier")
+	}
+	// MaxTokensToSample is the legacy v1/complete alias for max_tokens;
+	// ClaudeToOpenAIRequest only ever reads MaxTokens (see the top of this
+	// function), so a caller who set only the legacy field gets no max_tokens
+	// on the upstream request at all.
+	if r.MaxTokensToSample != 0 {
+		dropped = append(dropped, "max_tokens_to_sample")
+	}
+	if r.Prompt != "" {
+		dropped = append(dropped, "prompt")
+	}
+	return boundDroppedFields(dropped)
+}
+
+// geminiDroppedFields returns the caller-supplied dto.GeminiChatRequest field
+// names GeminiToOpenAIRequest does not map onto dto.GeneralOpenAIRequest.
+// Each check fires only when the caller actually set the field. Wire names
+// match the Gemini JSON body the caller sent (camelCase), not the Go field.
+func geminiDroppedFields(r *dto.GeminiChatRequest) []string {
+	if r == nil {
+		return nil
+	}
+	var dropped []string
+	if len(r.SafetySettings) > 0 {
+		dropped = append(dropped, "safetySettings")
+	}
+	if r.ToolConfig != nil {
+		dropped = append(dropped, "toolConfig")
+	}
+	if r.CachedContent != "" {
+		dropped = append(dropped, "cachedContent")
+	}
+	gc := r.GenerationConfig
+	if gc.ResponseMimeType != "" {
+		dropped = append(dropped, "responseMimeType")
+	}
+	if gc.ResponseSchema != nil {
+		dropped = append(dropped, "responseSchema")
+	}
+	if len(gc.ResponseJsonSchema) > 0 {
+		dropped = append(dropped, "responseJsonSchema")
+	}
+	if gc.PresencePenalty != nil {
+		dropped = append(dropped, "presencePenalty")
+	}
+	if gc.FrequencyPenalty != nil {
+		dropped = append(dropped, "frequencyPenalty")
+	}
+	if gc.ResponseLogprobs {
+		dropped = append(dropped, "responseLogprobs")
+	}
+	if gc.Logprobs != nil {
+		dropped = append(dropped, "logprobs")
+	}
+	if gc.MediaResolution != "" {
+		dropped = append(dropped, "mediaResolution")
+	}
+	if gc.Seed != 0 {
+		dropped = append(dropped, "seed")
+	}
+	if len(gc.ResponseModalities) > 0 {
+		dropped = append(dropped, "responseModalities")
+	}
+	if gc.ThinkingConfig != nil {
+		dropped = append(dropped, "thinkingConfig")
+	}
+	if len(gc.SpeechConfig) > 0 {
+		dropped = append(dropped, "speechConfig")
+	}
+	if len(gc.ImageConfig) > 0 {
+		dropped = append(dropped, "imageConfig")
+	}
+	return boundDroppedFields(dropped)
+}
 
 func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error) {
 	openAIRequest := dto.GeneralOpenAIRequest{
@@ -197,6 +361,8 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 	}
 
 	openAIRequest.Messages = openAIMessages
+
+	info.ConversionDropped = claudeDroppedFields(claudeRequest)
 
 	return &openAIRequest, nil
 }
@@ -753,6 +919,8 @@ func GeminiToOpenAIRequest(geminiRequest *dto.GeminiChatRequest, info *relaycomm
 		}
 		openaiRequest.Messages = append([]dto.Message{systemMessage}, openaiRequest.Messages...)
 	}
+
+	info.ConversionDropped = geminiDroppedFields(geminiRequest)
 
 	return openaiRequest, nil
 }

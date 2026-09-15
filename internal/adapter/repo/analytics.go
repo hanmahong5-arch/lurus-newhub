@@ -217,6 +217,38 @@ func getVendorUsageTotals(startTime, endTime int64, tenantID string) ([]RankingU
 	return rows, nil
 }
 
+// rankingsGroupExpr is the by="group" aggregation key: `group` is a SQL
+// reserved word, so the identifier is double-quoted (Postgres rejects an
+// unquoted `GROUP BY group`; SQLite's more permissive parser accepts it
+// either way, which is why this must be verified against the real Postgres
+// dialector — see log_rankings_test.go's
+// TestRankings_ByGroup_QuotesTheReservedIdentifier, not the hermetic
+// SQLite tier). Rows with an empty group fold into one explicit
+// "(ungrouped)" bucket rather than appearing as a blank-named row.
+const rankingsGroupExpr = `COALESCE(NULLIF("group", ''), '(ungrouped)')`
+
+// getGroupUsageTotals is GetModelUsageTotals' group-column-keyed sibling.
+// Unexported: GetRankings is its only caller today, mirroring
+// getVendorUsageTotals.
+func getGroupUsageTotals(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
+	base := LOG_DB.Model(&entity.Log{}).
+		Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
+		Where("created_at >= ? AND created_at <= ?", startTime, endTime)
+	if tenantID != "" {
+		base = base.Where("tenant_id = ?", tenantID)
+	}
+	var rows []RankingUsageTotal
+	err := base.
+		Select(rankingsGroupExpr + ` AS name,
+			COUNT(*) AS requests,
+			COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+			COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+			COALESCE(SUM(quota), 0) AS quota`).
+		Group(rankingsGroupExpr).
+		Find(&rows).Error
+	return rows, err
+}
+
 // RankingRow is one leaderboard entry returned by GetRankings: the current
 // window's usage plus its rank/trend/share against the immediately
 // preceding window of equal length.
@@ -242,7 +274,8 @@ const rankingsMaxRows = 20
 // preceding window of equal length, then returns the top `limit` groups by
 // current-window tokens with rank/rank_delta/share/growth attached.
 //
-// by == "vendor" groups by channel_type; anything else groups by
+// by == "vendor" groups by channel_type; by == "group" groups by the logs
+// table's `group` column (see rankingsGroupExpr); anything else groups by
 // model_name. rank_delta is (previous rank - current rank): positive means
 // the group moved up the leaderboard. A group absent from the previous
 // window gets rank_delta=0, is_new=true, and a nil requests_growth_pct (no
@@ -261,8 +294,11 @@ func GetRankings(startTime, endTime int64, tenantID, by string, limit int) (rows
 	prevStart := prevEnd - length
 
 	fetch := GetModelUsageTotals
-	if by == "vendor" {
+	switch by {
+	case "vendor":
 		fetch = getVendorUsageTotals
+	case "group":
+		fetch = getGroupUsageTotals
 	}
 
 	current, err := fetch(startTime, endTime, tenantID)

@@ -105,6 +105,13 @@ var wantUserVisible = map[string]string{
 	// GET /v1/generation lookup this lane ships without hiding anything.
 	"request_id": "the id they sent us or we already echoed back on the response headers",
 	"session_id": "the conversation id they sent us on X-Session-Id",
+
+	// L5-CONVERSION-FIDELITY: names of fields the caller sent that a
+	// cross-wire converter (ClaudeToOpenAIRequest / GeminiToOpenAIRequest)
+	// could not map onto the upstream request. TierPublic in
+	// governance/classification.go — it is a report on their own request, not
+	// our economics.
+	"conversion_dropped": "field names on their own request that never reached the vendor",
 }
 
 // wantInternal: keys that must never reach a non-admin. Predominantly our

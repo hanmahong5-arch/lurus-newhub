@@ -11,6 +11,9 @@ alert / signal comes from), **Triggered by** (the literal condition),
 |---|---|---|
 | [pool-threshold-alert](pool-threshold-alert.md) | `CreditPoolBalanceLow` / `CreditPoolExhausted` rules in `deploy/k8s/r6-stage/newhub-prometheus-rule.yaml` — **NOT DEPLOYED**, nothing evaluates them; today the trigger is a human reading `credit_pool_balance` on the host netdata | warning / page (intended) |
 | [wallet-revert-stranded](wallet-revert-stranded.md) | log line `STRANDED wallet debit` from `tenant_credit_pool.go` | page |
+| [upstream-5xx-burst](upstream-5xx-burst.md) | netdata `newhub_upstream_5xx_burst` (`deploy/r6-host-netdata/health.d/newhub.conf`, **installed**) — `relay_errors_total{error_type="upstream_5xx"}` | warning / critical |
+| [rate-limit-degraded](rate-limit-degraded.md) | netdata `newhub_rate_limit_degraded` (`deploy/r6-host-netdata/health.d/newhub.conf`, **installed**) — `rate_limit_degraded_total` | warning / critical |
+| [failover-suppressed-surge](failover-suppressed-surge.md) | netdata `newhub_failover_suppressed_surge` (`deploy/r6-host-netdata/health.d/newhub.conf`, **installed**) — `relay_failover_suppressed_total` | warning / critical |
 
 | [release-download-gate](release-download-gate.md) | `RELEASE_GATED_PRODUCTS` entitlement gate (mechanism shipped, default OFF) | activation |
 

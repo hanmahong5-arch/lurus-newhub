@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
-import { API, showError, isAdmin } from '../../../helpers';
+import { API, showError, showSuccess, isAdmin } from '../../../helpers';
 import { formatUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
@@ -162,6 +162,14 @@ const fmtCost = (quota) => formatUSD(quota);
 
 const PAGE_SIZE = 50;
 
+// request_id/upstream_request_id filter the `other` JSON column via an
+// unindexed extract (internal/adapter/repo/log.go, jsonOtherTextExpr) — a
+// plain index on `logs` is off the table this cycle (a CREATE INDEX would
+// hold ShareLock against the relay's own log writes; see runner.go). So an
+// id search always rides with a bounded start_time, falling back to this
+// lookback window when the caller left the date pickers empty.
+const ID_FILTER_LOOKBACK_SEC = 7 * 24 * 3600; // 7 days
+
 // Live-tail tuning. 3s poll matches the plan; the buffer is bounded so a
 // long-running tail can't grow memory without limit (drop oldest at the cap).
 const LIVE_POLL_MS = 3000;
@@ -213,6 +221,12 @@ const HFLog = () => {
   );
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
+  // L6: request_id/session_id are TierPublic (v2_log.go binds them on every
+  // caller's own route); upstream_request_id is TierInternal and only bound
+  // on the tenant-admin route, so its input renders admin-only below,
+  // mirroring the backend gate.
+  const [filterRequestId, setFilterRequestId] = useState('');
+  const [filterUpstreamRequestId, setFilterUpstreamRequestId] = useState('');
   // errors-only maps to the API's type filter (5 = error rows).
   const [errorsOnly, setErrorsOnly] = useState(
     () =>
@@ -225,7 +239,18 @@ const HFLog = () => {
   const [tenantWide, setTenantWide] = useState(false);
 
   const fetchLogs = useCallback(
-    async (currentPage, model, token, start, end, errOnly, wide, product) => {
+    async (
+      currentPage,
+      model,
+      token,
+      start,
+      end,
+      errOnly,
+      wide,
+      product,
+      requestId,
+      upstreamRequestId,
+    ) => {
       setLoading(true);
       try {
         const params = new URLSearchParams({
@@ -236,11 +261,20 @@ const HFLog = () => {
         if (token) params.set('token_name', token);
         if (product) params.set('source_product', product);
         if (errOnly) params.set('type', String(LOG_TYPE_ERROR));
-        if (start)
+        if (requestId) params.set('request_id', requestId);
+        if (upstreamRequestId)
+          params.set('upstream_request_id', upstreamRequestId);
+        if (start) {
           params.set(
             'start_time',
             String(Math.floor(new Date(start).getTime() / 1000)),
           );
+        } else if (requestId || upstreamRequestId) {
+          params.set(
+            'start_time',
+            String(Math.floor(Date.now() / 1000) - ID_FILTER_LOOKBACK_SEC),
+          );
+        }
         if (end)
           params.set(
             'end_time',
@@ -316,6 +350,8 @@ const HFLog = () => {
         errorsOnly,
         tenantWide,
         filterProduct,
+        filterRequestId,
+        filterUpstreamRequestId,
       );
       fetchStat(
         filterModel,
@@ -437,6 +473,8 @@ const HFLog = () => {
       errorsOnly,
       tenantWide,
       filterProduct,
+      filterRequestId,
+      filterUpstreamRequestId,
     );
     fetchStat(
       filterModel,
@@ -460,6 +498,8 @@ const HFLog = () => {
       errorsOnly,
       tenantWide,
       filterProduct,
+      filterRequestId,
+      filterUpstreamRequestId,
     );
   };
 
@@ -476,6 +516,8 @@ const HFLog = () => {
       next,
       tenantWide,
       filterProduct,
+      filterRequestId,
+      filterUpstreamRequestId,
     );
     fetchStat(
       filterModel,
@@ -501,6 +543,8 @@ const HFLog = () => {
       errorsOnly,
       next,
       filterProduct,
+      filterRequestId,
+      filterUpstreamRequestId,
     );
     // Stat header follows the scope: /logs/stat/all summarises the same rows
     // /logs/all lists.
@@ -517,6 +561,17 @@ const HFLog = () => {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const selectedLog = logs[selRow];
+
+  // Copy-to-clipboard affordance for the detail-panel id rows below. Mirrors
+  // the local `copy` used by the Token page (web/src/pages/v2/Token/index.jsx).
+  const copyId = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showSuccess(tr('console.common.copied', 'copied'));
+    } catch (_) {
+      showError(tr('console.common.copy_failed', 'copy failed'));
+    }
+  };
 
   const inputStyle = {
     fontFamily: 'var(--hf-mono)',
@@ -606,6 +661,27 @@ const HFLog = () => {
           value={filterEnd}
           onChange={(e) => setFilterEnd(e.target.value)}
         />
+        <input
+          style={{ ...inputStyle, width: 150 }}
+          data-testid='log-request-id-filter'
+          placeholder={tr('console.log.ph_request_id', 'request id…')}
+          value={filterRequestId}
+          onChange={(e) => setFilterRequestId(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
+        />
+        {isAdmin() && (
+          <input
+            style={{ ...inputStyle, width: 160 }}
+            data-testid='log-upstream-request-id-filter'
+            placeholder={tr(
+              'console.log.ph_upstream_request_id',
+              'upstream request id…',
+            )}
+            value={filterUpstreamRequestId}
+            onChange={(e) => setFilterUpstreamRequestId(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
+          />
+        )}
         <button type='button' className='btn primary' onClick={applyFilters}>
           {tr('console.common.search', 'search')}
         </button>
@@ -636,9 +712,11 @@ const HFLog = () => {
             setFilterProduct('');
             setFilterStart('');
             setFilterEnd('');
+            setFilterRequestId('');
+            setFilterUpstreamRequestId('');
             setErrorsOnly(false);
             setPage(1);
-            fetchLogs(1, '', '', '', '', false, tenantWide, '');
+            fetchLogs(1, '', '', '', '', false, tenantWide, '', '', '');
             fetchStat('', '', '', '', false, tenantWide, '');
           }}
         >
@@ -1120,6 +1198,95 @@ const HFLog = () => {
                                   {Math.round(Number(o.frt))}ms
                                 </div>
                               )}
+                            {/* L6: request_id/session_id are the caller's own
+                                correlation ids (TierPublic — present in this
+                                payload for every caller). upstream_request_id
+                                is the vendor's own trace id (TierInternal); it
+                                only survives here when the API already sent
+                                it (tenant-admin route), so no client-side
+                                admin check is needed to decide whether to
+                                render it. */}
+                            {o.request_id && (
+                              <div
+                                data-testid='log-detail-request-id'
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                }}
+                              >
+                                <span className='muted'>
+                                  {tr(
+                                    'console.log.detail_request_id',
+                                    'request id',
+                                  )}
+                                  :
+                                </span>
+                                <span>{o.request_id}</span>
+                                <button
+                                  type='button'
+                                  className='btn ghost sm'
+                                  data-testid='copy-request-id'
+                                  onClick={() => copyId(o.request_id)}
+                                >
+                                  {tr('console.common.copy', 'copy')}
+                                </button>
+                              </div>
+                            )}
+                            {o.session_id && (
+                              <div
+                                data-testid='log-detail-session-id'
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                }}
+                              >
+                                <span className='muted'>
+                                  {tr(
+                                    'console.log.detail_session_id',
+                                    'session id',
+                                  )}
+                                  :
+                                </span>
+                                <span>{o.session_id}</span>
+                                <button
+                                  type='button'
+                                  className='btn ghost sm'
+                                  data-testid='copy-session-id'
+                                  onClick={() => copyId(o.session_id)}
+                                >
+                                  {tr('console.common.copy', 'copy')}
+                                </button>
+                              </div>
+                            )}
+                            {o.upstream_request_id && (
+                              <div
+                                data-testid='log-detail-upstream-request-id'
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                }}
+                              >
+                                <span className='muted'>
+                                  {tr(
+                                    'console.log.detail_upstream_request_id',
+                                    'upstream request id',
+                                  )}
+                                  :
+                                </span>
+                                <span>{o.upstream_request_id}</span>
+                                <button
+                                  type='button'
+                                  className='btn ghost sm'
+                                  data-testid='copy-upstream-request-id'
+                                  onClick={() => copyId(o.upstream_request_id)}
+                                >
+                                  {tr('console.common.copy', 'copy')}
+                                </button>
+                              </div>
+                            )}
                           </>
                         );
                       })()}

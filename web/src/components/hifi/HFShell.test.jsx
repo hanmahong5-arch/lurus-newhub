@@ -182,6 +182,43 @@ describe('HFShell role-gated nav sections', () => {
     );
   });
 
+  // L8 (cycle 9): the "admin-diagnostics" (Diagnostics) nav entry has the
+  // same per-item minRole:100 override as admin-system-tasks above, inside
+  // the same minRole:10 "operations & insights" section — both backends it
+  // renders (session-affinity purge, TOTP adoption) sit behind RootJWTAuth
+  // server-side.
+  it('hides the root-only "Diagnostics" nav entry from an admin (role 10)', () => {
+    setBridgedUser(10);
+    renderShell();
+
+    // The section itself (minRole:10) is visible — a sibling item proves it.
+    expect(screen.getByText('Gateway health').closest('a')).toBeTruthy();
+    expect(screen.queryByText('Diagnostics')).toBeNull();
+  });
+
+  it('shows the root-only "Diagnostics" nav entry to root (role 100)', () => {
+    setBridgedUser(100);
+    renderShell();
+
+    const link = screen.getByText('Diagnostics').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/v2/admin/diagnostics');
+  });
+
+  it('visibleNavItems hides admin-diagnostics from role 10 and shows it to root', () => {
+    const forAdmin = visibleNavItems({ role: 10 });
+    const opsForAdmin = forAdmin.find((s) => s.h === 'operations & insights');
+    expect(opsForAdmin.items.some((it) => it.id === 'admin-diagnostics')).toBe(
+      false,
+    );
+
+    const forRoot = visibleNavItems({ role: 100 });
+    const opsForRoot = forRoot.find((s) => s.h === 'operations & insights');
+    expect(opsForRoot.items.some((it) => it.id === 'admin-diagnostics')).toBe(
+      true,
+    );
+  });
+
   // A-F7 (cycle-8 L4 repair round): the "admin-authz" (Permission grants)
   // nav entry has the same per-item minRole:100 override as
   // admin-system-tasks above, inside the same minRole:10 "governance"

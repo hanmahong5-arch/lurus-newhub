@@ -713,6 +713,137 @@ describe('Log page', () => {
       expect(screen.queryByTestId(id)).toBeNull();
     }
   });
+
+  // ── request_id / upstream_request_id search (L6) ──────────────────────────
+  //
+  // v2_log.go binds request_id/session_id (public) and, admin-only,
+  // upstream_request_id, and repo/log.go wires them into a JSON-extract
+  // WHERE clause with no supporting index — so the page must never send an
+  // id filter without a bounded time range, and must only render the
+  // upstream-id input for admins, mirroring the backend's own gate.
+
+  it('sends request_id AND a bounded start_time on the query when searching by request id', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    const reqInput = screen.getByPlaceholderText('request id…');
+    fireEvent.change(reqInput, { target: { value: 'req-abc-123' } });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs?'));
+      expect(logsCall).toBeDefined();
+      expect(logsCall).toContain('request_id=req-abc-123');
+      // An id lookup is an unindexed JSON-extract scan — it must never ride
+      // out unbounded, even when the caller never touched the date pickers.
+      expect(logsCall).toMatch(/start_time=\d+/);
+    });
+  });
+
+  it('does not widen an explicit time range when searching by request id', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    fireEvent.change(screen.getByPlaceholderText('request id…'), {
+      target: { value: 'req-explicit' },
+    });
+    fireEvent.change(screen.getByTitle('start time'), {
+      target: { value: '2026-01-01T00:00' },
+    });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs?'));
+      expect(logsCall).toBeDefined();
+      expect(logsCall).toContain(
+        `start_time=${Math.floor(new Date('2026-01-01T00:00').getTime() / 1000)}`,
+      );
+    });
+  });
+
+  it('hides the upstream-request-id filter from non-admin users', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    expect(screen.queryByPlaceholderText('upstream request id…')).toBeNull();
+  });
+
+  it('shows the upstream-request-id filter for admins and sends it bounded', async () => {
+    mockIsAdmin.mockReturnValue(true);
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    const upInput = screen.getByPlaceholderText('upstream request id…');
+    fireEvent.change(upInput, { target: { value: 'vendor-xyz' } });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs'));
+      expect(logsCall).toBeDefined();
+      expect(logsCall).toContain('upstream_request_id=vendor-xyz');
+      expect(logsCall).toMatch(/start_time=\d+/);
+    });
+  });
+
+  it('shows both ids in the detail panel with a copy affordance, for a row that carries them', async () => {
+    const origClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    try {
+      renderWithLog(
+        logWithOther(
+          JSON.stringify({
+            request_id: 'req-detail-1',
+            session_id: 'sess-detail-1',
+            upstream_request_id: 'up-detail-1',
+          }),
+        ),
+      );
+
+      await waitFor(() =>
+        expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
+      );
+
+      expect(screen.getByTestId('log-detail-request-id').textContent).toContain(
+        'req-detail-1',
+      );
+      expect(screen.getByTestId('log-detail-session-id').textContent).toContain(
+        'sess-detail-1',
+      );
+      expect(
+        screen.getByTestId('log-detail-upstream-request-id').textContent,
+      ).toContain('up-detail-1');
+
+      fireEvent.click(screen.getByTestId('copy-request-id'));
+      await waitFor(() =>
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+          'req-detail-1',
+        ),
+      );
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: origClipboard,
+      });
+    }
+  });
+
+  it('renders no id rows in the detail panel when the row carries none', async () => {
+    renderWithLog(logWithOther(JSON.stringify({ frt: 120 })));
+    await waitFor(() =>
+      expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByTestId('log-detail-request-id')).toBeNull();
+    expect(screen.queryByTestId('log-detail-session-id')).toBeNull();
+    expect(screen.queryByTestId('log-detail-upstream-request-id')).toBeNull();
+  });
 });
 
 // ── Cross-product attribution (console-one-surface, 2026-09-07) ────────────

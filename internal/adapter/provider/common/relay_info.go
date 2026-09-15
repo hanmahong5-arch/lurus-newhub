@@ -134,6 +134,18 @@ type RelayInfo struct {
 	// session_id / a future end_user filter) without newhub becoming a store
 	// of the caller's own customers' PII.
 	EndUserHash string
+	// ConversionDropped names the caller-supplied request fields that
+	// ClaudeToOpenAIRequest / GeminiToOpenAIRequest (internal/app/convert.go)
+	// could not map onto the upstream OpenAI-wire request and therefore never
+	// reached the vendor — e.g. a Claude-wire caller who set top_k. Set only
+	// when the converter actually dropped something the caller sent (nil
+	// otherwise), sorted, de-duplicated and capped at 16 names by
+	// boundDroppedFields. Carried here for the same reason SessionId/
+	// EndUserHash are: app.GenerateTextOtherInfo reads it off RelayInfo to
+	// project conversion_dropped into the success-path log row; the
+	// terminal-error path (adapter/handler/relay.go) builds its own Other map
+	// and does not read this field, so a failed request never carries it.
+	ConversionDropped []string
 	// UpstreamRequestId is the vendor's own request/trace id, captured from
 	// the upstream HTTP response headers in provider.doRequest — the seam
 	// DoApiRequest/DoFormRequest/DoTaskApiRequest funnel through for the main

@@ -257,4 +257,55 @@ describe('Rankings page', () => {
       expect(screen.queryByText('—')).toBeNull();
     });
   });
+
+  // Cycle-9 plan L7: `by=group` is a third accepted dimension alongside
+  // model/vendor — the backend now groups on the logs table's populated
+  // `group` column (internal/adapter/repo/analytics.go's
+  // getGroupUsageTotals).
+  describe('by=group dimension', () => {
+    it('renders a "by group" tab that re-fetches with by=group', async () => {
+      API.get.mockResolvedValue(payload());
+      render(<HFRankings />);
+      await waitFor(() => screen.getByTestId('rankings-by-group'));
+
+      API.get.mockResolvedValueOnce(payload({ by: 'group' }));
+      fireEvent.click(screen.getByTestId('rankings-by-group'));
+
+      await waitFor(() => {
+        const lastCall = API.get.mock.calls[API.get.mock.calls.length - 1];
+        expect(lastCall[0]).toContain('by=group');
+      });
+    });
+
+    it('renders rows returned under by=group (e.g. a labelled "(ungrouped)" bucket)', async () => {
+      API.get.mockResolvedValueOnce(payload());
+      render(<HFRankings />);
+      await waitFor(() => screen.getByTestId('rankings-by-group'));
+
+      API.get.mockResolvedValueOnce(
+        payload({
+          by: 'group',
+          rows: [
+            {
+              name: '(ungrouped)',
+              rank: 1,
+              rank_delta: 0,
+              is_new: true,
+              requests: 5,
+              total_tokens: 400,
+              quota: 2_000_000,
+              token_share_pct: 100,
+              quota_share_pct: 100,
+              requests_growth_pct: null,
+            },
+          ],
+        }),
+      );
+      fireEvent.click(screen.getByTestId('rankings-by-group'));
+
+      await waitFor(() => {
+        expect(screen.getByText('(ungrouped)')).toBeInTheDocument();
+      });
+    });
+  });
 });

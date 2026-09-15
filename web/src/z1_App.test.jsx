@@ -107,6 +107,7 @@ vi.mock('./pages/v2/Admin/CostIntelligence', () => stub('v2-cost'));
 vi.mock('./pages/v2/Admin/ModelPerformance', () => stub('v2-model-perf'));
 vi.mock('./pages/v2/Analytics/Rankings', () => stub('v2-rankings'));
 vi.mock('./pages/v2/Admin/ModelRateLimits', () => stub('v2-model-limits'));
+vi.mock('./pages/v2/Admin/Diagnostics', () => stub('v2-diagnostics'));
 
 import App from './App';
 import { StatusContext } from './context/Status';
@@ -212,6 +213,7 @@ describe('App — route guards', () => {
       ['admin/model-performance', 'v2-model-perf'],
       ['admin/rankings', 'v2-rankings'],
       ['admin/model-limits', 'v2-model-limits'],
+      ['admin/diagnostics', 'v2-diagnostics'],
     ];
 
     for (const [slug, testId] of slugs) {
