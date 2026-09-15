@@ -1,0 +1,457 @@
+# Cycle 9 — completion cycle: close what cycles 7–8 built but left one consumer short
+
+Branch: `feat/cycle9-completion` from `8878225b` (cycle-8 landing + the two UAT follow-ups).
+Method: twelve read-only re-verification agents against HEAD → three independent lane plans
+(operator / enterprise buyer / long-horizon maintainer) → two judges → this synthesis.
+Workflow run `wf_0cf24af7-6a3` (17 agents, 2.0M tokens, 26 min).
+
+## 1. What the re-verification changed
+
+The parity matrix (`newapi-parity-matrix-2026-09-12.md`) is now materially stale in newhub's
+favour. Rows it calls `missing` that are in fact shipped on HEAD:
+
+| row | matrix | HEAD | proof |
+|---|---|---|---|
+| logs-analytics-observability-08/09 | missing | shipped | `GetModelPerformanceV2` `v2_admin_analytics.go:33`, route `api-v2-router.go:537` |
+| logs-analytics-observability-10 | missing | shipped | `v2_analytics_rankings.go`, routes `api-v2-router.go:217,542` |
+| logs-analytics-observability-27/28 | missing | shipped | `writeRankingsResponse:148`, `rankingsCacheTTL = 5 * time.Minute:25` |
+| console-ux-03/04 | missing/partial | shipped | `web/src/pages/v2/Admin/ModelPerformance/index.jsx`, `Analytics/Rankings.jsx` |
+| routing-resilience-limits-11 | missing | shipped | `session_affinity.go:381-499`, `v2_admin_routing.go:47-135` |
+| routing-resilience-limits-13 | missing | shipped | cycle-7 `force_http1` |
+| billing-pricing-02/03 | partial/missing | shipped | cycle-7 pricing CAS + preview |
+| auth-security-08 | partial | shipped | `v2_sessions.go`, `v2_session_revoke.go`, migration 033 |
+| auth-security-16 | partial | shipped | cycle-7 fail-closed audit backstop |
+| tasks-plugins-18 | partial | shipped | cycle-8 L10 filters |
+| topup-payments-subscriptions-35 | missing | shipped | cycle-8 L1 redemption limiter |
+| console-ux-23 | partial | shipped | v2 profile page |
+
+Rows the judges struck off as premises that are **false**, not merely deferred:
+
+- **Runtime/GC admin endpoint (logs-analytics-18/-29).** `router/main.go:43` serves
+  `promhttp.Handler()` over the *default* gatherer and `internal/pkg/metrics/metrics.go` uses
+  `promauto` throughout with no private registry, so `go_goroutines`,
+  `go_memstats_heap_alloc_bytes`, `go_gc_duration_seconds` and the process collector are already
+  exposed and already scraped. There is no blindness to fix. A forced `runtime.GC()` button on a
+  1Gi-limit pod is rejected outright.
+- **`MultiKeyModeRotating` (routing-resilience-limits-22).** The local upstream checkout does not
+  define it; the row is void, not deferred.
+- **A functional index on `logs.other->>'request_id'` as migration 037.**
+  `migrations/029_create_projects.sql:61-74` forbids it in first-party prose and
+  `internal/pkg/migration/runner.go:324-338` is the mechanism: `BeginTx` → one `ExecContext` of the
+  whole body → `Commit`, so `CREATE INDEX CONCURRENTLY` is structurally impossible and a plain
+  `CREATE INDEX` on `logs` holds ShareLock against the relay's own consume-log writes.
+  **If any agent re-proposes this, reject it on sight.**
+
+What the re-verification found that no matrix row names:
+
+- **Step-up verification can be satisfied with no credential at all.**
+  `secure_verification.go:41-42` documents it and the code implements it: with `enrolled == false`
+  the only rejection is `req.Method != "session"`, so any authenticated enabled user sets
+  `SecureVerificationSessionKey` with an empty credential. `v2_admin_security.go:77-81` concedes the
+  consequence in first-party prose. That gate is what stands in front of channel-key reveal
+  (`api-router.go:151`) and 2FA force-disable. **Measured 2026-09-15: production has exactly one
+  privileged account (`users` role 100, id 1) and it has no row in `user_totps`** — so today that
+  gate is exactly equal to "holds a session cookie".
+- **Every delegated grant is permanent.** `034_create_admin_permission_grants.sql:54-62` has no
+  expiry column and `repo/admin_permission_grant.go` filters `revoked_at IS NULL` only.
+- **Zero live alerting.** `deploy/k8s/r6-stage/newhub-prometheus-rule.yaml:1-13` says in its own
+  header that nothing evaluates its rules, and `alert_wiring_honesty_test.go` exists solely to stop
+  Go comments claiming otherwise.
+
+## 2. Measured facts that set this cycle's defaults
+
+Both are `SELECT`-only queries run by the operator against the live databases on 2026-09-15:
+
+```
+newhub     : role 1 -> 11 users, role 100 -> 1 user, role 10 -> 0 users
+newhub     : users.role >= 10 AND status=1 JOIN user_totps -> id 1, role 100, has_totp = f
+newhub_uat : id 1 role 100 (no totp), id 3 role 10 (no totp), ids 2/4/5 role 1
+```
+
+Consequences, binding:
+
+- **L2 ships enforcing by default.** Requiring a grant for a non-root admin to write a channel key
+  or base URL breaks nobody in production: there are no non-root admins. UAT has exactly one
+  (id 3), which is the probe subject.
+- **L3 ships its enforcement behind a flag that defaults OFF.** Turning "step-up needs a real
+  credential" on today would lock the only production root out of channel-key reveal and 2FA
+  force-disable, because that account has no enrolled factor. The *audit* half of L3 ships
+  unconditionally, so the credential-free grant stops being invisible either way.
+
+## 3. Lanes (binding order L1 → L9)
+
+Development order is the landing order and the migration order. One migration this cycle: **037**.
+
+### L1 — expiry on delegated permission grants (migration 037)
+
+**Gap.** A grant is forever. `repo/admin_permission_grant.go` has one liveness predicate,
+`revoked_at IS NULL`. Handing an ops admin `channel:sensitive_write` (L2) without this is handing
+out a standing credential-substitution capability.
+
+**Scope.** Add `expires_at BIGINT NULL` to `admin_permission_grants`; a grant is active when
+`revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now)`. `POST …/authz/grants` accepts an
+optional `ttl_seconds` (bounded: 1 .. 90 days); the audit detail records it. The list response
+carries `expires_at` and a derived `expired` boolean. The console grant table shows it.
+
+**The trap, and the ruling.** `034`'s unique index is
+`uk_admin_permission_grants_active … WHERE revoked_at IS NULL`, so an *expired but unrevoked* row
+still occupies the slot and a re-grant of the same (user, resource, action) would 409 forever.
+The index is NOT changed (re-shaping a partial unique index on a live table is a second migration's
+worth of risk). Instead `CreatePermissionGrant` treats an existing row that is expired as
+re-grantable: inside the same transaction it stamps `revoked_at = now` on the expired row and then
+inserts the new one. An existing row that is *live* still returns `ErrGrantExists`.
+
+**Files.** `migrations/037_admin_permission_grants_add_expires_at.sql`,
+the migration-count test, `internal/domain/entity/admin_permission_grant.go`,
+`internal/adapter/repo/admin_permission_grant.go` + `_test.go`,
+`internal/adapter/handler/v2_admin_authz.go` + `_test.go`,
+`web/src/pages/v2/Admin/Authz.jsx` + `Authz.test.jsx`.
+
+**Oracles.**
+- `TestGrant_ExpiredIsNotActive` — insert a grant with `expires_at` in the past;
+  `HasActivePermissionGrant` returns false. Deleting the expiry clause makes it red.
+- `TestGrant_ReGrantAfterExpirySucceedsAndRevokesTheOldRow` — expired row + create → 200, and the
+  old row now has a non-null `revoked_at`; exactly one active row remains.
+- `TestGrant_ReGrantWhileLiveStill409` — the pre-existing behaviour is unchanged.
+- `TestGrant_TTLBounds` — `ttl_seconds` 0 / negative / > 90d → 400 `GRANT_INVALID`.
+- `TestEmbeddedFS_VersionsAreContiguous` (existing) must stay green with 037.
+
+**UAT probe.** Create a grant with `ttl_seconds=60` for user 3 → list shows `expires_at`; the
+granted route answers 200; after 60 s the same session gets 403 and the list shows `expired:true`;
+re-granting the same pair returns 200 (not 409) and the audit trail carries both rows.
+
+### L2 — `channel:sensitive_write`: stop any admin silently swapping a channel key or base URL
+
+**Gap.** `api-router.go:151` guards merely *reading* a channel key with
+`RootAuth + CriticalRateLimit + DisableCache + SecureVerificationRequired`, while `:157`
+`PUT /api/channel/` — which *replaces* the key — sits under a bare `AdminAuth()`. v2 is the same
+shape: `v2_channel.go:455-465` applies `Key` and `BaseURL` after only the tenant-admin check.
+`internal/app/authz/catalog.go:15-21` names this exact follow-up in its own comment.
+
+**Scope.** Add `channel: [sensitive_write]` to the catalogue. A **sensitive field set** =
+`key`, `base_url`, `param_override`, `header_override`, and the per-channel proxy setting — every
+field that changes *where traffic goes or what credential it carries*. Enforcement is in-handler
+(no router edit) and symmetric across four entry points: v1 `POST /api/channel/`,
+v1 `PUT /api/channel/`, v2 `POST …/channels`, v2 `PUT …/channels/:id`. Root always passes. A
+non-root admin without an active grant gets **403 `PERMISSION_DENIED` with no partial write** — not
+a silent strip, which would be a key rotation that reports success and does nothing. Updates that
+touch no sensitive field are unaffected. Every refusal writes an audit row.
+
+**Default: enforcing.** Measured in §2: zero non-root admins in production.
+
+**Files.** `internal/app/authz/catalog.go` + `_test.go`,
+`internal/adapter/handler/channel_sensitive_write.go` + `_test.go` (the shared predicate),
+`internal/adapter/handler/channel.go` + `channel_test.go`,
+`internal/adapter/handler/v2_channel.go` + `v2_channel_test.go`,
+`internal/app/governance/audit_action.go` (append only).
+
+**Oracles.**
+- `TestChannelSensitiveWrite_FieldSetIsExhaustive` — a table-driven test that lists the sensitive
+  fields and asserts the predicate flags each one; it also asserts a *non*-sensitive field (name,
+  models, group, priority) does not. Removing a field from the predicate turns it red.
+- `TestUpdateChannel_V1_NonRootAdminWithoutGrant403` and the v2 twin — **both routes**, because a
+  v2-only gate is bypassable through v1.
+- `TestUpdateChannel_V1_RefusedWriteLeavesRowUnchanged` — re-read the row after the 403 and compare
+  every column; a silent partial write fails here.
+- `TestCreateChannel_NonRootAdminWithoutGrant403` — creation carries the same power.
+- `TestUpdateChannel_RootAlwaysPasses` and `_NonSensitiveFieldsUnaffected`.
+- `TestAdminWriteRoutesAreAudited` (existing) must still name no new unaudited route.
+
+**UAT probe.** As UAT user 3 (role 10): `PUT` a channel's `base_url` → 403 `PERMISSION_DENIED`
+plus the audit row; `PUT` the same channel's `name` → 200; root grants `channel:sensitive_write`;
+the same call now returns 200 and the channel's base URL really changed (re-read it); revoke →
+403 again.
+
+### L3 — step-up that means something: audit the credential-free path, and offer a flag to close it
+
+**Gap.** §1. Today a stolen session cookie satisfies every "secure verification required" gate for
+any user with no enrolled factor — which is every privileged account in production.
+
+**Scope, three parts.**
+1. **Unconditional:** when `UniversalVerify` grants verification with `method: "session"` and the
+   user has no enrollment, write an audit row (`auth.stepup_without_credential`) naming the user and
+   the fact that no credential was presented. This ships on by default; it cannot lock anyone out
+   and it converts an invisible weakness into an auditable event.
+2. **Flag `SECURE_VERIFICATION_REQUIRE_ENROLLMENT`, default `false`:** when true, the no-enrollment
+   branch answers **403 `STEP_UP_ENROLLMENT_REQUIRED`** with a message pointing at the enrolment
+   page, instead of passing.
+3. **Honesty:** `VerificationStatusResponse` gains `enrollment_required` so the console can show the
+   real policy rather than assuming the legacy one, and the doc comment's "legacy behavior"
+   paragraph is rewritten to say what it costs.
+
+**Files.** `internal/adapter/handler/secure_verification.go` + `_test.go`,
+the setting package for the flag, `internal/app/governance/audit_action.go` (append, after L2),
+`doc/runbook/incident-response.md` (break-glass: how to turn it off), `.env.example`.
+
+**Oracles.**
+- `TestUniversalVerify_NoEnrollment_WritesCredentialFreeAuditRow` — flag off; assert the row exists
+  and names the user. Deleting the audit call turns it red.
+- `TestUniversalVerify_NoEnrollment_FlagOn_403EnrollmentRequired` — and asserts the session key was
+  **not** set (checking only the status code would pass a handler that 403s after verifying).
+- `TestUniversalVerify_Enrolled_UnchangedUnderBothFlagStates` — the TOTP path is untouched.
+- `TestVerificationStatus_ReportsEnrollmentRequired`.
+
+**UAT probe.** Flag off: root verifies → 200 and the new audit row appears. Flip the flag on the
+UAT deployment: the same call returns 403 `STEP_UP_ENROLLMENT_REQUIRED` and channel-key reveal is
+refused; flip it back. Production keeps the default until the owner enrols a factor for root
+(owner item **O1**).
+
+### L4 — VideoProxy egress parity: the SSRF guard the newer route has and the older one does not
+
+**Gap.** `git grep ValidateOutboundURL -- '*.go' | grep -v _test` → `channel.go:1370`,
+`task_media_guard.go:219`, `v2_channel_actions.go:53`, `ssrf_guard.go` — and **nothing in
+`video_proxy.go`**, which serves the same class of URL with only `allowedArtifactScheme`
+(`:199`) and `isSelfOrLoopURL` (`:210`). Two first-party comments already admit the asymmetry:
+`metrics.go:562` and `task_media_guard.go:20`.
+
+**Scope.** `VideoProxy` calls `app.ValidateOutboundURL` with the same refusal shape and the same
+metric labels as `GetTaskArtifactContent`. The two admitting comments are corrected in the same
+commit — a comment that documents a hole must not outlive the hole.
+
+**Files.** `internal/adapter/handler/video_proxy.go` + `video_proxy_test.go`,
+`internal/pkg/metrics/metrics.go` (comment + label doc; **this lane owns this file**),
+`internal/adapter/handler/task_media_guard.go` (comment only).
+
+**Oracles.**
+- `TestVideoProxy_RefusesPrivateAddress` — a `http://10.0.0.1/x` target is refused with the
+  egress-check reason and the metric increments; deleting the call turns it red.
+- `TestVideoProxy_RefusesDNSRebindShape` — whatever `ValidateOutboundURL` already covers, asserted
+  through this route so the two routes cannot drift again.
+- `TestTaskMediaRoutes_BothCallTheEgressGuard` — a source-level assertion that every handler
+  serving a vendor-supplied URL calls the guard. This is the anti-drift oracle; it is what stops a
+  third route shipping without it.
+
+### L5 — conversion-fidelity diagnostics: record what cross-wire conversion silently drops
+
+**Gap.** `convert.go:15 ClaudeToOpenAIRequest` builds the OpenAI request from a handful of fields
+and discards the rest without a word; `:610 GeminiToOpenAIRequest` likewise. A customer whose
+`top_k` or `tool_choice` never reached the vendor has no way to learn that from the product.
+
+**Scope.** Both request-side converters compute a deterministic, sorted, de-duplicated list of the
+caller's field names that were dropped or downgraded. It is stashed on `RelayInfo` and projected
+into the log row's `other` as `conversion_dropped` by `app.GenerateTextOtherInfo`
+(`log_info_generate.go:34`) — the single success-path funnel: `compatible_handler.go:490` calls it
+and `log_info_generate.go:96,108,125` wrap it, so **neither `quota.go` nor `compatible_handler.go`
+is edited**. Visibility is **public**: the caller set the field, so telling them it was ignored is
+the entire point. Bounded: at most 16 names, each at most 32 bytes.
+
+**Explicitly out of scope, stated so it cannot be mistaken for an oversight:** the terminal-error
+path in `internal/adapter/handler/relay.go:775-805` builds its own `other` map key by key and does
+**not** carry the diagnostics. `relay.go` is on the do-not-regress untouched list. A failed request
+therefore has no `conversion_dropped`; the lane report must say so.
+
+**Files.** `internal/app/convert.go` + `convert_test.go`,
+`internal/adapter/provider/common/relay_info.go`, `internal/app/log_info_generate.go` + `_test.go`,
+the `other`-key classification source, `internal/app/log_other_projection_lock_test.go`.
+
+**Oracles.**
+- `TestClaudeToOpenAI_ReportsDroppedFields` — a Claude request carrying fields the converter does
+  not map yields exactly those names; the assertion is on the *exact set*, so both a missing name
+  and an invented one fail.
+- `TestGeminiToOpenAI_ReportsDroppedFields` — same shape.
+- `TestConversionDiagnostics_EmptyWhenNothingDropped` — a minimal request produces no key at all
+  (an always-present empty array would be noise in every log row).
+- `TestOtherProjectionIsFullyClassified` (existing) — must name `conversion_dropped` as public;
+  this is the default-deny gate and it goes red if the key is added without classification.
+- `TestConversionDiagnostics_Bounded` — 100 dropped fields truncate to 16 with a marker.
+
+**UAT probe.** Send a Claude-wire request carrying a droppable field to a UAT channel; read the
+resulting log row's `other` and show `conversion_dropped` listing exactly that field; send the
+minimal request and show the key absent.
+
+### L6 — console: search logs by `request_id` and `upstream_request_id`
+
+**Gap.** `v2_log.go:217-221` binds `request_id`, `session_id` and (admin-only)
+`upstream_request_id`, and `repo/log.go:916,919,979,982` wire them into the query — while
+`grep -rn 'request_id' web/src/pages/v2/Log/index.jsx` returns **zero hits**. Cycle 7 shipped the
+capture and cycle 8 shipped the filter; nobody can reach either from the product.
+
+**Scope.** Frontend only. The Log page gains the two filter inputs (the upstream one only for
+admins, mirroring the backend's own gate) and shows both ids in the detail panel with a
+copy-to-clipboard affordance. **The lane always sends a time range** — the backend filter is a JSON
+extract with no supporting index (§1), so an unbounded id search would scan the whole `logs` table.
+No Go file is edited: adding a mandatory time window to a shipped admin API is a behaviour change
+and does not belong in a frontend lane.
+
+**Files.** `web/src/pages/v2/Log/index.jsx`, `web/src/pages/v2/Log/index.test.jsx`.
+
+**Oracles.**
+- `renders the request-id filter and sends it on the query` — asserts the outgoing query string
+  contains `request_id=` **and** a bounded start timestamp; dropping the time bound turns it red.
+- `hides the upstream-request-id filter from non-admin users`.
+- `shows both ids in the detail panel` — a row whose `other` carries `upstream_request_id`.
+
+### L7 — rankings by group
+
+**Gap.** `v2_analytics_rankings.go:119-120` is
+`if by != "model" && by != "vendor" { … }` while `entity/log.go:22` already carries a `Group`
+column that is populated and indexed. The dimension that answers "which pricing/routing group is
+burning the quota" is one validator away.
+
+**Scope.** Accept `by=group`; the repo query groups on the column with the identifier **quoted**
+(`GROUP BY "group"` — `group` is a SQL reserved word and an unquoted version fails on PG while
+passing on the hermetic SQLite tier, which is exactly the kind of green-locally/red-in-prod trap
+this cycle must not ship). Empty group strings rank as a single explicit `(ungrouped)` bucket
+rather than being dropped. The console Rankings page gains the third dimension.
+
+**Files.** `internal/adapter/handler/v2_analytics_rankings.go` + `_test.go`,
+`internal/adapter/repo/log.go` + its rankings test (**this lane owns the repo file**),
+`web/src/pages/v2/Analytics/Rankings.jsx` + `Rankings.test.jsx`.
+
+**Oracles.**
+- `TestRankings_ByGroup_QuotesTheReservedIdentifier` — asserts the generated SQL contains the
+  quoted identifier. This is the trap oracle; it must be written before the query.
+- `TestRankings_ByGroup_UngroupedBucket` — rows with an empty group produce one labelled bucket.
+- `TestRankings_ByGroup_TenantScoped` — the tenant-scoped route never returns another tenant's
+  groups.
+- `TestRankings_RejectsUnknownDimension` — `by=whatever` still 400s.
+
+**UAT probe.** `GET /api/v2/admin/analytics/rankings?by=group` on UAT returns the seeded groups with
+non-zero quota totals, and the tenant-scoped route returns only that tenant's.
+
+### L8 — one admin Diagnostics page for the backends that shipped blind
+
+**Gap.** Two shipped, root-gated backends have zero frontend consumers:
+session-affinity stats/purge (`api-v2-router.go:531-533`) and TOTP adoption
+(`api-v2-router.go:558`). `grep -rn 'routing/affinity' web/src` and `grep -rn 'totp-stats' web/src`
+both return nothing.
+
+**Scope.** **One** page — `admin/diagnostics` — with two panels: affinity (hit/miss/stale counters,
+backend, entry count, purge-one and purge-all with a confirm) and security posture (TOTP adoption:
+enrolled vs total, and the count of privileged accounts with no factor, which is the number §2
+measured as 1). Root-only, using the `minRole: 100` precedent already in the nav shell. This
+lane **owns the console shell files**; no other lane may edit them.
+
+**Files.** `web/src/pages/v2/Admin/Diagnostics/index.jsx` + `index.test.jsx`, `web/src/App.jsx`,
+the nav shell, the App-level route test.
+
+**Oracles.**
+- `calls both endpoints on mount and renders their numbers` — with the responses mocked; a panel
+  rendering a hard-coded number fails.
+- `purge-all asks for confirmation and sends the request only after it`.
+- `is not reachable below role 100` — asserted through the nav config, not by reading the page.
+
+### L9 — the alerting last mile: repo-owned netdata alarms with a series oracle
+
+**Gap.** Nothing on this service alerts anyone. `newhub-prometheus-rule.yaml:1-13` says so itself;
+`alert_wiring_honesty_test.go` exists only to keep Go comments from claiming otherwise. Cycles 7
+and 8 shipped a pile of metrics whose only consumer is a dashboard nobody watches at 03:00.
+
+**Scope.** Repo-owned netdata alarm definitions under `deploy/r6-host-netdata/health.d/`
+(the directory-as-source-of-truth shape already used by `deploy/r6-host-nginx/`), an idempotent
+install script, and a runbook entry per alarm — `doc/runbook/INDEX.md` is a hard gate, so a
+page-level alarm without a runbook is not shippable. First batch is **only alarms that can be
+provoked on demand**, so each one gets a live proof: upstream 5xx burst, rate-limit degradation,
+and failover suppression.
+
+**The repo oracle.** `TestNetdataAlarmsNameOnlyLiveSeries` parses the alarm files, extracts every
+metric name, and asserts each is actually written by production code — reusing the machinery behind
+the existing `TestDeclaredSeriesHaveAProductionWriter`. This is what makes an alarm file reviewable
+in CI: the classic failure is an alarm on a series nobody emits, which is silent forever. The
+honesty test is extended so the new directory asserts the *opposite* of the reference-only YAML —
+these files ARE installed, and the install script is named.
+
+**Honest limits, stated in the lane report and the runbook.** Alarm *delivery* to a human still
+depends on the host's `health_alarm_notify.conf` recipients, which is an owner item (**O2**). This
+lane proves the alarm transitions state and is visible in netdata's alarm API; it does not claim
+anyone is paged.
+
+**Files.** `deploy/r6-host-netdata/health.d/newhub.conf`, `deploy/r6-host-netdata/README.md`,
+`scripts/install-netdata-alarms.sh`, a new runbook page, `doc/runbook/INDEX.md`,
+`internal/pkg/metrics/netdata_alarm_series_test.go`,
+`internal/pkg/metrics/alert_wiring_honesty_test.go`. **This lane must not edit `metrics.go`** (L4
+owns it).
+
+**UAT probe (operator-run, not agent-run).** Install on R6, drive the fault simulator to produce an
+upstream-5xx burst, and show the alarm moving CLEAR → WARNING in netdata's alarm log with the
+timestamps, then back to CLEAR.
+
+## 4. Do-not-regress
+
+| Item | Lane | Re-check |
+|---|---|---|
+| default-deny `other` projection | L5 adds `conversion_dropped` (public) | `TestOtherProjectionIsFullyClassified`, `TestInternalOtherKeys_NoPublicField` |
+| `relay.go` untouched (retry gate, breaker, headroom, re-selection) | none — L5's error path is explicitly out of scope | `git diff` shows no `relay.go` hunk |
+| `quota.go` / `PreConsumeQuota` / `PostConsumeQuota` untouched | none | `git diff` empty for those files |
+| `channel_select.go`, `channel_cache.go`, `session_affinity.go`, `smart_routing.go` untouched | L8 only *reads* the affinity API | unchanged |
+| hash-chained audit: rows only via `RecordAuditEvent` | L1, L2, L3 | `VerifyAuditChainV2` green on UAT after each |
+| `TestAdminWriteRoutesAreAudited` names no new unaudited route | L2 | that test |
+| `TestV2IDOR_Completeness` | L1 (grant by id), L2 (channel by id) | that test |
+| abort-code structural gate; OpenAPI enum/path lock | L2, L3 (new codes) | `abort_code_structural_test`, `openapi_contract_lock_test` |
+| migration contiguity | L1 (037) | `TestEmbeddedFS_VersionsAreContiguous` |
+| `authHelper` per-request status/role re-validation | L2 calls it first, never bypasses | `TestRootOrGranted_*` |
+| cycle-8 grant semantics: global (`tenant_id IS NULL`) only | L1 adds expiry, does **not** widen scope | the tenant-scope rejection test |
+| `r5c_status_capability_test.go` passkey-absence lock | none | unchanged |
+| i18n: v2 console uses `tr(key, fallback)` and does **not** edit locale JSON | L6, L7, L8 | locale files unchanged in the diff |
+
+## 5. Deliberately not doing
+
+- **System instance registry / `system_instances` table** (console-ux-20, ops-deploy-docs-07). The
+  gap is real — `common.InstanceID()` and `common.IsLeader()` exist and both per-pod endpoints
+  disclaim cluster awareness. Deferred on deliverability: ~20 files across six packages (a new GORM
+  entity must be registered in three independent places), and it competes for 037 against grant
+  expiry, which is a two-line schema change guarding a live capability. Cycle 10.
+- **Runtime/GC admin endpoint and forced `runtime.GC()`** — premise disproved (§1).
+- **Rankings-cache reset route** — the TTL is five minutes; waiting it out is not an incident.
+- **Session-scoped `GET /api/task/self/:task_id/artifacts`** — there is no task page anywhere in
+  `web/src`, so it would ship with zero consumers. Pair it with a page or not at all.
+- **Admin cross-tenant top-up history** — `GET /api/v2/admin/logs/export` is already root-gated and
+  filterable by tenant and type; the delta is ergonomics.
+- **Any index on `logs.other`** (§1), **generic conversion registry** (wire-formats-12 — rewriting
+  six converters against no failing test), **HTTP/2 sharding**, **affinity regex rules and
+  switch-on-success toggles** (they land on `session_affinity.go`/`channel_select.go`),
+  **new channel types** (providers-channels-14/16/17), **`MultiKeyModeRotating`** (void, §1),
+  **JS billing-expression engine**, **signed capability URLs for artefacts** (a net-new crypto
+  primitive), **subscription/payment rows** (external blocker).
+
+## 6. Owner items
+
+- **O1 (L3).** Enrol a TOTP factor for the production root account, then flip
+  `SECURE_VERIFICATION_REQUIRE_ENROLLMENT=true`. Until then the credential-free path stays open in
+  production and is merely audited. This is the single highest-value action available to the owner
+  this cycle and it costs one enrolment.
+- **O2 (L9).** Netdata alarm recipients (`health_alarm_notify.conf` on the R6 host). Without one,
+  "alerting exists" means "visible in the netdata API", not "someone is paged".
+- **O3 (carried).** A real vendor-account channel on UAT — still the only way to prove the
+  Responses compact/registry round trips from cycle 8 end to end.
+- **O4 (carried).** Real per-vendor context-length thresholds and ratios; cycle 8's mechanism still
+  ships empty.
+- **O5 (L2 scope).** Confirm the sensitive-field set. It is `key`, `base_url`, `param_override`,
+  `header_override` and the per-channel proxy setting — everything that changes where traffic goes
+  or what credential it carries. Adding `models`/`group` to it would make ordinary channel
+  administration require a grant; the plan deliberately leaves them out.
+
+## 7. Verification protocol
+
+**Local gates (before push; lint and the full suite never run concurrently).**
+
+```
+go vet ./... && go build ./...
+go test -short -p 2 ./...
+go test -run 'TestV2IDOR_Completeness|TestConsoleCallsResolveToRegisteredRoutes|TestAdminWriteRoutesAreAudited|TestOtherProjectionIsFullyClassified|TestDeclaredSeriesHaveAProductionWriter|TestAllAuditActions_|TestOpenAPIContract_|TestAbortWithOpenAiMessage_EveryCallSiteCarriesACode|TestEmbeddedFS_VersionsAreContiguous|TestNoAlertFileClaimsDeploymentItDoesNotHave' -p 2 ./...
+golangci-lint run --new-from-rev=origin/main ./internal/... ./cmd/...
+cd web && bun run lint && bun run eslint && bun test && bun run build
+```
+
+`-race` and the coverage ratchet are CI-only; a lane is not green until the PR's CI run says so.
+Every `-run` filter must match more than zero tests, and the count is recorded.
+
+**Mutation checks.** Each lane shows its named oracle red on the reverted behaviour, then green on
+a byte-identical restore. Commit before mutating; never `git checkout --` over uncommitted work.
+L1 drop the expiry clause → `_ExpiredIsNotActive`. L2 remove one field from the predicate →
+`_FieldSetIsExhaustive`; remove the v1 call site → `_V1_NonRootAdminWithoutGrant403`. L3 delete the
+audit call → `_WritesCredentialFreeAuditRow`. L4 delete the guard call → `_RefusesPrivateAddress`.
+L5 stop stashing the list → `_ReportsDroppedFields`; add the key without classifying it →
+`TestOtherProjectionIsFullyClassified`. L6 drop the time bound → the filter test. L7 unquote the
+identifier → `_QuotesTheReservedIdentifier`. L8 hard-code a panel number → the mount test.
+L9 rename a metric in the alarm file → `TestNetdataAlarmsNameOnlyLiveSeries`.
+
+**UAT probes.** Per lane, §3. Preconditions: bridge token from the UAT secret; the digest recorded
+before and after each probe (ArgoCD may converge mid-probe — compare pod `startTime` with artefact
+timestamps); `VerifyAuditChainV2` green after every lane that writes audit rows. Production stays
+read-only: the only production commands this cycle are the two `SELECT`s already run in §2.
+
+**Landing.** One commit per lane in the order L1 → L9, one PR, `main` only, ArgoCD auto-pin.
+Contested files and their single owners: `governance/audit_action.go` — L2 owns, L3 appends after
+it; `internal/pkg/metrics/metrics.go` — L4 only; `internal/adapter/repo/log.go` — L7 only;
+`web/src/App.jsx` and the nav shell — L8 only; locale JSON — nobody.
