@@ -455,3 +455,306 @@ read-only: the only production commands this cycle are the two `SELECT`s already
 Contested files and their single owners: `governance/audit_action.go` — L2 owns, L3 appends after
 it; `internal/pkg/metrics/metrics.go` — L4 only; `internal/adapter/repo/log.go` — L7 only;
 `web/src/App.jsx` and the nav shell — L8 only; locale JSON — nobody.
+
+## 8. Operator rulings after the first acceptance round (2026-09-15, binding)
+
+Every finding below was checked against the tree before ruling. Findings are cited by the
+acceptor ids in the workflow journal (`A` = tests/mutation acceptor, `B` = buyer/reference
+acceptor). A ruling of ACCEPT means the repair lane implements the acceptor's expected fix as
+written unless the ruling narrows or widens it.
+
+### Correction to §4/§7 that applies to every frontend lane
+
+The line "locale JSON — nobody" was wrong. Verified 2026-09-15: `web/src/i18n/locales/{en,zh}.json`
+nest every v2 console key under `translation.console.*` — `console.admin.authz.*` carries 23 keys in
+both files and cycle 8's `console.admin.system_tasks.*` keys are there too. The v2 convention is
+therefore **both**: `tr(key, fallback)` in the JSX **and** the key in both locale files with a real
+Chinese value. L1, L6, L7 and L8 add their keys to both files; the i18n integrity gate
+(`every console.* key present in zh.json also resolves in en.json`) is the oracle. Lanes run
+sequentially, so the shared file is not a collision.
+
+### L1 — grant expiry
+
+- **R1 (A-1, B-1).** The in-transaction recycle of an expired row must be auditable.
+  `CreatePermissionGrant` returns the recycled grant ids; `CreateGrantV2` records one
+  `ActionPermissionRevoked` per id **after** the transaction commits, actor = the requesting admin,
+  detail `{grant_id, grantee_user_id, resource, action, tenant_id: null, reason: "superseded_expired"}`.
+  Never record inside the tx closure. Oracle: re-grant after expiry through the handler → a
+  `permission_revoked` row naming the old id **and** the `permission_granted` row both exist.
+- **R2 (A-2, A-3, A-5).** Handler-level oracles for: `expired` true/false on the list; `expires_at`
+  on the 201 body (ttl → `created_at + ttl`, no ttl → null); exactly one active row after re-grant.
+- **R3 (A-4, B-3).** REAL-CHAIN: `TestRootOrGranted_ExpiredGrant403` in
+  `internal/adapter/middleware/root_or_granted_test.go` **and** an expired-grant case in
+  `internal/adapter/handler/router/audit_routes_root_or_granted_test.go` through the real router.
+  Retitle the handler test's "REAL-CHAIN oracle" comment to what it is.
+- **R4 (A-6, B-6).** Console sends `ttl_seconds` whenever the field is non-empty and parses; the
+  server rejects 0. Vitest case.
+- **R5 (B-2).** Add the four keys under `console.admin.authz` in both locale files (see the
+  correction above).
+- **R6 (A-7, A-8, B-4, B-5).** Migration header: "a nullable `*int64` field (`ExpiresAt`), like
+  `RevokedAt` on the same struct, maps to BIGINT"; the `channel:sensitive_write` sentence may stay in
+  the present tense only because L2 is now on the tree — the repair verifies `catalog.go` carries it.
+  Integration guide: `越界返回 **400**`.
+- `RevokePermissionGrantsForUser` also sweeping already-expired rows: accepted as-is.
+
+### L2 — channel:sensitive_write
+
+- **R1 (A-1, B-1).** Value-diff, not presence, for `base_url`, `param_override`, `header_override`
+  (nil and "" equal). `key` stays presence-based (the console never sends it on update; multi-key
+  append makes a value diff wrong). Oracles: the exact console-shaped rename body
+  (`web/src/pages/v2/Channel/index.jsx:445-455`) by a non-root admin without a grant → 200 and the
+  name persisted; the same body with a different `base_url` → 403 and the row unchanged.
+- **R2 (B-3).** Widen the sensitive set by `type`, `other` and `openai_organization`, all value-diffed:
+  `type` changes the derived upstream host when `base_url` is empty; `other` feeds
+  api_version/region/plugin/bot_id in `distributor.go`; `openai_organization` rides as a header on the
+  credential. `settings` stays covered only through its proxy member — name the remaining settings
+  members as non-goals in the file header. Plan O5 is amended accordingly.
+- **R3 (B-4).** Gate `CopyChannel` (existing = nil, the clone as the request) and the
+  `delete_key` / `delete_disabled_keys` branches of `ManageMultiKeys`. Tests for both.
+- **R4 (B-5).** Gate `EditTagChannels` when the body carries `base_url`, `param_override`,
+  `header_override` or `key` — presence-based here, because the tag editor applies one value to many
+  rows. Test. The "tag editor out of scope" non-goal is withdrawn.
+- **R5 (B-7, A-4).** One test per API family through the **real** registration
+  (`router.SetApiRouter` for v1 `PUT /api/channel/`, `router.SetApiV2Router` for v2) with a session
+  whose role comes from the seeded user row (pattern: `root_seal_test.go`, `v2_completeness_test.go`
+  in the router package). Reword the test-file header to what it drives.
+- **R6 (A-3).** Test that forces the grant lookup to error → 403 and no mutation.
+- **R7 (B-6).** Replace the falsely named unknown-resource case with a genuinely unknown pair
+  (`wallet`/`write`); add a positive 201 for `channel:sensitive_write` with a seeded admin grantee.
+- **R8 (B-8).** Rename the table test; add a reflection guard over the request struct's json tags —
+  every field is in the sensitive set or the explicit non-sensitive set, else the test fails.
+- **R9 (A-5).** `TestCatalog_SliceMatchesMap`.
+- **R10 (A-2, B-2).** Integration guide: both catalogue entries; a 403 subsection next to the
+  channel-save error-shape paragraph naming every gated route (after R3/R4: v1 POST/PUT, tag editor,
+  copy, multi-key delete; v2 POST/PUT).
+- **R11 (B-9, B-10).** Name all three helper callers. Add the one-line comment pinning the gate to
+  the AdminAuth-mounted routes; do **not** widen the root check to JWT roles.
+
+### L3 — step-up
+
+- **R1 (A-1).** REAL-CHAIN subtest on `buildSecureVerifyFlowRouter` with the flag on:
+  `POST /api/verify` → 403 `STEP_UP_ENROLLMENT_REQUIRED`; `POST /api/channel/1/key` with the cookies →
+  403 `VERIFICATION_REQUIRED`.
+- **R2 (A-2, B-8).** Add the action to `TestIsValidAuditAction`.
+- **R3 (A-3, B-1).** Status oracle for the verified=true branch under both flag states.
+- **R4 (A-4, B-2, A-5, A-6, B-6, B-3).** Prose: "handed to the audit writer on every pass through
+  this branch; the write is a best-effort background insert"; drop always/unconditionally/every; name
+  the four mount points; fix the `.env.example` self-contradiction; append the flag clause to
+  `v2_admin_security.go:77-81`.
+- **R5 (A-7).** `t.Cleanup` restoring a no-op audit writer.
+- **R6 (B-7).** In the flag-on refusal, record `governance.ActionAuthFailed` with
+  `{"step":"secure_verify","reason":"enrollment_required"}` — the throttle precedent in the same
+  function — no new action. Assert it.
+- **R7 (A-10, B-5).** AMENDMENT — the lane now also owns `web/src/services/secureVerification.js`
+  (+ its test) and `web/src/hooks/common/useSecureVerification.jsx`: return `enrollmentRequired` from
+  `checkAvailableVerificationMethods`, `hasSession = !totpEnrolled && !enrollmentRequired`, fix the
+  service doc comment, vitest for the enable-2FA-first path.
+- **R8 (B-4).** Integration guide §A row for `POST /api/verify` + `GET /api/verify/status` (flag,
+  audit action, 403 code), ending `目前没有兄弟产品接入这组端点`. Not `relay.json`.
+- **R9 (B-9).** Document the accepted literals (`true/false/1/0`) in `.env.example`. No `/api/health`
+  change.
+- **R10 (A-8).** The PR-body claim is corrected: `enrollment_required` is on `GET /api/verify/status`
+  only.
+
+### L4 — VideoProxy egress parity
+
+- **R1 (A-1, B-4).** Add `RelayMidjourneyImage` (`internal/app/relay/mjproxy_handler.go`) to the
+  registry; widen the assertion to accept either `ValidateOutboundURL(` or
+  `ValidateURLWithFetchSetting(`; the comment names the semantic difference. Unifying the mj guard is
+  out of scope — do not edit `mjproxy_handler.go`.
+- **R2 (B-5).** Keep fail-closed DNS resolution (same posture as the artefact route). Document it in
+  the integration guide row and the `video_proxy.go` comment; add a test with a proxied channel and an
+  unresolvable host asserting the explicit 502 `artifact_request_rejected`.
+- **R3 (B-6).** Log scheme + host + path only (`url.Redacted()` keeps query strings, and Gemini
+  carries the key there); apply to the adjacent sinks in the same file.
+- **R4 (A-3, B-7).** Rename to `TestVideoProxy_RefusesDomainResolvingToPrivateAddress`.
+- **R5 (A-4).** Hoist the message to a package const in `task_media_guard.go`, both call sites use
+  it, equality assertion in `TestTaskMediaRoutes_BothCallTheEgressGuard`.
+- **R6 (B-1, B-2, B-3).** Integration guide :97/:98 corrected and the new 502 documented;
+  `relay.json` gains the 502 response on `/v1/videos/{task_id}/content` mirroring the artefact path.
+- **R7 (B-8).** `ssrf_guard.go` doc comment: enumerate the two task-media routes and qualify the
+  latency sentence (allowed outside the file list).
+- **R8 (A-5).** Count-free wording in `metrics.go`.
+- **R9 (A-2).** Consumer note corrected: `2l-bs-docs` enumerates the route in six locale overview
+  pages; the cross-repo follow-up asks whether the public docs should note the 502 class.
+
+### L5 — conversion-fidelity diagnostics
+
+- **R1 (A-1).** The classification entry must be enforced. In `log_other_projection_lock_test.go`
+  tie the two maps: every `wantUserVisible` key that appears in `governance.FieldClassification`
+  must be `TierPublic`, every `wantInternal` key that appears there must be `TierInternal`, **and**
+  `conversion_dropped` must be present in `FieldClassification` — deleting the `classification.go`
+  line or flipping its tier turns the build red.
+- **R2 (A-2, B-7).** REAL-CHAIN: one test in the `openai` provider package (it may import `app`
+  without a cycle) that calls `(&openai.Adaptor{}).ConvertClaudeRequest(c, info, req)` with a
+  `top_k`-bearing request and then `app.GenerateTextOtherInfo(c, info, ...)` over the **same**
+  `*RelayInfo`, asserting `other["conversion_dropped"] == ["top_k"]`. No hand-seeded field.
+- **R3 (A-5, B-1) — scope widened.** Stale diagnostics across retries are a real correctness
+  defect. Verified 2026-09-15: every relay handler calls `info.InitChannelMeta(c)`
+  (`relay_info.go:232`) at the start of each attempt, after `getChannel` →
+  `SetupContextForSelectedChannel` has re-pointed the gin context at the re-selected channel. That
+  is the per-attempt seam and it is a lane file: **reset `info.ConversionDropped = nil` inside
+  `InitChannelMeta`**. Oracle: drive two attempts over one `RelayInfo` — converter attempt sets the
+  list, a second `InitChannelMeta` clears it, a native-format attempt leaves it empty — and assert
+  the settled projection reflects the last attempt. Do not edit `relay.go` or the native adaptors.
+- **R4 (A-3, B-3).** Gemini `tools` entries with no `functionDeclarations` are reported with the
+  dotted wire names `tools.googleSearch`, `tools.googleSearchRetrieval`, `tools.codeExecution`,
+  `tools.urlContext` (each ≤ 32 bytes). Exact-set test with a `googleSearch`-only body.
+- **R5 (B-2).** Report `thinking` when `r.Thinking != nil` and the branch produced neither
+  `Reasoning` nor a model-name change — computed from the branch's outcome, never from the channel
+  type (that would leak upstream identity into a public key). Test on a non-OpenRouter `RelayInfo`
+  with a model name lacking the suffix.
+- **R6 (B-4).** Report `requests` when `len(r.Requests) > 0`. Test.
+- **R7 (B-5).** Report `tools` for the Claude converter when any incoming tool carries a non-function
+  `type` or a `cache_control` block (the conversion keeps only name/description/schema). Test.
+- **R8 (B-6).** `metadata` is reported only when it carries keys other than `user_id` — newhub
+  consumes `metadata.user_id` for `other.end_user` (`relay_info.go` `deriveEndUserHash`), so
+  reporting it as dropped would send customers to a ticket about attribution that works. Comment and
+  guide say so. Test both shapes.
+- **R9 (A-4, B-8).** Test the 32-byte cap through `boundDroppedFields` with a long name; publish the
+  truncation sentinel's literal in guide §J. Keep the cap.
+- **R10 (A-7, B-9, the OVERSTATED list).** Prose: drop every absolute; state precisely which
+  categories are covered (top-level unread fields; the named partial/conditional cases above) and
+  which residuals remain after R4–R8 (name them in guide §J so "key absent" is not sold as full
+  fidelity); `relay_info.go` comment softened to cite the error path by file:line instead of "never".
+- **R11 (A-6).** Report accuracy only: 9 new tests, `log_info_generate_test.go` is a lane file.
+
+### L6 — console request-id search
+
+- **R1 (A-1, B-1).** When `upstreamRequestId` is non-empty, `fetchLogs` must go to the tenant-wide
+  route (`/logs/all`) — the only route that binds the parameter — and the page reflects
+  `tenantWide = true` so the visible scope matches. The input renders only for admins. Oracle asserts
+  the URL contains `/logs/all?`, the parameter, and a bounded `start_time`. Tighten `u.includes('/logs')`
+  to the exact prefix.
+- **R2 (B-2).** Anchor the implicit lookback on the **end** bound when one is set, so
+  `start_time <= end_time` always holds; test the end-only + id case.
+- **R3 (B-3, A-6).** Show the effective window while an id filter is active
+  (`tr('console.log.id_window_hint', …)`); test presence with an id and absence without.
+- **R4 (B-4).** Seed both filters from the URL query like the sibling filters; test.
+- **R5 (B-5).** Pass the same effective `start_time` to `fetchStat`; label the header while an id
+  filter is active; test that the two calls carry the same `start_time`.
+- **R6 (B-6).** Trim both ids. Test a padded value.
+- **R7 (A-3).** Paging and both toggles must carry the id filter and the bound; test page 2.
+- **R8 (A-2, A-4, A-5, B-7).** Prose to what the code does (name the route, drop "always"/"every").
+- **R9 (locale correction).** Add every new `console.log.*` key to `en.json` and `zh.json` under the
+  nested `console.log` block with real Chinese values.
+
+### L7 — rankings by group
+
+- **R1 (A-1, B-1).** The SQLite claim is false and both comment blocks are rewritten: `group` is
+  reserved in Postgres **and** SQLite, the quoted identifier is required on both, and the DryRun test
+  exists to pin the exact production SQL. The sentences "accepts it either way" and "cannot see that
+  failure at all" must not survive anywhere in the tree.
+- **R2 (B-2).** No second copy of the identifier. Build the expression from the existing SSOT
+  `logGroupCol` (`repo/main.go`), make the hermetic tier initialise it the way production boot does
+  (`InitCol()` in the SQLite test setup), and add the guard test that the rankings expression
+  contains `logGroupCol`.
+- **R3 (B-7).** The quoting oracle asserts on the `GROUP BY` clause, not on the identifier appearing
+  anywhere.
+- **R4 (B-6, A-5).** Admin-route `by=group` test through `setupAnalyticsRouter` with two tenants:
+  unfiltered merges both, `tenant_id=A` returns only A.
+- **R5 (A-2).** REAL-CHAIN: one test through `router.SetApiV2Router` for
+  `GET /api/v2/:tenant_slug/analytics/rankings?by=group`; the hand-seeded harness comment is
+  reworded to what it drives.
+- **R6 (B-3, B-4, B-5, B-9, A-3, A-4).** Docs and comments: the dimension is the request's
+  **using group** (token/user group, may change on cross-group retry), not the channel group; drop the
+  index claim; `model|vendor|group` at all four doc sites and the guide's route-table row; publish the
+  old and new 400 message strings.
+- **R7 (B-8).** Name the `(ungrouped)` collision as a known non-goal in the const comment and §K.
+- **R8 (B-10, locale correction).** Add `console.rankings.by_group` and update
+  `console.rankings.sub` in `en.json` and `zh.json`; touch the other locale files only if they
+  already carry the `console.rankings` block (mirror whatever the sibling keys do there).
+- **R9 (A-6, A-7).** Drop `/renderSQL` and the authoring-order clause.
+
+### L8 — admin diagnostics page
+
+- **R1 (A-1).** Capture the `ConfirmDialog` props in the mock and assert
+  `confirmText === 'PURGE ALL'`; a missing prop makes purge-all permanently unusable in production.
+- **R2 (B-1, A-4).** `Promise.allSettled` with a per-panel state `ok | forbidden | error`; a failed
+  panel renders an explicit unavailable marker, never `no`/`0.0%` defaults; the other panel still
+  renders. Test with `totp-stats` rejecting 500.
+- **R3 (B-2).** `mem entries` renders only when `backend === 'memory'`; otherwise a sub-label
+  explaining it is the in-process fallback map. Test the redis case.
+- **R4 (B-3).** `doPurgeAll` wraps in try/catch like the `ModelRateLimits` precedent; test that a
+  rejected purge leaves the dialog open.
+- **R5 (A-3, A-5, A-6).** Cover the 403 branch; assert the dialog closes after success and
+  `enabled: false` renders `no`; purge-one shows the server message on a non-204 response.
+- **R6 (A-2, B-4, B-5).** Reword the two absolutes to the scoped, cited form; render `scope` from the
+  response; the acceptance line becomes "nav entry hidden below role 100, page renders a refusal when
+  the server refuses".
+- **R7 (locale correction).** Add every new `console.admin.diagnostics.*` key (and the nav label
+  key) to `en.json` and `zh.json`.
+
+### L9 — netdata alarms: the premise was incomplete, and the lane's output would never bind
+
+Verified on the R6 host on 2026-09-15 (read-only):
+
+- **A `newhub.conf` already exists on the host** —
+  `/data/obs-pack/runtime/netdata/config/health.d/newhub.conf`, 173 lines, mtime 2026-08-20, bind-mounted
+  read-only into the `obs-netdata` container at `/etc/netdata/health.d/newhub.conf` **per file** (a new
+  file dropped into that directory is not mounted). It carries eight `template:` alarms ported from
+  `deploy/grafana/newhub-alerts.yaml` — a repo file that commit `e0425425` deleted, so the host file's
+  own "tuning SOT" no longer exists. Nothing in the repo owns it today.
+- **Chart naming is `on: prometheus.newhub.<metric>`** (context) with chart ids
+  `prometheus_newhub.<metric>-<label>=<value>…`, one chart per label-set, single dimension, counters
+  rate-converted by go.d, **`update_every = 10`**. The lane wrote `prometheus_local_newhub.<metric>`
+  and `alarm:` blocks with `lookup: sum -5m` — none of its three alarms would ever bind, and the
+  arithmetic assumes a 1 s interval.
+- **Binding status via the netdata API:** four of the eight host templates are bound and CLEAR
+  (`platform_breaker_open`, `billing_outbox_failures`, `billing_outbox_backlog`,
+  `relay_5xx_elevated`); four are **unbound** because no chart matches (`credit_pool`,
+  `channel_breaker_open`, `cost_spike_429`, `quota_cap_402`) — dead alarms, exactly what the repo
+  oracle exists to catch. `relay_5xx_elevated` is bound only to the
+  `path=/api/health status=503` chart, i.e. it watches health checks, not relay traffic.
+- **Notification is configured:** `SEND_EMAIL="NO"`, `SEND_CUSTOM="YES"`,
+  `role_recipients_custom[sysadmin]="default"` — a custom webhook sender exists. O2 is therefore
+  "verify where the custom sender delivers", not "no recipient".
+
+Rulings, replacing the lane's shape:
+
+- **R1.** **Adopt the host file into the repo.** `deploy/r6-host-netdata/health.d/newhub.conf` becomes
+  a faithful copy of the live file (the operator provides it — the repair agent must not connect to
+  R6), then the three new alarms are **merged into it** in the same `template:` /
+  `on: prometheus.newhub.<metric>` / `chart labels:` / `lookup: average -Nm` (rate, `units: …/s`)
+  model the file already uses. The `README.md` states the provenance (host copy of 2026-08-20, adopted
+  2026-09-15) and that the repo is now the source of truth.
+- **R2 (A-1, B-2, B-1, B-3).** The oracle reads the **`on:` line** of every `template:`/`alarm:`
+  block, strips the `prometheus.newhub.` prefix, and requires the remainder to be a series the repo
+  both declares and writes, building the wire name from the parsed `Namespace`/`Subsystem`/`Name`
+  literals of each `promauto` block (no fabricated `lurus_gateway_` prefix). The `# series:` annotation
+  becomes a cross-check that must equal the `on:` metric, and every block must carry one. Dead
+  templates in the adopted file are handled by the oracle, not by hand: `chart labels:` filters whose
+  label **values** the code never emits (e.g. a `status=429` on `requests_total` if the recorder never
+  writes it) are flagged by a second check that parses the label filter and asserts the label key is
+  one the declared vector carries; a template the oracle cannot prove live is either fixed or moved
+  under a `# DEAD (reason, date)` section that the oracle skips and the README lists.
+- **R3 (B-4, B-11).** Header, README and every runbook state: the scrape is one NodePort round-robin
+  across three replicas at `update_every = 10`; rates are per-replica samples, so thresholds are
+  calibrated on the live probe, not derived. Use `lookup: average -Nm` on the rate-converted
+  dimension, never `sum` of samples as an event count.
+- **R4 (B-5, A-7, B-8).** `scripts/install-netdata-alarms.sh` writes the file to
+  `/data/obs-pack/runtime/netdata/config/health.d/newhub.conf` (the bind source), reloads with
+  `docker exec obs-netdata netdatacli reload-health`, fails loudly when the container is absent, and
+  requires root only when the destination is not writable. Delete the stock-config fallback prose.
+- **R5 (A-3).** Honest live-state prose: the conf header and INDEX rows say "adopted from the host
+  copy of 2026-08-20; re-installed from the repo — pending until the operator's probe" with a date;
+  the honesty test requires the installer name **and** a dated status line, not the absence of the
+  reference-only marker.
+- **R6 (A-4, B-7).** Implement the runbook gate: every `template:`/`alarm:` block's `info:` (or a
+  `# runbook:` line) names a `doc/runbook/*.md` that exists and is linked from `INDEX.md`. The adopted
+  file's existing eight alarms get runbook pointers too (short pages are acceptable; a dead template
+  gets no runbook and is listed as dead).
+- **R7 (A-5, B-10).** Fix `declaredMetricVarRe` in `declared_series_written_test.go` with
+  `(?:var\s+)?` and reuse it; if the widened gate exposes a declared-but-unwritten series, report it
+  as a finding, do not weaken the regex.
+- **R8 (A-6).** `rate_limit_degraded` `info:` and runbook say "either a fail-open admission or a lost
+  success recording; read the `check` label"; narrow the label filter only if the emitted label values
+  are proved from `r6_rate_limit_degraded.go`.
+- **R9 (B-6).** Runbooks name the real route `PUT /api/v2/{tenant_slug}/channels/{id}` and the
+  integer status value.
+- **R10 (B-9, the hygiene list).** Runbook prose: cite the three call sites and their branches;
+  distinguish the fail-closed web/API limiters from the fail-open relay limiters by file:line.
+- **R11 (A-8).** The report states how the local rehearsal bypassed the root check.
+- **O2 is amended:** the operator verifies where `SEND_CUSTOM` delivers during the probe and records
+  it in the README; until then "alerting exists" means "visible in the netdata API and sent to the
+  custom sender".
