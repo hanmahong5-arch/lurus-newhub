@@ -80,6 +80,16 @@ SELECT pg_terminate_backend(<pid>);
 - **All relay failing**: check channel status (admin) → verify upstream key → `grep "channel error"` → test direct upstream from pod (`kubectl exec ... wget --header='Authorization: Bearer <key>' https://api.openai.com/v1/models`) → enable backup channels / notify.
 - **High latency**: `kubectl top pod` → `pg_stat_statements` → `redis-cli -n 2 ping` (DB **2**, not 0) → pprof if sustained. (Meilisearch is not deployed for this service — `MEILISEARCH_ENABLED=false`.)
 - **Tenant login broken**: `curl https://identity.lurus.cn/oauth/v2/keys` → verify OIDC config (client ID, redirect URI, issuer) → check JWT validation errors → verify tenant in `tenants` table → test callback with `curl -v`.
+- **Locked out of step-up verification (`SECURE_VERIFICATION_REQUIRE_ENROLLMENT=true`)**: this flag makes
+  `POST /api/verify` (`method:"session"`) refuse with `403 STEP_UP_ENROLLMENT_REQUIRED` for any admin with
+  no TOTP enrollment — which blocks channel-key reveal and 2FA force-disable for that account. If an
+  operator gets locked out (flag was turned on before that operator enrolled a factor), break-glass is:
+  set `SECURE_VERIFICATION_REQUIRE_ENROLLMENT=false` (or unset it) in the deployment's secret/env and
+  restart the pods — this is a plain env change through the normal deploy path (`deploy/k8s/r6-stage/`),
+  not a runtime toggle, so it goes through the same ArgoCD/manifest flow as any other config change. The
+  no-enrollment grant this restores is always audited (`auth.stepup_without_credential` in the audit
+  trail) regardless of the flag, so turning it off does not reopen an invisible hole — it reopens an
+  auditable one, same as before this flag existed.
 
 ## Escalation
 

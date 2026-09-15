@@ -282,15 +282,25 @@ gauge 反映的是"这一轮测试已经发起",不是"每个渠道都测完了"
 - `GET /api/v2/admin/authz/catalog` — 200,返回本 cycle 可授权的 `(resource, action)` 静态目录
   (目前只有 `{"resource":"audit","actions":["read"]}` 一条)和两档固定角色
   (`tenant-admin` min_role 10 / `root` min_role 100)。
-- `GET /api/v2/admin/authz/grants` — 200,列出全部授权行(含已撤销)。
+- `GET /api/v2/admin/authz/grants` — 200,列出全部授权行(含已撤销)。每行新增(cycle-9 L1)
+  `expires_at`(unix 秒,nullable)和服务端派生的 `expired` 布尔——`expired` 只看
+  `expires_at` 是否已过 now,和 `revoked_at` 无关,两者可以同时为真(一条既过期又被显式撤销
+  的行)。
 - `POST /api/v2/admin/authz/grants` `{"user_id":int,"resource":"audit","action":"read",
-  "tenant_id":null}` — **201** `{"success":true,"data":{"id":n}}`;**400** `GRANT_INVALID`
-  当 `user_id` 不存在或该用户角色 `< RoleAdminUser`(L4 修复轮 B-F4——此前接受任意正数
-  `user_id`,写错一位数字会静默铸出一条永远打不开任何门的"active"行)、`(resource,action)`
-  不在目录里、或 `tenant_id` 非 null(见下"全局"一节);**409** `GRANT_EXISTS` 当同一
-  `(user_id, resource, action)` 已有一条未撤销的行。
+  "tenant_id":null,"ttl_seconds":int|null}` — **201**
+  `{"success":true,"data":{"id":n,"expires_at":int|null}}`;`ttl_seconds`(cycle-9 L1)是可选
+  字段,省略时该授权行永久有效,和这个字段存在之前的行为完全一致;给出时必须落在
+  `1..7776000`(90 天)闭区间内,越界answers **400** `GRANT_INVALID`(复用既有 error_code,
+  不是新码)。**400** `GRANT_INVALID` 同样覆盖:当 `user_id` 不存在或该用户角色
+  `< RoleAdminUser`(L4 修复轮 B-F4——此前接受任意正数 `user_id`,写错一位数字会静默铸出一条
+  永远打不开任何门的"active"行)、`(resource,action)` 不在目录里、或 `tenant_id` 非 null
+  (见下"全局"一节);**409** `GRANT_EXISTS` 当同一 `(user_id, resource, action)` 已有一条
+  **仍然存活**(未撤销且未过期)的行——一条已过期但从未显式撤销的旧行不会导致这个 409:
+  `CreatePermissionGrant` 在同一事务里先把过期旧行的 `revoked_at` 置位,再插入新行,新旧两行
+  都在授权行的历史列表里可见。
 - `DELETE /api/v2/admin/authz/grants/:id` — **200**(置 `revoked_at`);**404** 当 id 不存在或
-  已撤销(两种情况同形状,不可区分)。
+  已撤销(两种情况同形状,不可区分)。对一条已过期但未撤销的行调用同样返回 200(允许显式撤销一
+  条已经在功能上失效的行)。
 
 **授权是全局的(GLOBAL)**——本 cycle `tenant_id` 只接受 `null`;`RootOrGranted` 的授权检查同样
 只查 `tenant_id IS NULL` 的行。持有 `audit:read` 授权的租户管理员读到的是**全平台**审计流,
@@ -312,7 +322,8 @@ RevokePermissionGrantsForUser`),各记一条 `authz.permission_revoked` 审计�
 持有授权行而放行。
 
 **审计**——两个写端点各自记一条动作:`authz.permission_granted` / `authz.permission_revoked`,
-`resource="authz"`,`details` 带 `{grantee_user_id,resource,action,tenant_id:null}`。当写调用
+`resource="authz"`,`details` 带 `{grantee_user_id,resource,action,tenant_id:null}`;创建端点
+(cycle-9 L1)额外带 `ttl_seconds`(给了就是那个整数,没给就是 JSON `null`)。当写调用
 走 Bearer JWT 根路径时(`granted_by`/审计 `actor_id` 记 0,因为 JWT 分支不设 `"id"`),`details`
 额外带 `granted_by_sub` 记 JWT 的 subject——这是记录约定,不是拒绝这类调用的理由。
 

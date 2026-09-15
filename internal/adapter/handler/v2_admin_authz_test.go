@@ -346,3 +346,214 @@ func TestAuthzGrants_RejectsNonAdminGrantee(t *testing.T) {
 		})
 	}
 }
+
+// TestGrant_TTLBounds is the L1 oracle (cycle-9 plan section 3): ttl_seconds
+// is bounded 1..7776000 (90 days) inclusive; 0, negative, and over-90-days
+// all answer 400 GRANT_INVALID, the same error_code every other
+// CreateGrantV2 rejection uses, not a new one.
+func TestGrant_TTLBounds(t *testing.T) {
+	defer setupAuthzTestDB(t)()
+	seedGranteeUser(t, 42, common.RoleAdminUser)
+
+	r := buildAuthzRouter(1)
+
+	cases := []struct {
+		name string
+		ttl  int64
+	}{
+		{"zero", 0},
+		{"negative", -1},
+		{"over 90 days", 7776001},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]interface{}{
+				"user_id": 42, "resource": "audit", "action": "read", "ttl_seconds": tc.ttl,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/v2/admin/authz/grants", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("ttl_seconds=%d: status = %d, want 400; body=%s", tc.ttl, w.Code, w.Body.String())
+			}
+			var resp map[string]interface{}
+			_ = json.Unmarshal(w.Body.Bytes(), &resp)
+			if resp["error_code"] != "GRANT_INVALID" {
+				t.Errorf("ttl_seconds=%d: error_code = %v, want GRANT_INVALID", tc.ttl, resp["error_code"])
+			}
+			granted, err := repo.HasActivePermissionGrant(42, "audit", "read")
+			if err != nil {
+				t.Fatalf("HasActivePermissionGrant: %v", err)
+			}
+			if granted {
+				t.Fatalf("ttl_seconds=%d: a grant row was created despite the out-of-bounds ttl", tc.ttl)
+			}
+		})
+	}
+
+	// The boundary values are valid, not rejected.
+	for _, tc := range []struct {
+		name string
+		ttl  int64
+	}{{"minimum (1 second)", 1}, {"maximum (90 days)", 7776000}} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]interface{}{
+				"user_id": 42, "resource": "audit", "action": "read", "ttl_seconds": tc.ttl,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/v2/admin/authz/grants", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("ttl_seconds=%d: status = %d, want 201; body=%s", tc.ttl, w.Code, w.Body.String())
+			}
+			// Revoke so the next boundary case does not collide with the
+			// still-live "one active grant per triple" invariant.
+			var createResp struct {
+				Data struct {
+					ID int `json:"id"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &createResp); err != nil {
+				t.Fatalf("unmarshal create body: %v", err)
+			}
+			wRevoke := httptest.NewRecorder()
+			r.ServeHTTP(wRevoke, httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/v2/admin/authz/grants/%d", createResp.Data.ID), nil))
+			if wRevoke.Code != http.StatusOK {
+				t.Fatalf("cleanup revoke: status = %d, want 200; body=%s", wRevoke.Code, wRevoke.Body.String())
+			}
+		})
+	}
+}
+
+// TestAuthzGrants_CreateWithTTLSetsExpiresAtAndAuditRecordsTTL is the L1
+// oracle for the ttl_seconds happy path: the created row expires_at is
+// populated, the list response derives expired:false while still live, and
+// the create audit detail records the ttl.
+func TestAuthzGrants_CreateWithTTLSetsExpiresAtAndAuditRecordsTTL(t *testing.T) {
+	defer setupAuthzTestDB(t)()
+	seedGranteeUser(t, 42, common.RoleAdminUser)
+
+	const actorID = 1
+	r := buildAuthzRouter(actorID)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"user_id": 42, "resource": "audit", "action": "read", "ttl_seconds": 3600,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/admin/authz/grants", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+
+	ev := pollAuditRow(t, governance.ActionPermissionGranted, 2*time.Second)
+	if ev == nil {
+		t.Fatalf("no %s audit row found within timeout", governance.ActionPermissionGranted)
+	}
+	if !bytes.Contains([]byte(ev.Details), []byte(`"ttl_seconds":3600`)) {
+		t.Errorf("Details = %s, want ttl_seconds:3600 recorded", ev.Details)
+	}
+
+	reqList := httptest.NewRequest(http.MethodGet, "/api/v2/admin/authz/grants", nil)
+	wList := httptest.NewRecorder()
+	r.ServeHTTP(wList, reqList)
+	var listResp struct {
+		Data []struct {
+			ID        int    `json:"id"`
+			ExpiresAt *int64 `json:"expires_at"`
+			Expired   bool   `json:"expired"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wList.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list body: %v", err)
+	}
+	if len(listResp.Data) != 1 {
+		t.Fatalf("list returned %d grants, want 1", len(listResp.Data))
+	}
+	if listResp.Data[0].ExpiresAt == nil {
+		t.Fatalf("list response expires_at is nil for a grant created with ttl_seconds=3600")
+	}
+	if listResp.Data[0].Expired {
+		t.Fatalf("list response expired = true for a grant that has not expired yet")
+	}
+
+	// A grant created with NO ttl_seconds carries expires_at:null and
+	// expired:false, the flag-off equivalent is byte-identical to pre-L1
+	// behaviour.
+	seedGranteeUser(t, 43, common.RoleAdminUser)
+	body2, _ := json.Marshal(map[string]interface{}{
+		"user_id": 43, "resource": "audit", "action": "read",
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v2/admin/authz/grants", bytes.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("no-ttl create: status = %d, want 201; body=%s", w2.Code, w2.Body.String())
+	}
+
+	found := false
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var rows []entity.AuditEvent
+		if err := repo.DB.Where("action = ?", governance.ActionPermissionGranted).Find(&rows).Error; err == nil {
+			for _, row := range rows {
+				if bytes.Contains([]byte(row.Details), []byte(`"grantee_user_id":43`)) {
+					if !bytes.Contains([]byte(row.Details), []byte(`"ttl_seconds":null`)) {
+						t.Errorf("no-ttl create Details = %s, want ttl_seconds:null", row.Details)
+					}
+					found = true
+					break
+				}
+			}
+		}
+		if found {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !found {
+		t.Fatalf("no audit row found naming grantee_user_id:43")
+	}
+}
+
+// TestGrant_ReGrantAfterExpiry_ThroughHandler is the L1 REAL-CHAIN oracle
+// (cycle-9 plan section 3, the ruling): an expired-but-unrevoked grant must
+// not 409 a re-grant of the same (user, resource, action) through the real
+// CreateGrantV2 handler, the trap the partial unique index sets up.
+func TestGrant_ReGrantAfterExpiry_ThroughHandler(t *testing.T) {
+	defer setupAuthzTestDB(t)()
+	seedGranteeUser(t, 42, common.RoleAdminUser)
+
+	past := common.GetTimestamp() - 60
+	expired := entity.AdminPermissionGrant{
+		UserId: 42, Resource: "audit", Action: "read", GrantedBy: 1,
+		CreatedAt: common.GetTimestamp() - 120, ExpiresAt: &past,
+	}
+	if err := repo.DB.Create(&expired).Error; err != nil {
+		t.Fatalf("seed expired grant: %v", err)
+	}
+
+	r := buildAuthzRouter(1)
+	body, _ := json.Marshal(map[string]interface{}{
+		"user_id": 42, "resource": "audit", "action": "read",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/admin/authz/grants", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("re-grant after expiry through the real handler: status = %d, want 201 (not 409); body=%s", w.Code, w.Body.String())
+	}
+
+	granted, err := repo.HasActivePermissionGrant(42, "audit", "read")
+	if err != nil {
+		t.Fatalf("HasActivePermissionGrant: %v", err)
+	}
+	if !granted {
+		t.Fatalf("HasActivePermissionGrant = false right after the handler re-grant succeeded")
+	}
+}

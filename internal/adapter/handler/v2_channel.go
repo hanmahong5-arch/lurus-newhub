@@ -357,6 +357,16 @@ func CreateChannelV2(c *gin.Context) {
 		return
 	}
 
+	// channel:sensitive_write (L2): a create has no prior row (existing=nil),
+	// so the populated Key (required above) carries the same power as an
+	// update that touches one. Runs last, after every validation step above
+	// (so an unauthorized-AND-malformed request still gets the same 400 an
+	// authorized caller would, matching the v1 AddChannel ordering) and
+	// before the row is inserted — a refused create writes nothing.
+	if enforceChannelSensitiveWrite(c, nil, &channel, 0) {
+		return
+	}
+
 	// Insert channel
 	if err := channel.Insert(); err != nil {
 		common.SysError("Failed to create channel: " + err.Error())
@@ -440,6 +450,12 @@ func UpdateChannelV2(c *gin.Context) {
 		})
 		return
 	}
+
+	// Snapshot the pristine row before the merge loop below mutates
+	// existingChannel in place — the channel:sensitive_write gate (below,
+	// after config-document/egress validation) needs the ORIGINAL values to
+	// diff against, not the already-merged state.
+	originalChannel := *existingChannel
 
 	// Update fields if provided
 	if updateReq.Name != "" {
@@ -530,6 +546,16 @@ func UpdateChannelV2(c *gin.Context) {
 			})
 			return
 		}
+	}
+
+	// channel:sensitive_write (L2): checked against the pre-merge snapshot
+	// (originalChannel) vs. exactly what the caller sent (updateReq) — run
+	// last, after config-document/egress validation, so a malformed-AND-
+	// unauthorized request gets the same 400 an authorized caller would
+	// (matching the v1 UpdateChannel/CreateChannelV2 ordering), and before
+	// Update() persists anything.
+	if enforceChannelSensitiveWrite(c, &originalChannel, &updateReq, existingChannel.Id) {
+		return
 	}
 
 	// Save channel

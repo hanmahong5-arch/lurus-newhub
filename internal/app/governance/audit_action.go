@@ -37,6 +37,15 @@ const (
 	// (the user's own TOTP disable) because the actor and target differ and
 	// this is the escape hatch for a lost device, not routine self-service.
 	ActionTotpAdminDisabled = "auth.totp_admin_disabled"
+	// ActionAuthStepUpNoCredential is recorded by UniversalVerify
+	// (secure_verification.go, L3, cycle 9) every time step-up verification
+	// is granted through the no-TOTP-enrollment branch — method "session"
+	// accepted with nothing checked beyond an already-authenticated session,
+	// no credential of any kind presented. Fires unconditionally (regardless
+	// of SECURE_VERIFICATION_REQUIRE_ENROLLMENT), so this grant is auditable
+	// even while the flag that would refuse it instead stays off — see that
+	// flag's doc in .env.example for why the default is off.
+	ActionAuthStepUpNoCredential = "auth.stepup_without_credential"
 
 	// Token CRUD (relay key lifecycle).
 	ActionTokenCreated       = "token.created"
@@ -54,6 +63,17 @@ const (
 	ActionChannelEnabled      = "channel.enabled"
 	ActionChannelTagDisabled  = "channel.tag_disabled"
 	ActionChannelTested       = "channel.tested"
+	// ActionChannelSensitiveWriteRefused is recorded by
+	// internal/adapter/handler/channel_sensitive_write.go's
+	// enforceChannelSensitiveWrite (L2, cycle 9, auth-security-17/18
+	// follow-up) when a non-root admin's channel write touches a sensitive
+	// field (key, base_url, param_override, header_override, or the
+	// per-channel proxy setting) without an active channel:sensitive_write
+	// grant. Fires on refusal only — a write that is allowed to proceed
+	// already produces ActionChannelCreated/ActionChannelUpdated; this
+	// event exists so the DENIED attempt is visible too, across all four
+	// entry points (v1 add/update, v2 create/update).
+	ActionChannelSensitiveWriteRefused = "channel.sensitive_write_refused"
 
 	// User lifecycle and admin operations on users.
 	ActionUserCreated       = "user.created"
@@ -290,86 +310,88 @@ const (
 // validator is the single source of truth that the export endpoint and any
 // future schema-checking client can rely on.
 var validAuditActions = map[string]struct{}{
-	ActionAuthFailed:                {},
-	ActionAuthIPRejected:            {},
-	ActionAuthScopeRejected:         {},
-	ActionAuthBootstrapped:          {},
-	ActionAuthLoginSuccess:          {},
-	ActionAuthLogout:                {},
-	ActionAuthSessionRevoked:        {},
-	ActionAuthOIDCLinked:            {},
-	ActionAuthOIDCUnlinked:          {},
-	ActionAuthTokenRotated:          {},
-	ActionAuthTotpBackupRegenerated: {},
-	ActionTotpAdminDisabled:         {},
-	ActionTokenCreated:              {},
-	ActionTokenUpdated:              {},
-	ActionTokenDeleted:              {},
-	ActionTokenBatchDeleted:         {},
-	ActionTokenStatusChanged:        {},
-	ActionChannelCreated:            {},
-	ActionChannelUpdated:            {},
-	ActionChannelDeleted:            {},
-	ActionChannelBatchDeleted:       {},
-	ActionChannelDisabled:           {},
-	ActionChannelEnabled:            {},
-	ActionChannelTagDisabled:        {},
-	ActionChannelTested:             {},
-	ActionUserCreated:               {},
-	ActionUserUpdated:               {},
-	ActionUserDeleted:               {},
-	ActionUserRoleChanged:           {},
-	ActionUserBanned:                {},
-	ActionUserUnbanned:              {},
-	ActionUserSelfUpdated:           {},
-	ActionUserQuotaAdjusted:         {},
-	ActionRedemptionCreated:         {},
-	ActionRedemptionUpdated:         {},
-	ActionRedemptionDeleted:         {},
-	ActionRedemptionRedeemed:        {},
-	ActionRedemptionInvalidDeleted:  {},
-	ActionProjectCreated:            {},
-	ActionProjectUpdated:            {},
-	ActionProjectDeleted:            {},
-	ActionProjectRestored:           {},
-	ActionOptionUpdated:             {},
-	ActionPricingUpdated:            {},
-	ActionModelSyncTriggered:        {},
-	ActionModelCreated:              {},
-	ActionModelDeleted:              {},
-	ActionTenantCreated:             {},
-	ActionTenantUpdated:             {},
-	ActionTenantDeleted:             {},
-	ActionTenantMappingDeleted:      {},
-	ActionTenantBrandUpdated:        {},
-	ActionTenantInviteIssued:        {},
-	ActionTenantInviteConsumed:      {},
-	ActionTenantInviteRevoked:       {},
-	ActionInternalKeyTenantGranted:  {},
-	ActionInternalKeyTenantRevoked:  {},
-	ActionSensitiveBlocked:          {},
-	ActionWhitelabelKeyAccessed:     {},
-	ActionBillingDebit:              {},
-	ActionBillingCredit:             {},
-	ActionBillingQuotaConsumed:      {},
-	ActionBillingQuotaThreshold:     {},
-	ActionBillingPoolReset:          {},
-	ActionBillingPoolThreshold:      {},
-	ActionSystemStartup:             {},
-	ActionSystemShutdown:            {},
-	ActionAdminWriteUnaudited:       {},
-	ActionCreditPoolCreated:         {},
-	ActionCreditPoolToppedUp:        {},
-	ActionCreditPoolDeleted:         {},
-	ActionCreditPoolFunded:          {},
-	ActionSwitchPresetCreated:       {},
-	ActionAdminMaintenanceTriggered: {},
-	ActionRoutingAffinityPurged:     {},
-	ActionPermissionGranted:         {},
-	ActionPermissionRevoked:         {},
-	ActionResponseRetrieved:         {},
-	ActionResponseDeleted:           {},
-	ActionResponseDenied:            {},
+	ActionAuthFailed:                   {},
+	ActionAuthIPRejected:               {},
+	ActionAuthScopeRejected:            {},
+	ActionAuthBootstrapped:             {},
+	ActionAuthLoginSuccess:             {},
+	ActionAuthLogout:                   {},
+	ActionAuthSessionRevoked:           {},
+	ActionAuthOIDCLinked:               {},
+	ActionAuthOIDCUnlinked:             {},
+	ActionAuthTokenRotated:             {},
+	ActionAuthTotpBackupRegenerated:    {},
+	ActionTotpAdminDisabled:            {},
+	ActionAuthStepUpNoCredential:       {},
+	ActionTokenCreated:                 {},
+	ActionTokenUpdated:                 {},
+	ActionTokenDeleted:                 {},
+	ActionTokenBatchDeleted:            {},
+	ActionTokenStatusChanged:           {},
+	ActionChannelCreated:               {},
+	ActionChannelUpdated:               {},
+	ActionChannelDeleted:               {},
+	ActionChannelBatchDeleted:          {},
+	ActionChannelDisabled:              {},
+	ActionChannelEnabled:               {},
+	ActionChannelTagDisabled:           {},
+	ActionChannelTested:                {},
+	ActionChannelSensitiveWriteRefused: {},
+	ActionUserCreated:                  {},
+	ActionUserUpdated:                  {},
+	ActionUserDeleted:                  {},
+	ActionUserRoleChanged:              {},
+	ActionUserBanned:                   {},
+	ActionUserUnbanned:                 {},
+	ActionUserSelfUpdated:              {},
+	ActionUserQuotaAdjusted:            {},
+	ActionRedemptionCreated:            {},
+	ActionRedemptionUpdated:            {},
+	ActionRedemptionDeleted:            {},
+	ActionRedemptionRedeemed:           {},
+	ActionRedemptionInvalidDeleted:     {},
+	ActionProjectCreated:               {},
+	ActionProjectUpdated:               {},
+	ActionProjectDeleted:               {},
+	ActionProjectRestored:              {},
+	ActionOptionUpdated:                {},
+	ActionPricingUpdated:               {},
+	ActionModelSyncTriggered:           {},
+	ActionModelCreated:                 {},
+	ActionModelDeleted:                 {},
+	ActionTenantCreated:                {},
+	ActionTenantUpdated:                {},
+	ActionTenantDeleted:                {},
+	ActionTenantMappingDeleted:         {},
+	ActionTenantBrandUpdated:           {},
+	ActionTenantInviteIssued:           {},
+	ActionTenantInviteConsumed:         {},
+	ActionTenantInviteRevoked:          {},
+	ActionInternalKeyTenantGranted:     {},
+	ActionInternalKeyTenantRevoked:     {},
+	ActionSensitiveBlocked:             {},
+	ActionWhitelabelKeyAccessed:        {},
+	ActionBillingDebit:                 {},
+	ActionBillingCredit:                {},
+	ActionBillingQuotaConsumed:         {},
+	ActionBillingQuotaThreshold:        {},
+	ActionBillingPoolReset:             {},
+	ActionBillingPoolThreshold:         {},
+	ActionSystemStartup:                {},
+	ActionSystemShutdown:               {},
+	ActionAdminWriteUnaudited:          {},
+	ActionCreditPoolCreated:            {},
+	ActionCreditPoolToppedUp:           {},
+	ActionCreditPoolDeleted:            {},
+	ActionCreditPoolFunded:             {},
+	ActionSwitchPresetCreated:          {},
+	ActionAdminMaintenanceTriggered:    {},
+	ActionRoutingAffinityPurged:        {},
+	ActionPermissionGranted:            {},
+	ActionPermissionRevoked:            {},
+	ActionResponseRetrieved:            {},
+	ActionResponseDeleted:              {},
+	ActionResponseDenied:               {},
 }
 
 // IsValidAuditAction reports whether action is in the canonical taxonomy.

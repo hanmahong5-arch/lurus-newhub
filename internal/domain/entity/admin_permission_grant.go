@@ -36,6 +36,17 @@ type AdminPermissionGrant struct {
 	GrantedBy int     `json:"granted_by" gorm:"not null"`
 	CreatedAt int64   `json:"created_at" gorm:"not null"`
 	RevokedAt *int64  `json:"revoked_at"`
+	// ExpiresAt is unix seconds, nullable, added by migration 037 (cycle-9
+	// L1). NULL means "no expiry" — a grant created without ttl_seconds
+	// behaves exactly as every grant did before this column existed. A
+	// non-NULL value participates in the active-grant predicate alongside
+	// RevokedAt (repo.HasActivePermissionGrant): active = RevokedAt IS NULL
+	// AND (ExpiresAt IS NULL OR ExpiresAt > now). This column does NOT
+	// change the partial unique index's shape (034) — an expired-but-not-
+	// yet-revoked row still occupies that index's slot; see
+	// repo.CreatePermissionGrant for how re-granting after expiry is
+	// handled without touching the index.
+	ExpiresAt *int64 `json:"expires_at"`
 }
 
 // TableName overrides the default GORM table name.

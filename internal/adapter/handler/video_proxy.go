@@ -219,6 +219,26 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
+	// Cycle-9 L4: the general private-IP/domain SSRF policy
+	// (app.ValidateOutboundURL — fetch_setting's AllowPrivateIp/domain/IP
+	// allow-deny lists) already gated channel egress (channel.go,
+	// v2_channel_actions.go) and the artefact-content route
+	// (task_media_guard.go's streamMediaContent) before this lane; this
+	// handler served the same class of vendor-supplied URL with only the
+	// scheme/self-URL checks above and no call to it at all. Closing that
+	// gap is this lane's whole point (see task_media_guard.go and
+	// metrics.go's corrected doc comments). respondArtifactRejected is the
+	// artefact route's own refusal function, reused here rather than
+	// duplicated so the response shape (type/message/code) cannot drift
+	// between the two routes that serve the same class of URL — only the
+	// route label passed to it differs, which is what keeps the metric
+	// able to tell the two routes apart.
+	if err := app.ValidateOutboundURL(videoURL); err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Refusing video URL blocked by egress policy for task %s: %s: %s", taskID, videoURL, err.Error()))
+		respondArtifactRejected(c, videoProxyMetricsRoute, "egress_check", "Artifact URL failed the egress check")
+		return
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "upstream_error").Inc()

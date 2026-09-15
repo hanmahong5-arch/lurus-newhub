@@ -46,6 +46,7 @@ func TestIsValidAuditAction(t *testing.T) {
 		{ActionResponseRetrieved, true},
 		{ActionResponseDeleted, true},
 		{ActionResponseDenied, true},
+		{ActionChannelSensitiveWriteRefused, true},
 
 		// Unknown actions — must reject. These probe the most likely typos:
 		// trailing whitespace, near-misses, empty string, invented terms.

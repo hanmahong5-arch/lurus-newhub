@@ -272,3 +272,143 @@ func TestAdminPermissionGrantRepo_RevokeForUserWritesAuditRows(t *testing.T) {
 		}
 	}
 }
+
+// TestGrant_ExpiredIsNotActive is the L1 oracle (cycle-9 plan §3):
+// expires_at participates in the active-grant predicate alongside
+// revoked_at. A row with expires_at in the past, still un-revoked, must not
+// authorise anything — deleting the "(expires_at IS NULL OR expires_at > ?)"
+// clause from HasActivePermissionGrant's WHERE turns this red.
+func TestGrant_ExpiredIsNotActive(t *testing.T) {
+	defer setupSQLiteDB(t)()
+
+	past := common.GetTimestamp() - 3600
+	row := entity.AdminPermissionGrant{
+		UserId: 71, Resource: "audit", Action: "read", GrantedBy: 1,
+		CreatedAt: common.GetTimestamp() - 7200, ExpiresAt: &past,
+	}
+	if err := DB.Create(&row).Error; err != nil {
+		t.Fatalf("seed expired grant: %v", err)
+	}
+
+	granted, err := HasActivePermissionGrant(71, "audit", "read")
+	if err != nil {
+		t.Fatalf("HasActivePermissionGrant: %v", err)
+	}
+	if granted {
+		t.Fatalf("HasActivePermissionGrant = true for a grant whose expires_at is in the past and revoked_at is NULL")
+	}
+
+	// A grant with expires_at in the FUTURE is still active — expiry is not
+	// a blanket rejection of every non-NULL value.
+	future := common.GetTimestamp() + 3600
+	row2 := entity.AdminPermissionGrant{
+		UserId: 72, Resource: "audit", Action: "read", GrantedBy: 1,
+		CreatedAt: common.GetTimestamp(), ExpiresAt: &future,
+	}
+	if err := DB.Create(&row2).Error; err != nil {
+		t.Fatalf("seed future-expiring grant: %v", err)
+	}
+	granted, err = HasActivePermissionGrant(72, "audit", "read")
+	if err != nil {
+		t.Fatalf("HasActivePermissionGrant (future expiry): %v", err)
+	}
+	if !granted {
+		t.Fatalf("HasActivePermissionGrant = false for a grant whose expires_at is still in the future")
+	}
+
+	// A grant with expires_at NULL (no ttl_seconds given) is permanent,
+	// exactly as it behaved before this column existed.
+	if _, err := CreatePermissionGrant(73, "audit", "read", 1); err != nil {
+		t.Fatalf("CreatePermissionGrant (no ttl): %v", err)
+	}
+	granted, err = HasActivePermissionGrant(73, "audit", "read")
+	if err != nil {
+		t.Fatalf("HasActivePermissionGrant (no ttl): %v", err)
+	}
+	if !granted {
+		t.Fatalf("HasActivePermissionGrant = false for a grant created without ttl_seconds (expires_at NULL)")
+	}
+}
+
+// TestGrant_ReGrantAfterExpirySucceedsAndRevokesTheOldRow is the L1 oracle
+// for the trap the plan calls out: 034's partial unique index is
+// WHERE revoked_at IS NULL, so an expired-but-unrevoked row still occupies
+// the active slot. CreatePermissionGrant must stamp revoked_at on that row
+// and insert the new one in the same call, not 409. Deleting that
+// in-transaction revoke turns this red (ErrGrantExists instead of success).
+func TestGrant_ReGrantAfterExpirySucceedsAndRevokesTheOldRow(t *testing.T) {
+	defer setupSQLiteDB(t)()
+
+	past := common.GetTimestamp() - 60
+	old := entity.AdminPermissionGrant{
+		UserId: 81, Resource: "audit", Action: "read", GrantedBy: 1,
+		CreatedAt: common.GetTimestamp() - 120, ExpiresAt: &past,
+	}
+	if err := DB.Create(&old).Error; err != nil {
+		t.Fatalf("seed expired grant: %v", err)
+	}
+
+	fresh, err := CreatePermissionGrant(81, "audit", "read", 2)
+	if err != nil {
+		t.Fatalf("CreatePermissionGrant after expiry: err = %v, want success (not ErrGrantExists)", err)
+	}
+	if fresh.Id == old.Id {
+		t.Fatalf("CreatePermissionGrant returned the old row's id, want a NEW row")
+	}
+
+	var reread entity.AdminPermissionGrant
+	if err := DB.First(&reread, old.Id).Error; err != nil {
+		t.Fatalf("re-read old row: %v", err)
+	}
+	if reread.RevokedAt == nil {
+		t.Fatalf("old expired row's revoked_at is still NULL after re-grant — the trap: it would 409-lock the slot forever")
+	}
+
+	granted, err := HasActivePermissionGrant(81, "audit", "read")
+	if err != nil {
+		t.Fatalf("HasActivePermissionGrant: %v", err)
+	}
+	if !granted {
+		t.Fatalf("HasActivePermissionGrant = false right after the re-grant succeeded")
+	}
+
+	var all []entity.AdminPermissionGrant
+	if err := DB.Where("user_id = ? AND resource = ? AND action = ?", 81, "audit", "read").Find(&all).Error; err != nil {
+		t.Fatalf("list rows: %v", err)
+	}
+	activeCount := 0
+	for _, g := range all {
+		if g.RevokedAt == nil {
+			activeCount++
+		}
+	}
+	if activeCount != 1 {
+		t.Fatalf("active (revoked_at IS NULL) rows for (81,audit,read) = %d, want exactly 1", activeCount)
+	}
+}
+
+// TestGrant_ReGrantWhileLiveStill409 is the pre-existing behaviour the plan
+// says must not change: a still-LIVE grant (no expiry, or expiry in the
+// future) keeps rejecting a duplicate create with ErrGrantExists.
+func TestGrant_ReGrantWhileLiveStill409(t *testing.T) {
+	defer setupSQLiteDB(t)()
+
+	if _, err := CreatePermissionGrant(91, "audit", "read", 1); err != nil {
+		t.Fatalf("seed grant (no ttl): %v", err)
+	}
+	if _, err := CreatePermissionGrant(91, "audit", "read", 1); !errors.Is(err, ErrGrantExists) {
+		t.Fatalf("re-grant of a live (no-expiry) grant: err = %v, want ErrGrantExists", err)
+	}
+
+	future := common.GetTimestamp() + 3600
+	live := entity.AdminPermissionGrant{
+		UserId: 92, Resource: "audit", Action: "read", GrantedBy: 1,
+		CreatedAt: common.GetTimestamp(), ExpiresAt: &future,
+	}
+	if err := DB.Create(&live).Error; err != nil {
+		t.Fatalf("seed future-expiring grant: %v", err)
+	}
+	if _, err := CreatePermissionGrant(92, "audit", "read", 1); !errors.Is(err, ErrGrantExists) {
+		t.Fatalf("re-grant while expiry is still in the future: err = %v, want ErrGrantExists", err)
+	}
+}

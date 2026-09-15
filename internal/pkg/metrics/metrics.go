@@ -558,11 +558,11 @@ var (
 	// /v1/tasks/:platform/:task_id/artifacts/:key/content) — cycle-8 L9's
 	// operator ruling on the round-1 acceptance findings. route distinguishes
 	// the two handlers ("video_proxy" / "artifact_content"); reason is one
-	// of "scheme", "self_url", "size_cap" (checks both handlers run),
-	// "egress_check" (app.ValidateOutboundURL — GetTaskArtifactContent only,
-	// VideoProxy never calls it) or "upstream_error" (the fetch itself
-	// failed or returned non-200 — not a guard rejection, but counted here
-	// by both handlers too).
+	// of "scheme", "self_url", "size_cap" or "egress_check" (all four
+	// checks both handlers run as of cycle-9 L4, which closed the gap
+	// where VideoProxy never called app.ValidateOutboundURL) or
+	// "upstream_error" (the fetch itself failed or returned non-200 — not
+	// a guard rejection, but counted here by both handlers too).
 	// "size_cap" also covers the unknown-Content-Length case where the
 	// stream is stopped at the cap after a 200 has already been written (see
 	// task_media_guard.go/video_proxy.go): the request was not rejected

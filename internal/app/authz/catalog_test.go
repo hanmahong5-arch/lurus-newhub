@@ -13,7 +13,8 @@ func TestCatalog_IsValid(t *testing.T) {
 	}{
 		{"audit", "read", true},
 		{"audit", "write", false},
-		{"channel", "sensitive_write", false},
+		{"channel", "sensitive_write", true},
+		{"channel", "read", false},
 		{"", "", false},
 	}
 	for _, tc := range cases {
@@ -38,6 +39,29 @@ func TestCatalog_ContainsAuditRead(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("Catalog() = %+v, want an audit:read entry", entries)
+	}
+}
+
+// TestCatalog_ContainsChannelSensitiveWrite pins the cycle-9 L2 addition —
+// the catalogue is the only place a grant for channel:sensitive_write can
+// come from, so a regression here would make the grant-management endpoint
+// (v2_admin_authz.go's 400 GRANT_INVALID gate) reject every attempt to
+// grant it, even though catalog.go's own IsValid would silently agree.
+func TestCatalog_ContainsChannelSensitiveWrite(t *testing.T) {
+	entries := Catalog()
+	found := false
+	for _, e := range entries {
+		if e.Resource != "channel" {
+			continue
+		}
+		for _, a := range e.Actions {
+			if a == "sensitive_write" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Catalog() = %+v, want a channel:sensitive_write entry", entries)
 	}
 }
 

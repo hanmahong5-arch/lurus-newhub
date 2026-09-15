@@ -877,6 +877,16 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	// channel:sensitive_write (L2): a create has no prior row (existing=nil),
+	// so any populated sensitive field — key is required, see validateChannel
+	// above — carries the same power as an update that touches one. Runs
+	// after config-document validation (so a malformed request still gets
+	// the same "invalid document" response an authorized caller would) but
+	// before any row is written.
+	if enforceChannelSensitiveWrite(c, nil, addChannelRequest.Channel, 0) {
+		return
+	}
+
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
@@ -1253,6 +1263,15 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	if enforceTenantScope(c, originChannel.TenantId) {
+		return
+	}
+
+	// channel:sensitive_write (L2): checked against the freshly-fetched
+	// originChannel, before the KeyMode append/merge logic below can rewrite
+	// channel.Key — an "append" request still carries a non-empty Key (the
+	// delta to append), so the predicate correctly treats it as touching the
+	// key regardless of merge mode.
+	if enforceChannelSensitiveWrite(c, originChannel, &channel.Channel, originChannel.Id) {
 		return
 	}
 

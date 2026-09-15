@@ -21,6 +21,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Grant TTL bounds (cycle-9 L1): ttl_seconds on CreateGrantV2 is optional —
+// omitted, the grant is permanent (ExpiresAt stays nil), exactly as every
+// grant behaved before migration 037. When given, it is bounded 1 second
+// to 90 days; out of range is 400 GRANT_INVALID, the same error_code every
+// other CreateGrantV2 rejection already uses.
+const (
+	minGrantTTLSeconds int64 = 1
+	maxGrantTTLSeconds int64 = 90 * 24 * 60 * 60 // 7776000
+)
+
 // grantedBySubDetail returns a JSON object-fragment (leading comma, no
 // trailing comma) naming the acting admin's OIDC subject when a write
 // handler below ran on RootJWTAuth's Bearer-JWT branch: that branch never
@@ -43,6 +53,16 @@ func grantedBySubDetail(c *gin.Context, actorID int) string {
 	return fmt.Sprintf(`,"granted_by_sub":%q`, sub)
 }
 
+// grantListEntry is ListGrantsV2's wire shape: the stored row plus a
+// derived Expired flag (cycle-9 L1) — "past its expires_at", independent of
+// whether it has also been explicitly revoked. The console table reads
+// both revoked_at (status: active/revoked) and expired to tell "withdrawn"
+// from "timed out" apart.
+type grantListEntry struct {
+	repo.AdminPermissionGrant
+	Expired bool `json:"expired"`
+}
+
 // ListGrantsV2 lists every delegated permission grant, active and revoked.
 // Route: GET /api/v2/admin/authz/grants
 func ListGrantsV2(c *gin.Context) {
@@ -51,7 +71,15 @@ func ListGrantsV2(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to list grants"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": grants})
+	now := common.GetTimestamp()
+	out := make([]grantListEntry, 0, len(grants))
+	for _, g := range grants {
+		out = append(out, grantListEntry{
+			AdminPermissionGrant: g,
+			Expired:              g.ExpiresAt != nil && *g.ExpiresAt <= now,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": out})
 }
 
 type createGrantRequest struct {
@@ -59,6 +87,9 @@ type createGrantRequest struct {
 	Resource string  `json:"resource"`
 	Action   string  `json:"action"`
 	TenantID *string `json:"tenant_id"`
+	// TTLSeconds is optional (cycle-9 L1): nil means permanent, matching
+	// every grant created before this field existed.
+	TTLSeconds *int64 `json:"ttl_seconds"`
 }
 
 // CreateGrantV2 mints a delegated permission grant.
@@ -94,6 +125,14 @@ func CreateGrantV2(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "unknown resource/action", "error_code": "GRANT_INVALID"})
 		return
 	}
+	var ttl int64
+	if req.TTLSeconds != nil {
+		if *req.TTLSeconds < minGrantTTLSeconds || *req.TTLSeconds > maxGrantTTLSeconds {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "ttl_seconds must be between 1 and 7776000 (90 days)", "error_code": "GRANT_INVALID"})
+			return
+		}
+		ttl = *req.TTLSeconds
+	}
 	grantee, err := repo.GetUserById(req.UserID)
 	if err != nil || grantee.Role < common.RoleAdminUser {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "user not found or not an admin", "error_code": "GRANT_INVALID"})
@@ -101,7 +140,7 @@ func CreateGrantV2(c *gin.Context) {
 	}
 
 	actorID := c.GetInt("id")
-	grant, createErr := repo.CreatePermissionGrant(req.UserID, req.Resource, req.Action, actorID)
+	grant, createErr := repo.CreatePermissionGrant(req.UserID, req.Resource, req.Action, actorID, ttl)
 	if createErr != nil {
 		if errors.Is(createErr, repo.ErrGrantExists) {
 			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "an active grant for this user/resource/action already exists", "error_code": "GRANT_EXISTS"})
@@ -111,12 +150,16 @@ func CreateGrantV2(c *gin.Context) {
 		return
 	}
 
-	detail := fmt.Sprintf(`{"grantee_user_id":%d,"resource":%q,"action":%q,"tenant_id":null%s}`,
-		req.UserID, req.Resource, req.Action, grantedBySubDetail(c, actorID))
+	ttlDetail := "null"
+	if ttl > 0 {
+		ttlDetail = strconv.FormatInt(ttl, 10)
+	}
+	detail := fmt.Sprintf(`{"grantee_user_id":%d,"resource":%q,"action":%q,"tenant_id":null,"ttl_seconds":%s%s}`,
+		req.UserID, req.Resource, req.Action, ttlDetail, grantedBySubDetail(c, actorID))
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,
 		governance.ActionPermissionGranted, governance.ResourceAuthz, grant.Id, detail))
 
-	c.JSON(http.StatusCreated, gin.H{"success": true, "data": gin.H{"id": grant.Id}})
+	c.JSON(http.StatusCreated, gin.H{"success": true, "data": gin.H{"id": grant.Id, "expires_at": grant.ExpiresAt}})
 }
 
 // RevokeGrantV2 withdraws a permission grant.

@@ -97,6 +97,13 @@ func TestCreateChannelV2_VertexAIValidRegionSucceeds(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
+	// A create always populates key, so it needs channel:sensitive_write
+	// (L2, cycle 9) — grant it so this test keeps covering VertexAI region
+	// validation, not authz.
+	if _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "channel", "sensitive_write", ctx.RootUser.Id); err != nil {
+		t.Fatalf("seed channel:sensitive_write grant: %v", err)
+	}
+
 	body := map[string]interface{}{
 		"name":   "vertex-ok",
 		"key":    "sk-test-key",

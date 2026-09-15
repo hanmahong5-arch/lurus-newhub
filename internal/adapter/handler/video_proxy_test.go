@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -408,5 +409,195 @@ func TestVideoProxy_TruncatesUnknownLengthStreamAtCapAndCounts(t *testing.T) {
 	after := testutil.ToFloat64(metrics.TaskMediaGuardRejectionsTotal.WithLabelValues("video_proxy", "size_cap"))
 	if after-before != 1 {
 		t.Errorf("size_cap counter delta = %v, want 1 (truncation must still be counted)", after-before)
+	}
+}
+
+// TestVideoProxy_RefusesPrivateAddress is cycle-9 L4's oracle: a literal
+// private-IP videoURL, with allow_private_ip explicitly turned back off for
+// this test (setupVideoProxyGuardDB's default of true exists so the OTHER
+// tests in this file can reach an httptest.Server on 127.0.0.1), must be
+// refused by the same app.ValidateOutboundURL gate the artefact-content
+// route already applies (TestTaskArtifacts_ContentRefusesEgressBlockedURL,
+// task_artifacts_test.go) — before this lane, VideoProxy never called it at
+// all. Deleting the ValidateOutboundURL call from VideoProxy turns this red.
+func TestVideoProxy_RefusesPrivateAddress(t *testing.T) {
+	cleanup := setupVideoProxyGuardDB(t)
+	defer cleanup()
+
+	fs := system_setting.GetFetchSetting()
+	prevAllowPrivate := fs.AllowPrivateIp
+	fs.AllowPrivateIp = false // re-enable the private-IP block this specific test needs
+	t.Cleanup(func() { fs.AllowPrivateIp = prevAllowPrivate })
+
+	weight := uint(10)
+	priority := int64(0)
+	baseURL := "https://example.invalid"
+	channel := &repo.Channel{
+		Type: constant.ChannelTypeKling, Key: "sk-unused", Status: common.ChannelStatusEnabled,
+		Name: "video-proxy-egress-channel", BaseURL: &baseURL, Weight: &weight, Priority: &priority,
+	}
+	if err := repo.DB.Create(channel).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	before := testutil.ToFloat64(metrics.TaskMediaGuardRejectionsTotal.WithLabelValues("video_proxy", "egress_check"))
+
+	owner := 6006
+	task := &repo.Task{
+		TaskID: "vp-egress-1", Platform: constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeKling)),
+		UserId: owner, ChannelId: int(channel.Id), Status: repo.TaskStatusSuccess,
+		FailReason: "http://10.0.0.1/x", // literal private-IP target, not a self/loop URL
+		SubmitTime: time.Now().Unix(),
+	}
+	if err := repo.DB.Create(task).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/vp-egress-1/content", nil)
+	c.Request.Host = "hub.example.test" // deliberately not the target — isolates the egress check from the self-URL check
+	c.Params = gin.Params{{Key: "task_id", Value: "vp-egress-1"}}
+	c.Set("id", owner)
+	c.Set("role", common.RoleCommonUser)
+
+	VideoProxy(c)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "egress check") {
+		t.Errorf("body = %s, want it to mention the egress check refusal (same shape as the artefact route)", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"code":"artifact_request_rejected"`) {
+		t.Errorf("body = %s, want code=artifact_request_rejected (the artefact route's shape, reused rather than a second one invented)", w.Body.String())
+	}
+	after := testutil.ToFloat64(metrics.TaskMediaGuardRejectionsTotal.WithLabelValues("video_proxy", "egress_check"))
+	if after-before != 1 {
+		t.Errorf("egress_check counter delta = %v, want 1", after-before)
+	}
+}
+
+// TestVideoProxy_RefusesDNSRebindShape covers the OTHER half of what
+// app.ValidateOutboundURL checks: a domain name (not a literal IP) that
+// resolves to a private address. fetch_setting's ApplyIPFilterForDomain is
+// forced on in the default blacklist posture (see
+// app.ValidateOutboundURL's doc comment in ssrf_guard.go), so "localhost"
+// is rejected exactly like a 127.0.0.1 literal once resolved — this is the
+// half TestVideoProxy_RefusesPrivateAddress's literal-IP target does not
+// exercise, so the two routes cannot drift on only ONE of the two shapes
+// app.ValidateOutboundURL covers.
+func TestVideoProxy_RefusesDNSRebindShape(t *testing.T) {
+	cleanup := setupVideoProxyGuardDB(t)
+	defer cleanup()
+
+	fs := system_setting.GetFetchSetting()
+	prevAllowPrivate := fs.AllowPrivateIp
+	fs.AllowPrivateIp = false
+	t.Cleanup(func() { fs.AllowPrivateIp = prevAllowPrivate })
+
+	weight := uint(10)
+	priority := int64(0)
+	baseURL := "https://example.invalid"
+	channel := &repo.Channel{
+		Type: constant.ChannelTypeKling, Key: "sk-unused", Status: common.ChannelStatusEnabled,
+		Name: "video-proxy-dns-rebind-channel", BaseURL: &baseURL, Weight: &weight, Priority: &priority,
+	}
+	if err := repo.DB.Create(channel).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	before := testutil.ToFloat64(metrics.TaskMediaGuardRejectionsTotal.WithLabelValues("video_proxy", "egress_check"))
+
+	owner := 6007
+	task := &repo.Task{
+		TaskID: "vp-egress-2", Platform: constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeKling)),
+		UserId: owner, ChannelId: int(channel.Id), Status: repo.TaskStatusSuccess,
+		FailReason: "http://localhost:80/x", // domain that resolves to a loopback address, not a literal IP
+		SubmitTime: time.Now().Unix(),
+	}
+	if err := repo.DB.Create(task).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/vp-egress-2/content", nil)
+	c.Request.Host = "hub.example.test" // distinct from "localhost" — isolates the egress check from the self-URL check
+	c.Params = gin.Params{{Key: "task_id", Value: "vp-egress-2"}}
+	c.Set("id", owner)
+	c.Set("role", common.RoleCommonUser)
+
+	VideoProxy(c)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "egress check") {
+		t.Errorf("body = %s, want it to mention the egress check refusal", w.Body.String())
+	}
+	after := testutil.ToFloat64(metrics.TaskMediaGuardRejectionsTotal.WithLabelValues("video_proxy", "egress_check"))
+	if after-before != 1 {
+		t.Errorf("egress_check counter delta = %v, want 1", after-before)
+	}
+}
+
+// vendorURLGuardHandlers is cycle-9 L4's maintained registry of the handler
+// functions that dial a vendor-supplied URL taken from task/channel-instance
+// data (as opposed to a channel's admin-configured base_url, already gated
+// at write time by channel.go/v2_channel_actions.go's own
+// app.ValidateOutboundURL calls). TestTaskMediaRoutes_BothCallTheEgressGuard
+// only enforces the guard on the functions enumerated here — this is a
+// registry lock, not automatic discovery of new routes; a THIRD handler that
+// serves this class of URL must be added to this slice for the oracle to
+// cover it, the same convention internal/pkg/metrics/
+// declared_series_written_test.go uses for its own textual scan.
+var vendorURLGuardHandlers = []struct {
+	file, funcName string
+}{
+	{"video_proxy.go", "VideoProxy"},
+	{"task_media_guard.go", "streamMediaContent"},
+}
+
+// extractTopLevelFuncSource returns funcName's full source text (signature
+// through its closing brace) from path, relying on gofmt's convention that a
+// top-level function's closing brace is a lone "}" at column 0.
+func extractTopLevelFuncSource(t *testing.T, path, funcName string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	lines := strings.Split(string(data), "\n")
+	prefix := "func " + funcName + "("
+	for i, line := range lines {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		j := i + 1
+		for j < len(lines) && strings.TrimRight(lines[j], "\r") != "}" {
+			j++
+		}
+		if j >= len(lines) {
+			j = len(lines) - 1
+		}
+		return strings.Join(lines[i:j+1], "\n")
+	}
+	t.Fatalf("function %s not found in %s", funcName, path)
+	return ""
+}
+
+// TestTaskMediaRoutes_BothCallTheEgressGuard is cycle-9 L4's anti-drift
+// oracle: every handler in vendorURLGuardHandlers above must call
+// app.ValidateOutboundURL directly in its own source (not merely
+// transitively through a helper this test does not also check), so the two
+// routes cannot drift apart again. Deleting the ValidateOutboundURL call
+// from EITHER VideoProxy or streamMediaContent turns this red.
+func TestTaskMediaRoutes_BothCallTheEgressGuard(t *testing.T) {
+	for _, h := range vendorURLGuardHandlers {
+		body := extractTopLevelFuncSource(t, h.file, h.funcName)
+		if !strings.Contains(body, "ValidateOutboundURL(") {
+			t.Errorf("%s (%s) does not call app.ValidateOutboundURL — a handler serving a vendor-supplied URL must egress-check it before dialing", h.funcName, h.file)
+		}
 	}
 }

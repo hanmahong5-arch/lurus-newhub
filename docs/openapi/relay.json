@@ -1176,7 +1176,7 @@
       "get": {
         "summary": "获取视频内容",
         "deprecated": false,
-        "description": "获取已完成视频任务的视频文件内容。\n\n此接口会代理返回视频文件流。\n\ncycle-8 L9 在既有实现上加了前置校验（与 GET /v1/tasks/{platform}/{task_id}/artifacts/{key}/content 共用 task_media_guard.go 的 scheme 白名单/自指 host 守卫/转发上限，不共用 fetch_setting 出站检查）：非 http(s) 目标或自指本网关的目标返回 502（scheme 校验分支沿用了拒绝前既有的 502 文案，因为该分支此前必然经 client.Do 走到相同的网络层失败并产生相同的状态码/文案）；已知 Content-Length 超过 200MiB 上限时，现在在写任何响应头之前直接 502（此前会在 200 状态下把字节流截断在上限但仍转发原始 Content-Length，客户端拿到一个大小与声明不符的损坏文件）；未知长度流仍在上限处截断，但会计入 lurus_gateway_task_media_guard_rejections_total{route=\"video_proxy\",reason=\"size_cap\"}。响应额外带 X-Content-Type-Options: nosniff。仅支持整体 GET，不支持 Range/条件请求头。\n",
+        "description": "获取已完成视频任务的视频文件内容。\n\n此接口会代理返回视频文件流。\n\ncycle-8 L9 在既有实现上加了前置校验（与 GET /v1/tasks/{platform}/{task_id}/artifacts/{key}/content 共用 task_media_guard.go 的 scheme 白名单/自指 host 守卫/转发上限）：非 http(s) 目标或自指本网关的目标返回 502（scheme 校验分支沿用了拒绝前既有的 502 文案，因为该分支此前必然经 client.Do 走到相同的网络层失败并产生相同的状态码/文案）；已知 Content-Length 超过 200MiB 上限时，现在在写任何响应头之前直接 502（此前会在 200 状态下把字节流截断在上限但仍转发原始 Content-Length，客户端拿到一个大小与声明不符的损坏文件）；未知长度流仍在上限处截断，但会计入 lurus_gateway_task_media_guard_rejections_total{route=\"video_proxy\",reason=\"size_cap\"}。cycle-9 L4 补上了此前唯独这条路由没有的 fetch_setting 出站检查（app.ValidateOutboundURL，与渠道 egress 及 GET .../artifacts/{key}/content 同一函数）：私网/回环目标域名或字面量 IP 返回 502，响应体与错误码复用 artifacts 路由的形状（code=artifact_request_rejected），计入同一指标 reason=\"egress_check\"。响应额外带 X-Content-Type-Options: nosniff。仅支持整体 GET，不支持 Range/条件请求头。\n",
         "operationId": "getVideoContent",
         "tags": [
           "视频生成/Sora兼容格式"

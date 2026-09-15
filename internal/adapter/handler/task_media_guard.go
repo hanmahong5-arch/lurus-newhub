@@ -17,9 +17,10 @@ package handler
 // domain/IP allow/deny lists) is a SEPARATE, already-existing concern
 // (app.ValidateOutboundURL, used by channel egress and internal/app/
 // download.go) and is applied by streamMediaContent below via that same
-// function — NOT by VideoProxy, which never calls ValidateOutboundURL (see
-// video_proxy.go): the two routes share the scheme/self-URL/size-cap guard
-// below, not the fetch_setting egress check. What IS new in this file is
+// function — cycle-9 L4 closed the gap where VideoProxy (video_proxy.go)
+// served the same class of URL without ever calling it: both routes now
+// call app.ValidateOutboundURL, in addition to sharing the scheme/
+// self-URL/size-cap guard below. What IS new in this file is
 // the self-URL/loop check, which fetch_setting has no notion of: an
 // operator running with allow_private_ip=true (the tests in
 // task_artifacts_test.go and video_proxy_test.go set it, to reach an
