@@ -105,6 +105,13 @@ var wantUserVisible = map[string]string{
 	// GET /v1/generation lookup this lane ships without hiding anything.
 	"request_id": "the id they sent us or we already echoed back on the response headers",
 	"session_id": "the conversation id they sent us on X-Session-Id",
+
+	// L5-CONVERSION-FIDELITY: names of fields the caller sent that a
+	// cross-wire converter (ClaudeToOpenAIRequest / GeminiToOpenAIRequest)
+	// could not map onto the upstream request. TierPublic in
+	// governance/classification.go — it is a report on their own request, not
+	// our economics.
+	"conversion_dropped": "field names on their own request that never reached the vendor",
 }
 
 // wantInternal: keys that must never reach a non-admin. Predominantly our
@@ -429,5 +436,74 @@ func TestOtherProjectionStripsInternalKeys(t *testing.T) {
 			t.Errorf("user projection dropped %q (%s) — declared user-visible but stripped "+
 				"by repo.internalOtherKeys", k, why)
 		}
+	}
+}
+
+// classificationExceptions are keys where governance.FieldClassification and
+// this file's wantUserVisible/wantInternal decision deliberately disagree,
+// each for a reason already spelled out on the entry itself — not gaps to
+// widen this cycle:
+//   - "upstream_model": one literal key, two write sites, two different
+//     meanings (see the wantUserVisible comment above) — the error-log
+//     write site (adapter/handler/relay.go, original_model) means the
+//     caller's own requested model, TierPublic; governance.FieldClassification
+//     describes the OTHER meaning (the true upstream vendor model),
+//     TierInternal. The real defect is the shared name, not either tier.
+//   - "end_user": TierConfidential in governance.FieldClassification (a
+//     third-party identifier, opt-in/masked policy) is strictly stronger
+//     than wantInternal's admin-only bucket, not a weaker or contradictory
+//     one — see the wantInternal comment above.
+var classificationExceptions = map[string]bool{
+	"upstream_model": true,
+	"end_user":       true,
+}
+
+// TestOtherProjectionMatchesGovernanceClassification ties this file's two
+// visibility lists (wantUserVisible/wantInternal — the actual runtime
+// contract, enforced above via repo.SanitizeOtherForUser) to
+// governance.FieldClassification, which otherwise has no test reading it at
+// all: repo.SanitizeOtherForUser is a hand-maintained blacklist
+// (internalOtherKeys), not driven by governance.FieldClassification, so
+// deleting or mis-tiering a classification.go entry was previously
+// unenforced decoration. Any wantUserVisible/wantInternal key that also
+// appears in governance.FieldClassification, other than the documented
+// exceptions above, must agree with this file's decision, and the L5
+// conversion_dropped entry specifically must exist and be TierPublic — the
+// caller set the field, so telling them it was ignored is the point of
+// shipping it at all.
+func TestOtherProjectionMatchesGovernanceClassification(t *testing.T) {
+	for k := range wantUserVisible {
+		if classificationExceptions[k] {
+			continue
+		}
+		tier, known := governance.FieldClassification[k]
+		if !known {
+			// Not every user-visible Other key has a governance.FieldClassification
+			// entry yet; this test only enforces agreement where one exists.
+			continue
+		}
+		if tier != governance.TierPublic {
+			t.Errorf("governance.FieldClassification[%q] = %v, want TierPublic (wantUserVisible above says this key reaches ordinary callers)", k, tier)
+		}
+	}
+	for k := range wantInternal {
+		if classificationExceptions[k] {
+			continue
+		}
+		tier, known := governance.FieldClassification[k]
+		if !known {
+			continue
+		}
+		if tier != governance.TierInternal {
+			t.Errorf("governance.FieldClassification[%q] = %v, want TierInternal (wantInternal above says this key must never reach a non-admin)", k, tier)
+		}
+	}
+
+	tier, known := governance.FieldClassification["conversion_dropped"]
+	if !known {
+		t.Fatal(`governance.FieldClassification["conversion_dropped"] is missing — the L5 classification entry is required and this key is also declared TierPublic in wantUserVisible above`)
+	}
+	if tier != governance.TierPublic {
+		t.Errorf(`governance.FieldClassification["conversion_dropped"] = %v, want TierPublic`, tier)
 	}
 }

@@ -3,10 +3,10 @@ package app
 import (
 	"strings"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -59,6 +59,15 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	if relayInfo.IsModelMapped {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = relayInfo.UpstreamModelName
+	}
+	// conversion_dropped: caller-supplied fields ClaudeToOpenAIRequest /
+	// GeminiToOpenAIRequest (convert.go) could not map onto the upstream
+	// request. Nil when the converter dropped nothing (the common case) or
+	// when this request never went through a cross-wire converter at all
+	// (native OpenAI-wire requests) — either way, no key, so an
+	// always-present empty array is never written.
+	if len(relayInfo.ConversionDropped) > 0 {
+		other["conversion_dropped"] = relayInfo.ConversionDropped
 	}
 
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)

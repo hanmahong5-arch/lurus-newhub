@@ -394,6 +394,19 @@ export const NAV_SECTIONS = [
         badge: '',
         minRole: 100,
       },
+      // Session-affinity stats/purge + TOTP adoption (L8, cycle 9): both
+      // backends sit behind RootJWTAuth server-side (adminRoute), so this
+      // entry needs the same per-item minRole:100 override as
+      // admin-system-tasks and admin-authz above.
+      {
+        id: 'admin-diagnostics',
+        href: '/console/v2/admin/diagnostics',
+        glyph: LuHeartPulse,
+        label: 'Diagnostics',
+        key: 'console.nav.diagnostics',
+        badge: '',
+        minRole: 100,
+      },
     ],
   },
 ];

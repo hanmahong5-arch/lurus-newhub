@@ -156,3 +156,55 @@ func TestSecureVerificationFlow_ChannelKeyReveal_EndToEnd(t *testing.T) {
 		t.Fatalf("reveal: success=%v key=%q, want true %q", ok.Success, ok.Data.Key, channelTestSecretKey)
 	}
 }
+
+// TestSecureVerificationFlow_ChannelKeyReveal_FlagOn_RefusedEndToEnd proves
+// the REAL-CHAIN claim in secure_verification.go's doc comment: with
+// SECURE_VERIFICATION_REQUIRE_ENROLLMENT=true, a no-enrollment user cannot
+// obtain step-up verification through the real middleware.SecureVerificationRequired
+// chain in front of channel-key reveal — not just through the status
+// endpoint. This drives the real router built by buildSecureVerifyFlowRouter,
+// the same one TestSecureVerificationFlow_ChannelKeyReveal_EndToEnd uses for
+// the flag-off path.
+func TestSecureVerificationFlow_ChannelKeyReveal_FlagOn_RefusedEndToEnd(t *testing.T) {
+	cleanup := setupSecureVerifyFlowDB(t)
+	defer cleanup()
+	t.Setenv("SECURE_VERIFICATION_REQUIRE_ENROLLMENT", "true")
+	r := buildSecureVerifyFlowRouter()
+
+	// 1. POST /api/verify -> 403 STEP_UP_ENROLLMENT_REQUIRED, no session key set.
+	w1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodPost, "/api/verify", strings.NewReader(`{"method":"session"}`))
+	req1.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w1, req1)
+	if w1.Code != http.StatusForbidden {
+		t.Fatalf("verify: status=%d want 403; body=%s", w1.Code, w1.Body.String())
+	}
+	var e1 struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(w1.Body.Bytes(), &e1)
+	if e1.Code != "STEP_UP_ENROLLMENT_REQUIRED" {
+		t.Fatalf("verify code=%q want STEP_UP_ENROLLMENT_REQUIRED", e1.Code)
+	}
+
+	// 2. Replay whatever cookies came back against the real
+	// middleware.SecureVerificationRequired-gated route -> 403
+	// VERIFICATION_REQUIRED (the middleware's own refusal, proving no
+	// session key reached the store).
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/api/channel/1/key", nil)
+	for _, ck := range w1.Result().Cookies() {
+		req2.AddCookie(ck)
+	}
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("post-flagon reveal: status=%d want 403; body=%s", w2.Code, w2.Body.String())
+	}
+	var e2 struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(w2.Body.Bytes(), &e2)
+	if e2.Code != "VERIFICATION_REQUIRED" {
+		t.Fatalf("post-flagon reveal code=%q want VERIFICATION_REQUIRED", e2.Code)
+	}
+}

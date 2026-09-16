@@ -347,3 +347,102 @@ func TestNoAlertNamedAsFiringInGoSource(t *testing.T) {
 		t.Fatalf("scan internal/ for alert-name claims: %v", err)
 	}
 }
+
+// netdataHealthDDir is the repo-owned, HOST-INSTALLED counterpart to the
+// reference-only PrometheusRule YAML this file otherwise polices.
+const netdataHealthDDir = "deploy/r6-host-netdata/health.d"
+
+// netdataInstallScript is the script that makes files under netdataHealthDDir
+// live on the R6 host. Every alarm file must name it, and it must actually
+// exist — a reference to a script that was renamed or never committed would
+// be exactly the kind of claim this file exists to catch.
+const netdataInstallScript = "scripts/install-netdata-alarms.sh"
+
+// netdataInstallStatusLineRe matches a "# STATUS: ... YYYY-MM-DD" comment
+// line. Unlike deploy/k8s/r6-stage/newhub-prometheus-rule.yaml (which is
+// simply never deployed, so a static "REFERENCE ONLY" marker is always
+// true), a file under health.d/ moves between "not yet installed" and
+// "installed" as the operator actually runs the install script — a static
+// marker would go stale the moment either state changes. Requiring a DATED
+// status line instead of forbidding a marker string lets the file say
+// exactly what is true today without this test rotting into either a false
+// "installed" claim or a permanent "reference-only" one.
+var netdataInstallStatusLineRe = regexp.MustCompile(`(?m)^#\s*STATUS:.*\d{4}-\d{2}-\d{2}`)
+
+// TestNetdataDirectoryAssertsInstalledOppositeOfReferenceOnlyYAML is the
+// mirror image of TestNoAlertFileClaimsDeploymentItDoesNotHave above. That
+// test polices files that describe themselves as live but are not; this one
+// polices the opposite failure mode for deploy/r6-host-netdata/health.d/ —
+// files that ARE what makes newhub's alerting live once installed, so they
+// must say what installs them AND carry a dated status line describing
+// whether that has actually happened yet, so a reader isn't left to guess
+// whether the copy under version control is the one netdata evaluates.
+func TestNetdataDirectoryAssertsInstalledOppositeOfReferenceOnlyYAML(t *testing.T) {
+	root := repoRoot(t)
+	dir := filepath.Join(root, filepath.FromSlash(netdataHealthDDir))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	var confFiles []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".conf") {
+			confFiles = append(confFiles, e.Name())
+		}
+	}
+	if len(confFiles) == 0 {
+		t.Fatal("found zero .conf files under " + netdataHealthDDir + " — the scan is measuring nothing")
+	}
+
+	scriptPath := filepath.Join(root, filepath.FromSlash(netdataInstallScript))
+	if _, statErr := os.Stat(scriptPath); statErr != nil {
+		t.Errorf("%s names an install script that does not exist at %s: %v",
+			netdataHealthDDir, netdataInstallScript, statErr)
+	}
+
+	for _, name := range confFiles {
+		path := filepath.Join(dir, name)
+		body, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", path, readErr)
+		}
+		text := string(body)
+
+		if !strings.Contains(text, netdataInstallScript) && !strings.Contains(text, filepath.Base(netdataInstallScript)) {
+			t.Errorf("%s/%s does not name the script that installs it (%s) — a reader has no way "+
+				"to tell this file apart from the reference-only YAML without that pointer.",
+				netdataHealthDDir, name, netdataInstallScript)
+		}
+
+		if !netdataInstallStatusLineRe.MatchString(text) {
+			t.Errorf("%s/%s has no dated \"# STATUS: ... YYYY-MM-DD\" line — this directory's "+
+				"install state changes as the operator actually runs %s, so a static "+
+				"\"installed\"/\"not deployed\" claim goes stale; a dated status line at least "+
+				"tells a reader how fresh the claim is.",
+				netdataHealthDDir, name, netdataInstallScript)
+		}
+	}
+
+	// The install-time honesty limit: this directory can prove an alarm
+	// changes state and is visible in netdata's own alarm API. It cannot
+	// prove a human is notified — that depends on health_alarm_notify.conf
+	// recipients on the host, which this repo does not own. The README must
+	// say so in terms specific enough to check for (not just the word
+	// "alert").
+	readmePath := filepath.Join(root, filepath.FromSlash("deploy/r6-host-netdata/README.md"))
+	readmeBody, readErr := os.ReadFile(readmePath)
+	if readErr != nil {
+		t.Fatalf("read %s: %v", readmePath, readErr)
+	}
+	readme := string(readmeBody)
+	if !strings.Contains(readme, "health_alarm_notify.conf") {
+		t.Error("deploy/r6-host-netdata/README.md must name health_alarm_notify.conf as the " +
+			"thing that actually controls whether a human is notified — without it, a reader " +
+			"can mistake \"installed and evaluated by netdata\" for \"someone gets paged\".")
+	}
+	if !strings.Contains(readme, "owner") {
+		t.Error("deploy/r6-host-netdata/README.md must say plainly that populating alarm " +
+			"recipients is an owner action this lane does not perform.")
+	}
+}

@@ -134,6 +134,22 @@ type RelayInfo struct {
 	// session_id / a future end_user filter) without newhub becoming a store
 	// of the caller's own customers' PII.
 	EndUserHash string
+	// ConversionDropped names the caller-supplied request fields that
+	// ClaudeToOpenAIRequest / GeminiToOpenAIRequest (internal/app/convert.go)
+	// could not map, or could map only partially, onto the upstream
+	// OpenAI-wire request — e.g. a Claude-wire caller who set top_k. Set only
+	// when the converter actually dropped something the caller sent (nil
+	// otherwise), sorted, de-duplicated and capped at 16 names by
+	// boundDroppedFields. Reset at the start of each retry attempt by
+	// InitChannelMeta below, so a value set by a converter on a failed
+	// attempt cannot survive onto a later attempt's log row. Carried here for
+	// the same reason SessionId/EndUserHash are: app.GenerateTextOtherInfo
+	// reads it off RelayInfo to project conversion_dropped into the
+	// success-path log row; the terminal-error path
+	// (recordRelayErrorLog in adapter/handler/relay.go) builds its own
+	// Other map key by key and does not read this field, so a failed request
+	// carries no conversion_dropped.
+	ConversionDropped []string
 	// UpstreamRequestId is the vendor's own request/trace id, captured from
 	// the upstream HTTP response headers in provider.doRequest — the seam
 	// DoApiRequest/DoFormRequest/DoTaskApiRequest funnel through for the main
@@ -278,6 +294,16 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	if info.Request != nil {
 		info.Request.SetModelName(info.OriginModelName)
 	}
+
+	// ConversionDropped is per-attempt diagnostics, not per-request: a retry
+	// that lands on a different channel re-selects (SetupContextForSelectedChannel)
+	// and calls InitChannelMeta before the attempt's own converter (or, for a
+	// native-format/pass-through channel, no converter at all) runs. Without
+	// this reset, a list set by attempt 1's converter would survive onto a
+	// later attempt that never went through a converter, or went through one
+	// with a different outcome — telling the caller a field was dropped when
+	// the attempt that actually settled the request delivered it.
+	info.ConversionDropped = nil
 }
 
 func (info *RelayInfo) ToString() string {

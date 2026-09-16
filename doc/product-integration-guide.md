@@ -94,17 +94,18 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 | `/v1/responses/:response_id` | GET / DELETE | OpenAI Responses API 有状态半面(cycle-8 L7, tasks-plugins-12)。POST `/v1/responses`(`store` 不为字面量 `false`、渠道类型在 `SupportsResponsesStateful` 允许列表内——本周期仅 OpenAI,与 `/v1/responses/compact` 的 `SupportsResponsesCompact` 是两张独立的表——且渠道非多密钥、且渠道响应/流事件里出现过非空 `id` 时)成功后把 `response_id` 与产生它的渠道/模型记入 `response_registry`;这两条路由据此把请求原样转发回**同一个渠道**(读该行做鉴权+定位,不经过权重选择/`Distribute()`)。**多密钥渠道不写入本表**(cycle-8 L7 修复轮 B-F3):行只钉渠道 id,不钉密钥下标,而多密钥渠道每次请求随机/轮询选密钥,回放到错误密钥上会复现本特性本要避免的"渠道自己的 404";密钥下标列是 migration 036(本周期冻结)之外的 cycle-9 跟进项。流式 POST 在**首个**携带非空 `id` 的事件即暂存(不一定是 `response.completed`——早于它的 `response.created`/`queued`/`in_progress` 同样携带 id,一个连接在收到完成事件前掉线的后台流客户端因此仍留得下可寻址的行)。归属判定为同租户且同一用户(O7);不存在的 id、归属于他人的 id、渠道已被禁用或渠道类型已不再受支持四种情况返回完全相同的 `404 response_not_found` **网关信封**,从不返回 403,调用方无法用状态码或报文区分四者——但这与渠道自己返回的 404 是两种不同的报文:一旦行存在且渠道可达,渠道自身状态码/报文(含它自己的 404)会原样透传,不带 `error.code`。不解析 usage、不计费、不写任何配额行——费用已在原始 POST 时结清。挂在独立分组(`StampRelayFormat`+`TokenAuth`+自带的 `ResponsesStateRateLimit`——每 IP 30 次/60 秒的 `RS` 桶,与 `CriticalRateLimit`(渠道 key 揭示/TOTP 禁用/审计导出共用的"CT" 桶)完全分离,429 走 `abortWithOpenAiMessage` 带 `error.code`;cycle-8 L7 修复轮 B-F1 订正——原计划文档误引 `modelsRouter` 为"同一先例",而 `modelsRouter` 只挂 `TokenAuth`,若真挂 `CriticalRateLimit` 会让这条 `/v1` 路由的轮询流量与上述 `/api/*` 控制台路由共用限流桶,互相锁人),不经过资金池/成本尖峰/并发链的 `Distribute()` 半;上游 `Content-Type` 为 `text/event-stream` 时增量转发并逐块 flush,否则整体转发。行过期由 `RESPONSE_REGISTRY_TTL_DAYS`(默认 30 天,只影响之后新写入的行——调小该值不会缩短已写入行的保留期,过期时间在写入时就已按当时的值算好戳死)控制,每小时由 leader 副本清扫,并纳入 PIPL 抹除级联硬删除(`repo.HardDeleteUserResponseRegistry`,与 `user_sessions` 同一步)。目前没有兄弟产品接入这两个端点;公开开发者文档(`2l-bs-docs` 仓 `docs/api/overview.md` 及其语言分支)的端点列表尚未加入这两条,是本轮已知的跨仓跟进项 |
 | `/v1/responses/compact` | POST | `/v1/responses` 的文档化字段子集透传端点(cycle-8 L6, wire-formats-03)。这是一份白名单,不是排除列表:请求体先按该子集重新编码,只有 `model`/`input`/`instructions`/`previous_response_id`/`parallel_tool_calls`/`service_tier`/`prompt_cache_key`/`prompt_cache_retention` 真正转发给上游。`tools`/`reasoning`/`text` 会被解析(供客户端兼容),但不转发给上游(与参考实现一致)。`dto.OpenAIResponsesRequest` 其余字段——`include`/`max_output_tokens`/`metadata`/`store`/`temperature`/`tool_choice`/`top_p`/`truncation`/`user`/`max_tool_calls`/`prompt`/`stream`——一律被丢弃,渠道 `PassThroughRequestEnabled`/`PassThroughBodyEnabled` 打开时同样如此(该开关只跳过本网关自己的请求转换,不能绕过这道子集门;pass-through 分支同样应用渠道的禁用字段策略——如 `AllowServiceTier=false` 时 `service_tier` 仍会被剥离)。本周期未建模 `prompt_cache_options`(父类型也没有该字段)。渠道类型不在支持列表(本周期仅 OpenAI)时返回 `400 responses_compact_unsupported`,零上游调用。成功响应字节原样转发,`usage` 由渠道响应解析,缺失时按请求前估算的 prompt token 数计费、completion 记 0;渠道在 `200` 响应体内携带 `error` 字段时识别为上游错误并拒绝,不转发、不计费。会话亲和(`X-Session-Id`/`prompt_cache_key`)与 `/v1/responses` 共用同一套 scope 推导,同一 `prompt_cache_key` 在两个端点间派生相同的亲和 key。与 `/v1/responses` 共用同一条鉴权/资金池/限流/熔断链。目前没有兄弟产品接入这个端点 |
 | `/v1/tasks/:platform` `/v1/tasks/:platform/:task_id` | POST / GET | 通用异步任务提交/状态查询(cycle-8 L8)。一条路由服务全部已编译 task 适配器(ali/doubao/gemini/hailuo/jimeng/kling/music/sora/suno/vertex/vidu,由 `TestGenericTaskPlatforms_CoverCompiledAdaptors` 锁定为与 `internal/adapter/provider/task/*` 目录数相等,而非固定数字),复用与 `/suno`、`/v1/audio/music`、`/kling/v1`、`/v1/videos` 相同的 InitTask/轮询链路;`:platform` 不是任一已编译适配器名、或 Distribute 依据请求体 `model` 选中的渠道类型与 `:platform` 声明不一致(如 `POST /v1/tasks/kling` 的 `model` 解析到一个 Suno 渠道)时均返回 404、`code=task_platform_unknown`,后者在任何上游调用之前拒绝。请求体契约:ali/doubao/gemini/hailuo/jimeng/kling/sora/vertex/vidu 九个数值适配器接受统一的 `TaskSubmitReq` 形状(`model`/`prompt`/`image` 或 `images`/`size`/`seconds`/`metadata` 等);suno 接受自身提交体并额外需要顶层 `action`(`MUSIC`/`LYRICS`,专用路由原从 URL 的 `:action` 段读取,此处改从请求体读取并内部转发);music 与专用 `/v1/audio/music` 同体。Kling/Jimeng 供应商原生请求体(`model_name`/`image`、`req_key` 等)的转换中间件不挂在本路由上,原生格式仍只走各自专用路由。计费:本接口按请求体顶层 `model` 计费(该 model 须已在渠道上配置价格),与专用 `/suno/submit/:action` 按 action 派生模型名(如 `suno_music`)计费是两条独立定价路径,同一逻辑任务经两条路由可能定价不同。状态查询直接读 `tasks` 表(由后台轮询器每 15 秒刷新,本接口自身不发上游请求),查询按 `(user_id, task_id)` 限定作用域(`task_id` 只是索引不是唯一约束,避免撞号顶替),归属校验 fail-closed——他人任务、不存在的 `task_id`、存在但 platform 不匹配三种情况返回完全相同的 404 报文 `{"error":{"type":"invalid_request_error","message":"Task not found"}}`(sora 额外接受经 OpenAI 类型渠道提交的任务),不像专用的 `GET /v1/videos/:task_id/content`(视频内容代理)对越权访问返回 403。响应体是既有 `relay.TaskModel2Dto` 投影加 `platform`/`project_id`/`request_id` 三列,不含 `channel_id`/`user_id`/`quota`/`group`/`properties`。专用的 Kling/Jimeng/视频/Suno/Music 路由行为不变,与本行并存。任务行新增 `project_id`(成本归因)与 `request_id`(提交时的网关请求 id,支持排查) 两列(migration 035)。过滤入口(cycle-8 L10):既有的 `GET /api/task/`(管理端,全租户)与 `GET /api/task/self`(用户端,`user_id` 恒定 scope)新增 `project_id`/`request_id` 两个精确匹配 query 参数,`request_id` 服务端 trim 并截到 64 字符(列宽);用户端传入自己不拥有的 `project_id` 返回空列表(`total=0`),不是 403——与 `project_id` 天然叠加在已有的 `user_id` scope 之上、不需要额外归属校验同一套道理,`GET /api/v2/:tenant_slug/logs` 的 `project_id` 过滤(`v2_log.go`)是同一约定。目前没有兄弟产品接入这组端点 |
-| `/v1/tasks/:platform/:task_id/artifacts` `/v1/tasks/:platform/:task_id/artifacts/:key/content` | GET | 通用异步任务产物列表/内容代理(cycle-8 L9,建立在上一行的通用任务面之上,同一归属校验/同一 404 报文;不按 task 状态过滤——非 SUCCESS 的任务照样返回当前已有的 URL,可能是空列表)。列表接口仅元数据、不发上游请求,投影两处来源:①`Task.Data` 里**顶层**、形如 URL 的字符串字段(`http(s)://`/`data:` 开头)——这只对 suno/music 有意义,它们的 `Data` 是扁平对象;②对一个 SUCCESS 任务,若①未产出 `video` 这个 key,再看 `task.FailReason`——ali/kling/jimeng/doubao/vidu/hailuo/vertex 这 7 个数值适配器的 `Data` 是嵌套的供应商原始报文(如 kling 的 `data.task_result.videos[0].url`),真正解析出的结果 URL 由轮询器写进 `FailReason`(与专用 `GET /v1/videos/:task_id/content` 的默认分支读的是同一字段),看起来像 URL 就投影成 `video` 这个 key;sora/gemini 两个平台的 `FailReason` 是**本网关自己的** `/v1/videos/:task_id/content` 地址(不是供应商资产 URL),不投影——这两个平台的产物只能继续走专用视频代理路由。换言之:在①②都不命中之前(如任务尚未 SUCCESS、或两处都没有可用 URL),列表就是空数组。`key` 是 `Data` 里的原始字段名(对象形态)/数组下标(数组形态)/或固定值 `video`(FailReason 投影);`size` 只对 `data:` URL 有值(解码字节数),`http(s)` URL 恒为 0(未知,不为了拿大小发一次上游请求);`type` 取 `video/image/audio/text/json/other` 之一。内容代理接口按 `:key` 取那一条 URL:`data:` 直接内联解码返回零出站请求,`http(s)` 走一次受限 GET 并把上游 `Content-Type` 原样带回,并在响应上加 `X-Content-Type-Options: nosniff`/`Cache-Control: private, no-store`/`Referrer-Policy: no-referrer`(本路由的鉴权也接受 `?key=` query 参数,因此是可被浏览器直接导航的 URL,不能被缓存或经 Referer 泄漏)。**仅支持整体 GET**:不支持 `HEAD`、不转发/响应 `Range`/`If-*` 条件请求头,调用方不能用于可拖动进度的播放器。受限体现在四处,均为 `502` 且各自带 `code=artifact_request_rejected`:scheme 白名单(仅 http/https)、自指 host 拒绝(产物 URL 若与本次请求自身 Host 头同源则拒绝,防回环,与 `fetch_setting` 的私网 IP 放行策略是两道独立的检查——`fetch_setting`/`ValidateOutboundURL` 只应用在本接口,不应用在下面的专用视频代理)、`fetch_setting` 出站检查(私网/域名黑白名单)、单次转发 200MiB 上限——已知 `Content-Length` 超限在写任何响应头之前就直接拒绝(不会返回一个字节数与声明不符的 200),未知长度的流式响应仍会在到达上限处截断,但会记入 `lurus_gateway_task_media_guard_rejections_total{route="artifact_content",reason="size_cap"}`。未知 `:key` 返回 `404`,`code=artifact_not_found`。这一对与专用的 `GET /v1/videos/:task_id/content`(视频内容代理,仍是独立路由、仍是 403 越权语义、**观测行为不完全一致**——见下条)共用了同一份 scheme 白名单/自指 host 守卫/转发上限(`task_media_guard.go`),但不共用 `fetch_setting` 出站检查,也不共用鉴权语义——两者是各自路由上各自的归属检查。目前没有兄弟产品接入这组端点 |
-| `GET /v1/videos/:task_id/content` | GET | 专用视频内容代理(既有路由,cycle-8 L9 在其上加了新的前置校验,不是重写)。新增的 scheme/自指 host 检查与上一行共用同一份实现(`task_media_guard.go`),命中时统一返回 `502`;scheme 校验命中的那条分支刻意沿用了旧文案 `"Failed to fetch video content"`——因为这条分支此前必然会落到 `client.Do()` 的网络层失败并产生完全相同的状态码/文案(Go 标准库的 `http.Client` 本身就拒绝拨号非 http(s) scheme),所以这条校验对可观测行为而言是纵深防御,不是"新拒绝原因";自指 host 检查则是**真正新增**的拒绝(此前会真的去拨这个 URL)。**行为不再对所有历史输入字节相同**:上游声明的 `Content-Length` 超过 200MiB 上限时,此前会在 `200` 状态下静默截断转发(客户端拿到的字节数与声明的 `Content-Length` 不一致——一个已损坏的文件);现在改为在写任何响应头之前就返回 `502`。未知长度流仍在上限处截断,但会记入 `lurus_gateway_task_media_guard_rejections_total{route="video_proxy",reason="size_cap"}`。响应额外带 `X-Content-Type-Options: nosniff`。|
+| `/v1/tasks/:platform/:task_id/artifacts` `/v1/tasks/:platform/:task_id/artifacts/:key/content` | GET | 通用异步任务产物列表/内容代理(cycle-8 L9,建立在上一行的通用任务面之上,同一归属校验/同一 404 报文;不按 task 状态过滤——非 SUCCESS 的任务照样返回当前已有的 URL,可能是空列表)。列表接口仅元数据、不发上游请求,投影两处来源:①`Task.Data` 里**顶层**、形如 URL 的字符串字段(`http(s)://`/`data:` 开头)——这只对 suno/music 有意义,它们的 `Data` 是扁平对象;②对一个 SUCCESS 任务,若①未产出 `video` 这个 key,再看 `task.FailReason`——ali/kling/jimeng/doubao/vidu/hailuo/vertex 这 7 个数值适配器的 `Data` 是嵌套的供应商原始报文(如 kling 的 `data.task_result.videos[0].url`),真正解析出的结果 URL 由轮询器写进 `FailReason`(与专用 `GET /v1/videos/:task_id/content` 的默认分支读的是同一字段),看起来像 URL 就投影成 `video` 这个 key;sora/gemini 两个平台的 `FailReason` 是**本网关自己的** `/v1/videos/:task_id/content` 地址(不是供应商资产 URL),不投影——这两个平台的产物只能继续走专用视频代理路由。换言之:在①②都不命中之前(如任务尚未 SUCCESS、或两处都没有可用 URL),列表就是空数组。`key` 是 `Data` 里的原始字段名(对象形态)/数组下标(数组形态)/或固定值 `video`(FailReason 投影);`size` 只对 `data:` URL 有值(解码字节数),`http(s)` URL 恒为 0(未知,不为了拿大小发一次上游请求);`type` 取 `video/image/audio/text/json/other` 之一。内容代理接口按 `:key` 取那一条 URL:`data:` 直接内联解码返回零出站请求,`http(s)` 走一次受限 GET 并把上游 `Content-Type` 原样带回,并在响应上加 `X-Content-Type-Options: nosniff`/`Cache-Control: private, no-store`/`Referrer-Policy: no-referrer`(本路由的鉴权也接受 `?key=` query 参数,因此是可被浏览器直接导航的 URL,不能被缓存或经 Referer 泄漏)。**仅支持整体 GET**:不支持 `HEAD`、不转发/响应 `Range`/`If-*` 条件请求头,调用方不能用于可拖动进度的播放器。受限体现在四处,均为 `502` 且各自带 `code=artifact_request_rejected`:scheme 白名单(仅 http/https)、自指 host 拒绝(产物 URL 若与本次请求自身 Host 头同源则拒绝,防回环,与 `fetch_setting` 的私网 IP 放行策略是两道独立的检查——`fetch_setting`/`ValidateOutboundURL` 现已同时应用在本接口与下面的专用视频代理,cycle-9 L4 补上了后者此前缺失的这一道检查)、`fetch_setting` 出站检查(私网/域名黑白名单)、单次转发 200MiB 上限——已知 `Content-Length` 超限在写任何响应头之前就直接拒绝(不会返回一个字节数与声明不符的 200),未知长度的流式响应仍会在到达上限处截断,但会记入 `lurus_gateway_task_media_guard_rejections_total{route="artifact_content",reason="size_cap"}`。未知 `:key` 返回 `404`,`code=artifact_not_found`。这一对与专用的 `GET /v1/videos/:task_id/content`(视频内容代理,仍是独立路由、仍是 403 越权语义、**观测行为不完全一致**——见下条)共用了同一份 scheme 白名单/自指 host 守卫/转发上限(`task_media_guard.go`),cycle-9 L4 起也共用了 `fetch_setting` 出站检查,但不共用鉴权语义——两者是各自路由上各自的归属检查。目前没有兄弟产品接入这组端点 |
+| `GET /v1/videos/:task_id/content` | GET | 专用视频内容代理(既有路由,cycle-8 L9 在其上加了新的前置校验,不是重写)。新增的 scheme/自指 host 检查与上一行共用同一份实现(`task_media_guard.go`),命中时统一返回 `502`;scheme 校验命中的那条分支刻意沿用了旧文案 `"Failed to fetch video content"`——因为这条分支此前必然会落到 `client.Do()` 的网络层失败并产生完全相同的状态码/文案(Go 标准库的 `http.Client` 本身就拒绝拨号非 http(s) scheme),所以这条校验对可观测行为而言是纵深防御,不是"新拒绝原因";自指 host 检查则是**真正新增**的拒绝(此前会真的去拨这个 URL)。**行为不再对所有历史输入字节相同**:上游声明的 `Content-Length` 超过 200MiB 上限时,此前会在 `200` 状态下静默截断转发(客户端拿到的字节数与声明的 `Content-Length` 不一致——一个已损坏的文件);现在改为在写任何响应头之前就返回 `502`。未知长度流仍在上限处截断,但会记入 `lurus_gateway_task_media_guard_rejections_total{route="video_proxy",reason="size_cap"}`。响应额外带 `X-Content-Type-Options: nosniff`。cycle-9 L4 补上了此前唯独这条路由没有的 `fetch_setting` 出站检查(`app.ValidateOutboundURL`,与渠道 egress 及 `GET .../artifacts/{key}/content` 同一函数):私网/回环目标域名或字面量 IP 返回 `502`,响应体与错误码复用 artifacts 路由的形状(`code=artifact_request_rejected`),计入同一指标 `reason="egress_check"`。已知运维约束:该检查按 fail-closed 原则解析目标域名,即便渠道配置了 per-channel 代理(本路由是两条路由里唯一支持代理的一条)也照样解析——代理是给最终的取内容请求用的,不改变出站检查自己解析目标域名这一步;因此一个"因为网关侧解析不了供应商域名才配了代理"的渠道,域名解析失败时同样会在这道检查上收到 `502`,而不是照常经代理取到内容。|
 | `/v1/key` | GET | 只持一把 key 查自身额度/限流/所属租户资金池状态,无需控制台权限(详见 §F) |
 | `/v1/generation` | GET | 按 `id`(己方 X-Request-Id)反查一次调用的费用/供应商/用量(详见 §F) |
 | `/api/v2/{tenant}/user/me` | GET | 用户信息 |
 | `/api/v2/{tenant}/tokens` | GET / POST | 查询 / 创建 Token |
 | `/api/v2/{tenant}/logs` | GET | 使用日志 |
 | `/api/v2/{tenant}/logs/all?upstream_request_id=` | GET | 租户管理员(`requireTenantAdmin`)专用的日志列表,可按供应商自己的 request/trace id 精确匹配过滤:取上游响应头 `x-request-id` / `request-id` / `openai-request-id` / `cf-ray` 中第一个非空的值(≤128 字节可打印 ASCII,否则视为未发送),落在管理员可见字段 `other.upstream_request_id` 上(普通用户 `/api/v2/{tenant}/logs` 看不到该字段,也不支持这个查询参数)。根管理员导出 `GET /api/v2/admin/logs/export` 接受同名参数、同语义;供应商完全没发送这些头时该字段为空,不算缺陷;该 CSV 导出没有 `other` 列(过滤只用来缩小行范围,字段本身不落进文件),v2 控制台日志页当前也没有这个过滤输入框或明细展示 |
-| `/api/v2/{tenant}/analytics/rankings?by=model\|vendor&hours=` | GET | 租户管理员(`requireTenantAdmin`)专用的模型/供应商用量排行榜:按 token 用量降序给出 rank/环比 rank_delta(新上榜的 is_new=true、rank_delta=0)/requests_growth_pct(无上一窗口基线时为 null)/token_share_pct/quota_share_pct(份额基于当前窗口全部分组的总量,不是仅返回的最多 20 行);`by=vendor` 按 `channel_type` 聚合(名称经 `constant.GetChannelTypeName` 解析,`channel_type=0` 的历史行不计入任何 vendor 行);`hours` 会被收敛到 `{1,6,24,168,720}` 五档之一再作为缓存键(空值/非整数回落到默认 24h,超出 [1,720] 先截断再收敛),未知 `by` 值返回 400。响应体除 `rows` 外还带 `hours`(实际命中的档位)、`total_tokens`/`total_quota`(当前窗口全部分组的总量,不是仅返回的最多 20 行的求和,`token_share_pct`/`quota_share_pct` 即基于这两个总量计算);在进程内缓存 5 分钟(`cached_at` 可看出是否命中缓存;各副本各自维护自己的缓存,`cached_at` 在副本间可能不同,是预期行为不是缺陷)。两条路由都挂在 `CriticalRateLimit`(每 IP 20 次/20 分钟的 `CT` 桶,与渠道 key 揭示、TOTP 禁用、`/analytics/model-performance` 等 CriticalRateLimit 路由共享同一限流桶)之后,超额返回 429。根管理员等价端点 `GET /api/v2/admin/analytics/rankings?by=&hours=&tenant_id=` 额外接受 `tenant_id`(留空=跨租户)。目前没有兄弟产品接入这两个端点 |
+| `/api/v2/{tenant}/analytics/rankings?by=model\|vendor\|group&hours=` | GET | 租户管理员(`requireTenantAdmin`)专用的模型/供应商/分组用量排行榜:按 token 用量降序给出 rank/环比 rank_delta(新上榜的 is_new=true、rank_delta=0)/requests_growth_pct(无上一窗口基线时为 null)/token_share_pct/quota_share_pct(份额基于当前窗口全部分组的总量,不是仅返回的最多 20 行);`by=vendor` 按 `channel_type` 聚合(名称经 `constant.GetChannelTypeName` 解析,`channel_type=0` 的历史行不计入任何 vendor 行);`by=group` 详见下面 §K;`hours` 会被收敛到 `{1,6,24,168,720}` 五档之一再作为缓存键(空值/非整数回落到默认 24h,超出 [1,720] 先截断再收敛),未知 `by` 值返回 400。响应体除 `rows` 外还带 `hours`(实际命中的档位)、`total_tokens`/`total_quota`(当前窗口全部分组的总量,不是仅返回的最多 20 行的求和,`token_share_pct`/`quota_share_pct` 即基于这两个总量计算);在进程内缓存 5 分钟(`cached_at` 可看出是否命中缓存;各副本各自维护自己的缓存,`cached_at` 在副本间可能不同,是预期行为不是缺陷)。两条路由都挂在 `CriticalRateLimit`(每 IP 20 次/20 分钟的 `CT` 桶,与渠道 key 揭示、TOTP 禁用、`/analytics/model-performance` 等 CriticalRateLimit 路由共享同一限流桶)之后,超额返回 429。根管理员等价端点 `GET /api/v2/admin/analytics/rankings?by=&hours=&tenant_id=` 额外接受 `tenant_id`(留空=跨租户)。目前没有兄弟产品接入这两个端点 |
 | `/api/v2/{tenant}/billing/topup` | POST | 发起充值 |
 | `/api/v2/{tenant}/sessions` | GET / DELETE(`:id`、`others`、`current`) | 控制台会话列表与撤销,整体挂在 `SESSION_REGISTRY_ENABLED`(默认关)后面:关闭时列表只返回一条代表当前请求的合成行,`DELETE :id` 一律 404、`DELETE others` 一律 `{"revoked":0}`,均不触碰数据库(2026-09-12 起,回滚或某次开关期遗留的行都不会被这两个端点动到);打开后列表按已登录设备逐条返回(`is_current`/`created_at`/`last_seen_at`、`ip` 按 /24(v4)或 /48(v6)掩码、`user_agent_family` 粗粒度),`DELETE :id` 撤销自己名下的一台设备(IDOR 404 语义,不属于自己的 id 与不存在的 id 同样 404)、`others` 一键撤销除当前设备外的全部。根管理员等价端点 `DELETE /api/v2/admin/users/:id/sessions`(压缩账号处置步骤,同样受该 flag 门控)。目前没有兄弟产品接入这组端点 |
+| `POST /api/verify` `GET /api/verify/status` | POST / GET | 控制台二次确认(step-up)端点,挡在渠道 key 揭示(`/api/channel/:id/key`)、TOTP 禁用/备用码重置(`/api/user/totp/disable`、`/api/user/totp/backup-codes/regenerate`)与 2FA 强制关闭(`/api/v2/admin/security/users/:id/totp/force-disable`)四个入口前面(`middleware.SecureVerificationRequired`)。已启用 TOTP 的用户必须传 `method:"totp"`/`"totp_backup"` 加有效码;没有启用 TOTP 的用户默认经 `method:"session"` 无凭证通过(不检查任何凭证,仅凭已登录 session),这次放行记一条审计(`auth.stepup_without_credential`,命名到用户,不含凭证信息)。`SECURE_VERIFICATION_REQUIRE_ENROLLMENT`(默认关)打开后,未启用 TOTP 的用户改为 `403 STEP_UP_ENROLLMENT_REQUIRED`,且不再无凭证放行(同样记一条 `auth.failed` 审计,`reason:enrollment_required`)。`GET /api/verify/status` 响应体新增 `enrollment_required` 字段,反映该开关当前值(进程级配置,与调用者无关),控制台据此判断"session"这一路是否可用。默认关是基于 2026-09-15 的生产数据:唯一 role>=10 的账号(root)当时没有 TOTP 记录,打开会锁死它对渠道 key 揭示与 2FA 强制关闭的访问,见 `doc/runbook/incident-response.md` 的 break-glass 步骤。目前没有兄弟产品接入这组端点 |
 
 ### B. 错误码
 
@@ -189,6 +190,30 @@ HTTP/2 实现时断时续,和真正的下线区分不出来)。该键本身不�
 **400**;上面这条旧版编辑器实际调用的 `/api/channel/`(新建 `POST`、编辑 `PUT`)返回的是
 **HTTP 200 `{"success":false,"code":...,"message":...}`**——脚本化对接时必须看 `success` 字段,
 不能只看 HTTP 状态码。
+
+**渠道敏感字段写入闸门(`channel:sensitive_write`,cycle-9 L2)**——上面这条 `/api/channel/`
+POST/PUT 和它的 v2 对应端点,现在对**非 root 管理员**(role 10)额外挡一道:请求实际改动
+`key`/`base_url`/`param_override`/`header_override`/渠道级 proxy(`setting` blob 里的 `proxy`
+成员)/`type`/`other`/`openai_organization` 这八个字段中任意一个时,调用方必须持有一条有效的
+`channel:sensitive_write` 授权行(见上"授权管理端点"一节),否则 **403**
+`{"success":false,"message":"insufficient permission","error_code":"PERMISSION_DENIED"}`,且
+这次写入**完全不落地**(逐列核对过——不是把敏感字段静默剥掉再存非敏感部分)。"改动"按值比较,不
+按字段是否出现在请求体里判——两个渠道编辑器都会在每次保存时把这几个字段原样带上(包括不动它们
+的纯改名请求),按出现与否判会把每一次编辑都拒掉。models/group/name/priority/weight/status 不在
+这个集合里,普通管理员改这些不需要授权。
+
+覆盖的写入面(v1 与 v2 各自独立闸门,不是共用一次检查):
+- v1 `POST /api/channel/`(新建)、`PUT /api/channel/`(编辑)
+- v1 `POST /api/channel/copy/:id`(复制——克隆行携带源渠道的 key/base_url,和新建同等力度)
+- v1 `POST /api/channel/multi_key/manage` 的 `delete_key`/`delete_disabled_keys` 两个 action(删
+  除存量 key 与替换 key 属同一类凭证变更;该端点的其余 action——enable/disable/get_key_status——
+  不碰 key 列,不受影响)
+- v1 `PUT /api/channel/tag`(标签批量编辑器——对这一个端点按字段"是否出现"判,不按值比较,因为它
+  把一个值套用到多行,没有单一"原值"可比;它没有 `base_url`/`key` 字段可传,只有
+  `param_override`/`header_override` 落在这次闸门里)
+- v2 `POST /api/v2/:tenant_slug/channels`(新建)、`PUT /api/v2/:tenant_slug/channels/:id`(编辑)
+
+root(role ≥ 100)在以上任何一条路由上都不受影响。
 
 **范围**:该开关覆盖的是"最终经
 `provider.doRequest`(`internal/adapter/provider/api_request.go`)调用 `app.GetHttpClientFor`
@@ -280,17 +305,30 @@ gauge 反映的是"这一轮测试已经发起",不是"每个渠道都测完了"
 
 **授权管理端点**(仅 root,挂在 `adminRoute`,即 `RootJWTAuth`,不受上面这道闸影响):
 - `GET /api/v2/admin/authz/catalog` — 200,返回本 cycle 可授权的 `(resource, action)` 静态目录
-  (目前只有 `{"resource":"audit","actions":["read"]}` 一条)和两档固定角色
-  (`tenant-admin` min_role 10 / `root` min_role 100)。
-- `GET /api/v2/admin/authz/grants` — 200,列出全部授权行(含已撤销)。
+  (`{"resource":"audit","actions":["read"]}` 与 cycle-9 L2 新增的
+  `{"resource":"channel","actions":["sensitive_write"]}` 两条)和两档固定角色
+  (`tenant-admin` min_role 10 / `root` min_role 100)。`channel:sensitive_write` 解锁的不是这四个
+  审计只读路由,是 §G 之后新增小节描述的渠道写路由上的一道独立闸门——两条目录行对应两套完全不同的
+  受保护路由,不要假设"能授权就是能读审计"。
+- `GET /api/v2/admin/authz/grants` — 200,列出全部授权行(含已撤销)。每行新增(cycle-9 L1)
+  `expires_at`(unix 秒,nullable)和服务端派生的 `expired` 布尔——`expired` 只看
+  `expires_at` 是否已过 now,和 `revoked_at` 无关,两者可以同时为真(一条既过期又被显式撤销
+  的行)。
 - `POST /api/v2/admin/authz/grants` `{"user_id":int,"resource":"audit","action":"read",
-  "tenant_id":null}` — **201** `{"success":true,"data":{"id":n}}`;**400** `GRANT_INVALID`
-  当 `user_id` 不存在或该用户角色 `< RoleAdminUser`(L4 修复轮 B-F4——此前接受任意正数
-  `user_id`,写错一位数字会静默铸出一条永远打不开任何门的"active"行)、`(resource,action)`
-  不在目录里、或 `tenant_id` 非 null(见下"全局"一节);**409** `GRANT_EXISTS` 当同一
-  `(user_id, resource, action)` 已有一条未撤销的行。
+  "tenant_id":null,"ttl_seconds":int|null}` — **201**
+  `{"success":true,"data":{"id":n,"expires_at":int|null}}`;`ttl_seconds`(cycle-9 L1)是可选
+  字段,省略时该授权行永久有效,和这个字段存在之前的行为完全一致;给出时必须落在
+  `1..7776000`(90 天)闭区间内,越界返回 **400** `GRANT_INVALID`(复用既有 error_code,
+  不是新码)。**400** `GRANT_INVALID` 同样覆盖:当 `user_id` 不存在或该用户角色
+  `< RoleAdminUser`(L4 修复轮 B-F4——此前接受任意正数 `user_id`,写错一位数字会静默铸出一条
+  永远打不开任何门的"active"行)、`(resource,action)` 不在目录里、或 `tenant_id` 非 null
+  (见下"全局"一节);**409** `GRANT_EXISTS` 当同一 `(user_id, resource, action)` 已有一条
+  **仍然存活**(未撤销且未过期)的行——一条已过期但从未显式撤销的旧行不会导致这个 409:
+  `CreatePermissionGrant` 在同一事务里先把过期旧行的 `revoked_at` 置位,再插入新行,新旧两行
+  都在授权行的历史列表里可见。
 - `DELETE /api/v2/admin/authz/grants/:id` — **200**(置 `revoked_at`);**404** 当 id 不存在或
-  已撤销(两种情况同形状,不可区分)。
+  已撤销(两种情况同形状,不可区分)。对一条已过期但未撤销的行调用同样返回 200(允许显式撤销一
+  条已经在功能上失效的行)。
 
 **授权是全局的(GLOBAL)**——本 cycle `tenant_id` 只接受 `null`;`RootOrGranted` 的授权检查同样
 只查 `tenant_id IS NULL` 的行。持有 `audit:read` 授权的租户管理员读到的是**全平台**审计流,
@@ -312,7 +350,8 @@ RevokePermissionGrantsForUser`),各记一条 `authz.permission_revoked` 审计�
 持有授权行而放行。
 
 **审计**——两个写端点各自记一条动作:`authz.permission_granted` / `authz.permission_revoked`,
-`resource="authz"`,`details` 带 `{grantee_user_id,resource,action,tenant_id:null}`。当写调用
+`resource="authz"`,`details` 带 `{grantee_user_id,resource,action,tenant_id:null}`;创建端点
+(cycle-9 L1)额外带 `ttl_seconds`(给了就是那个整数,没给就是 JSON `null`)。当写调用
 走 Bearer JWT 根路径时(`granted_by`/审计 `actor_id` 记 0,因为 JWT 分支不设 `"id"`),`details`
 额外带 `granted_by_sub` 记 JWT 的 subject——这是记录约定,不是拒绝这类调用的理由。
 
@@ -324,3 +363,74 @@ JWT 分支响应行为一致(仅服务端 SysError 日志前缀不同,见上"仅
 不受这次改动影响;上面写的"HTTP 200→403 形状变化"只发生在
 **session-认证的非 root 管理员**这一类调用方身上,`2c-gui-switch` 用的是 Bearer 头,不落在这
 个变化范围内。
+
+### J. 转换保真诊断 (`other.conversion_dropped`,cycle-9 L5)
+
+Claude-wire (`/v1/messages`) 与 Gemini-wire (`/v1beta/...`) 两条跨协议转换路径
+(`internal/app/convert.go` 的 `ClaudeToOpenAIRequest` / `GeminiToOpenAIRequest`)只把一部分请求
+字段映射到上游 OpenAI 格式请求,调用方设置了但转换器不认识的字段(如 Claude-wire 的 `top_k` /
+`tool_choice`,Gemini-wire 的 `toolConfig` / `thinkingConfig` 等)此前被静默丢弃,调用方无法从产品
+里得知。成功行的日志 `other` 现在带一个新键:
+
+| 字段 | 类型 | 语义 |
+|------|------|------|
+| `other.conversion_dropped` | `string[]`,可选 | 本次请求里调用方**自己设置过**但转换器未能映射(或只做了部分映射)到上游请求的字段名,按上游 wire 的原始命名(Claude-wire 用 `top_k`/`tool_choice` 这类 snake_case;Gemini-wire 用 `toolConfig`/`thinkingConfig` 这类 camelCase),排序去重,只列出下面"覆盖范围"里判定为丢弃的字段——请求没有触发任何判定时该键完全不出现(不是空数组)。上限 16 个名字,超出时保留排序后的前 15 个并追加字面量 `…(truncated)` 作为第 16 个元素(这个字符串本身不是字段名,遇到它说明列表被截断,不是发现了一个叫这个名字的字段);单个名字超过 32 字节会被截断到 32 字节。TierPublic(`internal/app/governance/classification.go`),普通用户可见,`GET /api/v2/{tenant}/logs`(普通用户自查)与管理端的 `GET /api/v2/{tenant}/logs/all` 均不剥离这个键 |
+
+**覆盖范围**——这个键覆盖的判定分三类,精确到调用方能依据它做什么:
+
+1. **顶层从不读取的字段**:转换器代码里完全没有引用的请求字段,例如 Claude-wire 的
+   `context_management`/`output_config`/`output_format`/`container`/`mcp_servers`/
+   `service_tier`/`max_tokens_to_sample`/`prompt`,Gemini-wire 的
+   `safetySettings`/`cachedContent`/`responseSchema`/`seed` 等一整批 `GenerationConfig` 字段——调
+   用方设置了这些字段,这个请求就必然带上对应名字。
+2. **有条件映射,按分支实际结果判定**:`thinking` 只有在转换分支真正产出了上游 `Reasoning` 载荷
+   或改写了模型名(`-thinking` 后缀)时才算保留,否则报 `thinking`;`metadata` 只有当它携带
+   `user_id` 以外的键时才报——newhub 自己会读 `metadata.user_id` 投影进 `other.end_user`
+   (`internal/adapter/provider/common/relay_info.go` 的 `deriveEndUserHash`),只含 `user_id` 的
+   `metadata` **不会**出现在 `conversion_dropped` 里,这不是遗漏。
+3. **部分映射,整字段名归并报告**:`tools` 在两条 wire 上都只做了部分转换——Claude-wire 只保留
+   工具的 `name`/`description`/`input_schema`,某个工具带非 `function` 的 `type`(例如 Anthropic
+   的内置 `web_search` 工具)或带 `cache_control` 块,就报 `tools`(不区分是这个数组里第几个工具、
+   丢的是哪一部分);Gemini-wire 的工具数组里只转换带 `functionDeclarations` 的条目,
+   `googleSearch`/`googleSearchRetrieval`/`codeExecution`/`urlContext` 这四种内置工具各自用独立
+   的点号名字报告(`tools.googleSearch` 等),不归并进 `tools`。Gemini-wire 顶层的批量字段
+   `requests`(只有 vertex 适配器和 token 计数会读)也在此列,报 `requests`。
+
+**未覆盖的残留(键缺席≠该请求完全保真)**:上面三类之外的任何丢失都不会出现在这个键里——已知的
+残留包括:Claude-wire 工具的哪个具体子字段被丢(`tools` 只是整字段名的粗粒度标记);未来
+Anthropic/Google 新增的工具类型在代码更新前不会被识别;`thinking.type != "enabled"` 之外还有
+`thinking` 语义细节(比如具体 budget 数值被上游拒绝)不在这个诊断的范围内,它只回答"这个设置有没
+有以任何形式影响上游请求"。
+
+**范围边界,明确写出以免被当成疏漏**:只有成功结算的请求会带这个键——它在
+`app.GenerateTextOtherInfo`(即 `compatible_handler.go:490` 调 `PostConsumeQuota` 之后走的那条
+success-path 日志生成函数,Claude/audio/wss 三个变体生成器都会经过它)里投影。`internal/adapter/
+handler/relay.go`(`recordRelayErrorLog`,约 757-803 行)的终态错误日志路径是另一套独立、逐键拼装
+`other` 的代码,不读取这个字段——一次失败的请求(包括触发这段转换代码之后才失败的请求)不会有
+`conversion_dropped`。这不是本 cycle 计划做但没做完,是 L5 明确排除在范围外的部分。
+
+**目前没有兄弟产品接入这个字段**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均无
+`conversion_dropped` 命中)。
+
+### K. Rankings 新增 `by=group` 维度(cycle-9 L7)
+
+`/api/v2/{tenant}/analytics/rankings` 与根管理员端点 `/api/v2/admin/analytics/rankings` 的 `by`
+查询参数在既有 `model`/`vendor` 之外新接受第三个取值 `group`——按 `logs` 表已有的 `group` 列
+(`internal/domain/entity/log.go` 的 `Group` 字段)聚合。这一列记录的是**请求实际使用的分组**
+(调用方令牌/用户的分组,auto 跨组重试时可能变动——见 `internal/adapter/middleware/auth.go:747`
+写入 `ContextKeyUsingGroup`、`internal/adapter/provider/common/relay_info.go:96` 的
+`RelayInfo.UsingGroup` 注释),不是渠道自身的 `Group` 列;聚合表达式是
+`COALESCE(NULLIF("group", ''), '(ungrouped)')`,一个表达式而非裸列,不会用到该列上的 btree
+索引,查询成本与 `by=model`/`by=vendor` 相同的窗口扫描一致。响应形状与 `by=model`/`by=vendor`
+完全一致(`rank`/`rank_delta`/`is_new`/`requests`/`requests_growth_pct`/`total_tokens`/
+`token_share_pct`/`quota`/`quota_share_pct`)。空字符串 `group` 的行会被合并成一个显式的
+`(ungrouped)` 分组,不会以空名称单独出现,也不会被丢弃——已知非目标:分组名字面量就是
+`(ungrouped)` 时无法与空分组桶区分(分组名是自由文本,`internal/adapter/middleware/auth.go:738-744`
+只检查是否在比例表里出现,不限制取值)。未知 `by` 取值(既非 `model`/`vendor` 也非 `group`)仍然
+400,错误信息由 `by must be model or vendor` 改为 `by must be model, vendor or group`
+(`internal/adapter/handler/v2_analytics_rankings.go`)——按文本匹配旧信息的调用方需要更新。这是
+纯增量:不改变 `by=model`/`by=vendor` 的既有行为、不改变响应形状、不影响租户范围(`by=group`
+同样只返回调用方自己租户内的分组)。
+
+**目前没有兄弟产品接入 `by=group`**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均未见对
+`analytics/rankings` 端点的调用)。

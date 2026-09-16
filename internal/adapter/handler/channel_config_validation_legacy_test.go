@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,11 +19,19 @@ import (
 // channel_v1_regression_test.go (same package).
 // ============================================================================
 
+// registerV1ChannelUpdateRoute mounts v1 UpdateChannel for the config-document
+// tests below. It sets role=root deliberately: UpdateChannel refuses an
+// ungranted non-root caller BEFORE it validates the document (authorization
+// first, see the gate in channel.go), so a non-root context would answer 403
+// and these tests would never reach the validator they exist to exercise.
+// The authorization ordering itself is covered in
+// channel_sensitive_write_test.go.
 func registerV1ChannelUpdateRoute(ctx *V2TestContext) {
 	v1 := ctx.Router.Group("/api")
 	v1.Use(func(c *gin.Context) {
 		c.Set("tenant_id", ctx.TenantID)
 		c.Set("id", ctx.AdminUser.Id)
+		c.Set("role", common.RoleRootUser)
 		c.Next()
 	})
 	v1.PUT("/channel", UpdateChannel)

@@ -78,7 +78,10 @@ type totpForceDisableRequest struct {
 // root's own TOTP enrollment: a root with no TOTP of their own steps up via
 // method:"session" with no credential at all (secure_verification.go's
 // unenrolled branch), so a stolen root SESSION cookie is not mitigated by
-// this route — only the Bearer-JWT vector is closed.
+// this route — only the Bearer-JWT vector is closed — unless
+// SECURE_VERIFICATION_REQUIRE_ENROLLMENT=true, which refuses that grant
+// (403 STEP_UP_ENROLLMENT_REQUIRED) and therefore also closes the
+// stolen-session vector for this route (default off — see .env.example).
 func ForceDisableTotpV2(c *gin.Context) {
 	targetID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || targetID <= 0 {

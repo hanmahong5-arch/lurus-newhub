@@ -86,6 +86,7 @@ const V2Projects = lazy(() => import('./pages/v2/Projects'));
 const V2ModelRateLimits = lazy(
   () => import('./pages/v2/Admin/ModelRateLimits'),
 );
+const V2Diagnostics = lazy(() => import('./pages/v2/Admin/Diagnostics'));
 
 function App() {
   const location = useLocation();
@@ -398,6 +399,7 @@ function App() {
           ['admin/model-limits', V2ModelRateLimits],
           ['admin/system-tasks', V2SystemTasks],
           ['admin/authz', V2AdminAuthz],
+          ['admin/diagnostics', V2Diagnostics],
         ].map(([slug, Component]) => (
           <Route
             key={slug}

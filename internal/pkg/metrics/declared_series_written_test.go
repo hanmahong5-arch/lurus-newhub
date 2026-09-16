@@ -29,8 +29,14 @@ import (
 // package unaliased and referencing it as `metrics.X`.
 
 // declaredMetricVarRe matches a package-level var initialised directly from
-// promauto.New* — e.g. `RequestsTotal = promauto.NewCounterVec(`.
-var declaredMetricVarRe = regexp.MustCompile(`(?m)^\s*(\w+)\s*=\s*promauto\.New\w+\(`)
+// promauto.New* — e.g. `RequestsTotal = promauto.NewCounterVec(` (declared
+// inside a `var ( ... )` block) or a standalone `var RateLimitedTotal =
+// promauto.NewCounterVec(` statement. The optional `(?:var\s+)?` prefix
+// covers the standalone form; without it this regex silently skipped every
+// var declared that way (found via netdata_alarm_series_test.go, which
+// needed the same scan and could not use this regex until it grew that
+// prefix — reused here instead of forking a second copy).
+var declaredMetricVarRe = regexp.MustCompile(`(?m)^\s*(?:var\s+)?(\w+)\s*=\s*promauto\.New\w+\(`)
 
 // packageNonTestGoFiles returns the .go files directly in dir, excluding
 // _test.go files.

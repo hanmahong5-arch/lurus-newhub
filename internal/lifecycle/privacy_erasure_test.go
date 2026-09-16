@@ -119,7 +119,7 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 	// A delegated permission grant (L4) — must not survive erasure either
 	// (cycle-8 L4 repair round, B-F5): security-adjacent access, same class
 	// as the tokens/sessions/TOTP rows above.
-	if _, err := repo.CreatePermissionGrant(user.Id, "audit", "read", 1); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(user.Id, "audit", "read", 1); err != nil {
 		t.Fatalf("seed permission grant: %v", err)
 	}
 	// A response_registry row (L7) — must not survive erasure either

@@ -24,11 +24,11 @@ import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /*
- * v2 tenant-admin — Model & vendor performance rankings leaderboard.
+ * v2 tenant-admin — Model / vendor / group performance rankings leaderboard.
  *
  * Read-only. Consumes GET /api/v2/:tenant_slug/analytics/rankings
- * (period-over-period rank/trend/share per model or per channel-type
- * vendor — see internal/adapter/repo/analytics.go GetRankings). The
+ * (period-over-period rank/trend/share per model, per channel-type vendor,
+ * or per logs.group — see internal/adapter/repo/analytics.go GetRankings). The
  * tenant-admin gate lives server-side (requireTenantAdmin inside
  * GetTenantRankingsV2); a 403 renders the same forbidden panel the
  * ModelPerformance admin page uses for its own root-only gate.
@@ -159,7 +159,7 @@ const HFRankings = () => {
           <div className='sub'>
             {tr(
               'console.rankings.sub',
-              'rank · trend · share vs the previous window, per model or per vendor',
+              'rank · trend · share vs the previous window, per model, per vendor or per group',
             )}
           </div>
         </div>
@@ -209,6 +209,14 @@ const HFRankings = () => {
               onClick={() => setBy('vendor')}
             >
               {tr('console.rankings.by_vendor', 'by vendor')}
+            </button>
+            <button
+              type='button'
+              data-testid='rankings-by-group'
+              className={'btn sm' + (by === 'group' ? ' primary' : '')}
+              onClick={() => setBy('group')}
+            >
+              {tr('console.rankings.by_group', 'by group')}
             </button>
             {HOUR_PRESETS.map(([h, key, fallback]) => (
               <button

@@ -217,6 +217,48 @@ func getVendorUsageTotals(startTime, endTime int64, tenantID string) ([]RankingU
 	return rows, nil
 }
 
+// rankingsGroupExpr is the by="group" aggregation key: `group` is a SQL
+// reserved word in both Postgres and SQLite, so the identifier must be
+// double-quoted — an unquoted `GROUP BY group` is a syntax error on either
+// dialect. It is built from the shared logGroupCol identifier
+// (internal/adapter/repo/main.go, set by InitCol) rather than a second
+// literal, so this expression and the sibling log.go queries that also
+// read logGroupCol cannot drift apart on an upstream merge.
+// TestRankings_ByGroup_QuotesTheReservedIdentifier
+// (log_rankings_test.go) runs this against a real-Postgres-dialector
+// DryRun handle to pin the exact SQL Postgres receives; the hermetic
+// SQLite tests in the same file exercise the query's grouping/bucketing
+// behaviour. Rows with an empty group fold into one explicit "(ungrouped)"
+// bucket rather than appearing as a blank-named row — a group literally
+// named "(ungrouped)" is indistinguishable from that bucket; this is a
+// known, accepted non-goal (group names are free text, see
+// internal/adapter/middleware/auth.go:738-744).
+func rankingsGroupExpr() string {
+	return `COALESCE(NULLIF(` + logGroupCol + `, ''), '(ungrouped)')`
+}
+
+// getGroupUsageTotals is GetModelUsageTotals' group-column-keyed sibling.
+// Unexported: GetRankings is its only caller today, mirroring
+// getVendorUsageTotals.
+func getGroupUsageTotals(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
+	base := LOG_DB.Model(&entity.Log{}).
+		Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
+		Where("created_at >= ? AND created_at <= ?", startTime, endTime)
+	if tenantID != "" {
+		base = base.Where("tenant_id = ?", tenantID)
+	}
+	var rows []RankingUsageTotal
+	err := base.
+		Select(rankingsGroupExpr() + ` AS name,
+			COUNT(*) AS requests,
+			COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+			COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+			COALESCE(SUM(quota), 0) AS quota`).
+		Group(rankingsGroupExpr()).
+		Find(&rows).Error
+	return rows, err
+}
+
 // RankingRow is one leaderboard entry returned by GetRankings: the current
 // window's usage plus its rank/trend/share against the immediately
 // preceding window of equal length.
@@ -242,7 +284,8 @@ const rankingsMaxRows = 20
 // preceding window of equal length, then returns the top `limit` groups by
 // current-window tokens with rank/rank_delta/share/growth attached.
 //
-// by == "vendor" groups by channel_type; anything else groups by
+// by == "vendor" groups by channel_type; by == "group" groups by the logs
+// table's `group` column (see rankingsGroupExpr); anything else groups by
 // model_name. rank_delta is (previous rank - current rank): positive means
 // the group moved up the leaderboard. A group absent from the previous
 // window gets rank_delta=0, is_new=true, and a nil requests_growth_pct (no
@@ -261,8 +304,11 @@ func GetRankings(startTime, endTime int64, tenantID, by string, limit int) (rows
 	prevStart := prevEnd - length
 
 	fetch := GetModelUsageTotals
-	if by == "vendor" {
+	switch by {
+	case "vendor":
 		fetch = getVendorUsageTotals
+	case "group":
+		fetch = getGroupUsageTotals
 	}
 
 	current, err := fetch(startTime, endTime, tenantID)

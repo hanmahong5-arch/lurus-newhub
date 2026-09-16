@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
-import { API, showError, isAdmin } from '../../../helpers';
+import { API, showError, showSuccess, isAdmin } from '../../../helpers';
 import { formatUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
@@ -162,6 +162,30 @@ const fmtCost = (quota) => formatUSD(quota);
 
 const PAGE_SIZE = 50;
 
+// request_id/upstream_request_id filter the `other` JSON column via an
+// unindexed extract (internal/adapter/repo/log.go, jsonOtherTextExpr) — a
+// plain index on `logs` is off the table this cycle (a CREATE INDEX would
+// hold ShareLock against the relay's own log writes; see runner.go). So the
+// search and paging paths attach a bounded start_time when an id filter is
+// set and the caller left the date pickers empty; the CSV export button
+// below builds its own id-less query from the same filter state and is not
+// covered by this bound.
+const ID_FILTER_LOOKBACK_SEC = 7 * 24 * 3600; // 7 days
+
+// Effective lower time bound for a logs/stat query: an explicit start wins;
+// otherwise an active id filter gets the lookback above, anchored on the end
+// bound when one is set (so the computed start_time can never land after an
+// explicit end_time) and on now() otherwise. Returns null when neither an
+// explicit start nor an id filter applies, meaning no bound is sent.
+const computeStartTimeSec = (start, end, hasIdFilter) => {
+  if (start) return Math.floor(new Date(start).getTime() / 1000);
+  if (!hasIdFilter) return null;
+  const anchorSec = end
+    ? Math.floor(new Date(end).getTime() / 1000)
+    : Math.floor(Date.now() / 1000);
+  return anchorSec - ID_FILTER_LOOKBACK_SEC;
+};
+
 // Live-tail tuning. 3s poll matches the plan; the buffer is bounded so a
 // long-running tail can't grow memory without limit (drop oldest at the cap).
 const LIVE_POLL_MS = 3000;
@@ -213,6 +237,19 @@ const HFLog = () => {
   );
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
+  // L6: request_id/session_id are TierPublic (GET /api/v2/:tenant_slug/logs,
+  // v2_log.go:128-129, binds request_id/session_id); upstream_request_id is
+  // TierInternal and is bound only on GET /api/v2/:tenant_slug/logs/all
+  // (v2_log.go:221-222, tenant-admin only), so its input renders admin-only
+  // below and a non-empty value routes the query there (see fetchLogs).
+  const [filterRequestId, setFilterRequestId] = useState(
+    () => new URLSearchParams(window.location.search).get('request_id') || '',
+  );
+  const [filterUpstreamRequestId, setFilterUpstreamRequestId] = useState(
+    () =>
+      new URLSearchParams(window.location.search).get('upstream_request_id') ||
+      '',
+  );
   // errors-only maps to the API's type filter (5 = error rows).
   const [errorsOnly, setErrorsOnly] = useState(
     () =>
@@ -224,10 +261,39 @@ const HFLog = () => {
   // pricing-ratio fields only light up here.
   const [tenantWide, setTenantWide] = useState(false);
 
+  // Whether either id filter box currently holds a (trimmed) value. Drives
+  // the implicit lookback window, the window hint, and the stat-header
+  // scope note.
+  const idFilterActive = !!(
+    filterRequestId.trim() || filterUpstreamRequestId.trim()
+  );
+
   const fetchLogs = useCallback(
-    async (currentPage, model, token, start, end, errOnly, wide, product) => {
+    async (
+      currentPage,
+      model,
+      token,
+      start,
+      end,
+      errOnly,
+      wide,
+      product,
+      requestId,
+      upstreamRequestId,
+    ) => {
       setLoading(true);
       try {
+        const trimmedRequestId = (requestId || '').trim();
+        const trimmedUpstreamRequestId = (upstreamRequestId || '').trim();
+        const hasIdFilter = !!(trimmedRequestId || trimmedUpstreamRequestId);
+        // upstream_request_id is bound only on GET /api/v2/:tenant_slug/logs/all
+        // (v2_log.go:221-222) — GetLogsV2 never reads it. A non-empty value
+        // therefore always routes to /logs/all regardless of the tenantWide
+        // toggle, and the toggle is brought in sync so the "all users
+        // (admin)" button reflects the scope the query actually used.
+        const wideRoute = wide || !!trimmedUpstreamRequestId;
+        if (wideRoute) setTenantWide(true);
+
         const params = new URLSearchParams({
           page: String(currentPage),
           page_size: String(PAGE_SIZE),
@@ -236,11 +302,11 @@ const HFLog = () => {
         if (token) params.set('token_name', token);
         if (product) params.set('source_product', product);
         if (errOnly) params.set('type', String(LOG_TYPE_ERROR));
-        if (start)
-          params.set(
-            'start_time',
-            String(Math.floor(new Date(start).getTime() / 1000)),
-          );
+        if (trimmedRequestId) params.set('request_id', trimmedRequestId);
+        if (trimmedUpstreamRequestId)
+          params.set('upstream_request_id', trimmedUpstreamRequestId);
+        const startSec = computeStartTimeSec(start, end, hasIdFilter);
+        if (startSec != null) params.set('start_time', String(startSec));
         if (end)
           params.set(
             'end_time',
@@ -248,7 +314,7 @@ const HFLog = () => {
           );
 
         const res = await API.get(
-          `/api/v2/${tenantSlug}/logs${wide ? '/all' : ''}?${params.toString()}`,
+          `/api/v2/${tenantSlug}/logs${wideRoute ? '/all' : ''}?${params.toString()}`,
         );
         if (res?.data?.success) {
           const d = res.data.data;
@@ -271,7 +337,7 @@ const HFLog = () => {
   );
 
   const fetchStat = useCallback(
-    async (model, token, start, end, errOnly, wide, product) => {
+    async (model, token, start, end, errOnly, wide, product, hasIdFilter) => {
       setStatLoading(true);
       try {
         const params = new URLSearchParams();
@@ -279,11 +345,13 @@ const HFLog = () => {
         if (token) params.set('token_name', token);
         if (product) params.set('source_product', product);
         if (errOnly) params.set('type', String(LOG_TYPE_ERROR));
-        if (start)
-          params.set(
-            'start_time',
-            String(Math.floor(new Date(start).getTime() / 1000)),
-          );
+        // /logs/stat has no request_id/upstream_request_id parameter of its
+        // own — the id filter cannot narrow the totals — but the SAME
+        // effective start_time fetchLogs computed is sent here too, so the
+        // header at least summarises the window the id search actually ran
+        // over (see the "not filtered by id" hint rendered alongside it).
+        const startSec = computeStartTimeSec(start, end, !!hasIdFilter);
+        if (startSec != null) params.set('start_time', String(startSec));
         if (end)
           params.set(
             'end_time',
@@ -316,6 +384,8 @@ const HFLog = () => {
         errorsOnly,
         tenantWide,
         filterProduct,
+        filterRequestId,
+        filterUpstreamRequestId,
       );
       fetchStat(
         filterModel,
@@ -325,6 +395,7 @@ const HFLog = () => {
         errorsOnly,
         tenantWide,
         filterProduct,
+        idFilterActive,
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -437,6 +508,8 @@ const HFLog = () => {
       errorsOnly,
       tenantWide,
       filterProduct,
+      filterRequestId,
+      filterUpstreamRequestId,
     );
     fetchStat(
       filterModel,
@@ -446,6 +519,7 @@ const HFLog = () => {
       errorsOnly,
       tenantWide,
       filterProduct,
+      idFilterActive,
     );
   };
 
@@ -460,6 +534,8 @@ const HFLog = () => {
       errorsOnly,
       tenantWide,
       filterProduct,
+      filterRequestId,
+      filterUpstreamRequestId,
     );
   };
 
@@ -476,6 +552,8 @@ const HFLog = () => {
       next,
       tenantWide,
       filterProduct,
+      filterRequestId,
+      filterUpstreamRequestId,
     );
     fetchStat(
       filterModel,
@@ -485,6 +563,7 @@ const HFLog = () => {
       next,
       tenantWide,
       filterProduct,
+      idFilterActive,
     );
   };
 
@@ -501,6 +580,8 @@ const HFLog = () => {
       errorsOnly,
       next,
       filterProduct,
+      filterRequestId,
+      filterUpstreamRequestId,
     );
     // Stat header follows the scope: /logs/stat/all summarises the same rows
     // /logs/all lists.
@@ -512,11 +593,23 @@ const HFLog = () => {
       errorsOnly,
       next,
       filterProduct,
+      idFilterActive,
     );
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const selectedLog = logs[selRow];
+
+  // Copy-to-clipboard affordance for the detail-panel id rows below. Mirrors
+  // the local `copy` used by the Token page (web/src/pages/v2/Token/index.jsx).
+  const copyId = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showSuccess(tr('console.common.copied', 'copied'));
+    } catch (_) {
+      showError(tr('console.common.copy_failed', 'copy failed'));
+    }
+  };
 
   const inputStyle = {
     fontFamily: 'var(--hf-mono)',
@@ -606,6 +699,27 @@ const HFLog = () => {
           value={filterEnd}
           onChange={(e) => setFilterEnd(e.target.value)}
         />
+        <input
+          style={{ ...inputStyle, width: 150 }}
+          data-testid='log-request-id-filter'
+          placeholder={tr('console.log.ph_request_id', 'request id…')}
+          value={filterRequestId}
+          onChange={(e) => setFilterRequestId(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
+        />
+        {isAdmin() && (
+          <input
+            style={{ ...inputStyle, width: 160 }}
+            data-testid='log-upstream-request-id-filter'
+            placeholder={tr(
+              'console.log.ph_upstream_request_id',
+              'upstream request id…',
+            )}
+            value={filterUpstreamRequestId}
+            onChange={(e) => setFilterUpstreamRequestId(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
+          />
+        )}
         <button type='button' className='btn primary' onClick={applyFilters}>
           {tr('console.common.search', 'search')}
         </button>
@@ -636,10 +750,12 @@ const HFLog = () => {
             setFilterProduct('');
             setFilterStart('');
             setFilterEnd('');
+            setFilterRequestId('');
+            setFilterUpstreamRequestId('');
             setErrorsOnly(false);
             setPage(1);
-            fetchLogs(1, '', '', '', '', false, tenantWide, '');
-            fetchStat('', '', '', '', false, tenantWide, '');
+            fetchLogs(1, '', '', '', '', false, tenantWide, '', '', '');
+            fetchStat('', '', '', '', false, tenantWide, '', false);
           }}
         >
           {tr('console.log.clear', 'clear')}
@@ -672,6 +788,27 @@ const HFLog = () => {
           </button>
         )}
       </div>
+
+      {/* Effective window while an id filter is active: fetchLogs attaches a
+          bounded start_time (see ID_FILTER_LOOKBACK_SEC / computeStartTimeSec
+          above), which is otherwise invisible if the caller left the date
+          pickers empty. */}
+      {idFilterActive && (
+        <div
+          data-testid='log-id-window-hint'
+          className='muted mono'
+          style={{
+            fontSize: 11,
+            padding: '6px 28px',
+            borderBottom: '1px solid var(--hf-rule)',
+          }}
+        >
+          {tr(
+            'console.log.id_window_hint',
+            'id search — showing the last 7 days unless a start date is set',
+          )}
+        </div>
+      )}
 
       {/* Aggregate stat header — GET /logs/stat over the active filters.
           requests/quota reflect the full filter window; rpm/tpm are rolling
@@ -722,6 +859,28 @@ const HFLog = () => {
           </div>
         ))}
       </div>
+
+      {/* /logs/stat has no request_id/upstream_request_id parameter, so the
+          header above cannot be narrowed to the id search the same way the
+          trace table is — it only shares the same time window. Label that
+          while an id filter is active so the two panels aren't read as
+          describing the same rows. */}
+      {idFilterActive && (
+        <div
+          data-testid='log-stat-id-scope-hint'
+          className='muted mono'
+          style={{
+            fontSize: 11,
+            padding: '4px 28px 8px',
+            borderBottom: '1px solid var(--hf-rule)',
+          }}
+        >
+          {tr(
+            'console.log.stat_id_scope_hint',
+            'totals above are for the same time window, not filtered by id',
+          )}
+        </div>
+      )}
 
       {/* Per-product spend strip — GET /logs/stat's by_product, which (per
           the API contract) always summarises the FULL window regardless of
@@ -1120,6 +1279,95 @@ const HFLog = () => {
                                   {Math.round(Number(o.frt))}ms
                                 </div>
                               )}
+                            {/* L6: request_id/session_id are the caller's own
+                                correlation ids (TierPublic). upstream_request_id
+                                is the vendor's own trace id (TierInternal); the
+                                API (internal/adapter/repo/log.go) strips it from
+                                the `other` payload for non-tenant-admin routes,
+                                so this render check is proven by
+                                internal/adapter/handler/v2_log_test.go rather
+                                than a client-side admin check here. */}
+                            {o.request_id && (
+                              <div
+                                data-testid='log-detail-request-id'
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                }}
+                              >
+                                <span className='muted'>
+                                  {tr(
+                                    'console.log.detail_request_id',
+                                    'request id',
+                                  )}
+                                  :
+                                </span>
+                                <span>{o.request_id}</span>
+                                <button
+                                  type='button'
+                                  className='btn ghost sm'
+                                  data-testid='copy-request-id'
+                                  onClick={() => copyId(o.request_id)}
+                                >
+                                  {tr('console.common.copy', 'copy')}
+                                </button>
+                              </div>
+                            )}
+                            {o.session_id && (
+                              <div
+                                data-testid='log-detail-session-id'
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                }}
+                              >
+                                <span className='muted'>
+                                  {tr(
+                                    'console.log.detail_session_id',
+                                    'session id',
+                                  )}
+                                  :
+                                </span>
+                                <span>{o.session_id}</span>
+                                <button
+                                  type='button'
+                                  className='btn ghost sm'
+                                  data-testid='copy-session-id'
+                                  onClick={() => copyId(o.session_id)}
+                                >
+                                  {tr('console.common.copy', 'copy')}
+                                </button>
+                              </div>
+                            )}
+                            {o.upstream_request_id && (
+                              <div
+                                data-testid='log-detail-upstream-request-id'
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                }}
+                              >
+                                <span className='muted'>
+                                  {tr(
+                                    'console.log.detail_upstream_request_id',
+                                    'upstream request id',
+                                  )}
+                                  :
+                                </span>
+                                <span>{o.upstream_request_id}</span>
+                                <button
+                                  type='button'
+                                  className='btn ghost sm'
+                                  data-testid='copy-upstream-request-id'
+                                  onClick={() => copyId(o.upstream_request_id)}
+                                >
+                                  {tr('console.common.copy', 'copy')}
+                                </button>
+                              </div>
+                            )}
                           </>
                         );
                       })()}

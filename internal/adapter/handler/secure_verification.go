@@ -30,6 +30,24 @@ type VerificationStatusResponse struct {
 	Verified     bool  `json:"verified"`
 	ExpiresAt    int64 `json:"expires_at,omitempty"`
 	TotpEnrolled bool  `json:"totp_enrolled"`
+	// EnrollmentRequired mirrors secureVerificationRequireEnrollment() so the
+	// console can show the real policy instead of assuming the legacy one —
+	// it is a process-wide setting, not something derived from this user.
+	EnrollmentRequired bool `json:"enrollment_required"`
+}
+
+// secureVerificationRequireEnrollment reports whether UniversalVerify's
+// no-enrollment branch must refuse step-up instead of granting it for free.
+// Read fresh from the environment on every call (no init-time snapshot) so
+// tests can toggle it with t.Setenv.
+//
+// Default false is a measured decision, not timidity: as of the cycle-9
+// plan the only production account with role >= 10 (root, id 1) has no row
+// in user_totps, so flipping this default would lock that account out of
+// channel-key reveal and 2FA force-disable — see .env.example and
+// doc/runbook/incident-response.md for the break-glass procedure.
+func secureVerificationRequireEnrollment() bool {
+	return common.GetEnvOrDefaultBool("SECURE_VERIFICATION_REQUIRE_ENROLLMENT", false)
 }
 
 // UniversalVerify marks the current session as securely verified (step-up).
@@ -39,9 +57,23 @@ type VerificationStatusResponse struct {
 //     (403, code TOTP_REQUIRED); only method "totp" with a currently valid,
 //     not-yet-used code passes. Wrong codes are throttled per user and
 //     audited; a code can only be spent once inside the replay window.
-//   - User has NO enrollment → legacy behavior: any authenticated, enabled
-//     user passes with method "session". The response carries
-//     totp_enrolled:false so the frontend can steer users to enroll.
+//   - User has NO enrollment → by default (SECURE_VERIFICATION_REQUIRE_ENROLLMENT
+//     unset/false) this grants step-up on nothing beyond an already-authenticated
+//     session: method "session" passes with no credential presented at all,
+//     because there is no second factor to check. A stolen session cookie for
+//     such a user satisfies the gates behind middleware.SecureVerificationRequired
+//     (router/api-router.go:80 totp/disable, :84 backup-codes/regenerate, :151
+//     channel-key reveal; router/api-v2-router.go:560 2FA force-disable)
+//     exactly as well as the legitimate owner would. That grant is handed to
+//     the audit writer on every pass through this branch
+//     (governance.ActionAuthStepUpNoCredential) — the write itself is a
+//     best-effort background insert (see governance.RecordAuditEvent), so it
+//     is no longer invisible even when a write is dropped or fails. Setting
+//     SECURE_VERIFICATION_REQUIRE_ENROLLMENT=true closes it: the
+//     no-enrollment branch answers 403 STEP_UP_ENROLLMENT_REQUIRED instead of
+//     passing, and the session key is never set. The response carries
+//     totp_enrolled:false in this branch so the frontend can steer users to
+//     enroll.
 func UniversalVerify(c *gin.Context) {
 	userId := c.GetInt("id")
 	if userId == 0 {
@@ -156,6 +188,30 @@ func UniversalVerify(c *gin.Context) {
 			"totp_enrolled": false,
 		})
 		return
+	} else if secureVerificationRequireEnrollment() {
+		// Same throttle-refusal precedent as the enrolled-TOTP branches
+		// above (ActionAuthFailed with a "step" + "reason" detail blob):
+		// an operator who turns enforcement on gets a record of blocked
+		// step-up attempts, not just of the ones that succeeded.
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
+			governance.ActionAuthFailed, governance.ResourceUser, userId, `{"step":"secure_verify","reason":"enrollment_required"}`))
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":       false,
+			"message":       "Step-up verification requires an enrolled second factor. Enrol two-factor authentication in Settings > Security, then retry.",
+			"code":          "STEP_UP_ENROLLMENT_REQUIRED",
+			"totp_enrolled": false,
+		})
+		return
+	} else {
+		// Credential-free grant: no TOTP enrollment exists for this user, so
+		// this request proves nothing beyond an already-authenticated
+		// session. Handed to the audit writer on every pass through this
+		// branch (governance.ActionAuthStepUpNoCredential) — the write is a
+		// best-effort background insert — so the weakness is visible even
+		// while the flag above stays off.
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
+			governance.ActionAuthStepUpNoCredential, governance.ResourceUser, userId,
+			`{"step":"secure_verify","method":"session","reason":"no_totp_enrollment"}`))
 	}
 
 	session := sessions.Default(c)
@@ -196,6 +252,7 @@ func GetVerificationStatus(c *gin.Context) {
 		return
 	}
 	totpEnrolled := rec != nil && rec.Enabled
+	enrollmentRequired := secureVerificationRequireEnrollment()
 
 	session := sessions.Default(c)
 	verifiedAtRaw := session.Get(SecureVerificationSessionKey)
@@ -204,7 +261,7 @@ func GetVerificationStatus(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "",
-			"data":    VerificationStatusResponse{Verified: false, TotpEnrolled: totpEnrolled},
+			"data":    VerificationStatusResponse{Verified: false, TotpEnrolled: totpEnrolled, EnrollmentRequired: enrollmentRequired},
 		})
 		return
 	}
@@ -214,7 +271,7 @@ func GetVerificationStatus(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "",
-			"data":    VerificationStatusResponse{Verified: false, TotpEnrolled: totpEnrolled},
+			"data":    VerificationStatusResponse{Verified: false, TotpEnrolled: totpEnrolled, EnrollmentRequired: enrollmentRequired},
 		})
 		return
 	}
@@ -226,7 +283,7 @@ func GetVerificationStatus(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "",
-			"data":    VerificationStatusResponse{Verified: false, TotpEnrolled: totpEnrolled},
+			"data":    VerificationStatusResponse{Verified: false, TotpEnrolled: totpEnrolled, EnrollmentRequired: enrollmentRequired},
 		})
 		return
 	}
@@ -235,9 +292,10 @@ func GetVerificationStatus(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": VerificationStatusResponse{
-			Verified:     true,
-			ExpiresAt:    verifiedAt + SecureVerificationTimeout,
-			TotpEnrolled: totpEnrolled,
+			Verified:           true,
+			ExpiresAt:          verifiedAt + SecureVerificationTimeout,
+			TotpEnrolled:       totpEnrolled,
+			EnrollmentRequired: enrollmentRequired,
 		},
 	})
 }

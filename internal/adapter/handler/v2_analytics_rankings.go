@@ -106,18 +106,18 @@ func getCachedRankings(tenantID, by string, hours int) (*rankingsCacheEntry, err
 }
 
 // parseRankingsParams reads and validates the `by`/`hours` query params
-// shared by the root and tenant rankings routes. `by` must be "model" or
-// "vendor" — any other value is rejected with a non-empty errMsg (unknown
-// `by` used to fall back to "model" silently, which let a typo mint an
-// unbounded number of cache-key dimensions; now the caller must ask for one
-// of the two the leaderboard actually supports). `hours` is clamped to
-// [1,720] then snapped to a cache-friendly preset; an unparsable `hours`
-// (empty string, non-integer) falls back to rankingsDefaultHours rather
-// than silently clamping to the 1-hour preset.
+// shared by the root and tenant rankings routes. `by` must be "model",
+// "vendor" or "group" — any other value is rejected with a non-empty
+// errMsg (unknown `by` used to fall back to "model" silently, which let a
+// typo mint an unbounded number of cache-key dimensions; now the caller
+// must ask for one of the dimensions the leaderboard actually supports).
+// `hours` is clamped to [1,720] then snapped to a cache-friendly preset; an
+// unparsable `hours` (empty string, non-integer) falls back to
+// rankingsDefaultHours rather than silently clamping to the 1-hour preset.
 func parseRankingsParams(c *gin.Context) (by string, hours int, errMsg string) {
 	by = c.DefaultQuery("by", "model")
-	if by != "model" && by != "vendor" {
-		return "", 0, "by must be model or vendor"
+	if by != "model" && by != "vendor" && by != "group" {
+		return "", 0, "by must be model, vendor or group"
 	}
 	h, atoiErr := strconv.Atoi(c.DefaultQuery("hours", strconv.Itoa(rankingsDefaultHours)))
 	if atoiErr != nil {
@@ -151,11 +151,12 @@ func writeRankingsResponse(c *gin.Context, by string, hours int, entry *rankings
 	})
 }
 
-// GetTenantRankingsV2 is the tenant-admin model/vendor leaderboard: rank,
-// trend (rank_delta/is_new) and share (token_share_pct/quota_share_pct) per
-// model or per channel-type vendor, scoped to the caller's own tenant.
+// GetTenantRankingsV2 is the tenant-admin model/vendor/group leaderboard:
+// rank, trend (rank_delta/is_new) and share (token_share_pct/quota_share_pct)
+// per model, per channel-type vendor, or per logs.group, scoped to the
+// caller's own tenant.
 //
-// GET /api/v2/:tenant_slug/analytics/rankings?by=model|vendor&hours=1..720
+// GET /api/v2/:tenant_slug/analytics/rankings?by=model|vendor|group&hours=1..720
 //
 // Tenant id comes from the resolved tenant context, never from the query —
 // cross-tenant market share is impossible by construction (mirrors

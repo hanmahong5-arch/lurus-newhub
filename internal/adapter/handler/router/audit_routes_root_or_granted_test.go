@@ -124,7 +124,7 @@ func TestAuditRoutes_MountedUnderRootOrGranted(t *testing.T) {
 		}
 	}
 
-	if _, err := repo.CreatePermissionGrant(adminID, "audit", "read", 1); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(adminID, "audit", "read", 1); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 
@@ -160,5 +160,49 @@ func TestAuditRoutes_MountedUnderRootOrGranted(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &tenantsResp)
 	if tenantsResp.Success {
 		t.Fatalf("GET /admin/tenants/:id with only an audit:read grant: body=%s, want success:false (no leak)", w.Body.String())
+	}
+}
+
+// TestAuditRoutes_ExpiredGrantRejected is the REAL-CHAIN oracle for the
+// cycle-9 L1 repair ruling (R3, A-4/B-3): an expired grant does not
+// authorise the route it was granted for, proved through the REAL
+// production route table (SetApiV2Router), not a hand-mounted router. The
+// row is seeded with revoked_at NULL / expires_at in the past — never
+// explicitly revoked — so the only thing standing between this session and
+// the audit feed is the expiry predicate in
+// repo.HasActivePermissionGrant's WHERE clause.
+func TestAuditRoutes_ExpiredGrantRejected(t *testing.T) {
+	adminID := 6
+	sessionValues := map[string]interface{}{
+		"username": "delegated-admin-expired",
+		"role":     common.RoleAdminUser,
+		"id":       adminID,
+		"status":   common.UserStatusEnabled,
+	}
+	engine := mountRealRouterWithSession(t, sessionValues)
+
+	past := common.GetTimestamp() - 60
+	if err := repo.DB.Create(&entity.AdminPermissionGrant{
+		UserId: adminID, Resource: "audit", Action: "read", GrantedBy: 1,
+		CreatedAt: common.GetTimestamp() - 120, ExpiresAt: &past,
+	}).Error; err != nil {
+		t.Fatalf("seed expired grant: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/admin/audit/events", nil)
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("GET /api/v2/admin/audit/events with an expired (never revoked) grant: status=%d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Success   bool   `json:"success"`
+		ErrorCode string `json:"error_code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if resp.Success || resp.ErrorCode != "PERMISSION_DENIED" {
+		t.Fatalf("body=%s, want success:false error_code:PERMISSION_DENIED", w.Body.String())
 	}
 }

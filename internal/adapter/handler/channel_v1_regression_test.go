@@ -5,16 +5,24 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+
 	"github.com/gin-gonic/gin"
 )
 
 // registerV1ChannelRoutes mounts the v1 admin channel handlers under test on the
 // shared V2 harness router (they are not part of the v2 group registration).
+// Role is root: this file and channel_config_validation_legacy_test.go (which
+// reuses it) exercise channel CRUD/config-validation mechanics, not the
+// channel:sensitive_write grant (L2, cycle 9) — a non-root identity here
+// would now need an explicit grant to reach code these tests cover for
+// unrelated reasons.
 func registerV1ChannelRoutes(ctx *V2TestContext) {
 	v1 := ctx.Router.Group("/api")
 	v1.Use(func(c *gin.Context) {
 		c.Set("tenant_id", ctx.TenantID)
 		c.Set("id", ctx.AdminUser.Id)
+		c.Set("role", common.RoleRootUser)
 		c.Next()
 	})
 	v1.POST("/channel", AddChannel)

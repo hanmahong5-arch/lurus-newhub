@@ -18,6 +18,14 @@ type CatalogEntry struct {
 // resource/action agnostic.
 var catalog = map[string][]string{
 	"audit": {"read"},
+	// channel:sensitive_write — lets a non-root admin holding this grant
+	// write a channel's key, base_url, param_override, header_override,
+	// per-channel proxy setting, type, other, or openai_organization;
+	// enforced in-handler by
+	// internal/adapter/handler/channel_sensitive_write.go (whose header
+	// comment is the authoritative field list), not by a router group like
+	// audit:read.
+	"channel": {"sensitive_write"},
 }
 
 // Catalog returns the static catalogue as an ordered slice (stable output
@@ -25,6 +33,7 @@ var catalog = map[string][]string{
 func Catalog() []CatalogEntry {
 	return []CatalogEntry{
 		{Resource: "audit", Actions: []string{"read"}},
+		{Resource: "channel", Actions: []string{"sensitive_write"}},
 	}
 }
 

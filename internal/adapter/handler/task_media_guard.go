@@ -15,11 +15,12 @@ package handler
 //
 // General private-IP/domain SSRF policy (fetch_setting, AllowPrivateIp,
 // domain/IP allow/deny lists) is a SEPARATE, already-existing concern
-// (app.ValidateOutboundURL, used by channel egress and internal/app/
-// download.go) and is applied by streamMediaContent below via that same
-// function — NOT by VideoProxy, which never calls ValidateOutboundURL (see
-// video_proxy.go): the two routes share the scheme/self-URL/size-cap guard
-// below, not the fetch_setting egress check. What IS new in this file is
+// (app.ValidateOutboundURL, used by channel egress in channel.go and
+// v2_channel_actions.go) and is applied by streamMediaContent below via that same
+// function — cycle-9 L4 closed the gap where VideoProxy (video_proxy.go)
+// served the same class of URL without ever calling it: both routes now
+// call app.ValidateOutboundURL, in addition to sharing the scheme/
+// self-URL/size-cap guard below. What IS new in this file is
 // the self-URL/loop check, which fetch_setting has no notion of: an
 // operator running with allow_private_ip=true (the tests in
 // task_artifacts_test.go and video_proxy_test.go set it, to reach an
@@ -191,6 +192,15 @@ func setArtifactRouteSecurityHeaders(c *gin.Context) {
 	c.Writer.Header().Set("Referrer-Policy", "no-referrer")
 }
 
+// egressCheckRejectionMessage is the message both task-media routes
+// (streamMediaContent below and video_proxy.go's VideoProxy) pass to
+// respondArtifactRejected for an app.ValidateOutboundURL failure. Hoisted
+// to a single constant, not an independent string literal at each call
+// site, so the two routes' refusal shapes cannot drift apart from each
+// other — TestTaskMediaRoutes_BothCallTheEgressGuard (video_proxy_test.go)
+// asserts both call sites reference this symbol.
+const egressCheckRejectionMessage = "Artifact URL failed the egress check"
+
 func respondArtifactRejected(c *gin.Context, route, reason, message string) {
 	metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(route, reason).Inc()
 	c.JSON(http.StatusBadGateway, gin.H{
@@ -217,7 +227,7 @@ func streamMediaContent(c *gin.Context, rawURL string) {
 		return
 	}
 	if err := app.ValidateOutboundURL(rawURL); err != nil {
-		respondArtifactRejected(c, route, "egress_check", "Artifact URL failed the egress check")
+		respondArtifactRejected(c, route, "egress_check", egressCheckRejectionMessage)
 		return
 	}
 

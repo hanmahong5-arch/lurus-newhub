@@ -67,11 +67,21 @@ func r2chanNewCtx(method, target string, body interface{}) (*gin.Context, *httpt
 	return c, w
 }
 
-// r2chanAdminCtx builds a context that carries an admin identity (id + tenant).
+// r2chanAdminCtx builds a context that carries an admin identity (id +
+// tenant). Role is root: this helper's ~40 call sites across this file and
+// cov_handler-channel_crud_test.go exercise channel CRUD mechanics (multi-key
+// append/replace, batch add modes, param/header override validation) that
+// have nothing to do with the channel:sensitive_write grant (L2, cycle 9) —
+// a non-root identity here would now need an explicit grant just to reach
+// the code these tests actually cover, for reasons unrelated to what they
+// assert. No test in either file relies on this helper representing a
+// tenant-scoped non-root admin (enforceTenantScope's own rejection is
+// covered elsewhere, via V2RequestAsUser in v2_channel_idor_test.go).
 func r2chanAdminCtx(ctx *V2TestContext, method, target string, body interface{}) (*gin.Context, *httptest.ResponseRecorder) {
 	c, w := r2chanNewCtx(method, target, body)
 	c.Set("id", ctx.AdminUser.Id)
 	c.Set("tenant_id", ctx.TenantID)
+	c.Set("role", common.RoleRootUser)
 	return c, w
 }
 

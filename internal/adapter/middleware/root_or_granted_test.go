@@ -151,7 +151,7 @@ func TestRootOrGranted_SessionAdminNoGrant403(t *testing.T) {
 func TestRootOrGranted_SessionAdminWithGrant200(t *testing.T) {
 	defer setupGrantTestDB(t)()
 
-	if _, err := repo.CreatePermissionGrant(2, "audit", "read", 1); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(2, "audit", "read", 1); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 
@@ -191,7 +191,7 @@ func TestRootOrGranted_SessionAdminWithGrant200(t *testing.T) {
 func TestRootOrGranted_GrantForOtherActionStill403(t *testing.T) {
 	defer setupGrantTestDB(t)()
 
-	if _, err := repo.CreatePermissionGrant(2, "audit", "write", 1); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(2, "audit", "write", 1); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 
@@ -209,7 +209,7 @@ func TestRootOrGranted_GrantForOtherActionStill403(t *testing.T) {
 func TestRootOrGranted_RevokedGrant403(t *testing.T) {
 	defer setupGrantTestDB(t)()
 
-	grant, err := repo.CreatePermissionGrant(2, "audit", "read", 1)
+	grant, _, err := repo.CreatePermissionGrant(2, "audit", "read", 1)
 	if err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
@@ -227,6 +227,44 @@ func TestRootOrGranted_RevokedGrant403(t *testing.T) {
 	}
 }
 
+// TestRootOrGranted_ExpiredGrant403 is the REAL-CHAIN oracle for the
+// lane's headline claim (cycle-9 L1 repair ruling R3, A-4/B-3): an expired
+// grant does not authorise the route it was granted for. The row is
+// revoked_at IS NULL (never explicitly revoked, unlike its
+// TestRootOrGranted_RevokedGrant403 sibling above) with expires_at in the
+// past, seeded directly via repo.DB so the migration-037 column
+// participates without going through CreatePermissionGrant's own re-grant
+// path — this is the real gin session middleware chain (RootOrGranted →
+// resolveSessionIdentity → repo.HasActivePermissionGrant), not a hand-set
+// context key.
+func TestRootOrGranted_ExpiredGrant403(t *testing.T) {
+	defer setupGrantTestDB(t)()
+
+	past := common.GetTimestamp() - 60
+	if err := repo.DB.Create(&entity.AdminPermissionGrant{
+		UserId: 2, Resource: "audit", Action: "read", GrantedBy: 1,
+		CreatedAt: common.GetTimestamp() - 120, ExpiresAt: &past,
+	}).Error; err != nil {
+		t.Fatalf("seed expired grant: %v", err)
+	}
+
+	r := buildRootOrGrantedRouter(adminSession(2), "audit", "read")
+	req := httptest.NewRequest(http.MethodGet, "/audit/events", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for an expired (but never explicitly revoked) grant; body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if resp["error_code"] != "PERMISSION_DENIED" {
+		t.Errorf("error_code = %v, want PERMISSION_DENIED", resp["error_code"])
+	}
+}
+
 // TestRootOrGranted_SessionCommonUserWithGrantRejected is the A-F3 oracle
 // (cycle-8 L4 repair round): RootOrGranted's own RoleAdminUser floor is a
 // second, independent line of defense behind CreateGrantV2's own grantee-
@@ -236,7 +274,7 @@ func TestRootOrGranted_RevokedGrant403(t *testing.T) {
 func TestRootOrGranted_SessionCommonUserWithGrantRejected(t *testing.T) {
 	defer setupGrantTestDB(t)()
 
-	if _, err := repo.CreatePermissionGrant(3, "audit", "read", 1); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(3, "audit", "read", 1); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 
@@ -273,7 +311,7 @@ func TestRootOrGranted_DisabledUserWithGrantRejected(t *testing.T) {
 	if err := repo.DB.Create(&repo.User{Id: 4, Username: "delegated-admin", Role: common.RoleAdminUser, Status: common.UserStatusDisabled}).Error; err != nil {
 		t.Fatalf("seed disabled user: %v", err)
 	}
-	if _, err := repo.CreatePermissionGrant(4, "audit", "read", 1); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(4, "audit", "read", 1); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 
@@ -309,7 +347,7 @@ func TestRootOrGranted_OIDCOffBearerRequiresRootSession(t *testing.T) {
 	oidcEnabled = false
 	defer func() { oidcEnabled = prevEnabled }()
 
-	if _, err := repo.CreatePermissionGrant(2, "audit", "read", 1); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(2, "audit", "read", 1); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 

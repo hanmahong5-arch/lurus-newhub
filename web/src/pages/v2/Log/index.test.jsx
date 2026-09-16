@@ -713,6 +713,351 @@ describe('Log page', () => {
       expect(screen.queryByTestId(id)).toBeNull();
     }
   });
+
+  // ── request_id / upstream_request_id search (L6) ──────────────────────────
+  //
+  // v2_log.go binds request_id/session_id (public) and, admin-only,
+  // upstream_request_id, and repo/log.go wires them into a JSON-extract
+  // WHERE clause with no supporting index — so the page must never send an
+  // id filter without a bounded time range, and must only render the
+  // upstream-id input for admins, mirroring the backend's own gate.
+
+  it('sends request_id AND a bounded start_time on the query when searching by request id', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    const reqInput = screen.getByPlaceholderText('request id…');
+    fireEvent.change(reqInput, { target: { value: 'req-abc-123' } });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs?'));
+      expect(logsCall).toBeDefined();
+      expect(logsCall).toContain('request_id=req-abc-123');
+      // An id lookup is an unindexed JSON-extract scan — it must never ride
+      // out unbounded, even when the caller never touched the date pickers.
+      expect(logsCall).toMatch(/start_time=\d+/);
+    });
+  });
+
+  it('does not widen an explicit time range when searching by request id', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    fireEvent.change(screen.getByPlaceholderText('request id…'), {
+      target: { value: 'req-explicit' },
+    });
+    fireEvent.change(screen.getByTitle('start time'), {
+      target: { value: '2026-01-01T00:00' },
+    });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs?'));
+      expect(logsCall).toBeDefined();
+      expect(logsCall).toContain(
+        `start_time=${Math.floor(new Date('2026-01-01T00:00').getTime() / 1000)}`,
+      );
+    });
+  });
+
+  it('anchors the implicit lookback on an explicit end when only an end date is set with an id filter', async () => {
+    // R2: an end-only + id search used to fall back to the now()-7d lower
+    // bound regardless of the end, so start_time could land AFTER a past
+    // end_time and guarantee an empty page. The anchor must be the end
+    // bound when one is present.
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    fireEvent.change(screen.getByPlaceholderText('request id…'), {
+      target: { value: 'req-explicit' },
+    });
+    fireEvent.change(screen.getByTitle('end time'), {
+      target: { value: '2026-01-01T00:00' },
+    });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs?'));
+      expect(logsCall).toBeDefined();
+      const startMatch = logsCall.match(/start_time=(\d+)/);
+      const endMatch = logsCall.match(/end_time=(\d+)/);
+      expect(startMatch).toBeTruthy();
+      expect(endMatch).toBeTruthy();
+      expect(Number(startMatch[1])).toBeLessThanOrEqual(Number(endMatch[1]));
+    });
+  });
+
+  it('hides the upstream-request-id filter from non-admin users', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    expect(screen.queryByPlaceholderText('upstream request id…')).toBeNull();
+  });
+
+  it('shows the upstream-request-id filter for admins and routes it to /logs/all bounded', async () => {
+    // upstream_request_id is only bound by GetAllLogsV2 (/logs/all) —
+    // v2_log.go:221-222 — GetLogsV2 (/logs) ignores it as a silent no-op
+    // (v2_log_test.go). The query must go to the route that honours the
+    // param, not merely render the input.
+    mockIsAdmin.mockReturnValue(true);
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    const upInput = screen.getByPlaceholderText('upstream request id…');
+    fireEvent.change(upInput, { target: { value: 'vendor-xyz' } });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs/all?'));
+      expect(logsCall).toBeDefined();
+      expect(logsCall).toContain('upstream_request_id=vendor-xyz');
+      expect(logsCall).toMatch(/start_time=\d+/);
+    });
+  });
+
+  it('turns the tenant-wide toggle on when an upstream-request-id search runs', async () => {
+    // R1: the page must reflect tenantWide = true so the visible scope
+    // (and the "all users (admin)" button state) matches the route the
+    // query actually used.
+    mockIsAdmin.mockReturnValue(true);
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    expect(screen.getByTestId('log-tenant-wide').className).not.toContain(
+      'primary',
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('upstream request id…'), {
+      target: { value: 'vendor-xyz' },
+    });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('log-tenant-wide').className).toContain(
+        'primary',
+      );
+    });
+  });
+
+  it('shows both ids in the detail panel with a copy affordance, for a row that carries them', async () => {
+    const origClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    try {
+      renderWithLog(
+        logWithOther(
+          JSON.stringify({
+            request_id: 'req-detail-1',
+            session_id: 'sess-detail-1',
+            upstream_request_id: 'up-detail-1',
+          }),
+        ),
+      );
+
+      await waitFor(() =>
+        expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
+      );
+
+      expect(screen.getByTestId('log-detail-request-id').textContent).toContain(
+        'req-detail-1',
+      );
+      expect(screen.getByTestId('log-detail-session-id').textContent).toContain(
+        'sess-detail-1',
+      );
+      expect(
+        screen.getByTestId('log-detail-upstream-request-id').textContent,
+      ).toContain('up-detail-1');
+
+      fireEvent.click(screen.getByTestId('copy-request-id'));
+      await waitFor(() =>
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+          'req-detail-1',
+        ),
+      );
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: origClipboard,
+      });
+    }
+  });
+
+  it('renders no id rows in the detail panel when the row carries none', async () => {
+    renderWithLog(logWithOther(JSON.stringify({ frt: 120 })));
+    await waitFor(() =>
+      expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByTestId('log-detail-request-id')).toBeNull();
+    expect(screen.queryByTestId('log-detail-session-id')).toBeNull();
+    expect(screen.queryByTestId('log-detail-upstream-request-id')).toBeNull();
+  });
+
+  // R3: the implicit lookback window is otherwise invisible.
+  it('shows the id-window hint while an id filter is active, and hides it otherwise', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    expect(screen.queryByTestId('log-id-window-hint')).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText('request id…'), {
+      target: { value: 'req-abc' },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('log-id-window-hint')).toBeTruthy(),
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('request id…'), {
+      target: { value: '' },
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId('log-id-window-hint')).toBeNull(),
+    );
+  });
+
+  // R4: request_id/upstream_request_id must deep-link like the sibling
+  // filters (model_name/token_name/type already do — see the earlier
+  // "seeds model/token/type filters" test).
+  it('seeds request_id and upstream_request_id from the URL query and sends them on the first fetch', async () => {
+    mockIsAdmin.mockReturnValue(true);
+    const prevLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: {
+        ...prevLocation,
+        search: '?request_id=req-link&upstream_request_id=up-link',
+      },
+    });
+    try {
+      render(<HFLog />);
+      await waitFor(() => expect(API.get).toHaveBeenCalled());
+
+      expect(screen.getByPlaceholderText('request id…')).toHaveValue(
+        'req-link',
+      );
+      expect(screen.getByPlaceholderText('upstream request id…')).toHaveValue(
+        'up-link',
+      );
+
+      // upstream_request_id forces the /logs/all route (R1), so the first
+      // fetch lands there rather than on /logs?.
+      const firstLogsCall = API.get.mock.calls
+        .map(([u]) => u)
+        .find((u) => u.includes('/logs/all?'));
+      expect(firstLogsCall).toContain('request_id=req-link');
+      expect(firstLogsCall).toContain('upstream_request_id=up-link');
+    } finally {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: prevLocation,
+      });
+    }
+  });
+
+  // R5: the stat header has no id parameter of its own, but it must at
+  // least agree with the trace table on the effective start_time.
+  it('sends the same effective start_time to fetchStat as fetchLogs when an id filter is active', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    fireEvent.change(screen.getByPlaceholderText('request id…'), {
+      target: { value: 'req-stat-parity' },
+    });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs?'));
+      const statCall = urls.find((u) => u.includes('/logs/stat'));
+      expect(logsCall).toBeDefined();
+      expect(statCall).toBeDefined();
+      const logsStart = logsCall.match(/start_time=(\d+)/)?.[1];
+      const statStart = statCall.match(/start_time=(\d+)/)?.[1];
+      expect(logsStart).toBeTruthy();
+      expect(statStart).toBe(logsStart);
+    });
+
+    expect(screen.getByTestId('log-stat-id-scope-hint')).toBeTruthy();
+  });
+
+  // R6: a value pasted with surrounding whitespace must still exact-match
+  // on the backend (repo/log.go trims neither, so the client must).
+  it('trims a padded request id before sending it', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    fireEvent.change(screen.getByPlaceholderText('request id…'), {
+      target: { value: '  req-padded  ' },
+    });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs?'));
+      expect(logsCall).toBeDefined();
+      expect(logsCall).toContain('request_id=req-padded');
+      expect(logsCall).not.toContain('req-padded%20');
+      expect(logsCall).not.toContain('%20req-padded');
+    });
+  });
+
+  // R7: paging must carry the id filter and its bound — acceptor A-3 found
+  // that deleting the id args from goPage's fetchLogs call left the suite
+  // green, i.e. this invariant had no oracle.
+  it('carries the request-id filter and its bound onto page 2', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/logs/stat')) {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      return Promise.resolve({
+        data: {
+          success: true,
+          data: {
+            logs: Array.from({ length: 50 }, (_, i) => ({
+              id: i + 1,
+              type: 2,
+              model_name: 'gpt-4o',
+              created_at: Math.floor(Date.now() / 1000),
+            })),
+            total: 120,
+          },
+        },
+      });
+    });
+
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByPlaceholderText('request id…'), {
+      target: { value: 'req-paged' },
+    });
+    fireEvent.click(screen.getByText('search'));
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      expect(urls.some((u) => u.includes('request_id=req-paged'))).toBe(true);
+    });
+
+    API.get.mockClear();
+    fireEvent.click(screen.getByText('next →'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find((u) => u.includes('/logs?'));
+      expect(logsCall).toBeDefined();
+      expect(logsCall).toContain('page=2');
+      expect(logsCall).toContain('request_id=req-paged');
+      expect(logsCall).toMatch(/start_time=\d+/);
+    });
+  });
 });
 
 // ── Cross-product attribution (console-one-surface, 2026-09-07) ────────────

@@ -2,9 +2,11 @@ package repo
 
 // admin_permission_grant.go — delegated admin permission grants (L4,
 // auth-security-17/18, console-ux-36). A grant lets a non-root admin
-// (role >= RoleAdminUser, < RoleRootUser) reach a narrow root-gated route
-// group — this cycle only middleware.RootOrGranted("audit","read") —
-// without holding root. Grants are GLOBAL this cycle: every write here
+// (role >= RoleAdminUser, < RoleRootUser) reach a narrow root-gated
+// capability without holding root. Two are grantable as of cycle 9:
+// ("audit","read"), enforced by middleware.RootOrGranted on the audit
+// routes, and ("channel","sensitive_write"), enforced in-handler by
+// handler/channel_sensitive_write.go. Grants are GLOBAL this cycle: every write here
 // enforces tenant_id == nil; the column exists only so a future cycle's
 // tenant-scoped grants need no second migration.
 
@@ -38,20 +40,73 @@ var (
 // race guard on Postgres (isUniqueViolation below is the belt to that
 // suspenders); the pre-check alone is what makes the guarantee visible on
 // the hermetic SQLite tier, which never runs the partial-index migration.
-func CreatePermissionGrant(userID int, resource, action string, grantedBy int) (*AdminPermissionGrant, error) {
+//
+// ttlSeconds is variadic-optional so the existing test call sites keep
+// compiling unchanged and keep asserting the pre-037 behaviour; the sole
+// production caller (v2_admin_authz.go) always passes it. Omit it, or pass
+// 0, for a permanent grant (ExpiresAt stays nil) — byte-identical to this
+// function's behaviour before migration 037. A positive value sets
+// ExpiresAt = now + ttlSeconds; bounds-checking ttlSeconds (1..90 days) is
+// the caller's job (v2_admin_authz.go), not this function's — this layer
+// only ever computes an absolute unix-seconds expiry from whatever it is
+// given.
+//
+// THE TRAP (034's partial unique index is WHERE revoked_at IS NULL, so an
+// expired-but-unrevoked row still occupies the active slot): rather than
+// reshape that index, an existing row for this (user_id, resource, action)
+// that is expired (RevokedAt nil, ExpiresAt non-nil and <= now) is treated
+// as re-grantable — this function stamps RevokedAt on it in the SAME
+// transaction before inserting the new row. A row that is still LIVE
+// (RevokedAt nil and (ExpiresAt nil or in the future)) keeps returning
+// ErrGrantExists exactly as before.
+//
+// The second return value lists the ids of any rows this call recycled
+// (stamped RevokedAt on because they were expired) — empty on the common
+// path where no prior row existed or the call returned an error. This
+// function does NOT record an audit event for a recycled row: reading the
+// list back and stamping RevokedAt both happen inside this transaction, so
+// an event recorded here would fire even on rollback. The caller
+// (v2_admin_authz.go CreateGrantV2) records one ActionPermissionRevoked per
+// recycled id AFTER the transaction returned successfully.
+func CreatePermissionGrant(userID int, resource, action string, grantedBy int, ttlSeconds ...int64) (*AdminPermissionGrant, []int, error) {
 	if userID <= 0 || resource == "" || action == "" {
-		return nil, errors.New("user id, resource and action are required")
+		return nil, nil, errors.New("user id, resource and action are required")
 	}
+	var ttl int64
+	if len(ttlSeconds) > 0 {
+		ttl = ttlSeconds[0]
+	}
+	now := common.GetTimestamp()
 	var grant AdminPermissionGrant
+	var recycled []int
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		var existing AdminPermissionGrant
+		var existing []AdminPermissionGrant
 		res := tx.Where("user_id = ? AND tenant_id IS NULL AND resource = ? AND action = ? AND revoked_at IS NULL",
-			userID, resource, action).Limit(1).Find(&existing)
+			userID, resource, action).Find(&existing)
 		if res.Error != nil {
 			return res.Error
 		}
-		if res.RowsAffected > 0 {
-			return ErrGrantExists
+		for i := range existing {
+			if existing[i].ExpiresAt == nil || *existing[i].ExpiresAt > now {
+				// A still-live row occupies the slot: the pre-existing
+				// rejection, unchanged.
+				return ErrGrantExists
+			}
+		}
+		for i := range existing {
+			// Expired but never revoked: free the active slot before the
+			// insert below, in the same transaction as that insert.
+			if updErr := tx.Model(&AdminPermissionGrant{}).
+				Where("id = ?", existing[i].Id).
+				Update("revoked_at", now).Error; updErr != nil {
+				return fmt.Errorf("revoke expired grant %d: %w", existing[i].Id, updErr)
+			}
+			recycled = append(recycled, existing[i].Id)
+		}
+		var expiresAt *int64
+		if ttl > 0 {
+			e := now + ttl
+			expiresAt = &e
 		}
 		grant = AdminPermissionGrant{
 			UserId:    userID,
@@ -59,7 +114,8 @@ func CreatePermissionGrant(userID int, resource, action string, grantedBy int) (
 			Resource:  resource,
 			Action:    action,
 			GrantedBy: grantedBy,
-			CreatedAt: common.GetTimestamp(),
+			CreatedAt: now,
+			ExpiresAt: expiresAt,
 		}
 		if createErr := tx.Create(&grant).Error; createErr != nil {
 			if isUniqueViolation(createErr) {
@@ -70,9 +126,9 @@ func CreatePermissionGrant(userID int, resource, action string, grantedBy int) (
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &grant, nil
+	return &grant, recycled, nil
 }
 
 // RevokePermissionGrant sets revoked_at on an active grant. 404-shaped
@@ -150,19 +206,24 @@ func ListPermissionGrants() ([]AdminPermissionGrant, error) {
 }
 
 // HasActivePermissionGrant reports whether userID holds an ACTIVE
-// (revoked_at IS NULL), GLOBAL (tenant_id IS NULL) grant for
-// (resource, action) — the fail-closed check middleware.RootOrGranted runs
-// for every non-root SESSION-path caller (Bearer-JWT callers are rejected
-// before any lookup, see root_or_granted.go). A lookup error is NOT treated as "granted":
-// the caller (RootOrGranted) must fail closed on both "no row" and
-// "lookup failed", never open on a DB hiccup.
+// (revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now)),
+// GLOBAL (tenant_id IS NULL) grant for (resource, action). It has two
+// callers: middleware.RootOrGranted, which runs it for every non-root
+// SESSION-path caller of a gated route group (Bearer-JWT callers are
+// rejected before any lookup, see root_or_granted.go), and
+// handler.enforceChannelSensitiveWriteDecided, which runs it in-handler
+// for sensitive channel writes. expires_at (migration 037, cycle-9 L1) is a
+// second liveness predicate alongside revoked_at: a grant past its expiry
+// but never explicitly revoked must not authorise anything. A lookup error
+// is NOT treated as "granted": the caller (RootOrGranted) must fail closed
+// on both "no row" and "lookup failed", never open on a DB hiccup.
 func HasActivePermissionGrant(userID int, resource, action string) (bool, error) {
 	if userID <= 0 || resource == "" || action == "" {
 		return false, nil
 	}
 	var row AdminPermissionGrant
-	res := DB.Where("user_id = ? AND tenant_id IS NULL AND resource = ? AND action = ? AND revoked_at IS NULL",
-		userID, resource, action).Limit(1).Find(&row)
+	res := DB.Where("user_id = ? AND tenant_id IS NULL AND resource = ? AND action = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
+		userID, resource, action, common.GetTimestamp()).Limit(1).Find(&row)
 	if res.Error != nil {
 		return false, res.Error
 	}

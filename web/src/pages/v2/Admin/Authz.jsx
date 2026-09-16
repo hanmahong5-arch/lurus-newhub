@@ -45,7 +45,12 @@ const V2AdminAuthz = () => {
   const [grants, setGrants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
-  const [form, setForm] = useState({ userId: '', resource: '', action: '' });
+  const [form, setForm] = useState({
+    userId: '',
+    resource: '',
+    action: '',
+    ttlSeconds: '',
+  });
   const [submitting, setSubmitting] = useState(false);
 
   const fetchAll = useCallback(async () => {
@@ -93,15 +98,28 @@ const V2AdminAuthz = () => {
     if (!userId || userId <= 0 || !form.resource || !form.action) return;
     setSubmitting(true);
     try {
+      // ttl_seconds is optional (cycle-9 L1): an empty field means a
+      // permanent grant, same as before this field existed — omit the key
+      // entirely rather than send null-vs-0 ambiguity to the server. A
+      // trimmed-empty field is the only thing that omits the key: a parsed
+      // 0 (or a non-numeric value the browser's min='1' should already
+      // block) is still SENT, so the server's own 400 GRANT_INVALID is
+      // what the user sees — this field must not silently reinterpret 0 as
+      // "no ttl" and mint a permanent grant instead (R4/A-6/B-6).
+      const rawTtl = form.ttlSeconds.trim();
+      const ttlSeconds = rawTtl === '' ? null : parseInt(rawTtl, 10);
       const res = await API.post('/api/v2/admin/authz/grants', {
         user_id: userId,
         resource: form.resource,
         action: form.action,
         tenant_id: null,
+        ...(ttlSeconds === null || Number.isNaN(ttlSeconds)
+          ? {}
+          : { ttl_seconds: ttlSeconds }),
       });
       if (res?.data?.success) {
         showSuccess(tr('console.admin.authz.toast_created', 'Grant created'));
-        setForm({ userId: '', resource: '', action: '' });
+        setForm({ userId: '', resource: '', action: '', ttlSeconds: '' });
         await fetchAll();
       }
     } catch (_) {
@@ -232,6 +250,20 @@ const V2AdminAuthz = () => {
                   </option>
                 ))}
               </select>
+              <input
+                type='number'
+                min='1'
+                max='7776000'
+                placeholder={tr(
+                  'console.admin.authz.field_ttl',
+                  'ttl seconds (optional, max 90d)',
+                )}
+                value={form.ttlSeconds}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, ttlSeconds: e.target.value }))
+                }
+                data-testid='authz-input-ttl'
+              />
               <button
                 type='submit'
                 className='btn primary'
@@ -271,37 +303,58 @@ const V2AdminAuthz = () => {
                     <th>
                       {tr('console.admin.authz.th_created', 'granted at')}
                     </th>
+                    <th>
+                      {tr('console.admin.authz.th_expires', 'expires at')}
+                    </th>
                     <th>{tr('console.admin.authz.th_status', 'status')}</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {grants.map((g) => {
-                    const active = !g.revoked_at;
+                    // g.expired (cycle-9 L1) is server-derived from
+                    // expires_at vs now — do not recompute it client-side,
+                    // the server is the single source of truth for "now".
+                    const revoked = !!g.revoked_at;
+                    const expired = !!g.expired;
+                    const active = !revoked && !expired;
                     return (
                       <tr key={g.id} data-testid={`authz-row-${g.id}`}>
                         <td className='mono'>{g.user_id}</td>
                         <td className='mono muted'>{g.resource}</td>
                         <td className='mono muted'>{g.action}</td>
                         <td className='mono muted'>{fmtWhen(g.created_at)}</td>
+                        <td
+                          className='mono muted'
+                          data-testid={`authz-expires-${g.id}`}
+                        >
+                          {g.expires_at
+                            ? fmtWhen(g.expires_at)
+                            : tr('console.admin.authz.no_expiry', 'never')}
+                        </td>
                         <td>
                           <span
                             className={active ? 'tag ok' : 'tag'}
                             data-testid={`authz-status-${g.id}`}
                           >
-                            {active
+                            {revoked
                               ? tr(
-                                  'console.admin.authz.status_active',
-                                  'active',
-                                )
-                              : tr(
                                   'console.admin.authz.status_revoked',
                                   'revoked',
-                                )}
+                                )
+                              : expired
+                                ? tr(
+                                    'console.admin.authz.status_expired',
+                                    'expired',
+                                  )
+                                : tr(
+                                    'console.admin.authz.status_active',
+                                    'active',
+                                  )}
                           </span>
                         </td>
                         <td>
-                          {active && (
+                          {!revoked && (
                             <button
                               type='button'
                               className='btn ghost'

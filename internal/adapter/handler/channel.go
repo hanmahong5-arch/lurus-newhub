@@ -877,6 +877,16 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	// channel:sensitive_write (L2): a create has no prior row (existing=nil),
+	// so any populated sensitive field — key is required, see validateChannel
+	// above — carries the same power as an update that touches one. Runs
+	// after config-document validation (so a malformed request still gets
+	// the same "invalid document" response an authorized caller would) but
+	// before any row is written.
+	if enforceChannelSensitiveWrite(c, nil, addChannelRequest.Channel, 0) {
+		return
+	}
+
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
@@ -1144,6 +1154,21 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.ModelMapping = common.GetPointer[string](trimmed)
 	}
+
+	// channel:sensitive_write — withdraws the earlier "tag editor out of
+	// scope" non-goal. ChannelTag carries two of the predicate's sensitive
+	// fields (it has no base_url or key field at all), and the gate is on
+	// PRESENCE, not on a value diff: this editor applies ONE value to MANY
+	// rows, so there is no single prior value to compare against, and a body
+	// carrying param_override:"" CLEARS a real override on every tagged
+	// channel — as powerful as setting one. Routing the pair through the
+	// diff rule would wave that through, because it treats nil and "" as
+	// equal. existingID is 0: this targets a tag, not one channel id.
+	if enforceChannelSensitiveWriteDecided(c,
+		channelTag.ParamOverride != nil || channelTag.HeaderOverride != nil, 0) {
+		return
+	}
+
 	// A per-tenant admin (also passes AdminAuth) may only edit channels sharing
 	// this tag within its own tenant; root edits the tag across every tenant.
 	if c.GetInt("role") >= common.RoleRootUser {
@@ -1238,11 +1263,6 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
-	// 使用统一的校验函数
-	if err := validateChannel(&channel.Channel, false); err != nil {
-		c.JSON(http.StatusOK, legacyChannelConfigErrorResponse(err))
-		return
-	}
 	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
 	originChannel, err := repo.GetChannelById(channel.Id, true)
 	if err != nil {
@@ -1253,6 +1273,27 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	if enforceTenantScope(c, originChannel.TenantId) {
+		return
+	}
+
+	// channel:sensitive_write: checked against the freshly-fetched
+	// originChannel, before the KeyMode append/merge logic below can rewrite
+	// channel.Key — an "append" request still carries a non-empty Key (the
+	// delta to append), so the predicate correctly treats it as touching the
+	// key regardless of merge mode.
+	//
+	// Authorization runs BEFORE content/egress validation on purpose. With
+	// the order reversed, an ungranted admin submitting an invalid sensitive
+	// payload got the validation error instead of 403 — which both leaked
+	// whether the payload would have validated and skipped the refusal audit
+	// row, because the handler returned before ever reaching this gate.
+	if enforceChannelSensitiveWrite(c, originChannel, &channel.Channel, originChannel.Id) {
+		return
+	}
+
+	// 使用统一的校验函数
+	if err := validateChannel(&channel.Channel, false); err != nil {
+		c.JSON(http.StatusOK, legacyChannelConfigErrorResponse(err))
 		return
 	}
 
@@ -1568,6 +1609,15 @@ func CopyChannel(c *gin.Context) {
 	if resetBalance {
 		clone.Balance = 0
 		clone.UsedQuota = 0
+	}
+
+	// channel:sensitive_write: a copy duplicates the source
+	// channel's key/base_url/etc. onto a brand-new row — the same power as
+	// a create, so it is gated exactly like one (existing=nil; clone is the
+	// "req" the gate inspects). A refused copy writes nothing (checked
+	// before Insert below).
+	if enforceChannelSensitiveWrite(c, nil, &clone, 0) {
+		return
 	}
 
 	// insert via pointer receiver so GORM writes the auto-generated id back into
@@ -1917,6 +1967,15 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 
 	case "delete_key":
+		// channel:sensitive_write: removing a stored key is
+		// the same credential-mutation class as replacing one. The
+		// predicate's Key rule is presence-based (see
+		// channelWriteTouchesSensitiveField), so a synthetic non-empty
+		// placeholder trips the same check a real key value would — this
+		// branch never binds a repo.Channel request of its own.
+		if enforceChannelSensitiveWrite(c, channel, &repo.Channel{Key: "channel-key-delete"}, channel.Id) {
+			return
+		}
 		if request.KeyIndex == nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -1997,6 +2056,12 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 
 	case "delete_disabled_keys":
+		// channel:sensitive_write: same rationale as
+		// delete_key above — bulk-deleting auto-disabled keys still
+		// rewrites the stored key column.
+		if enforceChannelSensitiveWrite(c, channel, &repo.Channel{Key: "channel-key-delete"}, channel.Id) {
+			return
+		}
 		keys := channel.GetKeys()
 		var remainingKeys []string
 		var deletedCount int
