@@ -30,7 +30,7 @@ func TestAdminPermissionGrantRepo_ActiveUniqueAndRevoke(t *testing.T) {
 		t.Fatalf("HasActivePermissionGrant = true before any grant was created")
 	}
 
-	grant, err := CreatePermissionGrant(7, "audit", "read", 1)
+	grant, _, err := CreatePermissionGrant(7, "audit", "read", 1)
 	if err != nil {
 		t.Fatalf("CreatePermissionGrant: %v", err)
 	}
@@ -53,12 +53,12 @@ func TestAdminPermissionGrantRepo_ActiveUniqueAndRevoke(t *testing.T) {
 	// is still active must be rejected — this is the "one active grant per
 	// user+resource+action" invariant the partial unique index enforces on
 	// Postgres and CreatePermissionGrant's own pre-check enforces here.
-	if _, err := CreatePermissionGrant(7, "audit", "read", 1); !errors.Is(err, ErrGrantExists) {
+	if _, _, err := CreatePermissionGrant(7, "audit", "read", 1); !errors.Is(err, ErrGrantExists) {
 		t.Fatalf("CreatePermissionGrant duplicate: err = %v, want ErrGrantExists", err)
 	}
 
 	// A grant for a DIFFERENT action is independent and must succeed.
-	if _, err := CreatePermissionGrant(7, "audit", "write", 1); err != nil {
+	if _, _, err := CreatePermissionGrant(7, "audit", "write", 1); err != nil {
 		t.Fatalf("CreatePermissionGrant different action: %v", err)
 	}
 
@@ -84,7 +84,7 @@ func TestAdminPermissionGrantRepo_ActiveUniqueAndRevoke(t *testing.T) {
 
 	// After revoking (user,audit,read), a FRESH grant for the same triple
 	// must be creatable again — revocation frees the active-uniqueness slot.
-	if _, err := CreatePermissionGrant(7, "audit", "read", 1); err != nil {
+	if _, _, err := CreatePermissionGrant(7, "audit", "read", 1); err != nil {
 		t.Fatalf("CreatePermissionGrant after revoke: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestAdminPermissionGrantRepo_ActiveUniqueAndRevoke(t *testing.T) {
 func TestAdminPermissionGrantRepo_RevokeForUser(t *testing.T) {
 	defer setupSQLiteDB(t)()
 
-	if _, err := CreatePermissionGrant(11, "audit", "read", 1); err != nil {
+	if _, _, err := CreatePermissionGrant(11, "audit", "read", 1); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 	granted, err := HasActivePermissionGrant(11, "audit", "read")
@@ -174,7 +174,7 @@ func TestDeleteUserById_RevokesPermissionGrants(t *testing.T) {
 	if err := DB.Create(u).Error; err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	if _, err := CreatePermissionGrant(u.Id, "audit", "read", 1); err != nil {
+	if _, _, err := CreatePermissionGrant(u.Id, "audit", "read", 1); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 
@@ -194,13 +194,13 @@ func TestDeleteUserById_RevokesPermissionGrants(t *testing.T) {
 func TestAdminPermissionGrantRepo_ValidatesInput(t *testing.T) {
 	defer setupSQLiteDB(t)()
 
-	if _, err := CreatePermissionGrant(0, "audit", "read", 1); err == nil {
+	if _, _, err := CreatePermissionGrant(0, "audit", "read", 1); err == nil {
 		t.Fatalf("CreatePermissionGrant with user_id=0 should fail")
 	}
-	if _, err := CreatePermissionGrant(7, "", "read", 1); err == nil {
+	if _, _, err := CreatePermissionGrant(7, "", "read", 1); err == nil {
 		t.Fatalf("CreatePermissionGrant with empty resource should fail")
 	}
-	if _, err := CreatePermissionGrant(7, "audit", "", 1); err == nil {
+	if _, _, err := CreatePermissionGrant(7, "audit", "", 1); err == nil {
 		t.Fatalf("CreatePermissionGrant with empty action should fail")
 	}
 	if err := RevokePermissionGrant(0); !errors.Is(err, ErrGrantNotFound) {
@@ -231,10 +231,10 @@ func TestAdminPermissionGrantRepo_RevokeForUserWritesAuditRows(t *testing.T) {
 	governance.SetAuditWriter(grantAuditWriter{})
 	t.Cleanup(func() { governance.SetAuditWriter(nil) })
 
-	if _, err := CreatePermissionGrant(21, "audit", "read", 1); err != nil {
+	if _, _, err := CreatePermissionGrant(21, "audit", "read", 1); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
-	if _, err := CreatePermissionGrant(21, "audit", "write", 1); err != nil {
+	if _, _, err := CreatePermissionGrant(21, "audit", "write", 1); err != nil {
 		t.Fatalf("seed second grant: %v", err)
 	}
 	// Only the revocations below are counted, not the two creations.
@@ -318,7 +318,7 @@ func TestGrant_ExpiredIsNotActive(t *testing.T) {
 
 	// A grant with expires_at NULL (no ttl_seconds given) is permanent,
 	// exactly as it behaved before this column existed.
-	if _, err := CreatePermissionGrant(73, "audit", "read", 1); err != nil {
+	if _, _, err := CreatePermissionGrant(73, "audit", "read", 1); err != nil {
 		t.Fatalf("CreatePermissionGrant (no ttl): %v", err)
 	}
 	granted, err = HasActivePermissionGrant(73, "audit", "read")
@@ -348,12 +348,15 @@ func TestGrant_ReGrantAfterExpirySucceedsAndRevokesTheOldRow(t *testing.T) {
 		t.Fatalf("seed expired grant: %v", err)
 	}
 
-	fresh, err := CreatePermissionGrant(81, "audit", "read", 2)
+	fresh, recycled, err := CreatePermissionGrant(81, "audit", "read", 2)
 	if err != nil {
 		t.Fatalf("CreatePermissionGrant after expiry: err = %v, want success (not ErrGrantExists)", err)
 	}
 	if fresh.Id == old.Id {
 		t.Fatalf("CreatePermissionGrant returned the old row's id, want a NEW row")
+	}
+	if len(recycled) != 1 || recycled[0] != old.Id {
+		t.Fatalf("CreatePermissionGrant recycled ids = %v, want exactly [%d] — the id the caller must audit as superseded", recycled, old.Id)
 	}
 
 	var reread entity.AdminPermissionGrant
@@ -393,10 +396,10 @@ func TestGrant_ReGrantAfterExpirySucceedsAndRevokesTheOldRow(t *testing.T) {
 func TestGrant_ReGrantWhileLiveStill409(t *testing.T) {
 	defer setupSQLiteDB(t)()
 
-	if _, err := CreatePermissionGrant(91, "audit", "read", 1); err != nil {
+	if _, _, err := CreatePermissionGrant(91, "audit", "read", 1); err != nil {
 		t.Fatalf("seed grant (no ttl): %v", err)
 	}
-	if _, err := CreatePermissionGrant(91, "audit", "read", 1); !errors.Is(err, ErrGrantExists) {
+	if _, _, err := CreatePermissionGrant(91, "audit", "read", 1); !errors.Is(err, ErrGrantExists) {
 		t.Fatalf("re-grant of a live (no-expiry) grant: err = %v, want ErrGrantExists", err)
 	}
 
@@ -408,7 +411,7 @@ func TestGrant_ReGrantWhileLiveStill409(t *testing.T) {
 	if err := DB.Create(&live).Error; err != nil {
 		t.Fatalf("seed future-expiring grant: %v", err)
 	}
-	if _, err := CreatePermissionGrant(92, "audit", "read", 1); !errors.Is(err, ErrGrantExists) {
+	if _, _, err := CreatePermissionGrant(92, "audit", "read", 1); !errors.Is(err, ErrGrantExists) {
 		t.Fatalf("re-grant while expiry is still in the future: err = %v, want ErrGrantExists", err)
 	}
 }

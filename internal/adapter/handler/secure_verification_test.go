@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -26,6 +27,15 @@ func setupStepUpAuditDB(t *testing.T, userId int) func() {
 		t.Fatalf("automigrate audit tables: %v", err)
 	}
 	governance.SetAuditWriter(&pinnedAuditWriter{db: repo.DB})
+	// The pinned writer above holds repo.DB, which the caller's deferred
+	// cleanup() closes when the test returns. Without this, the global
+	// governance writer keeps pointing at a closed handle until some later
+	// test happens to call SetAuditWriter again, and any audit write in
+	// between (including a delayed async one from this test) logs "sql:
+	// database is closed" noise. Reset to an in-memory recorder (same type
+	// v2_models_write_test.go uses for the same purpose) once this test is
+	// fully done.
+	t.Cleanup(func() { governance.SetAuditWriter(&modelsWriteAuditRecorder{}) })
 	return cleanup
 }
 
@@ -94,6 +104,20 @@ func TestUniversalVerify_NoEnrollment_FlagOn_403EnrollmentRequired(t *testing.T)
 	if data.Verified {
 		t.Error("Verified = true, want false — the flag-on 403 branch must not set the session key")
 	}
+
+	// The refusal itself is audited (same ActionAuthFailed precedent as the
+	// TOTP-throttle refusal above it), so an operator who enables
+	// enforcement can see blocked step-up attempts, not just granted ones.
+	ev := pollAuditRow(t, governance.ActionAuthFailed, 2*time.Second)
+	if ev == nil {
+		t.Fatalf("no %s audit row found within timeout", governance.ActionAuthFailed)
+	}
+	if ev.ActorID != 4 {
+		t.Errorf("ActorID = %d, want 4", ev.ActorID)
+	}
+	if !strings.Contains(ev.Details, `"reason":"enrollment_required"`) {
+		t.Errorf("Details = %q, want reason=enrollment_required", ev.Details)
+	}
 }
 
 // TestUniversalVerify_Enrolled_UnchangedUnderBothFlagStates proves L3 does
@@ -151,7 +175,9 @@ func TestUniversalVerify_Enrolled_UnchangedUnderBothFlagStates(t *testing.T) {
 
 // TestVerificationStatus_ReportsEnrollmentRequired proves part 3 (honesty):
 // the status endpoint reports the actual policy rather than letting the
-// console assume the legacy one.
+// console assume the legacy one — for BOTH the unverified branch (no
+// session stamped yet) and the verified=true branch the console actually
+// reads right after a successful step-up.
 func TestVerificationStatus_ReportsEnrollmentRequired(t *testing.T) {
 	for _, flagOn := range []bool{false, true} {
 		flagOn := flagOn
@@ -171,8 +197,49 @@ func TestVerificationStatus_ReportsEnrollmentRequired(t *testing.T) {
 			if err := json.Unmarshal(env.Data, &data); err != nil {
 				t.Fatalf("unmarshal status data: %v", err)
 			}
+			if data.Verified {
+				t.Fatalf("unverified probe: Verified = true, want false")
+			}
 			if data.EnrollmentRequired != flagOn {
-				t.Errorf("EnrollmentRequired = %v, want %v", data.EnrollmentRequired, flagOn)
+				t.Errorf("unverified: EnrollmentRequired = %v, want %v", data.EnrollmentRequired, flagOn)
+			}
+
+			// Now stamp a session. The no-enrollment branch only grants
+			// while the flag is OFF, so momentarily clear it to obtain the
+			// session (a real client would have enrolled a factor instead
+			// of the flag ever having been on in the first place — this is
+			// purely to get a verified session into the store for the
+			// probe below); then restore the flag to the state under test
+			// and re-read status: the flag is read fresh per call, so this
+			// proves the verified=true response (the one the console reads
+			// right after a successful step-up) also reports the real
+			// policy instead of a stale zero value.
+			t.Setenv("SECURE_VERIFICATION_REQUIRE_ENROLLMENT", "false")
+			verifyW, verifyEnv := doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"session"}`, nil)
+			if verifyW.Code != http.StatusOK || !verifyEnv.Success {
+				t.Fatalf("stamp session: status=%d success=%v body=%s", verifyW.Code, verifyEnv.Success, verifyW.Body.String())
+			}
+			cookies := verifyW.Result().Cookies()
+
+			if flagOn {
+				t.Setenv("SECURE_VERIFICATION_REQUIRE_ENROLLMENT", "true")
+			} else {
+				t.Setenv("SECURE_VERIFICATION_REQUIRE_ENROLLMENT", "false")
+			}
+
+			w2, env2 := doJSON(t, r, http.MethodGet, "/api/verify/status", "", cookies)
+			if w2.Code != http.StatusOK {
+				t.Fatalf("status (verified): status=%d body=%s", w2.Code, w2.Body.String())
+			}
+			var data2 VerificationStatusResponse
+			if err := json.Unmarshal(env2.Data, &data2); err != nil {
+				t.Fatalf("unmarshal status data (verified): %v", err)
+			}
+			if !data2.Verified {
+				t.Fatalf("verified probe: Verified = false, want true")
+			}
+			if data2.EnrollmentRequired != flagOn {
+				t.Errorf("verified: EnrollmentRequired = %v, want %v", data2.EnrollmentRequired, flagOn)
 			}
 		})
 	}

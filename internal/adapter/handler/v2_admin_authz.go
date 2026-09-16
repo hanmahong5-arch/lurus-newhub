@@ -140,7 +140,7 @@ func CreateGrantV2(c *gin.Context) {
 	}
 
 	actorID := c.GetInt("id")
-	grant, createErr := repo.CreatePermissionGrant(req.UserID, req.Resource, req.Action, actorID, ttl)
+	grant, recycled, createErr := repo.CreatePermissionGrant(req.UserID, req.Resource, req.Action, actorID, ttl)
 	if createErr != nil {
 		if errors.Is(createErr, repo.ErrGrantExists) {
 			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "an active grant for this user/resource/action already exists", "error_code": "GRANT_EXISTS"})
@@ -158,6 +158,22 @@ func CreateGrantV2(c *gin.Context) {
 		req.UserID, req.Resource, req.Action, ttlDetail, grantedBySubDetail(c, actorID))
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,
 		governance.ActionPermissionGranted, governance.ResourceAuthz, grant.Id, detail))
+
+	// R1 (cycle-9 L1 repair ruling): CreatePermissionGrant already committed
+	// the transaction that stamped RevokedAt on any expired-but-unrevoked
+	// row it recycled to free the partial index's active slot — that state
+	// change gets its own audit row here, AFTER the commit (never inside
+	// the tx closure: a rollback there would record a state change that
+	// never happened). One ActionPermissionRevoked per recycled id, actor =
+	// the admin making this request, not ActorSystem — this is a
+	// consequence of an admin's own write, unlike
+	// RevokePermissionGrantsForUser's system-initiated sweep.
+	for _, oldID := range recycled {
+		revokeDetail := fmt.Sprintf(`{"grant_id":%d,"grantee_user_id":%d,"resource":%q,"action":%q,"tenant_id":null,"reason":"superseded_expired"}`,
+			oldID, req.UserID, req.Resource, req.Action)
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,
+			governance.ActionPermissionRevoked, governance.ResourceAuthz, oldID, revokeDetail))
+	}
 
 	c.JSON(http.StatusCreated, gin.H{"success": true, "data": gin.H{"id": grant.Id, "expires_at": grant.ExpiresAt}})
 }

@@ -38,13 +38,18 @@ const (
 	// this is the escape hatch for a lost device, not routine self-service.
 	ActionTotpAdminDisabled = "auth.totp_admin_disabled"
 	// ActionAuthStepUpNoCredential is recorded by UniversalVerify
-	// (secure_verification.go, L3, cycle 9) every time step-up verification
-	// is granted through the no-TOTP-enrollment branch — method "session"
-	// accepted with nothing checked beyond an already-authenticated session,
-	// no credential of any kind presented. Fires unconditionally (regardless
-	// of SECURE_VERIFICATION_REQUIRE_ENROLLMENT), so this grant is auditable
-	// even while the flag that would refuse it instead stays off — see that
-	// flag's doc in .env.example for why the default is off.
+	// (secure_verification.go, L3, cycle 9) on every pass through the
+	// no-TOTP-enrollment branch — method "session" accepted with nothing
+	// checked beyond an already-authenticated session, no credential of any
+	// kind presented. Handed to the audit writer regardless of
+	// SECURE_VERIFICATION_REQUIRE_ENROLLMENT (the flag only controls
+	// whether the grant happens at all, not whether it's audited once it
+	// does), so this grant stays auditable even while the flag that would
+	// refuse it instead stays off. The write itself goes through
+	// governance.RecordAuditEvent, which is a best-effort background
+	// insert: dropped silently if no writer is registered, logged (not
+	// retried) if the insert fails. See that flag's doc in .env.example for
+	// why the default is off.
 	ActionAuthStepUpNoCredential = "auth.stepup_without_credential"
 
 	// Token CRUD (relay key lifecycle).

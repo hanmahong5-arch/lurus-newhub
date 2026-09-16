@@ -1154,6 +1154,23 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.ModelMapping = common.GetPointer[string](trimmed)
 	}
+
+	// channel:sensitive_write (L2 repair, R4 — withdraws the earlier
+	// "tag editor out of scope" non-goal): ChannelTag carries only two of
+	// the predicate's sensitive fields (it has no base_url or key field at
+	// all), so this checks ParamOverride/HeaderOverride presence directly
+	// against a nil existing — channelWriteTouchesSensitiveField degenerates
+	// to a plain presence check when existing is nil, which is the right
+	// rule here: the tag editor applies ONE value to MANY rows, so there is
+	// no single prior value to diff against. existingID is 0 — this targets
+	// a tag, not one channel id.
+	if enforceChannelSensitiveWrite(c, nil, &repo.Channel{
+		ParamOverride:  channelTag.ParamOverride,
+		HeaderOverride: channelTag.HeaderOverride,
+	}, 0) {
+		return
+	}
+
 	// A per-tenant admin (also passes AdminAuth) may only edit channels sharing
 	// this tag within its own tenant; root edits the tag across every tenant.
 	if c.GetInt("role") >= common.RoleRootUser {
@@ -1589,6 +1606,15 @@ func CopyChannel(c *gin.Context) {
 		clone.UsedQuota = 0
 	}
 
+	// channel:sensitive_write (L2 repair, R3): a copy duplicates the source
+	// channel's key/base_url/etc. onto a brand-new row — the same power as
+	// a create, so it is gated exactly like one (existing=nil; clone is the
+	// "req" the gate inspects). A refused copy writes nothing (checked
+	// before Insert below).
+	if enforceChannelSensitiveWrite(c, nil, &clone, 0) {
+		return
+	}
+
 	// insert via pointer receiver so GORM writes the auto-generated id back into
 	// clone (BatchInsertChannels chunks into copies, so the caller never sees the id)
 	if err := clone.Insert(); err != nil {
@@ -1936,6 +1962,15 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 
 	case "delete_key":
+		// channel:sensitive_write (L2 repair, R3): removing a stored key is
+		// the same credential-mutation class as replacing one. The
+		// predicate's Key rule is presence-based (see
+		// channelWriteTouchesSensitiveField), so a synthetic non-empty
+		// placeholder trips the same check a real key value would — this
+		// branch never binds a repo.Channel request of its own.
+		if enforceChannelSensitiveWrite(c, channel, &repo.Channel{Key: "channel-key-delete"}, channel.Id) {
+			return
+		}
 		if request.KeyIndex == nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -2016,6 +2051,12 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 
 	case "delete_disabled_keys":
+		// channel:sensitive_write (L2 repair, R3): same rationale as
+		// delete_key above — bulk-deleting auto-disabled keys still
+		// rewrites the stored key column.
+		if enforceChannelSensitiveWrite(c, channel, &repo.Channel{Key: "channel-key-delete"}, channel.Id) {
+			return
+		}
 		keys := channel.GetKeys()
 		var remainingKeys []string
 		var deletedCount int

@@ -61,13 +61,17 @@ func secureVerificationRequireEnrollment() bool {
 //     unset/false) this grants step-up on nothing beyond an already-authenticated
 //     session: method "session" passes with no credential presented at all,
 //     because there is no second factor to check. A stolen session cookie for
-//     such a user satisfies every gate that requires secure verification
-//     (channel-key reveal, 2FA force-disable) exactly as well as the
-//     legitimate owner would. That grant is always recorded
-//     (governance.ActionAuthStepUpNoCredential) so it is no longer invisible.
-//     Setting SECURE_VERIFICATION_REQUIRE_ENROLLMENT=true closes it: the
+//     such a user satisfies the gates behind middleware.SecureVerificationRequired
+//     (router/api-router.go:80 totp/disable, :84 backup-codes/regenerate, :151
+//     channel-key reveal; router/api-v2-router.go:560 2FA force-disable)
+//     exactly as well as the legitimate owner would. That grant is handed to
+//     the audit writer on every pass through this branch
+//     (governance.ActionAuthStepUpNoCredential) — the write itself is a
+//     best-effort background insert (see governance.RecordAuditEvent), so it
+//     is no longer invisible even when a write is dropped or fails. Setting
+//     SECURE_VERIFICATION_REQUIRE_ENROLLMENT=true closes it: the
 //     no-enrollment branch answers 403 STEP_UP_ENROLLMENT_REQUIRED instead of
-//     passing, and the session key is never set. The response always carries
+//     passing, and the session key is never set. The response carries
 //     totp_enrolled:false in this branch so the frontend can steer users to
 //     enroll.
 func UniversalVerify(c *gin.Context) {
@@ -185,6 +189,12 @@ func UniversalVerify(c *gin.Context) {
 		})
 		return
 	} else if secureVerificationRequireEnrollment() {
+		// Same throttle-refusal precedent as the enrolled-TOTP branches
+		// above (ActionAuthFailed with a "step" + "reason" detail blob):
+		// an operator who turns enforcement on gets a record of blocked
+		// step-up attempts, not just of the ones that succeeded.
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
+			governance.ActionAuthFailed, governance.ResourceUser, userId, `{"step":"secure_verify","reason":"enrollment_required"}`))
 		c.JSON(http.StatusForbidden, gin.H{
 			"success":       false,
 			"message":       "Step-up verification requires an enrolled second factor. Enrol two-factor authentication in Settings > Security, then retry.",
@@ -195,9 +205,10 @@ func UniversalVerify(c *gin.Context) {
 	} else {
 		// Credential-free grant: no TOTP enrollment exists for this user, so
 		// this request proves nothing beyond an already-authenticated
-		// session. Audited unconditionally — see
-		// governance.ActionAuthStepUpNoCredential — so the weakness is
-		// visible even while the flag above stays off.
+		// session. Handed to the audit writer on every pass through this
+		// branch (governance.ActionAuthStepUpNoCredential) — the write is a
+		// best-effort background insert — so the weakness is visible even
+		// while the flag above stays off.
 		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userId,
 			governance.ActionAuthStepUpNoCredential, governance.ResourceUser, userId,
 			`{"step":"secure_verify","method":"session","reason":"no_totp_enrollment"}`))

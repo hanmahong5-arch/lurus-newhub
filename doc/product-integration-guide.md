@@ -190,6 +190,30 @@ HTTP/2 实现时断时续,和真正的下线区分不出来)。该键本身不�
 **HTTP 200 `{"success":false,"code":...,"message":...}`**——脚本化对接时必须看 `success` 字段,
 不能只看 HTTP 状态码。
 
+**渠道敏感字段写入闸门(`channel:sensitive_write`,cycle-9 L2)**——上面这条 `/api/channel/`
+POST/PUT 和它的 v2 对应端点,现在对**非 root 管理员**(role 10)额外挡一道:请求实际改动
+`key`/`base_url`/`param_override`/`header_override`/渠道级 proxy(`setting` blob 里的 `proxy`
+成员)/`type`/`other`/`openai_organization` 这八个字段中任意一个时,调用方必须持有一条有效的
+`channel:sensitive_write` 授权行(见上"授权管理端点"一节),否则 **403**
+`{"success":false,"message":"insufficient permission","error_code":"PERMISSION_DENIED"}`,且
+这次写入**完全不落地**(逐列核对过——不是把敏感字段静默剥掉再存非敏感部分)。"改动"按值比较,不
+按字段是否出现在请求体里判——两个渠道编辑器都会在每次保存时把这几个字段原样带上(包括不动它们
+的纯改名请求),按出现与否判会把每一次编辑都拒掉。models/group/name/priority/weight/status 不在
+这个集合里,普通管理员改这些不需要授权。
+
+覆盖的写入面(v1 与 v2 各自独立闸门,不是共用一次检查):
+- v1 `POST /api/channel/`(新建)、`PUT /api/channel/`(编辑)
+- v1 `POST /api/channel/copy/:id`(复制——克隆行携带源渠道的 key/base_url,和新建同等力度)
+- v1 `POST /api/channel/multi_key/manage` 的 `delete_key`/`delete_disabled_keys` 两个 action(删
+  除存量 key 与替换 key 属同一类凭证变更;该端点的其余 action——enable/disable/get_key_status——
+  不碰 key 列,不受影响)
+- v1 `PUT /api/channel/tag`(标签批量编辑器——对这一个端点按字段"是否出现"判,不按值比较,因为它
+  把一个值套用到多行,没有单一"原值"可比;它没有 `base_url`/`key` 字段可传,只有
+  `param_override`/`header_override` 落在这次闸门里)
+- v2 `POST /api/v2/:tenant_slug/channels`(新建)、`PUT /api/v2/:tenant_slug/channels/:id`(编辑)
+
+root(role ≥ 100)在以上任何一条路由上都不受影响。
+
 **范围**:该开关覆盖的是"最终经
 `provider.doRequest`(`internal/adapter/provider/api_request.go`)调用 `app.GetHttpClientFor`
 建出的客户端"发出的请求,以及(cycle7 L5 修复轮起)每个 `provider/task/*/adaptor.go` 的
@@ -280,8 +304,11 @@ gauge 反映的是"这一轮测试已经发起",不是"每个渠道都测完了"
 
 **授权管理端点**(仅 root,挂在 `adminRoute`,即 `RootJWTAuth`,不受上面这道闸影响):
 - `GET /api/v2/admin/authz/catalog` — 200,返回本 cycle 可授权的 `(resource, action)` 静态目录
-  (目前只有 `{"resource":"audit","actions":["read"]}` 一条)和两档固定角色
-  (`tenant-admin` min_role 10 / `root` min_role 100)。
+  (`{"resource":"audit","actions":["read"]}` 与 cycle-9 L2 新增的
+  `{"resource":"channel","actions":["sensitive_write"]}` 两条)和两档固定角色
+  (`tenant-admin` min_role 10 / `root` min_role 100)。`channel:sensitive_write` 解锁的不是这四个
+  审计只读路由,是 §G 之后新增小节描述的渠道写路由上的一道独立闸门——两条目录行对应两套完全不同的
+  受保护路由,不要假设"能授权就是能读审计"。
 - `GET /api/v2/admin/authz/grants` — 200,列出全部授权行(含已撤销)。每行新增(cycle-9 L1)
   `expires_at`(unix 秒,nullable)和服务端派生的 `expired` 布尔——`expired` 只看
   `expires_at` 是否已过 now,和 `revoked_at` 无关,两者可以同时为真(一条既过期又被显式撤销
@@ -290,7 +317,7 @@ gauge 反映的是"这一轮测试已经发起",不是"每个渠道都测完了"
   "tenant_id":null,"ttl_seconds":int|null}` — **201**
   `{"success":true,"data":{"id":n,"expires_at":int|null}}`;`ttl_seconds`(cycle-9 L1)是可选
   字段,省略时该授权行永久有效,和这个字段存在之前的行为完全一致;给出时必须落在
-  `1..7776000`(90 天)闭区间内,越界answers **400** `GRANT_INVALID`(复用既有 error_code,
+  `1..7776000`(90 天)闭区间内,越界返回 **400** `GRANT_INVALID`(复用既有 error_code,
   不是新码)。**400** `GRANT_INVALID` 同样覆盖:当 `user_id` 不存在或该用户角色
   `< RoleAdminUser`(L4 修复轮 B-F4——此前接受任意正数 `user_id`,写错一位数字会静默铸出一条
   永远打不开任何门的"active"行)、`(resource,action)` 不在目录里、或 `tenant_id` 非 null

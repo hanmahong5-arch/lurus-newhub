@@ -21,11 +21,11 @@
 -- inserts the new one inside the same transaction. This file only adds the
 -- column the predicate and that repo logic both read.
 --
--- BIGINT, NOT INT (same trap as 027 / 029 / 035): Go's plain `int64` field
--- (entity.AdminPermissionGrant.ExpiresAt, mirroring CreatedAt/RevokedAt on
--- the same struct) maps to postgres BIGINT under GORM, not INTEGER —
--- declaring INTEGER here would diverge from AutoMigrate and trigger a
--- column rewrite on the next boot.
+-- BIGINT, NOT INT (same trap as 027 / 029 / 035): a nullable Go `*int64`
+-- field (entity.AdminPermissionGrant.ExpiresAt), like RevokedAt on the same
+-- struct, maps to postgres BIGINT under GORM, not INTEGER — declaring
+-- INTEGER here would diverge from AutoMigrate and trigger a column rewrite
+-- on the next boot.
 --
 -- EXECUTION CONTRACT (internal/pkg/migration/runner.go): this body runs in
 -- ONE transaction; the Runner appends the schema_migrations record

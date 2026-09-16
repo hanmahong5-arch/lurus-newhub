@@ -349,9 +349,14 @@ func TestManageMultiKeys_DeleteKey_CannotDeleteLast(t *testing.T) {
 	defer ctx.Cleanup()
 	ch := handler_channel_seedMultiKeyChannel(t, ctx, []string{"only-key"})
 
+	// channel:sensitive_write (L2 repair, R3) now gates delete_key —
+	// this test is about the last-key business guard, not authz, so it
+	// drives the call as root (role is unset by v1CtxJSON, which predates
+	// the gate and never set it).
 	c, w := v1CtxJSON(http.MethodPost, "/x", map[string]interface{}{
 		"channel_id": ch.Id, "action": "delete_key", "key_index": 0,
 	}, ctx.TenantID, ctx.AdminUser.Id)
+	c.Set("role", common.RoleRootUser)
 	ManageMultiKeys(c)
 	resp := handler_channel_mkBody(t, w)
 	if resp["success"] != false || resp["message"] != "不能删除最后一个密钥" {
@@ -376,9 +381,12 @@ func TestManageMultiKeys_DeleteKey_ReindexesSurvivors(t *testing.T) {
 	}
 
 	// delete index 0 (k0) → k1 becomes new index 0, k2 becomes new index 1.
+	// channel:sensitive_write (L2 repair, R3) gates delete_key; this test
+	// is about reindexing, not authz, so it drives the call as root.
 	c, w := v1CtxJSON(http.MethodPost, "/x", map[string]interface{}{
 		"channel_id": ch.Id, "action": "delete_key", "key_index": 0,
 	}, ctx.TenantID, ctx.AdminUser.Id)
+	c.Set("role", common.RoleRootUser)
 	ManageMultiKeys(c)
 	resp := handler_channel_mkBody(t, w)
 	if resp["success"] != true || resp["message"] != "密钥已删除" {
@@ -406,6 +414,7 @@ func TestManageMultiKeys_DeleteKey_ReindexesSurvivors(t *testing.T) {
 	c, w = v1CtxJSON(http.MethodPost, "/x", map[string]interface{}{
 		"channel_id": ch.Id, "action": "delete_key", "key_index": 99,
 	}, ctx.TenantID, ctx.AdminUser.Id)
+	c.Set("role", common.RoleRootUser)
 	ManageMultiKeys(c)
 	if resp := handler_channel_mkBody(t, w); resp["message"] != "密钥索引超出范围" {
 		t.Fatalf("expected range guard on delete, got %v", resp["message"])
@@ -415,6 +424,7 @@ func TestManageMultiKeys_DeleteKey_ReindexesSurvivors(t *testing.T) {
 	c, w = v1CtxJSON(http.MethodPost, "/x", map[string]interface{}{
 		"channel_id": ch.Id, "action": "delete_key",
 	}, ctx.TenantID, ctx.AdminUser.Id)
+	c.Set("role", common.RoleRootUser)
 	ManageMultiKeys(c)
 	if resp := handler_channel_mkBody(t, w); resp["message"] != "未指定要删除的密钥索引" {
 		t.Fatalf("expected nil-index guard on delete, got %v", resp["message"])
@@ -433,9 +443,12 @@ func TestManageMultiKeys_DeleteDisabledKeys_NoneAutoDisabled(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
+	// channel:sensitive_write (L2 repair, R3) gates delete_disabled_keys;
+	// this test is about the "nothing to prune" business guard, not authz.
 	c, w := v1CtxJSON(http.MethodPost, "/x", map[string]interface{}{
 		"channel_id": ch.Id, "action": "delete_disabled_keys",
 	}, ctx.TenantID, ctx.AdminUser.Id)
+	c.Set("role", common.RoleRootUser)
 	ManageMultiKeys(c)
 	resp := handler_channel_mkBody(t, w)
 	if resp["success"] != false || resp["message"] != "没有需要删除的自动禁用密钥" {
@@ -465,9 +478,12 @@ func TestManageMultiKeys_DeleteDisabledKeys_PrunesOnlyAutoDisabled(t *testing.T)
 		t.Fatalf("seed: %v", err)
 	}
 
+	// channel:sensitive_write (L2 repair, R3) gates delete_disabled_keys;
+	// this test is about the prune/reindex business logic, not authz.
 	c, w := v1CtxJSON(http.MethodPost, "/x", map[string]interface{}{
 		"channel_id": ch.Id, "action": "delete_disabled_keys",
 	}, ctx.TenantID, ctx.AdminUser.Id)
+	c.Set("role", common.RoleRootUser)
 	ManageMultiKeys(c)
 	resp := handler_channel_mkBody(t, w)
 	if resp["success"] != true || resp["message"] != "已删除 1 个自动禁用的密钥" {

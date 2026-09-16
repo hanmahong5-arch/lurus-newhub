@@ -87,9 +87,11 @@ SELECT pg_terminate_backend(<pid>);
   set `SECURE_VERIFICATION_REQUIRE_ENROLLMENT=false` (or unset it) in the deployment's secret/env and
   restart the pods — this is a plain env change through the normal deploy path (`deploy/k8s/r6-stage/`),
   not a runtime toggle, so it goes through the same ArgoCD/manifest flow as any other config change. The
-  no-enrollment grant this restores is always audited (`auth.stepup_without_credential` in the audit
-  trail) regardless of the flag, so turning it off does not reopen an invisible hole — it reopens an
-  auditable one, same as before this flag existed.
+  no-enrollment grant this restores is handed to the audit writer on every pass through that branch
+  (`auth.stepup_without_credential` in the audit trail, a best-effort background insert — dropped if no
+  writer is registered, logged but not retried on failure) regardless of the flag, so turning it off does
+  not reopen an invisible hole — it reopens an auditable one, same as before this flag existed. (While
+  the flag is on, a refused attempt is also audited, as `auth.failed` with `reason:enrollment_required`.)
 
 ## Escalation
 

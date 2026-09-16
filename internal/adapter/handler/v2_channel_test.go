@@ -125,7 +125,7 @@ func TestCreateChannelV2_Success(t *testing.T) {
 	// A create always populates key, so it needs channel:sensitive_write
 	// (L2, cycle 9) the same as any other non-root admin write — grant it so
 	// this test keeps covering channel-creation mechanics rather than authz.
-	if _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "channel", "sensitive_write", ctx.RootUser.Id); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "channel", "sensitive_write", ctx.RootUser.Id); err != nil {
 		t.Fatalf("seed channel:sensitive_write grant: %v", err)
 	}
 

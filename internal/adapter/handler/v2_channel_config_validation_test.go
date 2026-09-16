@@ -50,7 +50,7 @@ func TestUpdateChannelV2_ParamOverride_ValidOperationsDocument_Stored(t *testing
 
 	// param_override is a sensitive field (L2, cycle 9) — grant it so this
 	// test keeps covering document-validation storage, not authz.
-	if _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "channel", "sensitive_write", ctx.RootUser.Id); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "channel", "sensitive_write", ctx.RootUser.Id); err != nil {
 		t.Fatalf("seed channel:sensitive_write grant: %v", err)
 	}
 

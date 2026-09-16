@@ -1236,9 +1236,13 @@
           "th_resource": "资源",
           "th_action": "操作",
           "th_created": "授权时间",
+          "th_expires": "到期时间",
           "th_status": "状态",
           "status_active": "生效中",
           "status_revoked": "已撤销",
+          "status_expired": "已过期",
+          "field_ttl": "有效期秒数（可选，最长 90 天）",
+          "no_expiry": "永不过期",
           "revoke": "撤销"
         }
       },

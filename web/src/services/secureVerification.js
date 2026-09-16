@@ -24,23 +24,31 @@ import { API } from '../helpers';
  * The backend (UniversalVerify) accepts method "session" only for users
  * WITHOUT an active TOTP enrollment; enrolled users must present a valid
  * TOTP code (method "totp"). GET /api/verify/status reports totp_enrolled
- * so the modal can offer the right factor. Session stays reported as
- * available for unenrolled users or the step-up flow dead-ends before ever
- * calling /api/verify.
+ * and enrollment_required so the modal can offer the right factor.
+ * enrollment_required reflects a process-wide server setting
+ * (SECURE_VERIFICATION_REQUIRE_ENROLLMENT), not anything about this user:
+ * when it is true, the backend refuses the no-enrollment "session" grant
+ * (403 STEP_UP_ENROLLMENT_REQUIRED), so an unenrolled user has no available
+ * factor and startVerification's "enable two-factor first" dead-end fires
+ * instead of opening a modal that would only get refused.
  */
 export class SecureVerificationService {
   static async checkAvailableVerificationMethods() {
     let totpEnrolled = false;
+    let enrollmentRequired = false;
     try {
       const res = await API.get('/api/verify/status');
       totpEnrolled = !!res.data?.data?.totp_enrolled;
+      enrollmentRequired = !!res.data?.data?.enrollment_required;
     } catch (e) {
       // Status probe failure: fall back to session so the flow can proceed;
-      // the backend still enforces TOTP for enrolled users.
+      // the backend still enforces TOTP for enrolled users (and still
+      // enforces the enrollment-required policy if it is on).
     }
     return {
       has2FA: totpEnrolled,
-      hasSession: !totpEnrolled,
+      hasSession: !totpEnrolled && !enrollmentRequired,
+      enrollmentRequired,
     };
   }
 

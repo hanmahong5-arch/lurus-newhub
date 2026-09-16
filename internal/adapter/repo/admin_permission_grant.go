@@ -56,9 +56,18 @@ var (
 // transaction before inserting the new row. A row that is still LIVE
 // (RevokedAt nil and (ExpiresAt nil or in the future)) keeps returning
 // ErrGrantExists exactly as before.
-func CreatePermissionGrant(userID int, resource, action string, grantedBy int, ttlSeconds ...int64) (*AdminPermissionGrant, error) {
+//
+// The second return value lists the ids of any rows this call recycled
+// (stamped RevokedAt on because they were expired) — empty on the common
+// path where no prior row existed or the call returned an error. This
+// function does NOT record an audit event for a recycled row: reading the
+// list back and stamping RevokedAt both happen inside this transaction, so
+// an event recorded here would fire even on rollback. The caller
+// (v2_admin_authz.go CreateGrantV2) records one ActionPermissionRevoked per
+// recycled id AFTER the transaction returned successfully.
+func CreatePermissionGrant(userID int, resource, action string, grantedBy int, ttlSeconds ...int64) (*AdminPermissionGrant, []int, error) {
 	if userID <= 0 || resource == "" || action == "" {
-		return nil, errors.New("user id, resource and action are required")
+		return nil, nil, errors.New("user id, resource and action are required")
 	}
 	var ttl int64
 	if len(ttlSeconds) > 0 {
@@ -66,6 +75,7 @@ func CreatePermissionGrant(userID int, resource, action string, grantedBy int, t
 	}
 	now := common.GetTimestamp()
 	var grant AdminPermissionGrant
+	var recycled []int
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var existing []AdminPermissionGrant
 		res := tx.Where("user_id = ? AND tenant_id IS NULL AND resource = ? AND action = ? AND revoked_at IS NULL",
@@ -88,6 +98,7 @@ func CreatePermissionGrant(userID int, resource, action string, grantedBy int, t
 				Update("revoked_at", now).Error; updErr != nil {
 				return fmt.Errorf("revoke expired grant %d: %w", existing[i].Id, updErr)
 			}
+			recycled = append(recycled, existing[i].Id)
 		}
 		var expiresAt *int64
 		if ttl > 0 {
@@ -112,9 +123,9 @@ func CreatePermissionGrant(userID int, resource, action string, grantedBy int, t
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &grant, nil
+	return &grant, recycled, nil
 }
 
 // RevokePermissionGrant sets revoked_at on an active grant. 404-shaped

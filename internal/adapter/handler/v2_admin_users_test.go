@@ -130,7 +130,7 @@ func TestUpdateAdminUserV2_DemotionRevokesPermissionGrants(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
-	if _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "audit", "read", ctx.RootUser.Id); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "audit", "read", ctx.RootUser.Id); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 	granted, err := repo.HasActivePermissionGrant(ctx.AdminUser.Id, "audit", "read")
@@ -401,7 +401,7 @@ func TestUpdateUser_DemotionRevokesPermissionGrants(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
-	if _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "audit", "read", ctx.RootUser.Id); err != nil {
+	if _, _, err := repo.CreatePermissionGrant(ctx.AdminUser.Id, "audit", "read", ctx.RootUser.Id); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 

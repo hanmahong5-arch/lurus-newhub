@@ -1236,9 +1236,13 @@
           "th_resource": "resource",
           "th_action": "action",
           "th_created": "granted at",
+          "th_expires": "expires at",
           "th_status": "status",
           "status_active": "active",
           "status_revoked": "revoked",
+          "status_expired": "expired",
+          "field_ttl": "ttl seconds (optional, max 90d)",
+          "no_expiry": "never",
           "revoke": "Revoke"
         }
       },
