@@ -54,8 +54,19 @@ directory does not add or change that scrape config). See `doc/runbook/INDEX.md`
 The conf file's own header carries a `# STATUS:` line with the date this
 repo copy was last synced from / installed onto the host — read that line,
 not this README, for the current state. As of 2026-09-16: repo copy synced
-from host 2026-08-20, three new alarms merged 2026-09-16, re-installation of
-the merged file onto R6 is **operator-run and PENDING**.
+from host 2026-08-20, three new alarms merged 2026-09-16, and the merged file
+**installed** onto R6 (bind source md5 `85abc751e883f732777e75529e2549bb`,
+matching this repo). It is **installed but not loaded**: `netdatacli
+reload-health` inside the `obs-netdata` container does not return (30s timeout,
+netdata v2.10.3, container healthy), so netdata is still evaluating the
+8-template file it read at startup and `newhub_upstream_5xx_burst`,
+`newhub_rate_limit_degraded` and `newhub_failover_suppressed_surge` are **not
+live**. `GET /api/v1/alarms?all` currently lists three newhub alarms, all from
+the original set. Loading the new ones needs a working reload path or an
+`obs-netdata` restart — the latter briefly blinds monitoring for every service
+on R6, not just newhub, so it is an operator call and was deliberately not
+taken here. The previous host file is backed up at
+`/root/c9-netdata/newhub.conf.backup-20260916`.
 
 Several of the 8 originally-ported alarms carry a dated "LIVE STATUS"
 comment recording what the operator observed directly on the R6 host on
