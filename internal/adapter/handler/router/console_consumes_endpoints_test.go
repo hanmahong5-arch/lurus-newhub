@@ -26,9 +26,24 @@ package router
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// A path named in a COMMENT is not a consumer. Stripping comments before the
+// match is what makes this gate mean "something calls it" rather than
+// "something mentions it": when this test was first mutation-checked, deleting
+// the admin-rankings call left the gate green because the same file's doc
+// comment still spelled the path out.
+var (
+	blockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	lineCommentRe  = regexp.MustCompile(`(?m)^\s*//.*$`)
+)
+
+func stripComments(src string) string {
+	return lineCommentRe.ReplaceAllString(blockCommentRe.ReplaceAllString(src, " "), " ")
+}
 
 // userFacingProjections are routes whose response is rendered to a human in
 // the console. Each value is the substring that must appear in web/src for the
@@ -126,7 +141,7 @@ func TestConsoleReadsEveryUserFacingEndpoint(t *testing.T) {
 		if readErr != nil {
 			return readErr
 		}
-		blob.Write(b)
+		blob.WriteString(stripComments(string(b)))
 		blob.WriteString("\n")
 		files++
 		return nil
