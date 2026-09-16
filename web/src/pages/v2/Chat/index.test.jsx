@@ -274,6 +274,10 @@ describe('Chat page', () => {
       { role: 'user', content: 'follow up' },
       { role: 'assistant', content: 'second reply' },
     ]);
+    // updateChatSessionRequest (backend) has no Model field — sending one
+    // here would be silently dropped server-side, so it must not be sent
+    // at all (this page also has no model picker to change it).
+    expect(patchPayload.model).toBeUndefined();
   });
 
   // 4. Failure path — backend 5xx rolls back the optimistic user message
@@ -450,5 +454,264 @@ describe('Chat page', () => {
     await waitFor(() => {
       expect(screen.queryByText('to delete')).toBeNull();
     });
+  });
+
+  // 10. GENERATION TOKEN regression: switching to a different saved session
+  //     while a turn is in flight must drop that turn's response entirely
+  //     — no render into the new conversation, no persistSession call at
+  //     all. Without the generation-token guard, conversation A's history
+  //     would land in a PATCH against session B, replacing whatever B had
+  //     stored (repo.UpdateChatSessionOwned is a delete-then-reinsert, so
+  //     that loss has no undo).
+  it('drops an in-flight turn and never persists it when the user switches sessions mid-flight', async () => {
+    API.get.mockImplementation((url) => {
+      if (url === '/api/v2/acme/chat/sessions') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              sessions: [
+                {
+                  id: 1,
+                  title: 'session one',
+                  model: 'gpt-4o',
+                  message_count: 1,
+                },
+                {
+                  id: 2,
+                  title: 'session two',
+                  model: 'gpt-4o',
+                  message_count: 2,
+                },
+              ],
+            },
+          },
+        });
+      }
+      if (url === '/api/v2/acme/chat/sessions/1') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              id: 1,
+              title: 'session one',
+              model: 'gpt-4o',
+              messages: [{ role: 'user', content: 'A-user' }],
+            },
+          },
+        });
+      }
+      if (url === '/api/v2/acme/chat/sessions/2') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              id: 2,
+              title: 'session two',
+              model: 'gpt-4o',
+              messages: [
+                { role: 'user', content: 'B-user' },
+                { role: 'assistant', content: 'B-asst' },
+              ],
+            },
+          },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+
+    let resolveChatSend;
+    API.post.mockImplementation((url) => {
+      if (url.endsWith('/chat/send')) {
+        return new Promise((resolve) => {
+          resolveChatSend = resolve;
+        });
+      }
+      // Both sessions in this test already exist — a create call here
+      // would itself be the bug under test (persisting the dropped turn).
+      return Promise.reject(new Error('unexpected session create'));
+    });
+
+    render(<HFChat />);
+    await waitFor(() => expect(screen.getByText('session one')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('session-list-row-1'));
+    await waitFor(() =>
+      expect(screen.getAllByText('A-user').length).toBeGreaterThan(0),
+    );
+
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'A-follow' },
+    });
+    fireEvent.click(screen.getByText(/▶ send/i).closest('button'));
+    await waitFor(() =>
+      expect(screen.getAllByText('A-follow').length).toBeGreaterThan(0),
+    );
+
+    // Switch away WHILE the turn above is still in flight — the sidebar
+    // row must remain clickable during a pending send (a slow turn must
+    // not lock navigation).
+    fireEvent.click(screen.getByTestId('session-list-row-2'));
+    await waitFor(() =>
+      expect(screen.getAllByText('B-asst').length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByText(/A-follow/i)).toBeNull();
+
+    // Now let session 1's turn resolve.
+    resolveChatSend(chatResponse('A-reply'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Session 2 is untouched: A's reply never rendered into it, and no
+    // save call (POST create or PATCH) ever fired for the dropped turn.
+    expect(screen.queryByText(/A-reply/i)).toBeNull();
+    expect(screen.getAllByText('B-user').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('B-asst').length).toBeGreaterThan(0);
+    expect(API.patch).not.toHaveBeenCalled();
+  });
+
+  // 11. persistSession must distinguish a 404 (session gone server-side)
+  //     from a transient failure: on 404, the NEXT turn falls back to
+  //     POST (create) instead of re-PATCHing the now-nonexistent id
+  //     forever, and the swallowed failure surfaces as a visible
+  //     "not saved" marker rather than vanishing silently.
+  it('falls back to creating a new session after a 404 on PATCH, and shows a not-saved marker', async () => {
+    API.get.mockImplementation((url) => {
+      if (url === '/api/v2/acme/chat/sessions') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              sessions: [
+                {
+                  id: 55,
+                  title: 'gone elsewhere',
+                  model: 'gpt-4o',
+                  message_count: 1,
+                },
+              ],
+            },
+          },
+        });
+      }
+      if (url === '/api/v2/acme/chat/sessions/55') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              id: 55,
+              title: 'gone elsewhere',
+              model: 'gpt-4o',
+              messages: [{ role: 'user', content: 'old turn' }],
+            },
+          },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    API.patch.mockRejectedValueOnce({ response: { status: 404 } });
+    API.post.mockImplementation((url) => {
+      if (url.endsWith('/chat/send')) {
+        return Promise.resolve(chatResponse('reply after 404'));
+      }
+      // The create call the post-404 fallback should trigger.
+      return Promise.resolve({
+        data: {
+          success: true,
+          data: { id: 999, title: '', model: 'gpt-4o', messages: [] },
+        },
+      });
+    });
+
+    render(<HFChat />);
+    await waitFor(() =>
+      expect(screen.getByText('gone elsewhere')).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByTestId('session-list-row-55'));
+    await waitFor(() =>
+      expect(screen.getAllByText('old turn').length).toBeGreaterThan(0),
+    );
+
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'first after reopen' },
+    });
+    fireEvent.click(screen.getByText(/▶ send/i).closest('button'));
+    await waitFor(() =>
+      expect(screen.getByText(/reply after 404/i)).toBeTruthy(),
+    );
+
+    // The PATCH was attempted against the (now-gone) session and 404'd.
+    await waitFor(() => expect(API.patch).toHaveBeenCalledTimes(1));
+    expect(API.patch.mock.calls[0][0]).toBe('/api/v2/acme/chat/sessions/55');
+
+    // The swallowed failure is NOT invisible.
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-save-failed')).toBeTruthy(),
+    );
+
+    // The next turn must NOT retry PATCHing the dead id — it creates a
+    // fresh session instead.
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'second after 404' },
+    });
+    fireEvent.click(screen.getByText(/▶ send/i).closest('button'));
+    await waitFor(() =>
+      expect(
+        API.post.mock.calls.filter(([u]) => u.endsWith('/chat/sessions')),
+      ).toHaveLength(1),
+    );
+    // Still exactly one PATCH ever — the fallback used POST, not a second
+    // PATCH against the dead id.
+    expect(API.patch).toHaveBeenCalledTimes(1);
+  });
+
+  // 12. GENERATION TOKEN regression, the null/null edge case: a session id
+  //     comparison alone cannot tell two DIFFERENT unsaved drafts apart —
+  //     both have activeSessionId === null. Starting "+ new chat" while a
+  //     fresh, never-saved conversation's first turn is still in flight
+  //     must not let that turn's response (or its save) land in the new,
+  //     blank draft.
+  it('drops an in-flight turn started from an unsaved draft when + new chat is clicked before it resolves', async () => {
+    let resolveChatSend;
+    API.post.mockImplementation((url) => {
+      if (url.endsWith('/chat/send')) {
+        return new Promise((resolve) => {
+          resolveChatSend = resolve;
+        });
+      }
+      return Promise.reject(
+        new Error('unexpected session create — the turn must be dropped'),
+      );
+    });
+
+    render(<HFChat />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'first draft msg' },
+    });
+    fireEvent.click(screen.getByText(/▶ send/i).closest('button'));
+    await waitFor(() =>
+      expect(screen.getAllByText('first draft msg').length).toBeGreaterThan(0),
+    );
+
+    // Start a new chat WHILE the turn above is still in flight — never
+    // disabled during `sending`.
+    fireEvent.click(screen.getByText(/\+ new chat/i).closest('button'));
+    expect(screen.getByText(/ask anything to begin/i)).toBeTruthy();
+    expect(screen.queryByText('first draft msg')).toBeNull();
+
+    // Now let the stale turn resolve.
+    resolveChatSend(chatResponse('stale draft reply'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The new, blank chat must still be blank — the stale response was
+    // dropped, not rendered into it, and never saved.
+    expect(screen.queryByText(/stale draft reply/i)).toBeNull();
+    expect(screen.getByText(/ask anything to begin/i)).toBeTruthy();
+    expect(API.patch).not.toHaveBeenCalled();
   });
 });

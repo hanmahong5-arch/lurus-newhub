@@ -31,10 +31,10 @@ vi.mock('../../../helpers', () => ({
 }));
 
 vi.mock('../../../components/hifi/HFShell', () => ({
-  default: ({ children, actions }) =>
+  default: ({ children, actions, active }) =>
     React.createElement(
       'div',
-      { 'data-testid': 'hf-shell' },
+      { 'data-testid': 'hf-shell', 'data-active': active },
       React.createElement('div', { 'data-testid': 'hf-actions' }, actions),
       children,
     ),
@@ -291,6 +291,15 @@ describe('Flows page — no WIP banners, no dead tabs', () => {
     expect(screen.queryByTestId('flows-tab-retry')).toBeNull();
     expect(screen.getAllByTestId(/^flows-tab-/)).toHaveLength(2);
   });
+
+  it('passes its own HFShell nav item id, not the Channels page id', () => {
+    render(<HFFlows />);
+    // HFShell's nav registers a real 'flows' item (components/hifi/HFShell.jsx);
+    // this page must highlight that item rather than 'channels'.
+    expect(screen.getByTestId('hf-shell').getAttribute('data-active')).toBe(
+      'flows',
+    );
+  });
 });
 
 describe('Flows page — newChannel wizard (real handler-chain contract)', () => {
@@ -363,6 +372,82 @@ describe('Flows page — newChannel wizard (real handler-chain contract)', () =>
     await waitFor(() => expect(API.post).toHaveBeenCalledTimes(1));
     const [, body] = API.post.mock.calls[0];
     expect(body.openai_organization).toBeUndefined();
+  });
+
+  it('rejects a multi-line key with an inline error and never calls API.post', async () => {
+    render(<HFFlows />);
+    goToChannelCredentials();
+    // A pasted multi-key blob: no leading/trailing whitespace (so .trim()
+    // would not catch it), just an internal newline.
+    fillChannelCredentials({ key: 'sk-key-one\nsk-key-two' });
+    fireEvent.click(screen.getByTestId('newchannel-create-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('newchannel-create-error').textContent).toMatch(
+        /one key per channel/i,
+      );
+    });
+    expect(API.post).not.toHaveBeenCalled();
+    // Stays on step 2 — no channel was created.
+    expect(screen.getByTestId('newchannel-create-btn')).toBeTruthy();
+  });
+
+  it('blocks create for a vendor with no default upstream host when base url is left blank', async () => {
+    render(<HFFlows />);
+    // 'custom' (type 8) has no entry in CHANNEL_PRESETS and no backend
+    // default in constant.ChannelBaseURLs.
+    fireEvent.click(screen.getByTestId('newchannel-vendor-custom'));
+    goToChannelCredentials();
+    fillChannelCredentials({ baseURL: '' });
+    fireEvent.click(screen.getByTestId('newchannel-create-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('newchannel-create-error').textContent).toMatch(
+        /no default upstream host/i,
+      );
+    });
+    expect(API.post).not.toHaveBeenCalled();
+  });
+
+  it('re-picking a vendor overwrites a preset-derived base url from the previous vendor', async () => {
+    API.post.mockResolvedValueOnce({
+      data: { success: true, data: { id: 7, name: 'zhipu/main' } },
+    });
+    render(<HFFlows />);
+    // First pick Anthropic (prefills base_url from its preset), then change
+    // to Zhipu without ever typing into the base url field ourselves.
+    fireEvent.click(screen.getByTestId('newchannel-vendor-anthropic'));
+    fireEvent.click(screen.getByTestId('newchannel-vendor-zhipu'));
+    goToChannelCredentials();
+    fillChannelCredentials({ baseURL: '' });
+    fireEvent.click(screen.getByTestId('newchannel-create-btn'));
+
+    await waitFor(() => expect(API.post).toHaveBeenCalledTimes(1));
+    const [, body] = API.post.mock.calls[0];
+    expect(body.type).toBe(26); // Zhipu (constants/channel.constants.js)
+    // Zhipu's own preset, not left over from the earlier Anthropic click.
+    expect(body.base_url).toBe('https://open.bigmodel.cn');
+  });
+
+  it('keeps a user-typed base url across a later vendor pick', async () => {
+    API.post.mockResolvedValueOnce({
+      data: { success: true, data: { id: 8, name: 'zhipu/proxy' } },
+    });
+    render(<HFFlows />);
+    fireEvent.click(screen.getByTestId('newchannel-vendor-anthropic'));
+    goToChannelCredentials();
+    fireEvent.change(screen.getByTestId('newchannel-baseurl'), {
+      target: { value: 'https://my-proxy.internal' },
+    });
+    fireEvent.click(screen.getByTestId('flows-back'));
+    fireEvent.click(screen.getByTestId('newchannel-vendor-zhipu'));
+    goToChannelCredentials();
+    fillChannelCredentials({ baseURL: '' });
+    fireEvent.click(screen.getByTestId('newchannel-create-btn'));
+
+    await waitFor(() => expect(API.post).toHaveBeenCalledTimes(1));
+    const [, body] = API.post.mock.calls[0];
+    expect(body.base_url).toBe('https://my-proxy.internal');
   });
 
   it('surfaces a 403 PERMISSION_DENIED create response naming the missing grant', async () => {

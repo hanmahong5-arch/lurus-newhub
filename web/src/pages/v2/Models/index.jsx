@@ -113,10 +113,22 @@ const HFModels = () => {
   // Aliased to `tr` per the v2 console convention.
   const { t: tr } = useTranslation();
   // role >= 100 per web/src/helpers/utils.jsx:isRoot — the same client-side
-  // gate CommandPalette uses to decide which nav items to offer. It is a UX
-  // pre-check only: the actual enforcement is the admin endpoint's
+  // gate SiderBar.jsx and UserInfoHeader.jsx use to decide what to show a
+  // root viewer (NOT CommandPalette: that reads role through
+  // useBridgedUser()/visibleNavItems — components/hifi/HFShell.jsx — a
+  // separate, try/catch-guarded read of the same localStorage key). It is a
+  // UX pre-check only: the actual enforcement is the admin endpoint's
   // RootJWTAuth, which the fetch below still has to clear.
-  const rootUser = isRoot();
+  // isRoot() itself does an unguarded JSON.parse(localStorage.user); this
+  // page can't change that helper, so the call is wrapped here — a
+  // malformed payload degrades to "not root" instead of white-screening
+  // this page's render.
+  let rootUser = false;
+  try {
+    rootUser = isRoot();
+  } catch (_) {
+    rootUser = false;
+  }
 
   const [vendor, setVendor] = useState('');
   const {
@@ -174,11 +186,19 @@ const HFModels = () => {
     let cancelled = false;
     (async () => {
       try {
-        const selfRes = await API.get(`/api/v2/${tenantSlug}/user/me`);
+        // skipErrorHandler: this is a decorative, root-only enrichment of a
+        // page every user (root or not) can already load — a failure here
+        // must not fire the global error toast/401-heal (helpers/api.js),
+        // same reasoning as CommandPalette/index.jsx's identical skip on its
+        // own best-effort model fetch.
+        const selfRes = await API.get(`/api/v2/${tenantSlug}/user/me`, {
+          skipErrorHandler: true,
+        });
         const tid = selfRes?.data?.data?.tenant_id;
         if (cancelled || !selfRes?.data?.success || !tid) return;
         const alRes = await API.get(
           `/api/v2/admin/tenants/${tid}/model-allowlist`,
+          { skipErrorHandler: true },
         );
         if (cancelled) return;
         if (alRes?.data?.success) setAllowlist(alRes.data.data);

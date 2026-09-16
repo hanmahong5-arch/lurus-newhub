@@ -441,4 +441,131 @@ describe('Admin ModelRateLimits page — model availability', () => {
       expect(screen.getByTestId('mrl-availability-clear').disabled).toBe(true);
     });
   });
+
+  // R7 (operator ruling): a non-403 GET failure must render its own error
+  // state, not the "no allow-list configured" defaults — those read to an
+  // operator as "observe mode, every model reachable", which may be false
+  // if the platform is actually in enforce mode with a restrictive row this
+  // fetch simply failed to read. Named oracle for this fix.
+  it('shows an explicit error state — not the unrestricted defaults — when the allow-list GET 500s, and disables save/clear', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/model-allowlist')) {
+        return Promise.reject({ response: { status: 500 } });
+      }
+      if (u.includes('/model-limits')) {
+        return Promise.resolve(limitsResponse([]));
+      }
+      return Promise.resolve(tenantsResponse());
+    });
+
+    render(<HFModelRateLimits />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mrl-availability-error')).toBeTruthy();
+    });
+
+    // Neither the observe-mode nor the unrestricted copy may appear — both
+    // are lies about a state this page never actually read.
+    expect(screen.queryByTestId('mrl-availability-mode')).toBeNull();
+    expect(screen.queryByTestId('mrl-availability-unrestricted')).toBeNull();
+    expect(screen.queryByText(/still answers/i)).toBeNull();
+    expect(screen.queryByText(/every catalog model is reachable/i)).toBeNull();
+
+    expect(screen.getByTestId('mrl-availability-save').disabled).toBe(true);
+    expect(screen.getByTestId('mrl-availability-clear').disabled).toBe(true);
+  });
+
+  it('the allow-list error state clears on retry once the GET succeeds', async () => {
+    let fail = true;
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/model-allowlist')) {
+        if (fail) return Promise.reject({ response: { status: 500 } });
+        return Promise.resolve(allowlistResponse({ configured: false }));
+      }
+      if (u.includes('/model-limits')) {
+        return Promise.resolve(limitsResponse([]));
+      }
+      return Promise.resolve(tenantsResponse());
+    });
+
+    render(<HFModelRateLimits />);
+    await waitFor(() => screen.getByTestId('mrl-availability-error'));
+
+    fail = false;
+    fireEvent.click(screen.getByTestId('mrl-availability-retry'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mrl-availability-mode')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('mrl-availability-error')).toBeNull();
+  });
+
+  // Cross-tenant write guard: fetchAllowlist must drop a response that
+  // lands after the operator has already switched tenants, or the stale
+  // tenant's list — including a later save of it — lands on the new
+  // selection.
+  it('drops a stale allow-list response after the tenant selection has moved on', async () => {
+    const tenants = [
+      { id: 'default', name: 'default' },
+      { id: 'other', name: 'other' },
+    ];
+    let resolveDefault;
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/tenants/default/model-allowlist')) {
+        return new Promise((resolve) => {
+          resolveDefault = resolve;
+        });
+      }
+      if (u.includes('/tenants/other/model-allowlist')) {
+        return Promise.resolve(
+          allowlistResponse({
+            configured: true,
+            allowed_models: ['other-model'],
+            mode: 'observe',
+          }),
+        );
+      }
+      if (u.includes('/model-limits')) {
+        return Promise.resolve(limitsResponse([]));
+      }
+      return Promise.resolve({
+        data: { success: true, data: { tenants } },
+      });
+    });
+
+    render(<HFModelRateLimits />);
+    await waitFor(() => screen.getByTestId('mrl-tenant-select'));
+
+    // Switch to 'other' while the 'default' allow-list fetch is still
+    // in flight.
+    fireEvent.change(screen.getByTestId('mrl-tenant-select'), {
+      target: { value: 'other' },
+    });
+
+    await waitFor(() =>
+      screen.getByTestId('mrl-availability-entry-other-model'),
+    );
+
+    // Now the stale 'default' response lands.
+    resolveDefault(
+      allowlistResponse({
+        configured: true,
+        allowed_models: ['default-model'],
+        mode: 'observe',
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The stale response must not have overwritten the 'other' tenant's
+    // entries.
+    expect(
+      screen.getByTestId('mrl-availability-entry-other-model'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId('mrl-availability-entry-default-model'),
+    ).toBeNull();
+  });
 });

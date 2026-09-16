@@ -230,24 +230,104 @@ describe('Settings page', () => {
     });
   });
 
-  // 2. INVERTED (cycle 10, L5): the Notifications section used to assert a
-  // WIPBanner was present. It is retired outright now — there is no
-  // subscription store, no dispatch path, and the "3 channels with disabled
-  // toggles" it used to render were hard-coded placeholder data, not a
-  // product in progress. The nav item itself must be gone, not merely its
-  // banner.
-  it('has no Notifications nav entry — the section was retired, not stubbed', async () => {
+  // 2. RE-INVERTED: the retirement this test used to lock was itself
+  // wrong — PUT /api/user/setting (user.go:521-535) and its dispatch path
+  // (app.NotifyUser, internal/app/user_notify.go:53, called from
+  // checkAndSendQuotaNotify on the live relay path) already existed, and
+  // components/settings/PersonalSetting.jsx was already a working consumer
+  // of the same store. This locks the restored panel: seeded from
+  // profile.setting, and the PUT body uses exactly the field names in
+  // user.go:521-531 — mirroring
+  // components/settings/q1_personal_setting.test.jsx:374-429's key-name
+  // and type assertions.
+  it('notifications section is seeded from profile.setting and saves with the exact backend field names', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              ...fakeProfile,
+              setting: JSON.stringify({
+                notify_type: 'gotify',
+                quota_warning_threshold: 250000,
+                gotify_url: 'https://gotify.example.test',
+                gotify_token: 'tok-abc',
+                gotify_priority: 7,
+              }),
+            },
+          },
+        });
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+    API.put.mockResolvedValue({ data: { success: true } });
+
     render(<HFSettings />);
 
-    expect(screen.queryByText('Notifications')).toBeNull();
+    screen.getByText('Notifications').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('notifications-section')).toBeTruthy();
+    });
+
+    // Seeded from profile.setting: gotify was the saved type, so its
+    // fields — not webhook/email/bark — are the ones rendered, with the
+    // saved values, not the useState defaults ('email' / 100000).
+    await waitFor(() => {
+      expect(screen.getByTestId('notify-type-select').value).toBe('gotify');
+    });
+    expect(screen.getByTestId('notify-threshold-input').value).toBe('250000');
+    expect(screen.getByTestId('notify-gotify-url-input').value).toBe(
+      'https://gotify.example.test',
+    );
+    expect(screen.getByTestId('notify-gotify-token-input').value).toBe(
+      'tok-abc',
+    );
+    expect(screen.getByTestId('notify-gotify-priority-input').value).toBe('7');
+
+    fireEvent.click(screen.getByTestId('notify-save-btn'));
+
+    await waitFor(() => {
+      expect(API.put.mock.calls.some((c) => c[0] === '/api/user/setting')).toBe(
+        true,
+      );
+    });
+
+    const body = API.put.mock.calls.find(
+      (c) => c[0] === '/api/user/setting',
+    )[1];
+    expect(Object.keys(body).sort()).toEqual([
+      'accept_unset_model_ratio_model',
+      'bark_url',
+      'gotify_priority',
+      'gotify_token',
+      'gotify_url',
+      'notification_email',
+      'notify_type',
+      'quota_warning_threshold',
+      'record_ip_log',
+      'webhook_secret',
+      'webhook_url',
+    ]);
+    expect(body.notify_type).toBe('gotify');
+    expect(body.gotify_url).toBe('https://gotify.example.test');
+    expect(body.gotify_token).toBe('tok-abc');
+    expect(body.quota_warning_threshold).toBe(250000);
+    expect(typeof body.quota_warning_threshold).toBe('number');
+    expect(body.gotify_priority).toBe(7);
+    expect(typeof body.gotify_priority).toBe('number');
   });
 
-  // 3. INVERTED (cycle 10, L5): the Team section used to assert a WIPBanner
-  // was present alongside an empty member list. Account and membership
-  // lifecycle belongs to the platform identity service — this console is a
-  // relying party, not the source of truth — so the section now states that
-  // plainly and links out, with no banner and no local member list.
-  it('team section has no WIPBanner and links out to platform identity', async () => {
+  // 3. RE-INVERTED: the interim "managed on platform identity" copy plus
+  // outbound link this test used to lock was itself a false claim —
+  // identity.lurus.cn has no
+  // customer-facing team/member surface (its authenticated nav is
+  // wallet/topup/subscriptions/invoices/refunds/redeem/account/
+  // data-privacy; the only org-membership screen is an internal /admin/v1
+  // tool). The section now states plainly that the capability is not
+  // available, with no outbound link at all.
+  it('team section states plainly that team management is not available, with no link and no WIPBanner', async () => {
     render(<HFSettings />);
 
     const teamNav = screen.getByText('Team & roles');
@@ -258,10 +338,12 @@ describe('Settings page', () => {
     });
 
     expect(screen.queryByTestId('wip-banner')).toBeNull();
-
-    const link = screen.getByTestId('team-identity-link');
-    expect(link.getAttribute('href')).toContain('identity.lurus.cn');
-    expect(link.getAttribute('target')).toBe('_blank');
+    expect(screen.queryByTestId('team-identity-link')).toBeNull();
+    expect(
+      screen.getByText(
+        'Per-tenant team management — invites, roles, removal — is not available in this product yet.',
+      ),
+    ).toBeTruthy();
   });
 
   // 4. Clicking "revoke" on a session row opens the ConfirmDialog.
@@ -646,13 +728,12 @@ describe('Settings page', () => {
     expect(screen.queryByText(/Loading…/)).toBeNull();
   });
 
-  // 8. INVERTED (cycle 10, L5): this used to assert the Notifications tab
-  // rendered 3 hard-coded channels (email/webhook/in-app) with disabled
-  // toggles behind a WIPBanner. Those channels were placeholder data with no
-  // subscription store or dispatch path behind them — the section is
-  // retired, not stubbed. This is the page-wide oracle for this cycle's
-  // rule: Settings renders zero WIPBanners, in any section.
-  it('renders zero WIPBanners in any section, and the placeholder notification channels are gone', async () => {
+  // 8. This is the page-wide oracle for this cycle's rule: Settings renders
+  // zero WIPBanners, in any section — including the restored Notifications
+  // section (real form now, not the old 3 hard-coded email/webhook/in-app
+  // channels with disabled toggles behind a WIPBanner that this test used
+  // to lock).
+  it('renders zero WIPBanners in any section, and the old placeholder notification channels are gone', async () => {
     render(<HFSettings />);
 
     for (const label of [
@@ -660,6 +741,7 @@ describe('Settings page', () => {
       'Security',
       'Subscription',
       'Billing',
+      'Notifications',
       'Team & roles',
       'Integrations',
       'Region & data',
@@ -685,8 +767,9 @@ describe('Settings page', () => {
       expect(screen.queryAllByTestId('wip-banner').length).toBe(0);
     }
 
-    // The three placeholder notification channels are gone along with the
-    // section — not merely hidden behind a disabled toggle.
+    // The old hard-coded 3-channel placeholder toggles are gone — the
+    // section itself is back (asserted above via the heading loop and by
+    // test 2), just rendering the real form instead.
     expect(screen.queryByTestId('notif-toggle-email')).toBeNull();
     expect(screen.queryByTestId('notif-toggle-webhook')).toBeNull();
     expect(screen.queryByTestId('notif-toggle-inapp')).toBeNull();

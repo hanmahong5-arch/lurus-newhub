@@ -42,10 +42,13 @@ const FLOWS = [
 // repo.Channel.Type value the backend persists — same catalogue as
 // constants/channel.constants.js's CHANNEL_OPTIONS, narrowed to the vendors
 // this wizard surfaces as one-click presets. Selecting a vendor sets the
-// channel's type and, when CHANNEL_PRESETS carries one, prefills base_url —
-// entity/channel.go derives a per-type default upstream host when base_url
-// is left empty, so an unlisted preset (base_url: '') is not a gap, it means
-// "use the vendor's default host".
+// channel's type and, when CHANNEL_PRESETS carries one, prefills base_url.
+// Four of these types — Azure(3), custom(8), AWS Bedrock(33), Google
+// Vertex(41) — have NO default upstream host anywhere: neither
+// CHANNEL_PRESETS (constants/channel.constants.js) nor the backend's
+// constant.ChannelBaseURLs (internal/pkg/constant/channel.go, indices 3, 8,
+// 33, 41 all hold "") carry one. For those four, base_url is a required
+// field rather than an optional override — see NO_DEFAULT_BASE_URL_TYPES.
 const VENDOR_CHOICES = [
   { key: 'openai', type: 1, label: 'OpenAI' },
   { key: 'anthropic', type: 14, label: 'Anthropic' },
@@ -56,6 +59,15 @@ const VENDOR_CHOICES = [
   { key: 'siliconflow', type: 40, label: 'SiliconCloud' },
   { key: 'custom', type: 8, label: null },
 ];
+
+// Types with no default upstream host in either CHANNEL_PRESETS or the
+// backend's constant.ChannelBaseURLs — see the VENDOR_CHOICES comment above.
+// Leaving base_url blank for one of these lets the wizard create a channel
+// step 3 (discover) and step 4 (test) both 400 on immediately
+// ("Channel has no base URL configured",
+// internal/adapter/handler/v2_channel_actions.go) and that the relay can
+// never route through, so the wizard blocks create instead.
+const NO_DEFAULT_BASE_URL_TYPES = new Set([3, 8, 33, 41]);
 
 // describeChannelWriteError turns an axios rejection from a channel write
 // into a message a tenant admin can act on. The 403 shape checked here
@@ -204,7 +216,7 @@ const NewChannelStep = ({
             gap: 12,
           }}
         >
-          {VENDOR_CHOICES.map((v, i) => {
+          {VENDOR_CHOICES.map((v) => {
             const label =
               v.label ?? tr('console.flows.vendor_custom', 'custom');
             const selected = Number(form.type) === v.type;
@@ -234,19 +246,16 @@ const NewChannelStep = ({
                   className='faint mono'
                   style={{ fontSize: 10, marginTop: 4 }}
                 >
-                  {i === 0
-                    ? tr(
-                        'console.flows.vendor_hint_oai',
-                        '18 models · OAI-compatible',
-                      )
-                    : i < 7
+                  {v.key === 'openai' || v.key === 'siliconflow'
+                    ? tr('console.flows.vendor_hint_oai', 'OAI-compatible')
+                    : v.key === 'custom'
                       ? tr(
-                          'console.flows.vendor_hint_native',
-                          'native protocol',
-                        )
-                      : tr(
                           'console.flows.vendor_hint_custom',
                           'OAI-compatible URL',
+                        )
+                      : tr(
+                          'console.flows.vendor_hint_native',
+                          'native protocol',
                         )}
                 </div>
               </div>
@@ -311,7 +320,12 @@ const NewChannelStep = ({
               placeholder='https://api.openai.com/v1'
             />
             <span className='faint mono' style={{ fontSize: 10 }}>
-              {tr('console.flows.hint_override', 'override for proxies')}
+              {NO_DEFAULT_BASE_URL_TYPES.has(Number(form.type))
+                ? tr(
+                    'console.flows.hint_override_required',
+                    'required — this vendor has no default host',
+                  )
+                : tr('console.flows.hint_override', 'override for proxies')}
             </span>
           </label>
           <label style={{ display: 'grid', gap: 6 }}>
@@ -330,7 +344,7 @@ const NewChannelStep = ({
             <span className='faint mono' style={{ fontSize: 10 }}>
               {tr(
                 'console.flows.hint_keys_rr',
-                'newline-separated · round-robin across keys',
+                'one key per channel · multi-key channels are created from the Channels page',
               )}
             </span>
           </label>
@@ -624,7 +638,9 @@ const NewChannelStep = ({
           [
             tr('console.flows.field_base_url', 'base url'),
             form.baseURL ||
-              tr('console.flows.base_url_default', 'provider default'),
+              (NO_DEFAULT_BASE_URL_TYPES.has(Number(form.type))
+                ? tr('console.flows.base_url_missing', 'not set')
+                : tr('console.flows.base_url_default', 'provider default')),
           ],
           [
             tr('console.flows.review_models_count', 'models configured'),
@@ -1076,29 +1092,69 @@ const HFFlows = () => {
   const [applyingModels, setApplyingModels] = useState(false);
   const [channelTesting, setChannelTesting] = useState(false);
   const [channelTestResult, setChannelTestResult] = useState(null);
+  // Whether the user has ever typed into the base url field themselves.
+  // handleSelectVendor consults this so that re-picking a vendor after the
+  // first click still overwrites a preset-derived value (the bug: with a
+  // plain `f.baseURL || preset` fallback, once ANY baseURL is set — even
+  // from a previous vendor's preset — a second vendor click keeps it,
+  // silently pointing e.g. a Zhipu channel at Anthropic's host).
+  const [baseURLTouched, setBaseURLTouched] = useState(false);
 
   const handleChannelField = useCallback((field, value) => {
     setChannelForm((f) => ({ ...f, [field]: value }));
+    if (field === 'baseURL') setBaseURLTouched(true);
   }, []);
 
-  const handleSelectVendor = useCallback((vendor) => {
-    setChannelForm((f) => ({
-      ...f,
-      type: vendor.type,
-      baseURL: f.baseURL || (CHANNEL_PRESETS[vendor.type]?.base_url ?? ''),
-    }));
-  }, []);
+  const handleSelectVendor = useCallback(
+    (vendor) => {
+      setChannelForm((f) => ({
+        ...f,
+        type: vendor.type,
+        baseURL: baseURLTouched
+          ? f.baseURL
+          : (CHANNEL_PRESETS[vendor.type]?.base_url ?? ''),
+      }));
+    },
+    [baseURLTouched],
+  );
 
   const handleCreateChannel = useCallback(async () => {
     if (channelCreating) return;
+    // .trim() only strips leading/trailing whitespace — an internal newline
+    // (pasted multi-key blob) survives it. This wizard's create path has no
+    // multi-key support (no channel_info is sent, so the backend treats the
+    // whole blob as one literal key — see the field_api_keys hint), so a
+    // multi-line key must be rejected here rather than silently POSTed as an
+    // unusable credential.
+    const key = channelForm.key.trim();
+    if (/[\r\n]/.test(key)) {
+      setChannelCreateError(
+        tr(
+          'console.flows.multi_key_rejected',
+          'One key per channel — remove the extra line(s). Multi-key channels are created from the Channels page.',
+        ),
+      );
+      return;
+    }
+    const type = Number(channelForm.type) || 1;
+    const baseURL = channelForm.baseURL.trim();
+    if (NO_DEFAULT_BASE_URL_TYPES.has(type) && !baseURL) {
+      setChannelCreateError(
+        tr(
+          'console.flows.base_url_required',
+          'This vendor has no default upstream host — enter a base url before creating the channel.',
+        ),
+      );
+      return;
+    }
     setChannelCreating(true);
     setChannelCreateError(null);
     try {
       const payload = {
         name: channelForm.name.trim(),
-        type: Number(channelForm.type) || 1,
-        base_url: channelForm.baseURL.trim(),
-        key: channelForm.key.trim(),
+        type,
+        base_url: baseURL,
+        key,
         models: channelForm.models.trim(),
       };
       if (channelForm.orgId.trim()) {
@@ -1230,6 +1286,7 @@ const HFFlows = () => {
     setDiscovery({ loading: false, error: null, data: null });
     setSelectedNewModels(new Set());
     setChannelTestResult(null);
+    setBaseURLTouched(false);
     setStep(1);
   }, []);
 
@@ -1245,7 +1302,7 @@ const HFFlows = () => {
 
   return (
     <HFShell
-      active='channels'
+      active='flows'
       crumbs={[
         tr('console.flows.crumb', 'flows'),
         tr(`console.flows.flow_${meta[0]}`, meta[1]),

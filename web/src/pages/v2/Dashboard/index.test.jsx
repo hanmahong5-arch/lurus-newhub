@@ -316,7 +316,34 @@ const makeQuotaRow = (overrides = {}) => ({
   ...overrides,
 });
 
+// enable_data_export is off by default in the wireDashboard() status fixture
+// ({} has no such key), so every test in this describe block that expects the
+// trend/model-distribution panels to be present must opt back in explicitly —
+// those two panels are gated on this flag (misc.go:165 common.DataExportEnabled).
+const EXPORT_ON_STATUS = {
+  data: { success: true, data: { enable_data_export: true } },
+};
+
 describe('Dashboard page — usage trend + model distribution (/api/data/self/)', () => {
+  // skipErrorHandler:true on this call would defeat the Layer-C 401
+  // self-heal in helpers/api.js (config.skipErrorHandler short-circuits the
+  // interceptor before the self-heal branch runs). This file mocks
+  // '../../../helpers' wholesale, so it cannot exercise that interceptor —
+  // this asserts the one thing it CAN see: the call-site contract that makes
+  // the self-heal reachable in the first place.
+  it('calls /api/data/self/ without skipErrorHandler (401 self-heal must stay reachable)', async () => {
+    wireDashboard();
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() => screen.getByText('total spend'));
+    const call = API.get.mock.calls.find((c) =>
+      String(c[0]).includes('/api/data/self/'),
+    );
+    expect(call).toBeTruthy();
+    expect(call[1]?.skipErrorHandler).not.toBe(true);
+  });
+
   it('renders a non-empty trend series and model distribution from a recorded payload', async () => {
     const now = Math.floor(Date.now() / 1000);
     const twoDaysAgo = now - 2 * 24 * 60 * 60;
@@ -340,7 +367,10 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
         quota: 300000,
       }),
     ];
-    wireDashboard({ quota: { data: { success: true, data: rows } } });
+    wireDashboard({
+      quota: { data: { success: true, data: rows } },
+      status: EXPORT_ON_STATUS,
+    });
 
     render(React.createElement(HFDashboard));
 
@@ -366,6 +396,11 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
 
     // The empty-state copy must NOT be showing alongside real data.
     expect(screen.queryByText('No usage recorded in this window.')).toBeNull();
+
+    // The window label interpolates the real constant rather than a
+    // hard-coded "29" that could silently drift from
+    // DASHBOARD_TREND_WINDOW_SECONDS (index.jsx:70).
+    expect(screen.getByText('last 29 days')).toBeTruthy();
   });
 
   it('treats the >30-day refusal (success:false, HTTP 200) as an empty state, not a toast', async () => {
@@ -375,6 +410,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
       quota: {
         data: { success: false, message: '时间跨度不能超过 1 个月' },
       },
+      status: EXPORT_ON_STATUS,
     });
 
     render(React.createElement(HFDashboard));
@@ -387,7 +423,10 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
   });
 
   it('renders nothing for the model distribution panel body when /api/data/self/ has no rows', async () => {
-    wireDashboard({ quota: { data: { success: true, data: [] } } });
+    wireDashboard({
+      quota: { data: { success: true, data: [] } },
+      status: EXPORT_ON_STATUS,
+    });
 
     render(React.createElement(HFDashboard));
 
@@ -395,6 +434,109 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
       screen.getByText('No model consumption recorded in this window.'),
     );
     expect(screen.queryByTestId('model-dist-row-0')).toBeNull();
+  });
+
+  // With data export off, the aggregator never wrote quota_data
+  // (repo/log.go:584, repo/usedata.go:18) — /api/data/self/ answering [] means
+  // "we never collected this", not "no usage today". Printing the trend
+  // panel's empty state next to a non-zero total-spend KPI would assert
+  // something false about the account's data, so both panels must be absent
+  // entirely — not degrade to their empty-state copy — matching the legacy
+  // SiderBar gate on the same flag (SiderBar.jsx:79).
+  it('renders neither panel — not even the empty state — when enable_data_export is false, despite real usage rows', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const rows = [
+      makeQuotaRow({ model_name: 'model-a', created_at: now, quota: 500000 }),
+    ];
+    wireDashboard({
+      quota: { data: { success: true, data: rows } },
+      status: { data: { success: true, data: { enable_data_export: false } } },
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() => screen.getByText('total spend'));
+    expect(screen.queryByTestId('usage-trend-chart')).toBeNull();
+    expect(screen.queryByText('No usage recorded in this window.')).toBeNull();
+    expect(screen.queryByTestId('model-dist-row-0')).toBeNull();
+    expect(
+      screen.queryByText('No model consumption recorded in this window.'),
+    ).toBeNull();
+  });
+
+  // fetchExtras uses Promise.allSettled (index.jsx), not Promise.all, so a
+  // rejection on one of the three calls must not blank the panels fed by the
+  // other two: /api/data/self/ rejects while /api/status answers 200 with
+  // FAQ content, and the FAQ panel must still render.
+  it('still renders the FAQ panel when /api/data/self/ rejects', async () => {
+    wireDashboard({
+      status: {
+        data: {
+          success: true,
+          data: {
+            faq_enabled: true,
+            faq: [{ question: 'Still up?', answer: 'Yes.' }],
+          },
+        },
+      },
+    });
+    const wired = API.get.getMockImplementation();
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/api/data/self/')) {
+        return Promise.reject(new Error('network unreachable'));
+      }
+      return wired(url);
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() => screen.getByTestId('dash-faq-panel'));
+    expect(screen.getByText('Still up?')).toBeTruthy();
+    // The rejected panel must degrade to its own empty state, not vanish the
+    // page or leave quotaLoaded stuck false forever.
+    expect(screen.getByText('total spend')).toBeTruthy();
+  });
+
+  // The trend chart's bars are keyed on the LOCAL calendar day
+  // (index.jsx localDayKey), matching the label HfUsageTrendChart renders via
+  // toLocaleDateString. Two rows exactly one hour apart, straddling local
+  // midnight, must land in two distinct day buckets — with the old
+  // UTC-keyed bucketing (Math.floor(ts / 86400) * 86400) this test's runtime
+  // offset (a fixed non-UTC zone, see web/vitest / bun runtime) puts both
+  // rows in the *same* UTC calendar day, merging them into one bar instead.
+  it('buckets two rows straddling local midnight into two distinct day bars, not merged into one', async () => {
+    const beforeMidnight = new Date();
+    beforeMidnight.setDate(beforeMidnight.getDate() - 2);
+    beforeMidnight.setHours(23, 30, 0, 0);
+    const afterMidnight = new Date(beforeMidnight);
+    // setHours(24, ...) rolls over to 00:30 local the next calendar day —
+    // exactly one hour after beforeMidnight in absolute time.
+    afterMidnight.setHours(24, 30, 0, 0);
+
+    const rows = [
+      makeQuotaRow({
+        model_name: 'model-a',
+        created_at: Math.floor(beforeMidnight.getTime() / 1000),
+        quota: 111000,
+      }),
+      makeQuotaRow({
+        model_name: 'model-a',
+        created_at: Math.floor(afterMidnight.getTime() / 1000),
+        quota: 222000,
+      }),
+    ];
+    wireDashboard({
+      quota: { data: { success: true, data: rows } },
+      status: EXPORT_ON_STATUS,
+    });
+
+    render(React.createElement(HFDashboard));
+
+    const chart = await waitFor(() => screen.getByTestId('usage-trend-chart'));
+    // Two rows one hour apart, on two different local calendar days, must
+    // produce two nonzero bars — a UTC-day bucket would merge them into one
+    // in this runtime's timezone.
+    expect(chart.querySelectorAll('[data-nonzero="true"]').length).toBe(2);
   });
 });
 

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -362,5 +363,121 @@ func TestV2ChatSession_Create_RejectsUnknownRole(t *testing.T) {
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body=%s", w.Code, w.Body.String())
+	}
+}
+
+// 5. An oversized title is rejected with 400, not silently truncated — pins
+// maxChatSessionTitleRunes's doc comment as the actual behaviour, not just
+// its claim. A title exactly at the 255-rune limit must still succeed
+// (boundary is >, not >=).
+func TestV2ChatSession_Create_RejectsOversizedTitle(t *testing.T) {
+	ctx := setupChatSessionRouter(t)
+
+	oversized := strings.Repeat("x", maxChatSessionTitleRunes+1)
+	w := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": oversized, "model": "gpt-4o", "messages": []map[string]string{},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("oversized title status = %d, want 400, body=%s", w.Code, w.Body.String())
+	}
+
+	atLimit := strings.Repeat("y", maxChatSessionTitleRunes)
+	wOK := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": atLimit, "model": "gpt-4o", "messages": []map[string]string{},
+	})
+	if wOK.Code != http.StatusOK {
+		t.Fatalf("at-limit title status = %d, want 200, body=%s", wOK.Code, wOK.Body.String())
+	}
+}
+
+// 6. PATCH applies the same oversized-title rejection as create, and a
+// rejected PATCH must not have applied.
+func TestV2ChatSession_Update_RejectsOversizedTitle(t *testing.T) {
+	ctx := setupChatSessionRouter(t)
+
+	wCreate := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "short", "model": "gpt-4o", "messages": []map[string]string{},
+	})
+	var createResp struct {
+		Data struct {
+			Id int `json:"id"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wCreate.Body.Bytes(), &createResp)
+
+	oversized := strings.Repeat("z", maxChatSessionTitleRunes+1)
+	wPatch := ctx.do(http.MethodPatch, "/"+strconv.Itoa(createResp.Data.Id), ctx.userID, map[string]any{
+		"title": oversized,
+	})
+	if wPatch.Code != http.StatusBadRequest {
+		t.Fatalf("oversized patch title status = %d, want 400, body=%s", wPatch.Code, wPatch.Body.String())
+	}
+
+	wFetch := ctx.do(http.MethodGet, "/"+strconv.Itoa(createResp.Data.Id), ctx.userID, nil)
+	var fetchResp struct {
+		Data struct {
+			Title string `json:"title"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wFetch.Body.Bytes(), &fetchResp)
+	if fetchResp.Data.Title != "short" {
+		t.Fatalf("title after rejected patch = %q, want unchanged %q", fetchResp.Data.Title, "short")
+	}
+}
+
+// 7. PATCH's response must reflect the FRESH row the write just performed,
+// not the pre-update struct UpdateChatSessionOwned read at the start of its
+// own transaction (repo.UpdateChatSessionOwned sets `session.Title` in
+// memory but never `session.UpdatedAt` — only the DB row gets a fresh
+// updated_at, via a raw map-based Updates call). Two PATCHes in a row expose
+// the regression: without the re-read fix, the SECOND PATCH's response would
+// echo the FIRST PATCH's updated_at instead of its own.
+func TestV2ChatSession_Update_ResponseReflectsFreshUpdatedAt(t *testing.T) {
+	ctx := setupChatSessionRouter(t)
+
+	wCreate := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "v1", "model": "gpt-4o", "messages": []map[string]string{},
+	})
+	var createResp struct {
+		Data struct {
+			Id int `json:"id"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wCreate.Body.Bytes(), &createResp)
+	id := createResp.Data.Id
+
+	type patchDetail struct {
+		Data struct {
+			UpdatedAt time.Time `json:"updated_at"`
+		} `json:"data"`
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	wPatch1 := ctx.do(http.MethodPatch, "/"+strconv.Itoa(id), ctx.userID, map[string]any{"title": "v2"})
+	var patch1Resp patchDetail
+	if err := json.Unmarshal(wPatch1.Body.Bytes(), &patch1Resp); err != nil {
+		t.Fatalf("unmarshal patch1: %v", err)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	wPatch2 := ctx.do(http.MethodPatch, "/"+strconv.Itoa(id), ctx.userID, map[string]any{"title": "v3"})
+	var patch2Resp patchDetail
+	if err := json.Unmarshal(wPatch2.Body.Bytes(), &patch2Resp); err != nil {
+		t.Fatalf("unmarshal patch2: %v", err)
+	}
+
+	wGet := ctx.do(http.MethodGet, "/"+strconv.Itoa(id), ctx.userID, nil)
+	var getResp patchDetail
+	if err := json.Unmarshal(wGet.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("unmarshal get: %v", err)
+	}
+
+	if !patch2Resp.Data.UpdatedAt.Equal(getResp.Data.UpdatedAt) {
+		t.Fatalf("second PATCH response updated_at = %v, want it to match a fresh GET's %v",
+			patch2Resp.Data.UpdatedAt, getResp.Data.UpdatedAt)
+	}
+	if patch2Resp.Data.UpdatedAt.Equal(patch1Resp.Data.UpdatedAt) {
+		t.Fatalf("second PATCH response updated_at (%v) equals the FIRST patch's (%v) — stale pre-update struct was echoed back",
+			patch2Resp.Data.UpdatedAt, patch1Resp.Data.UpdatedAt)
 	}
 }

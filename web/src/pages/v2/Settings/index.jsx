@@ -29,18 +29,24 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 // Wave 2: security, subscription and billing sections are wired.
 // Integrations/region/danger remain stubs pending infra (ComingSoon).
 //
-// Notifications (2026-09-16): retired outright, not stubbed. New API — the
-// upstream this console tracks — has no notifications feature across its
-// console routes either; there is no subscription store and no dispatch
-// path in this codebase to point a toggle at. A disabled switch over
-// placeholder event names was the one outcome ruled out for this section,
-// so the section is gone rather than parked behind a banner.
+// Notifications (2026-09-16): real subscription, not a placeholder. The
+// store (entity.User.Setting, JSON blob) and write path already existed —
+// PUT /api/user/setting (user.go:521-535) — and dispatch already runs on
+// the live relay consumption path via app.NotifyUser
+// (internal/app/user_notify.go:53), called from checkAndSendQuotaNotify
+// (internal/app/quota.go:1390). This panel is a second consumer of that
+// same store alongside components/settings/PersonalSetting.jsx, not a new
+// backend.
 //
 // Team (2026-09-16): retired as a newhub feature, not stubbed. Account and
 // membership lifecycle belongs to the platform identity service — this
 // service is a relying party, not the source of truth for who is on a
-// tenant (see repo CLAUDE.md, "Auth"). The section states that plainly and
-// links out; it does not attempt a local tenant_member store.
+// tenant (see repo CLAUDE.md, "Auth"). identity.lurus.cn has no
+// customer-facing team/member screen to link to (its authenticated nav is
+// wallet/topup/subscriptions/invoices/refunds/redeem/account/data-privacy;
+// the only org-membership screen is an internal /admin/v1 tool), so this
+// section states plainly that the capability is not offered rather than
+// linking somewhere that cannot serve it.
 // Wave 3 Phase 1 (2026-05-20): revoke session wired to DELETE /sessions/current.
 
 /*
@@ -49,7 +55,10 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
  * Security/Sessions: wired to GET /api/v2/:tenant_slug/sessions (Wave 2).
  *   Returns single synthetic session (auth_method + active_tokens + request_count).
  *   Single-device revoke wired (Wave 3 Phase 1). Multi-device tracking deferred to v3.
- * Team: no local data — a static link out to platform identity.
+ * Notifications: wired to GET setting-string on /api/v2/:tenant_slug/user/me
+ *   and PUT /api/user/setting (Wave 2 field names, unchanged).
+ * Team: not offered — no outbound link, since identity.lurus.cn has no
+ *   customer-facing surface for it either.
  */
 
 const fmtCNY = (v) =>
@@ -89,7 +98,12 @@ const SECTIONS = [
   ['security', 'Security', 'password, mfa, sessions'],
   ['subscription', 'Subscription', 'routing group & entitlements'],
   ['billing', 'Billing', 'wallet balance & usage'],
-  ['team', 'Team & roles', 'managed on platform identity'],
+  [
+    'notifications',
+    'Notifications',
+    'quota alerts: email, webhook, bark, gotify',
+  ],
+  ['team', 'Team & roles', 'not available in this product yet'],
   ['integrations', 'Integrations', 'webhooks, slack, observability'],
   ['region', 'Region & data', 'where data lives'],
   ['danger', 'Danger zone', 'export, transfer, delete'],
@@ -269,6 +283,30 @@ const HFSettings = () => {
   const [billSummary, setBillSummary] = useState(null);
   const [billTxns, setBillTxns] = useState([]);
 
+  // Notifications tab (2026-09-16) — real subscription against the
+  // store PersonalSetting.jsx already writes: entity.User.Setting (a JSON
+  // blob), read back via the `setting` string on GET /api/v2/:slug/user/me
+  // and written via PUT /api/user/setting (user.go:521-535 field names,
+  // copied verbatim below — do not invent new ones). Seeded once from
+  // profile.setting so a save from this panel never clobbers
+  // accept_unset_model_ratio_model / record_ip_log — fields this panel has
+  // no editor for — back to their zero values.
+  const [notifySeeded, setNotifySeeded] = useState(false);
+  const [notifySaving, setNotifySaving] = useState(false);
+  const [notifyForm, setNotifyForm] = useState({
+    notifyType: 'email',
+    quotaWarningThreshold: 100000,
+    webhookUrl: '',
+    webhookSecret: '',
+    notificationEmail: '',
+    barkUrl: '',
+    gotifyUrl: '',
+    gotifyToken: '',
+    gotifyPriority: 5,
+    acceptUnsetModelRatioModel: false,
+    recordIpLog: false,
+  });
+
   const fetchProfile = useCallback(async () => {
     setLoadingProfile(true);
     try {
@@ -400,6 +438,36 @@ const HFSettings = () => {
     }
   }, [section, tenantSlug, fetchBilling]);
 
+  // Seed the notifications form from profile.setting exactly once profile
+  // has loaded. Guarded on notifySeeded (not on `profile` truthiness alone)
+  // so a later profile refetch — e.g. after editing display_name — does not
+  // stomp on in-progress edits in this form.
+  useEffect(() => {
+    if (!profile || notifySeeded) return;
+    let parsed = {};
+    try {
+      parsed = profile.setting ? JSON.parse(profile.setting) : {};
+    } catch (_) {
+      parsed = {};
+    }
+    setNotifyForm({
+      notifyType: parsed.notify_type || 'email',
+      quotaWarningThreshold: parsed.quota_warning_threshold || 100000,
+      webhookUrl: parsed.webhook_url || '',
+      webhookSecret: parsed.webhook_secret || '',
+      notificationEmail: parsed.notification_email || '',
+      barkUrl: parsed.bark_url || '',
+      gotifyUrl: parsed.gotify_url || '',
+      gotifyToken: parsed.gotify_token || '',
+      gotifyPriority:
+        parsed.gotify_priority !== undefined ? parsed.gotify_priority : 5,
+      acceptUnsetModelRatioModel:
+        parsed.accept_unset_model_ratio_model || false,
+      recordIpLog: parsed.record_ip_log || false,
+    });
+    setNotifySeeded(true);
+  }, [profile, notifySeeded]);
+
   // handleRevokeSession serves both dialogs the confirm at the bottom of
   // this component wires to: revokeTargetId === null means "revoke MY OWN
   // current session" (the original Wave 3 behaviour — logs the caller out
@@ -490,6 +558,50 @@ const HFSettings = () => {
       showError(tr('console.settings.toast_save_failed', 'Save failed'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleNotifyChange = (field, value) => {
+    setNotifyForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  // PUT /api/user/setting — NOT tenant-scoped (api-router.go:59), same
+  // endpoint PersonalSetting.jsx already writes. Field names copied
+  // verbatim from UpdateUserSettingRequest (user.go:521-531); the two
+  // fields this panel has no editor for (accept_unset_model_ratio_model,
+  // record_ip_log) are still sent, carrying the value seeded from the
+  // server, so a save here cannot silently reset them.
+  const handleSaveNotify = async () => {
+    if (notifySaving) return;
+    setNotifySaving(true);
+    try {
+      const body = {
+        notify_type: notifyForm.notifyType,
+        quota_warning_threshold: Number(notifyForm.quotaWarningThreshold) || 0,
+        webhook_url: notifyForm.webhookUrl,
+        webhook_secret: notifyForm.webhookSecret,
+        notification_email: notifyForm.notificationEmail,
+        bark_url: notifyForm.barkUrl,
+        gotify_url: notifyForm.gotifyUrl,
+        gotify_token: notifyForm.gotifyToken,
+        gotify_priority: parseInt(notifyForm.gotifyPriority, 10) || 0,
+        accept_unset_model_ratio_model: notifyForm.acceptUnsetModelRatioModel,
+        record_ip_log: notifyForm.recordIpLog,
+      };
+      const res = await API.put('/api/user/setting', body);
+      if (res?.data?.success) {
+        showSuccess(tr('console.settings.toast_saved', 'Saved'));
+        fetchProfile();
+      } else {
+        showError(
+          res?.data?.message ||
+            tr('console.settings.toast_save_failed', 'Save failed'),
+        );
+      }
+    } catch (_) {
+      showError(tr('console.settings.toast_save_failed', 'Save failed'));
+    } finally {
+      setNotifySaving(false);
     }
   };
 
@@ -1391,13 +1503,223 @@ const HFSettings = () => {
             </div>
           )}
 
+          {/* ── Notifications (2026-09-16) ──
+              Real subscription against the store PersonalSetting.jsx already
+              writes: PUT /api/user/setting (user.go:521-535), dispatched on
+              the live relay consumption path by app.NotifyUser
+              (internal/app/user_notify.go:53) via checkAndSendQuotaNotify
+              (internal/app/quota.go:1390). */}
+          {section === 'notifications' && (
+            <div style={{ marginTop: 22 }} data-testid='notifications-section'>
+              <div className='panel' style={{ padding: 18, marginTop: 8 }}>
+                <div className='lbl' style={{ marginBottom: 8 }}>
+                  {tr('console.settings.notify_type_label', 'alert via')}
+                </div>
+                <select
+                  data-testid='notify-type-select'
+                  style={inputStyle}
+                  value={notifyForm.notifyType}
+                  onChange={(e) =>
+                    handleNotifyChange('notifyType', e.target.value)
+                  }
+                >
+                  <option value='email'>
+                    {tr('console.settings.notify_type_email', 'email')}
+                  </option>
+                  <option value='webhook'>
+                    {tr('console.settings.notify_type_webhook', 'webhook')}
+                  </option>
+                  <option value='bark'>
+                    {tr('console.settings.notify_type_bark', 'bark')}
+                  </option>
+                  <option value='gotify'>
+                    {tr('console.settings.notify_type_gotify', 'gotify')}
+                  </option>
+                </select>
+
+                <div className='lbl' style={{ marginTop: 16, marginBottom: 8 }}>
+                  {tr(
+                    'console.settings.notify_threshold_label',
+                    'quota warning threshold',
+                  )}
+                </div>
+                <input
+                  type='number'
+                  data-testid='notify-threshold-input'
+                  style={inputStyle}
+                  value={notifyForm.quotaWarningThreshold}
+                  onChange={(e) =>
+                    handleNotifyChange('quotaWarningThreshold', e.target.value)
+                  }
+                />
+
+                {notifyForm.notifyType === 'email' && (
+                  <>
+                    <div
+                      className='lbl'
+                      style={{ marginTop: 16, marginBottom: 8 }}
+                    >
+                      {tr(
+                        'console.settings.notify_email_label',
+                        'notification email (optional — defaults to account email)',
+                      )}
+                    </div>
+                    <input
+                      data-testid='notify-email-input'
+                      style={inputStyle}
+                      value={notifyForm.notificationEmail}
+                      onChange={(e) =>
+                        handleNotifyChange('notificationEmail', e.target.value)
+                      }
+                    />
+                  </>
+                )}
+
+                {notifyForm.notifyType === 'webhook' && (
+                  <>
+                    <div
+                      className='lbl'
+                      style={{ marginTop: 16, marginBottom: 8 }}
+                    >
+                      {tr(
+                        'console.settings.notify_webhook_url_label',
+                        'webhook url',
+                      )}
+                    </div>
+                    <input
+                      data-testid='notify-webhook-url-input'
+                      style={inputStyle}
+                      value={notifyForm.webhookUrl}
+                      onChange={(e) =>
+                        handleNotifyChange('webhookUrl', e.target.value)
+                      }
+                    />
+                    <div
+                      className='lbl'
+                      style={{ marginTop: 16, marginBottom: 8 }}
+                    >
+                      {tr(
+                        'console.settings.notify_webhook_secret_label',
+                        'webhook secret',
+                      )}
+                    </div>
+                    <input
+                      data-testid='notify-webhook-secret-input'
+                      style={inputStyle}
+                      value={notifyForm.webhookSecret}
+                      onChange={(e) =>
+                        handleNotifyChange('webhookSecret', e.target.value)
+                      }
+                    />
+                  </>
+                )}
+
+                {notifyForm.notifyType === 'bark' && (
+                  <>
+                    <div
+                      className='lbl'
+                      style={{ marginTop: 16, marginBottom: 8 }}
+                    >
+                      {tr(
+                        'console.settings.notify_bark_url_label',
+                        'bark push url',
+                      )}
+                    </div>
+                    <input
+                      data-testid='notify-bark-url-input'
+                      style={inputStyle}
+                      value={notifyForm.barkUrl}
+                      onChange={(e) =>
+                        handleNotifyChange('barkUrl', e.target.value)
+                      }
+                    />
+                  </>
+                )}
+
+                {notifyForm.notifyType === 'gotify' && (
+                  <>
+                    <div
+                      className='lbl'
+                      style={{ marginTop: 16, marginBottom: 8 }}
+                    >
+                      {tr(
+                        'console.settings.notify_gotify_url_label',
+                        'gotify server url',
+                      )}
+                    </div>
+                    <input
+                      data-testid='notify-gotify-url-input'
+                      style={inputStyle}
+                      value={notifyForm.gotifyUrl}
+                      onChange={(e) =>
+                        handleNotifyChange('gotifyUrl', e.target.value)
+                      }
+                    />
+                    <div
+                      className='lbl'
+                      style={{ marginTop: 16, marginBottom: 8 }}
+                    >
+                      {tr(
+                        'console.settings.notify_gotify_token_label',
+                        'gotify app token',
+                      )}
+                    </div>
+                    <input
+                      data-testid='notify-gotify-token-input'
+                      style={inputStyle}
+                      value={notifyForm.gotifyToken}
+                      onChange={(e) =>
+                        handleNotifyChange('gotifyToken', e.target.value)
+                      }
+                    />
+                    <div
+                      className='lbl'
+                      style={{ marginTop: 16, marginBottom: 8 }}
+                    >
+                      {tr(
+                        'console.settings.notify_gotify_priority_label',
+                        'gotify priority (0-10)',
+                      )}
+                    </div>
+                    <input
+                      type='number'
+                      data-testid='notify-gotify-priority-input'
+                      style={inputStyle}
+                      value={notifyForm.gotifyPriority}
+                      onChange={(e) =>
+                        handleNotifyChange('gotifyPriority', e.target.value)
+                      }
+                    />
+                  </>
+                )}
+
+                <button
+                  type='button'
+                  className='btn sm'
+                  style={{ marginTop: 18 }}
+                  data-testid='notify-save-btn'
+                  disabled={notifySaving}
+                  onClick={handleSaveNotify}
+                >
+                  {tr('console.common.save', 'save')}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* ── Team ──
               Retired as a newhub feature (2026-09-16): account and
               membership lifecycle — invites, roles, removal — belongs to
               the platform identity service. This service reads tenant
-              membership, it does not own it, so the section states that and
-              links out rather than shipping a local member list or a
-              tenant_member table with no writer behind it. */}
+              membership, it does not own it (repo CLAUDE.md, "Auth"). No
+              outbound link: identity.lurus.cn's authenticated customer nav
+              is wallet/topup/subscriptions/invoices/refunds/redeem/account/
+              data-privacy — no team or member screen a customer can reach.
+              The only org-membership surface there is an internal
+              /admin/v1 tool, not customer self-service. Per-tenant team
+              management is simply not offered in this product yet — this
+              section says that plainly instead of linking somewhere that
+              does not serve the capability. */}
           {section === 'team' && (
             <div style={{ marginTop: 22 }} data-testid='team-section'>
               <div className='panel' style={{ padding: 18, marginTop: 8 }}>
@@ -1406,32 +1728,10 @@ const HFSettings = () => {
                   style={{ fontSize: 12, lineHeight: 1.6 }}
                 >
                   {tr(
-                    'console.settings.team_retired_desc',
-                    'Team membership — invites, roles, removal — is managed on the platform identity service, not in this console.',
+                    'console.settings.team_not_available_desc',
+                    'Per-tenant team management — invites, roles, removal — is not available in this product yet.',
                   )}
                 </div>
-                <a
-                  href='https://identity.lurus.cn'
-                  target='_blank'
-                  rel='noopener noreferrer'
-                  className='btn sm'
-                  data-testid='team-identity-link'
-                  style={{
-                    marginTop: 12,
-                    textDecoration: 'none',
-                    display: 'inline-block',
-                  }}
-                  title={tr(
-                    'console.settings.team_identity_link_title',
-                    'team membership is managed on platform identity, not here',
-                  )}
-                >
-                  {tr(
-                    'console.settings.team_identity_link',
-                    'manage team on identity.lurus.cn',
-                  )}{' '}
-                  ↗
-                </a>
               </div>
             </div>
           )}

@@ -37,10 +37,24 @@ For commercial licensing, please contact support@quantumnous.com
 //      accurate; the day the page and its route landed, nothing would have
 //      forced anyone to also flip disabled:false — except this test.
 //
+// NAV_SECTIONS has zero disabled:true items at HEAD (the item above was the
+// last one), so mode 2's per-item check below never evaluates a real item —
+// it is exercised instead by a fixture block further down, against
+// constructed items rather than live nav data, so it still fails a real
+// assertion if the predicate itself regresses.
+//
 // App.jsx is parsed as source text rather than duplicating its route list
 // into a second, driftable array here — the same choice the Go-side
 // contract test makes for the same reason (collectRoutes() there reads the
 // real gin engine, not a hand-maintained mirror).
+//
+// A raw regex over that source text is blind to comments: `path='/x'` inside
+// a `{/* ... */}` or `// ...` comment reads exactly like a live <Route>. That
+// is the shape of a real drift bug — commenting out a Route while retiring a
+// page, without also touching the rail link that still points at it — so
+// stripComments() below runs first and strips both comment forms (preserving
+// string contents, so a path literal containing `//`, e.g. none exist today,
+// would not be mistaken for a line comment).
 
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
@@ -67,12 +81,60 @@ const { NAV_SECTIONS } = await import('./components/hifi/HFShell');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Every path App.jsx's <Routes> table registers, as literal strings (params
-// like ':id' and the '*' catch-all stay literal too — nav items never point
-// at those, so no segment-matching is needed here, unlike the Go test which
-// has to match concrete request paths against gin's :param syntax).
-function collectRegisteredRoutePaths() {
-  const src = fs.readFileSync(path.join(__dirname, 'App.jsx'), 'utf8');
+// Strips `// line` and `/* block */` comments from JS/JSX source while
+// leaving string/template literal contents untouched, so a comment
+// containing `path='...'` (or a URL containing `//`) cannot be mistaken for
+// live code. Not a full JS tokenizer — just enough state (comment vs.
+// string vs. plain code) to be correct on App.jsx's own syntax shapes.
+function stripComments(src) {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const two = src.slice(i, i + 2);
+    if (two === '/*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    if (two === '//') {
+      const end = src.indexOf('\n', i + 2);
+      i = end === -1 ? src.length : end;
+      continue;
+    }
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      out += ch;
+      i += 1;
+      while (i < src.length && src[i] !== ch) {
+        if (src[i] === '\\' && i + 1 < src.length) {
+          out += src[i] + src[i + 1];
+          i += 2;
+          continue;
+        }
+        out += src[i];
+        i += 1;
+      }
+      if (i < src.length) {
+        out += src[i];
+        i += 1;
+      }
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+// Every path a chunk of App.jsx-shaped source registers, as literal strings
+// (params like ':id' and the '*' catch-all stay literal too — nav items
+// never point at those, so no segment-matching is needed here, unlike the Go
+// test which has to match concrete request paths against gin's :param
+// syntax). Takes source text directly (rather than reading App.jsx itself)
+// so the comment-stripping behaviour below can be pinned against a small
+// fixture string, independent of App.jsx's current real content.
+function extractRoutesFromSource(rawSrc) {
+  const src = stripComments(rawSrc);
   const routes = new Set();
 
   // Every literal `<Route path='...'>` / `path="..."`, wherever the
@@ -91,6 +153,59 @@ function collectRegisteredRoutePaths() {
   }
 
   return routes;
+}
+
+function collectRegisteredRoutePaths() {
+  const raw = fs.readFileSync(path.join(__dirname, 'App.jsx'), 'utf8');
+  return extractRoutesFromSource(raw);
+}
+
+// Regression test for a real false-negative: a nav item repointed at a route
+// whose <Route> was commented out (retiring a page) used to still read as
+// "registered", because the old parser matched `path=(['"])...` against raw
+// source text with no notion of comments. Fixture-based (not App.jsx itself)
+// so this doesn't depend on App.jsx ever actually containing a commented-out
+// route.
+describe('extractRoutesFromSource ignores a route that only appears inside a comment', () => {
+  const fixtureSrc = `
+    <Routes>
+      <Route path='/console/real' element={<Real />} />
+      {/* retired: <Route path='/console/ghost' element={<Ghost />} /> */}
+      // <Route path='/console/also-ghost' element={<AlsoGhost />} />
+    </Routes>
+  `;
+  const routes = extractRoutesFromSource(fixtureSrc);
+
+  it('counts the live route', () => {
+    expect(routes.has('/console/real')).toBe(true);
+  });
+
+  it('does not count a route inside a block ({/* */}) comment', () => {
+    expect(routes.has('/console/ghost')).toBe(false);
+  });
+
+  it('does not count a route inside a line (//) comment', () => {
+    expect(routes.has('/console/also-ghost')).toBe(false);
+  });
+});
+
+// The two checks below, factored out of the per-item `it()`s so the fixture
+// block after them can call the exact same logic against constructed items
+// instead of only against whatever NAV_SECTIONS happens to contain today.
+//
+// Returns true when the item is fine (either out of scope for this check, or
+// checked and correct) and false when it is the bug shape.
+function enabledItemResolvesRoute(navItem, registered) {
+  if (navItem.disabled || !navItem.href) return true; // out of scope here
+  return registered.has(navItem.href);
+}
+
+function disabledItemHasNoWorkingHref(navItem, registered) {
+  if (!navItem.disabled) return true; // out of scope here
+  if (!navItem.href) return true; // the honest shape: no destination at all
+  // A disabled:true item WITH an href that resolves is the bug this lane
+  // fixed for "MJ / Task logs" — see file header.
+  return !registered.has(navItem.href);
 }
 
 describe('nav rail destinations resolve to routes App.jsx actually registers', () => {
@@ -114,17 +229,70 @@ describe('nav rail destinations resolve to routes App.jsx actually registers', (
     '%s',
     (_id, navItem) => {
       it('an enabled item with an href points at a registered route', () => {
-        if (navItem.disabled || !navItem.href) return; // out of scope here
-        expect(registered.has(navItem.href)).toBe(true);
+        expect(enabledItemResolvesRoute(navItem, registered)).toBe(true);
       });
 
       it('a disabled item never points at a route that already works', () => {
-        if (!navItem.disabled) return; // out of scope here
-        if (!navItem.href) return; // the honest shape: no destination at all
-        // A disabled:true item WITH an href that resolves is the bug this
-        // lane fixed for "MJ / Task logs" — see file header.
-        expect(registered.has(navItem.href)).toBe(false);
+        expect(disabledItemHasNoWorkingHref(navItem, registered)).toBe(true);
       });
     },
   );
+
+  // NAV_SECTIONS has zero `disabled: true` items at HEAD (the last one, "MJ
+  // / Task logs", was un-disabled by this lane) — every "disabled item never
+  // points..." case directly above therefore hits the `!navItem.disabled`
+  // early return and asserts nothing about a real item; that direction of
+  // the check is unexercised by the parameterized block on its own. These
+  // four fixture cases call the same two predicates against constructed
+  // items, independent of what NAV_SECTIONS currently contains, so this
+  // direction has at least one non-vacuous assertion at HEAD and a
+  // regression in either predicate fails a real `it()` here.
+  describe('both directions of the check are exercised by fixtures, independent of live NAV_SECTIONS content', () => {
+    const workingHref = [...registered][0];
+    const brokenHref = '/console/v2/__not-a-registered-route__';
+
+    it('sanity: the working-href fixture is actually a registered route', () => {
+      expect(registered.has(workingHref)).toBe(true);
+    });
+
+    it('sanity: the broken-href fixture is not a registered route', () => {
+      expect(registered.has(brokenHref)).toBe(false);
+    });
+
+    it('an enabled item whose href resolves passes', () => {
+      expect(
+        enabledItemResolvesRoute(
+          { disabled: false, href: workingHref },
+          registered,
+        ),
+      ).toBe(true);
+    });
+
+    it('an enabled item whose href does not resolve fails', () => {
+      expect(
+        enabledItemResolvesRoute(
+          { disabled: false, href: brokenHref },
+          registered,
+        ),
+      ).toBe(false);
+    });
+
+    it('a disabled item with no href (the honest shape) passes', () => {
+      expect(
+        disabledItemHasNoWorkingHref(
+          { disabled: true, href: null },
+          registered,
+        ),
+      ).toBe(true);
+    });
+
+    it('a disabled item whose href resolves anyway (the bug shape) fails', () => {
+      expect(
+        disabledItemHasNoWorkingHref(
+          { disabled: true, href: workingHref },
+          registered,
+        ),
+      ).toBe(false);
+    });
+  });
 });

@@ -18,7 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 
 // ─── mocks ───────────────────────────────────────────────────────────────────
 
@@ -262,6 +268,161 @@ describe('Tasks page (v2)', () => {
       'href',
       'https://cdn.example.test/out.mp4',
     );
+  });
+
+  // Oracle for the seconds-vs-milliseconds split (Task.SubmitTime is Unix
+  // seconds, repo/task.go:100; Midjourney.SubmitTime is Unix ms,
+  // mjproxy_handler.go:566/604). Asserts the exact wire value, which only
+  // matches when the Tasks tab divides by 1000 and the MJ tab does not.
+  it('sends start_timestamp in Unix SECONDS on the Tasks tab', async () => {
+    API.get.mockResolvedValue(page([makeTask(1)], 1));
+
+    render(React.createElement(HFTasks));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByTestId('tasks-start-filter'), {
+      target: { value: '2026-09-16T00:00' },
+    });
+    fireEvent.click(screen.getByTestId('tasks-search-btn'));
+
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(2));
+
+    const lastUrl = API.get.mock.calls[1][0];
+    const qs = new URLSearchParams(lastUrl.split('?')[1]);
+    const sent = Number(qs.get('start_timestamp'));
+    expect(sent).toBe(
+      Math.floor(new Date('2026-09-16T00:00').getTime() / 1000),
+    );
+    // magnitude check: whole Unix seconds are ~1e9, not ~1e12
+    expect(sent).toBeLessThan(1e10);
+  });
+
+  it('sends start_timestamp in Unix MILLISECONDS on the MJ tab', async () => {
+    API.get.mockImplementation((url) =>
+      url.startsWith('/api/mj/self/')
+        ? Promise.resolve(page([makeMj(9)], 1))
+        : Promise.resolve(emptyPage()),
+    );
+
+    render(React.createElement(HFTasks));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId('tasks-tab-mj'));
+    await waitFor(() => screen.getByTestId('mj-row-9'));
+
+    fireEvent.change(screen.getByTestId('mj-start-filter'), {
+      target: { value: '2026-09-16T00:00' },
+    });
+    fireEvent.click(screen.getByTestId('mj-search-btn'));
+
+    await waitFor(() => {
+      const calls = API.get.mock.calls.filter((c) =>
+        c[0].startsWith('/api/mj/self/'),
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    const calls = API.get.mock.calls.filter((c) =>
+      c[0].startsWith('/api/mj/self/'),
+    );
+    const lastMjUrl = calls[calls.length - 1][0];
+    const qs = new URLSearchParams(lastMjUrl.split('?')[1]);
+    const sent = Number(qs.get('start_timestamp'));
+    expect(sent).toBe(new Date('2026-09-16T00:00').getTime());
+    // magnitude check: Unix milliseconds are ~1e12, not ~1e9
+    expect(sent).toBeGreaterThan(1e12);
+  });
+
+  it('renders the FAILURE status tag with error styling on the Tasks tab', async () => {
+    API.get.mockResolvedValue(page([makeTask(4, { status: 'FAILURE' })], 1));
+
+    render(React.createElement(HFTasks));
+
+    await waitFor(() => screen.getByTestId('tasks-row-4'));
+    const tag = within(screen.getByTestId('tasks-row-4')).getByText('failed');
+    expect(tag.className).toContain('err');
+  });
+
+  it('renders the formatted cost cell on the Tasks tab', async () => {
+    API.get.mockResolvedValue(page([makeTask(5, { quota: 500000 })], 1));
+
+    render(React.createElement(HFTasks));
+
+    await waitFor(() => screen.getByTestId('tasks-row-5'));
+    expect(
+      within(screen.getByTestId('tasks-row-5')).getByText('$1.0000'),
+    ).toBeDefined();
+  });
+
+  it('renders the MJ submitted time from milliseconds without re-scaling', async () => {
+    // submit_time 1757900000000 is 2025-09-14/15 depending on timezone; a
+    // stray *1000 (treating it as seconds) would land ~55,000 years in the
+    // future, so a bare '2025' substring is enough to catch the unit bug.
+    API.get.mockImplementation((url) =>
+      url.startsWith('/api/mj/self/')
+        ? Promise.resolve(page([makeMj(10)], 1))
+        : Promise.resolve(emptyPage()),
+    );
+
+    render(React.createElement(HFTasks));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId('tasks-tab-mj'));
+    await waitFor(() => screen.getByTestId('mj-row-10'));
+
+    expect(screen.getByTestId('mj-row-10').textContent).toContain('2025');
+  });
+
+  it('renders fail_reason on the MJ tab for a failed job', async () => {
+    API.get.mockImplementation((url) =>
+      url.startsWith('/api/mj/self/')
+        ? Promise.resolve(
+            page(
+              [
+                makeMj(11, {
+                  status: 'FAILURE',
+                  fail_reason: 'upstream timeout',
+                }),
+              ],
+              1,
+            ),
+          )
+        : Promise.resolve(emptyPage()),
+    );
+
+    render(React.createElement(HFTasks));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId('tasks-tab-mj'));
+    await waitFor(() => screen.getByTestId('mj-row-11'));
+
+    expect(
+      within(screen.getByTestId('mj-row-11')).getByText('upstream timeout'),
+    ).toBeDefined();
+  });
+
+  it('renders a FAILURE fail_reason that looks like a URL as raw text, not a link', async () => {
+    API.get.mockResolvedValue(
+      page(
+        [
+          makeTask(6, {
+            status: 'FAILURE',
+            fail_reason: 'https://errors.example.test/E123',
+          }),
+        ],
+        1,
+      ),
+    );
+
+    render(React.createElement(HFTasks));
+
+    await waitFor(() => screen.getByTestId('tasks-row-6'));
+    expect(screen.queryByText('view result')).toBeNull();
+    expect(
+      within(screen.getByTestId('tasks-row-6')).getByText(
+        'https://errors.example.test/E123',
+      ),
+    ).toBeDefined();
   });
 
   it('handles API error on list fetch gracefully', async () => {

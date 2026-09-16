@@ -23,9 +23,13 @@ import { useTranslation } from 'react-i18next';
  * HfUsageTrendChart — dense SVG bar chart for a per-day quota series.
  *
  * `days` must already be a fully-populated, chronologically sorted series
- * (one entry per calendar day in the requested window, `quota: 0` for days
- * with no rows) — the caller (Dashboard) is responsible for that densification
- * from the sparse `/api/data/self/` rows, this component only draws it.
+ * (one entry per LOCAL calendar day in the requested window, `quota: 0` for
+ * days with no rows, `day` = that local day's midnight as unix seconds) — the
+ * caller (Dashboard) is responsible for that densification from the sparse
+ * `/api/data/self/` rows, this component only draws it. `day` must be local
+ * midnight, not UTC midnight, because the label below is rendered with
+ * `toLocaleDateString` (local) — a UTC-keyed `day` would render a correct
+ * label for the wrong bucket boundary.
  *
  * Each bar carries `data-nonzero` so a test can assert a real value rendered
  * without depending on computed pixel geometry (jsdom does not lay out SVG).

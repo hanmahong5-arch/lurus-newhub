@@ -32,7 +32,9 @@ import (
 
 // maxChatSessionTitleRunes matches chat_sessions.title's VARCHAR(255)
 // (migration 038) — enforced here so an oversized title fails with a 400
-// a caller can act on instead of a database error.
+// a caller can act on instead of a database error. Rejected, not
+// truncated: silently storing a different string than the caller sent
+// would leave the caller believing its own title was saved verbatim.
 const maxChatSessionTitleRunes = 255
 
 // maxChatMessageContentRunes matches the v2 Chat page's own input counter
@@ -95,6 +97,16 @@ func parseChatSessionMessages(in []chatSessionMessageInput) ([]repo.ChatMessageI
 		out[i] = repo.ChatMessageInput{Role: m.Role, Content: m.Content}
 	}
 	return out, nil
+}
+
+// validateChatSessionTitle trims and rejects (never truncates — see
+// maxChatSessionTitleRunes's doc comment) a title over the column width.
+func validateChatSessionTitle(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if len([]rune(trimmed)) > maxChatSessionTitleRunes {
+		return "", errors.New("title exceeds " + strconv.Itoa(maxChatSessionTitleRunes) + " characters")
+	}
+	return trimmed, nil
 }
 
 func chatSessionSummaryJSON(s repo.ChatSessionSummary) gin.H {
@@ -170,9 +182,14 @@ func CreateChatSessionV2(c *gin.Context) {
 		})
 		return
 	}
-	title := strings.TrimSpace(req.Title)
-	if r := []rune(title); len(r) > maxChatSessionTitleRunes {
-		title = string(r[:maxChatSessionTitleRunes])
+	title, err := validateChatSessionTitle(req.Title)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    err.Error(),
+			"error_code": "INVALID_REQUEST",
+		})
+		return
 	}
 	msgs, err := parseChatSessionMessages(req.Messages)
 	if err != nil {
@@ -272,9 +289,14 @@ func UpdateChatSessionV2(c *gin.Context) {
 		return
 	}
 	if req.Title != nil {
-		trimmed := strings.TrimSpace(*req.Title)
-		if r := []rune(trimmed); len(r) > maxChatSessionTitleRunes {
-			trimmed = string(r[:maxChatSessionTitleRunes])
+		trimmed, err := validateChatSessionTitle(*req.Title)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success":    false,
+				"message":    err.Error(),
+				"error_code": "INVALID_REQUEST",
+			})
+			return
 		}
 		req.Title = &trimmed
 	}
@@ -307,9 +329,14 @@ func UpdateChatSessionV2(c *gin.Context) {
 		})
 		return
 	}
-	// Re-read so the response always reflects the persisted messages,
-	// whether or not this call touched them.
-	_, messages, err := repo.GetChatSessionOwned(tenantCtx.TenantID, tenantCtx.UserID, session.Id)
+	// Re-read so the response always reflects the persisted row AND
+	// messages, whether or not this call touched them — `session` above is
+	// the pre-update struct UpdateChatSessionOwned only mutated the Title
+	// field of in-memory (its UpdatedAt was set on the row by a raw
+	// tx.Model(...).Updates map, never copied back onto that struct), so
+	// using it here would answer a PATCH response whose updated_at
+	// predates the write this handler just performed.
+	fresh, messages, err := repo.GetChatSessionOwned(tenantCtx.TenantID, tenantCtx.UserID, session.Id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success":    false,
@@ -318,7 +345,7 @@ func UpdateChatSessionV2(c *gin.Context) {
 		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": chatSessionDetailJSON(session, messages)})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": chatSessionDetailJSON(fresh, messages)})
 }
 
 // DeleteChatSessionV2 serves DELETE /api/v2/:tenant_slug/chat/sessions/:id.

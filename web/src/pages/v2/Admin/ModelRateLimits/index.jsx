@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
@@ -231,6 +231,13 @@ const HFModelRateLimits = () => {
   // editable from here.
   const [allowlist, setAllowlist] = useState(null);
   const [allowlistLoading, setAllowlistLoading] = useState(true);
+  // Set on any non-403 fetch failure (500, network, malformed 200). Unknown
+  // is not "observe" and unknown is not "unconfigured" — the platform may
+  // be in enforce mode with a restrictive row this page simply failed to
+  // read, so a failure here must render as its own state, not fall back to
+  // the same UI as "no allow-list configured" (which reads to an operator
+  // as "every model reachable").
+  const [allowlistError, setAllowlistError] = useState(false);
   const [draftList, setDraftList] = useState([]);
   const [newModelEntry, setNewModelEntry] = useState('');
   const [savingAllowlist, setSavingAllowlist] = useState(false);
@@ -278,25 +285,52 @@ const HFModelRateLimits = () => {
     }
   }, []);
 
+  // Always holds the currently-selected tenant, independent of render
+  // timing — fetchAllowlist below compares its own `tid` against this after
+  // every await so a response for a tenant the operator has since switched
+  // away from cannot overwrite the newer selection's state (and cannot PUT
+  // the stale tenant's models over the new one on save).
+  const tenantIdRef = useRef(tenantId);
+  useEffect(() => {
+    tenantIdRef.current = tenantId;
+  }, [tenantId]);
+
   const fetchAllowlist = useCallback(async (tid) => {
     if (!tid) return;
     setAllowlistLoading(true);
+    setAllowlistError(false);
     try {
       const res = await API.get(`/api/v2/admin/tenants/${tid}/model-allowlist`);
+      if (tid !== tenantIdRef.current) return; // superseded by a later selection
       if (res?.data?.success) {
         const data = res.data.data ?? {};
         setAllowlist(data);
         setDraftList(
           Array.isArray(data.allowed_models) ? data.allowed_models : [],
         );
+      } else {
+        // 200 but success:false — the read did not actually work; treat it
+        // the same as a thrown error rather than as "no allow-list".
+        setAllowlist(null);
+        setDraftList([]);
+        setAllowlistError(true);
       }
+      setAllowlistLoading(false);
     } catch (err) {
+      if (tid !== tenantIdRef.current) return; // superseded by a later selection
       if (err?.response?.status === 403) {
         setForbidden(true);
+      } else {
+        // Any non-403 failure (500, network, timeout): unknown state, not
+        // "observe" and not "unconfigured". Leaves allowlist=null and
+        // draftList=[] but allowlistError=true means the render below shows
+        // an explicit error, not the unrestricted-tenant defaults, and the
+        // save/clear controls stay disabled — an empty draftList must never
+        // reach a PUT here, or a read failure becomes a silent deny-all.
+        setAllowlist(null);
+        setDraftList([]);
+        setAllowlistError(true);
       }
-      setAllowlist(null);
-      setDraftList([]);
-    } finally {
       setAllowlistLoading(false);
     }
   }, []);
@@ -357,7 +391,7 @@ const HFModelRateLimits = () => {
       if (res?.data?.success) {
         showSuccess(
           tr(
-            'console.admin.model_limits.availability_toast_saved',
+            'console.model_limits.availability_toast_saved',
             'Model allow-list saved',
           ),
         );
@@ -378,7 +412,7 @@ const HFModelRateLimits = () => {
       if (res?.data?.success) {
         showSuccess(
           tr(
-            'console.admin.model_limits.availability_toast_cleared',
+            'console.model_limits.availability_toast_cleared',
             'Model allow-list cleared — tenant is unrestricted',
           ),
         );
@@ -618,13 +652,13 @@ const HFModelRateLimits = () => {
           <div className='panel' style={{ padding: '20px 24px' }}>
             <div className='strong' style={{ marginBottom: 4 }}>
               {tr(
-                'console.admin.model_limits.availability_title',
+                'console.model_limits.availability_title',
                 'model availability',
               )}
             </div>
             <div className='muted' style={{ fontSize: 11, marginBottom: 14 }}>
               {tr(
-                'console.admin.model_limits.availability_sub',
+                'console.model_limits.availability_sub',
                 'per-tenant model allow-list · mode is set platform-wide by the operator, not per tenant',
               )}
             </div>
@@ -635,49 +669,89 @@ const HFModelRateLimits = () => {
               </div>
             ) : (
               <>
-                <div
-                  data-testid='mrl-availability-mode'
-                  data-mode={allowlist?.mode || 'observe'}
-                  style={{
-                    fontSize: 12,
-                    fontFamily: 'var(--hf-mono)',
-                    padding: '6px 10px',
-                    marginBottom: 12,
-                    border: `1px solid ${
-                      allowlist?.mode === 'enforce'
-                        ? 'var(--hf-warn)'
-                        : 'var(--hf-rule)'
-                    }`,
-                    color:
-                      allowlist?.mode === 'enforce'
-                        ? 'var(--hf-warn)'
-                        : 'var(--hf-ink-2)',
-                    borderRadius: 2,
-                    display: 'inline-block',
-                  }}
-                >
-                  {allowlist?.mode === 'enforce'
-                    ? tr(
-                        'console.admin.model_limits.mode_enforce',
-                        'enforce — a model off the list is refused (HTTP 403)',
-                      )
-                    : tr(
-                        'console.admin.model_limits.mode_observe',
-                        'observe — a model off the list still answers; the miss is only counted',
-                      )}
-                </div>
-
-                {!allowlist?.configured && (
+                {allowlistError ? (
+                  // Unknown is not "observe" and unknown is not
+                  // "unconfigured" — a non-403 GET failure (500, network,
+                  // malformed 200) must not fall through to the defaults
+                  // below, or an enforce-mode tenant with a real
+                  // restrictive row reads as "every model reachable".
                   <div
-                    data-testid='mrl-availability-unrestricted'
+                    data-testid='mrl-availability-error'
                     className='muted'
-                    style={{ fontSize: 12, marginBottom: 12 }}
+                    style={{
+                      fontSize: 12,
+                      marginBottom: 12,
+                      color: 'var(--hf-warn)',
+                      border: '1px solid var(--hf-warn)',
+                      borderRadius: 2,
+                      padding: '8px 10px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                    }}
                   >
-                    {tr(
-                      'console.admin.model_limits.availability_unrestricted',
-                      'No allow-list configured — every catalog model is reachable for this tenant.',
-                    )}
+                    <span>
+                      {tr(
+                        'console.model_limits.availability_error',
+                        'Could not read the allow-list for this tenant — state unknown, not editable.',
+                      )}
+                    </span>
+                    <button
+                      type='button'
+                      className='btn ghost sm'
+                      data-testid='mrl-availability-retry'
+                      onClick={() => fetchAllowlist(tenantId)}
+                    >
+                      {tr('console.model_limits.availability_retry', 'retry')}
+                    </button>
                   </div>
+                ) : (
+                  <>
+                    <div
+                      data-testid='mrl-availability-mode'
+                      data-mode={allowlist?.mode || 'observe'}
+                      style={{
+                        fontSize: 12,
+                        fontFamily: 'var(--hf-mono)',
+                        padding: '6px 10px',
+                        marginBottom: 12,
+                        border: `1px solid ${
+                          allowlist?.mode === 'enforce'
+                            ? 'var(--hf-warn)'
+                            : 'var(--hf-rule)'
+                        }`,
+                        color:
+                          allowlist?.mode === 'enforce'
+                            ? 'var(--hf-warn)'
+                            : 'var(--hf-ink-2)',
+                        borderRadius: 2,
+                        display: 'inline-block',
+                      }}
+                    >
+                      {allowlist?.mode === 'enforce'
+                        ? tr(
+                            'console.model_limits.mode_enforce',
+                            'enforce — a model off the list is refused (HTTP 403)',
+                          )
+                        : tr(
+                            'console.model_limits.mode_observe',
+                            'observe — a model off the list still answers; the miss is only counted',
+                          )}
+                    </div>
+
+                    {!allowlist?.configured && (
+                      <div
+                        data-testid='mrl-availability-unrestricted'
+                        className='muted'
+                        style={{ fontSize: 12, marginBottom: 12 }}
+                      >
+                        {tr(
+                          'console.model_limits.availability_unrestricted',
+                          'No allow-list configured — every catalog model is reachable for this tenant.',
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
 
                 <div
@@ -721,8 +795,12 @@ const HFModelRateLimits = () => {
                   <input
                     data-testid='mrl-availability-add-input'
                     style={{ ...inputStyle, width: 260 }}
-                    placeholder='gpt-4o or gpt-4o-*'
+                    placeholder={tr(
+                      'console.model_limits.availability_placeholder',
+                      'gpt-4o or gpt-4o-*',
+                    )}
                     value={newModelEntry}
+                    disabled={allowlistError}
                     onChange={(e) => setNewModelEntry(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -735,19 +813,20 @@ const HFModelRateLimits = () => {
                     type='button'
                     className='btn ghost sm'
                     data-testid='mrl-availability-add-btn'
+                    disabled={allowlistError}
                     onClick={addDraftEntry}
                   >
-                    {tr('console.admin.model_limits.availability_add', '+ add')}
+                    {tr('console.model_limits.availability_add', '+ add')}
                   </button>
                 </div>
 
-                {draftList.length === 0 && (
+                {draftList.length === 0 && !allowlistError && (
                   <div
                     className='muted'
                     style={{ fontSize: 11, marginBottom: 10 }}
                   >
                     {tr(
-                      'console.admin.model_limits.availability_empty_warning',
+                      'console.model_limits.availability_empty_warning',
                       'Saving an empty list denies every model for this tenant — it is not the same as leaving the allow-list unconfigured.',
                     )}
                   </div>
@@ -758,13 +837,13 @@ const HFModelRateLimits = () => {
                     type='button'
                     className='btn primary'
                     data-testid='mrl-availability-save'
-                    disabled={savingAllowlist}
+                    disabled={savingAllowlist || allowlistError}
                     onClick={requestSaveAllowlist}
                   >
                     {savingAllowlist
                       ? tr('console.common.loading', 'Loading…')
                       : tr(
-                          'console.admin.model_limits.availability_save',
+                          'console.model_limits.availability_save',
                           'save allow-list',
                         )}
                   </button>
@@ -772,11 +851,11 @@ const HFModelRateLimits = () => {
                     type='button'
                     className='btn ghost'
                     data-testid='mrl-availability-clear'
-                    disabled={!allowlist?.configured}
+                    disabled={!allowlist?.configured || allowlistError}
                     onClick={requestClearAllowlist}
                   >
                     {tr(
-                      'console.admin.model_limits.availability_clear',
+                      'console.model_limits.availability_clear',
                       'clear (make unrestricted)',
                     )}
                   </button>
@@ -814,12 +893,12 @@ const HFModelRateLimits = () => {
         title={
           allowlistAction?.kind === 'clear'
             ? tr(
-                'console.admin.model_limits.clear_confirm_title',
+                'console.model_limits.clear_confirm_title',
                 'Remove the allow-list for {{tenant}}? The tenant becomes unrestricted.',
                 { tenant: tenantId },
               )
             : tr(
-                'console.admin.model_limits.save_empty_confirm_title',
+                'console.model_limits.save_empty_confirm_title',
                 'Save an EMPTY allow-list for {{tenant}}? This denies every model.',
                 { tenant: tenantId },
               )

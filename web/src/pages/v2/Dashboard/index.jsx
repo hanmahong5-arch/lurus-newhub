@@ -246,42 +246,47 @@ const HFDashboard = () => {
     fetchData();
   }, [fetchData]);
 
-  // /api/data/self/, /api/status and /api/uptime/status are all tenant-blind
-  // (not under /api/v2/:slug/) and auth via the session cookie the same way
-  // /api/v2/:slug/user/me does, so unlike fetchData this does not wait on
-  // tenantSlug — it fires once on mount and again on "refresh".
+  // /api/data/self/ is UserAuth (api-router.go:115, middleware.UserAuth());
+  // /api/status and /api/uptime/status are public — registered with no
+  // middleware under the "Public routes" block (api-router.go:24-32). None
+  // of the three are under /api/v2/:slug/, so unlike fetchData this does not
+  // wait on tenantSlug — it fires once on mount and again on "refresh".
   const fetchExtras = useCallback(async () => {
     const end = Math.floor(Date.now() / 1000);
     const start = end - DASHBOARD_TREND_WINDOW_SECONDS;
     setQuotaWindow({ start, end });
-    try {
-      const [quotaRes, statusRes, uptimeRes] = await Promise.all([
-        API.get(
-          `/api/data/self/?start_timestamp=${start}&end_timestamp=${end}`,
-          { skipErrorHandler: true },
-        ),
-        API.get('/api/status', { skipErrorHandler: true }),
-        API.get('/api/uptime/status', { skipErrorHandler: true }),
-      ]);
-      // success:false here means the >30-day span refusal (usedata.go:41) or
-      // some other server-side rejection — both degrade to the same empty
-      // trend/distribution panels, never a toast (skipErrorHandler above also
-      // means a network failure never reaches the global error handler).
-      const rows = quotaRes?.data?.success ? quotaRes.data.data : null;
-      setQuotaRows(Array.isArray(rows) ? rows : []);
-      setQuotaLoaded(true);
+    // Promise.allSettled, not Promise.all: these three calls feed five
+    // independent panels. A rejection on any one of them must not blank the
+    // other two's panels — each result below is branched on its own settled
+    // outcome instead of a shared try/catch.
+    const [quotaResult, statusResult, uptimeResult] = await Promise.allSettled([
+      // No skipErrorHandler here: /api/data/self/ is session-authed, and a
+      // stale session must go through the same Layer-C 401 self-heal +
+      // replay as /api/v2/:slug/user/me (helpers/api.js:110-133). The
+      // >30-day span refusal (usedata.go:41) is HTTP 200 success:false, so
+      // it never reaches that interceptor — it's handled by the `success`
+      // check below, same as before.
+      API.get(`/api/data/self/?start_timestamp=${start}&end_timestamp=${end}`),
+      API.get('/api/status', { skipErrorHandler: true }),
+      API.get('/api/uptime/status', { skipErrorHandler: true }),
+    ]);
 
-      if (statusRes?.data?.success && statusRes.data.data) {
-        setStatusData(statusRes.data.data);
-      }
+    const quotaRes =
+      quotaResult.status === 'fulfilled' ? quotaResult.value : null;
+    const rows = quotaRes?.data?.success ? quotaRes.data.data : null;
+    setQuotaRows(Array.isArray(rows) ? rows : []);
+    setQuotaLoaded(true);
 
-      const groups = uptimeRes?.data?.success ? uptimeRes.data.data : null;
-      setUptimeGroups(Array.isArray(groups) ? groups : []);
-    } catch (e) {
-      // Same calm-degrade contract as fetchData: an unreachable backend
-      // leaves these panels in their empty state, not an error wall.
-      setQuotaLoaded(true);
+    const statusRes =
+      statusResult.status === 'fulfilled' ? statusResult.value : null;
+    if (statusRes?.data?.success && statusRes.data.data) {
+      setStatusData(statusRes.data.data);
     }
+
+    const uptimeRes =
+      uptimeResult.status === 'fulfilled' ? uptimeResult.value : null;
+    const groups = uptimeRes?.data?.success ? uptimeRes.data.data : null;
+    setUptimeGroups(Array.isArray(groups) ? groups : []);
   }, []);
 
   useEffect(() => {
@@ -319,20 +324,39 @@ const HFDashboard = () => {
   // Dense per-day series across the full requested window (zero-fill days
   // with no rows) so the trend reflects the window even when traffic is
   // sparse, rather than only the days a row happens to exist for.
+  //
+  // Buckets key on the BROWSER's local calendar day, not the UTC day: this
+  // bar's label is rendered by HfUsageTrendChart via
+  // `new Date(day*1000).toLocaleDateString(...)`, i.e. in local time. Keying
+  // on UTC days would silently offset every bucket by the browser's UTC
+  // offset — e.g. a UTC+8 reader's 00:00–08:00 local traffic would land in
+  // the *previous* UTC day's bucket, so "today"'s bar would miss the first
+  // 8 hours of today and "yesterday"'s bar would carry them instead. Using
+  // `setDate` (not a fixed 86400s step) to walk the window keeps this correct
+  // across a DST transition, where a local day is not always 24h long.
+  const localDayKey = (tsSeconds) => {
+    const d = new Date(tsSeconds * 1000);
+    d.setHours(0, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+  };
   const trendByDay = useMemo(() => {
     if (!quotaWindow.start || !quotaWindow.end) return [];
-    const dayStart = Math.floor(quotaWindow.start / DAY_SECONDS) * DAY_SECONDS;
-    const dayEnd = Math.floor(quotaWindow.end / DAY_SECONDS) * DAY_SECONDS;
     const totals = new Map();
     for (const row of quotaRows) {
       const ts = Number(row?.created_at) || 0;
       if (!ts) continue;
-      const day = Math.floor(ts / DAY_SECONDS) * DAY_SECONDS;
+      const day = localDayKey(ts);
       totals.set(day, (totals.get(day) || 0) + (Number(row?.quota) || 0));
     }
+    const endDay = localDayKey(quotaWindow.end);
+    const cursor = new Date(quotaWindow.start * 1000);
+    cursor.setHours(0, 0, 0, 0);
     const days = [];
-    for (let d = dayStart; d <= dayEnd; d += DAY_SECONDS) {
-      days.push({ day: d, quota: totals.get(d) || 0 });
+    let day = Math.floor(cursor.getTime() / 1000);
+    while (day <= endDay) {
+      days.push({ day, quota: totals.get(day) || 0 });
+      cursor.setDate(cursor.getDate() + 1);
+      day = Math.floor(cursor.getTime() / 1000);
     }
     return days;
   }, [quotaRows, quotaWindow]);
@@ -350,6 +374,19 @@ const HFDashboard = () => {
       .sort((a, b) => b.quota - a.quota)
       .slice(0, 8);
   }, [quotaRows]);
+
+  // /api/status ships enable_data_export (misc.go:165, common.DataExportEnabled).
+  // When it's off the aggregator stops writing quota_data at all (repo/log.go:584,
+  // repo/usedata.go:18) — /api/data/self/ would answer 200 with an empty array
+  // forever, not "empty today". Rendering the trend/distribution panels' empty
+  // state in that case would print "No usage recorded" beside a non-zero total
+  // spend KPI, i.e. the console would be asserting something about data it knows
+  // it isn't collecting. The legacy console gates its data-dashboard nav entry on
+  // exactly this flag (SiderBar.jsx:79); these two panels do the same and render
+  // nothing — not even the empty-state copy — when it's off.
+  const dataExportEnabled = !!statusData?.enable_data_export;
+  const showUsageTrend = dataExportEnabled;
+  const showModelDistribution = dataExportEnabled;
 
   // ── /api/status derived panels — each renders nothing when its own
   // *_enabled flag is false or the parsed payload is empty (misc.go:178-210).
@@ -843,122 +880,134 @@ const HFDashboard = () => {
           )}
         </div>
 
-        {/* ── Usage trend · /api/data/self/ (up to 29 days) ── */}
-        <div className='panel' style={{ gridColumn: 'span 7', padding: 18 }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'baseline',
-              marginBottom: 12,
-            }}
-          >
-            <div>
-              <div className='lbl'>{t('console.dashboard.usage_trend')}</div>
-              <div className='display' style={{ fontSize: 18, marginTop: 2 }}>
-                {hasUsageData
-                  ? formatUSD(trendTotalQuota)
-                  : t('console.dashboard.no_consume')}
+        {/* ── Usage trend · /api/data/self/ (up to 29 days) ──
+            Gated on enable_data_export (see dataExportEnabled above) — absent
+            entirely, not an empty state, when it's off. */}
+        {showUsageTrend && (
+          <div className='panel' style={{ gridColumn: 'span 7', padding: 18 }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'baseline',
+                marginBottom: 12,
+              }}
+            >
+              <div>
+                <div className='lbl'>{t('console.dashboard.usage_trend')}</div>
+                <div className='display' style={{ fontSize: 18, marginTop: 2 }}>
+                  {hasUsageData
+                    ? formatUSD(trendTotalQuota)
+                    : t('console.dashboard.no_consume')}
+                </div>
               </div>
+              <span className='faint mono' style={{ fontSize: 10 }}>
+                {t('console.dashboard.usage_trend_window', {
+                  days: DASHBOARD_TREND_WINDOW_SECONDS / DAY_SECONDS,
+                })}
+              </span>
             </div>
-            <span className='faint mono' style={{ fontSize: 10 }}>
-              {t('console.dashboard.usage_trend_window')}
-            </span>
+            {!quotaLoaded && <HfSkeletonRows rows={3} />}
+            {quotaLoaded && !hasUsageData && (
+              <div
+                className='muted'
+                style={{
+                  fontSize: 11,
+                  fontFamily: 'var(--hf-mono)',
+                  padding: '24px 0',
+                  textAlign: 'center',
+                }}
+              >
+                {t('console.dashboard.usage_trend_empty')}
+              </div>
+            )}
+            {hasUsageData && (
+              <HfUsageTrendChart days={trendByDay} formatValue={formatUSD} />
+            )}
           </div>
-          {!quotaLoaded && <HfSkeletonRows rows={3} />}
-          {quotaLoaded && !hasUsageData && (
-            <div
-              className='muted'
-              style={{
-                fontSize: 11,
-                fontFamily: 'var(--hf-mono)',
-                padding: '24px 0',
-                textAlign: 'center',
-              }}
-            >
-              {t('console.dashboard.usage_trend_empty')}
-            </div>
-          )}
-          {hasUsageData && (
-            <HfUsageTrendChart days={trendByDay} formatValue={formatUSD} />
-          )}
-        </div>
+        )}
 
-        {/* ── Model consumption distribution · /api/data/self/ ── */}
-        <div className='panel' style={{ gridColumn: 'span 5', padding: 18 }}>
-          <div className='lbl' style={{ marginBottom: 10 }}>
-            {t('console.dashboard.model_distribution')}
-          </div>
-          {!quotaLoaded && <HfSkeletonRows rows={3} />}
-          {quotaLoaded && modelDistribution.length === 0 && (
-            <div
-              className='muted'
-              style={{
-                fontSize: 11,
-                fontFamily: 'var(--hf-mono)',
-                padding: '24px 0',
-                textAlign: 'center',
-              }}
-            >
-              {t('console.dashboard.model_distribution_empty')}
+        {/* ── Model consumption distribution · /api/data/self/ ──
+            Gated on enable_data_export — same reasoning as the trend panel
+            above. */}
+        {showModelDistribution && (
+          <div className='panel' style={{ gridColumn: 'span 5', padding: 18 }}>
+            <div className='lbl' style={{ marginBottom: 10 }}>
+              {t('console.dashboard.model_distribution')}
             </div>
-          )}
-          {modelDistribution.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {(() => {
-                const maxQuota = modelDistribution[0].quota || 1;
-                return modelDistribution.map((row, i) => {
-                  const pct = (row.quota / maxQuota) * 100;
-                  return (
-                    <div key={row.model} data-testid={`model-dist-row-${i}`}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          marginBottom: 3,
-                          fontSize: 11,
-                        }}
-                      >
-                        <span
-                          className='mono'
-                          style={{
-                            color: 'var(--hf-ink)',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                            maxWidth: '60%',
-                          }}
-                        >
-                          {row.model}
-                        </span>
-                        <span className='mono muted' style={{ fontSize: 10 }}>
-                          {formatUSD(row.quota)}
-                        </span>
-                      </div>
-                      <div
-                        style={{
-                          height: 6,
-                          background: 'var(--hf-sunken)',
-                          borderRadius: 1,
-                          overflow: 'hidden',
-                        }}
-                      >
+            {!quotaLoaded && <HfSkeletonRows rows={3} />}
+            {quotaLoaded && modelDistribution.length === 0 && (
+              <div
+                className='muted'
+                style={{
+                  fontSize: 11,
+                  fontFamily: 'var(--hf-mono)',
+                  padding: '24px 0',
+                  textAlign: 'center',
+                }}
+              >
+                {t('console.dashboard.model_distribution_empty')}
+              </div>
+            )}
+            {modelDistribution.length > 0 && (
+              <div
+                style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+              >
+                {(() => {
+                  const maxQuota = modelDistribution[0].quota || 1;
+                  return modelDistribution.map((row, i) => {
+                    const pct = (row.quota / maxQuota) * 100;
+                    return (
+                      <div key={row.model} data-testid={`model-dist-row-${i}`}>
                         <div
                           style={{
-                            height: '100%',
-                            width: pct + '%',
-                            background:
-                              i === 0 ? 'var(--hf-accent)' : 'var(--hf-info)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            marginBottom: 3,
+                            fontSize: 11,
                           }}
-                        />
+                        >
+                          <span
+                            className='mono'
+                            style={{
+                              color: 'var(--hf-ink)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              maxWidth: '60%',
+                            }}
+                          >
+                            {row.model}
+                          </span>
+                          <span className='mono muted' style={{ fontSize: 10 }}>
+                            {formatUSD(row.quota)}
+                          </span>
+                        </div>
+                        <div
+                          style={{
+                            height: 6,
+                            background: 'var(--hf-sunken)',
+                            borderRadius: 1,
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: '100%',
+                              width: pct + '%',
+                              background:
+                                i === 0 ? 'var(--hf-accent)' : 'var(--hf-info)',
+                            }}
+                          />
+                        </div>
                       </div>
-                    </div>
-                  );
-                });
-              })()}
-            </div>
-          )}
-        </div>
+                    );
+                  });
+                })()}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── Announcements · /api/status (announcements_enabled) ──
             Renders nothing when the flag is off or the list is empty —

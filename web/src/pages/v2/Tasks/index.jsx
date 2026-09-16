@@ -154,11 +154,15 @@ const TasksTab = ({ tr }) => {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  // project_id/request_id (cycle-8 L10, GetUserTask handler.go:381) are the
-  // only two filters this endpoint added beyond task_id/date-range — both
-  // are exact-match server-side (repo.TaskGetAllUserTask, task.go:118-152)
-  // and both are sent as plain query values, matching the legacy
-  // /api/task/self hook (web/src/hooks/task-logs/useTaskLogsData.js).
+  // project_id/request_id (cycle-8 L10, GetUserTask handler.go:381) were
+  // added on top of task_id/date-range; both are exact-match server-side
+  // (repo.TaskGetAllUserTask, task.go:118-152) and both are sent as plain
+  // query values, matching the legacy /api/task/self hook
+  // (web/src/hooks/task-logs/useTaskLogsData.js). The endpoint additionally
+  // accepts platform/status/action (task.go:396-405, repo/task.go:126-137),
+  // which this page does not surface — neither does the legacy UI
+  // (TaskLogsFilters.jsx exposes only dateRange/task_id/project_id/
+  // request_id/channel_id).
   const fetch = useCallback(
     async (targetPage, f) => {
       setLoading(true);
@@ -258,6 +262,7 @@ const TasksTab = ({ tr }) => {
         <input
           style={{ ...inputStyle, width: 160 }}
           type='datetime-local'
+          data-testid='tasks-start-filter'
           title={tr('console.log.start_time', 'start time')}
           value={start}
           onChange={(e) => setStart(e.target.value)}
@@ -268,6 +273,7 @@ const TasksTab = ({ tr }) => {
         <input
           style={{ ...inputStyle, width: 160 }}
           type='datetime-local'
+          data-testid='tasks-end-filter'
           title={tr('console.log.end_time', 'end time')}
           value={end}
           onChange={(e) => setEnd(e.target.value)}
@@ -328,7 +334,14 @@ const TasksTab = ({ tr }) => {
             <tbody>
               {items.map((row) => {
                 const dur = taskDurationSec(row.submit_time, row.finish_time);
+                // Legacy renderStatus (TaskLogsColumnDefs.jsx:384-392) only
+                // treats fail_reason as a result link when the job actually
+                // succeeded — a FAILURE row whose fail_reason happens to look
+                // like a URL (an upstream error body pointing at a docs page,
+                // say) must still show the raw reason text, not a green-path
+                // link that hides it.
                 const isUrl =
+                  row.status === 'SUCCESS' &&
                   typeof row.fail_reason === 'string' &&
                   /^https?:\/\//.test(row.fail_reason);
                 return (
@@ -527,6 +540,7 @@ const MjTab = ({ tr }) => {
         <input
           style={{ ...inputStyle, width: 160 }}
           type='datetime-local'
+          data-testid='mj-start-filter'
           title={tr('console.log.start_time', 'start time')}
           value={start}
           onChange={(e) => setStart(e.target.value)}
@@ -537,6 +551,7 @@ const MjTab = ({ tr }) => {
         <input
           style={{ ...inputStyle, width: 160 }}
           type='datetime-local'
+          data-testid='mj-end-filter'
           title={tr('console.log.end_time', 'end time')}
           value={end}
           onChange={(e) => setEnd(e.target.value)}
@@ -592,6 +607,7 @@ const MjTab = ({ tr }) => {
                 <th>{tr('console.tasks.th_cost', 'cost')}</th>
                 <th>{tr('console.tasks.th_result', 'result')}</th>
                 <th>{tr('console.tasks.th_prompt', 'prompt')}</th>
+                <th>{tr('console.tasks.th_detail', 'detail')}</th>
               </tr>
             </thead>
             <tbody>
@@ -645,6 +661,12 @@ const MjTab = ({ tr }) => {
                       title={row.prompt || ''}
                     >
                       <span className='muted'>{row.prompt || '—'}</span>
+                    </td>
+                    <td
+                      style={{ ...cellStyle, maxWidth: 220 }}
+                      title={row.fail_reason || ''}
+                    >
+                      <span className='muted'>{row.fail_reason || '—'}</span>
                     </td>
                   </tr>
                 );

@@ -19,17 +19,18 @@
 -- need a second HTTP hop that re-multiplexes upstream chunks — see
 -- ChatSend's doc comment) and these tables carry nothing streaming-related.
 --
--- AutoMigrate note: UNLIKE 029/032/033/034/036's dual-creation pattern,
--- entity.ChatSession/entity.ChatMessage are NOT registered in
--- repo.migrateDB's model list — internal/adapter/repo/main.go is outside
--- this lane's file ownership for cycle 10 (see the plan's per-lane file
--- list). This migration is therefore the ONLY creator of these two tables
--- today; a normal boot against a fresh Postgres depends on the Runner
--- reaching 038, not on AutoMigrate. Registering the two entities in
--- repo.migrateDB is left for whoever next touches main.go — doing so is
--- additive and safe precisely because this file's column types already
--- match what GORM would generate (see below), so AutoMigrate would find
--- nothing to alter.
+-- AutoMigrate note: entity.ChatSession/entity.ChatMessage ARE registered in
+-- repo.migrateDB's model list (internal/adapter/repo/main.go), same
+-- dual-creation pattern as 029/032/033/034/036 — this file's column types
+-- match what GORM derives from those structs (see below), so AutoMigrate
+-- finds nothing to alter when this migration has already run, and this
+-- migration's IF NOT EXISTS body is a no-op when AutoMigrate created the
+-- tables first (fresh Postgres, e.g. a DR restore that skips the Runner).
+-- NOTE: the two entities are not (yet) added to
+-- repo/tenant_plugin_registry_test.go's registeredModels/tenantColumnExempt
+-- forcing function — that file is owned elsewhere; both tables carry a
+-- tenant_id column and should be classified there (see that test's own
+-- doc comment for what "classify" means).
 --
 -- EXECUTION CONTRACT (internal/pkg/migration/runner.go): this body runs in
 -- ONE transaction; the Runner appends the schema_migrations record

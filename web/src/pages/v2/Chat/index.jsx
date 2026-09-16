@@ -16,7 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
@@ -30,8 +36,20 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
    - GET/POST/PATCH/DELETE /api/v2/:slug/chat/sessions[/:id]
      (migration 038, cycle-10 L3) is a client-driven SAVE of a conversation
      /chat/send already returned; persistSession() below calls it after
-     every turn, best-effort (a save failure never rolls back an
-     already-rendered turn — see persistSession's own comment).
+     every turn. Best-effort in the sense that a save failure never rolls
+     back an already-rendered turn, but NOT silent: a failed save sets
+     saveFailed, which renders a small "not saved" marker — see
+     persistSession's own comment for the 404-vs-transient-failure split.
+
+   A turn in flight is tied to the conversation it was sent from via a
+   generation counter (conversationGenerationRef, captured at send()
+   entry — see its own comment for why session id equality alone is not
+   enough): if the user switches conversations (or starts a new one)
+   before the turn resolves, the response is dropped instead of being
+   rendered into, or persisted onto, whatever conversation is now on
+   screen. The sidebar is deliberately never disabled while a turn is in
+   flight — see openSession's own comment — a slow turn must not lock
+   navigation.
 
    OUT OF SCOPE, deliberately, not because it is missing by oversight:
    - SSE streaming. Loopback SSE would require a second HTTP hop that
@@ -73,6 +91,29 @@ const HFChat = () => {
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [deletingSessionId, setDeletingSessionId] = useState(null);
+  // True when the most recent save attempt for the current conversation
+  // did not persist (see persistSession's own comment) — surfaced as a
+  // small "not saved" marker so a swallowed failure is not invisible.
+  const [saveFailed, setSaveFailed] = useState(false);
+
+  // activeSessionIdRef mirrors activeSessionId but updates SYNCHRONOUSLY
+  // (state updates do not) — persistSession needs the actual id to PATCH
+  // against. conversationGenerationRef is the switch DETECTOR send() uses:
+  // it is bumped on every navigation (newChat/openSession), even
+  // null -> null (unsaved draft -> "+ new chat" -> another unsaved draft)
+  // — a case activeSessionId equality alone cannot see, since both sides
+  // are null. Comparing activeSessionId across the same await would have
+  // missed exactly that case: a fresh, never-saved draft's first turn
+  // resolving after the user already started ANOTHER new (still-null)
+  // chat would render straight into it. All writes to activeSessionId go
+  // through setActiveSession below so ref/generation/state never drift.
+  const activeSessionIdRef = useRef(null);
+  const conversationGenerationRef = useRef(0);
+  const setActiveSession = useCallback((id) => {
+    conversationGenerationRef.current += 1;
+    activeSessionIdRef.current = id;
+    setActiveSessionId(id);
+  }, []);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -90,10 +131,15 @@ const HFChat = () => {
   }, [loadSessions]);
 
   const newChat = useCallback(() => {
-    setActiveSessionId(null);
+    setActiveSession(null);
     setMessages([]);
-  }, []);
+    setSaveFailed(false);
+  }, [setActiveSession]);
 
+  // Deliberately NOT gated on `sending` — a turn in flight for the
+  // conversation being left must not lock the sidebar (see send()'s own
+  // generation-token check, which is what actually protects that turn's
+  // response from landing in the conversation switched to below).
   const openSession = useCallback(
     async (id) => {
       if (id === activeSessionId) return;
@@ -101,10 +147,13 @@ const HFChat = () => {
         const res = await API.get(`/api/v2/${tenantSlug}/chat/sessions/${id}`);
         const data = res?.data?.data;
         if (!data) return;
-        setActiveSessionId(id);
+        setActiveSession(id);
         setMessages(
           (data.messages || []).map(({ role, content }) => ({ role, content })),
         );
+        // A session loaded from the server is, by definition, saved —
+        // clear any marker left over from the conversation just left.
+        setSaveFailed(false);
       } catch (err) {
         showError(
           err?.response?.data?.message ||
@@ -113,7 +162,7 @@ const HFChat = () => {
         );
       }
     },
-    [tenantSlug, activeSessionId, tr],
+    [tenantSlug, activeSessionId, tr, setActiveSession],
   );
 
   const deleteSession = useCallback(
@@ -140,32 +189,53 @@ const HFChat = () => {
   );
 
   // persistSession SAVES the full conversation (create on first successful
-  // turn, PATCH-replace on every turn after) — best-effort: a failure here
-  // is swallowed and the already-rendered chat turn is NOT rolled back,
-  // same convention as ResponseRegistry's post-hoc insert hook on the
-  // backend (entity.ChatSession's doc comment).
+  // turn, PATCH-replace on every turn after) — best-effort in the sense
+  // that a failure here never rolls back the already-rendered chat turn
+  // (same convention as ResponseRegistry's post-hoc insert hook on the
+  // backend, entity.ChatSession's doc comment), but NOT silent: it
+  // returns { id, saved } so the caller can update activeSessionId and
+  // show the "not saved" marker (see saveFailed) instead of the failure
+  // vanishing with no signal.
+  //
+  // Returns:
+  //   { id: <the session id to use from now on, or null>, saved: bool }
+  // On a 404 (the session was deleted — another tab, or this page's own
+  // delete button firing while a turn was in flight, see deleteSession),
+  // `id` comes back null instead of the dead sessionId, so the NEXT call
+  // falls back to POST (create) instead of PATCHing a tombstone forever.
+  // On any other failure (network, 5xx) `id` is left at sessionId so the
+  // next turn retries the same PATCH rather than forking a duplicate
+  // session — either way `saved` is false so the caller can surface it.
   const persistSession = useCallback(
     async (sessionId, title, allMessages) => {
-      const payload = {
-        title,
-        model,
-        messages: allMessages.map(({ role, content }) => ({ role, content })),
-      };
+      const messages = allMessages.map(({ role, content }) => ({
+        role,
+        content,
+      }));
       try {
         if (sessionId) {
-          await API.patch(
-            `/api/v2/${tenantSlug}/chat/sessions/${sessionId}`,
-            payload,
-          );
-          return sessionId;
+          // PATCH's request shape (updateChatSessionRequest, backend) has
+          // no `model` field — this page has no model picker to change it
+          // (`model` is a fixed useState with no setter) — so it is
+          // deliberately left out rather than sent and silently dropped.
+          await API.patch(`/api/v2/${tenantSlug}/chat/sessions/${sessionId}`, {
+            title,
+            messages,
+          });
+          return { id: sessionId, saved: true };
         }
-        const res = await API.post(
-          `/api/v2/${tenantSlug}/chat/sessions`,
-          payload,
-        );
-        return res?.data?.data?.id ?? null;
-      } catch (_) {
-        return sessionId ?? null;
+        const res = await API.post(`/api/v2/${tenantSlug}/chat/sessions`, {
+          title,
+          model,
+          messages,
+        });
+        const id = res?.data?.data?.id ?? null;
+        return { id, saved: id != null };
+      } catch (err) {
+        if (err?.response?.status === 404) {
+          return { id: null, saved: false };
+        }
+        return { id: sessionId ?? null, saved: false };
       }
     },
     [tenantSlug, model],
@@ -194,6 +264,23 @@ const HFChat = () => {
     const text = input.trim();
     if (!text || sending) return;
 
+    // Snapshot which conversation this turn belongs to BEFORE any await.
+    // turnGeneration is compared against conversationGenerationRef.current
+    // after every await below — if it no longer matches, the user
+    // navigated (openSession/newChat) while this turn was in flight;
+    // neither is ever disabled during `sending` (a slow turn must not
+    // lock the sidebar). turnSessionId is a SEPARATE snapshot: the actual
+    // session id (or null, for an unsaved draft) this turn's save should
+    // target — it is NOT what detects a switch (two different unsaved
+    // drafts are both null; see conversationGenerationRef's own comment
+    // for why session-id equality alone cannot tell them apart). On a
+    // mismatch the response is dropped outright: no setMessages (would
+    // clobber the conversation now on screen), no persistSession (would
+    // save this turn's history onto the conversation the user switched
+    // to — this is the data-loss regression the accompanying tests pin).
+    const turnGeneration = conversationGenerationRef.current;
+    const turnSessionId = activeSessionIdRef.current;
+
     const nextMessages = [...messages, { role: 'user', content: text }];
     setMessages(nextMessages);
     setInput('');
@@ -211,6 +298,11 @@ const HFChat = () => {
             tr('console.chat.invalid_response', 'invalid chat response'),
         );
       }
+
+      if (conversationGenerationRef.current !== turnGeneration) {
+        return;
+      }
+
       const assistantMsg = {
         role: 'assistant',
         content: data.message.content,
@@ -223,21 +315,30 @@ const HFChat = () => {
       const finalMessages = [...nextMessages, assistantMsg];
       setMessages(finalMessages);
 
-      // Best-effort save — see persistSession's own comment for why a
-      // failure here does not roll back the turn rendered above.
+      // Save — see persistSession's own comment: best-effort in that a
+      // failure here does not roll back the turn rendered above, but NOT
+      // silent (saveFailed below).
       const title = formatPreview(
         finalMessages.find((m) => m.role === 'user')?.content || '',
       );
-      const savedId = await persistSession(
-        activeSessionId,
-        title,
-        finalMessages,
-      );
-      if (savedId && savedId !== activeSessionId) {
-        setActiveSessionId(savedId);
+      const result = await persistSession(turnSessionId, title, finalMessages);
+
+      if (conversationGenerationRef.current !== turnGeneration) {
+        // The user switched conversations during the persist call itself.
+        return;
       }
+      if (result.id !== turnSessionId) {
+        setActiveSession(result.id);
+      }
+      setSaveFailed(!result.saved);
       loadSessions();
     } catch (err) {
+      if (conversationGenerationRef.current !== turnGeneration) {
+        // The conversation this failure belongs to is no longer on
+        // screen — do not surface an error for, or roll back, whatever
+        // conversation the user has since switched to.
+        return;
+      }
       showError(
         err?.response?.data?.message ||
           err?.message ||
@@ -256,9 +357,9 @@ const HFChat = () => {
     sending,
     tenantSlug,
     tr,
-    activeSessionId,
     persistSession,
     loadSessions,
+    setActiveSession,
   ]);
 
   const onKeyDown = useCallback(
@@ -496,6 +597,22 @@ const HFChat = () => {
                 {tr('console.chat.started_ago', 'started {{ago}} ago', {
                   ago: sessionStartedAgo,
                 })}
+                {saveFailed && messages.length > 0 && (
+                  <>
+                    {' '}
+                    ·{' '}
+                    <span
+                      data-testid='chat-save-failed'
+                      title={tr(
+                        'console.chat.not_saved_hint',
+                        'This conversation could not be saved to the server — it currently exists only in this browser tab.',
+                      )}
+                      style={{ color: 'var(--hf-danger, #c0392b)' }}
+                    >
+                      {tr('console.chat.not_saved', 'not saved')}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
             <span style={{ flex: 1 }} />

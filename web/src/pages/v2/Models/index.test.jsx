@@ -293,6 +293,70 @@ describe('Models page', () => {
     expect(screen.queryByTestId('model-availability-gpt-4o')).toBeNull();
   });
 
+  // Both root-only enrichment fetches (user/me, model-allowlist) must pass
+  // skipErrorHandler so a failure on this purely decorative catalog badge
+  // never fires the global error toast/401-heal in helpers/api.js — same
+  // reasoning as CommandPalette's identical skip on its own best-effort
+  // fetch (CommandPalette/index.jsx).
+  it('the allow-list enrichment fetches opt out of the global error handler', async () => {
+    isRoot.mockReturnValue(true);
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me')) {
+        return Promise.resolve({
+          data: { success: true, data: { tenant_id: 't-1' } },
+        });
+      }
+      if (u.includes('/model-allowlist')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: { configured: false, allowed_models: [], mode: 'observe' },
+          },
+        });
+      }
+      return Promise.resolve(fakeModelsResponse([]));
+    });
+
+    render(<HFModels />);
+
+    await waitFor(() => {
+      expect(
+        API.get.mock.calls.some(
+          (c) => String(c[0]).includes('/user/me') && c[1]?.skipErrorHandler,
+        ),
+      ).toBe(true);
+    });
+    expect(
+      API.get.mock.calls.some(
+        (c) =>
+          String(c[0]).includes('/model-allowlist') && c[1]?.skipErrorHandler,
+      ),
+    ).toBe(true);
+  });
+
+  // isRoot() (helpers/utils.jsx) does an unguarded JSON.parse of
+  // localStorage.user; a malformed payload must degrade this page to
+  // "not root", not white-screen it.
+  it('a malformed isRoot() throw degrades to non-root instead of crashing the page', async () => {
+    isRoot.mockImplementation(() => {
+      throw new SyntaxError('Unexpected token in JSON');
+    });
+    API.get.mockResolvedValue(
+      fakeModelsResponse([
+        { id: 1, model_name: 'gpt-4o', vendor: 'OpenAI', status: 1 },
+      ]),
+    );
+
+    render(<HFModels />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('model-card-gpt-4o')).toBeDefined();
+    });
+    expect(screen.queryByTestId('models-manage-availability-link')).toBeNull();
+    expect(screen.queryByTestId('model-availability-gpt-4o')).toBeNull();
+  });
+
   // The oracle this cycle exists for: an observe-mode "not on the list"
   // model must never render like an enforce-mode blocked one — observe
   // still answers (internal/adapter/middleware/distributor.go), only

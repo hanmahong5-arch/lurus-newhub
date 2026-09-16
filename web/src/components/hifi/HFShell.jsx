@@ -202,7 +202,15 @@ export const NAV_SECTIONS = [
       },
       // Self-scoped Midjourney / async-task job logs (pages/v2/Tasks) — real
       // as of cycle 10 L6/L7. Was a disabled:true placeholder with href:null
-      // ("not available in v2 yet") until this page existed.
+      // ("not available in v2 yet") until this page existed. Visibility is
+      // gated by the same enable_drawing/enable_task localStorage flags the
+      // legacy rail uses (components/layout/SiderBar.jsx's workspaceItems,
+      // set from GET /api/status by helpers/data.js) — shown if either is
+      // 'true', hidden if both are off, so a deployment without MJ/task
+      // enabled doesn't get a rail link to a page that can only ever be
+      // empty. Filtered in the render loop below rather than here, so
+      // CommandPalette's own visibleNavItems() call (a different file) still
+      // lists every destination regardless of these flags.
       {
         id: 'mj-logs',
         href: '/console/v2/tasks',
@@ -239,6 +247,11 @@ export const NAV_SECTIONS = [
       // wired — this is an honest, labelled link to where that capability
       // actually lives today, not a port (out of scope for this lane), and
       // not a silent dead end either.
+      // /console/personal renders the legacy HeaderBar/SiderBar chrome, not
+      // this shell (PageLayout.jsx's v2 bypass only matches /console/v2/*),
+      // so clicking this item leaves the rail entirely and nothing
+      // highlights on the way back. legacyBridge:true marks that in the UI
+      // — see the nav-legacy-tag rendering below.
       {
         id: 'personal',
         href: '/console/personal',
@@ -246,6 +259,7 @@ export const NAV_SECTIONS = [
         label: 'Notifications & access token',
         key: 'console.nav.personal',
         badge: '',
+        legacyBridge: true,
       },
     ],
   },
@@ -292,11 +306,21 @@ export const NAV_SECTIONS = [
         key: 'console.nav.pricing',
         badge: '',
       },
-      // Admin-only (server: internal/adapter/handler/router/api-router.go's
-      // openrouter-sync group runs AdminAuth on every GET; writes are
-      // RootAuth) job manager that refreshes a channel's free-model catalog
-      // from OpenRouter on a schedule. Real, working, previously reachable
-      // only by typing the URL — no nav entry anywhere pointed at it.
+      // Job manager that refreshes a channel's free-model catalog from
+      // OpenRouter on a schedule. Already had a legacy-rail entry
+      // (components/layout/SiderBar.jsx's adminItems, gated by isAdmin()) —
+      // this is its first entry in the v2 rail, not its first nav entry
+      // anywhere. Server-side, GET is AdminAuth but every mutating endpoint
+      // (POST/PUT/DELETE /jobs*, /run-all — api-router.go's
+      // openrouter-sync group) is RootAuth, and pages/OpenRouterSync/index.jsx
+      // has no client-side role check of its own: it renders the
+      // create/edit/delete/run buttons unconditionally. minRole:100 below
+      // (matching admin-authz/admin-system-tasks/admin-diagnostics' own
+      // per-item overrides in this file) keeps a role-10 admin from landing
+      // on a page where every mutating button 403s, until that page grows
+      // its own read-only view for role 10. Also renders the legacy
+      // HeaderBar/SiderBar chrome, same as /console/personal above —
+      // legacyBridge:true marks that.
       {
         id: 'openrouter-sync',
         href: '/console/openrouter-sync',
@@ -304,6 +328,8 @@ export const NAV_SECTIONS = [
         label: 'OpenRouter sync',
         key: 'console.nav.openrouter_sync',
         badge: '',
+        minRole: 100,
+        legacyBridge: true,
       },
     ],
   },
@@ -628,6 +654,13 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = () => setNavOpen(false);
   const navigate = useNavigate();
+  // Same flags + semantics as components/layout/SiderBar.jsx's
+  // workspaceItems: visible if either is 'true'. Read directly (not through
+  // visibleNavItems) so CommandPalette's own call to that function is
+  // unaffected by this rail-only gate.
+  const tasksFeatureEnabled =
+    localStorage.getItem('enable_drawing') === 'true' ||
+    localStorage.getItem('enable_task') === 'true';
 
   // ⌘K / Ctrl-K actually opens the palette now. The rail has rendered a ⌘K
   // badge next to the search button since the shell was built, but the repo
@@ -692,52 +725,70 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
         {visibleNavItems(user).map((s) => (
           <div className='nav-section' key={s.h}>
             <div className='nav-h'>{t(s.hKey, s.h)}</div>
-            {s.items.map((it) => {
-              const className = 'nav-i' + (activeId === it.id ? ' active' : '');
-              const Glyph = it.glyph;
-              const inner = (
-                <>
-                  <span className='nav-glyph' aria-hidden='true'>
-                    <Glyph size={14} />
-                  </span>
-                  <span className='nav-label'>{t(it.key, it.label)}</span>
-                  {it.badge && <span className='nav-badge'>{it.badge}</span>}
-                </>
-              );
-              // Deferred surfaces render as a non-interactive, greyed entry
-              // carrying an honest reason — never a dead link.
-              if (it.disabled) {
-                return (
-                  <div
+            {s.items
+              .filter((it) => it.id !== 'mj-logs' || tasksFeatureEnabled)
+              .map((it) => {
+                const className =
+                  'nav-i' + (activeId === it.id ? ' active' : '');
+                const Glyph = it.glyph;
+                const inner = (
+                  <>
+                    <span className='nav-glyph' aria-hidden='true'>
+                      <Glyph size={14} />
+                    </span>
+                    <span className='nav-label'>
+                      {t(it.key, it.label)}
+                      {it.legacyBridge && (
+                        <span
+                          className='nav-legacy-tag'
+                          data-testid={`nav-legacy-tag-${it.id}`}
+                          title={t(
+                            'console.nav.legacy_hint',
+                            'opens the legacy console page, not this v2 shell',
+                          )}
+                        >
+                          {' '}
+                          ↗
+                        </span>
+                      )}
+                    </span>
+                    {it.badge && <span className='nav-badge'>{it.badge}</span>}
+                  </>
+                );
+                // Deferred surfaces render as a non-interactive, greyed entry
+                // carrying an honest reason — never a dead link.
+                if (it.disabled) {
+                  return (
+                    <div
+                      key={it.id}
+                      className={className}
+                      data-testid={`nav-disabled-${it.id}`}
+                      aria-disabled='true'
+                      title={t(
+                        it.titleKey,
+                        it.title || 'not available in v2 yet',
+                      )}
+                      style={{ opacity: 0.4, cursor: 'not-allowed' }}
+                    >
+                      {inner}
+                    </div>
+                  );
+                }
+                return it.href ? (
+                  <Link
                     key={it.id}
+                    to={it.href}
                     className={className}
-                    data-testid={`nav-disabled-${it.id}`}
-                    aria-disabled='true'
-                    title={t(
-                      it.titleKey,
-                      it.title || 'not available in v2 yet',
-                    )}
-                    style={{ opacity: 0.4, cursor: 'not-allowed' }}
+                    onClick={closeNav}
                   >
+                    {inner}
+                  </Link>
+                ) : (
+                  <div key={it.id} className={className}>
                     {inner}
                   </div>
                 );
-              }
-              return it.href ? (
-                <Link
-                  key={it.id}
-                  to={it.href}
-                  className={className}
-                  onClick={closeNav}
-                >
-                  {inner}
-                </Link>
-              ) : (
-                <div key={it.id} className={className}>
-                  {inner}
-                </div>
-              );
-            })}
+              })}
           </div>
         ))}
 

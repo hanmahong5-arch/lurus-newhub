@@ -15,8 +15,10 @@ import "time"
 // way ResponseRegistry's insert is: a save failure must not be allowed to
 // undo an already-rendered chat turn.
 //
-// Schema is created by migration 038 (chat_sessions) alone — see that
-// file's header for why it, not AutoMigrate, is the sole creator today.
+// Schema is created BOTH by migration 038 (chat_sessions) and by
+// repo.migrateDB's AutoMigrate call (internal/adapter/repo/main.go) —
+// same dual-creation pattern as 029/032/033/034/036, see migration 038's
+// own header for why the two must stay column-type-compatible.
 type ChatSession struct {
 	Id        int       `json:"id" gorm:"primaryKey;autoIncrement"`
 	TenantId  string    `json:"tenant_id" gorm:"type:varchar(36);not null;index:idx_chat_sessions_tenant_user,priority:1"`
