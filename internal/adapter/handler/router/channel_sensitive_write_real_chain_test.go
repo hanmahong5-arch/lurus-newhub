@@ -228,8 +228,8 @@ func TestChannelSensitiveWriteRealChain_V1_PUT(t *testing.T) {
 
 // TestChannelSensitiveWriteRealChain_V2_PUT proves the v2 gate through the
 // production route table (SetApiV2Router mounts
-// PUT /api/v2/:tenant_slug/channels/:id under AdminAuth + TenantSlugGuard,
-// router/api-v2-router.go:169-171).
+// PUT /api/v2/:tenant_slug/channels/:id under AdminAuth + TenantSlugGuard
+// on the tenantChannels group in router/api-v2-router.go).
 func TestChannelSensitiveWriteRealChain_V2_PUT(t *testing.T) {
 	f, cleanup := setupChannelSensitiveWriteRealChain(t)
 	defer cleanup()

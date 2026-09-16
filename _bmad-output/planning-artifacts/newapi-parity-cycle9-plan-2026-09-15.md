@@ -54,9 +54,15 @@ What the re-verification found that no matrix row names:
   gate is exactly equal to "holds a session cookie".
 - **Every delegated grant is permanent.** `034_create_admin_permission_grants.sql:54-62` has no
   expiry column and `repo/admin_permission_grant.go` filters `revoked_at IS NULL` only.
-- **Zero live alerting.** `deploy/k8s/r6-stage/newhub-prometheus-rule.yaml:1-13` says in its own
+- ~~**Zero live alerting.**~~ **WRONG — corrected 2026-09-15, see §8 L9.** The repo-side claim is
+  true as far as it goes: `deploy/k8s/r6-stage/newhub-prometheus-rule.yaml:1-13` says in its own
   header that nothing evaluates its rules, and `alert_wiring_honesty_test.go` exists solely to stop
-  Go comments claiming otherwise.
+  Go comments claiming otherwise. But the conclusion was drawn from the repo alone: the R6 **host**
+  already ran `/data/obs-pack/runtime/netdata/config/health.d/newhub.conf` with 8 alarm templates
+  (4 bound, 4 unbound). L9 therefore adopts that host file into
+  `deploy/r6-host-netdata/` instead of writing new alarms beside it. This is the same mistake the
+  2026-08-24 audit made about off-site backups — a negative conclusion about production must query
+  the host layer too, not just `deploy/k8s/`.
 
 ## 2. Measured facts that set this cycle's defaults
 
@@ -129,10 +135,18 @@ shape: `v2_channel.go:455-465` applies `Key` and `BaseURL` after only the tenant
 `internal/app/authz/catalog.go:15-21` names this exact follow-up in its own comment.
 
 **Scope.** Add `channel: [sensitive_write]` to the catalogue. A **sensitive field set** =
-`key`, `base_url`, `param_override`, `header_override`, and the per-channel proxy setting — every
-field that changes *where traffic goes or what credential it carries*. Enforcement is in-handler
-(no router edit) and symmetric across four entry points: v1 `POST /api/channel/`,
-v1 `PUT /api/channel/`, v2 `POST …/channels`, v2 `PUT …/channels/:id`. Root always passes. A
+`key`, `base_url`, `param_override`, `header_override`, the per-channel proxy setting, `type`,
+`other` and `openai_organization` — the fields that decide *where traffic goes or what credential
+it carries*. (The last three were added during the repair round: `type` selects the derived
+upstream host when `base_url` is empty, `other` feeds api_version/region/plugin/bot_id, and
+`openai_organization` rides as a header on the credential. `OtherSettings`/`json:"settings"` can
+also steer a request and is an explicit non-goal, so the set is "what this gate covers", not
+"everything with that property".) Enforcement is in-handler (no router edit). The entry points grew
+past the four originally planned — v1 `POST /api/channel/`, v1 `PUT /api/channel/`, v2 `POST
+…/channels`, v2 `PUT …/channels/:id`, plus v1 `CopyChannel`, the key-removal branches of v1
+`ManageMultiKeys`, and v1 `PUT /api/channel/tag`; `channel_sensitive_write.go` is the live list.
+Authorization is decided **before** the document and egress validators run, so an ungranted caller
+cannot use the validator as an oracle and the refusal is always audited. Root always passes. A
 non-root admin without an active grant gets **403 `PERMISSION_DENIED` with no partial write** — not
 a silent strip, which would be a key rotation that reports success and does nothing. Updates that
 touch no sensitive field are unaffected. Every refusal writes an audit row.
@@ -215,7 +229,8 @@ commit — a comment that documents a hole must not outlive the hole.
 **Oracles.**
 - `TestVideoProxy_RefusesPrivateAddress` — a `http://10.0.0.1/x` target is refused with the
   egress-check reason and the metric increments; deleting the call turns it red.
-- `TestVideoProxy_RefusesDNSRebindShape` — whatever `ValidateOutboundURL` already covers, asserted
+- `TestVideoProxy_RefusesDomainResolvingToPrivateAddress` (shipped name; the plan first called it
+  `TestVideoProxy_RefusesDNSRebindShape`) — whatever `ValidateOutboundURL` already covers, asserted
   through this route so the two routes cannot drift again.
 - `TestTaskMediaRoutes_BothCallTheEgressGuard` — a source-level assertion that every handler
   serving a vendor-supplied URL calls the guard. This is the anti-drift oracle; it is what stops a
@@ -416,10 +431,12 @@ timestamps, then back to CLEAR.
   Responses compact/registry round trips from cycle 8 end to end.
 - **O4 (carried).** Real per-vendor context-length thresholds and ratios; cycle 8's mechanism still
   ships empty.
-- **O5 (L2 scope).** Confirm the sensitive-field set. It is `key`, `base_url`, `param_override`,
-  `header_override` and the per-channel proxy setting — everything that changes where traffic goes
-  or what credential it carries. Adding `models`/`group` to it would make ordinary channel
-  administration require a grant; the plan deliberately leaves them out.
+- **O5 (L2 scope).** Confirm the sensitive-field set. It is now **eight** fields: `key`,
+  `base_url`, `param_override`, `header_override`, the per-channel proxy setting, `type`, `other`
+  and `openai_organization` (the last three added in the repair round — see §3 L2). Adding
+  `models`/`group` would make ordinary channel administration require a grant; the plan
+  deliberately leaves them out. Still an owner decision: whether `OtherSettings`/`json:"settings"`
+  should join the set in a later cycle.
 
 ## 7. Verification protocol
 

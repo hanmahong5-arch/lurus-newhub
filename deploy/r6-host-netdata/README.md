@@ -33,9 +33,11 @@ the container definition first (out of scope for this directory).
 
 `health.d/newhub.conf` currently defines 11 alarms:
 
-- 8 ported from the host's original 2026-08-20 copy (settlement/billing
-  breaker, credit pool, channel breaker, billing outbox backlog, relay 5xx
-  floor, cost-spike 429, quota-cap 402).
+- 8 ported from the host's original 2026-08-20 copy
+  (`newhub_platform_breaker_open`, `newhub_billing_outbox_failures`,
+  `newhub_credit_pool`, `newhub_channel_breaker_open`,
+  `newhub_billing_outbox_backlog`, `newhub_relay_5xx_elevated`,
+  `newhub_cost_spike_429`, `newhub_quota_cap_402`).
 - 3 added 2026-09-16, chosen because they can be **provoked on demand** — see
   each one's linked runbook page for the exact trigger, so it can be proved
   live rather than trusted on faith: `newhub_upstream_5xx_burst`,

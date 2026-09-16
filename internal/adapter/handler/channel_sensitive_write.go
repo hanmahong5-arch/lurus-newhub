@@ -1,25 +1,22 @@
 package handler
 
-// channel_sensitive_write.go — channel:sensitive_write (cycle 9, L2,
-// auth-security-17/18 follow-up named in authz/catalog.go's own comment).
+// channel_sensitive_write.go — channel:sensitive_write
+// (auth-security-17/18 follow-up named in authz/catalog.go's own comment).
 //
 // api-router.go:151 gates merely READING a channel key behind RootAuth +
 // CriticalRateLimit + DisableCache + SecureVerificationRequired, while the
 // v1 POST/PUT writers and the v2 create/update writers sat behind nothing
 // more than AdminAuth()/requireTenantAdmin — any tenant admin (role 10)
 // could silently swap the upstream credential or redirect traffic to a
-// different base_url. This file is the ONE shared predicate + gate called
-// in-handler from the call sites listed on enforceChannelSensitiveWrite's own
-// comment for the list) — the router itself is untouched this cycle (plan
-// §3 L2: "no router edit").
+// different base_url. This file is the one shared predicate + gate, called
+// in-handler from the call sites listed on enforceChannelSensitiveWrite's
+// own comment; the router itself is untouched this cycle (plan §3 L2: "no
+// router edit").
 //
-// Scope, pinned by the cycle-9 plan (O5) and widened by the repair-round
-// ruling R2: the sensitive field set is key, base_url, param_override,
-// header_override, the per-channel proxy setting, type, other, and
+// Scope: the sensitive field set is key, base_url, param_override,
+// header_override, the per-channel proxy setting, type, other and
 // openai_organization — the fields that decide where traffic goes or what
-// credential it carries. Not every field with that property is in it:
-// OtherSettings (json:"settings") carries vendor knobs like the azure
-// api-version and is an explicit non-goal, see below. type changes the derived upstream host when
+// credential it carries. type changes the derived upstream host when
 // base_url is empty (entity/channel.go's BaseURL-or-ChannelBaseURLs[Type]
 // fallback); other feeds api_version/region/plugin/bot_id
 // (middleware/distributor.go); openai_organization rides as a header on
@@ -27,13 +24,15 @@ package handler
 // deliberately NOT in this set; adding them would make ordinary channel
 // administration require a grant, which the plan explicitly leaves out.
 //
-// Two explicit non-goals, NOT silent gaps: OtherSettings (json:"settings" —
-// azure api-version and similar vendor knobs) is never diffed by this
-// predicate, and inside the Setting/json:"setting" blob only the proxy
-// member is diffed — force_format/system_prompt/and any other member of
-// that same blob never trip the gate. (PUT /api/channel/tag was an earlier
-// non-goal; R4 withdrew it — see EditTagChannels below, which the gate now
-// covers for the two fields that struct actually carries.)
+// Two explicit non-goals, NOT silent gaps — both are fields that can also
+// steer a request, so the set above is "the fields this gate covers", not
+// "everything with that property": OtherSettings (json:"settings" — azure
+// api-version and similar vendor knobs) is never diffed by this predicate,
+// and inside the Setting/json:"setting" blob only the proxy member is
+// diffed, so force_format/system_prompt and any other member of that same
+// blob never trip the gate. (PUT /api/channel/tag was an earlier non-goal
+// and is now covered — see EditTagChannels below, for the two fields that
+// struct actually carries.)
 
 import (
 	"net/http"
@@ -83,7 +82,7 @@ const (
 //
 // type/other/openai_organization are in the set too, also value-diffed.
 // type and base_url are resent by BOTH editors on every save (v2's
-// Channel/index.jsx builds a fixed body at :445-455 that carries them);
+// Channel/index.jsx builds a fixed body at :445-456 that carries them);
 // other and openai_organization ride along in v1's whole-form post but are
 // absent from v2's body. Either way a presence check would 403 ordinary
 // edits, so these are presence-check-unsafe for the same reason.

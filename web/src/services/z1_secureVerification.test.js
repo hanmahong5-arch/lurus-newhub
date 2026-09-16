@@ -102,21 +102,33 @@ describe('SecureVerificationService.checkAvailableVerificationMethods', () => {
     });
   });
 
-  // has2FA and hasSession are strict complements — the step-up modal picks
-  // exactly one factor from them, so both-true or both-false would either
-  // let an enrolled user skip TOTP or dead-end the flow entirely.
+  // While enrollment_required is false, has2FA and hasSession are strict
+  // complements — the step-up modal picks exactly one factor from them, so
+  // both-true or both-false would either let an enrolled user skip TOTP or
+  // dead-end the flow entirely. The flag-on / not-enrolled state is the one
+  // case where both are false by design (there is no factor to offer and the
+  // modal must route the user to enrolment); it is deliberately absent from
+  // the cases below and asserted on its own in "withholds both factors for an
+  // unenrolled user when enrollment is required" above. Every response here
+  // therefore leaves enrollment_required unset, i.e. false.
   it.each([
     [{ data: { data: { totp_enrolled: true } } }],
     [{ data: { data: { totp_enrolled: false } } }],
+    [{ data: { data: { totp_enrolled: true, enrollment_required: false } } }],
+    [{ data: { data: { totp_enrolled: false, enrollment_required: false } } }],
     [{ data: { data: {} } }],
     [{ data: {} }],
     [{}],
-  ])('has2FA and hasSession stay mutually exclusive (%#)', async (response) => {
-    API.get.mockResolvedValue(response);
-    const m =
-      await SecureVerificationService.checkAvailableVerificationMethods();
-    expect(m.has2FA).toBe(!m.hasSession);
-  });
+  ])(
+    'has2FA and hasSession stay mutually exclusive while enrollment is not required (%#)',
+    async (response) => {
+      API.get.mockResolvedValue(response);
+      const m =
+        await SecureVerificationService.checkAvailableVerificationMethods();
+      expect(m.enrollmentRequired).toBe(false);
+      expect(m.has2FA).toBe(!m.hasSession);
+    },
+  );
 
   it('treats a status response missing data.data as unenrolled', async () => {
     API.get.mockResolvedValue({ data: { success: true } });

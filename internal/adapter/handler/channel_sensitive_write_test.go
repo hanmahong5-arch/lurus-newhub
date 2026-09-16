@@ -251,7 +251,7 @@ func TestUpdateChannel_V1_NonRootAdminWithoutGrant403(t *testing.T) {
 }
 
 // TestUpdateChannel_V1_LegacyConsoleShapedRename_Success is R1's oracle for
-// v1: the legacy channel editor (EditChannelModal.jsx:1300-1303, spreading
+// v1: the legacy channel editor (EditChannelModal.jsx:1310, spreading
 // localInputs whose originInputs.key/base_url/other default to ” at
 // :130-141 and whose type/openai_organization are pre-filled from the
 // channel being edited) always resends type/base_url/other/
@@ -609,7 +609,7 @@ func TestUpdateChannelV2_NonRootAdminWithoutGrant403(t *testing.T) {
 }
 
 // TestUpdateChannelV2_ConsoleShapedRename_Success is the oracle for v2:
-// the exact body web/src/pages/v2/Channel/index.jsx:445-455 builds
+// the exact body web/src/pages/v2/Channel/index.jsx:445-456 builds
 // (name/type/base_url/models/group/weight/priority/model_mapping/tag/
 // remark — base_url is ALWAYS included, pre-filled from source.base_url at
 // :417), resending the stored base_url unchanged. The stored value here is

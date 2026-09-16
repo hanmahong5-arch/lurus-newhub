@@ -146,7 +146,7 @@ type RelayInfo struct {
 	// the same reason SessionId/EndUserHash are: app.GenerateTextOtherInfo
 	// reads it off RelayInfo to project conversion_dropped into the
 	// success-path log row; the terminal-error path
-	// (adapter/handler/relay.go:757-803, recordRelayErrorLog) builds its own
+	// (recordRelayErrorLog in adapter/handler/relay.go) builds its own
 	// Other map key by key and does not read this field, so a failed request
 	// carries no conversion_dropped.
 	ConversionDropped []string
