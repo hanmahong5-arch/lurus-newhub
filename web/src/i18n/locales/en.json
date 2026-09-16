@@ -1360,7 +1360,9 @@
         "col_token_share": "token share",
         "col_quota": "spend",
         "col_quota_share": "spend share",
-        "total_tokens_in_window": "total tokens in window"
+        "total_tokens_in_window": "total tokens in window",
+        "scope_tenant": "this tenant",
+        "scope_all": "all tenants"
       },
       "palette": {
         "group_navigate": "navigate",
