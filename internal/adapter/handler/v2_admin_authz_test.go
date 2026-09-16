@@ -562,6 +562,56 @@ func TestAuthzGrants_CreateWithTTLSetsExpiresAtAndAuditRecordsTTL(t *testing.T) 
 		t.Fatalf("no-ttl create: status = %d, want 201; body=%s", w2.Code, w2.Body.String())
 	}
 
+	// expires_at must come back as an explicit JSON null, not an omitted key:
+	// the console distinguishes "never expires" from "this build does not
+	// return the field" by whether the key is there at all.
+	var noTTLResp struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &noTTLResp); err != nil {
+		t.Fatalf("unmarshal no-ttl create body: %v", err)
+	}
+	rawExpiry, present := noTTLResp.Data["expires_at"]
+	if !present {
+		t.Fatalf("no-ttl 201 body omits expires_at entirely; body=%s", w2.Body.String())
+	}
+	if string(rawExpiry) != "null" {
+		t.Fatalf("no-ttl 201 body expires_at = %s, want null", rawExpiry)
+	}
+
+	// ...and the same row reads back through the real ListGrantsV2 handler as
+	// expires_at:null / expired:false. A nil expiry deriving as expired would
+	// retire every open-ended grant the moment this flag shipped.
+	reqList2 := httptest.NewRequest(http.MethodGet, "/api/v2/admin/authz/grants", nil)
+	wList2 := httptest.NewRecorder()
+	r.ServeHTTP(wList2, reqList2)
+	var listResp2 struct {
+		Data []struct {
+			UserId    int    `json:"user_id"`
+			ExpiresAt *int64 `json:"expires_at"`
+			Expired   bool   `json:"expired"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wList2.Body.Bytes(), &listResp2); err != nil {
+		t.Fatalf("unmarshal no-ttl list body: %v", err)
+	}
+	sawNoTTLRow := false
+	for _, row := range listResp2.Data {
+		if row.UserId != 43 {
+			continue
+		}
+		sawNoTTLRow = true
+		if row.ExpiresAt != nil {
+			t.Errorf("list row for user 43 expires_at = %d, want null", *row.ExpiresAt)
+		}
+		if row.Expired {
+			t.Errorf("list row for user 43 expired = true, want false for a grant with no expiry")
+		}
+	}
+	if !sawNoTTLRow {
+		t.Fatalf("list response has no row for user_id 43; body=%s", wList2.Body.String())
+	}
+
 	found := false
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -743,5 +793,16 @@ func TestGrant_ReGrantAfterExpiry_ThroughHandler(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(revokedRow.Details), []byte(`"grantee_user_id":42`)) {
 		t.Errorf("revoked-row Details = %s, want grantee_user_id:42", revokedRow.Details)
+	}
+	// The recycle happens inside the request that created the replacement
+	// grant, so it must be attributed to the calling admin (actor 1 here, from
+	// buildAuthzRouter) — not to ActorSystem/0, which is what a background
+	// sweep would write. Recording it as a system event would make "who
+	// retired that grant" unanswerable from the audit trail.
+	if revokedRow.ActorType != governance.ActorAdmin {
+		t.Errorf("revoked-row ActorType = %q, want %q", revokedRow.ActorType, governance.ActorAdmin)
+	}
+	if revokedRow.ActorID != 1 {
+		t.Errorf("revoked-row ActorID = %d, want 1 (the admin who called CreateGrantV2)", revokedRow.ActorID)
 	}
 }

@@ -15,8 +15,8 @@ package handler
 //
 // General private-IP/domain SSRF policy (fetch_setting, AllowPrivateIp,
 // domain/IP allow/deny lists) is a SEPARATE, already-existing concern
-// (app.ValidateOutboundURL, used by channel egress and internal/app/
-// download.go) and is applied by streamMediaContent below via that same
+// (app.ValidateOutboundURL, used by channel egress in channel.go and
+// v2_channel_actions.go) and is applied by streamMediaContent below via that same
 // function — cycle-9 L4 closed the gap where VideoProxy (video_proxy.go)
 // served the same class of URL without ever calling it: both routes now
 // call app.ValidateOutboundURL, in addition to sharing the scheme/

@@ -85,8 +85,8 @@ describe('SecureVerificationService.checkAvailableVerificationMethods', () => {
     });
   });
 
-  // An enrolled user is unaffected by the flag: TOTP is always the offered
-  // factor regardless of enrollment_required's value.
+  // An enrolled user still gets TOTP when enrollment_required is true; the
+  // case above covers the false side.
   it('still offers TOTP for an enrolled user when enrollment is required', async () => {
     API.get.mockResolvedValue({
       data: { data: { totp_enrolled: true, enrollment_required: true } },

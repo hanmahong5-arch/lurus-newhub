@@ -181,6 +181,33 @@ func TestChannelSensitiveWrite_FieldSetIsExhaustive(t *testing.T) {
 	if seen == 0 {
 		t.Fatalf("reflect.TypeOf(repo.Channel{}) reported zero json-tagged fields — the guard did not actually run")
 	}
+
+	// The classification above is a static map: on its own, deleting a field
+	// from channelWriteTouchesSensitiveField leaves it green. So every name in
+	// sensitiveJSONFields must also DRIVE the predicate — a request that
+	// populates only that field has to read as a sensitive write. Dropping any
+	// one branch from the predicate turns this red and names the field.
+	populate := map[string]func(*repo.Channel){
+		"key":                 func(ch *repo.Channel) { ch.Key = "sk-exhaustiveness-probe" },
+		"base_url":            func(ch *repo.Channel) { ch.BaseURL = common.GetPointer[string]("https://probe.invalid") },
+		"param_override":      func(ch *repo.Channel) { ch.ParamOverride = common.GetPointer[string](`{"operations":[]}`) },
+		"header_override":     func(ch *repo.Channel) { ch.HeaderOverride = common.GetPointer[string](`{"X-Probe":"1"}`) },
+		"openai_organization": func(ch *repo.Channel) { ch.OpenAIOrganization = common.GetPointer[string]("org-probe") },
+		"type":                func(ch *repo.Channel) { ch.Type = 42 },
+		"other":               func(ch *repo.Channel) { ch.Other = "probe" },
+		"setting":             func(ch *repo.Channel) { ch.Setting = common.GetPointer[string](`{"proxy":"http://probe.invalid:8080"}`) },
+	}
+	for name := range sensitiveJSONFields {
+		drive, ok := populate[name]
+		if !ok {
+			t.Fatalf("sensitiveJSONFields lists %q but this guard has no way to populate it — add one, or the field is classified sensitive with nothing proving the predicate reads it", name)
+		}
+		req := &repo.Channel{}
+		drive(req)
+		if !channelWriteTouchesSensitiveField(nil, req) {
+			t.Errorf("a request populating only %q reads as NOT sensitive — channelWriteTouchesSensitiveField no longer looks at that field", name)
+		}
+	}
 }
 
 // ============================================================================
@@ -1104,5 +1131,49 @@ func TestChannelSensitiveWriteRefused_RecordsAuditEvent(t *testing.T) {
 	}
 	if ev.ResourceID != ch.Id {
 		t.Errorf("ResourceID = %d, want %d", ev.ResourceID, ch.Id)
+	}
+}
+
+// TestEditTagChannels_NonRootAdminWithoutGrant403_ClearsParamOverride is the
+// case the value-diff rule got wrong. A body carrying param_override:"" CLEARS
+// a real override on every channel under the tag, which is as powerful as
+// setting one, but nil and "" compare equal under strPtrChanged — so routing
+// the tag editor through channelWriteTouchesSensitiveField let an ungranted
+// non-root admin wipe an operations document with no 403 and no audit row.
+// The gate is on PRESENCE here; reverting EditTagChannels to the diff rule
+// turns this red while the two tests above stay green.
+func TestEditTagChannels_NonRootAdminWithoutGrant403_ClearsParamOverride(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	ch := seedSensitiveTestChannel(t, ctx, "v1-tag-edit-clear-po")
+	tag := "shared-tag-clear-po"
+	ch.Tag = &tag
+	const liveOverride = `{"operations":[{"path":"$.temperature","mode":"set","value":0.1}]}`
+	ch.ParamOverride = common.GetPointer[string](liveOverride)
+	if err := ctx.DB.Save(ch).Error; err != nil {
+		t.Fatalf("seed tagged channel with a live param_override: %v", err)
+	}
+
+	c, w := v1Ctx(http.MethodPut, "/api/channel/tag", ChannelTag{
+		Tag:           tag,
+		ParamOverride: common.GetPointer[string](""),
+	}, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	EditTagChannels(c)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	body := v1Body(t, w)
+	if body["error_code"] != "PERMISSION_DENIED" {
+		t.Errorf("error_code = %v, want PERMISSION_DENIED", body["error_code"])
+	}
+
+	reloaded, err := repo.GetChannelById(ch.Id, true)
+	if err != nil {
+		t.Fatalf("reload channel: %v", err)
+	}
+	if reloaded.ParamOverride == nil || *reloaded.ParamOverride != liveOverride {
+		t.Errorf("ParamOverride = %v, want the seeded document untouched", reloaded.ParamOverride)
 	}
 }

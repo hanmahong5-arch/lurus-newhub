@@ -9,7 +9,7 @@ package handler
 // more than AdminAuth()/requireTenantAdmin — any tenant admin (role 10)
 // could silently swap the upstream credential or redirect traffic to a
 // different base_url. This file is the ONE shared predicate + gate called
-// in-handler from seven call sites (see enforceChannelSensitiveWrite's own
+// in-handler from the call sites listed on enforceChannelSensitiveWrite's own
 // comment for the list) — the router itself is untouched this cycle (plan
 // §3 L2: "no router edit").
 //
@@ -69,7 +69,7 @@ const (
 // presence check when existing is nil, because the "previous" value it
 // diffs against is the type's zero value.
 //
-// R1 (repair-round ruling): base_url/param_override/header_override are
+// base_url/param_override/header_override are
 // VALUE-diffed, not presence-checked — the shipped channel editors (both
 // v1's EditChannelModal.jsx and v2's Channel/index.jsx) always resend
 // these fields on every save, including a plain rename, so a presence
@@ -80,7 +80,7 @@ const (
 // multi-key append mode makes a value diff wrong (the "new" value is a
 // delta to append, not the full replacement).
 //
-// R2 (repair-round ruling): type/other/openai_organization join the set,
+// type/other/openai_organization are in the set too,
 // also value-diffed — both shipped editors resend these on every save the
 // same way they resend base_url, so these are presence-check-unsafe for
 // the identical reason.
@@ -172,9 +172,9 @@ func channelSettingProxy(setting *string) string {
 
 // enforceChannelSensitiveWrite is the shared in-handler gate called after
 // binding the request and before any mutation reaches the database, from
-// seven call sites: v1 AddChannel and UpdateChannel (channel.go), v2
+// call sites: v1 AddChannel and UpdateChannel (channel.go), v2
 // CreateChannelV2 and UpdateChannelV2 (v2_channel.go), and — added by the
-// repair-round rulings R3/R4 — v1 CopyChannel, the delete_key and
+// v1 CopyChannel, the delete_key and
 // delete_disabled_keys branches of v1 ManageMultiKeys, and v1
 // EditTagChannels (all channel.go). Root (role >= RoleRootUser) always
 // passes. A non-root caller whose request does not touch a sensitive field
@@ -192,10 +192,10 @@ func channelSettingProxy(setting *string) string {
 // create path (and on EditTagChannels, which targets many rows by tag, not
 // one id).
 //
-// Root recognition (R11, repair-round ruling): only the integer "role"
+// Root recognition: only the integer "role"
 // session/access-token key is checked — deliberately NOT widened to accept
 // a JWT "root" string role the way requirePlatformRoot (v2_rbac.go) does,
-// because every one of the seven call sites above is mounted under
+// because each call site listed above is mounted under
 // middleware.AdminAuth() (v1 channelRoute, router/api-router.go) or
 // AdminAuth()+TenantSlugGuard() (v2 tenantChannels,
 // router/api-v2-router.go) — both session/access-token-only middlewares
@@ -204,7 +204,18 @@ func channelSettingProxy(setting *string) string {
 // JWT-accepting middleware (as /credit-pool/me is under a different
 // group), this check must be revisited.
 func enforceChannelSensitiveWrite(c *gin.Context, existing *repo.Channel, req *repo.Channel, existingID int) bool {
-	if !channelWriteTouchesSensitiveField(existing, req) {
+	return enforceChannelSensitiveWriteDecided(c, channelWriteTouchesSensitiveField(existing, req), existingID)
+}
+
+// enforceChannelSensitiveWriteDecided is enforceChannelSensitiveWrite with the
+// "is this a sensitive write" decision supplied by the caller, for the one
+// route where the value-diff rule is the wrong question: EditTagChannels
+// applies ONE value to MANY rows, so there is no single prior value to diff
+// against and a PRESENT field is a sensitive write whatever it contains.
+// Clearing param_override to "" across a tag is exactly as powerful as setting
+// it, and the diff rule would wave it through because nil and "" compare equal.
+func enforceChannelSensitiveWriteDecided(c *gin.Context, sensitive bool, existingID int) bool {
+	if !sensitive {
 		return false
 	}
 	if c.GetInt("role") >= common.RoleRootUser {

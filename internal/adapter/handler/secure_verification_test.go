@@ -40,7 +40,7 @@ func setupStepUpAuditDB(t *testing.T, userId int) func() {
 }
 
 // TestUniversalVerify_NoEnrollment_WritesCredentialFreeAuditRow proves the
-// unconditional half of L3: a user with no TOTP enrollment who steps up via
+// half that does not depend on the flag: a user with no TOTP enrollment who steps up via
 // method "session" — presenting no credential beyond an existing session —
 // gets an audit row naming them, even with the enforcement flag off
 // (default). Deleting the RecordAuditEvent call in the no-enrollment branch

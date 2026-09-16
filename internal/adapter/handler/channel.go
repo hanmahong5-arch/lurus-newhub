@@ -1155,19 +1155,17 @@ func EditTagChannels(c *gin.Context) {
 		channelTag.ModelMapping = common.GetPointer[string](trimmed)
 	}
 
-	// channel:sensitive_write (L2 repair, R4 — withdraws the earlier
-	// "tag editor out of scope" non-goal): ChannelTag carries only two of
-	// the predicate's sensitive fields (it has no base_url or key field at
-	// all), so this checks ParamOverride/HeaderOverride presence directly
-	// against a nil existing — channelWriteTouchesSensitiveField degenerates
-	// to a plain presence check when existing is nil, which is the right
-	// rule here: the tag editor applies ONE value to MANY rows, so there is
-	// no single prior value to diff against. existingID is 0 — this targets
-	// a tag, not one channel id.
-	if enforceChannelSensitiveWrite(c, nil, &repo.Channel{
-		ParamOverride:  channelTag.ParamOverride,
-		HeaderOverride: channelTag.HeaderOverride,
-	}, 0) {
+	// channel:sensitive_write — withdraws the earlier "tag editor out of
+	// scope" non-goal. ChannelTag carries two of the predicate's sensitive
+	// fields (it has no base_url or key field at all), and the gate is on
+	// PRESENCE, not on a value diff: this editor applies ONE value to MANY
+	// rows, so there is no single prior value to compare against, and a body
+	// carrying param_override:"" CLEARS a real override on every tagged
+	// channel — as powerful as setting one. Routing the pair through the
+	// diff rule would wave that through, because it treats nil and "" as
+	// equal. existingID is 0: this targets a tag, not one channel id.
+	if enforceChannelSensitiveWriteDecided(c,
+		channelTag.ParamOverride != nil || channelTag.HeaderOverride != nil, 0) {
 		return
 	}
 
@@ -1606,7 +1604,7 @@ func CopyChannel(c *gin.Context) {
 		clone.UsedQuota = 0
 	}
 
-	// channel:sensitive_write (L2 repair, R3): a copy duplicates the source
+	// channel:sensitive_write: a copy duplicates the source
 	// channel's key/base_url/etc. onto a brand-new row — the same power as
 	// a create, so it is gated exactly like one (existing=nil; clone is the
 	// "req" the gate inspects). A refused copy writes nothing (checked
@@ -1962,7 +1960,7 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 
 	case "delete_key":
-		// channel:sensitive_write (L2 repair, R3): removing a stored key is
+		// channel:sensitive_write: removing a stored key is
 		// the same credential-mutation class as replacing one. The
 		// predicate's Key rule is presence-based (see
 		// channelWriteTouchesSensitiveField), so a synthetic non-empty
@@ -2051,7 +2049,7 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 
 	case "delete_disabled_keys":
-		// channel:sensitive_write (L2 repair, R3): same rationale as
+		// channel:sensitive_write: same rationale as
 		// delete_key above — bulk-deleting auto-disabled keys still
 		// rewrites the stored key column.
 		if enforceChannelSensitiveWrite(c, channel, &repo.Channel{Key: "channel-key-delete"}, channel.Id) {

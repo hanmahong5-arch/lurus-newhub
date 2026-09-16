@@ -18,18 +18,30 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// redactVideoURLForLog returns raw with any query string or fragment
-// stripped — scheme+host+path only — before it is safe to write to an
-// error log. url.URL.Redacted() is not enough here: it keeps the query
-// string (only masking a userinfo password component), and a Gemini video
-// URL carries its API key AS a query parameter (video_proxy_gemini.go's
-// ensureAPIKey appends "?key=<apiKey>"), so logging the Redacted() form
-// would still put a live channel credential into the error log. This
-// applies uniformly across this file's videoURL log sinks, including the
-// url.Parse-failure case, where raw may not be a well-formed URL at all —
-// trimming at the first '?'/'#' still removes the query-parameter shape a
-// credential would take without requiring a successful parse first.
+// redactVideoURLForLog reduces raw to scheme://host/path before it reaches an
+// error log, dropping BOTH the query/fragment and any userinfo component.
+//
+// Two credential shapes have to go. url.URL.Redacted() removes neither: it
+// masks only a userinfo *password* and keeps the query string, while a Gemini
+// video URL carries its API key AS a query parameter (video_proxy_gemini.go's
+// ensureAPIKey appends "?key=<apiKey>"). A plain trim at the first '?'/'#'
+// removes the query but keeps "user:password@" in the authority. This builds
+// the safe form from the parsed URL instead, and falls back to the trim only
+// when raw does not parse — in that case there is no authority to isolate, and
+// cutting at '?'/'#' still removes the query-parameter shape a credential takes.
+//
+// Callers: every videoURL log sink in this file. TestRedactVideoURLForLog
+// covers the query, fragment, userinfo, both-at-once and unparseable cases, so
+// replacing this body with `return raw` fails the build.
 func redactVideoURLForLog(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		u.User = nil
+		u.RawQuery = ""
+		u.ForceQuery = false
+		u.Fragment = ""
+		u.RawFragment = ""
+		return u.String()
+	}
 	if idx := strings.IndexAny(raw, "?#"); idx >= 0 {
 		return raw[:idx]
 	}
@@ -255,7 +267,9 @@ func VideoProxy(c *gin.Context) {
 	//
 	// Known operational constraint (operator ruling, round-1 acceptance):
 	// app.ValidateOutboundURL resolves the target host itself via
-	// net.LookupIP (ssrf_guard.go), on the pod's own network path, and
+	// net.LookupIP (internal/pkg/common/ssrf_protection.go, reached from
+	// ssrf_guard.go via common.ValidateURLWithFetchSetting), on the pod's
+	// own network path, and
 	// fails CLOSED when that resolution errors — regardless of the
 	// per-channel proxy this handler otherwise dials through (client,
 	// built above from channel.GetSetting().Proxy). VideoProxy is the

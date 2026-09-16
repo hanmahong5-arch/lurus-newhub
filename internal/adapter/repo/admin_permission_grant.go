@@ -2,9 +2,11 @@ package repo
 
 // admin_permission_grant.go — delegated admin permission grants (L4,
 // auth-security-17/18, console-ux-36). A grant lets a non-root admin
-// (role >= RoleAdminUser, < RoleRootUser) reach a narrow root-gated route
-// group — this cycle only middleware.RootOrGranted("audit","read") —
-// without holding root. Grants are GLOBAL this cycle: every write here
+// (role >= RoleAdminUser, < RoleRootUser) reach a narrow root-gated
+// capability without holding root. Two are grantable as of cycle 9:
+// ("audit","read"), enforced by middleware.RootOrGranted on the audit
+// routes, and ("channel","sensitive_write"), enforced in-handler by
+// handler/channel_sensitive_write.go. Grants are GLOBAL this cycle: every write here
 // enforces tenant_id == nil; the column exists only so a future cycle's
 // tenant-scoped grants need no second migration.
 
@@ -39,9 +41,10 @@ var (
 // suspenders); the pre-check alone is what makes the guarantee visible on
 // the hermetic SQLite tier, which never runs the partial-index migration.
 //
-// ttlSeconds is variadic-optional (cycle-9 L1) purely to avoid touching
-// every existing call site in this repo: omit it, or pass 0, for a
-// permanent grant (ExpiresAt stays nil) — byte-identical to this
+// ttlSeconds is variadic-optional so the existing test call sites keep
+// compiling unchanged and keep asserting the pre-037 behaviour; the sole
+// production caller (v2_admin_authz.go) always passes it. Omit it, or pass
+// 0, for a permanent grant (ExpiresAt stays nil) — byte-identical to this
 // function's behaviour before migration 037. A positive value sets
 // ExpiresAt = now + ttlSeconds; bounds-checking ttlSeconds (1..90 days) is
 // the caller's job (v2_admin_authz.go), not this function's — this layer
@@ -204,10 +207,12 @@ func ListPermissionGrants() ([]AdminPermissionGrant, error) {
 
 // HasActivePermissionGrant reports whether userID holds an ACTIVE
 // (revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now)),
-// GLOBAL (tenant_id IS NULL) grant for (resource, action) — the
-// fail-closed check middleware.RootOrGranted runs for every non-root
-// SESSION-path caller (Bearer-JWT callers are rejected before any lookup,
-// see root_or_granted.go). expires_at (migration 037, cycle-9 L1) is a
+// GLOBAL (tenant_id IS NULL) grant for (resource, action). It has two
+// callers: middleware.RootOrGranted, which runs it for every non-root
+// SESSION-path caller of a gated route group (Bearer-JWT callers are
+// rejected before any lookup, see root_or_granted.go), and
+// handler.enforceChannelSensitiveWriteDecided, which runs it in-handler
+// for sensitive channel writes. expires_at (migration 037, cycle-9 L1) is a
 // second liveness predicate alongside revoked_at: a grant past its expiry
 // but never explicitly revoked must not authorise anything. A lookup error
 // is NOT treated as "granted": the caller (RootOrGranted) must fail closed
