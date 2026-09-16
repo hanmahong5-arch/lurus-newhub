@@ -68,16 +68,17 @@ const (
 	ActionChannelEnabled      = "channel.enabled"
 	ActionChannelTagDisabled  = "channel.tag_disabled"
 	ActionChannelTested       = "channel.tested"
-	// ActionChannelSensitiveWriteRefused is recorded by
-	// internal/adapter/handler/channel_sensitive_write.go's
-	// enforceChannelSensitiveWrite (L2, cycle 9, auth-security-17/18
+	// ActionChannelSensitiveWriteRefused is recorded by the gate in
+	// internal/adapter/handler/channel_sensitive_write.go (auth-security-17/18
 	// follow-up) when a non-root admin's channel write touches a sensitive
-	// field (key, base_url, param_override, header_override, or the
-	// per-channel proxy setting) without an active channel:sensitive_write
-	// grant. Fires on refusal only — a write that is allowed to proceed
-	// already produces ActionChannelCreated/ActionChannelUpdated; this
-	// event exists so the DENIED attempt is visible too, across all four
-	// entry points (v1 add/update, v2 create/update).
+	// field without an active channel:sensitive_write grant. The field set
+	// is the one named in that file's header comment, and it is the file
+	// to read for the current list of entry points — v1 add/update/copy,
+	// the key-removal branches of v1 multi-key management, v1 tag edit, and
+	// v2 create/update as of cycle 9. Fires on refusal only: a write that
+	// is allowed to proceed already produces ActionChannelCreated/
+	// ActionChannelUpdated, so this event exists to make the DENIED attempt
+	// visible too.
 	ActionChannelSensitiveWriteRefused = "channel.sensitive_write_refused"
 
 	// User lifecycle and admin operations on users.

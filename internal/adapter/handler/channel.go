@@ -1263,11 +1263,6 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
-	// 使用统一的校验函数
-	if err := validateChannel(&channel.Channel, false); err != nil {
-		c.JSON(http.StatusOK, legacyChannelConfigErrorResponse(err))
-		return
-	}
 	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
 	originChannel, err := repo.GetChannelById(channel.Id, true)
 	if err != nil {
@@ -1281,12 +1276,24 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
-	// channel:sensitive_write (L2): checked against the freshly-fetched
+	// channel:sensitive_write: checked against the freshly-fetched
 	// originChannel, before the KeyMode append/merge logic below can rewrite
 	// channel.Key — an "append" request still carries a non-empty Key (the
 	// delta to append), so the predicate correctly treats it as touching the
 	// key regardless of merge mode.
+	//
+	// Authorization runs BEFORE content/egress validation on purpose. With
+	// the order reversed, an ungranted admin submitting an invalid sensitive
+	// payload got the validation error instead of 403 — which both leaked
+	// whether the payload would have validated and skipped the refusal audit
+	// row, because the handler returned before ever reaching this gate.
 	if enforceChannelSensitiveWrite(c, originChannel, &channel.Channel, originChannel.Id) {
+		return
+	}
+
+	// 使用统一的校验函数
+	if err := validateChannel(&channel.Channel, false); err != nil {
+		c.JSON(http.StatusOK, legacyChannelConfigErrorResponse(err))
 		return
 	}
 

@@ -18,11 +18,13 @@ type CatalogEntry struct {
 // resource/action agnostic.
 var catalog = map[string][]string{
 	"audit": {"read"},
-	// channel:sensitive_write (cycle 9, L2) — lets a non-root admin holding
-	// this grant swap a channel's key/base_url/param_override/
-	// header_override/proxy setting; enforced in-handler by
-	// internal/adapter/handler/channel_sensitive_write.go, not by a router
-	// group like audit:read.
+	// channel:sensitive_write — lets a non-root admin holding this grant
+	// write a channel's key, base_url, param_override, header_override,
+	// per-channel proxy setting, type, other, or openai_organization;
+	// enforced in-handler by
+	// internal/adapter/handler/channel_sensitive_write.go (whose header
+	// comment is the authoritative field list), not by a router group like
+	// audit:read.
 	"channel": {"sensitive_write"},
 }
 

@@ -16,8 +16,10 @@ package handler
 // Scope, pinned by the cycle-9 plan (O5) and widened by the repair-round
 // ruling R2: the sensitive field set is key, base_url, param_override,
 // header_override, the per-channel proxy setting, type, other, and
-// openai_organization — every field that changes where traffic goes or
-// what credential it carries. type changes the derived upstream host when
+// openai_organization — the fields that decide where traffic goes or what
+// credential it carries. Not every field with that property is in it:
+// OtherSettings (json:"settings") carries vendor knobs like the azure
+// api-version and is an explicit non-goal, see below. type changes the derived upstream host when
 // base_url is empty (entity/channel.go's BaseURL-or-ChannelBaseURLs[Type]
 // fallback); other feeds api_version/region/plugin/bot_id
 // (middleware/distributor.go); openai_organization rides as a header on
@@ -69,21 +71,22 @@ const (
 // presence check when existing is nil, because the "previous" value it
 // diffs against is the type's zero value.
 //
-// base_url/param_override/header_override are
-// VALUE-diffed, not presence-checked — the shipped channel editors (both
-// v1's EditChannelModal.jsx and v2's Channel/index.jsx) always resend
-// these fields on every save, including a plain rename, so a presence
-// check would 403 every edit for a non-root admin. nil and "" compare
+// base_url/param_override/header_override are VALUE-diffed, not
+// presence-checked. v1's EditChannelModal.jsx posts its whole form object
+// (the spread at :1310) on every save, so a presence check would 403 every
+// v1 edit — a plain rename included — for a non-root admin. nil and "" compare
 // equal (repo.Channel already treats them identically — see
 // entity/channel.go). Key stays presence-based: neither editor resends the
 // stored key on update (it is never echoed back to the client), and
 // multi-key append mode makes a value diff wrong (the "new" value is a
 // delta to append, not the full replacement).
 //
-// type/other/openai_organization are in the set too,
-// also value-diffed — both shipped editors resend these on every save the
-// same way they resend base_url, so these are presence-check-unsafe for
-// the identical reason.
+// type/other/openai_organization are in the set too, also value-diffed.
+// type and base_url are resent by BOTH editors on every save (v2's
+// Channel/index.jsx builds a fixed body at :445-455 that carries them);
+// other and openai_organization ride along in v1's whole-form post but are
+// absent from v2's body. Either way a presence check would 403 ordinary
+// edits, so these are presence-check-unsafe for the same reason.
 func channelWriteTouchesSensitiveField(existing *repo.Channel, req *repo.Channel) bool {
 	if req == nil {
 		return false

@@ -195,7 +195,9 @@ func TestChannelSensitiveWrite_FieldSetIsExhaustive(t *testing.T) {
 		"openai_organization": func(ch *repo.Channel) { ch.OpenAIOrganization = common.GetPointer[string]("org-probe") },
 		"type":                func(ch *repo.Channel) { ch.Type = 42 },
 		"other":               func(ch *repo.Channel) { ch.Other = "probe" },
-		"setting":             func(ch *repo.Channel) { ch.Setting = common.GetPointer[string](`{"proxy":"http://probe.invalid:8080"}`) },
+		"setting": func(ch *repo.Channel) {
+			ch.Setting = common.GetPointer[string](`{"proxy":"http://probe.invalid:8080"}`)
+		},
 	}
 	for name := range sensitiveJSONFields {
 		drive, ok := populate[name]
@@ -340,8 +342,18 @@ func TestUpdateChannel_V1_LegacyConsoleShapedBody_DifferentBaseURL403(t *testing
 	}
 }
 
+// derefOrEmpty reads a *string column as "" when unset, so a nil/"" pair
+// does not read as a mutation.
+func derefOrEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
 // TestUpdateChannel_V1_RefusedWriteLeavesRowUnchanged re-reads the row after
-// the 403 and compares every column the predicate can touch — a silent
+// the 403 and compares each of the eight columns named in
+// channel_sensitive_write.go's header, plus name — a silent
 // partial write (the "key rotation that reports success and does nothing"
 // failure mode the plan calls out) would leave this red even though the
 // handler answered 403, if it had mutated the row before checking the gate.
@@ -355,15 +367,22 @@ func TestUpdateChannel_V1_RefusedWriteLeavesRowUnchanged(t *testing.T) {
 	originalParamOverride := ch.ParamOverride
 	originalHeaderOverride := ch.HeaderOverride
 	originalName := ch.Name
+	originalType := ch.Type
+	originalOther := ch.Other
+	originalOrganization := ch.OpenAIOrganization
+	originalSetting := ch.Setting
 
 	c, w := v1Ctx(http.MethodPut, "/api/channel/", map[string]interface{}{
-		"id":              ch.Id,
-		"type":            ch.Type,
-		"name":            "hijacked-name",
-		"key":             "sk-attacker-controlled",
-		"base_url":        "https://8.8.4.4",
-		"param_override":  `{"operations":[]}`,
-		"header_override": `{"X-Evil":"1"}`,
+		"id":                  ch.Id,
+		"type":                ch.Type + 1,
+		"name":                "hijacked-name",
+		"key":                 "sk-attacker-controlled",
+		"base_url":            "https://8.8.4.4",
+		"param_override":      `{"operations":[]}`,
+		"header_override":     `{"X-Evil":"1"}`,
+		"other":               "hijacked-other",
+		"openai_organization": "org-hijacked",
+		"setting":             `{"proxy":"http://203.0.113.9:8080"}`, // literal public IP: no DNS lookup in the egress guard
 	}, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
 	UpdateChannel(c)
 
@@ -393,6 +412,20 @@ func TestUpdateChannel_V1_RefusedWriteLeavesRowUnchanged(t *testing.T) {
 	}
 	if (reloaded.HeaderOverride == nil) != (originalHeaderOverride == nil) {
 		t.Errorf("HeaderOverride mutated: got %v, want %v", reloaded.HeaderOverride, originalHeaderOverride)
+	}
+	if reloaded.Type != originalType {
+		t.Errorf("Type mutated: got %d, want %d", reloaded.Type, originalType)
+	}
+	if reloaded.Other != originalOther {
+		t.Errorf("Other mutated: got %q, want %q", reloaded.Other, originalOther)
+	}
+	if derefOrEmpty(reloaded.OpenAIOrganization) != derefOrEmpty(originalOrganization) {
+		t.Errorf("OpenAIOrganization mutated: got %q, want %q",
+			derefOrEmpty(reloaded.OpenAIOrganization), derefOrEmpty(originalOrganization))
+	}
+	if derefOrEmpty(reloaded.Setting) != derefOrEmpty(originalSetting) {
+		t.Errorf("Setting mutated: got %q, want %q",
+			derefOrEmpty(reloaded.Setting), derefOrEmpty(originalSetting))
 	}
 	// Name was in the SAME request but is not a sensitive field; a naive
 	// "reject the whole struct" gate would coincidentally also leave this
@@ -575,23 +608,30 @@ func TestUpdateChannelV2_NonRootAdminWithoutGrant403(t *testing.T) {
 	}
 }
 
-// TestUpdateChannelV2_ConsoleShapedRename_Success is R1's oracle for v2:
+// TestUpdateChannelV2_ConsoleShapedRename_Success is the oracle for v2:
 // the exact body web/src/pages/v2/Channel/index.jsx:445-455 builds
 // (name/type/base_url/models/group/weight/priority/model_mapping/tag/
-// remark — base_url is ALWAYS included, pre-filled from source.base_url ??
-// ” at :417) with base_url equal to the stored value (both "", the
-// SeedV2Channel default). A non-root admin without a grant must still be
-// able to rename through this exact console request shape.
+// remark — base_url is ALWAYS included, pre-filled from source.base_url at
+// :417), resending the stored base_url unchanged. The stored value here is
+// deliberately NON-empty: with both sides empty this would also pass under
+// a rule that merely ignores empty strings, so it could not tell a value
+// diff from a presence check. A non-root admin without a grant must still
+// be able to rename through this exact console request shape.
 func TestUpdateChannelV2_ConsoleShapedRename_Success(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
 	ch := seedSensitiveTestChannel(t, ctx, "v2-console-shaped-rename")
+	const storedBaseURL = "https://203.0.113.10/v1" // literal public IP: no DNS lookup, so the SSRF guard stays hermetic
+	ch.BaseURL = common.GetPointer[string](storedBaseURL)
+	if err := ctx.DB.Save(ch).Error; err != nil {
+		t.Fatalf("seed a non-empty base_url: %v", err)
+	}
 
 	body := map[string]interface{}{
 		"name":          "renamed-via-console",
 		"type":          float64(ch.Type),
-		"base_url":      "", // console always sends this; SeedV2Channel's row has base_url unset ("")
+		"base_url":      storedBaseURL, // the console resends the stored value verbatim
 		"models":        ch.Models,
 		"group":         ch.Group,
 		"weight":        float64(1),
@@ -612,6 +652,9 @@ func TestUpdateChannelV2_ConsoleShapedRename_Success(t *testing.T) {
 	}
 	if reloaded.Name != "renamed-via-console" {
 		t.Errorf("Name = %q, want the rename to persist", reloaded.Name)
+	}
+	if reloaded.BaseURL == nil || *reloaded.BaseURL != storedBaseURL {
+		t.Errorf("BaseURL = %v, want the resent value %q to survive the rename", reloaded.BaseURL, storedBaseURL)
 	}
 }
 
@@ -1131,6 +1174,44 @@ func TestChannelSensitiveWriteRefused_RecordsAuditEvent(t *testing.T) {
 	}
 	if ev.ResourceID != ch.Id {
 		t.Errorf("ResourceID = %d, want %d", ev.ResourceID, ch.Id)
+	}
+}
+
+// TestUpdateChannel_V1_AuthorizationPrecedesValidation pins the ORDER of the
+// two refusals in v1 UpdateChannel. The request below is both unauthorized
+// (ungranted non-root admin touching base_url) and invalid (param_override
+// carries an operation mode the override engine does not implement). It must
+// answer 403 PERMISSION_DENIED and write the refusal audit row. Validating
+// first returned the document error and never reached the gate, which told an
+// ungranted caller whether their payload would have validated and left the
+// denied attempt unaudited.
+func TestUpdateChannel_V1_AuthorizationPrecedesValidation(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	if err := ctx.DB.AutoMigrate(&entity.AuditEvent{}, &entity.AuditChainHead{}); err != nil {
+		t.Fatalf("auto migrate audit tables: %v", err)
+	}
+	governance.SetAuditWriter(&pinnedAuditWriter{db: ctx.DB})
+
+	ch := seedSensitiveTestChannel(t, ctx, "v1-authz-before-validation")
+
+	c, w := v1Ctx(http.MethodPut, "/api/channel/", map[string]interface{}{
+		"id":             ch.Id,
+		"type":           ch.Type,
+		"base_url":       "https://8.8.8.8",
+		"param_override": `{"operations":[{"path":"model","mode":"not_a_real_mode","value":"x"}]}`,
+	}, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	UpdateChannel(c)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (authorization must be decided before the document is validated); body=%s", w.Code, w.Body.String())
+	}
+	body := v1Body(t, w)
+	if body["error_code"] != "PERMISSION_DENIED" {
+		t.Fatalf("error_code = %v, want PERMISSION_DENIED; body=%s", body["error_code"], w.Body.String())
+	}
+	if ev := pollAuditRow(t, governance.ActionChannelSensitiveWriteRefused, 2*time.Second); ev == nil {
+		t.Fatalf("no %s audit row found within timeout — the denied attempt was not recorded", governance.ActionChannelSensitiveWriteRefused)
 	}
 }
 
