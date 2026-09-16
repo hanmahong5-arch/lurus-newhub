@@ -159,7 +159,7 @@ const HFRankings = () => {
           <div className='sub'>
             {tr(
               'console.rankings.sub',
-              'rank · trend · share vs the previous window, per model or per vendor',
+              'rank · trend · share vs the previous window, per model, per vendor or per group',
             )}
           </div>
         </div>

@@ -192,6 +192,15 @@ func setArtifactRouteSecurityHeaders(c *gin.Context) {
 	c.Writer.Header().Set("Referrer-Policy", "no-referrer")
 }
 
+// egressCheckRejectionMessage is the message both task-media routes
+// (streamMediaContent below and video_proxy.go's VideoProxy) pass to
+// respondArtifactRejected for an app.ValidateOutboundURL failure. Hoisted
+// to a single constant, not an independent string literal at each call
+// site, so the two routes' refusal shapes cannot drift apart from each
+// other — TestTaskMediaRoutes_BothCallTheEgressGuard (video_proxy_test.go)
+// asserts both call sites reference this symbol.
+const egressCheckRejectionMessage = "Artifact URL failed the egress check"
+
 func respondArtifactRejected(c *gin.Context, route, reason, message string) {
 	metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(route, reason).Inc()
 	c.JSON(http.StatusBadGateway, gin.H{
@@ -218,7 +227,7 @@ func streamMediaContent(c *gin.Context, rawURL string) {
 		return
 	}
 	if err := app.ValidateOutboundURL(rawURL); err != nil {
-		respondArtifactRejected(c, route, "egress_check", "Artifact URL failed the egress check")
+		respondArtifactRejected(c, route, "egress_check", egressCheckRejectionMessage)
 		return
 	}
 

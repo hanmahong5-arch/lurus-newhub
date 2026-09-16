@@ -478,16 +478,20 @@ func TestVideoProxy_RefusesPrivateAddress(t *testing.T) {
 	}
 }
 
-// TestVideoProxy_RefusesDNSRebindShape covers the OTHER half of what
-// app.ValidateOutboundURL checks: a domain name (not a literal IP) that
-// resolves to a private address. fetch_setting's ApplyIPFilterForDomain is
-// forced on in the default blacklist posture (see
-// app.ValidateOutboundURL's doc comment in ssrf_guard.go), so "localhost"
-// is rejected exactly like a 127.0.0.1 literal once resolved — this is the
-// half TestVideoProxy_RefusesPrivateAddress's literal-IP target does not
-// exercise, so the two routes cannot drift on only ONE of the two shapes
-// app.ValidateOutboundURL covers.
-func TestVideoProxy_RefusesDNSRebindShape(t *testing.T) {
+// TestVideoProxy_RefusesDomainResolvingToPrivateAddress covers the OTHER
+// half of what app.ValidateOutboundURL checks: a domain name (not a
+// literal IP) that resolves to a private address. fetch_setting's
+// ApplyIPFilterForDomain is forced on in the default blacklist posture
+// (see app.ValidateOutboundURL's doc comment in ssrf_guard.go), so
+// "localhost" is rejected exactly like a 127.0.0.1 literal once resolved
+// — this is the half TestVideoProxy_RefusesPrivateAddress's literal-IP
+// target does not exercise, so the two routes cannot drift on only ONE of
+// the two shapes app.ValidateOutboundURL covers. This does NOT cover
+// DNS-rebinding (a target that resolves differently between check time and
+// dial time): app.ValidateOutboundURL resolves once at check time, and the
+// transport resolves again at dial time — ssrf_guard.go's doc comment
+// scopes TTL-based rebinding out as a separate, transport-layer concern.
+func TestVideoProxy_RefusesDomainResolvingToPrivateAddress(t *testing.T) {
 	cleanup := setupVideoProxyGuardDB(t)
 	defer cleanup()
 
@@ -542,21 +546,107 @@ func TestVideoProxy_RefusesDNSRebindShape(t *testing.T) {
 	}
 }
 
+// TestVideoProxy_RefusesUnresolvableDomainWithProxiedChannel is the
+// operator-ruled oracle for the known operational constraint documented in
+// video_proxy.go's egress-check comment and
+// doc/product-integration-guide.md's row for this route:
+// app.ValidateOutboundURL resolves the videoURL host itself, on the pod's
+// own network path, even for a channel configured with a per-channel proxy
+// (the one thing VideoProxy supports that the sibling artefact route does
+// not — video_proxy.go builds `client` from channel.GetSetting().Proxy
+// above). A channel whose proxy exists BECAUSE the pod cannot resolve the
+// vendor host directly still gets a 502 here: fail-closed DNS resolution
+// was kept exactly as the sibling artefact route already has it, not
+// softened around the proxy setting (round-1 acceptance finding B-5;
+// operator ruling R2). "example-does-not-resolve" under the .invalid TLD
+// (RFC 2606) is guaranteed to never resolve, matching the convention
+// task_artifacts_test.go and this file already use for other
+// never-resolving hosts.
+func TestVideoProxy_RefusesUnresolvableDomainWithProxiedChannel(t *testing.T) {
+	cleanup := setupVideoProxyGuardDB(t)
+	defer cleanup()
+
+	weight := uint(10)
+	priority := int64(0)
+	baseURL := "https://example.invalid"
+	proxySetting := `{"proxy":"socks5://127.0.0.1:1"}` // never dialed — the egress check refuses before client.Do
+	channel := &repo.Channel{
+		Type: constant.ChannelTypeKling, Key: "sk-unused", Status: common.ChannelStatusEnabled,
+		Name: "video-proxy-proxied-unresolvable-channel", BaseURL: &baseURL, Weight: &weight, Priority: &priority,
+		Setting: &proxySetting,
+	}
+	if err := repo.DB.Create(channel).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	before := testutil.ToFloat64(metrics.TaskMediaGuardRejectionsTotal.WithLabelValues("video_proxy", "egress_check"))
+
+	owner := 6008
+	task := &repo.Task{
+		TaskID: "vp-egress-3", Platform: constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeKling)),
+		UserId: owner, ChannelId: int(channel.Id), Status: repo.TaskStatusSuccess,
+		FailReason: "http://example-does-not-resolve.invalid/x", // unresolvable host; a channel would set a proxy specifically to reach a host like this in production
+		SubmitTime: time.Now().Unix(),
+	}
+	if err := repo.DB.Create(task).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/vp-egress-3/content", nil)
+	c.Request.Host = "hub.example.test"
+	c.Params = gin.Params{{Key: "task_id", Value: "vp-egress-3"}}
+	c.Set("id", owner)
+	c.Set("role", common.RoleCommonUser)
+
+	VideoProxy(c)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"code":"artifact_request_rejected"`) {
+		t.Errorf("body = %s, want code=artifact_request_rejected", w.Body.String())
+	}
+	after := testutil.ToFloat64(metrics.TaskMediaGuardRejectionsTotal.WithLabelValues("video_proxy", "egress_check"))
+	if after-before != 1 {
+		t.Errorf("egress_check counter delta = %v, want 1", after-before)
+	}
+}
+
 // vendorURLGuardHandlers is cycle-9 L4's maintained registry of the handler
 // functions that dial a vendor-supplied URL taken from task/channel-instance
 // data (as opposed to a channel's admin-configured base_url, already gated
 // at write time by channel.go/v2_channel_actions.go's own
 // app.ValidateOutboundURL calls). TestTaskMediaRoutes_BothCallTheEgressGuard
 // only enforces the guard on the functions enumerated here — this is a
-// registry lock, not automatic discovery of new routes; a THIRD handler that
+// registry lock, not automatic discovery of new routes; a handler that
 // serves this class of URL must be added to this slice for the oracle to
 // cover it, the same convention internal/pkg/metrics/
 // declared_series_written_test.go uses for its own textual scan.
+//
+// RelayMidjourneyImage (internal/app/relay/mjproxy_handler.go, mounted GET
+// /mj/image/:id) is a known member of this class — it dials
+// midjourneyTask.ImageUrl, a task-stored vendor-supplied URL — but it is
+// guarded by a DIFFERENT function, common.ValidateURLWithFetchSetting,
+// called directly rather than through app.ValidateOutboundURL, with
+// materially different semantics: it enforces fetch_setting's port
+// allow-list (app.ValidateOutboundURL deliberately does not, see
+// ssrf_guard.go) and it does NOT force ApplyIPFilterForDomain on in
+// blacklist mode, so a hostname that resolves to a private address is
+// refused on the two routes below and not on /mj/image/:id when
+// apply_ip_filter_for_domain is left at its default (false). Unifying
+// mjproxy_handler.go onto app.ValidateOutboundURL is out of this lane's
+// scope (operator ruling R1) — it is enumerated here, and the oracle below
+// accepts either guard function, so the registry's population rule keeps
+// matching the code instead of silently omitting a known same-class
+// handler.
 var vendorURLGuardHandlers = []struct {
 	file, funcName string
 }{
 	{"video_proxy.go", "VideoProxy"},
 	{"task_media_guard.go", "streamMediaContent"},
+	{"../../app/relay/mjproxy_handler.go", "RelayMidjourneyImage"},
 }
 
 // extractTopLevelFuncSource returns funcName's full source text (signature
@@ -588,16 +678,38 @@ func extractTopLevelFuncSource(t *testing.T, path, funcName string) string {
 }
 
 // TestTaskMediaRoutes_BothCallTheEgressGuard is cycle-9 L4's anti-drift
-// oracle: every handler in vendorURLGuardHandlers above must call
-// app.ValidateOutboundURL directly in its own source (not merely
-// transitively through a helper this test does not also check), so the two
-// routes cannot drift apart again. Deleting the ValidateOutboundURL call
-// from EITHER VideoProxy or streamMediaContent turns this red.
+// oracle: every handler in vendorURLGuardHandlers above must call an
+// outbound-URL egress guard directly in its own source (not merely
+// transitively through a helper this test does not also check) — either
+// app.ValidateOutboundURL (VideoProxy, streamMediaContent) or
+// common.ValidateURLWithFetchSetting (RelayMidjourneyImage, which predates
+// this lane and is intentionally left on its own, narrower guard — see
+// vendorURLGuardHandlers' comment). Deleting the guard call from any one of
+// the three turns this red.
 func TestTaskMediaRoutes_BothCallTheEgressGuard(t *testing.T) {
 	for _, h := range vendorURLGuardHandlers {
 		body := extractTopLevelFuncSource(t, h.file, h.funcName)
-		if !strings.Contains(body, "ValidateOutboundURL(") {
-			t.Errorf("%s (%s) does not call app.ValidateOutboundURL — a handler serving a vendor-supplied URL must egress-check it before dialing", h.funcName, h.file)
+		if !strings.Contains(body, "ValidateOutboundURL(") && !strings.Contains(body, "ValidateURLWithFetchSetting(") {
+			t.Errorf("%s (%s) does not call an egress guard — a handler serving a vendor-supplied URL must egress-check it before dialing", h.funcName, h.file)
+		}
+	}
+
+	// Equality lock (operator ruling R5, round-1 acceptance finding A-4):
+	// VideoProxy and streamMediaContent must reference the SAME message
+	// constant (egressCheckRejectionMessage, task_media_guard.go) for
+	// their app.ValidateOutboundURL refusal, not two independently-edited
+	// string literals that happen to match today and can silently drift
+	// apart tomorrow — neither of the two behavioural tests
+	// (TestVideoProxy_RefusesPrivateAddress,
+	// TestTaskArtifacts_ContentRefusesEgressBlockedURL) would catch that
+	// drift, since each only asserts its own route's body independently.
+	for _, h := range []struct{ file, funcName string }{
+		{"video_proxy.go", "VideoProxy"},
+		{"task_media_guard.go", "streamMediaContent"},
+	} {
+		body := extractTopLevelFuncSource(t, h.file, h.funcName)
+		if !strings.Contains(body, "egressCheckRejectionMessage") {
+			t.Errorf("%s (%s) does not reference egressCheckRejectionMessage — the egress-check refusal message must come from the shared constant, not a duplicated literal", h.funcName, h.file)
 		}
 	}
 }

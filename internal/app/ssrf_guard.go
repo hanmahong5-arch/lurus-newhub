@@ -10,8 +10,13 @@ import (
 )
 
 // ValidateOutboundURL is the single SSRF gate that operator-supplied outbound
-// targets (channel base_url, the upstream test/fetch endpoints) funnel through.
-// It applies the system fetch_setting with two egress-specific adjustments:
+// targets (channel base_url, the upstream test/fetch endpoints) funnel
+// through at write/config time, AND — since cycle-9 L4 — the two per-request
+// task-media content routes funnel a vendor-supplied URL through at read
+// time: video_proxy.go's VideoProxy (GET /v1/videos/:task_id/content) and
+// task_media_guard.go's streamMediaContent (GET
+// /v1/tasks/:platform/:task_id/artifacts/:key/content). It applies the
+// system fetch_setting with two egress-specific adjustments:
 //
 //   - The port allow-list is NOT enforced (nil ports → all ports allowed): LLM
 //     providers legitimately listen on arbitrary ports, and a port is not a
@@ -28,12 +33,18 @@ import (
 //     has already taken explicit control of egress IPs.
 //
 // Validation fails CLOSED on DNS-resolution error: a host that cannot be
-// resolved at write/sink time cannot be vetted, and treating that as a pass
+// resolved at check time cannot be vetted, and treating that as a pass
 // would let a name that is NXDOMAIN now but internal later (attacker-controlled
-// authoritative DNS, or delayed record creation) slip through. Write/sink time
-// is not latency-critical, so a transient blip merely asks the operator to
-// retry. (TTL-based rebinding on the relay hot path is a separate,
-// transport-layer concern tracked in the hardening plan.)
+// authoritative DNS, or delayed record creation) slip through. For the
+// write/config-time callers (channel base_url, upstream test/fetch) this is
+// not latency-critical, so a transient blip merely asks the operator to
+// retry. The two task-media content routes are a different cost: each is a
+// per-request, on-the-hot-path call, so each request pays one DNS lookup
+// for the resolved vendor URL and gets a 502 if that lookup fails —
+// including for a channel configured with its own outbound proxy (see
+// video_proxy.go's egress-check comment for that specific case). (TTL-based
+// rebinding on the relay hot path is a separate, transport-layer concern
+// tracked in the hardening plan.)
 //
 // Operators that intentionally route to in-cluster inference set
 // allow_private_ip=true or allow-list the host/IP. Empty input is a no-op;

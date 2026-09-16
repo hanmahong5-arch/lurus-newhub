@@ -1,16 +1,14 @@
 package repo
 
 // log_rankings_test.go — by=group leaderboard dimension for GetRankings
-// (cycle-9 plan L7). The trap this file exists to catch: `group` is a SQL
-// reserved word, so an unquoted `GROUP BY group` is a syntax error on
-// Postgres but silently accepted by SQLite's more permissive parser — the
-// hermetic tier every other test in this package runs on cannot see that
-// failure at all, which is exactly the green-locally/red-in-production
-// shape the plan calls out.
-// TestRankings_ByGroup_QuotesTheReservedIdentifier runs against the real
-// Postgres dialector in DryRun mode (newDryRunPG/renderSQL, defined in
-// lock_forupdate_test.go and reused here) specifically to catch it, and is
-// written before the query it guards.
+// (cycle-9 plan L7). `group` is a SQL reserved word in both Postgres and
+// SQLite, so an unquoted `GROUP BY group` is a syntax error on either
+// dialect — the identifier must be quoted regardless of which tier a test
+// runs on. TestRankings_ByGroup_QuotesTheReservedIdentifier runs against
+// the real Postgres dialector in DryRun mode (newDryRunPG, defined in
+// lock_forupdate_test.go and reused here) to pin the exact SQL Postgres
+// receives; the other tests in this file run on the hermetic SQLite tier
+// and exercise the query's grouping/bucketing/tenant-scoping behaviour.
 
 import (
 	"strings"
@@ -25,9 +23,13 @@ import (
 // TestRankings_ByGroup_QuotesTheReservedIdentifier is the trap oracle: it
 // swaps LOG_DB for a real-Postgres-dialector DryRun handle, calls the real
 // by=group query path, captures the actual SQL built, and asserts the
-// `group` identifier is quoted. Against an unquoted `GROUP BY group` this
-// is red; SQLite-only tests in this file cannot substitute for it.
+// GROUP BY clause itself quotes the `group` identifier (not merely that
+// `"group"` appears somewhere in the statement — the SELECT and GROUP BY
+// clauses share one Go constant today, but asserting on the clause that
+// actually breaks Postgres keeps this oracle correct even if that stops
+// being true). Against an unquoted `GROUP BY group` this is red.
 func TestRankings_ByGroup_QuotesTheReservedIdentifier(t *testing.T) {
+	InitCol()
 	db := newDryRunPG(t)
 	var captured string
 	if err := db.Callback().Query().After("gorm:query").
@@ -44,8 +46,23 @@ func TestRankings_ByGroup_QuotesTheReservedIdentifier(t *testing.T) {
 	if _, _, _, err := GetRankings(0, 3600, "", "group", 20); err != nil {
 		t.Fatalf("GetRankings by=group (dry-run): %v", err)
 	}
-	if !strings.Contains(captured, `"group"`) {
-		t.Fatalf("by=group query must quote the reserved identifier, got SQL: %s", captured)
+	if !strings.Contains(captured, `GROUP BY COALESCE(NULLIF("group"`) {
+		t.Fatalf("by=group query must quote the reserved identifier in its GROUP BY clause, got SQL: %s", captured)
+	}
+}
+
+// TestRankingsGroupExpr_UsesSharedLogGroupCol pins the no-parallel-mechanism
+// rule (operator ruling L7-R2): rankingsGroupExpr must build its identifier
+// from the package's single SSOT (logGroupCol, internal/adapter/repo/main.go)
+// rather than carrying its own copy of the `"group"` literal, so an
+// upstream merge that changes logGroupCol cannot silently desync the two.
+func TestRankingsGroupExpr_UsesSharedLogGroupCol(t *testing.T) {
+	InitCol()
+	if logGroupCol == "" {
+		t.Fatal("logGroupCol is empty after InitCol(); test setup is broken")
+	}
+	if !strings.Contains(rankingsGroupExpr(), logGroupCol) {
+		t.Fatalf("rankingsGroupExpr() = %q must contain logGroupCol %q", rankingsGroupExpr(), logGroupCol)
 	}
 }
 

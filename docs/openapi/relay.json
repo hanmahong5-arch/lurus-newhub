@@ -1216,6 +1216,36 @@
               }
             },
             "headers": {}
+          },
+          "502": {
+            "description": "视频代理请求被拒绝或上游失败。scheme 白名单（非 http/https）与自指 host 校验（cycle-8 L9）沿用拒绝前既有的文案（分别为 \"Failed to fetch video content\"、\"Refused to proxy a self-referential video URL\"）且不带 code；已知 Content-Length 超出 200MiB 上限、以及上游拉取失败/返回非 200，同样是既有的历史 502 分支，同样不带 code。cycle-9 L4 新增的 fetch_setting 出站检查（egress_check：私网/回环目标域名或字面量 IP）复用了 GET /v1/tasks/{platform}/{task_id}/artifacts/{key}/content 路由的响应形状，是这条路由目前唯一携带 code=artifact_request_rejected 的 502 分支；该检查对一个配置了 per-channel 代理的渠道同样按 fail-closed 原则解析目标域名（不因渠道设了代理就跳过解析），域名解析失败时同样返回本 502。\n",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "type": { "type": "string", "example": "server_error" },
+                        "message": { "type": "string" },
+                        "code": {
+                          "type": "string",
+                          "enum": ["artifact_request_rejected"],
+                          "description": "仅 egress_check 分支携带此字段；scheme/自指 host/大小上限/上游失败这几类既有分支不带 code。"
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "egress_check_rejected": {
+                    "value": { "error": { "type": "server_error", "message": "Artifact URL failed the egress check", "code": "artifact_request_rejected" } }
+                  }
+                }
+              }
+            },
+            "headers": {}
           }
         },
         "security": [

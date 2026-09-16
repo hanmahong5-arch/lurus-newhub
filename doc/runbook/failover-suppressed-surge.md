@@ -1,14 +1,20 @@
 # Runbook — Failover Suppressed Surge
 
 > **Source**: netdata alarm `newhub_failover_suppressed_surge`,
-> `deploy/r6-host-netdata/health.d/newhub.conf` (installed via
-> `scripts/install-netdata-alarms.sh`; ownership and the "does this page
-> anyone" limit are in `deploy/r6-host-netdata/README.md`).
-> **Triggered by**: `lurus_gateway_relay_failover_suppressed_total` rising —
-> more than 3 in 5 minutes warns, more than 15 in 5 minutes is critical
-> (first-cut thresholds, no production traffic to calibrate against).
+> `deploy/r6-host-netdata/health.d/newhub.conf` — see the conf file's own
+> "STATUS" header for whether it is installed on R6 today; ownership and the
+> "does this page anyone" limit are in `deploy/r6-host-netdata/README.md`.
+> **Triggered by**: `lurus_gateway_relay_failover_suppressed_total` rate
+> averaged over 5 minutes — warn above 0.01/s, crit above 0.05/s. Thresholds
+> are first-cut and **not calibrated against live data**; record the
+> measured rate during the UAT probe below and revise them then.
+> **Scrape topology**: the go.d job scrapes ONE NodePort that round-robins
+> across 3 replicas at `update_every = 10s` — a rate reading is a
+> per-replica sample, not a gateway-wide rate. See
+> `deploy/r6-host-netdata/health.d/newhub.conf`'s "PROVOKABLE ON DEMAND"
+> section header for the full caveat.
 > **Severity**: warning / critical (netdata `to: sysadmin`).
-> **Last review**: 2026-09-15.
+> **Last review**: 2026-09-16.
 
 ## Symptom
 
@@ -52,8 +58,10 @@ doc comment on `FailoverSuppressedTotal` if a second reason is ever added.
 No automatic recovery ships with this alarm. The affected requests already
 failed from the client's perspective by the time the counter increments —
 there is nothing left to retry safely. Recovery is disabling or
-deprioritizing the responsible channel (`PUT /api/v2/admin/channels/:id`)
-if one provider is clearly responsible.
+deprioritizing the responsible channel:
+`PUT /api/v2/{tenant_slug}/channels/{id}` with `status=2`
+(`common.ChannelStatusManuallyDisabled`) if one provider is clearly
+responsible.
 
 ## Verify
 
@@ -81,7 +89,10 @@ done
 
 Then watch `curl -s http://localhost:19999/api/v1/alarms?all | grep -A5 newhub_failover_suppressed_surge`
 move CLEAR → WARNING, and CLEAR again once the burst stops (operator-run —
-see the cycle plan's UAT probe for this lane).
+see the cycle plan's UAT probe for this lane). Given the scrape-topology
+caveat above, the operator's probe is what establishes the real number
+needed and should update the header's thresholds afterward, not this
+runbook's prose.
 
 ## Prevent
 

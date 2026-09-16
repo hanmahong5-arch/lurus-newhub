@@ -354,8 +354,8 @@ func TestResetRankingsCacheForTest_ClearsEntries(t *testing.T) {
 
 // TestParseRankingsParams_AcceptsGroup: `by=group` is a valid dimension
 // alongside model/vendor (cycle-9 plan L7) — the logs table's `group`
-// column is populated and indexed; this was previously rejected with
-// "by must be model or vendor".
+// column already exists (internal/domain/entity/log.go); this was
+// previously rejected with "by must be model or vendor".
 func TestParseRankingsParams_AcceptsGroup(t *testing.T) {
 	c := newRankingsParamsContext("by=group")
 	by, _, errMsg := parseRankingsParams(c)
@@ -367,12 +367,17 @@ func TestParseRankingsParams_AcceptsGroup(t *testing.T) {
 	}
 }
 
-// TestTenantRankingsV2_ByGroup_ScopedToOwnTenant drives the REAL tenant
-// rankings handler (through the router set up by setupTenantRankingsRouter,
-// same mockAuth-populated tenant_context every request through this route
-// carries in production) with by=group and asserts the response never
-// includes another tenant's group, mirroring
-// TestTenantRankingsV2_AdminSeesOwnTenantOnly for the new dimension.
+// TestTenantRankingsV2_ByGroup_ScopedToOwnTenant mounts GetTenantRankingsV2
+// directly on a bare gin.New() (setupTenantRankingsRouter) with
+// tenant_context hand-seeded by mockAuth's c.Set — not the production
+// UserAuth()+TenantSlugGuard() chain (router/api-v2-router.go:213-215),
+// which is exercised instead by
+// TestRankingsByGroupRealChain_ScopedToOwnTenant
+// (internal/adapter/handler/router/l7_rankings_by_group_real_chain_test.go).
+// What this test proves directly: with a tenant_context populated the same
+// shape TenantSlugGuard produces, by=group never returns another tenant's
+// group, mirroring TestTenantRankingsV2_AdminSeesOwnTenantOnly for the new
+// dimension.
 func TestTenantRankingsV2_ByGroup_ScopedToOwnTenant(t *testing.T) {
 	ctx := setupTenantRankingsRouter(t)
 	defer ctx.cleanup()
@@ -437,5 +442,87 @@ func TestRankingsV2_UnknownByStillRejected_AfterGroupAdded(t *testing.T) {
 	w := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by=whatever")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("by=whatever: want 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// seedAdminRankingsGroupLog is seedPerfLog's sibling that also sets the
+// `group` field, for the admin-route by=group tests below.
+func seedAdminRankingsGroupLog(t *testing.T, db *gorm.DB, tenant, group string, prompt, completion, quota int, createdAt int64) {
+	t.Helper()
+	l := &entity.Log{
+		UserId:           1,
+		TenantId:         tenant,
+		Type:             entity.LogTypeConsume,
+		ModelName:        "irrelevant-model",
+		Group:            group,
+		Quota:            quota,
+		PromptTokens:     prompt,
+		CompletionTokens: completion,
+		CreatedAt:        createdAt,
+	}
+	if err := db.Create(l).Error; err != nil {
+		t.Fatalf("seed admin rankings group log: %v", err)
+	}
+}
+
+// TestGetRankingsV2_ByGroup_MergesAcrossTenantsThenFiltersByOne exercises
+// the ADMIN route's by=group dimension — the half of the lane's "accept
+// by=group on BOTH routes" spec that was previously carried entirely by
+// the shared parseRankingsParams with no request actually reaching
+// GetRankingsV2 on the happy path. The admin path has behaviour the
+// tenant-scoped path does not: an optional tenant_id query filter
+// (v2_admin_analytics.go) and a tenantID=="" cross-tenant cache key
+// (v2_analytics_rankings.go), so this also pins that the admin and
+// tenant-scoped routes do not collide on that shared cache key.
+func TestGetRankingsV2_ByGroup_MergesAcrossTenantsThenFiltersByOne(t *testing.T) {
+	ctx := setupAnalyticsRouter(t)
+	defer ctx.cleanup()
+
+	now := time.Now().Unix()
+	seedAdminRankingsGroupLog(t, ctx.db, "tenant-a", "premium", 100, 50, 30, now-60)
+	seedAdminRankingsGroupLog(t, ctx.db, "tenant-b", "default", 200, 100, 60, now-60)
+
+	// Unfiltered: both tenants' groups are visible, merged into one leaderboard.
+	wAll := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by=group&hours=1")
+	if wAll.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", wAll.Code, wAll.Body.String())
+	}
+	bodyAll := parseJSON(t, wAll)
+	dataAll, ok := bodyAll["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing data object: %s", wAll.Body.String())
+	}
+	if got := dataAll["by"]; got != "group" {
+		t.Errorf("data.by = %v, want group", got)
+	}
+	rowsAll, ok := dataAll["rows"].([]interface{})
+	if !ok || len(rowsAll) != 2 {
+		t.Fatalf("want 2 merged rows (both tenants unfiltered), got %d: %s", len(rowsAll), wAll.Body.String())
+	}
+	namesAll := map[string]bool{}
+	for _, r := range rowsAll {
+		namesAll[r.(map[string]interface{})["name"].(string)] = true
+	}
+	if !namesAll["premium"] || !namesAll["default"] {
+		t.Fatalf("unfiltered admin by=group must merge both tenants' groups, got %v", namesAll)
+	}
+
+	// Filtered: only tenant-a's group, via the admin-only tenant_id param.
+	wA := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by=group&hours=1&tenant_id=tenant-a")
+	if wA.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", wA.Code, wA.Body.String())
+	}
+	bodyA := parseJSON(t, wA)
+	dataA, ok := bodyA["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing data object: %s", wA.Body.String())
+	}
+	rowsA, ok := dataA["rows"].([]interface{})
+	if !ok || len(rowsA) != 1 {
+		t.Fatalf("want 1 row scoped to tenant_id=tenant-a, got %d: %s", len(rowsA), wA.Body.String())
+	}
+	rowA := rowsA[0].(map[string]interface{})
+	if rowA["name"] != "premium" {
+		t.Errorf("name = %v, want premium (tenant-b's default group must not leak in)", rowA["name"])
 	}
 }

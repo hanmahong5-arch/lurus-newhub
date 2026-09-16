@@ -49,6 +49,7 @@ describe('SecureVerificationService.checkAvailableVerificationMethods', () => {
     expect(methods).toEqual({
       has2FA: true,
       hasSession: false,
+      enrollmentRequired: false,
     });
   });
 
@@ -60,6 +61,45 @@ describe('SecureVerificationService.checkAvailableVerificationMethods', () => {
 
     expect(methods.has2FA).toBe(false);
     expect(methods.hasSession).toBe(true);
+  });
+
+  // SECURE_VERIFICATION_REQUIRE_ENROLLMENT=true on the server: an unenrolled
+  // user gets neither factor, because the "session" grant the backend used
+  // to hand out for free is now refused (403 STEP_UP_ENROLLMENT_REQUIRED).
+  // useSecureVerification's "enable two-factor first" dead-end fires on
+  // exactly this has2FA:false/hasSession:false combination — see
+  // "refuses to arm a challenge when no factor is enrolled" in
+  // k2_useSecureVerification.test.jsx.
+  it('withholds both factors for an unenrolled user when enrollment is required', async () => {
+    API.get.mockResolvedValue({
+      data: { data: { totp_enrolled: false, enrollment_required: true } },
+    });
+
+    const methods =
+      await SecureVerificationService.checkAvailableVerificationMethods();
+
+    expect(methods).toEqual({
+      has2FA: false,
+      hasSession: false,
+      enrollmentRequired: true,
+    });
+  });
+
+  // An enrolled user is unaffected by the flag: TOTP is always the offered
+  // factor regardless of enrollment_required's value.
+  it('still offers TOTP for an enrolled user when enrollment is required', async () => {
+    API.get.mockResolvedValue({
+      data: { data: { totp_enrolled: true, enrollment_required: true } },
+    });
+
+    const methods =
+      await SecureVerificationService.checkAvailableVerificationMethods();
+
+    expect(methods).toEqual({
+      has2FA: true,
+      hasSession: false,
+      enrollmentRequired: true,
+    });
   });
 
   // has2FA and hasSession are strict complements — the step-up modal picks
@@ -99,6 +139,7 @@ describe('SecureVerificationService.checkAvailableVerificationMethods', () => {
     expect(m).toEqual({
       has2FA: false,
       hasSession: true,
+      enrollmentRequired: false,
     });
   });
 });

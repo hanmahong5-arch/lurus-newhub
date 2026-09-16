@@ -259,9 +259,8 @@ describe('Rankings page', () => {
   });
 
   // Cycle-9 plan L7: `by=group` is a third accepted dimension alongside
-  // model/vendor — the backend now groups on the logs table's populated
-  // `group` column (internal/adapter/repo/analytics.go's
-  // getGroupUsageTotals).
+  // model/vendor — the backend now groups on the logs table's `group`
+  // column (internal/adapter/repo/analytics.go's getGroupUsageTotals).
   describe('by=group dimension', () => {
     it('renders a "by group" tab that re-fetches with by=group', async () => {
       API.get.mockResolvedValue(payload());

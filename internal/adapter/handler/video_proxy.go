@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -16,6 +17,24 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// redactVideoURLForLog returns raw with any query string or fragment
+// stripped — scheme+host+path only — before it is safe to write to an
+// error log. url.URL.Redacted() is not enough here: it keeps the query
+// string (only masking a userinfo password component), and a Gemini video
+// URL carries its API key AS a query parameter (video_proxy_gemini.go's
+// ensureAPIKey appends "?key=<apiKey>"), so logging the Redacted() form
+// would still put a live channel credential into the error log. This
+// applies uniformly across this file's videoURL log sinks, including the
+// url.Parse-failure case, where raw may not be a well-formed URL at all —
+// trimming at the first '?'/'#' still removes the query-parameter shape a
+// credential would take without requiring a successful parse first.
+func redactVideoURLForLog(raw string) string {
+	if idx := strings.IndexAny(raw, "?#"); idx >= 0 {
+		return raw[:idx]
+	}
+	return raw
+}
 
 // videoProxyMetricsRoute is the "route" label VideoProxy's rejections/
 // truncations carry on metrics.TaskMediaGuardRejectionsTotal, distinguishing
@@ -168,7 +187,7 @@ func VideoProxy(c *gin.Context) {
 
 	req.URL, err = url.Parse(videoURL)
 	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to parse URL %s: %s", videoURL, err.Error()))
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to parse URL %s: %s", redactVideoURLForLog(videoURL), err.Error()))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"message": "Failed to create proxy request",
@@ -198,7 +217,7 @@ func VideoProxy(c *gin.Context) {
 	// client/transport, and its rejection is still counted.
 	if !allowedArtifactScheme(req.URL.Scheme) {
 		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "scheme").Inc()
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Refusing unfetchable video URL scheme for task %s: %s", taskID, videoURL))
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Refusing unfetchable video URL scheme for task %s: %s", taskID, redactVideoURLForLog(videoURL)))
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
 				"message": "Failed to fetch video content",
@@ -209,7 +228,7 @@ func VideoProxy(c *gin.Context) {
 	}
 	if isSelfOrLoopURL(c, req.URL) {
 		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "self_url").Inc()
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Refusing self-referential video URL for task %s: %s", taskID, videoURL))
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Refusing self-referential video URL for task %s: %s", taskID, redactVideoURLForLog(videoURL)))
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
 				"message": "Refused to proxy a self-referential video URL",
@@ -233,16 +252,35 @@ func VideoProxy(c *gin.Context) {
 	// between the two routes that serve the same class of URL — only the
 	// route label passed to it differs, which is what keeps the metric
 	// able to tell the two routes apart.
+	//
+	// Known operational constraint (operator ruling, round-1 acceptance):
+	// app.ValidateOutboundURL resolves the target host itself via
+	// net.LookupIP (ssrf_guard.go), on the pod's own network path, and
+	// fails CLOSED when that resolution errors — regardless of the
+	// per-channel proxy this handler otherwise dials through (client,
+	// built above from channel.GetSetting().Proxy). VideoProxy is the
+	// only one of the two guarded task-media routes that supports a
+	// per-channel proxy, i.e. the case where the pod deliberately cannot
+	// resolve/reach the vendor directly. A channel configured with a
+	// proxy specifically because its videoURL host is NOT resolvable from
+	// the pod will now get a 502 here instead of a working proxied fetch.
+	// This was deliberately kept (not special-cased around the proxy
+	// setting) rather than softened: the sibling artefact route has no
+	// proxy option at all and still gets this same fail-closed DNS check
+	// from the same function call, so exempting VideoProxy's proxied case
+	// would be the one place the two routes' egress posture diverges — see
+	// TestVideoProxy_RefusesUnresolvableDomainWithProxiedChannel below and
+	// the corresponding row in doc/product-integration-guide.md.
 	if err := app.ValidateOutboundURL(videoURL); err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Refusing video URL blocked by egress policy for task %s: %s: %s", taskID, videoURL, err.Error()))
-		respondArtifactRejected(c, videoProxyMetricsRoute, "egress_check", "Artifact URL failed the egress check")
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Refusing video URL blocked by egress policy for task %s: %s: %s", taskID, redactVideoURLForLog(videoURL), err.Error()))
+		respondArtifactRejected(c, videoProxyMetricsRoute, "egress_check", egressCheckRejectionMessage)
 		return
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
 		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "upstream_error").Inc()
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to fetch video from %s: %s", videoURL, err.Error()))
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to fetch video from %s: %s", redactVideoURLForLog(videoURL), err.Error()))
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
 				"message": "Failed to fetch video content",
@@ -255,7 +293,7 @@ func VideoProxy(c *gin.Context) {
 
 	if resp.StatusCode != http.StatusOK {
 		metrics.TaskMediaGuardRejectionsTotal.WithLabelValues(videoProxyMetricsRoute, "upstream_error").Inc()
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Upstream returned status %d for %s", resp.StatusCode, videoURL))
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Upstream returned status %d for %s", resp.StatusCode, redactVideoURLForLog(videoURL)))
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
 				"message": fmt.Sprintf("Upstream service returned status %d", resp.StatusCode),

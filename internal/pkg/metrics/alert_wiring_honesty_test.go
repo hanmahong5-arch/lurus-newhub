@@ -358,14 +358,25 @@ const netdataHealthDDir = "deploy/r6-host-netdata/health.d"
 // be exactly the kind of claim this file exists to catch.
 const netdataInstallScript = "scripts/install-netdata-alarms.sh"
 
+// netdataInstallStatusLineRe matches a "# STATUS: ... YYYY-MM-DD" comment
+// line. Unlike deploy/k8s/r6-stage/newhub-prometheus-rule.yaml (which is
+// simply never deployed, so a static "REFERENCE ONLY" marker is always
+// true), a file under health.d/ moves between "not yet installed" and
+// "installed" as the operator actually runs the install script — a static
+// marker would go stale the moment either state changes. Requiring a DATED
+// status line instead of forbidding a marker string lets the file say
+// exactly what is true today without this test rotting into either a false
+// "installed" claim or a permanent "reference-only" one.
+var netdataInstallStatusLineRe = regexp.MustCompile(`(?m)^#\s*STATUS:.*\d{4}-\d{2}-\d{2}`)
+
 // TestNetdataDirectoryAssertsInstalledOppositeOfReferenceOnlyYAML is the
 // mirror image of TestNoAlertFileClaimsDeploymentItDoesNotHave above. That
 // test polices files that describe themselves as live but are not; this one
 // polices the opposite failure mode for deploy/r6-host-netdata/health.d/ —
-// files that ARE what makes newhub's alerting live today, so they must NOT
-// carry the reference-only marker, and must say what installs them so a
-// reader isn't left to guess whether the copy under version control is the
-// one netdata evaluates.
+// files that ARE what makes newhub's alerting live once installed, so they
+// must say what installs them AND carry a dated status line describing
+// whether that has actually happened yet, so a reader isn't left to guess
+// whether the copy under version control is the one netdata evaluates.
 func TestNetdataDirectoryAssertsInstalledOppositeOfReferenceOnlyYAML(t *testing.T) {
 	root := repoRoot(t)
 	dir := filepath.Join(root, filepath.FromSlash(netdataHealthDDir))
@@ -398,17 +409,17 @@ func TestNetdataDirectoryAssertsInstalledOppositeOfReferenceOnlyYAML(t *testing.
 		}
 		text := string(body)
 
-		if strings.Contains(text, alertFileMarker) {
-			t.Errorf("%s/%s is marked %q, but this directory is the INSTALLED counterpart to the "+
-				"reference-only PrometheusRule YAML — it is copied onto the R6 host by %s. If it "+
-				"is genuinely not installed anywhere, it belongs with the other reference-only "+
-				"files instead of under deploy/r6-host-netdata/.",
-				netdataHealthDDir, name, alertFileMarker, netdataInstallScript)
-		}
-
 		if !strings.Contains(text, netdataInstallScript) && !strings.Contains(text, filepath.Base(netdataInstallScript)) {
 			t.Errorf("%s/%s does not name the script that installs it (%s) — a reader has no way "+
 				"to tell this file apart from the reference-only YAML without that pointer.",
+				netdataHealthDDir, name, netdataInstallScript)
+		}
+
+		if !netdataInstallStatusLineRe.MatchString(text) {
+			t.Errorf("%s/%s has no dated \"# STATUS: ... YYYY-MM-DD\" line — this directory's "+
+				"install state changes as the operator actually runs %s, so a static "+
+				"\"installed\"/\"not deployed\" claim goes stale; a dated status line at least "+
+				"tells a reader how fresh the claim is.",
 				netdataHealthDDir, name, netdataInstallScript)
 		}
 	}

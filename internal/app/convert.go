@@ -16,24 +16,43 @@ import (
 // --- Conversion-fidelity diagnostics (cycle 9, L5) ---
 //
 // ClaudeToOpenAIRequest and GeminiToOpenAIRequest each map a fixed subset of
-// the caller's wire request onto dto.GeneralOpenAIRequest; every other field
-// the caller actually set is silently discarded before the request reaches
-// the vendor. The helpers below compute, for each converter, exactly which
-// of the fields the CALLER set were dropped — never a static list of every
-// field the converter doesn't map, since an always-present list would be
-// noise on every request that used none of them.
+// the caller's wire request onto dto.GeneralOpenAIRequest. The helpers below
+// report the caller-set fields that are dropped or downgraded before the
+// request reaches the vendor:
+//   - top-level fields the converter never reads at all (the bulk of the
+//     list in claudeDroppedFields / geminiDroppedFields below);
+//   - `thinking`, which is only conditionally honoured (see the branch
+//     outcome check in ClaudeToOpenAIRequest);
+//   - `tools`, which is only partially honoured — Claude tool entries keep
+//     name/description/schema and drop type/cache_control, Gemini tool
+//     entries with functionDeclarations are mapped while
+//     googleSearch/googleSearchRetrieval/codeExecution/urlContext siblings
+//     on the same request are reported under their own `tools.*` names;
+//   - `metadata`, reported only when it carries keys other than user_id,
+//     because newhub itself consumes metadata.user_id for other.end_user
+//     (see the comment on that check below).
+//
+// This is never a static list of every field the converter doesn't map —
+// only fields the CALLER actually set, so an always-present list would be
+// noise on every request that used none of them. It also does not cover
+// every way a request can be degraded in translation (see the residuals
+// named above); doc/product-integration-guide.md §J lists them so an absent
+// key is not read as a full-fidelity guarantee.
 
 const (
 	// conversionDroppedMax bounds conversion_dropped so a request that sets
 	// many unmapped fields cannot grow the log row without limit.
 	conversionDroppedMax = 16
-	// conversionDroppedNameMax bounds a single field name. None of the wire
-	// names emitted below come close to this today; the cap exists so this
-	// function can never be the reason a log row grows unbounded.
+	// conversionDroppedNameMax bounds a single field name — enforced by
+	// boundDroppedFields and covered by
+	// TestConversionDiagnostics_BoundsNameLength (convert_test.go). None of
+	// the wire names emitted below come close to this today; the cap exists
+	// so a future name cannot be the reason a log row grows unbounded.
 	conversionDroppedNameMax = 32
 	// conversionDroppedTruncated marks that the list was cut at
-	// conversionDroppedMax, so a name past the cap is never misread as "not
-	// dropped".
+	// conversionDroppedMax. Published verbatim in
+	// doc/product-integration-guide.md §J so a consumer can recognise the
+	// marker instead of reading it as an invented field name.
 	conversionDroppedTruncated = "…(truncated)"
 )
 
@@ -70,16 +89,82 @@ func boundDroppedFields(names []string) []string {
 	return uniq
 }
 
+// claudeToolProbe reads only the two dto.Tool fields the Claude->OpenAI tool
+// conversion (ClaudeToOpenAIRequest below) throws away: it keeps
+// name/description/input_schema and drops everything else the caller put on
+// a tool entry.
+type claudeToolProbe struct {
+	Type         string          `json:"type,omitempty"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+}
+
+// claudeToolsLossy reports whether any incoming Claude tool carries a
+// non-function `type` (e.g. Anthropic's server-side web_search) or a
+// `cache_control` block — both are silently dropped by the tool conversion
+// below, which only copies name/description/input_schema.
+func claudeToolsLossy(toolsAny any) bool {
+	if toolsAny == nil {
+		return false
+	}
+	probes, err := common.Any2Type[[]claudeToolProbe](toolsAny)
+	if err != nil {
+		return false
+	}
+	for _, p := range probes {
+		if p.Type != "" && p.Type != "function" {
+			return true
+		}
+		if len(p.CacheControl) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// claudeMetadataHasExtraKeys reports whether the caller's metadata object
+// carries anything besides user_id. newhub itself reads metadata.user_id
+// (deriveEndUserHash, provider/common/relay_info.go) and projects it into
+// other.end_user, so a metadata object containing only user_id is consumed,
+// not dropped — reporting it as dropped would tell a caller their end-user
+// attribution is broken when it works. A malformed (non-object) metadata
+// value is conservatively reported as dropped.
+func claudeMetadataHasExtraKeys(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return true
+	}
+	for k := range m {
+		if k != "user_id" {
+			return true
+		}
+	}
+	return false
+}
+
 // claudeDroppedFields returns the caller-supplied dto.ClaudeRequest field
-// names ClaudeToOpenAIRequest does not map onto dto.GeneralOpenAIRequest.
-// Each check fires only when the caller actually set the field.
-func claudeDroppedFields(r dto.ClaudeRequest) []string {
+// names ClaudeToOpenAIRequest does not map onto dto.GeneralOpenAIRequest, or
+// maps only partially (tools, metadata — see claudeToolsLossy /
+// claudeMetadataHasExtraKeys above). Each check fires only when the caller
+// actually set the field. thinkingDropped is computed by the caller from the
+// thinking branch's actual outcome (ClaudeToOpenAIRequest), not passed a
+// static predicate here, because whether `thinking` survives depends on the
+// channel-specific branch that already ran.
+func claudeDroppedFields(r dto.ClaudeRequest, thinkingDropped bool) []string {
 	var dropped []string
 	if r.TopK != 0 {
 		dropped = append(dropped, "top_k")
 	}
 	if r.ToolChoice != nil {
 		dropped = append(dropped, "tool_choice")
+	}
+	if claudeToolsLossy(r.Tools) {
+		dropped = append(dropped, "tools")
+	}
+	if thinkingDropped {
+		dropped = append(dropped, "thinking")
 	}
 	if len(r.ContextManagement) > 0 {
 		dropped = append(dropped, "context_management")
@@ -96,7 +181,7 @@ func claudeDroppedFields(r dto.ClaudeRequest) []string {
 	if len(r.McpServers) > 0 {
 		dropped = append(dropped, "mcp_servers")
 	}
-	if len(r.Metadata) > 0 {
+	if claudeMetadataHasExtraKeys(r.Metadata) {
 		dropped = append(dropped, "metadata")
 	}
 	if r.ServiceTier != "" {
@@ -115,15 +200,45 @@ func claudeDroppedFields(r dto.ClaudeRequest) []string {
 	return boundDroppedFields(dropped)
 }
 
+// geminiToolsDroppedNames returns the dotted wire names of the caller's
+// Gemini tool entries the tool conversion below never reads: it only ever
+// converts tool.FunctionDeclarations (per entry), so a googleSearch /
+// googleSearchRetrieval / codeExecution / urlContext sibling on the same
+// tools array vanishes with no diagnostic today. Reported per member present,
+// independent of whether functionDeclarations is also set on the same entry.
+func geminiToolsDroppedNames(r *dto.GeminiChatRequest) []string {
+	var names []string
+	for _, tool := range r.GetTools() {
+		if tool.GoogleSearch != nil {
+			names = append(names, "tools.googleSearch")
+		}
+		if tool.GoogleSearchRetrieval != nil {
+			names = append(names, "tools.googleSearchRetrieval")
+		}
+		if tool.CodeExecution != nil {
+			names = append(names, "tools.codeExecution")
+		}
+		if tool.URLContext != nil {
+			names = append(names, "tools.urlContext")
+		}
+	}
+	return names
+}
+
 // geminiDroppedFields returns the caller-supplied dto.GeminiChatRequest field
-// names GeminiToOpenAIRequest does not map onto dto.GeneralOpenAIRequest.
-// Each check fires only when the caller actually set the field. Wire names
-// match the Gemini JSON body the caller sent (camelCase), not the Go field.
+// names GeminiToOpenAIRequest does not map onto dto.GeneralOpenAIRequest, or
+// maps only partially (tools — see geminiToolsDroppedNames above). Each check
+// fires only when the caller actually set the field. Wire names match the
+// Gemini JSON body the caller sent (camelCase), not the Go field.
 func geminiDroppedFields(r *dto.GeminiChatRequest) []string {
 	if r == nil {
 		return nil
 	}
 	var dropped []string
+	if len(r.Requests) > 0 {
+		dropped = append(dropped, "requests")
+	}
+	dropped = append(dropped, geminiToolsDroppedNames(r)...)
 	if len(r.SafetySettings) > 0 {
 		dropped = append(dropped, "safetySettings")
 	}
@@ -205,6 +320,16 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 			}
 		}
 	}
+
+	// thinkingDropped is computed from what the branch above actually did —
+	// not from info.ChannelType/isOpenRouter, which would leak upstream
+	// identity into conversion_dropped (a TierPublic key). The caller set
+	// thinking but the branch neither produced a Reasoning payload nor
+	// changed the outgoing model name, so nothing carried the setting
+	// upstream.
+	thinkingDropped := claudeRequest.Thinking != nil &&
+		openAIRequest.Reasoning == nil &&
+		openAIRequest.Model == claudeRequest.Model
 
 	// Convert stop sequences
 	if len(claudeRequest.StopSequences) == 1 {
@@ -362,7 +487,7 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 
 	openAIRequest.Messages = openAIMessages
 
-	info.ConversionDropped = claudeDroppedFields(claudeRequest)
+	info.ConversionDropped = claudeDroppedFields(claudeRequest, thinkingDropped)
 
 	return &openAIRequest, nil
 }

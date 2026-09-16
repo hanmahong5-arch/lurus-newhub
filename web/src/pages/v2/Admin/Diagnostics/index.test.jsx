@@ -34,15 +34,25 @@ vi.mock('../../../../components/hifi/HFShell', () => ({
     React.createElement('div', { 'data-testid': 'hf-shell' }, children),
 }));
 
+// `confirmDialogState.lastProps` lets a test inspect exactly what this page
+// handed ConfirmDialog — in particular `confirmText` — without pulling in
+// ConfirmDialog's own arm/disarm rendering (that contract is
+// ConfirmDialog.test.jsx's job). vi.hoisted because vi.mock factories are
+// lifted above this file's other module-scope statements (same pattern as
+// web/src/components/playground/cx_optimized_components.test.jsx).
+const confirmDialogState = vi.hoisted(() => ({ lastProps: null }));
+
 // Same shim ModelRateLimits/index.test.jsx uses: the typed-confirmation
 // arm/disarm logic is ConfirmDialog's own unit-tested contract
 // (ConfirmDialog.test.jsx); what THIS page's test must prove is that
-// nothing is sent to the backend before onConfirm fires, and that the
-// dialog only opens from the "purge all" button — not the wiring inside
-// the modal itself.
+// nothing is sent to the backend before onConfirm fires, that the dialog
+// only opens from the "purge all" button, and that the props this page
+// hands to ConfirmDialog actually arm it (confirmText).
 vi.mock('../../../../components/common/ConfirmDialog', () => ({
-  default: ({ visible, onConfirm, onCancel, title }) =>
-    visible
+  default: (props) => {
+    confirmDialogState.lastProps = props;
+    const { visible, onConfirm, onCancel, title } = props;
+    return visible
       ? React.createElement(
           'div',
           { 'data-testid': 'confirm-dialog' },
@@ -58,7 +68,8 @@ vi.mock('../../../../components/common/ConfirmDialog', () => ({
             'cancel',
           ),
         )
-      : null,
+      : null;
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -84,14 +95,19 @@ import { API, showSuccess } from '../../../../helpers';
 const AFFINITY_URL = '/api/v2/admin/routing/affinity';
 const TOTP_URL = '/api/v2/admin/security/totp-stats';
 
-const affinityResponse = (data) => ({
-  data: { success: true, scope: 'replica', data },
+const affinityResponse = (data, scope = 'replica') => ({
+  data: { success: true, scope, data },
 });
 
 const totpResponse = (data) => ({
   data: { success: true, message: '', data },
 });
 
+// backend defaults to 'redis' — this is deliberately "the redis case" for
+// mem_entries (R3): the counter is meaningful when backend=='memory' and
+// reads 0 otherwise (doc/product-integration-guide.md), so the default
+// fixture must not be the memory case or the redis-hides-mem_entries
+// assertion below would not exercise that branch at all.
 const AFFINITY_DATA = {
   enabled: true,
   ttl_seconds: 300,
@@ -112,7 +128,7 @@ const TOTP_DATA = {
 };
 
 // Branches the shared API.get mock by URL, matching the page's
-// Promise.all([affinity, totp]) fetch.
+// Promise.allSettled([affinity, totp]) fetch.
 const wireGet = (affinityData = AFFINITY_DATA, totpData = TOTP_DATA) => {
   API.get.mockImplementation((url) => {
     if (String(url).includes('/routing/affinity')) {
@@ -129,6 +145,7 @@ beforeEach(() => {
   API.get.mockReset();
   API.delete.mockReset();
   showSuccess.mockReset();
+  confirmDialogState.lastProps = null;
 });
 
 describe('Admin Diagnostics page — affinity + TOTP panels', () => {
@@ -158,11 +175,50 @@ describe('Admin Diagnostics page — affinity + TOTP panels', () => {
     expect(screen.getByTestId('diag-affinity-backend').textContent).toBe(
       'redis',
     );
+    expect(screen.getByTestId('diag-affinity-ttl').textContent).toBe('300');
+    expect(screen.getByTestId('diag-affinity-enabled').textContent).toBe('yes');
+    // R6: scope is rendered from the response, not a hard-coded string.
+    expect(screen.getByTestId('diag-affinity-scope-note').textContent).toMatch(
+      /replica/,
+    );
+  });
+
+  // R3 (B-2): mem_entries counts the in-process fallback map and is
+  // meaningless while the live backend is redis — the fixture above uses
+  // backend:'redis', so this asserts the counter is NOT presented as a
+  // binding count in that case, only the caveat sub-label is.
+  it('does not render mem_entries as a binding count when backend is redis', async () => {
+    wireGet();
+    render(<V2AdminDiagnostics />);
+
+    await waitFor(() => screen.getByTestId('diag-affinity-hit'));
+
+    expect(screen.queryByTestId('diag-affinity-mementries')).toBeNull();
+    expect(
+      screen.getByTestId('diag-affinity-mementries-note').textContent,
+    ).toMatch(/redis/i);
+  });
+
+  it('renders mem_entries as a real count when backend is memory', async () => {
+    wireGet({ ...AFFINITY_DATA, backend: 'memory', mem_entries: 9 });
+    render(<V2AdminDiagnostics />);
+
+    await waitFor(() => screen.getByTestId('diag-affinity-mementries'));
+
     expect(screen.getByTestId('diag-affinity-mementries').textContent).toBe(
       '9',
     );
-    expect(screen.getByTestId('diag-affinity-ttl').textContent).toBe('300');
-    expect(screen.getByTestId('diag-affinity-enabled').textContent).toBe('yes');
+    expect(screen.queryByTestId('diag-affinity-mementries-note')).toBeNull();
+  });
+
+  // R5 (A-5): the `no` half of yesNo has no assertion in the default
+  // fixture (enabled:true) — assert it explicitly for enabled:false.
+  it('renders "no" for affinity.enabled:false, not a truthy default', async () => {
+    wireGet({ ...AFFINITY_DATA, enabled: false });
+    render(<V2AdminDiagnostics />);
+
+    await waitFor(() => screen.getByTestId('diag-affinity-enabled'));
+    expect(screen.getByTestId('diag-affinity-enabled').textContent).toBe('no');
   });
 
   it('renders the real TOTP adoption numbers returned by the API, not a placeholder', async () => {
@@ -211,6 +267,48 @@ describe('Admin Diagnostics page — affinity + TOTP panels', () => {
       screen.getByText(/You do not have permission to view diagnostics/),
     );
     expect(screen.queryByTestId('diag-affinity-hit')).toBeNull();
+  });
+
+  // R5 (A-3/A-4): a rejected GET with status 403 (RootJWTAuth's Bearer-JWT
+  // branch) must hit the same forbidden panel as a 200 {success:false} —
+  // deleting the 403 branch in classifySettled must turn this red.
+  it('shows the permission notice when a GET rejects with HTTP 403', async () => {
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/routing/affinity')) {
+        return Promise.reject({ response: { status: 403 } });
+      }
+      return Promise.resolve(totpResponse(TOTP_DATA));
+    });
+
+    render(<V2AdminDiagnostics />);
+
+    await waitFor(() =>
+      screen.getByText(/You do not have permission to view diagnostics/),
+    );
+    expect(screen.queryByTestId('diag-affinity-hit')).toBeNull();
+  });
+
+  // R2 (B-1): a genuine backend failure on ONE endpoint must not blank or
+  // fabricate numbers for either panel. Promise.all (unlike allSettled)
+  // would reject here and both panels would render nothing — this is the
+  // trap oracle for that regression.
+  it('renders an explicit unavailable marker for a panel whose GET failed, and still renders the other panel', async () => {
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/routing/affinity')) {
+        return Promise.resolve(affinityResponse(AFFINITY_DATA));
+      }
+      return Promise.reject({ response: { status: 500 } });
+    });
+
+    render(<V2AdminDiagnostics />);
+
+    await waitFor(() => screen.getByTestId('diag-totp-unavailable'));
+
+    // The failed panel must not show a fabricated 0.0%/no default anywhere.
+    expect(screen.queryByTestId('diag-totp-adoption-pct')).toBeNull();
+    expect(screen.queryByTestId('diag-totp-enrolled')).toBeNull();
+    // The other panel, whose GET succeeded, still renders its real numbers.
+    expect(screen.getByTestId('diag-affinity-hit').textContent).toBe('137');
   });
 });
 
@@ -263,6 +361,30 @@ describe('Admin Diagnostics page — purge one binding', () => {
 
     expect(API.delete).not.toHaveBeenCalled();
   });
+
+  // R5 (A-6): a logged-in non-root session answers this DELETE with HTTP
+  // 200 {"success":false,"message":...} — neither 204 nor a rejection.
+  // Without the non-204 else-branch the button silently does nothing.
+  it('shows the server message on a non-204 response', async () => {
+    wireGet();
+    API.delete.mockResolvedValue({
+      status: 200,
+      data: { success: false, message: 'root required for this action' },
+    });
+    render(<V2AdminDiagnostics />);
+
+    await waitFor(() => screen.getByTestId('diag-affinity-purge-key-input'));
+    fireEvent.change(screen.getByTestId('diag-affinity-purge-key-input'), {
+      target: { value: 'abc123' },
+    });
+    fireEvent.click(screen.getByTestId('diag-affinity-purge-key-btn'));
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('diag-affinity-purge-key-msg').textContent,
+      ).toMatch(/root required for this action/),
+    );
+  });
 });
 
 describe('Admin Diagnostics page — purge all (confirmation-gated)', () => {
@@ -290,6 +412,27 @@ describe('Admin Diagnostics page — purge all (confirmation-gated)', () => {
         '/api/v2/admin/routing/affinity?all=true',
       ),
     );
+    // R5 (A-5): the dialog closes after a successful confirm — without
+    // setPurgeAllOpen(false) it would stay mounted.
+    await waitFor(() =>
+      expect(screen.queryByTestId('confirm-dialog')).toBeNull(),
+    );
+  });
+
+  // R1 (A-1): the confirmation contract is only real if this page actually
+  // hands ConfirmDialog the literal text that arms its Confirm button
+  // (ConfirmDialog.jsx's `armed = inputValue === confirmText`). A missing
+  // or wrong confirmText prop makes purge-all permanently unusable in
+  // production while every test using the local click-through stub still
+  // passes — so this asserts the prop directly.
+  it('passes the literal confirmText "PURGE ALL" to ConfirmDialog', async () => {
+    wireGet();
+    render(<V2AdminDiagnostics />);
+
+    await waitFor(() => screen.getByTestId('diag-affinity-purge-all-btn'));
+    fireEvent.click(screen.getByTestId('diag-affinity-purge-all-btn'));
+
+    expect(confirmDialogState.lastProps.confirmText).toBe('PURGE ALL');
   });
 
   it('sends nothing when the confirmation is cancelled', async () => {
@@ -317,5 +460,27 @@ describe('Admin Diagnostics page — purge all (confirmation-gated)', () => {
 
     await waitFor(() => expect(showSuccess).toHaveBeenCalled());
     expect(String(showSuccess.mock.calls[0][0])).toMatch(/incomplete/i);
+  });
+
+  // R4 (B-3): doPurgeAll has no catch upstream of ConfirmDialog, so a
+  // rejected DELETE (e.g. Redis down) must not throw out of the handler —
+  // it must leave the dialog open, matching the ModelRateLimits precedent
+  // (index.jsx's `catch (_) { // error toast from the interceptor }`).
+  it('leaves the confirmation dialog open when the purge-all request is rejected', async () => {
+    wireGet();
+    render(<V2AdminDiagnostics />);
+
+    await waitFor(() => screen.getByTestId('diag-affinity-purge-all-btn'));
+    fireEvent.click(screen.getByTestId('diag-affinity-purge-all-btn'));
+
+    API.delete.mockRejectedValue({ response: { status: 500 } });
+    fireEvent.click(screen.getByTestId('confirm-ok'));
+
+    await waitFor(() => expect(API.delete).toHaveBeenCalled());
+    // Give the rejected promise's catch a turn to run, then assert the
+    // dialog is still mounted (no uncaught rejection prevented cleanup).
+    await waitFor(() =>
+      expect(screen.getByTestId('confirm-dialog')).toBeInTheDocument(),
+    );
   });
 });

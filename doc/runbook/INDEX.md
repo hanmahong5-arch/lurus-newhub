@@ -11,9 +11,36 @@ alert / signal comes from), **Triggered by** (the literal condition),
 |---|---|---|
 | [pool-threshold-alert](pool-threshold-alert.md) | `CreditPoolBalanceLow` / `CreditPoolExhausted` rules in `deploy/k8s/r6-stage/newhub-prometheus-rule.yaml` — **NOT DEPLOYED**, nothing evaluates them; today the trigger is a human reading `credit_pool_balance` on the host netdata | warning / page (intended) |
 | [wallet-revert-stranded](wallet-revert-stranded.md) | log line `STRANDED wallet debit` from `tenant_credit_pool.go` | page |
-| [upstream-5xx-burst](upstream-5xx-burst.md) | netdata `newhub_upstream_5xx_burst` (`deploy/r6-host-netdata/health.d/newhub.conf`, **installed**) — `relay_errors_total{error_type="upstream_5xx"}` | warning / critical |
-| [rate-limit-degraded](rate-limit-degraded.md) | netdata `newhub_rate_limit_degraded` (`deploy/r6-host-netdata/health.d/newhub.conf`, **installed**) — `rate_limit_degraded_total` | warning / critical |
-| [failover-suppressed-surge](failover-suppressed-surge.md) | netdata `newhub_failover_suppressed_surge` (`deploy/r6-host-netdata/health.d/newhub.conf`, **installed**) — `relay_failover_suppressed_total` | warning / critical |
+
+### Repo-owned netdata alarms
+
+The 11 rows below all come from `deploy/r6-host-netdata/health.d/newhub.conf`.
+**Install state changes as the operator runs `scripts/install-netdata-alarms.sh`
+on R6; read the conf file's own "STATUS" header for the current dated state
+rather than trusting this table's prose, which cannot update itself.** As of
+2026-09-16: repo copy adopted from the host 2026-08-20, three new alarms
+merged 2026-09-16, re-installation of the merged file onto R6 is
+operator-run and PENDING. `internal/pkg/metrics/netdata_alarm_series_test.go`
+proves every metric named below is a real, written series and that every row
+here is reachable from a `# runbook:` pointer in the conf file — it does not
+prove, and cannot prove from a repo checkout, that a given alarm's netdata
+CHART currently has any bound data (see each runbook's own "LIVE STATUS"
+line, dated 2026-09-15 from the operator's direct host check, for which ones
+do).
+
+| Runbook | Trigger | Severity |
+|---|---|---|
+| [platform-billing-breaker-open](platform-billing-breaker-open.md) | netdata `newhub_platform_breaker_open` — `lurus_billing_circuit_breaker_state` | critical |
+| [billing-outbox-failures](billing-outbox-failures.md) | netdata `newhub_billing_outbox_failures` — `lurus_billing_outbox_failed_total` | critical |
+| [credit-pool-low](credit-pool-low.md) | netdata `newhub_credit_pool` — `lurus_gateway_credit_pool_balance` | warning / critical |
+| [channel-breaker-open](channel-breaker-open.md) | netdata `newhub_channel_breaker_open` — `lurus_gateway_circuit_breaker_state` | warning |
+| [billing-outbox-backlog](billing-outbox-backlog.md) | netdata `newhub_billing_outbox_backlog` — `lurus_billing_outbox_pending` | warning |
+| [relay-5xx-elevated](relay-5xx-elevated.md) | netdata `newhub_relay_5xx_elevated` — `requests_total{status=5*}` (bound to `path=/api/health` only, see the runbook) | warning |
+| [cost-spike-429](cost-spike-429.md) | netdata `newhub_cost_spike_429` — `requests_total{status=429}` | warning |
+| [quota-cap-402](quota-cap-402.md) | netdata `newhub_quota_cap_402` — `requests_total{status=402}` | warning |
+| [upstream-5xx-burst](upstream-5xx-burst.md) | netdata `newhub_upstream_5xx_burst` — `relay_errors_total{error_type="upstream_5xx"}` | warning / critical |
+| [rate-limit-degraded](rate-limit-degraded.md) | netdata `newhub_rate_limit_degraded` — `rate_limit_degraded_total` | warning / critical |
+| [failover-suppressed-surge](failover-suppressed-surge.md) | netdata `newhub_failover_suppressed_surge` — `relay_failover_suppressed_total` | warning / critical |
 
 | [release-download-gate](release-download-gate.md) | `RELEASE_GATED_PRODUCTS` entitlement gate (mechanism shipped, default OFF) | activation |
 

@@ -203,8 +203,8 @@ func SetApiV2Router(router *gin.Engine) {
 		}
 
 		// ================================================================
-		// Tenant-scoped Analytics (L4, 2026-09-12) — model/vendor rankings
-		// leaderboard. Admin gate lives inside the handler (requireTenantAdmin),
+		// Tenant-scoped Analytics (L4, 2026-09-12) — model/vendor/group
+		// rankings leaderboard. Admin gate lives inside the handler (requireTenantAdmin),
 		// same pattern as GetAllLogStatV2 above; CriticalRateLimit here mirrors
 		// the root route (two GROUP BY aggregates per cache miss — a hit
 		// within the 5-minute in-process cache runs no query at all).
@@ -535,8 +535,8 @@ func SetApiV2Router(router *gin.Engine) {
 			// Model performance analytics + platform-wide usage-log CSV export
 			// (rate-limited: heavy aggregation / bulk row scans over logs).
 			adminRoute.GET("/analytics/model-performance", middleware.CriticalRateLimit(), handler.GetModelPerformanceV2)
-			// L4 (2026-09-12): period-over-period model/vendor leaderboard,
-			// optionally filtered to one tenant. Same rate-limit rationale —
+			// L4 (2026-09-12): period-over-period model/vendor/group
+			// leaderboard, optionally filtered to one tenant. Same rate-limit rationale —
 			// each cache miss runs two GROUP BY aggregates over logs; a hit
 			// within the 5-minute in-process cache runs none.
 			adminRoute.GET("/analytics/rankings", middleware.CriticalRateLimit(), handler.GetRankingsV2)

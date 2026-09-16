@@ -74,11 +74,11 @@ func GetModelPerformanceV2(c *gin.Context) {
 	})
 }
 
-// GetRankingsV2 is the platform-root model/vendor leaderboard, optionally
-// filtered to one tenant. See v2_analytics_rankings.go for the shared
-// query/cache path and GetTenantRankingsV2, its tenant-admin sibling.
+// GetRankingsV2 is the platform-root model/vendor/group leaderboard,
+// optionally filtered to one tenant. See v2_analytics_rankings.go for the
+// shared query/cache path and GetTenantRankingsV2, its tenant-admin sibling.
 //
-// GET /api/v2/admin/analytics/rankings?by=model|vendor&hours=1..720&tenant_id=
+// GET /api/v2/admin/analytics/rankings?by=model|vendor|group&hours=1..720&tenant_id=
 //
 // Root-only (router applies RootJWTAuth + CriticalRateLimit on the route).
 func GetRankingsV2(c *gin.Context) {

@@ -1,17 +1,22 @@
 # Runbook — Upstream 5xx Burst
 
 > **Source**: netdata alarm `newhub_upstream_5xx_burst`,
-> `deploy/r6-host-netdata/health.d/newhub.conf` (installed via
-> `scripts/install-netdata-alarms.sh`; ownership and the "does this page
-> anyone" limit are in `deploy/r6-host-netdata/README.md`).
+> `deploy/r6-host-netdata/health.d/newhub.conf` — see the conf file's own
+> "STATUS" header for whether it is installed on R6 today; ownership and the
+> "does this page anyone" limit are in `deploy/r6-host-netdata/README.md`.
 > **Triggered by**: `lurus_gateway_relay_errors_total{error_type="upstream_5xx"}`
-> rising — 5 in 5 minutes warns, 20 in 5 minutes is critical (thresholds are
-> first-cut, no production traffic to calibrate against; see
-> `deploy/k8s/r6-stage/newhub-prometheus-rule.yaml`'s equivalent, undeployed,
-> `RelayProviderErrorSpike` rule for the same caveat).
+> rate averaged over 5 minutes — warn above 0.02/s, crit above 0.1/s.
+> Thresholds are first-cut and **not calibrated against live data**; record
+> the measured rate during the UAT probe below and revise them then.
+> **Scrape topology**: the go.d job scrapes ONE NodePort that round-robins
+> across 3 replicas at `update_every = 10s` — a rate reading is a
+> per-replica sample, not a gateway-wide rate; a burst confined to one
+> replica can be under-counted. See
+> `deploy/r6-host-netdata/health.d/newhub.conf`'s "PROVOKABLE ON DEMAND"
+> section header for the full caveat.
 > **Severity**: warning / critical (netdata `to: sysadmin` — see the README's
 > "Ownership boundary" for what that does and does not mean today).
-> **Last review**: 2026-09-15.
+> **Last review**: 2026-09-16.
 
 ## Symptom
 
@@ -55,9 +60,10 @@ curl -s http://localhost:30850/metrics | grep 'lurus_gateway_relay_errors_total{
 No automatic recovery action ships with this alarm — it is observability,
 not enforcement. The relay's own retry/failover logic (`relay.go`,
 untouched by this lane) already reacts to 5xx per-request; this alarm is for
-a human deciding whether to disable a channel manually
-(`PUT /api/v2/admin/channels/:id` with `status=disabled`) while the provider
-recovers.
+a human deciding whether to disable a channel manually:
+`PUT /api/v2/{tenant_slug}/channels/{id}` with `status=2`
+(`common.ChannelStatusManuallyDisabled` — `internal/pkg/common/constants.go`)
+while the provider recovers.
 
 ## Verify
 
@@ -88,7 +94,12 @@ done
 
 Then watch `curl -s http://localhost:19999/api/v1/alarms?all | grep -A5 newhub_upstream_5xx_burst`
 move CLEAR → WARNING, and CLEAR again once the burst stops (operator-run —
-see the cycle plan's UAT probe for this lane).
+see the cycle plan's UAT probe for this lane). Given the scrape-topology
+caveat above (3 replicas round-robinned at `update_every = 10s`), 8 requests
+in a short window may not be enough to move the alarm if they land on
+different replicas — the operator's probe is what establishes the real
+number and should update the header's thresholds afterward, not this
+runbook's prose.
 
 ## Prevent
 

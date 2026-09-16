@@ -218,14 +218,24 @@ func getVendorUsageTotals(startTime, endTime int64, tenantID string) ([]RankingU
 }
 
 // rankingsGroupExpr is the by="group" aggregation key: `group` is a SQL
-// reserved word, so the identifier is double-quoted (Postgres rejects an
-// unquoted `GROUP BY group`; SQLite's more permissive parser accepts it
-// either way, which is why this must be verified against the real Postgres
-// dialector — see log_rankings_test.go's
-// TestRankings_ByGroup_QuotesTheReservedIdentifier, not the hermetic
-// SQLite tier). Rows with an empty group fold into one explicit
-// "(ungrouped)" bucket rather than appearing as a blank-named row.
-const rankingsGroupExpr = `COALESCE(NULLIF("group", ''), '(ungrouped)')`
+// reserved word in both Postgres and SQLite, so the identifier must be
+// double-quoted — an unquoted `GROUP BY group` is a syntax error on either
+// dialect. It is built from the shared logGroupCol identifier
+// (internal/adapter/repo/main.go, set by InitCol) rather than a second
+// literal, so this expression and the sibling log.go queries that also
+// read logGroupCol cannot drift apart on an upstream merge.
+// TestRankings_ByGroup_QuotesTheReservedIdentifier
+// (log_rankings_test.go) runs this against a real-Postgres-dialector
+// DryRun handle to pin the exact SQL Postgres receives; the hermetic
+// SQLite tests in the same file exercise the query's grouping/bucketing
+// behaviour. Rows with an empty group fold into one explicit "(ungrouped)"
+// bucket rather than appearing as a blank-named row — a group literally
+// named "(ungrouped)" is indistinguishable from that bucket; this is a
+// known, accepted non-goal (group names are free text, see
+// internal/adapter/middleware/auth.go:738-744).
+func rankingsGroupExpr() string {
+	return `COALESCE(NULLIF(` + logGroupCol + `, ''), '(ungrouped)')`
+}
 
 // getGroupUsageTotals is GetModelUsageTotals' group-column-keyed sibling.
 // Unexported: GetRankings is its only caller today, mirroring
@@ -239,12 +249,12 @@ func getGroupUsageTotals(startTime, endTime int64, tenantID string) ([]RankingUs
 	}
 	var rows []RankingUsageTotal
 	err := base.
-		Select(rankingsGroupExpr + ` AS name,
+		Select(rankingsGroupExpr() + ` AS name,
 			COUNT(*) AS requests,
 			COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
 			COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
 			COALESCE(SUM(quota), 0) AS quota`).
-		Group(rankingsGroupExpr).
+		Group(rankingsGroupExpr()).
 		Find(&rows).Error
 	return rows, err
 }
