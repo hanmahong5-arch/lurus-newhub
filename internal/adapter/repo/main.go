@@ -487,6 +487,14 @@ func migrateDB() error {
 		// POST /v1/responses id to the channel that produced it so
 		// GET/DELETE /v1/responses/:response_id can route back to it.
 		&entity.ResponseRegistry{},
+		// v2 console Chat session persistence (migration 038, cycle-10 L3) —
+		// dual-creation like 029/032/033/034/036: migration 038's column
+		// types already match what GORM derives from these structs, so this
+		// is a no-op ALTER on an existing table and the sole creator on a
+		// fresh Postgres that skips the SQL runner (same CreditPoolFundEvent
+		// lesson noted above).
+		&entity.ChatSession{},
+		&entity.ChatMessage{},
 	)
 	if err != nil {
 		return err

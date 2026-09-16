@@ -230,32 +230,159 @@ describe('Settings page', () => {
     });
   });
 
-  // 2. Notifications section still has WIPBanner.
-  it('shows WIPBanner on notifications section', async () => {
+  // 2. RE-INVERTED: the retirement this test used to lock was itself
+  // wrong — PUT /api/user/setting (user.go:521-535) and its dispatch path
+  // (app.NotifyUser, internal/app/user_notify.go:53, called from
+  // checkAndSendQuotaNotify on the live relay path) already existed, and
+  // components/settings/PersonalSetting.jsx was already a working consumer
+  // of the same store. This locks the restored panel: seeded from
+  // profile.setting, and the PUT body uses exactly the field names in
+  // user.go:521-531 — mirroring
+  // components/settings/q1_personal_setting.test.jsx:374-429's key-name
+  // and type assertions.
+  it('notifications section is seeded from profile.setting and saves with the exact backend field names', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              ...fakeProfile,
+              setting: JSON.stringify({
+                notify_type: 'gotify',
+                quota_warning_threshold: 250000,
+                gotify_url: 'https://gotify.example.test',
+                gotify_token: 'tok-abc',
+                gotify_priority: 7,
+                // Opposite booleans on purpose. This panel has no editor for
+                // either field, so it must send back what the server gave it;
+                // hardcoding a value here instead of carrying it through would
+                // silently reset a user's preference on every save. Same
+                // technique as q1_personal_setting.test.jsx.
+                accept_unset_model_ratio_model: true,
+                record_ip_log: false,
+              }),
+            },
+          },
+        });
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+    API.put.mockResolvedValue({ data: { success: true } });
+
     render(<HFSettings />);
 
-    const notifNav = screen.getByText('Notifications');
-    notifNav.click();
+    screen.getByText('Notifications').click();
 
     await waitFor(() => {
-      const banners = screen.getAllByTestId('wip-banner');
-      const texts = banners.map((b) => b.textContent);
-      expect(texts.some((t) => /notification/i.test(t))).toBe(true);
+      expect(screen.getByTestId('notifications-section')).toBeTruthy();
     });
+
+    // Seeded from profile.setting: gotify was the saved type, so its
+    // fields — not webhook/email/bark — are the ones rendered, with the
+    // saved values, not the useState defaults ('email' / 100000).
+    await waitFor(() => {
+      expect(screen.getByTestId('notify-type-select').value).toBe('gotify');
+    });
+    expect(screen.getByTestId('notify-threshold-input').value).toBe('250000');
+    expect(screen.getByTestId('notify-gotify-url-input').value).toBe(
+      'https://gotify.example.test',
+    );
+    expect(screen.getByTestId('notify-gotify-token-input').value).toBe(
+      'tok-abc',
+    );
+    expect(screen.getByTestId('notify-gotify-priority-input').value).toBe('7');
+
+    fireEvent.click(screen.getByTestId('notify-save-btn'));
+
+    await waitFor(() => {
+      expect(API.put.mock.calls.some((c) => c[0] === '/api/user/setting')).toBe(
+        true,
+      );
+    });
+
+    const body = API.put.mock.calls.find(
+      (c) => c[0] === '/api/user/setting',
+    )[1];
+    expect(Object.keys(body).sort()).toEqual([
+      'accept_unset_model_ratio_model',
+      'bark_url',
+      'gotify_priority',
+      'gotify_token',
+      'gotify_url',
+      'notification_email',
+      'notify_type',
+      'quota_warning_threshold',
+      'record_ip_log',
+      'webhook_secret',
+      'webhook_url',
+    ]);
+    expect(body.notify_type).toBe('gotify');
+    expect(body.gotify_url).toBe('https://gotify.example.test');
+    expect(body.gotify_token).toBe('tok-abc');
+    expect(body.quota_warning_threshold).toBe(250000);
+    expect(typeof body.quota_warning_threshold).toBe('number');
+    expect(body.gotify_priority).toBe(7);
+    expect(typeof body.gotify_priority).toBe('number');
+    // Carried through from the seed, not re-derived from a default.
+    expect(body.accept_unset_model_ratio_model).toBe(true);
+    expect(body.record_ip_log).toBe(false);
   });
 
-  // 3. Team section still has WIPBanner.
-  it('shows WIPBanner on team section', async () => {
+  // The form is seeded from GET /user/me. If that call fails, profile stays
+  // null, the form shows its useState defaults, and PUT /api/user/setting
+  // replaces the whole blob — so an enabled save button would overwrite the
+  // user's real webhook/gotify configuration with 'email' / 100000 / empty.
+  it('notifications save is disabled until the form has been seeded from the server', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.reject(new Error('network down'));
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+
+    render(<HFSettings />);
+    screen.getByText('Notifications').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('notifications-section')).toBeTruthy();
+    });
+
+    const btn = screen.getByTestId('notify-save-btn');
+    expect(btn.disabled).toBe(true);
+
+    fireEvent.click(btn);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(API.put.mock.calls.some((c) => c[0] === '/api/user/setting')).toBe(
+      false,
+    );
+  });
+
+  // 3. RE-INVERTED: the interim "managed on platform identity" copy plus
+  // outbound link this test used to lock was itself a false claim —
+  // identity.lurus.cn has no
+  // customer-facing team/member surface (its authenticated nav is
+  // wallet/topup/subscriptions/invoices/refunds/redeem/account/
+  // data-privacy; the only org-membership screen is an internal /admin/v1
+  // tool). The section now states plainly that the capability is not
+  // available, with no outbound link at all.
+  it('team section states plainly that team management is not available, with no link and no WIPBanner', async () => {
     render(<HFSettings />);
 
     const teamNav = screen.getByText('Team & roles');
     teamNav.click();
 
     await waitFor(() => {
-      const banners = screen.getAllByTestId('wip-banner');
-      const texts = banners.map((b) => b.textContent);
-      expect(texts.some((t) => /team/i.test(t))).toBe(true);
+      expect(screen.getByTestId('team-section')).toBeTruthy();
     });
+
+    expect(screen.queryByTestId('wip-banner')).toBeNull();
+    expect(screen.queryByTestId('team-identity-link')).toBeNull();
+    expect(
+      screen.getByText(
+        'Per-tenant team management — invites, roles, removal — is not available in this product yet.',
+      ),
+    ).toBeTruthy();
   });
 
   // 4. Clicking "revoke" on a session row opens the ConfirmDialog.
@@ -640,28 +767,51 @@ describe('Settings page', () => {
     expect(screen.queryByText(/Loading…/)).toBeNull();
   });
 
-  // 8. Notifications tab — Wave A Squad 5A: stub -> read-only.
-  //    Asserts: WIPBanner still present; all 3 channel toggle buttons are
-  //    disabled with the Wave B tooltip.
-  it('notifications tab renders 3 channels with disabled toggles + WIP banner', async () => {
+  // 8. This is the page-wide oracle for this cycle's rule: Settings renders
+  // zero WIPBanners, in any section — including the restored Notifications
+  // section (real form now, not the old 3 hard-coded email/webhook/in-app
+  // channels with disabled toggles behind a WIPBanner that this test used
+  // to lock).
+  it('renders zero WIPBanners in any section, and the old placeholder notification channels are gone', async () => {
     render(<HFSettings />);
 
-    screen.getByText('Notifications').click();
-
-    // WIPBanner still shows
-    await waitFor(() => {
-      const banners = screen.getAllByTestId('wip-banner');
-      const texts = banners.map((b) => b.textContent);
-      expect(texts.some((t) => /notification/i.test(t))).toBe(true);
-    });
-
-    // All 3 channels rendered with disabled toggles + Wave B tooltip
-    for (const key of ['email', 'webhook', 'inapp']) {
-      const btn = screen.getByTestId(`notif-toggle-${key}`);
-      expect(btn).toBeTruthy();
-      expect(btn.disabled).toBe(true);
-      expect(btn.title).toMatch(/wave b/i);
+    for (const label of [
+      'Profile',
+      'Security',
+      'Subscription',
+      'Billing',
+      'Notifications',
+      'Team & roles',
+      'Integrations',
+      'Region & data',
+      'Danger zone',
+    ]) {
+      // getAllByText, not getByText: once a nav item's own section is
+      // active, its label also appears as the page <h1> title — the nav
+      // entry is always first in DOM order (left column renders before
+      // the right content pane).
+      screen.getAllByText(label)[0].click();
+      // Wait for the section switch to actually land (the <h1> title is a
+      // heading, unlike the nav item, so this cannot resolve against a
+      // stale pre-click render) before asserting on what it rendered —
+      // otherwise a `waitFor` whose very first synchronous check already
+      // sees zero banners (because the PREVIOUS section had none either)
+      // resolves without ever re-checking post-click, and the assertion
+      // below would pass on a page that had not switched sections yet.
+      await waitFor(() => {
+        expect(
+          screen.getByRole('heading', { level: 1, name: label }),
+        ).toBeTruthy();
+      });
+      expect(screen.queryAllByTestId('wip-banner').length).toBe(0);
     }
+
+    // The old hard-coded 3-channel placeholder toggles are gone — the
+    // section itself is back (asserted above via the heading loop and by
+    // test 2), just rendering the real form instead.
+    expect(screen.queryByTestId('notif-toggle-email')).toBeNull();
+    expect(screen.queryByTestId('notif-toggle-webhook')).toBeNull();
+    expect(screen.queryByTestId('notif-toggle-inapp')).toBeNull();
   });
 
   // 9. Honesty: Integrations must NOT paint fake "connected · ok" status.

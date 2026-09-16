@@ -71,6 +71,14 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"PUT /api/v2/:tenant_slug/user/me":  true, // TestUpdateSelfV2_CrossTenantIsolation
 		// billing checkout status ownership (internal/adapter/handler/v2_billing_checkout_status_idor_test.go)
 		"GET /api/v2/user/billing/checkout/:order_no/status": true, // TestGetBillingCheckoutStatus_CrossAccountIDOR
+		// chat session persistence — migration 038, cycle-10 L3
+		// (router/chat_sessions_real_chain_test.go). GetChatSessionOwned/
+		// UpdateChatSessionOwned/DeleteChatSessionOwned (repo/chat_session.go)
+		// all filter by (id, tenant_id, user_id) in one WHERE clause, so
+		// another user's session id and a nonexistent one 404 identically.
+		"GET /api/v2/:tenant_slug/chat/sessions/:id":    true, // TestChatSessionsRealChain_OwnershipFailClosed_SameShape
+		"PATCH /api/v2/:tenant_slug/chat/sessions/:id":  true, // TestChatSessionsRealChain_OwnershipFailClosed_SameShape
+		"DELETE /api/v2/:tenant_slug/chat/sessions/:id": true, // TestChatSessionsRealChain_OwnershipFailClosed_SameShape
 	}
 
 	// Not a cross-tenant/cross-account IDOR surface, each with the reason no
@@ -94,6 +102,7 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/:tenant_slug/redemptions":        "CreateRedemptionV2 stamps the caller's own tenant_id; cannot target another tenant",
 		"POST /api/v2/:tenant_slug/projects":           "CreateProjectV2 stamps the caller's own tenant_id from tenantCtx; cannot target another tenant",
 		"POST /api/v2/:tenant_slug/redeem":             "self-service: RedeemCodeV2 redeems into the caller's own balance (mirrors v1's POST /api/user/topup exemption)",
+		"POST /api/v2/:tenant_slug/chat/sessions":      "CreateChatSessionV2 stamps the caller's own (tenant_id, user_id) from tenantCtx (migration 038, cycle-10 L3); cannot target another tenant or user",
 
 		// ---- credential-is-the-resource: the token/code presented IS the auth, mirrors v1's rationale ----
 		"POST /api/v2/:tenant_slug/provision": "public entitlement-token exchange: the platform entitlement token (verified offline against the platform JWKS) is the credential",

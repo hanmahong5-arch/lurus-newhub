@@ -38,7 +38,7 @@ vi.mock('../../hooks/common/useFormDraft', () => ({
   clearAllDrafts: vi.fn(),
 }));
 
-import HFShell, { visibleNavItems } from './HFShell';
+import HFShell, { visibleNavItems, NAV_SECTIONS } from './HFShell';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -49,6 +49,13 @@ const setBridgedUser = (role) =>
     'user',
     JSON.stringify({ role, username: 'shell-test', display_name: 'Shell T.' }),
   );
+
+// Mirrors components/layout/SiderBar.jsx's own workspaceItems gate for the
+// same two flags (set from GET /api/status by helpers/data.js in real use).
+const setTasksFeatureFlags = ({ drawing = false, task = false } = {}) => {
+  window.localStorage.setItem('enable_drawing', String(drawing));
+  window.localStorage.setItem('enable_task', String(task));
+};
 
 const renderShell = () =>
   render(
@@ -64,19 +71,42 @@ const renderShell = () =>
   );
 
 describe('HFShell deferred-surface nav placeholders', () => {
-  it('renders MJ/Task logs as a disabled placeholder with an honest title', () => {
+  // Cycle-10 L7: "MJ / Task logs" was a disabled:true placeholder
+  // (href:null, aria-disabled, an honest "not available in v2 yet" title)
+  // until pages/v2/Tasks existed. It is a real page now, so this asserts
+  // the opposite of what this block asserted before — un-skipping a nav
+  // item without updating its test would have left the OLD assertions
+  // (disabled, no href) passing right alongside the new href, silently
+  // proving nothing.
+  it('MJ/Task logs is no longer a disabled placeholder', () => {
+    setTasksFeatureFlags({ drawing: true });
     renderShell();
-
-    const el = screen.getByTestId('nav-disabled-mj-logs');
-    expect(el).toBeTruthy();
-    expect(el.getAttribute('aria-disabled')).toBe('true');
-    expect((el.getAttribute('title') || '').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('nav-disabled-mj-logs')).toBeNull();
   });
 
-  it('the remaining disabled placeholder is not a link (no navigation target)', () => {
+  it('MJ/Task logs is a real nav link pointing at the tasks page when either feature flag is on', () => {
+    setTasksFeatureFlags({ drawing: true });
     renderShell();
-    const el = screen.getByTestId('nav-disabled-mj-logs');
-    expect(el.tagName.toLowerCase()).not.toBe('a');
+    const link = screen.getByText('MJ / Task logs').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/v2/tasks');
+  });
+
+  it('MJ/Task logs is a real nav link when only the task flag is on', () => {
+    setTasksFeatureFlags({ task: true });
+    renderShell();
+    const link = screen.getByText('MJ / Task logs').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/v2/tasks');
+  });
+
+  // Both flags default unset (beforeEach clears localStorage) — mirrors
+  // components/layout/SiderBar.jsx hiding '绘图日志'/'任务日志' the same way,
+  // so a deployment without either feature doesn't advertise a rail link to
+  // a page that can only ever render empty.
+  it('MJ/Task logs is absent when both feature flags are off', () => {
+    renderShell();
+    expect(screen.queryByText('MJ / Task logs')).toBeNull();
   });
 
   it('admin-users and admin-settings are real nav links for an admin', () => {
@@ -110,6 +140,123 @@ describe('HFShell deferred-surface nav placeholders', () => {
     expect(rankingsLink.getAttribute('href')).toBe(
       '/console/v2/admin/rankings',
     );
+  });
+
+  // Cycle-10 L7: Flows (pages/v2/Flows, wired to real backends by L4) had a
+  // registered route but no nav entry at all — reachable only by typing the
+  // URL. It sits in 'routing & models' (minRole 10) beside Channels.
+  it('Flows is a real nav link pointing at the flows page', () => {
+    setBridgedUser(10);
+    renderShell();
+
+    const link = screen.getByText('Flows').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/v2/flows');
+  });
+
+  it('Flows is hidden from a non-admin (role 1), same as Channels', () => {
+    setBridgedUser(1);
+    renderShell();
+    expect(screen.queryByText('Flows')).toBeNull();
+  });
+
+  // Cycle-10 L7: /console/openrouter-sync (pages/OpenRouterSync) already had
+  // a legacy-rail entry (components/layout/SiderBar.jsx's adminItems) — this
+  // is its first entry in the v2 rail. minRole:100 here (not 10) because
+  // every mutating endpoint the page calls is RootAuth server-side and the
+  // page itself has no client-side role check — see the item's own comment
+  // in HFShell.jsx.
+  it('OpenRouter sync is hidden from a role-10 admin (its mutating buttons would 403)', () => {
+    setBridgedUser(10);
+    renderShell();
+    expect(screen.queryByText('OpenRouter sync')).toBeNull();
+  });
+
+  it('OpenRouter sync is a real nav link pointing at its legacy route for root', () => {
+    setBridgedUser(100);
+    renderShell();
+
+    const link = screen.getByText('OpenRouter sync').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/openrouter-sync');
+  });
+
+  it('visibleNavItems hides openrouter-sync from role 10 and shows it to root', () => {
+    const forAdmin = visibleNavItems({ role: 10 });
+    const routingForAdmin = forAdmin.find((s) => s.h === 'routing & models');
+    expect(
+      routingForAdmin.items.some((it) => it.id === 'openrouter-sync'),
+    ).toBe(false);
+
+    const forRoot = visibleNavItems({ role: 100 });
+    const routingForRoot = forRoot.find((s) => s.h === 'routing & models');
+    expect(routingForRoot.items.some((it) => it.id === 'openrouter-sync')).toBe(
+      true,
+    );
+  });
+
+  // Cycle-10 L7: the legacy /console/personal page carries real,
+  // unported-to-v2 capability (quota-warning notification channels, the
+  // legacy system access token) — this is the explicit, labelled nav-rail
+  // link to it, not a port. Lives in 'my account' (no minRole), same as
+  // Settings beside it — /console/personal is PrivateRoute-only in App.jsx.
+  it('the personal-settings link is labelled and points at /console/personal, unrestricted by role', () => {
+    setBridgedUser(1);
+    renderShell();
+
+    const link = screen.getByText('Notifications & access token').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/personal');
+  });
+
+  // Both /console/personal and /console/openrouter-sync render the legacy
+  // HeaderBar/SiderBar chrome, not this shell (PageLayout.jsx only bypasses
+  // it for /console/v2/*), so clicking either leaves the rail entirely with
+  // nothing to highlight on return. legacyBridge:true on those two items
+  // renders a small marked tag so that isn't a silent surprise.
+  it('personal and openrouter-sync carry the "leaves v2" marker; other links do not', () => {
+    setBridgedUser(100);
+    renderShell();
+
+    expect(screen.getByTestId('nav-legacy-tag-personal')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('nav-legacy-tag-openrouter-sync'),
+    ).toBeInTheDocument();
+    // Settings is a real v2 destination (renders inside this shell) — no tag.
+    expect(screen.queryByTestId('nav-legacy-tag-settings')).toBeNull();
+  });
+
+  // NAV_SECTIONS has zero `disabled: true` items at HEAD ("MJ / Task logs"
+  // was the last one, un-disabled by this lane), so the greyed-placeholder
+  // render branch (HFShell.jsx's `if (it.disabled)`) has no live nav item
+  // exercising it. This pushes a synthetic item into the real, exported
+  // NAV_SECTIONS array (not a hand-assembled stub component) so the actual
+  // render branch runs, then removes it — mirrors the file's regular data
+  // shape (disabled:true, href:null) rather than inventing a new one.
+  it('a disabled:true item renders through the real placeholder branch, not as a link', () => {
+    const section = NAV_SECTIONS.find((s) => s.h === 'my account');
+    const fixtureItem = {
+      id: 'fixture-disabled-item',
+      href: null,
+      disabled: true,
+      title: 'fixture reason',
+      glyph: section.items[0].glyph,
+      label: 'Fixture placeholder',
+      key: 'console.nav.__fixture_disabled__',
+      badge: '',
+    };
+    section.items.push(fixtureItem);
+    try {
+      renderShell();
+      const placeholder = screen.getByTestId(
+        'nav-disabled-fixture-disabled-item',
+      );
+      expect(placeholder.getAttribute('aria-disabled')).toBe('true');
+      expect(placeholder.tagName).not.toBe('A');
+      expect(placeholder.getAttribute('title')).toBe('fixture reason');
+    } finally {
+      section.items.pop();
+    }
   });
 });
 

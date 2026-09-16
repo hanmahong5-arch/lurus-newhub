@@ -257,10 +257,12 @@ func SetApiV2Router(router *gin.Engine) {
 		}
 
 		// ================================================================
-		// Tenant-scoped Catalog & Pricing & Billing (Wave 2 — 2026-05-19)
-		// Read-only projections wired from the v2 console. Write paths
-		// (single-model edit, markup engine, PDF download, payment-method
-		// edit) deferred per Wave 2 scope — UI carries mini WIPBanner.
+		// Tenant-scoped Catalog & Pricing & Billing.
+		// Projections wired from the v2 console. Still not implemented here:
+		// single-model edit, the markup engine, invoice PDF download and
+		// payment-method edit. The console no longer advertises those with a
+		// banner; per-model availability is administered through
+		// /api/v2/admin/tenants/:id/model-allowlist instead.
 		// ================================================================
 
 		tenantModels := apiV2.Group("/:tenant_slug/models")
@@ -268,8 +270,7 @@ func SetApiV2Router(router *gin.Engine) {
 		tenantModels.Use(middleware.TenantSlugGuard())
 		{
 			tenantModels.GET("", handler.ListModelsV2)
-			// Wave 3 Phase 1 (2026-05-20): add / delete wired.
-			// Single-model edit deferred to v3 per scope-cut.
+			// Add and delete are wired; editing a single model is not.
 			//
 			// The catalogue is platform-global (entity.Model has no tenant_id),
 			// so these two enforce requirePlatformRoot INSIDE the handler — the
@@ -316,13 +317,21 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantBilling.GET("/topups", handler.GetTopUpsV2)
 		}
 
-		// Chat single-model multi-turn — non-stream only v1; in-memory
-		// conversation client-side (no chat_session table yet).
+		// Chat single-model multi-turn — non-stream only v1 (see
+		// handler.ChatSend's doc comment for why). /sessions[/:id]
+		// (migration 038, cycle-10 L3) is the client-driven persistence of
+		// a conversation /send already ran; ownership is fail-closed the
+		// same way tasks/logs are — see v2_chat_session.go's header.
 		tenantChat := apiV2.Group("/:tenant_slug/chat")
 		tenantChat.Use(middleware.UserAuth())
 		tenantChat.Use(middleware.TenantSlugGuard())
 		{
 			tenantChat.POST("/send", handler.ChatSend)
+			tenantChat.GET("/sessions", handler.ListChatSessionsV2)
+			tenantChat.POST("/sessions", handler.CreateChatSessionV2)
+			tenantChat.GET("/sessions/:id", handler.GetChatSessionV2)
+			tenantChat.PATCH("/sessions/:id", handler.UpdateChatSessionV2)
+			tenantChat.DELETE("/sessions/:id", handler.DeleteChatSessionV2)
 		}
 
 		// Settings — PUT for profile update (GET already registered above)

@@ -21,6 +21,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   LuActivity,
+  LuBell,
   LuBookOpen,
   LuBoxes,
   LuFlaskConical,
@@ -34,6 +35,7 @@ import {
   LuMenu,
   LuMessageSquare,
   LuRadioTower,
+  LuRefreshCcw,
   LuScrollText,
   LuSearch,
   LuSettings,
@@ -47,6 +49,7 @@ import {
   LuUserCog,
   LuUsers,
   LuWallet,
+  LuWorkflow,
   LuZap,
 } from 'react-icons/lu';
 import TenantSwitcher from './TenantSwitcher';
@@ -63,6 +66,7 @@ const PATH_TO_ID = {
   chat: 'chat',
   token: 'tokens',
   log: 'logs',
+  tasks: 'mj-logs',
   billing: 'billing',
   channel: 'channels',
   models: 'models',
@@ -71,7 +75,10 @@ const PATH_TO_ID = {
   redemption: 'redemption',
   projects: 'projects',
   settings: 'settings',
-  flows: 'channels',
+  // Flows/index.jsx passes active='flows' explicitly, which wins over this
+  // fallback whenever that page renders (see activeId below). This entry is
+  // the mapping for any other route that resolves to the Flows surface.
+  flows: 'flows',
   states: 'logs',
   variants: 'dashboard',
   cmdk: 'tokens',
@@ -189,18 +196,24 @@ export const NAV_SECTIONS = [
         key: 'console.nav.logs',
         badge: '',
       },
-      // Honest placeholder: Midjourney / async-task logs are not ported to v2
-      // yet. Shown greyed so the surface is visibly deferred, not silently gone.
+      // Self-scoped Midjourney / async-task job logs (pages/v2/Tasks) — real
+      // as of cycle 10 L6/L7. Was a disabled:true placeholder with href:null
+      // ("not available in v2 yet") until this page existed. Visibility is
+      // gated by the same enable_drawing/enable_task localStorage flags the
+      // legacy rail uses (components/layout/SiderBar.jsx's workspaceItems,
+      // set from GET /api/status by helpers/data.js) — shown if either is
+      // 'true', hidden if both are off, so a deployment without MJ/task
+      // enabled doesn't get a rail link to a page that can only ever be
+      // empty. Filtered in the render loop below rather than here, so
+      // CommandPalette's own visibleNavItems() call (a different file) still
+      // lists every destination regardless of these flags.
       {
         id: 'mj-logs',
-        href: null,
+        href: '/console/v2/tasks',
         glyph: LuImage,
         label: 'MJ / Task logs',
         key: 'console.nav.mj_logs',
         badge: '',
-        disabled: true,
-        titleKey: 'console.nav.mj_logs_unavailable',
-        title: 'Midjourney / async task logs not available in v2 yet',
       },
       {
         id: 'billing',
@@ -220,6 +233,30 @@ export const NAV_SECTIONS = [
         key: 'console.nav.settings',
         badge: '',
       },
+      // Legacy /console/personal (components/settings/PersonalSetting.jsx)
+      // carries two capabilities the v2 Settings page does not: real
+      // quota-warning notification channels (email/webhook/bark/gotify,
+      // wired to PUT /api/user/setting) and the legacy system access token.
+      // v2 Settings' own "Integrations" tab is explicitly unimplemented
+      // (pages/v2/Settings/index.jsx's INTEGRATIONS comment), and its
+      // "notifications" tab was removed this cycle rather than left half
+      // wired — this is an honest, labelled link to where that capability
+      // actually lives today, not a port (out of scope for this lane), and
+      // not a silent dead end either.
+      // /console/personal renders the legacy HeaderBar/SiderBar chrome, not
+      // this shell (PageLayout.jsx's v2 bypass only matches /console/v2/*),
+      // so clicking this item leaves the rail entirely and nothing
+      // highlights on the way back. legacyBridge:true marks that in the UI
+      // — see the nav-legacy-tag rendering below.
+      {
+        id: 'personal',
+        href: '/console/personal',
+        glyph: LuBell,
+        label: 'Notifications & access token',
+        key: 'console.nav.personal',
+        badge: '',
+        legacyBridge: true,
+      },
     ],
   },
   {
@@ -227,6 +264,16 @@ export const NAV_SECTIONS = [
     hKey: 'console.nav.section_routing_models',
     minRole: 10,
     items: [
+      // Multi-step setup wizards (new channel / new token) — pages/v2/Flows,
+      // wired to the real channel and token backends.
+      {
+        id: 'flows',
+        href: '/console/v2/flows',
+        glyph: LuWorkflow,
+        label: 'Flows',
+        key: 'console.nav.flows',
+        badge: '',
+      },
       {
         id: 'channels',
         href: '/console/v2/channel',
@@ -250,6 +297,31 @@ export const NAV_SECTIONS = [
         label: 'Pricing',
         key: 'console.nav.pricing',
         badge: '',
+      },
+      // Job manager that refreshes a channel's free-model catalog from
+      // OpenRouter on a schedule. Already had a legacy-rail entry
+      // (components/layout/SiderBar.jsx's adminItems, gated by isAdmin()) —
+      // this is its first entry in the v2 rail, not its first nav entry
+      // anywhere. Server-side, GET is AdminAuth but every mutating endpoint
+      // (POST/PUT/DELETE /jobs*, /run-all — api-router.go's
+      // openrouter-sync group) is RootAuth, and pages/OpenRouterSync/index.jsx
+      // has no client-side role check of its own: it renders the
+      // create/edit/delete/run buttons unconditionally. minRole:100 below
+      // (matching admin-authz/admin-system-tasks/admin-diagnostics' own
+      // per-item overrides in this file) keeps a role-10 admin from landing
+      // on a page where every mutating button 403s, until that page grows
+      // its own read-only view for role 10. Also renders the legacy
+      // HeaderBar/SiderBar chrome, same as /console/personal above —
+      // legacyBridge:true marks that.
+      {
+        id: 'openrouter-sync',
+        href: '/console/openrouter-sync',
+        glyph: LuRefreshCcw,
+        label: 'OpenRouter sync',
+        key: 'console.nav.openrouter_sync',
+        badge: '',
+        minRole: 100,
+        legacyBridge: true,
       },
     ],
   },
@@ -420,6 +492,26 @@ export const NAV_SECTIONS = [
 // admin (10) from root (100) — a role-10 admin was offered the root-only
 // "Background tasks" destination (admin-system-tasks, minRole:100) even
 // though the rail correctly hides it.
+// navItemEnabledByFeatureFlags answers whether a nav id points at a surface
+// the deployment has switched on at all, independent of role. Kept separate
+// from visibleNavItems (which is purely role-based, and which several tests
+// call with no localStorage at all) and exported so the rail and the command
+// palette gate on the SAME predicate — a destination the rail hides because
+// it would be a permanently empty page must not still be offered by ⌘K.
+// Same flags and the same either-is-true semantics as
+// components/layout/SiderBar.jsx's workspaceItems.
+export const navItemEnabledByFeatureFlags = (id) => {
+  if (id !== 'mj-logs') return true;
+  try {
+    return (
+      localStorage.getItem('enable_drawing') === 'true' ||
+      localStorage.getItem('enable_task') === 'true'
+    );
+  } catch (_) {
+    return true;
+  }
+};
+
 export const visibleNavItems = (user) => {
   const role = user?.role ?? 0;
   return NAV_SECTIONS.filter((s) => !s.minRole || role >= s.minRole).map(
@@ -574,6 +666,7 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = () => setNavOpen(false);
   const navigate = useNavigate();
+  const tasksFeatureEnabled = navItemEnabledByFeatureFlags('mj-logs');
 
   // ⌘K / Ctrl-K actually opens the palette now. The rail has rendered a ⌘K
   // badge next to the search button since the shell was built, but the repo
@@ -638,52 +731,70 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
         {visibleNavItems(user).map((s) => (
           <div className='nav-section' key={s.h}>
             <div className='nav-h'>{t(s.hKey, s.h)}</div>
-            {s.items.map((it) => {
-              const className = 'nav-i' + (activeId === it.id ? ' active' : '');
-              const Glyph = it.glyph;
-              const inner = (
-                <>
-                  <span className='nav-glyph' aria-hidden='true'>
-                    <Glyph size={14} />
-                  </span>
-                  <span className='nav-label'>{t(it.key, it.label)}</span>
-                  {it.badge && <span className='nav-badge'>{it.badge}</span>}
-                </>
-              );
-              // Deferred surfaces render as a non-interactive, greyed entry
-              // carrying an honest reason — never a dead link.
-              if (it.disabled) {
-                return (
-                  <div
+            {s.items
+              .filter((it) => it.id !== 'mj-logs' || tasksFeatureEnabled)
+              .map((it) => {
+                const className =
+                  'nav-i' + (activeId === it.id ? ' active' : '');
+                const Glyph = it.glyph;
+                const inner = (
+                  <>
+                    <span className='nav-glyph' aria-hidden='true'>
+                      <Glyph size={14} />
+                    </span>
+                    <span className='nav-label'>
+                      {t(it.key, it.label)}
+                      {it.legacyBridge && (
+                        <span
+                          className='nav-legacy-tag'
+                          data-testid={`nav-legacy-tag-${it.id}`}
+                          title={t(
+                            'console.nav.legacy_hint',
+                            'opens the legacy console page, not this v2 shell',
+                          )}
+                        >
+                          {' '}
+                          ↗
+                        </span>
+                      )}
+                    </span>
+                    {it.badge && <span className='nav-badge'>{it.badge}</span>}
+                  </>
+                );
+                // Deferred surfaces render as a non-interactive, greyed entry
+                // carrying an honest reason — never a dead link.
+                if (it.disabled) {
+                  return (
+                    <div
+                      key={it.id}
+                      className={className}
+                      data-testid={`nav-disabled-${it.id}`}
+                      aria-disabled='true'
+                      title={t(
+                        it.titleKey,
+                        it.title || 'not available in v2 yet',
+                      )}
+                      style={{ opacity: 0.4, cursor: 'not-allowed' }}
+                    >
+                      {inner}
+                    </div>
+                  );
+                }
+                return it.href ? (
+                  <Link
                     key={it.id}
+                    to={it.href}
                     className={className}
-                    data-testid={`nav-disabled-${it.id}`}
-                    aria-disabled='true'
-                    title={t(
-                      it.titleKey,
-                      it.title || 'not available in v2 yet',
-                    )}
-                    style={{ opacity: 0.4, cursor: 'not-allowed' }}
+                    onClick={closeNav}
                   >
+                    {inner}
+                  </Link>
+                ) : (
+                  <div key={it.id} className={className}>
                     {inner}
                   </div>
                 );
-              }
-              return it.href ? (
-                <Link
-                  key={it.id}
-                  to={it.href}
-                  className={className}
-                  onClick={closeNav}
-                >
-                  {inner}
-                </Link>
-              ) : (
-                <div key={it.id} className={className}>
-                  {inner}
-                </div>
-              );
-            })}
+              })}
           </div>
         ))}
 

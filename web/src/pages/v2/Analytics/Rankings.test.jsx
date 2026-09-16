@@ -22,6 +22,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('../../../helpers', () => ({
   API: { get: vi.fn() },
+  isRoot: vi.fn(() => false),
 }));
 
 vi.mock('../../../components/hifi/HFShell', () => ({
@@ -30,7 +31,7 @@ vi.mock('../../../components/hifi/HFShell', () => ({
 }));
 
 import HFRankings from './Rankings';
-import { API } from '../../../helpers';
+import { API, isRoot } from '../../../helpers';
 import i18n from '../../../i18n/i18n';
 
 const payload = (over = {}) => ({
@@ -306,5 +307,83 @@ describe('Rankings page', () => {
         expect(screen.getByText('(ungrouped)')).toBeInTheDocument();
       });
     });
+  });
+});
+
+// GET /api/v2/admin/analytics/rankings (GetRankingsV2, RootJWTAuth, optional
+// tenant_id) shipped with no console consumer: the leaderboard a root operator
+// saw was silently scoped to one tenant, with nothing in the UI saying so, and
+// the platform-wide view the server could already produce was unreachable.
+describe('Rankings — cross-tenant scope (root only)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    API.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: { rows: [], cached_at: 0, total_tokens: 0 },
+      },
+    });
+  });
+
+  it('offers no scope control to a non-root user and reads the tenant route', async () => {
+    isRoot.mockReturnValue(false);
+
+    render(React.createElement(HFRankings));
+
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    expect(screen.queryByTestId('rankings-scope-all')).toBeNull();
+    expect(API.get.mock.calls[0][0]).toContain('/analytics/rankings');
+    expect(API.get.mock.calls[0][0]).not.toContain('/admin/analytics/rankings');
+  });
+
+  it('switches root to the platform-wide admin route and back', async () => {
+    isRoot.mockReturnValue(true);
+
+    render(React.createElement(HFRankings));
+
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    // Default scope is still the tenant route — the broader view is opt-in.
+    expect(API.get.mock.calls[0][0]).not.toContain('/admin/analytics/rankings');
+
+    fireEvent.click(screen.getByTestId('rankings-scope-all'));
+    await waitFor(() =>
+      expect(
+        API.get.mock.calls.some((c) =>
+          c[0].startsWith('/api/v2/admin/analytics/rankings'),
+        ),
+      ).toBe(true),
+    );
+
+    const before = API.get.mock.calls.length;
+    fireEvent.click(screen.getByTestId('rankings-scope-tenant'));
+    await waitFor(() =>
+      expect(API.get.mock.calls.length).toBeGreaterThan(before),
+    );
+    const last = API.get.mock.calls[API.get.mock.calls.length - 1][0];
+    expect(last).not.toContain('/admin/analytics/rankings');
+  });
+
+  it('carries the by and hours params onto the admin route unchanged', async () => {
+    isRoot.mockReturnValue(true);
+
+    render(React.createElement(HFRankings));
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId('rankings-by-group'));
+    fireEvent.click(screen.getByTestId('rankings-scope-all'));
+
+    await waitFor(() =>
+      expect(
+        API.get.mock.calls.some((c) =>
+          c[0].startsWith('/api/v2/admin/analytics/rankings'),
+        ),
+      ).toBe(true),
+    );
+    const adminCall = API.get.mock.calls
+      .filter((c) => c[0].startsWith('/api/v2/admin/analytics/rankings'))
+      .pop()[0];
+    const qs = new URLSearchParams(adminCall.split('?')[1]);
+    expect(qs.get('by')).toBe('group');
+    expect(qs.get('hours')).toBeTruthy();
   });
 });

@@ -62,6 +62,7 @@ var registeredModels = []interface{}{
 	&entity.Project{},
 	&entity.TenantInvite{},
 	&entity.ResponseRegistry{},
+	&entity.ChatSession{}, &entity.ChatMessage{},
 }
 
 // tenantColumnExempt maps a GORM-derived table name (not on
@@ -124,6 +125,17 @@ var tenantColumnExempt = map[string]string{
 		"AND row.UserId against the caller before ever reading the row's " +
 		"payload); no call site routes this table through " +
 		"WithTenantID/GetTenantDB (cycle-8 L7 repair round, finding B-F7)",
+	"chat_sessions": "CreateChatSession/ListChatSessions/GetChatSessionOwned/ " +
+		"UpdateChatSessionOwned/DeleteChatSessionOwned (chat_session.go) each take " +
+		"tenantID as a mandatory argument and apply it as an explicit " +
+		"tenant_id = ? AND user_id = ? WHERE clause alongside the " +
+		"owning user, so a row is unreachable across either boundary; no call " +
+		"site routes this table through WithTenantID/GetTenantDB",
+	"chat_messages": "only ever written and read through their owning session " +
+		"(chat_session.go replaces a session's messages inside the same " +
+		"transaction that re-checks the session's tenant_id and user_id), so " +
+		"the column is carried for locality, never used as a query filter; no " +
+		"call site routes this table through WithTenantID/GetTenantDB",
 }
 
 // TestTenantPlugin_AllowListCoversEveryRegisteredTenantColumn is the

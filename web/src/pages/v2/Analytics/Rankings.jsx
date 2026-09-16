@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
-import { API } from '../../../helpers';
+import { API, isRoot } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
@@ -32,6 +32,12 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
  * tenant-admin gate lives server-side (requireTenantAdmin inside
  * GetTenantRankingsV2); a 403 renders the same forbidden panel the
  * ModelPerformance admin page uses for its own root-only gate.
+ *
+ * Root additionally gets a cross-tenant scope, which reads the platform-wide
+ * GET /api/v2/admin/analytics/rankings (GetRankingsV2, RootJWTAuth, optional
+ * tenant_id filter). That endpoint shipped with no console consumer at all —
+ * the leaderboard a root operator saw was silently scoped to one tenant, with
+ * nothing in the UI saying so.
  */
 
 // hours presets must match the backend's snap targets
@@ -74,6 +80,11 @@ const HFRankings = () => {
   const { t: tr } = useTranslation();
   const tenantSlug = useTenantSlug();
   const [by, setBy] = useState('model');
+  // 'tenant' reads the tenant-scoped route; 'all' reads the platform-wide
+  // admin route. Only offered to root, which is the only role the admin route
+  // accepts — a non-root caller would get 401 from RootJWTAuth.
+  const rootUser = isRoot();
+  const [scope, setScope] = useState('tenant');
   const [hours, setHours] = useState(24);
   const [rows, setRows] = useState([]);
   const [cachedAt, setCachedAt] = useState(null);
@@ -91,7 +102,11 @@ const HFRankings = () => {
     setForbidden(false);
     setError(null);
     const params = new URLSearchParams({ by, hours: String(hours) });
-    API.get(`/api/v2/${tenantSlug}/analytics/rankings?${params}`, {
+    const allTenants = rootUser && scope === 'all';
+    const url = allTenants
+      ? `/api/v2/admin/analytics/rankings?${params}`
+      : `/api/v2/${tenantSlug}/analytics/rankings?${params}`;
+    API.get(url, {
       skipErrorHandler: true,
     })
       .then((res) => {
@@ -120,7 +135,7 @@ const HFRankings = () => {
     return () => {
       cancelled = true;
     };
-  }, [tenantSlug, by, hours]);
+  }, [tenantSlug, by, hours, rootUser, scope]);
 
   const thStyle = {
     padding: '6px 10px',
@@ -194,6 +209,32 @@ const HFRankings = () => {
               flexWrap: 'wrap',
             }}
           >
+            {rootUser && (
+              <>
+                <button
+                  type='button'
+                  data-testid='rankings-scope-tenant'
+                  className={'btn sm' + (scope === 'tenant' ? ' primary' : '')}
+                  onClick={() => setScope('tenant')}
+                >
+                  {tr('console.rankings.scope_tenant', 'this tenant')}
+                </button>
+                <button
+                  type='button'
+                  data-testid='rankings-scope-all'
+                  className={'btn sm' + (scope === 'all' ? ' primary' : '')}
+                  onClick={() => setScope('all')}
+                >
+                  {tr('console.rankings.scope_all', 'all tenants')}
+                </button>
+                <span
+                  aria-hidden='true'
+                  style={{ opacity: 0.4, padding: '0 4px' }}
+                >
+                  |
+                </span>
+              </>
+            )}
             <button
               type='button'
               data-testid='rankings-by-model'

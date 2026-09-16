@@ -19,22 +19,84 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { Fragment, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
-import WIPBanner from '../../../components/hifi/WIPBanner';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
 import { API, showError } from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
+import { CHANNEL_PRESETS } from '../../../constants/channel.constants';
 
-/* HiFi 13 — Flows: multi-step wizards & incident response. Ported from hifi/hf13-flows.jsx. */
+/* HiFi 13 — Flows: multi-step wizards. Ported from hifi/hf13-flows.jsx, then
+   wired to the real channel/token backends (cycle 10 L4). The original port
+   also carried an "Incident Response" and a "Retry Chain Visualizer" tab —
+   both static mockups with no backend and no plan to build one, so this pass
+   removed them rather than ship them behind a permanent warning. */
 
 // Second column is the English fallback; display labels resolve through
 // tr(`console.flows.flow_${key}`, fallback) at render time.
 const FLOWS = [
   ['newChannel', 'New Channel', 4],
   ['newToken', 'New Token', 3],
-  ['incident', 'Incident Response', 4],
-  ['retry', 'Retry Chain Visualizer', 1],
 ];
+
+// Vendor picker choices for NewChannelStep step 1. `type` is the numeric
+// repo.Channel.Type value the backend persists — same catalogue as
+// constants/channel.constants.js's CHANNEL_OPTIONS, narrowed to the vendors
+// this wizard surfaces as one-click presets. Selecting a vendor sets the
+// channel's type and, when CHANNEL_PRESETS carries one, prefills base_url.
+// Four of these types — Azure(3), custom(8), AWS Bedrock(33), Google
+// Vertex(41) — have NO default upstream host anywhere: neither
+// CHANNEL_PRESETS (constants/channel.constants.js) nor the backend's
+// constant.ChannelBaseURLs (internal/pkg/constant/channel.go, indices 3, 8,
+// 33, 41 all hold "") carry one. For those four, base_url is a required
+// field rather than an optional override — see NO_DEFAULT_BASE_URL_TYPES.
+const VENDOR_CHOICES = [
+  { key: 'openai', type: 1, label: 'OpenAI' },
+  { key: 'anthropic', type: 14, label: 'Anthropic' },
+  { key: 'vertex', type: 41, label: 'Google Vertex' },
+  { key: 'azure', type: 3, label: 'Azure' },
+  { key: 'bedrock', type: 33, label: 'AWS Bedrock' },
+  { key: 'zhipu', type: 26, label: 'Zhipu' },
+  { key: 'siliconflow', type: 40, label: 'SiliconCloud' },
+  { key: 'custom', type: 8, label: null },
+];
+
+// Types with no default upstream host in either CHANNEL_PRESETS or the
+// backend's constant.ChannelBaseURLs — see the VENDOR_CHOICES comment above.
+// Leaving base_url blank for one of these lets the wizard create a channel
+// step 3 (discover) and step 4 (test) both 400 on immediately
+// ("Channel has no base URL configured",
+// internal/adapter/handler/v2_channel_actions.go) and that the relay can
+// never route through, so the wizard blocks create instead.
+const NO_DEFAULT_BASE_URL_TYPES = new Set([3, 8, 33, 41]);
+
+// describeChannelWriteError turns an axios rejection from a channel write
+// into a message a tenant admin can act on. The 403 shape checked here
+// ({success:false, message:'insufficient permission',
+// error_code:'PERMISSION_DENIED'}) is what enforceChannelSensitiveWriteDecided
+// writes (internal/adapter/handler/channel_sensitive_write.go) — proved
+// against the real router by TestCreateChannelV2_NonRootAdminWithoutGrant403
+// (internal/adapter/handler/channel_sensitive_write_test.go). A channel
+// create always populates `key`, which is one of the fields that gate
+// covers, so a non-root tenant admin without the channel:sensitive_write
+// grant hits this on every create — the bare "insufficient permission" body
+// does not say what the caller is missing or what to do about it.
+function describeChannelWriteError(err, tr) {
+  const data = err?.response?.data;
+  if (
+    err?.response?.status === 403 &&
+    data?.error_code === 'PERMISSION_DENIED'
+  ) {
+    return tr(
+      'console.flows.permission_denied_sensitive_write',
+      'Missing the channel:sensitive_write grant — creating a channel sets its key, so it needs this grant even for an otherwise ordinary tenant admin. Ask a root admin to grant channel:sensitive_write, or have them create the channel for you.',
+    );
+  }
+  return (
+    data?.message ??
+    err?.message ??
+    tr('console.flows.channel_create_failed', 'Failed to reach the channel API')
+  );
+}
 
 const Stepper = ({ steps, cur }) => (
   <div
@@ -93,9 +155,42 @@ const Stepper = ({ steps, cur }) => (
   </div>
 );
 
-const NewChannelStep = ({ step }) => {
-  // Sub-components defined in this file each own their useTranslation() hook.
+const inputStyle = {
+  fontFamily: 'var(--hf-mono)',
+  fontSize: 12,
+};
+
+// NewChannelStep is fully controlled by HFFlows — it owns no state of its
+// own (mirrors NewTokenStep). Three real backend calls drive it end to end:
+// POST …/channels (create, step 2 → 3), GET …/channels/:id/upstream-models
+// (discovery, step 3) and POST …/channels/:id/test (connection test, step
+// 4). Test and discovery both need a persisted channel row (they read the
+// stored key server-side), which is why creation happens at the step 2 → 3
+// transition rather than at the end of the wizard.
+const NewChannelStep = ({
+  step,
+  form,
+  onFieldChange,
+  onSelectVendor,
+  creating,
+  createError,
+  onCreate,
+  createdChannel,
+  discovery,
+  selectedNewModels,
+  onToggleNewModel,
+  onDiscoverModels,
+  applyingModels,
+  onApplyModels,
+  onSkipModels,
+  testing,
+  testResult,
+  onTestChannel,
+  onFinish,
+}) => {
+  // Own hook — sub-component defined in this file.
   const { t: tr } = useTranslation();
+
   if (step === 1) {
     return (
       <div>
@@ -121,81 +216,58 @@ const NewChannelStep = ({ step }) => {
             gap: 12,
           }}
         >
-          {[
-            'OpenAI',
-            'Anthropic',
-            'Google Vertex',
-            'Azure',
-            'AWS Bedrock',
-            'Zhipu',
-            'SiliconFlow',
-            tr('console.flows.vendor_custom', 'custom'),
-          ].map((v, i) => (
-            <div
-              key={i}
-              className='panel'
-              style={{
-                padding: 16,
-                cursor: 'pointer',
-                border:
-                  i === 0
+          {VENDOR_CHOICES.map((v) => {
+            const label =
+              v.label ?? tr('console.flows.vendor_custom', 'custom');
+            const selected = Number(form.type) === v.type;
+            return (
+              <div
+                key={v.key}
+                className='panel'
+                role='button'
+                tabIndex={0}
+                data-testid={`newchannel-vendor-${v.key}`}
+                onClick={() => onSelectVendor(v)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') onSelectVendor(v);
+                }}
+                style={{
+                  padding: 16,
+                  cursor: 'pointer',
+                  border: selected
                     ? '2px solid var(--hf-accent)'
                     : '1px solid var(--hf-rule)',
-              }}
-            >
-              <div className='display' style={{ fontSize: 15 }}>
-                {v}
-              </div>
-              <div
-                className='faint mono'
-                style={{ fontSize: 10, marginTop: 4 }}
+                }}
               >
-                {i === 0
-                  ? tr(
-                      'console.flows.vendor_hint_oai',
-                      '18 models · OAI-compatible',
-                    )
-                  : i < 7
-                    ? tr('console.flows.vendor_hint_native', 'native protocol')
-                    : tr(
-                        'console.flows.vendor_hint_custom',
-                        'OAI-compatible URL',
-                      )}
+                <div className='display' style={{ fontSize: 15 }}>
+                  {label}
+                </div>
+                <div
+                  className='faint mono'
+                  style={{ fontSize: 10, marginTop: 4 }}
+                >
+                  {v.key === 'openai' || v.key === 'siliconflow'
+                    ? tr('console.flows.vendor_hint_oai', 'OAI-compatible')
+                    : v.key === 'custom'
+                      ? tr(
+                          'console.flows.vendor_hint_custom',
+                          'OAI-compatible URL',
+                        )
+                      : tr(
+                          'console.flows.vendor_hint_native',
+                          'native protocol',
+                        )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
   }
+
   if (step === 2) {
-    const fields = [
-      [
-        tr('console.flows.field_channel_name', 'channel name'),
-        'openai/main-2',
-        tr('console.flows.hint_identifier', 'identifier · alphanumeric'),
-      ],
-      [
-        tr('console.flows.field_base_url', 'base url'),
-        'https://api.openai.com/v1',
-        tr('console.flows.hint_override', 'override for proxies'),
-      ],
-      [
-        tr('console.flows.field_api_keys', 'api keys'),
-        'sk-•••••••• ••••••••  ⊕ add another',
-        tr('console.flows.hint_keys_rr', '4 keys · round-robin'),
-      ],
-      [
-        tr('console.flows.field_org_id', 'organization id'),
-        'org-acme-prod',
-        tr('console.flows.hint_optional', 'optional'),
-      ],
-      [
-        tr('console.flows.field_custom_headers', 'custom headers'),
-        tr('console.flows.none', '— none —'),
-        tr('console.flows.hint_optional', 'optional'),
-      ],
-    ];
+    const locked = creating || !!createdChannel;
     return (
       <div>
         <div className='lbl'>
@@ -210,65 +282,190 @@ const NewChannelStep = ({ step }) => {
         <div className='muted' style={{ marginBottom: 22 }}>
           {tr(
             'console.flows.credentials_sub',
-            'encrypted at rest · never logged',
+            'sent once on create · never echoed back',
           )}
         </div>
-        <div className='panel' style={{ padding: 22 }}>
-          {fields.map((r, i) => (
-            <div
-              key={i}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '160px 1fr 200px',
-                padding: '14px 0',
-                borderBottom:
-                  i < fields.length - 1 ? '1px dashed var(--hf-rule)' : 0,
-                alignItems: 'center',
-                gap: 14,
-              }}
-            >
-              <span className='lbl'>{r[0]}</span>
-              <span className='strong mono' style={{ fontSize: 12 }}>
-                {r[1]}
-              </span>
-              <span className='faint mono' style={{ fontSize: 10 }}>
-                {r[2]}
-              </span>
-            </div>
-          ))}
+        <div
+          className='panel'
+          style={{ padding: 22, display: 'grid', gap: 16 }}
+        >
+          <label style={{ display: 'grid', gap: 6 }}>
+            <span className='lbl'>
+              {tr('console.flows.field_channel_name', 'channel name')}
+            </span>
+            <input
+              className='input'
+              style={inputStyle}
+              data-testid='newchannel-name'
+              value={form.name}
+              disabled={locked}
+              onChange={(e) => onFieldChange('name', e.target.value)}
+              placeholder='openai/main-2'
+            />
+            <span className='faint mono' style={{ fontSize: 10 }}>
+              {tr('console.flows.hint_identifier', 'identifier · alphanumeric')}
+            </span>
+          </label>
+          <label style={{ display: 'grid', gap: 6 }}>
+            <span className='lbl'>
+              {tr('console.flows.field_base_url', 'base url')}
+            </span>
+            <input
+              className='input'
+              style={inputStyle}
+              data-testid='newchannel-baseurl'
+              value={form.baseURL}
+              disabled={locked}
+              onChange={(e) => onFieldChange('baseURL', e.target.value)}
+              placeholder='https://api.openai.com/v1'
+            />
+            <span className='faint mono' style={{ fontSize: 10 }}>
+              {NO_DEFAULT_BASE_URL_TYPES.has(Number(form.type))
+                ? tr(
+                    'console.flows.hint_override_required',
+                    'required — this vendor has no default host',
+                  )
+                : tr('console.flows.hint_override', 'override for proxies')}
+            </span>
+          </label>
+          <label style={{ display: 'grid', gap: 6 }}>
+            <span className='lbl'>
+              {tr('console.flows.field_api_keys', 'api keys')}
+            </span>
+            <textarea
+              className='input'
+              style={{ ...inputStyle, minHeight: 56, resize: 'vertical' }}
+              data-testid='newchannel-key'
+              value={form.key}
+              disabled={locked}
+              onChange={(e) => onFieldChange('key', e.target.value)}
+              placeholder='sk-...'
+            />
+            <span className='faint mono' style={{ fontSize: 10 }}>
+              {tr(
+                'console.flows.hint_keys_rr',
+                'one key per channel · multi-key channels are created from the Channels page',
+              )}
+            </span>
+          </label>
+          <label style={{ display: 'grid', gap: 6 }}>
+            <span className='lbl'>
+              {tr('console.flows.field_models', 'models')}
+            </span>
+            <input
+              className='input'
+              style={inputStyle}
+              data-testid='newchannel-models'
+              value={form.models}
+              disabled={locked}
+              onChange={(e) => onFieldChange('models', e.target.value)}
+              placeholder='gpt-4o,gpt-4o-mini'
+            />
+            <span className='faint mono' style={{ fontSize: 10 }}>
+              {tr(
+                'console.flows.hint_models_required',
+                'comma-separated · at least one required',
+              )}
+            </span>
+          </label>
+          <label style={{ display: 'grid', gap: 6 }}>
+            <span className='lbl'>
+              {tr('console.flows.field_org_id', 'organization id')}
+            </span>
+            <input
+              className='input'
+              style={inputStyle}
+              data-testid='newchannel-orgid'
+              value={form.orgId}
+              disabled={locked}
+              onChange={(e) => onFieldChange('orgId', e.target.value)}
+              placeholder='org-acme-prod'
+            />
+            <span className='faint mono' style={{ fontSize: 10 }}>
+              {tr('console.flows.hint_optional', 'optional')}
+            </span>
+          </label>
+          {locked && !creating && (
+            <span className='faint mono' style={{ fontSize: 10 }}>
+              {tr(
+                'console.flows.locked_after_create',
+                'locked — edit this channel from the Channels page',
+              )}
+            </span>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-          <button
-            type='button'
-            className='btn ghost'
-            disabled
-            title={tr(
-              'console.flows.test_connection_tip',
-              'Select a channel in the Channels page to test it',
-            )}
-            data-testid='flow-test-connection-btn'
+
+        {createError && (
+          <div
+            className='panel'
+            data-testid='newchannel-create-error'
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderLeft: '2px solid var(--hf-err)',
+              fontSize: 12,
+            }}
           >
-            {tr('console.flows.test_connection', '▶ test connection')}
-          </button>
-          <span className='muted' style={{ alignSelf: 'center', fontSize: 11 }}>
+            {createError}
+          </div>
+        )}
+
+        {createdChannel ? (
+          <div
+            className='panel'
+            data-testid='newchannel-created-note'
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderLeft: '2px solid var(--hf-ok)',
+              fontSize: 12,
+            }}
+          >
             {tr(
-              'console.flows.test_connection_hint',
-              '→ select a channel in the Channels page, then click "Test channel"',
+              'console.flows.channel_ready_note',
+              'Channel #{{id}} created and enabled.',
+              { id: createdChannel.id },
             )}
-          </span>
-        </div>
+          </div>
+        ) : (
+          <div style={{ marginTop: 16, textAlign: 'right' }}>
+            <button
+              type='button'
+              className='btn primary'
+              data-testid='newchannel-create-btn'
+              disabled={
+                creating ||
+                !form.name.trim() ||
+                !form.key.trim() ||
+                !form.models.trim()
+              }
+              onClick={onCreate}
+            >
+              {creating
+                ? tr('console.flows.creating_channel', 'creating…')
+                : tr('console.flows.create_channel_btn', 'create channel →')}
+            </button>
+          </div>
+        )}
       </div>
     );
   }
+
   if (step === 3) {
-    const rows = [
-      ['gpt-4o-2024-11-20', 'gpt-4o', true],
-      ['gpt-4o-mini-2024-07-18', 'gpt-4o-mini', true],
-      ['gpt-4o-realtime', 'gpt-4o-realtime', true],
-      ['o1-preview', 'o1-preview', true],
-      ['text-embedding-3-large', 'embedding', true],
-      ['dall-e-3', tr('console.flows.skip_value', '— skip —'), false],
-    ];
+    if (!createdChannel) {
+      // Guard only — step 3 is unreachable without a created channel because
+      // the top-level "next" button is hidden for newChannel past step 1 and
+      // progression to here always goes through onCreate.
+      return (
+        <div className='muted'>
+          {tr(
+            'console.flows.channel_required_note',
+            'Create the channel in step 2 first.',
+          )}
+        </div>
+      );
+    }
+    const upstream = discovery.data;
     return (
       <div>
         <div className='lbl'>
@@ -283,76 +480,141 @@ const NewChannelStep = ({ step }) => {
         <div className='muted' style={{ marginBottom: 22 }}>
           {tr(
             'console.flows.map_models_sub',
-            'vendor model → your alias · we filled this in',
+            'discover the models the upstream actually serves and add the ones you want',
           )}
         </div>
-        <div className='panel'>
-          <div className='hf-table-scroll'>
-            <table className='t'>
-              <thead>
-                <tr>
-                  <th></th>
-                  <th>{tr('console.flows.th_vendor_model', 'vendor model')}</th>
-                  <th></th>
-                  <th>{tr('console.flows.th_your_alias', 'your alias')}</th>
-                  <th>{tr('console.flows.th_auto', 'auto')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={i}>
-                    <td>
-                      <input type='checkbox' defaultChecked={r[2]} />
-                    </td>
-                    <td className='mono strong'>{r[0]}</td>
-                    <td className='faint'>→</td>
-                    <td>
-                      <div
-                        className='field'
-                        style={{ width: 200, height: 24, fontSize: 11 }}
-                      >
-                        {r[1]}
-                      </div>
-                    </td>
-                    <td>
-                      {r[2] && (
-                        <span className='tag info'>
-                          {tr('console.flows.tag_auto', 'auto')}
-                        </span>
-                      )}
-                    </td>
+        <div
+          style={{
+            display: 'flex',
+            gap: 12,
+            alignItems: 'center',
+            marginBottom: 14,
+          }}
+        >
+          <button
+            type='button'
+            className='btn'
+            data-testid='newchannel-discover-btn'
+            disabled={discovery.loading}
+            onClick={onDiscoverModels}
+          >
+            {discovery.loading
+              ? tr('console.flows.discovering_models', 'discovering…')
+              : tr(
+                  'console.flows.discover_models_btn',
+                  'discover upstream models →',
+                )}
+          </button>
+          {discovery.error && (
+            <span
+              data-testid='newchannel-discover-error'
+              className='muted'
+              style={{ fontSize: 11, color: 'var(--hf-err)' }}
+            >
+              {discovery.error}
+            </span>
+          )}
+        </div>
+        {upstream && (
+          <div className='panel'>
+            <div className='hf-table-scroll'>
+              <table className='t'>
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>{tr('console.flows.th_model', 'model')}</th>
+                    <th>{tr('console.flows.th_status', 'status')}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {upstream.upstream.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className='muted'>
+                        {tr(
+                          'console.flows.no_new_models',
+                          'upstream returned no models',
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  {upstream.upstream.map((m) => {
+                    const isNew = (upstream.new ?? []).includes(m);
+                    return (
+                      <tr key={m}>
+                        <td>
+                          {isNew && (
+                            <input
+                              type='checkbox'
+                              data-testid={`newchannel-model-${m}`}
+                              checked={selectedNewModels.has(m)}
+                              onChange={() => onToggleNewModel(m)}
+                            />
+                          )}
+                        </td>
+                        <td className='mono strong'>{m}</td>
+                        <td>
+                          {isNew ? (
+                            <span className='tag info'>
+                              {tr('console.flows.tag_new', 'new')}
+                            </span>
+                          ) : (
+                            <span className='tag'>
+                              {tr('console.flows.tag_configured', 'configured')}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
+        )}
+        <div
+          style={{
+            display: 'flex',
+            gap: 10,
+            marginTop: 16,
+            justifyContent: 'flex-end',
+          }}
+        >
+          <button
+            type='button'
+            className='btn'
+            data-testid='newchannel-skip-models-btn'
+            onClick={onSkipModels}
+          >
+            {tr(
+              'console.flows.skip_models_btn',
+              'skip · continue without adding →',
+            )}
+          </button>
+          <button
+            type='button'
+            className='btn primary'
+            data-testid='newchannel-apply-models-btn'
+            disabled={applyingModels || selectedNewModels.size === 0}
+            onClick={onApplyModels}
+          >
+            {applyingModels
+              ? tr('console.flows.applying_models', 'applying…')
+              : tr(
+                  'console.flows.apply_models_btn',
+                  'add selected & continue →',
+                )}
+          </button>
         </div>
       </div>
     );
   }
-  // step 4
-  const summary = [
-    [tr('console.flows.sum_vendor', 'vendor'), 'OpenAI'],
-    [tr('console.flows.field_channel_name', 'channel name'), 'openai/main-2'],
-    [tr('console.flows.field_base_url', 'base url'), 'api.openai.com/v1'],
-    [
-      tr('console.flows.sum_keys', 'keys'),
-      tr('console.flows.val_keys_rr', '4 (round-robin)'),
-    ],
-    [
-      tr('console.flows.sum_models_enabled', 'models enabled'),
-      tr('console.flows.val_models_enabled', '5 of 18'),
-    ],
-    [
-      tr('console.flows.sum_routing_weight', 'routing weight'),
-      tr('console.flows.val_weight_primary', '1.0 · primary'),
-    ],
-    [tr('console.flows.sum_groups', 'groups'), 'default, vip'],
-    [
-      tr('console.flows.sum_fallback_to', 'fallback to'),
-      'openai/main, openai/backup',
-    ],
-  ];
+
+  // step 4 — review & test.
+  const modelsStr = createdChannel?.models ?? form.models;
+  const modelCount = modelsStr
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean).length;
   return (
     <div>
       <div className='lbl'>
@@ -368,42 +630,95 @@ const NewChannelStep = ({ step }) => {
         {tr('console.flows.review_sub', 'pre-flight summary')}
       </div>
       <div className='panel' style={{ padding: 22 }}>
-        {summary.map((r, i) => (
+        {[
+          [
+            tr('console.flows.field_channel_name', 'channel name'),
+            createdChannel?.name ?? form.name,
+          ],
+          [
+            tr('console.flows.field_base_url', 'base url'),
+            form.baseURL ||
+              (NO_DEFAULT_BASE_URL_TYPES.has(Number(form.type))
+                ? tr('console.flows.base_url_missing', 'not set')
+                : tr('console.flows.base_url_default', 'provider default')),
+          ],
+          [
+            tr('console.flows.review_models_count', 'models configured'),
+            String(modelCount),
+          ],
+        ].map(([l, v], i, arr) => (
           <div
-            key={i}
+            key={l}
             style={{
               display: 'grid',
               gridTemplateColumns: '180px 1fr',
               padding: '10px 0',
               borderBottom:
-                i < summary.length - 1 ? '1px dashed var(--hf-rule)' : 0,
+                i < arr.length - 1 ? '1px dashed var(--hf-rule)' : 0,
             }}
           >
-            <span className='lbl'>{r[0]}</span>
+            <span className='lbl'>{l}</span>
             <span className='strong' style={{ fontSize: 13 }}>
-              {r[1]}
+              {v}
             </span>
           </div>
         ))}
       </div>
       <div
-        className='panel'
         style={{
-          padding: 14,
-          marginTop: 14,
-          background: 'var(--hf-paper)',
-          borderLeft: '2px solid var(--hf-ok)',
+          display: 'flex',
+          gap: 12,
+          alignItems: 'center',
+          marginTop: 16,
         }}
       >
-        <span className='strong'>
-          {tr('console.flows.preflight_passed', 'Pre-flight passed.')}
-        </span>{' '}
-        <span className='muted'>
-          {tr(
-            'console.flows.preflight_detail',
-            '42ms ttft · 18 models · keys all reachable',
-          )}
-        </span>
+        <button
+          type='button'
+          className='btn'
+          data-testid='newchannel-test-btn'
+          disabled={testing || !createdChannel}
+          onClick={onTestChannel}
+        >
+          {testing
+            ? tr('console.flows.testing_channel', 'testing…')
+            : tr('console.flows.test_channel_btn', '▶ test channel')}
+        </button>
+        {testResult && (
+          <span
+            data-testid='newchannel-test-result'
+            className='mono'
+            style={{
+              fontSize: 11,
+              color: testResult.success ? 'var(--hf-ok)' : 'var(--hf-err)',
+            }}
+          >
+            {testResult.success
+              ? tr(
+                  'console.flows.test_result_success',
+                  'reachable · {{ms}}ms',
+                  {
+                    ms: testResult.latency_ms ?? 0,
+                  },
+                )
+              : tr(
+                  'console.flows.test_result_failure',
+                  'unreachable: {{error}}',
+                  {
+                    error: testResult.error ?? '',
+                  },
+                )}
+          </span>
+        )}
+      </div>
+      <div style={{ marginTop: 22, textAlign: 'right' }}>
+        <button
+          type='button'
+          className='btn primary'
+          data-testid='newchannel-finish-btn'
+          onClick={onFinish}
+        >
+          {tr('console.flows.finish_channel_btn', 'finish · create another')}
+        </button>
       </div>
     </div>
   );
@@ -417,6 +732,20 @@ const TOKEN_DRAFT_INIT = {
   unlimited_quota: true,
   remain_quota: 500000,
   expires_at: '',
+};
+
+// The newChannel wizard's draft is plain useState, NOT useFormDraft — unlike
+// the token draft above, it carries a real upstream provider api key, and
+// useFormDraft persists to localStorage (hooks/common/useFormDraft.js).
+// Writing a live credential to localStorage would be a new exposure, so this
+// draft never survives a refresh or a step re-mount from elsewhere in the app.
+const CHANNEL_DRAFT_INIT = {
+  type: 1,
+  name: '',
+  baseURL: '',
+  key: '',
+  models: '',
+  orgId: '',
 };
 
 // NewTokenStep receives the shared draft state and callbacks from HFFlows so
@@ -702,656 +1031,6 @@ const NewTokenStep = ({
   );
 };
 
-const IncidentScreen = () => {
-  // Own hook — sub-component defined in the same file.
-  const { t: tr } = useTranslation();
-  const events = [
-    [
-      '14:01:55',
-      tr('console.flows.evt_detected', 'detected'),
-      tr(
-        'console.flows.evt_detected_desc',
-        'success rate dropped to 0% · auto-detected',
-      ),
-      'err',
-    ],
-    [
-      '14:02:11',
-      tr('console.flows.evt_failover', 'failover engaged'),
-      tr(
-        'console.flows.evt_failover_desc',
-        'traffic routed to openai/main · auto',
-      ),
-      'info',
-    ],
-    [
-      '14:03:00',
-      tr('console.flows.evt_paged', 'paged on-call'),
-      tr('console.flows.evt_paged_desc', 'andy@ acknowledged · 14:03:42'),
-      'info',
-    ],
-    [
-      '14:05:18',
-      tr('console.flows.evt_investigation', 'investigation'),
-      tr(
-        'console.flows.evt_investigation_desc',
-        'Andy · checking upstream status page',
-      ),
-      'ink',
-    ],
-    [
-      '14:08:30',
-      tr('console.flows.evt_mitigation', 'mitigation'),
-      tr(
-        'console.flows.evt_mitigation_desc',
-        'rotated 2 stale keys · waiting for confirmation',
-      ),
-      'warn',
-    ],
-    [
-      '14:13:45',
-      tr('console.flows.evt_monitoring', 'monitoring'),
-      tr(
-        'console.flows.evt_monitoring_desc',
-        'success rate climbing · 38% and rising',
-      ),
-      'warn',
-    ],
-  ];
-  return (
-    <div style={{ padding: '24px 32px' }}>
-      <div className='lbl'>
-        {tr('console.flows.incident_label', 'incident')} · INC-2026-0512
-      </div>
-      <h1 className='display' style={{ fontSize: 28, margin: '4px 0 4px' }}>
-        {tr('console.flows.incident_title', 'openai/backup · totally down')}
-      </h1>
-      <div className='muted' style={{ marginBottom: 22 }}>
-        {tr(
-          'console.flows.incident_sub',
-          'started 14:01:55 · 12m ago · sev1 · 6 tenants affected',
-        )}
-      </div>
-
-      <div
-        style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 18 }}
-      >
-        <div>
-          <div className='panel'>
-            <div
-              style={{
-                padding: '14px 18px',
-                borderBottom: '1px solid var(--hf-rule)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
-              <span className='dot err' />{' '}
-              <span className='strong'>
-                {tr('console.flows.timeline', 'timeline')}
-              </span>
-              <span style={{ flex: 1 }} />
-              <button
-                type='button'
-                className='btn sm'
-                disabled
-                title={tr(
-                  'console.flows.incident_deferred_tip',
-                  'incident workflow requires alerting infra (alertmanager + on-call rotations) — deferred to v3',
-                )}
-                data-testid='incident-post-update-btn'
-              >
-                {tr('console.flows.post_update', 'post update')}
-              </button>
-            </div>
-            {events.map((e, i) => (
-              <div
-                key={i}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '80px 110px 1fr',
-                  padding: '12px 18px',
-                  borderBottom:
-                    i < events.length - 1 ? '1px solid var(--hf-rule)' : 0,
-                  gap: 14,
-                  alignItems: 'flex-start',
-                }}
-              >
-                <span className='mono muted' style={{ fontSize: 11 }}>
-                  {e[0]}
-                </span>
-                <span className={'tag ' + (e[3] === 'ink' ? '' : e[3])}>
-                  {e[1]}
-                </span>
-                <span style={{ fontSize: 12, lineHeight: 1.5 }}>{e[2]}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className='panel' style={{ marginTop: 14, padding: 18 }}>
-            <div className='lbl'>
-              {tr(
-                'console.flows.success_rate_label',
-                'success rate · last 15min',
-              )}
-            </div>
-            <svg
-              viewBox='0 0 600 100'
-              style={{ width: '100%', height: 100, marginTop: 10 }}
-            >
-              <line
-                x1='0'
-                y1='20'
-                x2='600'
-                y2='20'
-                stroke='var(--hf-rule)'
-                strokeDasharray='2 4'
-              />
-              <line
-                x1='0'
-                y1='50'
-                x2='600'
-                y2='50'
-                stroke='var(--hf-rule)'
-                strokeDasharray='2 4'
-              />
-              <line
-                x1='0'
-                y1='80'
-                x2='600'
-                y2='80'
-                stroke='var(--hf-rule)'
-                strokeDasharray='2 4'
-              />
-              <polyline
-                fill='none'
-                stroke='var(--hf-err)'
-                strokeWidth='2'
-                points='0,15 30,15 50,15 70,15 100,90 130,95 160,98 190,95 220,90 250,82 280,70 310,55 340,42 370,32 400,25 430,22 460,20 490,18 530,16 560,15 600,15'
-              />
-              <text
-                x='0'
-                y='14'
-                fontSize='10'
-                fontFamily='var(--hf-mono)'
-                fill='var(--hf-ink-3)'
-              >
-                100%
-              </text>
-              <text
-                x='0'
-                y='98'
-                fontSize='10'
-                fontFamily='var(--hf-mono)'
-                fill='var(--hf-ink-3)'
-              >
-                0%
-              </text>
-            </svg>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div className='panel' style={{ padding: 16 }}>
-            <div className='lbl'>{tr('console.flows.impact', 'impact')}</div>
-            <div
-              className='display'
-              style={{ fontSize: 28, marginTop: 4, color: 'var(--hf-err)' }}
-            >
-              1,420
-            </div>
-            <div className='muted' style={{ fontSize: 11 }}>
-              {tr(
-                'console.flows.impact_detail',
-                'requests rerouted · $42.80 est revenue saved',
-              )}
-            </div>
-          </div>
-          <div className='panel' style={{ padding: 16 }}>
-            <div className='lbl'>
-              {tr('console.flows.tenants_label', 'tenants')} · 6
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: 4,
-                marginTop: 8,
-              }}
-            >
-              {[
-                'acme',
-                'contoso',
-                'globex',
-                'initech',
-                'foobar',
-                'umbrella',
-              ].map((t) => (
-                <span key={t} className='pill' style={{ fontSize: 10 }}>
-                  {t}
-                </span>
-              ))}
-            </div>
-          </div>
-          <div className='panel' style={{ padding: 16 }}>
-            <div className='lbl'>{tr('console.flows.on_call', 'on-call')}</div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                marginTop: 8,
-              }}
-            >
-              <div
-                style={{
-                  width: 28,
-                  height: 28,
-                  background: 'var(--hf-accent)',
-                  color: '#fff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontFamily: 'var(--hf-display)',
-                  fontWeight: 600,
-                }}
-              >
-                A
-              </div>
-              <div>
-                <div className='strong' style={{ fontSize: 12 }}>
-                  Andy Liu
-                </div>
-                <div className='faint mono' style={{ fontSize: 10 }}>
-                  {tr('console.flows.ack_time', 'ack 14:03:42')}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className='panel' style={{ padding: 16 }}>
-            <div className='lbl'>{tr('console.flows.actions', 'actions')}</div>
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                marginTop: 10,
-              }}
-            >
-              <button
-                type='button'
-                className='btn'
-                disabled
-                title={tr(
-                  'console.flows.incident_deferred_tip',
-                  'incident workflow requires alerting infra (alertmanager + on-call rotations) — deferred to v3',
-                )}
-                data-testid='incident-silence-btn'
-              >
-                {tr('console.flows.silence_alert', 'silence alert · 30m')}
-              </button>
-              <button
-                type='button'
-                className='btn'
-                disabled
-                title={tr(
-                  'console.flows.incident_deferred_tip',
-                  'incident workflow requires alerting infra (alertmanager + on-call rotations) — deferred to v3',
-                )}
-                data-testid='incident-status-update-btn'
-              >
-                {tr('console.flows.post_status_update', 'post status update')}
-              </button>
-              {/* "disable channel" navigates to Channel page — no incident context available here */}
-              <a
-                href='/console/v2/channel'
-                className='btn'
-                data-testid='incident-disable-channel-btn'
-                title={tr(
-                  'console.flows.goto_channels_tip',
-                  'go to Channels to disable',
-                )}
-                style={{ textDecoration: 'none', textAlign: 'center' }}
-              >
-                {tr('console.flows.disable_channel', 'disable channel ↗')}
-              </a>
-              <button
-                type='button'
-                className='btn primary'
-                disabled
-                title={tr(
-                  'console.flows.incident_deferred_tip',
-                  'incident workflow requires alerting infra (alertmanager + on-call rotations) — deferred to v3',
-                )}
-                data-testid='incident-resolve-btn'
-              >
-                {tr('console.flows.resolve_incident', 'resolve incident')}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const RetryScreen = () => {
-  // Own hook — sub-component defined in the same file.
-  const { t: tr } = useTranslation();
-  return (
-    <div style={{ padding: '32px 40px' }}>
-      <div className='lbl'>
-        {tr('console.flows.retry_label', 'request flow visualizer')}
-      </div>
-      <h1 className='display' style={{ fontSize: 28, margin: '4px 0 4px' }}>
-        req_1f4a...e90c
-      </h1>
-      <div className='muted' style={{ marginBottom: 28 }}>
-        {tr(
-          'console.flows.retry_sub',
-          '3 attempts · ended successfully · 4.2s total',
-        )}
-      </div>
-
-      <div className='panel' style={{ padding: 28 }}>
-        <svg viewBox='0 0 800 280' style={{ width: '100%', height: 320 }}>
-          <defs>
-            <marker
-              id='arr'
-              viewBox='0 0 8 8'
-              refX='6'
-              refY='4'
-              markerWidth='6'
-              markerHeight='6'
-              orient='auto'
-            >
-              <path d='M0,0 L8,4 L0,8 Z' fill='var(--hf-ink-3)' />
-            </marker>
-          </defs>
-          <g fontFamily='var(--hf-mono)' fontSize='11'>
-            <rect
-              x='20'
-              y='120'
-              width='100'
-              height='40'
-              fill='var(--hf-paper)'
-              stroke='var(--hf-rule-strong)'
-            />
-            <text
-              x='70'
-              y='138'
-              textAnchor='middle'
-              fill='var(--hf-ink)'
-              fontWeight='500'
-            >
-              {tr('console.flows.svg_client', 'client')}
-            </text>
-            <text
-              x='70'
-              y='152'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              acme · prod
-            </text>
-
-            <rect
-              x='180'
-              y='120'
-              width='100'
-              height='40'
-              fill='var(--hf-paper)'
-              stroke='var(--hf-rule-strong)'
-            />
-            <text
-              x='230'
-              y='138'
-              textAnchor='middle'
-              fill='var(--hf-ink)'
-              fontWeight='500'
-            >
-              {tr('console.flows.svg_gateway', 'lurus gateway')}
-            </text>
-            <text
-              x='230'
-              y='152'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              {tr('console.flows.svg_router', 'router')}
-            </text>
-
-            <rect
-              x='360'
-              y='20'
-              width='160'
-              height='60'
-              fill='rgba(238,111,94,0.1)'
-              stroke='var(--hf-err)'
-            />
-            <text
-              x='440'
-              y='40'
-              textAnchor='middle'
-              fill='var(--hf-err)'
-              fontWeight='500'
-            >
-              {tr('console.flows.attempt', 'attempt')} 1 · 504
-            </text>
-            <text
-              x='440'
-              y='58'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              openai/main · 2.1s
-            </text>
-            <text
-              x='440'
-              y='72'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              upstream_timeout
-            </text>
-
-            <rect
-              x='360'
-              y='120'
-              width='160'
-              height='60'
-              fill='rgba(224,160,64,0.1)'
-              stroke='var(--hf-warn)'
-            />
-            <text
-              x='440'
-              y='140'
-              textAnchor='middle'
-              fill='var(--hf-warn)'
-              fontWeight='500'
-            >
-              {tr('console.flows.attempt', 'attempt')} 2 · 429
-            </text>
-            <text
-              x='440'
-              y='158'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              openai/backup · 0.4s
-            </text>
-            <text
-              x='440'
-              y='172'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              {tr('console.flows.backoff', 'rate_limit · backoff 1s')}
-            </text>
-
-            <rect
-              x='360'
-              y='220'
-              width='160'
-              height='60'
-              fill='rgba(90,204,146,0.1)'
-              stroke='var(--hf-ok)'
-            />
-            <text
-              x='440'
-              y='240'
-              textAnchor='middle'
-              fill='var(--hf-ok)'
-              fontWeight='500'
-            >
-              {tr('console.flows.attempt', 'attempt')} 3 · 200
-            </text>
-            <text
-              x='440'
-              y='258'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              azure/eu · 1.6s
-            </text>
-            <text
-              x='440'
-              y='272'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              {tr('console.flows.tokens_cost', '847 tokens · $0.0042')}
-            </text>
-
-            <rect
-              x='600'
-              y='220'
-              width='120'
-              height='60'
-              fill='rgba(90,204,146,0.1)'
-              stroke='var(--hf-ok)'
-            />
-            <text
-              x='660'
-              y='240'
-              textAnchor='middle'
-              fill='var(--hf-ok)'
-              fontWeight='500'
-            >
-              {tr('console.flows.delivered', 'delivered')}
-            </text>
-            <text
-              x='660'
-              y='258'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              {tr('console.flows.to_client', 'to client')}
-            </text>
-            <text
-              x='660'
-              y='272'
-              textAnchor='middle'
-              fill='var(--hf-ink-3)'
-              fontSize='9'
-            >
-              {tr('console.flows.total_time', 'total 4.2s')}
-            </text>
-          </g>
-
-          <g
-            stroke='var(--hf-ink-3)'
-            strokeWidth='1.2'
-            fill='none'
-            markerEnd='url(#arr)'
-          >
-            <line x1='120' y1='140' x2='180' y2='140' />
-            <line x1='280' y1='135' x2='360' y2='50' />
-            <line
-              x1='280'
-              y1='140'
-              x2='360'
-              y2='150'
-              stroke='var(--hf-rule-strong)'
-              strokeDasharray='3 3'
-            />
-            <line
-              x1='280'
-              y1='145'
-              x2='360'
-              y2='250'
-              stroke='var(--hf-rule-strong)'
-              strokeDasharray='3 3'
-            />
-            <line
-              x1='520'
-              y1='50'
-              x2='280'
-              y2='142'
-              stroke='var(--hf-err)'
-              strokeDasharray='2 3'
-            />
-            <line
-              x1='520'
-              y1='150'
-              x2='280'
-              y2='148'
-              stroke='var(--hf-warn)'
-              strokeDasharray='2 3'
-            />
-            <line x1='520' y1='250' x2='600' y2='250' stroke='var(--hf-ok)' />
-            <line x1='600' y1='245' x2='120' y2='160' stroke='var(--hf-ok)' />
-          </g>
-        </svg>
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
-          gap: 14,
-          marginTop: 18,
-        }}
-      >
-        {[
-          [
-            tr('console.flows.stat_attempts', 'attempts'),
-            '3',
-            'var(--hf-accent)',
-          ],
-          [tr('console.flows.stat_retries', 'retries'), '2', 'var(--hf-warn)'],
-          [
-            tr('console.flows.stat_final', 'final'),
-            tr('console.flows.final_ok', '200 ok'),
-            'var(--hf-ok)',
-          ],
-          [tr('console.flows.stat_cost', 'cost'), '$0.0042', 'var(--hf-ink)'],
-        ].map(([l, v, c], i) => (
-          <div key={i} className='panel' style={{ padding: 14 }}>
-            <div className='lbl'>{l}</div>
-            <div
-              className='display'
-              style={{ fontSize: 22, color: c, marginTop: 2 }}
-            >
-              {v}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
 const HFFlows = () => {
   // Aliased to `tr` per the v2 console convention.
   const { t: tr } = useTranslation();
@@ -1398,56 +1077,265 @@ const HFFlows = () => {
     }
   }, [draft, tenantSlug, submitting, clearDraft, tr]);
 
+  // newChannel wizard state — see CHANNEL_DRAFT_INIT for why this is plain
+  // useState rather than useFormDraft.
+  const [channelForm, setChannelForm] = useState(CHANNEL_DRAFT_INIT);
+  const [channelCreating, setChannelCreating] = useState(false);
+  const [channelCreateError, setChannelCreateError] = useState(null);
+  const [createdChannel, setCreatedChannel] = useState(null);
+  const [discovery, setDiscovery] = useState({
+    loading: false,
+    error: null,
+    data: null,
+  });
+  const [selectedNewModels, setSelectedNewModels] = useState(new Set());
+  const [applyingModels, setApplyingModels] = useState(false);
+  const [channelTesting, setChannelTesting] = useState(false);
+  const [channelTestResult, setChannelTestResult] = useState(null);
+  // Whether the user has ever typed into the base url field themselves.
+  // handleSelectVendor consults this so that re-picking a vendor after the
+  // first click still overwrites a preset-derived value (the bug: with a
+  // plain `f.baseURL || preset` fallback, once ANY baseURL is set — even
+  // from a previous vendor's preset — a second vendor click keeps it,
+  // silently pointing e.g. a Zhipu channel at Anthropic's host).
+  const [baseURLTouched, setBaseURLTouched] = useState(false);
+
+  const handleChannelField = useCallback((field, value) => {
+    setChannelForm((f) => ({ ...f, [field]: value }));
+    if (field === 'baseURL') setBaseURLTouched(true);
+  }, []);
+
+  const handleSelectVendor = useCallback(
+    (vendor) => {
+      setChannelForm((f) => ({
+        ...f,
+        type: vendor.type,
+        baseURL: baseURLTouched
+          ? f.baseURL
+          : (CHANNEL_PRESETS[vendor.type]?.base_url ?? ''),
+      }));
+    },
+    [baseURLTouched],
+  );
+
+  const handleCreateChannel = useCallback(async () => {
+    if (channelCreating) return;
+    // .trim() only strips leading/trailing whitespace — an internal newline
+    // (pasted multi-key blob) survives it. This wizard's create path has no
+    // multi-key support (no channel_info is sent, so the backend treats the
+    // whole blob as one literal key — see the field_api_keys hint), so a
+    // multi-line key must be rejected here rather than silently POSTed as an
+    // unusable credential.
+    const key = channelForm.key.trim();
+    if (/[\r\n]/.test(key)) {
+      setChannelCreateError(
+        tr(
+          'console.flows.multi_key_rejected',
+          'One key per channel — remove the extra line(s). Multi-key channels are created from the Channels page.',
+        ),
+      );
+      return;
+    }
+    const type = Number(channelForm.type) || 1;
+    const baseURL = channelForm.baseURL.trim();
+    if (NO_DEFAULT_BASE_URL_TYPES.has(type) && !baseURL) {
+      setChannelCreateError(
+        tr(
+          'console.flows.base_url_required',
+          'This vendor has no default upstream host — enter a base url before creating the channel.',
+        ),
+      );
+      return;
+    }
+    setChannelCreating(true);
+    setChannelCreateError(null);
+    try {
+      const payload = {
+        name: channelForm.name.trim(),
+        type,
+        base_url: baseURL,
+        key,
+        models: channelForm.models.trim(),
+      };
+      if (channelForm.orgId.trim()) {
+        payload.openai_organization = channelForm.orgId.trim();
+      }
+      const res = await API.post(`/api/v2/${tenantSlug}/channels`, payload);
+      const data = res?.data?.data ?? {};
+      setCreatedChannel({
+        id: data.id,
+        name: data.name ?? payload.name,
+        models: payload.models,
+      });
+      setStep(3);
+    } catch (err) {
+      setChannelCreateError(describeChannelWriteError(err, tr));
+    } finally {
+      setChannelCreating(false);
+    }
+  }, [channelForm, tenantSlug, channelCreating, tr]);
+
+  const handleDiscoverModels = useCallback(async () => {
+    if (!createdChannel || discovery.loading) return;
+    setDiscovery({ loading: true, error: null, data: null });
+    try {
+      const res = await API.get(
+        `/api/v2/${tenantSlug}/channels/${createdChannel.id}/upstream-models`,
+      );
+      if (res?.data?.success) {
+        const d = res.data.data;
+        setDiscovery({ loading: false, error: null, data: d });
+        setSelectedNewModels(new Set(d.new ?? []));
+      } else {
+        setDiscovery({
+          loading: false,
+          error:
+            res?.data?.message ??
+            tr(
+              'console.flows.discover_failed',
+              'Failed to fetch upstream models',
+            ),
+          data: null,
+        });
+      }
+    } catch (err) {
+      setDiscovery({
+        loading: false,
+        error: describeChannelWriteError(err, tr),
+        data: null,
+      });
+    }
+  }, [createdChannel, tenantSlug, discovery.loading, tr]);
+
+  const handleToggleNewModel = useCallback((m) => {
+    setSelectedNewModels((prev) => {
+      const n = new Set(prev);
+      if (n.has(m)) n.delete(m);
+      else n.add(m);
+      return n;
+    });
+  }, []);
+
+  const handleApplyModels = useCallback(async () => {
+    if (!createdChannel || applyingModels || selectedNewModels.size === 0) {
+      return;
+    }
+    setApplyingModels(true);
+    try {
+      const currentSet = new Set(
+        (createdChannel.models || '')
+          .split(',')
+          .map((m) => m.trim())
+          .filter(Boolean),
+      );
+      for (const m of selectedNewModels) currentSet.add(m);
+      const merged = [...currentSet].join(',');
+      const res = await API.put(
+        `/api/v2/${tenantSlug}/channels/${createdChannel.id}`,
+        { models: merged },
+      );
+      if (res?.data?.success) {
+        setCreatedChannel((c) => ({ ...c, models: merged }));
+        setStep(4);
+      } else {
+        setDiscovery((d) => ({
+          ...d,
+          error:
+            res?.data?.message ??
+            tr('console.flows.sync_failed', 'Failed to update models'),
+        }));
+      }
+    } catch (err) {
+      setDiscovery((d) => ({
+        ...d,
+        error: describeChannelWriteError(err, tr),
+      }));
+    } finally {
+      setApplyingModels(false);
+    }
+  }, [createdChannel, tenantSlug, applyingModels, selectedNewModels, tr]);
+
+  const handleSkipModels = useCallback(() => {
+    setStep(4);
+  }, []);
+
+  const handleTestChannel = useCallback(async () => {
+    if (!createdChannel || channelTesting) return;
+    setChannelTesting(true);
+    setChannelTestResult(null);
+    try {
+      const res = await API.post(
+        `/api/v2/${tenantSlug}/channels/${createdChannel.id}/test`,
+        {},
+      );
+      setChannelTestResult(res?.data ?? null);
+    } catch (err) {
+      setChannelTestResult({
+        success: false,
+        error: describeChannelWriteError(err, tr),
+      });
+    } finally {
+      setChannelTesting(false);
+    }
+  }, [createdChannel, tenantSlug, channelTesting, tr]);
+
+  const handleFinishChannel = useCallback(() => {
+    setChannelForm(CHANNEL_DRAFT_INIT);
+    setChannelCreateError(null);
+    setCreatedChannel(null);
+    setDiscovery({ loading: false, error: null, data: null });
+    setSelectedNewModels(new Set());
+    setChannelTestResult(null);
+    setBaseURLTouched(false);
+    setStep(1);
+  }, []);
+
   // When user switches flow or step, keep step in bounds.
   const maxStep = meta[2];
-  // For newToken, "next" on step 2 goes to review (step 3). The review step
-  // handles its own submit — nav buttons are hidden once createdKey is set.
-  const showNav =
-    flow !== 'incident' &&
-    flow !== 'retry' &&
-    !(flow === 'newToken' && step === maxStep);
+  // Top-level Back is hidden only on newToken's terminal review/success step
+  // (it owns its own confirm/copy actions there). Top-level Next is ALSO
+  // hidden for newChannel past step 1 — steps 2-4 progress through the
+  // wizard-owned Create / Discover / Test buttons above, each of which is a
+  // real async call, not a plain step increment.
+  const showBack = !(flow === 'newToken' && step === maxStep);
+  const showNext = showBack && !(flow === 'newChannel' && step >= 2);
 
   return (
     <HFShell
-      active='channels'
+      active='flows'
       crumbs={[
         tr('console.flows.crumb', 'flows'),
         tr(`console.flows.flow_${meta[0]}`, meta[1]),
       ]}
       actions={
-        showNav ? (
+        showBack || showNext ? (
           <>
-            <button
-              type='button'
-              className='btn'
-              data-testid='flows-back'
-              onClick={() => setStep(Math.max(1, step - 1))}
-            >
-              {tr('console.flows.back', '← back')}
-            </button>
-            <button
-              type='button'
-              className='btn primary'
-              data-testid='flows-next'
-              onClick={() => setStep(Math.min(maxStep, step + 1))}
-            >
-              {step === maxStep
-                ? tr('console.flows.finish', 'finish')
-                : tr('console.flows.next', 'next →')}
-            </button>
+            {showBack && (
+              <button
+                type='button'
+                className='btn'
+                data-testid='flows-back'
+                onClick={() => setStep(Math.max(1, step - 1))}
+              >
+                {tr('console.flows.back', '← back')}
+              </button>
+            )}
+            {showNext && (
+              <button
+                type='button'
+                className='btn primary'
+                data-testid='flows-next'
+                onClick={() => setStep(Math.min(maxStep, step + 1))}
+              >
+                {step === maxStep
+                  ? tr('console.flows.finish', 'finish')
+                  : tr('console.flows.next', 'next →')}
+              </button>
+            )}
           </>
         ) : null
       }
     >
-      {flow !== 'newToken' && (
-        <WIPBanner
-          reason={tr(
-            'console.flows.wip_static',
-            'Flow wizards are static step previews — wired in v3.',
-          )}
-          todo='newChannel/incident/retry wired in v3.'
-        />
-      )}
       <div
         style={{
           display: 'flex',
@@ -1490,14 +1378,6 @@ const HFFlows = () => {
 
       {flow === 'newChannel' && (
         <>
-          <WIPBanner
-            reason={tr(
-              'console.flows.wip_new_channel',
-              'New Channel wizard wired in v3.',
-            )}
-            todo='Requires credential validation + connection-test + model-discovery.'
-            data-testid='wip-newChannel'
-          />
           <Stepper
             steps={[
               tr('console.flows.step_vendor', 'vendor'),
@@ -1508,7 +1388,27 @@ const HFFlows = () => {
             cur={step}
           />
           <div style={{ padding: '32px 40px' }}>
-            <NewChannelStep step={step} />
+            <NewChannelStep
+              step={step}
+              form={channelForm}
+              onFieldChange={handleChannelField}
+              onSelectVendor={handleSelectVendor}
+              creating={channelCreating}
+              createError={channelCreateError}
+              onCreate={handleCreateChannel}
+              createdChannel={createdChannel}
+              discovery={discovery}
+              selectedNewModels={selectedNewModels}
+              onToggleNewModel={handleToggleNewModel}
+              onDiscoverModels={handleDiscoverModels}
+              applyingModels={applyingModels}
+              onApplyModels={handleApplyModels}
+              onSkipModels={handleSkipModels}
+              testing={channelTesting}
+              testResult={channelTestResult}
+              onTestChannel={handleTestChannel}
+              onFinish={handleFinishChannel}
+            />
           </div>
         </>
       )}
@@ -1537,32 +1437,6 @@ const HFFlows = () => {
               onSubmit={handleSubmit}
             />
           </div>
-        </>
-      )}
-      {flow === 'incident' && (
-        <>
-          <WIPBanner
-            reason={tr(
-              'console.flows.wip_incident',
-              'Incident Response wizard wired in v3.',
-            )}
-            todo='Event-response automation — deferred.'
-            data-testid='wip-incident'
-          />
-          <IncidentScreen />
-        </>
-      )}
-      {flow === 'retry' && (
-        <>
-          <WIPBanner
-            reason={tr(
-              'console.flows.wip_retry',
-              'Retry Chain Visualizer wired in v3.',
-            )}
-            todo='Failed-retry orchestration — deferred.'
-            data-testid='wip-retry'
-          />
-          <RetryScreen />
         </>
       )}
     </HFShell>

@@ -82,6 +82,7 @@ vi.mock('./components/auth/OidcCallback', () => stub('oidc-callback'));
 vi.mock('./components/settings/PersonalSetting', () => stub('page-personal'));
 
 vi.mock('./pages/v2/Log', () => stub('v2-log'));
+vi.mock('./pages/v2/Tasks', () => stub('v2-tasks'));
 vi.mock('./pages/v2/Channel', () => stub('v2-channel'));
 vi.mock('./pages/v2/Dashboard', () => stub('v2-dashboard'));
 vi.mock('./pages/v2/Token', () => stub('v2-token'));
@@ -190,6 +191,7 @@ describe('App — route guards', () => {
     const slugs = [
       ['dashboard', 'v2-dashboard'],
       ['log', 'v2-log'],
+      ['tasks', 'v2-tasks'],
       ['channel', 'v2-channel'],
       ['token', 'v2-token'],
       ['playground', 'v2-playground'],

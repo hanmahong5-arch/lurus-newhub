@@ -169,6 +169,62 @@ func TestHandlerIdentityLog_UpdateUserSetting_GotifyBranches(t *testing.T) {
 	})
 }
 
+// TestUpdateUserSetting_PreservesUnrelatedSettingMembers pins that saving a
+// notification preference does not erase the members of entity.User.Setting
+// that this request has no field for. sidebar_modules is written by
+// PUT /api/user/self and read back by GetSelfV2; log_detail_level gates the
+// prompt preview on log rows. Rebuilding dto.UserSetting from scratch here
+// serialized both away, so a user who saved a webhook address lost their
+// sidebar layout in the same write.
+func TestUpdateUserSetting_PreservesUnrelatedSettingMembers(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	var seeded repo.User
+	if err := ctx.DB.First(&seeded, ctx.NormalUser.Id).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	prior := seeded.GetSetting()
+	prior.SidebarModules = `{"chat":{"enabled":true}}`
+	prior.LogDetailLevel = "full"
+	seeded.SetSetting(prior)
+	if err := ctx.DB.Save(&seeded).Error; err != nil {
+		t.Fatalf("seed setting: %v", err)
+	}
+
+	c, w := r2authSession(http.MethodPut, "/api/user/setting", map[string]interface{}{
+		"notify_type":             "webhook",
+		"quota_warning_threshold": 250000.0,
+		"webhook_url":             "https://hook.example.com/notify",
+	}, ctx.NormalUser.Id, common.RoleCommonUser)
+	UpdateUserSetting(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	if body := r2authBody(t, w); !body["success"].(bool) {
+		t.Fatalf("expected success, body=%s", w.Body.String())
+	}
+
+	var reloaded repo.User
+	if err := ctx.DB.First(&reloaded, ctx.NormalUser.Id).Error; err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	got := reloaded.GetSetting()
+	if got.SidebarModules != `{"chat":{"enabled":true}}` {
+		t.Errorf("SidebarModules = %q, want the seeded layout to survive a notification save", got.SidebarModules)
+	}
+	if got.LogDetailLevel != "full" {
+		t.Errorf("LogDetailLevel = %q, want %q", got.LogDetailLevel, "full")
+	}
+	if got.WebhookUrl != "https://hook.example.com/notify" {
+		t.Errorf("WebhookUrl = %q, want the value this request carried", got.WebhookUrl)
+	}
+	if got.NotifyType != "webhook" {
+		t.Errorf("NotifyType = %q, want webhook", got.NotifyType)
+	}
+}
+
 // TestHandlerIdentityLog_UpdateUserSetting_EmailAndBarkValidation covers the
 // invalid-email and bad-Bark-URL branches that cover_r2_auth_test.go's
 // "bark_bad_scheme" case (a syntactically valid ftp:// URL) never reached.

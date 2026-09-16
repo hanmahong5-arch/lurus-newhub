@@ -60,6 +60,7 @@ vi.mock('../../../components/hifi/HFShell', async (importOriginal) => {
       React.createElement('div', { 'data-testid': 'hf-shell' }, children),
     NAV_SECTIONS: actual.NAV_SECTIONS,
     visibleNavItems: visibleNavItemsSpy,
+    navItemEnabledByFeatureFlags: actual.navItemEnabledByFeatureFlags,
     useBridgedUser: actual.useBridgedUser,
   };
 });
@@ -223,6 +224,37 @@ describe('CommandPalette — real data', () => {
     const rows = screen.getAllByTestId('palette-row-navigate');
     expect(rows.length).toBeGreaterThan(0);
     expect(document.body.textContent).toContain('/console/v2/dashboard');
+  });
+
+  // The rail hides "MJ / Task logs" when a deployment has both enable_drawing
+  // and enable_task off, because the page has nothing to show. The palette
+  // reads the same NAV_SECTIONS, so without the same gate it kept offering
+  // that destination — the rail's honesty fix, undone one keystroke away.
+  // Both surfaces now call navItemEnabledByFeatureFlags.
+  it('does not offer MJ / Task logs when the deployment has both task flags off', async () => {
+    wireGet();
+    window.localStorage.setItem('enable_drawing', 'false');
+    window.localStorage.setItem('enable_task', 'false');
+
+    render(<HFCmdK />);
+
+    await waitFor(() =>
+      expect(screen.getAllByText('deepseek-chat').length).toBeGreaterThan(0),
+    );
+    expect(document.body.textContent).not.toContain('/console/v2/tasks');
+  });
+
+  it('offers MJ / Task logs when either task flag is on', async () => {
+    wireGet();
+    window.localStorage.setItem('enable_drawing', 'false');
+    window.localStorage.setItem('enable_task', 'true');
+
+    render(<HFCmdK />);
+
+    await waitFor(() =>
+      expect(screen.getAllByText('deepseek-chat').length).toBeGreaterThan(0),
+    );
+    expect(document.body.textContent).toContain('/console/v2/tasks');
   });
 
   // B-F2/A-F3 regression: the palette used to gate the navigate group on
