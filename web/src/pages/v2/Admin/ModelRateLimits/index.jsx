@@ -459,7 +459,7 @@ const HFModelRateLimits = () => {
       active='admin-model-limits'
       crumbs={[
         tr('console.nav.section_governance', 'governance'),
-        tr('console.model_limits.crumb', 'model limits'),
+        tr('console.model_limits.crumb', 'model limits & availability'),
       ]}
       actions={
         !forbidden && (
@@ -491,7 +491,7 @@ const HFModelRateLimits = () => {
       <div className='hf-page-head'>
         <div>
           <div className='lbl' style={{ marginBottom: 6 }}>
-            {tr('console.model_limits.crumb', 'model limits')}
+            {tr('console.model_limits.crumb', 'model limits & availability')}
           </div>
           <h1>
             {loading

@@ -75,13 +75,9 @@ const PATH_TO_ID = {
   redemption: 'redemption',
   projects: 'projects',
   settings: 'settings',
-  // Flows/index.jsx (owned by a different lane) still hardcodes
-  // `active='channels'` on its own <HFShell> call, which wins over this
-  // fallback whenever that page actually renders (see activeId below) — so
-  // visiting /console/v2/flows highlights "Channels" in the rail today, not
-  // "Flows", even though the nav item below is id:'flows'. This entry is the
-  // correct mapping for that fallback path the day Flows/index.jsx stops
-  // overriding it; it is not itself what fixes the mismatch.
+  // Flows/index.jsx passes active='flows' explicitly, which wins over this
+  // fallback whenever that page renders (see activeId below). This entry is
+  // the mapping for any other route that resolves to the Flows surface.
   flows: 'flows',
   states: 'logs',
   variants: 'dashboard',
@@ -269,11 +265,7 @@ export const NAV_SECTIONS = [
     minRole: 10,
     items: [
       // Multi-step setup wizards (new channel / new token) — pages/v2/Flows,
-      // wired to the real channel/token backends by cycle-10 L4. Its own
-      // <HFShell active='channels'> call (Flows/index.jsx, a different
-      // lane's file) means the rail highlights "Channels" rather than this
-      // item while the page is open — see the PATH_TO_ID.flows comment
-      // above for why this entry doesn't fix that on its own.
+      // wired to the real channel and token backends.
       {
         id: 'flows',
         href: '/console/v2/flows',
@@ -500,6 +492,26 @@ export const NAV_SECTIONS = [
 // admin (10) from root (100) — a role-10 admin was offered the root-only
 // "Background tasks" destination (admin-system-tasks, minRole:100) even
 // though the rail correctly hides it.
+// navItemEnabledByFeatureFlags answers whether a nav id points at a surface
+// the deployment has switched on at all, independent of role. Kept separate
+// from visibleNavItems (which is purely role-based, and which several tests
+// call with no localStorage at all) and exported so the rail and the command
+// palette gate on the SAME predicate — a destination the rail hides because
+// it would be a permanently empty page must not still be offered by ⌘K.
+// Same flags and the same either-is-true semantics as
+// components/layout/SiderBar.jsx's workspaceItems.
+export const navItemEnabledByFeatureFlags = (id) => {
+  if (id !== 'mj-logs') return true;
+  try {
+    return (
+      localStorage.getItem('enable_drawing') === 'true' ||
+      localStorage.getItem('enable_task') === 'true'
+    );
+  } catch (_) {
+    return true;
+  }
+};
+
 export const visibleNavItems = (user) => {
   const role = user?.role ?? 0;
   return NAV_SECTIONS.filter((s) => !s.minRole || role >= s.minRole).map(
@@ -654,13 +666,7 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = () => setNavOpen(false);
   const navigate = useNavigate();
-  // Same flags + semantics as components/layout/SiderBar.jsx's
-  // workspaceItems: visible if either is 'true'. Read directly (not through
-  // visibleNavItems) so CommandPalette's own call to that function is
-  // unaffected by this rail-only gate.
-  const tasksFeatureEnabled =
-    localStorage.getItem('enable_drawing') === 'true' ||
-    localStorage.getItem('enable_task') === 'true';
+  const tasksFeatureEnabled = navItemEnabledByFeatureFlags('mj-logs');
 
   // ⌘K / Ctrl-K actually opens the palette now. The rail has rendered a ⌘K
   // badge next to the search button since the shell was built, but the repo

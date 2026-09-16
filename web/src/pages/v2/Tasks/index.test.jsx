@@ -297,6 +297,30 @@ describe('Tasks page (v2)', () => {
     expect(sent).toBeLessThan(1e10);
   });
 
+  // end_timestamp is converted by the same code path but needs its own
+  // assertion: with only start_timestamp pinned, the unit could drift on the
+  // end bound alone and every other assertion would stay green.
+  it('sends end_timestamp in Unix SECONDS on the Tasks tab', async () => {
+    API.get.mockResolvedValue(page([makeTask(1)], 1));
+
+    render(React.createElement(HFTasks));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByTestId('tasks-end-filter'), {
+      target: { value: '2026-09-17T00:00' },
+    });
+    fireEvent.click(screen.getByTestId('tasks-search-btn'));
+
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(2));
+
+    const qs2 = new URLSearchParams(API.get.mock.calls[1][0].split('?')[1]);
+    const sentEnd = Number(qs2.get('end_timestamp'));
+    expect(sentEnd).toBe(
+      Math.floor(new Date('2026-09-17T00:00').getTime() / 1000),
+    );
+    expect(sentEnd).toBeLessThan(1e10);
+  });
+
   it('sends start_timestamp in Unix MILLISECONDS on the MJ tab', async () => {
     API.get.mockImplementation((url) =>
       url.startsWith('/api/mj/self/')
@@ -331,6 +355,44 @@ describe('Tasks page (v2)', () => {
     expect(sent).toBe(new Date('2026-09-16T00:00').getTime());
     // magnitude check: Unix milliseconds are ~1e12, not ~1e9
     expect(sent).toBeGreaterThan(1e12);
+  });
+
+  it('sends end_timestamp in Unix MILLISECONDS on the MJ tab', async () => {
+    API.get.mockImplementation((url) =>
+      Promise.resolve(
+        url.startsWith('/api/mj/self/')
+          ? page([makeMj(9)], 1)
+          : page([makeTask(1)], 1),
+      ),
+    );
+
+    render(React.createElement(HFTasks));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId('tasks-tab-mj'));
+    await waitFor(() => screen.getByTestId('mj-row-9'));
+
+    fireEvent.change(screen.getByTestId('mj-end-filter'), {
+      target: { value: '2026-09-17T00:00' },
+    });
+    fireEvent.click(screen.getByTestId('mj-search-btn'));
+
+    await waitFor(() => {
+      const c = API.get.mock.calls.filter((x) =>
+        x[0].startsWith('/api/mj/self/'),
+      );
+      expect(c.length).toBeGreaterThanOrEqual(2);
+    });
+
+    const mjCalls = API.get.mock.calls.filter((c) =>
+      c[0].startsWith('/api/mj/self/'),
+    );
+    const qsEnd = new URLSearchParams(
+      mjCalls[mjCalls.length - 1][0].split('?')[1],
+    );
+    const sentEnd = Number(qsEnd.get('end_timestamp'));
+    expect(sentEnd).toBe(new Date('2026-09-17T00:00').getTime());
+    expect(sentEnd).toBeGreaterThan(1e12);
   });
 
   it('renders the FAILURE status tag with error styling on the Tasks tab', async () => {

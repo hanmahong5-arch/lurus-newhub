@@ -647,12 +647,25 @@ func UpdateUserSetting(c *gin.Context) {
 		return
 	}
 
-	settings := dto.UserSetting{
-		NotifyType:            req.QuotaWarningType,
-		QuotaWarningThreshold: req.QuotaWarningThreshold,
-		AcceptUnsetRatioModel: req.AcceptUnsetModelRatioModel,
-		RecordIpLog:           req.RecordIpLog,
-	}
+	// Start from what is stored and overwrite only the fields this request
+	// owns. Building a fresh dto.UserSetting here dropped every member the
+	// request does not carry — sidebar_modules (written by PUT /api/user/self,
+	// read back by GetSelfV2) and log_detail_level — so saving a notification
+	// preference silently reset the user's sidebar layout. The per-type target
+	// fields below are still assigned rather than merged: switching notify_type
+	// is meant to retire the previous channel's target.
+	settings := user.GetSetting()
+	settings.NotifyType = req.QuotaWarningType
+	settings.QuotaWarningThreshold = req.QuotaWarningThreshold
+	settings.AcceptUnsetRatioModel = req.AcceptUnsetModelRatioModel
+	settings.RecordIpLog = req.RecordIpLog
+	settings.WebhookUrl = ""
+	settings.WebhookSecret = ""
+	settings.NotificationEmail = ""
+	settings.BarkUrl = ""
+	settings.GotifyUrl = ""
+	settings.GotifyToken = ""
+	settings.GotifyPriority = 0
 
 	if req.QuotaWarningType == dto.NotifyTypeWebhook {
 		settings.WebhookUrl = req.WebhookUrl

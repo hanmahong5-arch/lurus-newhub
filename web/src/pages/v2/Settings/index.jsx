@@ -570,7 +570,8 @@ const HFSettings = () => {
   // verbatim from UpdateUserSettingRequest (user.go:521-531); the two
   // fields this panel has no editor for (accept_unset_model_ratio_model,
   // record_ip_log) are still sent, carrying the value seeded from the
-  // server, so a save here cannot silently reset them.
+  // server. The save test seeds them with opposite booleans and asserts both
+  // round-trip, so dropping the carry-through turns it red.
   const handleSaveNotify = async () => {
     if (notifySaving) return;
     setNotifySaving(true);
@@ -1693,12 +1694,25 @@ const HFSettings = () => {
                   </>
                 )}
 
+                {/* Disabled until the form has been seeded from the server.
+                    PUT /api/user/setting replaces the whole blob, so saving
+                    while profile is still null (or its fetch failed) would
+                    write this form's useState defaults over the user's real
+                    webhook/gotify configuration. */}
                 <button
                   type='button'
                   className='btn sm'
                   style={{ marginTop: 18 }}
                   data-testid='notify-save-btn'
-                  disabled={notifySaving}
+                  disabled={notifySaving || !notifySeeded}
+                  title={
+                    notifySeeded
+                      ? undefined
+                      : tr(
+                          'console.settings.notify_unseeded',
+                          'current settings could not be loaded - reload before saving',
+                        )
+                  }
                   onClick={handleSaveNotify}
                 >
                   {tr('console.common.save', 'save')}

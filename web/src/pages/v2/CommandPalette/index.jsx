@@ -21,6 +21,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell, {
   visibleNavItems,
+  navItemEnabledByFeatureFlags,
   useBridgedUser,
 } from '../../../components/hifi/HFShell';
 import { API, isAdmin } from '../../../helpers';
@@ -159,12 +160,18 @@ const HFCmdK = () => {
       // the palette offer a role-10 admin the root-only "Background tasks"
       // destination (admin-system-tasks, minRole:100) that the rail itself
       // correctly hid.
+      // navItemEnabledByFeatureFlags is the rail's own gate: without it the
+      // palette offered "MJ / Task logs" on a deployment with both
+      // enable_drawing and enable_task off, i.e. a destination the rail
+      // deliberately hides because the page has nothing to show.
       rows: visibleNavItems(bridgedUser).flatMap((s) =>
-        s.items.map((it) => ({
-          label: tr(it.key, it.label),
-          hint: it.href,
-          href: it.href,
-        })),
+        s.items
+          .filter((it) => navItemEnabledByFeatureFlags(it.id))
+          .map((it) => ({
+            label: tr(it.key, it.label),
+            hint: it.href,
+            href: it.href,
+          })),
       ),
     });
 

@@ -254,6 +254,13 @@ describe('Settings page', () => {
                 gotify_url: 'https://gotify.example.test',
                 gotify_token: 'tok-abc',
                 gotify_priority: 7,
+                // Opposite booleans on purpose. This panel has no editor for
+                // either field, so it must send back what the server gave it;
+                // hardcoding a value here instead of carrying it through would
+                // silently reset a user's preference on every save. Same
+                // technique as q1_personal_setting.test.jsx.
+                accept_unset_model_ratio_model: true,
+                record_ip_log: false,
               }),
             },
           },
@@ -317,6 +324,38 @@ describe('Settings page', () => {
     expect(typeof body.quota_warning_threshold).toBe('number');
     expect(body.gotify_priority).toBe(7);
     expect(typeof body.gotify_priority).toBe('number');
+    // Carried through from the seed, not re-derived from a default.
+    expect(body.accept_unset_model_ratio_model).toBe(true);
+    expect(body.record_ip_log).toBe(false);
+  });
+
+  // The form is seeded from GET /user/me. If that call fails, profile stays
+  // null, the form shows its useState defaults, and PUT /api/user/setting
+  // replaces the whole blob — so an enabled save button would overwrite the
+  // user's real webhook/gotify configuration with 'email' / 100000 / empty.
+  it('notifications save is disabled until the form has been seeded from the server', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.reject(new Error('network down'));
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+
+    render(<HFSettings />);
+    screen.getByText('Notifications').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('notifications-section')).toBeTruthy();
+    });
+
+    const btn = screen.getByTestId('notify-save-btn');
+    expect(btn.disabled).toBe(true);
+
+    fireEvent.click(btn);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(API.put.mock.calls.some((c) => c[0] === '/api/user/setting')).toBe(
+      false,
+    );
   });
 
   // 3. RE-INVERTED: the interim "managed on platform identity" copy plus

@@ -30,6 +30,13 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // CI runners are UTC. Any guard about LOCAL calendar days — the console
+    // buckets usage by the day the customer sees, not by the UTC day — is
+    // vacuous at a zero offset: a UTC-day bug passes every assertion. Pin a
+    // non-zero offset so those guards mean the same thing here and in CI. The
+    // suite is green under this zone locally, so this narrows behaviour rather
+    // than changing it.
+    env: { TZ: 'Asia/Shanghai' },
     setupFiles: ['./src/test/setup.js'],
     include: ['src/**/*.{test,spec}.{js,jsx,ts,tsx}'],
     exclude: ['node_modules', 'tests/e2e/**', 'dist'],

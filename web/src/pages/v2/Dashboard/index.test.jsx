@@ -505,6 +505,12 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
   // offset (a fixed non-UTC zone, see web/vitest / bun runtime) puts both
   // rows in the *same* UTC calendar day, merging them into one bar instead.
   it('buckets two rows straddling local midnight into two distinct day bars, not merged into one', async () => {
+    // This guard only distinguishes local-day from UTC-day bucketing at a
+    // non-zero UTC offset; at TZ=UTC the buggy code passes it. vitest.config.js
+    // pins TZ for exactly this reason, so assert the pin rather than silently
+    // becoming a no-op if someone removes it.
+    expect(new Date().getTimezoneOffset()).not.toBe(0);
+
     const beforeMidnight = new Date();
     beforeMidnight.setDate(beforeMidnight.getDate() - 2);
     beforeMidnight.setHours(23, 30, 0, 0);

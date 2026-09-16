@@ -257,10 +257,12 @@ func SetApiV2Router(router *gin.Engine) {
 		}
 
 		// ================================================================
-		// Tenant-scoped Catalog & Pricing & Billing (Wave 2 — 2026-05-19)
-		// Read-only projections wired from the v2 console. Write paths
-		// (single-model edit, markup engine, PDF download, payment-method
-		// edit) deferred per Wave 2 scope — UI carries mini WIPBanner.
+		// Tenant-scoped Catalog & Pricing & Billing.
+		// Projections wired from the v2 console. Still not implemented here:
+		// single-model edit, the markup engine, invoice PDF download and
+		// payment-method edit. The console no longer advertises those with a
+		// banner; per-model availability is administered through
+		// /api/v2/admin/tenants/:id/model-allowlist instead.
 		// ================================================================
 
 		tenantModels := apiV2.Group("/:tenant_slug/models")
@@ -268,8 +270,7 @@ func SetApiV2Router(router *gin.Engine) {
 		tenantModels.Use(middleware.TenantSlugGuard())
 		{
 			tenantModels.GET("", handler.ListModelsV2)
-			// Wave 3 Phase 1 (2026-05-20): add / delete wired.
-			// Single-model edit deferred to v3 per scope-cut.
+			// Add and delete are wired; editing a single model is not.
 			//
 			// The catalogue is platform-global (entity.Model has no tenant_id),
 			// so these two enforce requirePlatformRoot INSIDE the handler — the
