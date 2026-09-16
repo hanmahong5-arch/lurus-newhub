@@ -16,19 +16,32 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
-import WIPBanner from '../../../components/hifi/WIPBanner';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
-/* Wave 2: Chat wired to non-stream POST /api/v2/:slug/chat/send.
-   In-memory conversation only — no chat_session table yet, so the
-   sidebar lists the *current* session (started + turn count), not a
-   server-side history. SSE streaming, branching/retry, and
-   multi-conversation rehydrate are deferred to v3. */
+/* Chat is wired to two, independent backends:
+   - POST /api/v2/:slug/chat/send (handler.ChatSend) runs the actual
+     multi-turn completion via in-process loopback to /v1/chat/completions.
+     This is a REAL model call, not a mock — it always was.
+   - GET/POST/PATCH/DELETE /api/v2/:slug/chat/sessions[/:id]
+     (migration 038, cycle-10 L3) is a client-driven SAVE of a conversation
+     /chat/send already returned; persistSession() below calls it after
+     every turn, best-effort (a save failure never rolls back an
+     already-rendered turn — see persistSession's own comment).
+
+   OUT OF SCOPE, deliberately, not because it is missing by oversight:
+   - SSE streaming. Loopback SSE would require a second HTTP hop that
+     re-multiplexes upstream chunks (this process would have to open its
+     own SSE connection to itself and re-encode each chunk onto the
+     client's connection); that hop does not exist, so /chat/send only
+     ever returns a complete response. See handler.ChatSend's own comment.
+   - Per-turn retry/branch and rename-from-sidebar: the sessions API this
+     page calls has no sub-resource for either, only whole-session
+     GET/POST/PATCH/DELETE. */
 
 const DEFAULT_MODEL = 'gpt-4o';
 
@@ -53,6 +66,110 @@ const HFChat = () => {
   const [sessionStartedAt] = useState(() => Date.now());
   // "⋯" clear-conversation confirm dialog
   const [clearVisible, setClearVisible] = useState(false);
+
+  // Sidebar / persistence — sessions is the caller's own saved
+  // conversations (GET .../chat/sessions), activeSessionId is null for an
+  // unsaved draft that has not completed its first turn yet.
+  const [sessions, setSessions] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [deletingSessionId, setDeletingSessionId] = useState(null);
+
+  const loadSessions = useCallback(async () => {
+    try {
+      const res = await API.get(`/api/v2/${tenantSlug}/chat/sessions`);
+      setSessions(res?.data?.data?.sessions || []);
+    } catch (_) {
+      // The sidebar's history is a convenience on top of a chat that
+      // already works without it — a listing failure must not block
+      // sending or receiving a turn.
+    }
+  }, [tenantSlug]);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  const newChat = useCallback(() => {
+    setActiveSessionId(null);
+    setMessages([]);
+  }, []);
+
+  const openSession = useCallback(
+    async (id) => {
+      if (id === activeSessionId) return;
+      try {
+        const res = await API.get(`/api/v2/${tenantSlug}/chat/sessions/${id}`);
+        const data = res?.data?.data;
+        if (!data) return;
+        setActiveSessionId(id);
+        setMessages(
+          (data.messages || []).map(({ role, content }) => ({ role, content })),
+        );
+      } catch (err) {
+        showError(
+          err?.response?.data?.message ||
+            err?.message ||
+            tr('console.chat.load_failed', 'Failed to load conversation'),
+        );
+      }
+    },
+    [tenantSlug, activeSessionId, tr],
+  );
+
+  const deleteSession = useCallback(
+    async (id, evt) => {
+      evt?.stopPropagation?.();
+      setDeletingSessionId(id);
+      try {
+        await API.delete(`/api/v2/${tenantSlug}/chat/sessions/${id}`);
+        setSessions((prev) => prev.filter((s) => s.id !== id));
+        if (id === activeSessionId) {
+          newChat();
+        }
+      } catch (err) {
+        showError(
+          err?.response?.data?.message ||
+            err?.message ||
+            tr('console.chat.delete_failed', 'Failed to delete conversation'),
+        );
+      } finally {
+        setDeletingSessionId(null);
+      }
+    },
+    [tenantSlug, activeSessionId, newChat],
+  );
+
+  // persistSession SAVES the full conversation (create on first successful
+  // turn, PATCH-replace on every turn after) — best-effort: a failure here
+  // is swallowed and the already-rendered chat turn is NOT rolled back,
+  // same convention as ResponseRegistry's post-hoc insert hook on the
+  // backend (entity.ChatSession's doc comment).
+  const persistSession = useCallback(
+    async (sessionId, title, allMessages) => {
+      const payload = {
+        title,
+        model,
+        messages: allMessages.map(({ role, content }) => ({ role, content })),
+      };
+      try {
+        if (sessionId) {
+          await API.patch(
+            `/api/v2/${tenantSlug}/chat/sessions/${sessionId}`,
+            payload,
+          );
+          return sessionId;
+        }
+        const res = await API.post(
+          `/api/v2/${tenantSlug}/chat/sessions`,
+          payload,
+        );
+        return res?.data?.data?.id ?? null;
+      } catch (_) {
+        return sessionId ?? null;
+      }
+    },
+    [tenantSlug, model],
+  );
 
   const sessionTitle = useMemo(() => {
     const firstUser = messages.find((m) => m.role === 'user');
@@ -94,18 +211,32 @@ const HFChat = () => {
             tr('console.chat.invalid_response', 'invalid chat response'),
         );
       }
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: data.message.content,
-          meta: {
-            latency_ms: data.latency_ms,
-            prompt_tokens: data.usage?.prompt_tokens,
-            completion_tokens: data.usage?.completion_tokens,
-          },
+      const assistantMsg = {
+        role: 'assistant',
+        content: data.message.content,
+        meta: {
+          latency_ms: data.latency_ms,
+          prompt_tokens: data.usage?.prompt_tokens,
+          completion_tokens: data.usage?.completion_tokens,
         },
-      ]);
+      };
+      const finalMessages = [...nextMessages, assistantMsg];
+      setMessages(finalMessages);
+
+      // Best-effort save — see persistSession's own comment for why a
+      // failure here does not roll back the turn rendered above.
+      const title = formatPreview(
+        finalMessages.find((m) => m.role === 'user')?.content || '',
+      );
+      const savedId = await persistSession(
+        activeSessionId,
+        title,
+        finalMessages,
+      );
+      if (savedId && savedId !== activeSessionId) {
+        setActiveSessionId(savedId);
+      }
+      loadSessions();
     } catch (err) {
       showError(
         err?.response?.data?.message ||
@@ -118,7 +249,17 @@ const HFChat = () => {
     } finally {
       setSending(false);
     }
-  }, [input, messages, model, sending, tenantSlug, tr]);
+  }, [
+    input,
+    messages,
+    model,
+    sending,
+    tenantSlug,
+    tr,
+    activeSessionId,
+    persistSession,
+    loadSessions,
+  ]);
 
   const onKeyDown = useCallback(
     (e) => {
@@ -166,7 +307,7 @@ const HFChat = () => {
             consequenceList={[
               tr(
                 'console.chat.clear_consequence',
-                'The current conversation will be cleared and cannot be recovered (local session only).',
+                'Starts a new conversation. Anything already saved stays in the sidebar; unsent input is lost.',
               ),
             ]}
             confirmText='clear'
@@ -176,7 +317,7 @@ const HFChat = () => {
             )}
             confirmButtonType='danger'
             onConfirm={() => {
-              setMessages([]);
+              newChat();
               setClearVisible(false);
             }}
             onCancel={() => setClearVisible(false)}
@@ -204,54 +345,127 @@ const HFChat = () => {
               type='button'
               className='btn primary'
               style={{ width: '100%', justifyContent: 'center' }}
-              onClick={() => setMessages([])}
+              onClick={newChat}
             >
               {tr('console.chat.new_chat_btn', '+ new chat')}
             </button>
           </div>
+          {/* The active draft: shown while there are local turns that are
+              not yet reflected as an entry in `sessions` below — either the
+              persist call for this turn hasn't resolved yet, or it failed
+              (best-effort, see persistSession's comment). Once the draft's
+              id appears in `sessions` it renders as a normal (highlighted)
+              row there instead, so it is never shown twice. */}
+          {messages.length > 0 &&
+            !sessions.some((s) => s.id === activeSessionId) && (
+              <>
+                <div className='lbl' style={{ padding: '8px 16px' }}>
+                  {tr('console.chat.current_session', 'current session')}
+                </div>
+                <div
+                  data-testid='session-row'
+                  style={{
+                    padding: '10px 16px',
+                    background: 'var(--hf-elev)',
+                    borderLeft: '2px solid var(--hf-accent)',
+                    borderBottom: '1px solid var(--hf-rule)',
+                  }}
+                >
+                  <div
+                    className='strong'
+                    style={{
+                      fontSize: 12,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {sessionTitle}
+                  </div>
+                  <div
+                    className='faint mono'
+                    style={{ fontSize: 10, marginTop: 2 }}
+                  >
+                    {tr('console.chat.ago', '{{ago}} ago', {
+                      ago: sessionStartedAgo,
+                    })}{' '}
+                    ·{' '}
+                    {tr('console.chat.turns', '{{count}} turns', {
+                      count: turnCount,
+                    })}
+                  </div>
+                </div>
+              </>
+            )}
+
           <div className='lbl' style={{ padding: '8px 16px' }}>
-            {tr('console.chat.current_session', 'current session')}
+            {tr('console.chat.saved_sessions', 'saved conversations')}
           </div>
-          <div
-            data-testid='session-row'
-            style={{
-              padding: '10px 16px',
-              background: 'var(--hf-elev)',
-              borderLeft: '2px solid var(--hf-accent)',
-              borderBottom: '1px solid var(--hf-rule)',
-            }}
-          >
+          {sessions.length === 0 && (
             <div
-              className='strong'
+              className='faint'
+              style={{ padding: '4px 16px 14px', fontSize: 11 }}
+            >
+              {tr(
+                'console.chat.no_saved_sessions',
+                'no saved conversations yet',
+              )}
+            </div>
+          )}
+          {sessions.map((s) => (
+            <div
+              key={s.id}
+              data-testid={`session-list-row-${s.id}`}
+              onClick={() => openSession(s.id)}
+              role='button'
+              tabIndex={0}
               style={{
-                fontSize: 12,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                padding: '10px 16px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                background:
+                  s.id === activeSessionId ? 'var(--hf-elev)' : 'transparent',
+                borderLeft:
+                  s.id === activeSessionId
+                    ? '2px solid var(--hf-accent)'
+                    : '2px solid transparent',
+                borderBottom: '1px solid var(--hf-rule)',
               }}
             >
-              {sessionTitle}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  className='strong'
+                  style={{
+                    fontSize: 12,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {s.title || tr('console.chat.new_chat', 'new chat')}
+                </div>
+                <div
+                  className='faint mono'
+                  style={{ fontSize: 10, marginTop: 2 }}
+                >
+                  {tr('console.chat.messages_count', '{{count}} messages', {
+                    count: s.message_count,
+                  })}
+                </div>
+              </div>
+              <button
+                type='button'
+                className='btn ghost sm'
+                data-testid={`session-delete-${s.id}`}
+                disabled={deletingSessionId === s.id}
+                onClick={(e) => deleteSession(s.id, e)}
+              >
+                {tr('console.common.delete', 'delete')}
+              </button>
             </div>
-            <div className='faint mono' style={{ fontSize: 10, marginTop: 2 }}>
-              {tr('console.chat.ago', '{{ago}} ago', {
-                ago: sessionStartedAgo,
-              })}{' '}
-              ·{' '}
-              {tr('console.chat.turns', '{{count}} turns', {
-                count: turnCount,
-              })}
-            </div>
-          </div>
-          <div style={{ padding: '14px 16px' }}>
-            <WIPBanner
-              mini
-              reason={tr(
-                'console.chat.wip_persistence',
-                'persistence + streaming deferred to v3',
-              )}
-              todo='no chat_session table yet'
-            />
-          </div>
+          ))}
         </div>
 
         <div
@@ -356,13 +570,6 @@ const HFChat = () => {
                     >
                       {tr('console.common.copy', 'copy')}
                     </button>
-                    <WIPBanner
-                      mini
-                      reason={tr(
-                        'console.chat.wip_retry',
-                        'retry / branch deferred to v3',
-                      )}
-                    />
                   </div>
                 )}
               </div>

@@ -15,18 +15,26 @@ import (
 
 // ChatSend runs a single-model multi-turn chat completion via in-process
 // self-HTTP loopback to /v1/chat/completions. The conversation history is
-// passed in full from the client — there is no server-side conversation
-// store (Wave 2 scope: the chat_session entity does not exist yet).
+// passed in full from the client on every call — this handler itself has
+// no server-side conversation store and neither reads nor writes the
+// chat_sessions/chat_messages tables (migration 038,
+// v2_chat_session.go's GET/POST/PATCH/DELETE
+// /api/v2/:tenant_slug/chat/sessions[/:id]): those tables are a client-
+// driven SAVE of a conversation this handler already returned, not
+// something this handler consults on its own hot path. A caller that wants
+// the turn persisted calls the sessions endpoints separately after this one
+// returns.
 //
 // Route: POST /api/v2/:tenant_slug/chat/send
 // Auth:  UserAuth (session)
 // Body:  { model, messages: [{role, content}, ...], params? }
 //
-// non-stream only v1 — SSE-through-loopback would require a second HTTP
-// hop that re-multiplexes upstream chunks; that's not worth the design
-// budget while the consumer-feature persistence question is still open.
-// Adding stream:true here would also mean the front-end has to handle
-// partial JSON, and there is no Wave 2 frontend code for that yet.
+// non-stream only — SSE-through-loopback would require a second HTTP hop
+// that re-multiplexes upstream chunks (this process would have to open its
+// own SSE connection to itself, decode each vendor chunk, and re-encode it
+// onto the client's connection); that hop is not built, so stream:true is
+// not accepted here. This is unrelated to the persistence question above —
+// streaming stayed out of scope independently of whether sessions exist.
 func ChatSend(c *gin.Context) {
 	userID := c.GetInt("id")
 	if userID == 0 {

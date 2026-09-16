@@ -20,8 +20,13 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
+import HfUsageTrendChart from '../../../components/hifi/HfUsageTrendChart';
 import { API, getServerAddress } from '../../../helpers';
-import { getQuotaPerUSD, quotaToUSD } from '../../../helpers/formatting';
+import {
+  getQuotaPerUSD,
+  quotaToUSD,
+  formatUSD,
+} from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
   computeLatencyP50,
@@ -57,6 +62,31 @@ const fmtTs = (ts) => {
 // GET /api/v2/:slug/logs rejects page_size > 100 by falling back to 20
 // (v2_log.go), so asking for more than this returns *fewer* rows, not more.
 const DASHBOARD_LOG_PAGE_SIZE = 100;
+
+// GetUserQuotaDates (internal/adapter/handler/usedata.go:41) answers
+// HTTP 200 with success:false when end-start exceeds 2,592,000s (30 days).
+// 29 days keeps every request inside that ceiling with a day of margin for
+// the gap between this browser's clock and the server's.
+const DASHBOARD_TREND_WINDOW_SECONDS = 29 * 24 * 60 * 60;
+const DAY_SECONDS = 24 * 60 * 60;
+
+// /api/status ships announcements/faq/api_info as JSON arrays already decoded
+// server-side (console_setting.Get{Announcements,FAQ,ApiInfo}), but an older
+// deploy or a hand-edited option could still hand this a raw JSON string —
+// parse defensively so a malformed console-setting option degrades to "panel
+// absent", never a blank/crashed dashboard.
+const asList = (val) => {
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string' && val.trim()) {
+    try {
+      const parsed = JSON.parse(val);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+  return [];
+};
 
 // Shown when the user has zero tokens — Reseller-MVP onboarding TTFT lift,
 // modelled on OpenRouter / Anthropic quickstart pattern.
@@ -165,6 +195,19 @@ const HFDashboard = () => {
   const [logTotal, setLogTotal] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // /api/data/self/ — per (user, model, hour) quota rows for the trailing
+  // DASHBOARD_TREND_WINDOW_SECONDS window (usedata.go:141 GetQuotaDataByUserId).
+  const [quotaRows, setQuotaRows] = useState([]);
+  const [quotaWindow, setQuotaWindow] = useState({ start: 0, end: 0 });
+  const [quotaLoaded, setQuotaLoaded] = useState(false);
+
+  // /api/status — the console-setting panels it already returns and the v2
+  // dashboard previously discarded (misc.go:178-210).
+  const [statusData, setStatusData] = useState(null);
+
+  // /api/uptime/status — empty array when no groups are configured (uptime_kuma.go:131).
+  const [uptimeGroups, setUptimeGroups] = useState([]);
+
   const fetchData = useCallback(async () => {
     if (!tenantSlug) return;
     setLoading(true);
@@ -203,6 +246,48 @@ const HFDashboard = () => {
     fetchData();
   }, [fetchData]);
 
+  // /api/data/self/, /api/status and /api/uptime/status are all tenant-blind
+  // (not under /api/v2/:slug/) and auth via the session cookie the same way
+  // /api/v2/:slug/user/me does, so unlike fetchData this does not wait on
+  // tenantSlug — it fires once on mount and again on "refresh".
+  const fetchExtras = useCallback(async () => {
+    const end = Math.floor(Date.now() / 1000);
+    const start = end - DASHBOARD_TREND_WINDOW_SECONDS;
+    setQuotaWindow({ start, end });
+    try {
+      const [quotaRes, statusRes, uptimeRes] = await Promise.all([
+        API.get(
+          `/api/data/self/?start_timestamp=${start}&end_timestamp=${end}`,
+          { skipErrorHandler: true },
+        ),
+        API.get('/api/status', { skipErrorHandler: true }),
+        API.get('/api/uptime/status', { skipErrorHandler: true }),
+      ]);
+      // success:false here means the >30-day span refusal (usedata.go:41) or
+      // some other server-side rejection — both degrade to the same empty
+      // trend/distribution panels, never a toast (skipErrorHandler above also
+      // means a network failure never reaches the global error handler).
+      const rows = quotaRes?.data?.success ? quotaRes.data.data : null;
+      setQuotaRows(Array.isArray(rows) ? rows : []);
+      setQuotaLoaded(true);
+
+      if (statusRes?.data?.success && statusRes.data.data) {
+        setStatusData(statusRes.data.data);
+      }
+
+      const groups = uptimeRes?.data?.success ? uptimeRes.data.data : null;
+      setUptimeGroups(Array.isArray(groups) ? groups : []);
+    } catch (e) {
+      // Same calm-degrade contract as fetchData: an unreachable backend
+      // leaves these panels in their empty state, not an error wall.
+      setQuotaLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchExtras();
+  }, [fetchExtras]);
+
   // Derive spend KPI from user/me
   const spendUSD = me ? parseFloat(quotaToUSD(me.used_quota ?? 0)) : null;
   const remainUSD =
@@ -230,6 +315,60 @@ const HFDashboard = () => {
   // Activity table uses the most-recent slice only.
   const recentLogs = pickRecent(logs, 5);
 
+  // ── /api/data/self/ derived panels ──────────────────────────────────────
+  // Dense per-day series across the full requested window (zero-fill days
+  // with no rows) so the trend reflects the window even when traffic is
+  // sparse, rather than only the days a row happens to exist for.
+  const trendByDay = useMemo(() => {
+    if (!quotaWindow.start || !quotaWindow.end) return [];
+    const dayStart = Math.floor(quotaWindow.start / DAY_SECONDS) * DAY_SECONDS;
+    const dayEnd = Math.floor(quotaWindow.end / DAY_SECONDS) * DAY_SECONDS;
+    const totals = new Map();
+    for (const row of quotaRows) {
+      const ts = Number(row?.created_at) || 0;
+      if (!ts) continue;
+      const day = Math.floor(ts / DAY_SECONDS) * DAY_SECONDS;
+      totals.set(day, (totals.get(day) || 0) + (Number(row?.quota) || 0));
+    }
+    const days = [];
+    for (let d = dayStart; d <= dayEnd; d += DAY_SECONDS) {
+      days.push({ day: d, quota: totals.get(d) || 0 });
+    }
+    return days;
+  }, [quotaRows, quotaWindow]);
+  const trendTotalQuota = trendByDay.reduce((sum, d) => sum + d.quota, 0);
+  const hasUsageData = quotaLoaded && quotaRows.length > 0;
+
+  const modelDistribution = useMemo(() => {
+    const totals = new Map();
+    for (const row of quotaRows) {
+      const model = row?.model_name || '—';
+      totals.set(model, (totals.get(model) || 0) + (Number(row?.quota) || 0));
+    }
+    return Array.from(totals.entries())
+      .map(([model, quota]) => ({ model, quota }))
+      .sort((a, b) => b.quota - a.quota)
+      .slice(0, 8);
+  }, [quotaRows]);
+
+  // ── /api/status derived panels — each renders nothing when its own
+  // *_enabled flag is false or the parsed payload is empty (misc.go:178-210).
+  const announcementsList = asList(statusData?.announcements);
+  const showAnnouncements =
+    !!statusData?.announcements_enabled && announcementsList.length > 0;
+
+  const faqList = asList(statusData?.faq);
+  const showFaq = !!statusData?.faq_enabled && faqList.length > 0;
+
+  const apiInfoList = asList(statusData?.api_info);
+  const showApiInfo = !!statusData?.api_info_enabled && apiInfoList.length > 0;
+
+  // /api/uptime/status returns [] when unconfigured regardless of the flag
+  // (uptime_kuma.go:131); gate on both so a stale flag never surfaces a panel
+  // with nothing in it, and a configured-but-disabled panel stays hidden.
+  const showUptime =
+    !!statusData?.uptime_kuma_enabled && uptimeGroups.length > 0;
+
   return (
     <HFShell
       active='dashboard'
@@ -246,7 +385,14 @@ const HFDashboard = () => {
                   })
                 : ''}
           </span>
-          <button type='button' className='btn' onClick={fetchData}>
+          <button
+            type='button'
+            className='btn'
+            onClick={() => {
+              fetchData();
+              fetchExtras();
+            }}
+          >
             {t('console.common.refresh')}
           </button>
         </>
@@ -696,6 +842,286 @@ const HFDashboard = () => {
             </div>
           )}
         </div>
+
+        {/* ── Usage trend · /api/data/self/ (up to 29 days) ── */}
+        <div className='panel' style={{ gridColumn: 'span 7', padding: 18 }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'baseline',
+              marginBottom: 12,
+            }}
+          >
+            <div>
+              <div className='lbl'>{t('console.dashboard.usage_trend')}</div>
+              <div className='display' style={{ fontSize: 18, marginTop: 2 }}>
+                {hasUsageData
+                  ? formatUSD(trendTotalQuota)
+                  : t('console.dashboard.no_consume')}
+              </div>
+            </div>
+            <span className='faint mono' style={{ fontSize: 10 }}>
+              {t('console.dashboard.usage_trend_window')}
+            </span>
+          </div>
+          {!quotaLoaded && <HfSkeletonRows rows={3} />}
+          {quotaLoaded && !hasUsageData && (
+            <div
+              className='muted'
+              style={{
+                fontSize: 11,
+                fontFamily: 'var(--hf-mono)',
+                padding: '24px 0',
+                textAlign: 'center',
+              }}
+            >
+              {t('console.dashboard.usage_trend_empty')}
+            </div>
+          )}
+          {hasUsageData && (
+            <HfUsageTrendChart days={trendByDay} formatValue={formatUSD} />
+          )}
+        </div>
+
+        {/* ── Model consumption distribution · /api/data/self/ ── */}
+        <div className='panel' style={{ gridColumn: 'span 5', padding: 18 }}>
+          <div className='lbl' style={{ marginBottom: 10 }}>
+            {t('console.dashboard.model_distribution')}
+          </div>
+          {!quotaLoaded && <HfSkeletonRows rows={3} />}
+          {quotaLoaded && modelDistribution.length === 0 && (
+            <div
+              className='muted'
+              style={{
+                fontSize: 11,
+                fontFamily: 'var(--hf-mono)',
+                padding: '24px 0',
+                textAlign: 'center',
+              }}
+            >
+              {t('console.dashboard.model_distribution_empty')}
+            </div>
+          )}
+          {modelDistribution.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {(() => {
+                const maxQuota = modelDistribution[0].quota || 1;
+                return modelDistribution.map((row, i) => {
+                  const pct = (row.quota / maxQuota) * 100;
+                  return (
+                    <div key={row.model} data-testid={`model-dist-row-${i}`}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          marginBottom: 3,
+                          fontSize: 11,
+                        }}
+                      >
+                        <span
+                          className='mono'
+                          style={{
+                            color: 'var(--hf-ink)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            maxWidth: '60%',
+                          }}
+                        >
+                          {row.model}
+                        </span>
+                        <span className='mono muted' style={{ fontSize: 10 }}>
+                          {formatUSD(row.quota)}
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          height: 6,
+                          background: 'var(--hf-sunken)',
+                          borderRadius: 1,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <div
+                          style={{
+                            height: '100%',
+                            width: pct + '%',
+                            background:
+                              i === 0 ? 'var(--hf-accent)' : 'var(--hf-info)',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          )}
+        </div>
+
+        {/* ── Announcements · /api/status (announcements_enabled) ──
+            Renders nothing when the flag is off or the list is empty —
+            never a placeholder, per the console-completion cycle rule that
+            an absent feature must never render UI a customer sees. */}
+        {showAnnouncements && (
+          <div
+            className='panel'
+            data-testid='dash-announcements-panel'
+            style={{ gridColumn: 'span 4', padding: 18 }}
+          >
+            <div className='lbl' style={{ marginBottom: 10 }}>
+              {t('console.dashboard.announcements')}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {announcementsList.slice(0, 5).map((item, i) => (
+                <div
+                  key={i}
+                  style={{
+                    paddingBottom: 8,
+                    borderBottom:
+                      i < Math.min(announcementsList.length, 5) - 1
+                        ? '1px dashed var(--hf-rule)'
+                        : 0,
+                  }}
+                >
+                  {item?.publishDate && (
+                    <div className='mono muted' style={{ fontSize: 9 }}>
+                      {fmtTs(new Date(item.publishDate).getTime())}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 12, marginTop: 2 }}>
+                    {item?.content || ''}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── FAQ · /api/status (faq_enabled) ── */}
+        {showFaq && (
+          <div
+            className='panel'
+            data-testid='dash-faq-panel'
+            style={{ gridColumn: 'span 4', padding: 18 }}
+          >
+            <div className='lbl' style={{ marginBottom: 10 }}>
+              {t('console.dashboard.faq')}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {faqList.slice(0, 6).map((item, i) => (
+                <div key={i}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>
+                    {item?.question || ''}
+                  </div>
+                  <div className='muted' style={{ fontSize: 11, marginTop: 2 }}>
+                    {item?.answer || ''}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── API info · /api/status (api_info_enabled) ── */}
+        {showApiInfo && (
+          <div
+            className='panel'
+            data-testid='dash-apiinfo-panel'
+            style={{ gridColumn: 'span 4', padding: 18 }}
+          >
+            <div className='lbl' style={{ marginBottom: 10 }}>
+              {t('console.dashboard.api_info')}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {apiInfoList.slice(0, 6).map((item, i) => (
+                <a
+                  key={i}
+                  href={item?.url || '#'}
+                  target='_blank'
+                  rel='noreferrer'
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    fontSize: 11,
+                    textDecoration: 'none',
+                    color: 'inherit',
+                  }}
+                >
+                  <span className='mono'>{item?.route || item?.url}</span>
+                  <span
+                    className='muted'
+                    style={{
+                      fontSize: 10,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {item?.description || ''}
+                  </span>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── Uptime · GET /api/uptime/status (uptime_kuma_enabled) ── */}
+        {showUptime && (
+          <div
+            className='panel'
+            data-testid='dash-uptime-panel'
+            style={{ gridColumn: 'span 12', padding: 18 }}
+          >
+            <div className='lbl' style={{ marginBottom: 10 }}>
+              {t('console.dashboard.uptime')}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20 }}>
+              {uptimeGroups.map((group, gi) => (
+                <div key={gi} style={{ minWidth: 180 }}>
+                  <div
+                    className='mono muted'
+                    style={{ fontSize: 10, marginBottom: 6 }}
+                  >
+                    {group?.categoryName || ''}
+                  </div>
+                  <div
+                    style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
+                  >
+                    {(group?.monitors || []).map((mon, mi) => (
+                      <div
+                        key={mi}
+                        data-testid={`uptime-monitor-${gi}-${mi}`}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: 11,
+                        }}
+                      >
+                        <span className='mono'>{mon?.name || ''}</span>
+                        <span
+                          className='mono'
+                          style={{
+                            color:
+                              mon?.status === 1
+                                ? 'var(--hf-ok)'
+                                : 'var(--hf-err)',
+                          }}
+                        >
+                          {typeof mon?.uptime === 'number'
+                            ? `${(mon.uptime * 100).toFixed(1)}%`
+                            : '—'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </HFShell>
   );

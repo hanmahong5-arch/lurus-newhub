@@ -316,13 +316,21 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantBilling.GET("/topups", handler.GetTopUpsV2)
 		}
 
-		// Chat single-model multi-turn — non-stream only v1; in-memory
-		// conversation client-side (no chat_session table yet).
+		// Chat single-model multi-turn — non-stream only v1 (see
+		// handler.ChatSend's doc comment for why). /sessions[/:id]
+		// (migration 038, cycle-10 L3) is the client-driven persistence of
+		// a conversation /send already ran; ownership is fail-closed the
+		// same way tasks/logs are — see v2_chat_session.go's header.
 		tenantChat := apiV2.Group("/:tenant_slug/chat")
 		tenantChat.Use(middleware.UserAuth())
 		tenantChat.Use(middleware.TenantSlugGuard())
 		{
 			tenantChat.POST("/send", handler.ChatSend)
+			tenantChat.GET("/sessions", handler.ListChatSessionsV2)
+			tenantChat.POST("/sessions", handler.CreateChatSessionV2)
+			tenantChat.GET("/sessions/:id", handler.GetChatSessionV2)
+			tenantChat.PATCH("/sessions/:id", handler.UpdateChatSessionV2)
+			tenantChat.DELETE("/sessions/:id", handler.DeleteChatSessionV2)
 		}
 
 		// Settings — PUT for profile update (GET already registered above)

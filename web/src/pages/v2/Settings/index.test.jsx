@@ -230,32 +230,38 @@ describe('Settings page', () => {
     });
   });
 
-  // 2. Notifications section still has WIPBanner.
-  it('shows WIPBanner on notifications section', async () => {
+  // 2. INVERTED (cycle 10, L5): the Notifications section used to assert a
+  // WIPBanner was present. It is retired outright now — there is no
+  // subscription store, no dispatch path, and the "3 channels with disabled
+  // toggles" it used to render were hard-coded placeholder data, not a
+  // product in progress. The nav item itself must be gone, not merely its
+  // banner.
+  it('has no Notifications nav entry — the section was retired, not stubbed', async () => {
     render(<HFSettings />);
 
-    const notifNav = screen.getByText('Notifications');
-    notifNav.click();
-
-    await waitFor(() => {
-      const banners = screen.getAllByTestId('wip-banner');
-      const texts = banners.map((b) => b.textContent);
-      expect(texts.some((t) => /notification/i.test(t))).toBe(true);
-    });
+    expect(screen.queryByText('Notifications')).toBeNull();
   });
 
-  // 3. Team section still has WIPBanner.
-  it('shows WIPBanner on team section', async () => {
+  // 3. INVERTED (cycle 10, L5): the Team section used to assert a WIPBanner
+  // was present alongside an empty member list. Account and membership
+  // lifecycle belongs to the platform identity service — this console is a
+  // relying party, not the source of truth — so the section now states that
+  // plainly and links out, with no banner and no local member list.
+  it('team section has no WIPBanner and links out to platform identity', async () => {
     render(<HFSettings />);
 
     const teamNav = screen.getByText('Team & roles');
     teamNav.click();
 
     await waitFor(() => {
-      const banners = screen.getAllByTestId('wip-banner');
-      const texts = banners.map((b) => b.textContent);
-      expect(texts.some((t) => /team/i.test(t))).toBe(true);
+      expect(screen.getByTestId('team-section')).toBeTruthy();
     });
+
+    expect(screen.queryByTestId('wip-banner')).toBeNull();
+
+    const link = screen.getByTestId('team-identity-link');
+    expect(link.getAttribute('href')).toContain('identity.lurus.cn');
+    expect(link.getAttribute('target')).toBe('_blank');
   });
 
   // 4. Clicking "revoke" on a session row opens the ConfirmDialog.
@@ -640,28 +646,50 @@ describe('Settings page', () => {
     expect(screen.queryByText(/Loading…/)).toBeNull();
   });
 
-  // 8. Notifications tab — Wave A Squad 5A: stub -> read-only.
-  //    Asserts: WIPBanner still present; all 3 channel toggle buttons are
-  //    disabled with the Wave B tooltip.
-  it('notifications tab renders 3 channels with disabled toggles + WIP banner', async () => {
+  // 8. INVERTED (cycle 10, L5): this used to assert the Notifications tab
+  // rendered 3 hard-coded channels (email/webhook/in-app) with disabled
+  // toggles behind a WIPBanner. Those channels were placeholder data with no
+  // subscription store or dispatch path behind them — the section is
+  // retired, not stubbed. This is the page-wide oracle for this cycle's
+  // rule: Settings renders zero WIPBanners, in any section.
+  it('renders zero WIPBanners in any section, and the placeholder notification channels are gone', async () => {
     render(<HFSettings />);
 
-    screen.getByText('Notifications').click();
-
-    // WIPBanner still shows
-    await waitFor(() => {
-      const banners = screen.getAllByTestId('wip-banner');
-      const texts = banners.map((b) => b.textContent);
-      expect(texts.some((t) => /notification/i.test(t))).toBe(true);
-    });
-
-    // All 3 channels rendered with disabled toggles + Wave B tooltip
-    for (const key of ['email', 'webhook', 'inapp']) {
-      const btn = screen.getByTestId(`notif-toggle-${key}`);
-      expect(btn).toBeTruthy();
-      expect(btn.disabled).toBe(true);
-      expect(btn.title).toMatch(/wave b/i);
+    for (const label of [
+      'Profile',
+      'Security',
+      'Subscription',
+      'Billing',
+      'Team & roles',
+      'Integrations',
+      'Region & data',
+      'Danger zone',
+    ]) {
+      // getAllByText, not getByText: once a nav item's own section is
+      // active, its label also appears as the page <h1> title — the nav
+      // entry is always first in DOM order (left column renders before
+      // the right content pane).
+      screen.getAllByText(label)[0].click();
+      // Wait for the section switch to actually land (the <h1> title is a
+      // heading, unlike the nav item, so this cannot resolve against a
+      // stale pre-click render) before asserting on what it rendered —
+      // otherwise a `waitFor` whose very first synchronous check already
+      // sees zero banners (because the PREVIOUS section had none either)
+      // resolves without ever re-checking post-click, and the assertion
+      // below would pass on a page that had not switched sections yet.
+      await waitFor(() => {
+        expect(
+          screen.getByRole('heading', { level: 1, name: label }),
+        ).toBeTruthy();
+      });
+      expect(screen.queryAllByTestId('wip-banner').length).toBe(0);
     }
+
+    // The three placeholder notification channels are gone along with the
+    // section — not merely hidden behind a disabled toggle.
+    expect(screen.queryByTestId('notif-toggle-email')).toBeNull();
+    expect(screen.queryByTestId('notif-toggle-webhook')).toBeNull();
+    expect(screen.queryByTestId('notif-toggle-inapp')).toBeNull();
   });
 
   // 9. Honesty: Integrations must NOT paint fake "connected · ok" status.

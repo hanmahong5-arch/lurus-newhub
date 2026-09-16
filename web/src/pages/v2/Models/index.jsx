@@ -20,14 +20,58 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
-import WIPBanner from '../../../components/hifi/WIPBanner';
-import { API, showError, showSuccess } from '../../../helpers';
+import { API, isRoot, showError, showSuccess } from '../../../helpers';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import { useTenantModels } from '../../../hooks/models/useTenantModels';
 
 /* HiFi 7 — Models catalog. Wired to GET /api/v2/:tenant_slug/models (2026-05-19).
-   Wave 3 Phase 1 (2026-05-20): add-model modal + try ↗ navigate wired. */
+   Wave 3 Phase 1 (2026-05-20): add-model modal + try ↗ navigate wired.
+   Per-model enable/disable (2026-09-16): the write side of the tenant model
+   allow-list (internal/app/tenantpolicy, GET/PUT/DELETE
+   /api/v2/admin/tenants/:id/model-allowlist) is root-gated (RootJWTAuth),
+   while this page sits behind UserAuth + TenantSlugGuard — a non-root caller
+   cannot reach that endpoint and this page must not pretend otherwise. The
+   control itself lives on Admin/ModelRateLimits (the neighbouring
+   per-tenant/per-model admin surface); this page only reads the allow-list
+   (root only — GET /:tenant_slug/user/me for tenant_id, then the admin GET)
+   to render each model's real allow-list state, plus a link to the admin
+   page for role >= 100. A non-root viewer keeps seeing the model's existing
+   catalog status (m.status, below) — real data this page already had — with
+   no banner claiming the capability doesn't exist. */
+
+// Mirrors the match rule in internal/app/tenantpolicy.ModelAllowed (exact
+// name, or a trailing "*" prefix) against the tenant's allow-list. It does
+// NOT reproduce that function's ratio_setting.FormatMatchingModelName
+// normalization step (request-time model-name canonicalisation), so a
+// wildcard entry that depends on normalization to match may render
+// differently here than it resolves on the relay path.
+export function modelMatchesAllowlist(list, modelName) {
+  for (const raw of list || []) {
+    const entry = (raw || '').trim();
+    if (!entry) continue;
+    if (entry.endsWith('*')) {
+      if (modelName.startsWith(entry.slice(0, -1))) return true;
+    } else if (entry === modelName) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Reduces a fetched allow-list ({configured, allowed_models, mode}) plus a
+// model name to one of four states. 'blocked' and 'observed' are the pair
+// the observe/enforce oracle in this file's tests exists to keep visibly
+// distinct — an 'observed' model still answers relay requests (only
+// counted, per internal/adapter/middleware/distributor.go), while a
+// 'blocked' one is refused (403); labelling both the same way would be
+// exactly the kind of lie this cycle removes.
+export function describeModelAvailability(allowlist, modelName) {
+  if (!allowlist?.configured) return 'unrestricted';
+  if (modelMatchesAllowlist(allowlist.allowed_models, modelName))
+    return 'allowed';
+  return allowlist.mode === 'enforce' ? 'blocked' : 'observed';
+}
 
 // Known vendor names for the add-model select. The list is used for UX
 // convenience only — the backend accepts any vendor string.
@@ -68,6 +112,11 @@ const HFModels = () => {
   const navigate = useNavigate();
   // Aliased to `tr` per the v2 console convention.
   const { t: tr } = useTranslation();
+  // role >= 100 per web/src/helpers/utils.jsx:isRoot — the same client-side
+  // gate CommandPalette uses to decide which nav items to offer. It is a UX
+  // pre-check only: the actual enforcement is the admin endpoint's
+  // RootJWTAuth, which the fetch below still has to clear.
+  const rootUser = isRoot();
 
   const [vendor, setVendor] = useState('');
   const {
@@ -113,6 +162,36 @@ const HFModels = () => {
 
   // Build vendor filter pills from vendor_counts; add "all" pseudo-entry.
   const vendorNames = Object.keys(vendorCounts).filter(Boolean).sort();
+
+  // Tenant model allow-list (root only — see the file-header comment).
+  // `allowlist` stays null for a non-root viewer (no fetch attempted) or on
+  // any failure (403 from a stale client-side role, tenant lookup failure,
+  // network error) — every render site below already treats null as "no
+  // per-model allow-list state to show", not as "unrestricted".
+  const [allowlist, setAllowlist] = useState(null);
+  useEffect(() => {
+    if (!rootUser || !tenantSlug) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const selfRes = await API.get(`/api/v2/${tenantSlug}/user/me`);
+        const tid = selfRes?.data?.data?.tenant_id;
+        if (cancelled || !selfRes?.data?.success || !tid) return;
+        const alRes = await API.get(
+          `/api/v2/admin/tenants/${tid}/model-allowlist`,
+        );
+        if (cancelled) return;
+        if (alRes?.data?.success) setAllowlist(alRes.data.data);
+      } catch (_) {
+        // Root client-side but the server disagreed (403), or the tenant
+        // lookup failed — either way, fall back to showing no allow-list
+        // state rather than guessing at one.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rootUser, tenantSlug]);
 
   // ── Add-model submit ──────────────────────────────────────────────────────
   const handleAddSubmit = async (e) => {
@@ -170,14 +249,22 @@ const HFModels = () => {
         ]}
         actions={
           <>
-            {/* single-model editing deferred to v3 */}
-            <WIPBanner
-              reason={tr(
-                'console.models.wip_single_edit',
-                'single-model editing deferred to v3',
-              )}
-              todo='v3 story: per-model enable/disable'
-            />
+            {/* The write side (tenant model allow-list) is root-gated —
+                only role >= 100 gets a control here; see the file-header
+                comment for why this can't be widened to every user. */}
+            {rootUser && (
+              <button
+                type='button'
+                className='btn'
+                data-testid='models-manage-availability-link'
+                onClick={() => navigate('/console/v2/admin/model-limits')}
+              >
+                {tr(
+                  'console.models.manage_availability',
+                  'manage model availability →',
+                )}
+              </button>
+            )}
             <button
               type='button'
               className='btn primary'
@@ -309,6 +396,52 @@ const HFModels = () => {
                     : m.status}
                 </div>
 
+                {/* Tenant model allow-list state — root only, see the
+                    file-header comment. `allowlist` is null for a
+                    non-root viewer or a failed fetch, so nothing renders
+                    here for them; their real state stays the status line
+                    above, which every viewer already gets. */}
+                {rootUser && allowlist && (
+                  <div
+                    data-testid={`model-availability-${m.model_name}`}
+                    data-availability={describeModelAvailability(
+                      allowlist,
+                      m.model_name,
+                    )}
+                    className='mono'
+                    style={{
+                      fontSize: 11,
+                      marginTop: 4,
+                      color:
+                        describeModelAvailability(allowlist, m.model_name) ===
+                        'blocked'
+                          ? 'var(--hf-warn)'
+                          : 'var(--hf-ink-2)',
+                    }}
+                  >
+                    {
+                      {
+                        unrestricted: tr(
+                          'console.models.availability_unrestricted',
+                          'tenant allow-list: unrestricted',
+                        ),
+                        allowed: tr(
+                          'console.models.availability_allowed',
+                          'on tenant allow-list',
+                        ),
+                        observed: tr(
+                          'console.models.availability_observed',
+                          'off tenant allow-list — still answers (observe mode)',
+                        ),
+                        blocked: tr(
+                          'console.models.availability_blocked',
+                          'blocked by tenant allow-list (enforce mode)',
+                        ),
+                      }[describeModelAvailability(allowlist, m.model_name)]
+                    }
+                  </div>
+                )}
+
                 <div style={{ display: 'flex', gap: 6, marginTop: 14 }}>
                   <button
                     type='button'
@@ -322,14 +455,6 @@ const HFModels = () => {
                   >
                     {tr('console.models.try_btn', 'try')} ↗
                   </button>
-                  {/* single-model enable/disable deferred to v3 */}
-                  <WIPBanner
-                    reason={tr(
-                      'console.models.wip_single_toggle',
-                      'per-model enable/disable deferred to v3',
-                    )}
-                    todo='v3 story: per-model enable/disable'
-                  />
                 </div>
               </div>
             ))}

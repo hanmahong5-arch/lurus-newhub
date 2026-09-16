@@ -29,6 +29,10 @@ vi.mock('react-router-dom', () => ({
 
 // Mock helpers BEFORE importing the component — vi.mock is hoisted but the
 // component module reads API.get at runtime so mocks resolve at first call.
+// isRoot defaults to false — every existing (pre-L2) test exercises a
+// non-root viewer and must see exactly the same single models-list fetch it
+// always did; tests that need root behaviour call
+// `isRoot.mockReturnValue(true)` themselves.
 vi.mock('../../../helpers', () => ({
   API: {
     get: vi.fn(),
@@ -36,6 +40,7 @@ vi.mock('../../../helpers', () => ({
   },
   showError: vi.fn(),
   showSuccess: vi.fn(),
+  isRoot: vi.fn(() => false),
 }));
 
 // HFShell pulls TenantSwitcher → API helper chain → react-router. Stub it
@@ -47,17 +52,6 @@ vi.mock('../../../components/hifi/HFShell', () => ({
       { 'data-testid': 'hf-shell' },
       React.createElement('div', { 'data-testid': 'shell-actions' }, actions),
       children,
-    ),
-}));
-
-// WIPBanner is rendered inline — stub to a simple data-testid marker so tests
-// can assert presence without caring about its internal markup.
-vi.mock('../../../components/hifi/WIPBanner', () => ({
-  default: ({ reason }) =>
-    React.createElement(
-      'div',
-      { 'data-testid': 'wip-banner', role: 'status' },
-      reason,
     ),
 }));
 
@@ -80,14 +74,19 @@ vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => {} },
 }));
 
-import HFModels from './index';
-import { API, showError } from '../../../helpers';
+import HFModels, {
+  describeModelAvailability,
+  modelMatchesAllowlist,
+} from './index';
+import { API, isRoot, showError } from '../../../helpers';
 
 beforeEach(() => {
   API.get.mockReset();
   API.post.mockReset();
   showError.mockReset();
   mockNavigate.mockReset();
+  isRoot.mockReset();
+  isRoot.mockReturnValue(false);
   window.localStorage.clear();
   window.localStorage.setItem('tenant_slug', 'acme');
 });
@@ -204,24 +203,164 @@ describe('Models page', () => {
     expect(lastCall[0]).toContain('vendor=OpenAI');
   });
 
-  it('shows WIPBanner on add button section', async () => {
-    // Two fetches due to useTenantSlug default→acme transition
+  it('carries no WIP banner — the add button is present and enabled', async () => {
     API.get.mockResolvedValue(fakeModelsResponse([]));
 
     render(<HFModels />);
 
-    // WIPBanner(s) are rendered; at least one should be in the actions area
-    // (the one near the "+add model" button) or inside the cards area.
-    // We assert that at least one WIPBanner exists in the rendered output.
     await waitFor(() => {
-      const banners = screen.getAllByTestId('wip-banner');
-      expect(banners.length).toBeGreaterThanOrEqual(1);
+      const addBtn = screen.getByTestId('models-add-btn');
+      expect(addBtn).toBeDefined();
+      expect(addBtn.disabled).toBe(false);
     });
 
-    // The add button itself should be present and enabled (Wave 3 Phase 1).
-    const addBtn = screen.getByTestId('models-add-btn');
-    expect(addBtn).toBeDefined();
-    expect(addBtn.disabled).toBe(false);
+    // Neither banner this lane removed is rendered anywhere. Presence of
+    // either would mean a real, shipped capability is still being told to
+    // the user as "deferred to v3".
+    expect(screen.queryByText(/deferred to v3/i, { exact: false })).toBeNull();
+  });
+
+  it('a non-root viewer never sees the admin availability link', async () => {
+    isRoot.mockReturnValue(false);
+    API.get.mockResolvedValue(
+      fakeModelsResponse([
+        { id: 1, model_name: 'gpt-4o', vendor: 'OpenAI', status: 1 },
+      ]),
+    );
+
+    render(<HFModels />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('model-card-gpt-4o')).toBeDefined();
+    });
+    expect(screen.queryByTestId('models-manage-availability-link')).toBeNull();
+    // Non-root never reaches user/me or the admin allow-list endpoint —
+    // the models-list fetch is the only call.
+    expect(API.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('role >= 100 sees the admin availability link and it navigates to the admin page', async () => {
+    isRoot.mockReturnValue(true);
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me')) {
+        return Promise.resolve({
+          data: { success: true, data: { tenant_id: 't-1' } },
+        });
+      }
+      if (u.includes('/model-allowlist')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: { configured: false, allowed_models: [], mode: 'observe' },
+          },
+        });
+      }
+      return Promise.resolve(fakeModelsResponse([]));
+    });
+
+    render(<HFModels />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('models-manage-availability-link'),
+      ).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByTestId('models-manage-availability-link'));
+    expect(mockNavigate).toHaveBeenCalledWith('/console/v2/admin/model-limits');
+  });
+
+  it('a non-root fetch failure (stale client-side role) shows no availability badge, not a crash', async () => {
+    isRoot.mockReturnValue(true);
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me') || u.includes('/model-allowlist')) {
+        return Promise.reject({ response: { status: 403 } });
+      }
+      return Promise.resolve(
+        fakeModelsResponse([
+          { id: 1, model_name: 'gpt-4o', vendor: 'OpenAI', status: 1 },
+        ]),
+      );
+    });
+
+    render(<HFModels />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('model-card-gpt-4o')).toBeDefined();
+    });
+    expect(screen.queryByTestId('model-availability-gpt-4o')).toBeNull();
+  });
+
+  // The oracle this cycle exists for: an observe-mode "not on the list"
+  // model must never render like an enforce-mode blocked one — observe
+  // still answers (internal/adapter/middleware/distributor.go), only
+  // counted.
+  it('renders observe-mode "off the list" distinctly from enforce-mode "blocked"', async () => {
+    isRoot.mockReturnValue(true);
+    const items = [
+      { id: 1, model_name: 'gpt-4o', vendor: 'OpenAI', status: 1 },
+    ];
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me')) {
+        return Promise.resolve({
+          data: { success: true, data: { tenant_id: 't-1' } },
+        });
+      }
+      if (u.includes('/model-allowlist')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              configured: true,
+              allowed_models: ['claude-3-5-sonnet'],
+              mode: 'observe',
+            },
+          },
+        });
+      }
+      return Promise.resolve(fakeModelsResponse(items));
+    });
+
+    const { unmount } = render(<HFModels />);
+    const observedEl = await waitFor(() =>
+      screen.getByTestId('model-availability-gpt-4o'),
+    );
+    expect(observedEl.dataset.availability).toBe('observed');
+    expect(observedEl.textContent).toContain('still answers');
+    unmount();
+
+    // Re-render with the same allow-list but enforce mode.
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me')) {
+        return Promise.resolve({
+          data: { success: true, data: { tenant_id: 't-1' } },
+        });
+      }
+      if (u.includes('/model-allowlist')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              configured: true,
+              allowed_models: ['claude-3-5-sonnet'],
+              mode: 'enforce',
+            },
+          },
+        });
+      }
+      return Promise.resolve(fakeModelsResponse(items));
+    });
+
+    render(<HFModels />);
+    const blockedEl = await waitFor(() =>
+      screen.getByTestId('model-availability-gpt-4o'),
+    );
+    expect(blockedEl.dataset.availability).toBe('blocked');
+    expect(blockedEl.textContent).not.toContain('still answers');
   });
 
   // Wave 3 Phase 1 — "add model opens modal and posts"
@@ -283,5 +422,52 @@ describe('Models page', () => {
     const navArg = mockNavigate.mock.calls[0][0];
     expect(navArg).toContain('/console/v2/playground');
     expect(navArg).toContain('prefill_model=gpt-4o');
+  });
+});
+
+describe('describeModelAvailability / modelMatchesAllowlist', () => {
+  it('reports unrestricted when the tenant has no allow-list row', () => {
+    expect(describeModelAvailability(null, 'gpt-4o')).toBe('unrestricted');
+    expect(describeModelAvailability({ configured: false }, 'gpt-4o')).toBe(
+      'unrestricted',
+    );
+  });
+
+  it('matches an exact entry and a trailing-wildcard prefix', () => {
+    expect(modelMatchesAllowlist(['gpt-4o'], 'gpt-4o')).toBe(true);
+    expect(modelMatchesAllowlist(['gpt-4o'], 'gpt-4o-mini')).toBe(false);
+    expect(modelMatchesAllowlist(['gpt-4*'], 'gpt-4o-mini')).toBe(true);
+    expect(modelMatchesAllowlist(['claude-*'], 'gpt-4o')).toBe(false);
+  });
+
+  it('reports allowed for a model on the list regardless of mode', () => {
+    const allowlist = {
+      configured: true,
+      allowed_models: ['gpt-4o'],
+      mode: 'enforce',
+    };
+    expect(describeModelAvailability(allowlist, 'gpt-4o')).toBe('allowed');
+  });
+
+  it('reports observed (not blocked) for an off-list model under observe', () => {
+    const allowlist = {
+      configured: true,
+      allowed_models: ['gpt-4o'],
+      mode: 'observe',
+    };
+    expect(describeModelAvailability(allowlist, 'claude-3-5-sonnet')).toBe(
+      'observed',
+    );
+  });
+
+  it('reports blocked for an off-list model under enforce', () => {
+    const allowlist = {
+      configured: true,
+      allowed_models: ['gpt-4o'],
+      mode: 'enforce',
+    };
+    expect(describeModelAvailability(allowlist, 'claude-3-5-sonnet')).toBe(
+      'blocked',
+    );
   });
 });

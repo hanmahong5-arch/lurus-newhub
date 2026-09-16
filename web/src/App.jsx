@@ -87,6 +87,9 @@ const V2ModelRateLimits = lazy(
   () => import('./pages/v2/Admin/ModelRateLimits'),
 );
 const V2Diagnostics = lazy(() => import('./pages/v2/Admin/Diagnostics'));
+// Self-scoped async job logs (task + midjourney), replacing the nav rail's
+// former disabled:true "MJ / Task logs" placeholder (see HFShell.jsx).
+const V2Tasks = lazy(() => import('./pages/v2/Tasks'));
 
 function App() {
   const location = useLocation();
@@ -373,6 +376,7 @@ function App() {
         {[
           ['dashboard', V2Dashboard],
           ['log', V2Log],
+          ['tasks', V2Tasks],
           ['channel', V2Channel],
           ['token', V2Token],
           ['playground', V2Playground],

@@ -267,3 +267,252 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
     expect(screen.queryByText(/0 tokens/)).toBeNull();
   });
 });
+
+// ─── L1: /api/data/self/ + /api/status + /api/uptime/status ──────────────────
+//
+// Routes each API.get call by URL so the KPI-strip fetches (user/me, logs)
+// and the new L1 fetches (data/self, status, uptime/status) can each be wired
+// independently in a single test.
+const wireDashboard = ({
+  me = makeMe(),
+  logsPayload = { logs: [], total: 0 },
+  quota = { data: { success: true, data: [] } },
+  status = { data: { success: true, data: {} } },
+  uptime = { data: { success: true, data: [] } },
+} = {}) => {
+  API.get.mockImplementation((url) => {
+    const u = String(url);
+    if (u.includes('/user/me')) {
+      return Promise.resolve({ data: { success: true, data: me } });
+    }
+    if (u.includes('/api/data/self/')) {
+      return Promise.resolve(quota);
+    }
+    if (u.includes('/api/uptime/status')) {
+      return Promise.resolve(uptime);
+    }
+    if (u.includes('/api/status')) {
+      return Promise.resolve(status);
+    }
+    if (u.includes('/logs')) {
+      return Promise.resolve({ data: { success: true, data: logsPayload } });
+    }
+    return Promise.resolve({ data: { success: true, data: {} } });
+  });
+};
+
+// entity.QuotaData (internal/domain/entity/usedata.go): one row per
+// (user, model, hour-bucket) — id/user_id/username are present on the wire
+// but irrelevant to the trend/distribution aggregation.
+const makeQuotaRow = (overrides = {}) => ({
+  id: 1,
+  user_id: 1,
+  username: 'testuser',
+  model_name: 'gpt-4o',
+  created_at: Math.floor(Date.now() / 1000),
+  token_used: 100,
+  count: 1,
+  quota: 100000,
+  ...overrides,
+});
+
+describe('Dashboard page — usage trend + model distribution (/api/data/self/)', () => {
+  it('renders a non-empty trend series and model distribution from a recorded payload', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const twoDaysAgo = now - 2 * 24 * 60 * 60;
+    const oneDayAgo = now - 1 * 24 * 60 * 60;
+    // Day 1: model-a 300000 + 400000 = 700000. Day 2: model-b 300000.
+    // Total 1,000,000 quota / 500,000 (default QUOTA_PER_USD) = $2.0000.
+    const rows = [
+      makeQuotaRow({
+        model_name: 'model-a',
+        created_at: twoDaysAgo,
+        quota: 300000,
+      }),
+      makeQuotaRow({
+        model_name: 'model-a',
+        created_at: twoDaysAgo,
+        quota: 400000,
+      }),
+      makeQuotaRow({
+        model_name: 'model-b',
+        created_at: oneDayAgo,
+        quota: 300000,
+      }),
+    ];
+    wireDashboard({ quota: { data: { success: true, data: rows } } });
+
+    render(React.createElement(HFDashboard));
+
+    // Panel total — proves the per-day aggregation actually summed the rows,
+    // not just echoed a truthy fetch.
+    await waitFor(() => screen.getByText('$2.0000'));
+
+    // Model distribution — highest-consuming model first.
+    const row0 = await waitFor(() => screen.getByTestId('model-dist-row-0'));
+    expect(row0.textContent).toContain('model-a');
+    expect(row0.textContent).toContain('$1.4000');
+    const row1 = screen.getByTestId('model-dist-row-1');
+    expect(row1.textContent).toContain('model-b');
+    expect(row1.textContent).toContain('$0.6000');
+
+    // The dense per-day chart actually drew a bar carrying real data, not
+    // just an empty shell — data-nonzero is a rendered DOM attribute, not a
+    // mock-call assertion.
+    const chart = screen.getByTestId('usage-trend-chart');
+    expect(
+      chart.querySelectorAll('[data-nonzero="true"]').length,
+    ).toBeGreaterThan(0);
+
+    // The empty-state copy must NOT be showing alongside real data.
+    expect(screen.queryByText('No usage recorded in this window.')).toBeNull();
+  });
+
+  it('treats the >30-day refusal (success:false, HTTP 200) as an empty state, not a toast', async () => {
+    const { showError } = await import('../../../helpers');
+    showError.mockClear();
+    wireDashboard({
+      quota: {
+        data: { success: false, message: '时间跨度不能超过 1 个月' },
+      },
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() => screen.getByText('No usage recorded in this window.'));
+    expect(showError).not.toHaveBeenCalled();
+    // The rest of the page must still be usable — the refusal degrades only
+    // the trend panel, it does not blank the dashboard.
+    expect(screen.getByText('total spend')).toBeTruthy();
+  });
+
+  it('renders nothing for the model distribution panel body when /api/data/self/ has no rows', async () => {
+    wireDashboard({ quota: { data: { success: true, data: [] } } });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() =>
+      screen.getByText('No model consumption recorded in this window.'),
+    );
+    expect(screen.queryByTestId('model-dist-row-0')).toBeNull();
+  });
+});
+
+describe('Dashboard page — /api/status panels (announcements / faq / api_info)', () => {
+  it('shows each panel only when its own *_enabled flag is true AND it has content', async () => {
+    wireDashboard({
+      status: {
+        data: {
+          success: true,
+          data: {
+            // Off despite having content — must stay absent.
+            announcements_enabled: false,
+            announcements: [
+              { content: 'hello', publishDate: '2026-09-01T00:00:00Z' },
+            ],
+            // On with content — must render.
+            faq_enabled: true,
+            faq: [{ question: 'How do I top up?', answer: 'Visit Billing.' }],
+            // On but empty — must stay absent (flag alone is not enough).
+            api_info_enabled: true,
+            api_info: [],
+          },
+        },
+      },
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() => screen.getByTestId('dash-faq-panel'));
+    expect(screen.getByText('How do I top up?')).toBeTruthy();
+
+    expect(screen.queryByTestId('dash-announcements-panel')).toBeNull();
+    expect(screen.queryByTestId('dash-apiinfo-panel')).toBeNull();
+  });
+
+  it('parses a malformed (non-array, non-JSON) option as empty instead of crashing', async () => {
+    wireDashboard({
+      status: {
+        data: {
+          success: true,
+          data: {
+            faq_enabled: true,
+            faq: 'not json {{{',
+          },
+        },
+      },
+    });
+
+    render(React.createElement(HFDashboard));
+
+    // Page still renders normally; the malformed FAQ option just yields no panel.
+    await waitFor(() => screen.getByText('total spend'));
+    expect(screen.queryByTestId('dash-faq-panel')).toBeNull();
+  });
+});
+
+describe('Dashboard page — /api/uptime/status panel', () => {
+  it('renders monitors when uptime_kuma_enabled is true and groups are non-empty', async () => {
+    wireDashboard({
+      status: {
+        data: { success: true, data: { uptime_kuma_enabled: true } },
+      },
+      uptime: {
+        data: {
+          success: true,
+          data: [
+            {
+              categoryName: 'core',
+              monitors: [{ name: 'relay-api', uptime: 0.999, status: 1 }],
+            },
+          ],
+        },
+      },
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() => screen.getByTestId('dash-uptime-panel'));
+    expect(screen.getByText('relay-api')).toBeTruthy();
+  });
+
+  it('stays absent when uptime_kuma_enabled is false even though groups are configured', async () => {
+    // /api/uptime/status has no flag of its own (uptime_kuma.go:131 returns
+    // data regardless) — the gate has to come from /api/status's flag.
+    wireDashboard({
+      status: {
+        data: { success: true, data: { uptime_kuma_enabled: false } },
+      },
+      uptime: {
+        data: {
+          success: true,
+          data: [
+            {
+              categoryName: 'core',
+              monitors: [{ name: 'relay-api', uptime: 0.999, status: 1 }],
+            },
+          ],
+        },
+      },
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() => screen.getByText('total spend'));
+    expect(screen.queryByTestId('dash-uptime-panel')).toBeNull();
+  });
+
+  it('stays absent when the group list is empty (default GetUptimeKumaStatus response)', async () => {
+    wireDashboard({
+      status: {
+        data: { success: true, data: { uptime_kuma_enabled: true } },
+      },
+      uptime: { data: { success: true, data: [] } },
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() => screen.getByText('total spend'));
+    expect(screen.queryByTestId('dash-uptime-panel')).toBeNull();
+  });
+});

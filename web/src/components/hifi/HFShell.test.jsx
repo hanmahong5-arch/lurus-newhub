@@ -64,19 +64,23 @@ const renderShell = () =>
   );
 
 describe('HFShell deferred-surface nav placeholders', () => {
-  it('renders MJ/Task logs as a disabled placeholder with an honest title', () => {
+  // Cycle-10 L7: "MJ / Task logs" was a disabled:true placeholder
+  // (href:null, aria-disabled, an honest "not available in v2 yet" title)
+  // until pages/v2/Tasks existed. It is a real page now, so this asserts
+  // the opposite of what this block asserted before — un-skipping a nav
+  // item without updating its test would have left the OLD assertions
+  // (disabled, no href) passing right alongside the new href, silently
+  // proving nothing.
+  it('MJ/Task logs is no longer a disabled placeholder', () => {
     renderShell();
-
-    const el = screen.getByTestId('nav-disabled-mj-logs');
-    expect(el).toBeTruthy();
-    expect(el.getAttribute('aria-disabled')).toBe('true');
-    expect((el.getAttribute('title') || '').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('nav-disabled-mj-logs')).toBeNull();
   });
 
-  it('the remaining disabled placeholder is not a link (no navigation target)', () => {
+  it('MJ/Task logs is a real nav link pointing at the tasks page', () => {
     renderShell();
-    const el = screen.getByTestId('nav-disabled-mj-logs');
-    expect(el.tagName.toLowerCase()).not.toBe('a');
+    const link = screen.getByText('MJ / Task logs').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/v2/tasks');
   });
 
   it('admin-users and admin-settings are real nav links for an admin', () => {
@@ -110,6 +114,49 @@ describe('HFShell deferred-surface nav placeholders', () => {
     expect(rankingsLink.getAttribute('href')).toBe(
       '/console/v2/admin/rankings',
     );
+  });
+
+  // Cycle-10 L7: Flows (pages/v2/Flows, wired to real backends by L4) had a
+  // registered route but no nav entry at all — reachable only by typing the
+  // URL. It sits in 'routing & models' (minRole 10) beside Channels.
+  it('Flows is a real nav link pointing at the flows page', () => {
+    setBridgedUser(10);
+    renderShell();
+
+    const link = screen.getByText('Flows').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/v2/flows');
+  });
+
+  it('Flows is hidden from a non-admin (role 1), same as Channels', () => {
+    setBridgedUser(1);
+    renderShell();
+    expect(screen.queryByText('Flows')).toBeNull();
+  });
+
+  // Cycle-10 L7: /console/openrouter-sync (pages/OpenRouterSync, AdminAuth
+  // server-side) was a working admin route with no nav entry anywhere.
+  it('OpenRouter sync is a real nav link pointing at its legacy route', () => {
+    setBridgedUser(10);
+    renderShell();
+
+    const link = screen.getByText('OpenRouter sync').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/openrouter-sync');
+  });
+
+  // Cycle-10 L7: the legacy /console/personal page carries real,
+  // unported-to-v2 capability (quota-warning notification channels, the
+  // legacy system access token) — this is the explicit, labelled nav-rail
+  // link to it, not a port. Lives in 'my account' (no minRole), same as
+  // Settings beside it — /console/personal is PrivateRoute-only in App.jsx.
+  it('the personal-settings link is labelled and points at /console/personal, unrestricted by role', () => {
+    setBridgedUser(1);
+    renderShell();
+
+    const link = screen.getByText('Notifications & access token').closest('a');
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/console/personal');
   });
 });
 

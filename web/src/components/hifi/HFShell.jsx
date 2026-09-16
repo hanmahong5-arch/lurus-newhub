@@ -21,6 +21,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   LuActivity,
+  LuBell,
   LuBookOpen,
   LuBoxes,
   LuFlaskConical,
@@ -34,6 +35,7 @@ import {
   LuMenu,
   LuMessageSquare,
   LuRadioTower,
+  LuRefreshCcw,
   LuScrollText,
   LuSearch,
   LuSettings,
@@ -47,6 +49,7 @@ import {
   LuUserCog,
   LuUsers,
   LuWallet,
+  LuWorkflow,
   LuZap,
 } from 'react-icons/lu';
 import TenantSwitcher from './TenantSwitcher';
@@ -63,6 +66,7 @@ const PATH_TO_ID = {
   chat: 'chat',
   token: 'tokens',
   log: 'logs',
+  tasks: 'mj-logs',
   billing: 'billing',
   channel: 'channels',
   models: 'models',
@@ -71,7 +75,14 @@ const PATH_TO_ID = {
   redemption: 'redemption',
   projects: 'projects',
   settings: 'settings',
-  flows: 'channels',
+  // Flows/index.jsx (owned by a different lane) still hardcodes
+  // `active='channels'` on its own <HFShell> call, which wins over this
+  // fallback whenever that page actually renders (see activeId below) — so
+  // visiting /console/v2/flows highlights "Channels" in the rail today, not
+  // "Flows", even though the nav item below is id:'flows'. This entry is the
+  // correct mapping for that fallback path the day Flows/index.jsx stops
+  // overriding it; it is not itself what fixes the mismatch.
+  flows: 'flows',
   states: 'logs',
   variants: 'dashboard',
   cmdk: 'tokens',
@@ -189,18 +200,16 @@ export const NAV_SECTIONS = [
         key: 'console.nav.logs',
         badge: '',
       },
-      // Honest placeholder: Midjourney / async-task logs are not ported to v2
-      // yet. Shown greyed so the surface is visibly deferred, not silently gone.
+      // Self-scoped Midjourney / async-task job logs (pages/v2/Tasks) — real
+      // as of cycle 10 L6/L7. Was a disabled:true placeholder with href:null
+      // ("not available in v2 yet") until this page existed.
       {
         id: 'mj-logs',
-        href: null,
+        href: '/console/v2/tasks',
         glyph: LuImage,
         label: 'MJ / Task logs',
         key: 'console.nav.mj_logs',
         badge: '',
-        disabled: true,
-        titleKey: 'console.nav.mj_logs_unavailable',
-        title: 'Midjourney / async task logs not available in v2 yet',
       },
       {
         id: 'billing',
@@ -220,6 +229,24 @@ export const NAV_SECTIONS = [
         key: 'console.nav.settings',
         badge: '',
       },
+      // Legacy /console/personal (components/settings/PersonalSetting.jsx)
+      // carries two capabilities the v2 Settings page does not: real
+      // quota-warning notification channels (email/webhook/bark/gotify,
+      // wired to PUT /api/user/setting) and the legacy system access token.
+      // v2 Settings' own "Integrations" tab is explicitly unimplemented
+      // (pages/v2/Settings/index.jsx's INTEGRATIONS comment), and its
+      // "notifications" tab was removed this cycle rather than left half
+      // wired — this is an honest, labelled link to where that capability
+      // actually lives today, not a port (out of scope for this lane), and
+      // not a silent dead end either.
+      {
+        id: 'personal',
+        href: '/console/personal',
+        glyph: LuBell,
+        label: 'Notifications & access token',
+        key: 'console.nav.personal',
+        badge: '',
+      },
     ],
   },
   {
@@ -227,6 +254,20 @@ export const NAV_SECTIONS = [
     hKey: 'console.nav.section_routing_models',
     minRole: 10,
     items: [
+      // Multi-step setup wizards (new channel / new token) — pages/v2/Flows,
+      // wired to the real channel/token backends by cycle-10 L4. Its own
+      // <HFShell active='channels'> call (Flows/index.jsx, a different
+      // lane's file) means the rail highlights "Channels" rather than this
+      // item while the page is open — see the PATH_TO_ID.flows comment
+      // above for why this entry doesn't fix that on its own.
+      {
+        id: 'flows',
+        href: '/console/v2/flows',
+        glyph: LuWorkflow,
+        label: 'Flows',
+        key: 'console.nav.flows',
+        badge: '',
+      },
       {
         id: 'channels',
         href: '/console/v2/channel',
@@ -249,6 +290,19 @@ export const NAV_SECTIONS = [
         glyph: LuTag,
         label: 'Pricing',
         key: 'console.nav.pricing',
+        badge: '',
+      },
+      // Admin-only (server: internal/adapter/handler/router/api-router.go's
+      // openrouter-sync group runs AdminAuth on every GET; writes are
+      // RootAuth) job manager that refreshes a channel's free-model catalog
+      // from OpenRouter on a schedule. Real, working, previously reachable
+      // only by typing the URL — no nav entry anywhere pointed at it.
+      {
+        id: 'openrouter-sync',
+        href: '/console/openrouter-sync',
+        glyph: LuRefreshCcw,
+        label: 'OpenRouter sync',
+        key: 'console.nav.openrouter_sync',
         badge: '',
       },
     ],

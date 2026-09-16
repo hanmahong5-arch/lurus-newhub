@@ -85,11 +85,28 @@ const limitsResponse = (rows) => ({
   data: { success: true, data: rows },
 });
 
-// Branch the shared API.get mock by URL: the page fetches the tenant list AND
-// the selected tenant's model limits from the same instance.
-const wireGet = (rows) => {
+const allowlistResponse = (overrides = {}) => ({
+  data: {
+    success: true,
+    data: {
+      configured: false,
+      allowed_models: [],
+      mode: 'observe',
+      ...overrides,
+    },
+  },
+});
+
+// Branch the shared API.get mock by URL: the page fetches the tenant list,
+// the selected tenant's model limits, AND the selected tenant's model
+// allow-list from the same instance.
+const wireGet = (rows, allowlist) => {
   API.get.mockImplementation((url) => {
-    if (String(url).includes('/model-limits')) {
+    const u = String(url);
+    if (u.includes('/model-allowlist')) {
+      return Promise.resolve(allowlistResponse(allowlist));
+    }
+    if (u.includes('/model-limits')) {
       return Promise.resolve(limitsResponse(rows));
     }
     return Promise.resolve(tenantsResponse());
@@ -210,6 +227,218 @@ describe('Admin ModelRateLimits page', () => {
       expect(
         screen.getAllByText('Admin access required').length,
       ).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe('Admin ModelRateLimits page — model availability', () => {
+  it('shows the unrestricted state when no allow-list row is configured', async () => {
+    wireGet([]);
+
+    render(<HFModelRateLimits />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mrl-availability-unrestricted')).toBeTruthy();
+    });
+    expect(screen.getByTestId('mrl-availability-mode').dataset.mode).toBe(
+      'observe',
+    );
+  });
+
+  // The oracle this cycle exists for: observe and enforce must never render
+  // the same way. Observe still answers a model off the list (only
+  // counted); enforce refuses it (403). A UI that renders them alike would
+  // tell an observe-mode tenant its model is blocked when it is not.
+  it('renders observe mode as "still answers" — distinct from enforce', async () => {
+    wireGet([], {
+      configured: true,
+      allowed_models: ['gpt-4o'],
+      mode: 'observe',
+    });
+
+    render(<HFModelRateLimits />);
+
+    const modeEl = await waitFor(() =>
+      screen.getByTestId('mrl-availability-mode'),
+    );
+    expect(modeEl.dataset.mode).toBe('observe');
+    expect(modeEl.textContent).toContain('still answers');
+    expect(modeEl.textContent).not.toContain('refused');
+  });
+
+  it('renders enforce mode as "refused" — distinct from observe', async () => {
+    wireGet([], {
+      configured: true,
+      allowed_models: ['gpt-4o'],
+      mode: 'enforce',
+    });
+
+    render(<HFModelRateLimits />);
+
+    const modeEl = await waitFor(() =>
+      screen.getByTestId('mrl-availability-mode'),
+    );
+    expect(modeEl.dataset.mode).toBe('enforce');
+    expect(modeEl.textContent).toContain('refused');
+    expect(modeEl.textContent).not.toContain('still answers');
+  });
+
+  it('renders the configured allow-list entries from GET', async () => {
+    wireGet([], {
+      configured: true,
+      allowed_models: ['gpt-4o', 'claude-3-5-sonnet'],
+      mode: 'observe',
+    });
+
+    render(<HFModelRateLimits />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mrl-availability-entry-gpt-4o')).toBeTruthy();
+      expect(
+        screen.getByTestId('mrl-availability-entry-claude-3-5-sonnet'),
+      ).toBeTruthy();
+    });
+  });
+
+  it('adds a draft entry and PUTs exactly allowed_models on save', async () => {
+    wireGet([], {
+      configured: true,
+      allowed_models: ['gpt-4o'],
+      mode: 'observe',
+    });
+    API.put.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          configured: true,
+          allowed_models: ['gpt-4o', 'gpt-4o-mini'],
+          mode: 'observe',
+        },
+      },
+    });
+
+    render(<HFModelRateLimits />);
+    await waitFor(() => screen.getByTestId('mrl-availability-entry-gpt-4o'));
+
+    fireEvent.change(screen.getByTestId('mrl-availability-add-input'), {
+      target: { value: 'gpt-4o-mini' },
+    });
+    fireEvent.click(screen.getByTestId('mrl-availability-add-btn'));
+    await waitFor(() =>
+      screen.getByTestId('mrl-availability-entry-gpt-4o-mini'),
+    );
+
+    fireEvent.click(screen.getByTestId('mrl-availability-save'));
+
+    // Asserts the exact payload shape the handler parses
+    // (UpsertTenantModelAllowlist: `{ allowed_models: *[]string }`), not
+    // just that PUT fired — a body of { allowedModels: [...] } or
+    // { allowed_models: 'gpt-4o' } would bind-fail server-side.
+    await waitFor(() => {
+      expect(API.put).toHaveBeenCalledWith(
+        '/api/v2/admin/tenants/default/model-allowlist',
+        { allowed_models: ['gpt-4o', 'gpt-4o-mini'] },
+      );
+    });
+  });
+
+  it('removes a draft entry before saving', async () => {
+    wireGet([], {
+      configured: true,
+      allowed_models: ['gpt-4o', 'claude-3-5-sonnet'],
+      mode: 'observe',
+    });
+    API.put.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          configured: true,
+          allowed_models: ['claude-3-5-sonnet'],
+          mode: 'observe',
+        },
+      },
+    });
+
+    render(<HFModelRateLimits />);
+    await waitFor(() => screen.getByTestId('mrl-availability-entry-gpt-4o'));
+
+    fireEvent.click(screen.getByTestId('mrl-availability-remove-gpt-4o'));
+    fireEvent.click(screen.getByTestId('mrl-availability-save'));
+
+    await waitFor(() => {
+      expect(API.put).toHaveBeenCalledWith(
+        '/api/v2/admin/tenants/default/model-allowlist',
+        { allowed_models: ['claude-3-5-sonnet'] },
+      );
+    });
+  });
+
+  it('saving an empty list goes through the typed-confirm dialog before PUT (deny-all guard)', async () => {
+    wireGet([], {
+      configured: true,
+      allowed_models: ['gpt-4o'],
+      mode: 'observe',
+    });
+    API.put.mockResolvedValue({
+      data: {
+        success: true,
+        data: { configured: true, allowed_models: [], mode: 'observe' },
+      },
+    });
+
+    render(<HFModelRateLimits />);
+    await waitFor(() => screen.getByTestId('mrl-availability-entry-gpt-4o'));
+
+    fireEvent.click(screen.getByTestId('mrl-availability-remove-gpt-4o'));
+    fireEvent.click(screen.getByTestId('mrl-availability-save'));
+
+    // The PUT must NOT fire until the confirm dialog is accepted.
+    expect(API.put).not.toHaveBeenCalled();
+    await waitFor(() => screen.getByTestId('confirm-dialog'));
+
+    fireEvent.click(screen.getByTestId('confirm-ok'));
+
+    await waitFor(() => {
+      expect(API.put).toHaveBeenCalledWith(
+        '/api/v2/admin/tenants/default/model-allowlist',
+        { allowed_models: [] },
+      );
+    });
+  });
+
+  it('clearing the allow-list goes through the typed-confirm dialog then DELETEs', async () => {
+    wireGet([], {
+      configured: true,
+      allowed_models: ['gpt-4o'],
+      mode: 'enforce',
+    });
+    API.delete.mockResolvedValue({
+      data: { success: true, data: { configured: false, allowed_models: [] } },
+    });
+
+    render(<HFModelRateLimits />);
+    await waitFor(() => screen.getByTestId('mrl-availability-clear'));
+
+    fireEvent.click(screen.getByTestId('mrl-availability-clear'));
+    expect(API.delete).not.toHaveBeenCalled();
+    await waitFor(() => screen.getByTestId('confirm-dialog'));
+
+    fireEvent.click(screen.getByTestId('confirm-ok'));
+
+    await waitFor(() => {
+      expect(API.delete).toHaveBeenCalledWith(
+        '/api/v2/admin/tenants/default/model-allowlist',
+      );
+    });
+  });
+
+  it('the clear button is disabled when the tenant has no allow-list configured', async () => {
+    wireGet([]);
+
+    render(<HFModelRateLimits />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mrl-availability-clear').disabled).toBe(true);
     });
   });
 });

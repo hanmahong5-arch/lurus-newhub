@@ -20,14 +20,27 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
-import WIPBanner from '../../../components/hifi/WIPBanner';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { TotpService } from '../../../services/secureVerification';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
-// Wave 2: only security section is wired; notifications/team/integrations/MFA remain stubs pending infra.
+// Wave 2: security, subscription and billing sections are wired.
+// Integrations/region/danger remain stubs pending infra (ComingSoon).
+//
+// Notifications (2026-09-16): retired outright, not stubbed. New API — the
+// upstream this console tracks — has no notifications feature across its
+// console routes either; there is no subscription store and no dispatch
+// path in this codebase to point a toggle at. A disabled switch over
+// placeholder event names was the one outcome ruled out for this section,
+// so the section is gone rather than parked behind a banner.
+//
+// Team (2026-09-16): retired as a newhub feature, not stubbed. Account and
+// membership lifecycle belongs to the platform identity service — this
+// service is a relying party, not the source of truth for who is on a
+// tenant (see repo CLAUDE.md, "Auth"). The section states that plainly and
+// links out; it does not attempt a local tenant_member store.
 // Wave 3 Phase 1 (2026-05-20): revoke session wired to DELETE /sessions/current.
 
 /*
@@ -36,7 +49,7 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
  * Security/Sessions: wired to GET /api/v2/:tenant_slug/sessions (Wave 2).
  *   Returns single synthetic session (auth_method + active_tokens + request_count).
  *   Single-device revoke wired (Wave 3 Phase 1). Multi-device tracking deferred to v3.
- * Notifications + Team: mocked; see adr-2026-05-18-budget-alerts.md / -tenant-credit-pool.md.
+ * Team: no local data — a static link out to platform identity.
  */
 
 const fmtCNY = (v) =>
@@ -76,39 +89,10 @@ const SECTIONS = [
   ['security', 'Security', 'password, mfa, sessions'],
   ['subscription', 'Subscription', 'routing group & entitlements'],
   ['billing', 'Billing', 'wallet balance & usage'],
-  ['notifications', 'Notifications', 'email & webhook alerts'],
-  ['team', 'Team & roles', 'members and permissions'],
+  ['team', 'Team & roles', 'managed on platform identity'],
   ['integrations', 'Integrations', 'webhooks, slack, observability'],
   ['region', 'Region & data', 'where data lives'],
   ['danger', 'Danger zone', 'export, transfer, delete'],
-];
-
-// Wave A Squad 5A: 3 read-only notification channels with placeholder events.
-// Toggle switches are disabled — mutation flow lands in Wave B per
-// adr-2026-05-18-budget-alerts.md.
-// Labels/events are [key, fallback] pairs resolved at render via tr().
-const NOTIFICATION_EVENTS = [
-  ['event_quota_threshold', 'Quota threshold'],
-  ['event_plan_limit', 'Plan limit'],
-  ['event_security_event', 'Security event'],
-];
-
-const NOTIFICATION_CHANNELS = [
-  {
-    key: 'email',
-    label: ['channel_email', 'Email notifications'],
-    events: NOTIFICATION_EVENTS,
-  },
-  {
-    key: 'webhook',
-    label: ['channel_webhook', 'Webhook'],
-    events: NOTIFICATION_EVENTS,
-  },
-  {
-    key: 'inapp',
-    label: ['channel_inapp', 'In-app'],
-    events: NOTIFICATION_EVENTS,
-  },
 ];
 
 // Integration registry is not implemented — there is no connection store and
@@ -1407,92 +1391,47 @@ const HFSettings = () => {
             </div>
           )}
 
-          {/* ── Notifications (Wave A Squad 5A — read-only upgrade) ── */}
-          {section === 'notifications' && (
-            <div style={{ marginTop: 22 }} data-testid='notifications-section'>
-              <WIPBanner
-                reason={tr(
-                  'console.settings.notif_wip_reason',
-                  'Notification subscription store, dispatch path, and threshold rules not yet implemented. Designed in adr-2026-05-18-budget-alerts.md.',
-                )}
-                todo={tr(
-                  'console.settings.notif_wip_todo',
-                  'Backend: notification_subscription table + /api/v2/{slug}/notifications/subscriptions + Prometheus rule pack.',
-                )}
-              />
-              <div className='panel' style={{ marginTop: 14 }}>
-                {NOTIFICATION_CHANNELS.map((ch, i, a) => (
-                  <div
-                    key={ch.key}
-                    style={{
-                      padding: '14px 16px',
-                      borderBottom:
-                        i < a.length - 1 ? '1px dashed var(--hf-rule)' : 0,
-                      display: 'grid',
-                      gridTemplateColumns: '1fr auto',
-                      alignItems: 'center',
-                      gap: 16,
-                    }}
-                  >
-                    <div>
-                      <div className='strong' style={{ fontSize: 13 }}>
-                        {tr(`console.settings.${ch.label[0]}`, ch.label[1])}
-                      </div>
-                      <div
-                        className='faint mono'
-                        style={{ fontSize: 10, marginTop: 4 }}
-                      >
-                        {ch.events
-                          .map(([k, f]) => tr(`console.settings.${k}`, f))
-                          .join(' · ')}
-                      </div>
-                    </div>
-                    <button
-                      type='button'
-                      className='btn sm'
-                      disabled
-                      data-testid={`notif-toggle-${ch.key}`}
-                      title={tr(
-                        'console.settings.notif_toggle_title',
-                        'Notification preferences editable in Wave B',
-                      )}
-                    >
-                      {tr('console.settings.toggle_off', 'off')}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Team ── */}
+          {/* ── Team ──
+              Retired as a newhub feature (2026-09-16): account and
+              membership lifecycle — invites, roles, removal — belongs to
+              the platform identity service. This service reads tenant
+              membership, it does not own it, so the section states that and
+              links out rather than shipping a local member list or a
+              tenant_member table with no writer behind it. */}
           {section === 'team' && (
-            <div style={{ marginTop: 22 }}>
-              <WIPBanner
-                reason={tr(
-                  'console.settings.team_wip_reason',
-                  'Team / role management requires tenant membership store + role-permission matrix + invite flow. Not yet implemented.',
-                )}
-                todo={tr(
-                  'console.settings.team_wip_todo',
-                  'Backend: tenant_member table + role enum + POST /api/v2/{slug}/team/invite; cascade-revoke on member removal.',
-                )}
-              />
-              <div
-                className='panel'
-                style={{
-                  marginTop: 14,
-                  padding: 24,
-                  textAlign: 'center',
-                  color: 'var(--hf-ink-3)',
-                  fontFamily: 'var(--hf-mono)',
-                  fontSize: 12,
-                }}
-              >
-                {tr(
-                  'console.settings.team_empty',
-                  'No team members — endpoint not implemented.',
-                )}
+            <div style={{ marginTop: 22 }} data-testid='team-section'>
+              <div className='panel' style={{ padding: 18, marginTop: 8 }}>
+                <div
+                  className='muted'
+                  style={{ fontSize: 12, lineHeight: 1.6 }}
+                >
+                  {tr(
+                    'console.settings.team_retired_desc',
+                    'Team membership — invites, roles, removal — is managed on the platform identity service, not in this console.',
+                  )}
+                </div>
+                <a
+                  href='https://identity.lurus.cn'
+                  target='_blank'
+                  rel='noopener noreferrer'
+                  className='btn sm'
+                  data-testid='team-identity-link'
+                  style={{
+                    marginTop: 12,
+                    textDecoration: 'none',
+                    display: 'inline-block',
+                  }}
+                  title={tr(
+                    'console.settings.team_identity_link_title',
+                    'team membership is managed on platform identity, not here',
+                  )}
+                >
+                  {tr(
+                    'console.settings.team_identity_link',
+                    'manage team on identity.lurus.cn',
+                  )}{' '}
+                  ↗
+                </a>
               </div>
             </div>
           )}
