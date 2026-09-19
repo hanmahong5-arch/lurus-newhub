@@ -42,7 +42,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, afterAll } from 'vitest';
 
-import i18n, { PUBLISHED_LANGUAGES, isPublishedLanguage } from './i18n';
+import i18n, { PUBLISHED_LANGUAGES } from './i18n';
 import en from './locales/en.json';
 
 const LOCALE_DIR = path.resolve(process.cwd(), 'src/i18n/locales');
@@ -107,6 +107,10 @@ const report = [...COVERAGE]
 // that were asked for rather than languages that were shipped.
 const REGISTERED = Object.keys(i18n.store.data).sort();
 const INITIAL_LANGUAGE = i18n.language;
+// Sampled at import time too: what <html lang> holds after init and before any
+// test has switched language is the value a first paint gets.
+const INITIAL_RESOLVED_LANGUAGE = i18n.resolvedLanguage;
+const INITIAL_DOCUMENT_LANG = document.documentElement.lang;
 
 describe('locale coverage', () => {
   afterAll(async () => {
@@ -126,17 +130,28 @@ describe('locale coverage', () => {
     ).toEqual(shippable);
   });
 
-  it('declares the same set to callers that screen a stored language tag', () => {
-    // PageLayout replays localStorage's i18nextLng on every mount and screens
-    // it with isPublishedLanguage. Its own assertion lives in that page's
-    // suite; what is checked here is that the list it screens against is the
-    // one i18next loaded, and that a region subtag is not mistaken for an
-    // unshipped language (load: 'languageOnly' makes zh-CN a shipped tag).
+  it('screens an unshipped tag inside i18next, with no second list to keep in step', () => {
+    // supportedLngs IS PUBLISHED_LANGUAGES, and every tag reaching i18next goes
+    // through this screening — the detector's localStorage cache included. That
+    // is why no page guards the stored 'i18nextLng' itself: one ?lng=ja visit
+    // parks 'ja' in localStorage, and the next load reduces it here, before
+    // i18n.language is ever assigned, and the detector then caches the reduced
+    // tag. A guard in a page would be a second copy of this list that can drift.
     expect([...PUBLISHED_LANGUAGES].sort()).toEqual(REGISTERED);
-    for (const tag of ['zh', 'zh-CN', 'en', 'en-US', 'EN'])
-      expect(isPublishedLanguage(tag), tag).toBe(true);
-    for (const tag of ['ja', 'ja-JP', 'fr', 'ru', 'vi', 'de', '', null])
-      expect(isPublishedLanguage(tag), String(tag)).toBe(false);
+    const { languageUtils } = i18n.services;
+    // Region subtags are shipped tags: load: 'languageOnly' reduces them first.
+    for (const tag of ['zh', 'zh-CN', 'en', 'en-US'])
+      expect(languageUtils.isSupportedCode(tag), tag).toBe(true);
+    for (const tag of ['ja', 'ja-JP', 'fr', 'ru', 'vi', 'de'])
+      expect(languageUtils.isSupportedCode(tag), tag).toBe(false);
+    // What the detector's output is reduced to before anything reads it.
+    expect(languageUtils.getBestMatchFromCodes(['ja', 'ja-JP'])).toBe('en');
+    expect(languageUtils.getBestMatchFromCodes(['de'])).toBe('en');
+    // A supported region tag is kept as it stands — i18n.language really is
+    // 'zh-CN' for a Chinese browser, and only resolvedLanguage is 'zh'. Any
+    // code comparing i18n.language against 'zh' or 'en' therefore matches
+    // nothing for a mainstream browser; see LanguageSelector.jsx.
+    expect(languageUtils.getBestMatchFromCodes(['zh-CN', 'zh'])).toBe('zh-CN');
   });
 
   it('resolves a language it does not ship to en, not to Chinese', async () => {
@@ -149,12 +164,33 @@ describe('locale coverage', () => {
   });
 
   it('keeps a zh operator on Chinese for a key zh omits', async () => {
-    // do-not-regress: en.json carries 254 keys zh.json does not, and for the
+    // do-not-regress: en.json carries 265 keys zh.json does not, and for the
     // Chinese-source family the key itself is the correct Chinese string.
     // A blanket fallbackLng: 'en' would answer this lookup with 'Auto Pricing'.
     await i18n.changeLanguage('zh-CN');
     expect(i18n.resolvedLanguage).toBe('zh');
     expect(i18n.t('自动定价')).toBe('自动定价');
+  });
+
+  it('declares the rendered language on <html lang>', async () => {
+    // index.html ships lang="en" for the document before JavaScript runs; from
+    // there this follows what is actually on screen. Declaring a document
+    // Chinese while it renders English is what makes a browser offer to
+    // machine-translate an already-English page, and what sends a screen
+    // reader into the wrong voice.
+    //
+    // The init emit counts: the listener is registered before init, so the
+    // attribute is right on first paint rather than after the first manual
+    // switch. INITIAL_DOCUMENT_LANG was read at import time.
+    expect(INITIAL_DOCUMENT_LANG).toBe(INITIAL_RESOLVED_LANGUAGE);
+    expect(INITIAL_DOCUMENT_LANG).not.toBe('');
+
+    await i18n.changeLanguage('zh-CN');
+    expect(document.documentElement.lang).toBe('zh');
+    // resolvedLanguage, not language: this build renders English for 'ja'.
+    await i18n.changeLanguage('ja');
+    expect(i18n.language).toBe('ja');
+    expect(document.documentElement.lang).toBe('en');
   });
 
   it('offers in the language selector exactly the languages it registers', () => {

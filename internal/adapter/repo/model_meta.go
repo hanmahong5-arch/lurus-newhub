@@ -74,7 +74,31 @@ func GetAllModels(offset int, limit int) ([]*Model, error) {
 	return models, err
 }
 
+// GetBoundChannelsByModelsMap is the platform-operator form: every tenant's
+// channel that serves the named models. Tenant-facing callers must use
+// GetBoundChannelsByModelsMapForTenant — a channel NAME is customer data
+// (operators name channels after the account they belong to).
 func GetBoundChannelsByModelsMap(modelNames []string) (map[string][]BoundChannel, error) {
+	return boundChannelsByModels(modelNames, nil)
+}
+
+// GetBoundChannelsByModelsMapForTenant is GetBoundChannelsByModelsMap
+// restricted to the channels tenantID can route through: the platform-shared
+// ones (sharedChannelTenantIDs) plus its own, the same union
+// abilityTenantScope applies to the model names themselves. tenantID "" means
+// the platform-shared channels only — never "no filter" — because this
+// function has no non-tenant caller to reproduce.
+func GetBoundChannelsByModelsMapForTenant(modelNames []string, tenantID string) (map[string][]BoundChannel, error) {
+	visible := append([]string{}, sharedChannelTenantIDs...)
+	if tenantID != "" {
+		visible = append(visible, tenantID)
+	}
+	return boundChannelsByModels(modelNames, visible)
+}
+
+// boundChannelsByModels is the shared query; visibleTenantIDs nil means no
+// tenant predicate at all.
+func boundChannelsByModels(modelNames []string, visibleTenantIDs []string) (map[string][]BoundChannel, error) {
 	result := make(map[string][]BoundChannel)
 	if len(modelNames) == 0 {
 		return result, nil
@@ -85,12 +109,14 @@ func GetBoundChannelsByModelsMap(modelNames []string) (map[string][]BoundChannel
 		Type  int
 	}
 	var rows []row
-	err := DB.Table("channels").
+	tx := DB.Table("channels").
 		Select("abilities.model as model, channels.name as name, channels.type as type").
 		Joins("JOIN abilities ON abilities.channel_id = channels.id").
-		Where("abilities.model IN ? AND abilities.enabled = ?", modelNames, true).
-		Distinct().
-		Scan(&rows).Error
+		Where("abilities.model IN ? AND abilities.enabled = ?", modelNames, true)
+	if visibleTenantIDs != nil {
+		tx = tx.Where("channels.tenant_id IN ?", visibleTenantIDs)
+	}
+	err := tx.Distinct().Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
