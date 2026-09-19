@@ -94,7 +94,7 @@ Fixed user_mapping insecure password, removed dead code, created 3 ADRs (HA/v1-d
 ## 2026-02-05: Epic 2-5 Complete — Tests, Performance, Observability, DevEx
 
 **Epic 2**: 187 service tests, 100+ adaptor tests, 50 controller tests, 34 security tests
-**Epic 3**: Benchmarks (p95 <50ms), object pools, HA deployment (2 replicas + PDB)
+**Epic 3**: Benchmarks (p95 <50ms), object pools, HA deployment (2 replicas + PDB; the PDB was later removed — no PDB on the live single-node cluster, see runbook/ha-deployment.md)
 **Epic 4**: Prometheus /metrics (11 types), OpenTelemetry tracing, 10 alerting rules
 **Epic 5**: OpenAPI spec (45 endpoints), staging env, 6 runbooks
 

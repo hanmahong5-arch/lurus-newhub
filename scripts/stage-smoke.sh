@@ -178,7 +178,7 @@ if command -v ssh >/dev/null 2>&1 && [ -n "${R6_HOST:-}" ]; then
   else
     fail "archive_mode != on" "got: $archive_mode"
   fi
-  echo "  $(c_dim "  full restore drill is separate: bash scripts/pg-restore-drill.sh on R6 (monthly)")"
+  echo "  $(c_dim "  full restore drill is the weekly host cron dr-drill.sh in 2l-svc-platform/deploy/r6-host (doc/runbook/database.md)")"
 else
   skip "story 7-2.1" "R6_HOST missing or ssh unavailable"
 fi

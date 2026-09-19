@@ -1,181 +1,135 @@
-# Runbook: PostgreSQL Restore from wal-g
+# Runbook: PostgreSQL Restore from the pg_dump backups
 
-> **Audience**: on-call operator restoring `lurus-postgres` data after loss/corruption.
-> **Prerequisites**: `WALG_*` envs populated in `.env` (see `deploy/single-node/.env.example`),
-> base backups available in the S3 prefix.
-> **SLO**: RTO ≤ 30 min, RPO ≤ 5 min (set by `archive_timeout=60`).
+> **Audience**: on-call operator restoring the `newhub` database after loss or corruption.
+> **Live topology (2026-09-19)**: in-cluster StatefulSet `lurus-pg` (pod `lurus-pg-0`) in ns
+> `database`, Service `lurus-pg-rw.database.svc.cluster.local:5432`, DB `newhub` (tables in
+> `public`). Backups = CronJob `daily-pg-dump` (02:00 Asia/Shanghai) writing every database of the
+> instance plus globals to PVC `lurus-pg-backup` under `/backups/`, retained 30 days; off-site copy =
+> host cron rsync (source `2l-svc-platform/deploy/r6-host/`); authoritative restore drill = weekly
+> host cron `dr-drill.sh` (same repo). Details and the freshness alarms: `doc/runbook/database.md`.
+> **RPO**: up to 24 h — the live topology has **no WAL archiving and no PITR**. **RTO** target 30 min,
+> measured by the weekly drill (last-success stamp in `database.md`).
+>
+> 2026-09-19: rewritten. The previous version of this file described the docker-compose + wal-g
+> topology retired in 2026-04 (compose service names, a wal-g base-backup fetch, a named docker
+> volume); none of those objects exist on R6. `deploy/k8s/docs_claims_test.go` now fails if those
+> commands come back into any runbook.
 
 ---
 
-## Decision Tree
+## Decision tree
 
 ```
 Loss type?
-├── Whole DB / corruption / hardware failure
-│   → Full restore: latest base + WAL replay to LATEST  (§ A)
+├── Whole DB / corruption / disk failure
+│   → § A: full restore of the latest dump into `newhub`
 │
 ├── Logical mistake (DROP TABLE, bad UPDATE, …)
-│   → PITR: latest base + WAL replay to specific timestamp  (§ B)
+│   → § B: restore the latest dump into a scratch DB, copy the table or rows back
+│         (state = last dump; there is no point-in-time recovery)
 │
-└── Single table / row
-    → Spin up a parallel restored PG (§ B), then dump+restore the table  (§ C)
+└── Single table / rows
+    → § B
 ```
 
-**Always** snapshot the broken `pg_data` volume first if disk is intact —
-never overwrite it during recovery (§ Pre-flight).
+**Snapshot the broken database first** if it is still readable (Pre-flight step 2). Never
+overwrite the only copy of the current state.
 
 ---
 
 ## Pre-flight (always)
 
 ```bash
-# 1. Stop the application — prevents new writes during recovery.
-docker compose stop lurus-api
+# 1. Stop writes. Permanent k8s changes go through git + ArgoCD (selfHeal reverts a
+#    `kubectl scale`): set spec.replicas: 0 in deploy/k8s/r6-stage/deployment.yaml
+#    (and r6-uat if the UAT database is affected), push, wait for convergence.
+#    Emergency path when ArgoCD itself is down: doc/runbook/staging-deploy.md.
+kubectl get deploy -n lurus-newhub            # READY must read 0/0 before you continue
 
-# 2. Snapshot the broken volume (if disk is healthy enough to read).
-docker run --rm -v lurus-hub_pg_data:/data:ro -v $(pwd):/backup \
-  alpine tar czf /backup/pg_data.broken.$(date +%F).tgz -C /data .
+# 2. Open a shell that sees both the backup PVC and the database service.
+kubectl run -n database --rm -it restore-shell --image=postgres:16-alpine --restart=Never \
+  --overrides='{"spec":{"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"lurus-pg-backup"}}],"containers":[{"name":"restore-shell","image":"postgres:16-alpine","stdin":true,"tty":true,"volumeMounts":[{"name":"b","mountPath":"/backups"}]}]}}' -- sh
 
-# 3. List available base backups.
-docker exec lurus-postgres wal-g backup-list
+# Inside the shell. Credentials: the superuser password is the one used by the
+# daily-pg-dump CronJob (kubectl get cronjob -n database daily-pg-dump -o yaml);
+# export PGPASSWORD before the commands below.
+export PGHOST=lurus-pg-rw.database.svc PGUSER=postgres
 
-# Expected output:
-#   name                      modified             wal_segment_backup_start
-#   base_000000010000000000000003  2026-05-08T03:00:01Z  000000010000000000000003
-#   base_000000010000000000000007  2026-05-09T03:00:01Z  000000010000000000000007
+# 3. Snapshot the broken database if it still answers.
+pg_dump -Fc -d newhub -f /backups/newhub.broken.$(date +%F-%H%M).dump
+
+# 4. List the dumps you can restore from.
+ls -lh /backups | grep -E 'newhub|globals'
 ```
 
-If `backup-list` is empty: **no recovery possible from wal-g**. Fall back to
-the volume snapshot tarball (§ Pre-flight step 2). If that's also missing,
-you've lost data — escalate.
+If `/backups` is empty or the newest `newhub` dump is older than 24 h, the CronJob did not run:
+check `kubectl get cronjob -n database daily-pg-dump` and the last job's logs, then fall back to
+the off-site copy (host layer, see `database.md` "异地副本"). If both are missing, data after the
+last existing dump is lost — say so in the incident record before restoring.
 
 ---
 
-## § A — Full restore to LATEST (RPO ≤ 1 min)
+## § A — Full restore of the latest dump
 
 ```bash
-# 1. Stop PG so we can replace the data dir.
-docker compose stop postgres
+# In the restore-shell from Pre-flight. Roles and passwords live in the globals dump of the
+# same batch; restore them first when the target instance was rebuilt from scratch.
+ls /backups | grep globals | tail -1                              # e.g. lurus-globals-<TS>.sql
+psql -d postgres -f /backups/lurus-globals-<TS>.sql               # only on a rebuilt instance
 
-# 2. Wipe the broken data volume.
-docker volume rm lurus-hub_pg_data
-docker volume create lurus-hub_pg_data
-
-# 3. Fetch the latest base backup into the volume.
-docker run --rm \
-  --env-file deploy/single-node/.env \
-  -v lurus-hub_pg_data:/var/lib/postgresql/data \
-  lurus-postgres:walg-15 \
-  wal-g backup-fetch /var/lib/postgresql/data LATEST
-
-# 4. Tell PG to replay all archived WAL after the backup, then exit recovery.
-docker run --rm \
-  -v lurus-hub_pg_data:/var/lib/postgresql/data \
-  lurus-postgres:walg-15 \
-  bash -c "echo \"restore_command = '/usr/local/bin/wal-g wal-fetch %f %p'\" \
-           >> /var/lib/postgresql/data/postgresql.auto.conf && \
-           touch /var/lib/postgresql/data/recovery.signal"
-
-# 5. Start PG — it will replay WAL until the latest archived segment, then
-#    promote itself to writable.
-docker compose up -d postgres
-
-# 6. Watch logs until you see "archive recovery complete" + "database system is ready".
-docker compose logs -f postgres
-
-# 7. Bring the app back up.
-docker compose up -d lurus-api
+# Drop and recreate the objects from the dump (the recipe in database.md "Restore").
+pg_restore -d newhub --clean --if-exists /backups/lurus-newhub-<TS>.dump
 ```
 
-Verify:
+Verify before opening writes:
+
 ```bash
-docker exec lurus-postgres psql -U lurus -d newhub -c "SELECT pg_is_in_recovery();"  # should be f
-docker exec lurus-postgres psql -U lurus -d newhub -c "SELECT count(*) FROM users;"
+psql -d newhub -c "SELECT count(*) FROM users;"
+psql -d newhub -c "SELECT max(created_at) FROM logs;"    # must match the dump time you chose
+psql -d newhub -c "SELECT count(*) FROM schema_migrations;"
 ```
+
+Then restore `spec.replicas` in git, let ArgoCD converge, and check:
+
+- `GET /api/health` → `checks.schema_migrations` healthy and `/metrics`
+  `lurus_gateway_schema_migrations_pending` = 0. A dump older than the newest migration is fine:
+  every master-capable replica runs the embedded migration runner at boot (advisory-locked).
+- `kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=100` has no `FatalLog`.
+- One real relay through the gateway (UAT: faultsim channel; prod: read-only checks only).
 
 ---
 
-## § B — Point-in-Time Recovery (PITR)
-
-Same as § A, except step 4 sets a `recovery_target_time`:
+## § B — One table or selected rows
 
 ```bash
-# Replace TARGET with the last good moment, e.g. just before "DROP TABLE ..."
-TARGET="2026-05-08 14:30:00 UTC"
+# In the restore-shell. Load the dump into a scratch database, copy out what you need.
+createdb newhub_restore
+pg_restore -d newhub_restore /backups/lurus-newhub-<TS>.dump
 
-docker run --rm \
-  -v lurus-hub_pg_data:/var/lib/postgresql/data \
-  lurus-postgres:walg-15 \
-  bash -c "cat >> /var/lib/postgresql/data/postgresql.auto.conf <<EOF
-restore_command = '/usr/local/bin/wal-g wal-fetch %f %p'
-recovery_target_time = '$TARGET'
-recovery_target_action = 'pause'
-EOF
-           touch /var/lib/postgresql/data/recovery.signal"
+pg_dump -d newhub_restore -t public.tokens --data-only -f /tmp/tokens_at_dump.sql
+
+# Look at the SQL before loading it: unique keys already present in the live table make
+# the load fail half-way, so delete or narrow the bad rows first.
+psql -d newhub -f /tmp/tokens_at_dump.sql
+
+dropdb newhub_restore
 ```
 
-Start PG (step 5), then once recovery pauses at the target:
-
-```bash
-# Verify state at target time
-docker exec lurus-postgres psql -U lurus -d newhub -c "SELECT count(*) FROM users;"
-
-# If correct, promote
-docker exec lurus-postgres psql -U lurus -d newhub -c "SELECT pg_wal_replay_resume();"
-docker exec lurus-postgres pg_ctl promote -D /var/lib/postgresql/data
-
-# If wrong, target was too late/early — stop PG, edit recovery_target_time, restart
-```
+Stop writes (Pre-flight step 1) unless the affected table is append-only for the whole window.
 
 ---
 
-## § C — Restore one table (or selective rows)
+## Drills
 
-Use § B to spin up a **parallel** restored DB on a different port, then dump
-the desired table out.
-
-```bash
-# 1. Run a throwaway restored PG on port 5433.
-docker run -d --name lurus-postgres-restore \
-  -p 127.0.0.1:5433:5432 \
-  --env-file deploy/single-node/.env \
-  -e POSTGRES_USER=lurus \
-  -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
-  -v restore_data:/var/lib/postgresql/data \
-  lurus-postgres:walg-15
-
-# 2. Inside it, do § B PITR to the target timestamp.
-# 3. Once promoted, dump the wanted table:
-docker exec lurus-postgres-restore pg_dump \
-  -U lurus -d newhub -t public.tokens --data-only \
-  > tokens_at_target.sql
-
-# 4. Reload into the live PG.
-docker exec -i lurus-postgres psql -U lurus -d newhub < tokens_at_target.sql
-
-# 5. Tear down the restore container.
-docker rm -f lurus-postgres-restore
-docker volume rm restore_data
-```
-
----
-
-## Monthly drill (recommended)
-
-```bash
-bash scripts/pg-restore-drill.sh
-```
-
-That script spins up a clean PG container, does a full LATEST restore, runs a
-sanity SQL query, and reports PASS/FAIL. Schedule via host cron:
-
-```cron
-0 4 1 * * cd /opt/lurus-hub && bash scripts/pg-restore-drill.sh \
-          >> /var/log/lurus-restore-drill.log 2>&1
-```
-
-If a drill fails, page on-call immediately — backups silently rotting is the
-classic ops disaster.
+- **Authoritative**: host cron `32 5 * * 0` → `2l-svc-platform/scripts/dr-drill.sh` restores the
+  latest batch into a throwaway namespace, brings up platform-core against it, runs the smoke
+  reconciliation and records the measured RTO. Its last-success stamp is the only evidence that
+  the live backups restore; read it before promising an RTO.
+- **Removed 2026-09-19**: this repo's `scripts/pg-restore-drill.sh`. It exercised wal-g/S3 (not
+  installed on R6) and skipped itself silently when `WALG_S3_PREFIX` was unset, so a green run
+  proved nothing about the live pg_dump path.
+- **Ten-second non-destructive check**: `database.md` "单库快速验证" (pg_restore `--list` on the
+  newest dump).
 
 ---
 
@@ -183,17 +137,24 @@ classic ops disaster.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `wal-g backup-list` returns "S3 access denied" | bad `WALG_AWS_*` creds | re-issue MinIO/OSS access key, update `.env`, `docker compose up -d --force-recreate postgres` |
-| PG won't start: "could not open file ... in archive" | missing WAL segment | check `WALG_S3_PREFIX` matches what produced the segment; if irrecoverable, restore to the last consistent point and accept data loss |
-| `recovery.signal` ignored | PG ≥ 12 changed file location | confirm file is in `/var/lib/postgresql/data/`, not the OS-level data dir — wal-g fetches into PGDATA so this should be correct |
-| `archive_command failed`, WAL piling up in `pg_wal/` | wal-g target unreachable | check S3 endpoint reachability from PG container: `docker exec lurus-postgres wal-g wal-push /tmp/dummy` returns errors with details |
-| Container won't even start | corrupted PGDATA from interrupted restore | wipe volume and redo § A from scratch — the volume snapshot from Pre-flight is your fallback |
+| `/backups` is empty in the restore-shell | wrong PVC name, or the CronJob never ran | `kubectl get pvc -n database lurus-pg-backup`; `kubectl get cronjob -n database`; read the last job's logs, not its status |
+| `pg_restore: error: role "…" does not exist` | globals not restored on a rebuilt instance | load the globals dump of the same batch first (§ A step 1) |
+| `pg_restore` reports errors on `DROP` statements | objects absent in the target | expected with `--clean --if-exists` on a partial target; errors on `CREATE`/`COPY` are the ones that matter |
+| Deployment stays at 3/3 after you scaled it | you used `kubectl scale`; ArgoCD selfHeal reverted it | change `spec.replicas` in git |
+| App boots, `lurus_gateway_schema_migrations_pending` > 0 for minutes | migration runner waiting on the advisory lock or failing | `kubectl logs … \| grep -i migration`; `doc/runbook/database.md` "Schema 漂移" |
+| Newest dump is older than the incident window | daily cadence; no PITR | restore what exists, record the data loss window, raise owner item O-pitr |
 
 ---
 
+## Owner items
+
+- **O-pitr**: if the product needs an RPO measured in minutes, WAL archiving on the in-cluster
+  PostgreSQL is a decision (storage target, retention, and a restore path this runbook does not
+  have). Until then every promise must say "RPO up to 24 h".
+
 ## References
 
-- wal-g docs: <https://wal-g.readthedocs.io/PostgreSQL/>
-- HA strategy ADR: `lurus/doc/decisions/2026-05-07-newhub-pg-ha.md`
-- Drill script: `scripts/pg-restore-drill.sh`
-- Compose config: `deploy/single-node/docker-compose.yml` (postgres service)
+- `doc/runbook/database.md` — backup CronJobs, off-site rsync, freshness alarms, quick verification.
+- `2l-svc-platform/deploy/r6-host/` — off-site copy and the weekly `dr-drill.sh`.
+- `doc/runbook/staging-deploy.md` — ArgoCD emergency and rollback paths.
+- `lurus/doc/decisions/2026-05-07-newhub-pg-ha.md` — the wal-g design; superseded for the live topology.
