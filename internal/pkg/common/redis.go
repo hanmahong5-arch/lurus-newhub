@@ -25,6 +25,57 @@ func RedisKeyCacheSeconds() int {
 	return SyncFrequency
 }
 
+// Bounded outbound Redis budget (cycle 12 §2). go-redis ships
+// ContextTimeoutEnabled=false, which makes the client ignore the caller's
+// context deadline for the command round trip: a server that accepts the
+// connection and then stops answering costs every command the full ReadTimeout
+// (3s by default) no matter how little budget the caller had left. These
+// defaults plus the flag are what turn a caller deadline into a real bound —
+// TestRedisOptions_CallerDeadlineBoundsCommand measured 3.00s before and
+// ~0.2s after.
+const (
+	// defaultRedisOpTimeoutMS bounds one command's read and one command's write.
+	defaultRedisOpTimeoutMS = 1000
+	// defaultRedisDialTimeoutMS bounds establishing a new connection, which has
+	// to cover DNS plus TCP plus any AUTH round trip, hence the larger value.
+	defaultRedisDialTimeoutMS = 2000
+)
+
+// applyRedisTimeouts installs the bounded timeout set on a parsed option struct.
+// Operator knobs: REDIS_OP_TIMEOUT_MS (read and write), REDIS_DIAL_TIMEOUT_MS.
+// PoolTimeout is read timeout + 1s, go-redis' own convention for "wait for a
+// free connection slightly longer than one command may take". MaxRetries is 1
+// (go-redis default 3) so a dead backend costs at most one extra round trip;
+// with ContextTimeoutEnabled on, a retry past the caller's deadline fails
+// instantly anyway.
+func applyRedisTimeouts(opt *redis.Options) {
+	if opt == nil {
+		return
+	}
+	op := time.Duration(GetEnvOrDefault("REDIS_OP_TIMEOUT_MS", defaultRedisOpTimeoutMS)) * time.Millisecond
+	dial := time.Duration(GetEnvOrDefault("REDIS_DIAL_TIMEOUT_MS", defaultRedisDialTimeoutMS)) * time.Millisecond
+	opt.DialTimeout = dial
+	opt.ReadTimeout = op
+	opt.WriteTimeout = op
+	opt.PoolTimeout = op + time.Second
+	opt.MaxRetries = 1
+	opt.ContextTimeoutEnabled = true
+}
+
+// buildRedisOptions parses REDIS_CONN_STRING and applies the pool size plus the
+// bounded timeout set. InitRedisClient and ParseRedisOption both go through it
+// so the two construction paths cannot drift apart
+// (TestRedisOptionBuildersShareOneSource).
+func buildRedisOptions() (*redis.Options, error) {
+	opt, err := redis.ParseURL(os.Getenv("REDIS_CONN_STRING"))
+	if err != nil {
+		return nil, err
+	}
+	opt.PoolSize = GetEnvOrDefault("REDIS_POOL_SIZE", 10)
+	applyRedisTimeouts(opt)
+	return opt, nil
+}
+
 // InitRedisClient This function is called after init()
 func InitRedisClient() (err error) {
 	if os.Getenv("REDIS_CONN_STRING") == "" {
@@ -37,11 +88,10 @@ func InitRedisClient() (err error) {
 		SyncFrequency = 60
 	}
 	SysLog("Redis is enabled")
-	opt, err := redis.ParseURL(os.Getenv("REDIS_CONN_STRING"))
+	opt, err := buildRedisOptions()
 	if err != nil {
 		FatalLog("failed to parse Redis connection string: " + err.Error())
 	}
-	opt.PoolSize = GetEnvOrDefault("REDIS_POOL_SIZE", 10)
 	RDB = redis.NewClient(opt)
 
 	// Bounded boot connect-retry (A2): a Redis pod not yet Ready when this pod
@@ -69,7 +119,7 @@ func InitRedisClient() (err error) {
 }
 
 func ParseRedisOption() *redis.Options {
-	opt, err := redis.ParseURL(os.Getenv("REDIS_CONN_STRING"))
+	opt, err := buildRedisOptions()
 	if err != nil {
 		FatalLog("failed to parse Redis connection string: " + err.Error())
 	}

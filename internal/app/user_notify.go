@@ -87,7 +87,10 @@ func NotifyUser(ctx context.Context, userId int, userEmail string, userSetting d
 
 		// 获取 webhook secret
 		webhookSecret := userSetting.WebhookSecret
-		return SendWebhookNotify(webhookURLStr, webhookSecret, data)
+		// ctx-bounded: the caller already owns a deadline (relay post-consume uses a
+		// 5s detached one), and a customer-controlled endpoint must not be able to
+		// outlive it. See webhookSendBudget in webhook.go.
+		return SendWebhookNotifyWithContext(ctx, webhookURLStr, webhookSecret, data)
 	case dto.NotifyTypeBark:
 		barkURL := userSetting.BarkUrl
 		if barkURL == "" {

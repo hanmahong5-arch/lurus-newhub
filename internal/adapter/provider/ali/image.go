@@ -1,6 +1,7 @@
 package ali
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -185,23 +186,51 @@ func oaiFormEdit2AliImageEdit(c *gin.Context, info *relaycommon.RelayInfo, reque
 	return &imageRequest, nil
 }
 
+// aliTaskPollTimeout bounds one task-status GET. The poller previously used a
+// bare &http.Client{} and a context-free request, so an endpoint that accepted
+// the connection and then went quiet held the polling goroutine for the life of
+// the process. A var, not a const, so tests can shorten it
+// (image_timeout_test.go); nothing in production writes it.
+//
+// 30s is deliberately generous against the loop around it: asyncTaskWait sleeps
+// 10s between attempts, so a per-attempt ceiling below the retry interval would
+// turn a merely slow upstream into a poll that never observes a terminal state.
+var aliTaskPollTimeout = 30 * time.Second
+
+// aliTaskClient is the shared client for task-status polling. Shared rather than
+// per-call so repeated polls reuse connections, and with its own Timeout as a
+// belt-and-braces bound underneath the per-request context.
+var aliTaskClient = &http.Client{Timeout: aliTaskPollTimeout}
+
+// updateTask polls one task status on the package default budget. Callers that
+// hold a request context should use updateTaskCtx instead.
+//
+// The (resp, err, body) argument order is the pre-existing one and is kept so
+// the call sites that already destructure it keep compiling; updateTaskCtx,
+// being new, uses the conventional error-last order.
 func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error, []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), aliTaskPollTimeout)
+	defer cancel()
+	resp, body, err := updateTaskCtx(ctx, info, taskID)
+	return resp, err, body
+}
+
+func updateTaskCtx(ctx context.Context, info *relaycommon.RelayInfo, taskID string) (*AliResponse, []byte, error) {
 	url := fmt.Sprintf("%s/api/v1/tasks/%s", info.ChannelBaseUrl, taskID)
 
 	var aliResponse AliResponse
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return &aliResponse, err, nil
+		return &aliResponse, nil, err
 	}
 
 	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := aliTaskClient.Do(req)
 	if err != nil {
 		common.SysLog("updateTask client.Do err: " + err.Error())
-		return &aliResponse, err, nil
+		return &aliResponse, nil, err
 	}
 	defer resp.Body.Close()
 
@@ -211,10 +240,10 @@ func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error
 	err = common.Unmarshal(responseBody, &response)
 	if err != nil {
 		common.SysLog("updateTask NewDecoder err: " + err.Error())
-		return &aliResponse, err, nil
+		return &aliResponse, nil, err
 	}
 
-	return &response, nil, responseBody
+	return &response, responseBody, nil
 }
 
 func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*AliResponse, []byte, error) {
@@ -225,12 +254,22 @@ func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (
 	var taskResponse AliResponse
 	var responseBody []byte
 
+	// Poll on the originating request's context when there is one, so an
+	// abandoned generation stops costing an upstream round trip every 10s.
+	// c or c.Request can be nil in unit callers, hence the guard.
+	pollCtx := context.Background()
+	if c != nil && c.Request != nil {
+		pollCtx = c.Request.Context()
+	}
+
 	time.Sleep(time.Duration(5) * time.Second)
 
 	for {
 		logger.LogDebug(c, fmt.Sprintf("asyncTaskWait step %d/%d, wait %d seconds", step, maxStep, waitSeconds))
 		step++
-		rsp, err, body := updateTask(info, taskID)
+		attemptCtx, attemptCancel := context.WithTimeout(pollCtx, aliTaskPollTimeout)
+		rsp, body, err := updateTaskCtx(attemptCtx, info, taskID)
+		attemptCancel()
 		responseBody = body
 		if err != nil {
 			logger.LogWarn(c, "asyncTaskWait UpdateTask err: "+err.Error())

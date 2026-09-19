@@ -2,6 +2,7 @@ package ollama
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -286,11 +287,28 @@ func ollamaEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	return usage, nil
 }
 
+// ollamaAdminBudget bounds the two administrative Ollama calls — list models
+// (FetchOllamaModels) and delete model (DeleteOllamaModel). Both built a bare
+// &http.Client{}: no Timeout, no request context, so an Ollama host that
+// accepts the connection and stops answering held the console request that
+// triggered it for as long as the socket stayed open. A var, not a const, so
+// tests can shorten it; nothing in production writes it.
+//
+// PullOllamaModel, PullOllamaModelStream and FetchOllamaVersion are
+// deliberately NOT routed through this — the first two are long-lived model
+// downloads with their own 30m/1h ceilings, the third already has 10s.
+var ollamaAdminBudget = 30 * time.Second
+
+// ollamaAdminClient is shared so repeated console calls reuse connections; its
+// Timeout is a second bound underneath the per-request context.
+var ollamaAdminClient = &http.Client{Timeout: 30 * time.Second}
+
 func FetchOllamaModels(baseURL, apiKey string) ([]OllamaModel, error) {
 	url := fmt.Sprintf("%s/api/tags", baseURL)
 
-	client := &http.Client{}
-	request, err := http.NewRequest("GET", url, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), ollamaAdminBudget)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %v", err)
 	}
@@ -300,7 +318,7 @@ func FetchOllamaModels(baseURL, apiKey string) ([]OllamaModel, error) {
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	response, err := client.Do(request)
+	response, err := ollamaAdminClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("请求失败: %v", err)
 	}
@@ -456,8 +474,9 @@ func DeleteOllamaModel(baseURL, apiKey, modelName string) error {
 		return fmt.Errorf("序列化请求失败: %v", err)
 	}
 
-	client := &http.Client{}
-	request, err := http.NewRequest("DELETE", url, strings.NewReader(string(requestBody)))
+	ctx, cancel := context.WithTimeout(context.Background(), ollamaAdminBudget)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, strings.NewReader(string(requestBody)))
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %v", err)
 	}
@@ -467,7 +486,7 @@ func DeleteOllamaModel(baseURL, apiKey, modelName string) error {
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	response, err := client.Do(request)
+	response, err := ollamaAdminClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("请求失败: %v", err)
 	}

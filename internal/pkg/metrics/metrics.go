@@ -191,6 +191,26 @@ var (
 		},
 	)
 
+	// NATSConnected reports whether the JetStream publisher currently holds a
+	// live broker connection: 1 connected, 0 not. Written by
+	// internal/pkg/nats/publisher.go from the client's connect/disconnect/
+	// reconnect/closed callbacks.
+	//
+	// 0 is the correct steady state on a deployment with LLM_QUOTA_NATS_ENABLED
+	// off (UAT today) — the publisher is never built, so nothing ever sets it.
+	// "Off" and "broker unreachable" are therefore the same value here; the
+	// distinguishing signal is whether the deployment sets the enable flag at
+	// all. ⚠️ NOT ALERTED: nothing in deploy/r6-host-netdata/health.d/ reads
+	// this series yet (see O2 in the cycle 12 plan).
+	NATSConnected = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "nats_connected",
+			Help:      "JetStream publisher connection state: 1=connected, 0=disconnected or disabled",
+		},
+	)
+
 	// CacheHits tracks cache hit/miss ratio
 	CacheHits = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -696,4 +716,13 @@ func RecordConsumerAudienceMismatch(action string) {
 // RecordResponseRegistryError increments ResponseRegistryErrorsTotal.
 func RecordResponseRegistryError() {
 	ResponseRegistryErrorsTotal.Inc()
+}
+
+// SetNATSConnected publishes the JetStream publisher's connection state.
+func SetNATSConnected(connected bool) {
+	if connected {
+		NATSConnected.Set(1)
+		return
+	}
+	NATSConnected.Set(0)
 }
