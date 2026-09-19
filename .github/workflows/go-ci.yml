@@ -658,6 +658,7 @@ jobs:
           #     (573 production / 93 _test.go)
           #
           #   main@4c43f8a6, measured BY THIS JOB (run 35447252110)   646
+          #   feat/cycle12 first green run, measured BY THIS JOB (run 35474315586)   645
           #     20 fewer than the 2026-08-17 number above. The paydown was a
           #     side effect of cycles 9-11, not a lint campaign, so there is
           #     no per-linter table for it in the run log; the total is what
@@ -683,7 +684,7 @@ jobs:
           # lower it as that happens so the ceiling keeps its grip. It is a cap
           # on regression, NOT a budget to spend up to.
           # ---------------------------------------------------------------
-          CEILING=646
+          CEILING=645
 
           REPORT=/tmp/lint-debt.json
           rm -f "$REPORT"
