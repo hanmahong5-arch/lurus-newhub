@@ -122,6 +122,24 @@ describe('sanitizeHtml — content whose author is not the operator', () => {
       present: ['<div>'],
     },
     {
+      // The overlay half of "model output paints the console": an inline
+      // style is enough to cover the whole origin, no <style> block needed.
+      name: 'strips the style attribute so model output cannot paint an overlay',
+      input:
+        '<div style="position:fixed;inset:0;background:#fff;z-index:9999">x</div>',
+      absent: ['position:fixed', 'style='],
+      present: ['<div>x</div>'],
+    },
+    {
+      // A model asked for a diagram answers with SVG; the drawing must
+      // survive while the script and the handler inside it do not.
+      name: 'keeps an svg drawing but strips its script and handlers',
+      input:
+        '<svg viewBox="0 0 10 10" onload="steal()"><script>steal()</script><circle cx="5" cy="5" r="4"></circle></svg>',
+      absent: ['onload', 'script', 'steal'],
+      present: ['<svg', '<circle'],
+    },
+    {
       name: 'keeps ordinary formatting intact',
       input: '<b>bold</b> and <em>em</em>',
       absent: [],
@@ -271,9 +289,10 @@ const OFF_SITE_ESCAPED = {
 };
 
 /*
- * Files that name the attribute in prose only. Every entry is checked below:
- * the file must contain the string and must contain NO parsed sink for it,
- * so a comment-only entry cannot quietly become a real sink.
+ * Files with an occurrence of the attribute name that is prose, not a sink.
+ * Every entry is checked below: the file must still contain the string, and
+ * every occurrence the sink scan did not parse must sit on a comment line —
+ * so a comment-only excuse cannot quietly hide a sink the scan cannot see.
  */
 const MENTION_ONLY = {
   'helpers/sanitize.js':
@@ -487,12 +506,28 @@ describe('every dangerouslySetInnerHTML goes through a sanitiser', () => {
     ).toEqual([]);
   });
 
-  it('every MENTION_ONLY entry is still a real file that still only mentions it', () => {
+  it('every MENTION_ONLY entry is still a real file whose excused occurrences sit on comment lines', () => {
     const stale = [];
     for (const [file, reason] of Object.entries(MENTION_ONLY)) {
       if (!mentions.has(file)) {
         stale.push(`${file} no longer contains ${ATTR} (${reason})`);
+        continue;
       }
+      // The excuse is "prose": every occurrence the sink scan did not parse
+      // must be on a comment line, or the file has a sink spelled in a way
+      // the scan cannot see and the excuse is hiding it.
+      const lines = fs.readFileSync(path.join(SRC, file), 'utf8').split('\n');
+      const parsedLines = new Set(
+        sinks.filter((s) => s.file === file).map((s) => s.line),
+      );
+      lines.forEach((line, i) => {
+        if (!line.includes(ATTR) || parsedLines.has(i + 1)) return;
+        if (!/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(line)) {
+          stale.push(
+            `${file}:${i + 1} mentions ${ATTR} outside a comment and outside a parsed sink: ${line.trim()}`,
+          );
+        }
+      });
     }
     expect(stale, stale.join('\n  ')).toEqual([]);
   });

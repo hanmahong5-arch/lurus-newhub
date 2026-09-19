@@ -360,7 +360,11 @@ func SetOptionMapValue(key, value string) error {
 // ErrOptionValueRejected marks an option value that cannot be applied. Every
 // error this file produces for a bad value wraps it, so one errors.Is tells
 // the admin write path "this is the operator's typo, answer 400 and do not
-// persist" rather than "the database is down".
+// persist" rather than "the database is down". ValidateOptionValue refuses,
+// BEFORE the row is written: the numeric keys (by kind), the JSON keys (by
+// the shape their updater decodes, jsonOptionProbes), the hierarchical
+// <config>.<field> keys (by a dry-run decode) and the retired keys. A
+// boolean or free-form string key cannot fail to parse.
 //
 // The message it carries names the key and the type the value had to be. It
 // never quotes the value: this dispatch is shared with SMTPToken,
@@ -446,6 +450,45 @@ var jsonOptionKinds = map[string]optionValueKind{
 	"AudioCompletionRatio":       optionKindJSON,
 }
 
+// jsonOptionProbes decode a JSON option value into a throwaway of the SAME
+// type its updater decodes into (setting.UpdateChatsByJsonString and the
+// others named in updateOptionMap), so a well-formed document of the wrong
+// shape — {"a":"x"} for a map[string]float64 key — is refused before the row
+// is written, instead of being persisted and then refused by an updater that
+// had already emptied the live table. The types are copied from each
+// updater's make(...); ContextLengthTiers uses the updater's own validator,
+// which does not touch the live map. TestOptionJSONProbesCoverEveryJSONKey
+// keeps this table equal to jsonOptionKinds, and
+// TestOptionJSONProbesRejectWrongShape drives every probe with a wrong-shape
+// document.
+var jsonOptionProbes = map[string]func(string) error{
+	"Chats":                      jsonShape[[]map[string]string],
+	"AutoGroups":                 jsonShape[[]string],
+	"TopupGroupRatio":            jsonShape[map[string]float64],
+	"ModelRequestRateLimitGroup": jsonShape[map[string][2]int],
+	"ModelRatio":                 jsonShape[map[string]float64],
+	"GroupRatio":                 jsonShape[map[string]float64],
+	"GroupGroupRatio":            jsonShape[map[string]map[string]float64],
+	"UserUsableGroups":           jsonShape[map[string]string],
+	"CompletionRatio":            jsonShape[map[string]float64],
+	"ModelPrice":                 jsonShape[map[string]float64],
+	"CacheRatio":                 jsonShape[map[string]float64],
+	"ContextLengthTiers": func(value string) error {
+		_, err := ratio_setting.ValidateContextLengthTiersJSONString(value)
+		return err
+	},
+	"ImageRatio":           jsonShape[map[string]float64],
+	"AudioRatio":           jsonShape[map[string]float64],
+	"AudioCompletionRatio": jsonShape[map[string]float64],
+}
+
+// jsonShape is the generic probe: decode into a throwaway T and report the
+// decoder's verdict. It allocates nothing the caller keeps.
+func jsonShape[T any](value string) error {
+	var probe T
+	return json.Unmarshal([]byte(value), &probe)
+}
+
 // ValidateOptionValue reports whether value can be applied to key, changing
 // nothing at all. UpdateOption calls it before it writes the row.
 //
@@ -472,7 +515,13 @@ func ValidateOptionValue(key, value string) error {
 	}
 
 	if kind, ok := jsonOptionKinds[key]; ok {
-		if !json.Valid([]byte(value)) {
+		probe, known := jsonOptionProbes[key]
+		if !known {
+			// TestOptionJSONProbesCoverEveryJSONKey keeps the two tables equal;
+			// a key that slipped through is refused rather than persisted blind.
+			return fmt.Errorf("%w: %s has no shape probe", ErrOptionValueRejected, key)
+		}
+		if err := probe(value); err != nil {
 			reportOptionParseFailure(key, kind)
 			return optionKindError(key, kind)
 		}

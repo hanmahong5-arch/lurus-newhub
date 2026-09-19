@@ -66,11 +66,10 @@ func TestOptionOwnedGlobalsHaveOneWriter(t *testing.T) {
 
 	// The bare-identifier allow-list: `<file>:<function>` sites inside the
 	// declaring package that this gate does not (yet) get to remove. The
-	// compiled defaults and the boot-time environment reads do not need an
-	// entry — they are top-level `var x = ...` declarations and `init` bodies
-	// that the walk below does not treat as assignments to begin with — so
-	// everything listed here is a real run-time second writer with a reason it
-	// is still there.
+	// compiled defaults do not need an entry — they are top-level `var x = ...`
+	// declarations, which the walk below does not visit. An assignment inside
+	// an `init` body IS matched and needs an entry, so everything listed here
+	// is a run-time or boot-time second writer with a reason it is still there.
 	allowedBareWriters := map[string]string{
 		// SendEmail backfills SMTPFrom from SMTPAccount when the operator left
 		// "From" empty, and does it by writing the global rather than a local.

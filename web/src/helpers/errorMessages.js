@@ -42,6 +42,12 @@ export function resolveErrorMessage(error) {
   if (errorCode === 'SESSION_REGISTRY_DISABLED') {
     return t('console.settings.session_registry_disabled');
   }
+  // 403 USER_DISABLED: a banned account. The 403 branch below shows the
+  // generic "no permission" copy, which tells a banned admin the wrong
+  // thing; the backend minted this code so the console could branch.
+  if (errorCode === 'USER_DISABLED') {
+    return t('console.errors.account_disabled');
+  }
 
   switch (status) {
     case 401:

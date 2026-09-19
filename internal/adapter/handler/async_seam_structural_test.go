@@ -26,7 +26,10 @@ package handler
 // goroutine started inside a function this package calls but does not declare
 // (another package of this repo, or a library); a spawn behind an interface
 // method; a start driven by reflect. It walks this directory's non-test .go
-// files and nothing else.
+// files and nothing else. The other packages that carry an AsyncGo seam have
+// no copy of this scan yet, and each still holds a live unseamed spawn today
+// (2026-09-19): internal/adapter/repo/internal_api_key.go:95,
+// internal/app/notify-limit.go:46 and :85, internal/app/release_service.go:207.
 //
 // WHY: without the seam a spawn has no join point, so it keeps reading package
 // globals (repo.DB, common.RDB, common.RedisEnabled, releaseService …) after

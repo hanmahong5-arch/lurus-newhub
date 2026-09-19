@@ -36,8 +36,9 @@ func AdminJWTAuth() gin.HandlerFunc {
 		if err != nil {
 			common.SysError(fmt.Sprintf("AdminJWTAuth: token validation failed: %v", err))
 			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "unauthorized",
+				"success":    false,
+				"error_code": "UNAUTHENTICATED",
+				"message":    "unauthorized",
 			})
 			c.Abort()
 			return
@@ -94,8 +95,9 @@ func RootJWTAuth() gin.HandlerFunc {
 		if err != nil {
 			common.SysError(fmt.Sprintf("RootJWTAuth: token validation failed: %v", err))
 			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "unauthorized",
+				"success":    false,
+				"error_code": "UNAUTHENTICATED",
+				"message":    "unauthorized",
 			})
 			c.Abort()
 			return
@@ -104,8 +106,9 @@ func RootJWTAuth() gin.HandlerFunc {
 		roles := extractRoles(claims.Roles)
 		if !hasRole(roles, "root") {
 			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"message": "Root role required",
+				"success":    false,
+				"error_code": "PERMISSION_DENIED",
+				"message":    "Root role required",
 			})
 			c.Abort()
 			return
@@ -300,17 +303,33 @@ func classifyRootSessionDenial(message string) rootSessionDenial {
 //	               TestRootJWTAuth_SessionRevokedCodeSurvivesTheRewrite)
 //	anything else -> replayed as-is (e.g. the 403 TENANT_DISABLED branch,
 //	               which already has the v2 shape)
+//	empty 2xx     -> 403 PERMISSION_DENIED: a refusal that wrote nothing must
+//	               not replay as a bare 2xx, which every client reads as
+//	               "allowed" (TestRootSessionAuth_SilentRefusalIsNotABareTwoHundred)
 //
 // The original message is always kept: a banned root and a root whose role
 // was demoted get different sentences, as they did before this lane. A body
 // that is not a JSON object is replayed byte for byte.
 func (w *sessionDenialCapture) rewriteAsV2Denial(c *gin.Context) {
-	var env map[string]interface{}
-	if w.body.Len() == 0 || json.Unmarshal(w.body.Bytes(), &env) != nil {
-		c.Writer.WriteHeader(w.Status())
-		if w.body.Len() > 0 {
-			_, _ = c.Writer.Write(w.body.Bytes())
+	if w.body.Len() == 0 {
+		if status := w.Status(); status < 200 || status >= 300 {
+			c.Writer.WriteHeader(status)
+			return
 		}
+		// A refusal that wrote nothing. Replayed as-is it would be a bare 2xx
+		// — "denied" that every client reads as "allowed" — so it gets the
+		// same fallback envelope an unrecognised refusal message gets.
+		c.JSON(rootSessionDenialFallback.status, gin.H{
+			"success":    false,
+			"error_code": rootSessionDenialFallback.errorCode,
+			"message":    "无权进行此操作，权限不足",
+		})
+		return
+	}
+	var env map[string]interface{}
+	if json.Unmarshal(w.body.Bytes(), &env) != nil {
+		c.Writer.WriteHeader(w.Status())
+		_, _ = c.Writer.Write(w.body.Bytes())
 		return
 	}
 

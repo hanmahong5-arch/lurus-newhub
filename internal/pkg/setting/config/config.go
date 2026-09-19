@@ -27,7 +27,9 @@ type ConfigManager struct {
 // GetGlobalSettings().PassThroughRequestEnabled, the fetch_setting SSRF
 // lists), while the option-sync tick rewrites them every SYNC_FREQUENCY
 // seconds from the options table. Writers take fieldMu for writing and
-// publish freshly decoded values (see applyConfigMap); readers that must be
+// publish freshly decoded values (see applyConfigMap; the one other writer is
+// the nil repair in ratio_setting.GetGroupRatioSetting, which no production
+// path reaches and which takes the write lock); readers that must be
 // race-free take it for reading through RLock/RUnlock.
 //
 // Lock order where both are held: cm.mutex first, then fieldMu (LoadFromDB,

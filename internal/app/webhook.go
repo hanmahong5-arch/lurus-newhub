@@ -35,7 +35,8 @@ func generateSignature(secret string, payload []byte) string {
 // webhookSendBudget is the wall-clock ceiling for one outbound webhook
 // delivery. The endpoint belongs to the customer, the shared relay client has
 // no Timeout of its own when RELAY_TIMEOUT is unset (the deployed default), and
-// nothing upstream of here was bounding the call. A var, not a const, so tests
+// the only bound upstream of here was the shared transport's
+// ResponseHeaderTimeout (90s), which says nothing about a body that trickles. A var, not a const, so tests
 // can shorten it (webhook_timeout_test.go); nothing in production writes it.
 var webhookSendBudget = 10 * time.Second
 

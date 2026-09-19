@@ -43,8 +43,8 @@ func rateLimitScopeForIdent(ident string) string {
 // errors they degrade to the process-local limiter (a real ceiling, per
 // replica) instead of to cycle-11's fail-open (no ceiling at all). Each
 // entry names what it is guarding; TestRateLimitMarks_EveryMarkIsClassified
-// requires every mark in the codebase to be in this table or in the exempt
-// table beside it.
+// walks every non-test Go file under internal/ and requires every mark it
+// finds to be in this table or in the exempt table beside it.
 //
 // The value is the reason, not a description: it is the thing to argue with
 // when reclassifying.

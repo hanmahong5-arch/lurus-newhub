@@ -247,6 +247,18 @@ func TestPostConsumeQuota_RecordsBusinessTPMWindow(t *testing.T) {
 		// IdentityAccountID stays 0: the TPM hook must fire OUTSIDE the
 		// platform-wallet gate (local-quota tenants must be throttled too).
 	}
+	// The TPM window is process-global and keyed by token id, and every
+	// hermetic fixture in this package gets token id 1 from its own sqlite,
+	// so under -shuffle=on another test's settlement can already sit in this
+	// window. Assert the delta this call adds, not the absolute total.
+	tokenBefore, _, err := QueryBusinessTPMTokenWindow(context.Background(), tokenId)
+	if err != nil {
+		t.Fatalf("token query (before): %v", err)
+	}
+	tenantBefore, _, err := QueryBusinessTPMTenantWindow(context.Background(), tenantID)
+	if err != nil {
+		t.Fatalf("tenant query (before): %v", err)
+	}
 	if err := PostConsumeQuota(relayInfo, 300, 50, false); err != nil {
 		t.Fatalf("PostConsumeQuota: %v", err)
 	}
@@ -255,14 +267,14 @@ func TestPostConsumeQuota_RecordsBusinessTPMWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("token query: %v", err)
 	}
-	if total != 350 {
-		t.Errorf("token TPM window = %d, want 350 (quota 300 + preConsumed 50)", total)
+	if total-tokenBefore != 350 {
+		t.Errorf("token TPM window delta = %d, want 350 (quota 300 + preConsumed 50)", total-tokenBefore)
 	}
 	tenTotal, _, terr := QueryBusinessTPMTenantWindow(context.Background(), tenantID)
 	if terr != nil {
 		t.Fatalf("tenant query: %v", terr)
 	}
-	if tenTotal != 350 {
+	if tenTotal-tenantBefore != 350 {
 		t.Errorf("tenant TPM window = %d, want 350 (tenant resolved from token row)", tenTotal)
 	}
 

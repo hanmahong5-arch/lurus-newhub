@@ -490,6 +490,15 @@ jobs:
       #     per-test unique ids. The remaining shuffled failures in this
       #     package at the time of writing fail in ISOLATION too — they are
       #     another cycle-12 lane's in-flight work, not an ordering effect.
+      #   internal/app — measured after the six above (2026-09-19, operator
+      #     hand-finish): two order-dependent failures, both fixed — the TPM
+      #     window assertion in business_tpm_test.go now measures the delta the
+      #     test adds (the window is process-global, keyed by a token id every
+      #     sqlite fixture reuses), and other.source gained its visibility
+      #     decision in governance/classification.go.
+      #   Measured set = the seven packages above. Every other package's first
+      #   shuffle is this job: a red there is new information, not a
+      #   regression of something measured.
       # So the first CI run here is not the first measurement, but it IS the
       # first measurement WITH -race, and with every package in one binary set.
       - name: go test -short -race -shuffle=on ./...

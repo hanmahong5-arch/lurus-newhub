@@ -255,11 +255,13 @@ func SyncAllChannelsNow(c *gin.Context) {
 
 // modelCatalogueScope is the "which channels may this caller see" decision for
 // the model-meta read handlers, taken once per request by
-// modelScopeForCaller. The models table itself is the platform's global
-// catalogue and is NOT narrowed; what is narrowed is the per-row data
-// enrichModels attaches from the channels/abilities tables — bound_channels
-// (channel names, i.e. customer names) and enable_groups (group names
-// configured for one tenant's channels).
+// modelScopeForCaller. For the list pages (/api/models/, /search, /:id) the
+// models table itself is the platform's global catalogue and is not narrowed;
+// what is narrowed is the per-row data enrichModels attaches from the
+// channels/abilities tables — bound_channels (channel names, i.e. customer
+// names) and enable_groups (group names configured for one tenant's
+// channels). GetModelsPricingInfo, the third handler that takes this scope,
+// additionally drops the rows only another tenant's channels serve.
 type modelCatalogueScope struct {
 	tenantID string
 	isRoot   bool

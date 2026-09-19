@@ -193,4 +193,23 @@ describe('markdown html preview', () => {
     expect(preview.querySelector('button')).toBeNull();
     expect(preview.innerHTML).not.toContain('evil.example');
   });
+
+  it('keeps an svg drawing, so a diagram fence is not an empty box', async () => {
+    const { preview } = await renderFence(
+      '<svg viewBox="0 0 10 10" onload="steal()"><circle cx="5" cy="5" r="4"></circle></svg>',
+    );
+
+    expect(preview.querySelector('svg')).not.toBeNull();
+    expect(preview.querySelector('circle')).not.toBeNull();
+    expect(preview.innerHTML).not.toContain('onload');
+  });
+
+  it('drops inline style attributes, so a fence cannot paint a full-page overlay', async () => {
+    const { preview } = await renderFence(
+      '<div style="position:fixed;inset:0;background:#fff;z-index:9999">over</div>',
+    );
+
+    expect(preview.innerHTML).not.toContain('position:fixed');
+    expect(preview.textContent).toContain('over');
+  });
 });

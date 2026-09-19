@@ -203,7 +203,7 @@ func TestGroupSpecialUsableGroup_TokenAuthReadPathSeesOnlyPublishedMaps(t *testi
 // It covers the modules linked into this test binary, which it prints; the
 // module list itself is pinned against the Register call sites by
 // TestRegisteredConfigModulesAreTheKnownSet in
-// internal/adapter/repo/option_owned_globals_gate_test.go.
+// internal/adapter/repo/option_validation_gate_test.go.
 func TestRegisteredPointerFieldsDecodeInPlace(t *testing.T) {
 	modules := []string{
 		"gemini", "claude", "global", "fetch_setting", "group_ratio_setting",

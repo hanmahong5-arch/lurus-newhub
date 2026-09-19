@@ -27,8 +27,9 @@ import zhTranslation from './locales/zh.json';
 /**
  * The languages this build ships.
  *
- * fr / ja / ru / vi still live in ./locales and carry 58% of en.json's keys
- * (measured: fr 58.13, ja 57.98, ru 58.13, vi 58.20). Registering them let the
+ * fr / ja / ru / vi still live in ./locales and carry roughly 58% of en.json's
+ * keys (src/i18n/locale-coverage.test.js prints the live figures when it
+ * fails; they move whenever a lane adds an en key). Registering them let the
  * browser language detector land an operator on a console that was two fifths
  * Chinese, so they are not here — the files stay in the tree, which makes this
  * reversible. Finishing one to the floor in

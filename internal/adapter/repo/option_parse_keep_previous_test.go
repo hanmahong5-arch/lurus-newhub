@@ -43,6 +43,12 @@ func TestOptionParse_MalformedValueKeepsPreviousQuotaPerUnit(t *testing.T) {
 	if err == nil {
 		t.Errorf("SetOptionMapValue(abc) returned nil; an unparseable value must be reported")
 	}
+	// This is the tick path (loadOptionsFromDatabase -> updateOptionMap): its
+	// message is logged on every replica on every sync, and the dispatch is
+	// shared with the secret-bearing keys, so it must not quote the value.
+	if err != nil && strings.Contains(err.Error(), "abc") {
+		t.Errorf("the tick-path rejection quotes the submitted value: %q", err.Error())
+	}
 	if common.QuotaPerUnit != 500000 {
 		t.Fatalf("QuotaPerUnit = %v after an unparseable write, want the previous 500000", common.QuotaPerUnit)
 	}

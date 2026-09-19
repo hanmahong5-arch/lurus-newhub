@@ -471,7 +471,10 @@ func probeChannel(channel *repo.Channel, testModel string, endpointType string, 
 		// other.source marks the row as a manual probe so a usage view or a
 		// stats query can tell it apart from customer traffic: it is billed
 		// quota on paper (the Quota field below) but probeChannel never
-		// debits a wallet, so it is usage nobody paid for.
+		// debits a wallet, so it is usage nobody paid for. The marker lives on
+		// the logs row only: quota_data (repo/log.go) and the quota-consumed
+		// metric aggregate the same Quota with no source dimension, so they
+		// carry the phantom amount unfiltered.
 		if other == nil {
 			other = make(map[string]interface{})
 		}

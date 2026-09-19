@@ -129,6 +129,16 @@ export function checkBudget(metrics, budget) {
       continue;
     }
     const measured = metrics[key];
+    if (key === 'entryChunkBrotliBytes' && measured === 0) {
+      // A zero here is not a small entry chunk: the build emitted no .br
+      // sibling, so the precompressed transport in
+      // internal/adapter/handler/router/web-router.go has nothing to serve
+      // and every visitor is back on per-request gzip.
+      breaches.push(
+        `${key}: the build emitted no .br sibling for the entry chunk — the precompressed transport has nothing to serve`,
+      );
+      continue;
+    }
     if (measured > limit) {
       breaches.push(
         `${key}: ${measured} exceeds the budget of ${limit} (+${measured - limit})`,

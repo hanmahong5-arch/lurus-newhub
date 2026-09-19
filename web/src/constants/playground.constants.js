@@ -116,7 +116,9 @@ export const THINK_TAG_REGEX = /<think>([\s\S]*?)<\/think>/g;
 /*
  * These values are i18n keys: hooks/playground/useMessageActions.jsx renders
  * them as t(ERROR_MESSAGES.X). A key no bundle carries resolves to itself, so
- * six of these eight reached the English playground in Chinese — the literal
+ * four of these eight are rendered (hooks/playground/useMessageActions.jsx)
+ * and three of those four were missing from en.json, so they reached the
+ * English playground in Chinese; the other four have no consumer — the literal
  * t('…') scan in src/i18n/i18n-integrity.test.js cannot see a key that arrives
  * through a variable, which is why nothing was red.
  *

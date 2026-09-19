@@ -143,7 +143,8 @@ const V2AdminSystemTasks = () => {
       ]}
       actions={
         !forbidden &&
-        !signedOut && (
+        !signedOut &&
+        error === null && (
           <button
             type='button'
             className='btn ghost'

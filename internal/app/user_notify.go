@@ -89,9 +89,9 @@ func NotifyUser(ctx context.Context, userId int, userEmail string, userSetting d
 		// 获取 webhook secret
 		webhookSecret := userSetting.WebhookSecret
 		// ctx-bounded. The quota-notify caller budgets 10s
-		// (quotaNotifyBudget, quota.go:1390, applied at quota.go:1436); the other
+		// (quotaNotifyBudget, quota.go:1393, applied at quota.go:1442); the other
 		// caller, NotifyRootUser, is invoked with context.TODO()
-		// (channel.go:38, :59, handler/channel-test.go:712) and so carries no
+		// (channel.go:38, :59 and the app.NotifyRootUser call in handler/channel-test.go testAllChannels) and so carries no
 		// deadline at all — for that path webhookSendBudget (webhook.go) is the
 		// real floor. Either way a customer-controlled endpoint cannot outlive
 		// the shorter of the two.
@@ -130,8 +130,10 @@ func sendEmailNotify(userEmail string, data dto.Notify) error {
 // http.NewRequest — no context — on GetHttpClient(), whose Timeout is zero
 // whenever RELAY_TIMEOUT is unset, which is the deployed default
 // (http_client.go, .env.example RELAY_TIMEOUT=0, and neither manifest overrides
-// it). So a push endpoint that accepted the connection and went quiet parked the
-// notifying goroutine with nothing to end it.
+// it). So a push endpoint that accepted the connection and went quiet held the
+// notifying goroutine for as long as the shared relay transport's
+// ResponseHeaderTimeout allowed (common.RelayResponseHeaderTimeout, 90s) —
+// per silent endpoint, per notification, with no body deadline after that.
 //
 // The budget is applied inside the two functions rather than added to their
 // signatures: they are called directly, with the current signatures, from test

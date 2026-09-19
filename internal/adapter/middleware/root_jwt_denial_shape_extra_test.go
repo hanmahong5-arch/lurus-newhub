@@ -363,6 +363,32 @@ func TestRootJWTAuth_SessionRevokedCodeSurvivesTheRewrite(t *testing.T) {
 //
 // Mutation: drop the `defer` in captureSessionDenial (restore c.Writer after
 // the call instead) and this goes red with status 200.
+// TestRootSessionAuth_SilentRefusalIsNotABareTwoHundred: a resolver that
+// refuses without writing a body used to be replayed as an empty HTTP 200 —
+// the one route around this middleware's "no 2xx on refusal" invariant.
+// Mutation: make rewriteAsV2Denial replay an empty buffer with its captured
+// status again and this goes red with status 200.
+func TestRootSessionAuth_SilentRefusalIsNotABareTwoHundred(t *testing.T) {
+	prev := resolveRootSession
+	resolveRootSession = func(c *gin.Context) bool { return false }
+	t.Cleanup(func() { resolveRootSession = prev })
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/admin/probe", RootJWTAuth(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"success": true})
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/probe", nil))
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 — a refusal that wrote nothing must not become a bare 2xx; body=%q", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"error_code":"PERMISSION_DENIED"`) {
+		t.Errorf("body = %s, want the fallback PERMISSION_DENIED envelope", w.Body.String())
+	}
+}
+
 func TestRootSessionAuth_PanicRestoresWriter(t *testing.T) {
 	prev := resolveRootSession
 	resolveRootSession = func(c *gin.Context) bool {

@@ -93,7 +93,7 @@ func workerEgressHost() string {
 // primary gate — refusing here would turn transient DNS hiccups into hard relay
 // failures on the hot path.
 func checkRelayEgress(ctx context.Context, addr string, proxyHosts map[string]struct{}) error {
-	fs := system_setting.GetFetchSetting()
+	fs := system_setting.GetFetchSettingSnapshot()
 	if !fs.EnableSSRFProtection || fs.AllowPrivateIp {
 		return nil
 	}

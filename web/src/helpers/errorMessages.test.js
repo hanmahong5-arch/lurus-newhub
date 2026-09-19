@@ -76,6 +76,21 @@ describe('resolveErrorMessage', () => {
     ).toBe('console.settings.session_registry_disabled');
   });
 
+  it('maps error_code USER_DISABLED to the account-disabled copy, not the generic 403 text', () => {
+    expect(
+      resolveErrorMessage({
+        response: {
+          status: 403,
+          data: {
+            success: false,
+            error_code: 'USER_DISABLED',
+            message: '用户已被封禁',
+          },
+        },
+      }),
+    ).toBe('console.errors.account_disabled');
+  });
+
   it('still falls back to the backend message for an unmapped 409', () => {
     expect(
       resolveErrorMessage({

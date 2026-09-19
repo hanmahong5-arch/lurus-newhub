@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
@@ -20,6 +21,23 @@ type WorkerRequest struct {
 	Body    json.RawMessage   `json:"body,omitempty"`
 }
 
+// outboundFetchBudget bounds one worker relay or origin download end to end
+// (dial, headers, body). GetHttpClient() has no Timeout when RELAY_TIMEOUT is
+// unset — the deployed default — so an origin that accepted the connection
+// and went quiet held the fetching goroutine for the life of the process.
+// Two minutes is generous for the images and audio files these calls fetch.
+// A var so a test can shorten it; nothing in production writes it.
+var outboundFetchBudget = 2 * time.Minute
+
+// outboundFetchClient is GetHttpClient() with the budget above. The struct is
+// copied so the shared Transport — and the SSRF dial guard it carries — is
+// kept; only the Timeout differs.
+func outboundFetchClient() *http.Client {
+	client := *GetHttpClient()
+	client.Timeout = outboundFetchBudget
+	return &client
+}
+
 // DoWorkerRequest 通过Worker发送请求
 func DoWorkerRequest(req *WorkerRequest) (*http.Response, error) {
 	if !system_setting.EnableWorker() {
@@ -30,7 +48,7 @@ func DoWorkerRequest(req *WorkerRequest) (*http.Response, error) {
 	}
 
 	// SSRF防护：验证请求URL
-	fetchSetting := system_setting.GetFetchSetting()
+	fetchSetting := system_setting.GetFetchSettingSnapshot()
 	if err := common.ValidateURLWithFetchSetting(req.URL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 		return nil, fmt.Errorf("request reject: %v", err)
 	}
@@ -46,7 +64,7 @@ func DoWorkerRequest(req *WorkerRequest) (*http.Response, error) {
 		return nil, fmt.Errorf("failed to marshal worker payload: %v", err)
 	}
 
-	return GetHttpClient().Post(workerUrl, "application/json", bytes.NewBuffer(workerPayload))
+	return outboundFetchClient().Post(workerUrl, "application/json", bytes.NewBuffer(workerPayload))
 }
 
 func DoDownloadRequest(originUrl string, reason ...string) (resp *http.Response, err error) {
@@ -59,12 +77,12 @@ func DoDownloadRequest(originUrl string, reason ...string) (resp *http.Response,
 		return DoWorkerRequest(req)
 	} else {
 		// SSRF防护：验证请求URL（非Worker模式）
-		fetchSetting := system_setting.GetFetchSetting()
+		fetchSetting := system_setting.GetFetchSettingSnapshot()
 		if err := common.ValidateURLWithFetchSetting(originUrl, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 			return nil, fmt.Errorf("request reject: %v", err)
 		}
 
 		common.SysLog(fmt.Sprintf("downloading from origin: %s, reason: %s", common.MaskSensitiveInfo(originUrl), strings.Join(reason, ", ")))
-		return GetHttpClient().Get(originUrl)
+		return outboundFetchClient().Get(originUrl)
 	}
 }

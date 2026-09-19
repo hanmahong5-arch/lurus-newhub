@@ -121,6 +121,7 @@ var wantUserVisible = map[string]string{
 	// that the charge shown may not have actually settled. TierPublic in
 	// governance/classification.go.
 	"settlement": "flags that settlement failed on their own row — the row still shows a price, this says whether it can be trusted",
+	"source":     "marks the row as a manual channel probe rather than customer traffic — their own row, nothing about pricing or routing",
 }
 
 // wantInternal: keys that must never reach a non-admin. Predominantly our

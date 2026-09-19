@@ -230,6 +230,7 @@ const HFSettings = () => {
   // null = not answered yet.
   const [sessions, setSessions] = useState(null);
   const [registryEnabled, setRegistryEnabled] = useState(null);
+  const [registrySummary, setRegistrySummary] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(false);
 
   // Revoke session confirm dialog — used for BOTH "revoke my current
@@ -335,6 +336,12 @@ const HFSettings = () => {
         // "enabled" so an older backend keeps its previous behaviour rather
         // than claiming the feature is off.
         setRegistryEnabled(res.data.data.registry_enabled !== false);
+        // Flag-off answers carry the two real numbers at the top level
+        // (the console used to show them on an invented device row).
+        setRegistrySummary({
+          active_tokens: res.data.data.active_tokens,
+          request_count: res.data.data.request_count,
+        });
       }
     } catch (_) {
       // error toast shown by API interceptor
@@ -965,6 +972,27 @@ const HFSettings = () => {
                     data-testid='sessions-registry-off'
                     style={{ fontSize: 12, marginTop: 10 }}
                   >
+                    {registrySummary &&
+                      typeof registrySummary.active_tokens === 'number' && (
+                        <div
+                          data-testid='sessions-registry-off-summary'
+                          style={{ marginBottom: 6 }}
+                        >
+                          {tr(
+                            'console.settings.th_active_tokens',
+                            'active tokens',
+                          )}
+                          : {registrySummary.active_tokens} ·{' '}
+                          {tr(
+                            'console.settings.sessions_request_count_30d',
+                            'requests, last 30 days',
+                          )}
+                          :{' '}
+                          {(
+                            registrySummary.request_count ?? 0
+                          ).toLocaleString()}
+                        </div>
+                      )}
                     {tr(
                       'console.settings.sessions_registry_off_note',
                       'Per-device sessions are not enabled on this deployment, so the devices signed in to this account cannot be listed or signed out individually here.',

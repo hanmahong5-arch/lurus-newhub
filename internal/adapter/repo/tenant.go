@@ -333,8 +333,9 @@ func TenantCanAddUser(t *Tenant) (bool, error) {
 // sources, are repo.CreateUserMapping (user_mapping.go:48) and the /internal
 // provisioning self-heal (handler/internal_api_ext.go:507) — neither is on the
 // bridge path.
-// GetTenantUserCount is left alone: GetTenantStats and the OIDC provisioning
-// path (CreateUserFromIDPClaims) keep their existing meaning.
+// GetTenantUserCount keeps its mapping-based meaning for its one remaining
+// caller, TenantCanAddUser (the OIDC provisioning path's ceiling);
+// GetTenantStats and GET /api/v2/admin/tenants/:id moved to this seat count.
 //
 // Isolation is switched off explicitly because the question is about ONE named
 // tenant asked from a request that belongs to nobody yet (a first login).
@@ -447,8 +448,10 @@ func GetTenantStats(tenantID string) (*TenantStats, error) {
 
 	// Seat occupancy — the SAME number the seat cap enforces
 	// (TenantHasFreeSeat -> TenantUserSeatCount), so the count an admin reads
-	// next to max_users in the console cannot disagree with the ceiling that
-	// refuses the next login. It used to be GetTenantUserCount, which counts
+	// next to max_users in the console cannot disagree with the ceiling on the
+	// two bridge paths. The OIDC provisioning path (TenantCanAddUser, reached
+	// from oauth.go) still counts identity mappings and can admit past this
+	// number for a bridge-filled tenant. It used to be GetTenantUserCount, which counts
 	// identity mappings and therefore reads 0 for a tenant whose seats were
 	// filled through the session bridge.
 	stats.UserCount, _ = TenantUserSeatCount(tenantID)

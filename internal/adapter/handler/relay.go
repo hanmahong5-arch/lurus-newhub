@@ -374,6 +374,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		Retry:      common.GetPointer(0),
 	}
 
+	// attempted flips the first time a candidate channel is actually called.
+	// If the loop ends with it still false, every candidate was skipped on an
+	// open circuit breaker and nothing below has written a response.
+	attempted := false
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		// One-shot overhead — newhub-side latency budget, excludes retries.
 		if retryParam.GetRetry() == 0 {
@@ -406,6 +410,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		addUsedChannel(c, channel.Id)
+		attempted = true
 		// L3 residual (round-2 findings 8/11/15): provider.doRequest only
 		// clears the shared "upstream_request_id" key just before its own
 		// client.Do call, so a failure THIS attempt hits before ever reaching
@@ -520,6 +525,21 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		// Record retry attempt
 		metrics.RetryAttempts.WithLabelValues(providerName, string(newAPIError.GetErrorCode())).Inc()
+	}
+
+	if !attempted && newAPIError == nil {
+		// Every candidate was skipped on an open circuit breaker and no
+		// upstream was called. Until 2026-09-19 the handler returned here
+		// with nothing written: an empty HTTP 200 that no SDK parses, with no
+		// settlement and no log row (found by the cycle-12 -shuffle run, see
+		// TestRelay_AllBreakersOpenAnswers503). 503 is what a client's retry
+		// logic expects from a gateway whose upstreams are all out; skip-retry
+		// because the loop above already exhausted the candidates.
+		c.Header("Retry-After", "30")
+		newAPIError = types.NewErrorWithStatusCode(
+			errors.New("all upstream channels for this model are temporarily unavailable (circuit breakers open)"),
+			types.ErrorCodeChannelNoAvailableKey, http.StatusServiceUnavailable,
+			types.ErrOptionWithSkipRetry())
 	}
 
 	useChannel := c.GetStringSlice("use_channel")

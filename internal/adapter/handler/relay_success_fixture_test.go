@@ -341,3 +341,43 @@ func TestRelaySuccessFixture_SurvivesForeignChannelBreaker(t *testing.T) {
 		t.Fatalf("consume log rows = %d, want 1 — a foreign channel's open breaker must not stop this relay", len(logs))
 	}
 }
+
+// TestRelay_AllBreakersOpenAnswers503 pins the other half of the collision
+// above: when the ONLY candidate channel's breaker is open, the relay must say
+// so. Until cycle 12 the loop skipped the channel, ended, set no error, and
+// the client received an empty HTTP 200 — no body, no settlement, no log row.
+// Mutation that turns this red: delete the `!attempted` block after the retry
+// loop in relay.go (status goes back to 200 with an empty body).
+func TestRelay_AllBreakersOpenAnswers503(t *testing.T) {
+	t.Cleanup(func() { channelBreakers.Cleanup(map[int]struct{}{}) })
+
+	ctx := setupRelaySuccessRouter(t, openAIChatEchoUpstream)
+	for i := 0; i < 25; i++ {
+		channelBreakers.RecordFailure(ctx.channel.Id)
+	}
+	if got := channelBreakers.GetState(ctx.channel.Id).String(); got != "open" {
+		t.Fatalf("precondition: breaker for the fixture channel is %q after 25 failures, want open", got)
+	}
+
+	w := ctx.postChat(t, `{"model":"`+ctx.channel.Models+`","messages":[{"role":"user","content":"hi"}]}`, nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 when every candidate channel's breaker is open; body=%q", w.Code, w.Body.String())
+	}
+	if w.Body.Len() == 0 {
+		t.Fatal("503 with an empty body — the client needs the error envelope")
+	}
+	if got := w.Header().Get("Retry-After"); got == "" {
+		t.Error("Retry-After header missing on the all-breakers-open 503")
+	}
+	if !strings.Contains(w.Body.String(), "no_available_key") {
+		t.Errorf("body does not carry the no_available_key error code: %s", w.Body.String())
+	}
+
+	var logs []repo.Log
+	if err := ctx.db.Where("type = ?", repo.LogTypeConsume).Find(&logs).Error; err != nil {
+		t.Fatalf("query consume logs: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("consume log rows = %d, want 0 — nothing was relayed", len(logs))
+	}
+}

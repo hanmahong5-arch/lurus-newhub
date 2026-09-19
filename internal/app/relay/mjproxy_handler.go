@@ -51,7 +51,7 @@ func RelayMidjourneyImage(c *gin.Context) {
 		httpClient = app.GetHttpClient()
 	}
 	// SSRF protection: validate image URL before fetching
-	fetchSetting := system_setting.GetFetchSetting()
+	fetchSetting := system_setting.GetFetchSettingSnapshot()
 	if err := common.ValidateURLWithFetchSetting(midjourneyTask.ImageUrl, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": fmt.Sprintf("image URL rejected by SSRF protection: %v", err),

@@ -31,7 +31,7 @@ import DOMPurify from 'dompurify';
  *   sanitizeHtml          — the author is not the operator. An upstream
  *                           model's ```html fence, a third-party release
  *                           note, a legal document served to anonymous
- *                           visitors. Page-wide CSS and form controls are
+ *                           visitors. Page-wide CSS, inline style attributes and form controls are
  *                           removed, because in this origin they are the
  *                           two primitives an overlay + credential prompt
  *                           needs and no legitimate author of this content
@@ -77,8 +77,15 @@ const NO_FORM_CONTROLS = [
  */
 export const sanitizeHtml = (html) =>
   DOMPurify.sanitize(String(html ?? ''), {
-    USE_PROFILES: { html: true },
+    // svg: a model asked for a diagram answers with one, and the preview
+    // must draw it rather than show an empty box; DOMPurify's svg profile
+    // drops script and event handlers inside the drawing like anywhere else.
+    USE_PROFILES: { html: true, svg: true },
     FORBID_TAGS: ['style', ...NO_FORM_CONTROLS],
+    // The style ATTRIBUTE is the overlay primitive: position:fixed;inset:0
+    // on any element paints over the whole console origin. Inline styles are
+    // formatting nobody who is not the operator needs.
+    FORBID_ATTR: ['style'],
   });
 
 /*

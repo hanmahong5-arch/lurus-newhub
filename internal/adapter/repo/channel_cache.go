@@ -29,8 +29,10 @@ var channelSyncLock sync.RWMutex
 //
 // It keeps its func() signature — the error rebuildChannelCache returns is
 // logged here rather than propagated — because every call site is
-// fire-and-forget. The boot path, the periodic sync ticker and the post-write
-// channel refreshes in the v1 and v2 handlers all call it as a bare statement,
+// fire-and-forget. The boot path, the periodic sync ticker, the post-write
+// channel refreshes in the v1 and v2 handlers and the abilities self-heal in
+// this package (FixAbility) all call it as a bare statement
+// (grep -rn 'InitChannelCache()' --include=*.go . | grep -v _test.go),
 // and none of them has any recovery to run for a failed refresh: the next tick
 // rebuilds. Propagating the error would add an unchecked-error lint finding at
 // each of them and change nothing else. Callers that do need the reason call

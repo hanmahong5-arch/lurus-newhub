@@ -128,6 +128,11 @@ func ListSessionsV2(c *gin.Context) {
 				"items":            []gin.H{},
 				"total":            0,
 				"registry_enabled": false,
+				// The two numbers that are real without a registry: they were
+				// computed above from tokens and logs, and the console used to
+				// show them on the invented row. Keep them at the top level.
+				"active_tokens": activeTokens,
+				"request_count": requestCount,
 			},
 		})
 		return

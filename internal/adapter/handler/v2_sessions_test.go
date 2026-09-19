@@ -321,6 +321,13 @@ func TestV2Sessions_FlagOff_NoSyntheticRow(t *testing.T) {
 	if enabled != false {
 		t.Errorf("registry_enabled = %v, want false", enabled)
 	}
+	// The two real numbers survive the removal of the synthetic row.
+	if _, ok := data["active_tokens"].(float64); !ok {
+		t.Errorf("active_tokens missing from the flag-off answer: %v", data)
+	}
+	if _, ok := data["request_count"].(float64); !ok {
+		t.Errorf("request_count missing from the flag-off answer: %v", data)
+	}
 }
 
 // TestV2Sessions_FlagOn_ReportsCapability is the other half: the same field

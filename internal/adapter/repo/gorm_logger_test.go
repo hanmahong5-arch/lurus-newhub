@@ -434,8 +434,9 @@ func TestSQLPoolDefaults(t *testing.T) {
 	//
 	// Scope limit it still cannot close: a different package holding its own
 	// *sql.DB can call the setters and nothing here notices. Every such hit in
-	// the tree today is a _test.go file pinning SetMaxOpenConns(1) to
-	// serialise a shared-cache SQLite handle, which is deliberate.
+	// the tree today is a _test.go file pinning a small MaxOpenConns (1
+	// everywhere except internal/domain/entity/cov_audit_chain_pg_test.go, which
+	// uses 8) to serialise a shared-cache SQLite handle, which is deliberate.
 	sources := packageProductionSources(t)
 	if len(sources) < 2 || sources["main.go"] == "" {
 		t.Fatalf("scanned %d non-test files and main.go %s among them — the setter scan below is "+

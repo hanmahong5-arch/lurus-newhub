@@ -75,10 +75,15 @@ func sendMailBounded(addr, serverName string, auth smtp.Auth, from string, to []
 		}
 	}
 	if auth != nil {
-		if ok, _ := client.Extension("AUTH"); ok {
-			if aerr := client.Auth(auth); aerr != nil {
-				return aerr
-			}
+		// net/smtp.SendMail's rule, kept on purpose: credentials were
+		// configured and the server offers no way to present them, so nothing
+		// is sent. Continuing silently would deliver the mail unauthenticated
+		// (and, with no STARTTLS, in clear) while reporting success.
+		if ok, _ := client.Extension("AUTH"); !ok {
+			return fmt.Errorf("smtp: server doesn't support AUTH")
+		}
+		if aerr := client.Auth(auth); aerr != nil {
+			return aerr
 		}
 	}
 	if err = client.Mail(from); err != nil {
