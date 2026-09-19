@@ -297,12 +297,19 @@ func TestAutomaticallyTestChannelsWithContext_MasterEnabled(t *testing.T) {
 }
 
 // TestChannelHealthTest_SuccessfulTickStampsHeartbeat is the L3 heartbeat
-// oracle for channel-health-test — the one job of the five that is gated by
-// common.IsMasterNode only, NOT leadership (spec explicitly forbids wrapping
-// it in NewLeaderTask, since that would turn a three-replica job leader-
-// only). Drives the real AutomaticallyTestChannelsWithContext ticker loop
-// with AutoTestChannelMinutes forced to 0 so its first tick fires almost
-// immediately, against an empty (real) channels table, and asserts
+// oracle for channel-health-test. As of cycle-11 L3 this job IS leader-gated
+// (common.IsLeader() checked inside the tick case, taskreg.Register's
+// leaderOnly=true) — the earlier "NOT leadership, spec forbids NewLeaderTask"
+// note described the pre-cycle-11 shape, when every master-capable replica
+// probed independently; TestChannelHealthTest_FollowerNeverLaunchesPass
+// (channel_probe_auto_test.go) proves the follower side of the new gate,
+// this test proves the leader side still stamps. NewLeaderTask itself is
+// still deliberately NOT used (it would re-run a full ban-authority pass on
+// every lease acquisition); the gate is a plain IsLeader() check instead,
+// the same shape internal/lifecycle/audit_cleanup.go uses. Drives the real
+// AutomaticallyTestChannelsWithContext ticker loop with AutoTestChannelMinutes
+// forced to 0 so its first tick fires almost immediately, against an empty
+// (real) channels table, and asserts
 // metrics.LeaderTaskLastSuccess{task="channel-health-test"} advances.
 func TestChannelHealthTest_SuccessfulTickStampsHeartbeat(t *testing.T) {
 	cleanup := setupContextTestDB(t)
@@ -311,6 +318,10 @@ func TestChannelHealthTest_SuccessfulTickStampsHeartbeat(t *testing.T) {
 	prevMaster := common.IsMasterNode
 	common.IsMasterNode = true
 	defer func() { common.IsMasterNode = prevMaster }()
+
+	prevLeader := common.IsLeader()
+	common.SetLeader(true)
+	defer func() { common.SetLeader(prevLeader) }()
 
 	ms := operation_setting.GetMonitorSetting()
 	prevEnabled, prevMinutes := ms.AutoTestChannelEnabled, ms.AutoTestChannelMinutes
@@ -663,8 +674,11 @@ func TestChannelHealthTest_StartRegistersHeartbeat(t *testing.T) {
 	for _, task := range snap {
 		if task.Name == channelHealthTestTaskName {
 			found = true
-			if task.LeaderOnly {
-				t.Errorf("%s task.LeaderOnly = true, want false (runs on every master-capable replica)", channelHealthTestTaskName)
+			// LeaderOnly flipped to true in cycle-11 L3: before this fix
+			// every master-capable replica ran its own full probe pass on
+			// every tick, each with independent ban/enable authority.
+			if !task.LeaderOnly {
+				t.Errorf("%s task.LeaderOnly = false, want true (only the leader runs the probe pass)", channelHealthTestTaskName)
 			}
 			if task.Active == nil {
 				t.Errorf("%s task.Active = nil, want a non-nil func (B-F1: must report standby/disabled when AutoTestChannelEnabled is off)", channelHealthTestTaskName)
