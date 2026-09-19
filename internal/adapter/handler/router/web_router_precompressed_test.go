@@ -46,6 +46,7 @@ const (
 	plainCSS  = ".cycle12{color:red}"
 	gzipCSS   = "<<gzip bytes for y.css>>"
 	uncompJS  = "console.log('too small to precompress');"
+	hashedPNG = "\x89PNG not really a png"
 	indexHTML = "<!doctype html><title>spa</title>"
 )
 
@@ -74,7 +75,11 @@ func newPrecompressedEngine(t *testing.T) *gin.Engine {
 		"assets/y.css.gz": {Data: []byte(gzipCSS)},
 		// A chunk under the build's compression threshold: no siblings at all.
 		"assets/small.js": {Data: []byte(uncompJS)},
-		"index.html":      {Data: []byte(indexHTML)},
+		// A hashed asset whose extension is not in the precompressed
+		// content-type table. It is still content-addressed, so it still wants
+		// a validator.
+		"assets/sprite-DEADBEEF.png": {Data: []byte(hashedPNG)},
+		"index.html":                 {Data: []byte(indexHTML)},
 	}
 
 	engine := gin.New()
@@ -95,9 +100,10 @@ func getAsset(t *testing.T, engine *gin.Engine, path, acceptEncoding string) *ht
 
 // vite-plugin-compression has been writing .br and .gz next to every chunk over
 // 10 KB for as long as the plugin has been configured, and web/embed.go embeds
-// all of dist — so 5.75 MB of compressed copies shipped inside the binary while
-// static.Serve, which only ever looks up the exact request path, could not
-// reach a single one of them. Every asset was re-compressed on the fly instead.
+// all of dist — so those copies shipped inside every image while nothing ever
+// requested them: static.Serve looks up the exact request path, and no client
+// asks for "/assets/index-<hash>.js.br". Every asset was re-compressed on the
+// fly instead, per request, on bytes that cannot change under their own name.
 func TestPrecompressedAssets_ServesTheBuildOutput(t *testing.T) {
 	engine := newPrecompressedEngine(t)
 
@@ -222,6 +228,146 @@ func TestPrecompressedAssets_ServesTheBuildOutput(t *testing.T) {
 		}
 		if w.Code == http.StatusOK {
 			t.Fatalf("status = 200 for a path with ..; want the 404 an unresolvable asset path gets")
+		}
+	})
+}
+
+// A hashed asset was served with Cache-Control: max-age=604800 and no validator
+// of any kind: embed.FS reports a zero ModTime, so http.ServeContent sends no
+// Last-Modified, and nothing in the chain produced an ETag. A hard reload — or
+// any cache that decided to revalidate — therefore re-downloaded the entire
+// build as 200s.
+//
+// The file name is already a content hash, which makes it the validator. It is
+// per representation on purpose: the plain, .br and .gz copies of one asset are
+// different bytes, and a client holding the plain copy must not be told 304 for
+// the brotli one.
+func TestHashedAssets_CarryAValidatorAndAnswer304(t *testing.T) {
+	engine := newPrecompressedEngine(t)
+
+	conditionalGet := func(path, acceptEncoding, ifNoneMatch string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if acceptEncoding != "" {
+			req.Header.Set("Accept-Encoding", acceptEncoding)
+		}
+		if ifNoneMatch != "" {
+			req.Header.Set("If-None-Match", ifNoneMatch)
+		}
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+		return w
+	}
+
+	t.Run("the precompressed copy carries its own file name as the ETag", func(t *testing.T) {
+		w := getAsset(t, engine, "/assets/x.js", "br, gzip")
+		if got, want := w.Header().Get("ETag"), `W/"x.js.br"`; got != want {
+			t.Fatalf("ETag = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a conditional request for the precompressed copy is answered 304", func(t *testing.T) {
+		w := conditionalGet("/assets/x.js", "br, gzip", `W/"x.js.br"`)
+		if w.Code != http.StatusNotModified {
+			t.Fatalf("status = %d, want 304: the client sent the ETag it was given", w.Code)
+		}
+		if body := w.Body.String(); body != "" {
+			t.Fatalf("304 carried a body of %d bytes (%q); the whole point is that it does not", len(body), body)
+		}
+		if got, want := w.Header().Get("ETag"), `W/"x.js.br"`; got != want {
+			t.Fatalf("ETag on the 304 = %q, want %q: a cache needs it to refresh its entry", got, want)
+		}
+		if got := w.Header().Get("Cache-Control"); got != staticAssetCacheControl {
+			t.Fatalf("Cache-Control on the 304 = %q, want %q — this middleware aborts, so middleware.Cache() never runs", got, staticAssetCacheControl)
+		}
+		if got := w.Header().Get("Vary"); got != "Accept-Encoding" {
+			t.Fatalf("Vary on the 304 = %q, want Accept-Encoding", got)
+		}
+	})
+
+	t.Run("the weak comparison function accepts the strong spelling", func(t *testing.T) {
+		// RFC 9110 13.1.2: If-None-Match uses the weak comparison function, so
+		// a client (or an intermediary) that echoes the tag without the W/
+		// prefix still matches.
+		w := conditionalGet("/assets/x.js", "br", `"x.js.br"`)
+		if w.Code != http.StatusNotModified {
+			t.Fatalf("status = %d, want 304 for the strong spelling of the same opaque tag", w.Code)
+		}
+	})
+
+	t.Run("a stale tag re-sends the asset", func(t *testing.T) {
+		w := conditionalGet("/assets/x.js", "br", `W/"x-OLDHASH.js.br"`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: the client is holding a different build", w.Code)
+		}
+		if got := w.Body.String(); got != brotliJS {
+			t.Fatalf("body = %q, want the stored .br bytes %q", got, brotliJS)
+		}
+	})
+
+	t.Run("holding the plain copy does not 304 the brotli one", func(t *testing.T) {
+		// One ETag shared across content-codings is how a client ends up with a
+		// brotli body it asked to receive as plain bytes. The tag names the
+		// representation, so this must be a 200.
+		w := conditionalGet("/assets/x.js", "br", `W/"x.js"`)
+		if w.Code != http.StatusNotModified {
+			if got := w.Header().Get("ETag"); got != `W/"x.js.br"` {
+				t.Fatalf("ETag = %q, want the brotli representation's tag", got)
+			}
+		} else {
+			t.Fatal("status = 304: the plain copy's tag matched the brotli representation, so one ETag is being reused across content-codings")
+		}
+	})
+
+	t.Run("the plain path gets a validator too", func(t *testing.T) {
+		// small.js has no precompressed sibling, so its body comes from
+		// static.Serve. http.ServeContent cannot produce a validator for it
+		// (zero ModTime, no ETag), so the middleware attaches one and leaves
+		// the body alone.
+		w := getAsset(t, engine, "/assets/small.js", "")
+		if got, want := w.Header().Get("ETag"), `W/"small.js"`; got != want {
+			t.Fatalf("ETag = %q, want %q", got, want)
+		}
+		if got := w.Body.String(); got != uncompJS {
+			t.Fatalf("body = %q, want the plain file %q — attaching a validator must not change what is served", got, uncompJS)
+		}
+
+		conditional := conditionalGet("/assets/small.js", "", `W/"small.js"`)
+		if conditional.Code != http.StatusNotModified {
+			t.Fatalf("status = %d, want 304 on the plain path as well", conditional.Code)
+		}
+		if body := conditional.Body.String(); body != "" {
+			t.Fatalf("304 on the plain path carried a body: %q", body)
+		}
+	})
+
+	t.Run("an extension outside the compression table still gets a validator", func(t *testing.T) {
+		// The content-type table gates which assets are served FROM here; it
+		// must not gate which assets get a validator. A hashed image is just as
+		// immutable as a hashed chunk and was just as unconditionally
+		// re-downloaded.
+		w := getAsset(t, engine, "/assets/sprite-DEADBEEF.png", "br, gzip")
+		if got, want := w.Header().Get("ETag"), `W/"sprite-DEADBEEF.png"`; got != want {
+			t.Fatalf("ETag = %q, want %q", got, want)
+		}
+		if got := w.Body.String(); got != hashedPNG {
+			t.Fatalf("body = %q, want the stored file %q", got, hashedPNG)
+		}
+		conditional := conditionalGet(
+			"/assets/sprite-DEADBEEF.png", "br, gzip", `W/"sprite-DEADBEEF.png"`)
+		if conditional.Code != http.StatusNotModified {
+			t.Fatalf("status = %d, want 304", conditional.Code)
+		}
+	})
+
+	t.Run("a path with no stored file gets no validator", func(t *testing.T) {
+		// Otherwise a client could be handed 304 for something that does not
+		// exist, purely because it guessed the name.
+		w := conditionalGet("/assets/never-built-CAFEBABE.js", "br", `W/"never-built-CAFEBABE.js"`)
+		if w.Code == http.StatusNotModified {
+			t.Fatal("status = 304 for an asset this build does not contain")
+		}
+		if got := w.Header().Get("ETag"); got != "" {
+			t.Fatalf("ETag = %q for a file that does not exist", got)
 		}
 	})
 }

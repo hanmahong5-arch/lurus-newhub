@@ -1,18 +1,28 @@
 #!/usr/bin/env node
 // check-bundle-budget.mjs
 // First-paint transfer budget for the built SPA. Reads dist/index.html, follows
-// the entry script and its modulepreloads, and compares five measurements
-// against bundle-budget.json. Exits non-zero on any breach.
+// the entry script, its modulepreloads and its stylesheets, and compares seven
+// measurements against bundle-budget.json. Exits non-zero on any breach.
 //
 // Run: bun scripts/check-bundle-budget.mjs
 // or:  node web/scripts/check-bundle-budget.mjs --dist web/dist
 //
 // Why a gate and not a note in a README: the entry chunk reached 6.57 MB
 // (2026-09-19 measurement) one import at a time, and no single commit looked
-// expensive. Every number here is raw bytes on disk; the .br sizes are printed
-// alongside because that is what a visitor actually transfers, but the budget
-// is on raw bytes so it still means something in a build without the
-// compression plugin.
+// expensive.
+//
+// Two of the seven are deliberately not raw-bytes-of-JS:
+//   * entryChunkBrotliBytes is what the customer's connection actually carries.
+//     Locale tables and generated pricing rows compress ten to one, so a change
+//     can add a megabyte of raw weight and cost the visitor almost nothing —
+//     and the reverse, a change that adds incompressible weight, is invisible
+//     to a raw-bytes budget until it is large. Both directions want watching.
+//   * firstPaintCssBytes, because the two render-blocking stylesheets in <head>
+//     are bigger than the entry chunk they sit above (1.26 MB against 0.94 MB
+//     on the 2026-09-19 build). A budget that only measures .js is blind to the
+//     largest first-paint blocker doubling.
+// The raw-byte budgets stay primary: they still mean something in a build with
+// no compression plugin, where the brotli measurement reports 0.
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join, dirname, basename } from 'path';
@@ -20,7 +30,9 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const METRICS = [
   ['entryChunkBytes', 'the module the page loads first'],
+  ['entryChunkBrotliBytes', 'what the entry chunk costs on the wire'],
   ['firstPaintJsBytes', 'entry chunk + every modulepreload in index.html'],
+  ['firstPaintCssBytes', 'every render-blocking stylesheet in index.html'],
   ['largestChunkBytes', 'the biggest single .js file in the build'],
   ['totalJsBytes', 'every .js file the build emitted'],
   ['jsChunkCount', 'how many .js files the build emitted'],
@@ -31,7 +43,9 @@ const METRICS = [
 // it drift upward again in silence.
 const SLACK_FRACTION = 0.8;
 
-function assetHrefs(html, attribute, pattern) {
+// The attribute name is already baked into each caller's pattern; this only
+// collects capture group 1 and normalises the leading slash away.
+function assetHrefs(html, pattern) {
   const hrefs = [];
   const matcher = new RegExp(pattern, 'g');
   let match;
@@ -56,13 +70,15 @@ export function measureBundle(distDir) {
 
   const entryHrefs = assetHrefs(
     html,
-    'src',
     '<script[^>]+type=["\']module["\'][^>]+src=["\']([^"\']+)["\']',
   );
   const preloadHrefs = assetHrefs(
     html,
-    'href',
     '<link[^>]+rel=["\']modulepreload["\'][^>]+href=["\']([^"\']+)["\']',
+  );
+  const stylesheetHrefs = assetHrefs(
+    html,
+    '<link[^>]+rel=["\']stylesheet["\'][^>]+href=["\']([^"\']+)["\']',
   );
   if (entryHrefs.length === 0) {
     throw new Error(
@@ -86,11 +102,15 @@ export function measureBundle(distDir) {
     join(distDir, href),
   );
 
+  const cssPaths = stylesheetHrefs.map((href) => join(distDir, href));
+
   return {
     entryChunkBytes: sizeOf(entryPath),
     entryChunkBrotliBytes: sizeOf(`${entryPath}.br`),
     firstPaintJsBytes: firstPaintPaths.reduce((sum, p) => sum + sizeOf(p), 0),
     firstPaintChunkCount: firstPaintPaths.length,
+    firstPaintCssBytes: cssPaths.reduce((sum, p) => sum + sizeOf(p), 0),
+    firstPaintCssCount: cssPaths.length,
     largestChunkBytes: jsSizes.reduce((max, size) => Math.max(max, size), 0),
     largestChunkName: jsFiles[jsSizes.indexOf(Math.max(...jsSizes))],
     totalJsBytes: jsSizes.reduce((sum, size) => sum + size, 0),
@@ -130,6 +150,7 @@ function formatReport(metrics) {
         ? ` (${kb(metrics.entryChunkBrotliBytes)} brotli)`
         : ' (no .br sibling)'),
     `first paint JS     ${kb(metrics.firstPaintJsBytes)} over ${metrics.firstPaintChunkCount} files`,
+    `first paint CSS    ${kb(metrics.firstPaintCssBytes)} over ${metrics.firstPaintCssCount} render-blocking stylesheets`,
     `largest chunk      ${metrics.largestChunkName}: ${kb(metrics.largestChunkBytes)}`,
     `all JS             ${kb(metrics.totalJsBytes)} over ${metrics.jsChunkCount} files`,
   ].join('\n');

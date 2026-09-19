@@ -36,11 +36,16 @@ import { Avatar } from '@douyinfe/semi-ui';
 
 let loadedIcons = null;
 let loadPromise = null;
+let warnedAboutLoadFailure = false;
 
 // Memoised at module scope: every icon on the page shares one chunk request,
 // and once it has resolved a newly mounted icon renders the logo with no
 // placeholder frame at all.
-export function loadLobeIcons() {
+//
+// Module-private on purpose — LobeHubIcon is the only caller, and an exported
+// loader would be a second way to reach the pack that the entry-graph gate
+// (src/z9_entry_icon_barrel.test.js) reasons about.
+function loadLobeIcons() {
   if (loadedIcons) return Promise.resolve(loadedIcons);
   if (!loadPromise) {
     loadPromise = import('@lobehub/icons')
@@ -52,6 +57,20 @@ export function loadLobeIcons() {
         // A failed chunk fetch must not pin every future icon to the
         // placeholder: drop the memo so the next mount retries.
         loadPromise = null;
+        // ...and it must not be silent. The realistic trigger is ordinary: a
+        // deploy rotates the hashed chunk names while a tab is open, this
+        // request 404s, and every vendor logo on the page quietly degrades to
+        // an initial letter. Once per page load, not once per icon — there can
+        // be dozens on screen and they all share this promise.
+        if (!warnedAboutLoadFailure) {
+          warnedAboutLoadFailure = true;
+          // eslint-disable-next-line no-console
+          console.warn(
+            'vendor icon pack failed to load; icons fall back to their initial letter. ' +
+              'A stale tab after a deploy is the usual cause — reload to recover.',
+            err,
+          );
+        }
         throw err;
       });
   }
@@ -114,8 +133,9 @@ export function LobeHubIcon({ name, sub, ...iconProps }) {
         if (!cancelled) setIcons(mod);
       },
       () => {
-        // Keep the placeholder; loadLobeIcons has already logged nothing and
-        // cleared its memo so a later mount can retry.
+        // Keep the placeholder. loadLobeIcons has already warned once and
+        // cleared its memo, so the next mount re-issues the import rather than
+        // pinning the whole console to initial letters for the session.
       },
     );
     return () => {

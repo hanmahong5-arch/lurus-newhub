@@ -7,6 +7,11 @@
 // measurement (a dist with no JS, and no dist at all) that must fail loudly
 // instead of reporting zero and passing.
 //
+// Two of them cover the metrics that are not raw JS bytes: a breach detected
+// only on the wire (entryChunkBrotliBytes, raw size unchanged) and a breach in
+// the render-blocking stylesheets (firstPaintCssBytes), which are bigger than
+// the entry chunk they sit above and which a .js-only budget cannot see.
+//
 // Run: bun scripts/bundle-budget.test.mjs
 // or:  node web/scripts/bundle-budget.test.mjs
 
@@ -31,14 +36,33 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function makeDist({ entryBytes = 100, preloadBytes = [], withIndex = true }) {
+function makeDist({
+  entryBytes = 100,
+  entryBrotliBytes = 0,
+  preloadBytes = [],
+  cssBytes = [],
+  withIndex = true,
+}) {
   const dir = mkdtempSync(join(tmpdir(), 'bundle-budget-'));
   const assets = join(dir, 'assets');
   mkdirSync(assets);
   writeFileSync(join(assets, 'entry-aaaa.js'), 'x'.repeat(entryBytes));
+  if (entryBrotliBytes > 0) {
+    // Not real brotli; the gate only stats the sibling the compression plugin
+    // leaves next to the chunk.
+    writeFileSync(
+      join(assets, 'entry-aaaa.js.br'),
+      'z'.repeat(entryBrotliBytes),
+    );
+  }
   const preloads = preloadBytes.map((size, i) => {
     const name = `preload-${i}-bbbb.js`;
     writeFileSync(join(assets, name), 'y'.repeat(size));
+    return name;
+  });
+  const stylesheets = cssBytes.map((size, i) => {
+    const name = `sheet-${i}-cccc.css`;
+    writeFileSync(join(assets, name), 'c'.repeat(size));
     return name;
   });
   if (withIndex) {
@@ -46,6 +70,12 @@ function makeDist({ entryBytes = 100, preloadBytes = [], withIndex = true }) {
       .map(
         (name) =>
           `<link rel="modulepreload" crossorigin href="/assets/${name}">`,
+      )
+      .concat(
+        stylesheets.map(
+          (name) =>
+            `<link rel="stylesheet" crossorigin href="/assets/${name}">`,
+        ),
       )
       .join('\n');
     writeFileSync(
@@ -58,7 +88,9 @@ function makeDist({ entryBytes = 100, preloadBytes = [], withIndex = true }) {
 
 const budgetOf = (metrics, factor) => ({
   entryChunkBytes: Math.round(metrics.entryChunkBytes * factor),
+  entryChunkBrotliBytes: Math.round(metrics.entryChunkBrotliBytes * factor),
   firstPaintJsBytes: Math.round(metrics.firstPaintJsBytes * factor),
+  firstPaintCssBytes: Math.round(metrics.firstPaintCssBytes * factor),
   largestChunkBytes: Math.round(metrics.largestChunkBytes * factor),
   totalJsBytes: Math.round(metrics.totalJsBytes * factor),
   jsChunkCount: Math.round(metrics.jsChunkCount * factor),
@@ -88,6 +120,60 @@ check('measures the entry, its modulepreloads and the whole build', () => {
   assert(
     m.entryChunkBrotliBytes === 0,
     'a dist with no .br sibling must report 0, not crash',
+  );
+});
+
+check('measures the wire size of the entry and the render-blocking CSS', () => {
+  // The two metrics a raw-JS-bytes budget cannot see: what the connection
+  // actually carries, and the stylesheets that block the first paint above the
+  // entry chunk.
+  const dir = dist({
+    entryBytes: 1000,
+    entryBrotliBytes: 250,
+    preloadBytes: [200],
+    cssBytes: [600, 400],
+  });
+  const m = measureBundle(dir);
+  assert(
+    m.entryChunkBrotliBytes === 250,
+    `entryChunkBrotliBytes=${m.entryChunkBrotliBytes}`,
+  );
+  assert(
+    m.firstPaintCssBytes === 1000,
+    `firstPaintCssBytes=${m.firstPaintCssBytes}`,
+  );
+  assert(
+    m.firstPaintCssCount === 2,
+    `firstPaintCssCount=${m.firstPaintCssCount}`,
+  );
+  // A stylesheet is not a .js file and must not leak into the JS totals.
+  assert(m.totalJsBytes === 1200, `totalJsBytes=${m.totalJsBytes}`);
+  assert(m.jsChunkCount === 2, `jsChunkCount=${m.jsChunkCount}`);
+});
+
+check('fails when the entry grows on the wire even if raw bytes hold', () => {
+  const m = measureBundle(
+    dist({ entryBytes: 1000, entryBrotliBytes: 250, preloadBytes: [200] }),
+  );
+  const budget = budgetOf(m, 1.05);
+  budget.entryChunkBrotliBytes = 200;
+  const { breaches } = checkBudget(m, budget);
+  assert(
+    breaches.length === 1 && breaches[0].includes('entryChunkBrotliBytes'),
+    `breaches=${JSON.stringify(breaches)}`,
+  );
+});
+
+check('fails when the render-blocking CSS grows', () => {
+  const m = measureBundle(
+    dist({ entryBytes: 1000, preloadBytes: [200], cssBytes: [600, 400] }),
+  );
+  const budget = budgetOf(m, 1.05);
+  budget.firstPaintCssBytes = 900;
+  const { breaches } = checkBudget(m, budget);
+  assert(
+    breaches.length === 1 && breaches[0].includes('firstPaintCssBytes'),
+    `breaches=${JSON.stringify(breaches)}`,
   );
 });
 

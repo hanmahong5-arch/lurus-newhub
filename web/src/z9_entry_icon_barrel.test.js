@@ -40,6 +40,20 @@ import { fileURLToPath } from 'url';
 // scope by construction.
 const FORBIDDEN_IN_ENTRY_GRAPH = ['@lobehub/icons'];
 
+// Package boundary, not string equality. `@lobehub/icons` declares
+// main/module = 'es/index.js' and no `exports` map (node_modules/@lobehub/
+// icons/package.json, v2.48.0), so `import '@lobehub/icons/es'` — or
+// '@lobehub/icons/es/index.js' — is a second spelling of the identical 13 MB
+// of vendor logos and would have walked straight past an `includes()` check.
+// A package whose NAME merely starts with a forbidden one ('@lobehub/
+// icons-extra') is a different package and must not be caught: hence the
+// explicit '/' separator rather than a bare startsWith.
+export function forbiddenPackageFor(specifier) {
+  return FORBIDDEN_IN_ENTRY_GRAPH.find(
+    (pkg) => specifier === pkg || specifier.startsWith(`${pkg}/`),
+  );
+}
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = HERE;
 const ENTRY_POINTS = ['index.jsx', 'App.jsx'].map((f) => join(SRC_ROOT, f));
@@ -115,8 +129,13 @@ function walkEntryGraph() {
 
     const source = readFileSync(file, 'utf8');
     for (const specifier of staticSpecifiersOf(source)) {
-      if (FORBIDDEN_IN_ENTRY_GRAPH.includes(specifier)) {
-        offenders.push({ file: file.slice(SRC_ROOT.length + 1), specifier });
+      const forbidden = forbiddenPackageFor(specifier);
+      if (forbidden) {
+        offenders.push({
+          file: file.slice(SRC_ROOT.length + 1),
+          specifier,
+          package: forbidden,
+        });
         continue;
       }
       const resolved = resolveSpecifier(specifier, file);
@@ -140,17 +159,43 @@ describe('entry chunk module graph', () => {
   });
 
   it.each(FORBIDDEN_IN_ENTRY_GRAPH)(
-    'does not reach %s through a static import',
-    (specifier) => {
+    'does not reach %s through a static import, under any spelling',
+    (pkg) => {
       const hits = offenders
-        .filter((o) => o.specifier === specifier)
-        .map((o) => o.file);
+        .filter((o) => o.package === pkg)
+        .map((o) => `${o.file} (${o.specifier})`);
       expect(
         hits,
-        `${specifier} is statically reachable from the entry, so it lands in the entry chunk. ` +
+        `${pkg} is statically reachable from the entry, so it lands in the entry chunk. ` +
           `Import it with import() from a module the entry does not statically reach ` +
           `(see src/helpers/lobeIcon.jsx). Offending files: ${hits.join(', ')}`,
       ).toEqual([]);
     },
   );
+});
+
+// The gate above is a negative assertion, which is only worth what its matcher
+// is worth: while it compared specifiers for equality, `import '@lobehub/icons/
+// es'` put the very same 13 MB back into the entry chunk with the gate still
+// green.
+describe('forbidden-package matching', () => {
+  it.each([
+    ['@lobehub/icons', true, 'the package itself'],
+    [
+      '@lobehub/icons/es',
+      true,
+      "main/module is 'es/index.js' and there is no exports map, so this subpath IS the whole pack",
+    ],
+    ['@lobehub/icons/es/index.js', true, 'a deep path into the same package'],
+    [
+      '@lobehub/icons-extra',
+      false,
+      'a different package that merely shares a name prefix',
+    ],
+    ['@lobehub/iconsx', false, 'likewise'],
+    ['@lobehub/ui', false, 'a different package in the same scope'],
+    ['lucide-react', false, 'the icon set that is meant to be in the entry'],
+  ])('%s -> forbidden: %s (%s)', (specifier, expected) => {
+    expect(Boolean(forbiddenPackageFor(specifier))).toBe(expected);
+  });
 });

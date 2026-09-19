@@ -19,6 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
 vi.hoisted(() => {
   if (typeof window !== 'undefined' && !window.matchMedia) {
@@ -363,6 +366,106 @@ describe('getChannelIcon', () => {
   it('returns null for unknown / custom channel types', () => {
     expect(getChannelIcon(9999)).toBeNull();
     expect(getChannelIcon(undefined)).toBeNull();
+  });
+});
+
+// Moving the icon pack behind a dynamic import rewrote 55 call sites
+// mechanically: 34 JSX sites in getChannelIcon's switch and 21 `icon:` literals
+// in getModelCategories now say <LobeHubIcon name='X' sub='Y' /> instead of
+// naming the vendor component. Nothing about that shape makes a typo fail — a
+// name the pack does not export resolves to nothing and the row renders a
+// permanent initial-letter placeholder, silently, with a green suite. The two
+// spot checks above cover channel types 1 and 3.
+//
+// So read the switch table out of the source and require every row in it to
+// resolve against the REAL pack.
+describe('every icon descriptor in render.jsx resolves against the icon pack', () => {
+  const renderSource = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'render.jsx'),
+    'utf8',
+  );
+  const channelSwitch = renderSource.slice(
+    renderSource.indexOf('export function getChannelIcon'),
+    renderSource.indexOf('// 颜色列表'),
+  );
+  const channelTypes = [
+    ...new Set(
+      [...channelSwitch.matchAll(/^\s*case (\d+):/gm)].map((m) => Number(m[1])),
+    ),
+  ];
+
+  // 21 = knowledge base AI Proxy, 44 = MokaAI M3E embeddings. Both sit in the
+  // group that falls through to `default:` and returns null on purpose: the
+  // pack carries no mark for either.
+  const ICONLESS_CHANNEL_TYPES = new Set([21, 44]);
+
+  const describeDescriptor = (props) =>
+    props.sub ? `${props.name}.${props.sub}` : props.name;
+
+  // A descriptor is only faithful if BOTH halves land: resolveLobeIcon falls
+  // back to "treat the sub as a boolean prop on the base icon" for a segment
+  // the pack does not export, which is the right runtime behaviour for an
+  // operator-typed string and exactly the wrong thing to accept from a literal
+  // written in this file.
+  const unresolved = (element) => {
+    if (!element) return 'no element at all';
+    const { name, sub } = element.props;
+    const resolved = resolveLobeIcon(LobeIcons, name, sub);
+    if (!resolved) return `'${name}' is not exported by the icon pack`;
+    if (sub && resolved.subProps !== null) {
+      return `'${describeDescriptor(element.props)}' resolved only as far as '${name}' — the pack has no '${sub}' sub-component`;
+    }
+    return null;
+  };
+
+  it('read a real switch table out of the source', () => {
+    // Fail loudly rather than vacuously if the slice above ever stops finding
+    // the function: an empty table would make both assertions below true.
+    expect(channelSwitch).toContain('switch (channelType)');
+    expect(channelTypes.length).toBeGreaterThanOrEqual(43);
+  });
+
+  it('gives every channel type in the switch a resolvable vendor mark', () => {
+    const broken = [];
+    for (const channelType of channelTypes) {
+      const element = getChannelIcon(channelType);
+      if (ICONLESS_CHANNEL_TYPES.has(channelType)) {
+        if (element !== null) {
+          broken.push(
+            `channel ${channelType}: expected no icon, got ${describeDescriptor(element.props)}`,
+          );
+        }
+        continue;
+      }
+      const why = unresolved(element);
+      if (why) broken.push(`channel ${channelType}: ${why}`);
+    }
+    expect(
+      broken,
+      `channel rows that would render a permanent initial-letter placeholder:\n${broken.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  it('gives every model category a resolvable icon', () => {
+    const categories = getModelCategories((key) => key);
+    const keys = Object.keys(categories);
+    // Same fail-fast: a map that lost its rows must not pass by being empty.
+    expect(keys.length).toBeGreaterThanOrEqual(22);
+
+    const broken = [];
+    for (const [key, category] of Object.entries(categories)) {
+      if (key === 'all') {
+        // The "all models" row is deliberately iconless.
+        if (category.icon !== null) broken.push(`${key}: expected no icon`);
+        continue;
+      }
+      const why = unresolved(category.icon);
+      if (why) broken.push(`${key}: ${why}`);
+    }
+    expect(
+      broken,
+      `model categories that would render a permanent initial-letter placeholder:\n${broken.join('\n')}`,
+    ).toEqual([]);
   });
 });
 
