@@ -1,0 +1,10 @@
+{
+  "_measured": "2026-09-19, cycle-12 L2. Raw bytes from `bun run build` + `bun scripts/check-bundle-budget.mjs`. entryChunkBytes 939949, firstPaintJsBytes 2619318, largestChunkBytes 4387670 (the @lobehub/icons chunk, now loaded on demand), totalJsBytes 11446367, jsChunkCount 105.",
+  "_policy": "Byte budgets are the measurement plus 5%. A build that exceeds one is not automatically wrong — but the raise belongs in the same commit as the weight, with the reason. The report also asks for a budget to be LOWERED once a measurement falls more than 20% under it.",
+  "_jsChunkCount": "Not measurement+5%: the App.jsx wiring in this same PR converts eleven statically imported pages to lazy(), and each one becomes its own chunk. 130 covers that conversion; lower it to the real count once App.jsx has landed.",
+  "entryChunkBytes": 986946,
+  "firstPaintJsBytes": 2750284,
+  "largestChunkBytes": 4607054,
+  "totalJsBytes": 12018685,
+  "jsChunkCount": 130
+}
