@@ -186,7 +186,7 @@ func setupSessionRevokeDBRouter(t *testing.T, callerID int, currentKey string) *
 	prevDB := repo.DB
 	prevRedisEnabled := common.RedisEnabled
 	repo.DB = db
-	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
+	pinAuditWriter(t, db)
 	common.RedisEnabled = false // exercised separately with a real miniredis below
 
 	r := gin.New()

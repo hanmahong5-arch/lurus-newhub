@@ -18,8 +18,9 @@ import (
 
 // AsyncGo is package handler's own fire-and-forget spawn seam, same
 // convention as repo.AsyncGo (internal/adapter/repo/async.go) and
-// app.AsyncGo (internal/app/quota.go). SyncAllChannelsNow below is currently
-// the sole call site (grep AsyncGo( under this package): its bare `go
+// app.AsyncGo (internal/app/quota.go). SyncAllChannelsNow below was the first
+// call site; since cycle 12 every fire-and-forget spawn in this package goes
+// through it (async_seam_structural_test.go enumerates them). Its bare `go
 // syncAllChannelModels(...)` outlived whichever test's TestMain swapped
 // repo.DB to a fresh *gorm.DB and back — the check inside
 // syncAllChannelModels ("if repo.DB == nil") passes at call time but the

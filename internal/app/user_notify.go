@@ -180,7 +180,7 @@ func sendBarkNotify(barkURL string, data dto.Notify) error {
 		}
 	} else {
 		// SSRF防护：验证Bark URL（非Worker模式）
-		fetchSetting := system_setting.GetFetchSetting()
+		fetchSetting := system_setting.GetFetchSettingSnapshot()
 		if err := common.ValidateURLWithFetchSetting(finalURL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 			return fmt.Errorf("request reject: %v", err)
 		}
@@ -276,7 +276,7 @@ func sendGotifyNotify(gotifyUrl string, gotifyToken string, priority int, data d
 		}
 	} else {
 		// SSRF防护：验证Gotify URL（非Worker模式）
-		fetchSetting := system_setting.GetFetchSetting()
+		fetchSetting := system_setting.GetFetchSettingSnapshot()
 		if err := common.ValidateURLWithFetchSetting(finalURL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 			return fmt.Errorf("request reject: %v", err)
 		}

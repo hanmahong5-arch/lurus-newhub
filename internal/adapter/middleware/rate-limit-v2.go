@@ -9,8 +9,8 @@ import (
 // GlobalV2RateLimit is the IP-keyed rate limit for the /api/v2 route group.
 // Before this, /api/v2 (api-v2-router.go) ran CORS + body-size + identity
 // middleware and nothing else — no rate limit reached it at all.
-// GlobalWebRateLimit ("GW") is mounted by SetWebRouter on the console's own
-// group, and gin.Group() snapshots its parent's middleware chain at the
+// GlobalWebRateLimit ("GW") is bound to the SPA document in SetWebRouter
+// (web-router.go), and gin.Group() snapshots its parent's middleware chain at the
 // moment a child group is created, so a sibling group (which is what
 // /api/v2 is — see the mount comment beside
 // apiV2.Use(middleware.GlobalV2RateLimit()) in api-v2-router.go) never

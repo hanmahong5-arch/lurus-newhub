@@ -192,18 +192,20 @@ function parseImportMap(appSrc) {
 }
 
 function parseSlugTable(appSrc) {
-  const mapCallIdx = appSrc.indexOf('].map(([slug, Component])');
+  // The slug rows carry an optional third element since cycle 12 (a route
+  // guard such as RootRoute), so the anchor stops at the second name.
+  const mapCallIdx = appSrc.indexOf('].map(([slug, Component');
   if (mapCallIdx === -1) {
     throw new Error(
       'no_fabricated_status: App.jsx no longer contains the ' +
-        '].map(([slug, Component]) marker this parser anchors on ' +
+        '].map(([slug, Component marker this parser anchors on ' +
         '— update the anchor, do not delete the test.',
     );
   }
   const arrStart = appSrc.lastIndexOf('{[', mapCallIdx);
   expect(arrStart).toBeGreaterThan(-1);
   const block = appSrc.slice(arrStart, mapCallIdx);
-  const tupleRe = /\[\s*'([\w/-]+)'\s*,\s*(\w+)\s*\]/g;
+  const tupleRe = /\[\s*'([\w/-]+)'\s*,\s*(\w+)\s*(?:,\s*\w+\s*)?\]/g;
   const routes = [];
   let m;
   while ((m = tupleRe.exec(block))) {
