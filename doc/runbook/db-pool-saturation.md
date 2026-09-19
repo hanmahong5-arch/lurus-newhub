@@ -1,9 +1,10 @@
 # Runbook — Database Slow Queries / Connection-Pool Saturation
 
-> **Source**: netdata alarm `newhub_db_slow_queries`,
+> **Source**: netdata alarms `newhub_db_slow_queries` and
+> `newhub_channel_cache_stale`, both in
 > `deploy/r6-host-netdata/health.d/newhub.conf` — see that file's own
-> "STATUS"/"STATUS UPDATE" header for whether it is installed on R6 today (as
-> of 2026-09-19 it is added in-repo only, NOT installed; the README's
+> "STATUS"/"STATUS UPDATE" header for whether they are installed on R6 today
+> (as of 2026-09-19 both are added in-repo only, NOT installed; the README's
 > "Install" section has the command, and it is owner item O2).
 > **Triggered by**: `lurus_gateway_db_slow_query_total{db}` (counter) averaged
 > over 5 minutes crossing 0.05/s. The counter is incremented by the GORM
@@ -13,10 +14,35 @@
 > which no deployment in this repo configures today — `grep -c LOG_SQL_DSN
 > deploy/k8s/r6-stage/deployment.yaml deploy/k8s/r6-uat/deployment.yaml`
 > returns 0 for both).
-> **Severity**: warning (netdata `to: sysadmin` — see
+> **Also triggered by**:
+> `lurus_gateway_channel_cache_sync_failed_total{query}` (counter), any
+> sustained nonzero rate — the `newhub_channel_cache_stale` alarm. That one is
+> not about latency; it says the relay routing table on a replica is stale.
+> Jump to "Stale channel cache" at the bottom of this page.
+> **Severity**: warning for both (netdata `to: sysadmin` — see
 > `deploy/r6-host-netdata/README.md` "Ownership boundary" for what that does
 > and does not mean today).
 > **Last review**: 2026-09-19.
+>
+> **Threshold calibration status — read this before treating a WARNING as an
+> incident.** The 0.05/s slow-query threshold has NEVER been calibrated
+> against live data: production has had near-zero chargeable traffic (30 days,
+> 12,772 calls, 14 of them human), so there is no measured baseline to set it
+> from. It is a first cut meaning "about three slow statements a minute on the
+> replica that happened to be scraped". Two consequences:
+>
+> - A known structural source can put the rate in the same order as the
+>   threshold with no customer traffic at all — see "Is this just the channel
+>   cache?" below. Check that first.
+> - The scrape is one NodePort round-robining across 3 replicas, so the
+>   rate-converted dimension netdata charts is a PER-REPLICA sample, not a
+>   gateway-wide rate (the conf file's "SCRAPE TOPOLOGY" note has the full
+>   story). Do not multiply it by the replica count when comparing it to this
+>   threshold.
+>
+> Whoever first sees this alarm on real traffic should record the measured
+> rate and revise the threshold in the conf file. An alarm parked at WARNING
+> forever is worth as much as one that never changes state.
 
 ## Symptom
 
@@ -41,6 +67,45 @@ So a rising slow-query rate has two quite different causes:
 
 Telling them apart takes one look at the pool gauges, which are on the same
 `/metrics` page (`metrics.RegisterDBStats`, `internal/adapter/repo/main.go`).
+
+## A saturated pool surfaces as NotReady, not as slowness
+
+This is the one thing to know before raising or lowering `SQL_MAX_OPEN_CONNS`.
+
+Readiness on both deployments is DEEP: `readinessProbe` -> `GET /api/health`
+(`deploy/k8s/r6-stage/deployment.yaml` `readinessProbe:`, `timeoutSeconds: 4`,
+`periodSeconds: 5`, `failureThreshold: 3`), and that handler pings the
+database — `sqlDB.PingContext(ctx)` in
+`internal/adapter/handler/health.go`, bounded by `common.HealthDBPingTimeout`
+(1500ms, `HEALTH_DB_PING_TIMEOUT_MS`). `database/sql`'s `PingContext`
+**acquires a connection from the pool**; it does not bypass it. So when the
+pool is at `SQL_MAX_OPEN_CONNS` and every connection is busy, the probe queues
+with everyone else, gives up at 1.5s, and `/api/health` answers `503` with
+`checks.database = "unreachable"` — the only check that moves the HTTP status.
+
+Three consequences an operator has to hold together:
+
+- **The symptom of a saturated pool is a pod leaving the Service, not a slow
+  pod.** ~15s of sustained saturation (`failureThreshold: 3` x
+  `periodSeconds: 5`) flips a replica NotReady.
+- **It flips all replicas at once**, because saturation of a shared PostgreSQL
+  instance is correlated across them. This is the same correlation risk the
+  manifest already spells out in prose next to `livenessProbe:` for the
+  "PG blip" case; pool exhaustion is a second path into it, and this one can
+  be caused from inside the service by lowering `SQL_MAX_OPEN_CONNS` too far.
+- **Therefore `SQL_MAX_OPEN_CONNS` is not just a latency knob.** Set too low,
+  a traffic burst does not degrade into slower responses, it degrades into a
+  full outage. Lower it only with the budget arithmetic below in hand, and
+  treat a NotReady fleet with a healthy-looking PostgreSQL as this, not as a
+  database failure.
+
+A saturated pool and a genuinely unreachable database look identical from
+`/api/health`. The pool gauges below are what tells them apart; check them
+before concluding PostgreSQL is down.
+
+Cycle 12 did not change the probe. Keeping the readiness ping off the shared
+pool (a dedicated `sql.Conn`, or a one-connection health pool) is the real
+fix and is recorded as next-cycle work.
 
 ## Detect
 
@@ -119,7 +184,10 @@ runs out of connection slots at once.
 - **Pool saturated, and PostgreSQL has headroom**: raise
   `SQL_MAX_OPEN_CONNS`/`SQL_MAX_IDLE_CONNS` in
   `deploy/k8s/r6-stage/deployment.yaml` (git, then ArgoCD — do not
-  `kubectl set env`, selfHeal reverts it).
+  `kubectl set env`, selfHeal reverts it). Expect the symptom you are fixing
+  to be **503 / NotReady replicas**, not merely slow ones — see "A saturated
+  pool surfaces as NotReady" above — so this is an availability change, not a
+  latency tweak, and the rollout deserves the same care.
 - **Pool saturated and PostgreSQL has no headroom**: the fix is upstream of
   this service — fewer replicas, a pooler, or a bigger `max_connections`.
   Owner decision (cycle-12 owner item O-pool).
@@ -147,29 +215,97 @@ threshold (`delay: down 10m`).
   every connection's prepared-statement cache once a minute, which showed up
   as latency that looked like a slow database.
 - Setting `SQL_MAX_OPEN_CONNS`/`SQL_MAX_IDLE_CONNS` explicitly in both
-  manifests, plus a `deploy/k8s/deploy_consistency_test.go` case that makes a
-  multi-replica deployment declare them rather than inherit the 1000 default,
-  is cycle-12 work handed to the wiring lane. Until that lands, both
-  deployments run on the defaults above — check the live env before doing the
-  budget arithmetic:
+  manifests, plus a `deploy/k8s/deploy_consistency_test.go` case requiring
+  every manifest that declares a container memory limit to set
+  `SQL_MAX_OPEN_CONNS` and `GOMEMLIMIT` rather than inherit the 1000 default
+  (the replica count only enters the budget arithmetic, so the single-replica
+  UAT manifest is covered too), is cycle-12 work handed to the wiring lane.
+  Until that lands, both deployments run on the defaults above — check the
+  live env before doing the budget arithmetic:
   `ssh root@100.122.83.20 "kubectl -n lurus-newhub get deploy lurus-newhub -o jsonpath='{.spec.template.spec.containers[0].env}' | tr ',' '\n' | grep -i SQL_MAX"`
   (empty output = defaults).
 
-## Related signal on the same page
+## Is this just the channel cache?
 
-`lurus_gateway_channel_cache_sync_failed_total{query}` (cycle 12) counts
-channel-cache rebuilds abandoned because their database read failed
-(`repo.InitChannelCache`). It has no alarm of its own — grepping
-`deploy/r6-host-netdata/health.d/*.conf` for `channel_cache_sync_failed`
-returns zero hits as of 2026-09-19 — but a nonzero value during a database
-incident tells you the relay routing table on that replica is **stale**: it
-kept the last table it built from a complete read rather than emptying
-itself, so a channel disabled during the incident may still be serving.
-Check it alongside the pool gauges:
+Check this before escalating a `newhub_db_slow_queries` WARNING, because the
+service generates slow-query candidates on its own schedule with no customer
+involved. `repo.rebuildChannelCache`
+(`internal/adapter/repo/channel_cache.go`) issues two unfiltered full-table
+reads — `SELECT * FROM channels`, then `SELECT * FROM abilities` — on every
+replica every `SYNC_FREQUENCY` (60s on r6-stage). `abilities` holds one row
+per channel x group x model, so it grows much faster than the channel count
+suggests.
+
+Arithmetic: 2 statements / 60s = 0.033/s on one replica, 0.1/s across three.
+The chart shows the per-replica number (see the scrape-topology note above),
+so the figure to compare against the 0.05/s threshold is the first one — the
+same order as the threshold, before a single customer request is counted.
+
+```bash
+ssh root@100.122.83.20 "kubectl -n lurus-newhub logs deploy/lurus-newhub --since=15m | grep 'SLOW SQL' | grep -c channel_cache.go"
+ssh root@100.122.83.20 "kubectl -n lurus-newhub logs deploy/lurus-newhub --since=15m | grep 'SLOW SQL' | grep -vc channel_cache.go"
+```
+
+If nearly every `SLOW SQL` line names `channel_cache.go` and
+`go_sql_wait_count_total` is flat, this is the periodic cache refresh, not an
+incident. Raise `DB_SLOW_QUERY_MS`, or raise the alarm threshold in the conf
+file, and write down the rate you measured. Reducing the cost properly (an
+index, a narrower projection, or a longer `SYNC_FREQUENCY`) is a code change,
+not an incident action.
+
+## Stale channel cache (`newhub_channel_cache_stale`)
+
+**Series**: `lurus_gateway_channel_cache_sync_failed_total{query}`, where
+`query` is `channels` or `abilities` — which of the rebuild's two reads
+failed. Both label values are pre-registered at zero
+(`internal/pkg/metrics/db_observability.go` `init()`), so the series is on
+`/metrics` from boot: an absent chart means a scrape problem, not "no
+failures".
+
+**What it means.** A channel-cache rebuild whose database read failed is
+abandoned, and the replica keeps the previous routing table. Before cycle 12
+the failed query's empty result was swapped in instead, so one failed read
+emptied that replica's routing table and relay answered "no available
+channel" until the next successful sync — loud, and customer-visible within
+minutes. Keeping the old table is the better failure, but it is a **silent**
+one, and this counter (plus its alarm) is the whole of what makes it visible.
+
+**What is actually wrong while it is nonzero**, on the affected replica only:
+
+- a channel disabled, deleted or key-rotated since the last good sync **keeps
+  serving**;
+- a channel added since then **gets no traffic**;
+- priority/weight/group edits since then are not in effect.
+
+Everything else looks normal, including `/api/health`, which is exactly why it
+needs its own alarm.
+
+**Detect**:
 
 ```bash
 ssh root@100.122.83.20 "curl -s http://localhost:30850/metrics | grep '^lurus_gateway_channel_cache_sync_failed_total'"
+ssh root@100.122.83.20 "kubectl -n lurus-newhub logs deploy/lurus-newhub --since=30m | grep 'channel cache sync aborted'"
 ```
 
-It clears (stops climbing) as soon as one sync succeeds; the table is rebuilt
-in full on the next `SYNC_FREQUENCY` tick (60s on r6-stage).
+The log line carries the failing read and the driver error
+(`channel cache sync aborted, previous routing table kept: load <channels|abilities> for cache rebuild: ...`).
+Because the NodePort round-robins, prefer the per-pod form when it matters:
+
+```bash
+ssh root@100.122.83.20 "kubectl -n lurus-newhub exec <pod> -- wget -qO- http://127.0.0.1:3000/metrics | grep '^lurus_gateway_channel_cache_sync_failed_total'"
+```
+
+**Reconcile**: the cause is always the database read — the same two causes as
+the rest of this page (slow/unavailable PostgreSQL, or a saturated pool). The
+`query=abilities` label is the more likely one on a large dataset, since that
+table is the bigger of the two. Work the pool/database sections above.
+
+**Recover**: nothing to do by hand once the database is healthy — the counter
+stops climbing as soon as one sync succeeds, and the table is rebuilt in full
+on the next `SYNC_FREQUENCY` tick (60s on r6-stage). If you need the refresh
+immediately rather than within the tick, any channel write through the admin
+API triggers one on the replica that serves it, and a rollout restart
+rebuilds every replica at boot. If the counter keeps climbing while
+PostgreSQL looks healthy, the routing table on that replica is old by however
+long the alarm has been up: treat channel changes made during that window as
+not yet in effect.

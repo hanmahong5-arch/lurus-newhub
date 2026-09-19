@@ -27,13 +27,17 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/glebarez/sqlite"
@@ -274,6 +278,109 @@ func TestNewGormConfig_IsWhatChooseDBUses(t *testing.T) {
 	}
 }
 
+// lockedBuffer is the sink the test below installs as the process-wide slog
+// writer. It is mutex-guarded because that writer is global: a background
+// goroutine left running by another test in this package can log into it
+// while this test is reading, and an unguarded bytes.Buffer would be a data
+// race the -race job reports as this test's fault.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// slogLevelOfRecordContaining finds the single JSON log record carrying
+// marker and returns its "level" field. It fatals on zero or several matches
+// so a marker that stopped being unique cannot silently weaken the assertion.
+func slogLevelOfRecordContaining(t *testing.T, body, marker string) string {
+	t.Helper()
+	var levels []string
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.Contains(line, marker) {
+			continue
+		}
+		var rec struct {
+			Level string `json:"level"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("the log record carrying %q is not JSON (%v):\n%s", marker, err, line)
+		}
+		levels = append(levels, rec.Level)
+	}
+	if len(levels) != 1 {
+		t.Fatalf("want exactly one log record carrying %q, found %d — the whole capture was:\n%s",
+			marker, len(levels), body)
+	}
+	return levels[0]
+}
+
+// TestNewGormConfig_ErrorsAndSlowQueriesLandOnTheirOwnSinks is the oracle for
+// the one property the hand-written Trace exists for: WHICH sink each branch
+// writes to. Everything else in this file constructs its own newGormLogger
+// with capture writers, so the production wiring — which of
+// common.SysLog/common.SysError newGormConfig hands to which field — was
+// unguarded: the two could be swapped and the package stayed green, shipping
+// database errors at slog level INFO and slow queries at ERROR.
+//
+// This drives the logger newGormConfig actually builds and reads the level
+// off the real log record, rather than asserting on struct fields: in
+// production LOG_FORMAT=json (deploy/k8s/r6-stage/deployment.yaml), so
+// common.SysLog and common.SysError differ only by the "level" field of the
+// JSON record they emit, and that field is exactly what an operator filters
+// on.
+//
+// Mutation target: swap the two gormWriterFunc arguments in newGormConfig —
+// both assertions go red.
+func TestNewGormConfig_ErrorsAndSlowQueriesLandOnTheirOwnSinks(t *testing.T) {
+	t.Setenv("DB_SLOW_QUERY_MS", "")
+
+	captured := &lockedBuffer{}
+	common.InitSlog(&common.SlogConfig{JSONFormat: true, Writer: captured, ErrWriter: captured})
+	t.Cleanup(func() { common.InitSlog(nil) })
+
+	built := newGormConfig(dbPoolNameMain)
+	lg, ok := built.Logger.(*gormLogger)
+	if !ok {
+		t.Fatalf("newGormConfig's Logger is %T, want *gormLogger", built.Logger)
+	}
+	if lg.cfg.SlowThreshold <= 0 {
+		t.Fatalf("SlowThreshold = %v; the slow branch below would never run and this test would "+
+			"prove nothing", lg.cfg.SlowThreshold)
+	}
+
+	const failingMarker = "gormsinkprobe-failing-statement"
+	const slowMarker = "gormsinkprobe-slow-statement"
+
+	lg.Trace(context.Background(), time.Now(),
+		func() (string, int64) { return "SELECT '" + failingMarker + "'", 0 },
+		errors.New("connection reset by peer"))
+	lg.Trace(context.Background(), time.Now().Add(-2*lg.cfg.SlowThreshold),
+		func() (string, int64) { return "SELECT '" + slowMarker + "'", 1 },
+		nil)
+
+	body := captured.String()
+	if got := slogLevelOfRecordContaining(t, body, failingMarker); got != "ERROR" {
+		t.Errorf("a failed database statement was logged at level %s, want ERROR — newGormConfig has "+
+			"the error branch wired to the info sink, so database errors are invisible to any "+
+			"level-based filter", got)
+	}
+	if got := slogLevelOfRecordContaining(t, body, slowMarker); got != "INFO" {
+		t.Errorf("a slow database statement was logged at level %s, want INFO — newGormConfig has "+
+			"the slow branch wired to the error sink, so every slow query reads as a failure", got)
+	}
+}
+
 // TestSQLPoolDefaults pins the pool configuration. The values are asserted on
 // currentPoolSettings (database/sql exposes no getter for ConnMaxLifetime or
 // ConnMaxIdleTime), with applyPoolSettings checked against the one field
@@ -319,11 +426,62 @@ func TestSQLPoolDefaults(t *testing.T) {
 			t.Errorf("%s does not call applyPoolSettings(sqlDB)", strings.TrimPrefix(fn, "func "))
 		}
 	}
+	// The setter count is taken over EVERY non-test file in this package, not
+	// over main.go alone. A second production call site anywhere in package
+	// repo splits pool configuration in exactly the way applyPoolSettings
+	// exists to prevent, and a main.go-only scan cannot see it — which is what
+	// this check used to be.
+	//
+	// Scope limit it still cannot close: a different package holding its own
+	// *sql.DB can call the setters and nothing here notices. Every such hit in
+	// the tree today is a _test.go file pinning SetMaxOpenConns(1) to
+	// serialise a shared-cache SQLite handle, which is deliberate.
+	sources := packageProductionSources(t)
+	if len(sources) < 2 || sources["main.go"] == "" {
+		t.Fatalf("scanned %d non-test files and main.go %s among them — the setter scan below is "+
+			"measuring nothing", len(sources), map[bool]string{true: "is", false: "is NOT"}[sources["main.go"] != ""])
+	}
 	for _, setter := range []string{"SetMaxIdleConns(", "SetMaxOpenConns(", "SetConnMaxLifetime(", "SetConnMaxIdleTime("} {
-		if n := strings.Count(src, setter); n != 1 {
-			t.Errorf("main.go calls %s %d times, want exactly 1 (inside applyPoolSettings) — a second call site is how the two pools drift apart", setter, n)
+		total := 0
+		var where []string
+		for name, body := range sources {
+			if n := strings.Count(body, setter); n > 0 {
+				total += n
+				where = append(where, fmt.Sprintf("%s x%d", name, n))
+			}
+		}
+		if total != 1 {
+			sort.Strings(where)
+			t.Errorf("package repo calls %s %d times (%s), want exactly 1 — the one inside "+
+				"applyPoolSettings in main.go. A second call site is how the two pools drift apart.",
+				setter, total, strings.Join(where, ", "))
 		}
 	}
+}
+
+// packageProductionSources returns the body of every non-test .go file in
+// this package, keyed by file name. The working directory of a Go test is its
+// own package directory, which is what makes the bare ReadDir(".") correct
+// here (readRepoSource below relies on the same fact).
+func packageProductionSources(t *testing.T) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package directory: %v", err)
+	}
+	out := map[string]string{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		body, rerr := os.ReadFile(name)
+		if rerr != nil {
+			t.Fatalf("read %s: %v", name, rerr)
+		}
+		out[name] = string(body)
+	}
+	return out
 }
 
 // readRepoSource reads one of this package's own source files.

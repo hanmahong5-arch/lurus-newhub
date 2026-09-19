@@ -28,12 +28,18 @@ var channelSyncLock sync.RWMutex
 // rebuildChannelCache).
 //
 // It keeps its func() signature — the error rebuildChannelCache returns is
-// logged here rather than propagated — because its call sites are
-// fire-and-forget: cmd/server/main.go's boot path and ticker loop, and three
-// post-write refreshes in internal/adapter/handler/v2_channel.go, none of
-// which has anything to do with a failed refresh but retry on the next tick.
-// Returning an error would only add an unchecked-error lint finding at each
-// of those sites. Callers that need the reason call rebuildChannelCache.
+// logged here rather than propagated — because every call site is
+// fire-and-forget. The boot path, the periodic sync ticker and the post-write
+// channel refreshes in the v1 and v2 handlers all call it as a bare statement,
+// and none of them has any recovery to run for a failed refresh: the next tick
+// rebuilds. Propagating the error would add an unchecked-error lint finding at
+// each of them and change nothing else. Callers that do need the reason call
+// rebuildChannelCache directly.
+//
+// No call-site count is given here on purpose: it moves whenever a handler
+// adds or drops a refresh, and a stale number in a comment misleads worse than
+// no number (this comment previously claimed four sites; there were twenty).
+// `grep -rn "InitChannelCache()" --include=*.go .` is today's answer.
 func InitChannelCache() {
 	if err := rebuildChannelCache(); err != nil {
 		common.SysError("channel cache sync aborted, previous routing table kept: " + err.Error())
@@ -52,9 +58,11 @@ func InitChannelCache() {
 // read that keeps failing leaves the table STALE indefinitely (a channel
 // disabled in the database keeps serving) rather than empty. The counter is
 // what makes that visible — lurus_gateway_channel_cache_sync_failed_total,
-// alarm-less as of this change (grepped deploy/r6-host-netdata/health.d/*.conf
-// for channel_cache_sync_failed, zero hits) but on /metrics and named in
-// doc/runbook/db-pool-saturation.md.
+// which the netdata alarm newhub_channel_cache_stale watches
+// (deploy/r6-host-netdata/health.d/newhub.conf) and
+// doc/runbook/db-pool-saturation.md documents. That alarm is added in-repo
+// only; whether it has been installed onto the host is recorded in the conf
+// file's own dated STATUS header, which is the truth about it, not this line.
 func rebuildChannelCache() error {
 	if !common.MemoryCacheEnabled {
 		return nil

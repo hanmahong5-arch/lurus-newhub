@@ -24,6 +24,11 @@ package repo
 //     rebuild then swapped into the live routing table. One failed read =
 //     that replica relays nothing until the next successful sync, with no
 //     signal anywhere. The rebuild now aborts and keeps the previous table.
+//     Each read has its own case below
+//     (TestInitChannelCache_KeepsPreviousTableWhenQueryFails for the channels
+//     read, TestInitChannelCache_KeepsPreviousTableWhenAbilitiesReadFails for
+//     the abilities read): one case cannot cover both, because whichever read
+//     is made to fail first aborts the pass before the other one runs.
 //
 // The tests below drive the real functions (InitChannelCache /
 // syncChannelCacheOnce / SyncChannelCacheWithContext), not a
@@ -184,12 +189,14 @@ func TestSyncChannelCacheWithContext_RecoversPanic(t *testing.T) {
 // assertion: GORM leaves `channels` empty on the failed Find, the rebuild
 // treats that as "there are no channels", and the swap wipes the table.
 //
-// Mutation targets, both measured 2026-09-19 rather than predicted:
-// reverting the channels read alone to a bare `DB.Find(&channels)` turns
-// the counter assertion red but NOT the routability one (the abilities read
-// then aborts the pass and the table survives by accident); reverting both
-// reads turns both assertions red. The counter assertion is what makes the
-// single-read mutation detectable at all.
+// Mutation targets, all measured rather than predicted: reverting the
+// channels read alone to a bare `DB.Find(&channels)` turns the counter
+// assertion red but NOT the routability one (the abilities read then aborts
+// the pass and the table survives by accident); reverting both reads turns
+// both assertions red. The counter assertion is what makes the single-read
+// mutation detectable at all. The abilities read has its own case below —
+// this one cannot reach it, because the pool is closed before the first read
+// and the rebuild aborts there.
 func TestInitChannelCache_KeepsPreviousTableWhenQueryFails(t *testing.T) {
 	cleanup := setupSQLiteDB(t)
 	defer cleanup()
@@ -263,5 +270,92 @@ func TestInitChannelCacheQuery_ReturnsTheFailure(t *testing.T) {
 
 	if rerr := rebuildChannelCache(); rerr == nil {
 		t.Fatal("rebuildChannelCache() returned nil on a closed pool; want the read's error")
+	}
+}
+
+// TestInitChannelCache_KeepsPreviousTableWhenAbilitiesReadFails is the other
+// half of the flagship fix. The test above closes the pool, so the channels
+// read fails first and the abilities read is never reached — deleting the
+// abilities read's error check left the whole package green. This case fails
+// ONLY the abilities read: the channels table is untouched and answers
+// normally, the abilities table is dropped out from under the live *gorm.DB.
+//
+// That is also the half that fires first in production. `abilities` holds one
+// row per channel x group x model where `channels` holds one row per channel,
+// so on a real customer dataset the abilities SELECT is the one that reaches
+// SQL_STATEMENT_TIMEOUT_MS (8000ms, applied as a DSN runtime parameter by
+// withStatementTimeout in main.go).
+//
+// Mutation target, MEASURED rather than predicted: replacing the abilities
+// read with a bare `DB.Find(&abilities)` turns the counter assertion red
+// (before=0 after=0) and leaves the routability assertion green. That second
+// half is worth writing down rather than hiding, because it says what a
+// silently-failed abilities read actually costs today: the rebuild below uses
+// the abilities rows only to PRE-SEED the outer group map's keys, and the
+// channel loop creates any missing key lazily, so the table it builds is a
+// pure function of `channels`. The signal is the whole of the fix for this
+// read. The routability assertion stays as the regression guard for the day
+// that stops being true — the moment anything ability-driven (an enabled=false
+// row dropping a model, a per-ability weight) feeds the built table, an empty
+// abilities slice starts emptying the table again, and this is the case that
+// would catch it.
+func TestInitChannelCache_KeepsPreviousTableWhenAbilitiesReadFails(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+
+	prevCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = prevCache })
+	snapshotChannelCacheGlobals(t)
+
+	ch := &Channel{
+		Type: 1, Status: common.ChannelStatusEnabled,
+		Name: "keep-me-on-abilities-failure", Models: "model-ab", Group: "ab-group",
+		TenantId: "default",
+	}
+	if err := DB.Create(ch).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := DB.Create(&Ability{
+		Group: "ab-group", Model: "model-ab", ChannelId: ch.Id, Enabled: true,
+	}).Error; err != nil {
+		t.Fatalf("seed ability: %v", err)
+	}
+
+	InitChannelCache()
+	if got, err := GetRandomSatisfiedChannelForTenant("", "ab-group", "model-ab", 1); err != nil || got == nil {
+		t.Fatalf("precondition: channel not routable after a healthy sync: %+v, %v", got, err)
+	}
+
+	// Take away the abilities table only.
+	if err := DB.Exec("DROP TABLE abilities").Error; err != nil {
+		t.Fatalf("drop abilities: %v", err)
+	}
+	var stillReadable []*Channel
+	if err := DB.Find(&stillReadable).Error; err != nil {
+		t.Fatalf("precondition: the channels read must still succeed, otherwise this test is the "+
+			"previous one with extra steps: %v", err)
+	}
+
+	beforeAbilities := testutil.ToFloat64(metrics.ChannelCacheSyncFailedTotal.WithLabelValues("abilities"))
+	beforeChannels := testutil.ToFloat64(metrics.ChannelCacheSyncFailedTotal.WithLabelValues("channels"))
+	InitChannelCache()
+	afterAbilities := testutil.ToFloat64(metrics.ChannelCacheSyncFailedTotal.WithLabelValues("abilities"))
+	afterChannels := testutil.ToFloat64(metrics.ChannelCacheSyncFailedTotal.WithLabelValues("channels"))
+
+	got, rerr := GetRandomSatisfiedChannelForTenant("", "ab-group", "model-ab", 1)
+	if rerr != nil || got == nil || got.Id != ch.Id {
+		t.Errorf("after a failed ABILITIES read the previous routing table was lost: "+
+			"GetRandomSatisfiedChannelForTenant(ab-group, model-ab) = %+v, %v; want channel %d. "+
+			"A failed read must abort the rebuild, not swap in its empty result.", got, rerr, ch.Id)
+	}
+	if afterAbilities-beforeAbilities != 1 {
+		t.Errorf("ChannelCacheSyncFailedTotal{query=abilities} did not increment by 1: before=%f after=%f",
+			beforeAbilities, afterAbilities)
+	}
+	if afterChannels != beforeChannels {
+		t.Errorf("ChannelCacheSyncFailedTotal{query=channels} moved (%f -> %f) although the channels "+
+			"table was readable — the two reads are being attributed to the same label",
+			beforeChannels, afterChannels)
 	}
 }
