@@ -601,7 +601,10 @@ func TestChannel(c *gin.Context) {
 		return
 	}
 	milliseconds := elapsed.Milliseconds()
-	go channel.UpdateResponseTime(milliseconds)
+	// Through the package's AsyncGo seam (gopool.Go in production, synchronous
+	// under the test TestMain) so a test that drives this handler does not
+	// leave a goroutine reading repo.DB after its cleanup swapped it.
+	AsyncGo(func() { channel.UpdateResponseTime(milliseconds) })
 	consumedTime := float64(milliseconds) / 1000.0
 	if result.newAPIError != nil {
 		c.JSON(http.StatusOK, gin.H{

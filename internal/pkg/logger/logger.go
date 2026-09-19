@@ -72,8 +72,13 @@ func SetupLogger() {
 		common.SetSlogErrWriter(gin.DefaultErrorWriter)
 
 		if prev := currentLogFd.Swap(fd); prev != nil {
+			// Read the grace period here, on the caller's goroutine, so the
+			// closer never touches the package variable (a test shrinks it
+			// between SetupLogger calls; reading it inside the goroutine
+			// raced with that write under -race).
+			grace := logFdCloseGrace
 			go func(f *os.File) {
-				time.Sleep(logFdCloseGrace)
+				time.Sleep(grace)
 				_ = f.Close()
 			}(prev)
 		}
