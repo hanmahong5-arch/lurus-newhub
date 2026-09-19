@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -83,6 +84,7 @@ func setupAdminInviteRouter(t *testing.T) *adminInviteCtx {
 	}
 	g := router.Group("/api/v2/admin/tenants/:id/invites", mockAuth)
 	g.POST("", IssueTenantInvite)
+	g.GET("", ListTenantInvites)
 	g.DELETE("/:invite_id", RevokeTenantInvite)
 
 	t.Cleanup(func() {
@@ -192,6 +194,153 @@ func TestRevokeTenantInvite_UnknownID_404(t *testing.T) {
 	}
 }
 
+// TestListTenantInvites_NeverReturnsFullCode is the L6 oracle: the issue
+// response carries the real code, but the list body must not — no "code"
+// key anywhere in it, the raw code string absent from the body, and
+// code_prefix exactly the code's first 8 characters. Projecting inv.Code
+// instead of a prefix in toTenantInviteView makes this go red.
+func TestListTenantInvites_NeverReturnsFullCode(t *testing.T) {
+	ctx := setupAdminInviteRouter(t)
+
+	issueW := ctx.do(http.MethodPost, "/api/v2/admin/tenants/"+ctx.tenantID+"/invites",
+		map[string]any{"ttl_hours": 24})
+	if issueW.Code != http.StatusCreated {
+		t.Fatalf("issue status = %d, want 201, body=%s", issueW.Code, issueW.Body.String())
+	}
+	issueResp := ParseV2Response(t, issueW)
+	issueData, _ := issueResp["data"].(map[string]interface{})
+	code, _ := issueData["code"].(string)
+	if len(code) != 32 {
+		t.Fatalf("issued code = %q, want a 32-char code", code)
+	}
+
+	listW := ctx.do(http.MethodGet, "/api/v2/admin/tenants/"+ctx.tenantID+"/invites", nil)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200, body=%s", listW.Code, listW.Body.String())
+	}
+	body := listW.Body.String()
+	if strings.Contains(body, code) {
+		t.Fatalf("list body contains the full code %q: %s", code, body)
+	}
+	if strings.Contains(body, `"code"`) {
+		t.Fatalf("list body has a \"code\" key: %s", body)
+	}
+
+	listResp := ParseV2Response(t, listW)
+	listData, ok := listResp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data is not a map: %T body=%s", listResp["data"], body)
+	}
+	invites, ok := listData["invites"].([]interface{})
+	if !ok || len(invites) != 1 {
+		t.Fatalf("invites = %v, want exactly 1 row", listData["invites"])
+	}
+	row, ok := invites[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("row is not a map: %T", invites[0])
+	}
+	prefix, _ := row["code_prefix"].(string)
+	if prefix != code[:8] {
+		t.Errorf("code_prefix = %q, want %q", prefix, code[:8])
+	}
+}
+
+// TestListTenantInvites_ShowsStatusTransitions: a revoked invite lists
+// status 3; consuming a second, separately-issued invite lists status 2
+// with the consuming account id recorded.
+func TestListTenantInvites_ShowsStatusTransitions(t *testing.T) {
+	ctx := setupAdminInviteRouter(t)
+
+	revoked, err := repo.CreateTenantInvite(ctx.tenantID, ctx.actorID, 0)
+	if err != nil {
+		t.Fatalf("seed revoked invite: %v", err)
+	}
+	if err := repo.RevokeTenantInvite(revoked.Id, ctx.tenantID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	consumed, err := repo.CreateTenantInvite(ctx.tenantID, ctx.actorID, 0)
+	if err != nil {
+		t.Fatalf("seed consumed invite: %v", err)
+	}
+	if _, err := repo.ConsumeTenantInvite(consumed.Code, 4242); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+
+	listW := ctx.do(http.MethodGet, "/api/v2/admin/tenants/"+ctx.tenantID+"/invites", nil)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200, body=%s", listW.Code, listW.Body.String())
+	}
+	listResp := ParseV2Response(t, listW)
+	listData := listResp["data"].(map[string]interface{})
+	invites := listData["invites"].([]interface{})
+	if len(invites) != 2 {
+		t.Fatalf("invites = %d rows, want 2", len(invites))
+	}
+
+	byID := map[float64]map[string]interface{}{}
+	for _, raw := range invites {
+		row := raw.(map[string]interface{})
+		byID[row["id"].(float64)] = row
+	}
+
+	revokedRow, ok := byID[float64(revoked.Id)]
+	if !ok {
+		t.Fatalf("revoked invite id %d missing from list", revoked.Id)
+	}
+	if status := revokedRow["status"].(float64); status != float64(repo.TenantInviteStatusRevoked) {
+		t.Errorf("revoked row status = %v, want %d", status, repo.TenantInviteStatusRevoked)
+	}
+
+	consumedRow, ok := byID[float64(consumed.Id)]
+	if !ok {
+		t.Fatalf("consumed invite id %d missing from list", consumed.Id)
+	}
+	if status := consumedRow["status"].(float64); status != float64(repo.TenantInviteStatusConsumed) {
+		t.Errorf("consumed row status = %v, want %d", status, repo.TenantInviteStatusConsumed)
+	}
+	if consumer := consumedRow["consumed_by_account_id"].(float64); consumer != 4242 {
+		t.Errorf("consumed row consumed_by_account_id = %v, want 4242", consumer)
+	}
+}
+
+// TestListTenantInvites_UnknownTenant_404 covers the tenant-existence guard
+// (same shape as IssueTenantInvite's).
+func TestListTenantInvites_UnknownTenant_404(t *testing.T) {
+	ctx := setupAdminInviteRouter(t)
+
+	w := ctx.do(http.MethodGet, "/api/v2/admin/tenants/no-such-tenant/invites", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestListTenantInvites_PageSizeClamped pins the pagination bound: an
+// oversized page_size is clamped to 20 and a sub-1 page is clamped to 1.
+// Deleting the clamp block in ListTenantInvites left the package green
+// before this test existed (measured) — a caller could otherwise ask for
+// page_size=100000 with no test noticing.
+func TestListTenantInvites_PageSizeClamped(t *testing.T) {
+	ctx := setupAdminInviteRouter(t)
+
+	w := ctx.do(http.MethodGet,
+		"/api/v2/admin/tenants/"+ctx.tenantID+"/invites?page_size=100000&page=0", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", w.Code, w.Body.String())
+	}
+	resp := ParseV2Response(t, w)
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data is not a map: %T body=%s", resp["data"], w.Body.String())
+	}
+	if pageSize := data["page_size"].(float64); pageSize != 20 {
+		t.Errorf("page_size = %v, want clamped to 20", pageSize)
+	}
+	if page := data["page"].(float64); page != 1 {
+		t.Errorf("page = %v, want clamped to 1", page)
+	}
+}
+
 // TestTenantInviteAdmin_UnauthenticatedRejected mounts the PRODUCTION
 // middleware.RootJWTAuth (same wiring as api-v2-router.go's adminRoute) and
 // verifies an anonymous request never reaches either handler — the admin
@@ -206,11 +355,13 @@ func TestTenantInviteAdmin_UnauthenticatedRejected(t *testing.T) {
 	tenantMgmt := admin.Group("/tenants")
 	{
 		tenantMgmt.POST("/:id/invites", IssueTenantInvite)
+		tenantMgmt.GET("/:id/invites", ListTenantInvites)
 		tenantMgmt.DELETE("/:id/invites/:invite_id", RevokeTenantInvite)
 	}
 
 	cases := []struct{ method, path string }{
 		{http.MethodPost, "/api/v2/admin/tenants/some-tenant/invites"},
+		{http.MethodGet, "/api/v2/admin/tenants/some-tenant/invites"},
 		{http.MethodDelete, "/api/v2/admin/tenants/some-tenant/invites/1"},
 	}
 	for _, tc := range cases {

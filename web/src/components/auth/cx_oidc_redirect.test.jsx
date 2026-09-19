@@ -71,6 +71,7 @@ vi.mock('../../helpers/apiMode', () => ({
 }));
 
 import OidcRedirect from './OidcRedirect';
+import { inviteLink } from '../../helpers/inviteLink';
 
 // jsdom's window.location cannot be reassigned, so swap it for a recording
 // double. `origin` is fixed so the asserted URLs are exact strings.
@@ -135,6 +136,50 @@ describe('OidcRedirect — session bridge', () => {
       '/api/v2/auth/zita-bootstrap',
       {},
       { skipErrorHandler: true },
+    );
+  });
+
+  it('forwards ?invite= to the bootstrap POST and carries it in return_to', async () => {
+    window.location.search = '?invite=abc123XYZ_-';
+    apiPost.mockResolvedValue({ data: { success: false } });
+    render(React.createElement(OidcRedirect, null));
+    await flush();
+
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/v2/auth/zita-bootstrap?invite=abc123XYZ_-',
+      {},
+      { skipErrorHandler: true },
+    );
+    expect(hrefWrites).toHaveLength(1);
+    expect(hrefWrites[0]).toBe(
+      '/api/v2/auth/zita-login?return_to=' +
+        encodeURIComponent('https://hub.test/login?invite=abc123XYZ_-'),
+    );
+    // The return_to this screen builds must be exactly what
+    // InvitesDrawer.jsx's issue flow would build for the same code — both
+    // import helpers/inviteLink.js, so this ties them together by
+    // construction rather than by two independently-typed template strings.
+    const expectedReturnTo = inviteLink('https://hub.test', 'abc123XYZ_-');
+    expect(hrefWrites[0]).toBe(
+      '/api/v2/auth/zita-login?return_to=' +
+        encodeURIComponent(expectedReturnTo),
+    );
+  });
+
+  it('ignores a malformed invite code — bare call, dashboard return_to', async () => {
+    window.location.search = '?invite=' + encodeURIComponent('not valid!');
+    apiPost.mockResolvedValue({ data: { success: false } });
+    render(React.createElement(OidcRedirect, null));
+    await flush();
+
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/v2/auth/zita-bootstrap',
+      {},
+      { skipErrorHandler: true },
+    );
+    expect(hrefWrites[0]).toBe(
+      '/api/v2/auth/zita-login?return_to=' +
+        encodeURIComponent('https://hub.test/console/v2/dashboard'),
     );
   });
 

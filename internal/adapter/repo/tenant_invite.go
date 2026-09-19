@@ -109,6 +109,28 @@ func ConsumeTenantInvite(code string, accountID int64) (*Tenant, error) {
 	return &tenant, nil
 }
 
+// ListTenantInvites returns tenantID's invites newest-first (created_at
+// DESC; TestListTenantInvites_NewestFirst pins the order), scoped by the
+// tenant_id predicate so a request for tenant A's id can only ever return
+// A's rows (TestListTenantInvites_ScopedByTenant) — the same isolation
+// RevokeTenantInvite enforces on writes (L6). Callers project this down to
+// a prefix-only view (handler.ListTenantInvites); the full Code stays
+// reachable here because this is the repo layer, not the admin-facing
+// surface.
+func ListTenantInvites(tenantID string, limit, offset int) ([]TenantInvite, int64, error) {
+	var invites []TenantInvite
+	var total int64
+
+	query := DB.Model(&TenantInvite{}).Where("tenant_id = ?", tenantID)
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := query.Order("created_at DESC").Offset(offset).Limit(limit).Find(&invites).Error; err != nil {
+		return nil, 0, err
+	}
+	return invites, total, nil
+}
+
 // RevokeTenantInvite kills a pending code early (root decided not to send
 // it, or sent it to the wrong recipient). Scoped by tenantID so a code
 // belonging to a DIFFERENT tenant never revokes under this tenant's admin

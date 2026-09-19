@@ -73,6 +73,16 @@ vi.mock('./CreditPoolDrawer', () => ({
     ),
 }));
 
+vi.mock('./InvitesDrawer', () => ({
+  default: ({ tenantId, tenantName, onClose }) =>
+    React.createElement(
+      'div',
+      { 'data-testid': 'invites-drawer' },
+      `invites for ${tenantName} (${tenantId})`,
+      React.createElement('button', { onClick: onClose }, 'close'),
+    ),
+}));
+
 // Mirror i18next's en behaviour: return the English defaultValue (2nd arg)
 // with {{var}} interpolation, falling back to the key when no default given.
 vi.mock('react-i18next', () => ({
@@ -354,6 +364,32 @@ describe('Tenants page — stats drawer', () => {
     // Stats drawer shows the snake_case key values rendered
     await waitFor(() => screen.getByText('Stats Co · stats'));
     await waitFor(() => screen.getByText('user_count'));
+  });
+});
+
+// ─── L6: invites drawer opens with the clicked tenant's id/name ─────────────
+
+describe('Tenants page — invites drawer', () => {
+  it('opens the invites drawer for the clicked tenant row', async () => {
+    const tenant = makeTenant({ id: 'invites-tenant', name: 'Invites Co' });
+    API.get.mockResolvedValue(listResponse([tenant]));
+
+    render(React.createElement(HFTenants));
+
+    await waitFor(() => screen.getByTestId(`tenant-invites-btn-${tenant.id}`));
+    expect(screen.queryByTestId('invites-drawer')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId(`tenant-invites-btn-${tenant.id}`));
+
+    await waitFor(() => screen.getByTestId('invites-drawer'));
+    expect(screen.getByTestId('invites-drawer')).toHaveTextContent(
+      'invites for Invites Co (invites-tenant)',
+    );
+
+    fireEvent.click(screen.getByText('close'));
+    await waitFor(() =>
+      expect(screen.queryByTestId('invites-drawer')).not.toBeInTheDocument(),
+    );
   });
 });
 
