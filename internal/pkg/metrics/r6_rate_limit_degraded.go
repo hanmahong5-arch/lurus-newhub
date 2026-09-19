@@ -26,6 +26,35 @@ import (
 //	                            fail-open (the request already succeeded);
 //	                            counts silently LOST recordings, i.e. the
 //	                            success dimension under-counting.
+//	web_rate_limit_backend   — redisRateLimiterKeyed's LLen check
+//	                            (rate-limit.go). Reached by every
+//	                            rateLimitFactory/keyedRateLimitFactory caller
+//	                            in the package: GlobalAPIRateLimit,
+//	                            GlobalWebRateLimit, InternalApiRateLimit,
+//	                            CriticalRateLimit, TotpBackupCodesRateLimit,
+//	                            DownloadRateLimit, UploadRateLimit,
+//	                            RedemptionRateLimit, TopupRateLimit
+//	                            (unmounted), BootstrapRateLimit, and
+//	                            GlobalV2RateLimit (rate-limit-v2.go). Added
+//	                            cycle-11 L2: this limiter used to fail CLOSED
+//	                            (500+Abort) on a Redis error, which took the
+//	                            k8s probe paths mounted behind
+//	                            GlobalAPIRateLimit out of readiness on every
+//	                            replica at once. The same flip now also means
+//	                            that while Redis is down, none of the
+//	                            abuse-path buckets above are enforcing:
+//	                            redemption-code guessing (RedemptionRateLimit),
+//	                            bootstrap user creation (BootstrapRateLimit),
+//	                            TOTP backup-code regeneration
+//	                            (TotpBackupCodesRateLimit), and the shared
+//	                            channel-key-reveal/TOTP-disable bucket
+//	                            (CriticalRateLimit) are all unthrottled for
+//	                            the duration of the outage, same as every
+//	                            other bucket in this list.
+//	web_rate_limit_corrupt   — redisRateLimiterKeyed's stored-timestamp
+//	                            parse check; the backend is healthy but the
+//	                            list's tail value doesn't parse, so the key
+//	                            is deleted to self-heal.
 //
 // Composite risk (see the callers' comments for the full statement): while
 // this counter is climbing, BusinessRateLimit/BusinessModelRateLimit and
@@ -44,8 +73,10 @@ var RateLimitDegradedTotal = promauto.NewCounterVec(
 )
 
 // RecordRateLimitDegraded increments the degradation counter for the given
-// check ("model_rate_limit_success", "model_rate_limit_total" or
-// "model_rate_limit_record").
+// check: "model_rate_limit_success", "model_rate_limit_total" or
+// "model_rate_limit_record" (redisRateLimitHandler family), or
+// "web_rate_limit_backend" or "web_rate_limit_corrupt" (redisRateLimiterKeyed
+// family — see the label list above for its full set of callers).
 func RecordRateLimitDegraded(check string) {
 	RateLimitDegradedTotal.WithLabelValues(check).Inc()
 }
@@ -59,4 +90,6 @@ func init() {
 	RateLimitDegradedTotal.WithLabelValues("model_rate_limit_success")
 	RateLimitDegradedTotal.WithLabelValues("model_rate_limit_total")
 	RateLimitDegradedTotal.WithLabelValues("model_rate_limit_record")
+	RateLimitDegradedTotal.WithLabelValues("web_rate_limit_backend")
+	RateLimitDegradedTotal.WithLabelValues("web_rate_limit_corrupt")
 }

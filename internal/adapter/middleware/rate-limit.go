@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/gin-gonic/gin"
 )
 
@@ -43,9 +44,18 @@ func redisRateLimiterKeyed(c *gin.Context, maxRequestNum int, duration int64, ma
 	key := "rateLimit:" + mark + ident
 	listLength, err := rdb.LLen(ctx, key).Result()
 	if err != nil {
+		// Fail OPEN, not closed (cycle-11 L2 / operator decision D1's web/API
+		// half): this used to 500+Abort every request behind
+		// GlobalAPIRateLimit/GlobalWebRateLimit, including the k8s probe
+		// paths mounted behind GlobalAPIRateLimit — a Redis blip took every
+		// replica out of Service readiness at once. Matches the relay-path
+		// limiters' existing fail-open contract (model-rate-limit.go,
+		// business_rate_limit.go, concurrency_limit.go): a Redis hiccup must
+		// not become an outage of its own.
 		common.SysError("redis rate limit LLen error: " + err.Error())
-		c.Status(http.StatusInternalServerError)
-		c.Abort()
+		metrics.RecordRateLimitDegraded("web_rate_limit_backend")
+		r6aRateLimitDegradedLogf("web_rate_limit_backend", "web/API rate limit LLen error, failing open: "+err.Error())
+		c.Next()
 		return
 	}
 	if listLength < int64(maxRequestNum) {
@@ -55,17 +65,28 @@ func redisRateLimiterKeyed(c *gin.Context, maxRequestNum int, duration int64, ma
 		oldTimeStr, _ := rdb.LIndex(ctx, key, -1).Result()
 		oldTime, err := time.Parse(timeFormat, oldTimeStr)
 		if err != nil {
+			// Corrupt stored value, not a backend outage: the key itself is
+			// unusable, so self-heal by deleting it — a fresh window starts
+			// on the next request — instead of every future request for
+			// this ident failing the same parse forever.
 			common.SysError("redis rate limit time parse error: " + err.Error())
-			c.Status(http.StatusInternalServerError)
-			c.Abort()
+			metrics.RecordRateLimitDegraded("web_rate_limit_corrupt")
+			r6aRateLimitDegradedLogf("web_rate_limit_corrupt", "web/API rate limit corrupt timestamp, failing open: "+err.Error())
+			rdb.Del(ctx, key)
+			c.Next()
 			return
 		}
 		nowTimeStr := time.Now().Format(timeFormat)
 		nowTime, err := time.Parse(timeFormat, nowTimeStr)
 		if err != nil {
+			// Same corrupt-value contract as above; this branch parses a
+			// timestamp newhub just formatted itself, so it is effectively
+			// unreachable in practice, but the handling stays symmetric.
 			common.SysError("redis rate limit time parse error: " + err.Error())
-			c.Status(http.StatusInternalServerError)
-			c.Abort()
+			metrics.RecordRateLimitDegraded("web_rate_limit_corrupt")
+			r6aRateLimitDegradedLogf("web_rate_limit_corrupt", "web/API rate limit corrupt timestamp, failing open: "+err.Error())
+			rdb.Del(ctx, key)
+			c.Next()
 			return
 		}
 		// time.Since will return negative number!
@@ -124,11 +145,35 @@ func GlobalWebRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+// probeBypassPaths are the k8s liveness/readiness probe routes: a probe
+// failure restarts the pod, so these are exempted from GlobalAPIRateLimit
+// when the request is a direct in-cluster hit (loopback/private RemoteAddr
+// with none of the three forwarding headers present — see
+// IsDirectInClusterRequest in direct_request.go). In today's topology that
+// bypass condition is met by the kubelet hitting the pod's NodePort
+// directly, and also by anything else calling the pod from inside the node
+// or cluster network with no forwarding header. A request relayed through
+// the host nginx carries a forwarding header (deploy/r6-host-nginx/*.conf)
+// and so is not classified as direct, and stays rate limited exactly as
+// before — /api/health through nginx still performs a real DB ping and is
+// worth protecting.
+var probeBypassPaths = map[string]bool{
+	"/api/status": true,
+	"/api/health": true,
+}
+
 func GlobalAPIRateLimit() func(c *gin.Context) {
+	next := defNext
 	if common.GlobalApiRateLimitEnable {
-		return rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
+		next = rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
 	}
-	return defNext
+	return func(c *gin.Context) {
+		if probeBypassPaths[c.FullPath()] && IsDirectInClusterRequest(c) {
+			c.Next()
+			return
+		}
+		next(c)
+	}
 }
 
 func CriticalRateLimit() func(c *gin.Context) {

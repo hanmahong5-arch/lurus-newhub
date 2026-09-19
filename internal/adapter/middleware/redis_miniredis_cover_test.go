@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -177,10 +179,12 @@ func TestRedisRateLimiterKeyed_WindowExpired_Miniredis(t *testing.T) {
 	}
 }
 
-// A closed backend surfaces as a 500 from the LLen error branch. This case owns
-// a dedicated throwaway miniredis (it must close the server), leaving the shared
-// instance untouched.
-func TestRedisRateLimiterKeyed_BackendDown_Miniredis(t *testing.T) {
+// A closed backend must fail OPEN, not closed (cycle-11 L2 / operator
+// decision D1's web/API half): the request is admitted, not 500+aborted,
+// and the degradation is visible via the web_rate_limit_backend counter.
+// This case owns a dedicated throwaway miniredis (it must close the
+// server), leaving the shared instance untouched.
+func TestRedisRateLimiterKeyed_BackendDown_FailsOpen_Miniredis(t *testing.T) {
 	mr, err := miniredis.Run()
 	if err != nil {
 		t.Fatalf("start miniredis: %v", err)
@@ -197,15 +201,27 @@ func TestRedisRateLimiterKeyed_BackendDown_Miniredis(t *testing.T) {
 	}()
 	mr.Close() // subsequent commands error out
 
+	before := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("web_rate_limit_backend"))
+
 	c, _ := newTestContext(http.MethodGet, "/x", "", "")
 	redisRateLimiterKeyed(c, 1, 3600, "DOWN", "c")
-	if !c.IsAborted() || c.Writer.Status() != http.StatusInternalServerError {
-		t.Errorf("backend-down status=%d aborted=%v, want abort 500", c.Writer.Status(), c.IsAborted())
+	if c.IsAborted() {
+		t.Errorf("backend-down request must not be aborted (fail open), aborted=%v", c.IsAborted())
+	}
+	if c.Writer.Status() == http.StatusInternalServerError {
+		t.Errorf("backend-down status = %d, must not be 500", c.Writer.Status())
+	}
+
+	after := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("web_rate_limit_backend"))
+	if after != before+1 {
+		t.Errorf("web_rate_limit_backend counter = %v, want %v (before %v + 1)", after, before+1, before)
 	}
 }
 
-// A corrupt stored timestamp cannot be parsed → 500 (time-parse error branch).
-func TestRedisRateLimiterKeyed_CorruptTimestamp_Miniredis(t *testing.T) {
+// A corrupt stored timestamp must fail OPEN and self-heal by deleting the
+// unusable key, instead of 500-ing every future request for that ident
+// forever.
+func TestRedisRateLimiterKeyed_CorruptTimestamp_FailsOpenAndClearsKey_Miniredis(t *testing.T) {
 	_, rdb, cleanup := withMiniRedis(t)
 	defer cleanup()
 
@@ -214,10 +230,25 @@ func TestRedisRateLimiterKeyed_CorruptTimestamp_Miniredis(t *testing.T) {
 	if err := rdb.LPush(context.Background(), key, "not-a-timestamp").Err(); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+
+	before := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("web_rate_limit_corrupt"))
+
 	c, _ := newTestContext(http.MethodGet, "/x", "", "")
 	redisRateLimiterKeyed(c, 1, 3600, mark, ident)
-	if !c.IsAborted() || c.Writer.Status() != http.StatusInternalServerError {
-		t.Errorf("corrupt-timestamp status=%d, want 500", c.Writer.Status())
+	if c.IsAborted() {
+		t.Errorf("corrupt-timestamp request must not be aborted (fail open), aborted=%v", c.IsAborted())
+	}
+	if c.Writer.Status() == http.StatusInternalServerError {
+		t.Errorf("corrupt-timestamp status = %d, must not be 500", c.Writer.Status())
+	}
+
+	if exists, _ := rdb.Exists(context.Background(), key).Result(); exists != 0 {
+		t.Errorf("corrupt key must be deleted to self-heal, still exists (Exists=%d)", exists)
+	}
+
+	after := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("web_rate_limit_corrupt"))
+	if after != before+1 {
+		t.Errorf("web_rate_limit_corrupt counter = %v, want %v (before %v + 1)", after, before+1, before)
 	}
 }
 
