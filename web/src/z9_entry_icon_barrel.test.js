@@ -155,7 +155,10 @@ describe('entry chunk module graph', () => {
     for (const entry of ENTRY_POINTS) {
       expect(isFile(entry), `${entry} must exist`).toBe(true);
     }
-    expect(visited.size).toBeGreaterThan(100);
+    // 170 files before cycle 12; 67 after W made the eleven legacy pages
+    // lazy (measured 2026-09-19). The floor only guards against an empty
+    // walk, so it sits well under the real size.
+    expect(visited.size).toBeGreaterThan(40);
   });
 
   it.each(FORBIDDEN_IN_ENTRY_GRAPH)(
