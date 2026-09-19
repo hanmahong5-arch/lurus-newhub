@@ -26,6 +26,11 @@ import 'react-toastify/dist/ReactToastify.css';
 import { StatusProvider } from './context/Status';
 import { ThemeProvider } from './context/Theme';
 import PageLayout from './components/layout/PageLayout';
+// Importing this before render is also what puts <html lang> on the language
+// being rendered: i18n.js subscribes to languageChanged and index.html ships
+// lang="en" until then. It lives there rather than here because a module that
+// calls createRoot at import time cannot be loaded by a test, and that
+// attribute is worth an assertion (src/i18n/locale-coverage.test.js).
 import './i18n/i18n';
 import './index.css';
 import { LocaleProvider } from '@douyinfe/semi-ui';

@@ -171,6 +171,17 @@ vi.mock('../../../context/Theme', () => ({
   useActualTheme: () => actualTheme.current,
 }));
 
+// LanguageSelector asks i18next which bundle is rendering. Nothing else
+// reachable from this file touches react-i18next — useHeaderBar and StreakBadge
+// are mocked above and every other part takes `t` as a prop — so this stub is
+// the picker's input and nothing else's. resolvedLanguage starts undefined,
+// which is what a render with no i18next instance in context produces, so the
+// existing cases keep exercising the currentLang fallback.
+const i18nStub = vi.hoisted(() => ({ resolvedLanguage: undefined }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (k) => k, i18n: i18nStub }),
+}));
+
 // --- HeaderBar (index.jsx) collaborators -----------------------------------
 // The three hooks are the component's entire input surface; NoticeModal is a
 // marker that echoes the props it receives so "which tab does it open on?"
@@ -260,6 +271,7 @@ const t = (k) => k;
 beforeEach(() => {
   vi.clearAllMocks();
   actualTheme.current = 'light';
+  i18nStub.resolvedLanguage = undefined;
 });
 
 describe('MobileMenuButton', () => {
@@ -730,18 +742,46 @@ describe('LanguageSelector', () => {
     expect(onLanguageChange).toHaveBeenCalledWith(code);
   });
 
-  it('highlights exactly the active language', () => {
+  const menuItem = (label) =>
+    screen.getByText(label).closest('[role="menuitem"]');
+
+  // The tags a real browser produces, not the bare ones. useHeaderBar hands
+  // this component i18n.language, and i18next keeps a supported region tag as
+  // it stands, so 'en-US' and 'zh-CN' are what arrive here; comparing them
+  // against 'en' / 'zh' marked neither entry, and the menu an operator opened
+  // on first load showed no active language at all.
+  it.each([
+    ['en-US', 'English', '中文'],
+    ['zh-CN', '中文', 'English'],
+    ['en', 'English', '中文'],
+    ['zh', '中文', 'English'],
+  ])('highlights exactly the active language for %s', (tag, active, other) => {
     render(
       React.createElement(LanguageSelector, {
-        currentLang: 'en',
+        currentLang: tag,
         onLanguageChange: vi.fn(),
         t,
       }),
     );
-    const item = (label) =>
-      screen.getByText(label).closest('[role="menuitem"]');
-    expect(item('English').className).toContain('font-semibold');
-    expect(item('中文').className).not.toContain('font-semibold');
+    expect(menuItem(active).className).toContain('font-semibold');
+    expect(menuItem(other).className).not.toContain('font-semibold');
+  });
+
+  it('marks the language being rendered, not one i18next resolved away', () => {
+    // changeLanguage('ja') is the one case where the two disagree in substance:
+    // i18n.language stays 'ja' — which is what the header bar tracks and passes
+    // in — while every string comes from en.json. English is on screen, so
+    // English is what the menu has to mark.
+    i18nStub.resolvedLanguage = 'en';
+    render(
+      React.createElement(LanguageSelector, {
+        currentLang: 'ja',
+        onLanguageChange: vi.fn(),
+        t,
+      }),
+    );
+    expect(menuItem('English').className).toContain('font-semibold');
+    expect(menuItem('中文').className).not.toContain('font-semibold');
   });
 });
 

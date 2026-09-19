@@ -23,12 +23,39 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 
 import enTranslation from './locales/en.json';
 import zhTranslation from './locales/zh.json';
-import { PUBLISHED_LANGUAGES } from './published';
 
-// Re-exported so that './i18n' stays the one import path a reader reaches for.
-// The definitions live in ./published because that module has no imports, and
-// callers which only need the list must not pull i18next in with it.
-export { PUBLISHED_LANGUAGES, isPublishedLanguage } from './published';
+/**
+ * The languages this build ships.
+ *
+ * fr / ja / ru / vi still live in ./locales and carry 58% of en.json's keys
+ * (measured: fr 58.13, ja 57.98, ru 58.13, vi 58.20). Registering them let the
+ * browser language detector land an operator on a console that was two fifths
+ * Chinese, so they are not here — the files stay in the tree, which makes this
+ * reversible. Finishing one to the floor in
+ * src/i18n/locale-coverage.test.js is what puts it back (owner item O-lang).
+ */
+export const PUBLISHED_LANGUAGES = ['zh', 'en'];
+
+/**
+ * Keep <html lang> on the language the operator is actually reading.
+ *
+ * index.html ships lang="en" for the pre-JavaScript document; from the moment
+ * i18next resolves a language this follows it. resolvedLanguage, not language:
+ * an explicit changeLanguage('ja') leaves language on 'ja' while every string
+ * resolves through the fallback, and declaring a document Japanese while it
+ * renders English is the same lie in a different place — the browser offers to
+ * machine-translate an already-English page and a screen reader picks the
+ * wrong voice.
+ */
+const syncDocumentLanguage = (lng) => {
+  if (typeof document === 'undefined') return;
+  document.documentElement.lang = i18n.resolvedLanguage || lng || 'en';
+};
+
+// Registered before init: i18next emits languageChanged from inside init's own
+// changeLanguage (i18next.js changeLanguage -> done), and setResolvedLanguage
+// runs before that emit, so the first call already sees the resolved tag.
+i18n.on('languageChanged', syncDocumentLanguage);
 
 i18n
   .use(LanguageDetector)
@@ -47,7 +74,7 @@ i18n
     nonExplicitSupportedLngs: true,
     // Per-language, not a blanket 'en'. A t() key written as its own Chinese
     // source text renders correct Chinese by resolving to itself when zh.json
-    // omits it; en.json carries 254 keys zh.json does not (measured on this
+    // omits it; en.json carries 265 keys zh.json does not (measured on this
     // branch), and a zh -> en fallback would answer those lookups with English
     // for a Chinese operator. An empty array is a fallback list, so
     // getFallbackCodes returns it instead of reaching `default`

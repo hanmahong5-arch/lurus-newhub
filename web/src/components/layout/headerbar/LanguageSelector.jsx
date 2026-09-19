@@ -21,8 +21,33 @@ import React from 'react';
 import { Button, Dropdown } from '@douyinfe/semi-ui';
 import { Languages } from 'lucide-react';
 import { CN, GB } from 'country-flag-icons/react/3x2';
+import { useTranslation } from 'react-i18next';
+
+const languagePart = (code) =>
+  String(code || '')
+    .split('-')[0]
+    .toLowerCase();
 
 const LanguageSelector = ({ currentLang, onLanguageChange, t }) => {
+  const { i18n } = useTranslation();
+  /*
+   * Which entry is marked active follows the language being rendered, not the
+   * tag the header bar happens to hold.
+   *
+   * useHeaderBar passes i18n.language, and for every mainstream browser that
+   * is a region tag: a zh-CN browser lands on 'zh-CN' and an en-US browser on
+   * 'en-US' (getBestMatchFromCodes keeps a supported region tag as it stands;
+   * pinned in src/i18n/locale-coverage.test.js). Comparing that against 'zh'
+   * and 'en' matched neither, so the menu marked nothing until the operator
+   * picked a language by hand. resolvedLanguage is the bundle actually in use
+   * — 'zh' / 'en' — and it is also right in the one case the two disagree in
+   * substance: an explicit changeLanguage('ja') leaves language on 'ja' while
+   * the screen renders English, and English is what should be marked.
+   *
+   * currentLang stays the fallback for a render with no i18next instance in
+   * context.
+   */
+  const activeLang = languagePart(i18n?.resolvedLanguage || currentLang);
   return (
     <Dropdown
       position='bottomRight'
@@ -35,14 +60,14 @@ const LanguageSelector = ({ currentLang, onLanguageChange, t }) => {
               set, in both directions. */}
           <Dropdown.Item
             onClick={() => onLanguageChange('zh')}
-            className={`!flex !items-center !gap-2 !px-3 !py-1.5 !text-sm !text-semi-color-text-0 dark:!text-gray-200 ${currentLang === 'zh' ? '!bg-semi-color-primary-light-default dark:!bg-blue-600 !font-semibold' : 'hover:!bg-semi-color-fill-1 dark:hover:!bg-gray-600'}`}
+            className={`!flex !items-center !gap-2 !px-3 !py-1.5 !text-sm !text-semi-color-text-0 dark:!text-gray-200 ${activeLang === 'zh' ? '!bg-semi-color-primary-light-default dark:!bg-blue-600 !font-semibold' : 'hover:!bg-semi-color-fill-1 dark:hover:!bg-gray-600'}`}
           >
             <CN title='中文' className='!w-5 !h-auto' />
             <span>中文</span>
           </Dropdown.Item>
           <Dropdown.Item
             onClick={() => onLanguageChange('en')}
-            className={`!flex !items-center !gap-2 !px-3 !py-1.5 !text-sm !text-semi-color-text-0 dark:!text-gray-200 ${currentLang === 'en' ? '!bg-semi-color-primary-light-default dark:!bg-blue-600 !font-semibold' : 'hover:!bg-semi-color-fill-1 dark:hover:!bg-gray-600'}`}
+            className={`!flex !items-center !gap-2 !px-3 !py-1.5 !text-sm !text-semi-color-text-0 dark:!text-gray-200 ${activeLang === 'en' ? '!bg-semi-color-primary-light-default dark:!bg-blue-600 !font-semibold' : 'hover:!bg-semi-color-fill-1 dark:hover:!bg-gray-600'}`}
           >
             <GB title='English' className='!w-5 !h-auto' />
             <span>English</span>
