@@ -453,7 +453,7 @@ horizon_plan_2026_05_27:
     H1_3_ha_multimaster: >
       code-complete 2026-05-29 (commit a4dd2006) — DB-lease leader election
       (leader_elections / migration 018), common.IsLeader() gating all
-      master-only loops + boot migration, HPA min=3 + R6-stage replicas=3.
+      master-only loops + boot migration, no HPA (3 static replicas on R6-stage).
       Clock-injected unit tests green. STAGE-gated: real kill-leader-pod
       failover drill pending. ADR adr-2026-05-29-leader-election.md.
     H1_4_secret_rotation: >

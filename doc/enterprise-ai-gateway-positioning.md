@@ -81,22 +81,30 @@ become committed only once P1-5 (backups) + alert paging land — see §5.**
 ## 5. Reliability posture — honest tiering
 
 **Today: serious pre-production**, one tier below "sign an enterprise SLA":
-- Run plane is NOT a single point: HPA min=max=3 + PDB minAvailable:1 + DB-lease
-  leader election; topology spread + preStop drain (**P1-4**).
-- Observability is complete: 4 relay SLIs, graded Prometheus alerts + burn-rate
-  (**P0-4**), 25 RED/USE metrics, 3 previously-dead metrics now live (**P1-3**).
-- Billing is hard to lose: transactional outbox (SKIP LOCKED + idempotent) +
-  breaker + **P1-2** cached-balance degrade.
-- Dependency hangs bounded: PG `statement_timeout` + Meilisearch client timeout
-  (**P1-1**).
+- Run plane: 3 static replicas on a single-node cluster — no HPA, no PDB, no topology
+  spread (recorded as a decision in `deploy/k8s/r6-stage/README.md`, not drift); DB-lease
+  leader election for master-only loops; preStop drain with `terminationGracePeriodSeconds`
+  above the graceful-shutdown budget; shallow liveness / deep readiness split.
+- Observability: Prometheus-format `/metrics` (25+ RED/USE series, 4 relay SLIs) scraped by
+  the host Netdata. Alert rules live in `deploy/r6-host-netdata/health.d/`; the in-repo
+  `PrometheusRule` is not deployed (no Prometheus operator on R6). Delivery of an alarm to
+  a human is still owner-gated (no webhook target configured).
+- Billing is hard to lose: transactional outbox (SKIP LOCKED + idempotent) + breaker +
+  cached-balance degrade.
+- Dependency hangs bounded: PG `statement_timeout`, Meilisearch and Tavily client timeouts;
+  Redis, platform gRPC and NATS budgets are cycle-12 work
+  (`_bmad-output/planning-artifacts/cycle12-industrial-grade-2026-09-19.md`).
+- Backups: daily `pg_dump` CronJob to a PVC, host-cron off-site rsync, weekly restore drill
+  (`doc/runbook/database.md`, `doc/runbook/pg-restore.md`); no WAL archiving, so RPO is up
+  to 24 h.
 
 **Gap to "SLA-capable" (minimal honest set), all owner-gated:**
-1. **P1-5** — prove the newhub DB (`newhub`) is actually backed up (likely NOT today) +
-   1 restore drill. **RPO is the #1 blocker; an unverified-coverage DB ≠ any honest SLA.**
-2. **P0-2 → PROD only with P1-2** — deep readiness on 3 PG-sharing replicas without
-   the degrade would convert a PG blip into a fleet-wide outage.
-3. **P0-5** — GitOps so the hardened manifests are actually delivered to PROD.
-4. Page routing to a real on-call channel (so the SLOs we promise are observed).
+1. RPO: a daily dump only; WAL archiving / PITR is a decision not yet taken (O-pitr).
+2. Alert delivery: alarms exist in git, several are not loaded on the host and no webhook
+   target is set — nobody is paged today.
+3. Traffic: 30-day production traffic is our own probes (14 human calls); no measured
+   capacity baseline yet.
+4. One node: a node loss is a full outage; there is no second node to spread onto.
 
 Execution-ready details + diffs: `doc/runbook/industrial-readiness-gated-actions.md`.
 
@@ -104,6 +112,6 @@ Execution-ready details + diffs: `doc/runbook/industrial-readiness-gated-actions
 
 OTel tracing activation (no real traffic) · automated secret rotation (manual
 kubectl suffices; only the *shared* `IDENTITY_SESSION_SECRET` is worth flagging) ·
-real HPA autoscaling (nothing to scale; min=max=3 is right) · PG full circuit
+an HPA (nothing to scale; 3 static replicas, no HPA) · PG full circuit
 breaker (in-cluster timeout + `statement_timeout` suffices) · `hub.lurus.cn` DNS /
 R1 launch (owner-gated on PMF; runbook-ready only).

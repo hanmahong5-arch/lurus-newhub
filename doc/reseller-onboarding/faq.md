@@ -18,6 +18,6 @@
 
 **Q8 Switch 白标?** HMAC-SHA256 sidecar。(1) 我方 `GET /api/v2/admin/whitelabel/hmac-key?tenant_slug=<贵司>`(RootJWTAuth)→ 64-hex key;(2) 贵司打包流水线签 `whitelabel.json`(logo/默认 endpoint/租户 Key);(3) EndUser 启动验签,篡改拒载。算法 `sha256(master_secret + tenant_slug)`, 确定性, 无 DB 行。来源 `v2_admin_whitelabel.go:45-97` + ADR `2026-05-20-orphan-features-3-whitelabel-hmac.md`。
 
-**Q9 你们 down?** 客户端: HTTP 503/502 → Switch retry + 切备用 endpoint。服务端: circuit breaker 熔断坏 channel + 切兄弟 channel;multi-key pool 轮转;Postgres HA(WAL-G backup + streaming replica, story 7-2.1 review);Redis 故障退化到 cookie session。诚实: monthly uptime ~98%(目标 99.5%),STAGE chaos drill 未跑通,多 region failover 未实现。来源 `sprint-status.yaml:26-28` + epic-7。
+**Q9 你们 down?** 客户端: HTTP 503/502 → Switch retry + 切备用 endpoint。服务端: circuit breaker 熔断坏 channel + 切兄弟 channel;multi-key pool 轮转;Postgres 单实例 StatefulSet,每日 pg_dump + 宿主异地 rsync + 每周恢复演练,无流复制、无 WAL 归档(RPO 最长 24h,`doc/runbook/pg-restore.md`);Redis 故障退化到 cookie session。诚实: monthly uptime ~98%(目标 99.5%),STAGE chaos drill 未跑通,多 region failover 未实现。来源 `sprint-status.yaml:26-28` + epic-7。
 
 **Q10 退出?** (1) **数据导出**: `GET /api/v2/{slug}/logs/export`(CSV, cap 50k 行/次);token 列表 `GET /api/v2/{slug}/tokens` + Provisioning `GET /internal/v1/provisioning/tenants/{slug}/keys`。(2) **Key 失效**: `DELETE` 单 key 软删 + 运维 `DeleteTenant`(`api-v2-router.go:230`)。(3) **剩余 Pool 退款**: `current_balance` 反向 credit 回钱包(`CreditWalletGRPC`, 原子, `tenant_credit_pool.go:279-284`)。合同退出条款建议 30 天预通知 + 数据保留 90 天(待商务填)。

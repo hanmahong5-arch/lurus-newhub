@@ -85,14 +85,13 @@ pg_restore -U postgres -h lurus-pg-rw.database.svc -d newhub --clean --if-exists
 pg_restore -U postgres -h lurus-pg-rw.database.svc -d newhub --table=users --clean --if-exists /backups/lurus-newhub-<TS>.dump
 ```
 
-PITR(WAL 归档)见 `doc/runbook/pg-restore.md`(wal-g)。
+现役拓扑**没有** WAL 归档/PITR(RPO = 每日转储间隔,最长 24h);全库/单表恢复步骤见 `doc/runbook/pg-restore.md`。
 
 ### 演练:两条,别混淆
 
 - **全平台**:宿主 cron `32 5 * * 0` 跑 `2l-svc-platform/scripts/dr-drill.sh` —— 全库恢复进
   一次性 ns + 拉起真 platform-core 冒烟对账 + 实测 RTO。**这是权威演练**。
-- ⚠️ 本仓的 `scripts/pg-restore-drill.sh` 测的是 **wal-g/S3**,不是现役的 pg_dump 链路,
-  且 `WALG_S3_PREFIX` 未设时**静默 skip**。它跑绿**不能**说明现役备份可恢复。
+- `scripts/pg-restore-drill.sh`(wal-g/S3,`WALG_S3_PREFIX` 未设时静默 skip)已于 2026-09-19 删除:它从未测过现役 pg_dump 链路,跑绿不说明任何事。
 
 ### 单库快速验证(非破坏性,10 秒,可随时手跑)
 
