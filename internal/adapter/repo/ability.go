@@ -21,11 +21,25 @@ type AbilityWithChannel = entity.AbilityWithChannel
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	var abilities []AbilityWithChannel
 	err := DB.Table("abilities").
-		Select("abilities.*, channels.type as channel_type").
+		Select("abilities.*, channels.type as channel_type, coalesce(channels.tenant_id, '') as channel_tenant_id").
 		Joins("left join channels on abilities.channel_id = channels.id").
 		Where("abilities.enabled = ?", true).
 		Scan(&abilities).Error
 	return abilities, err
+}
+
+// GetEnabledModelsForTenant is GetEnabledModels narrowed to the channels
+// abilityTenantScope makes visible to this tenant, for the v1 admin
+// discovery endpoint GET /api/channel/models_enabled. tenantID == ""
+// reproduces GetEnabledModels (abilityTenantScope's own contract), so the
+// caller — not this function — decides that a blank tenant means "no filter".
+func GetEnabledModelsForTenant(tenantID string) []string {
+	var models []string
+	scope, scopeArgs := abilityTenantScope(tenantID)
+	where := "enabled = ?" + scope
+	args := append([]interface{}{true}, scopeArgs...)
+	DB.Table("abilities").Where(where, args...).Distinct("model").Pluck("model", &models)
+	return models
 }
 
 func GetGroupEnabledModels(group string) []string {

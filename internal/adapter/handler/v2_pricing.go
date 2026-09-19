@@ -36,7 +36,10 @@ func GetPricingV2(c *gin.Context) {
 		return
 	}
 
-	rawPricing := repo.GetPricing()
+	// Projected onto the slug's tenant: the platform-shared channels plus
+	// that tenant's own. The whole catalogue used to come back here too, so
+	// this page listed models only another tenant's channels could serve.
+	rawPricing := repo.GetPricingForTenant(tenant.Id)
 	type pricingItem struct {
 		ModelName  interface{} `json:"model_name"`
 		Vendor     interface{} `json:"vendor"`

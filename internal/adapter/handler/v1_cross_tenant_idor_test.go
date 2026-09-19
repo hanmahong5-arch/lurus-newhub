@@ -1012,3 +1012,216 @@ func TestV1RedemptionSearch_ListTenantScoped(t *testing.T) {
 		t.Errorf("root redemption search must include every tenant, missing victim redemption id=%d, items=%v", victim.Id, items)
 	}
 }
+
+// ─── Model discovery (cycle-12 plan §L5) ────────────────────────────────────
+//
+// The four v1 discovery endpoints below answered from the whole abilities /
+// channels table regardless of the caller's tenant, so a tenant admin could
+// enumerate another tenant's model names — including private fine-tune ids —
+// without ever addressing that tenant's resources by id.
+
+// seedV1DiscoveryChannel seeds one channel plus one enabled ability row, the
+// pair repo.GetEnabledModels / GetGroupEnabledModels answer from.
+func seedV1DiscoveryChannel(t *testing.T, ctx *V2TestContext, tenant, name, model, group string) *repo.Channel {
+	t.Helper()
+	ch := &repo.Channel{
+		Name:        name,
+		TenantId:    tenant,
+		Key:         "sk-" + name,
+		Status:      common.ChannelStatusEnabled,
+		Type:        1,
+		Models:      model,
+		Group:       group,
+		CreatedTime: common.GetTimestamp(),
+	}
+	if err := ctx.DB.Create(ch).Error; err != nil {
+		t.Fatalf("seed discovery channel %s: %v", name, err)
+	}
+	if err := ctx.DB.Create(&repo.Ability{
+		Group: group, Model: model, ChannelId: ch.Id, Enabled: true,
+	}).Error; err != nil {
+		t.Fatalf("seed discovery ability %s: %v", model, err)
+	}
+	return ch
+}
+
+// seedV1DiscoveryTrio seeds the shared / own / victim triple every discovery
+// test below asserts against and returns the three model names.
+func seedV1DiscoveryTrio(t *testing.T, ctx *V2TestContext) (shared, own, victim string) {
+	t.Helper()
+	shared, own, victim = "disc-shared-model", "disc-own-model", "disc-victim-model"
+	seedV1DiscoveryChannel(t, ctx, "default", "disc-shared", shared, "default")
+	seedV1DiscoveryChannel(t, ctx, ctx.TenantID, "disc-own", own, "default")
+	seedV1DiscoveryChannel(t, ctx, idorVictimTenant, "disc-victim", victim, "default")
+	return shared, own, victim
+}
+
+func v1StringList(t *testing.T, w *httptest.ResponseRecorder) []string {
+	t.Helper()
+	raw, _ := v1Body(t, w)["data"].([]interface{})
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func v1ListHas(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// GET /api/user/models — the caller's own model list.
+func TestV1UserModels_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	shared, own, victim := seedV1DiscoveryTrio(t, ctx)
+
+	c, w := v1Ctx(http.MethodGet, "/api/user/models", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	GetUserModels(c)
+	got := v1StringList(t, w)
+	for _, want := range []string{shared, own} {
+		if !v1ListHas(got, want) {
+			t.Errorf("tenant admin /api/user/models missing %q: %v", want, got)
+		}
+	}
+	if v1ListHas(got, victim) {
+		t.Errorf("tenant admin /api/user/models leaked cross-tenant model %q: %v", victim, got)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/user/models", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	GetUserModels(c)
+	if got = v1StringList(t, w); !v1ListHas(got, victim) {
+		t.Errorf("root /api/user/models must keep the global view, missing %q: %v", victim, got)
+	}
+}
+
+// GET /api/channel/models_enabled — the channel editor's "which models are
+// live" picker.
+func TestV1ModelsEnabled_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	shared, own, victim := seedV1DiscoveryTrio(t, ctx)
+
+	c, w := v1Ctx(http.MethodGet, "/api/channel/models_enabled", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	EnabledListModels(c)
+	got := v1StringList(t, w)
+	for _, want := range []string{shared, own} {
+		if !v1ListHas(got, want) {
+			t.Errorf("tenant admin models_enabled missing %q: %v", want, got)
+		}
+	}
+	if v1ListHas(got, victim) {
+		t.Errorf("tenant admin models_enabled leaked cross-tenant model %q: %v", victim, got)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/channel/models_enabled", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	EnabledListModels(c)
+	if got = v1StringList(t, w); !v1ListHas(got, victim) {
+		t.Errorf("root models_enabled must keep the global view, missing %q: %v", victim, got)
+	}
+}
+
+// GET /api/models/missing — "which live model names have no metadata row".
+func TestV1MissingModels_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	// SetupV2TestRouter does not migrate the models metadata table; this
+	// endpoint subtracts it from the enabled set, so it must exist.
+	if err := ctx.DB.AutoMigrate(&repo.Model{}); err != nil {
+		t.Fatalf("migrate models table: %v", err)
+	}
+	shared, own, victim := seedV1DiscoveryTrio(t, ctx)
+
+	c, w := v1Ctx(http.MethodGet, "/api/models/missing", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	GetMissingModels(c)
+	if v1Body(t, w)["success"] != true {
+		t.Fatalf("tenant admin missing-models call failed: %s", w.Body.String())
+	}
+	got := v1StringList(t, w)
+	for _, want := range []string{shared, own} {
+		if !v1ListHas(got, want) {
+			t.Errorf("tenant admin missing-models missing %q: %v", want, got)
+		}
+	}
+	if v1ListHas(got, victim) {
+		t.Errorf("tenant admin missing-models leaked cross-tenant model %q: %v", victim, got)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/models/missing", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	GetMissingModels(c)
+	if got = v1StringList(t, w); !v1ListHas(got, victim) {
+		t.Errorf("root missing-models must keep the global view, missing %q: %v", victim, got)
+	}
+}
+
+// GET /api/channel/tag/models?tag=… — any tag string was readable, so a
+// tenant admin who guessed (or read from a shared naming convention) another
+// tenant's tag got that tenant's longest model list back.
+func TestV1ChannelTagModels_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	const victimTag = "victim-only-tag"
+	const ownTag = "own-only-tag"
+	victim := seedV1TaggedChannel(t, ctx, idorVictimTenant, "tagmodels-victim", victimTag, common.ChannelStatusEnabled)
+	victim.Models = "victim-secret-model,victim-secret-model-2"
+	if err := ctx.DB.Save(victim).Error; err != nil {
+		t.Fatalf("set victim models: %v", err)
+	}
+	own := seedV1TaggedChannel(t, ctx, ctx.TenantID, "tagmodels-own", ownTag, common.ChannelStatusEnabled)
+	own.Models = "own-model-a,own-model-b"
+	if err := ctx.DB.Save(own).Error; err != nil {
+		t.Fatalf("set own models: %v", err)
+	}
+
+	c, w := v1Ctx(http.MethodGet, "/api/channel/tag/models?tag="+victimTag, nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	GetTagModels(c)
+	if got, _ := v1Body(t, w)["data"].(string); got != "" {
+		t.Errorf("tenant admin read another tenant's tag model list: %q", got)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/channel/tag/models?tag="+ownTag, nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	GetTagModels(c)
+	if got, _ := v1Body(t, w)["data"].(string); got != "own-model-a,own-model-b" {
+		t.Errorf("tenant admin own-tag model list = %q, want the own channel's models", got)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/channel/tag/models?tag="+victimTag, nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	GetTagModels(c)
+	if got, _ := v1Body(t, w)["data"].(string); got != "victim-secret-model,victim-secret-model-2" {
+		t.Errorf("root tag model list = %q, want the victim channel's models (root keeps the global view)", got)
+	}
+}
+
+// GET /api/channel/?tag_mode=true — the tag-grouped channel list. The rows
+// were already filtered by tenant (channel.go:134) but the page of tags and
+// the total were not, so a tenant admin paged through other tenants' tag
+// names and saw a total that counted them.
+func TestV1ChannelTagMode_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	seedV1TaggedChannel(t, ctx, ctx.TenantID, "tagmode-own", "own-only-tag", common.ChannelStatusEnabled)
+	seedV1TaggedChannel(t, ctx, idorVictimTenant, "tagmode-victim", "victim-only-tag", common.ChannelStatusEnabled)
+
+	c, w := v1Ctx(http.MethodGet, "/api/channel/?p=1&page_size=50&tag_mode=true", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	GetAllChannels(c)
+	data := v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 1 {
+		t.Errorf("tenant admin tag_mode total=%v want 1 (only its own tag)", got)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/channel/?p=1&page_size=50&tag_mode=true", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	GetAllChannels(c)
+	data = v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 2 {
+		t.Errorf("root tag_mode total=%v want 2 (global view)", got)
+	}
+}

@@ -43,25 +43,45 @@ type testResult struct {
 }
 
 // channelProbeOptions controls the side effects that differ between
-// probeChannel's two callers. RecordConsumeLog is the only one today: the
-// manual GET /api/channel/test/:id path (testChannel below, kept as a
-// 3-arg wrapper so TestChannel and context_tier_channel_test_test.go's
-// direct calls need no change) still writes a real consume-log row; the
-// automatic pass (autoProbeChannel, channel_probe_policy.go) does not —
-// every automatic probe used to write one as user 1, polluting the
-// leaderboard and quota_data (cycle-11 plan §L3). Both paths go through
-// metrics.RecordChannelProbe regardless of this flag.
+// probeChannel's callers. RecordConsumeLog is the oldest of them: the manual
+// GET /api/channel/test/:id path (TestChannel below, via testChannelForActor)
+// still writes a real consume-log row; the automatic pass (autoProbeChannel,
+// channel_probe_policy.go) does not — every automatic probe used to write one
+// as user 1, polluting the leaderboard and quota_data (cycle-11 plan §L3).
+// Both paths go through metrics.RecordChannelProbe regardless of this flag.
 type channelProbeOptions struct {
 	RecordConsumeLog bool
+	// ActorUserID / TenantID attribute the consume-log row this probe
+	// writes (they are read only under RecordConsumeLog) to the operator
+	// who asked for the probe and to that operator's tenant. probeChannel
+	// builds its own gin.Context and loads user 1 into it for the relay
+	// identity, so without these the row was written as user 1 in whatever
+	// tenant resolveLogTenantID (repo/log.go) picked for user 1: the
+	// operator saw nothing in their own log list and another tenant got a
+	// row it did not ask for. ActorUserID 0 keeps that older attribution,
+	// for callers that have no actor.
+	ActorUserID int
+	TenantID    string
 }
 
-// testChannel is the manual v1 path's entry point: GET
-// /api/channel/test/:id (TestChannel below) and
-// context_tier_channel_test_test.go both call it directly. It is
-// probeChannel with RecordConsumeLog always on — the one probe path this
-// cycle's plan explicitly keeps writing a consume-log row.
+// testChannel is the no-actor form of the manual probe, kept for
+// context_tier_channel_test_test.go's direct call. It is probeChannel with
+// RecordConsumeLog on — the one probe path this cycle's plan keeps writing a
+// consume-log row — and no attribution, so its row lands on user 1 the way it
+// always did. The HTTP handler (TestChannel below) uses testChannelForActor
+// instead.
 func testChannel(channel *repo.Channel, testModel string, endpointType string) testResult {
 	return probeChannel(channel, testModel, endpointType, channelProbeOptions{RecordConsumeLog: true})
+}
+
+// testChannelForActor is testChannel with the requesting operator attached, so
+// the consume-log row belongs to them and to their tenant.
+func testChannelForActor(channel *repo.Channel, testModel string, endpointType string, actorUserID int, tenantID string) testResult {
+	return probeChannel(channel, testModel, endpointType, channelProbeOptions{
+		RecordConsumeLog: true,
+		ActorUserID:      actorUserID,
+		TenantID:         tenantID,
+	})
 }
 
 func probeChannel(channel *repo.Channel, testModel string, endpointType string, opts channelProbeOptions) testResult {
@@ -443,7 +463,20 @@ func probeChannel(channel *repo.Channel, testModel string, endpointType string, 
 		consumedTime := float64(milliseconds) / 1000.0
 		other := app.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatioInfo.GroupRatio, priceData.CompletionRatio,
 			usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice, priceData.GroupRatioInfo.GroupSpecialRatio)
-		repo.RecordConsumeLog(c, 1, repo.RecordConsumeLogParams{
+		// Attribution: c is probeChannel's own context, carrying user 1's
+		// identity for the relay leg above. Re-stamp it here — after the
+		// relay, before the row is written — so the row names the operator
+		// who asked for the probe. resolveLogTenantID falls back to the
+		// actor's own tenant when opts.TenantID is empty.
+		logUserID := 1
+		if opts.ActorUserID > 0 {
+			logUserID = opts.ActorUserID
+			c.Set("tenant_id", opts.TenantID)
+			if actor, actorErr := repo.GetUserCache(logUserID); actorErr == nil {
+				common.SetContextKey(c, constant.ContextKeyUserName, actor.Username)
+			}
+		}
+		repo.RecordConsumeLog(c, logUserID, repo.RecordConsumeLogParams{
 			ChannelId:        channel.Id,
 			PromptTokens:     usage.PromptTokens,
 			CompletionTokens: usage.CompletionTokens,
@@ -589,7 +622,7 @@ func TestChannel(c *gin.Context) {
 	testModel := c.Query("model")
 	endpointType := c.Query("endpoint_type")
 	tik := time.Now()
-	result := testChannel(channel, testModel, endpointType)
+	result := testChannelForActor(channel, testModel, endpointType, c.GetInt("id"), c.GetString("tenant_id"))
 	elapsed := time.Since(tik)
 	metrics.RecordChannelProbe(string(classifyProbeResult(result)), elapsed)
 	if result.localErr != nil {
@@ -655,6 +688,13 @@ func testAllChannels(notify bool) error {
 	if disableThreshold <= 0 {
 		disableThreshold = 10000000 * time.Millisecond
 	}
+	// NOT the package's AsyncGo seam: this launch is the point of the function
+	// (testAllChannels returns as soon as the pass is LAUNCHED), and the inline
+	// seam this package's TestMain installs would make it block for the whole
+	// pass — turning TestChannelHealthTest_StampMeansLaunchedNotCompleted
+	// (context_tasks_integration_test.go) red. L1's structural gate carries the
+	// matching exemption entry (async_seam_structural_test.go); cycle-12 plan
+	// L5 asked for the conversion and this is the reason it is not done here.
 	gopool.Go(func() {
 		// 使用 defer 确保无论如何都会重置运行状态，防止死锁
 		defer func() {

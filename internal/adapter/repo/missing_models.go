@@ -2,8 +2,21 @@ package repo
 
 // GetMissingModels returns model names that are referenced in the system
 func GetMissingModels() ([]string, error) {
-	// 1. 获取所有已启用模型（去重）
-	models := GetEnabledModels()
+	return missingModels(GetEnabledModels())
+}
+
+// GetMissingModelsForTenant is GetMissingModels over the channels
+// abilityTenantScope makes visible to this tenant, so a tenant admin's
+// "models with no metadata row" hint does not enumerate other tenants'
+// model names. tenantID == "" reproduces GetMissingModels.
+func GetMissingModelsForTenant(tenantID string) ([]string, error) {
+	return missingModels(GetEnabledModelsForTenant(tenantID))
+}
+
+// missingModels subtracts the models metadata table from an already-deduped
+// list of enabled model names; the two exported wrappers above differ only in
+// how that list was scoped.
+func missingModels(models []string) ([]string, error) {
 	if len(models) == 0 {
 		return []string{}, nil
 	}

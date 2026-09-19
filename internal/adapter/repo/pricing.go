@@ -3,6 +3,7 @@ package repo
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"sync"
@@ -27,6 +28,13 @@ var (
 	supportedEndpointMap map[string]common.EndpointInfo
 	lastGetPricingTime   time.Time
 	updatePricingLock    sync.Mutex
+
+	// pricingOwnerGroups[model name][channel tenant id] lists the groups
+	// that tenant's channels serve the model in. Built by updatePricing
+	// next to pricingMap and read by GetPricingForTenant, which is how one
+	// process-wide catalogue can answer per-tenant without a second query.
+	// Guarded by updatePricingLock.
+	pricingOwnerGroups = make(map[string]map[string][]string)
 
 	// 缓存映射：模型名 -> 启用分组 / 计费类型
 	modelEnableGroups     = make(map[string][]string)
@@ -176,6 +184,10 @@ func updatePricing() {
 	}
 
 	modelGroupsMap := make(map[string]*types.Set[string])
+	// ownerGroups is modelGroupsMap split by the owning channel's tenant, so
+	// GetPricingForTenant can rebuild a per-tenant view of both the model
+	// list and each model's enable_groups without re-querying.
+	ownerGroups := make(map[string]map[string]*types.Set[string])
 
 	for _, ability := range enableAbilities {
 		groups, ok := modelGroupsMap[ability.Model]
@@ -184,6 +196,18 @@ func updatePricing() {
 			modelGroupsMap[ability.Model] = groups
 		}
 		groups.Add(ability.Group)
+
+		owners, ok := ownerGroups[ability.Model]
+		if !ok {
+			owners = make(map[string]*types.Set[string])
+			ownerGroups[ability.Model] = owners
+		}
+		ownerSet, ok := owners[ability.ChannelTenantId]
+		if !ok {
+			ownerSet = types.NewSet[string]()
+			owners[ability.ChannelTenantId] = ownerSet
+		}
+		ownerSet.Add(ability.Group)
 	}
 
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
@@ -299,6 +323,17 @@ func updatePricing() {
 		pricingMap = append(pricingMap, pricing)
 	}
 
+	pricingOwnerGroups = make(map[string]map[string][]string, len(ownerGroups))
+	for model, owners := range ownerGroups {
+		byOwner := make(map[string][]string, len(owners))
+		for owner, groups := range owners {
+			items := groups.Items()
+			sort.Strings(items)
+			byOwner[owner] = items
+		}
+		pricingOwnerGroups[model] = byOwner
+	}
+
 	// 刷新缓存映射，供高并发快速查询
 	modelEnableGroupsLock.Lock()
 	modelEnableGroups = make(map[string][]string)
@@ -315,4 +350,77 @@ func updatePricing() {
 // GetSupportedEndpointMap 返回全局端点到路径的映射
 func GetSupportedEndpointMap() map[string]common.EndpointInfo {
 	return supportedEndpointMap
+}
+
+// sharedChannelTenantIDs are the two channels.tenant_id values that mean
+// "platform-shared, every tenant routes through it": the literal "default"
+// (entity/channel.go's column default) and the empty string (rows written
+// before the column existed). Same pair abilityTenantScope and
+// channel_cache.go's tenantCanUseChannel use.
+var sharedChannelTenantIDs = []string{"default", ""}
+
+// GetPricingForTenant is GetPricing projected onto the channels tenantID can
+// route through: the platform-shared ones plus its own. A model no visible
+// channel serves is dropped from the catalogue entirely, and each surviving
+// row's EnableGroup lists only the groups the visible channels serve it in —
+// so a tenant's private model names and private group names stay out of the
+// answer given to anyone else, including the anonymous public catalogue
+// (tenantID ""), without a second DB round trip.
+//
+// The row values other than EnableGroup (ratios, endpoints, vendor, metadata)
+// are the shared catalogue's and are copied by value; the JSON field set is
+// identical to GetPricing's, so this narrows what is listed without changing
+// the response shape any consumer parses.
+func GetPricingForTenant(tenantID string) []Pricing {
+	// Refresh the shared catalogue if it is stale (GetPricing releases the
+	// lock before it returns), then take the catalogue and its owner index
+	// together under one lock so the two cannot come from different rebuilds.
+	// updatePricing replaces both slices/maps wholesale rather than mutating
+	// them in place, so the values read here stay valid after the unlock.
+	GetPricing()
+	updatePricingLock.Lock()
+	all := pricingMap
+	owners := pricingOwnerGroups
+	updatePricingLock.Unlock()
+
+	visible := make([]Pricing, 0, len(all))
+	for _, p := range all {
+		groups := visiblePricingGroups(owners[p.ModelName], tenantID)
+		if len(groups) == 0 {
+			continue
+		}
+		item := p
+		item.EnableGroup = groups
+		visible = append(visible, item)
+	}
+	return visible
+}
+
+// visiblePricingGroups unions the groups contributed by the platform-shared
+// channels with those contributed by tenantID's own channels, sorted so the
+// answer does not depend on map iteration order. An empty result means no
+// channel this caller can route through serves the model.
+func visiblePricingGroups(byOwner map[string][]string, tenantID string) []string {
+	if len(byOwner) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(byOwner))
+	appendOwner := func(owner string) {
+		for _, g := range byOwner[owner] {
+			if _, dup := seen[g]; dup {
+				continue
+			}
+			seen[g] = struct{}{}
+			out = append(out, g)
+		}
+	}
+	for _, shared := range sharedChannelTenantIDs {
+		appendOwner(shared)
+	}
+	if tenantID != "" {
+		appendOwner(tenantID)
+	}
+	sort.Strings(out)
+	return out
 }
