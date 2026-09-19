@@ -103,6 +103,13 @@ const parseOther = (row) => {
   }
 };
 
+// L7: other.settlement is written by app.FlagSettlementOutcome
+// (internal/app/settlement_outcome.go) only when the consume-quota
+// settlement call for this row's request returned an error — the row still
+// shows a price (the debit path is untouched), so this is the only signal
+// on the row itself that the charge may not have actually landed.
+const isSettlementFailed = (row) => parseOther(row)?.settlement === 'failed';
+
 // Time to first token. Two identical hardcoded `NotAvailable` cells used to
 // live in the trace table and the live tail, both claiming "the log schema has
 // no time-to-first-token column". That reason was false: the relay writes
@@ -1087,6 +1094,18 @@ const HFLog = () => {
                                 </span>
                               );
                             })()}
+                            {isSettlementFailed(r) && (
+                              <span
+                                className='tag'
+                                data-testid='settlement-failed-badge'
+                                style={{ marginLeft: 6 }}
+                              >
+                                {tr(
+                                  'console.log.settlement_failed',
+                                  'settlement failed',
+                                )}
+                              </span>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -1720,6 +1739,18 @@ const HFLog = () => {
                             <span className={o.cls}>
                               {tr(`console.log.outcome_${o.label}`, o.label)}
                             </span>
+                            {isSettlementFailed(r) && (
+                              <span
+                                className='tag'
+                                data-testid='settlement-failed-badge'
+                                style={{ marginLeft: 6 }}
+                              >
+                                {tr(
+                                  'console.log.settlement_failed',
+                                  'settlement failed',
+                                )}
+                              </span>
+                            )}
                           </td>
                         </tr>
                       );

@@ -112,6 +112,15 @@ var wantUserVisible = map[string]string{
 	// governance/classification.go — it is a report on their own request, not
 	// our economics.
 	"conversion_dropped": "field names on their own request that never reached the vendor",
+
+	// L7-SETTLEMENT-OUTCOME: written by app.FlagSettlementOutcome
+	// (internal/app/settlement_outcome.go) when the consume-quota settlement
+	// call for this row's own request returned an error, on the three sites
+	// that route through app.SettleConsume — the row itself is still written
+	// at full price, so this is the caller's only signal on the row itself
+	// that the charge shown may not have actually settled. TierPublic in
+	// governance/classification.go.
+	"settlement": "flags that settlement failed on their own row — the row still shows a price, this says whether it can be trusted",
 }
 
 // wantInternal: keys that must never reach a non-admin. Predominantly our

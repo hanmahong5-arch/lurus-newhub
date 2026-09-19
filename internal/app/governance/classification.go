@@ -79,6 +79,16 @@ var FieldClassification = map[string]DataTier{
 	// not a secret about our pricing or routing.
 	"conversion_dropped": TierPublic,
 
+	// settlement is written by app.FlagSettlementOutcome
+	// (internal/app/settlement_outcome.go) when the consume-quota settlement
+	// call for THIS row's request returned an error, on the three sites that
+	// route through app.SettleConsume — see that file's header comment for
+	// what is and is not covered this cycle. It says whether the charge the
+	// row already shows can be trusted, which is the caller's own data about
+	// their own request, not our pricing or routing — same reasoning as
+	// error_type/error_code/status_code above.
+	"settlement": TierPublic,
+
 	// Internal — admin only
 	"channel_id":     TierInternal,
 	"channel_name":   TierInternal,
