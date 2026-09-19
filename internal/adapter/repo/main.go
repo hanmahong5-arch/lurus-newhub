@@ -32,11 +32,11 @@ import (
 // PostgreSQL-only and idempotent (see internal/pkg/migration package doc).
 const migrationBaselineThrough = "020_create_privacy_erasure_requests"
 
-var commonGroupCol string
-var commonKeyCol string
+var commonGroupCol = `"group"` // PG quoting; initCol re-sets it, the default keeps a binary that never ran initCol valid
+var commonKeyCol = `"key"`     // PG quoting; initCol re-sets it, the default keeps a binary that never ran initCol valid
 
-var logKeyCol string
-var logGroupCol string
+var logKeyCol = `"key"`     // PG quoting; initCol re-sets it, the default keeps a binary that never ran initCol valid
+var logGroupCol = `"group"` // PG quoting; initCol re-sets it, the default keeps a binary that never ran initCol valid
 
 // InitCol initializes DB-dialect-specific column name quoting.
 // Called automatically by chooseDB; exported for test setup with direct DB injection.
