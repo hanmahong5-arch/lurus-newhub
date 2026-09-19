@@ -304,8 +304,14 @@ func DeleteAdminUserV2(c *gin.Context) {
 // always "admin_revoked" — distinct from a user's own self-service
 // revoke-others ("user_revoked_others") so the audit trail can tell an
 // operator-initiated revoke apart from a user-initiated one. A no-op (0
-// revoked, still 200) when the user has no active sessions — including when
-// SESSION_REGISTRY_ENABLED is off, since no rows are ever registered then.
+// revoked, still 200) when the user has no active sessions.
+//
+// When SESSION_REGISTRY_ENABLED is off the endpoint refuses with 409
+// SESSION_REGISTRY_DISABLED instead (cycle-12 L4): no rows are ever
+// registered then, so it cannot revoke anything, and the 200 {"revoked":0}
+// it used to answer read to an operator working the compromised-account
+// runbook exactly like "this user had no live sessions". See
+// doc/runbook/incident-response.md for where the flag lives.
 func RevokeUserSessionsAdminV2(c *gin.Context) {
 	if _, ok := requireRoot(c); !ok {
 		return
@@ -317,13 +323,15 @@ func RevokeUserSessionsAdminV2(c *gin.Context) {
 		return
 	}
 
-	// With the flag off no rows were ever registered — answer revoked:0
-	// without touching the DB, so a rollback (or leftover rows from a prior
-	// flag-on soak) cannot make this endpoint revoke anything.
+	// With the flag off no rows were ever registered — refuse without
+	// touching the DB, so a rollback (or leftover rows from a prior flag-on
+	// soak) cannot make this endpoint revoke anything, and the caller is
+	// told the feature is off rather than that the work is done.
 	if !repo.SessionRegistryEnabled() {
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"data":    gin.H{"revoked": 0},
+		c.JSON(http.StatusConflict, gin.H{
+			"success":    false,
+			"message":    "Session registry is disabled on this deployment",
+			"error_code": "SESSION_REGISTRY_DISABLED",
 		})
 		return
 	}

@@ -353,10 +353,15 @@ func TestAdminRevokeUserSessions_AuditsReason(t *testing.T) {
 }
 
 // TestAdminRevokeUserSessions_FlagOff: with SESSION_REGISTRY_ENABLED unset
-// (default off), DELETE /api/v2/admin/users/:id/sessions answers
-// {"revoked":0} WITHOUT touching the DB, even when rows exist (left over
-// from a prior flag-on soak) — a rollback must not let this endpoint revoke
-// anything.
+// (default off), DELETE /api/v2/admin/users/:id/sessions refuses with 409
+// SESSION_REGISTRY_DISABLED WITHOUT touching the DB, even when rows exist
+// (left over from a prior flag-on soak) — a rollback must not let this
+// endpoint revoke anything.
+//
+// Cycle-12 L4 changed the shape. It used to answer 200 {"revoked":0}: an
+// operator working the "compromised account" runbook step got a success
+// envelope from an endpoint that had revoked nothing and could not, and had
+// no way to tell that apart from "this user had no live sessions".
 func TestAdminRevokeUserSessions_FlagOff(t *testing.T) {
 	t.Setenv("SESSION_REGISTRY_ENABLED", "false")
 	r, db := setupAdminSessionsRevokeRouter(t)
@@ -374,13 +379,21 @@ func TestAdminRevokeUserSessions_FlagOff(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body: %s", w.Code, w.Body.String())
 	}
-	resp := ParseV2Response(t, w)
-	data := resp["data"].(map[string]interface{})
-	if data["revoked"].(float64) != 0 {
-		t.Errorf("revoked = %v, want 0 — the flag-off endpoint must not touch the DB", data["revoked"])
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode envelope: %v; body: %s", err, w.Body.String())
+	}
+	if success, _ := resp["success"].(bool); success {
+		t.Errorf("success = true, want false; body: %s", w.Body.String())
+	}
+	if code, _ := resp["error_code"].(string); code != "SESSION_REGISTRY_DISABLED" {
+		t.Errorf("error_code = %q, want \"SESSION_REGISTRY_DISABLED\"; body: %s", code, w.Body.String())
+	}
+	if _, hasData := resp["data"]; hasData {
+		t.Errorf("refusal carries a data object — a caller could still read revoked:0 out of it; body: %s", w.Body.String())
 	}
 
 	var row entity.UserSession

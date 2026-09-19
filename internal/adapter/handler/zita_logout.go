@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 
 	"github.com/gin-contrib/sessions"
@@ -28,7 +29,11 @@ func ZitaLogout(c *gin.Context) {
 	session := sessions.Default(c)
 	userID, _ := session.Get("id").(int)
 	session.Clear()
-	session.Options(sessions.Options{Path: "/", MaxAge: -1})
+	// middleware.SessionClearOptions, not a {Path,MaxAge} literal: the
+	// clearing Set-Cookie has to carry the same Domain/Secure/SameSite the
+	// live cookie was written with or the browser keeps the session cookie
+	// and the "switch account" link silently does nothing.
+	session.Options(middleware.SessionClearOptions())
 	_ = session.Save()
 
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, userID,

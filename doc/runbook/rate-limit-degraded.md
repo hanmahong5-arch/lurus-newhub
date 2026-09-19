@@ -12,7 +12,8 @@
 > across 3 replicas at `update_every = 10s` — a rate reading is a
 > per-replica sample, not a gateway-wide rate.
 > **Severity**: warning / critical (netdata `to: sysadmin`).
-> **Last review**: 2026-09-19.
+> **Last review**: 2026-09-19 (cycle-12 L4: credential buckets no longer
+> fail open — see the table below).
 
 ## Symptom
 
@@ -60,17 +61,42 @@ enroll/confirm/disable), `TotpBackupCodesRateLimit`, `DownloadRateLimit`,
 `UploadRateLimit`, `RedemptionRateLimit`, `TopupRateLimit` (unmounted this
 cycle), `BootstrapRateLimit`, and `GlobalV2RateLimit`
 (`internal/adapter/middleware/rate-limit-v2.go`, `/api/v2` route group).
-**While Redis is unreachable, none of those buckets enforce** — concretely,
-redemption-code guessing (`RedemptionRateLimit`), bootstrap user creation
-(`BootstrapRateLimit`), TOTP backup-code regeneration
-(`TotpBackupCodesRateLimit`), and the shared channel-key-reveal/TOTP-disable
-bucket (`CriticalRateLimit`) all go unthrottled for the duration of the
-outage — same fail-open shape as the two probe routes below, just a wider
-set of endpoints than the readiness fix alone suggests.
+While Redis is unreachable, the **traffic** buckets do not enforce — a page
+load, an `/api` call or a download is admitted unchecked. That is the
+accepted tradeoff (the readiness outage D1 fixed), and it is what
+`web_rate_limit_backend` counts.
+
+**Cycle-12 L4 update — the credential buckets no longer fail open.** The
+statement this section used to carry ("none of those buckets enforce") was
+true when it was written and is no longer. `redisRateLimiterKeyed` now
+splits its LLen-error path by bucket
+(`internal/adapter/middleware/rate-limit.go`,
+`rateLimitMemoryFallbackMarks`):
+
+| mark | limiter | Redis-error behaviour |
+|---|---|---|
+| `RD` | `RedemptionRateLimit` | process-local limiter |
+| `BS` | `BootstrapRateLimit` | process-local limiter |
+| `TB` | `TotpBackupCodesRateLimit` | process-local limiter |
+| `CT` | `CriticalRateLimit` (channel-key reveal, TOTP disable) | process-local limiter |
+| `TU` | `TopupRateLimit` (unmounted) | process-local limiter |
+| `IKP-IP` | `/internal` pre-auth IP tier | process-local limiter |
+| `GW` `GA` `GV` `DW` `UP` `IKR` `IKW` `IKP` `IKF` | traffic / already-authenticated-key tiers | fail open (unchanged) |
+
+The process-local limiter is a **per-replica** ceiling: with 3 replicas
+behind one NodePort, the effective budget during an outage is up to
+`3 x budget` rather than `budget`. That is weaker than Redis and is not the
+same thing as unthrottled. `middleware.TestRateLimitMarks_EveryMarkIsClassified`
+fails if a new limiter is added without a side.
 
 - `web_rate_limit_backend` — the LLen check on the bucket key errored
-  (backend unreachable). The request is admitted; no self-heal needed, the
-  next request retries the same call.
+  (backend unreachable) on a traffic bucket. The request is admitted; no
+  self-heal needed, the next request retries the same call.
+- `web_rate_limit_backend_memory` — the same LLen error on a credential
+  bucket from the table above. **Not** a fail-open: the request was measured
+  against the process-local limiter, so callers can still get a 429 while
+  this series climbs. A 429 whose `X-RateLimit-*` headers look right during
+  a Redis incident is this path, not a bug.
 - `web_rate_limit_corrupt` — the backend answered but the list's stored
   timestamp doesn't parse. The request is admitted AND the key is deleted
   (`rdb.Del`) so a fresh window starts on the next request for that ident,
@@ -103,8 +129,11 @@ curl -s http://localhost:30850/metrics | grep 'lurus_gateway_rate_limit_degraded
 
 The `check` label tells you which Redis call is failing
 (`model_rate_limit_success`, `model_rate_limit_total`, `model_rate_limit_record`,
-`web_rate_limit_backend`, `web_rate_limit_corrupt` — see the doc comment on
-`RateLimitDegradedTotal` for what each means).
+`web_rate_limit_backend`, `web_rate_limit_backend_memory`,
+`web_rate_limit_corrupt` — see the doc comment on `RateLimitDegradedTotal`
+for what each means). `web_rate_limit_backend_memory` climbing alongside
+user reports of 429s on redeem/login-bootstrap/2FA screens is the expected
+combination during a Redis outage, not a second incident.
 
 ## Reconcile
 

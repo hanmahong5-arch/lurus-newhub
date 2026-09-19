@@ -43,9 +43,20 @@ type VerificationStatusResponse struct {
 //
 // Default false is a measured decision, not timidity: as of the cycle-9
 // plan the only production account with role >= 10 (root, id 1) has no row
-// in user_totps, so flipping this default would lock that account out of
-// channel-key reveal and 2FA force-disable — see .env.example and
-// doc/runbook/incident-response.md for the break-glass procedure.
+// in user_totps, so flipping this default would refuse step-up for that
+// account until it enrols, and the four routes behind
+// middleware.SecureVerificationRequired would answer 403
+// STEP_UP_ENROLLMENT_REQUIRED (enumerated: router/api-router.go:80
+// totp/disable, :84 backup-codes/regenerate, :151 channel-key reveal;
+// router/api-v2-router.go:576 2FA force-disable).
+//
+// That is a refusal, not a lock-out, and this comment said "lock that
+// account out" until cycle-12 L4 checked it: enrolment is self-service and
+// is NOT itself behind the step-up gate (POST /api/user/totp/enroll and
+// /confirm, router/api-router.go:78-79, carry UserAuth + CriticalRateLimit
+// and nothing else), so the account recovers by enrolling. The break-glass
+// procedure in .env.example and doc/runbook/incident-response.md covers the
+// other direction — a root that HAS enrolled and then lost the factor.
 func secureVerificationRequireEnrollment() bool {
 	return common.GetEnvOrDefaultBool("SECURE_VERIFICATION_REQUIRE_ENROLLMENT", false)
 }

@@ -92,6 +92,33 @@ SELECT pg_terminate_backend(<pid>);
   writer is registered, logged but not retried on failure) regardless of the flag, so turning it off does
   not reopen an invisible hole — it reopens an auditable one, same as before this flag existed. (While
   the flag is on, a refused attempt is also audited, as `auth.failed` with `reason:enrollment_required`.)
+  Note (cycle-12 L4): "locked out" above means *refused until that account enrols*, not stranded —
+  enrolment itself is not behind the step-up gate (`POST /api/user/totp/enroll` and `/confirm` carry
+  `UserAuth` + `CriticalRateLimit` only, `router/api-router.go:78-79`), so an operator who can still log
+  in can self-serve. Break-glass is for an operator who enrolled and then lost the factor.
+- **"Session registry is disabled on this deployment" (HTTP 409 `SESSION_REGISTRY_DISABLED`)**: the
+  per-device session endpoints refuse rather than pretend. Affected:
+  `DELETE /api/v2/admin/users/:id/sessions` (the compromised-account runbook step) and
+  `DELETE /api/v2/:tenant_slug/sessions/others` ("sign out other devices"). This is a configuration
+  state, not a fault — it means `SESSION_REGISTRY_ENABLED` is not `"true"` on the replica that answered.
+
+  Where the switch lives: it is a plain env var, read per call by
+  `repo.SessionRegistryEnabled()` (`internal/adapter/repo/user_session.go:48`, exact string `"true"`).
+  It is set in `deploy/k8s/r6-uat/deployment.yaml` (UAT: `"true"`, on since the cycle-7 soak) and is
+  **absent from `deploy/k8s/r6-stage/deployment.yaml`**, i.e. off in production as of 2026-09-19.
+  Turning it on in production is a manifest edit merged to `main` (ArgoCD reverts a live `kubectl set
+  env`), which is owner item O-session — not an in-incident action.
+
+  Until it is on: to terminate a compromised session in production, the working levers are the user's
+  own logout (`DELETE /api/v2/:tenant_slug/sessions/current`, which clears the cookie and deletes the
+  Redis session key regardless of this flag), disabling the user
+  (`PUT /api/user/` with `status`, which `authHelper` re-checks against the user cache on every
+  request), or deleting the store's session key directly in Redis
+  (`redis-cli -n 2 DEL session_<key>`; DB **2**, not 0).
+
+  Before cycle-12 L4 these two endpoints answered `200 {"revoked":0}` with the flag off — success
+  shaped, nothing done. If a past incident record says sessions were revoked on production, check
+  whether it was one of these calls.
 
 ## Escalation
 

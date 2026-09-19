@@ -28,6 +28,7 @@ import (
 
 	"github.com/pquerna/otp"
 	pqtotp "github.com/pquerna/otp/totp"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -281,15 +282,37 @@ func MarkCodeUsed(ctx context.Context, userId int, code string) bool {
 func failKey(userId int) string { return "totp:fail:" + strconv.Itoa(userId) }
 
 // AllowAttempt reports whether the user is still under the failure budget.
+//
+// Two distinct Redis outcomes are NOT the same thing (cycle-12 L4, proved by
+// throttle_backend_error_test.go):
+//
+//	redis.Nil  — the key genuinely does not exist, i.e. this user has no
+//	             recorded failures. Admit, and do not consult the local
+//	             counter: a successful verification on another replica
+//	             clears the Redis key, and answering out of a stale local
+//	             counter would keep refusing a user who is already clear.
+//	other err  — the backend is unreachable/erroring. Fall back to the
+//	             process-local counter. That is a per-replica ceiling rather
+//	             than the cluster-wide one, but the previous behaviour
+//	             (admit) removed the brute-force ceiling on TOTP
+//	             verification entirely for the length of the outage.
 func AllowAttempt(ctx context.Context, userId int) bool {
 	if common.RedisEnabled {
 		v, err := common.RDB.Get(ctx, failKey(userId)).Result()
-		if err != nil { // key missing or redis error → allow (limiter is best-effort)
+		if errors.Is(err, redis.Nil) {
 			return true
+		}
+		if err != nil {
+			common.SysError("totp fail-counter redis read error, falling back to the process-local counter: " + err.Error())
+			return allowAttemptFromMemory(userId)
 		}
 		n, _ := strconv.Atoi(v)
 		return n < failLimit
 	}
+	return allowAttemptFromMemory(userId)
+}
+
+func allowAttemptFromMemory(userId int) bool {
 	now := timeNowFn()
 	memMu.Lock()
 	defer memMu.Unlock()
@@ -297,13 +320,17 @@ func AllowAttempt(ctx context.Context, userId int) bool {
 	return len(memFails[failKey(userId)]) < failLimit
 }
 
-// RecordFailure counts one wrong-code attempt for the user.
+// RecordFailure counts one wrong-code attempt for the user. A Redis error
+// routes the count to the process-local counter instead of dropping it —
+// otherwise AllowAttempt's fallback above would have nothing to read and the
+// budget would still be unbounded during an outage.
 func RecordFailure(ctx context.Context, userId int) {
 	if common.RedisEnabled {
 		key := failKey(userId)
 		n, err := common.RDB.Incr(ctx, key).Result()
 		if err != nil {
-			common.SysError("totp fail-counter redis error: " + err.Error())
+			common.SysError("totp fail-counter redis write error, counting in-process instead: " + err.Error())
+			recordFailureInMemory(userId)
 			return
 		}
 		if n == 1 {
@@ -311,6 +338,10 @@ func RecordFailure(ctx context.Context, userId int) {
 		}
 		return
 	}
+	recordFailureInMemory(userId)
+}
+
+func recordFailureInMemory(userId int) {
 	now := timeNowFn()
 	memMu.Lock()
 	defer memMu.Unlock()
@@ -318,16 +349,20 @@ func RecordFailure(ctx context.Context, userId int) {
 }
 
 // ClearFailures resets the failure budget after a successful verification.
+// It drops the process-local counter on every backend, not just the
+// memory-only one: entries land there whenever RecordFailure hits a Redis
+// error, and leaving them behind would charge a later outage's budget with
+// failures this verification already forgave.
 func ClearFailures(ctx context.Context, userId int) {
+	memMu.Lock()
+	delete(memFails, failKey(userId))
+	memMu.Unlock()
+
 	if common.RedisEnabled {
 		if err := common.RDB.Del(ctx, failKey(userId)).Err(); err != nil {
 			common.SysError("totp fail-counter redis error: " + err.Error())
 		}
-		return
 	}
-	memMu.Lock()
-	defer memMu.Unlock()
-	delete(memFails, failKey(userId))
 }
 
 // ResetStateForTest clears process-local replay/failure state between tests.
