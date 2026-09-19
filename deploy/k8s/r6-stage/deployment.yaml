@@ -227,6 +227,26 @@ spec:
               value: "master"
             - name: SYNC_FREQUENCY
               value: "60"
+            # Cycle-12 L8 pool ceiling. 3 replicas x 20 = 60 PostgreSQL
+            # connections today, on an instance shared with platform and the
+            # IdP; the code default is 1000 per pool (currentPoolSettings in
+            # internal/adapter/repo/main.go). A SECOND pool exists only if
+            # LOG_SQL_DSN is ever set -- InitLogDB aliases LOG_DB to DB
+            # otherwise, and neither manifest sets it -- so the x2 in the
+            # deploy_consistency_test.go budget arithmetic is headroom for that
+            # case, not today's count.
+            # Lowering this is an AVAILABILITY knob, not a latency one: the deep
+            # readinessProbe's DB ping takes a pooled connection, so a saturated
+            # pool answers /api/health with 503 and pulls replicas out of the
+            # Service. See doc/runbook/db-pool-saturation.md.
+            - name: SQL_MAX_OPEN_CONNS
+              value: "20"
+            - name: SQL_MAX_IDLE_CONNS
+              value: "5"
+            # Below the 1Gi container limit so the Go heap backs off before the
+            # cgroup OOM-kills the pod.
+            - name: GOMEMLIMIT
+              value: "900MiB"
             - name: GRACEFUL_SHUTDOWN_TIMEOUT
               value: "30s"
             - name: LOG_FORMAT

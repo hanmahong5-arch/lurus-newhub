@@ -307,7 +307,7 @@ func setupAdminSessionsRevokeRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
 	}
 
 	prevDB := repo.DB
-	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
+	pinAuditWriter(t, db)
 	repo.DB = db
 
 	r := gin.New()

@@ -58,6 +58,7 @@ vi.mock('./helpers', () => ({
     adminRouteChildren.push(children);
     return <div data-testid='admin-gate'>{children}</div>;
   },
+  RootRoute: ({ children }) => <div data-testid='root-gate'>{children}</div>,
   AuthRedirect: ({ children }) => <div data-testid='auth-gate'>{children}</div>,
 }));
 
@@ -108,6 +109,8 @@ vi.mock('./pages/v2/Admin/ModelPerformance', () => stub('v2-model-perf'));
 vi.mock('./pages/v2/Analytics/Rankings', () => stub('v2-rankings'));
 vi.mock('./pages/v2/Admin/ModelRateLimits', () => stub('v2-model-limits'));
 vi.mock('./pages/v2/Admin/Diagnostics', () => stub('v2-diagnostics'));
+vi.mock('./pages/v2/Admin/SystemTasks', () => stub('v2-system-tasks'));
+vi.mock('./pages/v2/Admin/Authz', () => stub('v2-admin-authz'));
 
 import App from './App';
 import { StatusContext } from './context/Status';
@@ -197,7 +200,6 @@ describe('App — route guards', () => {
       ['cmdk', 'v2-cmdk'],
       ['models', 'v2-models'],
       ['chat', 'v2-chat'],
-      ['tenants', 'v2-tenants'],
       ['pricing', 'v2-pricing'],
       ['redemption', 'v2-redemption'],
       ['billing', 'v2-billing'],
@@ -205,15 +207,13 @@ describe('App — route guards', () => {
       ['flows', 'v2-flows'],
       ['design-system', 'v2-design-system'],
       ['states', 'v2-states'],
-      ['admin/users', 'v2-admin-users'],
+      // Stays on PrivateRoute: the audit subgroup is mounted at
+      // api-v2-router.go with middleware.RootOrGranted("audit","read"), so a
+      // delegated grant reaches it at role 10.
       ['admin/audit', 'v2-admin-audit'],
-      ['admin/gateway', 'v2-admin-gateway'],
-      ['admin/settings', 'v2-admin-settings'],
-      ['admin/cost-intelligence', 'v2-cost'],
-      ['admin/model-performance', 'v2-model-perf'],
+      // Stays on PrivateRoute: a non-root caller falls back to
+      // /api/v2/:tenant_slug/analytics/rankings.
       ['admin/rankings', 'v2-rankings'],
-      ['admin/model-limits', 'v2-model-limits'],
-      ['admin/diagnostics', 'v2-diagnostics'],
     ];
 
     for (const [slug, testId] of slugs) {
@@ -221,6 +221,35 @@ describe('App — route guards', () => {
       const page = await screen.findByTestId(testId);
       expect(page, slug).toBeInTheDocument();
       expect(screen.getByTestId('private-gate'), slug).toContainElement(page);
+      view.unmount();
+    }
+  });
+
+  // Cycle-12 L3/W: the ten v2 screens whose every backend call is under
+  // /api/v2/admin (mounted behind RootJWTAuth) now carry RootRoute, mirroring
+  // components/hifi/HFShell.jsx's minRole:100 nav entries exactly. Before
+  // this, a role-10 tenant admin could open the page and watch every panel
+  // answer 403 — the console offered a screen the server would never serve.
+  it('the root-only v2 screens sit behind RootRoute, not PrivateRoute', async () => {
+    const slugs = [
+      ['tenants', 'v2-tenants'],
+      ['admin/users', 'v2-admin-users'],
+      ['admin/gateway', 'v2-admin-gateway'],
+      ['admin/settings', 'v2-admin-settings'],
+      ['admin/cost-intelligence', 'v2-cost'],
+      ['admin/model-performance', 'v2-model-perf'],
+      ['admin/model-limits', 'v2-model-limits'],
+      ['admin/system-tasks', 'v2-system-tasks'],
+      ['admin/authz', 'v2-admin-authz'],
+      ['admin/diagnostics', 'v2-diagnostics'],
+    ];
+
+    for (const [slug, testId] of slugs) {
+      const view = renderAt(`/console/v2/${slug}`);
+      const page = await screen.findByTestId(testId);
+      expect(page, slug).toBeInTheDocument();
+      expect(screen.getByTestId('root-gate'), slug).toContainElement(page);
+      expect(screen.queryByTestId('private-gate'), slug).toBeNull();
       view.unmount();
     }
   });
@@ -236,15 +265,28 @@ describe('App — route guards', () => {
     expect(screen.queryByTestId('private-gate')).toBeNull();
   });
 
+  it.each([['/console/user', 'page-user']])(
+    '%s is admin-only',
+    async (path, testId) => {
+      renderAt(path);
+      const page = await screen.findByTestId(testId);
+      expect(screen.getByTestId('admin-gate')).toContainElement(page);
+      expect(screen.queryByTestId('private-gate')).toBeNull();
+    },
+  );
+
+  // Cycle-12 L3/W: both write through /api/v2/admin/*-gated endpoints and both
+  // carry minRole:100 in HFShell's nav, so AdminRoute (role >= 10) was one
+  // tier too loose — it admitted a tenant admin to a page whose every call
+  // the server refuses.
   it.each([
-    ['/console/user', 'page-user'],
     ['/console/openrouter-sync', 'page-openrouter-sync'],
     ['/console/setting', 'page-setting'],
-  ])('%s is admin-only', async (path, testId) => {
+  ])('%s is root-only', async (path, testId) => {
     renderAt(path);
     const page = await screen.findByTestId(testId);
-    expect(screen.getByTestId('admin-gate')).toContainElement(page);
-    expect(screen.queryByTestId('private-gate')).toBeNull();
+    expect(screen.getByTestId('root-gate')).toContainElement(page);
+    expect(screen.queryByTestId('admin-gate')).toBeNull();
   });
 
   // The legacy Semi UI shells are gone (console-one-surface, 2026-09-07) —
@@ -283,6 +325,10 @@ describe('App — route guards', () => {
     ['/console/midjourney', 'page-midjourney'],
     ['/console/task', 'page-task'],
     ['/chat2link', 'page-chat2link'],
+    // Cycle-12 L3/W: the chat page had NO guard at all. It reads and writes
+    // the signed-in user's own conversations, so an anonymous visitor got a
+    // shell whose every call answers 401.
+    ['/console/chat/42', 'page-chat'],
   ])('%s requires a signed-in user', async (path, testId) => {
     renderAt(path);
     const page = await screen.findByTestId(testId);
@@ -315,7 +361,6 @@ describe('App — public routes', () => {
     ['/about', 'page-about'],
     ['/user-agreement', 'page-user-agreement'],
     ['/privacy-policy', 'page-privacy-policy'],
-    ['/console/chat/42', 'page-chat'],
     // Sign-in for a deployment with no single sign-on. It has to be
     // reachable by a browser that is not signed in — that is the whole
     // situation it exists for — so no guard may sit in front of it.
@@ -329,7 +374,11 @@ describe('App — public routes', () => {
 
   it('the chat id segment is optional', async () => {
     renderAt('/console/chat');
-    expect(await screen.findByTestId('page-chat')).toBeInTheDocument();
+    const page = await screen.findByTestId('page-chat');
+    expect(page).toBeInTheDocument();
+    // Same PrivateRoute as /console/chat/:id — the optional segment must not
+    // be a way around the guard.
+    expect(screen.getByTestId('private-gate')).toContainElement(page);
   });
 
   it.each([

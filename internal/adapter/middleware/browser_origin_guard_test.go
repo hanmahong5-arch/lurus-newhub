@@ -330,12 +330,19 @@ func TestBrowserOriginGuard_ModeTable(t *testing.T) {
 
 // browserOriginGuardMountSites are the route files that must mount the
 // guard, with where in each the mount belongs.
+//
+// `after` is the full Use STATEMENT, not the bare "middleware.CORS()" this
+// gate anchored on until cycle-12 W: api-v2-router.go names middleware.CORS()
+// in a COMMENT three lines above the real call, so the ordering check was
+// measuring the comment's offset. It passed either way — including for a
+// mount wedged between the comment and the actual CORS Use, which is the one
+// arrangement it exists to catch.
 var browserOriginGuardMountSites = []struct {
 	path  string
 	after string
 }{
-	{filepath.Join("..", "handler", "router", "api-v2-router.go"), "middleware.CORS()"},
-	{filepath.Join("..", "handler", "router", "api-router.go"), "middleware.CORS()"},
+	{filepath.Join("..", "handler", "router", "api-v2-router.go"), "apiV2.Use(middleware.CORS())"},
+	{filepath.Join("..", "handler", "router", "api-router.go"), "apiRouter.Use(middleware.CORS())"},
 }
 
 func TestBrowserOriginGuard_IsMountedInProductionRouters(t *testing.T) {

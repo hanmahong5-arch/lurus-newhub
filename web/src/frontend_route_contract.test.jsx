@@ -143,12 +143,18 @@ function extractRoutesFromSource(rawSrc) {
     routes.add(m[2]);
   }
 
-  // App.jsx:373's `[slug, Component].map(...)` table registers the bulk of
+  // App.jsx's `[slug, Component, Guard?].map(...)` table registers the bulk of
   // /console/v2/* as one <Route> per array entry rather than one literal
   // <Route> per page, so those slugs need pulling out separately. Matched by
   // the `V2<PascalCase>` component-name shape every entry in that array uses
-  // (see App.jsx's `const V2Foo = lazy(...)` imports above it).
-  for (const m of src.matchAll(/\[\s*'([a-zA-Z0-9/_-]+)'\s*,\s*V2\w+\s*\]/g)) {
+  // (see App.jsx's `const V2Foo = lazy(...)` imports above it). The third slot
+  // is the optional route guard cycle-12 L3 added (`RootRoute` on the ten
+  // root-only screens, defaulting to PrivateRoute when absent) — it does not
+  // change WHICH paths are registered, so both arities must parse. Leaving it
+  // out is how this gate went red on ten nav items the day that slot landed.
+  for (const m of src.matchAll(
+    /\[\s*'([a-zA-Z0-9/_-]+)'\s*,\s*V2\w+\s*(?:,\s*\w+\s*)?\]/g,
+  )) {
     routes.add(`/console/v2/${m[1]}`);
   }
 

@@ -14,14 +14,19 @@ alert / signal comes from), **Triggered by** (the literal condition),
 
 ### Repo-owned netdata alarms
 
-The 12 rows below all come from `deploy/r6-host-netdata/health.d/newhub.conf`.
+The 14 rows below all come from `deploy/r6-host-netdata/health.d/newhub.conf`.
 **Install state changes as the operator runs `scripts/install-netdata-alarms.sh`
 on R6; read the conf file's own "STATUS" header for the current dated state
 rather than trusting this table's prose, which cannot update itself.** As of
 2026-09-16: repo copy adopted from the host 2026-08-20, three new alarms
 merged 2026-09-16, re-installation of the merged file onto R6 is
 operator-run and PENDING. A 12th alarm (`newhub_settlement_failed`) was
-added 2026-09-19 (cycle-11 L7), in-repo only, same PENDING install state.
+added 2026-09-19 (cycle-11 L7), in-repo only, same PENDING install state. A
+13th (`newhub_db_slow_queries`) and a 14th (`newhub_channel_cache_stale`) were
+added 2026-09-19 (cycle-12 L8), also in-repo only, same PENDING install state.
+A 15th, `newhub_rate_limit_memory_fallback` (cycle-12 L4), shares the
+[rate-limit-degraded](rate-limit-degraded.md) row below rather than adding one
+— the two alarms split one runbook by severity.
 `internal/pkg/metrics/netdata_alarm_series_test.go`
 proves every metric named below is a real, written series and that every row
 here is reachable from a `# runbook:` pointer in the conf file — it does not
@@ -44,6 +49,8 @@ do).
 | [rate-limit-degraded](rate-limit-degraded.md) | netdata `newhub_rate_limit_degraded` — `rate_limit_degraded_total` | warning / critical |
 | [failover-suppressed-surge](failover-suppressed-surge.md) | netdata `newhub_failover_suppressed_surge` — `relay_failover_suppressed_total` | warning / critical |
 | [settlement-failed](settlement-failed.md) | netdata `newhub_settlement_failed` — `lurus_billing_settlement_failed_total{path}` | warning |
+| [db-pool-saturation](db-pool-saturation.md) | netdata `newhub_db_slow_queries` — `lurus_gateway_db_slow_query_total{db}` | warning |
+| [db-pool-saturation](db-pool-saturation.md) | netdata `newhub_channel_cache_stale` — `lurus_gateway_channel_cache_sync_failed_total{query}` | warning |
 
 | [release-download-gate](release-download-gate.md) | `RELEASE_GATED_PRODUCTS` entitlement gate (mechanism shipped, default OFF) | activation |
 
@@ -60,6 +67,7 @@ do).
 | [incident-response](incident-response.md) | General incident response framework |
 | [oidc-enable-activation](oidc-enable-activation.md) | Turning `OIDC_ENABLED` on (Lutu search is dark without it) — blast radius across four auth paths, and the order that keeps `/api/v2/admin/**` reachable |
 | [channel-auto-ban](channel-auto-ban.md) | Investigating why a channel flipped status with no operator action, or tuning `ChannelDisableThreshold`/`AutoTestChannelEnabled` |
+| [platform-dependency-degraded](platform-dependency-degraded.md) | platform-core is down/slow, or any outbound dependency (Redis, NATS, webhook, bark/gotify, SMTP, provider admin calls) is hanging — what each caller does and the time bound it now has |
 
 ## When to add a runbook
 

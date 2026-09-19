@@ -38,13 +38,16 @@ const sessionTouchThrottleKeyPrefix = "session_touch:"
 // environment on every call — same "no caching, so an operator's env change
 // takes effect on the next request, not the next restart" convention as
 // CREDIT_POOL_RESET_MODE / TENANT_MODEL_ALLOWLIST_MODE. Default false: the
-// pre-lane session endpoints (list-self, /current revoke) fall back to their
-// single-synthetic-row/current-only behaviour, which predates this flag. The
-// list/revoke-by-id/revoke-others routes this lane ADDED did not exist
-// before it, so there is no prior behaviour for them to fall back to —
-// RevokeSessionByIDV2 answers 404 SESSION_NOT_FOUND and RevokeOtherSessionsV2
-// answers 200 {"revoked":0}, both without touching the DB, when the flag is
-// off (see those handlers' own doc comments in v2_session_revoke.go).
+// pre-lane /current revoke keeps its current-only behaviour, which predates
+// this flag. With the flag off nothing is ever registered, so every endpoint
+// that would read or write the registry says so instead of pretending
+// (cycle-12 L4), all without touching the DB: ListSessionsV2 answers
+// {"items":[],"total":0,"registry_enabled":false} (it used to invent one
+// synthetic row), RevokeSessionByIDV2 answers 404 SESSION_NOT_FOUND, and
+// RevokeOtherSessionsV2 plus the root twin RevokeUserSessionsAdminV2 answer
+// 409 SESSION_REGISTRY_DISABLED (they used to answer 200 {"revoked":0},
+// indistinguishable from "that user had no live sessions"). See those
+// handlers' own doc comments in v2_session_revoke.go / v2_sessions.go.
 func SessionRegistryEnabled() bool {
 	return os.Getenv("SESSION_REGISTRY_ENABLED") == "true"
 }

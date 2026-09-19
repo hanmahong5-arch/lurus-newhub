@@ -1,13 +1,12 @@
 {
-  "_measured": "2026-09-19, cycle-12 L2 repair round. Raw bytes from `bun run build` + `bun scripts/check-bundle-budget.mjs` on the branch tree. entryChunkBytes 943354, entryChunkBrotliBytes 186922, firstPaintJsBytes 2622723 over 6 files, firstPaintCssBytes 1260054 over 2 render-blocking stylesheets, largestChunkBytes 4387670 (the vendor-logo chunk, now loaded on demand), totalJsBytes 11456434, jsChunkCount 105.",
+  "_measured": "2026-09-19, cycle-12 W wiring commit — remeasured after the App.jsx lazy() conversion landed (eleven statically imported pages became their own chunks). Raw bytes from `bun run build` + `bun scripts/check-bundle-budget.mjs` on the branch tree. entryChunkBytes 626643, entryChunkBrotliBytes 130294, firstPaintJsBytes 2306012 over 6 files, firstPaintCssBytes 1260054 over 2 render-blocking stylesheets, largestChunkBytes 4387670 (the vendor-logo chunk, loaded on demand), totalJsBytes 11470033, jsChunkCount 131. Before the conversion the same build measured entryChunkBytes 943354 / entryChunkBrotliBytes 186922 / firstPaintJsBytes 2622723 / jsChunkCount 105: the entry chunk lost 316711 raw bytes (56628 on the wire) and the count rose by 26, which is the trade the conversion is.",
   "_policy": "Budgets are the measurement plus 5%, rounded up. A build that exceeds one is not automatically wrong — but the raise belongs in the same commit as the weight, with the reason. The report also asks for a budget to be LOWERED once a measurement falls more than 20% under it.",
   "_notJustJs": "entryChunkBrotliBytes is what the visitor's connection actually carries, so weight that compresses well (locale tables, generated rows) cannot hide behind the raw-byte budgets. firstPaintCssBytes covers the two render-blocking stylesheets in <head>, which together are larger than the entry chunk they sit above — a .js-only budget could not see the biggest first-paint blocker double.",
-  "_jsChunkCount": "Not measurement+5%: the App.jsx wiring hand-off in this same PR converts eleven statically imported pages to lazy(), and each one becomes its own chunk. 130 covers that conversion. Until it lands this is the one metric holding nothing — measured 105 against 130 breaches nothing AND is not 20% under it (130 x 0.8 = 104), so the report prints no note either. W lowers it to the real count in the commit that lands App.jsx.",
-  "entryChunkBytes": 990522,
-  "entryChunkBrotliBytes": 196269,
-  "firstPaintJsBytes": 2753860,
+  "entryChunkBytes": 657976,
+  "entryChunkBrotliBytes": 136809,
+  "firstPaintJsBytes": 2421313,
   "firstPaintCssBytes": 1323057,
   "largestChunkBytes": 4607054,
-  "totalJsBytes": 12029256,
-  "jsChunkCount": 130
+  "totalJsBytes": 12043535,
+  "jsChunkCount": 138
 }

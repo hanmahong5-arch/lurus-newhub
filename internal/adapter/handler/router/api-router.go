@@ -12,6 +12,11 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
 	apiRouter.Use(middleware.CORS())
+	// Cycle-12 L4: CSRF origin guard — same placement and carve-outs as
+	// api-v2-router.go's. v1 relay and service callers present a credential
+	// header and are skipped; the console's cookie-authenticated writes are the
+	// population this protects. See middleware/browser_origin_guard.go.
+	apiRouter.Use(middleware.BrowserOriginGuard())
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	// DecompressRequestMiddleware (the only other body-size cap in this repo)
 	// is wired onto the relay router only, which SetRelayRouter registers on

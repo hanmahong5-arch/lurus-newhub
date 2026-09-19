@@ -5,6 +5,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,6 +17,13 @@ func SetApiV2Router(router *gin.Engine) {
 	// missing it, so browser cross-origin calls (console SPA, Switch app) had
 	// no Access-Control-* response headers and silently failed preflight.
 	apiV2.Use(middleware.CORS())
+	// Cycle-12 L4: CSRF origin guard. Directly after CORS and before anything
+	// that reads the session, so a cross-site cookie-authenticated write is
+	// refused before any handler or auth lookup runs. It skips GET/HEAD/OPTIONS,
+	// any request carrying Authorization or X-API-Key, and any request with no
+	// session cookie — POST /api/v2/bridge/exchange (no cookie inbound) is
+	// unaffected. Decision table and CSRF_ORIGIN_GUARD_MODE: middleware/browser_origin_guard.go.
+	apiV2.Use(middleware.BrowserOriginGuard())
 	// Same rationale as api-router.go: DecompressRequestMiddleware only lands
 	// on the relay router, which main.go wires up AFTER this group already
 	// snapshotted its middleware chain, so it never reaches /api/v2. Cap the
@@ -31,9 +39,32 @@ func SetApiV2Router(router *gin.Engine) {
 	// comment for the budget this default is sized against. It must be
 	// mounted here, directly on apiV2, because gin.Group() snapshots its
 	// parent's middleware chain at the moment a child group is created —
-	// SetWebRouter's GlobalWebRateLimit ("GW"), mounted on a sibling group,
-	// never reaches this one.
+	// SetWebRouter's GlobalWebRateLimit ("GW") never reaches this one either
+	// way: since cycle 12 L2 it is not a group middleware at all, but is called
+	// inside that router's NoRoute handler, on the SPA HTML document alone.
 	apiV2.Use(middleware.GlobalV2RateLimit())
+	// Response compression for the console's JSON. gin-contrib/gzip buffers a
+	// streamed response whole, so the three CSV exports are excluded — they
+	// write row by row:
+	//   GET /api/v2/:tenant_slug/logs/export  (tenantLogs.GET("/export"), :208)
+	//   GET /api/v2/admin/logs/export         (:560)
+	//   GET /api/v2/admin/audit/export        (:617)
+	// One anchored regex covers all three: "admin" also matches [^/]+ in the
+	// first alternative.
+	//
+	// NOTE for whoever edits this: in gin-contrib/gzip v0.0.6 newGzipHandler
+	// sets `Options: DefaultOptions` — a PACKAGE-LEVEL pointer — and then
+	// applies the option setters to it (handler.go:20-26), so an exclusion
+	// declared here is also in effect for SetWebRouter's gzip instance, which
+	// is constructed later (router/main.go: SetApiV2Router :46, SetWebRouter
+	// :58). Harmless today, because the SPA router never sees an /api/v2 path —
+	// but an exclusion is NOT scoped to the mount that declares it. Note also
+	// that WithExcludedPaths matches by PREFIX (options.go: strings.HasPrefix)
+	// while WithExcludedPathsRegexs uses MatchString, hence the ^...$ anchors.
+	apiV2.Use(gzip.Gzip(
+		gzip.DefaultCompression,
+		gzip.WithExcludedPathsRegexs([]string{`^/api/v2/(?:[^/]+/logs|admin/audit)/export$`}),
+	))
 	{
 		// ================================================================
 		// OAuth / OIDC Routes (public — handles redirects & callbacks)
@@ -603,10 +634,11 @@ func SetApiV2Router(router *gin.Engine) {
 		// (audit, read) reaches these without root; a Bearer JWT and a
 		// role < RoleAdminUser session are rejected exactly as RootJWTAuth
 		// rejected them before this lane (root passes unconditionally). A
-		// role >= RoleAdminUser session WITHOUT a grant now gets HTTP 403
-		// {error_code:"PERMISSION_DENIED"} where RootJWTAuth previously
-		// answered HTTP 200 {"success":false,...} — a real shape change for
-		// that one caller class, not "rejected exactly as before". A
+		// role >= RoleAdminUser session WITHOUT a grant gets HTTP 403
+		// {error_code:"PERMISSION_DENIED"} — since cycle-12 L4 that is the
+		// SAME shape RootJWTAuth's session branch answers with (it no longer
+		// answers HTTP 200 {"success":false,...}), so what is special here is
+		// WHO is admitted, not what a refusal looks like. A
 		// deliberate, confined exception to "adminRoute is RootJWTAuth,
 		// full stop" — see root_or_granted.go.
 		auditRoute := apiV2.Group("/admin/audit")

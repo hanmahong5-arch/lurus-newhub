@@ -105,6 +105,14 @@ var noConsoleConsumer = map[string]string{
 	// they are an API surface, not a console one.
 	"GET /api/redemption/": "superseded in the console by the v2 tenant-scoped " +
 		"redemptions endpoint; kept as a v1 API surface for scripted clients",
+	// The v1 per-user log listing. Its only console surface was the legacy
+	// components/table/usage-logs grid (and hooks/usage-logs behind it),
+	// deleted in cycle 12 L3 after an enumeration found no importer outside
+	// that subtree. The v2 Log page reads the tenant-scoped
+	// /api/v2/:tenant_slug/logs instead (web/src/pages/v2/Log/index.jsx:324).
+	// The v1 route stays registered for scripted API clients that predate v2.
+	"GET /api/log/self": "superseded in the console by the v2 tenant-scoped " +
+		"logs endpoint; kept as a v1 API surface for scripted clients",
 }
 
 // TestConsoleReadsEveryUserFacingEndpoint fails when a route in

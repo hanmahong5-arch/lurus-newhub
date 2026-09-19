@@ -136,7 +136,7 @@ func TestV1IDOR_ListScopeCompleteness(t *testing.T) {
 	engine := gin.New()
 	SetApiRouter(engine)
 
-	tenantScopedPrefixes := []string{"/api/channel/", "/api/redemption/", "/api/user/", "/api/task/", "/api/mj/"}
+	tenantScopedPrefixes := []string{"/api/channel/", "/api/redemption/", "/api/user/", "/api/task/", "/api/mj/", "/api/models"}
 
 	// route -> name of the *_ListTenantScoped test in package handler
 	// (internal/adapter/handler/v1_cross_tenant_idor_test.go) that proves
@@ -150,20 +150,32 @@ func TestV1IDOR_ListScopeCompleteness(t *testing.T) {
 		"GET /api/user/search":       "TestV1UserSearch_ListTenantScoped",
 		"GET /api/task/":             "TestV1Task_ListTenantScoped",
 		"GET /api/mj/":               "TestV1Midjourney_ListTenantScoped",
+		// cycle-12 L5: narrowed to the caller's tenant.
+		"GET /api/user/models":            "TestV1UserModels_ListTenantScoped",
+		"GET /api/channel/models_enabled": "TestV1ModelsEnabled_ListTenantScoped",
+		"GET /api/channel/tag/models":     "TestV1ChannelTagModels_ListTenantScoped",
+		"GET /api/models/missing":         "TestV1MissingModels_ListTenantScoped",
+		// cycle-12 L5: the models table itself stays global; what is scoped is
+		// the per-row bound_channels / enable_groups enrichment and, for
+		// pricing_info, the rows another tenant's channels alone serve.
+		"GET /api/models/":             "TestV1ModelsMeta_ListTenantScoped",
+		"GET /api/models/search":       "TestV1ModelsMeta_ListTenantScoped",
+		"GET /api/models/pricing_info": "TestV1ModelsPricingInfo_ListTenantScoped",
 	}
 
 	listExempt := map[string]string{
 		// self-service: the caller reads only its own account, no tenant list to scope.
 		"GET /api/user/token":       "self-service: issues an access token for the authenticated user only",
-		"GET /api/user/models":      "self-service: lists models available to the authenticated user only",
 		"GET /api/user/totp/status": "self-service: reads the authenticated user's own TOTP enrollment state",
 		// root-only after W's RootAuth edits above: a whole-platform operator pass, not a tenant-admin list.
 		"GET /api/channel/test":           "RootAuth-gated (cycle-11 L8/L3): whole-platform operator pass, not reachable by a tenant admin",
 		"GET /api/channel/update_balance": "RootAuth-gated (cycle-11 L8/L3): whole-platform operator pass, not reachable by a tenant admin",
-		// known gap, operator decision, next-cycle item — NOT "by design".
-		"GET /api/channel/models":         "ChannelListModels aggregates repo.GetChannelsByTag-style queries with no tenant filter today; known gap, operator decision, next-cycle item",
-		"GET /api/channel/models_enabled": "EnabledListModels: same tenant-blind aggregation as /models today; known gap, operator decision, next-cycle item",
-		"GET /api/channel/tag/models":     "GetTagModels calls the tenant-blind repo.GetChannelsByTag (channel.go:1540); the tenant-scoped sibling repo.GetChannelsByTagAndTenant (channel.go:323-329) exists and is not used here — known gap, operator decision, next-cycle item",
+		// No tenant dimension to scope: both answer from the compile-time
+		// vendor catalogue model.go's init() builds (openAIModels /
+		// channelId2Models), running no query at all.
+		"GET /api/channel/models":               "ChannelListModels returns the compile-time vendor catalogue built in model.go init(); it issues no query and has no tenant dimension",
+		"GET /api/models":                       "DashboardListModels returns channelId2Models, the same compile-time per-channel-TYPE catalogue from model.go init(); no query, no tenant dimension",
+		"GET /api/models/sync_upstream/preview": "SyncUpstreamPreview reports only names that exist in the public upstream catalogue it fetched (model_sync.go intersects both the local rows and the missing list with it), so a name only one tenant's channel serves cannot appear",
 	}
 
 	inScope := func(path string) bool {

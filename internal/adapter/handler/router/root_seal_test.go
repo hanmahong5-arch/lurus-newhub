@@ -135,7 +135,7 @@ func TestRootSeal_GlobalConfigWritesRequireRoot(t *testing.T) {
 		{http.MethodPost, "/api/prefill_group/"},
 		{http.MethodPut, "/api/prefill_group/"},
 		{http.MethodDelete, "/api/prefill_group/1"},
-		{http.MethodGet, "/api/api-keys/"},    // whole api-keys group is root-only
+		{http.MethodGet, "/api/api-keys/"}, // whole api-keys group is root-only
 		{http.MethodPost, "/api/api-keys/"},
 	}
 	for _, r := range sealed {
