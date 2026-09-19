@@ -48,6 +48,7 @@ spec:
         app: lurus-newhub
         environment: uat
     spec:
+      terminationGracePeriodSeconds: 40
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -61,6 +62,10 @@ spec:
           # pin: main-20260916-3af1dcb run=35070560391
           image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:aadea71ddddfb177aec2ed4b8280c69366107418336c21ff545560433e5ddd11
           imagePullPolicy: IfNotPresent
+          # --log-dir= (empty): file-based logging is a no-op here
+          # (internal/pkg/logger/logger.go's SetupLogger gates on
+          # *common.LogDir != ""); stdout is already collected by kubelet.
+          args: ["--log-dir="]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -122,6 +127,14 @@ spec:
             # exercised; only the budget is UAT-sized.
             - name: GLOBAL_WEB_RATE_LIMIT
               value: "600"
+            # /api/v2 now carries its own IP-keyed rate limit (default
+            # 600/180s). The nightly e2e suite runs from a single IP (the
+            # SSH tunnel) and would exhaust that budget partway through —
+            # same rationale as GLOBAL_WEB_RATE_LIMIT above. Limiter stays
+            # ENABLED so the middleware is still exercised; only the budget
+            # is UAT-sized.
+            - name: GLOBAL_V2_RATE_LIMIT
+              value: "3000"
             - name: ERROR_LOG_ENABLED
               value: "true"
             - name: OIDC_ENABLED
@@ -207,7 +220,7 @@ spec:
               port: 3000
             initialDelaySeconds: 10
             periodSeconds: 5
-            timeoutSeconds: 2
+            timeoutSeconds: 4
             failureThreshold: 3
             successThreshold: 1
           lifecycle:
@@ -221,6 +234,8 @@ spec:
               mountPath: /tmp
       volumes:
         - name: data
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 512Mi
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 512Mi

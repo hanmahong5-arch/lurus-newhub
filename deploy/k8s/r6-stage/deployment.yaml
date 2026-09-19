@@ -33,6 +33,7 @@ spec:
       # (Was "parity with base deploy/k8s/deployment.yaml"; that base manifest
       # set was deleted 2026-08-24 — it still described the retired lurus-api
       # image in ns lurus-system. This overlay is the only newhub manifest.)
+      terminationGracePeriodSeconds: 40
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -55,6 +56,10 @@ spec:
           # pin: main-20260916-3af1dcb run=35070560391
           image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:aadea71ddddfb177aec2ed4b8280c69366107418336c21ff545560433e5ddd11
           imagePullPolicy: IfNotPresent
+          # --log-dir= (empty): file-based logging is a no-op here
+          # (internal/pkg/logger/logger.go's SetupLogger gates on
+          # *common.LogDir != ""); stdout is already collected by kubelet.
+          args: ["--log-dir="]
           # Container hardening: no priv-escalation, read-only root FS (writes go
           # to the /data + /tmp emptyDirs below), drop all caps.
           securityContext:
@@ -269,7 +274,10 @@ spec:
           # WITH this change to PROD:
           #   1. failureThreshold:3 + periodSeconds:5 ⇒ ~15s of sustained failure
           #      before a pod leaves the Service, so a 2s PG hiccup never flaps
-          #      the fleet; timeoutSeconds:2 keeps a hung DB ping from wedging.
+          #      the fleet; timeoutSeconds:4 gives the handler's own ceiling
+          #      (DB ping budget 1.5s + Redis-touching checks up to 2s) headroom
+          #      to answer before the probe itself times out, while still
+          #      catching a truly hung DB ping.
           #   2. P1-2 (billing breaker → cached-balance degrade) must be live so
           #      /api/health does NOT 503 on a billing-path blip — only a true
           #      DB-down trips readiness. DO NOT apply this readiness change to
@@ -280,7 +288,7 @@ spec:
               port: 3000
             initialDelaySeconds: 10
             periodSeconds: 5
-            timeoutSeconds: 2
+            timeoutSeconds: 4
             failureThreshold: 3
             successThreshold: 1
           # P1-4: give in-flight relay requests ~5s to drain before SIGTERM on a
@@ -297,6 +305,8 @@ spec:
               mountPath: /tmp
       volumes:
         - name: data
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 512Mi
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 512Mi

@@ -423,8 +423,11 @@ func run(ctx context.Context, startTime time.Time) error {
 		<-ctx.Done()
 		common.SysLog("shutdown signal received, initiating graceful shutdown...")
 
-		// Allow 30 seconds for graceful shutdown
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Graceful shutdown timeout is configurable (config.Get().Server.GracefulShutdownTimeout,
+		// internal/pkg/config/config.go:50; env GRACEFUL_SHUTDOWN_TIMEOUT, config.go:113,
+		// default 30s) so it can be raised to match terminationGracePeriodSeconds:40
+		// without a code change.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), config.Get().Server.GracefulShutdownTimeout)
 		defer cancel()
 
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {

@@ -27,6 +27,13 @@ func SetApiV2Router(router *gin.Engine) {
 	// credential is that cookie. Never aborts — public routes (switch, oauth)
 	// and bearer/session paths are unaffected (ADR-0011 Layer C).
 	apiV2.Use(middleware.OptionalZitaIdentity())
+	// GlobalV2RateLimit ("GV" bucket): see middleware/rate-limit-v2.go's doc
+	// comment for the budget this default is sized against. It must be
+	// mounted here, directly on apiV2, because gin.Group() snapshots its
+	// parent's middleware chain at the moment a child group is created —
+	// SetWebRouter's GlobalWebRateLimit ("GW"), mounted on a sibling group,
+	// never reaches this one.
+	apiV2.Use(middleware.GlobalV2RateLimit())
 	{
 		// ================================================================
 		// OAuth / OIDC Routes (public — handles redirects & callbacks)
@@ -36,7 +43,6 @@ func SetApiV2Router(router *gin.Engine) {
 		apiV2.GET("/oauth/callback", handler.OIDCCallback)
 		apiV2.GET("/auth/session-info", handler.GetSessionInfo)
 		apiV2.POST("/oauth/logout", handler.OIDCLogout)
-		apiV2.POST("/oauth/refresh", handler.RefreshAccessToken)
 
 		// ----------------------------------------------------------------
 		// Zita SDK login path (ADR-0011 Layer C). Coexists with the
@@ -278,6 +284,7 @@ func SetApiV2Router(router *gin.Engine) {
 			// to tenant-admin: v1 keeps the equivalent writes behind RootAuth.
 			tenantModels.POST("", handler.CreateModelV2)
 			tenantModels.DELETE("/:id", handler.DeleteModelV2)
+			tenantModels.GET("/routable", handler.ListRoutableModelsV2)
 		}
 
 		tenantPricing := apiV2.Group("/:tenant_slug/pricing")
@@ -453,6 +460,7 @@ func SetApiV2Router(router *gin.Engine) {
 				// (?invite=<code>) to land a new zita-bridge user in this
 				// tenant instead of "default".
 				tenantMgmt.POST("/:id/invites", handler.IssueTenantInvite)
+				tenantMgmt.GET("/:id/invites", handler.ListTenantInvites)
 				tenantMgmt.DELETE("/:id/invites/:invite_id", handler.RevokeTenantInvite)
 			}
 

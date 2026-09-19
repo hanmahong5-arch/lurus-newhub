@@ -80,7 +80,6 @@ const PATH_TO_ID = {
   // the mapping for any other route that resolves to the Flows surface.
   flows: 'flows',
   states: 'logs',
-  variants: 'dashboard',
   cmdk: 'tokens',
   'design-system': 'settings',
 };
