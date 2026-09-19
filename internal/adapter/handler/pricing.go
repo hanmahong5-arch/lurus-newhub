@@ -3,18 +3,24 @@ package handler
 import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
-	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
 
-// GetPricing serves the v1 price list at GET /api/pricing. The route carries
-// no auth middleware (api-router.go:38), so the common caller is anonymous and
-// gets the platform-shared catalogue only; a session that does reach here is
-// answered with shared ∪ its own tenant, and the platform operator (root)
-// keeps the global catalogue. Before this projection every tenant's private
-// model names and channel group names were in the anonymous answer.
+// GetPricing serves the v1 price list at GET /api/pricing. The route is
+// mounted with NO auth middleware (api-router.go:38, in the "Public routes"
+// block), so role and id are never set on it in production: this answers the
+// platform-shared catalogue — channels whose tenant_id is "default" or empty —
+// to every caller, including the console's legacy /pricing page. Before the
+// projection it published every tenant's private model names and channel group
+// names to anonymous readers.
+//
+// The tenant-aware price list is GET /api/v2/:tenant_slug/pricing
+// (v2_pricing.go), which is behind UserAuth and answers shared ∪ that slug's
+// tenant. A "logged-in caller sees more here" branch was written for this
+// handler and then deleted: on this route it could not execute, and an
+// unreachable branch is a worse answer than a documented one.
 func GetPricing(c *gin.Context) {
 	userId, exists := c.Get("id")
 	usableGroup := map[string]string{}
@@ -23,12 +29,10 @@ func GetPricing(c *gin.Context) {
 		groupRatio[s] = f
 	}
 	var group string
-	var callerTenant string
 	if exists {
 		user, err := repo.GetUserCache(userId.(int))
 		if err == nil {
 			group = user.Group
-			callerTenant = user.TenantId
 			for g := range groupRatio {
 				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
 				if ok {
@@ -38,12 +42,9 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
-	var pricing []repo.Pricing
-	if c.GetInt("role") >= common.RoleRootUser {
-		pricing = repo.GetPricing()
-	} else {
-		pricing = repo.GetPricingForTenant(callerTenant)
-	}
+	// "" = the platform-shared catalogue. See the doc comment above for why
+	// there is no per-caller branch here.
+	pricing := repo.GetPricingForTenant("")
 
 	usableGroup = app.GetUserUsableGroups(group)
 	// check groupRatio contains usableGroup

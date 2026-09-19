@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -100,13 +101,11 @@ func setupProbeAttributionDB(t *testing.T) *probeAttributionCtx {
 	return &probeAttributionCtx{db: db, actor: actor}
 }
 
-// TestV1ChannelTest_ConsumeLogAttributedToCaller drives the real handler
-// (GET /api/channel/test/:id) against a loopback upstream and asserts the row
-// it writes belongs to the operator who asked for the probe.
-// Mutation: drop the ActorUserID/TenantID plumbing in TestChannel/probeChannel
-// and the row goes back to user 1 / tenant "default".
-func TestV1ChannelTest_ConsumeLogAttributedToCaller(t *testing.T) {
-	ctx := setupProbeAttributionDB(t)
+// runProbeAsActor drives the real handler (GET /api/channel/test/:id) against
+// a loopback upstream as actor, with requestTenant on the request context, and
+// returns the consume-log row it wrote.
+func runProbeAsActor(t *testing.T, ctx *probeAttributionCtx, actor *repo.User, requestTenant string) repo.Log {
+	t.Helper()
 	allowLoopbackEgress(t)
 	app.InitHttpClient()
 
@@ -121,7 +120,7 @@ func TestV1ChannelTest_ConsumeLogAttributedToCaller(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"id":"chatcmpl-probe","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}`))
 	}))
-	defer upstream.Close()
+	t.Cleanup(upstream.Close)
 
 	channel := &repo.Channel{
 		Type:     1, // OpenAI
@@ -138,7 +137,7 @@ func TestV1ChannelTest_ConsumeLogAttributedToCaller(t *testing.T) {
 	}
 
 	c, w := v1Ctx(http.MethodGet, "/api/channel/test/"+fmt.Sprint(channel.Id)+"?model="+probeTestModel,
-		nil, common.RoleAdminUser, probeActorTenant, ctx.actor.Id)
+		nil, common.RoleAdminUser, requestTenant, actor.Id)
 	c.Params = gin.Params{{Key: "id", Value: fmt.Sprint(channel.Id)}}
 	TestChannel(c)
 	if w.Code != http.StatusOK || v1Body(t, w)["success"] != true {
@@ -149,6 +148,23 @@ func TestV1ChannelTest_ConsumeLogAttributedToCaller(t *testing.T) {
 	if err := repo.LOG_DB.Where("channel_id = ?", channel.Id).Order("id desc").First(&row).Error; err != nil {
 		t.Fatalf("query consume log row: %v", err)
 	}
+	return row
+}
+
+// TestV1ChannelTest_ConsumeLogAttributedToCaller asserts the row the manual
+// probe writes belongs to the operator who asked for it, in that operator's
+// tenant, and is marked as a probe.
+//
+// Mutation: drop the ActorUserID plumbing in TestChannel/probeChannel (pin
+// logUserID back to 1) and user_id, username AND tenant_id all go red — the
+// tenant follows the actor because repo.resolveLogTenantID falls back to the
+// actor's user row, which is the single thing that decides it here.
+// Mutation: delete `other["source"] = channelProbeLogSource` and the last
+// assertion goes red.
+func TestV1ChannelTest_ConsumeLogAttributedToCaller(t *testing.T) {
+	ctx := setupProbeAttributionDB(t)
+	row := runProbeAsActor(t, ctx, ctx.actor, probeActorTenant)
+
 	if row.UserId != ctx.actor.Id {
 		t.Errorf("probe consume log user_id = %d, want %d (the operator who asked for the probe)", row.UserId, ctx.actor.Id)
 	}
@@ -157,5 +173,46 @@ func TestV1ChannelTest_ConsumeLogAttributedToCaller(t *testing.T) {
 	}
 	if row.Username != ctx.actor.Username {
 		t.Errorf("probe consume log username = %q, want %q", row.Username, ctx.actor.Username)
+	}
+	if !strings.Contains(row.Other, `"source":"`+channelProbeLogSource+`"`) {
+		t.Errorf("probe consume log other = %q, want it to carry source=%q so stats can tell probe rows "+
+			"from customer traffic (this row spends no wallet money)", row.Other, channelProbeLogSource)
+	}
+}
+
+// TestV1ChannelTest_ConsumeLogTenantFollowsActorUserRow names the one thing
+// that decides the row's tenant: repo.RecordConsumeLog stamps
+// resolveLogTenantID(c.GetString("tenant_id"), userId), and probeChannel's
+// own gin.Context carries no tenant_id — so the value comes from the ACTOR'S
+// USER ROW, not from the request context and not from the channel. Here the
+// actor's row says one thing while the request (and the channel it is allowed
+// to probe) says another; if a future edit copies the request value onto the
+// probe context, this goes red and there are two sources again.
+//
+// In production the two agree by construction: middleware/auth.go derives the
+// session's tenant_id from this same user row, which is why the explicit
+// c.Set the first round added here was deleted as a no-op.
+func TestV1ChannelTest_ConsumeLogTenantFollowsActorUserRow(t *testing.T) {
+	ctx := setupProbeAttributionDB(t)
+
+	const actorRowTenant = "acme-probe-actor-row-tenant"
+	actor := &repo.User{
+		Username: "probe-acme-admin-2", Group: "default", Role: common.RoleAdminUser,
+		Status: common.UserStatusEnabled, TenantId: actorRowTenant, Quota: 1_000_000,
+	}
+	if err := ctx.db.Create(actor).Error; err != nil {
+		t.Fatalf("seed second actor: %v", err)
+	}
+
+	// The request context carries the CHANNEL's tenant (enforceTenantScope
+	// demands that), which is deliberately not the actor row's tenant.
+	row := runProbeAsActor(t, ctx, actor, probeActorTenant)
+
+	if row.TenantId != actorRowTenant {
+		t.Errorf("probe consume log tenant_id = %q, want %q (the actor's user row, via resolveLogTenantID) — "+
+			"the request context said %q", row.TenantId, actorRowTenant, probeActorTenant)
+	}
+	if row.UserId != actor.Id {
+		t.Errorf("probe consume log user_id = %d, want %d", row.UserId, actor.Id)
 	}
 }

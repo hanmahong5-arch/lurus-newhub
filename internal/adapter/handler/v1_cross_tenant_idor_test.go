@@ -1200,22 +1200,51 @@ func TestV1ChannelTagModels_ListTenantScoped(t *testing.T) {
 	}
 }
 
+// v1ChannelNames pulls the channel names out of a GetAllChannels page.
+func v1ChannelNames(t *testing.T, w *httptest.ResponseRecorder) []string {
+	t.Helper()
+	items := v1Items(t, w)
+	names := make([]string, 0, len(items))
+	for _, it := range items {
+		row, _ := it.(map[string]interface{})
+		if row == nil {
+			continue
+		}
+		if name, ok := row["name"].(string); ok {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // GET /api/channel/?tag_mode=true — the tag-grouped channel list. The rows
-// were already filtered by tenant (channel.go:134) but the page of tags and
-// the total were not, so a tenant admin paged through other tenants' tag
-// names and saw a total that counted them.
+// were already filtered by tenant (channel.go's per-row filter) but the page
+// of tags and the total were not, so a tenant admin paged through other
+// tenants' tag names and saw a total that counted them.
+//
+// The page assertion is what pins the PAGE half: the victim's tag is seeded
+// first AND sorts first, so with the tenant-blind repo.GetPaginatedTags a
+// page of one holds the victim's tag, every row under it is filtered away,
+// and the caller's own channel never appears. Both halves (page + total) must
+// therefore be scoped for this to stay green.
 func TestV1ChannelTagMode_ListTenantScoped(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
-	seedV1TaggedChannel(t, ctx, ctx.TenantID, "tagmode-own", "own-only-tag", common.ChannelStatusEnabled)
-	seedV1TaggedChannel(t, ctx, idorVictimTenant, "tagmode-victim", "victim-only-tag", common.ChannelStatusEnabled)
+	const victimTag = "aaa-victim-tag"
+	const ownTag = "zzz-own-tag"
+	seedV1TaggedChannel(t, ctx, idorVictimTenant, "tagmode-victim", victimTag, common.ChannelStatusEnabled)
+	seedV1TaggedChannel(t, ctx, ctx.TenantID, "tagmode-own", ownTag, common.ChannelStatusEnabled)
 
-	c, w := v1Ctx(http.MethodGet, "/api/channel/?p=1&page_size=50&tag_mode=true", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	c, w := v1Ctx(http.MethodGet, "/api/channel/?p=1&page_size=1&tag_mode=true", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
 	GetAllChannels(c)
 	data := v1Body(t, w)["data"].(map[string]interface{})
 	if got := data["total"].(float64); got != 1 {
 		t.Errorf("tenant admin tag_mode total=%v want 1 (only its own tag)", got)
+	}
+	if got := v1ChannelNames(t, w); len(got) != 1 || got[0] != "tagmode-own" {
+		t.Errorf("tenant admin tag_mode page = %v, want exactly [tagmode-own] — "+
+			"an unscoped page of tags spends the window on another tenant's tag", got)
 	}
 
 	c, w = v1Ctx(http.MethodGet, "/api/channel/?p=1&page_size=50&tag_mode=true", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
@@ -1223,5 +1252,289 @@ func TestV1ChannelTagMode_ListTenantScoped(t *testing.T) {
 	data = v1Body(t, w)["data"].(map[string]interface{})
 	if got := data["total"].(float64); got != 2 {
 		t.Errorf("root tag_mode total=%v want 2 (global view)", got)
+	}
+	if got := v1ChannelNames(t, w); len(got) != 2 {
+		t.Errorf("root tag_mode page = %v, want both tenants' channels", got)
+	}
+}
+
+// ─── Model catalogue metadata (cycle-12 L5 repair) ──────────────────────────
+//
+// GET /api/models/, /search and /:id answer from the global models table, but
+// the per-row data enrichModels attaches came from the channels/abilities
+// tables with no tenant predicate: bound_channels published every tenant's
+// channel NAME (operators name channels after the account) and enable_groups
+// published every tenant's private group names — the same two disclosures
+// this cycle removed from the price list.
+
+const (
+	metaCommonModel     = "meta-common-model"
+	metaVictimOnlyModel = "meta-victim-only-model"
+	metaOrphanModel     = "meta-orphan-metadata-model"
+	metaVictimChannel   = "meta-victim-channel-SECRET"
+	metaSharedChannel   = "meta-shared-channel"
+	metaVictimGroup     = "victim-vip"
+)
+
+// seedV1ModelMetaFixture seeds one shared and one victim-tenant channel that
+// serve the SAME model (so bound_channels/enable_groups have something to
+// leak), one model only the victim serves, plus the models-table rows the
+// enrichment hangs off. It also drops the process-wide pricing cache, which
+// the enrichment reads.
+func seedV1ModelMetaFixture(t *testing.T, ctx *V2TestContext) {
+	t.Helper()
+	if err := ctx.DB.AutoMigrate(&repo.Model{}); err != nil {
+		t.Fatalf("migrate models table: %v", err)
+	}
+	seedV1DiscoveryChannel(t, ctx, "default", metaSharedChannel, metaCommonModel, "default")
+	seedV1DiscoveryChannel(t, ctx, idorVictimTenant, metaVictimChannel, metaCommonModel, metaVictimGroup)
+	seedV1DiscoveryChannel(t, ctx, idorVictimTenant, "meta-victim-private", metaVictimOnlyModel, metaVictimGroup)
+	for _, name := range []string{metaCommonModel, metaVictimOnlyModel, metaOrphanModel} {
+		if err := ctx.DB.Create(&repo.Model{
+			ModelName: name, NameRule: repo.NameRuleExact, Status: 1,
+			CreatedTime: common.GetTimestamp(),
+		}).Error; err != nil {
+			t.Fatalf("seed models-table row %q: %v", name, err)
+		}
+	}
+	repo.InvalidatePricingCache()
+	t.Cleanup(repo.InvalidatePricingCache)
+}
+
+// v1ModelMetaItem finds one model row in a GET /api/models/ page.
+func v1ModelMetaItem(t *testing.T, w *httptest.ResponseRecorder, modelName string) map[string]interface{} {
+	t.Helper()
+	body := v1Body(t, w)
+	data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data missing/wrong type, body: %s", w.Body.String())
+	}
+	items, _ := data["items"].([]interface{})
+	for _, it := range items {
+		row, _ := it.(map[string]interface{})
+		if row != nil && row["model_name"] == modelName {
+			return row
+		}
+	}
+	t.Fatalf("model %q missing from the page, body: %s", modelName, w.Body.String())
+	return nil
+}
+
+func v1BoundChannelNames(row map[string]interface{}) []string {
+	raw, _ := row["bound_channels"].([]interface{})
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		ch, _ := v.(map[string]interface{})
+		if ch == nil {
+			continue
+		}
+		if name, ok := ch["name"].(string); ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func v1RowStrings(row map[string]interface{}, key string) []string {
+	raw, _ := row[key].([]interface{})
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// GET /api/models/ — bound_channels and enable_groups narrowed to the
+// caller's own channels; root keeps the platform-wide answer.
+func TestV1ModelsMeta_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	seedV1ModelMetaFixture(t, ctx)
+
+	c, w := v1Ctx(http.MethodGet, "/api/models/?p=1&page_size=50", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	GetAllModelsMeta(c)
+	row := v1ModelMetaItem(t, w, metaCommonModel)
+	channels := v1BoundChannelNames(row)
+	if !v1ListHas(channels, metaSharedChannel) {
+		t.Errorf("tenant admin lost the shared channel from bound_channels: %v", channels)
+	}
+	if v1ListHas(channels, metaVictimChannel) {
+		t.Errorf("GET /api/models/ leaked another tenant's channel name: %v", channels)
+	}
+	groups := v1RowStrings(row, "enable_groups")
+	if !v1ListHas(groups, "default") {
+		t.Errorf("tenant admin lost its own group from enable_groups: %v", groups)
+	}
+	if v1ListHas(groups, metaVictimGroup) {
+		t.Errorf("GET /api/models/ leaked another tenant's group name: %v", groups)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/models/?p=1&page_size=50", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	GetAllModelsMeta(c)
+	row = v1ModelMetaItem(t, w, metaCommonModel)
+	if channels = v1BoundChannelNames(row); !v1ListHas(channels, metaVictimChannel) {
+		t.Errorf("root must keep the platform-wide bound_channels: %v", channels)
+	}
+	if groups = v1RowStrings(row, "enable_groups"); !v1ListHas(groups, metaVictimGroup) {
+		t.Errorf("root must keep the platform-wide enable_groups: %v", groups)
+	}
+}
+
+// GET /api/models/pricing_info — a model only another tenant's channels serve
+// is dropped for a non-root caller; platform metadata with no channel at all
+// stays, and root sees everything.
+func TestV1ModelsPricingInfo_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	seedV1ModelMetaFixture(t, ctx)
+
+	names := func(w *httptest.ResponseRecorder) []string {
+		rows, _ := v1Body(t, w)["data"].([]interface{})
+		out := make([]string, 0, len(rows))
+		for _, r := range rows {
+			row, _ := r.(map[string]interface{})
+			if row == nil {
+				continue
+			}
+			if n, ok := row["model_name"].(string); ok {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+
+	c, w := v1Ctx(http.MethodGet, "/api/models/pricing_info", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	GetModelsPricingInfo(c)
+	got := names(w)
+	for _, want := range []string{metaCommonModel, metaOrphanModel} {
+		if !v1ListHas(got, want) {
+			t.Errorf("tenant admin pricing_info missing %q: %v", want, got)
+		}
+	}
+	if v1ListHas(got, metaVictimOnlyModel) {
+		t.Errorf("pricing_info leaked a model only another tenant's channels serve: %v", got)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/models/pricing_info", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	GetModelsPricingInfo(c)
+	if got = names(w); !v1ListHas(got, metaVictimOnlyModel) {
+		t.Errorf("root pricing_info must list every models-table row: %v", got)
+	}
+}
+
+// ─── Fail-closed: a non-root session with no tenant on it ───────────────────
+//
+// repo.abilityTenantScope and repo.getChannelsByTagScoped both define the
+// empty tenant id as "apply no filter" — the contract their tenant-blind
+// callers rely on. handler.tenantScopeForDiscovery therefore narrows a
+// non-root caller with a blank session tenant to "default" (the shared pool)
+// instead of passing "" through. Deleting that two-line fallback is the
+// cheapest way to make a stubborn discovery test pass, so each of the five
+// scoped endpoints pins it here, the same way the task and midjourney lists
+// above do.
+
+// GET /api/user/models with no tenant on the session.
+func TestV1UserModels_ListTenantScoped_EmptyTenantFailsClosed(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	shared, own, victim := seedV1DiscoveryTrio(t, ctx)
+
+	c, w := v1Ctx(http.MethodGet, "/api/user/models", nil, common.RoleAdminUser, "", ctx.AdminUser.Id)
+	GetUserModels(c)
+	got := v1StringList(t, w)
+	if !v1ListHas(got, shared) {
+		t.Errorf("blank-tenant admin must still see the shared catalogue, missing %q: %v", shared, got)
+	}
+	for _, leaked := range []string{own, victim} {
+		if v1ListHas(got, leaked) {
+			t.Errorf("blank-tenant /api/user/models leaked tenant-owned model %q (fail-open): %v", leaked, got)
+		}
+	}
+}
+
+// GET /api/channel/models_enabled with no tenant on the session.
+func TestV1ModelsEnabled_ListTenantScoped_EmptyTenantFailsClosed(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	shared, own, victim := seedV1DiscoveryTrio(t, ctx)
+
+	c, w := v1Ctx(http.MethodGet, "/api/channel/models_enabled", nil, common.RoleAdminUser, "", ctx.AdminUser.Id)
+	EnabledListModels(c)
+	got := v1StringList(t, w)
+	if !v1ListHas(got, shared) {
+		t.Errorf("blank-tenant admin must still see the shared catalogue, missing %q: %v", shared, got)
+	}
+	for _, leaked := range []string{own, victim} {
+		if v1ListHas(got, leaked) {
+			t.Errorf("blank-tenant models_enabled leaked tenant-owned model %q (fail-open): %v", leaked, got)
+		}
+	}
+}
+
+// GET /api/models/missing with no tenant on the session.
+func TestV1MissingModels_ListTenantScoped_EmptyTenantFailsClosed(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	if err := ctx.DB.AutoMigrate(&repo.Model{}); err != nil {
+		t.Fatalf("migrate models table: %v", err)
+	}
+	shared, own, victim := seedV1DiscoveryTrio(t, ctx)
+
+	c, w := v1Ctx(http.MethodGet, "/api/models/missing", nil, common.RoleAdminUser, "", ctx.AdminUser.Id)
+	GetMissingModels(c)
+	if v1Body(t, w)["success"] != true {
+		t.Fatalf("blank-tenant missing-models call failed: %s", w.Body.String())
+	}
+	got := v1StringList(t, w)
+	if !v1ListHas(got, shared) {
+		t.Errorf("blank-tenant admin must still see the shared catalogue, missing %q: %v", shared, got)
+	}
+	for _, leaked := range []string{own, victim} {
+		if v1ListHas(got, leaked) {
+			t.Errorf("blank-tenant missing-models leaked tenant-owned model %q (fail-open): %v", leaked, got)
+		}
+	}
+}
+
+// GET /api/channel/tag/models with no tenant on the session.
+func TestV1ChannelTagModels_ListTenantScoped_EmptyTenantFailsClosed(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	const victimTag = "victim-only-tag-blank"
+	victim := seedV1TaggedChannel(t, ctx, idorVictimTenant, "tagmodels-victim-blank", victimTag, common.ChannelStatusEnabled)
+	victim.Models = "victim-secret-model"
+	if err := ctx.DB.Save(victim).Error; err != nil {
+		t.Fatalf("set victim models: %v", err)
+	}
+
+	c, w := v1Ctx(http.MethodGet, "/api/channel/tag/models?tag="+victimTag, nil, common.RoleAdminUser, "", ctx.AdminUser.Id)
+	GetTagModels(c)
+	if got, _ := v1Body(t, w)["data"].(string); got != "" {
+		t.Errorf("blank-tenant admin read another tenant's tag model list (fail-open): %q", got)
+	}
+}
+
+// GET /api/channel/?tag_mode=true with no tenant on the session. This half
+// never went through tenantScopeForDiscovery — GetAllChannels keeps using the
+// raw session tenant so its page agrees with its exact-match row filter — so
+// what this pins is that the raw value is itself fail-closed.
+func TestV1ChannelTagMode_ListTenantScoped_EmptyTenantFailsClosed(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	seedV1TaggedChannel(t, ctx, ctx.TenantID, "tagmode-own-blank", "own-tag-blank", common.ChannelStatusEnabled)
+	seedV1TaggedChannel(t, ctx, idorVictimTenant, "tagmode-victim-blank", "victim-tag-blank", common.ChannelStatusEnabled)
+
+	c, w := v1Ctx(http.MethodGet, "/api/channel/?p=1&page_size=50&tag_mode=true", nil, common.RoleAdminUser, "", ctx.AdminUser.Id)
+	GetAllChannels(c)
+	data := v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 0 {
+		t.Errorf("blank-tenant admin tag_mode total=%v want 0 (fail-closed)", got)
+	}
+	if got := v1ChannelNames(t, w); len(got) != 0 {
+		t.Errorf("blank-tenant admin tag_mode page = %v, want empty (fail-closed)", got)
 	}
 }

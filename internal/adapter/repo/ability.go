@@ -18,11 +18,24 @@ import (
 type Ability = entity.Ability
 type AbilityWithChannel = entity.AbilityWithChannel
 
+// GetAllEnableAbilityWithChannels feeds the pricing catalogue (updatePricing).
+// The join is INNER on purpose: an ability whose channel row is gone is
+// routable by nobody (route-time selection resolves ownership through the same
+// channel_id — abilityTenantScope below), so it must not enter the catalogue
+// either. With the left join this used to be, such a row arrived with
+// channel_tenant_id "" and the catalogue counted "" as platform-shared, which
+// published the orphan's model name to anonymous callers — the opposite of what
+// the four discovery endpoints do with the same row. The deletion paths that
+// can leave one behind are DeleteDisabledChannel / DeleteDisabledChannelByTenant
+// (channel.go) and Channel.Delete()'s two non-transactional deletes.
+//
+// coalesce still guards the column itself: a real channel row with a NULL
+// tenant_id reads as "", which IS platform-shared (sharedChannelTenantIDs).
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	var abilities []AbilityWithChannel
 	err := DB.Table("abilities").
 		Select("abilities.*, channels.type as channel_type, coalesce(channels.tenant_id, '') as channel_tenant_id").
-		Joins("left join channels on abilities.channel_id = channels.id").
+		Joins("join channels on abilities.channel_id = channels.id").
 		Where("abilities.enabled = ?", true).
 		Scan(&abilities).Error
 	return abilities, err
