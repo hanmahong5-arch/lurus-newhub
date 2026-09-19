@@ -29,6 +29,10 @@ import { API } from '../../../../helpers';
  * historical spend, with a visible heuristic caveat. The headline number is
  * computed server-side from SUM(quota) of real log rows — never a constant —
  * and this page only renders/derives USD from it (USD = quota / quota_per_usd).
+ *
+ * Cycle 12 L3: a failed fetch is its own state. "Savings endpoint returned no
+ * data" is an answer; a 502 is not, and rendering one as the other tells an
+ * operator there is nothing to save when nobody asked the question.
  */
 
 const usd = (quota, perUsd) => {
@@ -60,21 +64,39 @@ const HFCostIntelligence = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
   const [scenario, setScenario] = useState('conservative');
+  // null when the last fetch succeeded; otherwise the backend message, or ''
+  // when there was none.
+  const [error, setError] = useState(null);
+  // Bumped by the retry button to re-run the effect below.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setForbidden(false);
+    setSignedOut(false);
+    setError(null);
     API.get('/api/v2/admin/governance/savings?hours=168', {
       skipErrorHandler: true,
     })
       .then((res) => {
         if (cancelled) return;
-        if (res?.data?.success) setData(res.data.data);
+        if (res?.data?.success) {
+          setData(res.data.data);
+        } else {
+          setError(res?.data?.message ?? '');
+        }
       })
       .catch((err) => {
-        if (!cancelled && err?.response?.status === 403) setForbidden(true);
+        if (cancelled) return;
+        const status = err?.response?.status;
+        // L4 split the two refusals apart: 403 means the role is short,
+        // 401 means the session is gone and no permission grant fixes it.
+        if (status === 403) setForbidden(true);
+        else if (status === 401) setSignedOut(true);
+        else setError(err?.response?.data?.message ?? '');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -82,7 +104,7 @@ const HFCostIntelligence = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
 
   const perUsd = data?.quota_per_usd || 500000;
   const active = data?.scenarios?.[scenario] || null;
@@ -143,9 +165,67 @@ const HFCostIntelligence = () => {
             </div>
           </div>
         </div>
+      ) : signedOut ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='cost-signed-out'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.session_expired_title',
+                'Your session has expired',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.session_expired_body',
+                'The server no longer recognises this session, so nothing on this page can be read. Sign in again to continue.',
+              )}
+            </div>
+            <a className='btn sm' href='/login' data-testid='cost-sign-in'>
+              {tr('console.admin.sign_in_again', 'sign in again')}
+            </a>
+          </div>
+        </div>
       ) : loading ? (
         <div style={{ padding: 28 }} className='muted'>
           {tr('console.common.loading', 'loading…')}
+        </div>
+      ) : error !== null ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='cost-error'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr('console.admin.cost.error_title', 'Savings figure unknown')}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.cost.error_body',
+                'The savings endpoint did not answer. This is not a report that there is nothing to save — the analysis simply did not run.',
+              )}
+            </div>
+            {error ? (
+              <div
+                className='mono muted'
+                style={{ fontSize: 11, marginBottom: 12 }}
+              >
+                {error}
+              </div>
+            ) : null}
+            <button
+              type='button'
+              className='btn sm'
+              data-testid='cost-retry'
+              onClick={() => setAttempt((n) => n + 1)}
+            >
+              {tr('console.admin.cost.retry', 'retry')}
+            </button>
+          </div>
         </div>
       ) : !data ? (
         <div style={{ padding: 28 }}>

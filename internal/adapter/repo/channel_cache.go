@@ -23,18 +23,66 @@ var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
 var channelSyncLock sync.RWMutex
 
+// InitChannelCache rebuilds the in-memory channel routing table from the
+// database. A read that fails leaves the previous table in place (see
+// rebuildChannelCache).
+//
+// It keeps its func() signature — the error rebuildChannelCache returns is
+// logged here rather than propagated — because every call site is
+// fire-and-forget. The boot path, the periodic sync ticker, the post-write
+// channel refreshes in the v1 and v2 handlers and the abilities self-heal in
+// this package (FixAbility) all call it as a bare statement
+// (grep -rn 'InitChannelCache()' --include=*.go . | grep -v _test.go),
+// and none of them has any recovery to run for a failed refresh: the next tick
+// rebuilds. Propagating the error would add an unchecked-error lint finding at
+// each of them and change nothing else. Callers that do need the reason call
+// rebuildChannelCache directly.
+//
+// No call-site count is given here on purpose: it moves whenever a handler
+// adds or drops a refresh, and a stale number in a comment misleads worse than
+// no number (this comment previously claimed four sites; there were twenty).
+// `grep -rn "InitChannelCache()" --include=*.go .` is today's answer.
 func InitChannelCache() {
+	if err := rebuildChannelCache(); err != nil {
+		common.SysError("channel cache sync aborted, previous routing table kept: " + err.Error())
+	}
+}
+
+// rebuildChannelCache builds a fresh routing table and swaps it in.
+//
+// Either read failing aborts the pass: it returns the error WITHOUT touching
+// the live maps, so relay keeps routing on the last table that was built from
+// a complete read. Before this, both reads discarded their error and GORM's
+// empty-on-failure result slice was swapped in wholesale, which emptied that
+// replica's routing table on a single failed query.
+//
+// The trade-off is the same shape as syncChannelCacheOnce's recover below: a
+// read that keeps failing leaves the table STALE indefinitely (a channel
+// disabled in the database keeps serving) rather than empty. The counter is
+// what makes that visible — lurus_gateway_channel_cache_sync_failed_total,
+// which the netdata alarm newhub_channel_cache_stale watches
+// (deploy/r6-host-netdata/health.d/newhub.conf) and
+// doc/runbook/db-pool-saturation.md documents. That alarm is added in-repo
+// only; whether it has been installed onto the host is recorded in the conf
+// file's own dated STATUS header, which is the truth about it, not this line.
+func rebuildChannelCache() error {
 	if !common.MemoryCacheEnabled {
-		return
+		return nil
 	}
 	newChannelId2channel := make(map[int]*Channel)
 	var channels []*Channel
-	DB.Find(&channels)
+	if err := DB.Find(&channels).Error; err != nil {
+		metrics.RecordChannelCacheSyncFailed("channels")
+		return fmt.Errorf("load channels for cache rebuild: %w", err)
+	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 	}
 	var abilities []*Ability
-	DB.Find(&abilities)
+	if err := DB.Find(&abilities).Error; err != nil {
+		metrics.RecordChannelCacheSyncFailed("abilities")
+		return fmt.Errorf("load abilities for cache rebuild: %w", err)
+	}
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
@@ -107,6 +155,7 @@ func InitChannelCache() {
 	channelsIDM = newChannelId2channel
 	channelSyncLock.Unlock()
 	common.SysLog("channels synced from database")
+	return nil
 }
 
 // carryOverPollingIndices reads the current polling position of every cached

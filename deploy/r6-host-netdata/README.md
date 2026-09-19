@@ -31,7 +31,7 @@ a bind source. `scripts/install-netdata-alarms.sh` only manages
 `newhub.conf` — a second alarm file would need its own bind mount added to
 the container definition first (out of scope for this directory).
 
-`health.d/newhub.conf` currently defines 12 alarms:
+`health.d/newhub.conf` currently defines 14 alarms:
 
 - 8 ported from the host's original 2026-08-20 copy
   (`newhub_platform_breaker_open`, `newhub_billing_outbox_failures`,
@@ -48,6 +48,35 @@ the container definition first (out of scope for this directory).
   consume-quota settlement call fails. Added **in-repo only** in the same
   change; not yet installed onto R6 — see the conf file's own "STATUS
   UPDATE 2026-09-19" header note.
+- 1 added 2026-09-19 (cycle-12 L8): `newhub_db_slow_queries` — watches
+  `lurus_gateway_db_slow_query_total`, incremented by the GORM logger
+  (`internal/adapter/repo/gorm_logger.go`) for every statement over
+  `DB_SLOW_QUERY_MS` (default 200ms). It is deliberately NOT bound to the
+  `go_sql_wait_count_total` pool gauge, which is the more direct saturation
+  signal: those `go_sql_*` series come from prometheus/client_golang's
+  `NewDBStatsCollector`, and the repo oracle below can only resolve an `on:`
+  line to a series declared with `promauto` in `internal/pkg/metrics`, so an
+  alarm bound to one of them would sit outside the gate that keeps alarms
+  from going silently dead. GORM's measured statement time includes the wait
+  for a pooled connection, so pool saturation does surface on this counter;
+  `doc/runbook/db-pool-saturation.md` covers reading it together with the
+  `go_sql_*` gauges to tell "pool saturated" from "database slow". Added
+  **in-repo only**; not yet installed onto R6 — see the conf file's "STATUS
+  UPDATE 2026-09-19 (cycle-12 L8)" header note.
+- 1 added 2026-09-19 (cycle-12 L8): `newhub_channel_cache_stale` — watches
+  `lurus_gateway_channel_cache_sync_failed_total`, incremented by
+  `repo.rebuildChannelCache` (`internal/adapter/repo/channel_cache.go`) once
+  per rebuild abandoned because one of its two database reads failed. The
+  same cycle-12 change made that failure keep the previous routing table
+  instead of emptying it, which is the better failure but a **silent** one —
+  a channel disabled or key-rotated during the incident keeps serving on that
+  replica. This alarm is what keeps the trade from being "loud bug for silent
+  bug". Both label values are pre-registered at zero
+  (`internal/pkg/metrics/db_observability.go` `init()`), so the chart exists
+  from boot and an absent chart cannot be misread as "no failures". Runbook
+  is the same page as `newhub_db_slow_queries`
+  (`doc/runbook/db-pool-saturation.md`). Added **in-repo only**; not yet
+  installed onto R6 — same header note.
 
 Every alarm reads the same `/metrics` endpoint netdata's go.d `prometheus`
 collector already scrapes on R6 (job name `newhub`,
@@ -73,6 +102,14 @@ the original set. Loading the new ones needs a working reload path or an
 on R6, not just newhub, so it is an operator call and was deliberately not
 taken here. The previous host file is backed up at
 `/root/c9-netdata/newhub.conf.backup-20260916`.
+
+The three alarms added on 2026-09-19 (`newhub_settlement_failed`, cycle-11
+L7, and `newhub_db_slow_queries` + `newhub_channel_cache_stale`, cycle-12 L8)
+are a step behind even that: they were added to this repo copy only, so the
+bind source on R6 no longer matches this file and the md5 above is stale for
+it. All three need the install script run before netdata sees them at all, on
+top of the reload/restart the 2026-09-16 three are still waiting on. Same
+operator item (O2).
 
 Several of the 8 originally-ported alarms carry a dated "LIVE STATUS"
 comment recording what the operator observed directly on the R6 host on

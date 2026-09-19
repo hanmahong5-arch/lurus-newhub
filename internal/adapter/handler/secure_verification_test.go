@@ -26,16 +26,12 @@ func setupStepUpAuditDB(t *testing.T, userId int) func() {
 	if err := repo.DB.AutoMigrate(&entity.AuditEvent{}, &entity.AuditChainHead{}); err != nil {
 		t.Fatalf("automigrate audit tables: %v", err)
 	}
-	governance.SetAuditWriter(&pinnedAuditWriter{db: repo.DB})
-	// The pinned writer above holds repo.DB, which the caller's deferred
-	// cleanup() closes when the test returns. Without this, the global
-	// governance writer keeps pointing at a closed handle until some later
-	// test happens to call SetAuditWriter again, and any audit write in
-	// between (including a delayed async one from this test) logs "sql:
-	// database is closed" noise. Reset to an in-memory recorder (same type
-	// v2_models_write_test.go uses for the same purpose) once this test is
-	// fully done.
-	t.Cleanup(func() { governance.SetAuditWriter(&modelsWriteAuditRecorder{}) })
+	// The pinned writer holds repo.DB, which the caller's deferred cleanup()
+	// closes when the test returns. pinAuditWriter (audit_writer_pin_test.go)
+	// pairs that install with a t.Cleanup that swaps in a writer holding no
+	// database handle, so the global does not keep pointing at a closed one
+	// until some later test happens to call SetAuditWriter again.
+	pinAuditWriter(t, repo.DB)
 	return cleanup
 }
 

@@ -24,8 +24,11 @@ func GetHealthDetailed(c *gin.Context) {
 		sqlDB, err := repo.DB.DB()
 		if err == nil {
 			// Bound the ping with its own deadline (A1): a ping to a DOWN host can
-			// otherwise outlive the readinessProbe timeoutSeconds:2 window and leave
-			// a zombie pod draining traffic. Inline cancel — two more checks follow.
+			// otherwise outlive the readinessProbe timeout window and leave a zombie
+			// pod draining traffic. That window is timeoutSeconds: 4 in both
+			// manifests as of 2026-09-19 (deploy/k8s/r6-stage/deployment.yaml:291,
+			// deploy/k8s/r6-uat/deployment.yaml:223); this comment said 2 until the
+			// value was re-read. Inline cancel — two more checks follow.
 			ctx, cancel := context.WithTimeout(c.Request.Context(), common.HealthDBPingTimeout)
 			pingErr := sqlDB.PingContext(ctx)
 			cancel()
@@ -43,7 +46,16 @@ func GetHealthDetailed(c *gin.Context) {
 		checks["database"] = "not_configured"
 	}
 
-	// Redis check
+	// Redis check. The 2s cap below only became real in cycle 12: go-redis sets
+	// no read timeout of its own and consults the caller's context deadline only
+	// when ContextTimeoutEnabled is set, both of which common.applyRedisTimeouts
+	// now does. Measured against a listener that accepts and never replies
+	// (health_deadline_test.go): 3.0027799s before, 1.0221447s after — the ping
+	// now ends at the client's own 1s read timeout, inside both this 2s cap and
+	// the readinessProbe timeoutSeconds: 4 that both manifests declare
+	// (deploy/k8s/r6-stage/deployment.yaml:291,
+	// deploy/k8s/r6-uat/deployment.yaml:223). 3s was never a kubelet cut-off; it
+	// was 75% of the probe window spent on one soft dependency.
 	if common.RedisEnabled && common.RDB != nil {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()

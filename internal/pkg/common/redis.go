@@ -25,6 +25,43 @@ func RedisKeyCacheSeconds() int {
 	return SyncFrequency
 }
 
+// Bounded outbound Redis budget (cycle 12 §2). go-redis ships
+// ContextTimeoutEnabled=false, which makes the client ignore the caller's
+// context deadline for the command round trip: a server that accepts the
+// connection and then stops answering costs every command the full ReadTimeout
+// (3s by default) no matter how little budget the caller had left. These
+// defaults plus the flag are what turn a caller deadline into a real bound —
+// TestRedisOptions_CallerDeadlineBoundsCommand measured 3.00s before and
+// ~0.2s after.
+const (
+	// defaultRedisOpTimeoutMS bounds one command's read and one command's write.
+	defaultRedisOpTimeoutMS = 1000
+	// defaultRedisDialTimeoutMS bounds establishing a new connection, which has
+	// to cover DNS plus TCP plus any AUTH round trip, hence the larger value.
+	defaultRedisDialTimeoutMS = 2000
+)
+
+// applyRedisTimeouts installs the bounded timeout set on a parsed option struct.
+// Operator knobs: REDIS_OP_TIMEOUT_MS (read and write), REDIS_DIAL_TIMEOUT_MS.
+// PoolTimeout is read timeout + 1s, go-redis' own convention for "wait for a
+// free connection slightly longer than one command may take". MaxRetries is 1
+// (go-redis default 3) so a dead backend costs at most one extra round trip;
+// with ContextTimeoutEnabled on, a retry past the caller's deadline fails
+// instantly anyway.
+func applyRedisTimeouts(opt *redis.Options) {
+	if opt == nil {
+		return
+	}
+	op := time.Duration(GetEnvOrDefault("REDIS_OP_TIMEOUT_MS", defaultRedisOpTimeoutMS)) * time.Millisecond
+	dial := time.Duration(GetEnvOrDefault("REDIS_DIAL_TIMEOUT_MS", defaultRedisDialTimeoutMS)) * time.Millisecond
+	opt.DialTimeout = dial
+	opt.ReadTimeout = op
+	opt.WriteTimeout = op
+	opt.PoolTimeout = op + time.Second
+	opt.MaxRetries = 1
+	opt.ContextTimeoutEnabled = true
+}
+
 // InitRedisClient This function is called after init()
 func InitRedisClient() (err error) {
 	if os.Getenv("REDIS_CONN_STRING") == "" {
@@ -37,11 +74,13 @@ func InitRedisClient() (err error) {
 		SyncFrequency = 60
 	}
 	SysLog("Redis is enabled")
-	opt, err := redis.ParseURL(os.Getenv("REDIS_CONN_STRING"))
-	if err != nil {
-		FatalLog("failed to parse Redis connection string: " + err.Error())
-	}
-	opt.PoolSize = GetEnvOrDefault("REDIS_POOL_SIZE", 10)
+	// Through ParseRedisOption, not a private twin: the exported builder is what
+	// the Redis oracles drive, and before cycle 12's repair round it had zero
+	// production callers — the bounded timeout set could have been correct in the
+	// tested path and absent from the served one without a single test noticing
+	// (TestInitRedisClientGoesThroughParseRedisOption). ParseRedisOption
+	// FatalLogs a malformed DSN, which is the same fast-fail this line had.
+	opt := ParseRedisOption()
 	RDB = redis.NewClient(opt)
 
 	// Bounded boot connect-retry (A2): a Redis pod not yet Ready when this pod
@@ -68,11 +107,20 @@ func InitRedisClient() (err error) {
 	return err
 }
 
+// ParseRedisOption parses REDIS_CONN_STRING and applies the pool size plus the
+// bounded timeout set. It is the single construction path: InitRedisClient
+// builds the process-wide client from it, and everything else in the repo that
+// needs options calls it too, so an oracle driven through this function is
+// driving what production serves traffic with. A malformed DSN is a
+// configuration error, not a transient one, so it fast-fails the process.
 func ParseRedisOption() *redis.Options {
 	opt, err := redis.ParseURL(os.Getenv("REDIS_CONN_STRING"))
 	if err != nil {
 		FatalLog("failed to parse Redis connection string: " + err.Error())
+		return nil
 	}
+	opt.PoolSize = GetEnvOrDefault("REDIS_POOL_SIZE", 10)
+	applyRedisTimeouts(opt)
 	return opt
 }
 

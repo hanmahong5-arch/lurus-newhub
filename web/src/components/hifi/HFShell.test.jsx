@@ -109,8 +109,11 @@ describe('HFShell deferred-surface nav placeholders', () => {
     expect(screen.queryByText('MJ / Task logs')).toBeNull();
   });
 
-  it('admin-users and admin-settings are real nav links for an admin', () => {
-    setBridgedUser(10);
+  // Both destinations are RootJWTAuth server-side, so cycle 12 L3 moved them
+  // to minRole:100 — the assertion that they are real links, not disabled
+  // placeholders, now runs at the role that can actually open them.
+  it('admin-users and admin-settings are real nav links for root', () => {
+    setBridgedUser(100);
     renderShell();
 
     // No longer disabled placeholders.
@@ -265,10 +268,12 @@ describe('HFShell role-gated nav sections', () => {
     setBridgedUser(1);
     renderShell();
 
-    // One representative item per admin section.
+    // One representative item per admin section. Each of the three is an
+    // item WITHOUT a per-item minRole, so this pins the section gate rather
+    // than accidentally re-testing the item gate.
     expect(screen.queryByText('Channels')).toBeNull(); // routing & models
-    expect(screen.queryByText('Tenants')).toBeNull(); // governance
-    expect(screen.queryByText('Gateway health')).toBeNull(); // operations
+    expect(screen.queryByText('Redemption')).toBeNull(); // governance
+    expect(screen.queryByText('Rankings')).toBeNull(); // operations
   });
 
   it('hides admin sections when no bridged user exists at all', () => {
@@ -282,8 +287,8 @@ describe('HFShell role-gated nav sections', () => {
     renderShell();
 
     expect(screen.getByText('Channels').closest('a')).toBeTruthy();
-    expect(screen.getByText('Tenants').closest('a')).toBeTruthy();
-    expect(screen.getByText('Gateway health').closest('a')).toBeTruthy();
+    expect(screen.getByText('Redemption').closest('a')).toBeTruthy();
+    expect(screen.getByText('Rankings').closest('a')).toBeTruthy();
     expect(screen.getByText('Audit trail').closest('a')).toBeTruthy();
   });
 
@@ -297,7 +302,7 @@ describe('HFShell role-gated nav sections', () => {
     renderShell();
 
     // The section itself (minRole:10) is visible — a sibling item proves it.
-    expect(screen.getByText('Gateway health').closest('a')).toBeTruthy();
+    expect(screen.getByText('Rankings').closest('a')).toBeTruthy();
     expect(screen.queryByText('Background tasks')).toBeNull();
   });
 
@@ -339,7 +344,7 @@ describe('HFShell role-gated nav sections', () => {
     renderShell();
 
     // The section itself (minRole:10) is visible — a sibling item proves it.
-    expect(screen.getByText('Gateway health').closest('a')).toBeTruthy();
+    expect(screen.getByText('Rankings').closest('a')).toBeTruthy();
     expect(screen.queryByText('Diagnostics')).toBeNull();
   });
 
@@ -544,5 +549,95 @@ describe('HFShell help escape hatches', () => {
     expect(
       screen.getByTestId('shell-support-link').textContent.trim().length,
     ).toBeGreaterThan(0);
+  });
+});
+
+/*
+ * Cycle 12 L3. Seven rail entries pointed at pages whose every backend call
+ * sits under /api/v2/admin (api-v2-router.go mounts middleware.RootJWTAuth on
+ * that whole group), while their sections are only minRole:10. A role-10
+ * admin therefore saw six root-only destinations in the governance and
+ * operations sections plus Tenants, clicked one, and got a page that either
+ * rendered empty or — before L4 — rendered an all-green lie, because the
+ * refusal came back as HTTP 200 {success:false}.
+ *
+ * admin-audit and admin-rankings are deliberately NOT in this list:
+ *   - audit reads /api/v2/admin/audit/* — the one exception to "everything
+ *     under /api/v2/admin is root-only". That subgroup is mounted separately
+ *     at internal/adapter/handler/router/api-v2-router.go:612-613
+ *     (apiV2.Group("/admin/audit") + middleware.RootOrGranted("audit",
+ *     "read")), so a delegated audit:read grant reaches it at role 10;
+ *   - rankings falls back to /api/v2/:tenant_slug/analytics/rankings for a
+ *     non-root caller (pages/v2/Analytics/Rankings.jsx), so it is a real
+ *     tenant-scoped page.
+ */
+const ROOT_ONLY_ITEMS = [
+  ['users', 'Tenants', '/api/v2/admin/tenants'],
+  ['admin-users', 'Users (admin)', '/api/v2/admin/users'],
+  [
+    'admin-model-limits',
+    'Model limits',
+    '/api/v2/admin/tenants/:id/model-limits',
+  ],
+  ['admin-gateway', 'Gateway health', '/api/v2/admin/gateway/health'],
+  ['admin-cost', 'Cost intelligence', '/api/v2/admin/governance/savings'],
+  [
+    'admin-analytics',
+    'Model performance',
+    '/api/v2/admin/analytics/model-performance',
+  ],
+  ['admin-settings', 'Admin settings', '/api/v2/admin/options'],
+];
+
+describe('HFShell root-only rail entries', () => {
+  it.each(ROOT_ONLY_ITEMS)(
+    'hides %s (%s, backed by %s) from a role-10 admin',
+    (id, label) => {
+      setBridgedUser(10);
+      renderShell();
+
+      // A sibling without a per-item minRole proves the section itself is
+      // visible, so a null here is the item gate and not an empty rail.
+      expect(screen.getByText('Channels').closest('a')).toBeTruthy();
+      expect(screen.queryByText(label)).toBeNull();
+    },
+  );
+
+  it.each(ROOT_ONLY_ITEMS)('shows %s (%s) to root', (id, label) => {
+    setBridgedUser(100);
+    renderShell();
+
+    expect(screen.getByText(label).closest('a')).toBeTruthy();
+  });
+
+  it.each(ROOT_ONLY_ITEMS)(
+    'visibleNavItems drops %s for role 10 and keeps it for root',
+    (id) => {
+      const idsFor = (role) =>
+        visibleNavItems({ role }).flatMap((s) => s.items.map((it) => it.id));
+
+      expect(idsFor(10)).not.toContain(id);
+      expect(idsFor(100)).toContain(id);
+    },
+  );
+
+  // The complement: the rail a role-10 admin does see must still carry the
+  // entries that are genuinely reachable at role 10, or this whole change
+  // would read as "hide the admin section" rather than "hide the root-only
+  // items inside it".
+  it('keeps the genuinely role-10 admin entries visible', () => {
+    setBridgedUser(10);
+    renderShell();
+
+    for (const label of [
+      'Channels',
+      'Models',
+      'Projects',
+      'Redemption',
+      'Audit trail',
+      'Rankings',
+    ]) {
+      expect(screen.getByText(label).closest('a')).toBeTruthy();
+    }
   });
 });

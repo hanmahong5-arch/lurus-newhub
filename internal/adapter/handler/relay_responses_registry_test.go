@@ -83,7 +83,7 @@ func setupResponsesRegistryRouter(t *testing.T, upstream http.HandlerFunc) *resp
 	// pinnedAuditWriter (v2_pricing_write_test.go) so
 	// governance.RecordAuditEvent's async write lands in THIS db, not
 	// whatever repo.DB happened to be for a previously-run test package-wide.
-	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
+	pinAuditWriter(t, db)
 	common.UsingSQLite = true
 	common.UsingPostgreSQL = false
 	common.MemoryCacheEnabled = false

@@ -38,6 +38,32 @@ func rateLimitScopeForIdent(ident string) string {
 	return "ip"
 }
 
+// rateLimitMemoryFallbackMarks are the buckets that guard a credential or an
+// account-creation path rather than traffic volume. When their Redis backend
+// errors they degrade to the process-local limiter (a real ceiling, per
+// replica) instead of to cycle-11's fail-open (no ceiling at all). Each
+// entry names what it is guarding; TestRateLimitMarks_EveryMarkIsClassified
+// walks every non-test Go file under internal/ and requires every mark it
+// finds to be in this table or in the exempt table beside it.
+//
+// The value is the reason, not a description: it is the thing to argue with
+// when reclassifying.
+var rateLimitMemoryFallbackMarks = map[string]string{
+	"RD":     "RedemptionRateLimit: redemption-code guessing is a money path, and an unthrottled guessing run against a code space is exactly what this bucket exists for.",
+	"BS":     "BootstrapRateLimit: a leaked platform SDK cookie replayed from many client identities auto-creates newhub users; unthrottled, the blast radius is unbounded.",
+	"TB":     "TotpBackupCodesRateLimit: backup-code regeneration invalidates the old set and mints a new one — a second-factor credential path.",
+	"CT":     "CriticalRateLimit: channel-key reveal and TOTP disable share this bucket; both hand out or remove a credential.",
+	"TU":     "TopupRateLimit: wallet-to-quota transfer. Deliberately unmounted today (see TopupRateLimit), classified here so re-opening that money path does not silently re-open it unthrottled.",
+	"IKP-IP": "InternalApiRateLimit pre-auth IP tier: mounted BEFORE InternalApiAuth precisely to bound invalid-key floods, i.e. internal-API-key guessing. Unlike the per-key tiers it cannot be keyed to an authenticated caller.",
+}
+
+// rateLimitFallsBackToMemory reports whether this bucket degrades to the
+// process-local limiter on a Redis error.
+func rateLimitFallsBackToMemory(mark string) bool {
+	_, ok := rateLimitMemoryFallbackMarks[mark]
+	return ok
+}
+
 func redisRateLimiterKeyed(c *gin.Context, maxRequestNum int, duration int64, mark, ident string) {
 	ctx := c.Request.Context()
 	rdb := common.RDB
@@ -53,6 +79,22 @@ func redisRateLimiterKeyed(c *gin.Context, maxRequestNum int, duration int64, ma
 		// business_rate_limit.go, concurrency_limit.go): a Redis hiccup must
 		// not become an outage of its own.
 		common.SysError("redis rate limit LLen error: " + err.Error())
+		if rateLimitFallsBackToMemory(mark) {
+			// Credential/abuse bucket: degrade to the process-local limiter
+			// rather than to no limiter. Per replica, so the effective
+			// cluster budget is replicas x budget — weaker than Redis, and
+			// not the same thing as unthrottled. inMemoryRateLimiter was
+			// initialised by the factory that built this middleware (see
+			// rateLimitFactory / keyedRateLimitFactory); Init is not called
+			// here because it writes a package-global under a check that is
+			// not itself synchronised, which on a request path would be a
+			// data race.
+			metrics.RecordRateLimitDegraded("web_rate_limit_backend_memory")
+			r6aRateLimitDegradedLogf("web_rate_limit_backend_memory",
+				"web/API rate limit LLen error on credential bucket "+mark+", falling back to the in-process limiter: "+err.Error())
+			memoryRateLimiterKeyed(c, maxRequestNum, duration, mark, ident)
+			return
+		}
 		metrics.RecordRateLimitDegraded("web_rate_limit_backend")
 		r6aRateLimitDegradedLogf("web_rate_limit_backend", "web/API rate limit LLen error, failing open: "+err.Error())
 		c.Next()
@@ -126,6 +168,12 @@ func memoryRateLimiterKeyed(c *gin.Context, maxRequestNum int, duration int64, m
 
 func rateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gin.Context) {
 	if common.RedisEnabled {
+		if rateLimitFallsBackToMemory(mark) {
+			// Arm the process-local limiter now, at route-registration time:
+			// redisRateLimiterKeyed's fallback needs its store, and Init
+			// cannot be called from a request path without racing.
+			inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
+		}
 		return func(c *gin.Context) {
 			redisRateLimiter(c, maxRequestNum, duration, mark)
 		}
@@ -244,6 +292,11 @@ func internalApiRateLimitKey(c *gin.Context) string {
 // rateLimitFactory's redis-or-memory selection.
 func keyedRateLimitFactory(maxRequestNum int, duration int64, mark string, keyFn func(*gin.Context) string) func(c *gin.Context) {
 	if common.RedisEnabled {
+		if rateLimitFallsBackToMemory(mark) {
+			// Same reason as rateLimitFactory's: arm the fallback store here,
+			// not on the request path.
+			inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
+		}
 		return func(c *gin.Context) {
 			redisRateLimiterKeyed(c, maxRequestNum, duration, mark, keyFn(c))
 		}

@@ -17,10 +17,8 @@ func TestLookupAffinityChannel_ForeignTenantIsStale(t *testing.T) {
 	// setupAffinitySelection (channel_select_affinity_test.go) seeds channels
 	// 9301/9302, both TenantId "default", group "default", model "gpt-4o".
 	setupAffinitySelection(t)
-	// setupAffinitySelection does not call this itself (its own tests happen
-	// to run after another test in the package already has); GetSatisfiedChannelByID's
-	// DB-path query below needs commonGroupCol quoted, so set it explicitly
-	// rather than depend on test run order.
+	// setupServiceTestDB now calls repo.InitCol for every test; this explicit
+	// call stays as the local statement of the dependency (harmless twice).
 	repo.InitCol()
 
 	// Re-own channel 9302 to a specific, non-shared tenant so it is no longer

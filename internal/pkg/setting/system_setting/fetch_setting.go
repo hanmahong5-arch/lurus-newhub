@@ -29,6 +29,24 @@ func init() {
 	config.GlobalConfig.Register("fetch_setting", &defaultFetchSetting)
 }
 
+// GetFetchSetting returns the live registered object. Since the config writer
+// became copy-on-write the lists it hands out (DomainList, IpList,
+// AllowedPorts) are not written again after publication, so a caller that
+// reads one keeps a list somebody actually published; the field reads
+// themselves are still unsynchronised, which is what GetFetchSettingSnapshot
+// exists to fix for callers that take an SSRF decision.
 func GetFetchSetting() *FetchSetting {
 	return &defaultFetchSetting
+}
+
+// GetFetchSettingSnapshot returns a by-value copy of the fetch settings taken
+// under the configuration read lock. The copy shares the published slices,
+// which copy-on-write guarantees are immutable, so the whole decision a caller
+// takes from it is against one coherent published configuration rather than a
+// field-by-field mixture of two.
+func GetFetchSettingSnapshot() FetchSetting {
+	config.RLock()
+	defer config.RUnlock()
+
+	return defaultFetchSetting
 }

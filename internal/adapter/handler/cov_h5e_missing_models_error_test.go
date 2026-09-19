@@ -38,6 +38,15 @@ func TestGetMissingModels_ModelsTableMissing_Returns200WithSuccessFalse(t *testi
 	}).Error; err != nil {
 		t.Fatalf("seed enabled ability: %v", err)
 	}
+	// The ability above references channel id 1; that channel has to exist and
+	// be platform-shared, because GetMissingModels answers a non-root caller
+	// (this router mounts the handler with no auth middleware, so role is 0)
+	// over the channels its tenant can route — cycle-12 L5. Without it the
+	// enabled-model list is empty and the handler returns before ever touching
+	// the dropped models table, which is the branch this test is for.
+	if err := ctx.DB.Create(&repo.Channel{Id: 1, Name: "h5e-ability-owner", TenantId: "default"}).Error; err != nil {
+		t.Fatalf("seed the ability's channel: %v", err)
+	}
 
 	if err := ctx.DB.Migrator().DropTable(&repo.Model{}); err != nil {
 		t.Fatalf("drop models table: %v", err)

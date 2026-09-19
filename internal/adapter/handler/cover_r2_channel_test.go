@@ -485,8 +485,11 @@ func TestR2Chan_GetTagModels(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing tag, got %d", w.Code)
 	}
-	// valid tag
+	// valid tag, asked by the tenant that owns the channel — GetTagModels
+	// answers a non-root caller over its own tenant's channels only (cycle-12
+	// L5), and r2chanNewCtx builds a context with no identity on it.
 	c, w = r2chanNewCtx(http.MethodGet, "/api/channel/tag/models?tag="+tag, nil)
+	c.Set("tenant_id", ctx.TenantID)
 	GetTagModels(c)
 	resp := r2chanParseBody(t, w)
 	if resp["success"] != true {

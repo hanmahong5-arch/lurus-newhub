@@ -130,17 +130,51 @@ func TestUserSessionRegistry_UpsertThrottled60s_FlagIndependent(t *testing.T) {
 }
 
 // sessionAuditRowWriter implements governance.AuditWriter against a fixed
-// *gorm.DB — the repo-package equivalent of handler's pinnedAuditWriter (this
-// package has no such helper of its own yet).
+// *gorm.DB — the repo-package equivalent of handler's pinnedAuditWriter.
 type sessionAuditRowWriter struct{ db *gorm.DB }
 
 func (w *sessionAuditRowWriter) CreateAuditEvent(event *entity.AuditEvent) error {
 	return w.db.Create(event).Error
 }
 
+// inertSessionAuditWriter accepts and discards events. It holds no database
+// handle, so it stays safe for the rest of the test binary no matter what any
+// fixture closes.
+type inertSessionAuditWriter struct{}
+
+func (inertSessionAuditWriter) CreateAuditEvent(*entity.AuditEvent) error { return nil }
+
+// pinSessionAuditWriter installs a writer bound to this package's current DB
+// for the duration of t, and on cleanup replaces it with an inert one.
+//
+// governance.SetAuditWriter installs a PROCESS-global writer. Installing one
+// bound to a per-test *gorm.DB and never taking it back leaves that global
+// pointing at a handle setupSQLiteDB's cleanup is about to close, so the next
+// test in this binary that audits anything writes into a closed database —
+// noise at best, and with `go test -shuffle=on` (on the CI race job since
+// cycle 12) a different test every run.
+//
+// Cleanup installs the inert writer rather than restoring whatever was current
+// on entry, for the same two reasons as handler's pinAuditWriter
+// (internal/adapter/handler/audit_writer_pin_test.go): governance exposes no
+// reader for the installed writer, and "the previous one" is itself likely to
+// be another test's db-bound writer whose handle is already closed. The
+// invariant kept is "no audit writer outlives the database it writes to".
+func pinSessionAuditWriter(t *testing.T) {
+	t.Helper()
+	governance.SetAuditWriter(&sessionAuditRowWriter{db: DB})
+	t.Cleanup(func() { governance.SetAuditWriter(inertSessionAuditWriter{}) })
+}
+
 // pollCapExceededAuditRow polls for the first auth.session_revoked row whose
-// details mention cap_exceeded — RecordAuditEvent persists via gopool.Go, so
-// the row is not guaranteed to exist the instant the call returns.
+// details mention cap_exceeded.
+//
+// governance.RecordAuditEvent persists through governance.AsyncGo, which this
+// package's TestMain (async_seam_test.go) forces inline, so under `go test
+// ./internal/adapter/repo/` the row is already there on the first query. The
+// loop is kept because this helper's correctness must not depend on that
+// TestMain still being there, and it costs exactly one query when the row
+// exists.
 func pollCapExceededAuditRow(t *testing.T, timeout time.Duration) *entity.AuditEvent {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -171,7 +205,7 @@ func TestEnforceSessionCap_RevokesOldestBeyondCap(t *testing.T) {
 	mr := redeemCacheMiniRedis(t)
 	ctx := context.Background()
 
-	governance.SetAuditWriter(&sessionAuditRowWriter{db: DB})
+	pinSessionAuditWriter(t)
 
 	t.Setenv("SESSION_MAX_ACTIVE_PER_USER", "2")
 

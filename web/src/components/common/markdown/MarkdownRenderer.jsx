@@ -33,6 +33,7 @@ import { useDebouncedCallback } from 'use-debounce';
 import clsx from 'clsx';
 import { Button, Tooltip, Toast } from '@douyinfe/semi-ui';
 import { copy, rehypeSplitWordsIntoSpans } from '../../../helpers';
+import { sanitizeHtml } from '../../../helpers/sanitize';
 import { IconCopy } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 
@@ -227,7 +228,7 @@ export function PreCode(props) {
           >
             {t('HTML预览:')}
           </div>
-          <div dangerouslySetInnerHTML={{ __html: htmlCode }} />
+          <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(htmlCode) }} />
         </div>
       )}
     </>
@@ -335,7 +336,9 @@ function tryWrapHtmlCode(text) {
     );
 }
 
-function _MarkdownContent(props) {
+// Named with a capital so the rules-of-hooks lint can see it is a
+// component; React.memo wraps it into MarkdownContent below.
+function MarkdownContentBase(props) {
   const {
     content,
     className,
@@ -629,7 +632,7 @@ function _MarkdownContent(props) {
   );
 }
 
-export const MarkdownContent = React.memo(_MarkdownContent);
+export const MarkdownContent = React.memo(MarkdownContentBase);
 
 export function MarkdownRenderer(props) {
   const { t } = useTranslation();

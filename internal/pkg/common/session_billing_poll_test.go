@@ -128,11 +128,16 @@ func TestFetchAndApplyBillingConfig(t *testing.T) {
 }
 
 func TestStartBillingConfigPoller(t *testing.T) {
-	// Empty URL: no-op, returns without spawning.
+	// Empty URL: no-op, returns without spawning, and the done channel is
+	// already closed.
 	prev := IdentityServiceURL
 	IdentityServiceURL = ""
 	t.Cleanup(func() { IdentityServiceURL = prev })
-	StartBillingConfigPoller(context.Background()) // must return immediately
+	select {
+	case <-StartBillingConfigPoller(context.Background()):
+	case <-time.After(time.Second):
+		t.Fatal("no-op poller must hand back an already-closed done channel")
+	}
 
 	// Configured URL: immediate poll fires against the fake server.
 	hit := make(chan struct{}, 1)
@@ -147,11 +152,22 @@ func TestStartBillingConfigPoller(t *testing.T) {
 	IdentityServiceURL = srv.URL
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	StartBillingConfigPoller(ctx)
+	done := StartBillingConfigPoller(ctx)
 	select {
 	case <-hit:
 	case <-time.After(2 * time.Second):
 		t.Error("poller did not perform its immediate startup poll")
+	}
+
+	// The poller must be gone before this test returns. A goroutine left
+	// behind keeps calling SysLog while later tests in this package swap the
+	// global slog writer for a bytes.Buffer and read it back; the CI race job
+	// reported exactly that pair on 2026-09-19 (TestSlogJSONHandler_ContextInjection).
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("poller goroutine did not exit after its context was cancelled")
 	}
 }
 

@@ -188,11 +188,11 @@ func DownloadArtifact(c *gin.Context) {
 	referer := c.GetHeader("Referer")
 
 	svc := releaseService
-	go func() {
+	AsyncGo(func() {
 		logCtx, cancel := context.WithTimeout(context.Background(), downloadLogTimeout)
 		defer cancel()
 		_ = svc.HandleDownload(logCtx, artifactId, ipAddress, userAgent, referer)
-	}()
+	})
 
 	// Generate download URL
 	downloadURL, err := releaseService.GenerateDownloadURL(c.Request.Context(), artifact)

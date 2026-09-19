@@ -35,21 +35,63 @@ var (
 // (callers fall back to HTTP).
 func getGRPCClient() identityv1.IdentityServiceClient {
 	grpcClientOnce.Do(func() {
-		if identityGRPCAddr == "" {
-			return
-		}
-		conn, err := grpc.NewClient(identityGRPCAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-			grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
-		)
-		if err != nil {
-			slog.Error("identity grpc client: failed to connect", "addr", identityGRPCAddr, "err", err)
-			return
-		}
-		grpcClient = identityv1.NewIdentityServiceClient(conn)
-		slog.Info("identity grpc client connected", "addr", identityGRPCAddr)
+		grpcClient = newIdentityGRPCClient(identityGRPCAddr)
 	})
 	return grpcClient
+}
+
+// newIdentityGRPCClient builds the client for addr, or nil when there is no
+// address configured or the construction fails. Split out of the sync.Once so
+// both branches can be exercised without depending on which test in the binary
+// consumes that Once first.
+//
+// No WaitForReady: this client has an HTTP twin behind it, and wait-for-ready
+// turns "connection refused" into "block until the call deadline", which is the
+// one thing a fallback path must not do. Failing fast here is what lets the HTTP
+// leg run inside the same total budget (identity_timeout_test.go).
+func newIdentityGRPCClient(addr string) identityv1.IdentityServiceClient {
+	if addr == "" {
+		return nil
+	}
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		slog.Error("identity grpc client: failed to connect", "addr", addr, "err", err)
+		return nil
+	}
+	slog.Info("identity grpc client connected", "addr", addr)
+	return identityv1.NewIdentityServiceClient(conn)
+}
+
+// identityGRPCClient is the seam every wrapper below resolves its client
+// through. A var, so a test can force the "no gRPC client" condition — the
+// HTTP-fallback contract — instead of depending on where in the binary
+// grpcClientOnce happens to fire first. grpc_fallback_test.go used to assume it
+// was the first test in the package to consume that sync.Once, which -shuffle=on
+// turns into a coin flip. Nothing in production writes it.
+var identityGRPCClient = getGRPCClient
+
+// identityLookupClient resolves the client for the ACCOUNT and ENTITLEMENT
+// lookups only — never for the money legs. It returns nil, i.e. "skip the gRPC
+// leg and go straight to the HTTP twin", while the billing circuit breaker is
+// open: an open breaker is this process's own standing evidence that
+// platform-core is not answering, and re-paying the gRPC leg's 2s on every
+// console request to rediscover that is exactly the cost a breaker exists to
+// avoid. The HTTP twin still runs, so nothing is refused that would otherwise
+// have been served.
+//
+// Read-only by construction. BillingBreakerIsOpen never mutates state (no
+// half-open transition, unlike BillingBreakerAllow), and no caller on this path
+// records success or failure. Writing from here would be the actual hazard: an
+// identity-side blip would fast-fail the money path, and on a deployment with
+// BILLING_UNIFIED_ENABLED off — where no money leg ever probes — the breaker
+// would latch open with nothing left able to close it.
+func identityLookupClient() identityv1.IdentityServiceClient {
+	if BillingBreakerIsOpen() {
+		return nil
+	}
+	return identityGRPCClient()
 }
 
 // grpcCtx adds the internal API key as gRPC metadata.
@@ -57,9 +99,42 @@ func grpcCtx(ctx context.Context) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+IdentityServiceInternalKey)
 }
 
-// grpcTimeout wraps a context with a 5s timeout for gRPC calls.
+// Identity call budgets (cycle 12 §2). One logical identity call is two legs —
+// gRPC first, HTTP twin on failure — and before this each leg carried its own
+// independent 5s timeout, so a platform outage cost 10s per call while the
+// caller thought it had handed out one deadline. Now the whole call gets
+// identityTotalBudget and the gRPC leg gets identityGRPCLegTimeout inside it;
+// whatever is left over is what the HTTP fallback runs on.
+const (
+	defaultIdentityTotalBudgetMS = 5000
+	defaultIdentityGRPCLegMS     = 2000
+)
+
+// identityTotalBudget is the wall-clock ceiling for one identity call,
+// both legs together. Env: IDENTITY_TIMEOUT_MS.
+func identityTotalBudget() time.Duration {
+	return time.Duration(GetEnvOrDefault("IDENTITY_TIMEOUT_MS", defaultIdentityTotalBudgetMS)) * time.Millisecond
+}
+
+// identityGRPCLegTimeout is the ceiling for the gRPC leg alone.
+// Env: IDENTITY_GRPC_TIMEOUT_MS.
+func identityGRPCLegTimeout() time.Duration {
+	return time.Duration(GetEnvOrDefault("IDENTITY_GRPC_TIMEOUT_MS", defaultIdentityGRPCLegMS)) * time.Millisecond
+}
+
+// withIdentityBudget caps ctx at the whole-call budget. Every *GRPC wrapper
+// opens with this and then hands the SAME derived context to both legs, which
+// is what keeps the fallback from starting a fresh budget of its own. A caller
+// that already carries a shorter deadline keeps it — WithTimeout never extends.
+func withIdentityBudget(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, identityTotalBudget())
+}
+
+// grpcTimeout wraps a context with the gRPC-leg timeout. Because callers pass
+// the budgeted context in, the effective deadline is the earlier of the leg
+// timeout and what remains of the total budget.
 func grpcTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(grpcCtx(ctx), 5*time.Second)
+	return context.WithTimeout(grpcCtx(ctx), identityGRPCLegTimeout())
 }
 
 // grpcCtxIdem adds the internal API key AND an idempotency-key to gRPC metadata.
@@ -76,19 +151,26 @@ func grpcCtxIdem(ctx context.Context, idempotencyKey string) context.Context {
 }
 
 // grpcTimeoutIdem is grpcTimeout plus an idempotency-key metadata header.
+// Money RPCs use it, and they are safe to cut short at the leg timeout for the
+// same reason the fallback is safe at all: the HTTP twin carries the same
+// idempotency key, so a debit that committed server-side but did not ack in
+// time is deduped rather than charged twice (see grpcCtxIdem).
 func grpcTimeoutIdem(ctx context.Context, idempotencyKey string) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(grpcCtxIdem(ctx, idempotencyKey), 5*time.Second)
+	return context.WithTimeout(grpcCtxIdem(ctx, idempotencyKey), identityGRPCLegTimeout())
 }
 
 // GetAccountByZitadelSubGRPC retrieves account info via gRPC.
 // Falls back to HTTP if gRPC client is not available.
 func GetAccountByZitadelSubGRPC(ctx context.Context, sub string) (*IdentityMapping, error) {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityLookupClient()
 	if client == nil {
-		return GetAccountByZitadelSub(ctx, sub) // fallback to HTTP
+		return GetAccountByZitadelSub(bctx, sub) // fallback to HTTP
 	}
 
-	gctx, cancel := grpcTimeout(ctx)
+	gctx, cancel := grpcTimeout(bctx)
 	defer cancel()
 
 	resp, err := client.GetAccountByZitadelSub(gctx, &identityv1.GetAccountByZitadelSubRequest{
@@ -96,7 +178,7 @@ func GetAccountByZitadelSubGRPC(ctx context.Context, sub string) (*IdentityMappi
 	})
 	if err != nil {
 		slog.Debug("identity grpc GetAccountByZitadelSub failed, falling back to HTTP", "err", err)
-		return GetAccountByZitadelSub(ctx, sub)
+		return GetAccountByZitadelSub(bctx, sub)
 	}
 
 	return protoToIdentityMapping(resp), nil
@@ -105,12 +187,15 @@ func GetAccountByZitadelSubGRPC(ctx context.Context, sub string) (*IdentityMappi
 // UpsertAccountGRPC creates or updates an account via gRPC.
 // Falls back to HTTP if gRPC client is not available.
 func UpsertAccountGRPC(ctx context.Context, zitadelSub, email, displayName, avatarURL string) (*IdentityMapping, error) {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityLookupClient()
 	if client == nil {
-		return UpsertAccount(ctx, zitadelSub, email, displayName, avatarURL)
+		return UpsertAccount(bctx, zitadelSub, email, displayName, avatarURL)
 	}
 
-	gctx, cancel := grpcTimeout(ctx)
+	gctx, cancel := grpcTimeout(bctx)
 	defer cancel()
 
 	resp, err := client.UpsertAccount(gctx, &identityv1.UpsertAccountRequest{
@@ -121,7 +206,7 @@ func UpsertAccountGRPC(ctx context.Context, zitadelSub, email, displayName, avat
 	})
 	if err != nil {
 		slog.Debug("identity grpc UpsertAccount failed, falling back to HTTP", "err", err)
-		return UpsertAccount(ctx, zitadelSub, email, displayName, avatarURL)
+		return UpsertAccount(bctx, zitadelSub, email, displayName, avatarURL)
 	}
 
 	return protoToIdentityMapping(resp), nil
@@ -130,12 +215,15 @@ func UpsertAccountGRPC(ctx context.Context, zitadelSub, email, displayName, avat
 // GetEntitlementsGRPC retrieves entitlements via gRPC.
 // Falls back to HTTP if gRPC client is not available.
 func GetEntitlementsGRPC(ctx context.Context, accountID int64, productID string) (Entitlements, error) {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityLookupClient()
 	if client == nil {
-		return GetEntitlements(ctx, accountID, productID)
+		return GetEntitlements(bctx, accountID, productID)
 	}
 
-	gctx, cancel := grpcTimeout(ctx)
+	gctx, cancel := grpcTimeout(bctx)
 	defer cancel()
 
 	resp, err := client.GetEntitlements(gctx, &identityv1.GetEntitlementsRequest{
@@ -144,7 +232,7 @@ func GetEntitlementsGRPC(ctx context.Context, accountID int64, productID string)
 	})
 	if err != nil {
 		slog.Debug("identity grpc GetEntitlements failed, falling back to HTTP", "err", err)
-		return GetEntitlements(ctx, accountID, productID)
+		return GetEntitlements(bctx, accountID, productID)
 	}
 
 	return Entitlements(resp.Entitlements), nil
@@ -153,12 +241,15 @@ func GetEntitlementsGRPC(ctx context.Context, accountID int64, productID string)
 // GetAccountOverviewGRPC retrieves the aggregated overview via gRPC.
 // Falls back to HTTP if gRPC client is not available.
 func GetAccountOverviewGRPC(ctx context.Context, accountID int64, productID string) (*AccountOverview, error) {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityLookupClient()
 	if client == nil {
-		return GetAccountOverview(ctx, accountID, productID)
+		return GetAccountOverview(bctx, accountID, productID)
 	}
 
-	gctx, cancel := grpcTimeout(ctx)
+	gctx, cancel := grpcTimeout(bctx)
 	defer cancel()
 
 	resp, err := client.GetAccountOverview(gctx, &identityv1.GetAccountOverviewRequest{
@@ -167,7 +258,7 @@ func GetAccountOverviewGRPC(ctx context.Context, accountID int64, productID stri
 	})
 	if err != nil {
 		slog.Debug("identity grpc GetAccountOverview failed, falling back to HTTP", "err", err)
-		return GetAccountOverview(ctx, accountID, productID)
+		return GetAccountOverview(bctx, accountID, productID)
 	}
 
 	return protoToAccountOverview(resp), nil
@@ -176,13 +267,16 @@ func GetAccountOverviewGRPC(ctx context.Context, accountID int64, productID stri
 // ReportLLMUsageGRPC sends usage report via gRPC.
 // Falls back to HTTP if gRPC client is not available.
 func ReportLLMUsageGRPC(ctx context.Context, accountID int64, amountCNY float64) {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityGRPCClient()
 	if client == nil {
-		ReportLLMUsage(ctx, accountID, amountCNY)
+		ReportLLMUsage(bctx, accountID, amountCNY)
 		return
 	}
 
-	gctx, cancel := grpcTimeout(ctx)
+	gctx, cancel := grpcTimeout(bctx)
 	defer cancel()
 
 	_, err := client.ReportUsage(gctx, &identityv1.ReportUsageRequest{
@@ -191,19 +285,22 @@ func ReportLLMUsageGRPC(ctx context.Context, accountID int64, amountCNY float64)
 	})
 	if err != nil {
 		slog.Debug("identity grpc ReportUsage failed, falling back to HTTP", "err", err)
-		ReportLLMUsage(ctx, accountID, amountCNY)
+		ReportLLMUsage(bctx, accountID, amountCNY)
 	}
 }
 
 // DebitWalletGRPC deducts credits from an account's wallet via gRPC.
 // Falls back to HTTP if gRPC client is not available.
 func DebitWalletGRPC(ctx context.Context, accountID int64, amount float64, txType, description, productID, idempotencyKey string) (*DebitWalletResult, error) {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityGRPCClient()
 	if client == nil {
-		return DebitWallet(ctx, accountID, amount, txType, description, productID, idempotencyKey)
+		return DebitWallet(bctx, accountID, amount, txType, description, productID, idempotencyKey)
 	}
 
-	gctx, cancel := grpcTimeoutIdem(ctx, idempotencyKey)
+	gctx, cancel := grpcTimeoutIdem(bctx, idempotencyKey)
 	defer cancel()
 
 	resp, err := client.WalletDebit(gctx, &identityv1.WalletOperationRequest{
@@ -217,7 +314,7 @@ func DebitWalletGRPC(ctx context.Context, accountID int64, amount float64, txTyp
 		// Same idempotencyKey flows to the HTTP twin so a gRPC call that committed
 		// on the server but failed to ack is deduped here, not charged twice.
 		slog.Debug("identity grpc WalletDebit failed, falling back to HTTP", "err", err)
-		return DebitWallet(ctx, accountID, amount, txType, description, productID, idempotencyKey)
+		return DebitWallet(bctx, accountID, amount, txType, description, productID, idempotencyKey)
 	}
 
 	// Record billing debit metric after confirmed success. productID doubles
@@ -236,14 +333,17 @@ func DebitWalletGRPC(ctx context.Context, accountID int64, amount float64, txTyp
 
 // PreAuthorizeGRPC freezes wallet balance via gRPC, falls back to HTTP.
 func PreAuthorizeGRPC(ctx context.Context, accountID int64, amount float64, productID, referenceID, description string, ttlSeconds int) (*PreAuthResult, error) {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityGRPCClient()
 	if client == nil {
-		return PreAuthorize(ctx, accountID, amount, productID, referenceID, description, ttlSeconds)
+		return PreAuthorize(bctx, accountID, amount, productID, referenceID, description, ttlSeconds)
 	}
 
 	// PreAuth dedupes on referenceID (the relay request ref) so a retried freeze
 	// reuses the prior hold instead of stacking a second one.
-	gctx, cancel := grpcTimeoutIdem(ctx, referenceID)
+	gctx, cancel := grpcTimeoutIdem(bctx, referenceID)
 	defer cancel()
 
 	resp, err := client.WalletPreAuthorize(gctx, &identityv1.WalletPreAuthorizeRequest{
@@ -256,7 +356,7 @@ func PreAuthorizeGRPC(ctx context.Context, accountID int64, amount float64, prod
 	})
 	if err != nil {
 		slog.Debug("identity grpc WalletPreAuthorize failed, falling back to HTTP", "err", err)
-		return PreAuthorize(ctx, accountID, amount, productID, referenceID, description, ttlSeconds)
+		return PreAuthorize(bctx, accountID, amount, productID, referenceID, description, ttlSeconds)
 	}
 
 	return &PreAuthResult{
@@ -268,12 +368,15 @@ func PreAuthorizeGRPC(ctx context.Context, accountID int64, amount float64, prod
 
 // SettlePreAuthGRPC settles a pre-auth via gRPC, falls back to HTTP.
 func SettlePreAuthGRPC(ctx context.Context, preAuthID int64, actualAmount float64) (*SettlePreAuthResult, error) {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityGRPCClient()
 	if client == nil {
-		return SettlePreAuth(ctx, preAuthID, actualAmount)
+		return SettlePreAuth(bctx, preAuthID, actualAmount)
 	}
 
-	gctx, cancel := grpcTimeoutIdem(ctx, fmt.Sprintf("settle:%d", preAuthID))
+	gctx, cancel := grpcTimeoutIdem(bctx, fmt.Sprintf("settle:%d", preAuthID))
 	defer cancel()
 
 	resp, err := client.WalletSettlePreAuth(gctx, &identityv1.WalletSettlePreAuthRequest{
@@ -282,7 +385,7 @@ func SettlePreAuthGRPC(ctx context.Context, preAuthID int64, actualAmount float6
 	})
 	if err != nil {
 		slog.Debug("identity grpc WalletSettlePreAuth failed, falling back to HTTP", "err", err)
-		return SettlePreAuth(ctx, preAuthID, actualAmount)
+		return SettlePreAuth(bctx, preAuthID, actualAmount)
 	}
 
 	return &SettlePreAuthResult{
@@ -295,12 +398,15 @@ func SettlePreAuthGRPC(ctx context.Context, preAuthID int64, actualAmount float6
 
 // ReleasePreAuthGRPC releases a pre-auth via gRPC, falls back to HTTP.
 func ReleasePreAuthGRPC(ctx context.Context, preAuthID int64) error {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityGRPCClient()
 	if client == nil {
-		return ReleasePreAuth(ctx, preAuthID)
+		return ReleasePreAuth(bctx, preAuthID)
 	}
 
-	gctx, cancel := grpcTimeoutIdem(ctx, fmt.Sprintf("release:%d", preAuthID))
+	gctx, cancel := grpcTimeoutIdem(bctx, fmt.Sprintf("release:%d", preAuthID))
 	defer cancel()
 
 	_, err := client.WalletReleasePreAuth(gctx, &identityv1.WalletReleasePreAuthRequest{
@@ -308,7 +414,7 @@ func ReleasePreAuthGRPC(ctx context.Context, preAuthID int64) error {
 	})
 	if err != nil {
 		slog.Debug("identity grpc WalletReleasePreAuth failed, falling back to HTTP", "err", err)
-		return ReleasePreAuth(ctx, preAuthID)
+		return ReleasePreAuth(bctx, preAuthID)
 	}
 
 	return nil
@@ -317,12 +423,15 @@ func ReleasePreAuthGRPC(ctx context.Context, preAuthID int64) error {
 // CreditWalletGRPC adds credits to an account's wallet via gRPC.
 // Falls back to HTTP if gRPC client is not available.
 func CreditWalletGRPC(ctx context.Context, accountID int64, amount float64, txType, description, productID, idempotencyKey string) error {
-	client := getGRPCClient()
+	bctx, bcancel := withIdentityBudget(ctx)
+	defer bcancel()
+
+	client := identityGRPCClient()
 	if client == nil {
-		return CreditWallet(ctx, accountID, amount, txType, description, productID, idempotencyKey)
+		return CreditWallet(bctx, accountID, amount, txType, description, productID, idempotencyKey)
 	}
 
-	gctx, cancel := grpcTimeoutIdem(ctx, idempotencyKey)
+	gctx, cancel := grpcTimeoutIdem(bctx, idempotencyKey)
 	defer cancel()
 
 	_, err := client.WalletCredit(gctx, &identityv1.WalletOperationRequest{
@@ -334,7 +443,7 @@ func CreditWalletGRPC(ctx context.Context, accountID int64, amount float64, txTy
 	})
 	if err != nil {
 		slog.Debug("identity grpc WalletCredit failed, falling back to HTTP", "err", err)
-		return CreditWallet(ctx, accountID, amount, txType, description, productID, idempotencyKey)
+		return CreditWallet(bctx, accountID, amount, txType, description, productID, idempotencyKey)
 	}
 
 	return nil

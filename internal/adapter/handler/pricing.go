@@ -8,8 +8,20 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// GetPricing serves the v1 price list at GET /api/pricing. The route is
+// mounted with NO auth middleware (api-router.go:38, in the "Public routes"
+// block), so role and id are never set on it in production: this answers the
+// platform-shared catalogue — channels whose tenant_id is "default" or empty —
+// to every caller, including the console's legacy /pricing page. Before the
+// projection it published every tenant's private model names and channel group
+// names to anonymous readers.
+//
+// The tenant-aware price list is GET /api/v2/:tenant_slug/pricing
+// (v2_pricing.go), which is behind UserAuth and answers shared ∪ that slug's
+// tenant. A "logged-in caller sees more here" branch was written for this
+// handler and then deleted: on this route it could not execute, and an
+// unreachable branch is a worse answer than a documented one.
 func GetPricing(c *gin.Context) {
-	pricing := repo.GetPricing()
 	userId, exists := c.Get("id")
 	usableGroup := map[string]string{}
 	groupRatio := map[string]float64{}
@@ -29,6 +41,10 @@ func GetPricing(c *gin.Context) {
 			}
 		}
 	}
+
+	// "" = the platform-shared catalogue. See the doc comment above for why
+	// there is no per-caller branch here.
+	pricing := repo.GetPricingForTenant("")
 
 	usableGroup = app.GetUserUsableGroups(group)
 	// check groupRatio contains usableGroup

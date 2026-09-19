@@ -104,8 +104,21 @@ func PublishUsageMilestone(ctx context.Context, userID int, tokensUsed int64, mi
 	publishLLMEvent(ctx, p, SubjectLLMUsageMilestone, int64(userID), payload, "")
 }
 
+// eventPublishBudget bounds one fire-and-forget event publish. Nothing waits on
+// the result, so the only thing this number protects is the calling goroutine.
+const eventPublishBudget = 5 * time.Second
+
 // publishLLMEvent builds the canonical envelope and hands off to the publisher.
 // Marshaling errors are logged but never propagated to the caller.
+//
+// The caller's context is used for its values only: cancellation is stripped
+// with context.WithoutCancel and replaced by eventPublishBudget. Both typed
+// helpers are called with the HTTP request's context
+// (internal/app/relay/image_handler.go:160 for image.generated,
+// internal/app/relay/compatible_handler.go:552 → app.CheckAndPublishUsageMilestone
+// for usage.milestone), which is already cancelled whenever the client hung up.
+// Publisher.Publish honours cancellation as of cycle 12, so without this detach
+// "the browser closed" would silently become "the notification was dropped".
 func publishLLMEvent(ctx context.Context, p *Publisher, subject string, accountID int64, typedPayload any, model string) {
 	rawPayload, err := json.Marshal(typedPayload)
 	if err != nil {
@@ -119,7 +132,9 @@ func publishLLMEvent(ctx context.Context, p *Publisher, subject string, accountI
 		Payload:    rawPayload,
 		OccurredAt: time.Now().UTC(),
 	}
-	if err := p.Publish(ctx, subject, env); err != nil {
+	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), eventPublishBudget)
+	defer cancel()
+	if err := p.Publish(pubCtx, subject, env); err != nil {
 		slog.Warn("nats publishLLMEvent enqueue failed",
 			"subject", subject, "account_id", accountID, "model", model, "err", err)
 	}

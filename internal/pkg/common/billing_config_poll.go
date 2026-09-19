@@ -35,13 +35,20 @@ type billingConfigResponse struct {
 // On any error (network, non-200, parse failure) the goroutine logs a WARN and
 // leaves the current flag value unchanged (fail-keep, never flip on error).
 //
-// The goroutine stops cleanly when ctx is cancelled.
-func StartBillingConfigPoller(ctx context.Context) {
+// The goroutine stops when ctx is cancelled. The returned channel is closed once
+// the goroutine has actually exited (immediately in the no-op case), so a caller
+// that swaps process-global state afterwards — a test replacing the slog writer,
+// a shutdown path — can wait for it instead of racing a poll that is still
+// logging. The server ignores the channel: its lifetime is the context's.
+func StartBillingConfigPoller(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
 	if IdentityServiceURL == "" {
-		return
+		close(done)
+		return done
 	}
 
 	go func() {
+		defer close(done)
 		// Poll once immediately at startup before the first tick.
 		fetchAndApplyBillingConfig(ctx)
 
@@ -56,6 +63,7 @@ func StartBillingConfigPoller(ctx context.Context) {
 			}
 		}
 	}()
+	return done
 }
 
 // fetchAndApplyBillingConfig performs one HTTP GET to the platform billing-config

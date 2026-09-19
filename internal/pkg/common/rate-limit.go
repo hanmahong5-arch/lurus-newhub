@@ -9,6 +9,21 @@ type InMemoryRateLimiter struct {
 	store              map[string]*[]int64
 	mutex              sync.Mutex
 	expirationDuration time.Duration
+	// stop is closed by Stop to end the expiry sweeper Init starts. It is
+	// created lazily (stopChanLocked) so Stop is safe on a limiter that was
+	// never Init'd, and so a Stop that lands before Init still ends the
+	// sweeper Init goes on to start.
+	stop     chan struct{}
+	stopOnce sync.Once
+}
+
+// stopChanLocked returns the limiter's stop channel, creating it on first use.
+// The caller must hold l.mutex.
+func (l *InMemoryRateLimiter) stopChanLocked() chan struct{} {
+	if l.stop == nil {
+		l.stop = make(chan struct{})
+	}
+	return l.stop
 }
 
 func (l *InMemoryRateLimiter) Init(expirationDuration time.Duration) {
@@ -18,16 +33,49 @@ func (l *InMemoryRateLimiter) Init(expirationDuration time.Duration) {
 			l.store = make(map[string]*[]int64)
 			l.expirationDuration = expirationDuration
 			if expirationDuration > 0 {
-				go l.clearExpiredItems()
+				go l.clearExpiredItems(l.stopChanLocked())
 			}
 		}
 		l.mutex.Unlock()
 	}
 }
 
-func (l *InMemoryRateLimiter) clearExpiredItems() {
+// Stop ends the expiry sweeper started by Init. It is safe to call more than
+// once and safe on a limiter that was never Init'd.
+//
+// Stop is PERMANENT for this limiter: Init will not restart the sweeper,
+// because Init short-circuits once l.store is non-nil, and stopOnce keeps the
+// channel closed. A stopped limiter still answers Request correctly (Request
+// slides each key's window itself); what stops is the deletion of idle keys.
+// On a package-level limiter that means the sweeper is gone for the rest of
+// the process, so call it from a test cleanup, not from anything a request
+// path can reach.
+//
+// No production code calls it. Enumeration behind that:
+// `grep -rn InMemoryRateLimiter --include=*.go .` finds one non-test value,
+// middleware/rate-limit.go's package-level inMemoryRateLimiter, which is meant
+// to live for the process lifetime; `grep -rn '\.Stop()' --include=*.go
+// internal/adapter/middleware/` finds one call on it, in
+// middleware_cover_test.go. It exists for tests: without it, a test that
+// reaches Init leaves a sweeper goroutine holding this limiter's mutex on a
+// timer for the rest of the test binary.
+func (l *InMemoryRateLimiter) Stop() {
+	l.stopOnce.Do(func() {
+		l.mutex.Lock()
+		defer l.mutex.Unlock()
+		close(l.stopChanLocked())
+	})
+}
+
+func (l *InMemoryRateLimiter) clearExpiredItems(stop <-chan struct{}) {
+	ticker := time.NewTicker(l.expirationDuration)
+	defer ticker.Stop()
 	for {
-		time.Sleep(l.expirationDuration)
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
 		l.mutex.Lock()
 		now := time.Now().Unix()
 		for key := range l.store {

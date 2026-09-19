@@ -79,6 +79,40 @@ patchAPIInstance(API);
 // SINGLE bootstrap — every waiter shares it, then retries.
 let bootstrapInFlight = null;
 
+// Bridge refusals that are terminal for this browser: retrying the login
+// cannot clear them, an administrator has to act. Kept next to ensureSession
+// because that is where they are recognised; the login screen has the same
+// list (components/auth/OidcRedirect.jsx) with the copy for each one.
+const TERMINAL_BOOTSTRAP_ERROR_CODES = [
+  'TENANT_SEAT_LIMIT',
+  'TENANT_ORG_MISMATCH',
+];
+
+// withBootstrapErrorCode stamps the backend's `error_code` onto whatever the
+// bridge call failed with, so a caller can tell the refusals apart without
+// re-parsing an axios envelope.
+//
+// It matters because the bridge now has refusals a user can act on:
+// 403 TENANT_SEAT_LIMIT (the tenant is at tenants.max_users) and
+// 403 TENANT_ORG_MISMATCH (the account belongs to another organisation) —
+// both of which used to arrive as the generic "did not establish a session"
+// and were shown as a plain login failure. The original error object is
+// returned unchanged apart from the added field, so nothing downstream loses
+// `response` / `config`.
+function withBootstrapErrorCode(error, code) {
+  if (error && typeof error === 'object') {
+    if (code && !error.error_code) {
+      error.error_code = code;
+    }
+    return error;
+  }
+  const wrapped = new Error('zita-bootstrap did not establish a session');
+  if (code) {
+    wrapped.error_code = code;
+  }
+  return wrapped;
+}
+
 function ensureSession(instance) {
   if (!bootstrapInFlight) {
     bootstrapInFlight = instance
@@ -93,7 +127,16 @@ function ensureSession(instance) {
           }
           return res.data.data;
         }
-        throw new Error('zita-bootstrap did not establish a session');
+        throw withBootstrapErrorCode(
+          new Error('zita-bootstrap did not establish a session'),
+          res?.data?.error_code,
+        );
+      })
+      .catch((error) => {
+        throw withBootstrapErrorCode(
+          error,
+          error?.error_code ?? error?.response?.data?.error_code,
+        );
       })
       .finally(() => {
         bootstrapInFlight = null;
@@ -133,6 +176,16 @@ function addResponseInterceptor(instance) {
           // Bridge rejected (no platform session / account disabled) or the
           // replay still failed — fall through to the normal handler below,
           // which shows the toast or redirects to /login.
+          //
+          // One exception: when the bridge named a reason the person can act
+          // on (TERMINAL_BOOTSTRAP_ERROR_CODES), report THAT instead of the
+          // original 401. Reporting the 401 would say "your session expired"
+          // for a tenant that is simply full, which sends the user round the
+          // login loop that cannot fix it.
+          if (TERMINAL_BOOTSTRAP_ERROR_CODES.includes(e?.error_code)) {
+            showError(e);
+            return Promise.reject(error);
+          }
         }
       }
       // Tenant-slug self-heal. The slug in a v2 path comes from this

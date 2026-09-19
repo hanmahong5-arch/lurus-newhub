@@ -311,6 +311,40 @@ describe('OidcRedirect — session bridge', () => {
     expect(localStorage.getItem('user')).toBeNull();
   });
 
+  // A 403 the person can act on must not be dressed up as "your account is
+  // disabled": the remedy is an administrator freeing a seat or the right
+  // organisation's sign-in link, and the account-disabled page offers neither.
+  it.each([
+    ['TENANT_SEAT_LIMIT', 'console.auth.seat_limit'],
+    ['TENANT_ORG_MISMATCH', 'console.auth.org_mismatch'],
+  ])('parks a %s refusal on its own message', async (code, key) => {
+    apiPost.mockRejectedValue({
+      response: { status: 403, data: { error_code: code } },
+    });
+    render(React.createElement(OidcRedirect, null));
+    await flush();
+
+    // `t` is the identity spy here, so the key itself is what renders.
+    expect(screen.getByText(key)).toBeInTheDocument();
+    expect(tSpy).toHaveBeenCalledWith(key);
+    // Neither the account-disabled page nor the identity-login loop.
+    expect(replace).not.toHaveBeenCalled();
+    expect(hrefWrites).toEqual([]);
+  });
+
+  // The seat-limit code can also arrive stamped on the error by
+  // helpers/api.js's ensureSession rather than nested in the axios envelope.
+  it('reads the refusal code off the error itself when api.js stamped it', async () => {
+    const err = { response: { status: 403 } };
+    err.error_code = 'TENANT_SEAT_LIMIT';
+    apiPost.mockRejectedValue(err);
+    render(React.createElement(OidcRedirect, null));
+    await flush();
+
+    expect(screen.getByText('console.auth.seat_limit')).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
   it('reveals the "still redirecting" card only after the 3s grace period', async () => {
     vi.useFakeTimers();
     apiPost.mockRejectedValue({ response: { status: 401 } });

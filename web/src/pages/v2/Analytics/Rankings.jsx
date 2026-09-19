@@ -81,8 +81,12 @@ const HFRankings = () => {
   const tenantSlug = useTenantSlug();
   const [by, setBy] = useState('model');
   // 'tenant' reads the tenant-scoped route; 'all' reads the platform-wide
-  // admin route. Only offered to root, which is the only role the admin route
-  // accepts — a non-root caller would get 401 from RootJWTAuth.
+  // admin route, which is offered to root alone: every route under
+  // /api/v2/admin is mounted behind middleware.RootJWTAuth, whose session
+  // path answers 403 PERMISSION_DENIED to an authenticated caller below
+  // RoleRootUser and 401 UNAUTHENTICATED to one with no session
+  // (middleware/admin_jwt_auth.go, rootSessionAuth + rewriteAsV2Denial). It
+  // used to say 401 for both, which was wrong for the case that happens.
   const rootUser = isRoot();
   const [scope, setScope] = useState('tenant');
   const [hours, setHours] = useState(24);

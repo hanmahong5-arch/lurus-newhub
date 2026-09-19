@@ -104,7 +104,7 @@ func setupPricingWriteRouter(t *testing.T) *pricingWriteCtx {
 	// whatever repo.DB has become (nil, or another test's db) and panic
 	// inside the pool; writing to this closed *gorm.DB instead just returns
 	// an ordinary "database is closed" error that RecordAuditEvent logs.
-	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
+	pinAuditWriter(t, db)
 
 	slug := "acme-write"
 	tenant := &repo.Tenant{

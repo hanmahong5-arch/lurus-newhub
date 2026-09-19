@@ -113,6 +113,19 @@ export const DEFAULT_CONFIG = {
 export const THINK_TAG_REGEX = /<think>([\s\S]*?)<\/think>/g;
 
 // ========== 错误消息 ==========
+/*
+ * These values are i18n keys: hooks/playground/useMessageActions.jsx renders
+ * them as t(ERROR_MESSAGES.X). A key no bundle carries resolves to itself, so
+ * four of these eight are rendered (hooks/playground/useMessageActions.jsx)
+ * and three of those four were missing from en.json, so they reached the
+ * English playground in Chinese; the other four have no consumer — the literal
+ * t('…') scan in src/i18n/i18n-integrity.test.js cannot see a key that arrives
+ * through a variable, which is why nothing was red.
+ *
+ * A new message means a new entry in src/i18n/locales/en.json; the case named
+ * 'every key table handed to t() through a variable resolves in en.json' in
+ * that file fails otherwise.
+ */
 export const ERROR_MESSAGES = {
   NO_TEXT_CONTENT: '此消息没有可复制的文本内容',
   INVALID_MESSAGE_TYPE: '无法复制此类型的消息内容',

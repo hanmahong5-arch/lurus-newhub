@@ -228,11 +228,24 @@ jobs:
           # so the package could have lost 18 points of real coverage without the
           # gate noticing. Buffers kept at 3.4 / 3.5 / 5.1pt.
           #
+          # 2026-09-19 ratchet (cycle 12 L1). Actuals recorded in the cycle-12
+          # plan §1.1 from this job's run on main@4c43f8a6:
+          #   internal/app 89.7% · internal/adapter/repo 78.8% · internal/adapter/handler 75.5%
+          # app 86 -> 87 and handler 64 -> 73; repo stays at 77 because a 2pt
+          # buffer off 78.8 lands below the gate it already has and this ratchet
+          # only moves up. The handler move is the big one: its gate had been at
+          # 64 since 2026-07-20 against a package that has gained 6.4 points, so
+          # it was carrying an 11.5pt dead zone. Buffers after this change:
+          # 2.7 / 1.8 / 2.5pt. These three numbers came from the plan's record of
+          # a CI run, not from a local measurement — a local hermetic run has no
+          # PostgreSQL and measures a different subset (see the job comment).
+          # This job prints what it actually observes on every run; if it
+          # disagrees, correct these to the printed numbers and say so.
           # Keep internal/app/coverage_honesty_test.go's `want` map in step with
           # these three numbers — it reads this file and fails if they diverge.
-          check_pkg "internal/app"             86 "internal/app"             # 88.4% hermetic -> 89.4% with PG. 86 = 89.4-3.4pt buffer. Prior gate 84 (from the 88.4 hermetic number). Was 25 vs an actual 27.0% in 2026-05-31 — a 61pt dead zone once the 2026-07-25 corpus landed.
+          check_pkg "internal/app"             87 "internal/app"             # 87 = 89.7-2.7pt buffer against the 2026-09-19 actual. Prior gate 86 = 89.4-3.4pt (2026-08-17), 84 before that. Was 25 vs an actual 27.0% in 2026-05-31 — a 61pt dead zone once the 2026-07-25 corpus landed.
           check_pkg "internal/adapter/repo"    77 "internal/adapter/repo"    # 64.8% hermetic -> 80.5% with PG. 77 = 80.5-3.5pt buffer. Prior gate 62, i.e. an 18.5pt dead zone, and the old 64.3 "hermetic ceiling" WAS the skip: this package's PG-only tests never ran in this job. Largest single correction in this ratchet.
-          check_pkg "internal/adapter/handler" 64 "internal/adapter/handler" # 69.1% either way — unchanged, so its gate is unchanged. It does have a PG-gated test (cov_handler-deep-b_logs_test.go:258 skips without TEST_POSTGRES_DSN) and that test now runs, but it exercises too few statements to move the package total at one decimal; "unchanged" here means measured-and-unchanged, not not-applicable. 64 = 69.1-5.1pt, keeping the wider buffer this package has carried since 2026-07-20 (it has the most cross-test global state). Prior: 48 from a 52.8% measurement.
+          check_pkg "internal/adapter/handler" 73 "internal/adapter/handler" # 73 = 75.5-2.5pt buffer against the 2026-09-19 actual. Its PG-gated test (cov_handler-deep-b_logs_test.go:258 skips without TEST_POSTGRES_DSN) exercises too few statements to move the package total at one decimal, so the with-PG and hermetic numbers for this package have tracked each other. Prior gate 64 = 69.1-5.1pt (2026-08-17, carried unchanged from 2026-07-20), i.e. an 11.5pt dead zone by 2026-09-19. Prior to that: 48 from a 52.8% measurement.
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""
@@ -427,8 +440,69 @@ jobs:
       # -race needs CGO; ubuntu-latest ships gcc, so CGO_ENABLED defaults to 1.
       # -short keeps it to the hermetic suite (Postgres/MinIO integration tests
       # self-skip without their DSNs).
-      - name: go test -short -race ./...
-        run: go test -short -race -count=1 -timeout=15m ./...
+      # -shuffle=on randomises test order within each package and prints the
+      # seed it used ("-test.shuffle <seed>") on both pass and fail.
+      # Why: the cycle-12 plan §1.1/§1.2 records four red -race runs around
+      # 2026-09 (three on main: 09-08, 09-09, 09-19; one on PR #188) and names
+      # a cause for three of them — 09-19 a polling goroutine left by
+      # session_billing_poll_test.go:150, 09-09 an unjoined worker-pool
+      # submission in internal/pkg/search/sync.go, #188 a bare gopool.Go in
+      # handler/relay.go still calling DisableChannel after a test's cleanup.
+      # The 09-08 cause is not recorded there, so "three of the four had this
+      # shape" is the claim, not "all of them did". All three named causes are
+      # the same shape: a goroutine spawned by one test still reading a package
+      # global that a later test's cleanup had restored. Whether that surfaces
+      # depends on which test runs next, so a fixed order can hide it for
+      # months. If this job goes red, take the seed from the log and rerun with
+      # -shuffle=<seed> BEFORE arguing for a rerun.
+      #
+      # Shuffling needs no cgo, so it WAS measured on the dev host before this
+      # landed (the -race half still only runs here). 2026-09-19, one package at
+      # a time, `go test -short -count=1 -shuffle=on|<seed>`:
+      #   internal/pkg/search, internal/app/governance — 3/3 green.
+      #   internal/pkg/common — 4/4 green.
+      #   internal/adapter/middleware — seed 1789843908370378500 failed
+      #     TestAuthHelper_InvalidStatusType and TestAuthHelper_InvalidRoleType
+      #     with 500 instead of 401. Not a shuffle artefact: a real leak the
+      #     fixed order had been hiding. withMiniRedis restored
+      #     common.RDB/RedisEnabled through a caller-run `defer`, which fires
+      #     BEFORE t.Cleanup, and setModelRateLimit's t.Cleanup then put
+      #     RedisEnabled=true back on top of a nil RDB — the one combination
+      #     repo.GetUserCache's Redis branch does not survive. Fixed in those
+      #     two helpers; TestRedisGlobalsSurviveNestedRestores
+      #     (middleware_cover_test.go) is the regression oracle. Same seed
+      #     after the fix: those two pass.
+      #   internal/adapter/repo — two failures, both the same latent bug:
+      #     governance.SetAuditWriter(nil) stores a pointer to a nil interface,
+      #     which RecordAuditEvent's "no writer" guard did not recognise. A
+      #     gopool dispatch had been swallowing the nil dereference (and the
+      #     audit write with it); inline it panicked. Guard fixed in
+      #     governance/audit.go, oracle TestRecordAuditEvent_NilWriterIsNoOp.
+      #     3/3 green after.
+      #   internal/adapter/handler — four order-dependent test failures from
+      #     three process-global keys with no per-test reset: the circuit-breaker
+      #     registry keyed by channel id (an open breaker from the
+      #     gateway-health test made a later relay return an EMPTY 200 with no
+      #     settlement row), the same registry non-empty when the "no traffic
+      #     yet" test runs with no DB, and the TPM window keyed by token id.
+      #     Fixed in those test files; oracles
+      #     TestRelaySuccessFixture_SurvivesForeignChannelBreaker and the
+      #     per-test unique ids. The remaining shuffled failures in this
+      #     package at the time of writing fail in ISOLATION too — they are
+      #     another cycle-12 lane's in-flight work, not an ordering effect.
+      #   internal/app — measured after the six above (2026-09-19, operator
+      #     hand-finish): two order-dependent failures, both fixed — the TPM
+      #     window assertion in business_tpm_test.go now measures the delta the
+      #     test adds (the window is process-global, keyed by a token id every
+      #     sqlite fixture reuses), and other.source gained its visibility
+      #     decision in governance/classification.go.
+      #   Measured set = the seven packages above. Every other package's first
+      #   shuffle is this job: a red there is new information, not a
+      #   regression of something measured.
+      # So the first CI run here is not the first measurement, but it IS the
+      # first measurement WITH -race, and with every package in one binary set.
+      - name: go test -short -race -shuffle=on ./...
+        run: go test -short -race -shuffle=on -count=1 -timeout=15m ./...
 
   pg-integration:
     name: repo integration tests (disposable Postgres)
@@ -583,6 +657,14 @@ jobs:
           #     ineffassign 13 · unused 3 · bodyclose 3 · govet 0 · nilerr 0
           #     (573 production / 93 _test.go)
           #
+          #   main@4c43f8a6, measured BY THIS JOB (run 35447252110)   646
+          #   feat/cycle12 first green run, measured BY THIS JOB (run 35474315586)   645
+          #     20 fewer than the 2026-08-17 number above. The paydown was a
+          #     side effect of cycles 9-11, not a lint campaign, so there is
+          #     no per-linter table for it in the run log; the total is what
+          #     this job printed. Lowered here (cycle 12 L1) so the ceiling
+          #     keeps its grip instead of leaving 20 findings of slack.
+          #
           # ⚠️ Read this before trusting a local count. The same command on a
           # Windows dev box reported 873 for this same tree — 573 production
           # (identical) and 300 test-file findings, against CI's 93. The entire
@@ -602,7 +684,7 @@ jobs:
           # lower it as that happens so the ceiling keeps its grip. It is a cap
           # on regression, NOT a budget to spend up to.
           # ---------------------------------------------------------------
-          CEILING=666
+          CEILING=645
 
           REPORT=/tmp/lint-debt.json
           rm -f "$REPORT"

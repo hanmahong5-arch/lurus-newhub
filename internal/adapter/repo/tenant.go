@@ -3,9 +3,14 @@ package repo
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"gorm.io/gorm"
 )
@@ -149,6 +154,117 @@ func DeleteTenant(id string) error {
 	return DB.Delete(&Tenant{}, "id = ?", id).Error
 }
 
+// TenantMissingModeEnv names the environment variable that decides what
+// TenantGate does when a tenant id resolves to no row. It is read fresh on
+// every call — same posture as TENANT_MODEL_ALLOWLIST_MODE
+// (internal/app/tenantpolicy/allowlist.go) — so an operator's change takes
+// effect on the next request rather than the next restart.
+const TenantMissingModeEnv = "TENANT_MISSING_MODE"
+
+// Tenant-gate modes. The exact string "enforce" enforces; unset, empty,
+// "Enforce" and any other value observe.
+const (
+	TenantGateModeEnforce = "enforce"
+	TenantGateModeObserve = "observe"
+)
+
+// Tenant-gate denial reasons, returned by TenantGate so a caller can put the
+// cause in an audit row. TenantGateReasonDisabled is spelled exactly as the
+// string middleware/auth.go's relay gate has always written into its
+// ActionAuthFailed detail JSON, so that audit shape does not change.
+const (
+	TenantGateReasonDisabled = "tenant_disabled"
+	TenantGateReasonMissing  = "tenant_missing"
+)
+
+// TenantMissingMode returns the configured behaviour for a tenant id with no
+// row: TenantGateModeEnforce when TENANT_MISSING_MODE is exactly "enforce",
+// TenantGateModeObserve for every other value.
+func TenantMissingMode() string {
+	if strings.TrimSpace(os.Getenv(TenantMissingModeEnv)) == TenantGateModeEnforce {
+		return TenantGateModeEnforce
+	}
+	return TenantGateModeObserve
+}
+
+// tenantMissingLogged throttles the observe-mode log line to one entry per
+// tenant id per tenantMissingLogWindow, so a deleted tenant with live traffic
+// does not write one line per request. The metric is the unthrottled signal.
+// The key space is the set of tenant ids on user/token rows, not anything a
+// request supplies.
+var (
+	tenantMissingLogged sync.Map // map[string]time.Time — tenant id -> last log
+)
+
+// tenantMissingLogWindow is how long a tenant id stays quiet after being
+// logged once.
+const tenantMissingLogWindow = time.Minute
+
+// TenantGate answers whether a request owned by tenantID may proceed, and if
+// not, why (TenantGateReason*). It is the single decision point behind the
+// three gates in middleware/auth.go — the session/console path, the relay
+// token path and the playground token path.
+//
+// Cases:
+//
+//   - Empty id, or the bootstrap/system tenant "default": allowed. "default"
+//     predates the tenants table on some deployments and stays exempt here,
+//     as it was before this function existed; an empty id is a legacy row.
+//   - Row exists and Tenant.IsDisabled(): denied (TenantGateReasonDisabled).
+//     Unchanged behaviour, now counted.
+//   - No row — never created, or soft-deleted by DeleteTenant, which sets
+//     deleted_at on the tenants row and touches nothing else, so that tenant's
+//     token, user and log rows stay exactly as they were:
+//     under the default observe mode the request is ALLOWED and only counted
+//     and logged; under TENANT_MISSING_MODE=enforce it is denied
+//     (TenantGateReasonMissing). Before this gate existed the lookup error was
+//     indistinguishable from a DB fault and the request was simply admitted,
+//     so a deleted tenant's tokens kept relaying and spending.
+//   - Any other lookup error (DB down, driver fault): allowed. Fail-open on a
+//     transient backend fault is the pre-existing posture at all three call
+//     sites and is deliberately kept — a DB hiccup must not 403 every request.
+func TenantGate(tenantID string) (ok bool, reason string) {
+	if tenantID == "" || tenantID == "default" {
+		return true, ""
+	}
+
+	var tenant Tenant
+	err := DB.Where("id = ?", tenantID).First(&tenant).Error
+	switch {
+	case err == nil:
+		if tenant.IsDisabled() {
+			metrics.RecordTenantGate(metrics.TenantGateOutcomeDisabledDenied)
+			return false, TenantGateReasonDisabled
+		}
+		return true, ""
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		if TenantMissingMode() == TenantGateModeEnforce {
+			metrics.RecordTenantGate(metrics.TenantGateOutcomeMissingDenied)
+			return false, TenantGateReasonMissing
+		}
+		metrics.RecordTenantGate(metrics.TenantGateOutcomeMissingObserved)
+		logTenantMissingObserved(tenantID)
+		return true, ""
+	default:
+		// Transient backend fault: keep the pre-existing fail-open.
+		return true, ""
+	}
+}
+
+// logTenantMissingObserved writes the observe-mode system log line for
+// tenantID at most once per tenantMissingLogWindow.
+func logTenantMissingObserved(tenantID string) {
+	now := time.Now()
+	if prev, loaded := tenantMissingLogged.Load(tenantID); loaded {
+		if last, isTime := prev.(time.Time); isTime && now.Sub(last) < tenantMissingLogWindow {
+			return
+		}
+	}
+	tenantMissingLogged.Store(tenantID, now)
+	common.SysLog(fmt.Sprintf("tenant gate: tenant %q has no row (deleted or never created) — admitting the request because %s is %q; set it to %q to deny",
+		tenantID, TenantMissingModeEnv, TenantGateModeObserve, TenantGateModeEnforce))
+}
+
 // ListTenants retrieves all tenants with pagination
 func ListTenants(offset int, limit int, status int) ([]*Tenant, int64, error) {
 	var tenants []*Tenant
@@ -176,8 +292,19 @@ func ListTenants(offset int, limit int, status int) ([]*Tenant, int64, error) {
 	return tenants, total, nil
 }
 
-// GetTenantUserCount returns the number of users in a tenant
-// by counting identity mappings (User model has no tenant_id column).
+// GetTenantUserCount returns the number of rows in user_identity_mappings for
+// a tenant — i.e. how many users reached it through the OIDC identity path.
+//
+// It is NOT the tenant's seat occupancy. `users` does carry a tenant_id column
+// (entity/user.go:15), and the session-bridge signup path writes a users row
+// with no mapping row, so a bridge-provisioned tenant counts 0 here; the
+// comment that used to sit on this function said the User model had no
+// tenant_id column, which was false. TenantUserSeatCount below is the seat
+// number, and it is what the admin console and the seat cap both read.
+// This function stays mapping-based because TenantCanAddUser — the OIDC
+// provisioning path's own ceiling check (user_mapping.go:271-277) — has always
+// counted mappings, and re-basing it is a money/lockout-adjacent change that
+// belongs with the projection work, not here.
 func GetTenantUserCount(tenantID string) (int64, error) {
 	var count int64
 	err := DB.Model(&UserIdentityMapping{}).Where("tenant_id = ?", tenantID).Count(&count).Error
@@ -192,6 +319,105 @@ func TenantCanAddUser(t *Tenant) (bool, error) {
 	}
 
 	return currentUserCount < int64(t.MaxUsers), nil
+}
+
+// TenantUserSeatCount returns how many newhub users occupy a seat in tenantID,
+// counting rows in `users` by users.tenant_id (entity/user.go:15).
+//
+// It deliberately differs from GetTenantUserCount, which counts
+// user_identity_mappings rows: the session-bridge signup path
+// (handler.autoCreateBridgedUser) inserts a users row and no mapping row, so a
+// mapping-based count reads 0 for a tenant whose seats were filled through the
+// bridge. The mapping writers, enumerated 2026-09-19 by grepping
+// `UserIdentityMapping{` and `user_identity_mappings` across non-test internal/
+// sources, are repo.CreateUserMapping (user_mapping.go:48) and the /internal
+// provisioning self-heal (handler/internal_api_ext.go:507) — neither is on the
+// bridge path.
+// GetTenantUserCount keeps its mapping-based meaning for its one remaining
+// caller, TenantCanAddUser (the OIDC provisioning path's ceiling);
+// GetTenantStats and GET /api/v2/admin/tenants/:id moved to this seat count.
+//
+// Isolation is switched off explicitly because the question is about ONE named
+// tenant asked from a request that belongs to nobody yet (a first login).
+func TenantUserSeatCount(tenantID string) (int64, error) {
+	var count int64
+	err := WithoutTenantIsolation(DB).Model(&User{}).Where("tenant_id = ?", tenantID).Count(&count).Error
+	return count, err
+}
+
+// TenantHasFreeSeat reports whether tenantID can take one more user under
+// tenants.max_users, together with the numbers behind the answer (used seats
+// and the configured limit) so the caller can log or audit them.
+//
+// Fails OPEN — returns true — when the tenant id is empty, the tenant row
+// cannot be read, max_users is <= 0 (no ceiling configured), or the count
+// query errors. This sits on a login path: a ceiling nobody set, or a
+// transient DB fault, must not lock people out. TenantCanAddUser answers
+// false for max_users <= 0; that difference is intentional and its callers
+// are unchanged.
+//
+// Not a reservation: the read and the caller's INSERT are separate statements,
+// so two first logins racing into the last seat can both be admitted (same
+// weakness the older TenantCanAddUser has). Recorded, not fixed, in cycle 12 —
+// closing it needs a DB-level guard (a partial unique index or a counted
+// UPDATE … WHERE seats < max_users), which is next cycle's work; the ceiling
+// is a plan limit, not a security boundary, and overshooting it by the number
+// of simultaneous first logins is bounded and visible in the console's seat
+// count.
+func TenantHasFreeSeat(tenantID string) (ok bool, used int64, limit int) {
+	if tenantID == "" {
+		return true, 0, 0
+	}
+	tenant, err := GetTenantByID(tenantID)
+	if err != nil || tenant == nil {
+		return true, 0, 0
+	}
+	if tenant.MaxUsers <= 0 {
+		return true, 0, tenant.MaxUsers
+	}
+	used, err = TenantUserSeatCount(tenantID)
+	if err != nil {
+		return true, 0, tenant.MaxUsers
+	}
+	return used < int64(tenant.MaxUsers), used, tenant.MaxUsers
+}
+
+// PendingInviteTenantID answers "if this invite code were redeemed right now,
+// which tenant would it place the user in?" without redeeming it. Returns
+// ok=false for an absent/unknown/revoked/already-consumed/expired code — i.e.
+// exactly the cases where ConsumeTenantInvite would fail and the caller would
+// fall back to the "default" tenant.
+//
+// It exists so handler.ZitaBootstrap can check the tenant's seat ceiling
+// BEFORE consuming the code: ConsumeTenantInvite is atomic and single-use, so
+// a seat refusal after consumption burns a one-time code the visitor then has
+// to ask an admin to reissue.
+//
+// Read-only and advisory. ConsumeTenantInvite remains the single authority on
+// whether a code redeems — this predicate deliberately duplicates its status
+// and expiry rules rather than widening them, so a code this function rejects
+// still gets its ordinary "fall back to default, log the user in" treatment
+// there. Lives in tenant.go rather than next to the other invite functions
+// because that is the file cycle 12 L9 owns; moving it is a tidy-up for a
+// later cycle.
+func PendingInviteTenantID(code string) (string, bool) {
+	if code == "" {
+		return "", false
+	}
+	var invite TenantInvite
+	if err := WithoutTenantIsolation(DB).Where("code = ?", code).First(&invite).Error; err != nil {
+		return "", false
+	}
+	if invite.Status != TenantInviteStatusPending {
+		return "", false
+	}
+	if invite.ExpiredTime != 0 && invite.ExpiredTime < common.GetTimestamp() {
+		return "", false
+	}
+	if invite.TenantId == "" {
+		return "", false
+	}
+	return invite.TenantId, true
 }
 
 // GenerateID generates a unique ID for tenant
@@ -220,8 +446,15 @@ func GetTenantStats(tenantID string) (*TenantStats, error) {
 	stats.MaxUsers = tenant.MaxUsers
 	stats.MaxQuota = tenant.MaxQuota
 
-	// User count (from identity mappings)
-	stats.UserCount, _ = GetTenantUserCount(tenantID)
+	// Seat occupancy — the SAME number the seat cap enforces
+	// (TenantHasFreeSeat -> TenantUserSeatCount), so the count an admin reads
+	// next to max_users in the console cannot disagree with the ceiling on the
+	// two bridge paths. The OIDC provisioning path (TenantCanAddUser, reached
+	// from oauth.go) still counts identity mappings and can admit past this
+	// number for a bridge-filled tenant. It used to be GetTenantUserCount, which counts
+	// identity mappings and therefore reads 0 for a tenant whose seats were
+	// filled through the session bridge.
+	stats.UserCount, _ = TenantUserSeatCount(tenantID)
 
 	// Token count
 	stats.TokenCount, _ = GetTenantTokenCount(tenantID)

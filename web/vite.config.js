@@ -80,6 +80,27 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
+        // Rollup names a chunk after the file that faces it, and every routed
+        // page in this tree is a directory with an index.jsx — so the build
+        // emitted a crowd of interchangeable assets/index-<hash>.js files and
+        // nobody could tell from a waterfall, a budget report or a CDN log
+        // which page a chunk belonged to. Fold the directory back into the
+        // name for exactly that case.
+        chunkFileNames: (chunk) => {
+          const facade = chunk.facadeModuleId;
+          if (facade && /[\\/]index\.[jt]sx?$/.test(facade)) {
+            const dir = path.dirname(facade);
+            const label = [path.basename(path.dirname(dir)), path.basename(dir)]
+              .filter(
+                (part) =>
+                  part && !['src', 'pages', 'components'].includes(part),
+              )
+              .join('-')
+              .replace(/[^A-Za-z0-9._-]/g, '_');
+            if (label) return `assets/${label}-[hash].js`;
+          }
+          return 'assets/[name]-[hash].js';
+        },
         manualChunks: {
           'react-core': ['react', 'react-dom', 'react-router-dom'],
           'semi-ui': ['@douyinfe/semi-icons', '@douyinfe/semi-ui'],

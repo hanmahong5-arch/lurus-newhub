@@ -88,6 +88,8 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 	prevSQLite := common.UsingSQLite
 	prevPG := common.UsingPostgreSQL
 	prevRedis := common.RedisEnabled
+	prevQuotaForNewUser := common.QuotaForNewUser
+	prevLogConsumeEnabled := common.LogConsumeEnabled
 
 	repo.DB = db
 	repo.LOG_DB = db
@@ -278,6 +280,13 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 		common.UsingSQLite = prevSQLite
 		common.UsingPostgreSQL = prevPG
 		common.RedisEnabled = prevRedis
+		// These two are set above and were not restored before cycle-12 L1:
+		// every test that built a V2 router left QuotaForNewUser at 0 and
+		// LogConsumeEnabled at false for the rest of the binary, so a later
+		// test asserting either one passed or failed depending on run order
+		// — which `go test -shuffle=on` now varies.
+		common.QuotaForNewUser = prevQuotaForNewUser
+		common.LogConsumeEnabled = prevLogConsumeEnabled
 		sqlDB, _ := db.DB()
 		if sqlDB != nil {
 			sqlDB.Close()

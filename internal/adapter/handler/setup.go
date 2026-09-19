@@ -7,7 +7,6 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
-	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -114,11 +113,13 @@ func PostSetup(c *gin.Context) {
 		}
 	}
 
-	// Set operation modes
-	operation_setting.SelfUseModeEnabled = req.SelfUseModeEnabled
-	operation_setting.DemoSiteEnabled = req.DemoSiteEnabled
-
-	// Save operation modes to database for persistence
+	// Save operation modes to database for persistence.
+	//
+	// repo.UpdateOption persists the row AND applies it to the in-memory
+	// setting through updateOptionMap, so assigning
+	// operation_setting.SelfUseModeEnabled / .DemoSiteEnabled directly here
+	// (as this used to, on the two statements above these) was duplicate state
+	// with a second writer — see repo's TestOptionOwnedGlobalsHaveOneWriter.
 	err = repo.UpdateOption("SelfUseModeEnabled", boolToString(req.SelfUseModeEnabled))
 	if err != nil {
 		c.JSON(200, gin.H{

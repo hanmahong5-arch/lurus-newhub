@@ -331,9 +331,20 @@ func GetUserModels(c *gin.Context) {
 		return
 	}
 	groups := app.GetUserUsableGroups(user.Group)
+	// Non-root callers see only what their own tenant can route — the
+	// platform-shared channels plus their tenant's own. Unscoped, this
+	// endpoint listed every model any tenant's channel served, including
+	// private fine-tune ids, to any logged-in user.
+	tenantID, isRoot := tenantScopeForDiscovery(c)
 	var models []string
 	for group := range groups {
-		for _, g := range repo.GetGroupEnabledModels(group) {
+		var groupModels []string
+		if isRoot {
+			groupModels = repo.GetGroupEnabledModels(group)
+		} else {
+			groupModels = repo.GetGroupEnabledModelsForTenant(group, tenantID)
+		}
+		for _, g := range groupModels {
 			if !common.StringsContains(models, g) {
 				models = append(models, g)
 			}

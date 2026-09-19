@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import { API } from '../../../../helpers';
@@ -30,6 +30,14 @@ import { getQuotaPerUSD } from '../../../../helpers/formatting';
  * aggregated from the logs table — see internal/adapter/repo/analytics.go).
  * Root-only: the route sits behind RootJWTAuth, so a 403 renders the same
  * forbidden panel as the other admin surfaces (CostIntelligence convention).
+ *
+ * Cycle 12 L3, repair round: until now the catch recognised 403 and nothing
+ * else, so a 502 — or a dropped connection, or a 200 carrying success:false —
+ * left `models` at [] with loading false. The page then drew "0 total
+ * requests", "— error rate", "— latency" and an empty per-model table: an
+ * incident dashboard reporting a quiet gateway at the exact moment it cannot
+ * see the gateway at all. Four outcomes now, and only the first shows
+ * numbers: data / 403 forbidden / 401 signed-out / everything-else error.
  */
 
 // Time-range presets: [id, i18n key, fallback label, window seconds]
@@ -69,6 +77,12 @@ const HFModelPerformance = () => {
   const [window_, setWindow_] = useState(null); // {start_time, end_time} actually applied
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
+  // null when the last fetch succeeded; otherwise the backend message, or ''
+  // when there was none. Distinct from `forbidden` ("you may not see this")
+  // and `signedOut` ("we no longer know who you are").
+  const [error, setError] = useState(null);
+  const [reloadTick, setReloadTick] = useState(0);
   const [sortKey, setSortKey] = useState('requests');
   const [sortDir, setSortDir] = useState('desc');
 
@@ -92,6 +106,8 @@ const HFModelPerformance = () => {
     let cancelled = false;
     setLoading(true);
     setForbidden(false);
+    setSignedOut(false);
+    setError(null);
     const seconds = (RANGES.find((r) => r[0] === range) || RANGES[1])[3];
     const end = Math.floor(Date.now() / 1000);
     const start = end - seconds;
@@ -111,10 +127,16 @@ const HFModelPerformance = () => {
             start_time: res.data.data?.start_time ?? start,
             end_time: res.data.data?.end_time ?? end,
           });
+        } else {
+          setError(res?.data?.message ?? '');
         }
       })
       .catch((err) => {
-        if (!cancelled && err?.response?.status === 403) setForbidden(true);
+        if (cancelled) return;
+        const status = err?.response?.status;
+        if (status === 403) setForbidden(true);
+        else if (status === 401) setSignedOut(true);
+        else setError(err?.response?.data?.message ?? '');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -122,7 +144,9 @@ const HFModelPerformance = () => {
     return () => {
       cancelled = true;
     };
-  }, [range, tenantId]);
+  }, [range, tenantId, reloadTick]);
+
+  const retry = useCallback(() => setReloadTick((n) => n + 1), []);
 
   // ── Summary (top cards) ────────────────────────────────────────────────────
 
@@ -246,7 +270,9 @@ const HFModelPerformance = () => {
         tr('console.admin.analytics.crumb', 'model performance'),
       ]}
       actions={
-        !forbidden && (
+        !forbidden &&
+        !signedOut &&
+        error === null && (
           <button
             type='button'
             className='btn'
@@ -263,7 +289,14 @@ const HFModelPerformance = () => {
           <div className='lbl' style={{ marginBottom: 6 }}>
             {tr('console.admin.analytics.heading_lbl', 'model performance')}
           </div>
-          <h1>{tr('console.admin.analytics.title', 'Model performance')}</h1>
+          <h1 data-testid='perf-headline'>
+            {error !== null
+              ? tr(
+                  'console.admin.analytics.error_title',
+                  'Model performance unknown',
+                )
+              : tr('console.admin.analytics.title', 'Model performance')}
+          </h1>
           <div className='sub'>
             {tr(
               'console.admin.analytics.sub',
@@ -288,6 +321,67 @@ const HFModelPerformance = () => {
                 'You do not have permission to view model performance analytics.',
               )}
             </div>
+          </div>
+        </div>
+      ) : signedOut ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='perf-signed-out'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.session_expired_title',
+                'Your session has expired',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.session_expired_body',
+                'The server no longer recognises this session, so nothing on this page can be read. Sign in again to continue.',
+              )}
+            </div>
+            <a className='btn sm' href='/login' data-testid='perf-sign-in'>
+              {tr('console.admin.sign_in_again', 'sign in again')}
+            </a>
+          </div>
+        </div>
+      ) : error !== null ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='perf-error'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.analytics.error_title',
+                'Model performance unknown',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.analytics.error_body',
+                'The analytics endpoint did not answer. This is not a report of zero traffic and zero errors — the window simply could not be read.',
+              )}
+            </div>
+            {error ? (
+              <div
+                className='mono muted'
+                style={{ fontSize: 11, marginBottom: 12 }}
+              >
+                {error}
+              </div>
+            ) : null}
+            <button
+              type='button'
+              className='btn sm'
+              data-testid='perf-retry'
+              onClick={retry}
+            >
+              {tr('console.admin.analytics.retry', 'retry')}
+            </button>
           </div>
         </div>
       ) : (

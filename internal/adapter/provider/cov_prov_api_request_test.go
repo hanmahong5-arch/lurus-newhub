@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -847,10 +848,30 @@ func provReqCovPingContext(method, target string) (*gin.Context, *provReqCovSync
 	return c, rec
 }
 
+// TestStartPingKeepAlive_StopJoinsTheGoroutine: stop() returns only after the
+// ping goroutine has run its last statement, so a caller that touches
+// package globals afterwards (a test restoring common2.DebugEnabled) cannot
+// race the goroutine's deferred reads. Mutation: drop the `<-exited` wait
+// from the stop function and the hook count is usually still 0 when this
+// asserts; CI's -race job is the decisive oracle.
+func TestStartPingKeepAlive_StopJoinsTheGoroutine(t *testing.T) {
+	var exits atomic.Int32
+	prevHook := pingExitHook
+	pingExitHook = func() { exits.Add(1) }
+	t.Cleanup(func() { pingExitHook = prevHook })
+
+	c, _ := provReqCovPingContext(http.MethodGet, "/x")
+	stop := startPingKeepAlive(c, 15*time.Millisecond)
+	stop()
+	if got := exits.Load(); got != 1 {
+		t.Fatalf("ping goroutine exits observed after stop() returned = %d, want 1 — stop must join the goroutine", got)
+	}
+}
+
 func TestStartPingKeepAlive_WritesPingsThenStops(t *testing.T) {
-	// Deliberately does NOT flip common2.DebugEnabled: stop() cancels the
-	// pinger's context but does not wait for the goroutine to exit, so a
-	// t.Cleanup restoring that global races the goroutine's own debug reads.
+	// stop() joins the goroutine since cycle 12 (see the test above), so
+	// restoring common2.DebugEnabled after it would be safe; this test still
+	// leaves the global alone because it has no need to flip it.
 	c, rec := provReqCovPingContext(http.MethodGet, "/x")
 
 	stop := startPingKeepAlive(c, 15*time.Millisecond)

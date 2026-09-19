@@ -21,14 +21,22 @@ For commercial licensing, please contact support@quantumnous.com
  * i18n integrity gate.
  *
  * This project keys translations by their Chinese source text: t('保存设置').
- * i18n.js sets fallbackLng: 'zh', so a key that en.json does not carry resolves
- * to the key itself — i.e. an operator running the console in English is shown
- * Chinese. Nothing else in the suite notices, because every unit test renders
- * a component whose strings happen to be present.
+ * A key that en.json does not carry resolves to the key itself — i.e. an
+ * operator running the console in English is shown Chinese. Nothing else in
+ * the suite notices, because every unit test renders a component whose strings
+ * happen to be present.
  *
- * These three assertions are what catch that class. Each was red before the
- * change that introduced this file: 128 unresolvable keys, 15 escaped strings
- * and 88 untranslated toasts.
+ * That is true of i18n.js both before and after the fallback change: it used
+ * to route en through fallbackLng: 'zh' and now gives zh no fallback at all
+ * (see the comment on fallbackLng there), and either way the string an
+ * English-locale operator reads for a missing key is Chinese.
+ *
+ * The cases below are what catch that class. The first three were red when
+ * this file was written — 128 unresolvable keys, 15 escaped strings, 88
+ * untranslated toasts — and each one added since closed a spelling those three
+ * cannot see: an interpolated template literal, Chinese written straight into
+ * markup, a dotted console.* key missing from one bundle (in either
+ * direction), and a key that arrives through a variable rather than a literal.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,6 +44,8 @@ import { describe, it, expect } from 'vitest';
 
 import en from './locales/en.json';
 import zh from './locales/zh.json';
+import { DATE_RANGE_PRESETS } from '../constants/console.constants';
+import { ERROR_MESSAGES } from '../constants/playground.constants';
 
 const SRC = path.resolve(process.cwd(), 'src');
 const HAN = /[一-鿿]/;
@@ -71,20 +81,81 @@ const CLEANED = new Map(
   FILES.map((f) => [f, stripComments(fs.readFileSync(f, 'utf8'))]),
 );
 
-// t('…') / i18next.t('…'), first argument only, allowed to sit on its own line.
+// t('…') / i18next.t('…') / tr('…'), first argument only, allowed to sit on
+// its own line.
 // The body may contain the OTHER quote character — several keys embed a quoted
 // name, e.g. t('确定要删除供应商 "{{name}}" 吗？') — so the class excludes only
 // the delimiter itself. Excluding both quotes truncates such a key mid-string
 // and then reports the call as untranslated.
-const T_CALL = /\bt\(\s*(['"])((?:(?!\1)[^\\]|\\.)*?)\1/gs;
+//
+// Two axes, and this covers one of them.
+//
+// The NAME axis is closed: collecting every `useTranslation(` call site under
+// src and grouping the destructuring forms yields two bindings for the
+// translate function — a plain `{ t }` (with or without i18n alongside) and
+// `{ t: tr }`. Nothing binds a third name. The rename is the v2 console's:
+// measured on this branch, 46 `{ t: tr }` sites across 29 files, every one of
+// them under pages/v2 or components/hifi, where `t` is already taken by a
+// token loop variable. Scanning for `t(` alone left those 46 sites unaudited,
+// and two of their keys were in fact missing from en.json.
+//
+// The ARGUMENT axis is NOT closed by this regex: it reads a literal first
+// argument and nothing else, so `t(preset.text)` — a key arriving through a
+// variable — is invisible to it, whatever the binding is called. Five Chinese
+// quick-range labels and six playground error messages reached the English
+// console that way. The two cases named 'every t() call whose key arrives
+// through a variable is accounted for' and 'every key table handed to t()
+// through a variable resolves in en.json' are what hold that axis.
+const T_CALL = /\b(?:tr|t)\(\s*(['"])((?:(?!\1)[^\\]|\\.)*?)\1/gs;
 // Backticks included: a template literal is just as visible on screen as a
 // quoted one, and four notifiers were built that way.
 const LITERAL = /(['"`])((?:[^\\]|\\.)*?)\1/gs;
 
-// t(`…`). A template literal handed to t() becomes its own key after
+// t(`…`) / tr(`…`). A template literal handed to t() becomes its own key after
 // interpolation — '成功删除 3 个模型' — which no bundle can contain, so the call
 // renders Chinese in every locale while looking translated. Five existed.
-const T_TEMPLATE = /\bt\(\s*`((?:[^`\\]|\\.)*)`/gs;
+const T_TEMPLATE = /\b(?:tr|t)\(\s*`((?:[^`\\]|\\.)*)`/gs;
+
+const T_OPEN = /\b(?:tr|t)\(/g;
+
+/**
+ * The first argument of every t() / tr() call, as source text.
+ *
+ * Read by scanning to the matching delimiter rather than by a regex for one
+ * expression shape: a member expression, an index, a call and a ternary are
+ * all keys arriving through a variable, and a pattern written for identifiers
+ * would quietly miss the other three. Quotes and nesting are respected so that
+ * t(foo('a,b')) yields one argument, not two.
+ */
+function firstArguments(src) {
+  const args = [];
+  T_OPEN.lastIndex = 0;
+  let m;
+  while ((m = T_OPEN.exec(src))) {
+    const open = m.index + m[0].length;
+    let depth = 0;
+    let quote = null;
+    let i = open;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (quote) {
+        if (c === '\\') i++;
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') quote = c;
+      else if (c === '(' || c === '[' || c === '{') depth++;
+      else if (c === ')' || c === ']' || c === '}') {
+        if (depth === 0) break;
+        depth--;
+      } else if (c === ',' && depth === 0) break;
+    }
+    args.push({ start: open, text: src.slice(open, i).trim() });
+  }
+  return args;
+}
+
+const isLiteralArgument = (text) => /^['"`]/.test(text);
 
 /**
  * Blank out the key of every t() call, keeping length so offsets still map to
@@ -137,6 +208,46 @@ const resolves = (bundle, key) =>
     Object.prototype.hasOwnProperty.call(bundle, key + s),
   );
 
+/**
+ * Every leaf key of a bundle, in the dotted form a t() call would use.
+ *
+ * Both spellings collapse to the same string on purpose: the bundles hold
+ * "setting.group.general" as one flat key containing dots, and console.* as a
+ * nested object, and i18next reads either — ignoreJSONStructure defaults to
+ * true, so a lookup that misses the nested path falls back to a deep find of
+ * the flat key (verified against the installed engine: t('setting.group.
+ * general') is 'General' in en and '通用' in zh).
+ */
+function dottedKeys(obj, prefix = '', out = []) {
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    const p = prefix ? `${prefix}.${k}` : k;
+    if (v && typeof v === 'object') dottedKeys(v, p, out);
+    else out.push(p);
+  }
+  return out;
+}
+
+const consoleKeys = (bundle) =>
+  dottedKeys(bundle.translation).filter((k) => k.startsWith('console.'));
+
+// Checked the way i18next resolves it: the nested path first, then the flat
+// key. Checking only one spelling would report a key as missing while the
+// screen shows it translated.
+const resolvesDotted = (bundle, key) => {
+  const nested = key
+    .split('.')
+    .reduce(
+      (node, part) =>
+        node && typeof node === 'object' ? node[part] : undefined,
+      bundle.translation,
+    );
+  return (
+    nested !== undefined ||
+    Object.prototype.hasOwnProperty.call(bundle.translation, key)
+  );
+};
+
 const NOTIFIER_OPEN =
   /\b(?:showSuccess|showError|showWarning|showInfo|showNotice|setError|setErrMsg|Notification\.(?:error|success|warning|info)|Toast\.(?:error|success|warning|info)|Modal\.(?:error|warning|info|confirm))\s*\(/g;
 
@@ -175,12 +286,142 @@ function notifierSpans(src) {
 
 /*
  * The language picker names each language in its own language: 中文 stays 中文
- * for a French operator, exactly as Français stays Français for a Chinese one.
- * These are the only Chinese strings in the markup that are correct as they
- * stand, so they are exempted by VALUE — Chinese appearing anywhere else, in
- * this file included, still fails.
+ * for an English operator, exactly as English stays English for a Chinese one.
+ * That is Chinese in the markup which is correct as it stands, so it is
+ * exempted by VALUE — Chinese appearing anywhere else, in this file included,
+ * still fails.
+ *
+ * 日本語 sat here too while the picker offered ja. The picker offers the
+ * languages i18n.js registers and ja is not one of them, so the exemption is
+ * gone: `grep -rn 日本語 src --include=*.jsx --include=*.js` outside .test.
+ * files returns nothing to exempt, and 日本語 appearing in markup from here on
+ * fails like any other Chinese string — which is the honest state for a
+ * language this build does not ship.
+ *
+ * The one production site that carried it was
+ * components/table/models/modals/SyncWizardModal.jsx:121 (a radio offering
+ * ja), and that whole orphan directory was deleted earlier on this branch. If
+ * it ever comes back, it comes back offering a language the build does not
+ * ship, and this case is the thing that says so.
  */
-const LANGUAGE_ENDONYMS = new Set(['中文', '日本語']);
+const LANGUAGE_ENDONYMS = new Set(['中文']);
+
+/*
+ * Every t() / tr() call in src whose first argument is not a literal, keyed by
+ * file and by the expression as written, with the number of times that exact
+ * expression appears in that file. Enumerated by the case below, which fails
+ * on a new one and on a stale one alike.
+ *
+ * The reason has to say where the key text comes from and why it resolves,
+ * because no scan in this file can follow a variable. Where the keys are a
+ * table, the case after it reads the table.
+ */
+const NON_LITERAL_T_CALLS = {
+  'src/components/hifi/HFShell.jsx  s.hKey': {
+    count: 1,
+    reason:
+      'console.nav.section_* from the v2 nav model, called as t(s.hKey, s.h): the second argument is the English heading, so a key no bundle holds degrades to English rather than to an identifier. All 33 console.nav.* keys resolve in en.json today.',
+  },
+  'src/components/hifi/HFShell.jsx  it.key': {
+    count: 1,
+    reason:
+      'console.nav.* item key, called as t(it.key, it.label) — English default, same family as s.hKey.',
+  },
+  'src/components/hifi/HFShell.jsx  it.titleKey': {
+    count: 1,
+    reason:
+      "console.nav.* tooltip for a deferred entry, called as t(it.titleKey, it.title || 'not available in v2 yet') — English default.",
+  },
+  "src/components/settings/SecuritySettingPage.jsx  domainFilterMode ? '域名白名单' : '域名黑名单'":
+    {
+      count: 1,
+      reason:
+        'Ternary over two Chinese literals; both branches are checked by the literal scan in the case below, which walks string literals inside non-literal arguments. Both resolve in en.json.',
+    },
+  "src/components/settings/SecuritySettingPage.jsx  ipFilterMode ? 'IP白名单' : 'IP黑名单'":
+    {
+      count: 1,
+      reason:
+        'Ternary over two Chinese literals; both branches resolve in en.json and are checked by the case below.',
+    },
+  "src/components/settings/SystemSetting.jsx  domainFilterMode ? '域名白名单' : '域名黑名单'":
+    {
+      count: 1,
+      reason:
+        'Same ternary as SecuritySettingPage.jsx — this file is the older settings shell that still carries it. Both branches resolve in en.json and are checked by the case below.',
+    },
+  "src/components/settings/SystemSetting.jsx  ipFilterMode ? 'IP白名单' : 'IP黑名单'":
+    {
+      count: 1,
+      reason:
+        'Same ternary as SecuritySettingPage.jsx. Both branches resolve in en.json and are checked by the case below.',
+    },
+  'src/components/setup/components/steps/UsageModeStep.jsx  key': {
+    count: 1,
+    reason:
+      'The 11 mode_feat_* keys declared in MODE_FEATURES in that same file; every one of them resolves in en.json (measured).',
+  },
+  'src/components/table/mj-logs/MjLogsFilters.jsx  preset.text': {
+    count: 1,
+    reason:
+      'DATE_RANGE_PRESETS from constants/console.constants.js — read by the table case below, which is what made the five Chinese quick-range labels red.',
+  },
+  'src/components/table/task-logs/TaskLogsFilters.jsx  preset.text': {
+    count: 1,
+    reason: 'DATE_RANGE_PRESETS, same as MjLogsFilters.jsx.',
+  },
+  "src/components/table/users/modals/EditUserModal.jsx  isEdit ? '编辑' : '新建'":
+    {
+      count: 1,
+      reason:
+        'Ternary over two Chinese literals, both in en.json, both checked by the case below.',
+    },
+  "src/helpers/render.jsx  parts.join(' * ')": {
+    count: 1,
+    reason:
+      "A composite of parts that were each translated by their own i18next.t() before the join, plus the non-Chinese '{{ratioType}}: {{groupRatio}}'. The joined string is a key no bundle holds, so i18next returns it and interpolates it (verified against the installed engine), which is why the ratio tooltip reads in the operator's language even though this call never resolves.",
+  },
+  'src/hooks/playground/useDataLoader.js  message': {
+    count: 2,
+    reason:
+      'The server-supplied message field of a failed /api/user/models or /api/user/groups response. The gateway answers in Chinese and t() is a pass-through for it; giving server errors an error_code plus Accept-Language negotiation is plan section 7, next cycle. Not a key this repo can add to en.json.',
+  },
+  'src/hooks/playground/useMessageActions.jsx  ERROR_MESSAGES.NO_TEXT_CONTENT':
+    {
+      count: 1,
+      reason:
+        'ERROR_MESSAGES from constants/playground.constants.js — read by the table case below; six of its eight values were missing from en.json.',
+    },
+  'src/hooks/playground/useMessageActions.jsx  ERROR_MESSAGES.COPY_FAILED': {
+    count: 1,
+    reason: 'ERROR_MESSAGES, same table.',
+  },
+  'src/hooks/playground/useMessageActions.jsx  ERROR_MESSAGES.COPY_HTTPS_REQUIRED':
+    {
+      count: 1,
+      reason: 'ERROR_MESSAGES, same table.',
+    },
+  'src/hooks/playground/useMessageActions.jsx  ERROR_MESSAGES.BROWSER_NOT_SUPPORTED':
+    {
+      count: 1,
+      reason: 'ERROR_MESSAGES, same table.',
+    },
+  'src/pages/Setting/SettingsSidebar.jsx  group.labelKey': {
+    count: 2,
+    reason:
+      "setting.group.* from the GROUPS table in that same file. They are flat keys in the bundles — \"setting.group.general\" is one key containing dots, not a nested object — and resolve because ignoreJSONStructure defaults to true (verified: t('setting.group.general') is 'General' in en and '通用' in zh).",
+  },
+  'src/pages/Setting/SettingsSidebar.jsx  item.labelKey': {
+    count: 2,
+    reason:
+      'setting.nav.* from the same GROUPS table; flat keys, all 11 resolve in both bundles.',
+  },
+  'src/pages/v2/CommandPalette/index.jsx  it.key': {
+    count: 1,
+    reason:
+      'console.nav.* again, called as tr(it.key, it.label) with the English label as the default.',
+  },
+};
 
 describe('i18n integrity', () => {
   it('every Chinese t() key in the source resolves in en.json', () => {
@@ -289,6 +530,97 @@ describe('i18n integrity', () => {
   });
 
   /*
+   * The argument axis.
+   *
+   * Every scan above reads a literal first argument. A key that arrives
+   * through a variable — t(preset.text) — is invisible to all of them, and
+   * that is not a hypothetical: five quick-range labels (今天 / 近 7 天 / 本周 /
+   * 近 30 天 / 本月, constants/console.constants.js) reached /console/task and
+   * /console/midjourney in Chinese for an English operator, and six of the
+   * eight constants/playground.constants.js ERROR_MESSAGES did the same in the
+   * playground. Neither family was ever red.
+   *
+   * So the sites are enumerated instead, with a reason each. The comparison is
+   * an equality: a new t(<variable>) call fails until it is listed and its key
+   * source is audited, and a site that goes away fails too rather than leaving
+   * a stale exemption behind. The second case does the part a list cannot —
+   * it reads the two key tables and checks the keys themselves.
+   */
+  it('every t() call whose key arrives through a variable is accounted for', () => {
+    const found = new Map();
+    for (const [file, src] of CLEANED) {
+      for (const arg of firstArguments(src)) {
+        if (!arg.text || isLiteralArgument(arg.text)) continue;
+        const site = `${rel(file)}  ${arg.text}`;
+        found.set(site, (found.get(site) || 0) + 1);
+      }
+    }
+    const measured = [...found].map(([site, n]) => `${site} x${n}`).sort();
+    const declared = Object.entries(NON_LITERAL_T_CALLS)
+      .map(([site, { count }]) => `${site} x${count}`)
+      .sort();
+    expect(
+      Object.entries(NON_LITERAL_T_CALLS)
+        .filter(([, v]) => !v.reason || v.reason.length < 20)
+        .map(([site]) => site),
+      'every exemption carries a reason',
+    ).toEqual([]);
+    expect(
+      measured,
+      `t(<variable>) hands i18next a key no scan in this file can read, so ` +
+        `each site is listed in NON_LITERAL_T_CALLS with the reason its keys ` +
+        `resolve. A site listed here and not measured means the list went ` +
+        `stale; a site measured and not listed is new and unaudited — follow ` +
+        `the key back to where the strings are written and make sure en.json ` +
+        `carries every one of them (that is what the next case checks for the ` +
+        `two constant tables).`,
+    ).toEqual(declared);
+  });
+
+  it('every key table handed to t() through a variable resolves in en.json', () => {
+    // The tables the sites above read. Values are keys, so a value carrying
+    // Han that en.json does not hold is Chinese on an English screen; the
+    // English-only members (playground's API_REQUEST_ERROR family aside) are
+    // covered by the same check because it is keyed on the Han test.
+    const tables = {
+      'constants/console.constants.js DATE_RANGE_PRESETS':
+        DATE_RANGE_PRESETS.map((p) => p.text),
+      'constants/playground.constants.js ERROR_MESSAGES':
+        Object.values(ERROR_MESSAGES),
+    };
+    const missing = [];
+    for (const [table, keys] of Object.entries(tables))
+      for (const key of keys)
+        if (HAN.test(key) && !resolves(en.translation, key))
+          missing.push(`${table}  ${key}`);
+
+    // Literals written INSIDE a non-literal argument are keys too —
+    // t(isEdit ? '编辑' : '新建') is five such sites — and the scan at the top
+    // of this file skips the whole call, because the first character after the
+    // parenthesis is not a quote.
+    for (const [file, src] of CLEANED)
+      for (const arg of firstArguments(src)) {
+        if (!arg.text || isLiteralArgument(arg.text)) continue;
+        LITERAL.lastIndex = 0;
+        let m;
+        while ((m = LITERAL.exec(arg.text))) {
+          const key = unescapeLiteral(m[2]);
+          if (!HAN.test(key) || resolves(en.translation, key)) continue;
+          const line = src.slice(0, arg.start).split('\n').length;
+          missing.push(`${rel(file)}:${line}  ${key}`);
+        }
+      }
+
+    expect(
+      missing,
+      `These are rendered as t(<value>) and the value is the key, so an ` +
+        `English-locale operator reads the Chinese. Add each to ` +
+        `src/i18n/locales/en.json:\n  ` +
+        missing.join('\n  '),
+    ).toEqual([]);
+  });
+
+  /*
    * Chinese written straight into markup — JSX text, or a label / placeholder /
    * title prop — never reaches t() at all, so no locale can fix it. This was a
    * ratchet at 71 while whole surfaces were still built that way;
@@ -328,62 +660,58 @@ describe('i18n integrity', () => {
    * (t('console.playground.no_models', 'no models available')), because the
    * key itself carries no Han characters to trigger the check. For that
    * family, an English key silently missing while zh.json still carries it
-   * would fall back through fallbackLng: 'zh' and show Chinese on the
-   * English console with no red test anywhere. This closes that gap for the
-   * `console.*` namespace specifically (0 violations on HEAD).
+   * puts the raw identifier — `console.playground.no_models` — on the English
+   * console, or the Chinese string when the call passes no default, with no
+   * red test anywhere. This closes that gap for the `console.*` namespace
+   * specifically (0 violations on HEAD).
    */
   it('every console.* key present in zh.json also resolves in en.json', () => {
-    const flatten = (obj, prefix, out) => {
-      for (const k of Object.keys(obj)) {
-        const v = obj[k];
-        const p = prefix ? `${prefix}.${k}` : k;
-        if (v && typeof v === 'object') flatten(v, p, out);
-        else out.push(p);
-      }
-    };
-    const zhKeys = [];
-    flatten(zh.translation, '', zhKeys);
-    const resolvesNested = (root, dottedKey) =>
-      dottedKey
-        .split('.')
-        .reduce(
-          (node, part) =>
-            node && typeof node === 'object' ? node[part] : undefined,
-          root,
-        ) !== undefined;
-    const missing = zhKeys.filter(
-      (k) => k.startsWith('console.') && !resolvesNested(en.translation, k),
-    );
+    const missing = consoleKeys(zh).filter((k) => !resolvesDotted(en, k));
     expect(
       missing,
-      `These console.* keys exist in zh.json but not en.json. Under ` +
-        `fallbackLng: 'zh' an English-locale operator sees Chinese for each:\n  ` +
+      `These console.* keys exist in zh.json but not en.json. An ` +
+        `English-locale operator reads the identifier, or the Chinese, for ` +
+        `each:\n  ` +
         missing.join('\n  '),
     ).toEqual([]);
   });
 
   /*
-   * fr / ja / ru / vi are upstream leftovers, already ~600 keys behind the
-   * union of all locales. Bringing them to parity is not what makes the
-   * console launchable — en is the fallback every non-Chinese operator
-   * actually lands on — but they must not slide further. This is a ratchet,
-   * not a target: lower the number when a locale improves, never raise it.
+   * And the other direction, which has no fallback to soften it.
+   *
+   * zh is a terminal locale: fallbackLng gives it an empty list, so a
+   * console.* key that only en.json carries renders its own identifier —
+   * console.settings.session_registry_disabled — to a Chinese operator. That
+   * is deliberate (a Chinese-source key IS its own Chinese string, and a
+   * blanket zh -> en fallback would answer 265 of those lookups in English),
+   * and it is exactly why the dotted family needs the symmetric gate: for it,
+   * key-as-value is never a readable string.
+   *
+   * 0 violations today, which is when the assertion is cheap — the surface is
+   * one key away from growing every time a lane adds console.* copy.
    */
-  it.each([
-    ['fr', 221],
-    ['ja', 221],
-    ['ru', 221],
-    ['vi', 217],
-  ])('%s carries no more than %i untranslated keys', async (lng, ceiling) => {
-    const bundle = (await import(`./locales/${lng}.json`)).default.translation;
-    const keys = new Set();
-    for (const src of CLEANED.values()) {
-      let m;
-      T_CALL.lastIndex = 0;
-      while ((m = T_CALL.exec(src)))
-        if (HAN.test(m[2])) keys.add(unescapeLiteral(m[2]));
-    }
-    const missing = [...keys].filter((k) => !resolves(bundle, k));
-    expect(missing.length).toBeLessThanOrEqual(ceiling);
+  it('every console.* key present in en.json also resolves in zh.json', () => {
+    const missing = consoleKeys(en).filter((k) => !resolvesDotted(zh, k));
+    expect(
+      missing,
+      `zh has no fallback, so these render as the raw identifier for a ` +
+        `Chinese operator. Add each to src/i18n/locales/zh.json:\n  ` +
+        missing.join('\n  '),
+    ).toEqual([]);
   });
+
+  /*
+   * What used to be here: a per-locale ceiling on untranslated keys for
+   * fr / ja / ru / vi (221 / 221 / 221 / 217), ratcheting four bundles that
+   * i18n.js registered.
+   *
+   * i18n.js no longer registers them, so those numbers measured files no
+   * browser could reach — a ratchet on a shelf. Which languages ship, and the
+   * ratio each shipped bundle has to clear, is one question and it now has one
+   * owner: locale-coverage.test.js. Re-registering fr there without finishing
+   * the translation is what turns red, which is the condition this ceiling was
+   * standing in for.
+   *
+   * The files themselves stay in the tree; the same test pins that too.
+   */
 });

@@ -18,8 +18,9 @@ import (
 
 // AsyncGo is package handler's own fire-and-forget spawn seam, same
 // convention as repo.AsyncGo (internal/adapter/repo/async.go) and
-// app.AsyncGo (internal/app/quota.go). SyncAllChannelsNow below is currently
-// the sole call site (grep AsyncGo( under this package): its bare `go
+// app.AsyncGo (internal/app/quota.go). SyncAllChannelsNow below was the first
+// call site; since cycle 12 every fire-and-forget spawn in this package goes
+// through it (async_seam_structural_test.go enumerates them). Its bare `go
 // syncAllChannelModels(...)` outlived whichever test's TestMain swapped
 // repo.DB to a fresh *gorm.DB and back — the check inside
 // syncAllChannelModels ("if repo.DB == nil") passes at call time but the
@@ -45,7 +46,7 @@ func GetAllModelsMeta(c *gin.Context) {
 		return
 	}
 	// 批量填充附加字段，提升列表接口性能
-	enrichModels(modelsMeta)
+	enrichModels(modelsMeta, modelScopeForCaller(c))
 	var total int64
 	repo.DB.Model(&repo.Model{}).Count(&total)
 
@@ -76,7 +77,7 @@ func SearchModelsMeta(c *gin.Context) {
 		return
 	}
 	// 批量填充附加字段，提升列表接口性能
-	enrichModels(modelsMeta)
+	enrichModels(modelsMeta, modelScopeForCaller(c))
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(modelsMeta)
 	common.ApiSuccess(c, pageInfo)
@@ -95,7 +96,7 @@ func GetModelMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	enrichModels([]*repo.Model{&m})
+	enrichModels([]*repo.Model{&m}, modelScopeForCaller(c))
 	common.ApiSuccess(c, &m)
 }
 
@@ -182,7 +183,15 @@ func DeleteModelMeta(c *gin.Context) {
 	common.ApiSuccess(c, nil)
 }
 
-// GetModelsPricingInfo returns pricing source info for all models in the models table.
+// GetModelsPricingInfo returns pricing source info for the models table rows.
+//
+// A non-root caller does not get the rows that only ANOTHER tenant's channels
+// serve: the models table is written by the channel model-sync worker
+// (model_sync_worker.go) as well as by the operator, so a tenant's private
+// fine-tune id can land in it, and this endpoint used to echo every name back
+// to every tenant admin. A row no enabled channel serves at all is platform
+// metadata, not a tenant's, and stays — dropping it would empty this page for
+// a tenant with no channels of its own.
 func GetModelsPricingInfo(c *gin.Context) {
 	var models []repo.Model
 	if err := repo.DB.Find(&models).Error; err != nil {
@@ -199,8 +208,22 @@ func GetModelsPricingInfo(c *gin.Context) {
 		Markup    float64 `json:"markup,omitempty"`
 	}
 
+	scope := modelScopeForCaller(c)
+	var visible, routedByAnyone map[string]struct{}
+	if !scope.isRoot {
+		visible = pricingModelNameSet(scope.catalogue())
+		routedByAnyone = pricingModelNameSet(repo.GetPricing())
+	}
+
 	result := make([]pricingInfo, 0, len(models))
 	for _, m := range models {
+		if !scope.isRoot {
+			if _, routed := routedByAnyone[m.ModelName]; routed {
+				if _, ok := visible[m.ModelName]; !ok {
+					continue
+				}
+			}
+		}
 		ps := ratio_setting.GetModelPricingSource(m.ModelName)
 		result = append(result, pricingInfo{
 			ModelName: m.ModelName,
@@ -215,6 +238,15 @@ func GetModelsPricingInfo(c *gin.Context) {
 	common.ApiSuccess(c, result)
 }
 
+// pricingModelNameSet indexes a catalogue by model name.
+func pricingModelNameSet(catalogue []repo.Pricing) map[string]struct{} {
+	set := make(map[string]struct{}, len(catalogue))
+	for _, p := range catalogue {
+		set[p.ModelName] = struct{}{}
+	}
+	return set
+}
+
 // SyncAllChannelsNow triggers an immediate model sync for all enabled channels.
 // Runs asynchronously so the HTTP response returns immediately.
 func SyncAllChannelsNow(c *gin.Context) {
@@ -222,8 +254,64 @@ func SyncAllChannelsNow(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{"message": "channel model sync started"})
 }
 
+// modelCatalogueScope is the "which channels may this caller see" decision for
+// the model-meta read handlers, taken once per request by
+// modelScopeForCaller. For the list pages (/api/models/, /search, /:id) the
+// models table itself is the platform's global catalogue and is not narrowed;
+// what is narrowed is the per-row data enrichModels attaches from the
+// channels/abilities tables — bound_channels (channel names, i.e. customer
+// names) and enable_groups (group names configured for one tenant's
+// channels). GetModelsPricingInfo, the third handler that takes this scope,
+// additionally drops the rows only another tenant's channels serve.
+type modelCatalogueScope struct {
+	tenantID string
+	isRoot   bool
+}
+
+// modelScopeForCaller reuses the v1 discovery scope rule (channel.go) so
+// /api/models/* and /api/channel/models_enabled answer the same caller from
+// the same set of channels — including the blank-tenant fail-closed fallback.
+func modelScopeForCaller(c *gin.Context) modelCatalogueScope {
+	tenantID, isRoot := tenantScopeForDiscovery(c)
+	return modelCatalogueScope{tenantID: tenantID, isRoot: isRoot}
+}
+
+// boundChannels answers the channel-name lookup under this scope.
+func (s modelCatalogueScope) boundChannels(modelNames []string) map[string][]repo.BoundChannel {
+	if s.isRoot {
+		m, _ := repo.GetBoundChannelsByModelsMap(modelNames)
+		return m
+	}
+	m, _ := repo.GetBoundChannelsByModelsMapForTenant(modelNames, s.tenantID)
+	return m
+}
+
+// catalogue answers the pricing catalogue under this scope: the global one
+// for root, the shared ∪ own projection for a tenant caller.
+func (s modelCatalogueScope) catalogue() []repo.Pricing {
+	if s.isRoot {
+		return repo.GetPricing()
+	}
+	return repo.GetPricingForTenant(s.tenantID)
+}
+
+// enableGroupsByModel indexes the scoped catalogue's enable_groups by model
+// name. nil for root, whose exact-match path keeps calling
+// repo.GetModelEnableGroups unchanged.
+func (s modelCatalogueScope) enableGroupsByModel() map[string][]string {
+	if s.isRoot {
+		return nil
+	}
+	visible := s.catalogue()
+	byModel := make(map[string][]string, len(visible))
+	for _, p := range visible {
+		byModel[p.ModelName] = p.EnableGroup
+	}
+	return byModel
+}
+
 // enrichModels 批量填充附加信息：端点、渠道、分组、计费类型，避免 N+1 查询
-func enrichModels(models []*repo.Model) {
+func enrichModels(models []*repo.Model, scope modelCatalogueScope) {
 	if len(models) == 0 {
 		return
 	}
@@ -244,8 +332,9 @@ func enrichModels(models []*repo.Model) {
 		}
 	}
 
-	// 2) 批量查询精确模型的绑定渠道
-	channelsByModel, _ := repo.GetBoundChannelsByModelsMap(exactNames)
+	// 2) 批量查询精确模型的绑定渠道（按调用者可见的渠道集合）
+	channelsByModel := scope.boundChannels(exactNames)
+	scopedGroups := scope.enableGroupsByModel()
 
 	// 3) 精确模型：端点从缓存、渠道批量映射、分组/计费类型从缓存
 	for name, indices := range exactIdx {
@@ -259,7 +348,15 @@ func enrichModels(models []*repo.Model) {
 				}
 			}
 			mm.BoundChannels = chs
-			mm.EnableGroups = repo.GetModelEnableGroups(mm.ModelName)
+			if scopedGroups == nil {
+				mm.EnableGroups = repo.GetModelEnableGroups(mm.ModelName)
+			} else if groups, ok := scopedGroups[mm.ModelName]; ok {
+				mm.EnableGroups = groups
+			} else {
+				// Same empty-slice shape repo.GetModelEnableGroups returns for
+				// an unknown model, so the JSON stays [] and never null.
+				mm.EnableGroups = make([]string, 0)
+			}
 			mm.QuotaTypes = repo.GetModelQuotaTypes(mm.ModelName)
 		}
 	}
@@ -268,8 +365,9 @@ func enrichModels(models []*repo.Model) {
 		return
 	}
 
-	// 4) 一次性读取定价缓存，内存匹配所有规则模型
-	pricings := repo.GetPricing()
+	// 4) 一次性读取定价缓存，内存匹配所有规则模型（同样按调用者可见的渠道集合，
+	// 否则一条 prefix 规则会把别的租户的模型名当成自己的 matched_models 回显）
+	pricings := scope.catalogue()
 
 	// 为全部规则模型收集匹配名集合、端点并集、分组并集、配额集合
 	matchedNamesByIdx := make(map[int][]string)
@@ -332,7 +430,7 @@ func enrichModels(models []*repo.Model) {
 	for n := range allMatchedSet {
 		allMatched = append(allMatched, n)
 	}
-	matchedChannelsByModel, _ := repo.GetBoundChannelsByModelsMap(allMatched)
+	matchedChannelsByModel := scope.boundChannels(allMatched)
 
 	// 6) 回填每个规则模型的并集信息
 	for _, idx := range ruleIndices {

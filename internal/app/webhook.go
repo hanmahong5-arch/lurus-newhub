@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -31,8 +32,32 @@ func generateSignature(secret string, payload []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// SendWebhookNotify 发送 webhook 通知
+// webhookSendBudget is the wall-clock ceiling for one outbound webhook
+// delivery. The endpoint belongs to the customer, the shared relay client has
+// no Timeout of its own when RELAY_TIMEOUT is unset (the deployed default), and
+// the only bound upstream of here was the shared transport's
+// ResponseHeaderTimeout (90s), which says nothing about a body that trickles. A var, not a const, so tests
+// can shorten it (webhook_timeout_test.go); nothing in production writes it.
+var webhookSendBudget = 10 * time.Second
+
+// SendWebhookNotify 发送 webhook 通知。Uses the package budget; callers that
+// already hold a request or task context should use SendWebhookNotifyWithContext
+// so an abandoned caller stops paying for the delivery.
 func SendWebhookNotify(webhookURL string, secret string, data dto.Notify) error {
+	return SendWebhookNotifyWithContext(context.Background(), webhookURL, secret, data)
+}
+
+// SendWebhookNotifyWithContext is SendWebhookNotify bounded by ctx. The effective
+// deadline is the earlier of ctx and webhookSendBudget.
+//
+// The worker branch below is NOT bounded here: DoWorkerRequest
+// (internal/app/download.go:24) posts through GetHttpClient().Post, which takes
+// no context, and that file is outside this change. Only the direct branch —
+// the one a deployment without WorkerUrl uses — carries the deadline.
+func SendWebhookNotifyWithContext(ctx context.Context, webhookURL string, secret string, data dto.Notify) error {
+	ctx, cancel := context.WithTimeout(ctx, webhookSendBudget)
+	defer cancel()
+
 	// 处理占位符
 	content := data.Content
 	for _, value := range data.Values {
@@ -89,12 +114,12 @@ func SendWebhookNotify(webhookURL string, secret string, data dto.Notify) error 
 		}
 	} else {
 		// SSRF防护：验证Webhook URL（非Worker模式）
-		fetchSetting := system_setting.GetFetchSetting()
+		fetchSetting := system_setting.GetFetchSettingSnapshot()
 		if err := common.ValidateURLWithFetchSetting(webhookURL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 			return fmt.Errorf("request reject: %v", err)
 		}
 
-		req, err = http.NewRequest(http.MethodPost, webhookURL, bytes.NewBuffer(payloadBytes))
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewBuffer(payloadBytes))
 		if err != nil {
 			return fmt.Errorf("failed to create webhook request: %v", err)
 		}

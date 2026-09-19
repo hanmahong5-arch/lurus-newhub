@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
@@ -16,9 +17,11 @@ import (
 // Route: GET /api/v2/switch/pricing (no auth — public, cacheable).
 //
 // It mirrors GetPricingV2's field whitelist (no admin-only usable_group /
-// auto_groups) but drops the per-tenant requirement (this is one public
-// catalogue) and ADDS two fields so the client can derive USD-per-token
-// faithfully instead of guessing:
+// auto_groups) but takes no tenant slug: it is one public catalogue, and the
+// catalogue it publishes is the platform-shared one (channels whose tenant_id
+// is "default" or empty — repo.GetPricingForTenant("")), not the union of
+// every tenant's models. It ADDS two fields so the client can derive
+// USD-per-token faithfully instead of guessing:
 //
 //	completion_ratio — scales output rate off model_ratio
 //	quota_per_unit   — the quota↔USD scale (newapi default 500000 quota = $1)
@@ -30,7 +33,10 @@ import (
 //
 // Read-only; no DB migration.
 func GetSwitchPricing(c *gin.Context) {
-	rawPricing := repo.GetPricing()
+	// Public and unauthenticated: the platform-shared catalogue only. Passing
+	// "" here is what makes GetPricingForTenant drop every model that is only
+	// served by some tenant's own channels.
+	rawPricing := repo.GetPricingForTenant("")
 
 	type pricingItem struct {
 		ModelName              interface{} `json:"model_name"`
@@ -64,10 +70,16 @@ func GetSwitchPricing(c *gin.Context) {
 		})
 	}
 
-	// group_ratio scoped to all groups (public catalogue — no per-user
-	// narrowing, matching GetPricingV2).
+	// group_ratio narrowed to the groups an anonymous caller may actually
+	// use, the same narrowing v1 GetPricing applies (pricing.go). Publishing
+	// the raw map put every configured group name — including ones set up for
+	// a single tenant's channels — in an unauthenticated response.
+	usableGroup := app.GetUserUsableGroups("")
 	groupRatio := make(map[string]float64)
 	for k, v := range ratio_setting.GetGroupRatioCopy() {
+		if _, ok := usableGroup[k]; !ok {
+			continue
+		}
 		groupRatio[k] = v
 	}
 

@@ -92,6 +92,58 @@ SELECT pg_terminate_backend(<pid>);
   writer is registered, logged but not retried on failure) regardless of the flag, so turning it off does
   not reopen an invisible hole — it reopens an auditable one, same as before this flag existed. (While
   the flag is on, a refused attempt is also audited, as `auth.failed` with `reason:enrollment_required`.)
+  Note (cycle-12 L4): "locked out" above means *refused until that account enrols*, not stranded —
+  enrolment itself is not behind the step-up gate (`POST /api/user/totp/enroll` and `/confirm` carry
+  `UserAuth` + `CriticalRateLimit` only, `router/api-router.go:78-79`), so an operator who can still log
+  in can self-serve. Break-glass is for an operator who enrolled and then lost the factor.
+- **"Session registry is disabled on this deployment" (HTTP 409 `SESSION_REGISTRY_DISABLED`)**: the
+  per-device session endpoints refuse rather than pretend. Affected:
+  `DELETE /api/v2/admin/users/:id/sessions` (the compromised-account runbook step) and
+  `DELETE /api/v2/:tenant_slug/sessions/others` ("sign out other devices"). This is a configuration
+  state, not a fault — it means `SESSION_REGISTRY_ENABLED` is not `"true"` on the replica that answered.
+
+  Where the switch lives: it is a plain env var, read per call by
+  `repo.SessionRegistryEnabled()` (`internal/adapter/repo/user_session.go:48`, exact string `"true"`).
+  It is set in `deploy/k8s/r6-uat/deployment.yaml` (UAT: `"true"`, on since the cycle-7 soak) and is
+  **absent from `deploy/k8s/r6-stage/deployment.yaml`**, i.e. off in production as of 2026-09-19.
+  Turning it on in production is a manifest edit merged to `main` (ArgoCD reverts a live `kubectl set
+  env`), which is owner item O-session — not an in-incident action.
+
+  Until it is on: to terminate a compromised session in production, the working levers are the user's
+  own logout (`DELETE /api/v2/:tenant_slug/sessions/current`, which clears the cookie and deletes the
+  Redis session key regardless of this flag), disabling the user
+  (`PUT /api/user/` with `status`, which `authHelper` re-checks against the user cache on every
+  request), or deleting the store's session key directly in Redis
+  (`redis-cli -n 2 DEL session_<key>`; DB **2**, not 0).
+
+  Before cycle-12 L4 these two endpoints answered `200 {"revoked":0}` with the flag off — success
+  shaped, nothing done. If a past incident record says sessions were revoked on production, check
+  whether it was one of these calls.
+
+  The READ side answers the same configuration state rather than inventing one:
+  `GET /api/v2/:tenant_slug/sessions` returns `{"items":[],"total":0,"registry_enabled":false}` with
+  the flag off (cycle-12 L4; it used to return one synthetic row — id `current`, `last_seen` = now —
+  for every caller, so a user signed in from five browsers was shown exactly one device). The console's
+  Security panel reads `registry_enabled` and says the feature is not enabled on this deployment.
+  **Do not read an empty session list on production as "this account has no live sessions"** — with the
+  flag off the list says nothing at all about how many devices hold a valid cookie. The `users` +
+  Redis `session_*` keys are the only evidence in that state.
+- **"cross-site request refused" (HTTP 403 `CROSS_SITE_REQUEST`)**: `middleware.BrowserOriginGuard`
+  refused a cookie-authenticated, state-changing request that the browser itself reported as coming
+  from another site (`Sec-Fetch-Site: same-site|cross-site`), or whose `Origin` is absent from
+  `ALLOWED_ORIGINS`. Requests carrying `Authorization` or `X-API-Key`, and requests with no session
+  cookie, are never refused by it — so relay clients, service callers and `POST /api/v2/bridge/exchange`
+  cannot produce this.
+
+  If a legitimate integration is being refused, the lever is `CSRF_ORIGIN_GUARD_MODE`:
+  `enforce` (default, and what any unrecognised value means), `observe` (admit, count under
+  `lurus_gateway_csrf_observed_total{reason}`, log one line per reason per minute) or `off` (the guard
+  evaluates nothing). Read per request, so it takes effect on the next request — but it is still an env
+  var in the manifest, so changing it on production is a merged manifest edit, not a live `kubectl set
+  env` (ArgoCD selfHeal reverts that). `observe` is the diagnosis setting; the correct fix for a real
+  integration is a credential header, because a CORS allowlist entry does not make another site safe to
+  act with a victim's cookie. `lurus_gateway_csrf_rejected_total{reason}` counts only actual refusals —
+  it stays at 0 in observe and off.
 
 ## Escalation
 

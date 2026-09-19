@@ -28,6 +28,17 @@ import { API, showSuccess } from '../../../../helpers';
  * This is a curated, high-value SUBSET — NOT New-API's full 2000-key page. The
  * long tail (ratio JSON, advanced relay tuning) is honestly noted as managed in
  * v1 / advanced rather than half-surfaced here. Each write is one key per call.
+ *
+ * Cycle 12 L3: three ways this page used to state things it did not know.
+ *   - Any non-403 failure left `options` at {}, and an unchecked toggle reads
+ *     as "off" — a 502 drew password login, registration and every OAuth
+ *     provider as disabled. Those failures now render an error state, and a
+ *     401 renders a sign-in-again state rather than a permission one.
+ *   - A key the response omits is unknown, not false; those toggles render
+ *     indeterminate and labelled instead of unchecked.
+ *   - The same key absent from a text/number field rendered as an empty box,
+ *     which for QuotaForNewUser / QuotaForInviter / USDExchangeRate reads as
+ *     zero. Those fields carry the same marker and data-known.
  */
 
 // Field types: text | textarea | number | toggle. Each panel curates a subset.
@@ -200,15 +211,21 @@ const HFAdminSettings = () => {
   const [drafts, setDrafts] = useState({});
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
   const [panel, setPanel] = useState('general');
   const [savingKey, setSavingKey] = useState(null);
   const [errors, setErrors] = useState({}); // key → message
   const [stats, setStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  // null when the last GET succeeded; otherwise the backend message, or ''
+  // when there was none.
+  const [loadError, setLoadError] = useState(null);
 
   const fetchOptions = useCallback(async () => {
     setLoading(true);
     setForbidden(false);
+    setSignedOut(false);
+    setLoadError(null);
     try {
       const res = await API.get('/api/v2/admin/options', {
         skipErrorHandler: true,
@@ -220,9 +237,16 @@ const HFAdminSettings = () => {
         });
         setOptions(map);
         setDrafts(map);
+      } else {
+        setLoadError(res?.data?.message ?? '');
       }
     } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
+      const status = err?.response?.status;
+      // L4 split the two refusals apart: 403 means the role is short, 401
+      // means the session is gone and no permission grant fixes it.
+      if (status === 403) setForbidden(true);
+      else if (status === 401) setSignedOut(true);
+      else setLoadError(err?.response?.data?.message ?? '');
     } finally {
       setLoading(false);
     }
@@ -290,6 +314,10 @@ const HFAdminSettings = () => {
   );
 
   const isOn = (key) => options[key] === 'true';
+  // A key the GET did not return is UNKNOWN. `isOn` would report false for
+  // it, and an unchecked box reads as an operator decision to switch the
+  // feature off.
+  const isKnown = (key) => Object.prototype.hasOwnProperty.call(options, key);
   const dirty = (key) => (drafts[key] ?? '') !== (options[key] ?? '');
 
   const renderField = (f) => {
@@ -297,6 +325,7 @@ const HFAdminSettings = () => {
     const saving = savingKey === f.key;
 
     if (f.type === 'toggle') {
+      const known = isKnown(f.key);
       return (
         <div
           key={f.key}
@@ -314,6 +343,13 @@ const HFAdminSettings = () => {
             <input
               type='checkbox'
               data-testid={`toggle-${f.key}`}
+              // `indeterminate` is a DOM property, not an attribute, so React
+              // cannot set it from JSX — this ref is the only way to render
+              // the third state.
+              ref={(el) => {
+                if (el) el.indeterminate = !known;
+              }}
+              data-known={String(known)}
               checked={isOn(f.key)}
               disabled={saving}
               onChange={() => putOption(f.key, !isOn(f.key))}
@@ -321,6 +357,18 @@ const HFAdminSettings = () => {
             <span className='strong' style={{ fontSize: 13 }}>
               {tr(`console.admin.settings.${f.lk}`, f.lf)}
             </span>
+            {!known && (
+              <span
+                className='muted'
+                data-testid={`unknown-${f.key}`}
+                style={{ fontSize: 11 }}
+              >
+                {tr(
+                  'console.admin.settings.value_unknown',
+                  'not reported by the server',
+                )}
+              </span>
+            )}
           </label>
           {err && (
             <div
@@ -334,8 +382,17 @@ const HFAdminSettings = () => {
       );
     }
 
+    // Same honesty problem as the toggles, and sharper for the money-shaped
+    // keys: `value: drafts[f.key] ?? ''` renders an absent key as an empty
+    // box, which reads as "the operator cleared this" — and for
+    // QuotaForNewUser / QuotaForInviter / the USD exchange rate an empty box
+    // reads as zero. dirty() compares '' to '' so save stays disabled, but
+    // nothing on screen says the server never reported the key.
+    const known = isKnown(f.key);
+
     const commonProps = {
       'data-testid': `field-${f.key}`,
+      'data-known': String(known),
       style: inputStyle,
       value: drafts[f.key] ?? '',
       onChange: (e) =>
@@ -344,8 +401,23 @@ const HFAdminSettings = () => {
 
     return (
       <div key={f.key} style={{ marginBottom: 18 }}>
-        <div className='lbl' style={{ marginBottom: 5 }}>
-          {tr(`console.admin.settings.${f.lk}`, f.lf)}
+        <div
+          className='lbl'
+          style={{ marginBottom: 5, display: 'flex', gap: 8 }}
+        >
+          <span>{tr(`console.admin.settings.${f.lk}`, f.lf)}</span>
+          {!known && (
+            <span
+              className='muted'
+              data-testid={`unknown-${f.key}`}
+              style={{ fontSize: 11 }}
+            >
+              {tr(
+                'console.admin.settings.value_unknown',
+                'not reported by the server',
+              )}
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           {f.type === 'textarea' ? (
@@ -405,7 +477,17 @@ const HFAdminSettings = () => {
                   'console.admin.settings.forbidden_title',
                   'Admin access required',
                 )
-              : tr('console.admin.settings.title', 'System settings')}
+              : signedOut
+                ? tr(
+                    'console.admin.session_expired_title',
+                    'Your session has expired',
+                  )
+                : loadError !== null
+                  ? tr(
+                      'console.admin.settings.error_title',
+                      'Settings could not be read',
+                    )
+                  : tr('console.admin.settings.title', 'System settings')}
           </h1>
           <div className='sub'>
             {tr(
@@ -431,6 +513,67 @@ const HFAdminSettings = () => {
                 'You do not have permission to manage system settings. Contact a platform administrator.',
               )}
             </div>
+          </div>
+        </div>
+      ) : signedOut ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='settings-signed-out'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.session_expired_title',
+                'Your session has expired',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.session_expired_body',
+                'The server no longer recognises this session, so nothing on this page can be read. Sign in again to continue.',
+              )}
+            </div>
+            <a className='btn sm' href='/login' data-testid='settings-sign-in'>
+              {tr('console.admin.sign_in_again', 'sign in again')}
+            </a>
+          </div>
+        </div>
+      ) : loadError !== null ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='settings-error'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.settings.error_title',
+                'Settings could not be read',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.settings.error_body',
+                'The options endpoint did not answer, so none of these switches can be shown. An empty page here would have drawn every feature as disabled, which is not what the server said.',
+              )}
+            </div>
+            {loadError ? (
+              <div
+                className='mono muted'
+                style={{ fontSize: 11, marginBottom: 12 }}
+              >
+                {loadError}
+              </div>
+            ) : null}
+            <button
+              type='button'
+              className='btn sm'
+              data-testid='settings-retry'
+              onClick={fetchOptions}
+            >
+              {tr('console.admin.settings.retry', 'retry')}
+            </button>
           </div>
         </div>
       ) : (

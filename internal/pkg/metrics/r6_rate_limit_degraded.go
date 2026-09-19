@@ -50,7 +50,22 @@ import (
 //	                            channel-key-reveal/TOTP-disable bucket
 //	                            (CriticalRateLimit) are all unthrottled for
 //	                            the duration of the outage, same as every
-//	                            other bucket in this list.
+//	                            other bucket in this list. Cycle-12 L4 split
+//	                            those credential/abuse buckets out into the
+//	                            label below, so this one now counts the
+//	                            traffic buckets that still fail open
+//	                            (GW/GA/GV/DW/UP and the per-key internal
+//	                            tiers — see rateLimitMarksExemptFromMemoryFallback).
+//	web_rate_limit_backend_memory — same LLen error, on a bucket in
+//	                            middleware.rateLimitMemoryFallbackMarks
+//	                            (redemption, bootstrap, TOTP backup codes,
+//	                            channel-key reveal / TOTP disable, topup,
+//	                            the internal-API pre-auth IP tier). NOT a
+//	                            fail-open: the request was measured against
+//	                            the process-local limiter instead, so the
+//	                            ceiling is per replica rather than
+//	                            cluster-wide. A climbing series here means
+//	                            the effective budget is replicas x budget.
 //	web_rate_limit_corrupt   — redisRateLimiterKeyed's stored-timestamp
 //	                            parse check; the backend is healthy but the
 //	                            list's tail value doesn't parse, so the key
@@ -75,8 +90,9 @@ var RateLimitDegradedTotal = promauto.NewCounterVec(
 // RecordRateLimitDegraded increments the degradation counter for the given
 // check: "model_rate_limit_success", "model_rate_limit_total" or
 // "model_rate_limit_record" (redisRateLimitHandler family), or
-// "web_rate_limit_backend" or "web_rate_limit_corrupt" (redisRateLimiterKeyed
-// family — see the label list above for its full set of callers).
+// "web_rate_limit_backend", "web_rate_limit_backend_memory" or
+// "web_rate_limit_corrupt" (redisRateLimiterKeyed family — see the label list
+// above for its full set of callers).
 func RecordRateLimitDegraded(check string) {
 	RateLimitDegradedTotal.WithLabelValues(check).Inc()
 }
@@ -91,5 +107,6 @@ func init() {
 	RateLimitDegradedTotal.WithLabelValues("model_rate_limit_total")
 	RateLimitDegradedTotal.WithLabelValues("model_rate_limit_record")
 	RateLimitDegradedTotal.WithLabelValues("web_rate_limit_backend")
+	RateLimitDegradedTotal.WithLabelValues("web_rate_limit_backend_memory")
 	RateLimitDegradedTotal.WithLabelValues("web_rate_limit_corrupt")
 }

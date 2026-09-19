@@ -116,6 +116,10 @@ const flag = vi.hoisted(
   () => (name) => () =>
     React.createElement('i', { 'data-testid': `flag-${name}` }),
 );
+// The retired flags stay in the mock on purpose: were the module to export
+// only the two the component imports, re-adding a <FR …/> entry would fail to
+// render for the wrong reason (an undefined element) instead of tripping the
+// assertion below that says which languages the picker offers.
 vi.mock('country-flag-icons/react/3x2', () => ({
   CN: flag('CN'),
   GB: flag('GB'),
@@ -165,6 +169,17 @@ vi.mock('../../../helpers', () => ({
 const actualTheme = { current: 'light' };
 vi.mock('../../../context/Theme', () => ({
   useActualTheme: () => actualTheme.current,
+}));
+
+// LanguageSelector asks i18next which bundle is rendering. Nothing else
+// reachable from this file touches react-i18next — useHeaderBar and StreakBadge
+// are mocked above and every other part takes `t` as a prop — so this stub is
+// the picker's input and nothing else's. resolvedLanguage starts undefined,
+// which is what a render with no i18next instance in context produces, so the
+// existing cases keep exercising the currentLang fallback.
+const i18nStub = vi.hoisted(() => ({ resolvedLanguage: undefined }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (k) => k, i18n: i18nStub }),
 }));
 
 // --- HeaderBar (index.jsx) collaborators -----------------------------------
@@ -256,6 +271,7 @@ const t = (k) => k;
 beforeEach(() => {
   vi.clearAllMocks();
   actualTheme.current = 'light';
+  i18nStub.resolvedLanguage = undefined;
 });
 
 describe('MobileMenuButton', () => {
@@ -682,7 +698,13 @@ describe('ThemeToggle', () => {
 });
 
 describe('LanguageSelector', () => {
-  it('offers every supported language with its flag', () => {
+  // The picker offers the languages i18n.js registers — zh and en. fr / ja /
+  // ru / vi were offered here while their bundles carried 58% of en.json, so
+  // choosing one produced a console that was two fifths Chinese; the menu is
+  // the surface that made those bundles reachable, hence the negative half of
+  // this assertion. src/i18n/locale-coverage.test.js is the gate that compares
+  // this file's list against the registered set.
+  it('offers the shipped languages with their flags, and no others', () => {
     render(
       React.createElement(LanguageSelector, {
         currentLang: 'en',
@@ -690,21 +712,23 @@ describe('LanguageSelector', () => {
         t,
       }),
     );
-    ['中文', 'English', 'Français', '日本語', 'Русский', 'Tiếng Việt'].forEach(
-      (label) => expect(screen.getByText(label)).toBeInTheDocument(),
+    ['中文', 'English'].forEach((label) =>
+      expect(screen.getByText(label)).toBeInTheDocument(),
     );
-    ['CN', 'GB', 'FR', 'JP', 'RU', 'VN'].forEach((code) =>
+    ['CN', 'GB'].forEach((code) =>
       expect(screen.getByTestId(`flag-${code}`)).toBeInTheDocument(),
+    );
+    ['Français', '日本語', 'Русский', 'Tiếng Việt'].forEach((label) =>
+      expect(screen.queryByText(label)).toBeNull(),
+    );
+    ['FR', 'JP', 'RU', 'VN'].forEach((code) =>
+      expect(screen.queryByTestId(`flag-${code}`)).toBeNull(),
     );
   });
 
   it.each([
     ['中文', 'zh'],
     ['English', 'en'],
-    ['Français', 'fr'],
-    ['日本語', 'ja'],
-    ['Русский', 'ru'],
-    ['Tiếng Việt', 'vi'],
   ])('switches to %s using the code %s', (label, code) => {
     const onLanguageChange = vi.fn();
     render(
@@ -718,7 +742,37 @@ describe('LanguageSelector', () => {
     expect(onLanguageChange).toHaveBeenCalledWith(code);
   });
 
-  it('highlights exactly the active language', () => {
+  const menuItem = (label) =>
+    screen.getByText(label).closest('[role="menuitem"]');
+
+  // The tags a real browser produces, not the bare ones. useHeaderBar hands
+  // this component i18n.language, and i18next keeps a supported region tag as
+  // it stands, so 'en-US' and 'zh-CN' are what arrive here; comparing them
+  // against 'en' / 'zh' marked neither entry, and the menu an operator opened
+  // on first load showed no active language at all.
+  it.each([
+    ['en-US', 'English', '中文'],
+    ['zh-CN', '中文', 'English'],
+    ['en', 'English', '中文'],
+    ['zh', '中文', 'English'],
+  ])('highlights exactly the active language for %s', (tag, active, other) => {
+    render(
+      React.createElement(LanguageSelector, {
+        currentLang: tag,
+        onLanguageChange: vi.fn(),
+        t,
+      }),
+    );
+    expect(menuItem(active).className).toContain('font-semibold');
+    expect(menuItem(other).className).not.toContain('font-semibold');
+  });
+
+  it('marks the language being rendered, not one i18next resolved away', () => {
+    // changeLanguage('ja') is the one case where the two disagree in substance:
+    // i18n.language stays 'ja' — which is what the header bar tracks and passes
+    // in — while every string comes from en.json. English is on screen, so
+    // English is what the menu has to mark.
+    i18nStub.resolvedLanguage = 'en';
     render(
       React.createElement(LanguageSelector, {
         currentLang: 'ja',
@@ -726,10 +780,8 @@ describe('LanguageSelector', () => {
         t,
       }),
     );
-    const item = (label) =>
-      screen.getByText(label).closest('[role="menuitem"]');
-    expect(item('日本語').className).toContain('font-semibold');
-    expect(item('中文').className).not.toContain('font-semibold');
+    expect(menuItem('English').className).toContain('font-semibold');
+    expect(menuItem('中文').className).not.toContain('font-semibold');
   });
 });
 

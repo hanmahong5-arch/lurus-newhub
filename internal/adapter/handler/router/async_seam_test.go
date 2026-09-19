@@ -7,6 +7,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/handler"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 )
 
 // Tests in this package swap common.RDB / common.RedisEnabled and restore them
@@ -31,9 +32,15 @@ import (
 // router fixtures restore in their cleanup. A detached writer therefore races
 // the fixture teardown of whichever test spawned it — caught by the race
 // detector in CI, invisible without it.
+// governance.AsyncGo is the fourth: governance.RecordAuditEvent hands the
+// event to whichever AuditWriter was current at call time, and mounted admin
+// write routes exercised here reach it. The writers installed for those tests
+// are bound to a per-test *gorm.DB the fixture closes on cleanup, so a
+// detached write has no ordering against that close.
 func TestMain(m *testing.M) {
 	repo.AsyncGo = func(f func()) { f() }
 	handler.AsyncGo = func(f func()) { f() }
 	app.AsyncGo = func(f func()) { f() }
+	governance.AsyncGo = func(f func()) { f() }
 	os.Exit(m.Run())
 }

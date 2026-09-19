@@ -71,4 +71,34 @@ export function AdminRoute({ children }) {
   return <Navigate to='/forbidden' replace />;
 }
 
+/*
+ * One notch above AdminRoute. Pages under /console/v2/admin whose every call
+ * goes to a route under /api/v2/admin need this: that whole group is mounted
+ * behind middleware.RootJWTAuth (see
+ * internal/adapter/handler/router/api-v2-router.go), which refuses a role-10
+ * session with 403 PERMISSION_DENIED. Before cycle 12 those routes carried
+ * only PrivateRoute, so a role-10 admin who typed the URL got the page shell
+ * rendered against a refusal.
+ *
+ * Deliberately mirrors AdminRoute rather than generalising it: the `typeof
+ * user.role === 'number'` check is the load-bearing part (a JSON string "100"
+ * would clear a bare >=), and two eight-line guards read better here than one
+ * parameterised one whose caller could pass the threshold wrong.
+ */
+export function RootRoute({ children }) {
+  const raw = localStorage.getItem('user');
+  if (!raw) {
+    return <Navigate to='/login' state={{ from: history.location }} />;
+  }
+  try {
+    const user = JSON.parse(raw);
+    if (user && typeof user.role === 'number' && user.role >= 100) {
+      return children;
+    }
+  } catch (e) {
+    // A corrupted shim fails closed, same as AdminRoute.
+  }
+  return <Navigate to='/forbidden' replace />;
+}
+
 export { PrivateRoute };

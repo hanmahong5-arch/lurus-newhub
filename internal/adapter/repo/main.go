@@ -32,11 +32,11 @@ import (
 // PostgreSQL-only and idempotent (see internal/pkg/migration package doc).
 const migrationBaselineThrough = "020_create_privacy_erasure_requests"
 
-var commonGroupCol string
-var commonKeyCol string
+var commonGroupCol = `"group"` // PG quoting; initCol re-sets it, the default keeps a binary that never ran initCol valid
+var commonKeyCol = `"key"`     // PG quoting; initCol re-sets it, the default keeps a binary that never ran initCol valid
 
-var logKeyCol string
-var logGroupCol string
+var logKeyCol = `"key"`     // PG quoting; initCol re-sets it, the default keeps a binary that never ran initCol valid
+var logGroupCol = `"group"` // PG quoting; initCol re-sets it, the default keeps a binary that never ran initCol valid
 
 // InitCol initializes DB-dialect-specific column name quoting.
 // Called automatically by chooseDB; exported for test setup with direct DB injection.
@@ -62,6 +62,59 @@ func initCol() {
 var DB *gorm.DB
 
 var LOG_DB *gorm.DB
+
+// poolSettings is the database/sql connection-pool configuration
+// applyPoolSettings writes onto a pool (cycle-12 L8). Its two callers are
+// InitDB and InitLogDB, which TestSQLPoolDefaults checks structurally.
+type poolSettings struct {
+	MaxIdleConns int
+	MaxOpenConns int
+	MaxLifetime  time.Duration
+	MaxIdleTime  time.Duration
+}
+
+// currentPoolSettings reads the pool configuration from the environment.
+//
+// The two defaults this lane changed, and why:
+//
+//   - SQL_MAX_LIFETIME 60 -> 1800 seconds. chooseDB opens every pool with
+//     PrepareStmt:true, and gorm's prepared-statement cache is keyed per
+//     connection, so a 60-second lifetime discarded and re-prepared the whole
+//     cache on every connection once a minute — paying the prepare cost
+//     forever for a cache that never got to be warm. 1800s still recycles
+//     often enough for a DNS/failover change to take effect within the half
+//     hour.
+//   - SQL_MAX_IDLE_TIME, new, 300 seconds. Without ConnMaxIdleTime an idle
+//     connection is held until MaxLifetime expires, so a traffic burst left
+//     up to MaxIdleConns sockets parked against PostgreSQL for the rest of
+//     that window. Retiring them after 5 idle minutes gives the connections
+//     back while leaving a warm pool for normal traffic.
+//
+// SQL_MAX_IDLE_CONNS / SQL_MAX_OPEN_CONNS keep their historical defaults
+// here; the deployments set them explicitly (cycle-12 W hand-off) because the
+// right ceiling depends on replica count and on what else shares the
+// PostgreSQL instance, which this process cannot see.
+func currentPoolSettings() poolSettings {
+	return poolSettings{
+		MaxIdleConns: common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100),
+		MaxOpenConns: common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000),
+		MaxLifetime:  time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 1800)),
+		MaxIdleTime:  time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_IDLE_TIME", 300)),
+	}
+}
+
+// applyPoolSettings is the single place the four database/sql pool setters
+// are called, so the main pool and the log pool cannot be configured
+// differently by accident. It returns what it applied for callers that want
+// to log or assert on it.
+func applyPoolSettings(sqlDB *sql.DB) poolSettings {
+	s := currentPoolSettings()
+	sqlDB.SetMaxIdleConns(s.MaxIdleConns)
+	sqlDB.SetMaxOpenConns(s.MaxOpenConns)
+	sqlDB.SetConnMaxLifetime(s.MaxLifetime)
+	sqlDB.SetConnMaxIdleTime(s.MaxIdleTime)
+	return s
+}
 
 func createRootAccountIfNeed() error {
 	var user User
@@ -125,9 +178,7 @@ func chooseDB(envName string) (*gorm.DB, error) {
 		opened, oerr := gorm.Open(postgres.New(postgres.Config{
 			DSN:                  dsn,
 			PreferSimpleProtocol: true, // disables implicit prepared statement usage
-		}), &gorm.Config{
-			PrepareStmt: true, // precompile SQL
-		})
+		}), newGormConfig(poolNameForEnv(envName)))
 		if oerr != nil {
 			return oerr
 		}
@@ -212,13 +263,11 @@ func InitDB() (err error) {
 		if err != nil {
 			return err
 		}
-		sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100))
-		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
-		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
+		applyPoolSettings(sqlDB)
 
 		// Expose main-pool saturation (wait_count/wait_duration) on /metrics so
 		// pool exhaustion is alertable instead of surfacing only as latency.
-		metrics.RegisterDBStats("newhub", sqlDB)
+		metrics.RegisterDBStats(dbPoolNameMain, sqlDB)
 
 		// Publish the schema level BEFORE the master-node early return: a replica
 		// set with no master-capable pod never reaches runBootMigrations at all,
@@ -393,13 +442,11 @@ func InitLogDB() (err error) {
 		if err != nil {
 			return err
 		}
-		sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100))
-		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
-		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
+		applyPoolSettings(sqlDB)
 
 		// Log-DB pool telemetry under a distinct db_name so it is separable from
 		// the main pool on /metrics.
-		metrics.RegisterDBStats("newhub_log", sqlDB)
+		metrics.RegisterDBStats(dbPoolNameLog, sqlDB)
 
 		if !common.IsMasterNode {
 			return nil

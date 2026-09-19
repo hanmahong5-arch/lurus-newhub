@@ -26,6 +26,7 @@ import {
   ScrollItem,
 } from '@douyinfe/semi-ui';
 import { API, showError, copy, showSuccess } from '../../helpers';
+import { sanitizeOperatorHtml } from '../../helpers/sanitize';
 import { useIsMobile } from '../../hooks/common/useIsMobile';
 import { API_ENDPOINTS } from '../../constants/common.constant';
 import { StatusContext } from '../../context/Status';
@@ -371,7 +372,9 @@ const Home = () => {
           ) : (
             <div
               className='mt-[60px]'
-              dangerouslySetInnerHTML={{ __html: homePageContent }}
+              dangerouslySetInnerHTML={{
+                __html: sanitizeOperatorHtml(homePageContent),
+              }}
             />
           )}
         </div>

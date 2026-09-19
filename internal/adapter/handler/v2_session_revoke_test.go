@@ -186,7 +186,7 @@ func setupSessionRevokeDBRouter(t *testing.T, callerID int, currentKey string) *
 	prevDB := repo.DB
 	prevRedisEnabled := common.RedisEnabled
 	repo.DB = db
-	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
+	pinAuditWriter(t, db)
 	common.RedisEnabled = false // exercised separately with a real miniredis below
 
 	r := gin.New()
@@ -401,9 +401,15 @@ func TestV2SessionsOthers_KeepsCurrent(t *testing.T) {
 }
 
 // TestV2SessionsOthers_FlagOff: with SESSION_REGISTRY_ENABLED unset (default
-// off), DELETE .../sessions/others answers {"revoked":0} WITHOUT touching
-// the DB, even when rows exist (left over from a prior flag-on soak) — a
-// rollback must not let this endpoint revoke anything.
+// off), DELETE .../sessions/others refuses with 409 SESSION_REGISTRY_DISABLED
+// WITHOUT touching the DB, even when rows exist (left over from a prior
+// flag-on soak) — a rollback must not let this endpoint revoke anything.
+//
+// Cycle-12 L4 changed the shape. It used to answer 200 {"revoked":0}, which
+// is indistinguishable from "you have no other devices": a user who clicked
+// "sign out other devices" on a replica with the flag off was told the job
+// was done and nothing had happened. 409 is the honest answer — the
+// feature is switched off, not finished.
 func TestV2SessionsOthers_FlagOff(t *testing.T) {
 	t.Setenv("SESSION_REGISTRY_ENABLED", "false")
 	const userID = 101
@@ -415,14 +421,19 @@ func TestV2SessionsOthers_FlagOff(t *testing.T) {
 	w := httptest.NewRecorder()
 	ctx.router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body: %s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	data := resp["data"].(map[string]interface{})
-	if data["revoked"].(float64) != 0 {
-		t.Errorf("revoked = %v, want 0 — the flag-off endpoint must not touch the DB", data["revoked"])
+	if success, _ := resp["success"].(bool); success {
+		t.Errorf("success = true, want false; body: %s", w.Body.String())
+	}
+	if code, _ := resp["error_code"].(string); code != "SESSION_REGISTRY_DISABLED" {
+		t.Errorf("error_code = %q, want \"SESSION_REGISTRY_DISABLED\"; body: %s", code, w.Body.String())
+	}
+	if _, hasData := resp["data"]; hasData {
+		t.Errorf("refusal carries a data object — a caller could still read revoked:0 out of it; body: %s", w.Body.String())
 	}
 	var reloaded entity.UserSession
 	if err := ctx.db.Where("id = ?", other.Id).First(&reloaded).Error; err != nil {

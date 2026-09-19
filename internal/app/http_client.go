@@ -45,7 +45,7 @@ const maxProxyClients = 256
 const maxForceH1Clients = 256
 
 func checkRedirect(req *http.Request, via []*http.Request) error {
-	fetchSetting := system_setting.GetFetchSetting()
+	fetchSetting := system_setting.GetFetchSettingSnapshot()
 	urlStr := req.URL.String()
 	if err := common.ValidateURLWithFetchSetting(urlStr, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 		return fmt.Errorf("redirect to %s blocked: %v", urlStr, err)

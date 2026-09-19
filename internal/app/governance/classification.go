@@ -89,6 +89,14 @@ var FieldClassification = map[string]DataTier{
 	// error_type/error_code/status_code above.
 	"settlement": TierPublic,
 
+	// source is written by the manual channel probe
+	// (internal/adapter/handler/channel-test.go probeChannel) on the consume
+	// row it books to the operator who clicked "test": the row shows a price
+	// the probe never debited from any wallet, so a usage view has to be able
+	// to tell it from customer traffic. It says that a probe ran, which the
+	// row's own user_id already implies — nothing about pricing or routing.
+	"source": TierPublic,
+
 	// Internal — admin only
 	"channel_id":     TierInternal,
 	"channel_name":   TierInternal,

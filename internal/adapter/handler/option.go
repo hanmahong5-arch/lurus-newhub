@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -19,7 +20,10 @@ import (
 
 func GetOptions(c *gin.Context) {
 	var options []*repo.Option
-	common.OptionMapRWMutex.Lock()
+	// Read lock: this iteration only reads OptionMap, and taking the write
+	// lock made every concurrent admin console load serialise against the
+	// option-sync tick and against each other.
+	common.OptionMapRWMutex.RLock()
 	for k, v := range common.OptionMap {
 		if strings.HasSuffix(k, "Token") ||
 			strings.HasSuffix(k, "Secret") ||
@@ -33,7 +37,7 @@ func GetOptions(c *gin.Context) {
 			Value: common.Interface2String(v),
 		})
 	}
-	common.OptionMapRWMutex.Unlock()
+	common.OptionMapRWMutex.RUnlock()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -236,6 +240,34 @@ func UpdateOption(c *gin.Context) {
 		err = repo.UpdateOption(option.Key, option.Value.(string))
 	}
 	if err != nil {
+		// Every outcome of an authenticated admin write leaves an audit row.
+		// Before this, a write whose value could not be applied returned here
+		// and recorded nothing, so the only trace of it was a log line on
+		// whichever replica served the request.
+		//
+		// "rejected" means repo.UpdateOption refused the value before writing,
+		// so the row is unchanged. "failed" is everything else — a database
+		// error, a lost pricing-version CAS, a JSON document of the wrong
+		// shape that only the dispatch could refuse — and it does not say
+		// whether the row was written. Both carry the key only: option values
+		// include the OAuth client secret and the SMTP password, which must
+		// never reach audit_events.
+		outcome := "failed"
+		if errors.Is(err, repo.ErrOptionValueRejected) {
+			outcome = "rejected"
+		}
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+			governance.ActionOptionUpdated, governance.ResourceOption, 0,
+			fmt.Sprintf(`{"key":%q,"outcome":%q}`, option.Key, outcome)))
+		if outcome == "rejected" {
+			// 400 because the request is what is wrong, and the stored
+			// configuration is untouched; the v1 body shape is unchanged.
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}

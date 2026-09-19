@@ -21,24 +21,31 @@ import React, { lazy, Suspense, useContext, useMemo } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Loading from './components/common/ui/Loading';
 import HfRouteFallback from './components/hifi/HfRouteFallback';
-import User from './pages/User';
-import { AuthRedirect, PrivateRoute, AdminRoute } from './helpers';
+import { AuthRedirect, PrivateRoute, AdminRoute, RootRoute } from './helpers';
 import OidcRedirect from './components/auth/OidcRedirect';
 import NotFound from './pages/NotFound';
 import Forbidden from './pages/Forbidden';
-import Setting from './pages/Setting';
 import { StatusContext } from './context/Status';
-
-import OpenRouterSync from './pages/OpenRouterSync';
-import Chat from './pages/Chat';
-import Chat2Link from './pages/Chat2Link';
-import Midjourney from './pages/Midjourney';
-import Pricing from './pages/Pricing';
-import Task from './pages/Task';
-import OidcCallback from './components/auth/OidcCallback';
-import PersonalSetting from './components/settings/PersonalSetting';
-import Setup from './pages/Setup';
 import SetupCheck from './components/layout/SetupCheck';
+
+// Every routed page below is code-split. These eleven were static imports, so
+// their whole widget trees sat in the entry chunk a first-time visitor
+// downloads before anything paints. NotFound / Forbidden / OidcRedirect /
+// SetupCheck stay static: they are what a failed or suspended load falls back
+// TO.
+const User = lazy(() => import('./pages/User'));
+const Setting = lazy(() => import('./pages/Setting'));
+const OpenRouterSync = lazy(() => import('./pages/OpenRouterSync'));
+const Chat = lazy(() => import('./pages/Chat'));
+const Chat2Link = lazy(() => import('./pages/Chat2Link'));
+const Midjourney = lazy(() => import('./pages/Midjourney'));
+const Pricing = lazy(() => import('./pages/Pricing'));
+const Task = lazy(() => import('./pages/Task'));
+const OidcCallback = lazy(() => import('./components/auth/OidcCallback'));
+const PersonalSetting = lazy(
+  () => import('./components/settings/PersonalSetting'),
+);
+const Setup = lazy(() => import('./pages/Setup'));
 
 // Lazy like the routes below, not a static import: this screen is reached
 // only on a deployment without single sign-on, and pulling its editor
@@ -162,9 +169,11 @@ function App() {
         <Route
           path='/console/openrouter-sync'
           element={
-            <AdminRoute>
-              <OpenRouterSync />
-            </AdminRoute>
+            <RootRoute>
+              <Suspense fallback={<Loading></Loading>} key={location.pathname}>
+                <OpenRouterSync />
+              </Suspense>
+            </RootRoute>
           }
         />
         {/* Legacy Semi UI redemption shell retired (console-one-surface,
@@ -186,7 +195,9 @@ function App() {
           path='/console/user'
           element={
             <AdminRoute>
-              <User />
+              <Suspense fallback={<Loading></Loading>} key={location.pathname}>
+                <User />
+              </Suspense>
             </AdminRoute>
           }
         />
@@ -242,11 +253,11 @@ function App() {
         <Route
           path='/console/setting'
           element={
-            <AdminRoute>
+            <RootRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
                 <Setting />
               </Suspense>
-            </AdminRoute>
+            </RootRoute>
           }
         />
         <Route
@@ -341,9 +352,11 @@ function App() {
         <Route
           path='/console/chat/:id?'
           element={
-            <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-              <Chat />
-            </Suspense>
+            <PrivateRoute>
+              <Suspense fallback={<Loading></Loading>} key={location.pathname}>
+                <Chat />
+              </Suspense>
+            </PrivateRoute>
           }
         />
         {/* 方便使用chat2link直接跳转聊天... */}
@@ -382,7 +395,7 @@ function App() {
           ['cmdk', V2CmdK],
           ['models', V2Models],
           ['chat', V2Chat],
-          ['tenants', V2Tenants],
+          ['tenants', V2Tenants, RootRoute],
           ['pricing', V2Pricing],
           ['redemption', V2Redemption],
           ['projects', V2Projects],
@@ -391,30 +404,34 @@ function App() {
           ['flows', V2Flows],
           ['design-system', V2DesignSystem],
           ['states', V2States],
-          ['admin/users', V2AdminUsers],
+          ['admin/users', V2AdminUsers, RootRoute],
           ['admin/audit', V2AdminAudit],
-          ['admin/gateway', V2AdminGateway],
-          ['admin/settings', V2AdminSettings],
-          ['admin/cost-intelligence', V2CostIntelligence],
-          ['admin/model-performance', V2ModelPerformance],
+          ['admin/gateway', V2AdminGateway, RootRoute],
+          ['admin/settings', V2AdminSettings, RootRoute],
+          ['admin/cost-intelligence', V2CostIntelligence, RootRoute],
+          ['admin/model-performance', V2ModelPerformance, RootRoute],
           ['admin/rankings', V2Rankings],
-          ['admin/model-limits', V2ModelRateLimits],
-          ['admin/system-tasks', V2SystemTasks],
-          ['admin/authz', V2AdminAuthz],
-          ['admin/diagnostics', V2Diagnostics],
-        ].map(([slug, Component]) => (
+          ['admin/model-limits', V2ModelRateLimits, RootRoute],
+          ['admin/system-tasks', V2SystemTasks, RootRoute],
+          ['admin/authz', V2AdminAuthz, RootRoute],
+          ['admin/diagnostics', V2Diagnostics, RootRoute],
+          // Third tuple slot = the route guard, defaulting to PrivateRoute.
+          // The RootRoute rows mirror components/hifi/HFShell.jsx minRole:100
+          // exactly: every backend call those pages make is under
+          // /api/v2/admin, which api-v2-router.go mounts behind RootJWTAuth.
+        ].map(([slug, Component, Guard = PrivateRoute]) => (
           <Route
             key={slug}
             path={`/console/v2/${slug}`}
             element={
-              <PrivateRoute>
+              <Guard>
                 <Suspense
                   fallback={<HfRouteFallback />}
                   key={location.pathname}
                 >
                   <Component />
                 </Suspense>
-              </PrivateRoute>
+              </Guard>
             }
           />
         ))}

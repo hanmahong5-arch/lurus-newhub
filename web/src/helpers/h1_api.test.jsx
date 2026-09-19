@@ -221,6 +221,42 @@ describe('401 session self-heal interceptor', () => {
     expect(JSON.parse(localStorage.getItem('user')).id).toBe(1);
   });
 
+  // The bridge can now refuse with a reason a person can act on. Reporting the
+  // original 401 would tell them their session expired and send them back
+  // through a login loop that cannot clear a full tenant.
+  it.each(['TENANT_SEAT_LIMIT', 'TENANT_ORG_MISMATCH'])(
+    'reports the bridge refusal %s instead of the original 401',
+    async (code) => {
+      localStorage.setItem('user', JSON.stringify({ id: 1 }));
+      API.post.mockRejectedValue({
+        response: { status: 403, data: { error_code: code } },
+      });
+      const err = unauthorized();
+
+      await expect(onRejected()(err)).rejects.toBe(err);
+
+      expect(showError).toHaveBeenCalledTimes(1);
+      const reported = showError.mock.calls[0][0];
+      expect(reported).not.toBe(err);
+      expect(reported.error_code).toBe(code);
+      expect(reported.response.status).toBe(403);
+    },
+  );
+
+  // Every other bridge failure keeps the old behaviour: the original error is
+  // what the funnel sees, so this cannot be satisfied by always forwarding the
+  // bootstrap error.
+  it('still reports the original 401 when the bridge fails without a code', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    API.post.mockRejectedValue({ response: { status: 401 } });
+    const err = unauthorized();
+
+    await expect(onRejected()(err)).rejects.toBe(err);
+
+    expect(showError).toHaveBeenCalledTimes(1);
+    expect(showError.mock.calls[0][0]).toBe(err);
+  });
+
   it('reports any non-401 failure through the toast funnel', async () => {
     const err = { response: { status: 500 }, config: { url: '/api/x' } };
     await expect(onRejected()(err)).rejects.toBe(err);

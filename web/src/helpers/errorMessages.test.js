@@ -56,6 +56,52 @@ describe('resolveErrorMessage', () => {
     );
   });
 
+  // Cycle-12 L4: 409 has no status mapping, so before this the user was
+  // shown the backend's raw English sentence ("Session registry is disabled
+  // on this deployment") in a zh-default console. The error_code is what the
+  // copy hangs off, so a reworded backend message cannot silently change
+  // what the user reads.
+  it('maps error_code SESSION_REGISTRY_DISABLED to console copy, not the server sentence', () => {
+    expect(
+      resolveErrorMessage({
+        response: {
+          status: 409,
+          data: {
+            success: false,
+            error_code: 'SESSION_REGISTRY_DISABLED',
+            message: 'Session registry is disabled on this deployment',
+          },
+        },
+      }),
+    ).toBe('console.settings.session_registry_disabled');
+  });
+
+  it('maps error_code USER_DISABLED to the account-disabled copy, not the generic 403 text', () => {
+    expect(
+      resolveErrorMessage({
+        response: {
+          status: 403,
+          data: {
+            success: false,
+            error_code: 'USER_DISABLED',
+            message: '用户已被封禁',
+          },
+        },
+      }),
+    ).toBe('console.errors.account_disabled');
+  });
+
+  it('still falls back to the backend message for an unmapped 409', () => {
+    expect(
+      resolveErrorMessage({
+        response: {
+          status: 409,
+          data: { success: false, message: 'some other conflict' },
+        },
+      }),
+    ).toBe('some other conflict');
+  });
+
   it('never surfaces the internal "Layer C" technical 401 copy', () => {
     const msg = resolveErrorMessage({ response: { status: 401 } });
     expect(msg).not.toMatch(/Layer C/i);

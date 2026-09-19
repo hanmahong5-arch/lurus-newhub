@@ -8,20 +8,29 @@ package router
 // production serves. This file enters through the real SetApiV2Router, the
 // same convention v2_admin_security_wiring_test.go and
 // r6d_switch_redeem_mount_test.go use for their own routes:
-//   - anonymous (no session) -> 401, never reaching GetSystemTasksV2
+//   - anonymous (no session) -> 401 {"error_code":"UNAUTHENTICATED"},
+//     never reaching GetSystemTasksV2
 //   - a seeded root (role 100) session -> 200 with a tasks array
-//   - a seeded admin (role 10, NOT root) session -> the real refusal shape,
-//     HTTP 200 {"success":false} (middleware/auth.go's authHelper — this
-//     codebase's minRole convention is NOT a 403)
+//   - a seeded admin (role 10, NOT root) session -> HTTP 403
+//     {"success":false,"error_code":"PERMISSION_DENIED"}
+//
+// Cycle-12 L4 changed that last row. It used to be HTTP 200
+// {"success":false} (middleware/auth.go's authHelper, v1's minRole
+// convention), and this file pinned the 200 — which is how every v2 admin
+// console page came to run its success path on a refusal. v1 still answers
+// 200 for the same session, on purpose: see
+// middleware.TestRootDenialShape_V1AuthHelperShapeUnchanged.
 //
 // No DB row is seeded for the session user: authHelper's DB/cache lookup
 // misses (record not found) and falls back to the session's own role/status
 // — the same fail-open convention
 // handler.setupSystemTasksRootRouter's doc comment documents and relies on.
 //
-// Mutation target: removing `adminRoute.GET("/system/tasks",
+// Mutation targets: removing `adminRoute.GET("/system/tasks",
 // handler.GetSystemTasksV2)` from api-v2-router.go, or moving it outside
-// adminRoute, turns the anonymous_401 and admin_role_refused subtests red.
+// adminRoute, turns the anonymous_401 and admin_role_refused subtests red;
+// so does putting RootJWTAuth's session fallback back on authHelper
+// (middleware/admin_jwt_auth.go's rootSessionAuth).
 
 import (
 	"encoding/json"
@@ -107,13 +116,20 @@ func TestSetApiV2Router_SystemTasks_MountedAndGated(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("anonymous GET /api/v2/admin/system/tasks via real router: status=%d, want 401; body=%s", w.Code, w.Body.String())
 		}
+		var env map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode envelope: %v; body=%s", err, w.Body.String())
+		}
+		if code, _ := env["error_code"].(string); code != "UNAUTHENTICATED" {
+			t.Errorf("anonymous via real router: error_code=%q, want \"UNAUTHENTICATED\"; body=%s", code, w.Body.String())
+		}
 	})
 
 	t.Run("admin_role_refused", func(t *testing.T) {
 		engine := systemTasksMountRouter(t, common.RoleAdminUser)
 		w := doSystemTasksMountGET(engine)
-		if w.Code != http.StatusOK {
-			t.Fatalf("admin (role=10) via real router: status=%d, want 200 (this codebase's minRole refusal is success:false, not an HTTP error); body=%s", w.Code, w.Body.String())
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("admin (role=10) via real router: status=%d, want 403 (cycle-12 L4: the v2 admin refusal is an HTTP error, not a 200 envelope); body=%s", w.Code, w.Body.String())
 		}
 		var env map[string]interface{}
 		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
@@ -121,6 +137,9 @@ func TestSetApiV2Router_SystemTasks_MountedAndGated(t *testing.T) {
 		}
 		if success, _ := env["success"].(bool); success {
 			t.Fatalf("admin (role=10) session via real router: success=true, want false (root-only route); body=%s", w.Body.String())
+		}
+		if code, _ := env["error_code"].(string); code != "PERMISSION_DENIED" {
+			t.Errorf("admin (role=10) session via real router: error_code=%q, want \"PERMISSION_DENIED\" — the console branches on it; body=%s", code, w.Body.String())
 		}
 		if _, hasData := env["data"]; hasData {
 			t.Errorf("admin (role=10) session must not reach GetSystemTasksV2 at all — body=%s", w.Body.String())

@@ -4,10 +4,33 @@ import (
 	"net/http"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
+
+// pricingCallerGroup resolves the caller's user group for the group_ratio
+// narrowing below, the same way v1 GetPricing does: from the user row behind
+// the session id. An unresolvable caller (no id on the context — the v2 JWT
+// path does not always carry one) resolves to "", which
+// app.GetUserUsableGroups answers with the globally usable groups only, never
+// with a group that exists solely for some tenant's channels.
+func pricingCallerGroup(c *gin.Context) string {
+	userId, exists := c.Get("id")
+	if !exists {
+		return ""
+	}
+	id, ok := userId.(int)
+	if !ok {
+		return ""
+	}
+	user, err := repo.GetUserCache(id)
+	if err != nil || user == nil {
+		return ""
+	}
+	return user.Group
+}
 
 // GetPricingV2 returns the public pricing catalogue for a tenant's users.
 // Route: GET /api/v2/:tenant_slug/pricing
@@ -36,7 +59,10 @@ func GetPricingV2(c *gin.Context) {
 		return
 	}
 
-	rawPricing := repo.GetPricing()
+	// Projected onto the slug's tenant: the platform-shared channels plus
+	// that tenant's own. The whole catalogue used to come back here too, so
+	// this page listed models only another tenant's channels could serve.
+	rawPricing := repo.GetPricingForTenant(tenant.Id)
 	type pricingItem struct {
 		ModelName  interface{} `json:"model_name"`
 		Vendor     interface{} `json:"vendor"`
@@ -87,10 +113,17 @@ func GetPricingV2(c *gin.Context) {
 		pricing = append(pricing, item)
 	}
 
-	// Build group_ratio scoped to all groups (no per-user narrowing — this is
-	// a public catalogue; per-user narrowing is v1 GetPricing territory).
+	// group_ratio is narrowed to the groups this caller may actually use, the
+	// same narrowing v1 GetPricing and GetSwitchPricing apply. The raw map is
+	// process-global: publishing it handed every authenticated user of every
+	// tenant the names of groups configured for one tenant's channels — the
+	// disclosure this cycle removed from the model list right above.
+	usableGroup := app.GetUserUsableGroups(pricingCallerGroup(c))
 	groupRatio := make(map[string]float64)
 	for k, v := range ratio_setting.GetGroupRatioCopy() {
+		if _, ok := usableGroup[k]; !ok {
+			continue
+		}
 		groupRatio[k] = v
 	}
 

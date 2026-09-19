@@ -34,11 +34,26 @@ func currentSessionID(c *gin.Context) string {
 //	GET /api/v2/:tenant_slug/sessions
 //	Auth: UserAuth middleware
 //
-// With SESSION_REGISTRY_ENABLED off (default), or on but this login has no
-// registered row (cookie-only session store; a bearer/token-authenticated
-// GET), this returns exactly what it always has: a single synthetic entry
-// representing the current request — auth_method, active token count, and
-// 30-day request count.
+// Every response carries registry_enabled, so a caller can tell the two
+// worlds apart without guessing from the item count:
+//
+//	flag OFF -> {"items": [], "total": 0, "registry_enabled": false}
+//
+// Cycle-12 L4 changed that from a single SYNTHETIC row — id "current",
+// last_seen = now, one device — which was a fabrication: with the flag off
+// (production's state today) no session is registered anywhere, so the
+// console showed one device to a user logged in on five, and its "sign out
+// other devices" control could never appear. An empty list plus the
+// capability bit is the honest answer, and it is what lets the console say
+// "per-device sessions are not enabled on this deployment" instead of
+// inventing a device. The write side already refuses this state explicitly
+// (404 SESSION_NOT_FOUND / 409 SESSION_REGISTRY_DISABLED — v2_session_revoke.go).
+//
+// With the flag ON but this login registering no row (cookie-only session
+// store, or a bearer/token-authenticated GET), the legacy single synthetic
+// entry is still returned, with registry_enabled true: there the registry IS
+// the deployment's answer and "your current request" is a real session, it
+// just has no session_key to hang a row on.
 //
 // With the flag on and at least one row registered (repo.UpsertUserSessionSeen,
 // called from authHelper on cookie-session logins), it returns one item per
@@ -103,11 +118,29 @@ func ListSessionsV2(c *gin.Context) {
 		}
 	}
 
-	if repo.SessionRegistryEnabled() {
-		if rows, rErr := repo.ListActiveUserSessions(userID); rErr == nil && len(rows) > 0 {
-			renderRegistrySessions(c, rows, activeTokens, requestCount, authMethod, currentSessionID(c))
-			return
-		}
+	if !repo.SessionRegistryEnabled() {
+		// Nothing is registered on this deployment, so there is nothing
+		// truthful to list. Answering an empty list plus the capability bit
+		// is what stops the console fabricating a device.
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"items":            []gin.H{},
+				"total":            0,
+				"registry_enabled": false,
+				// The two numbers that are real without a registry: they were
+				// computed above from tokens and logs, and the console used to
+				// show them on the invented row. Keep them at the top level.
+				"active_tokens": activeTokens,
+				"request_count": requestCount,
+			},
+		})
+		return
+	}
+
+	if rows, rErr := repo.ListActiveUserSessions(userID); rErr == nil && len(rows) > 0 {
+		renderRegistrySessions(c, rows, activeTokens, requestCount, authMethod, currentSessionID(c))
+		return
 	}
 
 	session := gin.H{
@@ -122,8 +155,9 @@ func ListSessionsV2(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"items": []gin.H{session},
-			"total": 1,
+			"items":            []gin.H{session},
+			"total":            1,
+			"registry_enabled": true,
 		},
 	})
 }
@@ -161,8 +195,9 @@ func renderRegistrySessions(c *gin.Context, rows []entity.UserSession, activeTok
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"items": items,
-			"total": len(items),
+			"items":            items,
+			"total":            len(items),
+			"registry_enabled": true,
 		},
 	})
 }

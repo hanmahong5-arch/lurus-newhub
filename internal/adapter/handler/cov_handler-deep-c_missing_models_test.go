@@ -68,6 +68,17 @@ func TestGetMissingModels_MixOfConfiguredAndMissing(t *testing.T) {
 			t.Fatalf("seed ability %d: %v", i, err)
 		}
 	}
+	// The abilities above reference channel ids 1-4; those channels have to
+	// exist and be platform-shared, because GetMissingModels answers a non-root
+	// caller (this router mounts the handler with no auth middleware, so role
+	// is 0) over the channels its tenant can route — repo.abilityTenantScope,
+	// cycle-12 L5. An ability whose channel row is absent is routable by
+	// nobody.
+	for _, id := range []int{1, 2, 3, 4} {
+		if err := ctx.DB.Create(&repo.Channel{Id: id, Name: "deep-c-ability-owner", TenantId: "default"}).Error; err != nil {
+			t.Fatalf("seed channel %d: %v", id, err)
+		}
+	}
 	if err := ctx.DB.Create(&repo.Model{ModelName: "gpt-4o", Status: 1}).Error; err != nil {
 		t.Fatalf("seed configured model: %v", err)
 	}

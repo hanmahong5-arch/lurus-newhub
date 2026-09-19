@@ -1,6 +1,10 @@
 {
   "translation": {
     "console": {
+      "auth": {
+        "seat_limit": "该租户席位已满。请联系管理员释放席位或提高上限后重新登录。",
+        "org_mismatch": "此账号所属组织与当前登录的租户不匹配。请使用所属组织的登录链接，或联系管理员。"
+      },
       "common": {
         "no_data": "暂无数据",
         "loading": "加载中…",
@@ -31,6 +35,7 @@
         "network": "网络不可达 —— 请检查网络连接后重试。",
         "session_expired": "登录状态已过期，请重新登录。",
         "forbidden": "你没有执行此操作的权限。",
+        "account_disabled": "该账号已被停用，请联系平台管理员。",
         "not_found": "未找到对应的资源。",
         "rate_limited": "请求过于频繁，请稍后再试。",
         "server": "服务暂时不可用，请稍后重试。",
@@ -979,9 +984,12 @@
         "mfa_backup_codes_remaining": "剩余恢复码：{{count}}",
         "sessions_title": "会话",
         "load_sessions_failed": "加载会话失败。",
+        "session_registry_disabled": "本部署未启用按设备的会话管理。",
+        "sessions_registry_off_note": "本部署未启用按设备的会话管理，因此无法在此列出该账户已登录的设备，也无法单独登出它们。",
         "th_auth_method": "认证方式",
         "th_current": "当前",
         "th_active_tokens": "活跃令牌",
+        "sessions_request_count_30d": "近 30 天请求数",
         "th_requests_30d": "请求数（30天）",
         "th_last_seen": "最近活动",
         "th_device": "设备",
@@ -1046,6 +1054,9 @@
         "delete_account_btn": "我已了解 · 删除"
       },
       "admin": {
+        "session_expired_title": "登录会话已过期",
+        "session_expired_body": "服务器已不再识别此会话，此页任何内容都无法读取。请重新登录后继续。",
+        "sign_in_again": "重新登录",
         "users": {
           "crumb_admin": "治理",
           "crumb": "用户",
@@ -1136,7 +1147,11 @@
           "f_email_domain_restriction": "邮箱域名限制",
           "f_quota_new_user": "新用户初始配额",
           "f_quota_inviter": "邀请者奖励配额",
-          "f_usd_exchange_rate": "美元汇率"
+          "f_usd_exchange_rate": "美元汇率",
+          "error_title": "无法读取设置",
+          "error_body": "配置接口没有应答，因此这些开关都无法显示。若在此渲染空白页面，会把每一项功能都画成已关闭，而服务端并没有这么说。",
+          "retry": "重试",
+          "value_unknown": "服务端未返回该项"
         },
         "cost": {
           "crumb_admin": "运维 · 洞察",
@@ -1164,7 +1179,10 @@
           "col_alternative": "→ 替代",
           "col_est_savings": "预计节省",
           "opportunities_empty": "该时间窗内无可节省机会",
-          "excluded_lbl": "未参与重新计价（诚实缺口）"
+          "excluded_lbl": "未参与重新计价（诚实缺口）",
+          "error_title": "节省额未知",
+          "error_body": "节省分析接口没有应答。这不代表没有可节省的空间 —— 只是这次分析没有跑出来。",
+          "retry": "重试"
         },
         "analytics": {
           "crumb_admin": "运维 · 洞察",
@@ -1174,6 +1192,9 @@
           "sub": "按模型统计请求 · 错误 · token · 延迟分位数",
           "forbidden_title": "需要管理员权限",
           "forbidden_body": "你没有查看模型性能分析的权限。",
+          "error_title": "模型性能未知",
+          "error_body": "分析接口没有应答。这不是「零请求、零错误」的结论，而是根本没有读到这段时间窗。",
+          "retry": "重试",
           "export_csv": "导出 CSV",
           "range_1h": "近 1 小时",
           "range_24h": "近 24 小时",
@@ -1260,7 +1281,10 @@
           "state_closed": "闭合",
           "state_open": "已打开",
           "state_half_open": "半开",
-          "probe_due": "可探测"
+          "probe_due": "可探测",
+          "error_title": "熔断状态未知",
+          "error_body": "网关健康接口没有应答。这不代表所有渠道都健康 —— 在调用成功之前，熔断状态只是未知。每 30 秒重试一次。",
+          "retry": "重试"
         },
         "system_tasks": {
           "crumb_admin": "运维 · 洞察",
@@ -1272,6 +1296,9 @@
           "sub": "周期性后台任务 · 当前副本 · 不做跨副本聚合",
           "forbidden_title": "需要根管理员权限",
           "forbidden_body": "你没有查看后台任务的权限，请联系平台管理员。",
+          "error_title": "任务调度状态未知",
+          "error_body": "后台任务接口没有应答。这不是「所有任务均按计划运行」的结论：在调用成功之前，调度状态一无所知。每 30 秒重试一次。",
+          "retry": "重试",
           "caveat": "本视图为单副本视角：仅列出本副本已注册并上报过的任务。「待命」表示该任务受 leader 门控（本副本当前未持有 HA 租约）或被运营方关闭——这是预期状态，而非故障。",
           "empty": "本副本尚无任务注册。",
           "pause": "❚❚ 暂停",
@@ -1608,7 +1635,7 @@
     "[最多请求次数]和[最多请求完成次数]的最大值为2147483647。": "[最多请求次数]和[最多请求完成次数]的最大值为2147483647。",
     "[最多请求次数]必须大于等于0，[最多请求完成次数]必须大于等于1。": "[最多请求次数]必须大于等于0，[最多请求完成次数]必须大于等于1。",
     "auto分组调用链路": "auto分组调用链路",
-    "common.changeLanguage": "common.changeLanguage",
+    "common.changeLanguage": "切换语言",
     "default为默认设置，可单独设置每个分类的安全等级": "default为默认设置，可单独设置每个分类的安全等级",
     "default为默认设置，可单独设置每个模型的版本": "default为默认设置，可单独设置每个模型的版本",
     "false": "false",
@@ -3823,6 +3850,8 @@
     "撤销令牌 \"{{name}}\"?": "撤销令牌 \"{{name}}\"?",
     "旧密钥将立即失效": "旧密钥将立即停止工作。",
     "轮换密钥 \"{{name}}\"?": "轮换密钥 \"{{name}}\"?",
+    "删除 {{n}} 个令牌?": "删除 {{n}} 个令牌?",
+    "选中令牌的密钥将立即失效": "选中令牌的密钥将立即停止工作。",
     "删除渠道 \"{{name}}\" ?": "删除渠道 \"{{name}}\" ?",
     "停止通过此渠道路由请求": "请求将不再通过此渠道路由。",
     "测试渠道": "测试渠道",

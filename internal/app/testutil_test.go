@@ -74,6 +74,11 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 
 	repo.DB = db
 	repo.LOG_DB = db
+	// Column quoting (commonGroupCol and friends) is set by repo.InitCol at
+	// boot; in this test binary nothing else guarantees it ran before the
+	// first DB-path query, and under -shuffle=on the affinity tests once ran
+	// first and built `= ? and model = ?` with an empty column name.
+	repo.InitCol()
 	common.UsingSQLite = true
 	common.UsingPostgreSQL = false
 	common.UsingMySQL = false

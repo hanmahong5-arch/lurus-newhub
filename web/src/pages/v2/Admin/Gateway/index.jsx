@@ -32,9 +32,22 @@ import { API } from '../../../../helpers';
  *   - breaker state is per-replica, so this is one pod's view.
  * A dashboard that quietly showed "all green" for an untouched channel would be
  * worse than no dashboard during an incident.
+ *
+ * Cycle 12 L3 closed the third way it could say "all green" without knowing:
+ * a failed fetch. Four outcomes, and only the first shows breaker state:
+ * data / 403 forbidden / 401 signed-out / everything-else (502, a dropped
+ * connection, a 200 carrying success:false) an ERROR state with a retry,
+ * never `data === null` rendered as openCount 0 and an empty table.
  */
 
 const POLL_MS = 5000;
+// While in the error state, keep checking — but slowly. A 3-replica rolling
+// update reliably produces one transient 502 on this NodePort; stopping
+// outright froze the incident dashboard on "Breaker state unknown" until a
+// human clicked retry, while 5 s retries against a dead endpoint add load and
+// hide the failure behind a flicker. 30 s is the compromise, and the error
+// body says so rather than leaving the operator to guess.
+const ERROR_POLL_MS = 30000;
 
 const stateClass = (s) =>
   s === 'open' ? 'tag error' : s === 'half_open' ? 'tag' : 'tag ok';
@@ -50,14 +63,37 @@ const V2AdminGateway = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
   const [live, setLive] = useState(true);
+  // null when the last fetch succeeded; otherwise the backend message, or ''
+  // when there was none. Distinct from `forbidden`: one means "you may not
+  // see this", the other means "nobody can see this right now".
+  const [error, setError] = useState(null);
 
   const fetchHealth = useCallback(async () => {
     try {
       const res = await API.get('/api/v2/admin/gateway/health');
-      if (res?.data?.success) setData(res.data.data);
+      if (res?.data?.success) {
+        setData(res.data.data);
+        setError(null);
+      } else {
+        setError(res?.data?.message ?? '');
+      }
     } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
+      const status = err?.response?.status;
+      // L4 split the two refusals apart: 403 PERMISSION_DENIED means the role
+      // is short, 401 UNAUTHENTICATED means the session is gone. Telling an
+      // operator with an expired cookie to "contact a platform administrator"
+      // sends them to ask for a permission they already have.
+      if (status === 403) {
+        setForbidden(true);
+        setError(null);
+      } else if (status === 401) {
+        setSignedOut(true);
+        setError(null);
+      } else {
+        setError(err?.response?.data?.message ?? '');
+      }
     } finally {
       setLoading(false);
     }
@@ -67,11 +103,23 @@ const V2AdminGateway = () => {
     fetchHealth();
   }, [fetchHealth]);
 
+  // Polling continues in the error state, backed off to ERROR_POLL_MS, so a
+  // transient failure heals itself; it stops entirely for the two states a
+  // retry cannot fix (no permission, no session).
   useEffect(() => {
-    if (!live || forbidden) return undefined;
-    const id = setInterval(fetchHealth, POLL_MS);
+    if (!live || forbidden || signedOut) return undefined;
+    const id = setInterval(
+      fetchHealth,
+      error !== null ? ERROR_POLL_MS : POLL_MS,
+    );
     return () => clearInterval(id);
-  }, [live, forbidden, fetchHealth]);
+  }, [live, forbidden, signedOut, error, fetchHealth]);
+
+  const retry = useCallback(() => {
+    setError(null);
+    setLoading(true);
+    fetchHealth();
+  }, [fetchHealth]);
 
   const routes = data?.routes ?? [];
   const openCount = data?.open ?? 0;
@@ -84,7 +132,9 @@ const V2AdminGateway = () => {
         tr('console.admin.gateway.crumb', 'gateway'),
       ]}
       actions={
-        !forbidden && (
+        !forbidden &&
+        !signedOut &&
+        error === null && (
           <button
             type='button'
             className='btn ghost'
@@ -111,13 +161,26 @@ const V2AdminGateway = () => {
                     'console.admin.gateway.forbidden_title',
                     'Admin access required',
                   )
-                : openCount > 0
+                : signedOut
                   ? tr(
-                      'console.admin.gateway.open_count',
-                      '{{count}} breakers open',
-                      { count: openCount },
+                      'console.admin.session_expired_title',
+                      'Your session has expired',
                     )
-                  : tr('console.admin.gateway.all_closed', 'no open breakers')}
+                  : error !== null
+                    ? tr(
+                        'console.admin.gateway.error_title',
+                        'Breaker state unknown',
+                      )
+                    : openCount > 0
+                      ? tr(
+                          'console.admin.gateway.open_count',
+                          '{{count}} breakers open',
+                          { count: openCount },
+                        )
+                      : tr(
+                          'console.admin.gateway.all_closed',
+                          'no open breakers',
+                        )}
           </h1>
           <div className='sub'>
             {tr(
@@ -143,6 +206,64 @@ const V2AdminGateway = () => {
                 'You do not have permission to read gateway health. Contact a platform administrator.',
               )}
             </div>
+          </div>
+        </div>
+      ) : signedOut ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='gateway-signed-out'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.session_expired_title',
+                'Your session has expired',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.session_expired_body',
+                'The server no longer recognises this session, so nothing on this page can be read. Sign in again to continue.',
+              )}
+            </div>
+            <a className='btn sm' href='/login' data-testid='gateway-sign-in'>
+              {tr('console.admin.sign_in_again', 'sign in again')}
+            </a>
+          </div>
+        </div>
+      ) : error !== null ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='gateway-error'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr('console.admin.gateway.error_title', 'Breaker state unknown')}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.gateway.error_body',
+                'The gateway health endpoint did not answer. This is not a report that every channel is healthy — breaker state is simply unknown until the call succeeds. Retrying every 30s.',
+              )}
+            </div>
+            {error ? (
+              <div
+                className='mono muted'
+                style={{ fontSize: 11, marginBottom: 12 }}
+              >
+                {error}
+              </div>
+            ) : null}
+            <button
+              type='button'
+              className='btn sm'
+              data-testid='gateway-retry'
+              onClick={retry}
+            >
+              {tr('console.admin.gateway.retry', 'retry')}
+            </button>
           </div>
         </div>
       ) : (

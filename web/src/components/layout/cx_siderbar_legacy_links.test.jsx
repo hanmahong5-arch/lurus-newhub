@@ -39,7 +39,11 @@ vi.mock('@douyinfe/semi-ui', () => {
       { value: { renderWrapper } },
       React.createElement('nav', null, children),
     );
-  Nav.Item = ({ itemKey, text }) => {
+  // Bound to a capitalised name first: assigning the arrow straight to
+  // Nav.Item makes the linter read the hook below as living in a
+  // function called `Nav.Item`, which is neither a component name nor a
+  // hook name.
+  const NavItem = ({ itemKey, text }) => {
     const ctx = React.useContext(NavContext);
     const itemElement = React.createElement(
       'span',
@@ -51,6 +55,7 @@ vi.mock('@douyinfe/semi-ui', () => {
     }
     return itemElement;
   };
+  Nav.Item = NavItem;
   Nav.Sub = ({ children }) => React.createElement('div', null, children);
 
   return {

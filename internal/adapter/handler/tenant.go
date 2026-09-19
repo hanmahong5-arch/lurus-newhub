@@ -66,8 +66,14 @@ func GetTenant(c *gin.Context) {
 		return
 	}
 
-	// Get tenant statistics
-	userCount, _ := repo.GetTenantUserCount(tenantID)
+	// Seat occupancy — the same number the seat cap enforces
+	// (repo.TenantHasFreeSeat -> TenantUserSeatCount) and the same one
+	// repo.GetTenantStats reports, so the count the console shows beside
+	// max_users cannot disagree with the ceiling on the bridge paths (the OIDC
+	// provisioning ceiling, TenantCanAddUser, still counts identity mappings).
+	// It used to be repo.GetTenantUserCount, which counts identity mappings
+	// and therefore reads 0 for a tenant filled through the session bridge.
+	userCount, _ := repo.TenantUserSeatCount(tenantID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -111,6 +117,20 @@ func CreateTenant(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": err.Error(),
+		})
+		return
+	}
+
+	// A stand-in org id (see orgIDPlaceholderSuffix in oauth.go) makes the row
+	// indistinguishable from the two the SQL baseline seeds, and silently opts
+	// the tenant out of every organization-bound check: no organization hint on
+	// its authorize URL, and no org equality check on its OIDC callback. Refuse
+	// it at creation time rather than let an admin mint one by hand.
+	if !orgIDIsBound(req.IDPOrgID) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "zitadel_org_id must be a real IdP organization id, not a " + orgIDPlaceholderSuffix + " stand-in",
+			"error_code": "TENANT_ORG_ID_PLACEHOLDER",
 		})
 		return
 	}

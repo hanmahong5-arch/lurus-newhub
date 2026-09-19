@@ -66,6 +66,12 @@ func TestHandlerIdentityLog_ListSessionsV2_Unauthenticated(t *testing.T) {
 // upstream OIDC middleware stamped an auth_method on the context, that value
 // is surfaced verbatim instead of the "session" fallback used by cookie auth.
 func TestHandlerIdentityLog_ListSessionsV2_AuthMethodOverride(t *testing.T) {
+	// Registry ON with no registered row: that is the branch that still
+	// answers the single "your current request" entry, which is where the
+	// auth_method fallback lives. With the registry OFF the response is an
+	// empty list (cycle-12 L4 — no session is registered on such a
+	// deployment, so there is nothing to attach an auth_method to).
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
 	ctx := setupSessionsRouter(t)
 
 	r := gin.New()

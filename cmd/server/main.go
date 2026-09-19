@@ -404,10 +404,7 @@ func run(ctx context.Context, startTime time.Time) error {
 	}
 
 	// Create http.Server for graceful shutdown
-	httpServer := &http.Server{
-		Addr:    ":" + port,
-		Handler: engine,
-	}
+	httpServer := buildHTTPServer(port, engine)
 
 	// Start HTTP server
 	g.Go(func() error {
@@ -439,6 +436,27 @@ func run(ctx context.Context, startTime time.Time) error {
 
 	// Wait for all goroutines to complete
 	return g.Wait()
+}
+
+// buildHTTPServer constructs the public HTTP server.
+//
+// ReadHeaderTimeout and IdleTimeout come from config (env HTTP_READ_HEADER_TIMEOUT,
+// default 10s; HTTP_IDLE_TIMEOUT, default 120s — internal/pkg/config/config.go).
+// Both were zero, i.e. unlimited, until cycle 12: a peer could hold a connection
+// open indefinitely by never finishing its header block, and idle keep-alive
+// connections were never reaped.
+//
+// ReadTimeout and WriteTimeout are deliberately left at zero. They bound a whole
+// request/response, which on this server means cutting SSE relay streams and large
+// uploads mid-flight (cycle 12 do-not-regress list).
+func buildHTTPServer(port string, handler http.Handler) *http.Server {
+	srvCfg := config.Get().Server
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: srvCfg.ReadHeaderTimeout,
+		IdleTimeout:       srvCfg.IdleTimeout,
+	}
 }
 
 func InjectUmamiAnalytics() {

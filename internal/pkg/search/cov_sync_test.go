@@ -37,25 +37,6 @@ func (b *covSyncLogBuffer) String() string {
 	return b.buf.String()
 }
 
-// drainAsyncPool blocks until every task submitted so far has finished. The
-// pool's queue is FIFO, so once WorkerCount sentinels have run, no worker can
-// still be inside an earlier task. Without this the workers keep reading
-// Client/RetryCount/IndexPrefix while the test's cleanup restores them.
-func drainAsyncPool(workers int) {
-	if asyncPool == nil {
-		return
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	for i := 0; i < workers; i++ {
-		asyncPool.Go(wg.Done)
-	}
-	wg.Wait()
-}
-
 func resetSyncGlobals(t *testing.T) {
 	t.Helper()
 	prevPool, prevCtx, prevCancel := asyncPool, syncCtx, syncCancel
@@ -72,7 +53,6 @@ func resetSyncGlobals(t *testing.T) {
 	gin.DefaultWriter = logBuf
 
 	t.Cleanup(func() {
-		workers := WorkerCount
 		if syncCancel != nil {
 			syncCancel()
 			deadline := time.Now().Add(5 * time.Second)
@@ -84,7 +64,18 @@ func resetSyncGlobals(t *testing.T) {
 				t.Error("scheduled sync goroutine did not stop within 5s of cancellation")
 			}
 		}
-		drainAsyncPool(workers)
+		// The pool submissions used to be drained here by submitting
+		// WorkerCount sentinel tasks and waiting on them. That rested on "the
+		// queue is FIFO, so once WorkerCount sentinels have run no worker can
+		// still be inside an earlier task" — which gopool does not guarantee.
+		// Its CtxGo spawns an ADDITIONAL worker whenever the queue is
+		// non-empty and the worker count is still under the cap
+		// (gopool@v0.1.3 util/gopool/pool.go CtxGo), and a worker exits the
+		// moment it finds the queue empty (worker.go run()). So a sentinel
+		// can be dequeued by a freshly spawned worker while an earlier task
+		// is still executing, and the wait returns too early. The join now
+		// comes from AsyncGo being forced inline in TestMain
+		// (async_seam_test.go) instead.
 		gin.DefaultWriter = prevWriter
 		asyncPool, syncCtx, syncCancel = prevPool, prevCtx, prevCancel
 	})

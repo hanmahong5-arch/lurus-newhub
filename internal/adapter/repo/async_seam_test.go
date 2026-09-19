@@ -3,6 +3,8 @@ package repo
 import (
 	"os"
 	"testing"
+
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 )
 
 // TestMain runs this package's fire-and-forget side effects inline for the
@@ -16,5 +18,14 @@ import (
 // scheduler felt like it is now observable at the point it was requested.
 func TestMain(m *testing.M) {
 	AsyncGo = func(f func()) { f() }
+	// governance.RecordAuditEvent hands the write to whichever AuditWriter is
+	// current at call time, through governance.AsyncGo. Tests here install
+	// writers bound to a per-test *gorm.DB that setupSQLiteDB's cleanup closes
+	// (pinSessionAuditWriter in user_session_test.go, grantAuditWriter in
+	// admin_permission_grant_test.go, which writes through this package's DB
+	// global). Detached, that write and that close have no ordering — the same
+	// shape as the AsyncGo above, one layer sideways. Production keeps
+	// gopool.Go.
+	governance.AsyncGo = func(f func()) { f() }
 	os.Exit(m.Run())
 }

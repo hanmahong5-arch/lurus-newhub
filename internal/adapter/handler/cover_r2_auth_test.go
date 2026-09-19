@@ -154,12 +154,30 @@ func TestR2Auth_SimpleOptionEndpoints(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
+	// common.OptionMap is a process-wide map that nothing here owned before
+	// cycle-12 L1: these four keys used to be written and left behind, so any
+	// later test reading Notice/About/Midjourney/HomePageContent saw this
+	// test's values. Removing exactly the keys this test added (rather than
+	// snapshotting the whole map) keeps concurrent writers' entries intact.
+	optionKeys := []string{"Notice", "About", "Midjourney", "HomePageContent"}
+	optionValues := map[string]string{
+		"Notice":          "notice-body",
+		"About":           "about-body",
+		"Midjourney":      "mj-body",
+		"HomePageContent": "home-body",
+	}
 	common.OptionMapRWMutex.Lock()
-	common.OptionMap["Notice"] = "notice-body"
-	common.OptionMap["About"] = "about-body"
-	common.OptionMap["Midjourney"] = "mj-body"
-	common.OptionMap["HomePageContent"] = "home-body"
+	for _, k := range optionKeys {
+		common.OptionMap[k] = optionValues[k]
+	}
 	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		for _, k := range optionKeys {
+			delete(common.OptionMap, k)
+		}
+	})
 
 	cases := []struct {
 		name    string

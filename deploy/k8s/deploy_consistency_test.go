@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -383,6 +384,88 @@ func TestWorkflowsHaveReachableTriggers(t *testing.T) {
 		}
 		if strings.Contains(block[1], "tags:") {
 			t.Errorf("%s: triggers on push:tags: — this repo's release path is merge-to-main -> docker-image-main.yml -> ArgoCD, never git tags", name)
+		}
+	}
+}
+
+// deployEnvValue returns the value of the named container env var in a
+// deployment manifest, or "" if the manifest does not set it. The manifests
+// are hand-written with one `- name: X` / `value: "Y"` pair per entry (see
+// SYNC_FREQUENCY in both); this parses that shape. It is not a YAML parser and
+// does not follow valueFrom/secretKeyRef entries, which is fine for the two
+// plain-value keys below.
+func deployEnvValue(body, name string) string {
+	re := regexp.MustCompile(`(?m)^\s*-\s*name:\s*` + regexp.QuoteMeta(name) + `\s*\n\s*value:\s*"?([^"\n]*)"?\s*$`)
+	m := re.FindStringSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	return strings.TrimSpace(m[1])
+}
+
+// maxPoolConnectionBudget is THIS GATE's own ceiling for PostgreSQL
+// connections across all replicas of this service — not a measured limit of
+// the server. The real max_connections on R6's `database` instance, and what
+// platform and the IdP already consume of it, is cycle-12 owner item O-pool;
+// 150 is the number the plan fixed while that is open, chosen to sit above the
+// plan's worst-case arithmetic for r6-stage (3 replicas x 2 pools x 20 = 120)
+// with room for a fourth replica's worth of drift, and below the 200 the plan
+// reserves 80 of for platform/zitadel. Raise it here, in one place, once the
+// measured ceiling is known.
+const maxPoolConnectionBudget = 150
+
+// TestDeploymentPoolBudget: a manifest that declares a container memory limit
+// is a manifest whose resource ceiling somebody thought about, and it must
+// declare its database-connection ceiling too rather than inherit the code
+// default (1000 per pool, internal/adapter/repo/main.go currentPoolSettings),
+// plus its heap ceiling (GOMEMLIMIT — without it the Go heap grows with no
+// idea of the cgroup limit it is OOM-killed against). The replica count enters
+// only the budget arithmetic: keying the requirement on replicas>1 would let
+// the single-replica UAT manifest keep the 1000 default against the same
+// PostgreSQL instance production uses.
+//
+// The x2 in the arithmetic is headroom, not today's count: a second pool
+// exists only if LOG_SQL_DSN is set, and InitLogDB aliases LOG_DB to DB when
+// it is not (neither manifest sets it — `grep -c LOG_SQL_DSN` is 0 in both).
+// r6-stage's real worst case today is therefore 3 x 20 = 60.
+func TestDeploymentPoolBudget(t *testing.T) {
+	root := repoRoot(t)
+	manifests := []string{
+		"deploy/k8s/r6-stage/deployment.yaml",
+		"deploy/k8s/r6-uat/deployment.yaml",
+	}
+	replicasRe := regexp.MustCompile(`(?m)^\s*replicas:\s*(\d+)\s*$`)
+	memLimitRe := regexp.MustCompile(`(?s)limits:.{0,160}memory:`)
+
+	for _, rel := range manifests {
+		body := readFile(t, filepath.Join(root, filepath.FromSlash(rel)))
+
+		rm := replicasRe.FindStringSubmatch(body)
+		if rm == nil {
+			t.Errorf("%s: no replicas: line found — this gate is measuring nothing", rel)
+			continue
+		}
+		replicas, err := strconv.Atoi(rm[1])
+		if err != nil {
+			t.Errorf("%s: replicas: %q does not parse: %v", rel, rm[1], err)
+			continue
+		}
+
+		declaresLimits := memLimitRe.MatchString(body)
+		open := deployEnvValue(body, "SQL_MAX_OPEN_CONNS")
+		if declaresLimits && open == "" {
+			t.Errorf("%s: declares a container memory limit but does not set SQL_MAX_OPEN_CONNS, so each replica may open up to the code default (1000) against a PostgreSQL instance shared with the other deployment, platform and the IdP", rel)
+		}
+		if declaresLimits && deployEnvValue(body, "GOMEMLIMIT") == "" {
+			t.Errorf("%s: sets a container memory limit but no GOMEMLIMIT, so the Go heap grows with no idea of the cgroup ceiling it is OOM-killed against", rel)
+		}
+		if open != "" {
+			n, cerr := strconv.Atoi(open)
+			if cerr != nil {
+				t.Errorf("%s: SQL_MAX_OPEN_CONNS=%q does not parse: %v", rel, open, cerr)
+			} else if worst := replicas * 2 * n; worst > maxPoolConnectionBudget {
+				t.Errorf("%s: replicas(%d) x 2 pools x SQL_MAX_OPEN_CONNS(%d) = %d, over the %d budget", rel, replicas, n, worst, maxPoolConnectionBudget)
+			}
 		}
 	}
 }

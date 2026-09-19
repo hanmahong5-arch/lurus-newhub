@@ -188,6 +188,23 @@ spec:
               value: "master"
             - name: SYNC_FREQUENCY
               value: "60"
+            # Cycle-12 L8 pool ceiling, kept identical to r6-stage so UAT
+            # exercises the same pool shape. replicas: 1 here, so 1 x 20 = 20
+            # PostgreSQL connections today. Same LOG_SQL_DSN caveat as
+            # r6-stage: the x2 in the budget arithmetic is headroom for a log
+            # pool no deployment configures yet.
+            # Lowering this is an AVAILABILITY knob, not a latency one: the deep
+            # readinessProbe's DB ping takes a pooled connection, so a saturated
+            # pool answers /api/health with 503 and pulls replicas out of the
+            # Service. See doc/runbook/db-pool-saturation.md.
+            - name: SQL_MAX_OPEN_CONNS
+              value: "20"
+            - name: SQL_MAX_IDLE_CONNS
+              value: "5"
+            # Below the 1Gi container limit so the Go heap backs off before the
+            # cgroup OOM-kills the pod.
+            - name: GOMEMLIMIT
+              value: "900MiB"
             - name: GRACEFUL_SHUTDOWN_TIMEOUT
               value: "30s"
             - name: LOG_FORMAT

@@ -984,6 +984,20 @@ func GetPaginatedTags(offset int, limit int) ([]*string, error) {
 	return tags, err
 }
 
+// GetPaginatedTagsByTenant is GetPaginatedTags restricted to one tenant's
+// channels. The tag-grouped channel list (handler GetAllChannels, tag_mode)
+// pages over tags, not over rows: an unscoped page hands a tenant admin other
+// tenants' tag names and leaves the page mostly empty once the rows are
+// filtered. The tenant_id predicate is an exact match, matching the row
+// filter that list applies, rather than abilityTenantScope's shared union.
+func GetPaginatedTagsByTenant(tenantID string, offset int, limit int) ([]*string, error) {
+	var tags []*string
+	err := DB.Model(&Channel{}).Select("DISTINCT tag").
+		Where("tag != '' AND tenant_id = ?", tenantID).
+		Offset(offset).Limit(limit).Find(&tags).Error
+	return tags, err
+}
+
 func SearchTags(keyword string, group string, model string, idSort bool) ([]*string, error) {
 	var tags []*string
 	// UPSTREAM-MERGE NOTE: new-api branches on MySQL backtick quoting here;
@@ -1162,6 +1176,16 @@ func CountAllChannels() (int64, error) {
 func CountAllTags() (int64, error) {
 	var total int64
 	err := DB.Model(&Channel{}).Where("tag is not null AND tag != ''").Distinct("tag").Count(&total).Error
+	return total, err
+}
+
+// CountAllTagsByTenant is CountAllTags for one tenant's channels — the total
+// that goes with GetPaginatedTagsByTenant's page.
+func CountAllTagsByTenant(tenantID string) (int64, error) {
+	var total int64
+	err := DB.Model(&Channel{}).
+		Where("tag is not null AND tag != '' AND tenant_id = ?", tenantID).
+		Distinct("tag").Count(&total).Error
 	return total, err
 }
 

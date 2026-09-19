@@ -142,8 +142,23 @@ func parseSessions(t *testing.T, w *httptest.ResponseRecorder) map[string]interf
 
 // 1. Happy path: 2 tokens (1 enabled, 1 disabled) + 5 logs within 30 days.
 // Expect 1 session returned, active_tokens=1, request_count=5.
+//
+// Cycle-12 L4: this now runs with SESSION_REGISTRY_ENABLED on and one
+// registered row. The counts it asserts are the same ones, on the same
+// response shape — but they hang off a REAL session row instead of the
+// synthetic "current" entry the flag-off path used to invent. The flag-off
+// shape is pinned separately by TestV2Sessions_FlagOff_NoSyntheticRow.
 func TestV2Sessions_HappyPath(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
 	ctx := setupSessionsRouter(t)
+
+	now := common.GetTimestamp()
+	if err := ctx.db.Create(&entity.UserSession{
+		SessionKey: "sess-happy-path-1", UserId: ctx.userID, TenantId: ctx.tenantID,
+		AuthMethod: "session", CreatedAt: now, LastSeenAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed session row: %v", err)
+	}
 
 	// Token 1: enabled (status=1)
 	ctx.db.Create(&repo.Token{
@@ -163,12 +178,12 @@ func TestV2Sessions_HappyPath(t *testing.T) {
 	})
 
 	// 5 log entries within the last 30 days.
-	now := time.Now().Unix()
+	logNow := time.Now().Unix()
 	for i := 0; i < 5; i++ {
 		ctx.db.Create(&repo.Log{
 			UserId:    ctx.userID,
 			TenantId:  ctx.tenantID,
-			CreatedAt: now - int64(i*3600), // spread across last 5 hours
+			CreatedAt: logNow - int64(i*3600), // spread across last 5 hours
 			Type:      repo.LogTypeConsume,
 		})
 	}
@@ -194,9 +209,6 @@ func TestV2Sessions_HappyPath(t *testing.T) {
 	}
 
 	item := items[0].(map[string]interface{})
-	if item["current"] != true {
-		t.Errorf("current = %v, want true", item["current"])
-	}
 	if item["active_tokens"].(float64) != 1 {
 		t.Errorf("active_tokens = %v, want 1 (disabled token excluded)", item["active_tokens"])
 	}
@@ -206,8 +218,20 @@ func TestV2Sessions_HappyPath(t *testing.T) {
 }
 
 // 2. Tenant isolation: tenantA's token/log must not appear in tenantB's response.
+// Registry on (cycle-12 L4) so there is a row to carry the per-tenant
+// counts — with the flag off the response is now an empty list and this
+// would assert nothing.
 func TestV2Sessions_TenantIsolation(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
 	ctx := setupSessionsRouter(t)
+
+	nowTS := common.GetTimestamp()
+	if err := ctx.db.Create(&entity.UserSession{
+		SessionKey: "sess-tenant-isolation", UserId: ctx.userID, TenantId: ctx.tenantID,
+		AuthMethod: "session", CreatedAt: nowTS, LastSeenAt: nowTS,
+	}).Error; err != nil {
+		t.Fatalf("seed session row: %v", err)
+	}
 
 	// Seed a second tenant — needs a unique Id and ZitadelOrgID.
 	tenantB := &repo.Tenant{
@@ -254,9 +278,107 @@ func TestV2Sessions_TenantIsolation(t *testing.T) {
 	}
 }
 
-// 3. Whitelist enforced: response body must not contain sensitive field names.
-func TestV2Sessions_WhitelistEnforced(t *testing.T) {
+// TestV2Sessions_FlagOff_NoSyntheticRow (cycle-12 L4) pins the honest
+// flag-off answer: an EMPTY list plus registry_enabled:false.
+//
+// It used to answer one synthetic row — id "current", last_seen = now — for
+// every caller. Production runs with SESSION_REGISTRY_ENABLED unset, so a
+// customer logged in from five browsers was shown exactly one device "last
+// seen just now", and the console's "sign out other devices" control (which
+// only appears when the list holds more than one row) could never appear.
+// One invented device is worse than none: it reads as a complete answer.
+func TestV2Sessions_FlagOff_NoSyntheticRow(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "false")
 	ctx := setupSessionsRouter(t)
+
+	// A row exists in the table (left over from an earlier flag-on soak, or
+	// a rollback): the flag, not the table, decides.
+	now := common.GetTimestamp()
+	if err := ctx.db.Create(&entity.UserSession{
+		SessionKey: "sess-flag-off-leftover", UserId: ctx.userID, TenantId: ctx.tenantID,
+		AuthMethod: "session", CreatedAt: now, LastSeenAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed leftover session row: %v", err)
+	}
+
+	w := getSessions(ctx)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	data := parseSessions(t, w)["data"].(map[string]interface{})
+
+	items := data["items"].([]interface{})
+	if len(items) != 0 {
+		t.Errorf("items = %v, want [] — with the registry off nothing is registered, so any row here is invented", items)
+	}
+	if total, _ := data["total"].(float64); total != 0 {
+		t.Errorf("total = %v, want 0", data["total"])
+	}
+	enabled, present := data["registry_enabled"]
+	if !present {
+		t.Fatalf("response has no registry_enabled field — the console cannot tell \"no devices\" from \"per-device sessions are off here\"; body: %s", w.Body.String())
+	}
+	if enabled != false {
+		t.Errorf("registry_enabled = %v, want false", enabled)
+	}
+	// The two real numbers survive the removal of the synthetic row.
+	if _, ok := data["active_tokens"].(float64); !ok {
+		t.Errorf("active_tokens missing from the flag-off answer: %v", data)
+	}
+	if _, ok := data["request_count"].(float64); !ok {
+		t.Errorf("request_count missing from the flag-off answer: %v", data)
+	}
+}
+
+// TestV2Sessions_FlagOn_ReportsCapability is the other half: the same field
+// must say true when the registry IS on, otherwise a console that hides its
+// per-device UI on registry_enabled:false would hide it everywhere.
+func TestV2Sessions_FlagOn_ReportsCapability(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
+	ctx := setupSessionsRouter(t)
+
+	now := common.GetTimestamp()
+	if err := ctx.db.Create(&entity.UserSession{
+		SessionKey: "sess-capability-on", UserId: ctx.userID, TenantId: ctx.tenantID,
+		AuthMethod: "session", CreatedAt: now, LastSeenAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed session row: %v", err)
+	}
+
+	w := getSessions(ctx)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	data := parseSessions(t, w)["data"].(map[string]interface{})
+	if data["registry_enabled"] != true {
+		t.Errorf("registry_enabled = %v, want true; body: %s", data["registry_enabled"], w.Body.String())
+	}
+
+	// And on the flag-on-but-no-row path, which still answers the single
+	// "your current request" entry.
+	ctx.db.Where("session_key = ?", "sess-capability-on").Delete(&entity.UserSession{})
+	w = getSessions(ctx)
+	data = parseSessions(t, w)["data"].(map[string]interface{})
+	if data["registry_enabled"] != true {
+		t.Errorf("registry_enabled = %v on the no-row path, want true; body: %s", data["registry_enabled"], w.Body.String())
+	}
+}
+
+// 3. Whitelist enforced: response body must not contain sensitive field names.
+// Registry ON: with it off the response is an empty list and every substring
+// assertion below would pass vacuously.
+func TestV2Sessions_WhitelistEnforced(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
+	ctx := setupSessionsRouter(t)
+
+	nowTS := common.GetTimestamp()
+	if err := ctx.db.Create(&entity.UserSession{
+		SessionKey: "sess-whitelist-flagon", UserId: ctx.userID, TenantId: ctx.tenantID,
+		IP: "203.0.113.9", UserAgent: "curl/8.0", AuthMethod: "session",
+		CreatedAt: nowTS, LastSeenAt: nowTS,
+	}).Error; err != nil {
+		t.Fatalf("seed session row: %v", err)
+	}
 
 	w := getSessions(ctx)
 	if w.Code != http.StatusOK {
@@ -275,12 +397,9 @@ func TestV2Sessions_WhitelistEnforced(t *testing.T) {
 			t.Errorf("response body contains forbidden field %q — whitelist violated. body: %s", f, body)
 		}
 	}
-	// The flag-off (legacy synthetic-row) path renders no ip/user_agent at
-	// all today, so these never match here — but the assertion must live in
-	// THIS test too, not only in the flag-on masking test below: if a future
-	// change ever added a raw ip/UA field to the legacy path, this is what
-	// would catch it (mirrors §8's raw-pattern requirement, applied to both
-	// code paths rather than only the one that already carries them).
+	// The seeded row's ip is rendered masked, so a match of the raw pattern
+	// below can only be an unmasked address (mirrors §8's raw-pattern
+	// requirement, asserted on both this path and the masking test below).
 	if rawIPPattern.MatchString(body) {
 		t.Errorf("response body contains what looks like a raw (unmasked) IP address. body: %s", body)
 	}

@@ -18,45 +18,17 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import i18next from 'i18next';
-import { Modal, Tag, Typography, Avatar } from '@douyinfe/semi-ui';
+import { Modal, Tag, Typography } from '@douyinfe/semi-ui';
 import { copy, showSuccess } from './utils';
 import { MOBILE_BREAKPOINT } from '../hooks/common/useIsMobile';
 import { visit } from 'unist-util-visit';
-import * as LobeIcons from '@lobehub/icons';
-import {
-  OpenAI,
-  Claude,
-  Gemini,
-  Moonshot,
-  Zhipu,
-  Qwen,
-  DeepSeek,
-  Minimax,
-  Wenxin,
-  Spark,
-  Midjourney,
-  Hunyuan,
-  Cohere,
-  Cloudflare,
-  Ai360,
-  Yi,
-  Jina,
-  Mistral,
-  XAI,
-  Ollama,
-  Doubao,
-  Suno,
-  Xinference,
-  OpenRouter,
-  Dify,
-  Coze,
-  SiliconCloud,
-  FastGPT,
-  Kling,
-  Jimeng,
-  Perplexity,
-  Replicate,
-} from '@lobehub/icons';
+// Vendor logos arrive through a dynamic import (see ./lobeIcon): this module is
+// re-exported by the helpers barrel, which App.jsx imports, so a static import
+// of '@lobehub/icons' here puts the whole pack in the entry chunk.
+// src/z9_entry_icon_barrel.test.js guards that.
+import { LobeHubIcon, getLobeHubIcon } from './lobeIcon';
+
+export { getLobeHubIcon };
 
 import {
   LayoutDashboard,
@@ -149,12 +121,12 @@ export const getModelCategories = (() => {
       // 避免名字里碰巧带 360 的其它厂商模型被误认。
       ai360: {
         label: t('360智脑'),
-        icon: <Ai360.Color />,
+        icon: <LobeHubIcon name='Ai360' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().startsWith('360'),
       },
       openai: {
         label: 'OpenAI',
-        icon: <OpenAI />,
+        icon: <LobeHubIcon name='OpenAI' />,
         filter: (model) =>
           model.model_name.toLowerCase().includes('gpt') ||
           model.model_name.toLowerCase().includes('dall-e') ||
@@ -172,12 +144,12 @@ export const getModelCategories = (() => {
       },
       anthropic: {
         label: 'Anthropic',
-        icon: <Claude.Color />,
+        icon: <LobeHubIcon name='Claude' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().includes('claude'),
       },
       gemini: {
         label: 'Gemini',
-        icon: <Gemini.Color />,
+        icon: <LobeHubIcon name='Gemini' sub='Color' />,
         filter: (model) =>
           model.model_name.toLowerCase().includes('gemini') ||
           model.model_name.toLowerCase().includes('gemma') ||
@@ -190,14 +162,14 @@ export const getModelCategories = (() => {
       },
       moonshot: {
         label: 'Moonshot',
-        icon: <Moonshot />,
+        icon: <LobeHubIcon name='Moonshot' />,
         filter: (model) =>
           model.model_name.toLowerCase().includes('moonshot') ||
           model.model_name.toLowerCase().includes('kimi'),
       },
       zhipu: {
         label: t('智谱'),
-        icon: <Zhipu.Color />,
+        icon: <LobeHubIcon name='Zhipu' sub='Color' />,
         filter: (model) =>
           model.model_name.toLowerCase().includes('chatglm') ||
           model.model_name.toLowerCase().includes('glm-') ||
@@ -206,44 +178,44 @@ export const getModelCategories = (() => {
       },
       qwen: {
         label: t('通义千问'),
-        icon: <Qwen.Color />,
+        icon: <LobeHubIcon name='Qwen' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().includes('qwen'),
       },
       deepseek: {
         label: 'DeepSeek',
-        icon: <DeepSeek.Color />,
+        icon: <LobeHubIcon name='DeepSeek' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().includes('deepseek'),
       },
       minimax: {
         label: 'MiniMax',
-        icon: <Minimax.Color />,
+        icon: <LobeHubIcon name='Minimax' sub='Color' />,
         filter: (model) =>
           model.model_name.toLowerCase().includes('abab') ||
           model.model_name.toLowerCase().includes('minimax'),
       },
       baidu: {
         label: t('文心一言'),
-        icon: <Wenxin.Color />,
+        icon: <LobeHubIcon name='Wenxin' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().includes('ernie'),
       },
       xunfei: {
         label: t('讯飞星火'),
-        icon: <Spark.Color />,
+        icon: <LobeHubIcon name='Spark' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().includes('spark'),
       },
       midjourney: {
         label: 'Midjourney',
-        icon: <Midjourney />,
+        icon: <LobeHubIcon name='Midjourney' />,
         filter: (model) => model.model_name.toLowerCase().includes('mj_'),
       },
       tencent: {
         label: t('腾讯混元'),
-        icon: <Hunyuan.Color />,
+        icon: <LobeHubIcon name='Hunyuan' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().includes('hunyuan'),
       },
       cohere: {
         label: 'Cohere',
-        icon: <Cohere.Color />,
+        icon: <LobeHubIcon name='Cohere' sub='Color' />,
         filter: (model) =>
           model.model_name.toLowerCase().includes('command') ||
           model.model_name.toLowerCase().includes('c4ai-') ||
@@ -251,17 +223,17 @@ export const getModelCategories = (() => {
       },
       cloudflare: {
         label: 'Cloudflare',
-        icon: <Cloudflare.Color />,
+        icon: <LobeHubIcon name='Cloudflare' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().includes('@cf/'),
       },
       jina: {
         label: 'Jina',
-        icon: <Jina />,
+        icon: <LobeHubIcon name='Jina' />,
         filter: (model) => model.model_name.toLowerCase().includes('jina'),
       },
       mistral: {
         label: 'Mistral AI',
-        icon: <Mistral.Color />,
+        icon: <LobeHubIcon name='Mistral' sub='Color' />,
         filter: (model) =>
           model.model_name.toLowerCase().includes('mistral') ||
           model.model_name.toLowerCase().includes('codestral') ||
@@ -271,22 +243,22 @@ export const getModelCategories = (() => {
       },
       xai: {
         label: 'xAI',
-        icon: <XAI />,
+        icon: <LobeHubIcon name='XAI' />,
         filter: (model) => model.model_name.toLowerCase().includes('grok'),
       },
       llama: {
         label: 'Llama',
-        icon: <Ollama />,
+        icon: <LobeHubIcon name='Ollama' />,
         filter: (model) => model.model_name.toLowerCase().includes('llama'),
       },
       doubao: {
         label: t('豆包'),
-        icon: <Doubao.Color />,
+        icon: <LobeHubIcon name='Doubao' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().includes('doubao'),
       },
       yi: {
         label: t('零一万物'),
-        icon: <Yi.Color />,
+        icon: <LobeHubIcon name='Yi' sub='Color' />,
         filter: (model) => model.model_name.toLowerCase().includes('yi'),
       },
     };
@@ -307,200 +279,84 @@ export function getChannelIcon(channelType) {
   switch (channelType) {
     case 1: // OpenAI
     case 3: // Azure OpenAI
-      return <OpenAI size={iconSize} />;
+      return <LobeHubIcon name='OpenAI' size={iconSize} />;
     case 2: // Midjourney Proxy
     case 5: // Midjourney Proxy Plus
-      return <Midjourney size={iconSize} />;
+      return <LobeHubIcon name='Midjourney' size={iconSize} />;
     case 36: // Suno API
-      return <Suno size={iconSize} />;
+      return <LobeHubIcon name='Suno' size={iconSize} />;
     case 4: // Ollama
-      return <Ollama size={iconSize} />;
+      return <LobeHubIcon name='Ollama' size={iconSize} />;
     case 14: // Anthropic Claude
     case 33: // AWS Claude
-      return <Claude.Color size={iconSize} />;
+      return <LobeHubIcon name='Claude' sub='Color' size={iconSize} />;
     case 41: // Vertex AI
-      return <Gemini.Color size={iconSize} />;
+      return <LobeHubIcon name='Gemini' sub='Color' size={iconSize} />;
     case 34: // Cohere
-      return <Cohere.Color size={iconSize} />;
+      return <LobeHubIcon name='Cohere' sub='Color' size={iconSize} />;
     case 39: // Cloudflare
-      return <Cloudflare.Color size={iconSize} />;
+      return <LobeHubIcon name='Cloudflare' sub='Color' size={iconSize} />;
     case 43: // DeepSeek
-      return <DeepSeek.Color size={iconSize} />;
+      return <LobeHubIcon name='DeepSeek' sub='Color' size={iconSize} />;
     case 15: // 百度文心千帆
     case 46: // 百度文心千帆V2
-      return <Wenxin.Color size={iconSize} />;
+      return <LobeHubIcon name='Wenxin' sub='Color' size={iconSize} />;
     case 17: // 阿里通义千问
-      return <Qwen.Color size={iconSize} />;
+      return <LobeHubIcon name='Qwen' sub='Color' size={iconSize} />;
     case 18: // 讯飞星火认知
-      return <Spark.Color size={iconSize} />;
+      return <LobeHubIcon name='Spark' sub='Color' size={iconSize} />;
     case 16: // 智谱 ChatGLM
     case 26: // 智谱 GLM-4V
-      return <Zhipu.Color size={iconSize} />;
+      return <LobeHubIcon name='Zhipu' sub='Color' size={iconSize} />;
     case 24: // Google Gemini
     case 11: // Google PaLM2
-      return <Gemini.Color size={iconSize} />;
+      return <LobeHubIcon name='Gemini' sub='Color' size={iconSize} />;
     case 47: // Xinference
-      return <Xinference.Color size={iconSize} />;
+      return <LobeHubIcon name='Xinference' sub='Color' size={iconSize} />;
     case 25: // Moonshot
-      return <Moonshot size={iconSize} />;
+      return <LobeHubIcon name='Moonshot' size={iconSize} />;
     case 27: // Perplexity
-      return <Perplexity.Color size={iconSize} />;
+      return <LobeHubIcon name='Perplexity' sub='Color' size={iconSize} />;
     case 20: // OpenRouter
-      return <OpenRouter size={iconSize} />;
+      return <LobeHubIcon name='OpenRouter' size={iconSize} />;
     case 19: // 360 智脑
-      return <Ai360.Color size={iconSize} />;
+      return <LobeHubIcon name='Ai360' sub='Color' size={iconSize} />;
     case 23: // 腾讯混元
-      return <Hunyuan.Color size={iconSize} />;
+      return <LobeHubIcon name='Hunyuan' sub='Color' size={iconSize} />;
     case 31: // 零一万物
-      return <Yi.Color size={iconSize} />;
+      return <LobeHubIcon name='Yi' sub='Color' size={iconSize} />;
     case 35: // MiniMax
-      return <Minimax.Color size={iconSize} />;
+      return <LobeHubIcon name='Minimax' sub='Color' size={iconSize} />;
     case 37: // Dify
-      return <Dify.Color size={iconSize} />;
+      return <LobeHubIcon name='Dify' sub='Color' size={iconSize} />;
     case 38: // Jina
-      return <Jina size={iconSize} />;
+      return <LobeHubIcon name='Jina' size={iconSize} />;
     case 40: // SiliconCloud
-      return <SiliconCloud.Color size={iconSize} />;
+      return <LobeHubIcon name='SiliconCloud' sub='Color' size={iconSize} />;
     case 42: // Mistral AI
-      return <Mistral.Color size={iconSize} />;
+      return <LobeHubIcon name='Mistral' sub='Color' size={iconSize} />;
     case 45: // 字节火山方舟、豆包通用
-      return <Doubao.Color size={iconSize} />;
+      return <LobeHubIcon name='Doubao' sub='Color' size={iconSize} />;
     case 48: // xAI
-      return <XAI size={iconSize} />;
+      return <LobeHubIcon name='XAI' size={iconSize} />;
     case 49: // Coze
-      return <Coze size={iconSize} />;
+      return <LobeHubIcon name='Coze' size={iconSize} />;
     case 50: // 可灵 Kling
-      return <Kling.Color size={iconSize} />;
+      return <LobeHubIcon name='Kling' sub='Color' size={iconSize} />;
     case 51: // 即梦 Jimeng
-      return <Jimeng.Color size={iconSize} />;
+      return <LobeHubIcon name='Jimeng' sub='Color' size={iconSize} />;
     case 54: // 豆包视频 Doubao Video
-      return <Doubao.Color size={iconSize} />;
+      return <LobeHubIcon name='Doubao' sub='Color' size={iconSize} />;
     case 56: // Replicate
-      return <Replicate size={iconSize} />;
+      return <LobeHubIcon name='Replicate' size={iconSize} />;
     case 8: // 自定义渠道
     case 22: // 知识库：FastGPT
-      return <FastGPT.Color size={iconSize} />;
+      return <LobeHubIcon name='FastGPT' sub='Color' size={iconSize} />;
     case 21: // 知识库：AI Proxy
     case 44: // 嵌入模型：MokaAI M3E
     default:
       return null; // 未知类型或自定义渠道不显示图标
   }
-}
-
-/**
- * 根据图标名称动态获取 LobeHub 图标组件
- * 支持：
- * - 基础："OpenAI"、"OpenAI.Color" 等
- * - 额外属性（点号链式）："OpenAI.Avatar.type={'platform'}"、"OpenRouter.Avatar.shape={'square'}"
- * - 继续兼容第二参数 size；若字符串里有 size=，以字符串为准
- * @param {string} iconName - 图标名称/描述
- * @param {number} size - 图标大小，默认为 14
- * @returns {JSX.Element} - 对应的图标组件或 Avatar
- */
-// 按点号切分图标描述符，但花括号/引号内部的点号属于取值本身：直接 split('.')
-// 会把 size={1.5} 这样的小数撕成 '{1' 和 '5}' 两段。
-function splitIconDescriptor(descriptor) {
-  const segments = [];
-  let current = '';
-  let depth = 0;
-  let quote = null;
-
-  for (const ch of descriptor) {
-    if (quote) {
-      if (ch === quote) quote = null;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '{') {
-      depth++;
-    } else if (ch === '}') {
-      if (depth > 0) depth--;
-    } else if (ch === '.' && depth === 0) {
-      segments.push(current);
-      current = '';
-      continue;
-    }
-    current += ch;
-  }
-  segments.push(current);
-
-  return segments;
-}
-
-export function getLobeHubIcon(iconName, size = 14) {
-  if (typeof iconName === 'string') iconName = iconName.trim();
-  // 如果没有图标名称，返回 Avatar
-  if (!iconName) {
-    return <Avatar size='extra-extra-small'>?</Avatar>;
-  }
-
-  // 解析组件路径与点号链式属性
-  const segments = splitIconDescriptor(String(iconName));
-  const baseKey = segments[0];
-  const BaseIcon = LobeIcons[baseKey];
-
-  let IconComponent = undefined;
-  let propStartIndex = 1;
-
-  if (BaseIcon && segments.length > 1 && BaseIcon[segments[1]]) {
-    IconComponent = BaseIcon[segments[1]];
-    propStartIndex = 2;
-  } else {
-    IconComponent = LobeIcons[baseKey];
-    propStartIndex = 1;
-  }
-
-  // 失败兜底
-  if (
-    !IconComponent ||
-    (typeof IconComponent !== 'function' && typeof IconComponent !== 'object')
-  ) {
-    const firstLetter = String(iconName).charAt(0).toUpperCase();
-    return <Avatar size='extra-extra-small'>{firstLetter}</Avatar>;
-  }
-
-  // 解析点号链式属性，形如：key={...}、key='...'、key="..."、key=123、key、key=true/false
-  const props = {};
-
-  const parseValue = (raw) => {
-    if (raw == null) return true;
-    let v = String(raw).trim();
-    // 去除一层花括号包裹
-    if (v.startsWith('{') && v.endsWith('}')) {
-      v = v.slice(1, -1).trim();
-    }
-    // 去除引号
-    if (
-      (v.startsWith('"') && v.endsWith('"')) ||
-      (v.startsWith("'") && v.endsWith("'"))
-    ) {
-      return v.slice(1, -1);
-    }
-    // 布尔
-    if (v === 'true') return true;
-    if (v === 'false') return false;
-    // 数字
-    if (/^-?\d+(?:\.\d+)?$/.test(v)) return Number(v);
-    // 其他原样返回字符串
-    return v;
-  };
-
-  for (let i = propStartIndex; i < segments.length; i++) {
-    const seg = segments[i];
-    if (!seg) continue;
-    const eqIdx = seg.indexOf('=');
-    if (eqIdx === -1) {
-      props[seg.trim()] = true;
-      continue;
-    }
-    const key = seg.slice(0, eqIdx).trim();
-    const valRaw = seg.slice(eqIdx + 1).trim();
-    props[key] = parseValue(valRaw);
-  }
-
-  // 兼容第二参数 size，若字符串中未显式指定 size，则使用函数入参
-  if (props.size == null && size != null) props.size = size;
-
-  return <IconComponent {...props} />;
 }
 
 // 颜色列表

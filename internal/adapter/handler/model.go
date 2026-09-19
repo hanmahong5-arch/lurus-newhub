@@ -355,10 +355,21 @@ func DashboardListModels(c *gin.Context) {
 	})
 }
 
+// EnabledListModels serves GET /api/channel/models_enabled, the channel
+// editor's "which models are live" picker. Non-root callers get the models
+// their own tenant can route (platform-shared channels plus their own); root
+// keeps the platform-wide list.
 func EnabledListModels(c *gin.Context) {
+	tenantID, isRoot := tenantScopeForDiscovery(c)
+	var models []string
+	if isRoot {
+		models = repo.GetEnabledModels()
+	} else {
+		models = repo.GetEnabledModelsForTenant(tenantID)
+	}
 	c.JSON(200, gin.H{
 		"success": true,
-		"data":    repo.GetEnabledModels(),
+		"data":    models,
 	})
 }
 

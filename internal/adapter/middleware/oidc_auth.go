@@ -31,9 +31,13 @@ import (
 // The JSON struct tags below use vendor-NEUTRAL default keys (org_id, roles,
 // …). Different IdPs advertise tenant/role information under different (often
 // vendor-prefixed) claim keys, so the EFFECTIVE key is configurable per deploy
-// via OIDC_CLAIM_* env vars; resolveOIDCClaims overlays those onto the struct
-// after the standard JSON decode. The neutral tags keep the type usable in
-// tests and as a marshal target without leaking any vendor claim URN into code.
+// via OIDC_CLAIM_* env vars. ResolveConfiguredExtraClaims reads a token under
+// those keys and ConfiguredExtraClaims.applyTo overlays the result onto this
+// struct after the standard JSON decode — that pair is the production overlay,
+// on both token paths (OIDCAuth here via applyConfigurableClaims, and
+// handler.validateIDToken for the browser callback). The neutral tags keep the
+// type usable in tests and as a marshal target without leaking any vendor
+// claim URN into code.
 type OIDCClaims struct {
 	jwt.RegisteredClaims
 	Email             string                 `json:"email"`
@@ -77,41 +81,158 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// resolveOIDCClaims overlays the configurable extra claims (org/role) onto an
-// already-parsed OIDCClaims by re-reading the raw token claim map under the
-// deploy-configured keys. This is only needed when a deploy points OIDC_CLAIM_*
-// at non-default keys; when the keys equal the neutral struct-tag defaults the
-// standard JSON decode already populated the fields and this is a cheap no-op.
-// rawClaims is the full decoded claim set (map form) of the same token.
-func resolveOIDCClaims(c *OIDCClaims, rawClaims map[string]interface{}) {
-	if c == nil || rawClaims == nil {
-		return
+// ReloadOIDCClaimKeys re-reads the OIDC_CLAIM_* environment into the package's
+// claim-key set. InitOIDCAuth calls it: the package-level oidcClaimKeys
+// initializer runs at program init, which is BEFORE main() calls
+// godotenv.Load(".env"), so without this refresh an OIDC_CLAIM_* set only in a
+// .env file would be silently ignored and the vendor-neutral defaults used
+// instead. Real process env (K8s) is honoured either way.
+func ReloadOIDCClaimKeys() {
+	oidcClaimKeys = claimKeySet{
+		OrgID:             envOr("OIDC_CLAIM_ORG_ID", "org_id"),
+		OrgDomain:         envOr("OIDC_CLAIM_ORG_DOMAIN", "org_domain"),
+		ResourceOwnerID:   envOr("OIDC_CLAIM_RESOURCE_OWNER_ID", "resource_owner_id"),
+		ResourceOwnerName: envOr("OIDC_CLAIM_RESOURCE_OWNER_NAME", "resource_owner_name"),
+		Roles:             envOr("OIDC_CLAIM_ROLES", "roles"),
+	}
+}
+
+// ConfiguredExtraClaims carries the values a token stores under the
+// deploy-configured OIDC_CLAIM_* keys. A string field is nil when the
+// configured key for it equals the neutral struct-tag default (the standard
+// JSON decode already populated that field) or when the token carries no
+// value of the expected type under the configured key — nil therefore means
+// "leave whatever the standard decode produced alone", which is not the same
+// as an empty string.
+//
+// It exists so the token-verifying entry points read the configurable keys
+// through one resolver. The non-test callers, enumerated 2026-09-19 by
+// grepping ResolveConfiguredExtraClaims and applyConfigurableClaims across
+// internal/: OIDCAuth (via applyConfigurableClaims, the bearer-JWT path) and
+// handler.validateIDToken (the browser OIDC callback, whose IDTokenClaims is a
+// separate struct in a package this one cannot import).
+// ResourceOwnerID/ResourceOwnerName have no counterpart on IDTokenClaims and
+// are unread by that second caller.
+type ConfiguredExtraClaims struct {
+	OrgID             *string
+	OrgDomain         *string
+	ResourceOwnerID   *string
+	ResourceOwnerName *string
+	Roles             map[string]interface{}
+}
+
+// configuredKeysAreNeutral reports whether the five configured claim keys
+// (org id, org domain, resource-owner id, resource-owner name, roles) each
+// equal the neutral struct-tag default, in which case the standard JSON decode
+// has already done the work and no re-parse is needed.
+func configuredKeysAreNeutral() bool {
+	return oidcClaimKeys.OrgID == "org_id" &&
+		oidcClaimKeys.OrgDomain == "org_domain" &&
+		oidcClaimKeys.ResourceOwnerID == "resource_owner_id" &&
+		oidcClaimKeys.ResourceOwnerName == "resource_owner_name" &&
+		oidcClaimKeys.Roles == "roles"
+}
+
+// extraClaimsFromMap reads the configurable extra claims out of a decoded
+// claim map. A key left at its neutral default is skipped, so a deploy that
+// configures none of them gets an all-nil result.
+func extraClaimsFromMap(rawClaims map[string]interface{}) ConfiguredExtraClaims {
+	var out ConfiguredExtraClaims
+	if rawClaims == nil {
+		return out
 	}
 	if k := oidcClaimKeys.OrgID; k != "org_id" {
 		if v, ok := rawClaims[k].(string); ok {
-			c.OrgID = v
+			out.OrgID = &v
 		}
 	}
 	if k := oidcClaimKeys.OrgDomain; k != "org_domain" {
 		if v, ok := rawClaims[k].(string); ok {
-			c.OrgDomain = v
+			out.OrgDomain = &v
 		}
 	}
 	if k := oidcClaimKeys.ResourceOwnerID; k != "resource_owner_id" {
 		if v, ok := rawClaims[k].(string); ok {
-			c.ResourceOwnerID = v
+			out.ResourceOwnerID = &v
 		}
 	}
 	if k := oidcClaimKeys.ResourceOwnerName; k != "resource_owner_name" {
 		if v, ok := rawClaims[k].(string); ok {
-			c.ResourceOwnerName = v
+			out.ResourceOwnerName = &v
 		}
 	}
 	if k := oidcClaimKeys.Roles; k != "roles" {
 		if v, ok := rawClaims[k].(map[string]interface{}); ok {
-			c.Roles = v
+			out.Roles = v
 		}
 	}
+	return out
+}
+
+// ResolveConfiguredExtraClaims decodes tokenString's claim map and returns the
+// values stored under the deploy-configured OIDC_CLAIM_* keys.
+//
+// The token is parsed WITHOUT signature verification on purpose: both callers
+// listed on ConfiguredExtraClaims have already verified the signature through
+// VerifyIDTokenWithJWKS / jwt.ParseWithClaims and need the decoded map solely
+// to read keys the typed struct cannot name. An unparseable token
+// yields the all-nil result (no panic, no partial overlay), and so does a
+// deploy that leaves the five claim keys at their neutral defaults — that fast
+// path keeps the hot request path allocation-free.
+func ResolveConfiguredExtraClaims(tokenString string) ConfiguredExtraClaims {
+	if configuredKeysAreNeutral() {
+		return ConfiguredExtraClaims{}
+	}
+	raw := jwt.MapClaims{}
+	parser := jwt.NewParser()
+	if _, _, err := parser.ParseUnverified(tokenString, raw); err != nil {
+		return ConfiguredExtraClaims{}
+	}
+	return extraClaimsFromMap(map[string]interface{}(raw))
+}
+
+// applyTo writes each resolved (non-nil) field onto an OIDCClaims, leaving
+// the standard-decoded value in place for the rest.
+func (e ConfiguredExtraClaims) applyTo(c *OIDCClaims) {
+	if c == nil {
+		return
+	}
+	if e.OrgID != nil {
+		c.OrgID = *e.OrgID
+	}
+	if e.OrgDomain != nil {
+		c.OrgDomain = *e.OrgDomain
+	}
+	if e.ResourceOwnerID != nil {
+		c.ResourceOwnerID = *e.ResourceOwnerID
+	}
+	if e.ResourceOwnerName != nil {
+		c.ResourceOwnerName = *e.ResourceOwnerName
+	}
+	if e.Roles != nil {
+		c.Roles = e.Roles
+	}
+}
+
+// resolveOIDCClaims is a TEST-ONLY shim, not a production path: since cycle 12
+// every production overlay goes through ResolveConfiguredExtraClaims +
+// applyTo (applyConfigurableClaims on the bearer-JWT path,
+// handler.validateIDToken on the browser callback), and a grep of
+// resolveOIDCClaims across internal/ returns only this declaration and two
+// coverage tests in files this cycle's lane does not own
+// (oidc_admin_cover_test.go, oidc_autocreate_cover_test.go). It is kept so
+// those keep compiling and is a thin wrapper over the same resolver, so it
+// cannot drift from what production does.
+//
+// It overlays the configurable extra claims (org/role) onto an already-parsed
+// OIDCClaims from the raw claim map of the same token. Only meaningful when a
+// deploy points OIDC_CLAIM_* at non-default keys; with the neutral struct-tag
+// defaults the standard JSON decode already populated the fields.
+func resolveOIDCClaims(c *OIDCClaims, rawClaims map[string]interface{}) {
+	if c == nil || rawClaims == nil {
+		return
+	}
+	extraClaimsFromMap(rawClaims).applyTo(c)
 }
 
 // TenantContext represents the tenant context injected into Gin context
@@ -195,18 +316,9 @@ func InitOIDCAuth() error {
 		return nil
 	}
 
-	// Re-read the configurable claim keys here (post-.env). The package-level
-	// oidcClaimKeys initializer runs at program init, which is BEFORE main()
-	// calls godotenv.Load(".env"); without this refresh any OIDC_CLAIM_* set only
-	// in a .env file would be silently ignored and the vendor-neutral defaults
-	// used instead. Real process env (K8s) is honoured either way.
-	oidcClaimKeys = claimKeySet{
-		OrgID:             envOr("OIDC_CLAIM_ORG_ID", "org_id"),
-		OrgDomain:         envOr("OIDC_CLAIM_ORG_DOMAIN", "org_domain"),
-		ResourceOwnerID:   envOr("OIDC_CLAIM_RESOURCE_OWNER_ID", "resource_owner_id"),
-		ResourceOwnerName: envOr("OIDC_CLAIM_RESOURCE_OWNER_NAME", "resource_owner_name"),
-		Roles:             envOr("OIDC_CLAIM_ROLES", "roles"),
-	}
+	// Re-read the configurable claim keys here (post-.env) — see
+	// ReloadOIDCClaimKeys for why the package-level initializer is not enough.
+	ReloadOIDCClaimKeys()
 
 	// OIDC_ISSUER accepts a comma-separated list so that two issuers
 	// can be valid concurrently during a domain rebrand / IdP migration window.
@@ -896,23 +1008,10 @@ func checkAudience(aud jwt.ClaimStrings) bool {
 // applyConfigurableClaims overlays the deploy-configured org/role claim keys
 // onto claims. It only re-decodes the token's raw claim map when at least one
 // configured key differs from the neutral default — keeping the hot path
-// allocation-free in the common (neutral-key) deployment.
+// allocation-free in the common (neutral-key) deployment. The decoding itself
+// is ResolveConfiguredExtraClaims, shared with handler.validateIDToken.
 func applyConfigurableClaims(tokenString string, claims *OIDCClaims) {
-	if oidcClaimKeys.OrgID == "org_id" &&
-		oidcClaimKeys.OrgDomain == "org_domain" &&
-		oidcClaimKeys.ResourceOwnerID == "resource_owner_id" &&
-		oidcClaimKeys.ResourceOwnerName == "resource_owner_name" &&
-		oidcClaimKeys.Roles == "roles" {
-		return // all keys are neutral defaults; struct tags already handled them
-	}
-	raw := jwt.MapClaims{}
-	// Parse without verification: signature was already verified upstream;
-	// here we only need the decoded claim map to read configurable keys.
-	parser := jwt.NewParser()
-	if _, _, err := parser.ParseUnverified(tokenString, raw); err != nil {
-		return
-	}
-	resolveOIDCClaims(claims, map[string]interface{}(raw))
+	ResolveConfiguredExtraClaims(tokenString).applyTo(claims)
 }
 
 // RequireOIDCToken is a lightweight authentication gate that verifies an

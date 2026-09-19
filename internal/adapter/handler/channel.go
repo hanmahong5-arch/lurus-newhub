@@ -91,6 +91,34 @@ func enforceTenantScope(c *gin.Context, resourceTenantID string) bool {
 	return false
 }
 
+// tenantScopeForDiscovery answers "which tenant do the v1 catalogue-discovery
+// endpoints narrow to for this caller": GET /api/user/models,
+// /api/channel/models_enabled, /api/models/missing and /api/channel/tag/models.
+// isRoot true means the platform operator, who keeps the global view these
+// endpoints have always had.
+//
+// A non-root caller whose session carries no tenant id is narrowed to
+// "default" rather than passed through as "": repo.abilityTenantScope and
+// repo.getChannelsByTagScoped both define "" as "apply no filter", so passing
+// it on would hand a caller with a blank tenant the whole platform's
+// catalogue. "default" resolves to the platform-shared channels, which is
+// what such a caller can route to anyway.
+//
+// GetAllChannels's tag_mode branch deliberately does NOT use this helper: its
+// row filter is an exact tenant_id match on the caller's own tenant, so its
+// tag page and count must use that same raw value or the page would list tags
+// whose rows all get filtered away.
+func tenantScopeForDiscovery(c *gin.Context) (tenantID string, isRoot bool) {
+	if c.GetInt("role") >= common.RoleRootUser {
+		return "", true
+	}
+	tenantID = c.GetString("tenant_id")
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	return tenantID, false
+}
+
 func GetAllChannels(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*repo.Channel, 0)
@@ -116,7 +144,17 @@ func GetAllChannels(c *gin.Context) {
 	var total int64
 
 	if enableTagMode {
-		tags, err := repo.GetPaginatedTags(pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+		// The page of tags and the total below are scoped the same way the
+		// per-row filter at the bottom of this loop is; an unscoped page
+		// listed other tenants' tag names and counted them in the total,
+		// leaving the caller paging through mostly empty groups.
+		var tags []*string
+		var err error
+		if isRoot {
+			tags, err = repo.GetPaginatedTags(pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+		} else {
+			tags, err = repo.GetPaginatedTagsByTenant(callerTenant, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+		}
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 			return
@@ -147,7 +185,11 @@ func GetAllChannels(c *gin.Context) {
 			}
 			channelData = append(channelData, filtered...)
 		}
-		total, _ = repo.CountAllTags()
+		if isRoot {
+			total, _ = repo.CountAllTags()
+		} else {
+			total, _ = repo.CountAllTagsByTenant(callerTenant)
+		}
 	} else {
 		baseQuery := repo.DB.Model(&repo.Channel{})
 		if !isRoot {
@@ -1276,6 +1318,23 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
+	// Ownership is not a field the request body may set. PatchChannel embeds
+	// repo.Channel and entity/channel.go gives tenant_id a json tag, so a
+	// tenant_id in the body flowed straight into the UPDATE — and
+	// enforceTenantScope above only consults the STORED row, so a caller
+	// could pass the scope check on a channel it owns and, in the same
+	// request, hand that channel to another tenant or to the shared
+	// "default" pool every tenant routes through. Non-root callers get the
+	// stored tenant written back over whatever they sent; the platform
+	// operator (root) keeps the ability to move a channel between tenants.
+	tenantReassignAttempt := ""
+	if c.GetInt("role") < common.RoleRootUser {
+		if channel.TenantId != "" && channel.TenantId != originChannel.TenantId {
+			tenantReassignAttempt = channel.TenantId
+		}
+		channel.TenantId = originChannel.TenantId
+	}
+
 	// channel:sensitive_write: checked against the freshly-fetched
 	// originChannel, before the KeyMode append/merge logic below can rewrite
 	// channel.Key — an "append" request still carries a non-empty Key (the
@@ -1374,8 +1433,22 @@ func UpdateChannel(c *gin.Context) {
 	}
 	repo.InitChannelCache()
 	app.ResetProxyClientCache()
+	// The ignored reassignment rides on this event's details rather than on
+	// an action of its own: the action registry lives in
+	// internal/app/governance/audit_action.go, and an action missing from it
+	// is rejected by the audit console's filter (v2_admin_audit.go:116), so
+	// an unregistered action would be written but unsearchable.
+	auditDetails := ""
+	if tenantReassignAttempt != "" {
+		detailBytes, _ := json.Marshal(map[string]interface{}{
+			"tenant_id_change_ignored": true,
+			"requested_tenant_id":      tenantReassignAttempt,
+			"tenant_id":                originChannel.TenantId,
+		})
+		auditDetails = string(detailBytes)
+	}
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
-		governance.ActionChannelUpdated, governance.ResourceChannel, channel.Id, ""))
+		governance.ActionChannelUpdated, governance.ResourceChannel, channel.Id, auditDetails))
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
 	c.JSON(http.StatusOK, gin.H{
@@ -1537,7 +1610,17 @@ func GetTagModels(c *gin.Context) {
 		return
 	}
 
-	channels, err := repo.GetChannelsByTag(tag, false, false) // idSort=false, selectAll=false
+	// The tag string comes straight from the query and matches across every
+	// tenant, so an unscoped lookup let a tenant admin read another tenant's
+	// model list by naming that tenant's tag.
+	tenantID, isRoot := tenantScopeForDiscovery(c)
+	var channels []*repo.Channel
+	var err error
+	if isRoot {
+		channels, err = repo.GetChannelsByTag(tag, false, false) // idSort=false, selectAll=false
+	} else {
+		channels, err = repo.GetChannelsByTagAndTenant(tenantID, tag, false)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,

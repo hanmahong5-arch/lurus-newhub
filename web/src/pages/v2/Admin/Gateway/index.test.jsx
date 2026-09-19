@@ -201,4 +201,166 @@ describe('Admin Gateway health page', () => {
     );
     expect(screen.queryByTestId('gateway-live-toggle')).toBeNull();
   });
+
+  // Cycle 12 L3. The catch used to test for 403 and nothing else, and every
+  // other failure fell through to `data === null`, which renders openCount 0
+  // and routes [] — i.e. the headline "no open breakers" and an empty table.
+  // A gateway nobody can reach was displayed as a gateway with no problems,
+  // which is the single worst thing this page can say during an incident.
+  it('shows an error state, not "no open breakers", when the endpoint 502s', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+
+    render(<HFAdminGateway />);
+
+    await waitFor(() => screen.getByTestId('gateway-error'));
+    expect(screen.queryByText(/no open breakers/i)).toBeNull();
+    expect(screen.queryByTestId('gateway-empty')).toBeNull();
+    expect(screen.getByTestId('gateway-retry')).toBeTruthy();
+  });
+
+  it('shows an error state when the network call rejects with no response', async () => {
+    API.get.mockRejectedValue(new Error('Network Error'));
+
+    render(<HFAdminGateway />);
+
+    await waitFor(() => screen.getByTestId('gateway-error'));
+    expect(screen.queryByText(/no open breakers/i)).toBeNull();
+  });
+
+  it('shows an error state on a 200 that carries success:false', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: 'breaker registry unavailable' },
+    });
+
+    render(<HFAdminGateway />);
+
+    await waitFor(() => screen.getByTestId('gateway-error'));
+    expect(screen.getByTestId('gateway-error').textContent).toContain(
+      'breaker registry unavailable',
+    );
+    expect(screen.queryByText(/no open breakers/i)).toBeNull();
+  });
+
+  /*
+   * The error state backs the poll off rather than stopping it. The first
+   * version stopped outright, which meant the one transient 502 a 3-replica
+   * rolling update reliably produces froze this page on "Breaker state
+   * unknown" until a human clicked retry — during the exact window the
+   * operator is watching it. 5s retries against a dead endpoint are the
+   * other bad answer, so: 30s, stated in the error copy.
+   */
+  it('backs the poll off to 30s in the error state instead of stopping', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+    vi.useFakeTimers();
+
+    render(<HFAdminGateway />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const afterMount = API.get.mock.calls.length;
+    expect(afterMount).toBe(1);
+
+    // Nothing may fire at the healthy 5s cadence.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000);
+    });
+    expect(API.get.mock.calls.length).toBe(afterMount);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(API.get.mock.calls.length).toBe(afterMount + 1);
+  });
+
+  it('recovers on its own once the endpoint comes back, without a click', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+    vi.useFakeTimers();
+
+    render(<HFAdminGateway />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId('gateway-error')).toBeTruthy();
+
+    API.get.mockResolvedValue(health([{ channel_id: 7, state: 'closed' }]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30000);
+    });
+
+    expect(screen.queryByTestId('gateway-error')).toBeNull();
+    expect(screen.getByTestId('gateway-row-7')).toBeTruthy();
+  });
+
+  it('the retry button re-runs the fetch immediately', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+    vi.useFakeTimers();
+
+    render(<HFAdminGateway />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const whileBroken = API.get.mock.calls.length;
+
+    API.get.mockResolvedValue(health([{ channel_id: 7, state: 'closed' }]));
+    fireEvent.click(screen.getByTestId('gateway-retry'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(API.get.mock.calls.length).toBe(whileBroken + 1);
+    expect(screen.queryByTestId('gateway-error')).toBeNull();
+    expect(screen.getByTestId('gateway-row-7')).toBeTruthy();
+  });
+
+  it('shows the permission panel on 403 and no error state', async () => {
+    API.get.mockRejectedValue({ response: { status: 403 } });
+
+    render(<HFAdminGateway />);
+
+    await waitFor(() =>
+      screen.getByText(/You do not have permission to read gateway health/),
+    );
+    expect(screen.queryByTestId('gateway-error')).toBeNull();
+    expect(screen.queryByTestId('gateway-signed-out')).toBeNull();
+  });
+
+  /*
+   * 401 is its own state. L4 made the v2 admin group answer 401
+   * UNAUTHENTICATED when the session is missing or invalid and 403
+   * PERMISSION_DENIED when the role is short
+   * (internal/adapter/middleware/admin_jwt_auth.go). Telling an operator
+   * with an expired cookie to "contact a platform administrator" sends them
+   * to ask for a permission they already have.
+   */
+  it('shows a sign-in-again state on 401, not the permission panel', async () => {
+    API.get.mockRejectedValue({ response: { status: 401 } });
+
+    render(<HFAdminGateway />);
+
+    await waitFor(() => screen.getByTestId('gateway-signed-out'));
+    expect(screen.getByTestId('gateway-sign-in').getAttribute('href')).toBe(
+      '/login',
+    );
+    expect(
+      screen.queryByText(/You do not have permission to read gateway health/),
+    ).toBeNull();
+    expect(screen.queryByTestId('gateway-error')).toBeNull();
+    expect(screen.queryByText(/no open breakers/i)).toBeNull();
+  });
+
+  it('stops polling entirely in the signed-out state', async () => {
+    API.get.mockRejectedValue({ response: { status: 401 } });
+    vi.useFakeTimers();
+
+    render(<HFAdminGateway />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const afterMount = API.get.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120000);
+    });
+    expect(API.get.mock.calls.length).toBe(afterMount);
+  });
 });

@@ -1,5 +1,11 @@
 <!doctype html>
-<html lang="zh">
+<!-- lang is the document default, for the moment before JavaScript runs: en,
+     because a browser this build has no bundle for now resolves to English
+     (supportedLngs in src/i18n/i18n.js). From the moment i18next resolves a
+     language, i18n.js keeps this attribute on the language actually rendered —
+     declaring an English page Chinese is what makes a browser offer to
+     machine-translate it and sends a screen reader into the wrong voice. -->
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="/logo.png" />

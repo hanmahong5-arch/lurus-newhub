@@ -158,10 +158,32 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	return targetConn, nil
 }
 
+// pingStopGrace bounds how long the stop function returned by
+// startPingKeepAlive waits for the ping goroutine to exit. The loop leaves on
+// pingerCtx.Done() within one select, so the wait is normally microseconds;
+// the bound only guards a response writer that hangs inside Flush. A var so
+// a test can shorten it; nothing in production writes it.
+var pingStopGrace = 2 * time.Second
+
+// pingExitHook, when non-nil, runs as the last statement of the ping
+// goroutine. Test seam only (cov_prov_api_request_test.go); production leaves
+// it nil.
+var pingExitHook func()
+
 func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) context.CancelFunc {
 	pingerCtx, stopPinger := context.WithCancel(context.Background())
+	exited := make(chan struct{})
 
 	gopool.Go(func() {
+		// Declared first so it runs LAST: the debug reads in the deferred
+		// funcs below must happen before the caller is told the goroutine is
+		// gone.
+		defer func() {
+			if pingExitHook != nil {
+				pingExitHook()
+			}
+			close(exited)
+		}()
 		defer func() {
 			// 增加panic恢复处理
 			if r := recover(); r != nil {
@@ -223,7 +245,17 @@ func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) context.Canc
 		}
 	})
 
-	return stopPinger
+	return func() {
+		stopPinger()
+		// Join the goroutine (bounded). Before cycle 12 stop() returned while
+		// the goroutine's deferred common2.DebugEnabled reads were still
+		// pending, and a test that restored that global after stop() raced
+		// them (CI -race, 2026-09-19, seed 1789859598847560097).
+		select {
+		case <-exited:
+		case <-time.After(pingStopGrace):
+		}
+	}
 }
 
 func sendPingData(c *gin.Context, mutex *sync.Mutex) error {

@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useEffect, useState } from 'react';
 import { API, showError } from '../../../helpers';
+import { sanitizeHtml } from '../../../helpers/sanitize';
 import { Empty, Card, Spin, Typography } from '@douyinfe/semi-ui';
 const { Title } = Typography;
 import {
@@ -47,24 +48,6 @@ const isHtmlContent = (content) => {
   return htmlTagRegex.test(content);
 };
 
-// 安全地渲染HTML内容
-const sanitizeHtml = (html) => {
-  // 创建一个临时元素来解析HTML
-  const tempDiv = document.createElement('div');
-  tempDiv.innerHTML = html;
-
-  // 提取样式
-  const styles = Array.from(tempDiv.querySelectorAll('style'))
-    .map((style) => style.innerHTML)
-    .join('\n');
-
-  // 提取body内容，如果没有body标签则使用全部内容
-  const bodyContent = tempDiv.querySelector('body');
-  const content = bodyContent ? bodyContent.innerHTML : html;
-
-  return { content, styles };
-};
-
 /**
  * 通用文档渲染组件
  * @param {string} apiEndpoint - API 接口地址
@@ -76,15 +59,12 @@ const DocumentRenderer = ({ apiEndpoint, title, cacheKey, emptyMessage }) => {
   const { t } = useTranslation();
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
-  const [htmlStyles, setHtmlStyles] = useState('');
-  const [processedHtmlContent, setProcessedHtmlContent] = useState('');
 
   const loadContent = async () => {
     // 先从缓存中获取
     const cachedContent = localStorage.getItem(cacheKey) || '';
     if (cachedContent) {
       setContent(cachedContent);
-      processContent(cachedContent);
       setLoading(false);
     }
 
@@ -93,7 +73,6 @@ const DocumentRenderer = ({ apiEndpoint, title, cacheKey, emptyMessage }) => {
       const { success, message, data } = res.data;
       if (success && data) {
         setContent(data);
-        processContent(data);
         localStorage.setItem(cacheKey, data);
       } else {
         if (!cachedContent) {
@@ -111,44 +90,9 @@ const DocumentRenderer = ({ apiEndpoint, title, cacheKey, emptyMessage }) => {
     }
   };
 
-  const processContent = (rawContent) => {
-    if (isHtmlContent(rawContent)) {
-      const { content: htmlContent, styles } = sanitizeHtml(rawContent);
-      setProcessedHtmlContent(htmlContent);
-      setHtmlStyles(styles);
-    } else {
-      setProcessedHtmlContent('');
-      setHtmlStyles('');
-    }
-  };
-
   useEffect(() => {
     loadContent();
   }, []);
-
-  // 处理HTML样式注入
-  useEffect(() => {
-    const styleId = `document-renderer-styles-${cacheKey}`;
-
-    if (htmlStyles) {
-      let styleEl = document.getElementById(styleId);
-      if (!styleEl) {
-        styleEl = document.createElement('style');
-        styleEl.id = styleId;
-        styleEl.type = 'text/css';
-        document.head.appendChild(styleEl);
-      }
-      styleEl.innerHTML = htmlStyles;
-    } else {
-      const el = document.getElementById(styleId);
-      if (el) el.remove();
-    }
-
-    return () => {
-      const el = document.getElementById(styleId);
-      if (el) el.remove();
-    };
-  }, [htmlStyles, cacheKey]);
 
   // 显示加载状态
   if (loading) {
@@ -210,17 +154,24 @@ const DocumentRenderer = ({ apiEndpoint, title, cacheKey, emptyMessage }) => {
     );
   }
 
-  // 如果是 HTML 内容，直接渲染
+  // 如果是 HTML 内容，直接渲染。
+  // Until cycle 12 this branch called useEffect from *inside* the `if`, after
+  // four early returns: the first render bailed at `if (loading)` with fewer
+  // hooks than the render that finally got here, so React aborted the page
+  // with "Rendered more hooks than during the previous render". Every HTML
+  // document — the whole reason the branch exists — took /privacy-policy and
+  // /user-agreement down.
+  //
+  // The effect it ran republished <style> blocks the file had pulled out of
+  // the document into document.head. These documents are served to anonymous
+  // visitors, so they take the STRICT profile, which carries FORBID_TAGS
+  // 'style' (helpers/sanitize.js) — pinned by the sanitize.test.js case that
+  // puts the tag after body content, because a <style> in first position is
+  // hoisted into <head> by the HTML parser and would pass either way. With
+  // the tag gone there is nothing left to republish and no hook to call here.
+  // An operator who needs CSS on a legal page: the styling belongs in the
+  // app, not in a settings text box (owner item, recorded in the lane return).
   if (isHtmlContent(content)) {
-    const { content: htmlContent, styles } = sanitizeHtml(content);
-
-    // 设置样式（如果有的话）
-    useEffect(() => {
-      if (styles && styles !== htmlStyles) {
-        setHtmlStyles(styles);
-      }
-    }, [content, styles, htmlStyles]);
-
     return (
       <div className='min-h-screen bg-gray-50'>
         <div className='max-w-4xl mx-auto py-12 px-4 sm:px-6 lg:px-8'>
@@ -230,7 +181,7 @@ const DocumentRenderer = ({ apiEndpoint, title, cacheKey, emptyMessage }) => {
             </Title>
             <div
               className='prose prose-lg max-w-none'
-              dangerouslySetInnerHTML={{ __html: htmlContent }}
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(content) }}
             />
           </div>
         </div>

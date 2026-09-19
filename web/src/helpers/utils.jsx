@@ -33,6 +33,7 @@ import {
   shouldEmit,
 } from './errorMessages';
 import { hfToast } from '../components/hifi/HfToast';
+import { sanitizeHtml } from './sanitize';
 
 // showError/showSuccess/showWarning/showInfo are the single funnel used by
 // ~30 v1 + v2 call sites. On /console/v2/* they must render through the
@@ -48,7 +49,9 @@ function isV2Route() {
 }
 
 const HTMLToastContent = ({ htmlContent }) => {
-  return <div dangerouslySetInnerHTML={{ __html: htmlContent }} />;
+  return (
+    <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(htmlContent) }} />
+  );
 };
 export default HTMLToastContent;
 export function isAdmin() {

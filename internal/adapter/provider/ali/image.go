@@ -1,6 +1,7 @@
 package ali
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -185,23 +186,72 @@ func oaiFormEdit2AliImageEdit(c *gin.Context, info *relaycommon.RelayInfo, reque
 	return &imageRequest, nil
 }
 
-func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error, []byte) {
+// aliTaskPollTimeout bounds one task-status GET. The poller used to build a bare
+// &http.Client{} and a context-free request, so an endpoint that accepted the
+// connection and then went quiet held the polling goroutine for the life of the
+// process. A var, not a const, so tests can shorten it (image_timeout_test.go);
+// nothing in production writes it.
+//
+// 30s is deliberately generous against the loop around it: asyncTaskWait waits
+// aliTaskPollInterval between attempts, so a per-attempt ceiling below the retry
+// interval would turn a merely slow upstream into a poll that never observes a
+// terminal state.
+//
+// What the whole loop costs, worst case, is 5s + 20 x (30s + 10s), about 13
+// minutes, and only while the customer is still connected — a client that hangs
+// up ends it at once, which is the case this used to spin on forever.
+var aliTaskPollTimeout = 30 * time.Second
+
+// aliTaskClient is the shared client for task-status polling. Shared rather than
+// per-call so repeated polls reuse connections, and with its own Timeout as a
+// belt-and-braces bound underneath the per-request context.
+var aliTaskClient = &http.Client{Timeout: aliTaskPollTimeout}
+
+// aliTaskFirstPollDelay is the wait before the first status poll;
+// aliTaskPollInterval the wait between attempts. Both were inline literals (5s
+// and 10s), which left the loop itself — as opposed to the single GET inside it
+// — impossible to drive in a test, and the loop is where an abandoned request
+// used to spin for the life of the pod. Vars so tests can shorten them; nothing
+// in production writes them.
+var (
+	aliTaskFirstPollDelay = 5 * time.Second
+	aliTaskPollInterval   = 10 * time.Second
+)
+
+// sleepOrDone waits d, or returns ctx.Err() as soon as ctx dies. The poll loop
+// naps through this rather than time.Sleep so a client that disconnects
+// mid-generation is noticed at once instead of at the end of the current nap.
+func sleepOrDone(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// updateTaskCtx polls one task status. The caller owns the budget: asyncTaskWait
+// derives its per-attempt context from the originating request, and
+// aliTaskClient's own Timeout is the floor underneath for a caller that arrives
+// with no deadline at all.
+func updateTaskCtx(ctx context.Context, info *relaycommon.RelayInfo, taskID string) (*AliResponse, []byte, error) {
 	url := fmt.Sprintf("%s/api/v1/tasks/%s", info.ChannelBaseUrl, taskID)
 
 	var aliResponse AliResponse
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return &aliResponse, err, nil
+		return &aliResponse, nil, err
 	}
 
 	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := aliTaskClient.Do(req)
 	if err != nil {
 		common.SysLog("updateTask client.Do err: " + err.Error())
-		return &aliResponse, err, nil
+		return &aliResponse, nil, err
 	}
 	defer resp.Body.Close()
 
@@ -211,30 +261,55 @@ func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error
 	err = common.Unmarshal(responseBody, &response)
 	if err != nil {
 		common.SysLog("updateTask NewDecoder err: " + err.Error())
-		return &aliResponse, err, nil
+		return &aliResponse, nil, err
 	}
 
-	return &response, nil, responseBody
+	return &response, responseBody, nil
 }
 
 func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*AliResponse, []byte, error) {
-	waitSeconds := 10
 	step := 0
 	maxStep := 20
 
 	var taskResponse AliResponse
 	var responseBody []byte
 
-	time.Sleep(time.Duration(5) * time.Second)
+	// Poll on the originating request's context when there is one, so an
+	// abandoned generation stops costing an upstream round trip every 10s.
+	// c or c.Request can be nil in unit callers, hence the guard.
+	pollCtx := context.Background()
+	if c != nil && c.Request != nil {
+		pollCtx = c.Request.Context()
+	}
+
+	if err := sleepOrDone(pollCtx, aliTaskFirstPollDelay); err != nil {
+		return nil, nil, err
+	}
 
 	for {
-		logger.LogDebug(c, fmt.Sprintf("asyncTaskWait step %d/%d, wait %d seconds", step, maxStep, waitSeconds))
+		logger.LogDebug(c, fmt.Sprintf("asyncTaskWait step %d/%d, wait %v", step, maxStep, aliTaskPollInterval))
 		step++
-		rsp, err, body := updateTask(info, taskID)
+		attemptCtx, attemptCancel := context.WithTimeout(pollCtx, aliTaskPollTimeout)
+		rsp, body, err := updateTaskCtx(attemptCtx, info, taskID)
+		attemptCancel()
 		responseBody = body
 		if err != nil {
+			// Two exits this branch owned neither of before cycle 12, and it is
+			// the branch a client disconnect lands in: with pollCtx dead every
+			// further attempt fails instantly, so a bare continue turned an
+			// ordinary hang-up into a goroutine polling for the life of the pod.
+			// The step budget has to apply to failures for the same reason it
+			// applies to non-terminal statuses.
+			if cerr := pollCtx.Err(); cerr != nil {
+				return nil, responseBody, cerr
+			}
 			logger.LogWarn(c, "asyncTaskWait UpdateTask err: "+err.Error())
-			time.Sleep(time.Duration(waitSeconds) * time.Second)
+			if step >= maxStep {
+				break
+			}
+			if serr := sleepOrDone(pollCtx, aliTaskPollInterval); serr != nil {
+				return nil, responseBody, serr
+			}
 			continue
 		}
 
@@ -255,7 +330,9 @@ func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (
 		if step >= maxStep {
 			break
 		}
-		time.Sleep(time.Duration(waitSeconds) * time.Second)
+		if serr := sleepOrDone(pollCtx, aliTaskPollInterval); serr != nil {
+			return nil, responseBody, serr
+		}
 	}
 
 	return nil, nil, fmt.Errorf("aliAsyncTaskWait timeout")

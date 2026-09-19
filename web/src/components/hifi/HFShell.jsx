@@ -233,15 +233,14 @@ export const NAV_SECTIONS = [
         badge: '',
       },
       // Legacy /console/personal (components/settings/PersonalSetting.jsx)
-      // carries two capabilities the v2 Settings page does not: real
-      // quota-warning notification channels (email/webhook/bark/gotify,
-      // wired to PUT /api/user/setting) and the legacy system access token.
-      // v2 Settings' own "Integrations" tab is explicitly unimplemented
-      // (pages/v2/Settings/index.jsx's INTEGRATIONS comment), and its
-      // "notifications" tab was removed this cycle rather than left half
-      // wired — this is an honest, labelled link to where that capability
-      // actually lives today, not a port (out of scope for this lane), and
-      // not a silent dead end either.
+      // carries one capability the v2 Settings page does not: the system
+      // access token (components/settings/personal/cards/AccountManagement.jsx
+      // — grep for 系统访问令牌 finds it there and nowhere under pages/v2).
+      // Quota-warning notification channels are NOT a reason any more:
+      // pages/v2/Settings/index.jsx has had its own 'notifications' tab
+      // (email / webhook / bark / gotify, seeded from profile.setting and
+      // written back with PUT /api/user/setting) since cycle 10, so the
+      // sentence that used to stand here was stale by a cycle.
       // /console/personal renders the legacy HeaderBar/SiderBar chrome, not
       // this shell (PageLayout.jsx's v2 bypass only matches /console/v2/*),
       // so clicking this item leaves the rail entirely and nothing
@@ -329,6 +328,9 @@ export const NAV_SECTIONS = [
     hKey: 'console.nav.section_governance',
     minRole: 10,
     items: [
+      // Every call this page makes is /api/v2/admin/tenants{,/:id,/:id/stats},
+      // which api-v2-router.go puts behind RootJWTAuth. minRole:100 here so a
+      // role-10 admin is not shown a destination that can only answer 403.
       {
         id: 'users',
         href: '/console/v2/tenants',
@@ -336,7 +338,9 @@ export const NAV_SECTIONS = [
         label: 'Tenants',
         key: 'console.nav.tenants',
         badge: '',
+        minRole: 100,
       },
+      // /api/v2/admin/users (list, PUT, DELETE) — RootJWTAuth.
       {
         id: 'admin-users',
         href: '/console/v2/admin/users',
@@ -344,6 +348,7 @@ export const NAV_SECTIONS = [
         label: 'Users (admin)',
         key: 'console.nav.admin_users',
         badge: '',
+        minRole: 100,
       },
       // Cost-attribution projects (migration 029). Lives in an admin section
       // because creating/renaming/deleting one is tenant-admin gated — reading
@@ -357,6 +362,9 @@ export const NAV_SECTIONS = [
         badge: '',
       },
       // Per-(tenant, model) RPM/TPM rate-limit config (migration 026).
+      // Reads and writes /api/v2/admin/tenants/:id/model-limits and
+      // /model-allowlist, plus the admin tenant list to populate its picker —
+      // RootJWTAuth all the way down.
       {
         id: 'admin-model-limits',
         href: '/console/v2/admin/model-limits',
@@ -364,6 +372,7 @@ export const NAV_SECTIONS = [
         label: 'Model limits',
         key: 'console.nav.model_limits',
         badge: '',
+        minRole: 100,
       },
       {
         id: 'redemption',
@@ -407,6 +416,7 @@ export const NAV_SECTIONS = [
     minRole: 10,
     items: [
       // Live circuit-breaker state per channel (this replica).
+      // /api/v2/admin/gateway/health — RootJWTAuth.
       {
         id: 'admin-gateway',
         href: '/console/v2/admin/gateway',
@@ -414,8 +424,10 @@ export const NAV_SECTIONS = [
         label: 'Gateway health',
         key: 'console.nav.admin_gateway',
         badge: '',
+        minRole: 100,
       },
       // Cost-aware-routing savings analyzer (Phase 1).
+      // /api/v2/admin/governance/savings — RootJWTAuth.
       {
         id: 'admin-cost',
         href: '/console/v2/admin/cost-intelligence',
@@ -423,8 +435,12 @@ export const NAV_SECTIONS = [
         label: 'Cost intelligence',
         key: 'console.nav.cost_intelligence',
         badge: '',
+        minRole: 100,
       },
       // Per-model performance analytics (requests/errors/latency).
+      // /api/v2/admin/analytics/model-performance plus the admin tenant list —
+      // RootJWTAuth. Unlike Rankings below, this page has no tenant-scoped
+      // route to fall back to.
       {
         id: 'admin-analytics',
         href: '/console/v2/admin/model-performance',
@@ -432,6 +448,7 @@ export const NAV_SECTIONS = [
         label: 'Model performance',
         key: 'console.nav.model_performance',
         badge: '',
+        minRole: 100,
       },
       // Period-over-period model/vendor leaderboard (rank/trend/share) —
       // L4, 2026-09-12. Beside admin-analytics per the plan's §8 correction.
@@ -443,6 +460,8 @@ export const NAV_SECTIONS = [
         key: 'console.nav.rankings',
         badge: '',
       },
+      // /api/v2/admin/options (GET + PUT) and /api/v2/admin/stats —
+      // RootJWTAuth.
       {
         id: 'admin-settings',
         href: '/console/v2/admin/settings',
@@ -450,6 +469,7 @@ export const NAV_SECTIONS = [
         label: 'Admin settings',
         key: 'console.nav.admin_settings',
         badge: '',
+        minRole: 100,
       },
       // Background-task heartbeats (L3, 2026-09-13): GET
       // /api/v2/admin/system/tasks is RootJWTAuth-gated server-side, so this

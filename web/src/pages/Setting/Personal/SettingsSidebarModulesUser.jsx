@@ -54,16 +54,9 @@ export default function SettingsSidebarModulesUser() {
   // 使用useSidebar钩子获取刷新方法
   const { refreshUserConfig } = useSidebar();
 
-  // 如果没有边栏设置权限，不显示此组件
-  if (!permissionsLoading && !hasSidebarSettingsPermission()) {
-    return null;
-  }
-
-  // 权限加载中，显示加载状态
-  if (permissionsLoading) {
-    return null;
-  }
-
+  // 权限门在下方、所有 hook 之后，而不是在这里：早退发生在 useState/useEffect
+  // 之前会让「加载中」与「加载完成」两次渲染请求不同数量的 hook，React 直接
+  // 中止整棵子树。
   // 根据用户权限生成默认配置
   const generateDefaultConfig = () => {
     const defaultConfig = {};
@@ -274,6 +267,12 @@ export default function SettingsSidebarModulesUser() {
     isSidebarSectionAllowed,
     isSidebarModuleAllowed,
   ]);
+
+  // 没有边栏设置权限就不显示此组件；权限加载中同样不显示。这两个早退必须留在
+  // 所有 hook 之后 —— 见组件顶部的说明。
+  if (permissionsLoading || !hasSidebarSettingsPermission()) {
+    return null;
+  }
 
   // 检查功能是否被管理员允许
   const isAllowedByAdmin = (sectionKey, moduleKey = null) => {

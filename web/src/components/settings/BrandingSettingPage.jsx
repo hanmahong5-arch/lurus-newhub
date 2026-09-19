@@ -28,6 +28,7 @@ import {
   Card,
 } from '@douyinfe/semi-ui';
 import { API, showError, showSuccess, timestamp2string } from '../../helpers';
+import { sanitizeHtml } from '../../helpers/sanitize';
 import { marked } from 'marked';
 import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
@@ -343,7 +344,13 @@ const BrandingSettingPage = () => {
           </Button>,
         ]}
       >
-        <div dangerouslySetInnerHTML={{ __html: updateData.content }}></div>
+        {/* Third-party content, not operator-authored: `body` comes from
+            api.github.com's latest-release JSON, so this takes the strict
+            profile (no <style>, no form controls) even though the file it
+            lives in is a settings page. */}
+        <div
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(updateData.content) }}
+        ></div>
       </Modal>
     </Row>
   );

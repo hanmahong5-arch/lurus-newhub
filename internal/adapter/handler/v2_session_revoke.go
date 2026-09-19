@@ -82,9 +82,12 @@ func RevokeCurrentSessionV2(c *gin.Context) {
 	sessionKey := currentSessionID(c)
 
 	// Clear the gin session store entry so middleware.UserAuth() rejects the
-	// next request from this browser.
+	// next request from this browser. The attributes come from
+	// middleware.SessionClearOptions, not a {Path,MaxAge} literal: a clearing
+	// Set-Cookie whose Domain/Secure/SameSite differ from the live cookie's
+	// mints a second cookie instead of deleting the session one.
 	session.Clear()
-	session.Options(sessions.Options{Path: "/", MaxAge: -1})
+	session.Options(middleware.SessionClearOptions())
 	_ = session.Save()
 
 	if repo.SessionRegistryEnabled() && sessionKey != "" {
@@ -211,9 +214,11 @@ func RevokeSessionByIDV2(c *gin.Context) {
 // — Auth: UserAuth middleware. Registered before /:id in api-v2-router.go
 // (a literal path segment, not an addressable resource id — mirrors
 // /sessions/current's own exemption in v2_completeness_test.go). With
-// SESSION_REGISTRY_ENABLED off this answers {"revoked":0} without touching
-// the DB — a rollback or rows left over from a prior flag-on soak cannot
-// make this endpoint revoke anything.
+// SESSION_REGISTRY_ENABLED off this refuses with 409
+// SESSION_REGISTRY_DISABLED without touching the DB — a rollback or rows
+// left over from a prior flag-on soak cannot make this endpoint revoke
+// anything, and "sign out other devices" no longer reports success on a
+// deployment where it cannot work (cycle-12 L4).
 func RevokeOtherSessionsV2(c *gin.Context) {
 	userID := c.GetInt("id")
 	if userID == 0 {
@@ -225,13 +230,15 @@ func RevokeOtherSessionsV2(c *gin.Context) {
 		return
 	}
 
-	// With the flag off no rows were ever registered — answer revoked:0
-	// without touching the DB, so a rollback (or leftover rows from a prior
-	// flag-on soak) cannot make this endpoint revoke anything.
+	// With the flag off no rows were ever registered — refuse without
+	// touching the DB, so a rollback (or leftover rows from a prior flag-on
+	// soak) cannot make this endpoint revoke anything, and the browser is
+	// told the feature is off rather than that every other device is gone.
 	if !repo.SessionRegistryEnabled() {
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"data":    gin.H{"revoked": 0},
+		c.JSON(http.StatusConflict, gin.H{
+			"success":    false,
+			"message":    "Session registry is disabled on this deployment",
+			"error_code": "SESSION_REGISTRY_DISABLED",
 		})
 		return
 	}

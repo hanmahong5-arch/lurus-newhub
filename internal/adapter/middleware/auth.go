@@ -347,20 +347,17 @@ func resolveSessionIdentity(c *gin.Context, minRole int) bool {
 
 	// TI-5: reject console/relay access for a disabled or suspended tenant so
 	// an admin-suspended tenant is actually locked out, not just cosmetically
-	// flagged. Skip the bootstrap/system tenant ("default") — it predates the
-	// tenants table on some deployments and must never be lockable out from
-	// here; if the lookup itself fails, fail OPEN (preserve prior behavior)
-	// rather than hard-erroring every request on a transient DB hiccup.
-	if tenantId != "default" {
-		if tenant, tErr := repo.GetTenantByID(tenantId); tErr == nil && tenant != nil && tenant.IsDisabled() {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success":    false,
-				"message":    "所属租户已被禁用或暂停",
-				"error_code": "TENANT_DISABLED",
-			})
-			c.Abort()
-			return false
-		}
+	// flagged. repo.TenantGate carries the whole decision — the "default"
+	// exemption, the fail-OPEN on a transient lookup error, and (new in cycle
+	// 12) the soft-deleted / never-created tenant behind TENANT_MISSING_MODE.
+	if ok, _ := repo.TenantGate(tenantId); !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "所属租户已被禁用或暂停",
+			"error_code": "TENANT_DISABLED",
+		})
+		c.Abort()
+		return false
 	}
 
 	repo.InjectTenantContext(c, tenantId, userId)
@@ -662,10 +659,13 @@ func TokenAuth() func(c *gin.Context) {
 		//   #2 A token whose tenant was disabled/suspended must stop relaying.
 		//      Previously only the USER status was checked here, so an
 		//      admin-suspended tenant's keys kept working. Mirrors authHelper
-		//      (session path) and TenantSlugGuard (v2). The bootstrap/system
-		//      tenant ("default") predates the tenants table on some deployments
-		//      and is never lockable from here; a transient lookup error fails
-		//      OPEN so a DB hiccup cannot 403 all relay traffic.
+		//      (session path) and TenantSlugGuard (v2). repo.TenantGate holds
+		//      the rules: the bootstrap/system tenant ("default") is exempt, a
+		//      transient lookup error fails OPEN so a DB hiccup cannot 403 the
+		//      whole relay path, and a soft-deleted tenant
+		//      follows TENANT_MISSING_MODE (cycle 12 — before that its tokens
+		//      kept relaying and spending, because the lookup error a deleted
+		//      row produces was indistinguishable from a DB fault).
 		//
 		//   #3 Inject tenant_context so the downstream PoolBalanceCheck gate
 		//      (which reads GetTenantContext) is no longer dead code on the token
@@ -677,14 +677,12 @@ func TokenAuth() func(c *gin.Context) {
 		if tokenTenantId == "" {
 			tokenTenantId = "default"
 		}
-		if tokenTenantId != "default" {
-			if tenant, tErr := repo.GetTenantByID(tokenTenantId); tErr == nil && tenant != nil && tenant.IsDisabled() {
-				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorToken, token.UserId,
-					governance.ActionAuthFailed, governance.ResourceToken, token.Id,
-					fmt.Sprintf(`{"reason":"tenant_disabled","tenant_id":%q}`, tokenTenantId)))
-				abortWithOpenAiMessage(c, http.StatusForbidden, "Owning tenant is disabled or suspended", string(types.ErrorCodeTenantSuspended))
-				return
-			}
+		if ok, reason := repo.TenantGate(tokenTenantId); !ok {
+			governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorToken, token.UserId,
+				governance.ActionAuthFailed, governance.ResourceToken, token.Id,
+				fmt.Sprintf(`{"reason":%q,"tenant_id":%q}`, reason, tokenTenantId)))
+			abortWithOpenAiMessage(c, http.StatusForbidden, "Owning tenant is disabled or suspended", string(types.ErrorCodeTenantSuspended))
+			return
 		}
 		// A provisioned key has no user row, so it carries no email/username —
 		// logs and audit rows for that traffic show them empty. Accepted: the
@@ -888,18 +886,17 @@ func PlaygroundAuth() func(c *gin.Context) {
 		}
 
 		// TI-5 (mirrors authHelper): a disabled/suspended tenant is locked out
-		// of the playground too, not just the console/bearer relay path. Skip
-		// the bootstrap/system tenant, same reasoning as authHelper.
-		if tenantId != "default" {
-			if tenant, tErr := repo.GetTenantByID(tenantId); tErr == nil && tenant != nil && tenant.IsDisabled() {
-				c.JSON(http.StatusForbidden, gin.H{
-					"success":    false,
-					"message":    "所属租户已被禁用或暂停",
-					"error_code": "TENANT_DISABLED",
-				})
-				c.Abort()
-				return
-			}
+		// of the playground too, not just the console/bearer relay path. Same
+		// shared decision (repo.TenantGate): "default" exempt, transient lookup
+		// error fails open, absent row follows TENANT_MISSING_MODE.
+		if ok, _ := repo.TenantGate(tenantId); !ok {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success":    false,
+				"message":    "所属租户已被禁用或暂停",
+				"error_code": "TENANT_DISABLED",
+			})
+			c.Abort()
+			return
 		}
 
 		repo.InjectTenantContext(c, tenantId, userId)

@@ -1,6 +1,7 @@
 package ali
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -262,10 +263,12 @@ func TestProv2ndPass_Ali_PromptExtendValue_UnsetPointerDefaultsFalse(t *testing.
 }
 
 // ---------------------------------------------------------------------------
-// updateTask: single-shot GET against the ali task-status endpoint. Business-
-// critical because asyncTaskWait polls this in a loop and a wrong Authorization
-// header or a swallowed transport error would silently strand async image
-// generations without ever completing (customer pays, never gets an image).
+// updateTaskCtx: single-shot GET against the ali task-status endpoint.
+// Business-critical because asyncTaskWait polls this in a loop and a wrong
+// Authorization header or a swallowed transport error would silently strand
+// async image generations without ever completing (customer pays, never gets
+// an image). Cycle 12 deleted the context-free updateTask wrapper these cases
+// used to call, so they hand in their own context here.
 // ---------------------------------------------------------------------------
 
 func TestProv2ndPass_Ali_UpdateTask(t *testing.T) {
@@ -282,7 +285,7 @@ func TestProv2ndPass_Ali_UpdateTask(t *testing.T) {
 		defer srv.Close()
 
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: srv.URL, ApiKey: "sk-poll"}}
-		resp, err, body := updateTask(info, "t1")
+		resp, body, err := updateTaskCtx(context.Background(), info, "t1")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -308,7 +311,7 @@ func TestProv2ndPass_Ali_UpdateTask(t *testing.T) {
 		defer srv.Close()
 
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: srv.URL, ApiKey: "k"}}
-		_, err, _ := updateTask(info, "t2")
+		_, _, err := updateTaskCtx(context.Background(), info, "t2")
 		if err == nil {
 			t.Fatal("expected an error for malformed JSON task response, got nil")
 		}
@@ -316,7 +319,7 @@ func TestProv2ndPass_Ali_UpdateTask(t *testing.T) {
 
 	t.Run("transport failure (unreachable host) surfaces as an error", func(t *testing.T) {
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "http://127.0.0.1:1", ApiKey: "k"}}
-		_, err, _ := updateTask(info, "t3")
+		_, _, err := updateTaskCtx(context.Background(), info, "t3")
 		if err == nil {
 			t.Fatal("expected a transport error for an unreachable host, got nil")
 		}
@@ -325,9 +328,10 @@ func TestProv2ndPass_Ali_UpdateTask(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // asyncTaskWait: the polling loop backing async image generation. Only
-// terminal-on-first-poll cases are exercised here to keep runtime bounded
-// (waitSeconds is a hardcoded 10s per retry, not injectable) — the initial
-// 5s sleep is unavoidable but each sub-test still finishes well under 30s.
+// terminal-on-first-poll cases are exercised here, at the production delays, so
+// the 5s-before-the-first-poll contract is asserted against the real default;
+// the cancellation and step-budget exits are driven at shortened delays in
+// image_timeout_test.go.
 // ---------------------------------------------------------------------------
 
 func TestProv2ndPass_Ali_AsyncTaskWait_TerminatesOnFirstTerminalStatus(t *testing.T) {

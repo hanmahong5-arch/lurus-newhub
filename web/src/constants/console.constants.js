@@ -20,6 +20,20 @@ For commercial licensing, please contact support@quantumnous.com
 import dayjs from 'dayjs';
 
 // ========== 日期预设常量 ==========
+/*
+ * `text` is an i18n key, not a label: both consumers render it as
+ * t(preset.text) (components/table/task-logs/TaskLogsFilters.jsx and
+ * components/table/mj-logs/MjLogsFilters.jsx, both on routed pages —
+ * /console/task and /console/midjourney). A key the bundle does not carry
+ * resolves to itself, so until en.json was given these five the English
+ * console showed Chinese quick-range buttons: the scan in
+ * src/i18n/i18n-integrity.test.js reads literal t('…') arguments and cannot
+ * see a key that arrives through a variable.
+ *
+ * Adding a sixth preset therefore means adding its English to
+ * src/i18n/locales/en.json. The case named 'every key table handed to t()
+ * through a variable resolves in en.json' in that file fails if it is not.
+ */
 export const DATE_RANGE_PRESETS = [
   {
     text: '今天',

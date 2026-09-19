@@ -21,7 +21,18 @@ import { defineConfig } from 'i18next-cli';
 
 /** @type {import('i18next-cli').I18nextToolkitConfig} */
 export default defineConfig({
-  locales: ['zh', 'en', 'fr', 'ru', 'ja', 'vi'],
+  // The languages src/i18n/i18n.js registers (PUBLISHED_LANGUAGES). The first
+  // entry is also the extractor's primaryLanguage, and for that one it writes
+  // `defaultValue || key` into the file
+  // (i18next-cli/dist/esm/extractor/core/translation-manager.js:740) — which is
+  // how zh.json came to hold "common.changeLanguage": "common.changeLanguage",
+  // i.e. the identifier itself as the aria-label of the language button.
+  // src/i18n/locale-coverage.test.js fails on that shape now.
+  //
+  // fr / ja / ru / vi are no longer registered, so extracting into them writes
+  // entries no browser can reach. The files stay in the tree untouched until
+  // owner item O-lang decides whether to finish them.
+  locales: ['zh', 'en'],
   extract: {
     input: ['src/**/*.{js,jsx,ts,tsx}'],
     ignore: ['src/i18n/**/*'],
