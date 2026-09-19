@@ -70,29 +70,11 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-// Variants uses TweaksPanel from hifi — stub all exported components.
-vi.mock('../../components/hifi/TweaksPanel', () => ({
-  useTweaks: (defaults) => {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    const [state, setState] = React.useState(defaults);
-    return [state, setState];
-  },
-  TweaksPanel: ({ children }) =>
-    React.createElement('div', { 'data-testid': 'tweaks-panel' }, children),
-  TweakSection: ({ children }) => React.createElement('div', null, children),
-  TweakRadio: ({ children }) => React.createElement('div', null, children),
-  TweakColor: ({ children }) => React.createElement('div', null, children),
-  TweakToggle: ({ children }) => React.createElement('div', null, children),
-  TweakSlider: ({ children }) => React.createElement('div', null, children),
-  TweakSelect: ({ children }) => React.createElement('div', null, children),
-}));
-
 // ─── imports after mocks ──────────────────────────────────────────────────────
 
 import AccountDisabled from './AccountDisabled/index';
 import DesignSystem from './DesignSystem/index';
 import States from './States/index';
-import Variants from './Variants/index';
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
@@ -132,18 +114,6 @@ describe('States page', () => {
 
   it('renders the shell wrapper', () => {
     const { getByTestId } = render(React.createElement(States));
-    expect(getByTestId('hf-shell')).toBeTruthy();
-  });
-});
-
-describe('Variants page', () => {
-  it('renders without error', () => {
-    const { container } = render(React.createElement(Variants));
-    expect(container.firstChild).toBeTruthy();
-  });
-
-  it('renders the shell wrapper', () => {
-    const { getByTestId } = render(React.createElement(Variants));
     expect(getByTestId('hf-shell')).toBeTruthy();
   });
 });

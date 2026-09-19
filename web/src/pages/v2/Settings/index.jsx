@@ -27,7 +27,9 @@ import { TotpService } from '../../../services/secureVerification';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // Wave 2: security, subscription and billing sections are wired.
-// Integrations/region/danger remain stubs pending infra (ComingSoon).
+// Integrations/danger remain stubs pending infra (ComingSoon). The Region /
+// data-residency section (cycle 11) was deleted outright, not stubbed — it
+// showed three hardcoded "available" regions with no backend behind them.
 //
 // Notifications (2026-09-16): real subscription, not a placeholder. The
 // store (entity.User.Setting, JSON blob) and write path already existed —
@@ -105,7 +107,6 @@ const SECTIONS = [
   ],
   ['team', 'Team & roles', 'not available in this product yet'],
   ['integrations', 'Integrations', 'webhooks, slack, observability'],
-  ['region', 'Region & data', 'where data lives'],
   ['danger', 'Danger zone', 'export, transfer, delete'],
 ];
 
@@ -122,14 +123,6 @@ const INTEGRATIONS = [
   ['Webhook', 'idle'],
   ['Sentry', 'idle'],
   ['Discord', 'idle'],
-];
-
-// Data-residency selection is not wired (no backend). No region is "current" —
-// claiming one would be a fabricated state. All shown as merely available.
-const REGIONS = [
-  ['us-west', false],
-  ['eu-frankfurt', false],
-  ['ap-shanghai', false],
 ];
 
 // Shared inline input style (no hf-input class)
@@ -1794,54 +1787,6 @@ const HFSettings = () => {
                     </div>
                   </div>
                 ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Region ── */}
-          {section === 'region' && (
-            <div style={{ marginTop: 22 }}>
-              <ComingSoon />
-              <div className='panel' style={{ padding: 18, marginTop: 16 }}>
-                <div className='lbl'>
-                  {tr('console.settings.data_residency', 'data residency')}
-                </div>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(3, 1fr)',
-                    gap: 10,
-                    marginTop: 12,
-                  }}
-                >
-                  {REGIONS.map(([r, sel], i) => (
-                    <div
-                      key={i}
-                      className='panel-paper'
-                      style={{
-                        padding: 12,
-                        border: sel
-                          ? '2px solid var(--hf-accent)'
-                          : '1px solid var(--hf-rule)',
-                      }}
-                    >
-                      <div className='strong' style={{ fontSize: 13 }}>
-                        {r}
-                      </div>
-                      <div
-                        className='faint mono'
-                        style={{ fontSize: 10, marginTop: 4 }}
-                      >
-                        {sel
-                          ? tr('console.settings.region_current', 'current')
-                          : tr(
-                              'console.settings.region_available',
-                              'available',
-                            )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
               </div>
             </div>
           )}
