@@ -115,6 +115,20 @@ func CreateTenant(c *gin.Context) {
 		return
 	}
 
+	// A stand-in org id (see orgIDPlaceholderSuffix in oauth.go) makes the row
+	// indistinguishable from the two the SQL baseline seeds, and silently opts
+	// the tenant out of every organization-bound check: no organization hint on
+	// its authorize URL, and no org equality check on its OIDC callback. Refuse
+	// it at creation time rather than let an admin mint one by hand.
+	if !orgIDIsBound(req.IDPOrgID) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "zitadel_org_id must be a real IdP organization id, not a " + orgIDPlaceholderSuffix + " stand-in",
+			"error_code": "TENANT_ORG_ID_PLACEHOLDER",
+		})
+		return
+	}
+
 	// Set defaults
 	if req.PlanType == "" {
 		req.PlanType = repo.TenantPlanFree

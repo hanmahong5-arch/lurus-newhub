@@ -63,6 +63,37 @@ func ZitaBootstrap(c *gin.Context) {
 		// query param on that request is simply ignored (existing users'
 		// tenant is never changed by an invite, by construction).
 		tenantID := resolveInviteTenant(c, id.AccountID)
+
+		// Seat cap. tenants.max_users is the ceiling an admin set on the
+		// tenant; the OIDC provisioning path honours it
+		// (repo.CreateUserFromIDPClaims → TenantCanAddUser), this bridge path
+		// did not, so an invite code could fill a tenant past its plan. Fails
+		// open when no ceiling is configured or the tenant row cannot be read
+		// — see repo.TenantHasFreeSeat.
+		//
+		// Ordering note: the invite above is already consumed by the time we
+		// know which tenant to measure — repo/tenant_invite.go exports four
+		// functions (CreateTenantInvite, ConsumeTenantInvite,
+		// ListTenantInvites, RevokeTenantInvite) and ConsumeTenantInvite is the
+		// one that resolves a code to its tenant, atomically and single-use, so
+		// there is no peek. A caller who hits the ceiling burns the code and
+		// needs a new one.
+		if ok, used, limit := repo.TenantHasFreeSeat(tenantID); !ok {
+			common.SysLog(fmt.Sprintf("zita-bootstrap: seat limit reached for tenant %s (%d/%d) — refusing to provision account_id=%d", tenantID, used, limit, id.AccountID))
+			governance.RecordAuditEvent(governance.NewAuditEvent(
+				c, governance.ActorSystem, 0,
+				governance.ActionAuthFailed, governance.ResourceTenant, 0,
+				fmt.Sprintf(`{"reason":"tenant_seat_limit","tenant_id":%q,"used":%d,"max_users":%d,"account_id":%d}`,
+					tenantID, used, limit, id.AccountID),
+			))
+			c.JSON(http.StatusForbidden, gin.H{
+				"success":    false,
+				"message":    "该租户席位已满，请联系管理员 / This tenant has reached its user limit",
+				"error_code": "TENANT_SEAT_LIMIT",
+			})
+			return
+		}
+
 		user, err = autoCreateBridgedUser(id.AccountID, tenantID)
 		if err != nil {
 			common.SysError(fmt.Sprintf("zita-bootstrap: auto-create user failed (account_id=%d): %v", id.AccountID, err))

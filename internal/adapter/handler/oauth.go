@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
@@ -350,6 +351,36 @@ func OIDCCallback(c *gin.Context) {
 		return
 	}
 
+	// Organization binding. tenants.zitadel_org_id is a unique 1:1 projection
+	// of an upstream IdP organization (entity/tenant.go:18), but the tenant
+	// resolved above came from stateData.TenantSlug — i.e. from the login URL
+	// the browser was pointed at, not from the token. Without this check, and
+	// with OIDC_AUTO_CREATE_USER on, an account belonging to organization A
+	// that follows tenant B's login URL gets provisioned INTO tenant B.
+	//
+	// Compared only when both sides name a real organization: a token with no
+	// org claim (an IdP that does not advertise one) and a tenant still
+	// carrying a *_PLACEHOLDER stand-in (orgIDIsBound; the "default" and
+	// "switch" rows the SQL baseline seeds) each keep the pre-guard behaviour,
+	// so turning this on cannot lock out a deployment whose org ids were never
+	// filled in.
+	if orgIDIsBound(tenant.IDPOrgID) && claims.OrgID != "" && tenant.IDPOrgID != claims.OrgID {
+		common.SysError(fmt.Sprintf("oidc callback: organization mismatch — tenant %s is bound to org %s, ID token carries org %s; login refused",
+			tenant.Id, tenant.IDPOrgID, claims.OrgID))
+		governance.RecordAuditEvent(governance.NewAuditEvent(
+			c, governance.ActorSystem, 0,
+			governance.ActionAuthFailed, governance.ResourceTenant, 0,
+			fmt.Sprintf(`{"reason":"tenant_org_mismatch","tenant_id":%q,"tenant_org_id":%q,"claim_org_id":%q}`,
+				tenant.Id, tenant.IDPOrgID, claims.OrgID),
+		))
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "此账号所属组织与该租户不匹配 / This account's organization does not match this tenant",
+			"error_code": "TENANT_ORG_MISMATCH",
+		})
+		return
+	}
+
 	// Find or create local user from OIDC identity
 	oidcClaims := &repo.OIDCUserClaims{
 		Sub:               claims.Subject,
@@ -636,6 +667,33 @@ func parseOAuthState(state string) (*OAuthStateData, error) {
 	return &stateData, nil
 }
 
+// orgIDPlaceholderSuffix is the tail the SQL baseline gives a tenant row whose
+// IdP organization has not been created yet. Two seeded rows carry one today:
+// migrations/021_pg_baseline_gaps.sql:172 writes
+// 'ZITADEL_DEFAULT_ORG_ID_PLACEHOLDER' onto the "default" tenant and
+// migrations/030_seed_switch_tenant_and_credit_pool.sql:71 writes
+// 'SWITCH_ORG_ID_PLACEHOLDER' onto the "switch" tenant (that file's own comment
+// asks the owner to replace it once the organization exists). The column is
+// NOT NULL + UNIQUE (entity/tenant.go:18), which is why a stand-in exists at
+// all instead of an empty string.
+const orgIDPlaceholderSuffix = "_PLACEHOLDER"
+
+// orgIDIsBound reports whether orgID identifies a real IdP organization, i.e.
+// is non-empty and is not one of the stand-ins described on
+// orgIDPlaceholderSuffix. Both "unbound" spellings are treated the same way
+// everywhere this lane touches: no organization hint on the authorize URL
+// (buildOIDCAuthURL) and no organization equality check on the callback
+// (OIDCCallback) — an unbound tenant keeps exactly the pre-cycle-12 behaviour.
+func orgIDIsBound(orgID string) bool {
+	return orgID != "" && !strings.HasSuffix(orgID, orgIDPlaceholderSuffix)
+}
+
+// placeholderOrgLogged remembers which placeholder org ids already produced a
+// system-log line, so a tenant stuck on a stand-in logs once per process
+// instead of once per login. Keyed by the org id itself; the key space is the
+// set of tenant rows, not anything a caller supplies.
+var placeholderOrgLogged sync.Map
+
 // buildOIDCAuthURL builds the OIDC authorization URL with PKCE and nonce support
 // prompt: "login" for fresh login, "create" for registration
 func buildOIDCAuthURL(orgID string, state string, nonce string, pkceData *PKCEData, prompt string) string {
@@ -656,9 +714,17 @@ func buildOIDCAuthURL(orgID string, state string, nonce string, pkceData *PKCEDa
 	params.Set("state", state)
 	params.Set("nonce", nonce) // OIDC nonce for ID token validation
 
-	// Add organization hint if provided
-	if orgID != "" {
+	// Add organization hint when the tenant is bound to a real IdP
+	// organization. A placeholder org id is not forwarded: the IdP has no such
+	// organization, so the hint either fails the authorize request outright or
+	// is ignored — both worse than omitting it, which is the pre-organization
+	// behaviour the login already supports (orgID == "" took this branch).
+	if orgIDIsBound(orgID) {
 		params.Set("organization", orgID)
+	} else if orgID != "" {
+		if _, seen := placeholderOrgLogged.LoadOrStore(orgID, struct{}{}); !seen {
+			common.SysLog(fmt.Sprintf("oidc: tenant org id %q is a placeholder — omitting the organization hint from the authorize URL until the IdP organization is created and the row updated", orgID))
+		}
 	}
 
 	// Set prompt mode:
@@ -792,6 +858,22 @@ func validateIDToken(idToken string, expectedNonce string) (*IDTokenClaims, erro
 	claims, ok := token.Claims.(*IDTokenClaims)
 	if !ok {
 		return nil, fmt.Errorf("invalid ID token claims type")
+	}
+
+	// Overlay the deploy-configured (possibly URN-shaped) org claim keys, the
+	// same resolver middleware.OIDCAuth runs on the bearer-JWT path. No-op when
+	// OIDC_CLAIM_* are left at the neutral defaults the struct tags above
+	// already cover. IDTokenClaims has no resource-owner fields, so those two
+	// resolved values are deliberately unread here.
+	extra := middleware.ResolveConfiguredExtraClaims(idToken)
+	if extra.OrgID != nil {
+		claims.OrgID = *extra.OrgID
+	}
+	if extra.OrgDomain != nil {
+		claims.OrgDomain = *extra.OrgDomain
+	}
+	if extra.Roles != nil {
+		claims.Roles = extra.Roles
 	}
 
 	if err := validateIDTokenClaims(claims, expectedNonce); err != nil {
