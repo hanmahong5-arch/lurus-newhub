@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app/hub"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/pool"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 )
@@ -47,6 +49,16 @@ func InitChannelCache() {
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
+			// A channel's own Group can name a group with no Ability rows
+			// yet (abilities lag channel creation, or were never synced for
+			// this group) — the outer map above is only pre-seeded from
+			// abilities, so newGroup2model2channels[group] can still be nil
+			// here. Create it lazily instead of assuming the pre-seed
+			// covered every group, otherwise the write below panics
+			// ("assignment to entry in nil map").
+			if newGroup2model2channels[group] == nil {
+				newGroup2model2channels[group] = make(map[string][]int)
+			}
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
 				if _, ok := newGroup2model2channels[group][model]; !ok {
@@ -122,12 +134,44 @@ func carryOverPollingIndices() map[int]int {
 	return carried
 }
 
-func SyncChannelCache(frequency int) {
-	for {
-		time.Sleep(time.Duration(frequency) * time.Second)
-		common.SysLog("syncing channels from database")
-		InitChannelCache()
-	}
+// initChannelCacheFn is the seam syncChannelCacheOnce calls through. Tests
+// swap it to inject a panic without needing InitChannelCache itself to
+// panic (e.g. exercising the nil-map class of bug above without depending
+// on it staying reproducible).
+var initChannelCacheFn = InitChannelCache
+
+// syncChannelCacheOnce runs one InitChannelCache pass with its own panic
+// recovery; SyncChannelCacheWithContext's ticker loop below calls it.
+//
+// Pre-fix, the ticker loop called InitChannelCache directly with no
+// recovery of its own. The loop runs inside an errgroup.Group.Go goroutine
+// (cmd/server/main.go), and errgroup deliberately does not recover a
+// panicking goroutine's func (x/sync/errgroup) — so a panic there crashed
+// the whole process, not just this goroutine. That crash was loud (visible
+// as a pod restart in k8s), and on the next boot the startup path's own
+// recover (cmd/server/main.go, around the InitChannelCache call) caught the
+// same panic once and called repo.FixAbility() to try to repair the
+// abilities table before giving up.
+//
+// Post-fix, a panic on a tick is recovered: it increments
+// PanicsRecovered{source="channel_cache_sync"} and logs the stack, and the
+// goroutine keeps ticking — no process crash, so no pod restart, and no
+// FixAbility() self-heal runs from this loop (FixAbility only runs from the
+// boot-time recover above, which now fires strictly less often since the
+// process stops crashing here). A sync that keeps failing therefore leaves
+// the channel routing table stale indefinitely instead of restarting the
+// pod; nothing pages on the counter today (no netdata alarm exists for
+// panics_recovered_total as of this change — grepped
+// deploy/r6-host-netdata/health.d/*.conf, zero hits).
+func syncChannelCacheOnce() {
+	defer func() {
+		if r := recover(); r != nil {
+			metrics.RecordPanic("channel_cache_sync")
+			common.SysError(fmt.Sprintf("channel cache sync panic: %v\n%s", r, debug.Stack()))
+		}
+	}()
+	common.SysLog("syncing channels from database")
+	initChannelCacheFn()
 }
 
 // SyncChannelCacheWithContext syncs channel cache with context cancellation support.
@@ -141,8 +185,7 @@ func SyncChannelCacheWithContext(ctx context.Context, frequency int) {
 			common.SysLog("channel cache sync stopped")
 			return
 		case <-ticker.C:
-			common.SysLog("syncing channels from database")
-			InitChannelCache()
+			syncChannelCacheOnce()
 		}
 	}
 }

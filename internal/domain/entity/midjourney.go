@@ -30,4 +30,19 @@ type TaskQueryParams struct {
 	MjID           string
 	StartTimestamp string
 	EndTimestamp   string
+	// TenantID scopes the admin list (repo.GetAllTasks/CountAllTasks) to one
+	// tenant's Midjourney rows via a subquery on the owning user (cycle-11
+	// L8). The caller (GetAllMidjourney) sets both TenantID and
+	// TenantScoped for every non-root admin, including one whose session
+	// has no tenant yet (TenantID == "" — see TenantScoped's fail-closed
+	// note); root leaves TenantScoped false and keeps the platform-wide view.
+	TenantID string
+	// TenantScoped, when true, makes the repo apply the tenant subquery even
+	// if TenantID is "" — an empty-string tenant then matches no user row,
+	// so the caller gets an empty page rather than every tenant's rows.
+	// Fail-closed by construction: this is the flag, not TenantID != "",
+	// that gates the WHERE clause (operator decision, cycle-11 L8 repair —
+	// mirrors GetAllChannels' `if !isRoot { WHERE tenant_id = callerTenant }`,
+	// which is unconditional on emptiness the same way).
+	TenantScoped bool
 }

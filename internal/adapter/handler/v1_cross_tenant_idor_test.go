@@ -29,6 +29,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/gin-gonic/gin"
 )
 
@@ -678,5 +679,336 @@ func TestV1Channel_DeleteDisabledTenantScoped(t *testing.T) {
 	DeleteDisabledChannel(c)
 	if got := v1ChannelCount(ctx, victimDisabled.Id); got != 0 {
 		t.Errorf("(c) root delete-disabled must prune victim, count=%d want 0", got)
+	}
+}
+
+// ─── Task / Midjourney (cycle-11 L8) ───────────────────────────────────────
+//
+// GET /api/task/ and GET /api/mj/ (both AdminAuth-gated, same as channel/
+// user/redemption above) built their query with no tenant filter at all —
+// a tenant admin could enumerate every tenant's async render/generation
+// jobs. SetupV2TestRouter does not migrate the task/midjourney tables (they
+// are not part of its route table), so these two tests extend ctx.DB with
+// them directly instead of touching that shared fixture file.
+
+func seedV1VictimTask(t *testing.T, ctx *V2TestContext) *repo.Task {
+	t.Helper()
+	if err := ctx.DB.AutoMigrate(&repo.Task{}); err != nil {
+		t.Fatalf("migrate Task: %v", err)
+	}
+	victimUser := seedV1VictimUser(t, ctx)
+	task := &repo.Task{
+		TaskID: "victim-task", Platform: constant.TaskPlatformSuno,
+		UserId: victimUser.Id, ChannelId: 1, Status: repo.TaskStatusSuccess, Progress: "100%",
+	}
+	if err := ctx.DB.Create(task).Error; err != nil {
+		t.Fatalf("seed victim task: %v", err)
+	}
+	return task
+}
+
+func TestV1Task_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	if err := ctx.DB.AutoMigrate(&repo.Task{}); err != nil {
+		t.Fatalf("migrate Task: %v", err)
+	}
+
+	ownTask := &repo.Task{
+		TaskID: "own-task", Platform: constant.TaskPlatformSuno,
+		UserId: ctx.AdminUser.Id, ChannelId: 1, Status: repo.TaskStatusSuccess, Progress: "100%",
+	}
+	if err := ctx.DB.Create(ownTask).Error; err != nil {
+		t.Fatalf("seed own task: %v", err)
+	}
+	seedV1VictimTask(t, ctx) // other-tenant-xyz
+
+	containsTaskID := func(items []interface{}, taskID string) bool {
+		for _, it := range items {
+			if m, ok := it.(map[string]interface{}); ok && m["task_id"] == taskID {
+				return true
+			}
+		}
+		return false
+	}
+
+	// (d) tenant admin sees ONLY its own tenant's task — both the reported
+	// total AND the actual rows (a filter that only narrows total() while
+	// leaving the row query unscoped would still pass a total-only check).
+	c, w := v1Ctx(http.MethodGet, "/api/task/?p=1&page_size=50", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	GetAllTask(c)
+	data := v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 1 {
+		t.Errorf("tenant admin task total=%v want 1", got)
+	}
+	items := data["items"].([]interface{})
+	if !containsTaskID(items, "own-task") {
+		t.Errorf("tenant admin task list missing own-tenant task, items=%v", items)
+	}
+	if containsTaskID(items, "victim-task") {
+		t.Errorf("tenant admin task list leaked cross-tenant victim task, items=%v", items)
+	}
+
+	// root sees every tenant's task.
+	c, w = v1Ctx(http.MethodGet, "/api/task/?p=1&page_size=50", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	GetAllTask(c)
+	data = v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 2 {
+		t.Errorf("root task total=%v want 2", got)
+	}
+	items = data["items"].([]interface{})
+	if !containsTaskID(items, "victim-task") {
+		t.Errorf("root task list must include every tenant, items=%v", items)
+	}
+}
+
+// TestV1Task_ListTenantScoped_EmptyTenantFailsClosed: a non-root admin whose
+// session carries no tenant (c.GetString("tenant_id") == "", e.g. a session
+// resolved before the tenant lookup populated it) must see an EMPTY page,
+// not the whole platform. Before the TenantScoped flag this fell through
+// `if queryParams.TenantID != ""` and returned every tenant's rows —
+// fail-open. Mirrors GetAllChannels, which applies `WHERE tenant_id = ""`
+// unconditionally for any non-root caller and likewise matches nothing.
+func TestV1Task_ListTenantScoped_EmptyTenantFailsClosed(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	if err := ctx.DB.AutoMigrate(&repo.Task{}); err != nil {
+		t.Fatalf("migrate Task: %v", err)
+	}
+
+	ownTask := &repo.Task{
+		TaskID: "own-task-empty-tenant", Platform: constant.TaskPlatformSuno,
+		UserId: ctx.AdminUser.Id, ChannelId: 1, Status: repo.TaskStatusSuccess, Progress: "100%",
+	}
+	if err := ctx.DB.Create(ownTask).Error; err != nil {
+		t.Fatalf("seed own task: %v", err)
+	}
+	seedV1VictimTask(t, ctx) // other-tenant-xyz
+
+	c, w := v1Ctx(http.MethodGet, "/api/task/?p=1&page_size=50", nil, common.RoleAdminUser, "", ctx.AdminUser.Id)
+	GetAllTask(c)
+	data := v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 0 {
+		t.Errorf("non-root admin with empty tenant task total=%v want 0 (fail-closed)", got)
+	}
+	items, _ := data["items"].([]interface{})
+	if len(items) != 0 {
+		t.Errorf("non-root admin with empty tenant task items=%v want empty", items)
+	}
+}
+
+func seedV1VictimMidjourney(t *testing.T, ctx *V2TestContext) *repo.Midjourney {
+	t.Helper()
+	if err := ctx.DB.AutoMigrate(&repo.Midjourney{}); err != nil {
+		t.Fatalf("migrate Midjourney: %v", err)
+	}
+	victimUser := seedV1VictimUser(t, ctx)
+	mj := &repo.Midjourney{MjId: "victim-mj", UserId: victimUser.Id, Status: "SUCCESS", Progress: "100%"}
+	if err := ctx.DB.Create(mj).Error; err != nil {
+		t.Fatalf("seed victim mj: %v", err)
+	}
+	return mj
+}
+
+func TestV1Midjourney_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	if err := ctx.DB.AutoMigrate(&repo.Midjourney{}); err != nil {
+		t.Fatalf("migrate Midjourney: %v", err)
+	}
+
+	ownMJ := &repo.Midjourney{MjId: "own-mj", UserId: ctx.AdminUser.Id, Status: "SUCCESS", Progress: "100%"}
+	if err := ctx.DB.Create(ownMJ).Error; err != nil {
+		t.Fatalf("seed own mj: %v", err)
+	}
+	seedV1VictimMidjourney(t, ctx) // other-tenant-xyz
+
+	containsMjID := func(items []interface{}, mjID string) bool {
+		for _, it := range items {
+			if m, ok := it.(map[string]interface{}); ok && m["mj_id"] == mjID {
+				return true
+			}
+		}
+		return false
+	}
+
+	// (d) tenant admin sees ONLY its own tenant's mj job — both the
+	// reported total AND the actual rows.
+	c, w := v1Ctx(http.MethodGet, "/api/mj/?p=1&page_size=50", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	GetAllMidjourney(c)
+	data := v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 1 {
+		t.Errorf("tenant admin mj total=%v want 1", got)
+	}
+	items := data["items"].([]interface{})
+	if !containsMjID(items, "own-mj") {
+		t.Errorf("tenant admin mj list missing own-tenant job, items=%v", items)
+	}
+	if containsMjID(items, "victim-mj") {
+		t.Errorf("tenant admin mj list leaked cross-tenant victim job, items=%v", items)
+	}
+
+	// root sees every tenant's mj job.
+	c, w = v1Ctx(http.MethodGet, "/api/mj/?p=1&page_size=50", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	GetAllMidjourney(c)
+	data = v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 2 {
+		t.Errorf("root mj total=%v want 2", got)
+	}
+	items = data["items"].([]interface{})
+	if !containsMjID(items, "victim-mj") {
+		t.Errorf("root mj list must include every tenant, items=%v", items)
+	}
+}
+
+// TestV1Midjourney_ListTenantScoped_EmptyTenantFailsClosed mirrors
+// TestV1Task_ListTenantScoped_EmptyTenantFailsClosed for the Midjourney
+// list: a non-root admin with no tenant on its session gets an empty page,
+// not the platform's.
+func TestV1Midjourney_ListTenantScoped_EmptyTenantFailsClosed(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+	if err := ctx.DB.AutoMigrate(&repo.Midjourney{}); err != nil {
+		t.Fatalf("migrate Midjourney: %v", err)
+	}
+
+	ownMJ := &repo.Midjourney{MjId: "own-mj-empty-tenant", UserId: ctx.AdminUser.Id, Status: "SUCCESS", Progress: "100%"}
+	if err := ctx.DB.Create(ownMJ).Error; err != nil {
+		t.Fatalf("seed own mj: %v", err)
+	}
+	seedV1VictimMidjourney(t, ctx) // other-tenant-xyz
+
+	c, w := v1Ctx(http.MethodGet, "/api/mj/?p=1&page_size=50", nil, common.RoleAdminUser, "", ctx.AdminUser.Id)
+	GetAllMidjourney(c)
+	data := v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 0 {
+		t.Errorf("non-root admin with empty tenant mj total=%v want 0 (fail-closed)", got)
+	}
+	items, _ := data["items"].([]interface{})
+	if len(items) != 0 {
+		t.Errorf("non-root admin with empty tenant mj items=%v want empty", items)
+	}
+}
+
+// ─── Search variants (cycle-11 L8) ─────────────────────────────────────────
+//
+// SearchChannels/SearchUsers/SearchRedemptions already carry the same
+// isRoot/callerTenant scope as their List siblings above; these lock that
+// existing behaviour through the real handler with an empty keyword (the
+// "browse everything" case), matching the *_ListTenantScoped naming
+// convention above so a name-based route/test-pairing gate finds all of
+// list+search by pattern.
+
+func TestV1ChannelSearch_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	SeedV2Channel(t, ctx, "own-search-channel") // ctx.TenantID
+	victim := seedV1VictimChannel(t, ctx)       // other-tenant-xyz
+
+	containsChannelID := func(items []interface{}, id int) bool {
+		for _, it := range items {
+			if m, ok := it.(map[string]interface{}); ok {
+				if idf, ok := m["id"].(float64); ok && int(idf) == id {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	c, w := v1Ctx(http.MethodGet, "/api/channel/search?p=1&page_size=50", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	SearchChannels(c)
+	data := v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 1 {
+		t.Errorf("tenant admin channel search total=%v want 1", got)
+	}
+	items, _ := data["items"].([]interface{})
+	if containsChannelID(items, victim.Id) {
+		t.Errorf("tenant admin channel search leaked cross-tenant victim channel id=%d, items=%v", victim.Id, items)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/channel/search?p=1&page_size=50", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	SearchChannels(c)
+	data = v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 2 {
+		t.Errorf("root channel search total=%v want 2", got)
+	}
+	items, _ = data["items"].([]interface{})
+	if !containsChannelID(items, victim.Id) {
+		t.Errorf("root channel search must include every tenant, missing victim channel id=%d, items=%v", victim.Id, items)
+	}
+}
+
+func TestV1UserSearch_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	victim := seedV1VictimUser(t, ctx)
+
+	c, w := v1Ctx(http.MethodGet, "/api/user/search?p=1&page_size=50", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	SearchUsers(c)
+	items := v1Items(t, w)
+	for _, it := range items {
+		if m, ok := it.(map[string]interface{}); ok {
+			if idf, ok := m["id"].(float64); ok && int(idf) == victim.Id {
+				t.Errorf("tenant admin user search leaked cross-tenant victim id=%d", victim.Id)
+			}
+		}
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/user/search?p=1&page_size=50", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	SearchUsers(c)
+	found := false
+	for _, it := range v1Items(t, w) {
+		if m, ok := it.(map[string]interface{}); ok {
+			if idf, ok := m["id"].(float64); ok && int(idf) == victim.Id {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("root user search must include every tenant")
+	}
+}
+
+func TestV1RedemptionSearch_ListTenantScoped(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	seedV1Redemption(t, ctx, ctx.TenantID)
+	victim := seedV1Redemption(t, ctx, idorVictimTenant)
+
+	containsRedemptionID := func(items []interface{}, id int) bool {
+		for _, it := range items {
+			if m, ok := it.(map[string]interface{}); ok {
+				if idf, ok := m["id"].(float64); ok && int(idf) == id {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	c, w := v1Ctx(http.MethodGet, "/api/redemption/search?p=1&page_size=50", nil, common.RoleAdminUser, ctx.TenantID, ctx.AdminUser.Id)
+	SearchRedemptions(c)
+	data := v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 1 {
+		t.Errorf("tenant admin redemption search total=%v want 1", got)
+	}
+	items, _ := data["items"].([]interface{})
+	if containsRedemptionID(items, victim.Id) {
+		t.Errorf("tenant admin redemption search leaked cross-tenant victim redemption id=%d, items=%v", victim.Id, items)
+	}
+
+	c, w = v1Ctx(http.MethodGet, "/api/redemption/search?p=1&page_size=50", nil, common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	SearchRedemptions(c)
+	data = v1Body(t, w)["data"].(map[string]interface{})
+	if got := data["total"].(float64); got != 2 {
+		t.Errorf("root redemption search total=%v want 2", got)
+	}
+	items, _ = data["items"].([]interface{})
+	if !containsRedemptionID(items, victim.Id) {
+		t.Errorf("root redemption search must include every tenant, missing victim redemption id=%d, items=%v", victim.Id, items)
 	}
 }

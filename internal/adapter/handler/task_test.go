@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 )
 
@@ -83,6 +84,7 @@ func TestGetAllTask_FiltersByProjectAndRequestId(t *testing.T) {
 
 	t.Run("project_id narrows the admin list and its total", func(t *testing.T) {
 		c, w := r2deplCtx(http.MethodGet, "/tasks?page=1&page_size=10&project_id=5", nil)
+		c.Set("role", common.RoleRootUser) // admin list, not tenant-scoping under test
 		GetAllTask(c)
 		data, _ := r2deplBody(t, w)["data"].(map[string]interface{})
 		if data == nil {
@@ -106,6 +108,7 @@ func TestGetAllTask_FiltersByProjectAndRequestId(t *testing.T) {
 
 	t.Run("request_id narrows the admin list", func(t *testing.T) {
 		c, w := r2deplCtx(http.MethodGet, "/tasks?page=1&page_size=10&request_id=req-admin-other", nil)
+		c.Set("role", common.RoleRootUser) // admin list, not tenant-scoping under test
 		GetAllTask(c)
 		data, _ := r2deplBody(t, w)["data"].(map[string]interface{})
 		if total, _ := data["total"].(float64); total != 1 {
@@ -125,6 +128,7 @@ func TestGetAllTask_FiltersByProjectAndRequestId(t *testing.T) {
 	// never equal the stored (untrimmed) value and this goes red.
 	t.Run("a padded request_id is trimmed before the query", func(t *testing.T) {
 		c, w := r2deplCtx(http.MethodGet, "/tasks?page=1&page_size=10&request_id=%20req-admin-other%20", nil)
+		c.Set("role", common.RoleRootUser) // admin list, not tenant-scoping under test
 		GetAllTask(c)
 		data, _ := r2deplBody(t, w)["data"].(map[string]interface{})
 		if total, _ := data["total"].(float64); total != 1 {
@@ -138,6 +142,7 @@ func TestGetAllTask_FiltersByProjectAndRequestId(t *testing.T) {
 			long += "a"
 		}
 		c, w := r2deplCtx(http.MethodGet, "/tasks?page=1&page_size=10&request_id="+long, nil)
+		c.Set("role", common.RoleRootUser) // admin list, not tenant-scoping under test
 		GetAllTask(c)
 		data, _ := r2deplBody(t, w)["data"].(map[string]interface{})
 		if total, _ := data["total"].(float64); total != 0 {
@@ -159,6 +164,7 @@ func TestGetAllTask_FiltersByProjectAndRequestId(t *testing.T) {
 		}
 		query := stored64 + "extra6" // 64 + 6 = 70 chars, first 64 equal stored64
 		c, w := r2deplCtx(http.MethodGet, "/tasks?page=1&page_size=10&request_id="+query, nil)
+		c.Set("role", common.RoleRootUser) // admin list, not tenant-scoping under test
 		GetAllTask(c)
 		data, _ := r2deplBody(t, w)["data"].(map[string]interface{})
 		if total, _ := data["total"].(float64); total != 0 {
@@ -173,6 +179,7 @@ func TestGetAllTask_FiltersByProjectAndRequestId(t *testing.T) {
 	// per-request error log — not the same thing as a filtered empty page.
 	t.Run("a non-numeric project_id yields the empty page without an items:null response", func(t *testing.T) {
 		c, w := r2deplCtx(http.MethodGet, "/tasks?page=1&page_size=10&project_id=abc", nil)
+		c.Set("role", common.RoleRootUser) // admin list, not tenant-scoping under test
 		GetAllTask(c)
 		body := r2deplBody(t, w)
 		if ok, _ := body["success"].(bool); !ok {
