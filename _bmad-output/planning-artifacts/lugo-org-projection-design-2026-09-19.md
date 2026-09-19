@@ -23,13 +23,24 @@ newhub 保留自己的 `tenants` 表作为**投影**，新增一列可空唯一�
 | G1 | 组织一致性 | `internal/adapter/handler/oauth.go` `OIDCCallback` | 租户 `IDPOrgID` 与 ID token 的 `org_id` 都有值且不等 → 403 `TENANT_ORG_MISMATCH` + 审计 `auth.failed{reason:tenant_org_mismatch}` |
 | G2 | 一处 claim 解析器 | `internal/adapter/middleware/oidc_auth.go` `ResolveConfiguredExtraClaims` + `oauth.go` `validateIDToken` | 浏览器回调也读 `OIDC_CLAIM_*`（此前只有 bearer JWT 路径读） |
 | G3 | 占位符守卫 | `oauth.go` `orgIDIsBound` / `buildOIDCAuthURL` / `handler/tenant.go` `CreateTenant` | `*_PLACEHOLDER` 结尾的 org id：不发 `organization=` 参数、不参与 G1 比较、不允许新建 |
-| G4 | 桥接座位上限 | `handler/zita_bootstrap.go` + `repo.TenantHasFreeSeat` | 邀请码首登超 `tenants.max_users` → 403 `TENANT_SEAT_LIMIT` |
+| G4 | 桥接座位上限 | `handler/zita_bootstrap.go` `autoCreateBridgedUser` + `repo.TenantHasFreeSeat` | 首登超 `tenants.max_users` → 403 `TENANT_SEAT_LIMIT` + 审计 `auth.failed{reason:tenant_seat_limit}` + `tenant_gate_total{outcome="seat_limit_denied"}`。闸在**唯一的 insert 上**，所以两个桥接入口（`ZitaBootstrap`、`ProvisionV2`）都受管；邀请码在闸之前**只 peek 不消费**（`repo.PendingInviteTenantID`），被拒的登录不烧码。控制台的 `user_count`（`GetTenantStats`、`GET /api/v2/admin/tenants/:id`）已换成同一个席位数，不再与闸分叉 |
 | G5 | 租户生命周期闸 | `repo.TenantGate` + `middleware/auth.go` 三处 | 软删/不存在的租户：`TENANT_MISSING_MODE=observe`（默认）计数放行、`enforce` 403 |
 
 G1/G3 的"不比较"分支就是为投影留的口子：生产两行租户（`default`、`switch`）的
 `zitadel_org_id` 目前是 `ZITADEL_DEFAULT_ORG_ID_PLACEHOLDER` / `SWITCH_ORG_ID_PLACEHOLDER`
 （`migrations/021_pg_baseline_gaps.sql:172`、`migrations/030_seed_switch_tenant_and_credit_pool.sql:71`），
 投影落地前它们没有任何真实组织可绑。
+
+**G1 今天的实际爆炸半径 = 0，明写出来免得被读成"已经守住了"**：真实部署今天只有这两行租户，
+两行都带占位符，所以任何组织的账号沿 `default` 租户的登录 URL 进来**仍然会被自动开通进去**
+——G1 一次都不会触发。它守的是"O-org 把占位符换成真组织 id 之后"的那天，以及任何新建的
+真绑定租户（`CreateTenant` 自本轮起拒绝占位符，见 G3，所以新行只会是真绑定）。
+这不是失败，是有意的分期；但读这份文档的人必须知道，"守卫在位"≠"今天有东西被守住"。
+**怎么知道哪天开始真的守住了**：`lurus_gateway_tenant_gate_total` 的四个 org 结局
+（`org_claim_absent` / `org_tenant_unbound` / `org_matched` / `org_mismatch_denied`）
+逐次登录计数 —— `org_claim_absent` 独大 = IdP 根本不发 org claim（O-org 第 3 问的答案）；
+`org_tenant_unbound` 独大 = claim 有了但租户还是占位符（O-org 第 2 问）；
+两者归零、`org_matched` 开始增长 = G1 从此真的在守。
 
 ---
 
@@ -187,6 +198,7 @@ flag：`LUGO_ORG_PROJECTION_ENABLED`，默认 `false`；两份 manifest 先不�
 | R6 | 投影写回 platform | 两边互相覆盖 | 单向：platform → newhub。newhub 侧任何组织字段的修改都不回写 |
 | R7 | `plan` 自动映射 | 两套计划名口径不同，配额/席位被静默改写 | 只读展示，不驱动 `plan_type`（§3.2） |
 | R8 | 生产 org id 仍是占位符 | 投影对象不存在 | 绑定是显式的 `platform_org_id`，与 `zitadel_org_id` 解耦；占位符行走 §1 G3 的不比较分支 |
+| R9 | 席位上限是"读后写"不是"预留" | 同一租户两个首登并发时都读到 `used == max_users-1`，两个都放行，超卖 N=并发数 | 记录不修（cycle 12 决定，下一轮做 DB 级守卫：`users(tenant_id)` 上的计数式 `UPDATE … WHERE seats < max_users` 或部分唯一索引）。上限是**套餐限额不是安全边界**，超卖数量有界且在控制台席位数上可见（本轮已把控制台的 user_count 换成同一个席位数，见 §1 G4） |
 
 ---
 

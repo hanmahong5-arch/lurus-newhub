@@ -19,6 +19,7 @@ package middleware
 // repo.TenantGate directly, plus one direct table test for the modes.
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -27,7 +28,9 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
+	"github.com/glebarez/sqlite"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"gorm.io/gorm"
 )
 
 // tenantGateToken builds a relay-ready token owned by tenantID.
@@ -71,12 +74,12 @@ func TestTokenAuth_SoftDeletedTenant_ObserveMode_AdmitsAndCounts(t *testing.T) {
 		t.Fatalf("soft delete tenant: %v", err)
 	}
 
-	before := tenantGateCount(t, "missing_observed")
+	before := tenantGateCount(t, metrics.TenantGateOutcomeMissingObserved)
 	w := provisionedProbe(t, r, key)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 — observe mode must admit; body=%s", w.Code, w.Body.String())
 	}
-	if after := tenantGateCount(t, "missing_observed"); after != before+1 {
+	if after := tenantGateCount(t, metrics.TenantGateOutcomeMissingObserved); after != before+1 {
 		t.Errorf("tenant_gate_total{outcome=\"missing_observed\"} = %v, want %v — an admitted deleted-tenant request must still be counted",
 			after, before+1)
 	}
@@ -99,13 +102,13 @@ func TestTokenAuth_SoftDeletedTenant_EnforceMode_Denied(t *testing.T) {
 		t.Fatalf("soft delete tenant: %v", err)
 	}
 
-	before := tenantGateCount(t, "missing_denied")
+	before := tenantGateCount(t, metrics.TenantGateOutcomeMissingDenied)
 	w := provisionedProbe(t, r, key)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 — enforce mode must deny a deleted tenant's token; body=%s",
 			w.Code, w.Body.String())
 	}
-	if after := tenantGateCount(t, "missing_denied"); after != before+1 {
+	if after := tenantGateCount(t, metrics.TenantGateOutcomeMissingDenied); after != before+1 {
 		t.Errorf("tenant_gate_total{outcome=\"missing_denied\"} = %v, want %v", after, before+1)
 	}
 }
@@ -127,12 +130,12 @@ func TestTokenAuth_DisabledTenant_DeniedInBothModes(t *testing.T) {
 			r, _, cleanup := setupProvisionedTestRouter(t, tenantGateToken(tenant.Id, key), tenant)
 			defer cleanup()
 
-			before := tenantGateCount(t, "disabled_denied")
+			before := tenantGateCount(t, metrics.TenantGateOutcomeDisabledDenied)
 			w := provisionedProbe(t, r, key)
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, want 403 for a disabled tenant; body=%s", w.Code, w.Body.String())
 			}
-			if after := tenantGateCount(t, "disabled_denied"); after != before+1 {
+			if after := tenantGateCount(t, metrics.TenantGateOutcomeDisabledDenied); after != before+1 {
 				t.Errorf("tenant_gate_total{outcome=\"disabled_denied\"} = %v, want %v", after, before+1)
 			}
 		})
@@ -155,6 +158,87 @@ func TestTokenAuth_EnabledTenant_AdmittedInEnforceMode(t *testing.T) {
 	w := provisionedProbe(t, r, key)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 for an enabled tenant under enforce; body=%s", w.Code, w.Body.String())
+	}
+}
+
+var tenantGateFaultDBCounter int
+
+// installBrokenTenantDB points repo.DB at a database whose connection is
+// closed, so every query fails with a driver error that is neither nil nor
+// gorm.ErrRecordNotFound — the shape a real backend fault (PG down, pool
+// exhausted, network partition) produces. Restores the previous handle on
+// cleanup.
+func installBrokenTenantDB(t *testing.T) {
+	t.Helper()
+	tenantGateFaultDBCounter++
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:tenantgatefault%d?mode=memory&cache=shared", tenantGateFaultDBCounter)), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&repo.Tenant{}); err != nil {
+		t.Fatalf("migrate tenant: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("sql handle: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql handle: %v", err)
+	}
+	// Prove the handle really is poisoned before relying on it: a test that
+	// silently got a working DB would assert nothing.
+	if err := db.Where("id = ?", "probe").First(&repo.Tenant{}).Error; err == nil {
+		t.Fatal("the poisoned handle still answers queries; this oracle needs a real backend fault")
+	}
+	prev := repo.DB
+	repo.DB = db
+	t.Cleanup(func() { repo.DB = prev })
+}
+
+// TestTenantGate_BackendFault_FailsOpen is the oracle for the one branch of
+// the gate that admits on an ERROR rather than on a decision.
+//
+// Every comment in auth.go and repo/tenant.go calls this posture deliberate
+// and load-bearing — a DB hiccup must not 403 every console request and every
+// relay call at once — but nothing tested it, so a future "tidy-up" that
+// folded the default branch into the not-found branch would have turned a
+// database blip into a total outage under TENANT_MISSING_MODE=enforce, with
+// all of this file still green.
+//
+// Two things are asserted, in both modes: the request is admitted, and NO
+// outcome is counted. The second is what separates "fail-open on a fault"
+// from "treated the fault as a missing tenant and happened to admit it":
+// counting a fault as missing_observed would also poison the very series an
+// operator reads to decide whether enforce is safe.
+func TestTenantGate_BackendFault_FailsOpen(t *testing.T) {
+	for _, mode := range []string{"", repo.TenantGateModeEnforce} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			t.Setenv(repo.TenantMissingModeEnv, mode)
+			installBrokenTenantDB(t)
+
+			beforeObserved := tenantGateCount(t, metrics.TenantGateOutcomeMissingObserved)
+			beforeDenied := tenantGateCount(t, metrics.TenantGateOutcomeMissingDenied)
+			beforeDisabled := tenantGateCount(t, metrics.TenantGateOutcomeDisabledDenied)
+
+			ok, reason := repo.TenantGate("t-gate-backend-fault")
+			if !ok {
+				t.Errorf("TenantGate under a DB fault = (%v, %q), want admitted — a backend fault must not 403 every request",
+					ok, reason)
+			}
+			if reason != "" {
+				t.Errorf("reason = %q, want empty — a fault is not a tenant decision", reason)
+			}
+			if got := tenantGateCount(t, metrics.TenantGateOutcomeMissingObserved); got != beforeObserved {
+				t.Errorf("missing_observed moved %v -> %v on a DB fault; that series must only count tenants that really have no row",
+					beforeObserved, got)
+			}
+			if got := tenantGateCount(t, metrics.TenantGateOutcomeMissingDenied); got != beforeDenied {
+				t.Errorf("missing_denied moved %v -> %v on a DB fault", beforeDenied, got)
+			}
+			if got := tenantGateCount(t, metrics.TenantGateOutcomeDisabledDenied); got != beforeDisabled {
+				t.Errorf("disabled_denied moved %v -> %v on a DB fault", beforeDisabled, got)
+			}
+		})
 	}
 }
 

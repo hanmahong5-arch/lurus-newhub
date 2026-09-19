@@ -233,16 +233,16 @@ func TenantGate(tenantID string) (ok bool, reason string) {
 	switch {
 	case err == nil:
 		if tenant.IsDisabled() {
-			metrics.RecordTenantGate("disabled_denied")
+			metrics.RecordTenantGate(metrics.TenantGateOutcomeDisabledDenied)
 			return false, TenantGateReasonDisabled
 		}
 		return true, ""
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		if TenantMissingMode() == TenantGateModeEnforce {
-			metrics.RecordTenantGate("missing_denied")
+			metrics.RecordTenantGate(metrics.TenantGateOutcomeMissingDenied)
 			return false, TenantGateReasonMissing
 		}
-		metrics.RecordTenantGate("missing_observed")
+		metrics.RecordTenantGate(metrics.TenantGateOutcomeMissingObserved)
 		logTenantMissingObserved(tenantID)
 		return true, ""
 	default:
@@ -292,8 +292,19 @@ func ListTenants(offset int, limit int, status int) ([]*Tenant, int64, error) {
 	return tenants, total, nil
 }
 
-// GetTenantUserCount returns the number of users in a tenant
-// by counting identity mappings (User model has no tenant_id column).
+// GetTenantUserCount returns the number of rows in user_identity_mappings for
+// a tenant — i.e. how many users reached it through the OIDC identity path.
+//
+// It is NOT the tenant's seat occupancy. `users` does carry a tenant_id column
+// (entity/user.go:15), and the session-bridge signup path writes a users row
+// with no mapping row, so a bridge-provisioned tenant counts 0 here; the
+// comment that used to sit on this function said the User model had no
+// tenant_id column, which was false. TenantUserSeatCount below is the seat
+// number, and it is what the admin console and the seat cap both read.
+// This function stays mapping-based because TenantCanAddUser — the OIDC
+// provisioning path's own ceiling check (user_mapping.go:271-277) — has always
+// counted mappings, and re-basing it is a money/lockout-adjacent change that
+// belongs with the projection work, not here.
 func GetTenantUserCount(tenantID string) (int64, error) {
 	var count int64
 	err := DB.Model(&UserIdentityMapping{}).Where("tenant_id = ?", tenantID).Count(&count).Error
@@ -343,6 +354,15 @@ func TenantUserSeatCount(tenantID string) (int64, error) {
 // transient DB fault, must not lock people out. TenantCanAddUser answers
 // false for max_users <= 0; that difference is intentional and its callers
 // are unchanged.
+//
+// Not a reservation: the read and the caller's INSERT are separate statements,
+// so two first logins racing into the last seat can both be admitted (same
+// weakness the older TenantCanAddUser has). Recorded, not fixed, in cycle 12 —
+// closing it needs a DB-level guard (a partial unique index or a counted
+// UPDATE … WHERE seats < max_users), which is next cycle's work; the ceiling
+// is a plan limit, not a security boundary, and overshooting it by the number
+// of simultaneous first logins is bounded and visible in the console's seat
+// count.
 func TenantHasFreeSeat(tenantID string) (ok bool, used int64, limit int) {
 	if tenantID == "" {
 		return true, 0, 0
@@ -359,6 +379,44 @@ func TenantHasFreeSeat(tenantID string) (ok bool, used int64, limit int) {
 		return true, 0, tenant.MaxUsers
 	}
 	return used < int64(tenant.MaxUsers), used, tenant.MaxUsers
+}
+
+// PendingInviteTenantID answers "if this invite code were redeemed right now,
+// which tenant would it place the user in?" without redeeming it. Returns
+// ok=false for an absent/unknown/revoked/already-consumed/expired code — i.e.
+// exactly the cases where ConsumeTenantInvite would fail and the caller would
+// fall back to the "default" tenant.
+//
+// It exists so handler.ZitaBootstrap can check the tenant's seat ceiling
+// BEFORE consuming the code: ConsumeTenantInvite is atomic and single-use, so
+// a seat refusal after consumption burns a one-time code the visitor then has
+// to ask an admin to reissue.
+//
+// Read-only and advisory. ConsumeTenantInvite remains the single authority on
+// whether a code redeems — this predicate deliberately duplicates its status
+// and expiry rules rather than widening them, so a code this function rejects
+// still gets its ordinary "fall back to default, log the user in" treatment
+// there. Lives in tenant.go rather than next to the other invite functions
+// because that is the file cycle 12 L9 owns; moving it is a tidy-up for a
+// later cycle.
+func PendingInviteTenantID(code string) (string, bool) {
+	if code == "" {
+		return "", false
+	}
+	var invite TenantInvite
+	if err := WithoutTenantIsolation(DB).Where("code = ?", code).First(&invite).Error; err != nil {
+		return "", false
+	}
+	if invite.Status != TenantInviteStatusPending {
+		return "", false
+	}
+	if invite.ExpiredTime != 0 && invite.ExpiredTime < common.GetTimestamp() {
+		return "", false
+	}
+	if invite.TenantId == "" {
+		return "", false
+	}
+	return invite.TenantId, true
 }
 
 // GenerateID generates a unique ID for tenant
@@ -387,8 +445,13 @@ func GetTenantStats(tenantID string) (*TenantStats, error) {
 	stats.MaxUsers = tenant.MaxUsers
 	stats.MaxQuota = tenant.MaxQuota
 
-	// User count (from identity mappings)
-	stats.UserCount, _ = GetTenantUserCount(tenantID)
+	// Seat occupancy — the SAME number the seat cap enforces
+	// (TenantHasFreeSeat -> TenantUserSeatCount), so the count an admin reads
+	// next to max_users in the console cannot disagree with the ceiling that
+	// refuses the next login. It used to be GetTenantUserCount, which counts
+	// identity mappings and therefore reads 0 for a tenant whose seats were
+	// filled through the session bridge.
+	stats.UserCount, _ = TenantUserSeatCount(tenantID)
 
 	// Token count
 	stats.TokenCount, _ = GetTenantTokenCount(tenantID)

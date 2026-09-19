@@ -31,9 +31,13 @@ import (
 // The JSON struct tags below use vendor-NEUTRAL default keys (org_id, roles,
 // …). Different IdPs advertise tenant/role information under different (often
 // vendor-prefixed) claim keys, so the EFFECTIVE key is configurable per deploy
-// via OIDC_CLAIM_* env vars; resolveOIDCClaims overlays those onto the struct
-// after the standard JSON decode. The neutral tags keep the type usable in
-// tests and as a marshal target without leaking any vendor claim URN into code.
+// via OIDC_CLAIM_* env vars. ResolveConfiguredExtraClaims reads a token under
+// those keys and ConfiguredExtraClaims.applyTo overlays the result onto this
+// struct after the standard JSON decode — that pair is the production overlay,
+// on both token paths (OIDCAuth here via applyConfigurableClaims, and
+// handler.validateIDToken for the browser callback). The neutral tags keep the
+// type usable in tests and as a marshal target without leaking any vendor
+// claim URN into code.
 type OIDCClaims struct {
 	jwt.RegisteredClaims
 	Email             string                 `json:"email"`
@@ -210,12 +214,20 @@ func (e ConfiguredExtraClaims) applyTo(c *OIDCClaims) {
 	}
 }
 
-// resolveOIDCClaims overlays the configurable extra claims (org/role) onto an
-// already-parsed OIDCClaims by re-reading the raw token claim map under the
-// deploy-configured keys. This is only needed when a deploy points OIDC_CLAIM_*
-// at non-default keys; when the keys equal the neutral struct-tag defaults the
-// standard JSON decode already populated the fields and this is a cheap no-op.
-// rawClaims is the full decoded claim set (map form) of the same token.
+// resolveOIDCClaims is a TEST-ONLY shim, not a production path: since cycle 12
+// every production overlay goes through ResolveConfiguredExtraClaims +
+// applyTo (applyConfigurableClaims on the bearer-JWT path,
+// handler.validateIDToken on the browser callback), and a grep of
+// resolveOIDCClaims across internal/ returns only this declaration and two
+// coverage tests in files this cycle's lane does not own
+// (oidc_admin_cover_test.go, oidc_autocreate_cover_test.go). It is kept so
+// those keep compiling and is a thin wrapper over the same resolver, so it
+// cannot drift from what production does.
+//
+// It overlays the configurable extra claims (org/role) onto an already-parsed
+// OIDCClaims from the raw claim map of the same token. Only meaningful when a
+// deploy points OIDC_CLAIM_* at non-default keys; with the neutral struct-tag
+// defaults the standard JSON decode already populated the fields.
 func resolveOIDCClaims(c *OIDCClaims, rawClaims map[string]interface{}) {
 	if c == nil || rawClaims == nil {
 		return

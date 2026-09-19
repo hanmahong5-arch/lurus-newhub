@@ -349,6 +349,16 @@ func ProvisionV2(c *gin.Context) {
 		// from :tenant_slug above but that is a pre-existing, separately
 		// tracked gap (recon N2 evidence #2), out of scope here.
 		user, err = autoCreateBridgedUser(accountID, "default")
+		// The seat cap lives inside autoCreateBridgedUser (cycle 12 L9) so both
+		// bridge callers honour tenants.max_users. Mapped to the same 403
+		// TENANT_SEAT_LIMIT ZitaBootstrap answers, not to the generic 500 an
+		// unrecognised provisioning failure gets: a full tenant is an
+		// administrative limit the caller can act on, not a fault.
+		var seatErr *seatLimitError
+		if errors.As(err, &seatErr) {
+			denyTenantSeatLimit(c, seatErr, accountID, "provision-v2")
+			return
+		}
 		if err != nil {
 			common.SysError("ProvisionV2: auto-create user failed" +
 				" account_id=" + strconv.FormatInt(accountID, 10) + " err=" + err.Error())

@@ -66,8 +66,13 @@ func GetTenant(c *gin.Context) {
 		return
 	}
 
-	// Get tenant statistics
-	userCount, _ := repo.GetTenantUserCount(tenantID)
+	// Seat occupancy — the same number the seat cap enforces
+	// (repo.TenantHasFreeSeat -> TenantUserSeatCount) and the same one
+	// repo.GetTenantStats reports, so the count the console shows beside
+	// max_users cannot disagree with the ceiling that refuses the next login.
+	// It used to be repo.GetTenantUserCount, which counts identity mappings
+	// and therefore reads 0 for a tenant filled through the session bridge.
+	userCount, _ := repo.TenantUserSeatCount(tenantID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

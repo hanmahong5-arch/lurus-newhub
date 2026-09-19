@@ -72,6 +72,25 @@ function readInviteCode() {
   return null;
 }
 
+// Terminal refusals the bridge can answer with: 403s that signing in again
+// cannot clear, and that used to land on /console/v2/account-disabled — which
+// says the wrong thing and offers the wrong remedy.
+//
+// TENANT_SEAT_LIMIT comes from POST /api/v2/auth/zita-bootstrap
+// (handler/zita_bootstrap.go, the tenants.max_users ceiling).
+// TENANT_ORG_MISMATCH is answered by GET /api/v2/oauth/callback
+// (handler/oauth.go) — that response is JSON the browser lands on directly, so
+// this entry covers the case where the same code reaches this screen through
+// the bridge instead.
+//
+// The copy is selected by a literal-key branch in terminalRefusalMessage
+// rather than a code -> key map, so every key stays a literal argument to t()
+// — i18n-integrity.test.js can only check keys it can see statically.
+const TERMINAL_BOOTSTRAP_ERROR_CODES = [
+  'TENANT_SEAT_LIMIT',
+  'TENANT_ORG_MISMATCH',
+];
+
 // register prop kept for backward compat with the route declaration in
 // App.jsx; platform identity.lurus.cn renders a unified "登录/注册" UI
 // so the same redirect target serves both flows. tenantSlug routing
@@ -83,6 +102,21 @@ const OidcRedirect = (_props) => {
   // Set only when the instance reports no single sign-on, so this screen
   // stops instead of navigating into a 503 it cannot come back from.
   const [noSSO, setNoSSO] = useState(null);
+  // error_code of a terminal refusal to render, or null. Set instead of
+  // navigating, because neither refusal is fixed by signing in again.
+  const [deniedCode, setDeniedCode] = useState(null);
+
+  // terminalRefusalMessage maps a recognised refusal to its copy. Literal
+  // keys only — see TERMINAL_BOOTSTRAP_ERROR_CODES.
+  const terminalRefusalMessage = (code) => {
+    if (code === 'TENANT_SEAT_LIMIT') {
+      return t('console.auth.seat_limit');
+    }
+    if (code === 'TENANT_ORG_MISMATCH') {
+      return t('console.auth.org_mismatch');
+    }
+    return null;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -138,11 +172,20 @@ const OidcRedirect = (_props) => {
           return;
         }
       } catch (err) {
-        // 403 = account disabled. Bouncing back to identity-login would loop
-        // (bootstrap rejects on every retry). Surface the terminal state
-        // explicitly so the user can contact support or switch accounts.
+        // 403 = terminal. Bouncing back to identity-login would loop
+        // (bootstrap rejects on every retry), so every 403 stops here; the
+        // error_code decides WHAT the person is told. A refusal the person can
+        // act on (a full tenant, the wrong organisation) gets its own message
+        // rather than "your account is disabled", which is neither true nor
+        // actionable.
         if (err?.response?.status === 403) {
           if (cancelled) return;
+          const code =
+            err?.error_code ?? err?.response?.data?.error_code ?? null;
+          if (TERMINAL_BOOTSTRAP_ERROR_CODES.includes(code)) {
+            setDeniedCode(code);
+            return;
+          }
           window.location.replace(
             window.location.origin + '/console/v2/account-disabled',
           );
@@ -176,6 +219,18 @@ const OidcRedirect = (_props) => {
       if (timer) clearTimeout(timer);
     };
   }, []);
+
+  if (deniedCode) {
+    return (
+      <div className='flex flex-col items-center justify-center min-h-screen bg-gray-50'>
+        <Card className='p-6 shadow-lg'>
+          <Typography.Text className='text-gray-600 block text-center'>
+            {terminalRefusalMessage(deniedCode)}
+          </Typography.Text>
+        </Card>
+      </div>
+    );
+  }
 
   if (noSSO) {
     return (

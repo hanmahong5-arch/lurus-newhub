@@ -20,6 +20,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -364,7 +365,16 @@ func OIDCCallback(c *gin.Context) {
 	// "switch" rows the SQL baseline seeds) each keep the pre-guard behaviour,
 	// so turning this on cannot lock out a deployment whose org ids were never
 	// filled in.
-	if orgIDIsBound(tenant.IDPOrgID) && claims.OrgID != "" && tenant.IDPOrgID != claims.OrgID {
+	//
+	// Blast radius today, stated plainly: both tenants a live deployment has
+	// are seeded with a placeholder, so until owner item O-org replaces those
+	// two values this guard refuses nothing — an account from ANY organization
+	// following the "default" tenant's login URL is still auto-provisioned into
+	// it. Every outcome below is counted (lurus_gateway_tenant_gate_total), so
+	// one day of production logins answers both halves of O-org: whether the
+	// IdP emits an organization claim at all (org_claim_absent) and whether the
+	// tenants are bound yet (org_tenant_unbound).
+	if !recordOrgBindingOutcome(tenant.IDPOrgID, claims.OrgID) {
 		common.SysError(fmt.Sprintf("oidc callback: organization mismatch — tenant %s is bound to org %s, ID token carries org %s; login refused",
 			tenant.Id, tenant.IDPOrgID, claims.OrgID))
 		governance.RecordAuditEvent(governance.NewAuditEvent(
@@ -686,6 +696,38 @@ const orgIDPlaceholderSuffix = "_PLACEHOLDER"
 // (OIDCCallback) — an unbound tenant keeps exactly the pre-cycle-12 behaviour.
 func orgIDIsBound(orgID string) bool {
 	return orgID != "" && !strings.HasSuffix(orgID, orgIDPlaceholderSuffix)
+}
+
+// recordOrgBindingOutcome classifies one OIDC callback's organization binding,
+// counts it on lurus_gateway_tenant_gate_total, and reports whether the login
+// may proceed. Exactly one outcome is recorded per call, and the admitted
+// outcomes are counted too — without the denominator the operator cannot tell
+// "the guard never fired because everything matched" from "the guard never
+// fired because nothing was comparable", which is precisely owner item O-org:
+//
+//	org_claim_absent    — the verified ID token names no organization. The
+//	                      guard can never fire on this deployment's logins.
+//	org_tenant_unbound  — the token names one but the tenant row still carries
+//	                      a *_PLACEHOLDER stand-in, so there is nothing to
+//	                      compare it against (the two seeded rows).
+//	org_matched         — both name a real organization and they agree.
+//	org_mismatch_denied — both name a real organization and they disagree:
+//	                      the login is refused.
+func recordOrgBindingOutcome(tenantOrgID, claimOrgID string) (admit bool) {
+	switch {
+	case claimOrgID == "":
+		metrics.RecordTenantGate(metrics.TenantGateOutcomeOrgClaimAbsent)
+		return true
+	case !orgIDIsBound(tenantOrgID):
+		metrics.RecordTenantGate(metrics.TenantGateOutcomeOrgTenantUnbound)
+		return true
+	case tenantOrgID == claimOrgID:
+		metrics.RecordTenantGate(metrics.TenantGateOutcomeOrgMatched)
+		return true
+	default:
+		metrics.RecordTenantGate(metrics.TenantGateOutcomeOrgMismatchDenied)
+		return false
+	}
 }
 
 // placeholderOrgLogged remembers which placeholder org ids already produced a
