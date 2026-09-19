@@ -43,6 +43,12 @@ const maxChatSessionTitleRunes = 255
 // accepting more than the UI tells a user is allowed.
 const maxChatMessageContentRunes = 200_000
 
+// maxChatSessionMessages is a soft product limit (cycle-11 L5) on the
+// number of turns a single saved conversation may hold, shared by Create
+// and Update (both funnel through parseChatSessionMessages) so a PATCH
+// cannot grow a conversation past the same ceiling a POST is held to.
+const maxChatSessionMessages = 500
+
 // chatSessionAllowedRoles are the only Role values a caller may persist —
 // the same three roles ChatSend's own request/response shapes use
 // (playgroundChatMessage's role, and the "assistant" ChatSend always
@@ -86,6 +92,9 @@ func parseChatSessionMessages(in []chatSessionMessageInput) ([]repo.ChatMessageI
 	if in == nil {
 		return nil, nil
 	}
+	if len(in) > maxChatSessionMessages {
+		return nil, errors.New("messages exceeds " + strconv.Itoa(maxChatSessionMessages) + " turns")
+	}
 	out := make([]repo.ChatMessageInput, len(in))
 	for i, m := range in {
 		if !chatSessionAllowedRoles[m.Role] {
@@ -105,6 +114,22 @@ func validateChatSessionTitle(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if len([]rune(trimmed)) > maxChatSessionTitleRunes {
 		return "", errors.New("title exceeds " + strconv.Itoa(maxChatSessionTitleRunes) + " characters")
+	}
+	return trimmed, nil
+}
+
+// maxChatSessionModelRunes matches entity.ChatSession.Model's varchar(128).
+// validateChatSessionModel rejects (never truncates — same convention as
+// validateChatSessionTitle) an over-length model on BOTH routes that accept
+// one: CreateChatSessionV2 calls it on req.Model and UpdateChatSessionV2
+// calls it on *req.Model when the field is present, so an over-length model
+// gets the same 400 INVALID_REQUEST on POST and PATCH — no asymmetry.
+const maxChatSessionModelRunes = 128
+
+func validateChatSessionModel(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if len([]rune(trimmed)) > maxChatSessionModelRunes {
+		return "", errors.New("model exceeds " + strconv.Itoa(maxChatSessionModelRunes) + " characters")
 	}
 	return trimmed, nil
 }
@@ -191,6 +216,15 @@ func CreateChatSessionV2(c *gin.Context) {
 		})
 		return
 	}
+	model, err := validateChatSessionModel(req.Model)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    err.Error(),
+			"error_code": "INVALID_REQUEST",
+		})
+		return
+	}
 	msgs, err := parseChatSessionMessages(req.Messages)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -200,8 +234,16 @@ func CreateChatSessionV2(c *gin.Context) {
 		})
 		return
 	}
-	session, err := repo.CreateChatSession(tenantCtx.TenantID, tenantCtx.UserID, title, req.Model, msgs)
+	session, err := repo.CreateChatSession(tenantCtx.TenantID, tenantCtx.UserID, title, model, msgs)
 	if err != nil {
+		if errors.Is(err, repo.ErrChatSessionLimitReached) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success":    false,
+				"message":    "Chat session limit reached",
+				"error_code": "CHAT_SESSION_LIMIT_REACHED",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success":    false,
 			"message":    "Failed to create chat session",
@@ -254,6 +296,9 @@ func GetChatSessionV2(c *gin.Context) {
 
 type updateChatSessionRequest struct {
 	Title *string `json:"title"`
+	// Model, when present, replaces the session's stored model the same way
+	// Title does — nil (field absent) leaves it untouched.
+	Model *string `json:"model"`
 	// Messages uses a pointer-to-slice so ShouldBindJSON can tell "field
 	// omitted" (nil pointer — title-only update, existing messages
 	// untouched) apart from "field present as []" (non-nil pointer to an
@@ -300,6 +345,18 @@ func UpdateChatSessionV2(c *gin.Context) {
 		}
 		req.Title = &trimmed
 	}
+	if req.Model != nil {
+		trimmed, err := validateChatSessionModel(*req.Model)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success":    false,
+				"message":    err.Error(),
+				"error_code": "INVALID_REQUEST",
+			})
+			return
+		}
+		req.Model = &trimmed
+	}
 	var msgs []repo.ChatMessageInput
 	if req.Messages != nil {
 		parsed, err := parseChatSessionMessages(*req.Messages)
@@ -316,7 +373,7 @@ func UpdateChatSessionV2(c *gin.Context) {
 		}
 		msgs = parsed
 	}
-	session, err := repo.UpdateChatSessionOwned(tenantCtx.TenantID, tenantCtx.UserID, id, req.Title, msgs)
+	session, err := repo.UpdateChatSessionOwned(tenantCtx.TenantID, tenantCtx.UserID, id, req.Title, req.Model, msgs)
 	if err != nil {
 		if errors.Is(err, repo.ErrChatSessionNotFound) {
 			respondChatSessionNotFound(c)
