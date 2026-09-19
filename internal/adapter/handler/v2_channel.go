@@ -378,7 +378,7 @@ func CreateChannelV2(c *gin.Context) {
 	}
 
 	// Refresh channel cache
-	go repo.InitChannelCache()
+	AsyncGo(func() { repo.InitChannelCache() })
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, tenantCtx.UserID,
 		governance.ActionChannelUpdated, governance.ResourceChannel, channel.Id, ""))
 
@@ -569,7 +569,7 @@ func UpdateChannelV2(c *gin.Context) {
 	}
 
 	// Refresh channel cache
-	go repo.InitChannelCache()
+	AsyncGo(func() { repo.InitChannelCache() })
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, tenantCtx.UserID,
 		governance.ActionChannelUpdated, governance.ResourceChannel, existingChannel.Id, ""))
 
@@ -642,7 +642,7 @@ func DeleteChannelV2(c *gin.Context) {
 	}
 
 	// Refresh channel cache
-	go repo.InitChannelCache()
+	AsyncGo(func() { repo.InitChannelCache() })
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, tenantCtx.UserID,
 		governance.ActionChannelDeleted, governance.ResourceChannel, channelID, ""))
 

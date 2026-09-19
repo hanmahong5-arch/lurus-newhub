@@ -20,6 +20,23 @@ type AuditWriter interface {
 // auditWriterRef stores the global audit writer atomically for safe concurrent access.
 var auditWriterRef atomic.Pointer[AuditWriter]
 
+// AsyncGo is this package's fire-and-forget spawn seam, the same convention as
+// repo.AsyncGo (internal/adapter/repo/async.go), app.AsyncGo
+// (internal/app/quota.go), handler.AsyncGo (handler/model_meta.go) and
+// search.AsyncGo (internal/pkg/search/sync.go). Production keeps the default,
+// gopool.Go, so RecordAuditEvent's persistence stays off the request path; a
+// package's TestMain can assign an inline implementation so the write has
+// finished before the test that triggered it returns.
+//
+// Why this package needs one: RecordAuditEvent's spawned func holds the
+// AuditWriter that was current at call time, and handler/router tests install
+// writers bound to a per-test *gorm.DB that their cleanup closes. With no join
+// point the write and the close run concurrently. Package handler's
+// pinAuditWriter (audit_writer_pin_test.go) pairs with this seam: the seam
+// makes the write happen before the test returns, the helper makes the writer
+// stop pointing at a closed handle afterwards.
+var AsyncGo = gopool.Go
+
 // AuditedContextKey is the gin context key RecordAuditEvent sets to true the
 // moment it is called for a request-scoped event — see middleware.AuditWriteGuard,
 // which checks this after an admin write handler runs to catch writes that
@@ -66,7 +83,7 @@ func RecordAuditEvent(event *entity.AuditEvent) {
 		return
 	}
 	writer := *wp
-	gopool.Go(func() {
+	AsyncGo(func() {
 		if err := writer.CreateAuditEvent(event); err != nil {
 			common.SysLog("failed to record audit event: " + err.Error())
 		}

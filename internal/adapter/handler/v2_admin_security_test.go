@@ -64,7 +64,7 @@ func setupAdminSecurityDB(t *testing.T) func() {
 	// Real audit-writer wiring, pinned to THIS test's db — see
 	// pinnedAuditWriter's doc comment in v2_pricing_write_test.go for why a
 	// closure-captured *gorm.DB and not the mutable repo.DB package global.
-	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
+	pinAuditWriter(t, db)
 
 	return func() {
 		repo.DB, repo.LOG_DB = prevDB, prevLogDB

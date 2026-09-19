@@ -75,7 +75,7 @@ func setupRoutingTestRouter(t *testing.T, useRedis bool) *routingTestCtx {
 	repo.InitCol()
 	common.UsingSQLite = true
 	common.UsingPostgreSQL = false
-	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
+	pinAuditWriter(t, db)
 
 	ctx := &routingTestCtx{db: db}
 	if useRedis {

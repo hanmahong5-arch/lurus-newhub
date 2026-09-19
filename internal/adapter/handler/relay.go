@@ -32,8 +32,6 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/tracing"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
-	"github.com/bytedance/gopkg/util/gopool"
-
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -719,14 +717,14 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if app.ShouldDisableChannel(channelError.ChannelType, err) && channelError.AutoBan {
-		gopool.Go(func() {
+		AsyncGo(func() {
 			app.DisableChannel(channelError, err.Error())
 		})
 	}
 
 	// OpenRouter free-key pool: rate-limited keys get a per-key cooldown rather
 	// than being treated as permanently disabled. No-op for non-OpenRouter or non-429.
-	gopool.Go(func() {
+	AsyncGo(func() {
 		openrouter_pool.MaybeMarkCooldown(channelError, err)
 	})
 

@@ -46,7 +46,7 @@ func setupAuthzTestDB(t *testing.T) func() {
 	prevDB, prevRedis := repo.DB, common.RedisEnabled
 	repo.DB = db
 	common.RedisEnabled = false
-	governance.SetAuditWriter(&pinnedAuditWriter{db: db})
+	pinAuditWriter(t, db)
 
 	return func() {
 		repo.DB, common.RedisEnabled = prevDB, prevRedis

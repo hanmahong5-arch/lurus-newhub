@@ -273,7 +273,7 @@ func TestProvisionV2_PlanChange_DisablesSiblingToken(t *testing.T) {
 	if err := ctx.DB.AutoMigrate(&entity.AuditEvent{}); err != nil {
 		t.Fatalf("automigrate audit_events: %v", err)
 	}
-	governance.SetAuditWriter(&pinnedAuditWriter{db: ctx.DB})
+	pinAuditWriter(t, ctx.DB)
 
 	tokA := provSignRS256(t, key, "test-kid",
 		provClaims("991006", map[string]string{"plan_code": "cc_pro", "quota": "1000"}))

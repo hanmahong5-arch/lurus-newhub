@@ -13,6 +13,29 @@ import (
 // 用于异步索引的工作池
 var asyncPool gopool.Pool
 
+// AsyncGo is this package's fire-and-forget spawn seam, the same convention as
+// repo.AsyncGo (internal/adapter/repo/async.go), app.AsyncGo
+// (internal/app/quota.go) and handler.AsyncGo (handler/model_meta.go). Its
+// default submits to asyncPool, so production keeps the behaviour the four
+// Sync*Async functions below had before this seam existed; a package's
+// TestMain can assign
+// an inline implementation so a submission finishes before the test that
+// caused it returns.
+//
+// Why this package needs one: the submissions below read the package globals
+// Client / RetryCount / RetryDelay / Debug / IndexPrefix from a pool worker,
+// while cov_helpers_test.go's withFakeClient restores those same globals in
+// t.Cleanup. There is no join point between the two, which is the shape the
+// cycle-12 plan §1.2 records as the 2026-09-09 CI `-race` failure at
+// sync.go's batch submission. (That attribution is quoted from the plan, not
+// re-measured here — `-race` needs cgo and does not run on the dev host.)
+//
+// This seam does not change the panic semantics of the calls it replaces:
+// they were already asyncPool.Go, and a gopool worker recovers a panic in the
+// submitted func and logs it (gopool@v0.1.3 util/gopool/worker.go run())
+// rather than letting it crash the process.
+var AsyncGo = func(f func()) { asyncPool.Go(f) }
+
 // syncCtx and syncCancel for graceful shutdown
 var (
 	syncCtx    context.Context
@@ -74,7 +97,7 @@ func SyncLogAsync(log *Log) {
 
 	// Submit to worker pool
 	// 提交到工作池
-	asyncPool.Go(func() {
+	AsyncGo(func() {
 		err := RetryWithBackoff(func() error {
 			return IndexLog(log)
 		})
@@ -100,7 +123,7 @@ func SyncLogsBatchAsync(logs []*Log) {
 
 	// Submit to worker pool
 	// 提交到工作池
-	asyncPool.Go(func() {
+	AsyncGo(func() {
 		err := RetryWithBackoff(func() error {
 			return IndexLogsBatch(logs)
 		})
@@ -122,7 +145,7 @@ func SyncUserAsync(user *User) {
 		return
 	}
 
-	asyncPool.Go(func() {
+	AsyncGo(func() {
 		err := RetryWithBackoff(func() error {
 			return IndexUser(user)
 		})
@@ -144,7 +167,7 @@ func SyncChannelAsync(channel *Channel) {
 		return
 	}
 
-	asyncPool.Go(func() {
+	AsyncGo(func() {
 		err := RetryWithBackoff(func() error {
 			return IndexChannel(channel)
 		})

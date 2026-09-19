@@ -1148,7 +1148,7 @@ func TestChannelSensitiveWriteRefused_RecordsAuditEvent(t *testing.T) {
 	if err := ctx.DB.AutoMigrate(&entity.AuditEvent{}, &entity.AuditChainHead{}); err != nil {
 		t.Fatalf("auto migrate audit tables: %v", err)
 	}
-	governance.SetAuditWriter(&pinnedAuditWriter{db: ctx.DB})
+	pinAuditWriter(t, ctx.DB)
 
 	ch := seedSensitiveTestChannel(t, ctx, "v1-update-audited")
 
@@ -1191,7 +1191,7 @@ func TestUpdateChannel_V1_AuthorizationPrecedesValidation(t *testing.T) {
 	if err := ctx.DB.AutoMigrate(&entity.AuditEvent{}, &entity.AuditChainHead{}); err != nil {
 		t.Fatalf("auto migrate audit tables: %v", err)
 	}
-	governance.SetAuditWriter(&pinnedAuditWriter{db: ctx.DB})
+	pinAuditWriter(t, ctx.DB)
 
 	ch := seedSensitiveTestChannel(t, ctx, "v1-authz-before-validation")
 

@@ -369,6 +369,11 @@ func TestCostSpikeLimit_RedisDisabled_FailsOpen(t *testing.T) {
 
 func TestMemoryRateLimiterKeyed_AbortsOverLimit(t *testing.T) {
 	inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
+	// Init spawns the limiter's expiry sweeper, which before cycle-12 L1 had
+	// no way to end: it kept taking this package-global limiter's mutex on a
+	// timer for the rest of the test binary. Stop is idempotent and leaves
+	// the allow/deny path working, so a later Init in this package is safe.
+	t.Cleanup(inMemoryRateLimiter.Stop)
 	// First request under limit passes.
 	c1, w1 := newTestContext(http.MethodGet, "/x", "", "")
 	memoryRateLimiterKeyed(c1, 1, 3600, "UT1", "identA")
