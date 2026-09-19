@@ -35,6 +35,20 @@ import { fileURLToPath } from 'node:url';
  * subtree. Tests are excluded on purpose: a directory whose remaining callers
  * are its own tests is precisely the shape being caught — 27 test files kept
  * the four table directories looking alive for months.
+ *
+ * SCOPE LIMIT, stated so a green run is not read as more than it is: the unit
+ * is the DIRECTORY. A single file with no importers inside a directory that
+ * is otherwise alive is invisible here — components/settings is the standing
+ * example: measured on 2026-09-19 by the same import-graph walk this file
+ * does, 7 of its 22 source files have no non-test importer anywhere
+ * (AIFeaturesSettingPage, DashboardSetting, ModelConfigSettingPage,
+ * OperationSetting, OtherSetting, RatioSetting, SystemSetting), while the
+ * directory as a whole is imported all over. That shape is deliberately out
+ * of scope this cycle: the plan's §8 O-ratio records that RatioSetting.jsx is
+ * the only model/group ratio editor in the tree, so "orphaned" there means
+ * "unreachable feature an operator still needs", not "delete it". A per-file
+ * variant needs that owner decision first, and is recorded as a next-cycle
+ * item rather than half-built here.
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

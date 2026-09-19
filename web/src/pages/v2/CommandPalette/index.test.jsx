@@ -289,9 +289,15 @@ describe('CommandPalette — real data', () => {
     const sections = visibleNavItemsSpy.mock.results[0].value;
     const allHrefs = sections.flatMap((s) => s.items.map((it) => it.href));
     // The section itself (minRole:10) is visible — a sibling item proves it.
-    expect(allHrefs).toContain('/console/v2/admin/gateway');
-    // The per-item minRole:100 destination is not.
+    // Rankings is the sibling to use: cycle 12 L3 moved every OTHER item in
+    // "operations & insights" to minRole:100 because each one's only backend
+    // call is under /api/v2/admin (RootJWTAuth). Rankings stayed at the
+    // section's own minRole because it falls back to the tenant-scoped
+    // /api/v2/:tenant_slug/analytics/rankings for a non-root caller.
+    expect(allHrefs).toContain('/console/v2/admin/rankings');
+    // The per-item minRole:100 destinations are not.
     expect(allHrefs).not.toContain('/console/v2/admin/system-tasks');
+    expect(allHrefs).not.toContain('/console/v2/admin/gateway');
   });
 
   it('calls visibleNavItems with the real bridged role, and it includes "Background tasks" for role 100', async () => {

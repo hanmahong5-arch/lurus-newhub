@@ -28,7 +28,7 @@ import {
 } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import { API, showError, getRelativeTime } from '../../helpers';
-import { sanitizeHtml } from '../../helpers/sanitize';
+import { sanitizeOperatorHtml } from '../../helpers/sanitize';
 import { marked } from 'marked';
 import {
   IllustrationNoContent,
@@ -144,7 +144,9 @@ const NoticeModal = ({
 
     return (
       <div
-        dangerouslySetInnerHTML={{ __html: sanitizeHtml(noticeContent) }}
+        dangerouslySetInnerHTML={{
+          __html: sanitizeOperatorHtml(noticeContent),
+        }}
         className='notice-content-scroll max-h-[55vh] overflow-y-auto pr-2'
       />
     );
@@ -183,7 +185,7 @@ const NoticeModal = ({
                     <div
                       className='text-xs text-gray-500'
                       dangerouslySetInnerHTML={{
-                        __html: sanitizeHtml(htmlExtra),
+                        __html: sanitizeOperatorHtml(htmlExtra),
                       }}
                     />
                   ) : null
@@ -194,7 +196,7 @@ const NoticeModal = ({
                   <div
                     className={item.isUnread ? 'shine-text' : ''}
                     dangerouslySetInnerHTML={{
-                      __html: sanitizeHtml(htmlContent),
+                      __html: sanitizeOperatorHtml(htmlContent),
                     }}
                   />
                 </div>

@@ -54,9 +54,37 @@ For commercial licensing, please contact support@quantumnous.com
  *     Admin/CostIntelligence said the savings endpoint "returned no data".
  *     All three had an API call, so rule (b) was satisfied, and none of the
  *     strings were fabricated, so rule (a) was too. The oracle for that
- *     shape is a per-page failure-injection test (each page's own suite now
- *     has one); a structural rule would have to know which render branch a
- *     null payload reaches, which this file deliberately does not attempt.
+ *     shape is a per-page failure-injection test; a structural rule would
+ *     have to know which render branch a null payload reaches, which this
+ *     file deliberately does not attempt.
+ *
+ *     Coverage of that oracle, as of cycle 12's repair round: FIVE pages
+ *     have it — Admin/Gateway, Admin/CostIntelligence, Admin/Settings,
+ *     Admin/ModelPerformance and Admin/SystemTasks (each page's own
+ *     *.test.jsx injects a 502, a bare network reject, a 200 carrying
+ *     success:false, a 403 and a 401).
+ *
+ *     TEN call sites still catch 403 and nothing else, so each still renders
+ *     its benign-zero branch on any other failure — and, since L4 split 401
+ *     out as its own denial, renders an expired session as an empty page
+ *     rather than "sign in again". Enumerated by
+ *     `grep -rn "status === 403" src/pages/v2 --include=*.jsx` on
+ *     2026-09-19, excluding the five pages above, excluding Analytics/
+ *     Rankings.jsx:127 (already has an error state) and Flows/index.jsx:86
+ *     (a write-error message helper, not a load path):
+ *
+ *       Admin/Audit/index.jsx:263          empty feed = "no audit events"
+ *       Admin/Audit/index.jsx:307          action taxonomy silently empty
+ *       Admin/Diagnostics/index.jsx:75     probe panel blank = "all fine"
+ *       Admin/Users/index.jsx:318          empty list = "no users"
+ *       Admin/ModelRateLimits/index.jsx:262/279/321  no limits = "unlimited"
+ *       Admin/Authz.jsx:79                 no grants = "nobody delegated"
+ *       Tenants/index.jsx:505              empty list = "no tenants"
+ *       Projects/index.jsx:274             empty list = "no projects"
+ *
+ *     Those files are outside the lane's ownership this cycle; the list is
+ *     also carried in the lane return value as a next-cycle item. Audit is
+ *     the compliance-visible one and Diagnostics the incident-visible one.
  */
 import fs from 'node:fs';
 import path from 'node:path';

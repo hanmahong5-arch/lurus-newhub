@@ -113,8 +113,32 @@ describe('Admin Settings page', () => {
     });
   });
 
-  it('treats 401 like 403 rather than as a transport failure', async () => {
+  /*
+   * 401 is neither a transport failure nor a permission problem. L4 made the
+   * v2 admin group answer 401 UNAUTHENTICATED when the session is missing or
+   * invalid and 403 PERMISSION_DENIED when the role is short
+   * (internal/adapter/middleware/admin_jwt_auth.go). "Contact a platform
+   * administrator" is the wrong instruction for an expired cookie: the
+   * operator has the permission, they need to sign in again.
+   */
+  it('shows a sign-in-again state on 401, not the permission panel', async () => {
     API.get.mockRejectedValue({ response: { status: 401 } });
+
+    render(<HFAdminSettings />);
+
+    await waitFor(() => screen.getByTestId('settings-signed-out'));
+    expect(screen.getByTestId('settings-sign-in').getAttribute('href')).toBe(
+      '/login',
+    );
+    expect(screen.queryByText('Admin access required')).toBeNull();
+    expect(screen.queryByTestId('settings-error')).toBeNull();
+    // And no switch is drawn at all — the failure that started this whole
+    // item was a page full of unchecked boxes.
+    expect(screen.queryByTestId('toggle-PasswordLoginEnabled')).toBeNull();
+  });
+
+  it('still shows the permission panel on 403', async () => {
+    API.get.mockRejectedValue({ response: { status: 403 } });
 
     render(<HFAdminSettings />);
 
@@ -123,6 +147,7 @@ describe('Admin Settings page', () => {
         screen.getAllByText('Admin access required').length,
       ).toBeGreaterThan(0);
     });
+    expect(screen.queryByTestId('settings-signed-out')).toBeNull();
     expect(screen.queryByTestId('settings-error')).toBeNull();
   });
 
@@ -212,5 +237,49 @@ describe('Admin Settings page', () => {
     expect(off.checked).toBe(false);
     expect(off.indeterminate).toBe(false);
     expect(screen.queryByTestId('unknown-GitHubOAuthEnabled')).toBeNull();
+  });
+
+  /*
+   * Same lie, third shape, and the sharpest of the three: an absent
+   * text/number key rendered as an empty box with nothing to distinguish it
+   * from a box the operator cleared. On the quota panel that empty box sits
+   * under "Quota for new user" and "USD exchange rate", where empty reads as
+   * zero — a number an operator might well act on.
+   */
+  it('marks a number field whose key the response omitted as unknown, not empty', async () => {
+    API.get.mockResolvedValue(optionsResponse({ QuotaForNewUser: '10000' }));
+
+    render(<HFAdminSettings />);
+    await waitFor(() => screen.getByTestId('panel-quota'));
+    fireEvent.click(screen.getByTestId('panel-quota'));
+
+    const known = screen.getByTestId('field-QuotaForNewUser');
+    expect(known.getAttribute('data-known')).toBe('true');
+    expect(known.value).toBe('10000');
+    expect(screen.queryByTestId('unknown-QuotaForNewUser')).toBeNull();
+
+    const unknown = screen.getByTestId('field-USDExchangeRate');
+    expect(unknown.getAttribute('data-known')).toBe('false');
+    expect(unknown.value).toBe('');
+    expect(screen.getByTestId('unknown-USDExchangeRate').textContent).toMatch(
+      /not reported/i,
+    );
+  });
+
+  it('marks an absent textarea the same way', async () => {
+    API.get.mockResolvedValue(optionsResponse({ SystemName: 'Acme' }));
+
+    render(<HFAdminSettings />);
+    await waitFor(() => screen.getByTestId('field-SystemName'));
+
+    expect(
+      screen.getByTestId('field-SystemName').getAttribute('data-known'),
+    ).toBe('true');
+    expect(screen.getByTestId('field-About').getAttribute('data-known')).toBe(
+      'false',
+    );
+    expect(screen.getByTestId('unknown-About').textContent).toMatch(
+      /not reported/i,
+    );
   });
 });

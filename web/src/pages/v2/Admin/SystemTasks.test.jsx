@@ -254,16 +254,24 @@ describe('Admin background-task heartbeats page', () => {
     expect(API.get.mock.calls.length).toBe(afterOneTick);
   });
 
-  // This is the shape the real backend actually sends: RootJWTAuth's
-  // authHelper refuses a non-root session with HTTP 200
-  // {"success":false,...} — never an HTTP error (auth.go). Before this
-  // fix the page only recognised a 403 rejection, which this route never
-  // produces, so a non-root viewer saw "all tasks on schedule" instead of
-  // a forbidden notice.
-  it('shows a permission notice when the backend answers success:false, and stops polling', async () => {
-    API.get.mockResolvedValue({
-      data: { success: false, message: 'root required' },
-    });
+  /*
+   * Cycle 12. The refusal shape moved, and the failure shape was missing.
+   *
+   * Until L4, RootJWTAuth's session fallback refused a non-root caller with
+   * HTTP 200 {"success":false,...}, so this page read success:false as
+   * "forbidden". L4 changed that fallback to answer 403 PERMISSION_DENIED
+   * and 401 UNAUTHENTICATED (internal/adapter/middleware/admin_jwt_auth.go,
+   * pinned by root_jwt_denial_shape_test.go), which leaves success:false
+   * meaning one thing only: the handler itself failed. Reporting that as
+   * "Root access required" sends the operator off to request a permission
+   * they already hold.
+   *
+   * And every other failure — a 502 from a rolling update, a dropped
+   * connection — fell through to a null payload, i.e. an empty task list,
+   * i.e. a page saying nothing is late at the moment it cannot tell.
+   */
+  it('shows a permission notice on 403 and stops polling', async () => {
+    API.get.mockRejectedValue({ response: { status: 403 } });
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
     render(<V2AdminSystemTasks />);
@@ -282,24 +290,101 @@ describe('Admin background-task heartbeats page', () => {
     expect(API.get.mock.calls.length).toBe(afterNotice);
   });
 
-  // Defensive branch: kept in case a future gateway/proxy layer starts
-  // emitting a real HTTP error for this route. Not the shape production
-  // sends today (see the success:false test above), but must not be dead
-  // code either.
-  it('also shows a permission notice on a real HTTP 403 and stops polling', async () => {
-    API.get.mockRejectedValue({ response: { status: 403 } });
+  it('shows a sign-in-again state on 401, not the permission panel, and stops polling', async () => {
+    API.get.mockRejectedValue({ response: { status: 401 } });
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
     render(<V2AdminSystemTasks />);
 
-    await waitFor(() =>
-      screen.getByText(/You do not have permission to view background tasks/),
-    );
-    expect(screen.queryByTestId('system-tasks-live-toggle')).toBeNull();
+    await waitFor(() => screen.getByTestId('system-tasks-signed-out'));
+    expect(
+      screen.getByTestId('system-tasks-sign-in').getAttribute('href'),
+    ).toBe('/login');
+    expect(
+      screen.queryByText(/You do not have permission to view background tasks/),
+    ).toBeNull();
+    expect(screen.queryByText(/all tasks on schedule/)).toBeNull();
     const afterNotice = API.get.mock.calls.length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60000);
     });
     expect(API.get.mock.calls.length).toBe(afterNotice);
+  });
+
+  it('shows an error state, not "all tasks on schedule", when the endpoint 502s', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+
+    render(<V2AdminSystemTasks />);
+
+    await waitFor(() => screen.getByTestId('system-tasks-error'));
+    expect(screen.queryByText(/all tasks on schedule/)).toBeNull();
+    expect(screen.queryByTestId('system-tasks-empty')).toBeNull();
+    expect(
+      screen.queryByText(/You do not have permission to view background tasks/),
+    ).toBeNull();
+    expect(screen.getByTestId('system-tasks-retry')).toBeTruthy();
+  });
+
+  it('shows an error state, with the message, on a 200 carrying success:false', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: 'task registry unavailable' },
+    });
+
+    render(<V2AdminSystemTasks />);
+
+    await waitFor(() => screen.getByTestId('system-tasks-error'));
+    expect(screen.getByTestId('system-tasks-error').textContent).toContain(
+      'task registry unavailable',
+    );
+    expect(screen.queryByText(/all tasks on schedule/)).toBeNull();
+  });
+
+  // The trade-off the Gateway page pays too: stopping outright means one
+  // transient 502 during a rolling update freezes the page until a human
+  // notices the retry button. So polling continues, backed off from 15s to
+  // 30s, and the error copy says so.
+  it('keeps polling in the error state, at the 30s backoff rather than 15s', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    render(<V2AdminSystemTasks />);
+    await waitFor(() => screen.getByTestId('system-tasks-error'));
+    const afterError = API.get.mock.calls.length;
+
+    // 15s is the healthy interval; nothing may fire before the backoff.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
+    expect(API.get.mock.calls.length).toBe(afterError);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
+    expect(API.get.mock.calls.length).toBeGreaterThan(afterError);
+  });
+
+  it('retry re-runs the fetch and leaves the error state once it succeeds', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+
+    render(<V2AdminSystemTasks />);
+    await waitFor(() => screen.getByTestId('system-tasks-error'));
+
+    API.get.mockResolvedValue(
+      tasksResponse([
+        {
+          name: 'channel-cache-sync',
+          interval_seconds: 60,
+          leader_only: false,
+          state: 'ok',
+          last_success_unix: 1700000000,
+        },
+      ]),
+    );
+    fireEvent.click(screen.getByTestId('system-tasks-retry'));
+
+    await waitFor(() =>
+      screen.getByTestId('system-tasks-row-channel-cache-sync'),
+    );
+    expect(screen.queryByTestId('system-tasks-error')).toBeNull();
   });
 });

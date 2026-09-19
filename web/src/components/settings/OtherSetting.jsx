@@ -512,6 +512,10 @@ const OtherSetting = () => {
           </Button>,
         ]}
       >
+        {/* Third-party content, not operator-authored: `body` comes from
+            api.github.com's latest-release JSON, so this takes the strict
+            profile (no <style>, no form controls) even though the file it
+            lives in is a settings page. */}
         <div
           dangerouslySetInnerHTML={{ __html: sanitizeHtml(updateData.content) }}
         ></div>

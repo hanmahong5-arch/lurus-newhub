@@ -34,9 +34,29 @@ import { API } from '../../../helpers';
  * or a task the operator has administratively disabled
  * (task.standby_reason distinguishes the two — see
  * internal/adapter/handler/v2_admin_system_tasks.go).
+ *
+ * Cycle 12 L3, repair round. Two things were wrong with the failure paths.
+ *
+ * (1) Every failure that was not an HTTP 403 fell through to `data === null`,
+ *     which renders `tasks = []` — and an empty task list on this page reads
+ *     as "no background job is late". A 502 from a rolling update therefore
+ *     said the schedule was clean.
+ * (2) A 200 carrying success:false was treated as a permission refusal. That
+ *     was true of the old v1-shaped authHelper fallback; cycle 12 L4 changed
+ *     RootJWTAuth's session fallback to answer 403 PERMISSION_DENIED and 401
+ *     UNAUTHENTICATED (internal/adapter/middleware/admin_jwt_auth.go), so a
+ *     success:false here now means the handler failed, not that the caller is
+ *     unwelcome — showing "Root access required" for a broken registry sends
+ *     the operator to ask for a permission they already have.
+ *
+ * Four outcomes now: tasks / 403 forbidden / 401 signed-out / error.
  */
 
 const POLL_MS = 15000;
+// While in the error state, keep checking — but slowly. Stopping outright
+// means one transient 502 during a rolling update freezes the page until a
+// human notices the retry button; polling at 15 s hammers a dead endpoint.
+const ERROR_POLL_MS = 30000;
 
 const stateClass = (s) =>
   s === 'overdue' ? 'tag error' : s === 'standby' ? 'tag' : 'tag ok';
@@ -59,24 +79,34 @@ const V2AdminSystemTasks = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
+  // null when the last fetch succeeded; otherwise the backend message, or ''
+  // when there was none.
+  const [error, setError] = useState(null);
   const [live, setLive] = useState(true);
 
   const fetchTasks = useCallback(async () => {
     try {
       const res = await API.get('/api/v2/admin/system/tasks');
-      // The real backend (middleware.RootJWTAuth's authHelper) never
-      // answers a non-root session with an HTTP error — it refuses inside
-      // a 200 envelope, `{"success":false,...}` (auth.go). A 403 branch is
-      // kept below too, in case a future gateway/proxy layer starts
-      // emitting a real HTTP error for this route, but success===false is
-      // the shape production actually sends today.
       if (res?.data?.success) {
         setData(res.data.data);
+        setError(null);
       } else {
-        setForbidden(true);
+        // Post-L4 this is a handler failure, not a refusal: the refusal
+        // shapes are 403 and 401, both of which arrive as HTTP errors.
+        setError(res?.data?.message ?? '');
       }
     } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
+      const status = err?.response?.status;
+      if (status === 403) {
+        setForbidden(true);
+        setError(null);
+      } else if (status === 401) {
+        setSignedOut(true);
+        setError(null);
+      } else {
+        setError(err?.response?.data?.message ?? '');
+      }
     } finally {
       setLoading(false);
     }
@@ -87,10 +117,19 @@ const V2AdminSystemTasks = () => {
   }, [fetchTasks]);
 
   useEffect(() => {
-    if (!live || forbidden) return undefined;
-    const id = setInterval(fetchTasks, POLL_MS);
+    if (!live || forbidden || signedOut) return undefined;
+    const id = setInterval(
+      fetchTasks,
+      error !== null ? ERROR_POLL_MS : POLL_MS,
+    );
     return () => clearInterval(id);
-  }, [live, forbidden, fetchTasks]);
+  }, [live, forbidden, signedOut, error, fetchTasks]);
+
+  const retry = useCallback(() => {
+    setError(null);
+    setLoading(true);
+    fetchTasks();
+  }, [fetchTasks]);
 
   const tasks = data?.tasks ?? [];
   const overdueCount = tasks.filter((t) => t.state === 'overdue').length;
@@ -103,7 +142,8 @@ const V2AdminSystemTasks = () => {
         tr('console.admin.system_tasks.crumb', 'background tasks'),
       ]}
       actions={
-        !forbidden && (
+        !forbidden &&
+        !signedOut && (
           <button
             type='button'
             className='btn ghost'
@@ -130,16 +170,26 @@ const V2AdminSystemTasks = () => {
                     'console.admin.system_tasks.forbidden_title',
                     'Root access required',
                   )
-                : overdueCount > 0
+                : signedOut
                   ? tr(
-                      'console.admin.system_tasks.overdue_count',
-                      '{{count}} tasks overdue',
-                      { count: overdueCount },
+                      'console.admin.session_expired_title',
+                      'Your session has expired',
                     )
-                  : tr(
-                      'console.admin.system_tasks.all_ok',
-                      'all tasks on schedule',
-                    )}
+                  : error !== null
+                    ? tr(
+                        'console.admin.system_tasks.error_title',
+                        'Task schedule unknown',
+                      )
+                    : overdueCount > 0
+                      ? tr(
+                          'console.admin.system_tasks.overdue_count',
+                          '{{count}} tasks overdue',
+                          { count: overdueCount },
+                        )
+                      : tr(
+                          'console.admin.system_tasks.all_ok',
+                          'all tasks on schedule',
+                        )}
           </h1>
           <div className='sub'>
             {tr(
@@ -165,6 +215,71 @@ const V2AdminSystemTasks = () => {
                 'You do not have permission to view background tasks. Contact a platform administrator.',
               )}
             </div>
+          </div>
+        </div>
+      ) : signedOut ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='system-tasks-signed-out'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.session_expired_title',
+                'Your session has expired',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.session_expired_body',
+                'The server no longer recognises this session, so nothing on this page can be read. Sign in again to continue.',
+              )}
+            </div>
+            <a
+              className='btn sm'
+              href='/login'
+              data-testid='system-tasks-sign-in'
+            >
+              {tr('console.admin.sign_in_again', 'sign in again')}
+            </a>
+          </div>
+        </div>
+      ) : error !== null ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='system-tasks-error'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.system_tasks.error_title',
+                'Task schedule unknown',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.system_tasks.error_body',
+                'The background-task endpoint did not answer. This is not a report that every job is on schedule — nothing about the schedule is known until the call succeeds. Retrying every 30s.',
+              )}
+            </div>
+            {error ? (
+              <div
+                className='mono muted'
+                style={{ fontSize: 11, marginBottom: 12 }}
+              >
+                {error}
+              </div>
+            ) : null}
+            <button
+              type='button'
+              className='btn sm'
+              data-testid='system-tasks-retry'
+              onClick={retry}
+            >
+              {tr('console.admin.system_tasks.retry', 'retry')}
+            </button>
           </div>
         </div>
       ) : (

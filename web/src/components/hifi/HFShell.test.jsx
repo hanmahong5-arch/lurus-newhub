@@ -562,8 +562,11 @@ describe('HFShell help escape hatches', () => {
  * refusal came back as HTTP 200 {success:false}.
  *
  * admin-audit and admin-rankings are deliberately NOT in this list:
- *   - audit reads /api/v2/audit/*, gated by RootOrGranted, so a delegated
- *     audit:read grant reaches it at role 10;
+ *   - audit reads /api/v2/admin/audit/* — the one exception to "everything
+ *     under /api/v2/admin is root-only". That subgroup is mounted separately
+ *     at internal/adapter/handler/router/api-v2-router.go:612-613
+ *     (apiV2.Group("/admin/audit") + middleware.RootOrGranted("audit",
+ *     "read")), so a delegated audit:read grant reaches it at role 10;
  *   - rankings falls back to /api/v2/:tenant_slug/analytics/rankings for a
  *     non-root caller (pages/v2/Analytics/Rankings.jsx), so it is a real
  *     tenant-scoped page.

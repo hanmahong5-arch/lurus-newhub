@@ -160,10 +160,17 @@ const DocumentRenderer = ({ apiEndpoint, title, cacheKey, emptyMessage }) => {
   // hooks than the render that finally got here, so React aborted the page
   // with "Rendered more hooks than during the previous render". Every HTML
   // document — the whole reason the branch exists — took /privacy-policy and
-  // /user-agreement down. The effect it ran republished <style> blocks the
-  // file had pulled out of the document into document.head; helpers/sanitize
-  // drops <style> (see helpers/sanitize.test.js), so there is nothing left to
-  // republish and no hook to call here.
+  // /user-agreement down.
+  //
+  // The effect it ran republished <style> blocks the file had pulled out of
+  // the document into document.head. These documents are served to anonymous
+  // visitors, so they take the STRICT profile, which carries FORBID_TAGS
+  // 'style' (helpers/sanitize.js) — pinned by the sanitize.test.js case that
+  // puts the tag after body content, because a <style> in first position is
+  // hoisted into <head> by the HTML parser and would pass either way. With
+  // the tag gone there is nothing left to republish and no hook to call here.
+  // An operator who needs CSS on a legal page: the styling belongs in the
+  // app, not in a settings text box (owner item, recorded in the lane return).
   if (isHtmlContent(content)) {
     return (
       <div className='min-h-screen bg-gray-50'>

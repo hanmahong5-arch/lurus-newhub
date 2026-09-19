@@ -64,6 +64,7 @@ const HFCostIntelligence = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
   const [scenario, setScenario] = useState('conservative');
   // null when the last fetch succeeded; otherwise the backend message, or ''
   // when there was none.
@@ -75,6 +76,7 @@ const HFCostIntelligence = () => {
     let cancelled = false;
     setLoading(true);
     setForbidden(false);
+    setSignedOut(false);
     setError(null);
     API.get('/api/v2/admin/governance/savings?hours=168', {
       skipErrorHandler: true,
@@ -90,7 +92,10 @@ const HFCostIntelligence = () => {
       .catch((err) => {
         if (cancelled) return;
         const status = err?.response?.status;
-        if (status === 403 || status === 401) setForbidden(true);
+        // L4 split the two refusals apart: 403 means the role is short,
+        // 401 means the session is gone and no permission grant fixes it.
+        if (status === 403) setForbidden(true);
+        else if (status === 401) setSignedOut(true);
         else setError(err?.response?.data?.message ?? '');
       })
       .finally(() => {
@@ -158,6 +163,30 @@ const HFCostIntelligence = () => {
                 'You do not have permission to view platform cost intelligence.',
               )}
             </div>
+          </div>
+        </div>
+      ) : signedOut ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='cost-signed-out'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.session_expired_title',
+                'Your session has expired',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.session_expired_body',
+                'The server no longer recognises this session, so nothing on this page can be read. Sign in again to continue.',
+              )}
+            </div>
+            <a className='btn sm' href='/login' data-testid='cost-sign-in'>
+              {tr('console.admin.sign_in_again', 'sign in again')}
+            </a>
           </div>
         </div>
       ) : loading ? (

@@ -21,7 +21,7 @@ import React, { useEffect, useState, useMemo, useContext } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Typography } from '@douyinfe/semi-ui';
 import { getFooterHTML, getLogo, getSystemName } from '../../helpers';
-import { sanitizeHtml } from '../../helpers/sanitize';
+import { sanitizeOperatorHtml } from '../../helpers/sanitize';
 import { StatusContext } from '../../context/Status';
 
 const FooterBar = () => {
@@ -225,7 +225,7 @@ const FooterBar = () => {
         <div className='relative'>
           <div
             className='custom-footer'
-            dangerouslySetInnerHTML={{ __html: sanitizeHtml(footer) }}
+            dangerouslySetInnerHTML={{ __html: sanitizeOperatorHtml(footer) }}
           ></div>
           <div className='absolute bottom-2 right-4 text-xs !text-semi-color-text-2 opacity-70'>
             <span>{t('设计与开发由')} </span>

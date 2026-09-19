@@ -204,8 +204,8 @@ describe('Cost Intelligence savings page', () => {
     expect(screen.queryByTestId('cost-error')).toBeNull();
   });
 
-  it('treats 401 as the permission state, like 403', async () => {
-    API.get.mockRejectedValue({ response: { status: 401 } });
+  it('shows the permission panel on 403', async () => {
+    API.get.mockRejectedValue({ response: { status: 403 } });
 
     render(<HFCostIntelligence />);
 
@@ -215,6 +215,32 @@ describe('Cost Intelligence savings page', () => {
       ),
     );
     expect(screen.queryByTestId('cost-error')).toBeNull();
+    expect(screen.queryByTestId('cost-signed-out')).toBeNull();
+  });
+
+  /*
+   * 401 is its own state. L4 made the v2 admin group answer 401
+   * UNAUTHENTICATED for a missing or invalid session and 403
+   * PERMISSION_DENIED for a role shortfall
+   * (internal/adapter/middleware/admin_jwt_auth.go), so an expired cookie
+   * must not be reported as a permission the operator has to go and ask for.
+   */
+  it('shows a sign-in-again state on 401, not the permission panel', async () => {
+    API.get.mockRejectedValue({ response: { status: 401 } });
+
+    render(<HFCostIntelligence />);
+
+    await waitFor(() => screen.getByTestId('cost-signed-out'));
+    expect(screen.getByTestId('cost-sign-in').getAttribute('href')).toBe(
+      '/login',
+    );
+    expect(
+      screen.queryByText(
+        /You do not have permission to view platform cost intelligence/,
+      ),
+    ).toBeNull();
+    expect(screen.queryByTestId('cost-error')).toBeNull();
+    expect(screen.queryByTestId('savings-headline')).toBeNull();
   });
 
   // The pre-existing "no data" path has to survive: a 200 with a null payload

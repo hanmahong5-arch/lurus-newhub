@@ -1,6 +1,10 @@
 {
   "translation": {
     "console": {
+      "auth": {
+        "seat_limit": "This tenant has reached its user limit. Ask an administrator to free a seat or raise the limit, then sign in again.",
+        "org_mismatch": "This account belongs to a different organisation than the tenant you are signing in to. Use your own organisation's sign-in link, or ask an administrator."
+      },
       "common": {
         "no_data": "no data",
         "loading": "loading…",
@@ -979,6 +983,8 @@
         "mfa_backup_codes_remaining": "backup codes remaining: {{count}}",
         "sessions_title": "sessions",
         "load_sessions_failed": "Failed to load sessions.",
+        "session_registry_disabled": "Per-device sessions are not enabled on this deployment.",
+        "sessions_registry_off_note": "Per-device sessions are not enabled on this deployment, so the devices signed in to this account cannot be listed or signed out individually here.",
         "th_auth_method": "auth method",
         "th_current": "current",
         "th_active_tokens": "active tokens",
@@ -1046,6 +1052,9 @@
         "delete_account_btn": "I understand · delete"
       },
       "admin": {
+        "session_expired_title": "Your session has expired",
+        "session_expired_body": "The server no longer recognises this session, so nothing on this page can be read. Sign in again to continue.",
+        "sign_in_again": "sign in again",
         "users": {
           "crumb_admin": "governance",
           "crumb": "users",
@@ -1194,6 +1203,9 @@
           "card_latency_sub": "{{count}} samples",
           "table_lbl": "per-model breakdown",
           "empty": "no traffic in this window",
+          "error_title": "Model performance unknown",
+          "error_body": "The analytics endpoint did not answer. This is not a report of zero traffic and zero errors — the window simply could not be read.",
+          "retry": "retry",
           "col_model": "model",
           "col_requests": "requests",
           "col_error_rate": "error rate",
@@ -1269,7 +1281,7 @@
           "state_half_open": "half-open",
           "probe_due": "due",
           "error_title": "Breaker state unknown",
-          "error_body": "The gateway health endpoint did not answer. This is not a report that every channel is healthy — breaker state is simply unknown until the call succeeds.",
+          "error_body": "The gateway health endpoint did not answer. This is not a report that every channel is healthy — breaker state is simply unknown until the call succeeds. Retrying every 30s.",
           "retry": "retry"
         },
         "system_tasks": {
@@ -1282,6 +1294,9 @@
           "sub": "periodic background jobs · this pod · no cluster-wide aggregation",
           "forbidden_title": "Root access required",
           "forbidden_body": "You do not have permission to view background tasks. Contact a platform administrator.",
+          "error_title": "Task schedule unknown",
+          "error_body": "The background-task endpoint did not answer. This is not a report that every job is on schedule — nothing about the schedule is known until the call succeeds. Retrying every 30s.",
+          "retry": "retry",
           "caveat": "This view is per-pod: it lists only the tasks this replica has registered and stamped. A \"standby\" task is either leader-gated (this replica does not currently hold the HA lease) or administratively disabled — that is expected, not a fault.",
           "empty": "No background task has registered on this pod yet.",
           "pause": "❚❚ pause",
@@ -4113,6 +4128,17 @@
     "粘贴验收令牌": "Paste the acceptance token",
     "进入控制台": "Open the console",
     "此实例未启用统一登录": "Single sign-on is not enabled on this instance",
-    "前往验收登录": "Go to acceptance sign-in"
+    "前往验收登录": "Go to acceptance sign-in",
+    "今天": "Today",
+    "近 7 天": "Last 7 days",
+    "本周": "This week",
+    "近 30 天": "Last 30 days",
+    "本月": "This month",
+    "此消息没有可复制的文本内容": "This message has no text content to copy",
+    "无法复制此类型的消息内容": "This kind of message content cannot be copied",
+    "复制功能需要 HTTPS 环境，请手动复制": "Copying needs an HTTPS page, please copy manually",
+    "浏览器不支持复制功能，请手动复制": "This browser does not support copying, please copy manually",
+    "自定义请求体格式错误，请检查JSON格式": "The custom request body is not valid JSON, please check the format",
+    "网络连接失败或服务器无响应": "Network request failed or the server did not respond"
   }
 }
