@@ -300,8 +300,11 @@ func ollamaEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 var ollamaAdminBudget = 30 * time.Second
 
 // ollamaAdminClient is shared so repeated console calls reuse connections; its
-// Timeout is a second bound underneath the per-request context.
-var ollamaAdminClient = &http.Client{Timeout: 30 * time.Second}
+// Timeout is a second bound underneath the per-request context, and it reads the
+// same var rather than repeating the literal — the two silently drifting apart
+// is how a "bounded" call ends up bounded at a number nobody chose
+// (TestOllamaAdminClientUsesTheDeclaredBudget).
+var ollamaAdminClient = &http.Client{Timeout: ollamaAdminBudget}
 
 func FetchOllamaModels(baseURL, apiKey string) ([]OllamaModel, error) {
 	url := fmt.Sprintf("%s/api/tags", baseURL)

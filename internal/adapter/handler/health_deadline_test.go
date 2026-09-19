@@ -3,18 +3,25 @@ package handler
 // health_deadline_test.go — cycle 12 L7 oracle for /api/health.
 //
 // The Redis check in health.go wraps its ping in a 2s context. That number was
-// aspirational: go-redis ignores the caller's context deadline unless
-// ContextTimeoutEnabled is set, so a Redis that accepts the connection and then
-// stops answering made the probe pay go-redis' own read timeout (3s measured)
-// instead of the 2s the code asks for. readinessProbe timeoutSeconds is 2 on
-// both manifests, so the probe was being cut off by kubelet before the handler
-// could answer — a hung cache read as a rolling restart of every replica.
+// aspirational: go-redis sets neither a read timeout nor ContextTimeoutEnabled
+// by default, so a Redis that accepts the connection and then stops answering
+// made the probe pay go-redis' own 3s read timeout instead of the 2s the code
+// asks for. Measured on this machine by making common.applyRedisTimeouts a
+// no-op (the pre-cycle-12 state) and running this test: 3.0027799s.
 //
-// This test drives the real construction path (common.ParseRedisOption, the
-// same option builder InitRedisClient uses) against a listener that accepts and
-// never replies, and pins three things: the handler returns inside the 2s it
-// promises, it labels Redis "unreachable", and it still answers 200 — Redis is
-// a soft dependency, only the database moves the status code.
+// What that cost is NOT a kubelet cut-off. readinessProbe timeoutSeconds is 4,
+// on both manifests (deploy/k8s/r6-stage/deployment.yaml:291,
+// deploy/k8s/r6-uat/deployment.yaml:223) — an earlier draft of this file said 2
+// and derived a rolling restart from it; that incident never happened. What did
+// happen is that one hung dependency spent 75% of the probe window and broke the
+// handler's own 2s promise, with the DB ping and the rest of the handler still to
+// pay for out of the same 4s.
+//
+// This test drives the real construction path (common.ParseRedisOption, which
+// InitRedisClient itself now calls) against a listener that accepts and never
+// replies, and pins three things: the handler returns inside the 2s it promises,
+// it labels Redis "unreachable", and it still answers 200 — Redis is a soft
+// dependency, only the database moves the status code.
 
 import (
 	"encoding/json"
@@ -89,6 +96,9 @@ func TestGetHealthDetailed_HungRedisStaysInsideProbeBudget(t *testing.T) {
 	start := time.Now()
 	GetHealthDetailed(c)
 	elapsed := time.Since(start)
+	// Logged unconditionally so the "after" number is visible in a -v run rather
+	// than only in a failure message.
+	t.Logf("GetHealthDetailed against a hung Redis returned in %v", elapsed)
 
 	if elapsed > 2500*time.Millisecond {
 		t.Errorf("GetHealthDetailed took %v against a hung Redis; the handler's own 2s "+

@@ -149,7 +149,21 @@ func newPublisher(js natsgo.JetStreamContext, stream string) *Publisher {
 // same deadline, so it does not outlive the budget. Callers that want the
 // publish to survive their own cancellation (fire-and-forget event helpers)
 // detach before calling — see publishLLMEvent in events.go.
-// ctx must be non-nil (the standard library's own rule for context arguments).
+//
+// ctx must be non-nil AND must carry a deadline. Without one, nats.go takes the
+// RequestMsgWithContext branch with its ack TTL left at zero, i.e. an unbounded
+// ack wait, and the select below has nothing to fire on either — the bound would
+// be gone in both halves. All three call sites comply today: events.go
+// (eventPublishBudget 5s), quota_threshold.go and pool_threshold.go (5s and 2s,
+// handed in from internal/app/quota.go).
+//
+// Consumer note: a publish reported as failed here may still have landed on the
+// broker. When ctx fires first the goroutine's result is discarded, so the
+// error describes this process's patience, not the broker's outcome. The
+// subjects are designed for that — consumers key on the event's own identity,
+// so a redelivery is idempotent — but a counter fed from this error
+// (CreditPoolAlertHookErrorTotal via pool_threshold.go) can over-count against a
+// slow-but-healthy broker.
 func (p *Publisher) Publish(ctx context.Context, subject string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {

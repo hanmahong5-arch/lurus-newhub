@@ -74,10 +74,17 @@ leg costs 2s, the HTTP leg the remaining 3s. Same 5s ceiling.
   `doc/runbook/platform-billing-breaker-open.md`.
 
 The breaker is opened and closed by the money legs only. Account and
-entitlement lookups do not write breaker state: making them write it would let
-an identity-side blip fast-fail the money path, and — on a deployment where
+entitlement lookups *read* it and never write it. Reading it: while the breaker
+is open they skip the gRPC leg entirely and go straight to the HTTP twin, so a
+console request during a platform outage stops re-paying
+`IDENTITY_GRPC_TIMEOUT_MS` to rediscover something this process already knows
+(`identityLookupClient`, `internal/pkg/common/identity_grpc_client.go`). Not
+writing it: making the lookup path record failures would let an identity-side
+blip fast-fail the money path, and — on a deployment where
 `BILLING_UNIFIED_ENABLED` is off, so no money leg ever probes — would leave the
-breaker latched open with nothing to close it.
+breaker latched open with nothing able to close it. Both halves are pinned by
+`TestAccountLookupSkipsTheGRPCLegWhileTheBreakerIsOpen` and
+`TestAccountLookupFailureNeverWritesBreakerState`.
 
 ## Triage
 
@@ -115,8 +122,14 @@ page to check:
 | Redis | `REDIS_OP_TIMEOUT_MS` 1000, `REDIS_DIAL_TIMEOUT_MS` 2000, caller deadlines honoured | `internal/pkg/common/redis.go` |
 | NATS JetStream publish | caller context, 5s for fire-and-forget events; unlimited reconnect after boot | `internal/pkg/nats/publisher.go` |
 | Customer webhook notify | 10s | `internal/app/webhook.go` |
-| Ali async image task poll | 30s per poll | `internal/adapter/provider/ali/image.go` |
+| Customer bark / gotify push | 10s each | `internal/app/user_notify.go` |
+| SMTP (the DEFAULT notify channel) | 10s dial, 30s for the whole conversation | `internal/pkg/common/email.go` |
+| Ali async image task poll | 30s per poll, **and** the loop around it: 20 attempts max, and it stops the moment the originating request is cancelled | `internal/adapter/provider/ali/image.go` |
 | Ollama list/delete model | 30s | `internal/adapter/provider/ollama/relay-ollama.go` |
+
+All four notification branches are bounded, which matters because the branch a
+deployment actually uses is whichever one the *user* configured — and with no
+NotifyType set at all that is email.
 
 Known gap: the worker-relay branch of webhook delivery
 (`internal/app/download.go:24` `DoWorkerRequest`) posts through
@@ -135,6 +148,19 @@ disabled case, so nothing writes it. Read it together with
 sets it `"true"` (`deploy/k8s/r6-stage/deployment.yaml:217`), UAT `"false"`
 (`deploy/k8s/r6-uat/deployment.yaml:148`), so 0 on UAT is expected and relay is
 unaffected there.
+
+A publish reported as failed here may still have landed. `Publisher.Publish`
+races the JetStream call against the caller's context; when the context fires
+first the in-flight result is discarded, so the error describes this process's
+patience rather than the broker's outcome. Consumers are idempotent by subject
+design — each event carries its own identity, so a redelivery is harmless — but
+a counter fed from that error can over-count against a slow-but-healthy broker.
+The one to distrust in that situation is
+`lurus_gateway_credit_pool_alert_hook_error_total`, incremented at
+`internal/app/quota.go:923`; the same crossing is also recorded as
+`delivery="recorded_only"` by `internal/pkg/nats/pool_threshold.go`, so the
+crossing itself is never lost — only its delivery label and that error counter
+are affected.
 
 One boot-time caveat: if the broker is unreachable when the pod starts, `Init`
 logs the failure and the process runs with no publisher for its lifetime —

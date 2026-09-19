@@ -8,7 +8,21 @@ import (
 	"testing"
 
 	"google.golang.org/grpc/metadata"
+
+	identityv1 "github.com/LurusTech/lurus-proto-go/identity/v1"
 )
+
+// withoutGRPCClient forces the "no gRPC client configured" condition through the
+// package's client seam. Doing it by blanking identityGRPCAddr instead only
+// works for whichever test reaches grpcClientOnce first, which under
+// -shuffle=on is a coin flip — this test failed that way in 1 of 6 shuffled
+// runs during cycle 12 acceptance.
+func withoutGRPCClient(t *testing.T) {
+	t.Helper()
+	prev := identityGRPCClient
+	identityGRPCClient = func() identityv1.IdentityServiceClient { return nil }
+	t.Cleanup(func() { identityGRPCClient = prev })
+}
 
 // TestGRPC_MetadataHelpers exercises the pure gRPC metadata/context builders.
 func TestGRPC_MetadataHelpers(t *testing.T) {
@@ -52,13 +66,16 @@ func TestGRPC_MetadataHelpers(t *testing.T) {
 // degrades to its HTTP counterpart — the resilience contract that keeps relay
 // billing working when the gRPC port is unreachable.
 func TestGRPC_FallsBackToHTTP(t *testing.T) {
-	origAddr := identityGRPCAddr
-	identityGRPCAddr = "" // getGRPCClient's Once will now yield a nil client
-	t.Cleanup(func() { identityGRPCAddr = origAddr })
-
-	if getGRPCClient() != nil {
-		t.Fatal("empty gRPC address must yield a nil client")
+	withoutGRPCClient(t)
+	if identityGRPCClient() != nil {
+		t.Fatal("the test seam must yield a nil client")
 	}
+	// The breaker gate in front of the account/entitlement lookups must not be
+	// what makes them fall back here: force it closed so this test measures the
+	// nil-client contract and nothing else. (Whatever ran before us may have left
+	// it open; nothing in this package resets it on the way out.)
+	BillingBreakerSuccess()
+	t.Cleanup(BillingBreakerSuccess)
 
 	newIdentityServer(t, func(w http.ResponseWriter, r *http.Request) {
 		// Answer any HTTP fallback endpoint generically.
@@ -123,5 +140,19 @@ func TestGRPC_FallsBackToHTTP(t *testing.T) {
 	}
 	if err := CreditWalletGRPC(ctx, 1, 1.0, "refund", "d", "prod", "idem"); err != nil {
 		t.Errorf("CreditWalletGRPC fallback: %v", err)
+	}
+}
+
+// TestNewIdentityGRPCClient_EmptyAddressYieldsNil covers the branch the seam
+// above no longer reaches: a deployment with IDENTITY_GRPC_ADDR blanked runs
+// HTTP-only rather than building a client aimed at nothing. Driven through the
+// constructor rather than getGRPCClient so it does not depend on the sync.Once.
+func TestNewIdentityGRPCClient_EmptyAddressYieldsNil(t *testing.T) {
+	if c := newIdentityGRPCClient(""); c != nil {
+		t.Errorf("newIdentityGRPCClient(\"\") = %v, want nil", c)
+	}
+	if c := newIdentityGRPCClient("127.0.0.1:1"); c == nil {
+		t.Error("a syntactically valid address must yield a client: grpc.NewClient is lazy, so " +
+			"an unreachable port is a call-time failure, not a construction failure")
 	}
 }

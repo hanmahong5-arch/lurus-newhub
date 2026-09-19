@@ -145,15 +145,24 @@ func TestPublisherInitWiresReconnectObservability(t *testing.T) {
 		t.Fatalf("read publisher.go: %v", err)
 	}
 	src := string(raw)
-	for _, want := range []string{
-		"natsgo.MaxReconnects(-1)",
-		"natsgo.DisconnectErrHandler(",
-		"natsgo.ReconnectHandler(",
-		"natsgo.ClosedHandler(",
-		"metrics.SetNATSConnected(",
+	for _, tc := range []struct {
+		needle string
+		why    string
+	}{
+		{"natsgo.MaxReconnects(-1)", "a broker restart would again close the connection permanently"},
+		{"natsgo.DisconnectErrHandler(", "disconnects would again go unrecorded"},
+		{"natsgo.ReconnectHandler(", "reconnects would again go unrecorded"},
+		{"natsgo.ClosedHandler(", "a permanently closed connection would again go unrecorded"},
+		{"metrics.SetNATSConnected(", "the nats_connected gauge would have no writer"},
+		// The half the select arm cannot prove: with the opt gone the CALLER is
+		// still bounded (the select fires on ctx), but the goroutine spawned by
+		// Publish stays parked inside the client for as long as it feels like
+		// waiting. No behavioural test in this package sees that, because the
+		// stub honours neither the opt nor a deadline.
+		{"natsgo.Context(ctx)", "the publish goroutine would outlive the caller's budget, one leak per publish"},
 	} {
-		if !strings.Contains(src, want) {
-			t.Errorf("publisher.go no longer contains %q — the reconnect/observability wiring is gone", want)
+		if !strings.Contains(src, tc.needle) {
+			t.Errorf("publisher.go no longer contains %q: %s", tc.needle, tc.why)
 		}
 	}
 }

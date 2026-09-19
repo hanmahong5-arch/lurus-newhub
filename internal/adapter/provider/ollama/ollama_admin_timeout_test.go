@@ -42,6 +42,21 @@ func withShortOllamaAdminBudget(t *testing.T) {
 	t.Cleanup(func() { ollamaAdminBudget = prev })
 }
 
+// TestOllamaAdminClientUsesTheDeclaredBudget pins the two halves of the bound to
+// one number. The shared client repeated the 30s as a literal, one line below the
+// var that declares it, so shortening the budget would have left the client's own
+// ceiling where it was and the next reader would have had two answers to "how long
+// can a console model-list call take".
+func TestOllamaAdminClientUsesTheDeclaredBudget(t *testing.T) {
+	if ollamaAdminBudget != 30*time.Second {
+		t.Errorf("ollamaAdminBudget = %v, want 30s", ollamaAdminBudget)
+	}
+	if ollamaAdminClient.Timeout != ollamaAdminBudget {
+		t.Errorf("ollamaAdminClient.Timeout = %v, ollamaAdminBudget = %v: the two have drifted",
+			ollamaAdminClient.Timeout, ollamaAdminBudget)
+	}
+}
+
 func TestFetchOllamaModels_HungHostIsBounded(t *testing.T) {
 	withShortOllamaAdminBudget(t)
 	base := ollamaHungUpstream(t)

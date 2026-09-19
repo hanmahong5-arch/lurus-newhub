@@ -16,6 +16,7 @@ package common
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -161,5 +162,159 @@ func TestIdentityGRPCLegNeverOutlivesTheTotalBudget(t *testing.T) {
 	}
 	if remaining := time.Until(deadline); remaining > 300*time.Millisecond {
 		t.Errorf("gRPC leg deadline is %v away, but the whole call only had 150ms of budget", remaining)
+	}
+}
+
+// countingClientProvider installs a client provider that records how many times
+// the wrappers ask for a gRPC client, and hands back a real one aimed at a dead
+// port so any call that does happen fails fast into the HTTP twin.
+func countingClientProvider(t *testing.T) *int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	client := newIdentityGRPCClient(addr)
+	if client == nil {
+		t.Fatal("newIdentityGRPCClient must build a client for a syntactically valid address")
+	}
+	calls := 0
+	prev := identityGRPCClient
+	identityGRPCClient = func() identityv1.IdentityServiceClient {
+		calls++
+		return client
+	}
+	t.Cleanup(func() { identityGRPCClient = prev })
+	return &calls
+}
+
+// tripBreaker drives the billing breaker to OPEN and restores it afterwards.
+// Three consecutive failures is its threshold (billing_breaker.go).
+func tripBreaker(t *testing.T) {
+	t.Helper()
+	BillingBreakerSuccess()
+	BillingBreakerFailure()
+	BillingBreakerFailure()
+	BillingBreakerFailure()
+	if !BillingBreakerIsOpen() {
+		t.Fatal("three consecutive failures must open the breaker")
+	}
+	t.Cleanup(BillingBreakerSuccess)
+}
+
+// TestAccountLookupSkipsTheGRPCLegWhileTheBreakerIsOpen is the cycle 12 operator
+// decision: the account/entitlement calls read the breaker (never write it) and,
+// when it is open, go straight to the HTTP twin instead of re-paying the gRPC
+// leg's budget to rediscover that platform-core is down.
+func TestAccountLookupSkipsTheGRPCLegWhileTheBreakerIsOpen(t *testing.T) {
+	newIdentityServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/entitlements/"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"plan_code": "pro"})
+		case strings.Contains(r.URL.Path, "/overview"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"account": map[string]any{"id": 5}})
+		case strings.Contains(r.URL.Path, "/upsert"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 6})
+		case strings.Contains(r.URL.Path, "/by-idp-sub/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "idp_subject": "s"})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	calls := countingClientProvider(t)
+	tripBreaker(t)
+
+	ctx := context.Background()
+	if m, err := GetAccountByZitadelSubGRPC(ctx, "s"); err != nil || m == nil || m.ID != 7 {
+		t.Errorf("GetAccountByZitadelSubGRPC with the breaker open: %+v err=%v", m, err)
+	}
+	if m, err := UpsertAccountGRPC(ctx, "s", "e", "n", ""); err != nil || m == nil || m.ID != 6 {
+		t.Errorf("UpsertAccountGRPC with the breaker open: %+v err=%v", m, err)
+	}
+	if ent, err := GetEntitlementsGRPC(ctx, 1, "prod"); err != nil || ent.GetString("plan_code", "") != "pro" {
+		t.Errorf("GetEntitlementsGRPC with the breaker open: %+v err=%v", ent, err)
+	}
+	if ov, err := GetAccountOverviewGRPC(ctx, 5, ""); err != nil || ov == nil || ov.Account.ID != 5 {
+		t.Errorf("GetAccountOverviewGRPC with the breaker open: %+v err=%v", ov, err)
+	}
+
+	if *calls != 0 {
+		t.Errorf("the gRPC client was resolved %d times with the breaker open, want 0: the "+
+			"account/entitlement lookups are still paying the gRPC leg to rediscover a "+
+			"platform-core this process already knows is down", *calls)
+	}
+	// Read-only: consulting the breaker must not have moved it, and nothing on
+	// this path may record a failure against it either.
+	if !BillingBreakerIsOpen() {
+		t.Error("the account path changed breaker state; it must only read it")
+	}
+}
+
+// TestAccountLookupUsesTheGRPCLegWhileTheBreakerIsClosed is the other half: the
+// gate must be a gate, not an amputation.
+func TestAccountLookupUsesTheGRPCLegWhileTheBreakerIsClosed(t *testing.T) {
+	newIdentityServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "idp_subject": "s"})
+	})
+	calls := countingClientProvider(t)
+	BillingBreakerSuccess()
+	t.Cleanup(BillingBreakerSuccess)
+
+	if _, err := GetAccountByZitadelSubGRPC(context.Background(), "s"); err != nil {
+		t.Errorf("GetAccountByZitadelSubGRPC: %v", err)
+	}
+	if *calls != 1 {
+		t.Errorf("the gRPC client was resolved %d times with the breaker closed, want 1", *calls)
+	}
+}
+
+// TestAccountLookupFailureNeverWritesBreakerState guards the half of the
+// operator decision that is about the MONEY path: if the account path recorded
+// failures, an identity-side blip would fast-fail wallet operations, and on a
+// deployment with unified billing off nothing would ever close the breaker again
+// because no money leg is there to probe it.
+func TestAccountLookupFailureNeverWritesBreakerState(t *testing.T) {
+	t.Setenv("IDENTITY_TIMEOUT_MS", "300")
+	t.Setenv("IDENTITY_GRPC_TIMEOUT_MS", "100")
+	newIdentityServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	countingClientProvider(t)
+	BillingBreakerSuccess()
+	t.Cleanup(BillingBreakerSuccess)
+
+	for i := 0; i < 5; i++ {
+		_, _ = GetAccountByZitadelSubGRPC(context.Background(), "s")
+		_, _ = GetEntitlementsGRPC(context.Background(), 1, "prod")
+	}
+	if BillingBreakerIsOpen() {
+		t.Error("ten failed account/entitlement lookups opened the billing breaker: the lookup " +
+			"path is writing breaker state, which would fast-fail the money path on an " +
+			"identity-side blip")
+	}
+}
+
+// TestMoneyLegIgnoresTheLookupGate: the wallet wrappers must keep trying gRPC
+// first even while the breaker is open. Their own gate is BillingBreakerAllow,
+// applied by the *WithBreaker wrappers one level up, and that one is allowed to
+// move state.
+func TestMoneyLegIgnoresTheLookupGate(t *testing.T) {
+	t.Setenv("IDENTITY_TIMEOUT_MS", "500")
+	t.Setenv("IDENTITY_GRPC_TIMEOUT_MS", "150")
+	newIdentityServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "balance_after": 1.0})
+	})
+	calls := countingClientProvider(t)
+	tripBreaker(t)
+
+	if _, err := DebitWalletGRPC(context.Background(), 1, 1.0, "spend", "d", "prod", "idem"); err != nil {
+		t.Errorf("DebitWalletGRPC: %v", err)
+	}
+	if *calls != 1 {
+		t.Errorf("the money leg resolved the gRPC client %d times with the breaker open, want 1: "+
+			"the read-only lookup gate has leaked onto the wallet path", *calls)
 	}
 }

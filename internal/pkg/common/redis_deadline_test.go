@@ -138,34 +138,53 @@ func TestApplyRedisTimeouts_EnvOverrides(t *testing.T) {
 	}
 }
 
-// TestRedisOptionBuildersShareOneSource guards the seam this file's timing
-// oracle relies on. The oracle drives ParseRedisOption, but the client the
-// process actually serves traffic with is the one InitRedisClient builds; if
-// the two stopped sharing buildRedisOptions, the oracle would keep passing
-// while production went back to unbounded commands. Textual check on this one
-// file — the two function bodies are a dozen lines apart.
-func TestRedisOptionBuildersShareOneSource(t *testing.T) {
+// TestInitRedisClientGoesThroughParseRedisOption guards the seam this file's
+// timing oracle relies on. The oracle drives ParseRedisOption; the client the
+// process actually serves traffic with is the one InitRedisClient builds. Until
+// cycle 12's repair round those were two functions over a private twin and
+// ParseRedisOption had zero production callers, so the oracle could have been
+// green over a production path carrying no bounds at all. Now there is one
+// builder and InitRedisClient calls it by name.
+//
+// Textual, because InitRedisClient's other half is a boot ping this test has no
+// business running. The second and third assertions are what stop it from
+// measuring nothing.
+func TestInitRedisClientGoesThroughParseRedisOption(t *testing.T) {
 	src, err := os.ReadFile("redis.go")
 	if err != nil {
 		t.Fatalf("read redis.go: %v", err)
 	}
-	// Line endings normalised: a Windows checkout of this repo produces CRLF
-	// working copies for text-attributed sources, and the needle below spans a
-	// line break.
+	// Line endings normalised: a Windows checkout of this repo can produce CRLF
+	// working copies for text-attributed sources, and the needles below span line
+	// breaks.
 	body := strings.ReplaceAll(string(src), "\r\n", "\n")
-	for _, fn := range []string{"func InitRedisClient() (err error) {", "func ParseRedisOption() *redis.Options {"} {
-		i := strings.Index(body, fn)
+
+	funcBody := func(sig string) string {
+		t.Helper()
+		i := strings.Index(body, sig)
 		if i < 0 {
-			t.Fatalf("could not find %q in redis.go — this check is measuring nothing", fn)
+			t.Fatalf("could not find %q in redis.go: this check is measuring nothing", sig)
 		}
 		rest := body[i:]
 		end := strings.Index(rest, "\n}\n")
 		if end < 0 {
-			t.Fatalf("could not find the end of %q", fn)
+			t.Fatalf("could not find the end of %q", sig)
 		}
-		if !strings.Contains(rest[:end], "buildRedisOptions(") {
-			t.Errorf("%s does not go through buildRedisOptions(): the bounded timeout set "+
-				"would apply to only one of the two construction paths", fn)
-		}
+		return rest[:end]
+	}
+
+	initBody := funcBody("func InitRedisClient() (err error) {")
+	if !strings.Contains(initBody, "ParseRedisOption()") {
+		t.Error("InitRedisClient no longer builds its options with ParseRedisOption(): the " +
+			"oracles in this file would be measuring a construction path production does " +
+			"not use")
+	}
+	if strings.Contains(initBody, "redis.ParseURL(") {
+		t.Error("InitRedisClient parses the DSN itself again: that fork is exactly how the " +
+			"bounded timeout set ends up on one construction path and not the other")
+	}
+
+	if !strings.Contains(funcBody("func ParseRedisOption() *redis.Options {"), "applyRedisTimeouts(opt)") {
+		t.Error("ParseRedisOption no longer applies the bounded timeout set")
 	}
 }

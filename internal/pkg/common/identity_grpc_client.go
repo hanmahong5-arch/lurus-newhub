@@ -35,25 +35,63 @@ var (
 // (callers fall back to HTTP).
 func getGRPCClient() identityv1.IdentityServiceClient {
 	grpcClientOnce.Do(func() {
-		if identityGRPCAddr == "" {
-			return
-		}
-		// No WaitForReady: this client has an HTTP twin behind it, and
-		// wait-for-ready turns "connection refused" into "block until the call
-		// deadline", which is the one thing a fallback path must not do. Failing
-		// fast here is what lets the HTTP leg run inside the same total budget
-		// (identity_timeout_test.go).
-		conn, err := grpc.NewClient(identityGRPCAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if err != nil {
-			slog.Error("identity grpc client: failed to connect", "addr", identityGRPCAddr, "err", err)
-			return
-		}
-		grpcClient = identityv1.NewIdentityServiceClient(conn)
-		slog.Info("identity grpc client connected", "addr", identityGRPCAddr)
+		grpcClient = newIdentityGRPCClient(identityGRPCAddr)
 	})
 	return grpcClient
+}
+
+// newIdentityGRPCClient builds the client for addr, or nil when there is no
+// address configured or the construction fails. Split out of the sync.Once so
+// both branches can be exercised without depending on which test in the binary
+// consumes that Once first.
+//
+// No WaitForReady: this client has an HTTP twin behind it, and wait-for-ready
+// turns "connection refused" into "block until the call deadline", which is the
+// one thing a fallback path must not do. Failing fast here is what lets the HTTP
+// leg run inside the same total budget (identity_timeout_test.go).
+func newIdentityGRPCClient(addr string) identityv1.IdentityServiceClient {
+	if addr == "" {
+		return nil
+	}
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		slog.Error("identity grpc client: failed to connect", "addr", addr, "err", err)
+		return nil
+	}
+	slog.Info("identity grpc client connected", "addr", addr)
+	return identityv1.NewIdentityServiceClient(conn)
+}
+
+// identityGRPCClient is the seam every wrapper below resolves its client
+// through. A var, so a test can force the "no gRPC client" condition — the
+// HTTP-fallback contract — instead of depending on where in the binary
+// grpcClientOnce happens to fire first. grpc_fallback_test.go used to assume it
+// was the first test in the package to consume that sync.Once, which -shuffle=on
+// turns into a coin flip. Nothing in production writes it.
+var identityGRPCClient = getGRPCClient
+
+// identityLookupClient resolves the client for the ACCOUNT and ENTITLEMENT
+// lookups only — never for the money legs. It returns nil, i.e. "skip the gRPC
+// leg and go straight to the HTTP twin", while the billing circuit breaker is
+// open: an open breaker is this process's own standing evidence that
+// platform-core is not answering, and re-paying the gRPC leg's 2s on every
+// console request to rediscover that is exactly the cost a breaker exists to
+// avoid. The HTTP twin still runs, so nothing is refused that would otherwise
+// have been served.
+//
+// Read-only by construction. BillingBreakerIsOpen never mutates state (no
+// half-open transition, unlike BillingBreakerAllow), and no caller on this path
+// records success or failure. Writing from here would be the actual hazard: an
+// identity-side blip would fast-fail the money path, and on a deployment with
+// BILLING_UNIFIED_ENABLED off — where no money leg ever probes — the breaker
+// would latch open with nothing left able to close it.
+func identityLookupClient() identityv1.IdentityServiceClient {
+	if BillingBreakerIsOpen() {
+		return nil
+	}
+	return identityGRPCClient()
 }
 
 // grpcCtx adds the internal API key as gRPC metadata.
@@ -127,7 +165,7 @@ func GetAccountByZitadelSubGRPC(ctx context.Context, sub string) (*IdentityMappi
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityLookupClient()
 	if client == nil {
 		return GetAccountByZitadelSub(bctx, sub) // fallback to HTTP
 	}
@@ -152,7 +190,7 @@ func UpsertAccountGRPC(ctx context.Context, zitadelSub, email, displayName, avat
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityLookupClient()
 	if client == nil {
 		return UpsertAccount(bctx, zitadelSub, email, displayName, avatarURL)
 	}
@@ -180,7 +218,7 @@ func GetEntitlementsGRPC(ctx context.Context, accountID int64, productID string)
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityLookupClient()
 	if client == nil {
 		return GetEntitlements(bctx, accountID, productID)
 	}
@@ -206,7 +244,7 @@ func GetAccountOverviewGRPC(ctx context.Context, accountID int64, productID stri
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityLookupClient()
 	if client == nil {
 		return GetAccountOverview(bctx, accountID, productID)
 	}
@@ -232,7 +270,7 @@ func ReportLLMUsageGRPC(ctx context.Context, accountID int64, amountCNY float64)
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityGRPCClient()
 	if client == nil {
 		ReportLLMUsage(bctx, accountID, amountCNY)
 		return
@@ -257,7 +295,7 @@ func DebitWalletGRPC(ctx context.Context, accountID int64, amount float64, txTyp
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityGRPCClient()
 	if client == nil {
 		return DebitWallet(bctx, accountID, amount, txType, description, productID, idempotencyKey)
 	}
@@ -298,7 +336,7 @@ func PreAuthorizeGRPC(ctx context.Context, accountID int64, amount float64, prod
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityGRPCClient()
 	if client == nil {
 		return PreAuthorize(bctx, accountID, amount, productID, referenceID, description, ttlSeconds)
 	}
@@ -333,7 +371,7 @@ func SettlePreAuthGRPC(ctx context.Context, preAuthID int64, actualAmount float6
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityGRPCClient()
 	if client == nil {
 		return SettlePreAuth(bctx, preAuthID, actualAmount)
 	}
@@ -363,7 +401,7 @@ func ReleasePreAuthGRPC(ctx context.Context, preAuthID int64) error {
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityGRPCClient()
 	if client == nil {
 		return ReleasePreAuth(bctx, preAuthID)
 	}
@@ -388,7 +426,7 @@ func CreditWalletGRPC(ctx context.Context, accountID int64, amount float64, txTy
 	bctx, bcancel := withIdentityBudget(ctx)
 	defer bcancel()
 
-	client := getGRPCClient()
+	client := identityGRPCClient()
 	if client == nil {
 		return CreditWallet(bctx, accountID, amount, txType, description, productID, idempotencyKey)
 	}

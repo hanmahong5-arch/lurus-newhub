@@ -62,20 +62,6 @@ func applyRedisTimeouts(opt *redis.Options) {
 	opt.ContextTimeoutEnabled = true
 }
 
-// buildRedisOptions parses REDIS_CONN_STRING and applies the pool size plus the
-// bounded timeout set. InitRedisClient and ParseRedisOption both go through it
-// so the two construction paths cannot drift apart
-// (TestRedisOptionBuildersShareOneSource).
-func buildRedisOptions() (*redis.Options, error) {
-	opt, err := redis.ParseURL(os.Getenv("REDIS_CONN_STRING"))
-	if err != nil {
-		return nil, err
-	}
-	opt.PoolSize = GetEnvOrDefault("REDIS_POOL_SIZE", 10)
-	applyRedisTimeouts(opt)
-	return opt, nil
-}
-
 // InitRedisClient This function is called after init()
 func InitRedisClient() (err error) {
 	if os.Getenv("REDIS_CONN_STRING") == "" {
@@ -88,10 +74,13 @@ func InitRedisClient() (err error) {
 		SyncFrequency = 60
 	}
 	SysLog("Redis is enabled")
-	opt, err := buildRedisOptions()
-	if err != nil {
-		FatalLog("failed to parse Redis connection string: " + err.Error())
-	}
+	// Through ParseRedisOption, not a private twin: the exported builder is what
+	// the Redis oracles drive, and before cycle 12's repair round it had zero
+	// production callers — the bounded timeout set could have been correct in the
+	// tested path and absent from the served one without a single test noticing
+	// (TestInitRedisClientGoesThroughParseRedisOption). ParseRedisOption
+	// FatalLogs a malformed DSN, which is the same fast-fail this line had.
+	opt := ParseRedisOption()
 	RDB = redis.NewClient(opt)
 
 	// Bounded boot connect-retry (A2): a Redis pod not yet Ready when this pod
@@ -118,11 +107,20 @@ func InitRedisClient() (err error) {
 	return err
 }
 
+// ParseRedisOption parses REDIS_CONN_STRING and applies the pool size plus the
+// bounded timeout set. It is the single construction path: InitRedisClient
+// builds the process-wide client from it, and everything else in the repo that
+// needs options calls it too, so an oracle driven through this function is
+// driving what production serves traffic with. A malformed DSN is a
+// configuration error, not a transient one, so it fast-fails the process.
 func ParseRedisOption() *redis.Options {
-	opt, err := buildRedisOptions()
+	opt, err := redis.ParseURL(os.Getenv("REDIS_CONN_STRING"))
 	if err != nil {
 		FatalLog("failed to parse Redis connection string: " + err.Error())
+		return nil
 	}
+	opt.PoolSize = GetEnvOrDefault("REDIS_POOL_SIZE", 10)
+	applyRedisTimeouts(opt)
 	return opt
 }
 

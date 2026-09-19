@@ -1385,8 +1385,11 @@ func reportQuotaThreshold(ctx context.Context, relayInfo *relaycommon.RelayInfo,
 }
 
 // quotaNotifyBudget bounds the low-balance notification that follows a relay.
-// The delivery target is customer-configured (webhook/bark/gotify URL), so an
-// endpoint that accepts and never answers must not pin the async goroutine.
+// The delivery target is whichever of email/webhook/bark/gotify the user picked,
+// all four customer-configured, so a target that accepts and never answers must
+// not pin the async goroutine. This ctx is the bound for the webhook branch;
+// the other three are entered from call sites that pass no context at all and
+// therefore carry budgets of their own (see the call site below).
 const quotaNotifyBudget = 10 * time.Second
 
 func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int) {
@@ -1430,9 +1433,12 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 			}
 
 			// Bounded, detached context: this runs inside AsyncGo after the request
-			// is done, so there is no caller context to inherit, and NotifyUser can
-			// reach a customer-controlled webhook/bark/gotify endpoint. context.TODO()
-			// gave that outbound call no deadline at all.
+			// is done, so there is no caller context to inherit. Of NotifyUser's four
+			// delivery branches this ctx reaches exactly one — the customer-configured
+			// webhook (user_notify.go, SendWebhookNotifyWithContext). Email, bark and
+			// gotify are also called from paths that hand in no context, so each bounds
+			// itself: common.smtpSendBudget for email, notifySendBudget for the other
+			// two. context.TODO() here gave the webhook branch no deadline at all.
 			notifyCtx, notifyCancel := context.WithTimeout(context.Background(), quotaNotifyBudget)
 			err := NotifyUser(notifyCtx, relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values))
 			notifyCancel()

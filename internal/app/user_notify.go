@@ -8,10 +8,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
 )
 
@@ -87,9 +88,13 @@ func NotifyUser(ctx context.Context, userId int, userEmail string, userSetting d
 
 		// 获取 webhook secret
 		webhookSecret := userSetting.WebhookSecret
-		// ctx-bounded: the caller already owns a deadline (relay post-consume uses a
-		// 5s detached one), and a customer-controlled endpoint must not be able to
-		// outlive it. See webhookSendBudget in webhook.go.
+		// ctx-bounded. The quota-notify caller budgets 10s
+		// (quotaNotifyBudget, quota.go:1390, applied at quota.go:1436); the other
+		// caller, NotifyRootUser, is invoked with context.TODO()
+		// (channel.go:38, :59, handler/channel-test.go:712) and so carries no
+		// deadline at all — for that path webhookSendBudget (webhook.go) is the
+		// real floor. Either way a customer-controlled endpoint cannot outlive
+		// the shorter of the two.
 		return SendWebhookNotifyWithContext(ctx, webhookURLStr, webhookSecret, data)
 	case dto.NotifyTypeBark:
 		barkURL := userSetting.BarkUrl
@@ -119,6 +124,20 @@ func sendEmailNotify(userEmail string, data dto.Notify) error {
 	}
 	return common.SendEmail(data.Title, userEmail, content)
 }
+
+// notifySendBudget is the wall-clock ceiling for one bark or gotify delivery.
+// Both targets are customer-configured URLs, and both built their request with
+// http.NewRequest — no context — on GetHttpClient(), whose Timeout is zero
+// whenever RELAY_TIMEOUT is unset, which is the deployed default
+// (http_client.go, .env.example RELAY_TIMEOUT=0, and neither manifest overrides
+// it). So a push endpoint that accepted the connection and went quiet parked the
+// notifying goroutine with nothing to end it.
+//
+// The budget is applied inside the two functions rather than added to their
+// signatures: they are called directly, with the current signatures, from test
+// files outside this lane. 10s, matching webhookSendBudget. Vars, not consts, so
+// the oracles can shorten them; nothing in production writes them.
+var notifySendBudget = 10 * time.Second
 
 func sendBarkNotify(barkURL string, data dto.Notify) error {
 	// 处理占位符
@@ -165,7 +184,9 @@ func sendBarkNotify(barkURL string, data dto.Notify) error {
 		}
 
 		// 直接发送请求
-		req, err = http.NewRequest(http.MethodGet, finalURL, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), notifySendBudget)
+		defer cancel()
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, finalURL, nil)
 		if err != nil {
 			return fmt.Errorf("failed to create bark request: %v", err)
 		}
@@ -259,7 +280,9 @@ func sendGotifyNotify(gotifyUrl string, gotifyToken string, priority int, data d
 		}
 
 		// 直接发送请求
-		req, err = http.NewRequest(http.MethodPost, finalURL, bytes.NewBuffer(payloadBytes))
+		ctx, cancel := context.WithTimeout(context.Background(), notifySendBudget)
+		defer cancel()
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, finalURL, bytes.NewBuffer(payloadBytes))
 		if err != nil {
 			return fmt.Errorf("failed to create gotify request: %v", err)
 		}
