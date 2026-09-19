@@ -17,6 +17,14 @@ package repo
 //     loud crash-and-restart for a quiet counter increment; see its doc
 //     comment in channel_cache.go for the full trade-off.
 //
+// Cycle-12 L8 adds a third failure mode to the same file:
+//
+//   - Both of InitChannelCache's reads (channels, abilities) discarded their
+//     error, so a failed query produced an EMPTY result slice that the
+//     rebuild then swapped into the live routing table. One failed read =
+//     that replica relays nothing until the next successful sync, with no
+//     signal anywhere. The rebuild now aborts and keeps the previous table.
+//
 // The tests below drive the real functions (InitChannelCache /
 // syncChannelCacheOnce / SyncChannelCacheWithContext), not a
 // reimplementation of their logic.
@@ -162,5 +170,98 @@ func TestSyncChannelCacheWithContext_RecoversPanic(t *testing.T) {
 	after := testutil.ToFloat64(metrics.PanicsRecovered.WithLabelValues("channel_cache_sync"))
 	if after-before < 1 {
 		t.Fatalf("PanicsRecovered{source=channel_cache_sync} did not increment via SyncChannelCacheWithContext: before=%f after=%f", before, after)
+	}
+}
+
+// TestInitChannelCache_KeepsPreviousTableWhenQueryFails is the cycle-12 L8
+// oracle: a rebuild whose database read fails must leave the previously
+// built routing table in place and record the failure, instead of swapping
+// in the empty result of the failed query.
+//
+// The failure is injected by closing the pool underneath the live *gorm.DB,
+// which is what a repo-tier (hermetic SQLite) test can reproduce of "the
+// database went away mid-sync". Pre-fix this test fails on the routability
+// assertion: GORM leaves `channels` empty on the failed Find, the rebuild
+// treats that as "there are no channels", and the swap wipes the table.
+//
+// Mutation targets, both measured 2026-09-19 rather than predicted:
+// reverting the channels read alone to a bare `DB.Find(&channels)` turns
+// the counter assertion red but NOT the routability one (the abilities read
+// then aborts the pass and the table survives by accident); reverting both
+// reads turns both assertions red. The counter assertion is what makes the
+// single-read mutation detectable at all.
+func TestInitChannelCache_KeepsPreviousTableWhenQueryFails(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+
+	prevCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = prevCache })
+	snapshotChannelCacheGlobals(t)
+
+	ch := &Channel{
+		Type: 1, Status: common.ChannelStatusEnabled,
+		Name: "keep-me-on-failure", Models: "model-keep", Group: "keep-group",
+		TenantId: "default",
+	}
+	if err := DB.Create(ch).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	InitChannelCache()
+	if got, err := GetRandomSatisfiedChannelForTenant("", "keep-group", "model-keep", 1); err != nil || got == nil {
+		t.Fatalf("precondition: channel not routable after a healthy sync: %+v, %v", got, err)
+	}
+
+	// Take the database away. Every later query on this *gorm.DB returns
+	// "sql: database is closed".
+	sqlDB, err := DB.DB()
+	if err != nil {
+		t.Fatalf("DB.DB(): %v", err)
+	}
+	if cerr := sqlDB.Close(); cerr != nil {
+		t.Fatalf("close pool: %v", cerr)
+	}
+
+	before := testutil.ToFloat64(metrics.ChannelCacheSyncFailedTotal.WithLabelValues("channels"))
+	InitChannelCache()
+	after := testutil.ToFloat64(metrics.ChannelCacheSyncFailedTotal.WithLabelValues("channels"))
+
+	got, rerr := GetRandomSatisfiedChannelForTenant("", "keep-group", "model-keep", 1)
+	if rerr != nil || got == nil || got.Id != ch.Id {
+		t.Errorf("after a failed sync the previous routing table was lost: "+
+			"GetRandomSatisfiedChannelForTenant(keep-group, model-keep) = %+v, %v; want channel %d. "+
+			"A failed read must abort the rebuild, not swap in its empty result.", got, rerr, ch.Id)
+	}
+	if after-before != 1 {
+		t.Errorf("ChannelCacheSyncFailedTotal{query=channels} did not increment by 1: before=%f after=%f", before, after)
+	}
+}
+
+// TestInitChannelCacheQuery_ReturnsTheFailure covers the error value itself:
+// InitChannelCache keeps its func() signature (see its doc comment for why),
+// so the abandoned-rebuild reason is observable only through the unexported
+// worker it delegates to. Without this, "the rebuild aborted" and "the
+// rebuild silently did nothing" would be indistinguishable from inside the
+// package.
+func TestInitChannelCacheQuery_ReturnsTheFailure(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+
+	prevCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = prevCache })
+	snapshotChannelCacheGlobals(t)
+
+	sqlDB, err := DB.DB()
+	if err != nil {
+		t.Fatalf("DB.DB(): %v", err)
+	}
+	if cerr := sqlDB.Close(); cerr != nil {
+		t.Fatalf("close pool: %v", cerr)
+	}
+
+	if rerr := rebuildChannelCache(); rerr == nil {
+		t.Fatal("rebuildChannelCache() returned nil on a closed pool; want the read's error")
 	}
 }
