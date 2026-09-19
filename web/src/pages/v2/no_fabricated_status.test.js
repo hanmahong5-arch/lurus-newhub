@@ -47,6 +47,16 @@ For commercial licensing, please contact support@quantumnous.com
  *     slug table / literal path routes; a fabricated panel embedded in an
  *     otherwise-live page (one that already has its own API call) is
  *     invisible to both rules.
+ *   - Third blind spot, named by cycle 12 L3 rather than fixed here: a page
+ *     that DOES call the backend can still fabricate, by rendering a failed
+ *     call as a benign answer. Admin/Gateway drew "no open breakers" and an
+ *     empty table on a 502; Admin/Settings drew every auth toggle as off;
+ *     Admin/CostIntelligence said the savings endpoint "returned no data".
+ *     All three had an API call, so rule (b) was satisfied, and none of the
+ *     strings were fabricated, so rule (a) was too. The oracle for that
+ *     shape is a per-page failure-injection test (each page's own suite now
+ *     has one); a structural rule would have to know which render branch a
+ *     null payload reaches, which this file deliberately does not attempt.
  */
 import fs from 'node:fs';
 import path from 'node:path';

@@ -39,6 +39,19 @@ module.exports = {
           ],
         ],
         'no-multiple-empty-lines': ['error', { max: 1 }],
+        // eslint-plugin-react-hooks has been installed and listed in
+        // `plugins` since the hi-fi console landed, with neither of its two
+        // rules turned on — so it linted nothing. Switching rules-of-hooks on
+        // found 16 real violations (11 in shipped code), one of which took
+        // /privacy-policy and /user-agreement down on every HTML document:
+        // components/common/DocumentRenderer called useEffect from inside a
+        // branch that sits after four early returns.
+        'react-hooks/rules-of-hooks': 'error',
+        // exhaustive-deps is a warning, not an error: a missing dependency is
+        // sometimes deliberate (mount-once effects), so this is a ratchet
+        // carried by the --max-warnings ceiling on the `eslint` script rather than
+        // a hard gate. Lower the ceiling when the count drops; never raise it.
+        'react-hooks/exhaustive-deps': 'warn',
       },
     },
   ],

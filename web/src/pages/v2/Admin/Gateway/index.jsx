@@ -32,6 +32,11 @@ import { API } from '../../../../helpers';
  *   - breaker state is per-replica, so this is one pod's view.
  * A dashboard that quietly showed "all green" for an untouched channel would be
  * worse than no dashboard during an incident.
+ *
+ * Cycle 12 L3 closed the third way it could say "all green" without knowing:
+ * a failed fetch. 403/401 are a permission state, everything else (502, a
+ * dropped connection, a 200 carrying success:false) is an ERROR state with a
+ * retry, never `data === null` rendered as openCount 0 and an empty table.
  */
 
 const POLL_MS = 5000;
@@ -51,13 +56,28 @@ const V2AdminGateway = () => {
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
   const [live, setLive] = useState(true);
+  // null when the last fetch succeeded; otherwise the backend message, or ''
+  // when there was none. Distinct from `forbidden`: one means "you may not
+  // see this", the other means "nobody can see this right now".
+  const [error, setError] = useState(null);
 
   const fetchHealth = useCallback(async () => {
     try {
       const res = await API.get('/api/v2/admin/gateway/health');
-      if (res?.data?.success) setData(res.data.data);
+      if (res?.data?.success) {
+        setData(res.data.data);
+        setError(null);
+      } else {
+        setError(res?.data?.message ?? '');
+      }
     } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
+      const status = err?.response?.status;
+      if (status === 403 || status === 401) {
+        setForbidden(true);
+        setError(null);
+      } else {
+        setError(err?.response?.data?.message ?? '');
+      }
     } finally {
       setLoading(false);
     }
@@ -67,11 +87,20 @@ const V2AdminGateway = () => {
     fetchHealth();
   }, [fetchHealth]);
 
+  // Polling stops in the error state as well as the forbidden one: five
+  // seconds of retries against a dead endpoint adds load and hides the
+  // failure behind a flicker. The retry button below is the way back.
   useEffect(() => {
-    if (!live || forbidden) return undefined;
+    if (!live || forbidden || error !== null) return undefined;
     const id = setInterval(fetchHealth, POLL_MS);
     return () => clearInterval(id);
-  }, [live, forbidden, fetchHealth]);
+  }, [live, forbidden, error, fetchHealth]);
+
+  const retry = useCallback(() => {
+    setError(null);
+    setLoading(true);
+    fetchHealth();
+  }, [fetchHealth]);
 
   const routes = data?.routes ?? [];
   const openCount = data?.open ?? 0;
@@ -84,7 +113,8 @@ const V2AdminGateway = () => {
         tr('console.admin.gateway.crumb', 'gateway'),
       ]}
       actions={
-        !forbidden && (
+        !forbidden &&
+        error === null && (
           <button
             type='button'
             className='btn ghost'
@@ -111,13 +141,21 @@ const V2AdminGateway = () => {
                     'console.admin.gateway.forbidden_title',
                     'Admin access required',
                   )
-                : openCount > 0
+                : error !== null
                   ? tr(
-                      'console.admin.gateway.open_count',
-                      '{{count}} breakers open',
-                      { count: openCount },
+                      'console.admin.gateway.error_title',
+                      'Breaker state unknown',
                     )
-                  : tr('console.admin.gateway.all_closed', 'no open breakers')}
+                  : openCount > 0
+                    ? tr(
+                        'console.admin.gateway.open_count',
+                        '{{count}} breakers open',
+                        { count: openCount },
+                      )
+                    : tr(
+                        'console.admin.gateway.all_closed',
+                        'no open breakers',
+                      )}
           </h1>
           <div className='sub'>
             {tr(
@@ -143,6 +181,40 @@ const V2AdminGateway = () => {
                 'You do not have permission to read gateway health. Contact a platform administrator.',
               )}
             </div>
+          </div>
+        </div>
+      ) : error !== null ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='gateway-error'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr('console.admin.gateway.error_title', 'Breaker state unknown')}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.gateway.error_body',
+                'The gateway health endpoint did not answer. This is not a report that every channel is healthy — breaker state is simply unknown until the call succeeds.',
+              )}
+            </div>
+            {error ? (
+              <div
+                className='mono muted'
+                style={{ fontSize: 11, marginBottom: 12 }}
+              >
+                {error}
+              </div>
+            ) : null}
+            <button
+              type='button'
+              className='btn sm'
+              data-testid='gateway-retry'
+              onClick={retry}
+            >
+              {tr('console.admin.gateway.retry', 'retry')}
+            </button>
           </div>
         </div>
       ) : (

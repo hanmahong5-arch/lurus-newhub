@@ -149,7 +149,10 @@ vi.mock('@douyinfe/semi-ui', () => {
     );
   };
   Form.Section = ({ children }) => React.createElement('div', null, children);
-  Form.Input = ({
+  // Capitalised local bindings, assigned onto Form below: an arrow
+  // assigned straight to `Form.Input` reads to the linter as a function
+  // named `Form.Input`, which may not call hooks.
+  const FormInput = ({
     field,
     value,
     onChange,
@@ -179,7 +182,7 @@ vi.mock('@douyinfe/semi-ui', () => {
       suffix,
     );
   };
-  Form.Checkbox = ({ field, children, onChange }) => {
+  const FormCheckbox = ({ field, children, onChange }) => {
     const ctx = React.useContext(FormCtx);
     const key = norm(field);
     return React.createElement(
@@ -197,7 +200,7 @@ vi.mock('@douyinfe/semi-ui', () => {
       children,
     );
   };
-  Form.Select = ({ field, optionList, placeholder }) => {
+  const FormSelect = ({ field, optionList, placeholder }) => {
     const ctx = React.useContext(FormCtx);
     const key = norm(field);
     return React.createElement(
@@ -217,6 +220,10 @@ vi.mock('@douyinfe/semi-ui', () => {
       ),
     );
   };
+
+  Form.Input = FormInput;
+  Form.Checkbox = FormCheckbox;
+  Form.Select = FormSelect;
 
   const Button = ({ children, onClick }) =>
     React.createElement('button', { type: 'button', onClick }, children);

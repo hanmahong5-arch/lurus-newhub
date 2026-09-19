@@ -149,4 +149,85 @@ describe('Cost Intelligence savings page', () => {
       );
     });
   });
+
+  /*
+   * Cycle 12 L3. The catch tested for 403 and nothing else, so a 502 or a
+   * dropped connection left `data` null and the page rendered NotAvailable
+   * with "savings endpoint returned no data" — which says the endpoint
+   * answered and had nothing to report. It did not answer. An operator
+   * reading that concludes there are no savings to be had, and stops looking.
+   */
+  it('shows an error state with a retry, not "returned no data", on a 502', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+
+    render(<HFCostIntelligence />);
+
+    await waitFor(() => screen.getByTestId('cost-error'));
+    expect(screen.queryByTestId('not-available')).toBeNull();
+    expect(screen.getByTestId('cost-retry')).toBeTruthy();
+  });
+
+  it('shows an error state when the call rejects with no response at all', async () => {
+    API.get.mockRejectedValue(new Error('Network Error'));
+
+    render(<HFCostIntelligence />);
+
+    await waitFor(() => screen.getByTestId('cost-error'));
+    expect(screen.queryByTestId('not-available')).toBeNull();
+  });
+
+  it('shows an error state on a 200 that carries success:false', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: 'savings job has not run yet' },
+    });
+
+    render(<HFCostIntelligence />);
+
+    await waitFor(() => screen.getByTestId('cost-error'));
+    expect(screen.getByTestId('cost-error').textContent).toContain(
+      'savings job has not run yet',
+    );
+  });
+
+  it('retry refetches and clears the error state', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+
+    render(<HFCostIntelligence />);
+    await waitFor(() => screen.getByTestId('cost-error'));
+
+    API.get.mockResolvedValue(payload());
+    fireEvent.click(screen.getByTestId('cost-retry'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('savings-headline').textContent).toBe('$5.00'),
+    );
+    expect(screen.queryByTestId('cost-error')).toBeNull();
+  });
+
+  it('treats 401 as the permission state, like 403', async () => {
+    API.get.mockRejectedValue({ response: { status: 401 } });
+
+    render(<HFCostIntelligence />);
+
+    await waitFor(() =>
+      screen.getByText(
+        /You do not have permission to view platform cost intelligence/,
+      ),
+    );
+    expect(screen.queryByTestId('cost-error')).toBeNull();
+  });
+
+  // The pre-existing "no data" path has to survive: a 200 with a null payload
+  // is a real answer and must keep reading as one.
+  it('keeps the no-data notice for a successful response with no payload', async () => {
+    API.get.mockResolvedValue({ data: { success: true, data: null } });
+
+    render(<HFCostIntelligence />);
+
+    await waitFor(() => screen.getByTestId('not-available'));
+    expect(screen.getByTestId('not-available').textContent).toContain(
+      'savings endpoint returned no data',
+    );
+    expect(screen.queryByTestId('cost-error')).toBeNull();
+  });
 });

@@ -51,7 +51,7 @@
     "build": "vite build",
     "lint": "prettier . --check",
     "lint:fix": "prettier . --write",
-    "eslint": "bunx eslint \"**/*.{js,jsx}\" --cache",
+    "eslint": "bunx eslint \"**/*.{js,jsx}\" --cache --max-warnings=97",
     "eslint:fix": "bunx eslint \"**/*.{js,jsx}\" --fix --cache",
     "preview": "vite preview",
     "test": "vitest run",

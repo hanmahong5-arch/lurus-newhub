@@ -1136,7 +1136,11 @@
           "f_email_domain_restriction": "Email domain restriction",
           "f_quota_new_user": "Quota for new user",
           "f_quota_inviter": "Quota for inviter",
-          "f_usd_exchange_rate": "USD exchange rate"
+          "f_usd_exchange_rate": "USD exchange rate",
+          "error_title": "Settings could not be read",
+          "error_body": "The options endpoint did not answer, so none of these switches can be shown. An empty page here would have drawn every feature as disabled, which is not what the server said.",
+          "retry": "retry",
+          "value_unknown": "not reported by the server"
         },
         "cost": {
           "crumb_admin": "operations & insights",
@@ -1164,7 +1168,10 @@
           "col_alternative": "→ alternative",
           "col_est_savings": "est. savings",
           "opportunities_empty": "no eligible savings opportunities in this window",
-          "excluded_lbl": "excluded from re-pricing (honest gaps)"
+          "excluded_lbl": "excluded from re-pricing (honest gaps)",
+          "error_title": "Savings figure unknown",
+          "error_body": "The savings endpoint did not answer. This is not a report that there is nothing to save — the analysis simply did not run.",
+          "retry": "retry"
         },
         "analytics": {
           "crumb_admin": "operations & insights",
@@ -1260,7 +1267,10 @@
           "state_closed": "closed",
           "state_open": "OPEN",
           "state_half_open": "half-open",
-          "probe_due": "due"
+          "probe_due": "due",
+          "error_title": "Breaker state unknown",
+          "error_body": "The gateway health endpoint did not answer. This is not a report that every channel is healthy — breaker state is simply unknown until the call succeeds.",
+          "retry": "retry"
         },
         "system_tasks": {
           "crumb_admin": "operations & insights",
@@ -3853,6 +3863,8 @@
     "撤销令牌 \"{{name}}\"?": "Revoke token \"{{name}}\"?",
     "旧密钥将立即失效": "The existing key will stop working immediately.",
     "轮换密钥 \"{{name}}\"?": "Rotate key for \"{{name}}\"?",
+    "删除 {{n}} 个令牌?": "Delete {{n}} tokens?",
+    "选中令牌的密钥将立即失效": "The keys of the selected tokens will stop working immediately.",
     "删除渠道 \"{{name}}\" ?": "Delete channel \"{{name}}\"?",
     "停止通过此渠道路由请求": "Requests will no longer route through this channel.",
     "对租户 \"{{name}}\" 执行 {{action}} 操作?": "Run {{action}} on tenant \"{{name}}\"?",

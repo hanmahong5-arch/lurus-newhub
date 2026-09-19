@@ -48,22 +48,23 @@ vi.mock('../../../components/hifi/HFShell', () => ({
 // Stub useFormDraft — use real implementation but provide storage mock via localStorage.
 vi.mock('../../../hooks/common/useFormDraft', () => {
   const { useState } = require('react');
-  return {
-    default: (_key, initialValue) => {
-      const [draft, setDraftState] = useState(initialValue);
-      const isDirty =
-        draft !== null &&
-        typeof draft === 'object' &&
-        Object.keys(draft).length > 0;
-      const setDraft = (updater) => {
-        setDraftState((prev) =>
-          typeof updater === 'function' ? updater(prev) : updater,
-        );
-      };
-      const clear = () => setDraftState(initialValue);
-      return [draft, setDraft, clear, isDirty, false];
-    },
+  // Named `use…` so the linter sees a hook, not an anonymous member called
+  // `default` — which may not call useState.
+  const useFormDraftStub = (_key, initialValue) => {
+    const [draft, setDraftState] = useState(initialValue);
+    const isDirty =
+      draft !== null &&
+      typeof draft === 'object' &&
+      Object.keys(draft).length > 0;
+    const setDraft = (updater) => {
+      setDraftState((prev) =>
+        typeof updater === 'function' ? updater(prev) : updater,
+      );
+    };
+    const clear = () => setDraftState(initialValue);
+    return [draft, setDraft, clear, isDirty, false];
   };
+  return { default: useFormDraftStub };
 });
 
 // Mirror i18next's en behaviour: return the English defaultValue (2nd arg)

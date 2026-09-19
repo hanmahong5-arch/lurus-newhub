@@ -201,4 +201,79 @@ describe('Admin Gateway health page', () => {
     );
     expect(screen.queryByTestId('gateway-live-toggle')).toBeNull();
   });
+
+  // Cycle 12 L3. The catch used to test for 403 and nothing else, and every
+  // other failure fell through to `data === null`, which renders openCount 0
+  // and routes [] — i.e. the headline "no open breakers" and an empty table.
+  // A gateway nobody can reach was displayed as a gateway with no problems,
+  // which is the single worst thing this page can say during an incident.
+  it('shows an error state, not "no open breakers", when the endpoint 502s', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+
+    render(<HFAdminGateway />);
+
+    await waitFor(() => screen.getByTestId('gateway-error'));
+    expect(screen.queryByText(/no open breakers/i)).toBeNull();
+    expect(screen.queryByTestId('gateway-empty')).toBeNull();
+    expect(screen.getByTestId('gateway-retry')).toBeTruthy();
+  });
+
+  it('shows an error state when the network call rejects with no response', async () => {
+    API.get.mockRejectedValue(new Error('Network Error'));
+
+    render(<HFAdminGateway />);
+
+    await waitFor(() => screen.getByTestId('gateway-error'));
+    expect(screen.queryByText(/no open breakers/i)).toBeNull();
+  });
+
+  it('shows an error state on a 200 that carries success:false', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: 'breaker registry unavailable' },
+    });
+
+    render(<HFAdminGateway />);
+
+    await waitFor(() => screen.getByTestId('gateway-error'));
+    expect(screen.getByTestId('gateway-error').textContent).toContain(
+      'breaker registry unavailable',
+    );
+    expect(screen.queryByText(/no open breakers/i)).toBeNull();
+  });
+
+  it('stops polling while in the error state and resumes on retry', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+    vi.useFakeTimers();
+
+    render(<HFAdminGateway />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30000);
+    });
+    const whileBroken = API.get.mock.calls.length;
+    expect(whileBroken).toBe(1);
+
+    API.get.mockResolvedValue(health([{ channel_id: 7, state: 'closed' }]));
+    fireEvent.click(screen.getByTestId('gateway-retry'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(API.get.mock.calls.length).toBe(whileBroken + 1);
+    expect(screen.queryByTestId('gateway-error')).toBeNull();
+    expect(screen.getByTestId('gateway-row-7')).toBeTruthy();
+  });
+
+  it('treats 401 like 403 rather than as a transport failure', async () => {
+    API.get.mockRejectedValue({ response: { status: 401 } });
+
+    render(<HFAdminGateway />);
+
+    await waitFor(() =>
+      screen.getByText(/You do not have permission to read gateway health/),
+    );
+    expect(screen.queryByTestId('gateway-error')).toBeNull();
+  });
 });

@@ -486,60 +486,64 @@ export default function UpstreamRatioSync(props) {
     </div>
   );
 
-  const renderDifferenceTable = () => {
-    const dataSource = useMemo(() => {
-      const tmp = [];
+  // These three derivations sit in the component body, not inside
+  // renderDifferenceTable below: a hook called from a plain helper is a
+  // rules-of-hooks violation, and it only happened to work because the
+  // helper is invoked unconditionally from the single return.
+  const dataSource = useMemo(() => {
+    const tmp = [];
 
-      Object.entries(differences).forEach(([model, ratioTypes]) => {
-        const hasPrice = 'model_price' in ratioTypes;
-        const hasOtherRatio = [
-          'model_ratio',
-          'completion_ratio',
-          'cache_ratio',
-        ].some((rt) => rt in ratioTypes);
-        const billingConflict = hasPrice && hasOtherRatio;
+    Object.entries(differences).forEach(([model, ratioTypes]) => {
+      const hasPrice = 'model_price' in ratioTypes;
+      const hasOtherRatio = [
+        'model_ratio',
+        'completion_ratio',
+        'cache_ratio',
+      ].some((rt) => rt in ratioTypes);
+      const billingConflict = hasPrice && hasOtherRatio;
 
-        Object.entries(ratioTypes).forEach(([ratioType, diff]) => {
-          tmp.push({
-            key: `${model}_${ratioType}`,
-            model,
-            ratioType,
-            current: diff.current,
-            upstreams: diff.upstreams,
-            confidence: diff.confidence || {},
-            billingConflict,
-          });
+      Object.entries(ratioTypes).forEach(([ratioType, diff]) => {
+        tmp.push({
+          key: `${model}_${ratioType}`,
+          model,
+          ratioType,
+          current: diff.current,
+          upstreams: diff.upstreams,
+          confidence: diff.confidence || {},
+          billingConflict,
         });
       });
+    });
 
-      return tmp;
-    }, [differences]);
+    return tmp;
+  }, [differences]);
 
-    const filteredDataSource = useMemo(() => {
-      if (!searchKeyword.trim() && !ratioTypeFilter) {
-        return dataSource;
-      }
+  const filteredDataSource = useMemo(() => {
+    if (!searchKeyword.trim() && !ratioTypeFilter) {
+      return dataSource;
+    }
 
-      return dataSource.filter((item) => {
-        const matchesKeyword =
-          !searchKeyword.trim() ||
-          item.model.toLowerCase().includes(searchKeyword.toLowerCase().trim());
+    return dataSource.filter((item) => {
+      const matchesKeyword =
+        !searchKeyword.trim() ||
+        item.model.toLowerCase().includes(searchKeyword.toLowerCase().trim());
 
-        const matchesRatioType =
-          !ratioTypeFilter || item.ratioType === ratioTypeFilter;
+      const matchesRatioType =
+        !ratioTypeFilter || item.ratioType === ratioTypeFilter;
 
-        return matchesKeyword && matchesRatioType;
-      });
-    }, [dataSource, searchKeyword, ratioTypeFilter]);
+      return matchesKeyword && matchesRatioType;
+    });
+  }, [dataSource, searchKeyword, ratioTypeFilter]);
 
-    const upstreamNames = useMemo(() => {
-      const set = new Set();
-      filteredDataSource.forEach((row) => {
-        Object.keys(row.upstreams || {}).forEach((name) => set.add(name));
-      });
-      return Array.from(set);
-    }, [filteredDataSource]);
+  const upstreamNames = useMemo(() => {
+    const set = new Set();
+    filteredDataSource.forEach((row) => {
+      Object.keys(row.upstreams || {}).forEach((name) => set.add(name));
+    });
+    return Array.from(set);
+  }, [filteredDataSource]);
 
+  const renderDifferenceTable = () => {
     if (filteredDataSource.length === 0) {
       return (
         <Empty

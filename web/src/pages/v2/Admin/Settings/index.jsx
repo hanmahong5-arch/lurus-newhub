@@ -28,6 +28,13 @@ import { API, showSuccess } from '../../../../helpers';
  * This is a curated, high-value SUBSET — NOT New-API's full 2000-key page. The
  * long tail (ratio JSON, advanced relay tuning) is honestly noted as managed in
  * v1 / advanced rather than half-surfaced here. Each write is one key per call.
+ *
+ * Cycle 12 L3: two ways this page used to state things it did not know.
+ *   - Any non-403 failure left `options` at {}, and an unchecked toggle reads
+ *     as "off" — a 502 drew password login, registration and every OAuth
+ *     provider as disabled. Those failures now render an error state.
+ *   - A key the response omits is unknown, not false; those toggles render
+ *     indeterminate and labelled instead of unchecked.
  */
 
 // Field types: text | textarea | number | toggle. Each panel curates a subset.
@@ -205,10 +212,14 @@ const HFAdminSettings = () => {
   const [errors, setErrors] = useState({}); // key → message
   const [stats, setStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  // null when the last GET succeeded; otherwise the backend message, or ''
+  // when there was none.
+  const [loadError, setLoadError] = useState(null);
 
   const fetchOptions = useCallback(async () => {
     setLoading(true);
     setForbidden(false);
+    setLoadError(null);
     try {
       const res = await API.get('/api/v2/admin/options', {
         skipErrorHandler: true,
@@ -220,9 +231,13 @@ const HFAdminSettings = () => {
         });
         setOptions(map);
         setDrafts(map);
+      } else {
+        setLoadError(res?.data?.message ?? '');
       }
     } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
+      const status = err?.response?.status;
+      if (status === 403 || status === 401) setForbidden(true);
+      else setLoadError(err?.response?.data?.message ?? '');
     } finally {
       setLoading(false);
     }
@@ -290,6 +305,10 @@ const HFAdminSettings = () => {
   );
 
   const isOn = (key) => options[key] === 'true';
+  // A key the GET did not return is UNKNOWN. `isOn` would report false for
+  // it, and an unchecked box reads as an operator decision to switch the
+  // feature off.
+  const isKnown = (key) => Object.prototype.hasOwnProperty.call(options, key);
   const dirty = (key) => (drafts[key] ?? '') !== (options[key] ?? '');
 
   const renderField = (f) => {
@@ -297,6 +316,7 @@ const HFAdminSettings = () => {
     const saving = savingKey === f.key;
 
     if (f.type === 'toggle') {
+      const known = isKnown(f.key);
       return (
         <div
           key={f.key}
@@ -314,6 +334,13 @@ const HFAdminSettings = () => {
             <input
               type='checkbox'
               data-testid={`toggle-${f.key}`}
+              // `indeterminate` is a DOM property, not an attribute, so React
+              // cannot set it from JSX — this ref is the only way to render
+              // the third state.
+              ref={(el) => {
+                if (el) el.indeterminate = !known;
+              }}
+              data-known={String(known)}
               checked={isOn(f.key)}
               disabled={saving}
               onChange={() => putOption(f.key, !isOn(f.key))}
@@ -321,6 +348,18 @@ const HFAdminSettings = () => {
             <span className='strong' style={{ fontSize: 13 }}>
               {tr(`console.admin.settings.${f.lk}`, f.lf)}
             </span>
+            {!known && (
+              <span
+                className='muted'
+                data-testid={`unknown-${f.key}`}
+                style={{ fontSize: 11 }}
+              >
+                {tr(
+                  'console.admin.settings.value_unknown',
+                  'not reported by the server',
+                )}
+              </span>
+            )}
           </label>
           {err && (
             <div
@@ -405,7 +444,12 @@ const HFAdminSettings = () => {
                   'console.admin.settings.forbidden_title',
                   'Admin access required',
                 )
-              : tr('console.admin.settings.title', 'System settings')}
+              : loadError !== null
+                ? tr(
+                    'console.admin.settings.error_title',
+                    'Settings could not be read',
+                  )
+                : tr('console.admin.settings.title', 'System settings')}
           </h1>
           <div className='sub'>
             {tr(
@@ -431,6 +475,43 @@ const HFAdminSettings = () => {
                 'You do not have permission to manage system settings. Contact a platform administrator.',
               )}
             </div>
+          </div>
+        </div>
+      ) : loadError !== null ? (
+        <div style={{ padding: 24 }}>
+          <div
+            className='panel'
+            style={{ padding: '20px 24px' }}
+            data-testid='settings-error'
+          >
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.settings.error_title',
+                'Settings could not be read',
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 12 }}>
+              {tr(
+                'console.admin.settings.error_body',
+                'The options endpoint did not answer, so none of these switches can be shown. An empty page here would have drawn every feature as disabled, which is not what the server said.',
+              )}
+            </div>
+            {loadError ? (
+              <div
+                className='mono muted'
+                style={{ fontSize: 11, marginBottom: 12 }}
+              >
+                {loadError}
+              </div>
+            ) : null}
+            <button
+              type='button'
+              className='btn sm'
+              data-testid='settings-retry'
+              onClick={fetchOptions}
+            >
+              {tr('console.admin.settings.retry', 'retry')}
+            </button>
           </div>
         </div>
       ) : (

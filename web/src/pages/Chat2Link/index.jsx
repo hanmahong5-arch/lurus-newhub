@@ -21,7 +21,9 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTokenKeys } from '../../hooks/chat/useTokenKeys';
 
-const chat2page = () => {
+// Capitalised: it calls useTranslation and useTokenKeys, which only a
+// component (or another hook) may do.
+const Chat2Page = () => {
   const { t } = useTranslation();
   const { keys, chatLink, serverAddress, isLoading } = useTokenKeys();
 
@@ -44,4 +46,4 @@ const chat2page = () => {
   );
 };
 
-export default chat2page;
+export default Chat2Page;

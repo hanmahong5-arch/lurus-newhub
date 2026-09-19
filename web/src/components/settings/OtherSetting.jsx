@@ -29,6 +29,7 @@ import {
   Card,
 } from '@douyinfe/semi-ui';
 import { API, showError, showSuccess, timestamp2string } from '../../helpers';
+import { sanitizeHtml } from '../../helpers/sanitize';
 import { marked } from 'marked';
 import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
@@ -511,7 +512,9 @@ const OtherSetting = () => {
           </Button>,
         ]}
       >
-        <div dangerouslySetInnerHTML={{ __html: updateData.content }}></div>
+        <div
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(updateData.content) }}
+        ></div>
       </Modal>
     </Row>
   );

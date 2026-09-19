@@ -112,4 +112,105 @@ describe('Admin Settings page', () => {
       ).toBeGreaterThan(0);
     });
   });
+
+  it('treats 401 like 403 rather than as a transport failure', async () => {
+    API.get.mockRejectedValue({ response: { status: 401 } });
+
+    render(<HFAdminSettings />);
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText('Admin access required').length,
+      ).toBeGreaterThan(0);
+    });
+    expect(screen.queryByTestId('settings-error')).toBeNull();
+  });
+
+  /*
+   * Cycle 12 L3. setOptions ran only on success, so any non-403 failure left
+   * `options` as the initial {} — and isOn() reads `options[key] === 'true'`,
+   * which renders every toggle UNCHECKED. A 502 therefore drew a page saying
+   * password login, registration, GitHub OAuth, Telegram, WeChat and
+   * Turnstile were all switched off. That is not a degraded view of the
+   * settings; it is the opposite of several of them.
+   */
+  it('shows an error state with a retry, and no toggles at all, on a 502', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+
+    render(<HFAdminSettings />);
+
+    await waitFor(() => screen.getByTestId('settings-error'));
+    expect(screen.getByTestId('settings-retry')).toBeTruthy();
+    expect(screen.queryByTestId('toggle-PasswordLoginEnabled')).toBeNull();
+    expect(screen.queryByTestId('toggle-GitHubOAuthEnabled')).toBeNull();
+  });
+
+  it('shows an error state on a 200 that carries success:false', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: 'option store unreachable' },
+    });
+
+    render(<HFAdminSettings />);
+
+    await waitFor(() => screen.getByTestId('settings-error'));
+    expect(screen.getByTestId('settings-error').textContent).toContain(
+      'option store unreachable',
+    );
+  });
+
+  it('retry refetches and renders the options once the call succeeds', async () => {
+    API.get.mockRejectedValue({ response: { status: 502 } });
+
+    render(<HFAdminSettings />);
+    await waitFor(() => screen.getByTestId('settings-error'));
+
+    API.get.mockResolvedValue(optionsResponse({ SystemName: 'Recovered' }));
+    fireEvent.click(screen.getByTestId('settings-retry'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('field-SystemName').value).toBe('Recovered');
+    });
+    expect(screen.queryByTestId('settings-error')).toBeNull();
+  });
+
+  /*
+   * The second half of the same lie: a key the backend did not return is not
+   * a key that is switched off. Those toggles render indeterminate and say
+   * so, instead of drawing an unchecked box that reads as a decision.
+   */
+  it('marks a toggle whose key the response omitted as unknown, not off', async () => {
+    API.get.mockResolvedValue(
+      optionsResponse({ PasswordLoginEnabled: 'true' }),
+    );
+
+    render(<HFAdminSettings />);
+    await waitFor(() => screen.getByTestId('panel-general'));
+    fireEvent.click(screen.getByTestId('panel-auth'));
+
+    const known = screen.getByTestId('toggle-PasswordLoginEnabled');
+    expect(known.getAttribute('data-known')).toBe('true');
+    expect(known.checked).toBe(true);
+    expect(known.indeterminate).toBe(false);
+
+    const unknown = screen.getByTestId('toggle-GitHubOAuthEnabled');
+    expect(unknown.getAttribute('data-known')).toBe('false');
+    expect(unknown.indeterminate).toBe(true);
+    expect(
+      screen.getByTestId('unknown-GitHubOAuthEnabled').textContent,
+    ).toMatch(/not reported/i);
+  });
+
+  it('a key the response returned as false is off, not unknown', async () => {
+    API.get.mockResolvedValue(optionsResponse({ GitHubOAuthEnabled: 'false' }));
+
+    render(<HFAdminSettings />);
+    await waitFor(() => screen.getByTestId('panel-auth'));
+    fireEvent.click(screen.getByTestId('panel-auth'));
+
+    const off = screen.getByTestId('toggle-GitHubOAuthEnabled');
+    expect(off.getAttribute('data-known')).toBe('true');
+    expect(off.checked).toBe(false);
+    expect(off.indeterminate).toBe(false);
+    expect(screen.queryByTestId('unknown-GitHubOAuthEnabled')).toBeNull();
+  });
 });
