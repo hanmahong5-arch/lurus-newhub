@@ -42,7 +42,29 @@ type testResult struct {
 	newAPIError *types.NewAPIError
 }
 
+// channelProbeOptions controls the side effects that differ between
+// probeChannel's two callers. RecordConsumeLog is the only one today: the
+// manual GET /api/channel/test/:id path (testChannel below, kept as a
+// 3-arg wrapper so TestChannel and context_tier_channel_test_test.go's
+// direct calls need no change) still writes a real consume-log row; the
+// automatic pass (autoProbeChannel, channel_probe_policy.go) does not —
+// every automatic probe used to write one as user 1, polluting the
+// leaderboard and quota_data (cycle-11 plan §L3). Both paths go through
+// metrics.RecordChannelProbe regardless of this flag.
+type channelProbeOptions struct {
+	RecordConsumeLog bool
+}
+
+// testChannel is the manual v1 path's entry point: GET
+// /api/channel/test/:id (TestChannel below) and
+// context_tier_channel_test_test.go both call it directly. It is
+// probeChannel with RecordConsumeLog always on — the one probe path this
+// cycle's plan explicitly keeps writing a consume-log row.
 func testChannel(channel *repo.Channel, testModel string, endpointType string) testResult {
+	return probeChannel(channel, testModel, endpointType, channelProbeOptions{RecordConsumeLog: true})
+}
+
+func probeChannel(channel *repo.Channel, testModel string, endpointType string, opts channelProbeOptions) testResult {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -112,6 +134,22 @@ func testChannel(channel *repo.Channel, testModel string, endpointType string) t
 		Body:   nil,
 		Header: make(http.Header),
 	}
+
+	// Deadline (cycle-11 plan §L3): the raw *http.Request built above has no
+	// context, so every c.Request.Context() call downstream (relay's
+	// provider.DoApiRequest) resolved to context.Background() — no deadline
+	// of its own. The shared relay transport already bounds two narrower
+	// cases (RelayResponseHeaderTimeout, 90s to the first response header,
+	// internal/pkg/common/init.go; and a 300s trickling-body read timeout,
+	// internal/app/http_client.go), but nothing bounded the combination
+	// end-to-end (the 2026-09-17 audit's field note records one probe
+	// against a hung upstream running about 900s).
+	// channelProbeTimeout() adds a single budget for the whole probe,
+	// including the body read, and is re-read on every call so an
+	// operator's env change takes effect without a restart.
+	probeCtx, cancelProbe := context.WithTimeout(context.Background(), channelProbeTimeout())
+	defer cancelProbe()
+	c.Request = c.Request.WithContext(probeCtx)
 
 	cache, err := repo.GetUserCache(1)
 	if err != nil {
@@ -368,45 +406,57 @@ func testChannel(channel *repo.Channel, testModel string, endpointType string) t
 			newAPIError: types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
 		}
 	}
-	info.SetEstimatePromptTokens(usage.PromptTokens)
+	// RecordConsumeLog gate (cycle-11 plan §L3): every automatic probe used
+	// to reach repo.RecordConsumeLog below unconditionally, writing a real
+	// consume-log row as user 1 on every tick — polluting the leaderboard
+	// and quota_data with entries that were never a real customer request.
+	// The manual GET /api/channel/test/:id path (opts.RecordConsumeLog=true
+	// via the testChannel wrapper) is the only caller that still wants
+	// this: an operator who clicked "test" wants to see the row. Skipping
+	// the whole block for the automatic pass also skips the pricing-tier
+	// resettlement and quota math below, none of which anything after this
+	// block reads.
+	if opts.RecordConsumeLog {
+		info.SetEstimatePromptTokens(usage.PromptTokens)
 
-	// Declarative context-length pricing tier (billing-pricing-14): priceData
-	// was built above (helper.ModelPriceHelper, promptTokens=0 estimate)
-	// before this channel-test call had an actual response; re-evaluate
-	// against the real usage before billing and writing the consume-log row
-	// below, matching every other settlement site (cycle-8 plan §8 L5
-	// A-F4/A-F5) — otherwise this writes a real log row from a stale tier.
-	// No-op for UsePrice models and for any model with no tiers configured.
-	helper.ResettleContextTier(&priceData, info.OriginModelName, usage.AsOpenAIWire().PromptTokens)
+		// Declarative context-length pricing tier (billing-pricing-14): priceData
+		// was built above (helper.ModelPriceHelper, promptTokens=0 estimate)
+		// before this channel-test call had an actual response; re-evaluate
+		// against the real usage before billing and writing the consume-log row
+		// below, matching every other settlement site (cycle-8 plan §8 L5
+		// A-F4/A-F5) — otherwise this writes a real log row from a stale tier.
+		// No-op for UsePrice models and for any model with no tiers configured.
+		helper.ResettleContextTier(&priceData, info.OriginModelName, usage.AsOpenAIWire().PromptTokens)
 
-	quota := 0
-	if !priceData.UsePrice {
-		quota = usage.PromptTokens + int(math.Round(float64(usage.CompletionTokens)*priceData.CompletionRatio))
-		quota = int(math.Round(float64(quota) * priceData.ModelRatio))
-		if priceData.ModelRatio != 0 && quota <= 0 {
-			quota = 1
+		quota := 0
+		if !priceData.UsePrice {
+			quota = usage.PromptTokens + int(math.Round(float64(usage.CompletionTokens)*priceData.CompletionRatio))
+			quota = int(math.Round(float64(quota) * priceData.ModelRatio))
+			if priceData.ModelRatio != 0 && quota <= 0 {
+				quota = 1
+			}
+		} else {
+			quota = int(priceData.ModelPrice * common.QuotaPerUnit)
 		}
-	} else {
-		quota = int(priceData.ModelPrice * common.QuotaPerUnit)
+		tok := time.Now()
+		milliseconds := tok.Sub(tik).Milliseconds()
+		consumedTime := float64(milliseconds) / 1000.0
+		other := app.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatioInfo.GroupRatio, priceData.CompletionRatio,
+			usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice, priceData.GroupRatioInfo.GroupSpecialRatio)
+		repo.RecordConsumeLog(c, 1, repo.RecordConsumeLogParams{
+			ChannelId:        channel.Id,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			ModelName:        info.OriginModelName,
+			TokenName:        "模型测试",
+			Quota:            quota,
+			Content:          "模型测试",
+			UseTimeSeconds:   int(consumedTime),
+			IsStream:         info.IsStream,
+			Group:            info.UsingGroup,
+			Other:            other,
+		})
 	}
-	tok := time.Now()
-	milliseconds := tok.Sub(tik).Milliseconds()
-	consumedTime := float64(milliseconds) / 1000.0
-	other := app.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatioInfo.GroupRatio, priceData.CompletionRatio,
-		usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice, priceData.GroupRatioInfo.GroupSpecialRatio)
-	repo.RecordConsumeLog(c, 1, repo.RecordConsumeLogParams{
-		ChannelId:        channel.Id,
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		ModelName:        info.OriginModelName,
-		TokenName:        "模型测试",
-		Quota:            quota,
-		Content:          "模型测试",
-		UseTimeSeconds:   int(consumedTime),
-		IsStream:         info.IsStream,
-		Group:            info.UsingGroup,
-		Other:            other,
-	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return testResult{
 		context:     c,
@@ -540,6 +590,8 @@ func TestChannel(c *gin.Context) {
 	endpointType := c.Query("endpoint_type")
 	tik := time.Now()
 	result := testChannel(channel, testModel, endpointType)
+	elapsed := time.Since(tik)
+	metrics.RecordChannelProbe(string(classifyProbeResult(result)), elapsed)
 	if result.localErr != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -548,9 +600,11 @@ func TestChannel(c *gin.Context) {
 		})
 		return
 	}
-	tok := time.Now()
-	milliseconds := tok.Sub(tik).Milliseconds()
-	go channel.UpdateResponseTime(milliseconds)
+	milliseconds := elapsed.Milliseconds()
+	// Through the package's AsyncGo seam (gopool.Go in production, synchronous
+	// under the test TestMain) so a test that drives this handler does not
+	// leave a goroutine reading repo.DB after its cleanup swapped it.
+	AsyncGo(func() { channel.UpdateResponseTime(milliseconds) })
 	consumedTime := float64(milliseconds) / 1000.0
 	if result.newAPIError != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -583,9 +637,23 @@ func testAllChannels(notify bool) error {
 	if getChannelErr != nil {
 		return getChannelErr
 	}
-	var disableThreshold = int64(common.ChannelDisableThreshold * 1000)
-	if disableThreshold == 0 {
-		disableThreshold = 10000000 // a impossible value
+	// L3 repair round (cycle-11 plan): threshold in time.Duration, not raw
+	// milliseconds — evaluateProbeOutcome (channel_probe_policy.go) takes a
+	// Duration so its tests can express thresholds like "1ms" directly. The
+	// "impossible value" sentinel — 10,000,000ms (~2.8h), a latency no real
+	// probe will ever exceed, so the elapsed>threshold branch never trips —
+	// is unchanged from before this refactor for the operator setting the
+	// threshold to exactly 0. The guard below reads `<= 0`, not `== 0` as
+	// the pre-cycle-11 code did: a negative ChannelDisableThreshold used to
+	// leave disableThreshold negative, and since every elapsed duration is
+	// >= 0 that banned every channel on its very first pass; `<= 0` routes a
+	// negative value to the same "never trips" sentinel a zero value gets,
+	// which is safer but is itself a behaviour change from before this
+	// cycle (undeclared in the original plan; see CONSUMER_VISIBLE_CHANGES
+	// in the L3 repair-round report).
+	disableThreshold := time.Duration(common.ChannelDisableThreshold * float64(time.Second))
+	if disableThreshold <= 0 {
+		disableThreshold = 10000000 * time.Millisecond
 	}
 	gopool.Go(func() {
 		// 使用 defer 确保无论如何都会重置运行状态，防止死锁
@@ -596,39 +664,7 @@ func testAllChannels(notify bool) error {
 		}()
 
 		for _, channel := range channels {
-			isChannelEnabled := channel.Status == common.ChannelStatusEnabled
-			tik := time.Now()
-			result := testChannel(channel, "", "")
-			tok := time.Now()
-			milliseconds := tok.Sub(tik).Milliseconds()
-
-			shouldBanChannel := false
-			newAPIError := result.newAPIError
-			// request error disables the channel
-			if newAPIError != nil {
-				shouldBanChannel = app.ShouldDisableChannel(channel.Type, result.newAPIError)
-			}
-
-			// 当错误检查通过，才检查响应时间
-			if common.AutomaticDisableChannelEnabled && !shouldBanChannel {
-				if milliseconds > disableThreshold {
-					err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0)
-					newAPIError = types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
-					shouldBanChannel = true
-				}
-			}
-
-			// disable channel
-			if isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-				processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
-			}
-
-			// enable channel
-			if !isChannelEnabled && app.ShouldEnableChannel(newAPIError, channel.Status) {
-				app.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
-			}
-
-			channel.UpdateResponseTime(milliseconds)
+			autoProbeChannel(channel, disableThreshold)
 			time.Sleep(common.RequestInterval)
 		}
 
@@ -651,39 +687,19 @@ func TestAllChannels(c *gin.Context) {
 	})
 }
 
-var autoTestChannelsOnce sync.Once
-
-func AutomaticallyTestChannels() {
-	// 只在Master节点定时测试渠道
-	if !common.IsMasterNode {
-		return
-	}
-	autoTestChannelsOnce.Do(func() {
-		for {
-			if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
-				time.Sleep(1 * time.Minute)
-				continue
-			}
-			for {
-				frequency := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
-				time.Sleep(time.Duration(int(math.Round(frequency))) * time.Minute)
-				common.SysLog(fmt.Sprintf("automatically test channels with interval %f minutes", frequency))
-				common.SysLog("automatically testing all channels")
-				_ = testAllChannels(false)
-				common.SysLog("automatically channel test finished")
-				if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
-					break
-				}
-			}
-		}
-	})
-}
-
 // channelHealthTestTaskName is the "task" label this job stamps on
-// metrics.LeaderTaskLastSuccess and registers under in taskreg. Unlike the
-// leader-gated L3 heartbeat jobs this one is NOT leader-gated — it runs on
-// every master-capable replica (common.IsMasterNode), so taskreg.Register's
-// leaderOnly argument below is false.
+// metrics.LeaderTaskLastSuccess and registers under in taskreg.
+//
+// Leader-only (L3 repair round, cycle-11 plan): before this fix every
+// master-capable replica ran its own full pass over every channel on every
+// tick (taskreg.Register's leaderOnly argument below was false) — three
+// replicas each independently latency-testing and ban/enable-deciding the
+// same channel. The tick loop below now checks common.IsLeader() before
+// doing any work, the same shape internal/lifecycle/audit_cleanup.go uses
+// for its own leader-gated ticker. This is NOT NewLeaderTask, deliberately:
+// that helper re-runs a full pass with ban authority on every lease
+// acquisition (three times per rolling deploy), which would multiply bans
+// rather than dedupe them.
 //
 // Stamp semantics (L3 repair round, B-F10): the heartbeat below fires when
 // testAllChannels returns nil — i.e. when the async pass over every channel
@@ -717,7 +733,7 @@ func AutomaticallyTestChannelsWithContext(ctx context.Context) {
 	taskreg.Register(channelHealthTestTaskName, func() time.Duration {
 		frequency := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
 		return time.Duration(int(math.Round(frequency))) * time.Minute
-	}, false, func() bool {
+	}, true, func() bool {
 		ms := operation_setting.GetMonitorSetting()
 		return ms.AutoTestChannelEnabled && ms.AutoTestChannelMinutes > 0
 	})
@@ -746,6 +762,13 @@ func AutomaticallyTestChannelsWithContext(ctx context.Context) {
 			common.SysLog("channel auto-test stopped")
 			return
 		case <-time.After(time.Duration(int(math.Round(frequency))) * time.Minute):
+			// HA: only the leader runs the probe pass; followers idle
+			// (audit_cleanup.go's ticker uses the same shape). Without this
+			// every master-capable replica probed every channel on every
+			// tick, each with its own ban/enable authority.
+			if !common.IsLeader() {
+				continue
+			}
 			common.SysLog(fmt.Sprintf("automatically test channels with interval %f minutes", frequency))
 			common.SysLog("automatically testing all channels")
 			// testAllChannels takes no context: it launches its own detached

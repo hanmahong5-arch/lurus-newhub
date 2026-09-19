@@ -783,7 +783,6 @@ describe('Settings page', () => {
       'Notifications',
       'Team & roles',
       'Integrations',
-      'Region & data',
       'Danger zone',
     ]) {
       // getAllByText, not getByText: once a nav item's own section is
@@ -838,19 +837,18 @@ describe('Settings page', () => {
     );
   });
 
-  // 10. Honesty: Region must not claim a fabricated "current" residency.
-  it('region section claims no current data-residency region', async () => {
+  // 10. Honesty: the Region / data-residency section was fabricated (three
+  // hardcoded "available" regions, no backend behind any of them) and cycle
+  // 11 deleted it outright — no flag, no "coming soon" placeholder standing
+  // in for it (that would just be the same fabrication, hidden).
+  it('region / data-residency section is gone', () => {
     render(<HFSettings />);
 
-    screen.getByText('Region & data').click();
-
-    await waitFor(() => {
-      expect(screen.getByText('data residency')).toBeTruthy();
-    });
-
-    // No region labelled "current" — all are merely "available".
-    expect(screen.queryByText('current')).toBeNull();
-    expect(screen.getAllByText('available').length).toBe(3);
+    expect(screen.queryByText('Region & data')).toBeNull();
+    expect(screen.queryByText('data residency')).toBeNull();
+    expect(screen.queryByText('us-west')).toBeNull();
+    expect(screen.queryByText('eu-frankfurt')).toBeNull();
+    expect(screen.queryByText('ap-shanghai')).toBeNull();
   });
 });
 

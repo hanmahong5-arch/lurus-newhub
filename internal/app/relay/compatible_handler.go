@@ -8,15 +8,15 @@ import (
 	"strings"
 	"time"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app"
-	"github.com/LurusTech/lurus-hub/internal/app/governance"
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
@@ -472,10 +472,7 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	// models) — see the same note in app.PostClaudeConsumeQuota. Skipping the
 	// call on a zero delta also skipped the tenant-pool debit and the platform
 	// pre-auth settlement, letting the pre-auth TTL expire and release revenue.
-	err := app.PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
-	if err != nil {
-		logger.LogError(ctx, "error consuming token remain quota: "+err.Error())
-	}
+	settleErr := app.SettleConsume(ctx, relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, "text")
 
 	logModel := modelName
 	if strings.HasPrefix(logModel, "gpt-4-gizmo") {
@@ -488,6 +485,7 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	}
 	logContent := strings.Join(extraContent, ", ")
 	other := app.GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, cacheTokens, cacheRatio, modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	app.FlagSettlementOutcome(other, settleErr)
 	if imageTokens != 0 {
 		other["image"] = true
 		other["image_ratio"] = imageRatio

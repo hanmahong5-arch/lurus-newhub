@@ -12,7 +12,7 @@
 > across 3 replicas at `update_every = 10s` — a rate reading is a
 > per-replica sample, not a gateway-wide rate.
 > **Severity**: warning / critical (netdata `to: sysadmin`).
-> **Last review**: 2026-09-16.
+> **Last review**: 2026-09-19.
 
 ## Symptom
 
@@ -48,11 +48,51 @@ necessarily a fail-open admission.
 "every backend error fails OPEN" per its file header) degrade the same way
 for the same Redis outage, and `CostSpikeLimit`'s default observe-only mode
 does not stop spending either — so during that window, none of the
-**relay-path** rate/cost limiters are enforcing. This is distinct from the
-web/API-facing limiters (`internal/adapter/middleware/rate-limit.go`'s
-`redisRateLimiterKeyed`, lines 44-49): those **fail CLOSED** — a Redis error
-there returns HTTP 500 and aborts the request — so a Redis outage does not
-open those up at all.
+**relay-path** rate/cost limiters are enforcing.
+
+**Cycle-11 L2 update**: the web/API-facing limiters
+(`internal/adapter/middleware/rate-limit.go`'s `redisRateLimiterKeyed`) now
+fail OPEN too, under two new labels on the same counter. `redisRateLimiterKeyed`
+is reached by every `rateLimitFactory`/`keyedRateLimitFactory` caller in the
+package — grepped: `GlobalAPIRateLimit`, `GlobalWebRateLimit`,
+`InternalApiRateLimit`, `CriticalRateLimit` (channel-key reveal, TOTP
+enroll/confirm/disable), `TotpBackupCodesRateLimit`, `DownloadRateLimit`,
+`UploadRateLimit`, `RedemptionRateLimit`, `TopupRateLimit` (unmounted this
+cycle), `BootstrapRateLimit`, and `GlobalV2RateLimit`
+(`internal/adapter/middleware/rate-limit-v2.go`, `/api/v2` route group).
+**While Redis is unreachable, none of those buckets enforce** — concretely,
+redemption-code guessing (`RedemptionRateLimit`), bootstrap user creation
+(`BootstrapRateLimit`), TOTP backup-code regeneration
+(`TotpBackupCodesRateLimit`), and the shared channel-key-reveal/TOTP-disable
+bucket (`CriticalRateLimit`) all go unthrottled for the duration of the
+outage — same fail-open shape as the two probe routes below, just a wider
+set of endpoints than the readiness fix alone suggests.
+
+- `web_rate_limit_backend` — the LLen check on the bucket key errored
+  (backend unreachable). The request is admitted; no self-heal needed, the
+  next request retries the same call.
+- `web_rate_limit_corrupt` — the backend answered but the list's stored
+  timestamp doesn't parse. The request is admitted AND the key is deleted
+  (`rdb.Del`) so a fresh window starts on the next request for that ident,
+  instead of every future request failing the same parse forever.
+
+Before this change these two returned HTTP 500 and aborted the request —
+including the k8s probe routes (`/api/status`, `/api/health`) mounted behind
+`GlobalAPIRateLimit`, so a Redis blip took every replica out of Service
+readiness at once, and liveness restarted them. That readiness/restart loop
+is what this change fixes. It does NOT change what happens if a pod is
+*booting* while Redis is unreachable: `internal/pkg/common/redis.go:62`
+still `FatalLog`s on a failed boot-time Redis ping, unchanged this cycle —
+a pod that starts up during a Redis outage still exits.
+
+Direct in-cluster requests to the two probe routes now also bypass the
+limiter entirely (`middleware.IsDirectInClusterRequest` — RemoteAddr
+loopback/private and none of X-Forwarded-For/X-Real-IP/Forwarded present);
+in today's topology that condition is met by the kubelet, and also by
+anything else on the node/cluster network calling the pod with no
+forwarding header. A request relayed through the host nginx carries a
+forwarding header (`deploy/r6-host-nginx/*.conf:37-38,42-43`) and stays
+rate limited exactly as before.
 
 ## Detect
 
@@ -61,9 +101,10 @@ curl -s http://localhost:19999/api/v1/alarms?all | grep -A5 newhub_rate_limit_de
 curl -s http://localhost:30850/metrics | grep 'lurus_gateway_rate_limit_degraded_total{'
 ```
 
-The `check` label tells you which of the three Redis calls is failing
-(`model_rate_limit_success`, `model_rate_limit_total`, `model_rate_limit_record`
-— see the doc comment on `RateLimitDegradedTotal` for what each means).
+The `check` label tells you which Redis call is failing
+(`model_rate_limit_success`, `model_rate_limit_total`, `model_rate_limit_record`,
+`web_rate_limit_backend`, `web_rate_limit_corrupt` — see the doc comment on
+`RateLimitDegradedTotal` for what each means).
 
 ## Reconcile
 

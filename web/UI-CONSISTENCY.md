@@ -47,7 +47,6 @@
 | --------------------------- | ------------------------ | :-----: | ---------------------------------- |
 | `/console/v2/design-system` | `DesignSystem/index.jsx` |   ❌    | 设计 token / 组件画廊预览          |
 | `/console/v2/states`        | `States/index.jsx`       |   ✅    | empty/loading/error/modal 状态演示 |
-| `/console/v2/variants`      | `Variants/index.jsx`     |   ✅    | 组件变体演示(`TweaksPanel`)        |
 
 ### legacy v1(本轮不迁 — 仍 Semi UI)
 

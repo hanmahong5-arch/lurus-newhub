@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,9 +22,27 @@ import (
 
 const maxLogCount = 1000000
 
+// defaultLogFileRetain is how many rotated oneapi-*.log files pruneLogFiles
+// keeps when LOG_FILE_RETAIN isn't set.
+const defaultLogFileRetain = 3
+
 var logCount atomic.Int64
 var setupLogLock sync.Mutex
 var setupLogWorking atomic.Bool
+
+// currentLogFd is the *os.File SetupLogger last swapped into
+// gin.DefaultWriter/DefaultErrorWriter. Tracked so the previous fd can be
+// closed instead of leaked on every rotation.
+var currentLogFd atomic.Pointer[os.File]
+
+// logFdCloseGrace is how long SetupLogger waits before closing the fd it
+// just replaced. A concurrent goroutine may have already read the old
+// gin.DefaultWriter/ErrorWriter value before this rotation's swap landed
+// (there is no lock around those package vars on the read side), so closing
+// immediately could turn an in-flight write into an error; a short grace
+// period lets any such write finish first. Var, not const, so tests can
+// shrink it instead of sleeping the production value.
+var logFdCloseGrace = 2 * time.Second
 
 // SetupLogger configures file-based logging with rotation
 func SetupLogger() {
@@ -51,6 +70,46 @@ func SetupLogger() {
 		// Update slog writers as well
 		common.SetSlogWriter(gin.DefaultWriter)
 		common.SetSlogErrWriter(gin.DefaultErrorWriter)
+
+		if prev := currentLogFd.Swap(fd); prev != nil {
+			// Read the grace period here, on the caller's goroutine, so the
+			// closer never touches the package variable (a test shrinks it
+			// between SetupLogger calls; reading it inside the goroutine
+			// raced with that write under -race).
+			grace := logFdCloseGrace
+			go func(f *os.File) {
+				time.Sleep(grace)
+				_ = f.Close()
+			}(prev)
+		}
+
+		pruneLogFiles(*common.LogDir, common.GetEnvOrDefault("LOG_FILE_RETAIN", defaultLogFileRetain))
+	}
+}
+
+// pruneLogFiles keeps only the newest keep rotated oneapi-*.log files in
+// dir, deleting the rest. Rotation (above) creates a new file every time
+// checkLogRotation trips; nothing removed the old ones, so a long-lived pod
+// (deploy/k8s: data is an emptyDir, no persistent disk, 30G root on R6) grew
+// one file per rotation forever. oneapi-<YYYYMMDDHHMMSS>.log's name is
+// itself lexicographically sortable by creation time, so a plain string
+// sort is enough — no need to stat mtimes.
+func pruneLogFiles(dir string, keep int) {
+	// keep<=0 (LOG_FILE_RETAIN unset to 0, or set to a negative value) falls
+	// back to defaultLogFileRetain rather than disabling pruning: a value of
+	// 0 has no "never prune, grow the emptyDir forever" meaning here.
+	if keep <= 0 {
+		keep = defaultLogFileRetain
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "oneapi-*.log"))
+	if err != nil || len(matches) <= keep {
+		return
+	}
+	sort.Strings(matches)
+	for _, old := range matches[:len(matches)-keep] {
+		if rmErr := os.Remove(old); rmErr != nil {
+			slog.Warn("failed to prune rotated log file", "file", old, "error", rmErr)
+		}
 	}
 }
 

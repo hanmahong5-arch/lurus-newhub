@@ -35,6 +35,7 @@ var chatSessionTestDBCounter atomic.Int64
 
 type chatSessionCtx struct {
 	router      *gin.Engine
+	db          *gorm.DB
 	tenantID    string
 	tenantSlug  string
 	userID      int
@@ -89,7 +90,7 @@ func setupChatSessionRouter(t *testing.T) *chatSessionCtx {
 		t.Fatalf("seed other user: %v", err)
 	}
 
-	ctx := &chatSessionCtx{tenantID: tenantID, tenantSlug: tenantSlug, userID: user.Id, otherUserID: other.Id}
+	ctx := &chatSessionCtx{db: db, tenantID: tenantID, tenantSlug: tenantSlug, userID: user.Id, otherUserID: other.Id}
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -479,5 +480,251 @@ func TestV2ChatSession_Update_ResponseReflectsFreshUpdatedAt(t *testing.T) {
 	if patch2Resp.Data.UpdatedAt.Equal(patch1Resp.Data.UpdatedAt) {
 		t.Fatalf("second PATCH response updated_at (%v) equals the FIRST patch's (%v) — stale pre-update struct was echoed back",
 			patch2Resp.Data.UpdatedAt, patch1Resp.Data.UpdatedAt)
+	}
+}
+
+func chatSessionErrorCode(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var resp struct {
+		ErrorCode string `json:"error_code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal error response: %v; body=%s", err, w.Body.String())
+	}
+	return resp.ErrorCode
+}
+
+func chatSessionMessagesOfLen(n int) []map[string]string {
+	out := make([]map[string]string, n)
+	for i := range out {
+		out[i] = map[string]string{"role": "user", "content": "turn"}
+	}
+	return out
+}
+
+// 8. maxChatSessionsPerUser is enforced on create: the 201st session for one
+// user 400s with CHAT_SESSION_LIMIT_REACHED, while a DIFFERENT user in the
+// same tenant is unaffected (the cap is per-user, not per-tenant).
+func TestV2ChatSession_Create_RejectsWhenSessionCapReached(t *testing.T) {
+	ctx := setupChatSessionRouter(t)
+
+	rows := make([]entity.ChatSession, repo.MaxChatSessionsPerUser)
+	for i := range rows {
+		rows[i] = entity.ChatSession{TenantId: ctx.tenantID, UserId: ctx.userID, Title: fmt.Sprintf("seed-%d", i), Model: "rt-alpha"}
+	}
+	if err := ctx.db.Create(&rows).Error; err != nil {
+		t.Fatalf("seed %d sessions: %v", repo.MaxChatSessionsPerUser, err)
+	}
+
+	w := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "one too many", "model": "rt-alpha", "messages": []map[string]string{},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("201st create for the capped user: status = %d, want 400, body=%s", w.Code, w.Body.String())
+	}
+	if code := chatSessionErrorCode(t, w); code != "CHAT_SESSION_LIMIT_REACHED" {
+		t.Fatalf("201st create error_code = %q, want CHAT_SESSION_LIMIT_REACHED", code)
+	}
+
+	wOther := ctx.do(http.MethodPost, "", ctx.otherUserID, map[string]any{
+		"title": "a different user's first session", "model": "rt-alpha", "messages": []map[string]string{},
+	})
+	if wOther.Code != http.StatusOK {
+		t.Fatalf("create for a different user in the same tenant: status = %d, want 200, body=%s", wOther.Code, wOther.Body.String())
+	}
+}
+
+// 9. maxChatSessionMessages is enforced on create: 501 turns 400s, exactly
+// 500 succeeds (boundary is >, not >=).
+func TestV2ChatSession_Create_RejectsOversizedMessageList(t *testing.T) {
+	ctx := setupChatSessionRouter(t)
+
+	wOver := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "too many turns", "model": "rt-alpha", "messages": chatSessionMessagesOfLen(501),
+	})
+	if wOver.Code != http.StatusBadRequest {
+		t.Fatalf("501-message create: status = %d, want 400, body=%s", wOver.Code, wOver.Body.String())
+	}
+	if code := chatSessionErrorCode(t, wOver); code != "INVALID_REQUEST" {
+		t.Fatalf("501-message create error_code = %q, want INVALID_REQUEST", code)
+	}
+
+	wAtLimit := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "at the limit", "model": "rt-alpha", "messages": chatSessionMessagesOfLen(500),
+	})
+	if wAtLimit.Code != http.StatusOK {
+		t.Fatalf("500-message create: status = %d, want 200, body=%s", wAtLimit.Code, wAtLimit.Body.String())
+	}
+}
+
+// 10. The same maxChatSessionMessages ceiling applies to PATCH (both routes
+// share parseChatSessionMessages), and a REJECTED patch must leave the
+// stored session's messages untouched.
+func TestV2ChatSession_Update_RejectsOversizedMessageList(t *testing.T) {
+	ctx := setupChatSessionRouter(t)
+
+	wCreate := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "starter", "model": "rt-alpha",
+		"messages": []map[string]string{{"role": "user", "content": "one"}},
+	})
+	var createResp struct {
+		Data struct {
+			Id int `json:"id"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wCreate.Body.Bytes(), &createResp)
+	id := createResp.Data.Id
+
+	wOver := ctx.do(http.MethodPatch, "/"+strconv.Itoa(id), ctx.userID, map[string]any{
+		"messages": chatSessionMessagesOfLen(501),
+	})
+	if wOver.Code != http.StatusBadRequest {
+		t.Fatalf("501-message patch: status = %d, want 400, body=%s", wOver.Code, wOver.Body.String())
+	}
+
+	wFetch := ctx.do(http.MethodGet, "/"+strconv.Itoa(id), ctx.userID, nil)
+	var fetchResp struct {
+		Data struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wFetch.Body.Bytes(), &fetchResp)
+	if len(fetchResp.Data.Messages) != 1 || fetchResp.Data.Messages[0].Content != "one" {
+		t.Fatalf("messages after rejected patch = %+v, want unchanged [one]", fetchResp.Data.Messages)
+	}
+
+	wAtLimit := ctx.do(http.MethodPatch, "/"+strconv.Itoa(id), ctx.userID, map[string]any{
+		"messages": chatSessionMessagesOfLen(500),
+	})
+	if wAtLimit.Code != http.StatusOK {
+		t.Fatalf("500-message patch: status = %d, want 200, body=%s", wAtLimit.Code, wAtLimit.Body.String())
+	}
+}
+
+// 11. PATCH persists a new model — pins updateChatSessionRequest.Model and
+// the repo write, not just the wire shape.
+func TestV2ChatSession_Update_PersistsModel(t *testing.T) {
+	ctx := setupChatSessionRouter(t)
+
+	wCreate := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "model swap", "model": "rt-alpha", "messages": []map[string]string{},
+	})
+	var createResp struct {
+		Data struct {
+			Id    int    `json:"id"`
+			Model string `json:"model"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wCreate.Body.Bytes(), &createResp)
+	if createResp.Data.Model != "rt-alpha" {
+		t.Fatalf("create model = %q, want rt-alpha", createResp.Data.Model)
+	}
+	id := createResp.Data.Id
+
+	wPatch := ctx.do(http.MethodPatch, "/"+strconv.Itoa(id), ctx.userID, map[string]any{"model": "rt-beta"})
+	if wPatch.Code != http.StatusOK {
+		t.Fatalf("patch model status = %d, want 200, body=%s", wPatch.Code, wPatch.Body.String())
+	}
+	var patchResp struct {
+		Data struct {
+			Model string `json:"model"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wPatch.Body.Bytes(), &patchResp); err != nil {
+		t.Fatalf("unmarshal patch: %v", err)
+	}
+	if patchResp.Data.Model != "rt-beta" {
+		t.Fatalf("patch response model = %q, want rt-beta", patchResp.Data.Model)
+	}
+
+	wFetch := ctx.do(http.MethodGet, "/"+strconv.Itoa(id), ctx.userID, nil)
+	var fetchResp struct {
+		Data struct {
+			Model string `json:"model"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wFetch.Body.Bytes(), &fetchResp)
+	if fetchResp.Data.Model != "rt-beta" {
+		t.Fatalf("fetch after patch model = %q, want rt-beta (persisted)", fetchResp.Data.Model)
+	}
+}
+
+// TestMaxChatSessionMessagesIsThe500TheCommentAdvertises pins the actual
+// enforced value the same way TestMaxChatSessionsPerUserIsThe200... pins
+// the session cap in the repo package: the 501/500 boundary tests below
+// only prove "the boundary sits wherever the constant is", not that the
+// constant itself is 500.
+func TestMaxChatSessionMessagesIsThe500TheCommentAdvertises(t *testing.T) {
+	if maxChatSessionMessages != 500 {
+		t.Fatalf("maxChatSessionMessages = %d, want 500", maxChatSessionMessages)
+	}
+}
+
+// 12. validateChatSessionModel rejects an over-length model on CREATE, not
+// just on PATCH (cycle-11 repair round: this branch previously existed only
+// on the PATCH path — a >128-char model on POST hit the varchar(128) column
+// directly and surfaced as a 500 CHAT_SESSION_CREATE_FAILED instead of a
+// 400). A model exactly at the 128-rune limit must still succeed (boundary
+// is >, not >=).
+func TestV2ChatSession_Create_RejectsOversizedModel(t *testing.T) {
+	ctx := setupChatSessionRouter(t)
+
+	oversized := strings.Repeat("m", maxChatSessionModelRunes+1)
+	w := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "oversized model", "model": oversized, "messages": []map[string]string{},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("oversized model create status = %d, want 400, body=%s", w.Code, w.Body.String())
+	}
+	if code := chatSessionErrorCode(t, w); code != "INVALID_REQUEST" {
+		t.Fatalf("oversized model create error_code = %q, want INVALID_REQUEST", code)
+	}
+
+	atLimit := strings.Repeat("n", maxChatSessionModelRunes)
+	wOK := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "at-limit model", "model": atLimit, "messages": []map[string]string{},
+	})
+	if wOK.Code != http.StatusOK {
+		t.Fatalf("at-limit model create status = %d, want 200, body=%s", wOK.Code, wOK.Body.String())
+	}
+}
+
+// 13. Same rejection on PATCH, and a rejected PATCH must leave the stored
+// model untouched (same "failed PATCH does not partially apply" contract
+// as the title and message-list tests above).
+func TestV2ChatSession_Update_RejectsOversizedModel(t *testing.T) {
+	ctx := setupChatSessionRouter(t)
+
+	wCreate := ctx.do(http.MethodPost, "", ctx.userID, map[string]any{
+		"title": "starter", "model": "rt-alpha", "messages": []map[string]string{},
+	})
+	var createResp struct {
+		Data struct {
+			Id int `json:"id"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wCreate.Body.Bytes(), &createResp)
+	id := createResp.Data.Id
+
+	oversized := strings.Repeat("p", maxChatSessionModelRunes+1)
+	wPatch := ctx.do(http.MethodPatch, "/"+strconv.Itoa(id), ctx.userID, map[string]any{"model": oversized})
+	if wPatch.Code != http.StatusBadRequest {
+		t.Fatalf("oversized model patch status = %d, want 400, body=%s", wPatch.Code, wPatch.Body.String())
+	}
+	if code := chatSessionErrorCode(t, wPatch); code != "INVALID_REQUEST" {
+		t.Fatalf("oversized model patch error_code = %q, want INVALID_REQUEST", code)
+	}
+
+	wFetch := ctx.do(http.MethodGet, "/"+strconv.Itoa(id), ctx.userID, nil)
+	var fetchResp struct {
+		Data struct {
+			Model string `json:"model"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wFetch.Body.Bytes(), &fetchResp)
+	if fetchResp.Data.Model != "rt-alpha" {
+		t.Fatalf("model after rejected patch = %q, want unchanged %q", fetchResp.Data.Model, "rt-alpha")
 	}
 }

@@ -14,13 +14,15 @@ alert / signal comes from), **Triggered by** (the literal condition),
 
 ### Repo-owned netdata alarms
 
-The 11 rows below all come from `deploy/r6-host-netdata/health.d/newhub.conf`.
+The 12 rows below all come from `deploy/r6-host-netdata/health.d/newhub.conf`.
 **Install state changes as the operator runs `scripts/install-netdata-alarms.sh`
 on R6; read the conf file's own "STATUS" header for the current dated state
 rather than trusting this table's prose, which cannot update itself.** As of
 2026-09-16: repo copy adopted from the host 2026-08-20, three new alarms
 merged 2026-09-16, re-installation of the merged file onto R6 is
-operator-run and PENDING. `internal/pkg/metrics/netdata_alarm_series_test.go`
+operator-run and PENDING. A 12th alarm (`newhub_settlement_failed`) was
+added 2026-09-19 (cycle-11 L7), in-repo only, same PENDING install state.
+`internal/pkg/metrics/netdata_alarm_series_test.go`
 proves every metric named below is a real, written series and that every row
 here is reachable from a `# runbook:` pointer in the conf file — it does not
 prove, and cannot prove from a repo checkout, that a given alarm's netdata
@@ -41,6 +43,7 @@ do).
 | [upstream-5xx-burst](upstream-5xx-burst.md) | netdata `newhub_upstream_5xx_burst` — `relay_errors_total{error_type="upstream_5xx"}` | warning / critical |
 | [rate-limit-degraded](rate-limit-degraded.md) | netdata `newhub_rate_limit_degraded` — `rate_limit_degraded_total` | warning / critical |
 | [failover-suppressed-surge](failover-suppressed-surge.md) | netdata `newhub_failover_suppressed_surge` — `relay_failover_suppressed_total` | warning / critical |
+| [settlement-failed](settlement-failed.md) | netdata `newhub_settlement_failed` — `lurus_billing_settlement_failed_total{path}` | warning |
 
 | [release-download-gate](release-download-gate.md) | `RELEASE_GATED_PRODUCTS` entitlement gate (mechanism shipped, default OFF) | activation |
 
@@ -56,6 +59,7 @@ do).
 | [pg-restore](pg-restore.md) | Restoring PostgreSQL from backup |
 | [incident-response](incident-response.md) | General incident response framework |
 | [oidc-enable-activation](oidc-enable-activation.md) | Turning `OIDC_ENABLED` on (Lutu search is dark without it) — blast radius across four auth paths, and the order that keeps `/api/v2/admin/**` reachable |
+| [channel-auto-ban](channel-auto-ban.md) | Investigating why a channel flipped status with no operator action, or tuning `ChannelDisableThreshold`/`AutoTestChannelEnabled` |
 
 ## When to add a runbook
 

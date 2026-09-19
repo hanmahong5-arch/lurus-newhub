@@ -98,7 +98,6 @@ vi.mock('./pages/v2/Settings', () => stub('v2-settings'));
 vi.mock('./pages/v2/Flows', () => stub('v2-flows'));
 vi.mock('./pages/v2/DesignSystem', () => stub('v2-design-system'));
 vi.mock('./pages/v2/States', () => stub('v2-states'));
-vi.mock('./pages/v2/Variants', () => stub('v2-variants'));
 vi.mock('./pages/v2/AccountDisabled', () => stub('v2-account-disabled'));
 vi.mock('./pages/v2/Admin/Users', () => stub('v2-admin-users'));
 vi.mock('./pages/v2/Admin/Audit', () => stub('v2-admin-audit'));
@@ -206,7 +205,6 @@ describe('App — route guards', () => {
       ['flows', 'v2-flows'],
       ['design-system', 'v2-design-system'],
       ['states', 'v2-states'],
-      ['variants', 'v2-variants'],
       ['admin/users', 'v2-admin-users'],
       ['admin/audit', 'v2-admin-audit'],
       ['admin/gateway', 'v2-admin-gateway'],
@@ -338,6 +336,10 @@ describe('App — public routes', () => {
     ['/definitely-not-a-route'],
     ['/console/v2/does-not-exist'],
     ['/console/legacy/log'],
+    // cycle-11 L4/W: /console/v2/variants was retired (App.jsx no longer
+    // imports or mounts pages/v2/Variants) — the route now falls through
+    // to NotFound like any other unmounted /console/v2/* path.
+    ['/console/v2/variants'],
   ])('%s falls through to NotFound', async (path) => {
     renderAt(path);
     expect(await screen.findByTestId('page-not-found')).toBeInTheDocument();

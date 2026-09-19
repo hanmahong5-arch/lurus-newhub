@@ -26,6 +26,27 @@ import (
 // (admin_permission_grant.go) and task_artifacts.go's loadOwnedTask.
 var ErrChatSessionNotFound = errors.New("chat session not found")
 
+// MaxChatSessionsPerUser is a soft product limit (cycle-11 L5), not a
+// storage or performance ceiling: 200 saved conversations is far more than
+// any one console user is expected to accumulate, and it exists so an
+// unbounded client bug (or a scripted loop hitting POST .../chat/sessions)
+// cannot grow one user's row count without limit. The COUNT and the INSERT
+// share one transaction, so a failed INSERT cannot leave a counted-but-
+// absent row — but a
+// plain transaction under PostgreSQL's default READ COMMITTED does NOT
+// serialize a COUNT-then-INSERT: two concurrent creates from the same user
+// that both observe count==199 can both proceed, admitting up to a small
+// handful of rows over the cap. That is acceptable for a soft product
+// limit and is not guarded by an advisory lock or a unique constraint.
+// Exported so both this package's own test and the handler package's test
+// (v2_chat_session_test.go) seed exactly this many rows, never a literal
+// that could silently drift from the enforced value.
+const MaxChatSessionsPerUser = 200
+
+// ErrChatSessionLimitReached is returned by CreateChatSession when the
+// caller already owns MaxChatSessionsPerUser sessions in this tenant.
+var ErrChatSessionLimitReached = errors.New("chat session limit reached")
+
 // ChatMessageInput is the turn shape a caller of Create/Update supplies —
 // deliberately narrower than entity.ChatMessage (no Id/SessionId/TenantId/
 // UserId/CreatedAt/Seq): filling those in is this file's job, not the
@@ -58,6 +79,15 @@ func CreateChatSession(tenantID string, userID int, title, model string, msgs []
 		Model:    model,
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&entity.ChatSession{}).
+			Where("tenant_id = ? AND user_id = ?", tenantID, userID).
+			Count(&count).Error; err != nil {
+			return fmt.Errorf("count chat sessions: %w", err)
+		}
+		if count >= MaxChatSessionsPerUser {
+			return ErrChatSessionLimitReached
+		}
 		if err := tx.Create(&session).Error; err != nil {
 			return fmt.Errorf("create chat session: %w", err)
 		}
@@ -148,13 +178,14 @@ func GetChatSessionOwned(tenantID string, userID, id int) (*entity.ChatSession, 
 }
 
 // UpdateChatSessionOwned applies a partial update to a session the caller
-// owns: title (when non-nil) and/or a full REPLACEMENT of its messages
-// (when msgs is non-nil — an empty, non-nil slice clears history, mirroring
-// the front-end PATCHing the complete client-side array it already holds,
-// not a diff). Both the title write and the delete-then-reinsert of
-// messages happen in one transaction, so a mid-write failure cannot leave
-// the session with half its former history and half its new history.
-func UpdateChatSessionOwned(tenantID string, userID, id int, title *string, msgs []ChatMessageInput) (*entity.ChatSession, error) {
+// owns: title (when non-nil), model (when non-nil) and/or a full
+// REPLACEMENT of its messages (when msgs is non-nil — an empty, non-nil
+// slice clears history, mirroring the front-end PATCHing the complete
+// client-side array it already holds, not a diff). The title write, the
+// model write and the delete-then-reinsert of messages happen in one
+// transaction, so a mid-write failure cannot leave the session with half
+// its former history and half its new history.
+func UpdateChatSessionOwned(tenantID string, userID, id int, title, model *string, msgs []ChatMessageInput) (*entity.ChatSession, error) {
 	if tenantID == "" || userID <= 0 || id <= 0 {
 		return nil, ErrChatSessionNotFound
 	}
@@ -188,7 +219,7 @@ func UpdateChatSessionOwned(tenantID string, userID, id int, title *string, msgs
 				}
 			}
 		}
-		if title == nil && msgs == nil {
+		if title == nil && model == nil && msgs == nil {
 			// Nothing to change — do not touch UpdatedAt for a no-op call.
 			return nil
 		}
@@ -196,6 +227,10 @@ func UpdateChatSessionOwned(tenantID string, userID, id int, title *string, msgs
 		if title != nil {
 			updates["title"] = *title
 			session.Title = *title
+		}
+		if model != nil {
+			updates["model"] = *model
+			session.Model = *model
 		}
 		if err := tx.Model(&entity.ChatSession{}).Where("id = ?", session.Id).Updates(updates).Error; err != nil {
 			return fmt.Errorf("update chat session: %w", err)

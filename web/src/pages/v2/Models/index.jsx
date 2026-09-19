@@ -463,6 +463,11 @@ const HFModels = () => {
                 )}
 
                 <div style={{ display: 'flex', gap: 6, marginTop: 14 }}>
+                  {/* Playground's readURLParams (L1, cycle-11) now reads
+                      ?prefill_model= and drops it into the compare draft if
+                      it's routable — before this lane the query param was
+                      appended but Playground never read it, so "try" landed
+                      on the page's default draft, not this model. */}
                   <button
                     type='button'
                     className='btn sm'

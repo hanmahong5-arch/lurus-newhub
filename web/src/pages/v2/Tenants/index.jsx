@@ -23,6 +23,7 @@ import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, showSuccess } from '../../../helpers';
 import CreditPoolDrawer from './CreditPoolDrawer';
+import InvitesDrawer from './InvitesDrawer';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
 
 /* HiFi 9 — Tenants admin. Wired to /api/v2/admin/tenants (2026-05-11). */
@@ -481,6 +482,7 @@ const HFTenants = () => {
   const [creating, setCreating] = useState(false);
   const [statsTarget, setStatsTarget] = useState(null); // tenant object for stats drawer
   const [poolTarget, setPoolTarget] = useState(null); // tenant object for credit-pool drawer
+  const [invitesTarget, setInvitesTarget] = useState(null); // tenant object for invites drawer
   const [limitsTarget, setLimitsTarget] = useState(null); // tenant object for rate-limits modal
   const [actioning, setActioning] = useState(null); // tenant id being actioned
   // Tier 1.3: typed-confirmation for enable / disable / suspend. The
@@ -845,6 +847,15 @@ const HFTenants = () => {
                               <button
                                 type='button'
                                 className='btn ghost sm'
+                                data-testid={`tenant-invites-btn-${t.id}`}
+                                disabled={isActioning}
+                                onClick={() => setInvitesTarget(t)}
+                              >
+                                {tr('console.tenant.btn_invites', 'invites')}
+                              </button>
+                              <button
+                                type='button'
+                                className='btn ghost sm'
                                 data-testid={`tenant-limits-btn-${t.id}`}
                                 disabled={isActioning}
                                 onClick={() => setLimitsTarget(t)}
@@ -929,6 +940,14 @@ const HFTenants = () => {
           tenantId={poolTarget.id}
           tenantName={poolTarget.name}
           onClose={() => setPoolTarget(null)}
+        />
+      )}
+
+      {invitesTarget && (
+        <InvitesDrawer
+          tenantId={invitesTarget.id}
+          tenantName={invitesTarget.name}
+          onClose={() => setInvitesTarget(null)}
         />
       )}
 

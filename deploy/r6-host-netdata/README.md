@@ -31,7 +31,7 @@ a bind source. `scripts/install-netdata-alarms.sh` only manages
 `newhub.conf` — a second alarm file would need its own bind mount added to
 the container definition first (out of scope for this directory).
 
-`health.d/newhub.conf` currently defines 11 alarms:
+`health.d/newhub.conf` currently defines 12 alarms:
 
 - 8 ported from the host's original 2026-08-20 copy
   (`newhub_platform_breaker_open`, `newhub_billing_outbox_failures`,
@@ -42,6 +42,12 @@ the container definition first (out of scope for this directory).
   each one's linked runbook page for the exact trigger, so it can be proved
   live rather than trusted on faith: `newhub_upstream_5xx_burst`,
   `newhub_rate_limit_degraded`, `newhub_failover_suppressed_surge`.
+- 1 added 2026-09-19 (cycle-11 L7): `newhub_settlement_failed` — fires on
+  `lurus_billing_settlement_failed_total`, the counter
+  `app.SettleConsume` (internal/app/settlement_outcome.go) increments when a
+  consume-quota settlement call fails. Added **in-repo only** in the same
+  change; not yet installed onto R6 — see the conf file's own "STATUS
+  UPDATE 2026-09-19" header note.
 
 Every alarm reads the same `/metrics` endpoint netdata's go.d `prometheus`
 collector already scrapes on R6 (job name `newhub`,

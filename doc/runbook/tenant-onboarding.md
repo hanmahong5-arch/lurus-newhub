@@ -102,6 +102,59 @@ org-id claim (`OIDC_CLAIM_ORG_ID`, default `org_id`) → `tenants.zitadel_org_id
 row → Lurus user created with the tenant-plan default quota → tenant context
 injected for isolation.
 
+## Phase 3b: Invite-Link Onboarding (zita-bridge first login)
+
+Phase 3 above resolves the tenant from the OIDC org-id claim — it only fires
+on the org-claim login path (`/api/v2/:tenant_slug/auth/login` →
+`OIDCLoginRedirect`/`OIDCCallback`). The console's actual sign-on screen
+(`OidcRedirect.jsx`) goes through the platform SDK bridge instead
+(`POST /api/v2/auth/zita-bootstrap`), which has no org claim to read: a
+first-ever bridge login with no invite code auto-creates the user in the
+"default" tenant (`handler.ZitaBootstrap`'s `autoCreateBridgedUser`). A
+root-issued, one-time invite code is the way to land that first login in a
+real tenant instead — same "default" fallback semantics as an OIDC tenant
+that was never auto-created, but resolved from a code instead of a claim.
+
+1. **Issue a code** (root admin session; the console's Tenants page has an
+   "invites" drawer that does the same POST):
+
+   ```bash
+   curl -X POST https://hub.lurus.cn/api/v2/admin/tenants/<id>/invites \
+     -H "Content-Type: application/json" -H "Cookie: session=<root_admin_session>" \
+     -d '{"ttl_hours": 72}'
+   # 201 → {"success":true,"data":{"id":7,"tenant_id":"<id>","code":"<32-hex>","status":1,"expired_time":...,"created_by_user_id":...,"created_at":...}}
+   ```
+
+   `code` is returned exactly once, in this response — record it now.
+   `ttl_hours` omitted or `<= 0` means the code never expires.
+
+2. **List outstanding codes** (never returns the plaintext code back — only
+   an 8-char `code_prefix`, so this endpoint is safe to call from a shared
+   admin session):
+
+   ```bash
+   curl -s https://hub.lurus.cn/api/v2/admin/tenants/<id>/invites \
+     -H "Cookie: session=<root_admin_session>" | jq
+   # 200 → {"success":true,"data":{"invites":[{"id":7,"code_prefix":"a1b2c3d4","status":1,"expired_time":0,"consumed_by_account_id":null,"created_by_user_id":1,"created_at":"..."}],"total":1,"page":1,"page_size":20}}
+   ```
+
+3. **Revoke a code early** (only a `status=1` pending code can be revoked;
+   already-consumed or already-revoked ids 404):
+
+   ```bash
+   curl -X DELETE https://hub.lurus.cn/api/v2/admin/tenants/<id>/invites/7 \
+     -H "Cookie: session=<root_admin_session>"
+   # 200 → {"success":true,"message":"Invite revoked"}
+   ```
+
+**Browser flow**: send the invitee `https://hub.lurus.cn/login?invite=<code>`
+(built by `InvitesDrawer.jsx`'s `inviteLink`). Their first-ever SSO login
+through that link lands the auto-created user in `<id>` instead of
+`default`. Single use — the code is spent (`status=2`, `consumed_by_account_id`
+set) on that first successful bootstrap; every login after that, with or
+without the code in the URL, ignores it because the newhub user row already
+exists. `governance.ActionTenantInviteConsumed` is audited on success.
+
 ## Phase 4: Verification
 
 ```bash
@@ -122,6 +175,7 @@ curl -v "https://hub.lurus.cn/api/v2/acme-corp/auth/login?redirect_url=/dashboar
 | Enable / Disable / Suspend | `/api/v2/admin/tenants/:id/{enable,disable,suspend}` | POST |
 | Stats | `/api/v2/admin/tenants/:id/stats` | GET |
 | Credit pool: create/get/topup/usage/delete | `/api/v2/admin/tenants/:id/credit-pool[/topup\|/usage]` | POST/GET/POST/GET/DELETE |
+| Invites: issue/list/revoke | `/api/v2/admin/tenants/:id/invites[/:invite_id]` | POST/GET/DELETE |
 
 ```bash
 curl -X POST https://hub.lurus.cn/api/v2/admin/tenants/<id>/disable -H "Cookie: session=<admin_session>"  # all users lose login, data preserved
@@ -140,6 +194,7 @@ curl -X PUT https://hub.lurus.cn/api/v2/admin/tenants/<id> -H "Content-Type: app
 | Cross-tenant data visible | tenant_id in request context, GORM plugin |
 | First relay call 402s `pool_not_configured` | no credit-pool row yet — run Phase 2b step 2 |
 | First relay call 402s `pool_exhausted` | pool row exists but `current_balance=0` — run Phase 2b step 3 (fund) |
+| User landed in "default" tenant despite an invite link | Three causes: (a) the browser already had a hub session for an existing account — bootstrap succeeds instantly without ever going through identity, so it isn't that account's first login and the invite is silently ignored; (b) the code was expired, already revoked, or already consumed (list it — `status` != `1`); (c) the account had already completed a bridge login before, invite or not — a code is only ever consulted on a brand-new user's first-ever login (Phase 3b). Check `audit_events` for action `tenant.invite_consumed`: present = the invite fired and the query above is looking at the wrong account/tenant; absent = one of (a)/(b)/(c) above |
 
 Env: `OIDC_ENABLED=true`, `OIDC_ISSUER=<deploy-time>`, `OIDC_CLIENT_ID`
 (reconciler-owned, see Phase 1), `OIDC_REDIRECT_URI=https://hub.lurus.cn/api/v2/oauth/callback`,

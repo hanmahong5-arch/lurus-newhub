@@ -1,55 +1,73 @@
 # 产品接入指南 — Lurus 统一登录平台
 
-> v1.0 (2026-02-10) · 反馈 support@quantumnous.com · 文档 https://docs.lurus.cn
+> v1.1 (2026-09-19,L6 重写 :1-82 —— 原文档描述的是已退役服务的接入方式,详见文末各节改动说明) ·
+> 反馈 support@quantumnous.com · 文档 https://docs.lurus.cn
 
-Lurus 平台提供:统一身份认证 (Zitadel OAuth2/OIDC) + AI 网关 (OpenAI 兼容 API) + 集中计费 (额度/订阅)。接入后获得:一次注册全产品通用 SSO、统一 OpenAI 格式调用、自动扣费 + 自助充值、用量监控 + Token 管理。
+Lurus 平台提供:统一身份认证 (OIDC) + AI 网关 (OpenAI 兼容 API) + 集中计费 (额度/订阅)。接入后获得:一次注册全产品通用 SSO、统一 OpenAI 格式调用、自动扣费 + 自助充值、用量监控 + Token 管理。
 
 ## 架构
 
-登录流程: 产品前端 → `https://api.lurus.cn/login/{product-slug}` → Zitadel 登录页 → OAuth 授权 → Lurus 回调 (创建/关联租户 + 分配 Session) → Lurus 控制台 → 用户创建 API Token (`sk-xxx`) → 配置到产品后端 → `POST /v1/chat/completions`。
+Host: `hub.lurus.cn`。登录流程: 用户访问 `https://hub.lurus.cn/login`(控制台的登录页,`OidcRedirect`
+组件)→ 跳转统一身份平台完成登录 → 回跳 `POST /api/v2/auth/zita-bootstrap` 建立 newhub 会话
+(`internal/adapter/handler/zita_bootstrap.go`)→ 该平台账号在本服务首次出现时自动建号,落入
+`default` 占位租户,除非携带一个有效的邀请码(见下)→ 用户在控制台创建 API Token (`sk-xxx`) → 配置到
+产品后端 → `POST /v1/chat/completions`。
 
-数据隔离: 用户账号**共享** (SSO);API Token / 使用日志 / 额度计费 **按产品 (tenant) 隔离**;AI 渠道配置共享 (可选按产品定制)。
+数据隔离: 用户账号在统一身份平台层面**共享**(同一账号理论上可能在不同租户下各有一条 newhub 用户记
+录,取决于它在哪个租户的邀请链接下完成了第一次登录);API Token / 使用日志 / 额度计费 **按租户隔
+离**;AI 渠道配置共享(可选按租户设置模型限流/白名单,见 Q3)。
 
 ## 接入步骤
 
-**1. Zitadel 创建 Application** (https://auth.lurus.cn/ui/console,账号联系管理员)
-- Organization `lurus` → Applications → New
-- Name `{产品英文名}`(如 `product-b`) · Type `Web` · Auth Method `PKCE`
-- Redirect URI: `https://api.lurus.cn/api/v2/oauth/callback`
-- Post Logout Redirect URIs: `https://api.lurus.cn`、`https://{产品域名}`
-- Grant Types: Authorization Code + Refresh Token
-- 记录 **Client ID**(如 `234567890123456789@lurus`)
+**1. 创建租户** — root 管理员经控制台 Tenants 页,或直接调用管理 API:
 
-**2. Lurus 注册租户** — 提供给管理员: slug(小写字母/数字/连字符)、name、zitadel_org_id、zitadel_client_id、admin_email。管理员执行:
-
-```sql
-INSERT INTO tenants (slug, name, zitadel_org_id, zitadel_client_id, status, created_at)
-VALUES ('product-b', 'Product B', '{org_id}', '{client_id}', 1, NOW());
-INSERT INTO tenant_admins (tenant_id, user_email, role)
-VALUES ((SELECT id FROM tenants WHERE slug = 'product-b'), 'admin@product-b.com', 'owner');
-```
-
-完成后获得登录入口 `https://api.lurus.cn/login/product-b`。
-
-**3. 产品后端环境变量**:
 ```bash
-LURUS_API_BASE_URL=https://api.lurus.cn
-LURUS_API_KEY=sk-xxxxxxxxxxxx   # 从控制台获取
+curl -X POST https://hub.lurus.cn/api/v2/admin/tenants \
+  -H "Content-Type: application/json" -H "Cookie: session=<root_admin_session>" \
+  -d '{"zitadel_org_id":"<占位字符串,见下方说明>","slug":"product-b","name":"Product B"}'
+# 201 → {"success":true,"data":{"id":"uuid","slug":"product-b","name":"Product B","status":1,...}}
 ```
 
-## 前端集成 (三种方式)
+`zitadel_org_id` 目前仍是必填字段(物理列名,idp-migration 完成前不会改名)——只有
+`doc/runbook/tenant-onboarding.md` 描述的另一条、基于 OIDC org 声明做租户映射的登录路径会读它;下面第
+2 步的邀请码路径不读这个字段,可以填任意占位字符串。完整的租户生命周期/资金池步骤见
+`doc/runbook/tenant-onboarding.md`。
 
-- **方式 1 直接链接(推荐)** — `<a href="https://api.lurus.cn/login/product-b">使用 Lurus 账号登录</a>`。无需代码;用户登录后进 Lurus 控制台,手动复制 Token。
-- **方式 2 嵌入式** — 不跳转控制台,在产品内完成登录。`handleLogin` 存 `return_url` 后 `window.location.href = '.../login/product-b'`;登出 `POST /api/v2/oauth/logout` (credentials:'include');会话检查 `GET /api/v2/auth/session-info` (credentials:'include',返回 `data.success && data.data.id`)。
-- **方式 3 回调页面(自动取 Token)** — 管理员 `UPDATE tenants SET custom_redirect_url='https://yourapp.com/auth/callback' WHERE slug='product-b'`;回调页用 URL `token` 参数 `POST /api/v2/product-b/auth/exchange-token {temp_token}` 换取 `api_key`,存 localStorage 后跳回 `return_url`。
+**2. 邀请第一个用户** — 新租户此时还没有任何用户,签发一个一次性邀请码:
+
+```bash
+curl -X POST https://hub.lurus.cn/api/v2/admin/tenants/<id>/invites \
+  -H "Content-Type: application/json" -H "Cookie: session=<root_admin_session>" \
+  -d '{"ttl_hours": 72}'
+# 201 → {"success":true,"data":{"id":7,"code":"<32位十六进制,仅此一次返回>","status":1,...}}
+```
+
+把 `https://hub.lurus.cn/login?invite=<code>` 发给对方(控制台 Tenants 页的"邀请"抽屉做同一件事,
+签发后展示一次性只读链接框 + 复制按钮)。收件人**首次**登录统一身份平台时会落入这个租户,而不是
+`default`。邀请码单次有效:一旦被消费(或过期/被撤销)就不能再用;该账号之后的任何登录都不会再读它
+——租户归属在第一次登录时就定死了,已经登录过的账号不会被邀请码改派。
+
+**3. 产品后端环境变量**(拿到 Token 之后,与登录流程无关):
+```bash
+LURUS_API_BASE_URL=https://hub.lurus.cn
+LURUS_API_KEY=sk-xxxxxxxxxxxx   # 从控制台 Token 页获取
+```
+
+## 前端集成
+
+登录入口固定是 `https://hub.lurus.cn/login`(可带 `?invite=<code>`,见上一节)。`/login/<slug>` 这条老
+路径还在,它渲染的是同一个登录屏、不做任何按租户的分流——请统一用 `/login`(可带 `?invite=`)。会话
+检查 `GET /api/v2/auth/session-info`(`credentials:'include'`,返回
+`data.success && data.data.id`);登出 `POST /api/v2/oauth/logout`(`credentials:'include'`)。控制台
+里生成的 API Token 需要手动复制粘贴到产品后端——目前没有自动回传 Token 的回调页机制。
 
 ## 后端集成
 
 OpenAI SDK 兼容 — 仅改 `base_url`。Python:
 ```python
 from openai import OpenAI
-client = OpenAI(api_key=os.getenv("LURUS_API_KEY"), base_url="https://api.lurus.cn/v1")
-resp = client.chat.completions.create(model="gpt-4o", messages=[...], temperature=0.7)
+client = OpenAI(api_key=os.getenv("LURUS_API_KEY"), base_url="https://hub.lurus.cn/v1")
+resp = client.chat.completions.create(model="<从 GET /v1/models 或控制台 Models 页取一个本租户可路由的模型 id>", messages=[...], temperature=0.7)
 ```
 
 Node.js / Go: 标准 HTTP `POST {LURUS_API_BASE}/v1/chat/completions`,Header `Authorization: Bearer ${LURUS_API_KEY}` + `Content-Type: application/json`,body `{model, messages, temperature}`,读 `choices[0].message.content`;非 2xx 时读 `error.message`。
@@ -57,27 +75,29 @@ Node.js / Go: 标准 HTTP `POST {LURUS_API_BASE}/v1/chat/completions`,Header `Au
 ## 测试验证
 
 ```bash
-# 登录: 访问 https://api.lurus.cn/login/product-b → 输入测试账号 → 跳转 https://api.lurus.cn/console
+# 登录: 浏览器访问 https://hub.lurus.cn/login(带邀请码则 ?invite=<code>)→ 统一身份平台登录 → 回到控制台仪表盘
 # AI 调用:
-curl -X POST https://api.lurus.cn/v1/chat/completions \
+curl -X POST https://hub.lurus.cn/v1/chat/completions \
   -H "Content-Type: application/json" -H "Authorization: Bearer sk-xxxxxxxxxxxx" \
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"test"}]}'
+  -d '{"model":"<从 GET /v1/models 或控制台 Models 页取一个本租户可路由的模型 id>","messages":[{"role":"user","content":"test"}]}'
 # 返回 chat.completion + usage{prompt_tokens, completion_tokens, total_tokens}
 
-# 用量查询:
-curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-xxxxxxxxxxxx"
-# 返回 quota / used_quota / remaining_quota / daily_quota{limit,used,remaining} / subscription{plan_code,status,expires_at}
+# 用量查询(同一把 sk- key,只读,见附录 F):
+curl https://hub.lurus.cn/v1/key -H "Authorization: Bearer sk-xxxxxxxxxxxx"
+# 返回这把 key 自身的 limit/limit_remaining/usage(quota 整数)、所属分组与模型白名单、RPM/TPM 限流、所属租户资金池状态
+# 注意: /api/v2/{tenant}/user/me 走的是控制台会话鉴权(Bearer 处填 Token 页的 access token,不是这里的 sk- key),
+# 用 sk- key 调用会得到 200 + {"success":false,"message":"...access token 无效"} —— 一个 200 形状的失败,不要在自动化里只看状态码
 ```
 
 ## 常见问题
 
-- **Q1 登录后看不到我的产品?** Lurus 是 AI 网关不是产品平台。用户登录→建 Token→配置到产品。无缝体验用方式 3。
-- **Q2 多产品数据会混吗?** 不会。账号 SSO 共享,但每产品独立 `tenant_id`,Token 绑定租户,日志/计费按租户隔离,A 产品 Token 不能在 B 用。
-- **Q3 为产品配专属模型?** 联系管理员 `INSERT INTO tenant_channels (tenant_id, channel_id, priority) VALUES (...)`。
+- **Q1 登录后看不到我的产品?** Lurus 是 AI 网关不是产品平台。用户登录→控制台建 Token→手动配置到产品后端,目前没有自动取 Token 的回调机制。
+- **Q2 多产品数据会混吗?** 不会。账号在统一身份平台层面共享,但每租户独立 `tenant_id`,Token 绑定租户,日志/计费按租户隔离,A 租户 Token 不能在 B 用。
+- **Q3 为租户配专属模型?** 没有"绑定渠道优先级"的写入口。可用的两个管理端点:按模型限流 `PUT /api/v2/admin/tenants/:id/model-limits`,或按模型白名单 `PUT /api/v2/admin/tenants/:id/model-allowlist`(默认 `observe` 只记录不拒绝,需要管理员显式切到 `enforce` 才会真正挡掉白名单外的模型)。
 - **Q4 额度不足?** 两处独立的额度闸,响应不同:(a) 钱包/Token/租户资金池本地额度耗尽 → 402,OpenAI 线 `type=insufficient_quota`/Anthropic 线 `type=billing_error`,`code` 视具体原因为 `insufficient_user_quota` / `token_quota_exhausted` / `pool_exhausted`;(b) 平台侧 entitlement 校验(按 `X-Lurus-Product` 归属的产品配额)拒绝 → 429,OpenAI 线 body 为 `{"error":{"message","type":"rate_limit_error","code":"quota_exceeded","metadata":{"upgrade_url":...}}}`;Claude/Gemini 调用方走各自原生信封(`{"type":"error","error":{...}}` / `{"error":{...}}`),两者均**不带** `upgrade_url`(信封结构没有 metadata 位置),只能靠 message 文案里的 `quota_exceeded` 判定,不要依赖顶层 `upgrade_url` 字段。都提示用户去钱包充值或订阅。
 - **Q5 限制调用频率?** Lurus 内置 `daily_quota` 日限额;或产品侧自实现限流。兑换/激活码相关的四个 `/api` 端点(`POST /api/user/topup`、`POST /api/v2/{tenant}/redeem`、`POST /api/v2/switch/redeem`、`POST /api/v2/switch/user/topup`)额外共享同一个按调用方 IP 计的 `RD` 桶(5 次/60 秒,`rate-limit.go`)——这是**一个** IP 在 60 秒窗口内跨这四个端点合计 5 次,不是每个端点各 5 次;第 6 次起收到空 body 的 429,带 `X-RateLimit-Scope: ip`/`Retry-After`(cycle-8 L1)。
-- **Q6 白标?** 当前不支持完全白标,可:自定义 Zitadel 登录页主题、用方式 3、隐藏控制台 (Token 自动管理)。
-- **Q7 支持哪些模型?** 列表 https://api.lurus.cn/console/models。常用: OpenAI gpt-4o/gpt-4o-mini、Anthropic claude-3-5-sonnet、Google gemini-1.5-pro、国内 qwen-max/glm-4/deepseek-chat。
+- **Q6 白标?** 当前不支持完全白标,可:自定义统一身份平台登录页主题、隐藏控制台(Token 自动管理)。
+- **Q7 支持哪些模型?** 可路由的模型集来自 `GET /v1/models`(需 sk-token)或控制台 Models 页;本文不列举具体型号——目录会变,且不同租户的可路由集不同(见附录 A `/v1/models` 行)。
 - **Q8 技术支持?** 邮箱 support@quantumnous.com · 文档 https://docs.lurus.cn · 企业微信群(联系管理员)。
 
 ## 附录
@@ -86,7 +106,8 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/v1/models` `/v1/models/:model` | GET | 模型发现:列表原本就从(租户盲的)ability 集作答,2026-09-09 起改为按调用方所属租户可路由的模型集(不再看得到别的租户的渠道);`:model` 单条查询原本直接答静态目录、与路由是否可达无关,现在改用同一个租户可路由集判断——查询一个该租户路由不到的模型返回 404 而不是静态目录里的 200,OpenAI 线 `type=invalid_request_error`、`param=model`、`code=model_not_found`(注意与下方 B 表 404 行的 `type=not_found_error` 不同);Anthropic 线 `type=not_found_error`,与 B 表一致,但该信封**没有 `code` 字段**——这一条要按 `type` 判,不要按本文其余各处推荐的 `code` 判;token 自带 `model_limit` 列表时,列表/单条查询按该列表作答,不做租户可路由性交叉;若该租户的模型白名单处于 `enforce` 模式,列表与单条查询都再按白名单收窄(两者共用同一个可见集,所以被白名单挡掉的模型单条查询也返回 404) |
+| `/v1/models` `/v1/models/:model` | GET | 模型发现:列表原本就从(租户盲的)ability 集作答,2026-09-09 起改为按调用方所属租户可路由的模型集(不再看得到别的租户的渠道);`:model` 单条查询原本直接答静态目录、与路由是否可达无关,现在改用同一个租户可路由集判断——查询一个该租户路由不到的模型返回 404 而不是静态目录里的 200,OpenAI 线 `type=invalid_request_error`、`param=model`、`code=model_not_found`(注意与下方 B 表 404 行的 `type=not_found_error` 不同);Anthropic 线 `type=not_found_error`,与 B 表一致,但该信封**没有 `code` 字段**——这一条要按 `type` 判,不要按本文其余各处推荐的 `code` 判;token 自带 `model_limit` 列表时,列表/单条查询按该列表作答,不做租户可路由性交叉;若该租户的模型白名单处于 `enforce` 模式,列表与单条查询都再按白名单收窄(两者共用同一个可见集,所以被白名单挡掉的模型单条查询也返回 404)。需要 sk-token;不带 token 的浏览器会话场景见下一行 `/api/v2/{tenant}/models/routable` |
+| `/api/v2/{tenant}/models/routable` | GET | 控制台自用的会话鉴权模型发现(L1,cycle-11),不需要 sk-token,只需已登录会话;把上一行 `/v1/models` 列表的核心(同一个租户可路由集 + 同一份白名单收窄)抽出来给控制台四个页面(Chat/Playground/Dashboard/Token 的示例片段)直接问"这个租户能路由什么",取代此前控制台读手工目录表 `models`(结构上答不了这个问题)的 `GET /api/v2/{tenant}/models`。与 `/v1/models` 的差异:没有 token,所以不应用 token 的 `model_limit`/`group` 覆盖;`items` 按 id 排序(`/v1/models` 不排序)。响应 `{success:true,data:{items:[{id,owned_by,supported_endpoint_types}]}}`,`items` 为空数组而非 `null`。目前没有兄弟产品接入这个端点(控制台自用) |
 | `/v1/chat/completions` | POST | 对话模型 |
 | `/v1/embeddings` | POST | 文本向量化 |
 | `/v1/images/generations` | POST | 图片生成 |
@@ -106,6 +127,7 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 | `/api/v2/{tenant}/billing/topup` | POST | 发起充值 |
 | `/api/v2/{tenant}/sessions` | GET / DELETE(`:id`、`others`、`current`) | 控制台会话列表与撤销,整体挂在 `SESSION_REGISTRY_ENABLED`(默认关)后面:关闭时列表只返回一条代表当前请求的合成行,`DELETE :id` 一律 404、`DELETE others` 一律 `{"revoked":0}`,均不触碰数据库(2026-09-12 起,回滚或某次开关期遗留的行都不会被这两个端点动到);打开后列表按已登录设备逐条返回(`is_current`/`created_at`/`last_seen_at`、`ip` 按 /24(v4)或 /48(v6)掩码、`user_agent_family` 粗粒度),`DELETE :id` 撤销自己名下的一台设备(IDOR 404 语义,不属于自己的 id 与不存在的 id 同样 404)、`others` 一键撤销除当前设备外的全部。根管理员等价端点 `DELETE /api/v2/admin/users/:id/sessions`(压缩账号处置步骤,同样受该 flag 门控)。目前没有兄弟产品接入这组端点 |
 | `POST /api/verify` `GET /api/verify/status` | POST / GET | 控制台二次确认(step-up)端点,挡在渠道 key 揭示(`/api/channel/:id/key`)、TOTP 禁用/备用码重置(`/api/user/totp/disable`、`/api/user/totp/backup-codes/regenerate`)与 2FA 强制关闭(`/api/v2/admin/security/users/:id/totp/force-disable`)四个入口前面(`middleware.SecureVerificationRequired`)。已启用 TOTP 的用户必须传 `method:"totp"`/`"totp_backup"` 加有效码;没有启用 TOTP 的用户默认经 `method:"session"` 无凭证通过(不检查任何凭证,仅凭已登录 session),这次放行记一条审计(`auth.stepup_without_credential`,命名到用户,不含凭证信息)。`SECURE_VERIFICATION_REQUIRE_ENROLLMENT`(默认关)打开后,未启用 TOTP 的用户改为 `403 STEP_UP_ENROLLMENT_REQUIRED`,且不再无凭证放行(同样记一条 `auth.failed` 审计,`reason:enrollment_required`)。`GET /api/verify/status` 响应体新增 `enrollment_required` 字段,反映该开关当前值(进程级配置,与调用者无关),控制台据此判断"session"这一路是否可用。默认关是基于 2026-09-15 的生产数据:唯一 role>=10 的账号(root)当时没有 TOTP 记录,打开会锁死它对渠道 key 揭示与 2FA 强制关闭的访问,见 `doc/runbook/incident-response.md` 的 break-glass 步骤。目前没有兄弟产品接入这组端点 |
+| `GET`/`POST /api/v2/admin/tenants/:id/invites`、`DELETE /api/v2/admin/tenants/:id/invites/:invite_id` | GET / POST / DELETE | root 专用的租户邀请码管理(L6,见"接入步骤"第 2 步)。`POST` 签发一次性码(`ttl_hours` 可选,`<=0`/省略=永不过期),201 响应带明文 `code`。`GET` 列表投影为 `{id, code_prefix(Code 前 8 位), status, expired_time, consumed_by_account_id, consumed_at, created_by_user_id, created_at}`——列表投影刻意丢弃 `code`,只留前缀;`IssueTenantInvite` 的 201 是目前唯一带出明文码的产出点(`internal/adapter/handler/tenant_invite.go`);`:id` 不是已存在的租户 id 时两个端点均 404。`DELETE` 撤销一个仍处于 `status=1`(pending)的码,已消费/已撤销/属于其它租户的 id 一律 404(与"不存在"同一报文,不给探测信号)。`status`:`1` 待使用、`2` 已消费(`consumed_by_account_id` 记录消费者的平台账号 id)、`3` 已撤销。码本身只在 `handler.ZitaBootstrap` 的首次登录自动建号分支被消费(`internal/adapter/repo/tenant_invite.go` 的 `ConsumeTenantInvite`),不影响任何既有用户的登录。目前没有兄弟产品接入这组端点 |
 
 ### B. 错误码
 
@@ -135,6 +157,12 @@ curl https://api.lurus.cn/api/v2/product-b/user/me -H "Authorization: Bearer sk-
 - 钱包治理的令牌不再消耗用户的本地欢迎额度;钱包余额不足直接拒绝,不回落到本地额度。
 
 ### C. Webhook 通知 (可选)
+
+> **无代码锚点**(2026-09-19 复核):本节描述的"租户级充值/订阅事件出站 webhook"在当前代码里找不到实
+> 现——`internal/app/webhook.go` 的 `SendWebhookNotify` 是真实存在的函数,但它的调用方是**用户级**告
+> 警通知(`internal/app/user_notify.go`,配额告警等,读 `user_setting.WebhookUrl`/`WebhookSecret`),
+> 不是按租户配置、以充值/订阅事件为 payload 的机制;没有 `tenant_slug`/`quota_before`/`quota_after`
+> 这个 body 形状的任何写入或读取路径。以下段落保留供将来对照,不代表现有行为。
 
 提供 Webhook URL 接收用户充值/订阅事件:`POST https://yourapp.com/webhooks/lurus`,body `{event, tenant_slug, user_id, data{amount, quota_before, quota_after, timestamp}, signature: "sha256=..."}`(signature 验真实性)。
 
@@ -434,3 +462,31 @@ handler/relay.go`(`recordRelayErrorLog`,约 757-803 行)的终态错误日志路
 
 **目前没有兄弟产品接入 `by=group`**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均未见对
 `analytics/rankings` 端点的调用)。
+
+### L. 结算失败标记 (`other.settlement`,cycle-11 L7)
+
+三个走 `app.SettleConsume` 的结算点(`relay.postConsumeQuota` / `relay/compatible_handler.go`、
+`app.PostClaudeConsumeQuota`、`app.PostAudioConsumeQuota`)在 `PostConsumeQuota` 结算调用返回
+错误时,除了保留原有的 `logger.LogError` 日志行,现在还会在这一行的日志 `other` 里写一个新键:
+
+| 字段 | 类型 | 语义 |
+|------|------|------|
+| `other.settlement` | `string`,可选,唯一取值 `"failed"` | 本次请求的结算调用(`app.PostConsumeQuota`,经由 `app.SettleConsume`)返回了错误。该请求结算成功时这个键完全不出现(不是写 `"ok"` 之类的值)。TierPublic(`internal/app/governance/classification.go`),普通用户可见,`GET /api/v2/{tenant}/logs`(普通用户自查)与管理端的 `GET /api/v2/{tenant}/logs/all` 均不剥离这个键 |
+
+**这个键不说明的事**:`other.settlement` 只反映结算调用本身是否报错,不说明这笔请求对应的
+租户信用池(credit pool)是否已经被扣款——`PostConsumeQuota` 的租户池扣款
+(`internal/app/quota.go:1000-1002`)先于可能失败的 token 配额更新
+(`internal/app/quota.go:1016-1046`)执行,后者失败时只补偿了 user 配额那一条腿,池扣款不会撤销。
+一行带 `other.settlement="failed"` 的日志,其租户池仍可能已经被真实扣款过。控制台上对应的
+"settlement failed"/"结算失败" 徽章同样不是退款凭证,只说明"这次结算调用报了错"。
+
+**覆盖范围边界**:这个键只在上面三个结算点写入。`internal/app/relay/mjproxy_handler.go`(Midjourney
+代理任务回调)、`internal/app/relay/relay_task.go`(异步任务结算,如 Suno)里直接调用
+`app.PostConsumeQuota` 的调用点,以及 `internal/app/quota.go` 的 `PostWssConsumeQuota`(实时/
+WebSocket 结算路径,根本不调用 `PostConsumeQuota`)都不在这个 cycle 的覆盖范围内——这些路径上的
+结算失败仍然只有一行 `common.SysLog`,既不带 `other.settlement`,也不计入新增的
+`lurus_billing_settlement_failed_total` 指标。详见 `doc/runbook/settlement-failed.md` 的
+"Not covered this cycle" 一节。
+
+**目前没有兄弟产品接入 `other.settlement`**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均无对
+`other.settlement` 或 `settlement` 字段的读取)。

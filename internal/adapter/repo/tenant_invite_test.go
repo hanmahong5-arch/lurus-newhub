@@ -201,6 +201,80 @@ func TestRevokeTenantInvite_WrongTenant_NotFound(t *testing.T) {
 	}
 }
 
+// TestListTenantInvites_ScopedByTenant: a tenant's invite list must never
+// include another tenant's codes, even though both rows sit in the same
+// table — the same isolation RevokeTenantInvite's WHERE clause enforces on
+// writes. Removing the tenant_id predicate makes this go red (L6 mutation).
+func TestListTenantInvites_ScopedByTenant(t *testing.T) {
+	cleanup := setupInviteTestDB(t)
+	defer cleanup()
+	seedInviteTenant(t, DB, "t-acme", "acme")
+	seedInviteTenant(t, DB, "t-other", "other")
+
+	if _, err := CreateTenantInvite("t-acme", 1, 0); err != nil {
+		t.Fatalf("create acme invite: %v", err)
+	}
+	if _, err := CreateTenantInvite("t-other", 1, 0); err != nil {
+		t.Fatalf("create other invite: %v", err)
+	}
+
+	invites, total, err := ListTenantInvites("t-acme", 50, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("total = %d, want 1 (t-other's invite must not be counted)", total)
+	}
+	if len(invites) != 1 || invites[0].TenantId != "t-acme" {
+		t.Fatalf("invites = %+v, want exactly one row scoped to t-acme", invites)
+	}
+}
+
+// TestListTenantInvites_NewestFirst pins the order ListTenantInvites'
+// comment claims: created_at DESC. Flipping the Order clause to ASC leaves
+// this red (measured — the sibling status/scoping tests never look at
+// order, so they stayed green under that mutation).
+func TestListTenantInvites_NewestFirst(t *testing.T) {
+	cleanup := setupInviteTestDB(t)
+	defer cleanup()
+	seedInviteTenant(t, DB, "t-acme", "acme")
+
+	older, err := CreateTenantInvite("t-acme", 1, 0)
+	if err != nil {
+		t.Fatalf("create older: %v", err)
+	}
+	newer, err := CreateTenantInvite("t-acme", 1, 0)
+	if err != nil {
+		t.Fatalf("create newer: %v", err)
+	}
+	// Both rows can land in the same wall-clock instant on a fast test
+	// machine, so stamp distinct created_at values directly rather than
+	// relying on real time to separate them.
+	base := time.Now()
+	if err := DB.Model(&TenantInvite{}).Where("id = ?", older.Id).
+		Update("created_at", base.Add(-time.Hour)).Error; err != nil {
+		t.Fatalf("stamp older: %v", err)
+	}
+	if err := DB.Model(&TenantInvite{}).Where("id = ?", newer.Id).
+		Update("created_at", base).Error; err != nil {
+		t.Fatalf("stamp newer: %v", err)
+	}
+
+	invites, _, err := ListTenantInvites("t-acme", 50, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(invites) != 2 {
+		t.Fatalf("invites = %d rows, want 2", len(invites))
+	}
+	if invites[0].Id != newer.Id {
+		t.Fatalf("invites[0].Id = %d, want %d (the newer row first)", invites[0].Id, newer.Id)
+	}
+	if invites[1].Id != older.Id {
+		t.Fatalf("invites[1].Id = %d, want %d (the older row second)", invites[1].Id, older.Id)
+	}
+}
+
 // TestCreateTenantInvite_NoExpiry: ttl<=0 leaves ExpiredTime at 0, and a
 // zero-ExpiredTime code never expires regardless of how much time passes.
 func TestCreateTenantInvite_NoExpiry(t *testing.T) {

@@ -481,6 +481,13 @@ func TestR2Depl_GetTaskHandlers_DB(t *testing.T) {
 
 	t.Run("GetAllTask", func(t *testing.T) {
 		c, w := r2deplCtx(http.MethodGet, "/tasks?page=1&page_size=10", nil)
+		// Seed spans two different (and, for user 99999, nonexistent-user)
+		// owners with no shared tenant — this subtest is exercising the
+		// unscoped admin view, so it must present as root (cycle-11 L8:
+		// GetAllTask now scopes every non-root caller to its tenant,
+		// fail-closed on an empty tenant_id — see TestV1Task_ListTenantScoped
+		// in v1_cross_tenant_idor_test.go for that behavior's own lock).
+		c.Set("role", common.RoleRootUser)
 		GetAllTask(c)
 		m := r2deplBody(t, w)
 		if ok, _ := m["success"].(bool); !ok {
@@ -666,6 +673,10 @@ func TestR2Depl_GetMidjourneyHandlers_DB(t *testing.T) {
 
 	t.Run("GetAllMidjourney", func(t *testing.T) {
 		c, w := r2deplCtx(http.MethodGet, "/mj?page=1&page_size=10", nil)
+		// Same reasoning as the GetAllTask subtest above: this exercises the
+		// unscoped admin view across two different owners with no shared
+		// tenant, so it must present as root (cycle-11 L8 tenant scoping).
+		c.Set("role", common.RoleRootUser)
 		GetAllMidjourney(c)
 		data, _ := r2deplBody(t, w)["data"].(map[string]interface{})
 		if data == nil {

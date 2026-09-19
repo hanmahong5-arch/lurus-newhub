@@ -35,7 +35,7 @@ var ErrReservedTenantSlug = errors.New("tenant slug collides with a reserved top
 // api-v2-router.go. Each entry below is annotated with the route(s) that
 // register it as a static segment.
 var ReservedTenantSlugs = map[string]struct{}{
-	// GET /api/v2/oauth/callback, POST /api/v2/oauth/logout, POST /api/v2/oauth/refresh
+	// GET /api/v2/oauth/callback, POST /api/v2/oauth/logout
 	"oauth": {},
 	// GET /api/v2/auth/session-info, /api/v2/auth/zita-login, /api/v2/auth/zita-logout,
 	// POST /api/v2/auth/zita-bootstrap

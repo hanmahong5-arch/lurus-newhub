@@ -28,6 +28,10 @@ import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
+import {
+  useRoutableModels,
+  firstRoutableModel,
+} from '../../../hooks/models/useRoutableModels';
 
 /* Chat is wired to two, independent backends:
    - POST /api/v2/:slug/chat/send (handler.ChatSend) runs the actual
@@ -61,8 +65,6 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
      page calls has no sub-resource for either, only whole-session
      GET/POST/PATCH/DELETE. */
 
-const DEFAULT_MODEL = 'gpt-4o';
-
 const formatPreview = (text) => {
   if (!text) return '';
   return text.length > 36 ? text.slice(0, 36) + '…' : text;
@@ -80,7 +82,37 @@ const HFChat = () => {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-  const [model] = useState(DEFAULT_MODEL);
+
+  // Routing truth for this tenant (L1, cycle-11): the model picker, the
+  // send payload and the empty state all come from the SAME list — there is
+  // no literal fallback. `resolved` distinguishes "haven't asked yet" from
+  // "asked, tenant can route zero models" (see useRoutableModels's own
+  // comment).
+  const {
+    items: routableModels,
+    error: modelsError,
+    resolved: modelsResolved,
+    refetch: refetchModels,
+  } = useRoutableModels(tenantSlug);
+  const [model, setModel] = useState('');
+  // True once the model has been set at least once (by the routable-default
+  // effect below OR by openSession adopting a saved session's own model) —
+  // guards the default-pick effect from firing a second time and clobbering
+  // a session the user already opened before the routable fetch resolved.
+  const modelInitializedRef = useRef(false);
+  const [modelNotFoundHint, setModelNotFoundHint] = useState(false);
+
+  useEffect(() => {
+    if (modelInitializedRef.current || !modelsResolved) return;
+    const first = firstRoutableModel(routableModels);
+    if (first) {
+      setModel(first.id);
+      modelInitializedRef.current = true;
+    }
+  }, [modelsResolved, routableModels]);
+
+  const noRoutableModels = modelsResolved && routableModels.length === 0;
+
   const [sessionStartedAt] = useState(() => Date.now());
   // "⋯" clear-conversation confirm dialog
   const [clearVisible, setClearVisible] = useState(false);
@@ -151,6 +183,14 @@ const HFChat = () => {
         setMessages(
           (data.messages || []).map(({ role, content }) => ({ role, content })),
         );
+        // Adopt the session's own model rather than whatever the picker
+        // currently shows — also marks the model "initialized" so the
+        // routable-default effect (which only fires once) cannot overwrite
+        // this pick if it resolves after the click.
+        if (data.model) {
+          setModel(data.model);
+          modelInitializedRef.current = true;
+        }
         // A session loaded from the server is, by definition, saved —
         // clear any marker left over from the conversation just left.
         setSaveFailed(false);
@@ -214,12 +254,13 @@ const HFChat = () => {
       }));
       try {
         if (sessionId) {
-          // PATCH's request shape (updateChatSessionRequest, backend) has
-          // no `model` field — this page has no model picker to change it
-          // (`model` is a fixed useState with no setter) — so it is
-          // deliberately left out rather than sent and silently dropped.
+          // updateChatSessionRequest (backend, v2_chat_session.go) accepts
+          // an optional `model` — sent every PATCH so switching models via
+          // the picker (or adopting a saved session's model on open)
+          // survives a save, not just the create path.
           await API.patch(`/api/v2/${tenantSlug}/chat/sessions/${sessionId}`, {
             title,
+            model,
             messages,
           });
           return { id: sessionId, saved: true };
@@ -262,7 +303,8 @@ const HFChat = () => {
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || sending) return;
+    if (!text || sending || noRoutableModels || !model) return;
+    setModelNotFoundHint(false);
 
     // Snapshot which conversation this turn belongs to BEFORE any await.
     // turnGeneration is compared against conversationGenerationRef.current
@@ -339,11 +381,29 @@ const HFChat = () => {
         // conversation the user has since switched to.
         return;
       }
-      showError(
-        err?.response?.data?.message ||
-          err?.message ||
-          tr('console.chat.send_failed', 'Send failed'),
-      );
+      // The routing truth (routableModels) said this model was routable —
+      // model_not_found means it stopped being routable between the picker
+      // resolving and this send landing (another admin, an allow-list
+      // change). Surfaced both as a toast (showError) and an inline hint
+      // (modelNotFoundHint) next to the picker, and the routable list is
+      // refetched so the picker itself stops offering the now-dead model.
+      if (err?.response?.data?.error_code === 'model_not_found') {
+        showError(
+          tr(
+            'console.chat.model_not_found',
+            'Model "{{model}}" is no longer routable for this tenant — pick another.',
+            { model },
+          ),
+        );
+        setModelNotFoundHint(true);
+        refetchModels();
+      } else {
+        showError(
+          err?.response?.data?.message ||
+            err?.message ||
+            tr('console.chat.send_failed', 'Send failed'),
+        );
+      }
       // Roll back the optimistic user message on failure so the next
       // retry doesn't double-send.
       setMessages(messages);
@@ -354,12 +414,14 @@ const HFChat = () => {
     input,
     messages,
     model,
+    noRoutableModels,
     sending,
     tenantSlug,
     tr,
     persistSession,
     loadSessions,
     setActiveSession,
+    refetchModels,
   ]);
 
   const onKeyDown = useCallback(
@@ -616,9 +678,59 @@ const HFChat = () => {
               </div>
             </div>
             <span style={{ flex: 1 }} />
-            <span className='pill'>
-              <span className='dot ok' /> {model}
-            </span>
+            {modelsError ? (
+              <span className='pill' data-testid='chat-models-error'>
+                {tr('console.chat.models_load_failed', 'Failed to load models')}
+              </span>
+            ) : noRoutableModels ? (
+              <span className='pill' data-testid='chat-no-models'>
+                {tr(
+                  'console.chat.no_routable_models',
+                  'No models are routable for this tenant yet',
+                )}
+              </span>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <select
+                  data-testid='chat-model-select'
+                  aria-label={tr('console.chat.model_label', 'model')}
+                  value={model}
+                  disabled={sending}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    setModelNotFoundHint(false);
+                  }}
+                >
+                  {/* A saved session can carry a model that isn't in the
+                      CURRENT routable list (routing truth changed since it
+                      was saved) — render it anyway so the select doesn't
+                      silently jump to whatever option happens to be first;
+                      the model_not_found path (send()'s catch) is what
+                      surfaces that this specific model stopped routing. */}
+                  {model && !routableModels.some((m) => m.id === model) && (
+                    <option value={model}>{model}</option>
+                  )}
+                  {routableModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.id}
+                    </option>
+                  ))}
+                </select>
+                {modelNotFoundHint && (
+                  <span
+                    data-testid='chat-model-not-found-hint'
+                    className='faint'
+                    style={{ fontSize: 10, marginTop: 4 }}
+                  >
+                    {tr(
+                      'console.chat.model_not_found',
+                      'Model "{{model}}" is no longer routable for this tenant — pick another.',
+                      { model },
+                    )}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           <div
@@ -746,7 +858,9 @@ const HFChat = () => {
                   type='button'
                   className='btn primary'
                   onClick={send}
-                  disabled={sending || !input.trim()}
+                  disabled={
+                    sending || !input.trim() || noRoutableModels || !model
+                  }
                 >
                   {tr('console.chat.send_btn', '▶ send')}{' '}
                   <span className='kbd' style={{ marginLeft: 4 }}>

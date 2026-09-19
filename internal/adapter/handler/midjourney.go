@@ -431,6 +431,17 @@ func GetAllMidjourney(c *gin.Context) {
 		StartTimestamp: c.Query("start_timestamp"),
 		EndTimestamp:   c.Query("end_timestamp"),
 	}
+	// This route is mounted under middleware.AdminAuth() (role >=
+	// RoleAdminUser), not RootAuth — a tenant admin narrower than root must
+	// not see other tenants' Midjourney jobs. Mirrors GetAllChannels'
+	// isRoot/callerTenant scope (channel.go:113-114,153-154): the filter is
+	// set unconditionally for every non-root caller, including one whose
+	// session carries no tenant yet, so an empty tenant closes the page
+	// rather than falling through to the platform-wide view.
+	if c.GetInt("role") < common.RoleRootUser {
+		queryParams.TenantID = c.GetString("tenant_id")
+		queryParams.TenantScoped = true
+	}
 
 	items := repo.GetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := repo.CountAllTasks(queryParams)

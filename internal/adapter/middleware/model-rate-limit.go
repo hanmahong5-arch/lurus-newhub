@@ -69,7 +69,11 @@ var r6aTokenBucketAllowFunc = func(ctx context.Context, rdb *redis.Client, key s
 }
 
 // r6aRateLimitDegradedLogf is the throttled log emitter for the fail-open
-// branches in redisRateLimitHandler. checkName is "success" or "total".
+// branches in redisRateLimitHandler (this file) and redisRateLimiterKeyed
+// (rate-limit.go). checkName is the same string passed to
+// metrics.RecordRateLimitDegraded and keys the per-check throttle: the
+// model-rate-limit family uses "model_rate_limit_success"/"_total"/"_record",
+// and the web/API family uses "web_rate_limit_backend"/"web_rate_limit_corrupt".
 func r6aRateLimitDegradedLogf(checkName, msg string) {
 	now := time.Now()
 	if last, loaded := r6aRateLimitDegradedLogLast.LoadOrStore(checkName, now); loaded {

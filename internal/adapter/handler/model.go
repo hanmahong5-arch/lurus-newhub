@@ -110,6 +110,108 @@ func init() {
 	})
 }
 
+// acceptUnsetRatioModels reports whether models without a configured
+// ratio/price should still be kept in discovery: platform self-use mode
+// makes this true regardless of the caller; otherwise it follows the
+// caller's own per-user AcceptUnsetRatioModel setting (proved by
+// TestVisibleModels_AcceptUnsetRatioModel_PerUser). Split out of
+// visibleModels unchanged so ListRoutableModelsV2
+// (v2_models_routable.go) can compute the same flag without a token in
+// context.
+func acceptUnsetRatioModels(c *gin.Context) bool {
+	if operation_setting.SelfUseModeEnabled {
+		return true
+	}
+	userId := c.GetInt("id")
+	if userId > 0 {
+		userSettings, _ := repo.GetUserSetting(userId, false)
+		if userSettings.AcceptUnsetRatioModel {
+			return true
+		}
+	}
+	return false
+}
+
+// tenantRoutableModels is the group / auto-union / ratio-filter / projection
+// core of visibleModels's former else-branch, split out unchanged so
+// ListRoutableModelsV2 (v2_models_routable.go) can call it directly for the
+// console's own "what can this tenant route" question. tokenGroup is read
+// from c (ContextKeyTokenGroup) because /v1/models tokens can carry a group
+// override; the v2 console caller never sets that key, so this naturally
+// falls through to the user's own group for that caller — same as before
+// this split, group resolution just wasn't a separate function.
+func tenantRoutableModels(c *gin.Context, userID int, tenantID string, acceptUnsetRatioModel bool) ([]dto.OpenAIModels, error) {
+	userOpenAiModels := make([]dto.OpenAIModels, 0)
+
+	userGroup, err := repo.GetUserGroup(userID, false)
+	if err != nil {
+		return nil, err
+	}
+	group := userGroup
+	tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
+	if tokenGroup != "" {
+		group = tokenGroup
+	}
+	var models []string
+	if tokenGroup == "auto" {
+		for _, autoGroup := range app.GetUserAutoGroup(userGroup) {
+			groupModels := repo.GetGroupEnabledModelsForTenant(autoGroup, tenantID)
+			for _, g := range groupModels {
+				if !common.StringsContains(models, g) {
+					models = append(models, g)
+				}
+			}
+		}
+	} else {
+		models = repo.GetGroupEnabledModelsForTenant(group, tenantID)
+	}
+	for _, modelName := range models {
+		if !acceptUnsetRatioModel {
+			_, _, exist := ratio_setting.GetModelRatioOrPrice(modelName)
+			if !exist {
+				continue
+			}
+		}
+		if oaiModel, ok := openAIModelsMap[modelName]; ok {
+			oaiModel.SupportedEndpointTypes = repo.GetModelSupportEndpointTypes(modelName)
+			userOpenAiModels = append(userOpenAiModels, oaiModel)
+		} else {
+			userOpenAiModels = append(userOpenAiModels, dto.OpenAIModels{
+				Id:                     modelName,
+				Object:                 "model",
+				Created:                1626777600,
+				OwnedBy:                "custom",
+				SupportedEndpointTypes: repo.GetModelSupportEndpointTypes(modelName),
+			})
+		}
+	}
+	return userOpenAiModels, nil
+}
+
+// narrowByTenantAllowlist applies the tenant model allow-list to `in` —
+// only under TENANT_MODEL_ALLOWLIST_MODE=enforce with a configured
+// allow-list; observe (the default, and any tenant with no configured
+// allow-list) returns `in` unchanged. Split out of visibleModels unchanged
+// so ListRoutableModelsV2 (v2_models_routable.go) narrows the same way
+// /v1/models does, keeping the two endpoints' answers the same set for the
+// same user.
+func narrowByTenantAllowlist(tenantID string, in []dto.OpenAIModels) []dto.OpenAIModels {
+	if tenantpolicy.Mode() != tenantpolicy.ModeEnforce {
+		return in
+	}
+	allowed, configured, err := tenantpolicy.LoadModelAllowlist(tenantID)
+	if err != nil || !configured {
+		return in
+	}
+	filtered := make([]dto.OpenAIModels, 0, len(in))
+	for _, m := range in {
+		if tenantpolicy.ModelAllowed(allowed, m.Id) {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered
+}
+
 // visibleModels builds the set of models this caller (relay token, scoped to
 // its owning tenant) may see in discovery. Both ListModels and RetrieveModel
 // call this, so the list and the retrieve answer come from one construction
@@ -130,18 +232,7 @@ func init() {
 // the owner's L1 answer, carried over here so discovery and the 403 the
 // relay path would give under enforce agree.
 func visibleModels(c *gin.Context) ([]dto.OpenAIModels, error) {
-	userOpenAiModels := make([]dto.OpenAIModels, 0)
-
-	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
-	if !acceptUnsetRatioModel {
-		userId := c.GetInt("id")
-		if userId > 0 {
-			userSettings, _ := repo.GetUserSetting(userId, false)
-			if userSettings.AcceptUnsetRatioModel {
-				acceptUnsetRatioModel = true
-			}
-		}
-	}
+	acceptUnsetRatioModel := acceptUnsetRatioModels(c)
 
 	// Every caller today reaches this through middleware.TokenAuth
 	// (relay-router.go:18-60), which injects the tenant id at auth.go:601.
@@ -149,8 +240,11 @@ func visibleModels(c *gin.Context) ([]dto.OpenAIModels, error) {
 	// empty tenant is defined as the unscoped query (ability.go).
 	tenantID, _ := repo.GetTenantID(c)
 
+	var userOpenAiModels []dto.OpenAIModels
+
 	modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
 	if modelLimitEnable {
+		userOpenAiModels = make([]dto.OpenAIModels, 0)
 		s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
 		var tokenModelLimit map[string]bool
 		if ok {
@@ -180,64 +274,14 @@ func visibleModels(c *gin.Context) ([]dto.OpenAIModels, error) {
 		}
 	} else {
 		userId := c.GetInt("id")
-		userGroup, err := repo.GetUserGroup(userId, false)
+		var err error
+		userOpenAiModels, err = tenantRoutableModels(c, userId, tenantID, acceptUnsetRatioModel)
 		if err != nil {
 			return nil, err
 		}
-		group := userGroup
-		tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
-		if tokenGroup != "" {
-			group = tokenGroup
-		}
-		var models []string
-		if tokenGroup == "auto" {
-			for _, autoGroup := range app.GetUserAutoGroup(userGroup) {
-				groupModels := repo.GetGroupEnabledModelsForTenant(autoGroup, tenantID)
-				for _, g := range groupModels {
-					if !common.StringsContains(models, g) {
-						models = append(models, g)
-					}
-				}
-			}
-		} else {
-			models = repo.GetGroupEnabledModelsForTenant(group, tenantID)
-		}
-		for _, modelName := range models {
-			if !acceptUnsetRatioModel {
-				_, _, exist := ratio_setting.GetModelRatioOrPrice(modelName)
-				if !exist {
-					continue
-				}
-			}
-			if oaiModel, ok := openAIModelsMap[modelName]; ok {
-				oaiModel.SupportedEndpointTypes = repo.GetModelSupportEndpointTypes(modelName)
-				userOpenAiModels = append(userOpenAiModels, oaiModel)
-			} else {
-				userOpenAiModels = append(userOpenAiModels, dto.OpenAIModels{
-					Id:                     modelName,
-					Object:                 "model",
-					Created:                1626777600,
-					OwnedBy:                "custom",
-					SupportedEndpointTypes: repo.GetModelSupportEndpointTypes(modelName),
-				})
-			}
-		}
 	}
 
-	if tenantpolicy.Mode() == tenantpolicy.ModeEnforce {
-		allowed, configured, err := tenantpolicy.LoadModelAllowlist(tenantID)
-		if err == nil && configured {
-			filtered := make([]dto.OpenAIModels, 0, len(userOpenAiModels))
-			for _, m := range userOpenAiModels {
-				if tenantpolicy.ModelAllowed(allowed, m.Id) {
-					filtered = append(filtered, m)
-				}
-			}
-			userOpenAiModels = filtered
-		}
-	}
-
-	return userOpenAiModels, nil
+	return narrowByTenantAllowlist(tenantID, userOpenAiModels), nil
 }
 
 func ListModels(c *gin.Context, modelType int) {

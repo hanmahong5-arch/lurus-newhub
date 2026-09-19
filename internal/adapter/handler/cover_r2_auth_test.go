@@ -986,36 +986,6 @@ func TestR2Auth_OIDCLogout(t *testing.T) {
 	})
 }
 
-func TestR2Auth_RefreshAccessToken(t *testing.T) {
-	ctx := SetupV2TestRouter(t)
-	defer ctx.Cleanup()
-
-	r := r2authSessionRouter(func(r *gin.Engine) {
-		r.POST("/refresh", RefreshAccessToken)
-	})
-
-	t.Run("missing_refresh_token", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/refresh", bytes.NewReader([]byte(`{}`)))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("code = %d, want 400 (body=%s)", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("refresh_fails_upstream", func(t *testing.T) {
-		// No OIDC_ISSUER configured → the token endpoint POST fails → 401.
-		req := httptest.NewRequest(http.MethodPost, "/refresh", bytes.NewReader([]byte(`{"refresh_token":"rt-xyz"}`)))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("code = %d, want 401 (body=%s)", w.Code, w.Body.String())
-		}
-	})
-}
-
 func TestR2Auth_ValidateIDToken_Error(t *testing.T) {
 	// With no JWKS manager initialised, signature verification must fail —
 	// exercises the error return of validateIDToken.

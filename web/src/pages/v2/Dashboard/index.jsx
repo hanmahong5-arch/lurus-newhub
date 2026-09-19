@@ -29,6 +29,11 @@ import {
 } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
+  useRoutableModels,
+  firstRoutableModel,
+  WIRE_OPENAI,
+} from '../../../hooks/models/useRoutableModels';
+import {
   computeLatencyP50,
   computeLatencyP95,
   computeLatencyP99,
@@ -97,7 +102,25 @@ const asList = (val) => {
 // getServerAddress() (configured `status.server_address`, else the origin the
 // console is served from), so the quickstart names the host the reader is
 // already talking to. See web/src/pages/v2/Token/index.jsx for the same fix.
-const OnboardingCurlBlock = ({ username, tenantSlug }) => {
+//
+// L1 (cycle-11): the curl's "model" field was ALSO a hardcoded literal —
+// the same class of bug as the host used to be, just for the model
+// instead of the domain. `model` is the caller's first OpenAI-wire routable
+// model (HFDashboard resolves it via useRoutableModels); `resolved`
+// distinguishes "still loading" (render nothing yet) from "asked, and this
+// tenant can route zero models" (the honest empty state below, no <pre>).
+// `error` is a THIRD, distinct outcome from "resolved && no model": a
+// failed fetch is not proof the tenant has nothing to route — it is proof
+// only that we could not ask — so it renders its own onboarding_load_failed
+// line instead of the "add a channel" copy, which would send a brand-new
+// customer chasing a channel that may well already exist.
+const OnboardingCurlBlock = ({
+  username,
+  tenantSlug,
+  model,
+  resolved,
+  error,
+}) => {
   const { t } = useTranslation();
   const relayBaseUrl = useMemo(
     () => `${getServerAddress().replace(/\/+$/, '')}/v1`,
@@ -107,13 +130,17 @@ const OnboardingCurlBlock = ({ username, tenantSlug }) => {
     e.preventDefault();
     window.location.href = '/console/v2/token';
   };
-  const curlExample = `curl ${relayBaseUrl}/chat/completions \\
+  const noModelsRoutable = resolved && !error && !model;
+  const modelsLoadFailed = resolved && !!error && !model;
+  const curlExample = model
+    ? `curl ${relayBaseUrl}/chat/completions \\
   -H "Authorization: Bearer YOUR_TOKEN_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "gpt-4o-mini",
+    "model": "${model}",
     "messages": [{"role": "user", "content": "Hello from ${username || 'lurus-hub'}!"}]
-  }'`;
+  }'`
+    : '';
   return (
     <div
       role='region'
@@ -164,21 +191,47 @@ const OnboardingCurlBlock = ({ username, tenantSlug }) => {
           )}
         </span>
       </div>
-      <pre
-        style={{
-          background: 'var(--hf-code-bg)',
-          color: 'var(--hf-code-ink)',
-          padding: 14,
-          margin: 0,
-          fontSize: 11,
-          lineHeight: 1.55,
-          fontFamily: 'var(--hf-mono)',
-          overflow: 'auto',
-          border: '1px solid var(--hf-rule-strong)',
-        }}
-      >
-        {curlExample}
-      </pre>
+      {model && (
+        <pre
+          style={{
+            background: 'var(--hf-code-bg)',
+            color: 'var(--hf-code-ink)',
+            padding: 14,
+            margin: 0,
+            fontSize: 11,
+            lineHeight: 1.55,
+            fontFamily: 'var(--hf-mono)',
+            overflow: 'auto',
+            border: '1px solid var(--hf-rule-strong)',
+          }}
+        >
+          {curlExample}
+        </pre>
+      )}
+      {noModelsRoutable && (
+        <div
+          data-testid='dashboard-onboarding-no-models'
+          className='muted'
+          style={{ fontSize: 12, padding: '8px 0' }}
+        >
+          {t(
+            'console.dashboard.onboarding_no_models',
+            'No models are routable for this tenant yet — add a channel before your first call.',
+          )}
+        </div>
+      )}
+      {modelsLoadFailed && (
+        <div
+          data-testid='dashboard-onboarding-load-failed'
+          className='muted'
+          style={{ fontSize: 12, padding: '8px 0' }}
+        >
+          {t(
+            'console.dashboard.onboarding_load_failed',
+            'Could not check which models this tenant can route — try refreshing.',
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -317,6 +370,15 @@ const HFDashboard = () => {
   const hasRealtimeData = logs.length > 0;
   const showOnboarding = !loading && me && (me.token_count ?? 0) === 0;
 
+  // Only fetched once onboarding actually needs to render — avoids an
+  // extra request for every returning customer who already has a token.
+  const {
+    items: onboardingModels,
+    resolved: onboardingModelsResolved,
+    error: onboardingModelsError,
+  } = useRoutableModels(tenantSlug, { enabled: !!showOnboarding });
+  const onboardingModel = firstRoutableModel(onboardingModels, WIRE_OPENAI);
+
   // Activity table uses the most-recent slice only.
   const recentLogs = pickRecent(logs, 5);
 
@@ -436,7 +498,13 @@ const HFDashboard = () => {
       }
     >
       {showOnboarding && (
-        <OnboardingCurlBlock username={me?.username} tenantSlug={tenantSlug} />
+        <OnboardingCurlBlock
+          username={me?.username}
+          tenantSlug={tenantSlug}
+          model={onboardingModel?.id}
+          resolved={onboardingModelsResolved}
+          error={onboardingModelsError}
+        />
       )}
       <div className='hf-page-head'>
         <div>

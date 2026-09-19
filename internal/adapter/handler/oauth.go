@@ -555,57 +555,6 @@ func OIDCLogout(c *gin.Context) {
 	})
 }
 
-// RefreshAccessToken refreshes the access token using refresh token
-// Route: POST /api/v2/oauth/refresh
-func RefreshAccessToken(c *gin.Context) {
-	// Get refresh token from session or request body
-	session := sessions.Default(c)
-	refreshToken, _ := session.Get("oauth_refresh_token").(string)
-
-	if refreshToken == "" {
-		var req struct {
-			RefreshToken string `json:"refresh_token"`
-		}
-		if err := c.ShouldBindJSON(&req); err == nil {
-			refreshToken = req.RefreshToken
-		}
-	}
-
-	if refreshToken == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Refresh token is required",
-		})
-		return
-	}
-
-	// Exchange refresh token for new access token
-	tokenResp, err := refreshAccessToken(refreshToken)
-	if err != nil {
-		common.SysError(fmt.Sprintf("Failed to refresh access token: %v", err))
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": "Failed to refresh access token",
-		})
-		return
-	}
-
-	// Update session
-	session.Set("oauth_access_token", tokenResp.AccessToken)
-	if tokenResp.RefreshToken != "" {
-		session.Set("oauth_refresh_token", tokenResp.RefreshToken)
-	}
-	session.Save()
-
-	// Return new tokens
-	c.JSON(http.StatusOK, gin.H{
-		"success":       true,
-		"access_token":  tokenResp.AccessToken,
-		"refresh_token": tokenResp.RefreshToken,
-		"expires_in":    tokenResp.ExpiresIn,
-	})
-}
-
 // ============================================================================
 // Helper functions
 // ============================================================================
@@ -778,60 +727,6 @@ func exchangeCodeForToken(code string, codeVerifier string) (*OAuthTokenResponse
 		}
 		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
 			return nil, fmt.Errorf("token endpoint error: %s - %s", errResp.Error, errResp.ErrorDescription)
-		}
-		return nil, fmt.Errorf("token endpoint returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse response
-	var tokenResp OAuthTokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("failed to decode token response: %w", err)
-	}
-
-	return &tokenResp, nil
-}
-
-// refreshAccessToken refreshes the access token using refresh token
-func refreshAccessToken(refreshToken string) (*OAuthTokenResponse, error) {
-	issuer := os.Getenv("OIDC_ISSUER")
-	clientID := os.Getenv("OIDC_CLIENT_ID")
-	clientSecret := os.Getenv("OIDC_CLIENT_SECRET")
-
-	// Build token request
-	data := url.Values{}
-	data.Set("grant_type", "refresh_token")
-	data.Set("refresh_token", refreshToken)
-	data.Set("client_id", clientID)
-	if clientSecret != "" {
-		data.Set("client_secret", clientSecret)
-	}
-
-	// Create HTTP client with timeout
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	// Send POST request to token endpoint
-	resp, err := client.PostForm(issuer+oidcTokenPath(), data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to post token request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		// Parse error response for better error messages
-		var errResp struct {
-			Error            string `json:"error"`
-			ErrorDescription string `json:"error_description"`
-		}
-		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
-			return nil, fmt.Errorf("token refresh error: %s - %s", errResp.Error, errResp.ErrorDescription)
 		}
 		return nil, fmt.Errorf("token endpoint returned status %d: %s", resp.StatusCode, string(body))
 	}

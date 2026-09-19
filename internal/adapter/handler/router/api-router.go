@@ -149,9 +149,13 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.GET("/models_enabled", handler.EnabledListModels)
 			channelRoute.GET("/:id", handler.GetChannel)
 			channelRoute.POST("/:id/key", middleware.RootAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(), handler.GetChannelKey)
-			channelRoute.GET("/test", handler.TestAllChannels)
+			// Operator-only (cycle-11 L3/L8 repair round): the no-id forms run
+			// against every channel/tenant and (for /test) share the automatic
+			// probe pass's ban authority — not a per-resource action a
+			// tenant-admin grant should cover.
+			channelRoute.GET("/test", middleware.RootAuth(), handler.TestAllChannels)
 			channelRoute.GET("/test/:id", handler.TestChannel)
-			channelRoute.GET("/update_balance", handler.UpdateAllChannelsBalance)
+			channelRoute.GET("/update_balance", middleware.RootAuth(), handler.UpdateAllChannelsBalance)
 			channelRoute.GET("/update_balance/:id", handler.UpdateChannelBalance)
 			channelRoute.POST("/", handler.AddChannel)
 			channelRoute.PUT("/", handler.UpdateChannel)
@@ -161,7 +165,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.PUT("/tag", handler.EditTagChannels)
 			channelRoute.DELETE("/:id", handler.DeleteChannel)
 			channelRoute.POST("/batch", handler.DeleteChannelBatch)
-			channelRoute.POST("/fix", handler.FixChannelsAbilities)
+			channelRoute.POST("/fix", middleware.RootAuth(), handler.FixChannelsAbilities)
 			channelRoute.GET("/fetch_models/:id", handler.FetchUpstreamModels)
 			channelRoute.POST("/fetch_models", handler.FetchModels)
 			channelRoute.POST("/ollama/pull", handler.OllamaPullModel)

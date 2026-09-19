@@ -22,18 +22,17 @@ import HFShell from '../../../components/hifi/HFShell';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
-import { useTenantModels } from '../../../hooks/models/useTenantModels';
+import {
+  useRoutableModels,
+  defaultCompareModels,
+} from '../../../hooks/models/useRoutableModels';
 
 // HiFi 5 — Playground multi-model compare. Wired to
 // POST /api/v2/:tenant_slug/playground/run (2026-05-19).
 // Wave 3 Phase 1 — save/blank/swap/share wired (2026-05-20).
-
-const DEFAULT_MODELS = ['gpt-4o', 'claude-3.5-sonnet', 'gemini-1.5-pro'];
-const VENDOR_FOR = {
-  'gpt-4o': 'OpenAI',
-  'claude-3.5-sonnet': 'Anthropic',
-  'gemini-1.5-pro': 'Google',
-};
+// L1 (cycle-11): the compare draft, the swap list and the run guard all
+// come from GET .../models/routable — there is no literal model list or
+// vendor map anymore (see the routable-draft-sync effect below).
 
 const DEFAULT_FORM = {
   system: 'You are a helpful, concise assistant.',
@@ -41,17 +40,25 @@ const DEFAULT_FORM = {
   temperature: 0.7,
   top_p: 1.0,
   max_tokens: 1024,
-  models: DEFAULT_MODELS,
+  // Populated once the routable list resolves (routable-draft-sync effect)
+  // — no literal fallback model list.
+  models: [],
 };
 
-// readURLParams extracts ?prompt=&models=&params= from the current URL
-// for URL-self-contained share links. Returns partial form fields.
+// readURLParams extracts ?prompt=&prefill_model=&models=&params= from the
+// current URL for URL-self-contained share links and the Models page's
+// "try ↗" link (prefill_model — a single model id, takes precedence over
+// `models` when both are present since "try" is a more specific intent
+// than a restored multi-model share link).
 function readURLParams() {
   try {
     const params = new URLSearchParams(window.location.search);
     const out = {};
     if (params.has('prompt')) out.user = params.get('prompt');
-    if (params.has('models')) {
+    if (params.has('prefill_model')) {
+      const pm = params.get('prefill_model');
+      if (pm) out.models = [pm];
+    } else if (params.has('models')) {
       try {
         const m = JSON.parse(params.get('models'));
         if (Array.isArray(m) && m.length > 0) out.models = m;
@@ -105,30 +112,75 @@ const HFPlayground = () => {
   const [running, setRunning] = useState(false);
   const [items, setItems] = useState(null); // null = never run; [] = ran with errors
 
+  // Routing truth for this tenant (L1, cycle-11) — fetched eagerly (not
+  // lazily behind the swap▾ menu, unlike the old useTenantModels wiring)
+  // because the draft-sync effect below and the run-guard both need to
+  // know the routable set before the user ever opens swap▾.
+  const {
+    items: routableModels,
+    loading: modelsLoading,
+    error: modelsError,
+    resolved: modelsResolved,
+  } = useRoutableModels(tenantSlug);
+  const availableModels = routableModels.map((m) => m.id).filter(Boolean);
+  const vendorFor = (modelId) =>
+    routableModels.find((m) => m.id === modelId)?.owned_by || '—';
+  const noModelsRoutable = modelsResolved && routableModels.length === 0;
+
   // Apply URL prefill on first mount — takes precedence over the draft only
   // when share params are present. Preserves draft for fields not in URL.
+  // prefillModelRef remembers a single-model ?prefill_model= (the Models
+  // page's "try ↗" link) so the routable-draft-sync effect below can tell
+  // the user WHY their draft changed, instead of silently dropping it.
   const urlPrefillApplied = useRef(false);
+  const prefillModelRef = useRef(null);
+  const [prefillUnroutableHint, setPrefillUnroutableHint] = useState(null);
   useEffect(() => {
     if (urlPrefillApplied.current) return;
     urlPrefillApplied.current = true;
     const prefill = readURLParams();
+    if (prefill.models && prefill.models.length === 1) {
+      prefillModelRef.current = prefill.models[0];
+    }
     if (Object.keys(prefill).length > 0) {
       setForm((prev) => ({ ...prev, ...prefill }));
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Routable-draft-sync: once the routable list resolves, drop any draft
+  // model (restored from a stale localStorage draft, or a share-link
+  // ?models= from before a tenant's allow-list changed) that is no longer
+  // routable; if that empties the draft, fall back to the first three
+  // routable models (defaultCompareModels) instead of leaving the compare
+  // grid with zero columns.
+  useEffect(() => {
+    if (!modelsResolved) return;
+    const validIds = new Set(routableModels.map((m) => m.id));
+    if (prefillModelRef.current && !validIds.has(prefillModelRef.current)) {
+      setPrefillUnroutableHint(prefillModelRef.current);
+    }
+    prefillModelRef.current = null; // only check once, right after resolve
+    setForm((prev) => {
+      const kept = prev.models.filter((m) => validIds.has(m));
+      // Nothing dropped AND the draft was non-empty to begin with — the
+      // `0 === 0` case (an empty draft, e.g. first mount) must still fall
+      // through to the default-fill branch below, not bail out here.
+      if (kept.length === prev.models.length && prev.models.length > 0) {
+        return prev;
+      }
+      if (kept.length > 0) return { ...prev, models: kept };
+      return {
+        ...prev,
+        models: defaultCompareModels(routableModels).map((m) => m.id),
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelsResolved, routableModels]);
+
   // ── Preset state ──
   const [presets, setPresets] = useState(null); // null = not yet loaded
   const [blankOpen, setBlankOpen] = useState(false);
   const [swapOpen, setSwapOpen] = useState(null); // colIdx | null
-  // Lazy — the hook's fetch does not fire until the swap▾ menu is opened once.
-  const [modelsRequested, setModelsRequested] = useState(false);
-  const {
-    items: modelItems,
-    loading: modelsLoading,
-    error: modelsError,
-  } = useTenantModels(tenantSlug, { enabled: modelsRequested });
-  const availableModels = modelItems.map((m) => m.model_name).filter(Boolean);
   const blankRef = useRef(null);
   const swapRef = useRef(null);
 
@@ -173,6 +225,7 @@ const HFPlayground = () => {
       );
       return;
     }
+    if (noModelsRoutable || form.models.length === 0) return;
     setRunning(true);
     setItems(null);
     try {
@@ -203,7 +256,7 @@ const HFPlayground = () => {
     } finally {
       setRunning(false);
     }
-  }, [form, tenantSlug, tr]);
+  }, [form, tenantSlug, tr, noModelsRoutable]);
 
   // ⌘/Ctrl + Enter triggers run from any focus position inside the page.
   useEffect(() => {
@@ -332,7 +385,6 @@ const HFPlayground = () => {
         setSwapOpen(null);
         return;
       }
-      setModelsRequested(true);
       setSwapOpen(colIdx);
       setBlankOpen(false);
     },
@@ -358,7 +410,7 @@ const HFPlayground = () => {
     return {
       idx: i,
       model: m,
-      vendor: VENDOR_FOR[m] || '—',
+      vendor: vendorFor(m),
       result: found || null,
     };
   });
@@ -535,6 +587,61 @@ const HFPlayground = () => {
             </div>
           )}
 
+          {prefillUnroutableHint && (
+            <div
+              style={{
+                marginTop: 10,
+                fontSize: 11,
+                padding: '4px 10px',
+                borderLeft: '2px solid var(--hf-warn)',
+                background: 'var(--hf-warn-bg)',
+                color: 'var(--hf-ink-2)',
+              }}
+              data-testid='playground-prefill-unroutable'
+            >
+              {tr(
+                'console.playground.prefill_unroutable',
+                'Model "{{model}}" is not routable for this tenant — showing the default compare set instead.',
+                { model: prefillUnroutableHint },
+              )}
+            </div>
+          )}
+
+          {modelsError && (
+            <div
+              style={{
+                marginTop: 10,
+                fontSize: 11,
+                padding: '4px 10px',
+                borderLeft: '2px solid var(--hf-err)',
+                background: 'var(--hf-warn-bg)',
+                color: 'var(--hf-ink-2)',
+              }}
+              data-testid='playground-models-error'
+            >
+              {tr(
+                'console.playground.models_load_failed',
+                'failed to load models',
+              )}
+            </div>
+          )}
+
+          {!modelsError && noModelsRoutable && (
+            <div
+              style={{
+                marginTop: 10,
+                fontSize: 11,
+                padding: '4px 10px',
+                borderLeft: '2px solid var(--hf-err)',
+                background: 'var(--hf-warn-bg)',
+                color: 'var(--hf-ink-2)',
+              }}
+              data-testid='playground-no-models'
+            >
+              {tr('console.playground.no_models', 'no models available')}
+            </div>
+          )}
+
           <div
             style={{
               marginTop: 16,
@@ -671,7 +778,7 @@ const HFPlayground = () => {
             <button
               type='button'
               className='btn acc'
-              disabled={running}
+              disabled={running || noModelsRoutable || form.models.length === 0}
               onClick={runAll}
               data-testid='playground-run'
             >

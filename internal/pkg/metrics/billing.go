@@ -132,4 +132,40 @@ var (
 		},
 		[]string{"status"},
 	)
+
+	// BillingSettlementFailedTotal counts consume-quota settlement calls that
+	// returned an error, labeled by which relay path failed to settle (text/
+	// claude/audio — the three sites that route through app.SettleConsume:
+	// relay.postConsumeQuota, app.PostClaudeConsumeQuota,
+	// app.PostAudioConsumeQuota). Other PostConsumeQuota callers
+	// (internal/app/relay/mjproxy_handler.go, internal/app/relay/relay_task.go)
+	// and the realtime path (quota.go PostWssConsumeQuota) are not counted
+	// here — see doc/runbook/settlement-failed.md's "Not covered this cycle"
+	// section. The consume log row for that request is still written at the
+	// same quota it would have carried anyway (neither RecordConsumeLog nor
+	// the debit path changes) — this counter, together with the row's own
+	// other.settlement="failed" flag (app.FlagSettlementOutcome), is the
+	// only signal on the row itself that the charge shown on that row may
+	// not have actually settled (SettleConsume's logger.LogError line is a
+	// second, separate signal — see internal/app/settlement_outcome.go).
+	BillingSettlementFailedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "billing",
+			Name:      "settlement_failed_total",
+			Help:      "Consume-quota settlement calls that returned an error, by relay path (text/claude/audio)",
+		},
+		[]string{"path"},
+	)
 )
+
+// init pre-registers the three known path label values with a zero count,
+// matching the pattern in r6_rate_limit_degraded.go — a CounterVec child
+// series only exists on /metrics once its first Inc() fires, so an absent
+// series would otherwise be ambiguous between "no settlement has failed yet"
+// and "this counter isn't wired into a call site at all".
+func init() {
+	BillingSettlementFailedTotal.WithLabelValues("text")
+	BillingSettlementFailedTotal.WithLabelValues("claude")
+	BillingSettlementFailedTotal.WithLabelValues("audio")
+}

@@ -524,10 +524,7 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	// debit and the platform pre-auth settlement, letting the pre-auth TTL
 	// expire and release paid-for revenue. PostConsumeQuota handles quota == 0
 	// safely (the +0 local writes are no-ops; pool + settle key on totalQuota).
-	err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
-	if err != nil {
-		logger.LogError(ctx, "error consuming token remain quota: "+err.Error())
-	}
+	settleErr := SettleConsume(ctx, relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, "claude")
 
 	other := GenerateClaudeOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio,
 		cacheTokens, cacheRatio,
@@ -535,6 +532,7 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		cacheCreationTokens5m, cacheCreationRatio5m,
 		cacheCreationTokens1h, cacheCreationRatio1h,
 		modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	FlagSettlementOutcome(other, settleErr)
 	if claudeWebSearchCallCount > 0 {
 		// Set directly on the map GenerateClaudeOtherInfo returns rather than
 		// inside that shared generator — these three keys already exist in the
@@ -716,10 +714,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	// Always settle, even when quotaDelta == 0 (exact estimate) — see the same
 	// note in PostClaudeConsumeQuota. Skipping a zero delta skipped the pool
 	// debit and the platform pre-auth settlement.
-	err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
-	if err != nil {
-		logger.LogError(ctx, "error consuming token remain quota: "+err.Error())
-	}
+	settleErr := SettleConsume(ctx, relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, "audio")
 
 	logModel := relayInfo.OriginModelName
 	if extraContent != "" {
@@ -727,6 +722,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 	other := GenerateAudioOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	FlagSettlementOutcome(other, settleErr)
 	logParams := repo.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.PromptTokens,

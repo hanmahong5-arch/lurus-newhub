@@ -67,7 +67,6 @@ const V2Settings = lazy(() => import('./pages/v2/Settings'));
 const V2Flows = lazy(() => import('./pages/v2/Flows'));
 const V2DesignSystem = lazy(() => import('./pages/v2/DesignSystem'));
 const V2States = lazy(() => import('./pages/v2/States'));
-const V2Variants = lazy(() => import('./pages/v2/Variants'));
 const V2AccountDisabled = lazy(() => import('./pages/v2/AccountDisabled'));
 const V2AdminUsers = lazy(() => import('./pages/v2/Admin/Users'));
 const V2AdminAudit = lazy(() => import('./pages/v2/Admin/Audit'));
@@ -392,7 +391,6 @@ function App() {
           ['flows', V2Flows],
           ['design-system', V2DesignSystem],
           ['states', V2States],
-          ['variants', V2Variants],
           ['admin/users', V2AdminUsers],
           ['admin/audit', V2AdminAudit],
           ['admin/gateway', V2AdminGateway],

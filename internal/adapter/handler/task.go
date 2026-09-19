@@ -347,10 +347,9 @@ func GetAllTask(c *gin.Context) {
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 
 	// ProjectID/RequestID: cost-attribution/support-lookup filters on the
-	// migration-035 columns (cycle-8 L10); exact match, admin sees all
-	// tenants' tasks so no ownership narrowing is needed here. An invalid
-	// value for either short-circuits to the empty page before any query
-	// builder or DB call runs.
+	// migration-035 columns (cycle-8 L10); exact match. An invalid value for
+	// either short-circuits to the empty page before any query builder or
+	// DB call runs.
 	projectID, projectIDInvalid := normalizeProjectIDFilter(c.Query("project_id"))
 	requestID, requestIDInvalid := normalizeRequestIDFilter(c.Query("request_id"))
 	if projectIDInvalid || requestIDInvalid {
@@ -369,6 +368,17 @@ func GetAllTask(c *gin.Context) {
 		ChannelID:      c.Query("channel_id"),
 		ProjectID:      projectID,
 		RequestID:      requestID,
+	}
+	// This route is mounted under middleware.AdminAuth() (role >=
+	// RoleAdminUser), not RootAuth — a tenant admin narrower than root must
+	// not see other tenants' tasks. Mirrors GetAllChannels' isRoot/
+	// callerTenant scope (channel.go:113-114,153-154): the filter is set
+	// unconditionally for every non-root caller, including one whose
+	// session carries no tenant yet, so an empty tenant closes the page
+	// rather than falling through to the platform-wide view.
+	if c.GetInt("role") < common.RoleRootUser {
+		queryParams.TenantID = c.GetString("tenant_id")
+		queryParams.TenantScoped = true
 	}
 
 	items := repo.TaskGetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)

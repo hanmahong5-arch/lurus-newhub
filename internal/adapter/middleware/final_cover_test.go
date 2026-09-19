@@ -146,13 +146,29 @@ func deadRedis(t *testing.T) func() {
 	}
 }
 
-func TestRedisRateLimiterKeyed_LLenError_500(t *testing.T) {
+// TestRedisRateLimiterKeyed_LLenError_FailsOpen was TestRedisRateLimiterKeyed_LLenError_500
+// until cycle-11 L2 / operator decision D1 (mirrors the 2026-08-27 D1 flip
+// this file's sibling TestModelRateLimit_Redis_CheckError_FailsOpen already
+// documents above): redisRateLimiterKeyed's LLen error is now a deliberate
+// fail-OPEN (c.Next(), not c.Abort()+500), matching the relay-path limiters'
+// existing contract. The replacement assertions: the request is admitted
+// (not aborted, status not 500), and metrics.RateLimitDegradedTotal for
+// "web_rate_limit_backend" increments so the degradation stays observable.
+func TestRedisRateLimiterKeyed_LLenError_FailsOpen(t *testing.T) {
 	cleanup := deadRedis(t)
 	defer cleanup()
+	before := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("web_rate_limit_backend"))
 	c, w := newTestContext(http.MethodGet, "/x", "", "")
 	redisRateLimiterKeyed(c, 5, 60, "ERR", "identX")
-	if !c.IsAborted() || c.Writer.Status() != http.StatusInternalServerError {
-		t.Errorf("aborted=%v status=%d, want abort 500 on Redis LLen failure", c.IsAborted(), c.Writer.Status())
+	if c.IsAborted() {
+		t.Errorf("aborted=%v, want not aborted (fail open) on Redis LLen failure", c.IsAborted())
+	}
+	if c.Writer.Status() == http.StatusInternalServerError {
+		t.Errorf("status=%d, must not be 500 on Redis LLen failure (fail open)", c.Writer.Status())
+	}
+	after := testutil.ToFloat64(metrics.RateLimitDegradedTotal.WithLabelValues("web_rate_limit_backend"))
+	if after != before+1 {
+		t.Errorf("web_rate_limit_backend counter = %v, want %v (before %v + 1)", after, before+1, before)
 	}
 	_ = w
 }

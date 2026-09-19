@@ -1171,3 +1171,96 @@ describe('Log page — cross-product attribution', () => {
     });
   });
 });
+
+// ── Settlement outcome (L7, cycle 11) ───────────────────────────────────────
+//
+// other.settlement is written by app.FlagSettlementOutcome
+// (internal/app/settlement_outcome.go) only when the consume-quota
+// settlement call for a request failed. The row still shows a price — the
+// debit path is untouched — so the badge is the only on-row signal that the
+// charge may not have actually landed.
+describe('Log page — settlement outcome', () => {
+  const settlementBaseLog = {
+    id: 1,
+    type: 2,
+    model_name: 'rt-alpha',
+    total_latency_ms: 120,
+    prompt_tokens: 100,
+    completion_tokens: 200,
+    quota: 1000,
+    created_at: Math.floor(Date.now() / 1000),
+    channel: 7,
+  };
+
+  const wireOneLog = (log) => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/logs/stat')) {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { logs: [log], total: 1 } },
+      });
+    });
+  };
+
+  it('renders a settlement-failed badge when other.settlement is failed', async () => {
+    wireOneLog({
+      ...settlementBaseLog,
+      other: JSON.stringify({ settlement: 'failed' }),
+    });
+
+    render(<HFLog />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('settlement-failed-badge')).toBeTruthy();
+    });
+    expect(screen.getByTestId('settlement-failed-badge').textContent).toBe(
+      'settlement failed',
+    );
+  });
+
+  it('renders no settlement-failed badge for a normal settled row', async () => {
+    wireOneLog({
+      ...settlementBaseLog,
+      other: JSON.stringify({ frt: 120 }),
+    });
+
+    render(<HFLog />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('rt-alpha').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByTestId('settlement-failed-badge')).toBeNull();
+  });
+
+  // Live tail renders a second, independent copy of the badge
+  // (web/src/pages/v2/Log/index.jsx ~1739) from the same trace-table copy
+  // (~1097) — without this test, deleting either copy leaves the other
+  // green and the regression goes unnoticed (acceptor finding, cycle-11
+  // repair round).
+  it('renders a settlement-failed badge in the live tail view', async () => {
+    vi.useFakeTimers();
+    wireOneLog({
+      ...settlementBaseLog,
+      id: 2,
+      other: JSON.stringify({ settlement: 'failed' }),
+    });
+
+    render(<HFLog />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.click(screen.getByText('Live tail'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByTestId('settlement-failed-badge')).toBeTruthy();
+    expect(screen.getByTestId('settlement-failed-badge').textContent).toBe(
+      'settlement failed',
+    );
+
+    vi.useRealTimers();
+  });
+});

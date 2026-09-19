@@ -148,22 +148,6 @@ paths:
         '302':
           description: Redirect to Zitadel logout URL
 
-  /api/v2/oauth/refresh:
-    post:
-      tags: [OAuth]
-      summary: Refresh Access Token
-      description: Refreshes the OAuth access token using refresh token
-      operationId: refreshAccessToken
-      responses:
-        '200':
-          description: New access token
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TokenResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
   # ============================================================
   # User Routes
   # ============================================================
@@ -441,6 +425,116 @@ paths:
       responses:
         '204':
           description: Token deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================
+  # Chat Session Routes (migration 038, cycle-10 L3; 400 error codes and
+  # the model field added cycle-11 L5)
+  # ============================================================
+
+  /api/v2/{tenant_slug}/chat/sessions:
+    get:
+      tags: [ChatSessions]
+      summary: List Chat Sessions
+      description: Lists the caller's own saved chat sessions, most-recently-updated first.
+      operationId: listChatSessionsV2
+      security:
+        - ZitadelJWT: []
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+      responses:
+        '200':
+          description: Chat sessions listed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [ChatSessions]
+      summary: Create Chat Session
+      description: >-
+        Saves a conversation the client already holds — the request carries
+        the full turn array, not a single new turn to append.
+      operationId: createChatSessionV2
+      security:
+        - ZitadelJWT: []
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+      responses:
+        '200':
+          description: Chat session created
+        '400':
+          description: >-
+            Bad request — error_code is CHAT_SESSION_LIMIT_REACHED (the
+            caller already owns 200 sessions in this tenant) or
+            INVALID_REQUEST (oversized/invalid title, model, or messages).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v2/{tenant_slug}/chat/sessions/{id}:
+    get:
+      tags: [ChatSessions]
+      summary: Get Chat Session
+      description: Fetches one saved chat session (plus its messages) the caller owns.
+      operationId: getChatSessionV2
+      security:
+        - ZitadelJWT: []
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+        - $ref: '#/components/parameters/ChatSessionId'
+      responses:
+        '200':
+          description: Chat session fetched
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [ChatSessions]
+      summary: Update Chat Session
+      description: >-
+        Partially updates title and/or model, and/or REPLACES the full
+        message list, of a chat session the caller owns.
+      operationId: updateChatSessionV2
+      security:
+        - ZitadelJWT: []
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+        - $ref: '#/components/parameters/ChatSessionId'
+      responses:
+        '200':
+          description: Chat session updated
+        '400':
+          description: >-
+            Bad request — error_code is INVALID_REQUEST (oversized/invalid
+            title, model, or messages). A rejected update leaves the stored
+            session unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [ChatSessions]
+      summary: Delete Chat Session
+      description: Deletes a chat session (and its messages) the caller owns.
+      operationId: deleteChatSessionV2
+      security:
+        - ZitadelJWT: []
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+        - $ref: '#/components/parameters/ChatSessionId'
+      responses:
+        '200':
+          description: Chat session deleted
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1365,6 +1459,12 @@ components:
       schema:
         type: integer
     TokenId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+    ChatSessionId:
       name: id
       in: path
       required: true

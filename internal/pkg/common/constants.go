@@ -218,6 +218,14 @@ var (
 	GlobalWebRateLimitNum      int
 	GlobalWebRateLimitDuration int64
 
+	// GlobalV2RateLimit* guards the /api/v2 route group, which previously
+	// had no rate limit at all (see middleware/rate-limit-v2.go's doc
+	// comment). Its own "GV" bucket, deliberately separate from GA/GW above,
+	// so console and /api/* traffic never share a budget with it.
+	GlobalV2RateLimitEnable   bool
+	GlobalV2RateLimitNum      int
+	GlobalV2RateLimitDuration int64
+
 	CriticalRateLimitEnable   bool
 	CriticalRateLimitNum            = 20
 	CriticalRateLimitDuration int64 = 20 * 60

@@ -198,6 +198,18 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	if queryParams.EndTimestamp != 0 {
 		query = query.Where("submit_time <= ?", queryParams.EndTimestamp)
 	}
+	// TenantID: this table has no tenant_id column of its own (unlike
+	// channel/user/redemption), so the scope reaches the tenant through the
+	// owning user row, same precedent as applyQuotaData (repo/usedata.go).
+	// GetAllTask only sets TenantScoped for non-root admins. The gate is
+	// TenantScoped, not TenantID != "" — a non-root caller with no tenant on
+	// its session (TenantID == "") still gets the WHERE clause, and an empty
+	// string matches no user row, so the page comes back empty instead of
+	// falling through to every tenant's rows (fail-closed, operator
+	// decision cycle-11 L8 repair).
+	if queryParams.TenantScoped {
+		query = query.Where("user_id IN (SELECT id FROM users WHERE tenant_id = ?)", queryParams.TenantID)
+	}
 
 	// 获取数据
 	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
@@ -376,6 +388,14 @@ func TaskCountAllTasks(queryParams SyncTaskQueryParams) int64 {
 	}
 	if queryParams.EndTimestamp != 0 {
 		query = query.Where("submit_time <= ?", queryParams.EndTimestamp)
+	}
+	// TenantID/TenantScoped must mirror TaskGetAllTasks above, same
+	// reasoning as the ProjectID/RequestID comment a few lines up —
+	// otherwise the admin list's reported "total" would count every
+	// tenant's rows (or, for a scoped-but-tenantless caller, every row too)
+	// while the page itself only shows one tenant's or none.
+	if queryParams.TenantScoped {
+		query = query.Where("user_id IN (SELECT id FROM users WHERE tenant_id = ?)", queryParams.TenantID)
 	}
 	_ = query.Count(&total).Error
 	return total

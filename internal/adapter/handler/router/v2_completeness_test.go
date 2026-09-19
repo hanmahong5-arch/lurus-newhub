@@ -86,7 +86,6 @@ func TestV2IDOR_Completeness(t *testing.T) {
 	exempt := map[string]string{
 		// ---- self-service: acts on the caller's own session/identity, no addressable id ----
 		"POST /api/v2/oauth/logout":                    "self-service: clears the authenticated caller's own session, no resource id",
-		"POST /api/v2/oauth/refresh":                   "self-service: refreshes the authenticated caller's own session/tokens, no resource id",
 		"POST /api/v2/auth/zita-logout":                "self-service: idempotent clear of the caller's own session/cookie, no resource id",
 		"POST /api/v2/:tenant_slug/playground/run":     "self-service: runs the caller's own prompt against models, no stored per-id resource accessed",
 		"POST /api/v2/:tenant_slug/chat/send":          "self-service: sends the caller's own message, no stored per-id resource",
@@ -151,6 +150,7 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"GET /api/v2/admin/tenants/:id/credit-pool/usage":           "RootJWTAuth-gated: root manages every tenant's credit pool by design",
 		"DELETE /api/v2/admin/tenants/:id/credit-pool":              "RootJWTAuth-gated: root manages every tenant's credit pool by design",
 		"POST /api/v2/admin/tenants/:id/invites":                    "RootJWTAuth-gated: root mints onboarding invite codes for every tenant by design (N2)",
+		"GET /api/v2/admin/tenants/:id/invites":                     "RootJWTAuth-gated: root reads every tenant's invite list by design; projection is prefix-only (see TestListTenantInvites_NeverReturnsFullCode, internal/adapter/handler/tenant_invite_admin_test.go)",
 		"DELETE /api/v2/admin/tenants/:id/invites/:invite_id":       "RootJWTAuth-gated: repo.RevokeTenantInvite scopes by (id, tenant_id) itself — a code belonging to a different tenant 404s as not-found, same as the credit-pool group above",
 		"GET /api/v2/admin/mappings/:id":                            "RootJWTAuth-gated: root reads platform user-identity mappings across every tenant by design",
 		"DELETE /api/v2/admin/mappings/:id":                         "RootJWTAuth-gated: root manages platform user-identity mappings across every tenant by design",

@@ -72,6 +72,88 @@ func IssueTenantInvite(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"success": true, "data": invite})
 }
 
+// tenantInviteView is the admin list projection of a TenantInvite. It
+// deliberately drops Code down to an 8-char CodePrefix — the list projection
+// drops the code; IssueTenantInvite's 201 is the only producer that returns
+// the full code today (TestListTenantInvites_NeverReturnsFullCode).
+type tenantInviteView struct {
+	Id                  int        `json:"id"`
+	CodePrefix          string     `json:"code_prefix"`
+	Status              int        `json:"status"`
+	ExpiredTime         int64      `json:"expired_time"`
+	ConsumedByAccountId *int64     `json:"consumed_by_account_id"`
+	ConsumedAt          *time.Time `json:"consumed_at"`
+	CreatedByUserId     int        `json:"created_by_user_id"`
+	CreatedAt           time.Time  `json:"created_at"`
+}
+
+func toTenantInviteView(inv repo.TenantInvite) tenantInviteView {
+	prefix := inv.Code
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+	return tenantInviteView{
+		Id:                  inv.Id,
+		CodePrefix:          prefix,
+		Status:              inv.Status,
+		ExpiredTime:         inv.ExpiredTime,
+		ConsumedByAccountId: inv.ConsumedByAccountId,
+		ConsumedAt:          inv.ConsumedAt,
+		CreatedByUserId:     inv.CreatedByUserId,
+		CreatedAt:           inv.CreatedAt,
+	}
+}
+
+// ListTenantInvites lists tenantID's invite codes, newest first
+// (repo.ListTenantInvites orders created_at DESC;
+// TestListTenantInvites_NewestFirst pins it), projected through
+// tenantInviteView so the list response carries only the 8-char prefix
+// (TestListTenantInvites_NeverReturnsFullCode).
+// Route: GET /api/v2/admin/tenants/:id/invites
+func ListTenantInvites(c *gin.Context) {
+	tenantID := c.Param("id")
+	if tenantID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "tenant id required"})
+		return
+	}
+	if _, err := repo.GetTenantByID(tenantID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "Tenant not found"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	invites, total, err := repo.ListTenantInvites(tenantID, pageSize, offset)
+	if err != nil {
+		common.SysError("ListTenantInvites: list failed: " + err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to list invites"})
+		return
+	}
+
+	views := make([]tenantInviteView, 0, len(invites))
+	for _, inv := range invites {
+		views = append(views, toTenantInviteView(inv))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"invites":   views,
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
+		},
+	})
+}
+
 // RevokeTenantInvite kills a pending code early.
 // Route: DELETE /api/v2/admin/tenants/:id/invites/:invite_id
 //

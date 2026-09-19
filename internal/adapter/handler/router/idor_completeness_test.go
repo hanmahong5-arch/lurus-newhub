@@ -17,6 +17,7 @@ package router
 
 import (
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -76,7 +77,7 @@ func TestV1IDOR_Completeness(t *testing.T) {
 		"POST /api/channel/:id/key":      "RootAuth-gated (root only); not reachable by a tenant admin",
 		"POST /api/channel/":             "AddChannel stamps the caller's tenant_id; cannot target another tenant",
 		"POST /api/channel/fetch_models": "operates on request-body base_url/key; no stored resource id to cross tenants",
-		"POST /api/channel/fix":          "FixChannelsAbilities rebuilds ability rows idempotently; global maintenance, not a per-tenant data mutation",
+		"POST /api/channel/fix":          "RootAuth-gated (cycle-11 L8/L3): operator-only maintenance, not reachable by a tenant admin",
 		"POST /api/redemption/":          "AddRedemption stamps the caller's tenant_id; cannot target another tenant",
 		// user self-service (UserAuth; operate on the authenticated principal, no id)
 		"PUT /api/user/self":                          "self-service: updates the authenticated user only",
@@ -119,5 +120,92 @@ func TestV1IDOR_Completeness(t *testing.T) {
 		}
 		t.Errorf("tenant-scoped route %q is neither swept by a cross-tenant IDOR test nor exempted — "+
 			"add a case to v1_idor_sweep_test.go or an exemption with justification here", key)
+	}
+}
+
+// TestV1IDOR_ListScopeCompleteness is the list-scoping sibling of
+// TestV1IDOR_Completeness above: every in-scope, :id-less GET whose path
+// does not contain "/self" must appear in listScoped (backed by a named
+// *_ListTenantScoped test in v1_cross_tenant_idor_test.go, verified to
+// actually exist by source grep, not just declared here) or listExempt
+// (with a factual reason). An unclassified route fails the test — the map
+// must never be merely "non-empty".
+func TestV1IDOR_ListScopeCompleteness(t *testing.T) {
+	common.RedisEnabled = false
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+
+	tenantScopedPrefixes := []string{"/api/channel/", "/api/redemption/", "/api/user/", "/api/task/", "/api/mj/"}
+
+	// route -> name of the *_ListTenantScoped test in package handler
+	// (internal/adapter/handler/v1_cross_tenant_idor_test.go) that proves
+	// this list narrows to the caller's tenant.
+	listScoped := map[string]string{
+		"GET /api/channel/":          "TestV1Channel_ListTenantScoped",
+		"GET /api/channel/search":    "TestV1ChannelSearch_ListTenantScoped",
+		"GET /api/redemption/":       "TestV1Redemption_ListTenantScoped",
+		"GET /api/redemption/search": "TestV1RedemptionSearch_ListTenantScoped",
+		"GET /api/user/":             "TestV1User_ListTenantScoped",
+		"GET /api/user/search":       "TestV1UserSearch_ListTenantScoped",
+		"GET /api/task/":             "TestV1Task_ListTenantScoped",
+		"GET /api/mj/":               "TestV1Midjourney_ListTenantScoped",
+	}
+
+	listExempt := map[string]string{
+		// self-service: the caller reads only its own account, no tenant list to scope.
+		"GET /api/user/token":       "self-service: issues an access token for the authenticated user only",
+		"GET /api/user/models":      "self-service: lists models available to the authenticated user only",
+		"GET /api/user/totp/status": "self-service: reads the authenticated user's own TOTP enrollment state",
+		// root-only after W's RootAuth edits above: a whole-platform operator pass, not a tenant-admin list.
+		"GET /api/channel/test":           "RootAuth-gated (cycle-11 L8/L3): whole-platform operator pass, not reachable by a tenant admin",
+		"GET /api/channel/update_balance": "RootAuth-gated (cycle-11 L8/L3): whole-platform operator pass, not reachable by a tenant admin",
+		// known gap, operator decision, next-cycle item — NOT "by design".
+		"GET /api/channel/models":         "ChannelListModels aggregates repo.GetChannelsByTag-style queries with no tenant filter today; known gap, operator decision, next-cycle item",
+		"GET /api/channel/models_enabled": "EnabledListModels: same tenant-blind aggregation as /models today; known gap, operator decision, next-cycle item",
+		"GET /api/channel/tag/models":     "GetTagModels calls the tenant-blind repo.GetChannelsByTag (channel.go:1540); the tenant-scoped sibling repo.GetChannelsByTagAndTenant (channel.go:323-329) exists and is not used here — known gap, operator decision, next-cycle item",
+	}
+
+	inScope := func(path string) bool {
+		for _, p := range tenantScopedPrefixes {
+			if strings.HasPrefix(path, p) {
+				return true
+			}
+		}
+		return false
+	}
+
+	handlerTestSrc := "" // lazily read once
+	readHandlerTestSrc := func(t *testing.T) string {
+		if handlerTestSrc != "" {
+			return handlerTestSrc
+		}
+		b, err := os.ReadFile("../v1_cross_tenant_idor_test.go")
+		if err != nil {
+			t.Fatalf("read v1_cross_tenant_idor_test.go: %v", err)
+		}
+		handlerTestSrc = string(b)
+		return handlerTestSrc
+	}
+
+	for _, rt := range engine.Routes() {
+		if !inScope(rt.Path) {
+			continue
+		}
+		if rt.Method != http.MethodGet || strings.Contains(rt.Path, ":id") || strings.Contains(rt.Path, "/self") {
+			continue
+		}
+		key := rt.Method + " " + rt.Path
+		if testName, ok := listScoped[key]; ok {
+			if !strings.Contains(readHandlerTestSrc(t), "func "+testName+"(") {
+				t.Errorf("listScoped[%q] names %q but no such function exists in v1_cross_tenant_idor_test.go", key, testName)
+			}
+			continue
+		}
+		if _, ok := listExempt[key]; ok {
+			continue
+		}
+		t.Errorf("tenant-scoped list route %q is neither in listScoped nor listExempt — "+
+			"add a *_ListTenantScoped test and a listScoped entry, or a listExempt reason", key)
 	}
 }

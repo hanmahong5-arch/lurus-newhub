@@ -22,6 +22,7 @@ import Loading from '../common/ui/Loading';
 import { Button, Card, Typography } from '@douyinfe/semi-ui';
 import { API } from '../../helpers';
 import { setTenantSlug } from '../../helpers/apiMode';
+import { inviteLink } from '../../helpers/inviteLink';
 
 /**
  * What this deployment can actually sign someone in with.
@@ -48,6 +49,27 @@ async function loginCapability() {
   } catch (_) {
     return { sso: true, bridge: false };
   }
+}
+
+// readInviteCode pulls ?invite=<code> off the current URL (present on the
+// first /login link an operator sends — see InvitesDrawer.jsx) and validates
+// it against the same shape zita_bootstrap.go's caller is expected to send:
+// URL-safe, bounded length. A malformed or absent value is treated as "no
+// invite" for the one shape this function's own test covers (a value with a
+// disallowed character) — the malformed input just isn't forwarded, rather
+// than blocking the login.
+const INVITE_CODE_RE = /^[A-Za-z0-9_-]{1,64}$/;
+function readInviteCode() {
+  let raw = null;
+  try {
+    raw = new URLSearchParams(window.location.search).get('invite');
+  } catch (_) {
+    return null;
+  }
+  if (raw && INVITE_CODE_RE.test(raw)) {
+    return raw;
+  }
+  return null;
 }
 
 // register prop kept for backward compat with the route declaration in
@@ -79,9 +101,25 @@ const OidcRedirect = (_props) => {
     // On 401/network failure (no platform session yet) we fall through
     // to the identity login redirect — same as the prior behavior.
     const bootstrap = async () => {
+      // Present only on the operator-issued /login?invite=<code> link
+      // (InvitesDrawer.jsx). Forwarded to the bootstrap POST so a session
+      // that is ALREADY platform-authenticated (the SSO round trip landed
+      // back here) consumes it on this call; also folded into return_to so
+      // a visitor who still needs to go through identity comes back to this
+      // same invite link rather than the plain dashboard target.
+      const inviteCode = readInviteCode();
+      // The first argument stays a string literal with the query appended
+      // after it: router/frontend_route_contract_test.go's apiCallRe only
+      // recognises `API.<verb>('/...` call sites, and this is the call that
+      // keeps POST /api/v2/auth/zita-bootstrap tied to a registered route
+      // in that gate (helpers/api.js reaches it through `instance.post`,
+      // which the gate does not scan).
+      const inviteQuery = inviteCode
+        ? `?invite=${encodeURIComponent(inviteCode)}`
+        : '';
       try {
         const res = await API.post(
-          '/api/v2/auth/zita-bootstrap',
+          '/api/v2/auth/zita-bootstrap' + inviteQuery,
           {},
           { skipErrorHandler: true },
         );
@@ -124,7 +162,9 @@ const OidcRedirect = (_props) => {
         return;
       }
 
-      const returnTo = `${window.location.origin}/console/v2/dashboard`;
+      const returnTo = inviteCode
+        ? inviteLink(window.location.origin, inviteCode)
+        : `${window.location.origin}/console/v2/dashboard`;
       const url = `/api/v2/auth/zita-login?return_to=${encodeURIComponent(returnTo)}`;
       timer = setTimeout(() => setShowFallback(true), 3000);
       window.location.href = url;

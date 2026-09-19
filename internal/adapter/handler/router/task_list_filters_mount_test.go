@@ -46,6 +46,7 @@ var taskListFiltersMountDBCounter atomic.Int64
 type taskListFiltersMountFixture struct {
 	commonUser *repo.User
 	adminUser  *repo.User
+	rootUser   *repo.User
 }
 
 func mountTaskListFiltersFixture(t *testing.T) *taskListFiltersMountFixture {
@@ -98,7 +99,32 @@ func mountTaskListFiltersFixture(t *testing.T) *taskListFiltersMountFixture {
 		t.Fatalf("seed foreign task: %v", err)
 	}
 
-	return &taskListFiltersMountFixture{commonUser: commonUser, adminUser: adminUser}
+	rootUser := &repo.User{
+		Username: "task-filter-root-user", Role: common.RoleRootUser,
+		Status: common.UserStatusEnabled, Email: "task-filter-root@local", TenantId: "default",
+	}
+	if err := db.Create(rootUser).Error; err != nil {
+		t.Fatalf("create root user: %v", err)
+	}
+
+	// cycle-11 L8/W: a user in a DIFFERENT tenant with its own task row —
+	// commonUser/adminUser above are both tenant "default", so this is the
+	// only row that proves the admin route's TenantScoped filter (task.go's
+	// GetAllTask) actually narrows by tenant rather than merely returning
+	// "everything", and that root (no TenantScoped filter) still sees it.
+	otherTenantUser := &repo.User{
+		Username: "task-filter-other-tenant-user", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Email: "task-filter-other@local", TenantId: "other-tenant-xyz",
+	}
+	if err := db.Create(otherTenantUser).Error; err != nil {
+		t.Fatalf("create other-tenant user: %v", err)
+	}
+	otherTenantTask := &repo.Task{TaskID: "other-tenant-task", Platform: constant.TaskPlatformSuno, UserId: otherTenantUser.Id, ChannelId: 1, Status: repo.TaskStatusSuccess, Progress: "100%", ProjectId: 1, RequestId: "req-other-tenant"}
+	if err := db.Create(otherTenantTask).Error; err != nil {
+		t.Fatalf("seed other-tenant task: %v", err)
+	}
+
+	return &taskListFiltersMountFixture{commonUser: commonUser, adminUser: adminUser, rootUser: rootUser}
 }
 
 // serveAs issues a request against the fixture's real router with a cookie
@@ -185,5 +211,32 @@ func TestTaskListFilters_AdminRoute_RealChain(t *testing.T) {
 	resp = decodeTaskListResp(t, w)
 	if resp.Success {
 		t.Fatalf("common user on admin route: success=%v, want false (AdminAuth must reject); body=%s", resp.Success, w.Body.String())
+	}
+}
+
+// TestTaskListFilters_AdminRoute_TenantScoped_RealChain is the cycle-11
+// L8/W REAL-CHAIN oracle for GetAllTask's TenantScoped filter (task.go):
+// a non-root admin session must see only its own tenant's rows (ownTask +
+// foreignTask, both tenant "default" — otherTenantTask, owned by a user in
+// "other-tenant-xyz", must not leak in), while a root session (no
+// TenantScoped filter applied) sees every tenant's rows including it.
+//
+// Mutation: deleting the `queryParams.TenantScoped = true` /
+// `queryParams.TenantID = ...` assignment in internal/adapter/handler/task.go
+// (GetAllTask) turns the admin sub-test red (total becomes 3, the
+// other-tenant row leaks in).
+func TestTaskListFilters_AdminRoute_TenantScoped_RealChain(t *testing.T) {
+	f := mountTaskListFiltersFixture(t)
+
+	w := f.serveAs(t, f.adminUser, http.MethodGet, "/api/task/")
+	resp := decodeTaskListResp(t, w)
+	if !resp.Success || resp.Data.Total != 2 {
+		t.Fatalf("tenant admin total=%d success=%v, want 2 (ownTask+foreignTask, both tenant default; other-tenant-task must not leak); body=%s", resp.Data.Total, resp.Success, w.Body.String())
+	}
+
+	wRoot := f.serveAs(t, f.rootUser, http.MethodGet, "/api/task/")
+	respRoot := decodeTaskListResp(t, wRoot)
+	if !respRoot.Success || respRoot.Data.Total != 3 {
+		t.Fatalf("root total=%d success=%v, want 3 (every tenant's rows, no TenantScoped filter); body=%s", respRoot.Data.Total, respRoot.Success, wRoot.Body.String())
 	}
 }
