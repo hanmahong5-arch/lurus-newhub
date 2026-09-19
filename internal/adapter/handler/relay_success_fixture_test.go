@@ -140,7 +140,21 @@ func setupRelaySuccessRouter(t *testing.T, upstream http.HandlerFunc) *relaySucc
 	weight := uint(10)
 	priority := int64(0)
 	baseURL := srv.URL
+	// The channel id needs the same treatment as the user/token ids above, for
+	// a second process-global with no per-test reset: channelBreakers
+	// (relay.go), the circuit-breaker registry keyed by CHANNEL ID. A test that
+	// trips a breaker leaves it open for CB_TIMEOUT_SEC (30s by default) —
+	// cov_handler-deep-c_gateway_health_test.go records 25 failures against the
+	// channel its own sqlite handed id 1 — and with an auto-increment id this
+	// fixture's channel IS id 1. Relay then skips the only candidate channel
+	// (relay.go's `if !channelBreakers.Allow(channel.Id) { continue }`), the
+	// retry loop ends with no error set, and the caller gets an empty HTTP 200
+	// with no settlement and no consume-log row. That is the failure
+	// `go test -shuffle=on` exposed here as "consume log rows = 0"; it was
+	// never about logging. TestRelaySuccessFixture_SurvivesForeignChannelBreaker
+	// is the regression oracle.
 	channel := &repo.Channel{
+		Id:       idBase,
 		TenantId: "default", Type: constant.ChannelTypeOpenAI, Key: "sk-upstream-dummy",
 		Status: common.ChannelStatusEnabled, Name: "fixture-openai",
 		BaseURL: &baseURL, Models: "gpt-4o", Group: "default",
@@ -271,5 +285,59 @@ func TestRelaySuccessFixture_WritesConsumeLogRow(t *testing.T) {
 	}
 	if logs[0].ChannelType != constant.ChannelTypeOpenAI {
 		t.Errorf("ChannelType = %d, want %d (ChannelMeta populated from the real selected channel)", logs[0].ChannelType, constant.ChannelTypeOpenAI)
+	}
+}
+
+// TestRelaySuccessFixture_SurvivesForeignChannelBreaker is the regression
+// oracle for the cross-test leak `go test -shuffle=on` exposed in this package
+// (cycle-12 L1).
+//
+// channelBreakers (relay.go) is a process-global registry keyed by channel ID
+// with no per-test reset, and a tripped breaker stays open for
+// CB_TIMEOUT_SEC. Another test in this package
+// (cov_handler-deep-c_gateway_health_test.go) deliberately records 25 failures
+// against the channel ITS hermetic sqlite gave id 1. Every other hermetic
+// fixture here also starts its auto-increment at 1, so for the next ~30
+// seconds their relays silently skipped their only channel:
+// `if !channelBreakers.Allow(channel.Id) { continue }`, the retry loop ends,
+// nothing sets an error, and the client gets an EMPTY HTTP 200 — no upstream
+// call, no settlement, no consume-log row, no log line. The visible symptom was
+// "consume log rows = 0" / "query consume log: record not found", which reads
+// like a logging bug and is not one.
+//
+// This test recreates the collision deliberately: it opens the breaker for
+// channel id 1 and then runs the fixture, which must still settle because its
+// channel carries a unique high id. Removing `Id: idBase` from the channel
+// seed in setupRelaySuccessRouter turns this red (empty 200, zero rows).
+func TestRelaySuccessFixture_SurvivesForeignChannelBreaker(t *testing.T) {
+	// Leave the registry as clean as this test found it, whatever it contains.
+	t.Cleanup(func() { channelBreakers.Cleanup(map[int]struct{}{}) })
+
+	const collidingID = 1
+	for i := 0; i < 25; i++ {
+		channelBreakers.RecordFailure(collidingID)
+	}
+	if got := channelBreakers.GetState(collidingID).String(); got != "open" {
+		t.Fatalf("precondition: breaker for channel %d is %q after 25 failures, want open", collidingID, got)
+	}
+
+	ctx := setupRelaySuccessRouter(t, openAIChatEchoUpstream)
+	if ctx.channel.Id == collidingID {
+		t.Fatalf("fixture channel id = %d — it collides with the breaker this test opened, which is the bug", ctx.channel.Id)
+	}
+
+	// Ask for whatever model the fixture's channel actually serves, so this
+	// test keeps routing to it if that seed ever changes.
+	w := ctx.postChat(t, `{"model":"`+ctx.channel.Models+`","messages":[{"role":"user","content":"hi"}]}`, nil)
+	if w.Code != http.StatusOK || w.Body.Len() == 0 {
+		t.Fatalf("status = %d, body length = %d — an empty 200 is what a skipped channel looks like", w.Code, w.Body.Len())
+	}
+
+	var logs []repo.Log
+	if err := ctx.db.Where("type = ?", repo.LogTypeConsume).Find(&logs).Error; err != nil {
+		t.Fatalf("query consume logs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("consume log rows = %d, want 1 — a foreign channel's open breaker must not stop this relay", len(logs))
 	}
 }

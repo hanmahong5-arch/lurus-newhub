@@ -52,3 +52,44 @@ func TestRecordAuditEvent_HonoursSeam(t *testing.T) {
 			"the dispatch did not go through the AsyncGo seam", got)
 	}
 }
+
+// TestRecordAuditEvent_NilWriterIsNoOp pins SetAuditWriter's contract that a
+// nil writer means "no writer", which the doc comment claimed and the code did
+// not honour.
+//
+// auditWriterRef is an atomic.Pointer[AuditWriter], so SetAuditWriter(nil)
+// stores a NON-NIL pointer to a NIL INTERFACE: the `wp == nil` guard in
+// RecordAuditEvent passes it straight through to writer.CreateAuditEvent and
+// the call panics. internal/adapter/repo's admin_permission_grant_test.go
+// detaches its db-bound writer exactly that way
+// (`t.Cleanup(func() { governance.SetAuditWriter(nil) })`), and any audit the
+// next test triggered hit the panic — invisible until cycle 12, because a
+// gopool dispatch recovers panics, so the write just disappeared. Under
+// `go test -shuffle=on` with the seam inline it became a hard test panic,
+// which is how it surfaced.
+//
+// The package's existing TestRecordAuditEvent_NilWriter (audit_test.go) does
+// NOT cover this: it stores a nil POINTER (auditWriterRef.Store(nil)), which
+// the first guard already handled. The two tests look like duplicates and
+// exercise opposite sides of the bug.
+//
+// Deleting the `writer == nil` early return in RecordAuditEvent's guard makes
+// this test panic instead of pass.
+func TestRecordAuditEvent_NilWriterIsNoOp(t *testing.T) {
+	prev := auditWriterRef.Load()
+	t.Cleanup(func() { auditWriterRef.Store(prev) })
+
+	SetAuditWriter(nil)
+
+	// Must not panic, and must leave the caller's context marking intact.
+	RecordAuditEvent(&entity.AuditEvent{Action: ActionTokenCreated, Resource: ResourceToken})
+
+	// And a writer installed afterwards must still be used — "no writer" is a
+	// state, not a latch.
+	w := &countingAuditWriter{}
+	SetAuditWriter(w)
+	RecordAuditEvent(&entity.AuditEvent{Action: ActionTokenCreated, Resource: ResourceToken})
+	if got := w.n.Load(); got != 1 {
+		t.Fatalf("CreateAuditEvent calls after re-installing a writer = %d, want 1", got)
+	}
+}

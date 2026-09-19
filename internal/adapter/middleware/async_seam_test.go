@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 )
 
 // Tests in this package swap common.RDB / common.RedisEnabled and restore them
@@ -18,8 +19,16 @@ import (
 // Forcing the seam inline means every spawn has finished before the spawning
 // test returns. See repo.AsyncGo (internal/adapter/repo/async.go) for the full
 // story; production is unaffected, since AsyncGo's value there is gopool.Go.
+//
+// governance.AsyncGo is the same seam for audit persistence: AuditWriteGuard's
+// tests (audit_write_guard_test.go) install recording writers and swap them
+// back in t.Cleanup, and governance.RecordAuditEvent hands the write to
+// whichever writer was current at call time. Detached, "did this request
+// audit?" becomes a scheduling question; inline, it is answered at the point
+// the request finished.
 func TestMain(m *testing.M) {
 	repo.AsyncGo = func(f func()) { f() }
+	governance.AsyncGo = func(f func()) { f() }
 	code := m.Run()
 	// rate_limit_message_lock_test.go's scanner-honesty floor: only checked
 	// after every test has had a chance to record a site, only when the

@@ -117,6 +117,11 @@ func TestRefreshIdentityClientEnv(t *testing.T) {
 func TestRateLimiter_ClearExpiredItems(t *testing.T) {
 	l := &InMemoryRateLimiter{}
 	l.Init(50 * time.Millisecond) // starts the background sweeper
+	// Without this the sweeper wakes every 50ms and takes this limiter's mutex
+	// for the rest of the test binary — a goroutine the -race job's leak
+	// accounting sees for every later test (cycle-12 L1 added Stop for exactly
+	// this). l is local to this test, so stopping it affects nothing else.
+	t.Cleanup(l.Stop)
 
 	if !l.Request("sweep-key", 5, 60) {
 		t.Fatal("first request should be allowed")

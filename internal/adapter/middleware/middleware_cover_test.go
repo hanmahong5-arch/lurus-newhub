@@ -371,8 +371,20 @@ func TestMemoryRateLimiterKeyed_AbortsOverLimit(t *testing.T) {
 	inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
 	// Init spawns the limiter's expiry sweeper, which before cycle-12 L1 had
 	// no way to end: it kept taking this package-global limiter's mutex on a
-	// timer for the rest of the test binary. Stop is idempotent and leaves
-	// the allow/deny path working, so a later Init in this package is safe.
+	// timer for the rest of the test binary. Stop ends it.
+	//
+	// Read this before copying the pattern: inMemoryRateLimiter is a PACKAGE
+	// GLOBAL and Stop is permanent for it. Once this cleanup fires, the sweeper
+	// is dead for the rest of the test binary — Init is a no-op once l.store is
+	// non-nil, so the later Init calls in model-rate-limit.go, rate-limit.go and
+	// responses_state_rate_limit.go do not bring it back. What survives is the
+	// allow/deny verdict: InMemoryRateLimiter.Request slides each key's own
+	// window itself (a full queue whose oldest entry has aged past duration
+	// drops that entry and admits the request), so it never consults the
+	// sweeper. What is lost is deletion of whole idle keys, i.e. memory, which
+	// for a test binary is nothing. With -shuffle=on this test may now be the
+	// FIRST to touch the limiter, so treat "the sweeper is running" as false
+	// everywhere.
 	t.Cleanup(inMemoryRateLimiter.Stop)
 	// First request under limit passes.
 	c1, w1 := newTestContext(http.MethodGet, "/x", "", "")
@@ -723,6 +735,55 @@ func TestPlaygroundAuth_NoSession_401(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/pg", nil))
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 for playground without session", w.Code)
+	}
+}
+
+// ======================= redis global restore nesting =====================
+
+// TestRedisGlobalsSurviveNestedRestores is the regression oracle for the
+// cycle-12 L1 shuffle repair.
+//
+// The bug it pins is an ordering one, not a forgotten restore: withMiniRedis
+// handed back a cleanup that callers run with `defer`, and `defer` fires when
+// the test body returns — BEFORE t.Cleanup. An inner helper that snapshots
+// common.RedisEnabled through t.Cleanup (setModelRateLimit does) therefore
+// snapshotted `true`, and its cleanup ran AFTER the defer had already put the
+// client back to nil. The binary was left with RedisEnabled=true and RDB=nil,
+// which is the one combination no caller handles: repo.GetUserCache's Redis
+// branch is guarded on RedisEnabled and then dereferences RDB, so the next
+// test in the binary that resolved a session panicked and gin.Recovery
+// answered 500. Under `go test -shuffle=on` that was
+// TestAuthHelper_InvalidStatusType and TestAuthHelper_InvalidRoleType getting
+// 500 instead of 401 — a real leak the fixed order had been hiding, not a
+// shuffle artefact.
+//
+// The assertion is deliberately on the globals after a subtest that nests the
+// two helpers exactly as the live tests do, because that is the only place the
+// ordering is observable.
+func TestRedisGlobalsSurviveNestedRestores(t *testing.T) {
+	prevRDB, prevEnabled := common.RDB, common.RedisEnabled
+	common.RDB, common.RedisEnabled = nil, false
+	t.Cleanup(func() { common.RDB, common.RedisEnabled = prevRDB, prevEnabled })
+
+	t.Run("outer_defer_restore_inner_cleanup_restore", func(t *testing.T) {
+		_, _, cleanup := withMiniRedis(t) // outer: caller-run defer
+		defer cleanup()
+		setModelRateLimit(t, true /*redis*/, 0, 1) // inner: t.Cleanup, snapshots enabled=true
+
+		if !common.RedisEnabled || common.RDB == nil {
+			t.Fatalf("setup is not exercising the nesting: enabled=%v rdb-nil=%v",
+				common.RedisEnabled, common.RDB == nil)
+		}
+	})
+
+	if common.RedisEnabled && common.RDB == nil {
+		t.Fatalf("after the nested restores: RedisEnabled=true with a nil common.RDB — every later test that reads the user cache panics on RDB.HGetAll")
+	}
+	if common.RedisEnabled {
+		t.Errorf("after the nested restores: RedisEnabled=%v, want false (the state this test established)", common.RedisEnabled)
+	}
+	if common.RDB != nil {
+		t.Errorf("after the nested restores: common.RDB is non-nil, want nil (the state this test established)")
 	}
 }
 

@@ -455,6 +455,43 @@ jobs:
       # depends on which test runs next, so a fixed order can hide it for
       # months. If this job goes red, take the seed from the log and rerun with
       # -shuffle=<seed> BEFORE arguing for a rerun.
+      #
+      # Shuffling needs no cgo, so it WAS measured on the dev host before this
+      # landed (the -race half still only runs here). 2026-09-19, one package at
+      # a time, `go test -short -count=1 -shuffle=on|<seed>`:
+      #   internal/pkg/search, internal/app/governance — 3/3 green.
+      #   internal/pkg/common — 4/4 green.
+      #   internal/adapter/middleware — seed 1789843908370378500 failed
+      #     TestAuthHelper_InvalidStatusType and TestAuthHelper_InvalidRoleType
+      #     with 500 instead of 401. Not a shuffle artefact: a real leak the
+      #     fixed order had been hiding. withMiniRedis restored
+      #     common.RDB/RedisEnabled through a caller-run `defer`, which fires
+      #     BEFORE t.Cleanup, and setModelRateLimit's t.Cleanup then put
+      #     RedisEnabled=true back on top of a nil RDB — the one combination
+      #     repo.GetUserCache's Redis branch does not survive. Fixed in those
+      #     two helpers; TestRedisGlobalsSurviveNestedRestores
+      #     (middleware_cover_test.go) is the regression oracle. Same seed
+      #     after the fix: those two pass.
+      #   internal/adapter/repo — two failures, both the same latent bug:
+      #     governance.SetAuditWriter(nil) stores a pointer to a nil interface,
+      #     which RecordAuditEvent's "no writer" guard did not recognise. A
+      #     gopool dispatch had been swallowing the nil dereference (and the
+      #     audit write with it); inline it panicked. Guard fixed in
+      #     governance/audit.go, oracle TestRecordAuditEvent_NilWriterIsNoOp.
+      #     3/3 green after.
+      #   internal/adapter/handler — four order-dependent test failures from
+      #     three process-global keys with no per-test reset: the circuit-breaker
+      #     registry keyed by channel id (an open breaker from the
+      #     gateway-health test made a later relay return an EMPTY 200 with no
+      #     settlement row), the same registry non-empty when the "no traffic
+      #     yet" test runs with no DB, and the TPM window keyed by token id.
+      #     Fixed in those test files; oracles
+      #     TestRelaySuccessFixture_SurvivesForeignChannelBreaker and the
+      #     per-test unique ids. The remaining shuffled failures in this
+      #     package at the time of writing fail in ISOLATION too — they are
+      #     another cycle-12 lane's in-flight work, not an ordering effect.
+      # So the first CI run here is not the first measurement, but it IS the
+      # first measurement WITH -race, and with every package in one binary set.
       - name: go test -short -race -shuffle=on ./...
         run: go test -short -race -shuffle=on -count=1 -timeout=15m ./...
 

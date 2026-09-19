@@ -1,44 +1,62 @@
 package common
 
 import (
-	"runtime"
 	"testing"
 	"time"
 )
+
+// rateLimitHasKey reports whether the limiter still holds a bucket for key.
+// It takes the limiter's own mutex, so it is safe to call while the sweeper
+// is running.
+func rateLimitHasKey(l *InMemoryRateLimiter, key string) bool {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	_, ok := l.store[key]
+	return ok
+}
 
 // TestInMemoryRateLimiter_CleanerStops is the oracle for InMemoryRateLimiter's
 // stop channel: Init spawns the expiry sweeper, and before this there was no
 // way to end it — the goroutine outlived every test that called Init and kept
 // taking the limiter's mutex for the rest of the binary. Stop must end it.
 //
-// The assertion is on goroutine count rather than on an exported flag because
-// the sweeper has no observable output; the count is taken before Init so the
-// comparison is against this test's own baseline, not an absolute number that
-// other packages' background goroutines would make flaky.
+// The assertion is on the sweeper's only observable effect — eviction of an
+// idle bucket — not on runtime.NumGoroutine(). The first version of this test
+// compared goroutine counts against a baseline taken before Init, and under
+// `go test -shuffle=on` it failed roughly one run in three: the count is
+// process-wide, so an unrelated goroutine from an earlier test exiting between
+// the two samples cancels the sweeper's +1 and the liveness half of the test
+// reports "Init did not start the sweeper". A test that fails on other tests'
+// scheduling is not a gate, and this one guards the CI race job.
 func TestInMemoryRateLimiter_CleanerStops(t *testing.T) {
-	// A short expiry keeps the sweeper's loop iteration short, so a stop
-	// signalled mid-sleep is observed quickly.
+	// Eviction compares whole Unix SECONDS (clearExpiredItems:
+	// now-lastSeen > int64(expirationDuration.Seconds())), so any sub-second
+	// expiry evicts on the first tick after the second rolls over. A short
+	// ticker keeps that first tick close.
 	const expiry = 20 * time.Millisecond
-
-	before := runtime.NumGoroutine()
 
 	l := &InMemoryRateLimiter{}
 	l.Init(expiry)
-	if !l.Request("stop-key", 5, 60) {
+	if !l.Request("evicted-key", 5, 60) {
 		t.Fatal("first request should be allowed")
 	}
 
-	// The sweeper is running: wait until the count actually rises, so a
-	// scheduler that has not started the goroutine yet cannot make the
-	// "it went back down" half of this test vacuous.
-	if !rateLimitWaitFor(2*time.Second, func() bool { return runtime.NumGoroutine() > before }) {
-		t.Fatalf("goroutine count never rose above the pre-Init baseline %d — Init did not start the sweeper, so this test cannot prove Stop ends it", before)
+	// Liveness: the sweeper must actually evict, or the second half of this
+	// test would pass vacuously against a sweeper that never ran.
+	if !rateLimitWaitFor(3*time.Second, func() bool { return !rateLimitHasKey(l, "evicted-key") }) {
+		t.Fatal("the sweeper never evicted an idle bucket within 3s — Init did not start it, so this test cannot prove Stop ends it")
 	}
 
 	l.Stop()
 
-	if !rateLimitWaitFor(time.Second, func() bool { return runtime.NumGoroutine() <= before }) {
-		t.Fatalf("goroutine count still %d one second after Stop(), baseline was %d — the sweeper did not exit", runtime.NumGoroutine(), before)
+	if !l.Request("survivor-key", 5, 60) {
+		t.Fatal("request after Stop should still be allowed")
+	}
+	// A live sweeper evicts within ~1s (see the seconds granularity above);
+	// wait comfortably past that.
+	time.Sleep(1500 * time.Millisecond)
+	if !rateLimitHasKey(l, "survivor-key") {
+		t.Fatal("an idle bucket was evicted 1.5s after Stop() — the sweeper is still running, i.e. the stop branch in clearExpiredItems is not being taken")
 	}
 }
 

@@ -58,6 +58,10 @@ var pendingAuditContexts sync.Map // map[*entity.AuditEvent]*gin.Context
 // SetAuditWriter sets the global audit event writer (called once during startup).
 // It also wires the entity-level audit-chain fallback logger so fail-open
 // chain degradations (entity.AuditEvent.BeforeCreate) surface in the system log.
+//
+// A nil w is accepted and means "no writer": RecordAuditEvent becomes a no-op
+// until one is installed again. Tests use that to detach a writer bound to a
+// database they are about to close.
 func SetAuditWriter(w AuditWriter) {
 	auditWriterRef.Store(&w)
 	entity.SetAuditChainLogger(common.SysError)
@@ -83,6 +87,18 @@ func RecordAuditEvent(event *entity.AuditEvent) {
 		return
 	}
 	writer := *wp
+	// Two distinct "no writer" states, and the pointer check above only covers
+	// the first: nothing was ever stored (wp == nil), and SetAuditWriter(nil)
+	// stored a pointer to a NIL INTERFACE (wp != nil, *wp == nil). The second
+	// is what internal/adapter/repo's tests do to detach a writer bound to a
+	// database they are about to close, and calling through it is a nil
+	// dereference. It went unnoticed while every dispatch was a gopool
+	// goroutine — gopool's panic handler swallowed it, so the audit write
+	// simply vanished. With the seam inline under test it became a test
+	// panic, which is how it was found.
+	if writer == nil {
+		return
+	}
 	AsyncGo(func() {
 		if err := writer.CreateAuditEvent(event); err != nil {
 			common.SysLog("failed to record audit event: " + err.Error())

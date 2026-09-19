@@ -25,9 +25,20 @@ func runModelRLMem(uid int) int {
 	return w.Code
 }
 
+// setModelRateLimit arms ModelRequestRateLimit for one test and restores every
+// global it touched on cleanup.
+//
+// common.RedisEnabled and common.RDB are saved and restored as a PAIR (cycle-12
+// L1). "Enabled with a nil client" is not a state any code here handles:
+// repo.GetUserCache's Redis branch is guarded on RedisEnabled alone and then
+// dereferences RDB (common.RedisHGetObj), so half a restore is a nil-pointer
+// panic in whichever test runs next. Restoring both keeps the snapshot
+// internally consistent even when this helper is nested inside another that
+// mutated the same two globals.
 func setModelRateLimit(t *testing.T, redisOn bool, total, success int) {
 	t.Helper()
 	prevRedis := common.RedisEnabled
+	prevRDB := common.RDB
 	prevEnabled := setting.ModelRequestRateLimitEnabled
 	prevCount := setting.ModelRequestRateLimitCount
 	prevSuccess := setting.ModelRequestRateLimitSuccessCount
@@ -37,6 +48,7 @@ func setModelRateLimit(t *testing.T, redisOn bool, total, success int) {
 	setting.ModelRequestRateLimitSuccessCount = success
 	t.Cleanup(func() {
 		common.RedisEnabled = prevRedis
+		common.RDB = prevRDB
 		setting.ModelRequestRateLimitEnabled = prevEnabled
 		setting.ModelRequestRateLimitCount = prevCount
 		setting.ModelRequestRateLimitSuccessCount = prevSuccess

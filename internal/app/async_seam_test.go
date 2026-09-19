@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 )
 
 // TestMain forces PostConsumeQuota's async side effects (see AsyncGo in
@@ -23,5 +24,11 @@ func TestMain(m *testing.M) {
 	// teardown. CI caught it as a DATA RACE plus a nil dereference inside the
 	// pool, on a PR that touched neither package.
 	repo.AsyncGo = func(f func()) { f() }
+	// And for audit persistence: credit_pool_reset_test.go installs capturing
+	// writers and swaps them back in t.Cleanup, while governance.RecordAuditEvent
+	// hands the write to whichever writer was current at call time. Detached,
+	// the capture and the swap-back race; inline, an event recorded by the code
+	// under test has reached the writer before the test asserts on it.
+	governance.AsyncGo = func(f func()) { f() }
 	os.Exit(m.Run())
 }

@@ -43,6 +43,14 @@ func (l *InMemoryRateLimiter) Init(expirationDuration time.Duration) {
 // Stop ends the expiry sweeper started by Init. It is safe to call more than
 // once and safe on a limiter that was never Init'd.
 //
+// Stop is PERMANENT for this limiter: Init will not restart the sweeper,
+// because Init short-circuits once l.store is non-nil, and stopOnce keeps the
+// channel closed. A stopped limiter still answers Request correctly (Request
+// slides each key's window itself); what stops is the deletion of idle keys.
+// On a package-level limiter that means the sweeper is gone for the rest of
+// the process, so call it from a test cleanup, not from anything a request
+// path can reach.
+//
 // No production code calls it. Enumeration behind that:
 // `grep -rn InMemoryRateLimiter --include=*.go .` finds one non-test value,
 // middleware/rate-limit.go's package-level inMemoryRateLimiter, which is meant

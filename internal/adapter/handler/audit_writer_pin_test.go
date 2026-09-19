@@ -11,24 +11,41 @@ package handler
 //
 // pinAuditWriter is the paired install/uninstall.
 //
-// `grep -rn SetAuditWriter --include=*_test.go internal/adapter/handler/` is
-// the enumeration. At the cycle-12 baseline eleven call sites installed a
-// writer bound to a per-test *gorm.DB; ten of those did nothing to take it
-// back (secure_verification_test.go was the one that did, by installing an
-// in-memory recorder afterwards). L1 moved nine of the eleven onto this
-// helper: two in channel_sensitive_write_test.go and one each in
-// relay_responses_registry_test.go, secure_verification_test.go,
-// v2_admin_authz_test.go, v2_admin_routing_test.go, v2_admin_security_test.go,
-// v2_pricing_write_test.go and v2_provision_models_test.go.
+// pinAuditWriter is the paired install/uninstall for THIS package.
 //
-// Two are deliberately left: v2_admin_users_test.go:286 and
-// v2_session_revoke_test.go:189, whose files another cycle-12 lane owns. Both
-// are in this cycle's hand-off list, not forgotten.
+// The enumeration is repo-wide, not package-wide — the first round scoped it to
+// this directory, and the acceptor was right that a directory-scoped grep reads
+// as a completeness claim it cannot make. The command is
+// `grep -rn 'SetAuditWriter(' --include=*_test.go .` (excluding web/), and on
+// 2026-09-19 it returns sites in five Go packages:
 //
-// The other sites the grep returns install writers that hold no database
-// handle and already pair with a cleanup of their own
-// (v2_models_write_test.go, internal_credit_pool_fund_test.go,
-// channel_tenant_id_immutable_test.go).
+//   - internal/adapter/handler — eleven installs of a writer bound to a per-test
+//     *gorm.DB at the cycle-12 baseline; ten of them did nothing to take it back
+//     (secure_verification_test.go was the one that did, by installing an
+//     in-memory recorder afterwards). L1 moved nine onto this helper: two in
+//     channel_sensitive_write_test.go and one each in
+//     relay_responses_registry_test.go, secure_verification_test.go,
+//     v2_admin_authz_test.go, v2_admin_routing_test.go,
+//     v2_admin_security_test.go, v2_pricing_write_test.go and
+//     v2_provision_models_test.go. Two are deliberately left —
+//     v2_admin_users_test.go and v2_session_revoke_test.go, whose files another
+//     cycle-12 lane owns — and are in this cycle's hand-off list, not forgotten.
+//     This package's other installs hold no database handle and already pair
+//     with a cleanup (v2_models_write_test.go, internal_credit_pool_fund_test.go,
+//     channel_tenant_id_immutable_test.go).
+//   - internal/adapter/repo — user_session_test.go had the identical unpaired
+//     shape (a writer holding the package's DB global, no cleanup at all) and
+//     now uses its own pinSessionAuditWriter; admin_permission_grant_test.go
+//     writes through the DB global and clears the writer in t.Cleanup.
+//   - internal/adapter/middleware, internal/app, internal/app/governance — every
+//     install there is an in-memory recorder paired with a cleanup.
+//
+// The other half of the repair is the seam: internal/adapter/handler,
+// internal/adapter/handler/router, internal/adapter/repo,
+// internal/adapter/middleware and internal/app all set
+// governance.AsyncGo = func(f func()) { f() } in their TestMain, so the write
+// has happened before the test that triggered it returns. The helper stops a
+// writer outliving its database; the seam stops the write outliving the test.
 
 import (
 	"testing"

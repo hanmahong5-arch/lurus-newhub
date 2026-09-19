@@ -53,6 +53,28 @@ func sharedMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 // returns the live *miniredis.Miniredis (for direct key-state assertions) and a
 // cleanup that flushes all keys and restores the globals it mutated, keeping
 // tests -count=1 safe and mutually isolated.
+//
+// The restore is registered TWICE on purpose (cycle-12 L1), and the second
+// registration is the one that matters:
+//
+// `defer cleanup()` runs when the test function's body returns, which is
+// BEFORE any t.Cleanup the test registered. Several tests here call an inner
+// helper that saves/restores common.RedisEnabled through t.Cleanup —
+// setModelRateLimit (limiter_jwks_extra_cover_test.go) is the live example —
+// and that inner helper snapshots the global AFTER this one set it to true. So
+// the sequence was: defer restores (RDB=nil, enabled=false), then the inner
+// t.Cleanup puts enabled=true back while RDB stays nil. Every later test in the
+// binary that reads the user cache then panicked on a nil client
+// (common.RedisHGetObj -> RDB.HGetAll) and gin.Recovery turned it into a 500;
+// under `go test -shuffle=on` that surfaced as
+// TestAuthHelper_InvalidStatusType/InvalidRoleType getting 500 instead of 401.
+//
+// Registering the same restore on t.Cleanup here — first registration, so LIFO
+// runs it LAST — makes the globals coherent at the end of the test no matter
+// what an inner helper registered later. The returned closure is kept so the
+// 27 existing `defer cleanup()` call sites read unchanged and so a test can
+// still put the globals back mid-body; running it twice is harmless (both runs
+// assign the same snapshot).
 func withMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client, func()) {
 	t.Helper()
 	mr, rdb := sharedMiniRedis(t)
@@ -68,6 +90,7 @@ func withMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client, func()) {
 		common.RedisEnabled = prevEnabled
 		mr.FlushAll()
 	}
+	t.Cleanup(cleanup)
 	return mr, rdb, cleanup
 }
 

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
@@ -60,6 +61,45 @@ func setupRateLimitChain(t *testing.T) (*V2TestContext, *gin.Engine) {
 	return ctx, r
 }
 
+// chainTokenSeq numbers the tokens seeded by seedChainToken.
+var chainTokenSeq atomic.Int64
+
+// seedChainToken is SeedV2Token with a PROCESS-unique primary key.
+//
+// Both limiter backends this file drives are process-global maps keyed by
+// token id with no per-test reset: app's TPM window (bizTPMMem, fed by
+// app.RecordBusinessTPMUsage) and middleware's in-memory RPM limiter. Every
+// hermetic fixture in this package starts its sqlite auto-increment at 1, so a
+// token seeded here shares a key with unrelated tokens in other tests' own
+// databases, and inherits their recorded usage. In source order that never
+// bit; under `go test -shuffle=on` it showed up as "relay on quiet TPM window
+// = 429, want 200" — a window that was not quiet because another test had
+// filled it (cycle-12 L1).
+//
+// A high, per-call id makes the key this test's own. It is the same treatment
+// relay_success_fixture_test.go applies to its user/token/channel ids, for the
+// same reason.
+func seedChainToken(t *testing.T, ctx *V2TestContext, name string) *repo.Token {
+	t.Helper()
+	token := &repo.Token{
+		Id:             880000000 + int(chainTokenSeq.Add(1)),
+		UserId:         ctx.NormalUser.Id,
+		TenantId:       ctx.TenantID,
+		Key:            common.GetRandomString(32),
+		Status:         common.TokenStatusEnabled,
+		Name:           name,
+		CreatedTime:    common.GetTimestamp(),
+		AccessedTime:   common.GetTimestamp(),
+		ExpiredTime:    -1,
+		UnlimitedQuota: true,
+		Group:          "default",
+	}
+	if err := ctx.DB.Create(token).Error; err != nil {
+		t.Fatalf("seed chain token: %v", err)
+	}
+	return token
+}
+
 func chainRelay(r *gin.Engine, tokenID int) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/chain/relay", nil)
@@ -90,7 +130,7 @@ func updateChainToken(t *testing.T, r *gin.Engine, tok *repo.Token, rpm, tpm int
 
 func TestTokenRateLimitChain_UpdateAPIDrivesMiddleware(t *testing.T) {
 	ctx, r := setupRateLimitChain(t)
-	tok := SeedV2Token(t, ctx, ctx.NormalUser.Id, "chain-rpm-token")
+	tok := seedChainToken(t, ctx, "chain-rpm-token")
 
 	// Baseline: no limits → relay flows freely.
 	for i := 0; i < 3; i++ {
@@ -135,7 +175,7 @@ func TestTokenRateLimitChain_UpdateAPIDrivesMiddleware(t *testing.T) {
 
 func TestTokenRateLimitChain_TPMUpdateDrivesMiddleware(t *testing.T) {
 	ctx, r := setupRateLimitChain(t)
-	tok := SeedV2Token(t, ctx, ctx.NormalUser.Id, "chain-tpm-token")
+	tok := seedChainToken(t, ctx, "chain-tpm-token")
 
 	// tpm_limit=50 via the update API.
 	updateChainToken(t, r, tok, 0, 50)

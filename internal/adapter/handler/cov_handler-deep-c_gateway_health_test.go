@@ -37,8 +37,18 @@ func handlerDeepCDoGatewayHealth(r *gin.Engine) (*httptest.ResponseRecorder, map
 }
 
 func TestGetGatewayHealthV2_NoTrafficYet_EmptyRoutes(t *testing.T) {
-	// channelBreakers is a real package-level registry; a freshly-started
-	// process (or a channel ID this test file never touches) has no entry.
+	// channelBreakers is a real PROCESS-level registry, and "no traffic yet"
+	// is a property of the whole test binary, not of this test: every relay
+	// test in this package registers an entry for its channel (relay.go's
+	// RecordSuccess/RecordFailure), and GetGatewayHealthV2 then decorates each
+	// entry through repo.CacheGetChannel — which nil-dereferences repo.DB,
+	// because this test deliberately stands up no database. In source order
+	// this test happened to run first; under `go test -shuffle=on` it does not,
+	// and the panic is a hard package failure (cycle-12 L1). Establish the
+	// precondition instead of inheriting it, and leave the registry as empty as
+	// this test needs it to be.
+	channelBreakers.Cleanup(map[int]struct{}{})
+	t.Cleanup(func() { channelBreakers.Cleanup(map[int]struct{}{}) })
 	r := handlerDeepCGatewayHealthRouter()
 	w, resp := handlerDeepCDoGatewayHealth(r)
 	if w.Code != http.StatusOK {
@@ -82,6 +92,16 @@ func TestGetGatewayHealthV2_FailuresRecorded_TrippedBreakerCountedAndDecorated(t
 	// Trip the breaker: DefaultConfig threshold defaults to 5 consecutive
 	// failures unless CB_THRESHOLD overrides it; record generously past any
 	// reasonable threshold to make the open-state assertion environment-proof.
+	//
+	// channelBreakers is a PROCESS-global registry keyed by channel id, and an
+	// open breaker stays open for CB_TIMEOUT_SEC (30s). channel.Id here comes
+	// from a hermetic sqlite, so it is a low auto-increment number that every
+	// other hermetic fixture in this package also hands out — and relay.go
+	// skips a channel whose breaker is open, which surfaces as an empty HTTP
+	// 200 with no settlement in whatever relay test runs next. Dropping every
+	// breaker on cleanup keeps this test's deliberate damage inside this test
+	// (cycle-12 L1; `go test -shuffle=on` is what made it visible).
+	t.Cleanup(func() { channelBreakers.Cleanup(map[int]struct{}{}) })
 	for i := 0; i < 25; i++ {
 		channelBreakers.RecordFailure(channel.Id)
 	}
@@ -141,6 +161,10 @@ func TestGetGatewayHealthV2_BreakerOutlivesChannelRow_DecorationBestEffort(t *te
 	t.Cleanup(func() { common.MemoryCacheEnabled = prevMemCache })
 
 	const orphanChannelID = 987654321
+	// Same process-global registry as the test above; this id cannot collide
+	// with a hermetic fixture's auto-increment, but leaving entries behind
+	// still makes another test's Snapshot() non-deterministic.
+	t.Cleanup(func() { channelBreakers.Cleanup(map[int]struct{}{}) })
 	channelBreakers.RecordFailure(orphanChannelID)
 
 	r := handlerDeepCGatewayHealthRouter()
