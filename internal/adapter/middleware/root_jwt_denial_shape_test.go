@@ -7,8 +7,11 @@ package middleware
 // looked authorised-and-empty instead of refused — cycle-12 §1.2 item 6.
 // This file pins the replacement wire shape branch by branch.
 //
-// Scope: the session branch only. The Bearer-JWT branch is unchanged and
-// stays covered by oidc_admin_cover_test.go
+// Scope: BOTH branches RootJWTAuth routes to rootSessionAuth — the
+// header-less console one and the one an Authorization header takes when
+// OIDC is off or its JWKS never initialised (UAT runs OIDC_ENABLED=false
+// permanently, so that second branch is not hypothetical). The validated
+// Bearer-JWT branch is unchanged and stays covered by oidc_admin_cover_test.go
 // (TestRootJWTAuth_ValidRoot_Passes / TestRootJWTAuth_NonRoot_403) and
 // rate_limit_factory_cover_test.go (TestRootJWTAuth_InvalidToken_401).
 //
@@ -16,6 +19,13 @@ package middleware
 // {"success":false} for the same session, because switch consumes that
 // shape (cycle-12 §6 do-not-regress). TestRootDenialShape_V1AuthHelperShapeUnchanged
 // below is the guard against "fix the shape everywhere" creep.
+//
+// The refusals are classified, not blanket-remapped: an invalid credential
+// answers 401 so its owner re-authenticates, a role shortfall answers 403 so
+// its owner stops retrying. TestRootSessionDenials_CoverEveryTwoHundredRefusal
+// parses auth.go and fails if a 200-shaped refusal exists that the
+// classification table does not name, so "the enumeration was incomplete"
+// cannot happen silently again.
 
 import (
 	"encoding/json"
@@ -24,6 +34,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-contrib/sessions"
@@ -56,10 +67,31 @@ func mountRootJWTSession(preset map[string]any) *gin.Engine {
 	return r
 }
 
-func doRootJWTProbe(engine *gin.Engine) *httptest.ResponseRecorder {
+func doRootJWTProbe(engine *gin.Engine, authHeader string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/probe", nil))
+	req := httptest.NewRequest(http.MethodGet, "/admin/probe", nil)
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	engine.ServeHTTP(w, req)
 	return w
+}
+
+// withOIDCOff pins the package's OIDC state to "not initialised" for the
+// duration of a test. That is the state a fresh process is in, the state UAT
+// is in permanently (OIDC_ENABLED=false) and the state prod is in whenever
+// InitOIDCAuth failed — and it is what sends an Authorization-bearing
+// request to rootSessionAuth instead of validateJWT. Pinned explicitly so
+// this file's expectations do not depend on which other test ran first.
+func withOIDCOff(t *testing.T) {
+	t.Helper()
+	prevEnabled, prevJWKS := oidcEnabled, jwksManager
+	oidcEnabled = false
+	jwksManager = nil
+	t.Cleanup(func() {
+		oidcEnabled = prevEnabled
+		jwksManager = prevJWKS
+	})
 }
 
 func rootDenialSession(role, status int) map[string]any {
@@ -72,12 +104,34 @@ func rootDenialSession(role, status int) map[string]any {
 }
 
 func TestRootJWTAuth_SessionDenialShape(t *testing.T) {
-	_, cleanup := setupCoverDB(t)
+	db, cleanup := setupCoverDB(t)
 	defer cleanup()
+	withOIDCOff(t)
+
+	// A real root user reachable by access token, for the
+	// Authorization-header branch's admitted row. repo.ValidateAccessToken
+	// matches on the users.access_token column (user.go:736).
+	// Id is pinned away from rootDenialSession's id=1 on purpose:
+	// resolveSessionIdentity re-validates role/status against the user cache,
+	// so a seeded row that happened to land on id 1 would silently promote
+	// every role-10 session row in this table to root and turn the refusal
+	// rows green for the wrong reason.
+	accessTokenRoot := &repo.User{
+		Id:          4100,
+		Username:    "l4-root-by-access-token",
+		DisplayName: "L4 Root",
+		Role:        common.RoleRootUser,
+		Status:      common.UserStatusEnabled,
+	}
+	accessTokenRoot.SetAccessToken("l4-valid-root-access-token")
+	if err := db.Create(accessTokenRoot).Error; err != nil {
+		t.Fatalf("seed access-token root: %v", err)
+	}
 
 	cases := []struct {
 		name       string
 		preset     map[string]any
+		authHeader string
 		wantStatus int
 		wantCode   string
 		// wantMessagePart, when set, must appear in the body: it proves the
@@ -107,7 +161,7 @@ func TestRootJWTAuth_SessionDenialShape(t *testing.T) {
 			name:            "banned_root_forbidden_keeps_its_reason",
 			preset:          rootDenialSession(common.RoleRootUser, common.UserStatusDisabled),
 			wantStatus:      http.StatusForbidden,
-			wantCode:        "PERMISSION_DENIED",
+			wantCode:        "USER_DISABLED",
 			wantMessagePart: "封禁",
 		},
 		{
@@ -116,11 +170,42 @@ func TestRootJWTAuth_SessionDenialShape(t *testing.T) {
 			wantStatus:       http.StatusOK,
 			wantReachHandler: true,
 		},
+		// ---- the Authorization-header branch (oidcEnabled == false) ----
+		// These are NOT the validated-JWT rows: with OIDC off,
+		// admin_jwt_auth.go sends an Authorization-bearing request to
+		// rootSessionAuth, where it is resolved as a newhub access token.
+		{
+			name:       "invalid_access_token_401_unauthenticated",
+			preset:     nil,
+			authHeader: "Bearer l4-expired-or-bogus-token",
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "UNAUTHENTICATED",
+			// The credential is invalid, not under-privileged: saying
+			// "permission denied" here is what stops a client from ever
+			// refreshing its token.
+			wantMessagePart: "access token",
+		},
+		{
+			name:             "valid_root_access_token_admitted",
+			preset:           nil,
+			authHeader:       "Bearer l4-valid-root-access-token",
+			wantStatus:       http.StatusOK,
+			wantReachHandler: true,
+		},
+		{
+			name:       "session_role_wins_over_unparseable_header",
+			preset:     rootDenialSession(common.RoleAdminUser, common.UserStatusEnabled),
+			authHeader: "Bearer l4-expired-or-bogus-token",
+			// A live session takes precedence over the header inside
+			// resolveSessionIdentity, so this is still a role shortfall.
+			wantStatus: http.StatusForbidden,
+			wantCode:   "PERMISSION_DENIED",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w := doRootJWTProbe(mountRootJWTSession(tc.preset))
+			w := doRootJWTProbe(mountRootJWTSession(tc.preset), tc.authHeader)
 			if w.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.wantStatus, w.Body.String())
 			}

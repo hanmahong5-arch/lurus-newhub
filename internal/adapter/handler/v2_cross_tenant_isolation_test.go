@@ -386,6 +386,10 @@ func TestUpdateSelfV2_CrossTenantIsolation(t *testing.T) {
 // belonging to a second tenant in the same DB must not inflate the requesting
 // user's session summary.
 func TestListSessionsV2_CrossTenantIsolation(t *testing.T) {
+	// Registry ON (no rows seeded) so the response still carries the
+	// per-request summary entry whose counters this test is about; with it
+	// OFF the list is empty by design since cycle-12 L4.
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 

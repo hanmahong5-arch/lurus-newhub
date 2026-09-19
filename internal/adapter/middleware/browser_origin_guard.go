@@ -2,13 +2,74 @@ package middleware
 
 import (
 	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/config"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
 	"github.com/gin-gonic/gin"
 	zita "github.com/hanmahong5-arch/zita-sdk-go"
 )
+
+// csrfOriginGuardModeEnv names the environment variable that decides what
+// BrowserOriginGuard does with a request it judges cross-site. Read fresh on
+// every request — the same posture as TENANT_MISSING_MODE
+// (repo.TenantMissingMode) and SESSION_REGISTRY_ENABLED — so an operator who
+// has to switch it off during an incident does not have to restart three
+// replicas to do it.
+const csrfOriginGuardModeEnv = "CSRF_ORIGIN_GUARD_MODE"
+
+// Guard modes.
+//
+//	enforce — refuse with 403 CROSS_SITE_REQUEST (the default, and what any
+//	          unrecognised value means: a typo must not disable a security
+//	          control)
+//	observe — admit the request, count it under csrf_observed_total{reason}
+//	          and log it (throttled). For measuring a suspected legitimate
+//	          caller before enforcing, not a permanent setting
+//	off     — the guard evaluates nothing at all: no decision, no metric.
+//	          The lever for an incident where the guard itself is the fault
+const (
+	csrfGuardModeEnforce = "enforce"
+	csrfGuardModeObserve = "observe"
+	csrfGuardModeOff     = "off"
+)
+
+// csrfOriginGuardMode returns the configured mode, defaulting to enforce.
+func csrfOriginGuardMode() string {
+	switch strings.TrimSpace(os.Getenv(csrfOriginGuardModeEnv)) {
+	case csrfGuardModeObserve:
+		return csrfGuardModeObserve
+	case csrfGuardModeOff:
+		return csrfGuardModeOff
+	default:
+		return csrfGuardModeEnforce
+	}
+}
+
+// csrfObserveLogLast throttles the observe-mode log line to one per reason
+// per minute: observe mode is what someone runs while under a real
+// cross-site attempt, and one ERROR line per request would be the outage.
+// The metric is the unthrottled signal.
+var csrfObserveLogLast sync.Map // reason -> time.Time
+
+// csrfObserveLogWindow is how long a reason stays quiet after being logged.
+const csrfObserveLogWindow = time.Minute
+
+func csrfObserveLogf(reason, msg string) {
+	now := time.Now()
+	if last, loaded := csrfObserveLogLast.LoadOrStore(reason, now); loaded {
+		if now.Sub(last.(time.Time)) < csrfObserveLogWindow {
+			return
+		}
+		csrfObserveLogLast.Store(reason, now)
+	}
+	common.SysLog(msg)
+}
 
 // browserSessionCookieNames are the cookies that make a request
 // cookie-authenticated on this gateway: the gin session cookie this process
@@ -74,8 +135,18 @@ var browserOriginGuardSafeMethods = map[string]bool{
 // in every current mainstream browser, but a scripted client or an old
 // embedded webview sends neither header, and failing those closed would
 // break callers that are not the attack this guards against.
+//
+// CSRF_ORIGIN_GUARD_MODE (csrfOriginGuardMode) decides what a refusal row
+// does: enforce (default) answers 403, observe counts and admits, off skips
+// the guard entirely. The decision table above is the enforce column; in
+// observe mode every row admits.
 func BrowserOriginGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		mode := csrfOriginGuardMode()
+		if mode == csrfGuardModeOff {
+			c.Next()
+			return
+		}
 		if browserOriginGuardSafeMethods[c.Request.Method] {
 			c.Next()
 			return
@@ -94,7 +165,7 @@ func BrowserOriginGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		case "same-site", "cross-site":
-			rejectCrossSiteRequest(c, "sec_fetch_site")
+			refuseCrossSiteRequest(c, mode, "sec_fetch_site")
 			return
 		}
 
@@ -109,7 +180,7 @@ func BrowserOriginGuard() gin.HandlerFunc {
 				return
 			}
 		}
-		rejectCrossSiteRequest(c, "origin")
+		refuseCrossSiteRequest(c, mode, "origin")
 	}
 }
 
@@ -124,10 +195,23 @@ func hasBrowserSessionCookie(c *gin.Context) bool {
 	return false
 }
 
-// rejectCrossSiteRequest writes the guard's single refusal shape. reason is
-// the metric label, not part of the response: telling a cross-site caller
-// which check caught it only helps it probe for the other one.
-func rejectCrossSiteRequest(c *gin.Context, reason string) {
+// refuseCrossSiteRequest applies the configured mode to a request the
+// decision table judged cross-site. reason is the metric label, never part
+// of the response: telling a cross-site caller which check caught it only
+// helps it probe for the other one.
+//
+// In observe mode the request is admitted and counted separately — the
+// enforce counter must keep meaning "was actually refused", so that a
+// dashboard cannot read an observe-mode deployment as a protected one.
+func refuseCrossSiteRequest(c *gin.Context, mode, reason string) {
+	if mode == csrfGuardModeObserve {
+		metrics.RecordCSRFObserved(reason)
+		csrfObserveLogf(reason, "CSRF origin guard (observe mode) would have refused "+
+			c.Request.Method+" "+c.FullPath()+" — reason="+reason+
+			"; set CSRF_ORIGIN_GUARD_MODE=enforce to make this a 403")
+		c.Next()
+		return
+	}
 	metrics.RecordCSRFRejected(reason)
 	c.JSON(http.StatusForbidden, gin.H{
 		"success":    false,

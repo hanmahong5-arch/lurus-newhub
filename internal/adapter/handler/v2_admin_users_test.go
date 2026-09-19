@@ -241,19 +241,43 @@ func TestDeleteAdminUserV2_Success(t *testing.T) {
 
 // TestAdminUsersV2_NonRootRejected confirms a non-root caller is forbidden from
 // every admin user endpoint.
+//
+// It also pins the error_code (cycle-12 L4): these handlers refuse through
+// requireRoot, which used to write a 403 with no error_code at all while the
+// middleware guarding the very same route group answered the same refusal
+// class with error_code PERMISSION_DENIED. A console that branches on
+// error_code would have fallen through to its generic handler on exactly
+// these routes.
 func TestAdminUsersV2_NonRootRejected(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
 
+	assertPermissionDenied := func(w *httptest.ResponseRecorder, what string) {
+		t.Helper()
+		AssertV2Error(t, w, http.StatusForbidden)
+		var env map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatalf("%s: decode envelope: %v; body=%s", what, err, w.Body.String())
+		}
+		if code, _ := env["error_code"].(string); code != "PERMISSION_DENIED" {
+			t.Errorf("%s: error_code = %q, want \"PERMISSION_DENIED\" (same code the route group's middleware answers with); body=%s",
+				what, code, w.Body.String())
+		}
+	}
+
 	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/admin/users", nil, nil)
-	AssertV2Error(t, w, http.StatusForbidden)
+	assertPermissionDenied(w, "GET /api/v2/admin/users")
 
 	path := fmt.Sprintf("/api/v2/admin/users/%d", ctx.AdminUser.Id)
 	w = V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPut, path, map[string]interface{}{"quota": 1}, nil)
-	AssertV2Error(t, w, http.StatusForbidden)
+	assertPermissionDenied(w, "PUT /api/v2/admin/users/:id")
 
 	w = V2RequestAsUser(ctx, ctx.NormalUser, http.MethodDelete, path, nil, nil)
-	AssertV2Error(t, w, http.StatusForbidden)
+	assertPermissionDenied(w, "DELETE /api/v2/admin/users/:id")
+	// DELETE /users/:id/sessions shares requireRoot but is not registered in
+	// this shared harness (see setupAdminSessionsRevokeRouter below); its
+	// non-root refusal is pinned in
+	// TestAdminRevokeUserSessions_NonRootRejected.
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +325,39 @@ func setupAdminSessionsRevokeRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
 		}
 	})
 	return r, db
+}
+
+// TestAdminRevokeUserSessions_NonRootRejected pins the fourth requireRoot
+// call site — the one the shared harness does not route. A role-10 caller is
+// refused with 403 PERMISSION_DENIED and never reaches the registry, flag or
+// no flag. No DB is wired on purpose: requireRoot must refuse before any
+// lookup, so a nil repo.DB here would surface as a panic rather than a pass.
+func TestAdminRevokeUserSessions_NonRootRejected(t *testing.T) {
+	t.Setenv("SESSION_REGISTRY_ENABLED", "true")
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.DELETE("/api/v2/admin/users/:id/sessions", func(c *gin.Context) {
+		c.Set("id", 998)
+		c.Set("role", common.RoleAdminUser)
+		c.Next()
+	}, RevokeUserSessionsAdminV2)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v2/admin/users/321/sessions", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	var env map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode envelope: %v; body=%s", err, w.Body.String())
+	}
+	if code, _ := env["error_code"].(string); code != "PERMISSION_DENIED" {
+		t.Errorf("error_code = %q, want \"PERMISSION_DENIED\"; body=%s", code, w.Body.String())
+	}
 }
 
 // TestAdminRevokeUserSessions_AuditsReason: root revoking a compromised

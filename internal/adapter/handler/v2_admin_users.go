@@ -60,12 +60,19 @@ func toAdminUserViews(users []*repo.User) []adminUserView {
 
 // requireRoot is the shared platform-admin gate. Returns the caller's role and
 // whether the request may proceed; on rejection it has already written the 403.
+//
+// The refusal carries error_code PERMISSION_DENIED — the same code
+// middleware.RootJWTAuth's session branch now answers with for the same
+// refusal class on this same route group (cycle-12 L4). A consumer that
+// branches on error_code must not have to special-case the /users/* routes
+// because their 403 happened to be the one without a code.
 func requireRoot(c *gin.Context) (int, bool) {
 	role := c.GetInt("role")
 	if role < common.RoleRootUser {
 		c.JSON(http.StatusForbidden, gin.H{
-			"success": false,
-			"message": "Platform admin role required",
+			"success":    false,
+			"message":    "Platform admin role required",
+			"error_code": "PERMISSION_DENIED",
 		})
 		return role, false
 	}

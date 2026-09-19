@@ -32,6 +32,17 @@ export function resolveErrorMessage(error) {
     return t('console.errors.network');
   }
 
+  // error_code first, for the few refusals where the status alone is not
+  // enough to say anything useful. Cycle-12 L4: the session endpoints answer
+  // 409 SESSION_REGISTRY_DISABLED when per-device sessions are not enabled on
+  // this deployment — without this the user saw the backend's raw English
+  // sentence in a zh-default console, because 409 falls through to the
+  // backend-message branch at the bottom.
+  const errorCode = error?.response?.data?.error_code;
+  if (errorCode === 'SESSION_REGISTRY_DISABLED') {
+    return t('console.settings.session_registry_disabled');
+  }
+
   switch (status) {
     case 401:
       // Session expired or not yet bridged. After the WS-A auth fix this is

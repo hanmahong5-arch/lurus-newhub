@@ -87,7 +87,24 @@ The process-local limiter is a **per-replica** ceiling: with 3 replicas
 behind one NodePort, the effective budget during an outage is up to
 `3 x budget` rather than `budget`. That is weaker than Redis and is not the
 same thing as unthrottled. `middleware.TestRateLimitMarks_EveryMarkIsClassified`
-fails if a new limiter is added without a side.
+walks every non-test `.go` file under `internal/` and fails if a new limiter
+is added without a side, or if its mark is not a string literal (a computed
+mark cannot be classified by reading the source).
+
+### Two alarms, two severities
+
+`web_rate_limit_backend_memory` is deliberately NOT paged at the same
+severity as the fail-open series: the request it counts **was** measured
+against a limiter. One alarm (`newhub_rate_limit_degraded`, warn/crit)
+covers every series where the request went through unchecked, and a second
+(`newhub_rate_limit_memory_fallback`, warn only) covers the memory-fallback
+series. Both point here. They are still the same underlying event — Redis is
+failing — so treat a memory-fallback alarm as a Redis incident; what differs
+is that customer-visible 429s during it are correct behaviour, not a second
+fault to chase. Until both blocks are in
+`deploy/r6-host-netdata/health.d/newhub.conf`, a memory-fallback occurrence
+fires the single aggregate alarm at fail-open severity — read the `check`
+label before acting.
 
 - `web_rate_limit_backend` — the LLen check on the bucket key errored
   (backend unreachable) on a traffic bucket. The request is admitted; no

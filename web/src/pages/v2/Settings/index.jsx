@@ -55,8 +55,11 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
  * HiFi 12 — Settings.
  * Profile: wired to GET/PUT /api/v2/:tenant_slug/user/me
  * Security/Sessions: wired to GET /api/v2/:tenant_slug/sessions (Wave 2).
- *   Returns single synthetic session (auth_method + active_tokens + request_count).
- *   Single-device revoke wired (Wave 3 Phase 1). Multi-device tracking deferred to v3.
+ *   Registry ON: one row per registered device, plus per-device revoke and
+ *   "sign out other devices" (L7). Registry OFF (production today): an empty
+ *   list and registry_enabled:false, rendered as an explicit "not enabled on
+ *   this deployment" note — it used to be one invented row (cycle-12 L4).
+ *   Single-device revoke wired (Wave 3 Phase 1).
  * Notifications: wired to GET setting-string on /api/v2/:tenant_slug/user/me
  *   and PUT /api/user/setting (Wave 2 field names, unchanged).
  * Team: not offered — no outbound link, since identity.lurus.cn has no
@@ -214,11 +217,19 @@ const HFSettings = () => {
   const [editField, setEditField] = useState(null); // 'display_name' | 'email'
   const [saving, setSaving] = useState(false);
 
-  // Session state. With SESSION_REGISTRY_ENABLED off (or on but this login
-  // registered no row — e.g. a bearer/token-authenticated visit), `sessions`
-  // stays the single synthetic row it always was; with the flag on it can
-  // hold one row per registered device (L7).
+  // Session state. With the per-device session registry ON, `sessions` holds
+  // one row per registered device (L7); with it ON but this login registering
+  // no row (a bearer/token-authenticated visit) it holds the single
+  // "your current request" row.
+  //
+  // With the registry OFF — production's state today — the API returns an
+  // EMPTY list and registry_enabled:false (cycle-12 L4). It used to invent
+  // one row, so a user signed in on five browsers was shown one device and
+  // told it was current. `registryEnabled` carries that capability bit so
+  // this page can say the feature is off instead of rendering an empty box.
+  // null = not answered yet.
   const [sessions, setSessions] = useState(null);
+  const [registryEnabled, setRegistryEnabled] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(false);
 
   // Revoke session confirm dialog — used for BOTH "revoke my current
@@ -320,6 +331,10 @@ const HFSettings = () => {
       const res = await API.get(`/api/v2/${tenantSlug}/sessions`);
       if (res?.data?.success) {
         setSessions(res.data.data.items ?? []);
+        // Absent on a gateway that predates the capability bit: treat that as
+        // "enabled" so an older backend keeps its previous behaviour rather
+        // than claiming the feature is off.
+        setRegistryEnabled(res.data.data.registry_enabled !== false);
       }
     } catch (_) {
       // error toast shown by API interceptor
@@ -937,6 +952,22 @@ const HFSettings = () => {
                     {tr(
                       'console.settings.load_sessions_failed',
                       'Failed to load sessions.',
+                    )}
+                  </div>
+                )}
+                {/* Registry off: the list is empty BY DESIGN, not because
+                    this account has no devices signed in. Saying so is the
+                    whole point of the capability bit — an empty box would
+                    read as "you are signed in nowhere". */}
+                {!sessionLoading && sessions && registryEnabled === false && (
+                  <div
+                    className='muted'
+                    data-testid='sessions-registry-off'
+                    style={{ fontSize: 12, marginTop: 10 }}
+                  >
+                    {tr(
+                      'console.settings.sessions_registry_off_note',
+                      'Per-device sessions are not enabled on this deployment, so the devices signed in to this account cannot be listed or signed out individually here.',
                     )}
                   </div>
                 )}

@@ -125,10 +125,10 @@ const fakeProfile = {
   request_count: 0,
 };
 
-const fakeSessionsResponse = (items) => ({
+const fakeSessionsResponse = (items, registryEnabled = true) => ({
   data: {
     success: true,
-    data: { items, total: items.length },
+    data: { items, total: items.length, registry_enabled: registryEnabled },
   },
 });
 
@@ -460,6 +460,51 @@ describe('Settings page', () => {
     expect(tableText).toContain('198.51.100.0');
     expect(tableText).toContain('Firefox');
     expect(screen.getByTestId('revoke-others-btn')).toBeTruthy();
+  });
+
+  // 4b-bis. Cycle-12 L4: with the per-device registry OFF the API answers an
+  // empty list plus registry_enabled:false, and the page must SAY so. It used
+  // to be handed one invented row ("current", last seen just now), so a user
+  // signed in on five browsers saw one device and no way to tell that the
+  // feature was simply not enabled here — which is production's state.
+  it('says per-device sessions are not enabled when registry_enabled is false', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/user/me')) {
+        return Promise.resolve({ data: { success: true, data: fakeProfile } });
+      }
+      if (url.includes('/sessions')) {
+        return Promise.resolve(fakeSessionsResponse([], false));
+      }
+      return Promise.resolve({ data: { success: false } });
+    });
+
+    render(<HFSettings />);
+    screen.getByText('Security').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sessions-registry-off')).toBeTruthy();
+    });
+    expect(screen.getByTestId('sessions-registry-off').textContent).toContain(
+      'not enabled on this deployment',
+    );
+    // No table, and above all no "sign out other devices" button: there is
+    // nothing it could sign out, and pressing it would 409.
+    expect(screen.queryByTestId('sessions-table')).toBeNull();
+    expect(screen.queryByTestId('revoke-others-btn')).toBeNull();
+    // And not the failure state either — the fetch succeeded.
+    expect(screen.queryByText(/Failed to load sessions/)).toBeNull();
+  });
+
+  // 4b-ter. The same note must NOT appear when the registry is on: a page
+  // that always claimed the feature was off would be just as dishonest.
+  it('does not show the registry-off note when registry_enabled is true', async () => {
+    render(<HFSettings />);
+    screen.getByText('Security').click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sessions-table')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('sessions-registry-off')).toBeNull();
   });
 
   // 4c. L7: revoking a NON-current device calls DELETE .../sessions/:id

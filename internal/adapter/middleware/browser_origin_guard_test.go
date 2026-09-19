@@ -11,6 +11,8 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -237,5 +239,128 @@ func TestBrowserOriginGuard_CountsRejections(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(metrics.CSRFRejectedTotal.WithLabelValues("origin")); got != beforeOrigin+1 {
 		t.Errorf("csrf_rejected_total{reason=origin} = %v, want %v", got, beforeOrigin+1)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CSRF_ORIGIN_GUARD_MODE (cycle-12 L4, repair round). The guard had no lever
+// short of a revert; the operator decision gave it three modes. These rows
+// are the whole contract of that switch.
+// ---------------------------------------------------------------------------
+
+// crossSiteCookiePost is the one request shape the mode changes the answer
+// to: cookie-authenticated, state-changing, and cross-site by the browser's
+// own account.
+func crossSiteCookiePost(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/t", nil)
+	req.AddCookie(ginSessionCookie())
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	w := httptest.NewRecorder()
+	browserOriginGuardEngine().ServeHTTP(w, req)
+	return w
+}
+
+func TestBrowserOriginGuard_ModeTable(t *testing.T) {
+	withCORSTestOrigin(t, "https://hub.lurus.cn")
+
+	t.Run("unset_enforces", func(t *testing.T) {
+		t.Setenv("CSRF_ORIGIN_GUARD_MODE", "")
+		if w := crossSiteCookiePost(t); w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 — enforce is the default; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("typo_enforces", func(t *testing.T) {
+		// A misspelt value must not disable a security control.
+		t.Setenv("CSRF_ORIGIN_GUARD_MODE", "enforcing")
+		if w := crossSiteCookiePost(t); w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 — an unrecognised mode must mean enforce; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("observe_admits_and_counts_separately", func(t *testing.T) {
+		t.Setenv("CSRF_ORIGIN_GUARD_MODE", "observe")
+		beforeObserved := testutil.ToFloat64(metrics.CSRFObservedTotal.WithLabelValues("sec_fetch_site"))
+		beforeRejected := testutil.ToFloat64(metrics.CSRFRejectedTotal.WithLabelValues("sec_fetch_site"))
+
+		w := crossSiteCookiePost(t)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ok":true`) {
+			t.Fatalf("status = %d body = %s, want the request admitted in observe mode", w.Code, w.Body.String())
+		}
+		if got := testutil.ToFloat64(metrics.CSRFObservedTotal.WithLabelValues("sec_fetch_site")); got != beforeObserved+1 {
+			t.Errorf("csrf_observed_total{reason=sec_fetch_site} = %v, want %v — observe mode must still be measurable", got, beforeObserved+1)
+		}
+		if got := testutil.ToFloat64(metrics.CSRFRejectedTotal.WithLabelValues("sec_fetch_site")); got != beforeRejected {
+			t.Errorf("csrf_rejected_total{reason=sec_fetch_site} = %v, want it unchanged at %v — nothing was refused, and an alarm on that counter must not read an observe deployment as protected",
+				got, beforeRejected)
+		}
+	})
+
+	t.Run("off_evaluates_nothing", func(t *testing.T) {
+		t.Setenv("CSRF_ORIGIN_GUARD_MODE", "off")
+		beforeObserved := testutil.ToFloat64(metrics.CSRFObservedTotal.WithLabelValues("sec_fetch_site"))
+		beforeRejected := testutil.ToFloat64(metrics.CSRFRejectedTotal.WithLabelValues("sec_fetch_site"))
+
+		w := crossSiteCookiePost(t)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 with the guard off; body=%s", w.Code, w.Body.String())
+		}
+		if got := testutil.ToFloat64(metrics.CSRFObservedTotal.WithLabelValues("sec_fetch_site")); got != beforeObserved {
+			t.Errorf("csrf_observed_total moved with the guard off (%v -> %v) — off must mean no decision at all", beforeObserved, got)
+		}
+		if got := testutil.ToFloat64(metrics.CSRFRejectedTotal.WithLabelValues("sec_fetch_site")); got != beforeRejected {
+			t.Errorf("csrf_rejected_total moved with the guard off (%v -> %v)", beforeRejected, got)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Reachability. Everything above proves the guard DECIDES correctly; none of
+// it proves the guard RUNS. The mount is a W hand-off in two router files
+// this lane does not own, and both metric series read 0 whether the guard is
+// mounted or not — so without this gate, dropping the mount would leave
+// every test in this lane green and the only production signal
+// indistinguishable from "no attacks".
+//
+// EXPECTED RED until W applies hand-off #1 and #2 (the two
+// middleware.BrowserOriginGuard() mounts). That is the point: the lane's
+// work is not done until the guard is on the route table production serves.
+// ---------------------------------------------------------------------------
+
+// browserOriginGuardMountSites are the route files that must mount the
+// guard, with where in each the mount belongs.
+var browserOriginGuardMountSites = []struct {
+	path  string
+	after string
+}{
+	{filepath.Join("..", "handler", "router", "api-v2-router.go"), "middleware.CORS()"},
+	{filepath.Join("..", "handler", "router", "api-router.go"), "middleware.CORS()"},
+}
+
+func TestBrowserOriginGuard_IsMountedInProductionRouters(t *testing.T) {
+	const mount = "middleware.BrowserOriginGuard()"
+
+	for _, site := range browserOriginGuardMountSites {
+		raw, err := os.ReadFile(site.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", site.path, err)
+		}
+		source := string(raw)
+
+		mountAt := strings.Index(source, mount)
+		if mountAt < 0 {
+			t.Errorf("%s does not mount the guard: no %q in the file. The middleware is dead code until it is mounted, and its metrics read 0 either way — mount it directly after %s.",
+				site.path, mount, site.after)
+			continue
+		}
+		corsAt := strings.Index(source, site.after)
+		if corsAt < 0 {
+			t.Errorf("%s no longer contains %q — this gate's ordering check cannot verify anything; fix the gate rather than deleting it", site.path, site.after)
+			continue
+		}
+		if mountAt < corsAt {
+			t.Errorf("%s mounts the guard BEFORE %s — a cross-site request would be refused without the CORS headers that let the browser read the refusal", site.path, site.after)
+		}
 	}
 }

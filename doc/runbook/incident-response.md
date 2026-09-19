@@ -120,6 +120,31 @@ SELECT pg_terminate_backend(<pid>);
   shaped, nothing done. If a past incident record says sessions were revoked on production, check
   whether it was one of these calls.
 
+  The READ side answers the same configuration state rather than inventing one:
+  `GET /api/v2/:tenant_slug/sessions` returns `{"items":[],"total":0,"registry_enabled":false}` with
+  the flag off (cycle-12 L4; it used to return one synthetic row — id `current`, `last_seen` = now —
+  for every caller, so a user signed in from five browsers was shown exactly one device). The console's
+  Security panel reads `registry_enabled` and says the feature is not enabled on this deployment.
+  **Do not read an empty session list on production as "this account has no live sessions"** — with the
+  flag off the list says nothing at all about how many devices hold a valid cookie. The `users` +
+  Redis `session_*` keys are the only evidence in that state.
+- **"cross-site request refused" (HTTP 403 `CROSS_SITE_REQUEST`)**: `middleware.BrowserOriginGuard`
+  refused a cookie-authenticated, state-changing request that the browser itself reported as coming
+  from another site (`Sec-Fetch-Site: same-site|cross-site`), or whose `Origin` is absent from
+  `ALLOWED_ORIGINS`. Requests carrying `Authorization` or `X-API-Key`, and requests with no session
+  cookie, are never refused by it — so relay clients, service callers and `POST /api/v2/bridge/exchange`
+  cannot produce this.
+
+  If a legitimate integration is being refused, the lever is `CSRF_ORIGIN_GUARD_MODE`:
+  `enforce` (default, and what any unrecognised value means), `observe` (admit, count under
+  `lurus_gateway_csrf_observed_total{reason}`, log one line per reason per minute) or `off` (the guard
+  evaluates nothing). Read per request, so it takes effect on the next request — but it is still an env
+  var in the manifest, so changing it on production is a merged manifest edit, not a live `kubectl set
+  env` (ArgoCD selfHeal reverts that). `observe` is the diagnosis setting; the correct fix for a real
+  integration is a credential header, because a CORS allowlist entry does not make another site safe to
+  act with a victim's cookie. `lurus_gateway_csrf_rejected_total{reason}` counts only actual refusals —
+  it stays at 0 in observe and off.
+
 ## Escalation
 
 | Sev | Criteria | Response |
