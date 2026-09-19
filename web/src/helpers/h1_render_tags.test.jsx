@@ -100,7 +100,9 @@ vi.mock('./utils', async (importOriginal) => {
 });
 
 import { Modal } from '@douyinfe/semi-ui';
+import * as LobeIcons from '@lobehub/icons';
 import { OpenAI, Claude } from '@lobehub/icons';
+import { resolveLobeIcon } from './lobeIcon';
 import { Key, CircleUser } from 'lucide-react';
 import { copy, showSuccess } from './utils';
 import {
@@ -113,6 +115,14 @@ import {
   renderRatio,
   truncateText,
 } from './render';
+
+// The icon pack now sits behind a dynamic import (helpers/lobeIcon.jsx), so an
+// icon element carries the descriptor its wrapper will resolve rather than the
+// vendor component itself. Pairing the parsed props.name / props.sub with
+// resolveLobeIcon over the real pack pins the same round-trip the old
+// `element.type` assertions did: this descriptor still selects that component.
+const iconComponentOf = (element) =>
+  resolveLobeIcon(LobeIcons, element.props.name, element.props.sub)?.Component;
 
 // Which category a model name lands in — first match wins over the insertion
 // order of the category map, so this doubles as an ordering assertion.
@@ -344,9 +354,9 @@ describe('renderRatio colour thresholds', () => {
 
 describe('getChannelIcon', () => {
   it('maps a channel type to its vendor icon', () => {
-    expect(getChannelIcon(1).type).toBe(OpenAI);
+    expect(iconComponentOf(getChannelIcon(1))).toBe(OpenAI);
     // Azure OpenAI (3) shares the OpenAI mark.
-    expect(getChannelIcon(3).type).toBe(OpenAI);
+    expect(iconComponentOf(getChannelIcon(3))).toBe(OpenAI);
     expect(getChannelIcon(1).props.size).toBe(14);
   });
 
@@ -391,11 +401,11 @@ describe('getLobeHubIcon', () => {
   });
 
   it('trims whitespace before resolving', () => {
-    expect(getLobeHubIcon('  OpenAI  ').type).toBe(OpenAI);
+    expect(iconComponentOf(getLobeHubIcon('  OpenAI  '))).toBe(OpenAI);
   });
 
   it('resolves a dotted sub-component such as Claude.Color', () => {
-    expect(getLobeHubIcon('Claude.Color').type).toBe(Claude.Color);
+    expect(iconComponentOf(getLobeHubIcon('Claude.Color'))).toBe(Claude.Color);
   });
 
   it('applies the size argument when the descriptor does not set one', () => {
@@ -434,7 +444,7 @@ describe('getLobeHubIcon', () => {
     // Replaces the companion that pinned the shredded prop. Same seam, the
     // other quoting form, plus proof the sub-component path still splits.
     const el = getLobeHubIcon("Claude.Color.shape={'2.5x'}.size=20");
-    expect(el.type).toBe(Claude.Color);
+    expect(iconComponentOf(el)).toBe(Claude.Color);
     expect(el.props.shape).toBe('2.5x');
     expect(el.props.size).toBe(20);
   });
