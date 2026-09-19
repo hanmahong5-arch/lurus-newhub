@@ -38,7 +38,9 @@ function assert(condition, message) {
 
 function makeDist({
   entryBytes = 100,
-  entryBrotliBytes = 0,
+  // A real build always leaves a .br sibling next to the entry (the gate
+  // treats its absence as a breach), so the fixtures carry one by default.
+  entryBrotliBytes = 20,
   preloadBytes = [],
   cssBytes = [],
   withIndex = true,
@@ -103,8 +105,22 @@ function dist(options) {
   return dir;
 }
 
+check('fails when the build emitted no .br sibling for the entry chunk', () => {
+  const dir = dist({ entryBytes: 1000, entryBrotliBytes: 0 });
+  const m = measureBundle(dir);
+  const { breaches } = checkBudget(m, budgetOf(m, 1.1));
+  assert(
+    breaches.some((b) => b.includes('no .br sibling')),
+    `expected the missing-sibling breach, got ${JSON.stringify(breaches)}`,
+  );
+});
+
 check('measures the entry, its modulepreloads and the whole build', () => {
-  const dir = dist({ entryBytes: 1000, preloadBytes: [200, 300] });
+  const dir = dist({
+    entryBytes: 1000,
+    entryBrotliBytes: 0,
+    preloadBytes: [200, 300],
+  });
   const m = measureBundle(dir);
   assert(m.entryChunkBytes === 1000, `entryChunkBytes=${m.entryChunkBytes}`);
   assert(

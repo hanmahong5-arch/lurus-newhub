@@ -282,8 +282,8 @@ func TestPostConsumeQuota_RecordsBusinessTPMWindow(t *testing.T) {
 	if err := PostConsumeQuota(relayInfo, -100, 0, false); err != nil {
 		t.Fatalf("refund PostConsumeQuota: %v", err)
 	}
-	total, _, _ = QueryBusinessTPMTokenWindow(context.Background(), tokenId)
-	if total != 350 {
-		t.Errorf("token TPM window after refund = %d, want unchanged 350", total)
+	afterRefund, _, _ := QueryBusinessTPMTokenWindow(context.Background(), tokenId)
+	if afterRefund != total {
+		t.Errorf("token TPM window after refund = %d, want unchanged %d (same process-global window as above; a foreign test's usage may sit in it)", afterRefund, total)
 	}
 }
