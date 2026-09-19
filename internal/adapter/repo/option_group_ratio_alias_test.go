@@ -4,7 +4,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // option_group_ratio_alias_test.go — one setting, one write path.
@@ -65,5 +67,35 @@ func TestOptionGroupRatio_RegisteredStructHasNoRatioAliases(t *testing.T) {
 			t.Errorf("GroupRatioSetting still carries field %s (json:%q); the reflect writer can reach the ratio maps through it",
 				typ.Field(i).Name, tag)
 		}
+	}
+}
+
+// TestOptionGroupRatio_RetiredKeyIsNotCountedOnEveryTick — a row nobody has
+// deleted must not be reported forever.
+//
+// loadOptionsFromDatabase reads every options row on every SyncOptions tick, on
+// every replica. An instance that still has a group_ratio_setting.group_ratio
+// row would therefore log a line and increment
+// option_parse_rejected_total{key=...} once per key per tick per replica, for
+// as long as the row exists — a permanently nonzero rate on a counter whose
+// whole purpose is to say "something needs attention", plus a log line every 60
+// seconds saying the same thing. The key is ignored with one message per
+// process instead, and the counter stays for values that really did fail to
+// parse.
+func TestOptionGroupRatio_RetiredKeyIsNotCountedOnEveryTick(t *testing.T) {
+	restoreOptionMapForTest(t)
+
+	const key = "group_ratio_setting.group_ratio"
+	before := testutil.ToFloat64(metrics.OptionParseRejectedTotal.WithLabelValues(key))
+
+	for i := 0; i < 3; i++ {
+		if err := SetOptionMapValue(key, "{\"default\":9}"); err == nil {
+			t.Fatal("the retired key was accepted")
+		}
+	}
+
+	after := testutil.ToFloat64(metrics.OptionParseRejectedTotal.WithLabelValues(key))
+	if after != before {
+		t.Errorf("option_parse_rejected_total{key=%s} went %v -> %v; a retired key is ignored, not counted once per tick", key, before, after)
 	}
 }

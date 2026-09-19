@@ -84,32 +84,61 @@ func TestSSRFGuard_PublishedDomainListIsNotRewrittenUnderAnInFlightCheck(t *test
 // TestSSRFGuard_SnapshotReaderSeesOneCoherentConfiguration covers the second
 // half of the same problem: copy-on-write makes each published list immutable,
 // but a caller that reads fetch_setting field by field off the live struct can
-// still mix a filter mode from before an update with a list from after it.
-// system_setting.GetFetchSettingSnapshot copies the struct under the
-// configuration read lock, so the decision is taken against one published
-// configuration.
-func TestSSRFGuard_SnapshotReaderSeesOneCoherentConfiguration(t *testing.T) {
-	fs := system_setting.GetFetchSetting()
-	previous := *fs
+// still mix a filter mode from before an update with a list from after it —
+// and a mixture of two configurations that each reject a host can admit it.
+//
+// The two configurations below are the whole point of the test. Each one on
+// its own rejects evil.invalid:
+//
+//	A  blacklist mode + ["evil.invalid"]   -> listed, and listed means reject
+//	B  whitelist mode + ["good.invalid"]   -> not listed, and that means reject
+//
+// Either mixture admits it:
+//
+//	mode from A + list from B -> blacklist that does not contain it -> allowed
+//	mode from B + list from A -> whitelist that does contain it     -> allowed
+//
+// so the assertion "evil.invalid is never admitted" is exactly the assertion
+// "no reader ever saw a mixture". The writer is the production one
+// (ConfigManager.LoadFromDB, what repo.SyncOptions calls on every tick, which
+// is where a module's keys are applied together) and the reader is the
+// production one (app.ValidateOutboundURL, which every channel base_url and
+// every proxy target goes through).
+//
+// The earlier version of this test only ever varied the domain list, and both
+// of its shapes contained evil.invalid, so no mixture it could produce was
+// unsafe: it passed with the lock deleted from GetFetchSettingSnapshot and
+// with copy-on-write reverted. It pinned nothing.
+func TestSSRFGuard_AnSSRFDecisionIsTakenAgainstOnePublishedConfiguration(t *testing.T) {
+	previous := *system_setting.GetFetchSetting()
 	t.Cleanup(func() { *system_setting.GetFetchSetting() = previous })
 
+	fs := system_setting.GetFetchSetting()
 	fs.EnableSSRFProtection = true
-	fs.DomainFilterMode = false
 	fs.AllowPrivateIp = false
+	// IP whitelist mode makes ValidateOutboundURL compute
+	// applyIPFilterForDomain = false, so the check stops at the domain list and
+	// performs no DNS lookup.
 	fs.IpFilterMode = true
 	fs.ApplyIPFilterForDomain = false
 
-	cfg := config.GlobalConfig.Get("fetch_setting")
-	if cfg == nil {
-		t.Fatal("fetch_setting is not registered with the config manager")
+	shapes := []map[string]string{
+		{ // A: blacklist containing the host
+			"fetch_setting.domain_filter_mode": "false",
+			"fetch_setting.domain_list":        `["evil.invalid"]`,
+		},
+		{ // B: whitelist not containing the host
+			"fetch_setting.domain_filter_mode": "true",
+			"fetch_setting.domain_list":        `["good.invalid"]`,
+		},
 	}
-
-	shapes := []string{
-		`["evil.invalid","pad1.invalid","pad2.invalid","pad3.invalid"]`,
-		`["evil.invalid","pad4.invalid"]`,
-	}
-	if err := config.UpdateConfigFromMap(cfg, map[string]string{"domain_list": shapes[0]}); err != nil {
-		t.Fatalf("seed publish: %v", err)
+	for i, shape := range shapes {
+		if err := config.GlobalConfig.LoadFromDB(shape); err != nil {
+			t.Fatalf("seed publish %d: %v", i, err)
+		}
+		if err := ValidateOutboundURL("http://evil.invalid"); err == nil {
+			t.Fatalf("shape %d admits evil.invalid on its own; the test would prove nothing", i)
+		}
 	}
 
 	stop := make(chan struct{})
@@ -124,14 +153,15 @@ func TestSSRFGuard_SnapshotReaderSeesOneCoherentConfiguration(t *testing.T) {
 				return
 			default:
 			}
-			if err := config.UpdateConfigFromMap(cfg, map[string]string{"domain_list": shapes[i%len(shapes)]}); err != nil {
-				t.Errorf("publish domain_list: %v", err)
+			if err := config.GlobalConfig.LoadFromDB(shapes[i%len(shapes)]); err != nil {
+				t.Errorf("publish fetch_setting: %v", err)
 				return
 			}
 		}
 	}()
 
 	var admitted int
+	var admittedWith system_setting.FetchSetting
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -141,18 +171,8 @@ func TestSSRFGuard_SnapshotReaderSeesOneCoherentConfiguration(t *testing.T) {
 				return
 			default:
 			}
-			snapshot := system_setting.GetFetchSettingSnapshot()
-			if err := common.ValidateURLWithFetchSetting(
-				"http://evil.invalid",
-				snapshot.EnableSSRFProtection,
-				snapshot.AllowPrivateIp,
-				snapshot.DomainFilterMode,
-				snapshot.IpFilterMode,
-				snapshot.DomainList,
-				snapshot.IpList,
-				nil,
-				snapshot.ApplyIPFilterForDomain,
-			); err == nil {
+			if err := ValidateOutboundURL("http://evil.invalid"); err == nil {
+				admittedWith = system_setting.GetFetchSettingSnapshot()
 				admitted++
 				return
 			}
@@ -164,6 +184,7 @@ func TestSSRFGuard_SnapshotReaderSeesOneCoherentConfiguration(t *testing.T) {
 	wg.Wait()
 
 	if admitted != 0 {
-		t.Fatalf("a blacklisted host was admitted %d time(s) while the domain list was being republished", admitted)
+		t.Fatalf("evil.invalid was admitted %d time(s) while fetch_setting was being republished; a reader mixed a filter mode from one publication with a list from another (nearest snapshot: whitelist=%v list=%v)",
+			admitted, admittedWith.DomainFilterMode, admittedWith.DomainList)
 	}
 }

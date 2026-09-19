@@ -95,15 +95,30 @@ func TestOptionHotReload_ConcurrentGeminiSafetyRead(t *testing.T) {
 }
 
 // restoreOptionMapForTest makes common.OptionMap usable for the duration of
-// one test and puts it back afterwards. The map is nil until InitOptionMap
-// runs (common/constants.go declares it without an initialiser), and
-// updateOptionMap writes into it unconditionally.
+// one test and restores its CONTENTS afterwards. The map is nil until
+// InitOptionMap runs (common/constants.go declares it without an initialiser),
+// and updateOptionMap writes into it unconditionally.
+//
+// The contents, not the reference: other tests in this package call
+// InitOptionMap (sqlite_repo_test.go, sqlite_repo_extra4_test.go), so by the
+// time these tests run the map usually exists, and capturing the reference
+// would "restore" the very same map with every key this test wrote still in
+// it — QuotaPerUnit="abc", ChannelDisableThreshold="", GroupRatio={"default":2}
+// and so on. Nothing reads those keys today, so the package is green either
+// way; with `-shuffle=on` (this cycle's CI) a later test that does read one
+// would fail in some orders and not others, which is the worst failure to
+// debug. A deep copy costs one map copy per test.
 func restoreOptionMapForTest(t *testing.T) {
 	t.Helper()
 	common.OptionMapRWMutex.Lock()
-	previous := common.OptionMap
+	var previous map[string]string
 	if common.OptionMap == nil {
 		common.OptionMap = make(map[string]string)
+	} else {
+		previous = make(map[string]string, len(common.OptionMap))
+		for key, value := range common.OptionMap {
+			previous[key] = value
+		}
 	}
 	common.OptionMapRWMutex.Unlock()
 	t.Cleanup(func() {
@@ -111,4 +126,41 @@ func restoreOptionMapForTest(t *testing.T) {
 		common.OptionMap = previous
 		common.OptionMapRWMutex.Unlock()
 	})
+}
+
+// TestRestoreOptionMapForTest_RestoresContentsNotJustTheReference is the oracle
+// for the helper above. Capturing the reference instead of the contents leaves
+// every key the inner test wrote in the live map, which with -shuffle=on turns
+// into a failure that depends on test order.
+func TestRestoreOptionMapForTest_RestoresContentsNotJustTheReference(t *testing.T) {
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMap["restore-probe-existing"] = "kept"
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		delete(common.OptionMap, "restore-probe-existing")
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	t.Run("inner", func(t *testing.T) {
+		restoreOptionMapForTest(t)
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap["restore-probe-leaked"] = "written by the inner test"
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	common.OptionMapRWMutex.RLock()
+	_, leaked := common.OptionMap["restore-probe-leaked"]
+	kept, present := common.OptionMap["restore-probe-existing"]
+	common.OptionMapRWMutex.RUnlock()
+
+	if leaked {
+		t.Error("a key written under restoreOptionMapForTest survived the cleanup; the helper restores the reference, not the contents")
+	}
+	if !present || kept != "kept" {
+		t.Errorf("restore-probe-existing = %q (present=%v), want the pre-existing value to survive", kept, present)
+	}
 }

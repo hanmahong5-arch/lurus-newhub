@@ -5,24 +5,33 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// OptionParseRejectedTotal counts option values that could not be applied and
-// were therefore left at their previous value, labelled by the option key.
+// OptionParseRejectedTotal counts option values that could not be parsed,
+// labelled by the option key.
 //
-// Two ways a value reaches repo.updateOptionMap: an admin write
-// (PUT /api/option) and the SyncOptions tick re-reading the options table on
-// every replica. Before the keep-previous change the numeric keys were parsed
-// as `x, _ = strconv.Parse*(value)`, so a blank or mistyped value stored zero
-// — QuotaPerUnit 0 makes every quota-to-currency number the console and
-// /api/status show read 0 — and the write path recorded nothing about it.
-// It now keeps the old value and increments this.
+// Two ways a value gets here, and they mean different things:
 //
-// It also counts a rejected hierarchical value (the "<config>.<field>" keys
-// handled by handleConfigUpdate: a malformed JSON map for gemini.safety_
-// settings, fetch_setting.domain_list and the rest) and a write to a retired
-// key that is refused outright.
+//   - An admin write (PUT /api/option). repo.UpdateOption parses before it
+//     persists, so the row is NOT written and the running value is untouched;
+//     the caller gets a 400. One increment per refused write.
+//   - The SyncOptions tick re-reading the options table on every replica, for
+//     a row that was stored before this check existed or written by some other
+//     means. The previous value is kept — before the keep-previous change the
+//     numeric keys were parsed as `x, _ = strconv.Parse*(value)`, so a blank or
+//     mistyped value stored zero, and QuotaPerUnit 0 makes every
+//     quota-to-currency number in the console and in /api/status read 0. This
+//     case increments once per key per tick per replica, because the row and
+//     the running value really do disagree until somebody fixes the row.
 //
-// A non-zero value means the persisted row and the running value disagree for
-// that key, on this replica, until someone writes a value that parses.
+// So a single spike is a refused admin write (nothing is broken), and a
+// sustained rate is a stored row the engine cannot apply (something is). An
+// alarm on this should fire on "nonzero for N minutes", not on any increase.
+//
+// It counts both the flat numeric keys and a rejected hierarchical value (the
+// "<config>.<field>" keys: a malformed JSON map for gemini.safety_settings,
+// fetch_setting.domain_list and the rest). It deliberately does NOT count a
+// retired key (repo's retiredOptionKeys): that row is ignored by design and
+// reported once per process, so counting it would make this counter
+// permanently nonzero for a condition nobody needs to act on urgently.
 var OptionParseRejectedTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Namespace: namespace,

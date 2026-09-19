@@ -29,13 +29,22 @@ import (
 // direct assignments were pure duplicate state.
 //
 // Scope of the gate, stated precisely so it is not read as more than it is:
-// it derives the owned set from updateOptionMap's own assignments, then flags
-// assignments to those globals written in the QUALIFIED form `pkg.Name = ...`
-// in non-test .go files under internal/ and cmd/. A write from inside the
-// package that declares the variable (where the spelling is the bare
-// identifier) is not matched — that is where the compiled-in default and the
-// env-var boot path legitimately live, and both are overwritten by the first
-// loadOptionsFromDatabase anyway.
+//
+//   - The owned set is derived from updateOptionMap's own assignments, so it
+//     covers the flat option keys. The hierarchical keys — everything the
+//     config manager's reflect writer owns — are NOT in it; they are fields of
+//     registered structs rather than package variables, and their second-writer
+//     risk is covered instead by TestRegisteredPointerFieldsDecodeInPlace
+//     (internal/app/group_ratio_race_test.go) and by the configuration lock
+//     gate (internal/pkg/setting/config/config_cow_test.go).
+//   - It flags both spellings of a write: the qualified `pkg.Name = ...` from
+//     any package, and the bare `Name = ...` from inside the package that
+//     declares the variable. The bare case needs the allow-list below, because
+//     the compiled-in default and the env-var boot path legitimately live
+//     there.
+//   - A write THROUGH an owned value rather than TO it (common.OptionMap[k] =,
+//     a method call that mutates) is not an assignment to the variable and is
+//     not matched.
 func TestOptionOwnedGlobalsHaveOneWriter(t *testing.T) {
 	root := optionGateRepoRoot(t)
 
@@ -55,7 +64,28 @@ func TestOptionOwnedGlobalsHaveOneWriter(t *testing.T) {
 		filepath.Join("internal", "adapter", "repo", "option.go"): true,
 	}
 
+	// The bare-identifier allow-list: `<file>:<function>` sites inside the
+	// declaring package that this gate does not (yet) get to remove. The
+	// compiled defaults and the boot-time environment reads do not need an
+	// entry — they are top-level `var x = ...` declarations and `init` bodies
+	// that the walk below does not treat as assignments to begin with — so
+	// everything listed here is a real run-time second writer with a reason it
+	// is still there.
+	allowedBareWriters := map[string]string{
+		// SendEmail backfills SMTPFrom from SMTPAccount when the operator left
+		// "From" empty, and does it by writing the global rather than a local.
+		// It races the option-sync tick (which restores the stored "" every
+		// SYNC_FREQUENCY seconds) and the other SendEmail goroutines. The fix
+		// is a local variable, but the current behaviour is pinned by
+		// internal/pkg/common/cov_r5core_boot_email_test.go:86 ("want it
+		// backfilled from SMTPAccount"), so changing it is a behaviour decision
+		// in another package's test, not a cleanup: it is recorded as an owner
+		// item rather than silently altered here.
+		"internal/pkg/common/email.go:SendEmail": "known second writer of common.SMTPFrom; the backfill contract is pinned by that package's own test — owner item",
+	}
+
 	var offenders []string
+	packageVars := map[string]map[string]bool{} // package dir -> top-level var names
 	scanRoots := []string{filepath.Join(root, "internal"), filepath.Join(root, "cmd")}
 	for _, scanRoot := range scanRoots {
 		err := filepath.WalkDir(scanRoot, func(path string, d fs.DirEntry, err error) error {
@@ -80,25 +110,54 @@ func TestOptionOwnedGlobalsHaveOneWriter(t *testing.T) {
 				t.Logf("skipping unparseable %s: %v", rel, parseErr)
 				return nil
 			}
-			ast.Inspect(file, func(n ast.Node) bool {
-				var targets []ast.Expr
-				switch stmt := n.(type) {
-				case *ast.AssignStmt:
-					targets = stmt.Lhs
-				case *ast.IncDecStmt:
-					targets = []ast.Expr{stmt.X}
-				default:
-					return true
+
+			// Bare identifiers only mean anything inside the package that
+			// declares the variable, and only for names that really are
+			// package-level variables there.
+			pkgName := file.Name.Name
+			dir := filepath.Dir(path)
+			if _, seen := packageVars[dir]; !seen {
+				packageVars[dir] = packageLevelVars(t, dir)
+			}
+			declared := packageVars[dir]
+
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
 				}
-				for _, target := range targets {
-					name, ok := qualifiedGlobalName(target)
-					if !ok || !owned[name] {
-						continue
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					var targets []ast.Expr
+					switch stmt := n.(type) {
+					case *ast.AssignStmt:
+						if stmt.Tok == token.DEFINE {
+							return true // `:=` declares a new local
+						}
+						targets = stmt.Lhs
+					case *ast.IncDecStmt:
+						targets = []ast.Expr{stmt.X}
+					default:
+						return true
 					}
-					offenders = append(offenders, fmt.Sprintf("%s:%d writes %s", filepath.ToSlash(rel), fset.Position(target.Pos()).Line, name))
-				}
-				return true
-			})
+					for _, target := range targets {
+						if name, ok := qualifiedGlobalName(target); ok && owned[name] {
+							offenders = append(offenders, fmt.Sprintf("%s:%d writes %s", filepath.ToSlash(rel), fset.Position(target.Pos()).Line, name))
+							continue
+						}
+						ident, ok := target.(*ast.Ident)
+						if !ok || !declared[ident.Name] || !owned[pkgName+"."+ident.Name] {
+							continue
+						}
+						site := filepath.ToSlash(rel) + ":" + fn.Name.Name
+						if _, ok := allowedBareWriters[site]; ok {
+							continue
+						}
+						offenders = append(offenders, fmt.Sprintf("%s:%d writes %s (bare identifier, inside the declaring package)",
+							filepath.ToSlash(rel), fset.Position(target.Pos()).Line, pkgName+"."+ident.Name))
+					}
+					return true
+				})
+			}
 			return nil
 		})
 		if err != nil {
@@ -111,6 +170,44 @@ func TestOptionOwnedGlobalsHaveOneWriter(t *testing.T) {
 		t.Fatalf("option-owned globals written outside updateOptionMap (the next SyncOptions tick overwrites them):\n  %s",
 			strings.Join(offenders, "\n  "))
 	}
+}
+
+// packageLevelVars returns the names declared by top-level `var` blocks in the
+// non-test files of one package directory. A bare identifier that is not in
+// this set cannot be a write to an option-owned global.
+func packageLevelVars(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+	names := map[string]bool{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return names
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil, 0)
+		if parseErr != nil {
+			continue
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, ident := range value.Names {
+					names[ident.Name] = true
+				}
+			}
+		}
+	}
+	return names
 }
 
 // optionGateRepoRoot walks up from this package directory to the module root.

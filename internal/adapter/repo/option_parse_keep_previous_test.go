@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -83,5 +85,83 @@ func TestOptionParse_MalformedValueKeepsPreviousChannelDisableThreshold(t *testi
 	}
 	if common.RetryTimes != 3 {
 		t.Fatalf("RetryTimes = %v, want the previous 3", common.RetryTimes)
+	}
+}
+
+// TestOptionParse_RejectedAdminWriteDoesNotPersistTheRow — parse first, persist
+// second.
+//
+// The other order leaves the operator with no way out inside the product: the
+// options row holds a value the engine refuses, /api/option echoes that string
+// back to the console, every replica keeps running the previous number, and
+// every SyncOptions tick refuses the row again. The only repair is a value that
+// parses — assuming somebody notices, because the console shows the string that
+// was saved, not the number that is running.
+func TestOptionParse_RejectedAdminWriteDoesNotPersistTheRow(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+	restoreOptionMapForTest(t)
+
+	previous := common.QuotaPerUnit
+	t.Cleanup(func() { common.QuotaPerUnit = previous })
+
+	if err := UpdateOption("QuotaPerUnit", "500000"); err != nil {
+		t.Fatalf("UpdateOption(500000): %v", err)
+	}
+	if common.QuotaPerUnit != 500000 {
+		t.Fatalf("QuotaPerUnit = %v after a valid write, want 500000", common.QuotaPerUnit)
+	}
+
+	before := testutil.ToFloat64(metrics.OptionParseRejectedTotal.WithLabelValues("QuotaPerUnit"))
+
+	err := UpdateOption("QuotaPerUnit", "abc")
+	if err == nil {
+		t.Fatal("UpdateOption accepted an unparseable QuotaPerUnit")
+	}
+	if !errors.Is(err, ErrOptionValueRejected) {
+		t.Errorf("error %v does not wrap ErrOptionValueRejected, so the handler cannot tell an operator typo from a database failure", err)
+	}
+	// The message travels into the system log and into the HTTP response, and
+	// this dispatch is shared with SMTPToken and the OAuth client secret.
+	if strings.Contains(err.Error(), "abc") {
+		t.Errorf("the rejection message quotes the value (%q); option values carry secrets", err.Error())
+	}
+
+	stored, found, storeErr := GetOptionValue(DB, "QuotaPerUnit")
+	if storeErr != nil {
+		t.Fatalf("read back the option row: %v", storeErr)
+	}
+	if !found {
+		t.Fatal("the QuotaPerUnit row disappeared; the rejected write must leave the previous row alone, not delete it")
+	}
+	if stored != "500000" {
+		t.Errorf("stored QuotaPerUnit = %q, want the previous 500000 — the refused value reached the options table", stored)
+	}
+	if common.QuotaPerUnit != 500000 {
+		t.Errorf("running QuotaPerUnit = %v, want 500000", common.QuotaPerUnit)
+	}
+
+	after := testutil.ToFloat64(metrics.OptionParseRejectedTotal.WithLabelValues("QuotaPerUnit"))
+	if after != before+1 {
+		t.Errorf("option_parse_rejected_total{key=QuotaPerUnit} went %v -> %v, want +1", before, after)
+	}
+}
+
+// TestOptionParse_RetiredKeyIsRefusedBeforeItIsPersisted covers the other class
+// UpdateOption refuses: a key that is no longer a write path at all.
+func TestOptionParse_RetiredKeyIsRefusedBeforeItIsPersisted(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+	restoreOptionMapForTest(t)
+
+	err := UpdateOption("group_ratio_setting.group_ratio", "{\"default\":9}")
+	if err == nil {
+		t.Fatal("UpdateOption accepted a retired key")
+	}
+	if !errors.Is(err, ErrOptionValueRejected) {
+		t.Errorf("error %v does not wrap ErrOptionValueRejected", err)
+	}
+	if _, found, _ := GetOptionValue(DB, "group_ratio_setting.group_ratio"); found {
+		t.Error("the retired key was written to the options table")
 	}
 }

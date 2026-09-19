@@ -53,6 +53,15 @@ var defaultGroupSpecialUsableGroup = map[string]map[string]string{
 // (web/src/pages/Setting/Ratio/GroupRatioSettings.jsx:197 and
 // web/src/components/settings/RatioSetting.jsx:58), and it is a types.RWMap,
 // which carries its own lock.
+//
+// That lock is only worth anything if the POINTER to it stops moving: this
+// field is read with no lock at all on the token-auth path
+// (app.GetUserUsableGroups, reached per relay request from
+// middleware/auth.go), so republishing the pointer on every option-sync tick
+// would be a data race on a per-request read. config.applyConfigMap therefore
+// unmarshals a new value INTO this pointee instead of replacing the pointer;
+// the pointer word is written once, by init below, before any goroutine
+// exists. TestGroupSpecialUsableGroup_PointerIsStableAcrossAPublish pins it.
 type GroupRatioSetting struct {
 	GroupSpecialUsableGroup *types.RWMap[string, map[string]string] `json:"group_special_usable_group"`
 }
@@ -70,12 +79,36 @@ func init() {
 	config.GlobalConfig.Register("group_ratio_setting", &groupRatioSetting)
 }
 
+// GetGroupRatioSetting returns the registered group-ratio configuration.
+//
+// The nil repair below cannot fire from any production path — init allocates
+// the map and the config writer never replaces the pointer — but it is pinned
+// by ratio_coverage_test.go, which nils the field and expects the next call to
+// restore it, so it is kept and made lock-ordered: the check is taken under
+// the configuration read lock and the repair under the write lock (released
+// and re-taken, never nested: config.RLock is not reentrant), re-checking so
+// two callers that both saw nil publish one map rather than two.
 func GetGroupRatioSetting() *GroupRatioSetting {
-	if groupRatioSetting.GroupSpecialUsableGroup == nil {
-		groupRatioSetting.GroupSpecialUsableGroup = types.NewRWMap[string, map[string]string]()
-		groupRatioSetting.GroupSpecialUsableGroup.AddAll(defaultGroupSpecialUsableGroup)
+	config.RLock()
+	initialised := groupRatioSetting.GroupSpecialUsableGroup != nil
+	config.RUnlock()
+
+	if !initialised {
+		repairGroupSpecialUsableGroup()
 	}
 	return &groupRatioSetting
+}
+
+func repairGroupSpecialUsableGroup() {
+	config.Lock()
+	defer config.Unlock()
+
+	if groupRatioSetting.GroupSpecialUsableGroup != nil {
+		return
+	}
+	repaired := types.NewRWMap[string, map[string]string]()
+	repaired.AddAll(defaultGroupSpecialUsableGroup)
+	groupRatioSetting.GroupSpecialUsableGroup = repaired
 }
 
 func GetGroupRatioCopy() map[string]float64 {

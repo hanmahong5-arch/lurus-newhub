@@ -2,10 +2,12 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	entity "github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -185,6 +187,16 @@ func loadOptionsFromDatabase() {
 	for _, option := range options {
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
+			if errors.Is(err, errOptionKeyRetired) {
+				// Already reported once per process by warnRetiredOptionOnce.
+				// This runs on every SyncOptions tick on every replica, so a
+				// row an operator has not deleted yet must not produce a log
+				// line per tick forever.
+				continue
+			}
+			// The message names the key and the type the value had to be,
+			// never the value: this same table holds the SMTP password and the
+			// OAuth client secret.
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
@@ -216,6 +228,19 @@ func SyncOptionsWithContext(ctx context.Context, frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	// Parse first, persist second.
+	//
+	// The other order — which this had — leaves a value the engine refuses in
+	// the options table for good: the row says one thing, every replica keeps
+	// running the previous value, and the next SyncOptions tick rejects the row
+	// again. The operator sees the old number in the console and has no
+	// in-product way to find the row that is wrong. A value that cannot be
+	// applied is therefore refused before the row is written; the caller gets
+	// an error wrapping ErrOptionValueRejected.
+	if err := ValidateOptionValue(key, value); err != nil {
+		return err
+	}
+
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -332,6 +357,151 @@ func SetOptionMapValue(key, value string) error {
 	return updateOptionMap(key, value)
 }
 
+// ErrOptionValueRejected marks an option value that cannot be applied. Every
+// error this file produces for a bad value wraps it, so one errors.Is tells
+// the admin write path "this is the operator's typo, answer 400 and do not
+// persist" rather than "the database is down".
+//
+// The message it carries names the key and the type the value had to be. It
+// never quotes the value: this dispatch is shared with SMTPToken,
+// GitHubClientSecret, TurnstileSecretKey and SMSAccessKeySecret, and the
+// message ends up in the system log, in the HTTP response body and — through
+// loadOptionsFromDatabase — in the log of every replica on every tick.
+var ErrOptionValueRejected = errors.New("option value rejected")
+
+// errOptionKeyRetired is the subclass for a key that is no longer a write
+// path at all (retiredOptionKeys). It wraps ErrOptionValueRejected so the
+// admin path refuses it like any other bad value, and is recognisable on its
+// own so the option-sync tick can stay quiet about a row that is already
+// reported.
+var errOptionKeyRetired = fmt.Errorf("%w: option key is retired", ErrOptionValueRejected)
+
+// optionValueKind is the operator-facing name of what a stored option string
+// has to parse as.
+type optionValueKind string
+
+const (
+	optionKindInteger optionValueKind = "integer"
+	optionKindNumber  optionValueKind = "number"
+	optionKindJSON    optionValueKind = "JSON document"
+)
+
+// numericOptionKinds is the key -> kind table the admin write path validates
+// against before it persists anything. It must list every key updateOptionMap
+// hands to optionInt or optionFloat, which is derived from this file's AST and
+// checked by TestOptionNumericKindsCoverEveryParsedKey — a key that reaches the
+// dispatch without an entry here is accepted into the options table and only
+// then refused, which is the divergence this table exists to prevent.
+var numericOptionKinds = map[string]optionValueKind{
+	"FileUploadPermission":                 optionKindInteger,
+	"FileDownloadPermission":               optionKindInteger,
+	"ImageUploadPermission":                optionKindInteger,
+	"ImageDownloadPermission":              optionKindInteger,
+	"SMTPPort":                             optionKindInteger,
+	"LinuxDOMinimumTrustLevel":             optionKindInteger,
+	"QuotaForNewUser":                      optionKindInteger,
+	"QuotaForInviter":                      optionKindInteger,
+	"QuotaForInvitee":                      optionKindInteger,
+	"QuotaRemindThreshold":                 optionKindInteger,
+	"PreConsumedQuota":                     optionKindInteger,
+	"ModelRequestRateLimitCount":           optionKindInteger,
+	"ModelRequestRateLimitDurationMinutes": optionKindInteger,
+	"ModelRequestRateLimitSuccessCount":    optionKindInteger,
+	"RetryTimes":                           optionKindInteger,
+	"DataExportInterval":                   optionKindInteger,
+	"StreamCacheQueueLength":               optionKindInteger,
+	"SessionTimeoutMinutes":                optionKindInteger,
+	"Price":                                optionKindNumber,
+	"USDExchangeRate":                      optionKindNumber,
+	"ChannelDisableThreshold":              optionKindNumber,
+	"QuotaPerUnit":                         optionKindNumber,
+	"ModelFallbackMarkup":                  optionKindNumber,
+}
+
+// jsonOptionKinds lists the keys whose dispatch hands the value to a
+// JSON-string updater. Validation for these is json.Valid only: the updaters
+// unmarshal into their own shapes and a shape-aware pre-check here would be a
+// second copy of those shapes, free to drift and to refuse a value the real
+// updater accepts. A malformed document — the typo an operator actually makes
+// — is refused before the row is written; a well-formed document of the wrong
+// shape is still refused by the updater after the row is written, and the
+// handler records that refusal in the audit trail.
+// TestOptionJSONKeysCoverEveryJSONUpdater derives the same set from this
+// file's AST.
+var jsonOptionKinds = map[string]optionValueKind{
+	"Chats":                      optionKindJSON,
+	"AutoGroups":                 optionKindJSON,
+	"TopupGroupRatio":            optionKindJSON,
+	"ModelRequestRateLimitGroup": optionKindJSON,
+	"ModelRatio":                 optionKindJSON,
+	"GroupRatio":                 optionKindJSON,
+	"GroupGroupRatio":            optionKindJSON,
+	"UserUsableGroups":           optionKindJSON,
+	"CompletionRatio":            optionKindJSON,
+	"ModelPrice":                 optionKindJSON,
+	"CacheRatio":                 optionKindJSON,
+	"ContextLengthTiers":         optionKindJSON,
+	"ImageRatio":                 optionKindJSON,
+	"AudioRatio":                 optionKindJSON,
+	"AudioCompletionRatio":       optionKindJSON,
+}
+
+// ValidateOptionValue reports whether value can be applied to key, changing
+// nothing at all. UpdateOption calls it before it writes the row.
+//
+// A key it does not recognise is not an error: most options are free-form
+// strings and booleans (`value == "true"`), which cannot fail to parse.
+func ValidateOptionValue(key, value string) error {
+	if canonical, retired := retiredOptionKeys[key]; retired {
+		return fmt.Errorf("%w: %s; write %s instead", errOptionKeyRetired, key, canonical)
+	}
+
+	if kind, ok := numericOptionKinds[key]; ok {
+		var err error
+		switch kind {
+		case optionKindInteger:
+			_, err = strconv.Atoi(value)
+		default:
+			_, err = strconv.ParseFloat(value, 64)
+		}
+		if err != nil {
+			reportOptionParseFailure(key, kind)
+			return optionKindError(key, kind)
+		}
+		return nil
+	}
+
+	if kind, ok := jsonOptionKinds[key]; ok {
+		if !json.Valid([]byte(value)) {
+			reportOptionParseFailure(key, kind)
+			return optionKindError(key, kind)
+		}
+		return nil
+	}
+
+	parts := strings.SplitN(key, ".", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	cfg := config.GlobalConfig.Get(parts[0])
+	if cfg == nil {
+		return nil
+	}
+	if err := config.ValidateConfigValue(cfg, parts[1], value); err != nil {
+		// config's error names the expected type and nothing else
+		// (config.parseKindError), so it is safe to log and to return.
+		metrics.RecordOptionParseRejected(key)
+		common.SysError(fmt.Sprintf("option %s rejected: %v; the previous value is kept", key, err))
+		return fmt.Errorf("%w: %s %w", ErrOptionValueRejected, key, err)
+	}
+	return nil
+}
+
+// optionKindError is the single shape of a rejection message.
+func optionKindError(key string, kind optionValueKind) error {
+	return fmt.Errorf("%w: %s must be a valid %s", ErrOptionValueRejected, key, kind)
+}
+
 // optionInt parses an integer option value, and on failure keeps previous,
 // reports the key and returns an error for the caller to propagate. Zeroing a
 // setting because its stored string did not parse is how a blank admin field
@@ -339,8 +509,8 @@ func SetOptionMapValue(key, value string) error {
 func optionInt(key, value string, previous int) (int, error) {
 	parsed, parseErr := strconv.Atoi(value)
 	if parseErr != nil {
-		reportOptionParseFailure(key, parseErr)
-		return previous, fmt.Errorf("option %s: %w", key, parseErr)
+		reportOptionParseFailure(key, optionKindInteger)
+		return previous, optionKindError(key, optionKindInteger)
 	}
 	return parsed, nil
 }
@@ -351,18 +521,20 @@ func optionInt(key, value string, previous int) (int, error) {
 func optionFloat(key, value string, previous float64) (float64, error) {
 	parsed, parseErr := strconv.ParseFloat(value, 64)
 	if parseErr != nil {
-		reportOptionParseFailure(key, parseErr)
-		return previous, fmt.Errorf("option %s: %w", key, parseErr)
+		reportOptionParseFailure(key, optionKindNumber)
+		return previous, optionKindError(key, optionKindNumber)
 	}
 	return parsed, nil
 }
 
-// reportOptionParseFailure counts and logs one rejected value. The value
-// itself is not logged: option values include SMTP and OAuth secrets, and this
-// path is shared with them.
-func reportOptionParseFailure(key string, cause error) {
+// reportOptionParseFailure counts one rejected value and logs the key together
+// with the type the value had to be. It is handed a kind, not the parse error,
+// because strconv's and encoding/json's messages quote the input they were
+// given and this dispatch carries the SMTP password and the OAuth client
+// secret.
+func reportOptionParseFailure(key string, kind optionValueKind) {
 	metrics.RecordOptionParseRejected(key)
-	common.SysError(fmt.Sprintf("option %q value rejected, previous value kept: %v", key, cause))
+	common.SysError(fmt.Sprintf("option %s rejected: value is not a valid %s; the previous value is kept", key, kind))
 }
 
 // retiredOptionKeys maps a hierarchical key that must no longer be written to
@@ -373,6 +545,23 @@ func reportOptionParseFailure(key string, cause error) {
 var retiredOptionKeys = map[string]string{
 	"group_ratio_setting.group_ratio":       "GroupRatio",
 	"group_ratio_setting.group_group_ratio": "GroupGroupRatio",
+}
+
+// retiredOptionWarned remembers the retired keys this process has already
+// complained about.
+var retiredOptionWarned sync.Map
+
+// warnRetiredOptionOnce logs a retired key the first time this process meets
+// it and stays silent afterwards. A row an operator has not deleted is read by
+// every replica on every SyncOptions tick, so the alternative is a line per
+// key per tick per replica for as long as the row exists.
+func warnRetiredOptionOnce(key, canonical string) {
+	if _, alreadyWarned := retiredOptionWarned.LoadOrStore(key, struct{}{}); alreadyWarned {
+		return
+	}
+	common.SysLog(fmt.Sprintf(
+		"option %s is retired and is being ignored; %s is the key that applies. Delete the stale row from the options table to silence this.",
+		key, canonical))
 }
 
 func updateOptionMap(key string, value string) (err error) {
@@ -718,9 +907,8 @@ func applyHierarchicalOption(key, value string) (bool, error) {
 	}
 
 	if canonical, retired := retiredOptionKeys[key]; retired {
-		metrics.RecordOptionParseRejected(key)
-		common.SysError(fmt.Sprintf("option %q is retired, write %q instead; value not applied", key, canonical))
-		return true, fmt.Errorf("option %s is retired: write %s instead", key, canonical)
+		warnRetiredOptionOnce(key, canonical)
+		return true, fmt.Errorf("%w: %s; write %s instead", errOptionKeyRetired, key, canonical)
 	}
 
 	configName := parts[0]
@@ -737,8 +925,11 @@ func applyHierarchicalOption(key, value string) (bool, error) {
 		configKey: value,
 	}
 	if updateErr := config.UpdateConfigFromMapStrict(cfg, configMap); updateErr != nil {
-		reportOptionParseFailure(key, updateErr)
-		return true, fmt.Errorf("option %s: %w", key, updateErr)
+		// updateErr names the field and the type it had to be, nothing else
+		// (config.parseKindError), so it is safe to log and to return.
+		metrics.RecordOptionParseRejected(key)
+		common.SysError(fmt.Sprintf("option %s rejected: %v; the previous value is kept", key, updateErr))
+		return true, fmt.Errorf("%w: %s %w", ErrOptionValueRejected, key, updateErr)
 	}
 
 	return true, nil // 已处理

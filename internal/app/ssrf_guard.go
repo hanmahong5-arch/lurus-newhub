@@ -53,7 +53,13 @@ func ValidateOutboundURL(rawURL string) error {
 	if strings.TrimSpace(rawURL) == "" {
 		return nil
 	}
-	fs := system_setting.GetFetchSetting()
+	// One snapshot, taken under the configuration read lock, for the whole
+	// decision: reading the live struct field by field could mix a filter mode
+	// from before an option-sync tick with a list from after it, and such a
+	// mixture can admit a host that both of the published configurations
+	// reject — ssrf_guard_race_test.go exhibits a pair where either mixture
+	// does.
+	fs := system_setting.GetFetchSettingSnapshot()
 	applyIPFilterForDomain := fs.ApplyIPFilterForDomain || !fs.IpFilterMode
 	return common.ValidateURLWithFetchSetting(
 		rawURL,
