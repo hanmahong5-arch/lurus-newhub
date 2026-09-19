@@ -200,6 +200,96 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
     await waitFor(() => screen.getByText(/0 tokens/));
   });
 
+  // L1 (cycle-11): the onboarding curl's "model" field used to be a
+  // hardcoded literal — now it's the caller's first OpenAI-wire routable
+  // model, fetched from GET .../models/routable.
+  it('onboarding curl uses the first OpenAI-wire routable model, not a literal', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/models/routable')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              items: [
+                {
+                  id: 'rt-anthropic-only',
+                  owned_by: 'Vendor X',
+                  supported_endpoint_types: ['anthropic'],
+                },
+                {
+                  id: 'rt-openai-pick',
+                  owned_by: 'Vendor Y',
+                  supported_endpoint_types: ['openai'],
+                },
+              ],
+            },
+          },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: makeMe({ token_count: 0 }) },
+      });
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() =>
+      expect(screen.getByText(/"model": "rt-openai-pick"/)).toBeTruthy(),
+    );
+    // The anthropic-only fixture model must not have been picked — proves
+    // the wire filter, not just "some routable model", drove the choice.
+    expect(screen.queryByText(/rt-anthropic-only/)).toBeNull();
+  });
+
+  // resolved && !model -> honest empty state, no <pre> that must fail.
+  it('renders an honest empty state (no <pre>) when nothing is routable', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/models/routable')) {
+        return Promise.resolve({
+          data: { success: true, data: { items: [] } },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: makeMe({ token_count: 0 }) },
+      });
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('dashboard-onboarding-no-models')).toBeTruthy(),
+    );
+    expect(document.querySelector('pre')).toBeNull();
+  });
+
+  // A rejected /models/routable fetch is NOT proof the tenant has nothing
+  // to route — it is proof only that we could not ask. Must render its own
+  // load-failed line, never the "add a channel" copy, which would send a
+  // brand-new customer chasing a channel that may well already exist.
+  it('renders an onboarding load-failed state (not the empty state) when the routable fetch errors', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/models/routable')) {
+        return Promise.reject(new Error('network down'));
+      }
+      return Promise.resolve({
+        data: { success: true, data: makeMe({ token_count: 0 }) },
+      });
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('dashboard-onboarding-load-failed'),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByTestId('dashboard-onboarding-no-models')).toBeNull();
+    expect(document.querySelector('pre')).toBeNull();
+  });
+
   it('cost-by-model rows deep-link to the log page filtered to that model', async () => {
     const now = Math.floor(Date.now() / 1000);
     API.get.mockImplementation((url) => {

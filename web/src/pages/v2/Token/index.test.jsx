@@ -94,13 +94,33 @@ const fakeToken = {
   accessed_time: Math.floor(Date.now() / 1000) - 60,
 };
 
-// The page issues TWO GETs: the token list and the tenant's project list
-// (cost attribution, migration 029). A URL-agnostic mock would answer both
-// with the same payload, so the project <select> would render an <option>
-// per token and duplicate every token name in the DOM.
-const wireGet = (tokens, projects = []) => {
+// Neutral fixture ids (this cycle's convention — no vendor model names in
+// new content) covering both wires: rt-alpha speaks only openai, rt-mixed
+// speaks both, so the default fixture exercises the Anthropic tab too.
+const ROUTABLE_DEFAULT = [
+  { id: 'rt-alpha', owned_by: 'custom', supported_endpoint_types: ['openai'] },
+  {
+    id: 'rt-mixed',
+    owned_by: 'custom',
+    supported_endpoint_types: ['anthropic', 'openai'],
+  },
+];
+
+// The page issues THREE GETs: the token list, the tenant's project list
+// (cost attribution, migration 029), and (L1, cycle-11) the routable model
+// list the snippet panel now builds from. A URL-agnostic mock would answer
+// all three with the same payload, so the project <select> would render an
+// <option> per token AND the snippet panel would embed a token id as a
+// model name — route by URL, not by argument position.
+const wireGet = (tokens, projects = [], routable = ROUTABLE_DEFAULT) => {
   API.get.mockImplementation((url) => {
-    if (String(url).includes('/projects')) {
+    const u = String(url);
+    if (u.includes('/models/routable')) {
+      return Promise.resolve({
+        data: { success: true, data: { items: routable } },
+      });
+    }
+    if (u.includes('/projects')) {
       return Promise.resolve({
         data: { success: true, data: { items: projects } },
       });
@@ -209,6 +229,239 @@ describe('Token page — multi-format client URLs', () => {
     ]) {
       expect(screen.getByTestId(`copy-endpoint-${label}`)).toBeTruthy();
     }
+  });
+});
+
+describe('Token page — routable-model snippets (L1, cycle-11)', () => {
+  it('snippets use the first routable OpenAI-wire model, not a literal', async () => {
+    wireGet(
+      [fakeToken],
+      [],
+      [
+        {
+          id: 'rt-solo',
+          owned_by: 'custom',
+          supported_endpoint_types: ['openai'],
+        },
+      ],
+    );
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('client base urls'));
+
+    const shown = document.body.textContent;
+    expect(shown).toContain('rt-solo');
+  });
+
+  // Anthropic tab only when a routable model speaks the anthropic wire.
+  it('hides the Anthropic SDK tab when no routable model speaks the anthropic wire', async () => {
+    wireGet(
+      [fakeToken],
+      [],
+      [
+        {
+          id: 'rt-openai-only',
+          owned_by: 'custom',
+          supported_endpoint_types: ['openai'],
+        },
+      ],
+    );
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('client base urls'));
+
+    expect(screen.queryByText('Anthropic SDK')).toBeNull();
+    // curl (the fallback tab) still renders.
+    expect(document.body.textContent).toContain('rt-openai-only');
+  });
+
+  it('shows the Anthropic SDK tab and snippet when a routable model speaks the anthropic wire', async () => {
+    wireGet(
+      [fakeToken],
+      [],
+      [
+        {
+          id: 'rt-claude-like',
+          owned_by: 'custom',
+          supported_endpoint_types: ['anthropic', 'openai'],
+        },
+      ],
+    );
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('client base urls'));
+
+    expect(screen.getByText('Anthropic SDK')).toBeTruthy();
+    fireEvent.click(screen.getByText('Anthropic SDK'));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain('model: "rt-claude-like"'),
+    );
+  });
+
+  // Candidates are narrowed by the SELECTED token's own model_limits before
+  // picking the snippet's model.
+  it("narrows snippet candidates to the selected token's model_limits", async () => {
+    wireGet(
+      [
+        {
+          ...fakeToken,
+          model_limits_enabled: true,
+          model_limits: 'rt-beta',
+        },
+      ],
+      [],
+      [
+        {
+          id: 'rt-alpha',
+          owned_by: 'custom',
+          supported_endpoint_types: ['openai'],
+        },
+        {
+          id: 'rt-beta',
+          owned_by: 'custom',
+          supported_endpoint_types: ['openai'],
+        },
+      ],
+    );
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('client base urls'));
+
+    const shown = document.body.textContent;
+    expect(shown).toContain('rt-beta');
+    expect(shown).not.toContain('"model":"rt-alpha"');
+  });
+
+  // No candidate (after narrowing) -> honest empty state, not a snippet
+  // that embeds "undefined" as the model.
+  it('shows an honest empty state when the token has no routable candidates', async () => {
+    wireGet(
+      [
+        {
+          ...fakeToken,
+          model_limits_enabled: true,
+          model_limits: 'rt-gone',
+        },
+      ],
+      [],
+      [
+        {
+          id: 'rt-alpha',
+          owned_by: 'custom',
+          supported_endpoint_types: ['openai'],
+        },
+      ],
+    );
+
+    render(<HFToken />);
+    await waitFor(() =>
+      expect(screen.getByTestId('token-snippet-no-models')).toBeTruthy(),
+    );
+    expect(document.body.textContent).not.toContain('undefined');
+  });
+
+  // Before the routable fetch resolves, the panel must not claim
+  // "no models" — that claim is only true once `resolved` says so. A
+  // never-resolving fetch pins the page in the pre-resolve state for the
+  // life of the test.
+  it('does not claim "no models" while the routable fetch is still in flight', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/models/routable')) {
+        return new Promise(() => {});
+      }
+      if (u.includes('/projects')) {
+        return Promise.resolve({
+          data: { success: true, data: { items: [] } },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { items: [fakeToken] } },
+      });
+    });
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('client base urls'));
+
+    expect(screen.queryByTestId('token-snippet-no-models')).toBeNull();
+    expect(screen.queryByTestId('token-snippets-load-failed')).toBeNull();
+  });
+
+  // A rejected fetch is a DIFFERENT truth from "genuinely zero candidates"
+  // — must render its own state, never snippet_no_models.
+  it('shows a snippets_load_failed state, not the empty state, when the routable fetch rejects', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/models/routable')) {
+        return Promise.reject(new Error('network down'));
+      }
+      if (u.includes('/projects')) {
+        return Promise.resolve({
+          data: { success: true, data: { items: [] } },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { items: [fakeToken] } },
+      });
+    });
+
+    render(<HFToken />);
+    await waitFor(() =>
+      expect(screen.getByTestId('token-snippets-load-failed')).toBeTruthy(),
+    );
+    expect(screen.queryByTestId('token-snippet-no-models')).toBeNull();
+  });
+
+  // Anthropic tab selected, then switching tokens to one whose
+  // model_limits exclude every anthropic-wire model must fall `lang` back
+  // to curl rather than leaving it pointed at a tab that no longer renders.
+  it('falls back to curl when switching to a token with no anthropic-wire candidate', async () => {
+    const anthropicToken = { ...fakeToken, id: 1, name: 'has-anthropic' };
+    const openaiOnlyToken = {
+      ...fakeToken,
+      id: 2,
+      name: 'openai-only',
+      model_limits_enabled: true,
+      model_limits: 'rt-alpha',
+    };
+    wireGet(
+      [anthropicToken, openaiOnlyToken],
+      [],
+      [
+        {
+          id: 'rt-alpha',
+          owned_by: 'custom',
+          supported_endpoint_types: ['openai'],
+        },
+        {
+          id: 'rt-mixed',
+          owned_by: 'custom',
+          supported_endpoint_types: ['anthropic', 'openai'],
+        },
+      ],
+    );
+
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('client base urls'));
+
+    expect(screen.getByText('Anthropic SDK')).toBeTruthy();
+    fireEvent.click(screen.getByText('Anthropic SDK'));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain('model: "rt-mixed"'),
+    );
+
+    fireEvent.click(screen.getByText('openai-only'));
+
+    await waitFor(() => expect(screen.queryByText('Anthropic SDK')).toBeNull());
+    // If `lang` had stayed 'anthropic' the code block would render EMPTY
+    // (buildSnippets' anthropic key is '' when there is no anthropic-wire
+    // candidate) — asserting the curl snippet's own text is what actually
+    // proves the fallback fired, not just that the tab button disappeared.
+    await waitFor(() =>
+      expect(document.querySelector('pre')?.textContent || '').toContain(
+        'curl ',
+      ),
+    );
   });
 });
 

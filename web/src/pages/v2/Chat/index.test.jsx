@@ -80,6 +80,33 @@ vi.mock('react-i18next', () => ({
 import HFChat from './index';
 import { API, showError, showSuccess } from '../../../helpers';
 
+// The single routable model every test gets unless it overrides the mock —
+// a neutral fixture id, not a vendor model name (this cycle's fixtures use
+// rt-* names, matching internal/adapter/handler/v2_models_routable_test.go
+// on the Go side).
+const ROUTABLE_DEFAULT = [
+  { id: 'rt-alpha', owned_by: 'custom', supported_endpoint_types: ['openai'] },
+];
+
+const routableResponse = (items = ROUTABLE_DEFAULT) => ({
+  data: { success: true, data: { items } },
+});
+
+// GET now serves two different concerns from the same mocked function
+// (routable models AND chat sessions) — every test's own
+// API.get.mockImplementation must route on URL, never rely on call order,
+// since useRoutableModels' effect and loadSessions' effect both fire on
+// mount and a plain FIFO queue could hand either one's answer to the wrong
+// caller.
+const wireGet = (sessionsHandler) => {
+  API.get.mockImplementation((url) => {
+    if (String(url).includes('/models/routable')) {
+      return Promise.resolve(routableResponse());
+    }
+    return sessionsHandler(url);
+  });
+};
+
 beforeEach(() => {
   API.get.mockReset();
   API.post.mockReset();
@@ -96,24 +123,34 @@ beforeEach(() => {
   // about — every send() now ALSO calls the sessions API (persistSession),
   // so a test that only cares about the /chat/send turn still needs the
   // trailing persistence call to resolve to something, not vi.fn()'s bare
-  // `undefined`.
-  API.get.mockResolvedValue({
-    data: { success: true, data: { sessions: [] } },
-  });
+  // `undefined`. Routed by URL (see wireGet) so it also answers the new
+  // /models/routable fetch with a single routable model.
+  wireGet(() =>
+    Promise.resolve({ data: { success: true, data: { sessions: [] } } }),
+  );
   API.post.mockResolvedValue({
     data: {
       success: true,
-      data: { id: 101, title: '', model: 'gpt-4o', messages: [] },
+      data: { id: 101, title: '', model: 'rt-alpha', messages: [] },
     },
   });
   API.patch.mockResolvedValue({
     data: {
       success: true,
-      data: { id: 101, title: '', model: 'gpt-4o', messages: [] },
+      data: { id: 101, title: '', model: 'rt-alpha', messages: [] },
     },
   });
   API.delete.mockResolvedValue({ data: { success: true } });
 });
+
+// The model picker's default pick is now async (useRoutableModels' fetch),
+// where it used to be a synchronous literal — tests that fire input/send
+// events immediately after render() must first wait for the picker to have
+// resolved, or send() silently no-ops on its `!model` guard.
+const waitForModelReady = () =>
+  waitFor(() =>
+    expect(screen.getByTestId('chat-model-select').value).toBe('rt-alpha'),
+  );
 
 const chatResponse = (content, latencyMs = 120) => ({
   data: {
@@ -143,7 +180,12 @@ const mockChatSendSequence = (...replies) => {
     return Promise.resolve({
       data: {
         success: true,
-        data: { id: nextSessionId++, title: '', model: 'gpt-4o', messages: [] },
+        data: {
+          id: nextSessionId++,
+          title: '',
+          model: 'rt-alpha',
+          messages: [],
+        },
       },
     });
   });
@@ -176,8 +218,9 @@ describe('Chat page', () => {
   //    response renders, and the full conversation is preserved. The turn
   //    is also SAVED (POST .../chat/sessions) once it completes.
   it('sends a turn, renders both messages, and persists the session', async () => {
-    API.post.mockResolvedValueOnce(chatResponse('hi from gpt-4o'));
+    API.post.mockResolvedValueOnce(chatResponse('hi from rt-alpha'));
     render(<HFChat />);
+    await waitForModelReady();
 
     const input = screen.getByLabelText('message-input');
     fireEvent.change(input, { target: { value: 'hello' } });
@@ -191,21 +234,21 @@ describe('Chat page', () => {
     });
     // Assistant response after the promise resolves.
     await waitFor(() => {
-      expect(screen.getByText(/hi from gpt-4o/i)).toBeTruthy();
+      expect(screen.getByText(/hi from rt-alpha/i)).toBeTruthy();
     });
 
     // API.post called twice: the completion, then the session-create save.
     await waitFor(() => expect(API.post).toHaveBeenCalledTimes(2));
     const [sendUrl, sendPayload] = API.post.mock.calls[0];
     expect(sendUrl).toBe('/api/v2/acme/chat/send');
-    expect(sendPayload.model).toBe('gpt-4o');
+    expect(sendPayload.model).toBe('rt-alpha');
     expect(sendPayload.messages).toEqual([{ role: 'user', content: 'hello' }]);
 
     const [persistUrl, persistPayload] = API.post.mock.calls[1];
     expect(persistUrl).toBe('/api/v2/acme/chat/sessions');
     expect(persistPayload.messages).toEqual([
       { role: 'user', content: 'hello' },
-      { role: 'assistant', content: 'hi from gpt-4o' },
+      { role: 'assistant', content: 'hi from rt-alpha' },
     ]);
   });
 
@@ -217,6 +260,7 @@ describe('Chat page', () => {
     window.localStorage.setItem('tenant_slug', 'lurus');
     API.post.mockResolvedValueOnce(chatResponse('pong'));
     render(<HFChat />);
+    await waitForModelReady();
 
     fireEvent.change(screen.getByLabelText('message-input'), {
       target: { value: 'ping' },
@@ -240,6 +284,7 @@ describe('Chat page', () => {
   it('forwards full message history on subsequent turns and switches save from POST to PATCH', async () => {
     mockChatSendSequence('first reply', 'second reply');
     render(<HFChat />);
+    await waitForModelReady();
 
     const input = screen.getByLabelText('message-input');
     fireEvent.change(input, { target: { value: 'hi' } });
@@ -274,10 +319,10 @@ describe('Chat page', () => {
       { role: 'user', content: 'follow up' },
       { role: 'assistant', content: 'second reply' },
     ]);
-    // updateChatSessionRequest (backend) has no Model field — sending one
-    // here would be silently dropped server-side, so it must not be sent
-    // at all (this page also has no model picker to change it).
-    expect(patchPayload.model).toBeUndefined();
+    // updateChatSessionRequest (backend, v2_chat_session.go) now accepts an
+    // optional model — the page sends the currently-selected model on every
+    // PATCH (L1, cycle-11), not just on create.
+    expect(patchPayload.model).toBe('rt-alpha');
   });
 
   // 4. Failure path — backend 5xx rolls back the optimistic user message
@@ -288,6 +333,7 @@ describe('Chat page', () => {
       response: { data: { message: 'upstream down' } },
     });
     render(<HFChat />);
+    await waitForModelReady();
 
     fireEvent.change(screen.getByLabelText('message-input'), {
       target: { value: 'will fail' },
@@ -306,6 +352,7 @@ describe('Chat page', () => {
   it('clears messages when + new chat clicked', async () => {
     API.post.mockResolvedValueOnce(chatResponse('hi back'));
     render(<HFChat />);
+    await waitForModelReady();
 
     fireEvent.change(screen.getByLabelText('message-input'), {
       target: { value: 'hello' },
@@ -322,6 +369,7 @@ describe('Chat page', () => {
   it('opens ConfirmDialog on ⋯ click and clears messages on confirm', async () => {
     API.post.mockResolvedValueOnce(chatResponse('hello response'));
     render(<HFChat />);
+    await waitForModelReady();
 
     // Send a message so the conversation is non-empty.
     fireEvent.change(screen.getByLabelText('message-input'), {
@@ -350,16 +398,26 @@ describe('Chat page', () => {
   //    this is the "wire the sidebar to the new endpoints" requirement:
   //    before this cycle there was no GET call here at all.
   it('loads saved sessions from the server on mount', async () => {
-    API.get.mockResolvedValueOnce({
-      data: {
-        success: true,
+    // wireGet, not mockResolvedValueOnce: useRoutableModels' effect and
+    // loadSessions' effect both fire on mount, so a blind "next call"
+    // override could land on either one — must route by URL.
+    wireGet(() =>
+      Promise.resolve({
         data: {
-          sessions: [
-            { id: 5, title: 'earlier chat', model: 'gpt-4o', message_count: 4 },
-          ],
+          success: true,
+          data: {
+            sessions: [
+              {
+                id: 5,
+                title: 'earlier chat',
+                model: 'rt-alpha',
+                message_count: 4,
+              },
+            ],
+          },
         },
-      },
-    });
+      }),
+    );
     render(<HFChat />);
 
     await waitFor(() => {
@@ -379,7 +437,7 @@ describe('Chat page', () => {
   // 8. Clicking a saved session in the sidebar fetches and loads its full
   //    message history — the round trip's "fetch" half, driven from the UI.
   it('opens a saved session from the sidebar and loads its messages', async () => {
-    API.get.mockImplementation((url) => {
+    wireGet((url) => {
       if (url === '/api/v2/acme/chat/sessions') {
         return Promise.resolve({
           data: {
@@ -389,7 +447,7 @@ describe('Chat page', () => {
                 {
                   id: 7,
                   title: 'old convo',
-                  model: 'gpt-4o',
+                  model: 'rt-alpha',
                   message_count: 2,
                 },
               ],
@@ -404,7 +462,7 @@ describe('Chat page', () => {
             data: {
               id: 7,
               title: 'old convo',
-              model: 'gpt-4o',
+              model: 'rt-alpha',
               messages: [
                 { role: 'user', content: 'what is Kyoto' },
                 { role: 'assistant', content: 'a city in Japan' },
@@ -433,16 +491,23 @@ describe('Chat page', () => {
   // 9. Deleting a saved session calls DELETE and removes it from the
   //    sidebar — the round trip's "delete" half, driven from the UI.
   it('deletes a saved session from the sidebar', async () => {
-    API.get.mockResolvedValueOnce({
-      data: {
-        success: true,
+    wireGet(() =>
+      Promise.resolve({
         data: {
-          sessions: [
-            { id: 9, title: 'to delete', model: 'gpt-4o', message_count: 1 },
-          ],
+          success: true,
+          data: {
+            sessions: [
+              {
+                id: 9,
+                title: 'to delete',
+                model: 'rt-alpha',
+                message_count: 1,
+              },
+            ],
+          },
         },
-      },
-    });
+      }),
+    );
     render(<HFChat />);
 
     await waitFor(() => expect(screen.getByText('to delete')).toBeTruthy());
@@ -464,7 +529,7 @@ describe('Chat page', () => {
   //     stored (repo.UpdateChatSessionOwned is a delete-then-reinsert, so
   //     that loss has no undo).
   it('drops an in-flight turn and never persists it when the user switches sessions mid-flight', async () => {
-    API.get.mockImplementation((url) => {
+    wireGet((url) => {
       if (url === '/api/v2/acme/chat/sessions') {
         return Promise.resolve({
           data: {
@@ -474,13 +539,13 @@ describe('Chat page', () => {
                 {
                   id: 1,
                   title: 'session one',
-                  model: 'gpt-4o',
+                  model: 'rt-alpha',
                   message_count: 1,
                 },
                 {
                   id: 2,
                   title: 'session two',
-                  model: 'gpt-4o',
+                  model: 'rt-alpha',
                   message_count: 2,
                 },
               ],
@@ -495,7 +560,7 @@ describe('Chat page', () => {
             data: {
               id: 1,
               title: 'session one',
-              model: 'gpt-4o',
+              model: 'rt-alpha',
               messages: [{ role: 'user', content: 'A-user' }],
             },
           },
@@ -508,7 +573,7 @@ describe('Chat page', () => {
             data: {
               id: 2,
               title: 'session two',
-              model: 'gpt-4o',
+              model: 'rt-alpha',
               messages: [
                 { role: 'user', content: 'B-user' },
                 { role: 'assistant', content: 'B-asst' },
@@ -577,7 +642,7 @@ describe('Chat page', () => {
   //     forever, and the swallowed failure surfaces as a visible
   //     "not saved" marker rather than vanishing silently.
   it('falls back to creating a new session after a 404 on PATCH, and shows a not-saved marker', async () => {
-    API.get.mockImplementation((url) => {
+    wireGet((url) => {
       if (url === '/api/v2/acme/chat/sessions') {
         return Promise.resolve({
           data: {
@@ -587,7 +652,7 @@ describe('Chat page', () => {
                 {
                   id: 55,
                   title: 'gone elsewhere',
-                  model: 'gpt-4o',
+                  model: 'rt-alpha',
                   message_count: 1,
                 },
               ],
@@ -602,7 +667,7 @@ describe('Chat page', () => {
             data: {
               id: 55,
               title: 'gone elsewhere',
-              model: 'gpt-4o',
+              model: 'rt-alpha',
               messages: [{ role: 'user', content: 'old turn' }],
             },
           },
@@ -621,7 +686,7 @@ describe('Chat page', () => {
       return Promise.resolve({
         data: {
           success: true,
-          data: { id: 999, title: '', model: 'gpt-4o', messages: [] },
+          data: { id: 999, title: '', model: 'rt-alpha', messages: [] },
         },
       });
     });
@@ -713,5 +778,349 @@ describe('Chat page', () => {
     expect(screen.queryByText(/stale draft reply/i)).toBeNull();
     expect(screen.getByText(/ask anything to begin/i)).toBeTruthy();
     expect(API.patch).not.toHaveBeenCalled();
+  });
+
+  // 13. L1 (cycle-11): the model is no longer a literal — it defaults to
+  // the FIRST routable model returned by GET .../models/routable.
+  it('defaults the send model to the first routable model, not a literal', async () => {
+    // NOT wireGet: this test overrides the routable response itself, so it
+    // needs full control over that branch too (wireGet's own routable
+    // branch always answers with the fixed ROUTABLE_DEFAULT).
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return Promise.resolve(
+          routableResponse([
+            {
+              id: 'rt-beta',
+              owned_by: 'custom',
+              supported_endpoint_types: ['openai'],
+            },
+            {
+              id: 'rt-gamma',
+              owned_by: 'custom',
+              supported_endpoint_types: ['openai'],
+            },
+          ]),
+        );
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    API.post.mockResolvedValueOnce(chatResponse('hi from rt-beta'));
+    render(<HFChat />);
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-model-select').value).toBe('rt-beta'),
+    );
+
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'hello' },
+    });
+    fireEvent.click(screen.getByText(/▶ send/i).closest('button'));
+
+    await waitFor(() => expect(API.post).toHaveBeenCalled());
+    const [, sendPayload] = API.post.mock.calls[0];
+    expect(sendPayload.model).toBe('rt-beta');
+  });
+
+  // 13b. Before the routable fetch resolves, the page must not have picked
+  // ANY model (literal or otherwise) — the pre-resolve window is exactly
+  // where a hardcoded vendor model would be observable and sendable, and
+  // is the window the previous test could not see because it always
+  // waited for the fetch to resolve first.
+  it('carries no model and blocks send before the routable list resolves', async () => {
+    // Never resolves — pins the component in the pre-resolve state for
+    // the life of the test.
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return new Promise(() => {});
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    render(<HFChat />);
+
+    // Neither the empty-state pill nor the error pill has anything to show
+    // yet — `resolved` is still false — so the select branch renders with
+    // an empty value, not a literal.
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-model-select')).toBeTruthy(),
+    );
+    expect(screen.getByTestId('chat-model-select').value).toBe('');
+
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'hello' },
+    });
+    const sendBtn = screen.getByText(/▶ send/i).closest('button');
+    expect(sendBtn?.disabled).toBe(true);
+    fireEvent.click(sendBtn);
+    expect(API.post).not.toHaveBeenCalled();
+  });
+
+  // 14. Honest empty state: a tenant with zero routable models must never
+  // see a command (send) that is guaranteed to fail.
+  it('shows an honest empty state and disables send when nothing is routable', async () => {
+    // NOT wireGet — see the previous test's comment.
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return Promise.resolve(routableResponse([]));
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    render(<HFChat />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-no-models')).toBeTruthy(),
+    );
+    expect(screen.queryByTestId('chat-model-select')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'hello' },
+    });
+    const sendBtn = screen.getByText(/▶ send/i).closest('button');
+    expect(sendBtn?.disabled).toBe(true);
+    fireEvent.click(sendBtn);
+    expect(API.post).not.toHaveBeenCalled();
+  });
+
+  // 15. A load failure on the routable endpoint must be distinguishable
+  // from "the tenant genuinely has zero models".
+  it('shows a models_load_failed state when the routable fetch errors', async () => {
+    // NOT wireGet — see the earlier comment.
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return Promise.reject(new Error('network down'));
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    render(<HFChat />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-models-error')).toBeTruthy(),
+    );
+    expect(screen.queryByTestId('chat-no-models')).toBeNull();
+    expect(screen.queryByTestId('chat-model-select')).toBeNull();
+  });
+
+  // 16. The picker is a real control: changing it changes the model the
+  // NEXT send actually carries.
+  it('the picker changes the model sent', async () => {
+    // NOT wireGet — see the earlier comment.
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return Promise.resolve(
+          routableResponse([
+            {
+              id: 'rt-alpha',
+              owned_by: 'custom',
+              supported_endpoint_types: ['openai'],
+            },
+            {
+              id: 'rt-beta',
+              owned_by: 'custom',
+              supported_endpoint_types: ['openai'],
+            },
+          ]),
+        );
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    API.post.mockResolvedValueOnce(chatResponse('hi from rt-beta'));
+    render(<HFChat />);
+    await waitForModelReady();
+
+    fireEvent.change(screen.getByTestId('chat-model-select'), {
+      target: { value: 'rt-beta' },
+    });
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'hello' },
+    });
+    fireEvent.click(screen.getByText(/▶ send/i).closest('button'));
+
+    await waitFor(() => expect(API.post).toHaveBeenCalled());
+    const [, sendPayload] = API.post.mock.calls[0];
+    expect(sendPayload.model).toBe('rt-beta');
+  });
+
+  // 17. openSession adopts the session's OWN model — a saved session made
+  // with a since-superseded model must keep answering with that model, not
+  // silently switch to whatever the picker currently shows.
+  it('opening a saved session adopts its model', async () => {
+    wireGet((url) => {
+      if (url === '/api/v2/acme/chat/sessions') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              sessions: [
+                {
+                  id: 3,
+                  title: 'beta convo',
+                  model: 'rt-beta',
+                  message_count: 1,
+                },
+              ],
+            },
+          },
+        });
+      }
+      if (url === '/api/v2/acme/chat/sessions/3') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              id: 3,
+              title: 'beta convo',
+              model: 'rt-beta',
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+          },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    render(<HFChat />);
+    await waitFor(() => expect(screen.getByText('beta convo')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('session-list-row-3'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-model-select').value).toBe('rt-beta'),
+    );
+  });
+
+  // 17b. A routable-list refetch (triggered by model_not_found below) must
+  // not clobber a model the user/session already picked — the
+  // modelInitializedRef guard is what stops the once-only default-pick
+  // effect from re-firing just because `routableModels` got a new array
+  // reference from the refetch.
+  it('keeps a saved session model after a routable refetch, not the first routable model', async () => {
+    // A fresh array on every call (not a shared reference) — the refetch
+    // this test drives must look, from React's point of view, like a real
+    // new answer (same ids, new array identity), the way two separate HTTP
+    // responses actually would.
+    const makeRoutableTwo = () => [
+      {
+        id: 'rt-alpha',
+        owned_by: 'custom',
+        supported_endpoint_types: ['openai'],
+      },
+      {
+        id: 'rt-beta',
+        owned_by: 'custom',
+        supported_endpoint_types: ['openai'],
+      },
+    ];
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return Promise.resolve(routableResponse(makeRoutableTwo()));
+      }
+      if (url === '/api/v2/acme/chat/sessions') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              sessions: [
+                {
+                  id: 3,
+                  title: 'beta convo',
+                  model: 'rt-beta',
+                  message_count: 1,
+                },
+              ],
+            },
+          },
+        });
+      }
+      if (url === '/api/v2/acme/chat/sessions/3') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              id: 3,
+              title: 'beta convo',
+              model: 'rt-beta',
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+          },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    API.post.mockRejectedValueOnce({
+      response: {
+        status: 502,
+        data: { error_code: 'model_not_found', message: 'model not found' },
+      },
+    });
+    render(<HFChat />);
+    await waitFor(() => expect(screen.getByText('beta convo')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('session-list-row-3'));
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-model-select').value).toBe('rt-beta'),
+    );
+
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'hello' },
+    });
+    fireEvent.click(screen.getByText(/▶ send/i).closest('button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-model-not-found-hint')).toBeTruthy(),
+    );
+    // The refetch triggered by model_not_found answered with a NEW array
+    // (same two ids, rt-alpha still first) — the session's own model must
+    // still be selected, not rt-alpha.
+    expect(screen.getByTestId('chat-model-select').value).toBe('rt-beta');
+  });
+
+  // 18. model_not_found: /chat/send answers 502 with error_code
+  // "model_not_found" when the routable list was stale (the routing truth
+  // changed between the picker resolving and this send landing). Must
+  // toast, show an inline hint naming the model, and refetch the list.
+  it('shows model_not_found guidance and refetches the routable list on a stale model', async () => {
+    let routableCalls = 0;
+    // NOT wireGet — needs to count routable calls itself.
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        routableCalls += 1;
+        return Promise.resolve(routableResponse());
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    API.post.mockRejectedValueOnce({
+      response: {
+        status: 502,
+        data: { error_code: 'model_not_found', message: 'model not found' },
+      },
+    });
+    render(<HFChat />);
+    await waitForModelReady();
+    const callsBeforeSend = routableCalls;
+
+    fireEvent.change(screen.getByLabelText('message-input'), {
+      target: { value: 'hello' },
+    });
+    fireEvent.click(screen.getByText(/▶ send/i).closest('button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-model-not-found-hint')).toBeTruthy(),
+    );
+    expect(showError).toHaveBeenCalledWith(expect.stringContaining('rt-alpha'));
+    await waitFor(() => expect(routableCalls).toBeGreaterThan(callsBeforeSend));
   });
 });

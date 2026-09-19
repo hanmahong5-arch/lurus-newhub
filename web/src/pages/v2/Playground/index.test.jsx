@@ -75,6 +75,49 @@ vi.mock('react-i18next', () => ({
 import HFPlayground from './index';
 import { API, showError, showSuccess } from '../../../helpers';
 
+// Neutral fixture ids (this cycle's convention, not vendor model names) —
+// three by default so defaultCompareModels(routableModels) (max=3) fills
+// the compare draft exactly like the old DEFAULT_MODELS literal used to,
+// without hardcoding a vendor name anywhere in this file.
+const ROUTABLE_DEFAULT = [
+  {
+    id: 'rt-alpha',
+    owned_by: 'Vendor A',
+    supported_endpoint_types: ['openai'],
+  },
+  { id: 'rt-beta', owned_by: 'Vendor B', supported_endpoint_types: ['openai'] },
+  {
+    id: 'rt-gamma',
+    owned_by: 'Vendor C',
+    supported_endpoint_types: ['openai'],
+  },
+];
+
+const routableResponse = (items = ROUTABLE_DEFAULT) => ({
+  data: { success: true, data: { items } },
+});
+
+// GET now serves two concerns (routable models AND presets/list-load) from
+// the same mocked function — route by URL, not call order, since
+// useRoutableModels' effect fires on every mount regardless of what a given
+// test is trying to exercise. routableItemsOrFn lets a test override or
+// react dynamically (e.g. count calls) to the routable response while
+// keeping the rest of otherHandler's routing untouched.
+const wireGet = (otherHandler, routableItemsOrFn = ROUTABLE_DEFAULT) => {
+  API.get.mockImplementation((url) => {
+    if (String(url).includes('/models/routable')) {
+      const items =
+        typeof routableItemsOrFn === 'function'
+          ? routableItemsOrFn(url)
+          : routableItemsOrFn;
+      return Promise.resolve(routableResponse(items));
+    }
+    return otherHandler
+      ? otherHandler(url)
+      : Promise.reject(new Error(`unexpected GET ${url}`));
+  });
+};
+
 beforeEach(() => {
   API.get.mockReset();
   API.post.mockReset();
@@ -87,6 +130,9 @@ beforeEach(() => {
   window.localStorage.setItem('tenant_slug', 'acme');
   // Reset URL to avoid cross-test URL pollution from share tests.
   window.history.replaceState({}, '', '/playground');
+  // Default: the routable list resolves to the 3-item fixture above; any
+  // other GET (presets) 404s until a test wires its own.
+  wireGet();
 });
 
 afterEach(() => {
@@ -96,6 +142,38 @@ afterEach(() => {
 const fakeRunResponse = (items) => ({
   data: { success: true, data: { items } },
 });
+
+// The compare draft is now populated asynchronously (routable-draft-sync
+// effect), where it used to be the DEFAULT_MODELS literal available at
+// first render — tests that click run (or read the model count) right
+// after render() must wait for that effect to land first.
+const waitForModelsReady = () =>
+  waitFor(() =>
+    expect(screen.getByTestId('playground-run')).not.toBeDisabled(),
+  );
+
+// useFormDraft reads localStorage SYNCHRONOUSLY on mount (its useState
+// initializer), so seeding a valid envelope here lets a test render with a
+// non-empty form.models before the routable fetch has resolved — the only
+// way to have a compare column exist while that fetch is still pending.
+// Mirrors useFormDraft's own storage layout (buildFullKey + envelope).
+const seedPlaygroundDraft = (models = ['rt-alpha', 'rt-beta', 'rt-gamma']) => {
+  window.localStorage.setItem(
+    'lurus-hub:draft:pg-tester:playground-form',
+    JSON.stringify({
+      v: 1,
+      t: Date.now(),
+      d: {
+        system: 'You are a helpful, concise assistant.',
+        user: 'What is the capital of Australia? Briefly.',
+        temperature: 0.7,
+        top_p: 1.0,
+        max_tokens: 1024,
+        models,
+      },
+    }),
+  );
+};
 
 describe('Playground page', () => {
   // 1. system / user are editable inputs (no longer the readOnly spans from
@@ -120,21 +198,21 @@ describe('Playground page', () => {
     API.post.mockResolvedValueOnce(
       fakeRunResponse([
         {
-          model: 'gpt-4o',
+          model: 'rt-alpha',
           content: 'four',
           latency_ms: 100,
           prompt_tokens: 5,
           completion_tokens: 1,
         },
         {
-          model: 'claude-3.5-sonnet',
+          model: 'rt-beta',
           content: 'four.',
           latency_ms: 80,
           prompt_tokens: 5,
           completion_tokens: 1,
         },
         {
-          model: 'gemini-1.5-pro',
+          model: 'rt-gamma',
           content: '2+2=4',
           latency_ms: 120,
           prompt_tokens: 5,
@@ -144,6 +222,7 @@ describe('Playground page', () => {
     );
 
     render(<HFPlayground />);
+    await waitForModelsReady();
     fireEvent.click(screen.getByTestId('playground-run'));
 
     await waitFor(() => {
@@ -151,11 +230,7 @@ describe('Playground page', () => {
     });
     const [url, body] = API.post.mock.calls[0];
     expect(url).toBe('/api/v2/acme/playground/run');
-    expect(body.models).toEqual([
-      'gpt-4o',
-      'claude-3.5-sonnet',
-      'gemini-1.5-pro',
-    ]);
+    expect(body.models).toEqual(['rt-alpha', 'rt-beta', 'rt-gamma']);
     expect(body.user).toMatch(/capital of Australia/);
 
     await waitFor(() => {
@@ -177,14 +252,14 @@ describe('Playground page', () => {
     API.post.mockResolvedValueOnce(
       fakeRunResponse([
         {
-          model: 'gpt-4o',
+          model: 'rt-alpha',
           content: 'ok',
           latency_ms: 100,
           prompt_tokens: 5,
           completion_tokens: 1,
         },
         {
-          model: 'claude-3.5-sonnet',
+          model: 'rt-beta',
           content: '',
           latency_ms: 200,
           prompt_tokens: 0,
@@ -193,7 +268,7 @@ describe('Playground page', () => {
           error_message: 'channel exhausted',
         },
         {
-          model: 'gemini-1.5-pro',
+          model: 'rt-gamma',
           content: 'fine',
           latency_ms: 150,
           prompt_tokens: 5,
@@ -203,6 +278,7 @@ describe('Playground page', () => {
     );
 
     render(<HFPlayground />);
+    await waitForModelsReady();
     fireEvent.click(screen.getByTestId('playground-run'));
 
     await waitFor(() => {
@@ -223,8 +299,9 @@ describe('Playground page', () => {
 
   // 4. Empty user prompt → showError, no POST fired (cheap client-side
   //    guard avoids a server 400 roundtrip for the most common mistake).
-  it('refuses to run with empty user prompt', () => {
+  it('refuses to run with empty user prompt', async () => {
     render(<HFPlayground />);
+    await waitForModelsReady();
     fireEvent.change(screen.getByTestId('playground-user'), {
       target: { value: '   ' },
     });
@@ -241,6 +318,7 @@ describe('Playground page', () => {
     API.post.mockReturnValueOnce(pending);
 
     render(<HFPlayground />);
+    await waitForModelsReady();
     const btn = screen.getByTestId('playground-run');
     fireEvent.click(btn);
 
@@ -263,6 +341,7 @@ describe('Playground page', () => {
     });
 
     render(<HFPlayground />);
+    await waitForModelsReady();
     fireEvent.click(screen.getByTestId('playground-run'));
 
     await waitFor(() => {
@@ -277,6 +356,7 @@ describe('Playground page', () => {
     API.post.mockResolvedValueOnce(fakeRunResponse([]));
 
     render(<HFPlayground />);
+    await waitForModelsReady();
     fireEvent.change(screen.getByTestId('playground-temp'), {
       target: { value: '0.3' },
     });
@@ -322,22 +402,31 @@ describe('Playground page', () => {
   // 9. blank▾ — opens dropdown, click on a preset item loads it into the
   //    user textarea.
   it('blank: loads preset prompt into user textarea', async () => {
-    API.get.mockResolvedValueOnce({
-      data: {
-        success: true,
-        data: [
-          {
-            id: 42,
-            name: 'test-preset',
-            prompt: 'loaded-prompt',
-            models: '["gpt-4o"]',
-            params: '{"temperature":0.2,"top_p":0.8,"max_tokens":512}',
+    // wireGet (not mockResolvedValueOnce): useRoutableModels' effect also
+    // fires a GET on mount, so a blind "next call" override could answer
+    // either one — route by URL.
+    wireGet((url) => {
+      if (String(url).includes('/playground/presets')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: [
+              {
+                id: 42,
+                name: 'test-preset',
+                prompt: 'loaded-prompt',
+                models: '["rt-alpha"]',
+                params: '{"temperature":0.2,"top_p":0.8,"max_tokens":512}',
+              },
+            ],
           },
-        ],
-      },
+        });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
     });
 
     render(<HFPlayground />);
+    await waitForModelsReady();
     fireEvent.click(screen.getByTestId('playground-blank-btn'));
 
     await waitFor(() => {
@@ -376,24 +465,20 @@ describe('Playground page', () => {
   // 11. swap▾ — opens model dropdown, clicking a model toggles it in/out of
   //     form.models. Model already present → removed; absent → appended.
   it('swap: toggles model in the models array', async () => {
-    // Real wire shape from GET /api/v2/:tenant_slug/models
-    // (v2_models.go:108-116): data is an object with an `items` array, never
-    // the array itself.
-    API.get.mockResolvedValueOnce({
-      data: {
-        success: true,
-        data: {
-          items: [
-            { model_name: 'gpt-4o' },
-            { model_name: 'claude-3.5-sonnet' },
-            { model_name: 'gemini-1.5-pro' },
-            { model_name: 'o1-mini' },
-          ],
-        },
+    // Real wire shape from GET .../models/routable
+    // (v2_models_routable.go): data is an object with an `items` array,
+    // never the array itself.
+    wireGet(undefined, [
+      ...ROUTABLE_DEFAULT,
+      {
+        id: 'rt-delta',
+        owned_by: 'Vendor D',
+        supported_endpoint_types: ['openai'],
       },
-    });
+    ]);
 
     render(<HFPlayground />);
+    await waitForModelsReady();
 
     // Open swap dropdown for column 0.
     fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
@@ -402,12 +487,11 @@ describe('Playground page', () => {
       expect(screen.getByTestId('playground-swap-dropdown-0')).toBeTruthy();
     });
 
-    // Click o1-mini (not in default models) to add it — the request is async,
-    // so the button only appears once the hook resolves.
+    // Click rt-delta (not in the default 3-model draft) to add it.
     await waitFor(() => {
-      expect(screen.getByTestId('playground-swap-model-o1-mini')).toBeTruthy();
+      expect(screen.getByTestId('playground-swap-model-rt-delta')).toBeTruthy();
     });
-    fireEvent.click(screen.getByTestId('playground-swap-model-o1-mini'));
+    fireEvent.click(screen.getByTestId('playground-swap-model-rt-delta'));
 
     // After clicking, the model count in the header should have increased.
     await waitFor(() => {
@@ -415,15 +499,35 @@ describe('Playground page', () => {
     });
   });
 
-  // 12. swap▾ with a tenant that has no models — the loading text must not
-  //     linger forever (that was the original bug); an honest "no models
-  //     available" line replaces it once the fetch resolves empty.
-  it('swap: shows "no models available" once loaded with an empty catalog', async () => {
-    API.get.mockResolvedValueOnce({
-      data: { success: true, data: { items: [] } },
-    });
+  // 12a. Genuinely zero routable models: no columns render at all, and the
+  //     TOP-LEVEL "no models available" banner is what a real customer with
+  //     nothing routable sees (there is no per-column swap▾ to open when
+  //     there are zero columns).
+  it('shows the top-level "no models available" banner with a genuinely empty catalog', async () => {
+    wireGet(undefined, []);
 
     render(<HFPlayground />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('playground-no-models')).toBeTruthy(),
+    );
+    expect(screen.queryByTestId('playground-swap-btn-0')).toBeNull();
+    expect(screen.getByTestId('playground-run')).toBeDisabled();
+  });
+
+  // 12b. The per-column swap▾ dropdown's OWN empty state is still real
+  //     code — it fires when a column exists (routableModels is non-empty)
+  //     but every entry's id filters out as falsy (a malformed backend
+  //     row), which is a different case from "nothing routable at all".
+  it('swap: shows "no models available" inside the dropdown when every routable id is blank', async () => {
+    wireGet(undefined, [
+      { id: '', owned_by: 'Vendor Unknown', supported_endpoint_types: [] },
+    ]);
+
+    render(<HFPlayground />);
+    await waitFor(() =>
+      expect(screen.getByTestId('playground-swap-btn-0')).toBeTruthy(),
+    );
 
     fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
 
@@ -432,21 +536,32 @@ describe('Playground page', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('no models available')).toBeTruthy();
+      expect(screen.getByTestId('playground-swap-empty')).toBeTruthy();
     });
     expect(screen.queryByText('loading…')).toBeNull();
   });
 
-  // Lock for the loading block itself (Playground/index.jsx:757-767) — while
-  // the request is in flight the dropdown must show the loading line, not
-  // jump straight to the empty state.
+  // Lock for the loading block itself — while the routable fetch is still
+  // in flight the dropdown must show the loading line, not jump straight
+  // to the empty state (the fetch now starts on MOUNT, not on swap▾'s
+  // first click, but the dropdown's own loading/error/empty rendering is
+  // unchanged — it just reads the same hook state).
   it('swap: shows the loading line while the models request is in flight', async () => {
+    // Columns only exist once form.models is non-empty, and the draft
+    // starts empty until the routable fetch resolves — seed a restored
+    // draft (useFormDraft reads localStorage synchronously on mount, see
+    // seedPlaygroundDraft) so column 0 exists WHILE the fetch is still
+    // pending, which is the only way to open its swap▾ before resolution.
+    seedPlaygroundDraft();
     let resolveGet;
-    API.get.mockReturnValueOnce(
-      new Promise((r) => {
-        resolveGet = r;
-      }),
-    );
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return new Promise((r) => {
+          resolveGet = r;
+        });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
 
     render(<HFPlayground />);
 
@@ -457,55 +572,211 @@ describe('Playground page', () => {
     });
     expect(screen.queryByTestId('playground-swap-empty')).toBeNull();
 
-    resolveGet({ data: { success: true, data: { items: [] } } });
+    // Resolving to an empty routable list clears the draft (routable-
+    // draft-sync effect) — the column itself disappears and the TOP-LEVEL
+    // "no models available" banner is what replaces it, not a per-column
+    // empty state inside a dropdown that no longer has a column to belong
+    // to (see the 12a/12b split above for why).
+    resolveGet(routableResponse([]));
     await waitFor(() => {
-      expect(screen.getByTestId('playground-swap-empty')).toBeTruthy();
+      expect(screen.getByTestId('playground-no-models')).toBeTruthy();
     });
+    expect(screen.queryByTestId('playground-swap-btn-0')).toBeNull();
   });
 
-  // Lock for the .filter(Boolean) on availableModels (Playground/index.jsx
-  // ~130) — a catalogue entry with no model_name must not render a blank
-  // swap row.
-  it('swap: drops a catalogue entry with no model_name instead of rendering a blank row', async () => {
-    API.get.mockResolvedValueOnce({
-      data: {
-        success: true,
-        data: {
-          items: [
-            { model_name: 'gpt-4o' },
-            { vendor: 'OpenAI' },
-            { model_name: '' },
-          ],
-        },
+  // Lock for the .filter(Boolean) on availableModels — a routable entry
+  // with an empty id must not render a blank swap row.
+  it('swap: drops a routable entry with no id instead of rendering a blank row', async () => {
+    wireGet(undefined, [
+      {
+        id: 'rt-alpha',
+        owned_by: 'Vendor A',
+        supported_endpoint_types: ['openai'],
       },
-    });
+      { id: '', owned_by: 'Vendor Unknown', supported_endpoint_types: [] },
+    ]);
 
     render(<HFPlayground />);
+    await waitForModelsReady();
 
     fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('playground-swap-model-gpt-4o')).toBeTruthy();
+      expect(screen.getByTestId('playground-swap-model-rt-alpha')).toBeTruthy();
     });
     const dropdown = screen.getByTestId('playground-swap-dropdown-0');
-    // Exactly one row rendered — the entry with no name and the entry with
-    // an empty-string name are both dropped, not rendered as blank buttons.
+    // Exactly one row rendered — the entry with the empty id is dropped,
+    // not rendered as a blank button.
     expect(dropdown.querySelectorAll('button').length).toBe(1);
   });
 
-  // Lock for the distinct failure line (item 2) — a failed fetch must not
-  // read as "no models available".
-  it('swap: shows a failure line, not the empty-catalog line, when the fetch fails', async () => {
-    API.get.mockRejectedValueOnce(new Error('network down'));
+  // Lock for the distinct top-level failure banner — a failed routable
+  // fetch must not read as "no models available" (that phrase is reserved
+  // for a resolved, genuinely empty catalogue). With zero models resolved
+  // there are also zero compare columns, so there is no swap▾ to open —
+  // the page-level banner is the only signal available.
+  it('shows a failure banner, not the empty-catalog banner, when the routable fetch fails', async () => {
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return Promise.reject(new Error('network down'));
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
 
     render(<HFPlayground />);
 
-    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
-
     await waitFor(() => {
-      expect(screen.getByTestId('playground-swap-error')).toBeTruthy();
+      expect(screen.getByTestId('playground-models-error')).toBeTruthy();
     });
-    expect(screen.queryByTestId('playground-swap-empty')).toBeNull();
+    expect(screen.queryByTestId('playground-no-models')).toBeNull();
     expect(screen.queryByText('no models available')).toBeNull();
+    expect(screen.queryByTestId('playground-swap-btn-0')).toBeNull();
+  });
+
+  // L1 (cycle-11) — explicit locks for the mutation list:
+
+  // "first three routable by default": a fresh visitor with no draft gets
+  // exactly the first three routable models, not a literal list.
+  it('defaults the compare draft to the first three routable models, not a literal', async () => {
+    wireGet(undefined, [
+      ...ROUTABLE_DEFAULT,
+      {
+        id: 'rt-delta',
+        owned_by: 'Vendor D',
+        supported_endpoint_types: ['openai'],
+      },
+    ]);
+
+    render(<HFPlayground />);
+    await waitForModelsReady();
+
+    expect(screen.getByText(/3 models, one prompt/i)).toBeTruthy();
+    // The three columns are the routable fixture ids, not a literal list.
+    expect(document.body.textContent).toContain('rt-alpha');
+    expect(document.body.textContent).toContain('rt-beta');
+    expect(document.body.textContent).toContain('rt-gamma');
+    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
+    await waitFor(() =>
+      expect(screen.getByTestId('playground-swap-dropdown-0')).toBeTruthy(),
+    );
+    // rt-delta (the 4th routable model) is available to swap IN — proving
+    // it was excluded from the initial draft, not merely absent from the
+    // catalogue.
+    expect(screen.getByTestId('playground-swap-model-rt-delta')).toBeTruthy();
+  });
+
+  // Before the routable fetch resolves, the compare draft must be empty
+  // and run disabled — the pre-resolve window is exactly where a literal
+  // DEFAULT_FORM.models list would be observable and runnable, and is the
+  // window the previous test could not see because it always waited for
+  // the fetch to resolve first.
+  it('shows an empty compare draft and disables run before the routable list resolves', async () => {
+    // Never resolves — pins the component in the pre-resolve state for the
+    // life of the test.
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return new Promise(() => {});
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    render(<HFPlayground />);
+
+    const runBtn = screen.getByTestId('playground-run');
+    // The count baked into the button's own label is the most direct
+    // oracle for form.models.length — a literal DEFAULT_FORM.models would
+    // show "run all 3" here even though nothing has resolved yet.
+    expect(runBtn.textContent).toContain('run all 0');
+    expect(runBtn.disabled).toBe(true);
+    fireEvent.click(runBtn);
+    expect(API.post).not.toHaveBeenCalled();
+  });
+
+  // "reads ?prefill_model=": the Models page's "try ↗" link.
+  it('reads ?prefill_model= from the URL and adopts it as the sole compare draft', async () => {
+    window.history.replaceState({}, '', '/playground?prefill_model=rt-beta');
+
+    render(<HFPlayground />);
+    await waitForModelsReady();
+
+    expect(screen.getByText(/1 models, one prompt/i)).toBeTruthy();
+    // The single column's model select/label is rt-beta — verified via the
+    // swap dropdown's checkmark rather than the column header text (which
+    // also appears in the run-request body assertion below).
+    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('playground-swap-model-rt-beta').textContent,
+      ).toContain('✓'),
+    );
+  });
+
+  // "drops non-routable draft models": a restored draft naming a model
+  // that is no longer routable must lose only that model, keeping the
+  // ones that ARE still routable.
+  it('drops a non-routable model from a restored draft, keeping the routable ones', async () => {
+    seedPlaygroundDraft(['rt-alpha', 'rt-zzz-gone', 'rt-beta']);
+
+    render(<HFPlayground />);
+    await waitForModelsReady();
+
+    expect(screen.getByText(/2 models, one prompt/i)).toBeTruthy();
+    const [, body] = await (async () => {
+      fireEvent.click(screen.getByTestId('playground-run'));
+      await waitFor(() => expect(API.post).toHaveBeenCalledTimes(1));
+      return API.post.mock.calls[0];
+    })();
+    expect(body.models).toEqual(['rt-alpha', 'rt-beta']);
+  });
+
+  // "if that empties the draft take the first three": every draft model is
+  // stale — the draft falls back to defaultCompareModels, not an empty
+  // grid.
+  it('falls back to the first three routable models when every draft model is stale', async () => {
+    seedPlaygroundDraft(['rt-zzz-gone-1', 'rt-zzz-gone-2']);
+
+    render(<HFPlayground />);
+    await waitForModelsReady();
+
+    expect(screen.getByText(/3 models, one prompt/i)).toBeTruthy();
+  });
+
+  // "refuses to run when nothing routable": Run stays disabled and a click
+  // (even via keyboard shortcut) does not POST.
+  it('refuses to run when nothing is routable', async () => {
+    wireGet(undefined, []);
+
+    render(<HFPlayground />);
+    await waitFor(() =>
+      expect(screen.getByTestId('playground-no-models')).toBeTruthy(),
+    );
+
+    const btn = screen.getByTestId('playground-run');
+    expect(btn).toBeDisabled();
+    fireEvent.click(btn);
+    expect(API.post).not.toHaveBeenCalled();
+  });
+
+  // prefill of an unroutable model -> console.playground.prefill_unroutable
+  // hint, and the draft falls back to the default compare set instead of
+  // silently rendering a single dead column.
+  it('shows a prefill_unroutable hint when ?prefill_model= names a model that is not routable', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/playground?prefill_model=rt-does-not-exist',
+    );
+
+    render(<HFPlayground />);
+    await waitForModelsReady();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('playground-prefill-unroutable')).toBeTruthy(),
+    );
+    expect(
+      screen.getByTestId('playground-prefill-unroutable').textContent,
+    ).toContain('rt-does-not-exist');
+    // Falls back to the default 3-model set rather than staying on the
+    // dead single-model draft.
+    expect(screen.getByText(/3 models, one prompt/i)).toBeTruthy();
   });
 });

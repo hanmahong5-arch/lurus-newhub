@@ -35,6 +35,13 @@ import {
 } from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
+  useRoutableModels,
+  firstRoutableModel,
+  intersectTokenLimits,
+  WIRE_OPENAI,
+  WIRE_ANTHROPIC,
+} from '../../../hooks/models/useRoutableModels';
+import {
   getQuotaPerUSD,
   quotaToUSD,
   formatRelativeTime,
@@ -148,16 +155,23 @@ const copy = async (text) => {
 // `host` is the live relay host (see relayHostFromServer) — never a literal.
 // Every snippet below is copy-pasted verbatim by customers, so a stale host
 // here is a broken integration, not a cosmetic issue.
-const buildSnippets = (key, host) => ({
+//
+// L1 (cycle-11): `openaiModel`/`anthropicModel` were ALSO hardcoded
+// literals — same class of bug as the host used to be. Callers resolve
+// both from the routing truth (useRoutableModels,
+// narrowed to this token's own model_limits via intersectTokenLimits)
+// before calling this. anthropicModel may be undefined — the anthropic
+// snippet then never renders (langTabsFor hides its tab to match).
+const buildSnippets = (key, host, { openaiModel, anthropicModel } = {}) => ({
   curl: `curl ${host}/v1/chat/completions \\
   -H "Authorization: Bearer ${key}" \\
   -H "Content-Type: application/json" \\
-  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'`,
+  -d '{"model":"${openaiModel}","messages":[{"role":"user","content":"hi"}]}'`,
   python: `from openai import OpenAI
 
 client = OpenAI(api_key="${key}", base_url="${host}/v1")
 resp = client.chat.completions.create(
-    model="gpt-4o",
+    model="${openaiModel}",
     messages=[{"role": "user", "content": "hi"}],
 )
 print(resp.choices[0].message.content)`,
@@ -165,21 +179,37 @@ print(resp.choices[0].message.content)`,
 
 const client = new OpenAI({ apiKey: "${key}", baseURL: "${host}/v1" });
 const r = await client.chat.completions.create({
-  model: "gpt-4o",
+  model: "${openaiModel}",
   messages: [{ role: "user", content: "hi" }],
 });`,
-  anthropic: `import Anthropic from "@anthropic-ai/sdk";
+  anthropic: anthropicModel
+    ? `import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic({
   apiKey: "${key}",
   baseURL: "${host}",
 });
 await client.messages.create({
-  model: "claude-3.5-sonnet",
+  model: "${anthropicModel}",
   max_tokens: 1024,
   messages: [{ role: "user", content: "hi" }],
-});`,
+});`
+    : '',
 });
+
+// langTabsFor drops the Anthropic SDK tab when no routable (token-scoped)
+// model speaks the anthropic wire — showing a tab whose snippet embeds
+// "model":"undefined" would be worse than not offering it.
+const ALL_LANG_TABS = [
+  ['curl', 'cURL'],
+  ['python', 'Python'],
+  ['node', 'Node.js'],
+  ['anthropic', 'Anthropic SDK'],
+];
+const langTabsFor = (anthropicModel) =>
+  anthropicModel
+    ? ALL_LANG_TABS
+    : ALL_LANG_TABS.filter(([k]) => k !== 'anthropic');
 
 // ─── Create token modal ───────────────────────────────────────────────────────
 
@@ -530,13 +560,6 @@ const InlineEdit = ({ value, onSave, onCancel }) => {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-const LANG_TABS = [
-  ['curl', 'cURL'],
-  ['python', 'Python'],
-  ['node', 'Node.js'],
-  ['anthropic', 'Anthropic SDK'],
-];
-
 const HFToken = () => {
   const navigate = useNavigate();
   const tenantSlug = useTenantSlug();
@@ -583,6 +606,45 @@ const HFToken = () => {
   }, [fetchTokens, tenantSlug]);
 
   const token = tokens[sel];
+
+  // Routing truth for this tenant (L1, cycle-11) — the snippet panel and
+  // the Anthropic tab's visibility are built from this, narrowed to the
+  // SELECTED token's own model_limits (intersectTokenLimits), never a
+  // literal model name.
+  const {
+    items: routableModels,
+    resolved: routableModelsResolved,
+    error: routableModelsError,
+  } = useRoutableModels(tenantSlug);
+  const tokenModelCandidates = intersectTokenLimits(routableModels, token);
+  const snippetOpenaiModel =
+    firstRoutableModel(tokenModelCandidates, WIRE_OPENAI)?.id ||
+    tokenModelCandidates[0]?.id;
+  const snippetAnthropicModel = firstRoutableModel(
+    tokenModelCandidates,
+    WIRE_ANTHROPIC,
+  )?.id;
+  // Three states, not two: `!routableModelsResolved` is "haven't asked yet
+  // / still in flight" (render nothing definitive — see
+  // useRoutableModels.js's own comment on `resolved`), a fetch error is
+  // "could not ask" (not proof the token has nothing to route), and only
+  // resolved-without-error-and-empty is the honest "genuinely zero"
+  // snippet_no_models state below.
+  const snippetsLoadFailed = routableModelsResolved && !!routableModelsError;
+  const noSnippetModels =
+    routableModelsResolved &&
+    !routableModelsError &&
+    tokenModelCandidates.length === 0;
+
+  // The Anthropic tab can disappear out from under the current selection
+  // (a routable-list change, or switching to a token whose model_limits
+  // exclude every anthropic-wire model) — fall back to curl rather than
+  // leaving `lang` pointed at a tab that no longer renders.
+  useEffect(() => {
+    if (lang === 'anthropic' && !snippetAnthropicModel) {
+      setLang('curl');
+    }
+  }, [lang, snippetAnthropicModel]);
 
   // ── Computed summary ──────────────────────────────────────────────────────
 
@@ -856,7 +918,10 @@ const HFToken = () => {
     [relayHost],
   );
 
-  const snippetMap = buildSnippets(rotatedKey(token) || 'YOUR_KEY', relayHost);
+  const snippetMap = buildSnippets(rotatedKey(token) || 'YOUR_KEY', relayHost, {
+    openaiModel: snippetOpenaiModel,
+    anthropicModel: snippetAnthropicModel,
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1325,64 +1390,104 @@ const HFToken = () => {
                 </div>
               </div>
 
-              {/* Code snippets */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 0,
-                  marginTop: 22,
-                  borderBottom: '1px solid var(--hf-rule)',
-                }}
-              >
-                {LANG_TABS.map(([k, l]) => (
-                  <button
-                    key={k}
-                    type='button'
-                    onClick={() => setLang(k)}
+              {/* Code snippets — three states, in order: still resolving
+                  (render nothing definitive), the fetch failed (a distinct
+                  message from "genuinely zero", see the comment above
+                  snippetsLoadFailed), and the honest empty state. */}
+              {!routableModelsResolved ? null : snippetsLoadFailed ? (
+                <div
+                  data-testid='token-snippets-load-failed'
+                  className='muted'
+                  style={{
+                    marginTop: 22,
+                    padding: 18,
+                    fontSize: 12,
+                    border: '1px solid var(--hf-rule)',
+                  }}
+                >
+                  {tr(
+                    'console.token.snippets_load_failed',
+                    'Could not check which models this token can route — try refreshing.',
+                  )}
+                </div>
+              ) : noSnippetModels ? (
+                <div
+                  data-testid='token-snippet-no-models'
+                  className='muted'
+                  style={{
+                    marginTop: 22,
+                    padding: 18,
+                    fontSize: 12,
+                    border: '1px solid var(--hf-rule)',
+                  }}
+                >
+                  {tr(
+                    'console.token.snippet_no_models',
+                    'No models are routable for this token yet.',
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div
                     style={{
-                      padding: '10px 16px',
-                      border: 0,
-                      background: 'transparent',
-                      cursor: 'pointer',
-                      fontFamily: 'var(--hf-mono)',
-                      fontSize: 11,
-                      color: lang === k ? 'var(--hf-ink)' : 'var(--hf-ink-3)',
-                      borderBottom:
-                        lang === k
-                          ? '2px solid var(--hf-accent)'
-                          : '2px solid transparent',
-                      marginBottom: -1,
+                      display: 'flex',
+                      gap: 0,
+                      marginTop: 22,
+                      borderBottom: '1px solid var(--hf-rule)',
                     }}
                   >
-                    {l}
-                  </button>
-                ))}
-                <span style={{ flex: 1 }} />
-                <button
-                  type='button'
-                  className='btn ghost sm'
-                  style={{ alignSelf: 'center' }}
-                  onClick={() => copy(snippetMap[lang])}
-                >
-                  {tr('console.common.copy', 'copy')} ⧉
-                </button>
-              </div>
-              <pre
-                className='mono'
-                style={{
-                  margin: 0,
-                  padding: 18,
-                  fontSize: 11,
-                  background: 'var(--hf-paper)',
-                  border: '1px solid var(--hf-rule)',
-                  borderTop: 0,
-                  color: 'var(--hf-ink-2)',
-                  whiteSpace: 'pre',
-                  overflow: 'auto',
-                }}
-              >
-                {snippetMap[lang]}
-              </pre>
+                    {langTabsFor(snippetAnthropicModel).map(([k, l]) => (
+                      <button
+                        key={k}
+                        type='button'
+                        onClick={() => setLang(k)}
+                        style={{
+                          padding: '10px 16px',
+                          border: 0,
+                          background: 'transparent',
+                          cursor: 'pointer',
+                          fontFamily: 'var(--hf-mono)',
+                          fontSize: 11,
+                          color:
+                            lang === k ? 'var(--hf-ink)' : 'var(--hf-ink-3)',
+                          borderBottom:
+                            lang === k
+                              ? '2px solid var(--hf-accent)'
+                              : '2px solid transparent',
+                          marginBottom: -1,
+                        }}
+                      >
+                        {l}
+                      </button>
+                    ))}
+                    <span style={{ flex: 1 }} />
+                    <button
+                      type='button'
+                      className='btn ghost sm'
+                      style={{ alignSelf: 'center' }}
+                      onClick={() => copy(snippetMap[lang])}
+                    >
+                      {tr('console.common.copy', 'copy')} ⧉
+                    </button>
+                  </div>
+                  <pre
+                    className='mono'
+                    style={{
+                      margin: 0,
+                      padding: 18,
+                      fontSize: 11,
+                      background: 'var(--hf-paper)',
+                      border: '1px solid var(--hf-rule)',
+                      borderTop: 0,
+                      color: 'var(--hf-ink-2)',
+                      whiteSpace: 'pre',
+                      overflow: 'auto',
+                    }}
+                  >
+                    {snippetMap[lang]}
+                  </pre>
+                </>
+              )}
 
               {/* Settings */}
               <div className='lbl' style={{ marginTop: 24, marginBottom: 8 }}>
