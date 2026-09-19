@@ -27,6 +27,7 @@ import React, { useContext, useEffect, useState } from 'react';
 import { useIsMobile } from '../../hooks/common/useIsMobile';
 import { useSidebarCollapsed } from '../../hooks/common/useSidebarCollapsed';
 import { useTranslation } from 'react-i18next';
+import { isPublishedLanguage } from '../../i18n/published';
 import {
   API,
   getLogo,
@@ -117,8 +118,13 @@ const PageLayout = () => {
         linkElement.href = logo;
       }
     }
+    // Only replay a language this build ships. A single ?lng=ja visit used to
+    // park that tag in localStorage for good, and replaying it leaves
+    // i18n.language on 'ja' while every string resolves through the fallback —
+    // English copy with no entry highlighted in the picker. supportedLngs makes
+    // the strings right on its own; this keeps i18n.language honest too.
     const savedLang = localStorage.getItem('i18nextLng');
-    if (savedLang) {
+    if (savedLang && isPublishedLanguage(savedLang)) {
       i18n.changeLanguage(savedLang);
     }
   }, [i18n]);

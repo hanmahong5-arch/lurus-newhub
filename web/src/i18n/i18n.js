@@ -22,11 +22,13 @@ import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 
 import enTranslation from './locales/en.json';
-import frTranslation from './locales/fr.json';
 import zhTranslation from './locales/zh.json';
-import ruTranslation from './locales/ru.json';
-import jaTranslation from './locales/ja.json';
-import viTranslation from './locales/vi.json';
+import { PUBLISHED_LANGUAGES } from './published';
+
+// Re-exported so that './i18n' stays the one import path a reader reaches for.
+// The definitions live in ./published because that module has no imports, and
+// callers which only need the list must not pull i18next in with it.
+export { PUBLISHED_LANGUAGES, isPublishedLanguage } from './published';
 
 i18n
   .use(LanguageDetector)
@@ -36,12 +38,22 @@ i18n
     resources: {
       en: enTranslation,
       zh: zhTranslation,
-      fr: frTranslation,
-      ru: ruTranslation,
-      ja: jaTranslation,
-      vi: viTranslation,
     },
-    fallbackLng: 'zh',
+    supportedLngs: PUBLISHED_LANGUAGES,
+    // Redundant while load: 'languageOnly' is set — i18next 23 ORs the two in
+    // LanguageUtils.isSupportedCode (node_modules/i18next/dist/cjs/i18next.js:923)
+    // — and kept so that dropping 'languageOnly' cannot silently make zh-CN an
+    // unsupported code.
+    nonExplicitSupportedLngs: true,
+    // Per-language, not a blanket 'en'. A t() key written as its own Chinese
+    // source text renders correct Chinese by resolving to itself when zh.json
+    // omits it; en.json carries 254 keys zh.json does not (measured on this
+    // branch), and a zh -> en fallback would answer those lookups with English
+    // for a Chinese operator. An empty array is a fallback list, so
+    // getFallbackCodes returns it instead of reaching `default`
+    // (i18next.js:952-964: exact code, script part, formatted code, language
+    // part, then default — there is no wildcard form).
+    fallbackLng: { zh: [], default: ['en'] },
     nsSeparator: false,
     interpolation: {
       escapeValue: false,

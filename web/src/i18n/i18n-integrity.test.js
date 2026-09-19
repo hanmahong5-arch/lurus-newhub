@@ -21,10 +21,15 @@ For commercial licensing, please contact support@quantumnous.com
  * i18n integrity gate.
  *
  * This project keys translations by their Chinese source text: t('保存设置').
- * i18n.js sets fallbackLng: 'zh', so a key that en.json does not carry resolves
- * to the key itself — i.e. an operator running the console in English is shown
- * Chinese. Nothing else in the suite notices, because every unit test renders
- * a component whose strings happen to be present.
+ * A key that en.json does not carry resolves to the key itself — i.e. an
+ * operator running the console in English is shown Chinese. Nothing else in
+ * the suite notices, because every unit test renders a component whose strings
+ * happen to be present.
+ *
+ * That is true of i18n.js both before and after the fallback change: it used
+ * to route en through fallbackLng: 'zh' and now gives zh no fallback at all
+ * (see the comment on fallbackLng there), and either way the string an
+ * English-locale operator reads for a missing key is Chinese.
  *
  * These three assertions are what catch that class. Each was red before the
  * change that introduced this file: 128 unresolvable keys, 15 escaped strings
@@ -71,20 +76,30 @@ const CLEANED = new Map(
   FILES.map((f) => [f, stripComments(fs.readFileSync(f, 'utf8'))]),
 );
 
-// t('…') / i18next.t('…'), first argument only, allowed to sit on its own line.
+// t('…') / i18next.t('…') / tr('…'), first argument only, allowed to sit on
+// its own line.
 // The body may contain the OTHER quote character — several keys embed a quoted
 // name, e.g. t('确定要删除供应商 "{{name}}" 吗？') — so the class excludes only
 // the delimiter itself. Excluding both quotes truncates such a key mid-string
 // and then reports the call as untranslated.
-const T_CALL = /\bt\(\s*(['"])((?:(?!\1)[^\\]|\\.)*?)\1/gs;
+//
+// Why two names and not more: collecting every `useTranslation(` call site
+// under src and grouping the destructuring forms yields two that bind the
+// translate function — a plain `{ t }` (with or without i18n alongside) and
+// `{ t: tr }`. Nothing binds a third name. The rename is the v2 console's:
+// measured on this branch, 46 `{ t: tr }` sites across 29 files, every one of
+// them under pages/v2 or components/hifi, where `t` is already taken by a
+// token loop variable. Scanning for `t(` alone left those 46 sites unaudited,
+// and two of their keys were in fact missing from en.json.
+const T_CALL = /\b(?:tr|t)\(\s*(['"])((?:(?!\1)[^\\]|\\.)*?)\1/gs;
 // Backticks included: a template literal is just as visible on screen as a
 // quoted one, and four notifiers were built that way.
 const LITERAL = /(['"`])((?:[^\\]|\\.)*?)\1/gs;
 
-// t(`…`). A template literal handed to t() becomes its own key after
+// t(`…`) / tr(`…`). A template literal handed to t() becomes its own key after
 // interpolation — '成功删除 3 个模型' — which no bundle can contain, so the call
 // renders Chinese in every locale while looking translated. Five existed.
-const T_TEMPLATE = /\bt\(\s*`((?:[^`\\]|\\.)*)`/gs;
+const T_TEMPLATE = /\b(?:tr|t)\(\s*`((?:[^`\\]|\\.)*)`/gs;
 
 /**
  * Blank out the key of every t() call, keeping length so offsets still map to
@@ -175,12 +190,19 @@ function notifierSpans(src) {
 
 /*
  * The language picker names each language in its own language: 中文 stays 中文
- * for a French operator, exactly as Français stays Français for a Chinese one.
- * These are the only Chinese strings in the markup that are correct as they
- * stand, so they are exempted by VALUE — Chinese appearing anywhere else, in
- * this file included, still fails.
+ * for an English operator, exactly as English stays English for a Chinese one.
+ * That is Chinese in the markup which is correct as it stands, so it is
+ * exempted by VALUE — Chinese appearing anywhere else, in this file included,
+ * still fails.
+ *
+ * 日本語 sat here too while the picker offered ja. The picker offers the
+ * languages i18n.js registers and ja is not one of them, so the exemption is
+ * gone: `grep -rn 日本語 src --include=*.jsx --include=*.js` outside .test.
+ * files returns nothing to exempt, and 日本語 appearing in markup from here on
+ * fails like any other Chinese string — which is the honest state for a
+ * language this build does not ship.
  */
-const LANGUAGE_ENDONYMS = new Set(['中文', '日本語']);
+const LANGUAGE_ENDONYMS = new Set(['中文']);
 
 describe('i18n integrity', () => {
   it('every Chinese t() key in the source resolves in en.json', () => {
@@ -328,9 +350,10 @@ describe('i18n integrity', () => {
    * (t('console.playground.no_models', 'no models available')), because the
    * key itself carries no Han characters to trigger the check. For that
    * family, an English key silently missing while zh.json still carries it
-   * would fall back through fallbackLng: 'zh' and show Chinese on the
-   * English console with no red test anywhere. This closes that gap for the
-   * `console.*` namespace specifically (0 violations on HEAD).
+   * puts the raw identifier — `console.playground.no_models` — on the English
+   * console, or the Chinese string when the call passes no default, with no
+   * red test anywhere. This closes that gap for the `console.*` namespace
+   * specifically (0 violations on HEAD).
    */
   it('every console.* key present in zh.json also resolves in en.json', () => {
     const flatten = (obj, prefix, out) => {
@@ -356,34 +379,25 @@ describe('i18n integrity', () => {
     );
     expect(
       missing,
-      `These console.* keys exist in zh.json but not en.json. Under ` +
-        `fallbackLng: 'zh' an English-locale operator sees Chinese for each:\n  ` +
+      `These console.* keys exist in zh.json but not en.json. An ` +
+        `English-locale operator reads the identifier, or the Chinese, for ` +
+        `each:\n  ` +
         missing.join('\n  '),
     ).toEqual([]);
   });
 
   /*
-   * fr / ja / ru / vi are upstream leftovers, already ~600 keys behind the
-   * union of all locales. Bringing them to parity is not what makes the
-   * console launchable — en is the fallback every non-Chinese operator
-   * actually lands on — but they must not slide further. This is a ratchet,
-   * not a target: lower the number when a locale improves, never raise it.
+   * What used to be here: a per-locale ceiling on untranslated keys for
+   * fr / ja / ru / vi (221 / 221 / 221 / 217), ratcheting four bundles that
+   * i18n.js registered.
+   *
+   * i18n.js no longer registers them, so those numbers measured files no
+   * browser could reach — a ratchet on a shelf. Which languages ship, and the
+   * ratio each shipped bundle has to clear, is one question and it now has one
+   * owner: locale-coverage.test.js. Re-registering fr there without finishing
+   * the translation is what turns red, which is the condition this ceiling was
+   * standing in for.
+   *
+   * The files themselves stay in the tree; the same test pins that too.
    */
-  it.each([
-    ['fr', 221],
-    ['ja', 221],
-    ['ru', 221],
-    ['vi', 217],
-  ])('%s carries no more than %i untranslated keys', async (lng, ceiling) => {
-    const bundle = (await import(`./locales/${lng}.json`)).default.translation;
-    const keys = new Set();
-    for (const src of CLEANED.values()) {
-      let m;
-      T_CALL.lastIndex = 0;
-      while ((m = T_CALL.exec(src)))
-        if (HAN.test(m[2])) keys.add(unescapeLiteral(m[2]));
-    }
-    const missing = [...keys].filter((k) => !resolves(bundle, k));
-    expect(missing.length).toBeLessThanOrEqual(ceiling);
-  });
 });

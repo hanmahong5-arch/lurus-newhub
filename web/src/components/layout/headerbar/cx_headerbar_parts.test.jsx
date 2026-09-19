@@ -116,6 +116,10 @@ const flag = vi.hoisted(
   () => (name) => () =>
     React.createElement('i', { 'data-testid': `flag-${name}` }),
 );
+// The retired flags stay in the mock on purpose: were the module to export
+// only the two the component imports, re-adding a <FR …/> entry would fail to
+// render for the wrong reason (an undefined element) instead of tripping the
+// assertion below that says which languages the picker offers.
 vi.mock('country-flag-icons/react/3x2', () => ({
   CN: flag('CN'),
   GB: flag('GB'),
@@ -682,7 +686,13 @@ describe('ThemeToggle', () => {
 });
 
 describe('LanguageSelector', () => {
-  it('offers every supported language with its flag', () => {
+  // The picker offers the languages i18n.js registers — zh and en. fr / ja /
+  // ru / vi were offered here while their bundles carried 58% of en.json, so
+  // choosing one produced a console that was two fifths Chinese; the menu is
+  // the surface that made those bundles reachable, hence the negative half of
+  // this assertion. src/i18n/locale-coverage.test.js is the gate that compares
+  // this file's list against the registered set.
+  it('offers the shipped languages with their flags, and no others', () => {
     render(
       React.createElement(LanguageSelector, {
         currentLang: 'en',
@@ -690,21 +700,23 @@ describe('LanguageSelector', () => {
         t,
       }),
     );
-    ['中文', 'English', 'Français', '日本語', 'Русский', 'Tiếng Việt'].forEach(
-      (label) => expect(screen.getByText(label)).toBeInTheDocument(),
+    ['中文', 'English'].forEach((label) =>
+      expect(screen.getByText(label)).toBeInTheDocument(),
     );
-    ['CN', 'GB', 'FR', 'JP', 'RU', 'VN'].forEach((code) =>
+    ['CN', 'GB'].forEach((code) =>
       expect(screen.getByTestId(`flag-${code}`)).toBeInTheDocument(),
+    );
+    ['Français', '日本語', 'Русский', 'Tiếng Việt'].forEach((label) =>
+      expect(screen.queryByText(label)).toBeNull(),
+    );
+    ['FR', 'JP', 'RU', 'VN'].forEach((code) =>
+      expect(screen.queryByTestId(`flag-${code}`)).toBeNull(),
     );
   });
 
   it.each([
     ['中文', 'zh'],
     ['English', 'en'],
-    ['Français', 'fr'],
-    ['日本語', 'ja'],
-    ['Русский', 'ru'],
-    ['Tiếng Việt', 'vi'],
   ])('switches to %s using the code %s', (label, code) => {
     const onLanguageChange = vi.fn();
     render(
@@ -721,14 +733,14 @@ describe('LanguageSelector', () => {
   it('highlights exactly the active language', () => {
     render(
       React.createElement(LanguageSelector, {
-        currentLang: 'ja',
+        currentLang: 'en',
         onLanguageChange: vi.fn(),
         t,
       }),
     );
     const item = (label) =>
       screen.getByText(label).closest('[role="menuitem"]');
-    expect(item('日本語').className).toContain('font-semibold');
+    expect(item('English').className).toContain('font-semibold');
     expect(item('中文').className).not.toContain('font-semibold');
   });
 });
