@@ -19,7 +19,10 @@ import (
 
 func GetOptions(c *gin.Context) {
 	var options []*repo.Option
-	common.OptionMapRWMutex.Lock()
+	// Read lock: this iteration only reads OptionMap, and taking the write
+	// lock made every concurrent admin console load serialise against the
+	// option-sync tick and against each other.
+	common.OptionMapRWMutex.RLock()
 	for k, v := range common.OptionMap {
 		if strings.HasSuffix(k, "Token") ||
 			strings.HasSuffix(k, "Secret") ||
@@ -33,7 +36,7 @@ func GetOptions(c *gin.Context) {
 			Value: common.Interface2String(v),
 		})
 	}
-	common.OptionMapRWMutex.Unlock()
+	common.OptionMapRWMutex.RUnlock()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

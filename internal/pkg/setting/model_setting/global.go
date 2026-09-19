@@ -28,6 +28,9 @@ func init() {
 	config.GlobalConfig.Register("global", &globalSettings)
 }
 
+// GetGlobalSettings returns the live registered object — see the note on
+// GetGeminiSettings; ShouldPreserveThinkingSuffix below is the accessor that
+// takes the configuration read lock.
 func GetGlobalSettings() *GlobalSettings {
 	return &globalSettings
 }
@@ -38,6 +41,9 @@ func ShouldPreserveThinkingSuffix(modelName string) bool {
 	if target == "" {
 		return false
 	}
+
+	config.RLock()
+	defer config.RUnlock()
 
 	for _, entry := range globalSettings.ThinkingModelBlacklist {
 		if strings.TrimSpace(entry) == target {

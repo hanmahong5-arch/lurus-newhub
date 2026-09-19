@@ -34,9 +34,26 @@ var defaultGroupSpecialUsableGroup = map[string]map[string]string{
 	},
 }
 
+// GroupRatioSetting is the hierarchical config registered under
+// "group_ratio_setting".
+//
+// It used to also carry `group_ratio` and `group_group_ratio` fields holding
+// the very same map objects as the package variables below, which gave the
+// group multipliers — a price — a second write path: the config manager's
+// reflect writer, reached by PUT /api/option with key
+// "group_ratio_setting.group_ratio". That path took none of the mutexes the
+// accessors here take and skipped CheckGroupRatio's non-negative validation.
+// The canonical keys "GroupRatio" and "GroupGroupRatio" (repo/option.go's
+// dispatch, which routes to UpdateGroupRatioByJSONString /
+// UpdateGroupGroupRatioByJSONString) are the write path that remains, and
+// repo.updateOptionMap rejects the two retired hierarchical spellings listed
+// in its retiredOptionKeys.
+//
+// group_special_usable_group stays: it is the field the console writes
+// (web/src/pages/Setting/Ratio/GroupRatioSettings.jsx:197 and
+// web/src/components/settings/RatioSetting.jsx:58), and it is a types.RWMap,
+// which carries its own lock.
 type GroupRatioSetting struct {
-	GroupRatio              map[string]float64                      `json:"group_ratio"`
-	GroupGroupRatio         map[string]map[string]float64           `json:"group_group_ratio"`
 	GroupSpecialUsableGroup *types.RWMap[string, map[string]string] `json:"group_special_usable_group"`
 }
 
@@ -48,8 +65,6 @@ func init() {
 
 	groupRatioSetting = GroupRatioSetting{
 		GroupSpecialUsableGroup: groupSpecialUsableGroup,
-		GroupRatio:              groupRatio,
-		GroupGroupRatio:         GroupGroupRatio,
 	}
 
 	config.GlobalConfig.Register("group_ratio_setting", &groupRatioSetting)

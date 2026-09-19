@@ -42,13 +42,21 @@ func init() {
 	config.GlobalConfig.Register("gemini", &geminiSettings)
 }
 
-// GetGeminiSettings 获取Gemini配置
+// GetGeminiSettings 获取Gemini配置。
+//
+// Returns the live registered object, which is what the option-sync tick
+// republishes: reading a field off it is a read of shared state. Callers on a
+// relay request path use the three accessors below instead — they take the
+// configuration read lock so their read is ordered against that tick.
 func GetGeminiSettings() *GeminiSettings {
 	return &geminiSettings
 }
 
 // GetGeminiSafetySetting 获取安全设置
 func GetGeminiSafetySetting(key string) string {
+	config.RLock()
+	defer config.RUnlock()
+
 	if value, ok := geminiSettings.SafetySettings[key]; ok {
 		return value
 	}
@@ -57,6 +65,9 @@ func GetGeminiSafetySetting(key string) string {
 
 // GetGeminiVersionSetting 获取版本设置
 func GetGeminiVersionSetting(key string) string {
+	config.RLock()
+	defer config.RUnlock()
+
 	if value, ok := geminiSettings.VersionSettings[key]; ok {
 		return value
 	}
@@ -64,6 +75,9 @@ func GetGeminiVersionSetting(key string) string {
 }
 
 func IsGeminiModelSupportImagine(model string) bool {
+	config.RLock()
+	defer config.RUnlock()
+
 	for _, v := range geminiSettings.SupportedImagineModels {
 		if v == model {
 			return true

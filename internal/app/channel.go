@@ -125,7 +125,10 @@ func ShouldDisableChannel(channelType int, err *types.NewAPIError) bool {
 	}
 
 	lowerMessage := strings.ToLower(err.Error())
-	search, _ := AcSearch(lowerMessage, operation_setting.AutomaticDisableKeywords, true)
+	// One snapshot for the whole classification: the keyword list is
+	// republished on every option-sync tick, and a channel that is failing
+	// during that window is exactly when this runs.
+	search, _ := AcSearch(lowerMessage, operation_setting.AutomaticDisableKeywordsSnapshot(), true)
 	return search
 }
 

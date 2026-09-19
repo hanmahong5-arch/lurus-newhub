@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -15,6 +17,44 @@ type ConfigManager struct {
 	configs map[string]interface{}
 	mutex   sync.RWMutex
 }
+
+// fieldMu guards the fields of the structs registered through Register —
+// cm.mutex only guards the registry map itself, which says nothing about the
+// objects in it.
+//
+// The registered structs are live: relay goroutines read them per request
+// (model_setting.GetGeminiSafetySetting, ClaudeSettings.WriteHeaders,
+// GetGlobalSettings().PassThroughRequestEnabled, the fetch_setting SSRF
+// lists), while the option-sync tick rewrites them every SYNC_FREQUENCY
+// seconds from the options table. Writers take fieldMu for writing and
+// publish freshly decoded values (see applyConfigMap); readers that must be
+// race-free take it for reading through RLock/RUnlock.
+//
+// Lock order where both are held: cm.mutex first, then fieldMu (LoadFromDB,
+// SaveToDB and ExportAllConfigs are the three places that hold both).
+var fieldMu sync.RWMutex
+
+// RLock acquires the configuration read lock. Accessors in the setting
+// subpackages that a relay goroutine calls use it so their reads are ordered
+// against the option-sync tick's writes; it is exported because those
+// accessors live in other packages (model_setting, system_setting).
+// Every RLock must be paired with an RUnlock, and nothing that holds it may
+// call back into a function that writes configuration.
+func RLock() { fieldMu.RLock() }
+
+// RUnlock releases the configuration read lock taken by RLock.
+func RUnlock() { fieldMu.RUnlock() }
+
+// Lock acquires the configuration write lock. It is for a setting package
+// publishing a replacement value into its own registered struct — the
+// copy-on-write rule still holds, so the caller assigns a freshly built
+// map/slice rather than writing into the one already published.
+// model_setting.GetClaudeSettings's missing-"default" repair is the one caller
+// today (`grep -rn "config.Lock()" --include=*.go .`).
+func Lock() { fieldMu.Lock() }
+
+// Unlock releases the configuration write lock taken by Lock.
+func Unlock() { fieldMu.Unlock() }
 
 var GlobalConfig = NewConfigManager()
 
@@ -57,7 +97,10 @@ func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 
 		// 如果找到配置项，则更新配置
 		if len(configMap) > 0 {
-			if err := updateConfigFromMap(config, configMap); err != nil {
+			// The parseable fields of this module are applied either way;
+			// applyConfigMap reports the ones that were not, which are left at
+			// their previous values instead of being zeroed.
+			if err := applyConfigMap(config, configMap); err != nil {
 				common.SysError("failed to update config " + name + ": " + err.Error())
 				continue
 			}
@@ -90,7 +133,15 @@ func (cm *ConfigManager) SaveToDB(updateFunc func(key, value string) error) erro
 }
 
 // 辅助函数：将配置对象转换为map
+//
+// Reads the same live fields applyConfigMap writes, so it takes the read lock:
+// without it, serialising a registered config for /api/option while the
+// option-sync tick republishes it is the same unguarded read the accessors
+// were fixed to stop doing.
 func configToMap(config interface{}) (map[string]string, error) {
+	fieldMu.RLock()
+	defer fieldMu.RUnlock()
+
 	result := make(map[string]string)
 
 	val := reflect.ValueOf(config)
@@ -161,10 +212,32 @@ func configToMap(config interface{}) (map[string]string, error) {
 	return result, nil
 }
 
-// 辅助函数：从map更新配置对象
-func updateConfigFromMap(config interface{}, configMap map[string]string) error {
+// applyConfigMap 从 map 更新配置对象，采用 copy-on-write。
+//
+// Two properties this function is responsible for, both of them reachable
+// from a single admin edit or from any option-sync tick:
+//
+//  1. It does not write into a map, slice or pointee that has already been
+//     published: each value is decoded into a fresh allocation and then
+//     published with one Set. encoding/json, handed the address of a live
+//     field, merges into an existing map and re-appends into an existing
+//     slice's backing array — so a reader ranging over the map met the
+//     runtime's unrecoverable "concurrent map read and map write", and a
+//     reader holding the slice header evaluated a mixture of the old and new
+//     lists that nobody had published (the SSRF domain list is read exactly
+//     that way, app/ssrf_guard.go).
+//
+//  2. A value that does not parse leaves its field at the previous value and
+//     is reported, instead of being skipped silently. The fields that do
+//     parse are still applied — one bad key in a module must not block the
+//     rest of that module's settings.
+//
+// The decode phase touches nothing; the publish phase takes fieldMu once for
+// the whole struct, so a reader under RLock sees this update's fields together
+// rather than interleaved with its own read.
+func applyConfigMap(config interface{}, configMap map[string]string) error {
 	val := reflect.ValueOf(config)
-	if val.Kind() != reflect.Pointer {
+	if val.Kind() != reflect.Pointer || val.IsNil() {
 		return nil
 	}
 	val = val.Elem()
@@ -172,6 +245,16 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 	if val.Kind() != reflect.Struct {
 		return nil
 	}
+
+	type pendingField struct {
+		index int
+		value reflect.Value
+	}
+
+	var (
+		pending []pendingField
+		errs    []error
+	)
 
 	typ := val.Type()
 	for i := 0; i < val.NumField(); i++ {
@@ -200,58 +283,84 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 			continue
 		}
 
-		switch field.Kind() {
-		case reflect.String:
-			field.SetString(strValue)
-		case reflect.Bool:
-			boolValue, err := strconv.ParseBool(strValue)
-			if err != nil {
-				continue
-			}
-			field.SetBool(boolValue)
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			intValue, err := strconv.ParseInt(strValue, 10, 64)
-			if err != nil {
-				continue
-			}
-			field.SetInt(intValue)
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			uintValue, err := strconv.ParseUint(strValue, 10, 64)
-			if err != nil {
-				continue
-			}
-			field.SetUint(uintValue)
-		case reflect.Float32, reflect.Float64:
-			floatValue, err := strconv.ParseFloat(strValue, 64)
-			if err != nil {
-				continue
-			}
-			field.SetFloat(floatValue)
-		case reflect.Pointer:
-			// 处理指针类型
-			if strValue == "null" {
-				field.Set(reflect.Zero(field.Type()))
-			} else {
-				// 如果指针是 nil，需要先初始化
-				if field.IsNil() {
-					field.Set(reflect.New(field.Type().Elem()))
-				}
-				// 反序列化到指针指向的值
-				err := json.Unmarshal([]byte(strValue), field.Interface())
-				if err != nil {
-					continue
-				}
-			}
-		case reflect.Map, reflect.Slice, reflect.Struct:
-			// 复杂类型使用JSON反序列化
-			err := json.Unmarshal([]byte(strValue), field.Addr().Interface())
-			if err != nil {
-				continue
-			}
+		next, err := decodeConfigValue(field.Type(), strValue)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", key, err))
+			continue
 		}
+		if !next.IsValid() {
+			// 不支持的字段类型：与旧实现一致，静默跳过
+			continue
+		}
+		pending = append(pending, pendingField{index: i, value: next})
 	}
 
-	return nil
+	if len(pending) > 0 {
+		fieldMu.Lock()
+		for _, p := range pending {
+			val.Field(p.index).Set(p.value)
+		}
+		fieldMu.Unlock()
+	}
+
+	return errors.Join(errs...)
+}
+
+// decodeConfigValue turns one stored string into a freshly allocated value of
+// type t. An invalid reflect.Value with a nil error means "this kind is not
+// supported, leave the field alone"; a non-nil error means the value was
+// meant for this field and could not be parsed.
+func decodeConfigValue(t reflect.Type, strValue string) (reflect.Value, error) {
+	out := reflect.New(t).Elem()
+
+	switch t.Kind() {
+	case reflect.String:
+		out.SetString(strValue)
+	case reflect.Bool:
+		boolValue, err := strconv.ParseBool(strValue)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out.SetBool(boolValue)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		intValue, err := strconv.ParseInt(strValue, 10, 64)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out.SetInt(intValue)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		uintValue, err := strconv.ParseUint(strValue, 10, 64)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out.SetUint(uintValue)
+	case reflect.Float32, reflect.Float64:
+		floatValue, err := strconv.ParseFloat(strValue, 64)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out.SetFloat(floatValue)
+	case reflect.Pointer:
+		// "null" 表示清空指针字段
+		if strValue == "null" {
+			return reflect.Zero(t), nil
+		}
+		fresh := reflect.New(t.Elem())
+		if err := json.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
+			return reflect.Value{}, err
+		}
+		return fresh, nil
+	case reflect.Map, reflect.Slice, reflect.Struct:
+		// 复杂类型使用JSON反序列化到全新对象（copy-on-write 的关键）
+		if err := json.Unmarshal([]byte(strValue), out.Addr().Interface()); err != nil {
+			return reflect.Value{}, err
+		}
+	default:
+		// 跳过不支持的类型
+		return reflect.Value{}, nil
+	}
+
+	return out, nil
 }
 
 // ConfigToMap 将配置对象转换为map（导出函数）
@@ -259,9 +368,29 @@ func ConfigToMap(config interface{}) (map[string]string, error) {
 	return configToMap(config)
 }
 
-// UpdateConfigFromMap 从map更新配置对象（导出函数）
+// UpdateConfigFromMap 从map更新配置对象（导出函数）。
+//
+// It applies every field it can parse and returns nil for the ones it cannot,
+// which are left at their previous values. That lenient contract is the one
+// this function had before copy-on-write, and it is pinned by
+// TestUpdateConfigFromMap_InvalidNumericSkipsField and
+// TestUpdateConfigFromMap_BoolParsingVariants
+// (cov_boot-settings_config_test.go); callers that need to know a value was
+// rejected — the admin option write path, repo/option.go's handleConfigUpdate
+// — call UpdateConfigFromMapStrict instead.
 func UpdateConfigFromMap(config interface{}, configMap map[string]string) error {
-	return updateConfigFromMap(config, configMap)
+	if err := applyConfigMap(config, configMap); err != nil {
+		common.SysError("config value rejected (previous value kept): " + err.Error())
+	}
+	return nil
+}
+
+// UpdateConfigFromMapStrict is UpdateConfigFromMap with the rejected fields
+// reported to the caller: the returned error joins one entry per key whose
+// stored value could not be parsed into its field. The fields that did parse
+// are applied either way, and a rejected field keeps the value it had.
+func UpdateConfigFromMapStrict(config interface{}, configMap map[string]string) error {
+	return applyConfigMap(config, configMap)
 }
 
 // ExportAllConfigs 导出所有已注册的配置为扁平结构

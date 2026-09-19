@@ -3,12 +3,14 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	entity "github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/config"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
@@ -330,28 +332,77 @@ func SetOptionMapValue(key, value string) error {
 	return updateOptionMap(key, value)
 }
 
+// optionInt parses an integer option value, and on failure keeps previous,
+// reports the key and returns an error for the caller to propagate. Zeroing a
+// setting because its stored string did not parse is how a blank admin field
+// used to switch a feature off silently; see metrics.OptionParseRejectedTotal.
+func optionInt(key, value string, previous int) (int, error) {
+	parsed, parseErr := strconv.Atoi(value)
+	if parseErr != nil {
+		reportOptionParseFailure(key, parseErr)
+		return previous, fmt.Errorf("option %s: %w", key, parseErr)
+	}
+	return parsed, nil
+}
+
+// optionFloat is optionInt for float options (the money-adjacent ones:
+// QuotaPerUnit, Price, USDExchangeRate, ChannelDisableThreshold,
+// ModelFallbackMarkup).
+func optionFloat(key, value string, previous float64) (float64, error) {
+	parsed, parseErr := strconv.ParseFloat(value, 64)
+	if parseErr != nil {
+		reportOptionParseFailure(key, parseErr)
+		return previous, fmt.Errorf("option %s: %w", key, parseErr)
+	}
+	return parsed, nil
+}
+
+// reportOptionParseFailure counts and logs one rejected value. The value
+// itself is not logged: option values include SMTP and OAuth secrets, and this
+// path is shared with them.
+func reportOptionParseFailure(key string, cause error) {
+	metrics.RecordOptionParseRejected(key)
+	common.SysError(fmt.Sprintf("option %q value rejected, previous value kept: %v", key, cause))
+}
+
+// retiredOptionKeys maps a hierarchical key that must no longer be written to
+// the canonical key that replaced it. The two group-ratio entries reached the
+// ratio maps through the config manager's reflect writer, bypassing both
+// ratio_setting's mutexes and CheckGroupRatio's validation; see the comment on
+// ratio_setting.GroupRatioSetting.
+var retiredOptionKeys = map[string]string{
+	"group_ratio_setting.group_ratio":       "GroupRatio",
+	"group_ratio_setting.group_group_ratio": "GroupGroupRatio",
+}
+
 func updateOptionMap(key string, value string) (err error) {
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
+	// OptionMap mirrors the options table, so it keeps the stored string even
+	// when the dispatch below rejects it: the row does exist with that value,
+	// and the divergence between it and the running value is what
+	// metrics.OptionParseRejectedTotal reports.
 	common.OptionMap[key] = value
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
-	if handleConfigUpdate(key, value) {
-		return nil // 已由配置系统处理
+	if handled, configErr := applyHierarchicalOption(key, value); handled {
+		return configErr // 已由配置系统处理
 	}
 
 	// 处理传统配置项...
 	if strings.HasSuffix(key, "Permission") {
-		intValue, _ := strconv.Atoi(value)
 		switch key {
 		case "FileUploadPermission":
-			common.FileUploadPermission = intValue
+			common.FileUploadPermission, err = optionInt(key, value, common.FileUploadPermission)
 		case "FileDownloadPermission":
-			common.FileDownloadPermission = intValue
+			common.FileDownloadPermission, err = optionInt(key, value, common.FileDownloadPermission)
 		case "ImageUploadPermission":
-			common.ImageUploadPermission = intValue
+			common.ImageUploadPermission, err = optionInt(key, value, common.ImageUploadPermission)
 		case "ImageDownloadPermission":
-			common.ImageDownloadPermission = intValue
+			common.ImageDownloadPermission, err = optionInt(key, value, common.ImageDownloadPermission)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	if strings.HasSuffix(key, "Enabled") || key == "DefaultCollapseSidebar" || key == "DefaultUseAutoGroup" {
@@ -443,8 +494,7 @@ func updateOptionMap(key string, value string) (err error) {
 	case "SMTPServer":
 		common.SMTPServer = value
 	case "SMTPPort":
-		intValue, _ := strconv.Atoi(value)
-		common.SMTPPort = intValue
+		common.SMTPPort, err = optionInt(key, value, common.SMTPPort)
 	case "SMTPAccount":
 		common.SMTPAccount = value
 	case "SMTPFrom":
@@ -462,9 +512,9 @@ func updateOptionMap(key string, value string) (err error) {
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
 	case "Price":
-		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
+		operation_setting.Price, err = optionFloat(key, value, operation_setting.Price)
 	case "USDExchangeRate":
-		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
+		operation_setting.USDExchangeRate, err = optionFloat(key, value, operation_setting.USDExchangeRate)
 	case "TopupGroupRatio":
 		err = common.UpdateTopupGroupRatioByJSONString(value)
 	case "GitHubClientId":
@@ -476,7 +526,7 @@ func updateOptionMap(key string, value string) (err error) {
 	case "LinuxDOClientSecret":
 		common.LinuxDOClientSecret = value
 	case "LinuxDOMinimumTrustLevel":
-		common.LinuxDOMinimumTrustLevel, _ = strconv.Atoi(value)
+		common.LinuxDOMinimumTrustLevel, err = optionInt(key, value, common.LinuxDOMinimumTrustLevel)
 	case "Footer":
 		common.Footer = value
 	case "SystemName":
@@ -498,27 +548,27 @@ func updateOptionMap(key string, value string) (err error) {
 	case "TurnstileSecretKey":
 		common.TurnstileSecretKey = value
 	case "QuotaForNewUser":
-		common.QuotaForNewUser, _ = strconv.Atoi(value)
+		common.QuotaForNewUser, err = optionInt(key, value, common.QuotaForNewUser)
 	case "QuotaForInviter":
-		common.QuotaForInviter, _ = strconv.Atoi(value)
+		common.QuotaForInviter, err = optionInt(key, value, common.QuotaForInviter)
 	case "QuotaForInvitee":
-		common.QuotaForInvitee, _ = strconv.Atoi(value)
+		common.QuotaForInvitee, err = optionInt(key, value, common.QuotaForInvitee)
 	case "QuotaRemindThreshold":
-		common.QuotaRemindThreshold, _ = strconv.Atoi(value)
+		common.QuotaRemindThreshold, err = optionInt(key, value, common.QuotaRemindThreshold)
 	case "PreConsumedQuota":
-		common.PreConsumedQuota, _ = strconv.Atoi(value)
+		common.PreConsumedQuota, err = optionInt(key, value, common.PreConsumedQuota)
 	case "ModelRequestRateLimitCount":
-		setting.ModelRequestRateLimitCount, _ = strconv.Atoi(value)
+		setting.ModelRequestRateLimitCount, err = optionInt(key, value, setting.ModelRequestRateLimitCount)
 	case "ModelRequestRateLimitDurationMinutes":
-		setting.ModelRequestRateLimitDurationMinutes, _ = strconv.Atoi(value)
+		setting.ModelRequestRateLimitDurationMinutes, err = optionInt(key, value, setting.ModelRequestRateLimitDurationMinutes)
 	case "ModelRequestRateLimitSuccessCount":
-		setting.ModelRequestRateLimitSuccessCount, _ = strconv.Atoi(value)
+		setting.ModelRequestRateLimitSuccessCount, err = optionInt(key, value, setting.ModelRequestRateLimitSuccessCount)
 	case "ModelRequestRateLimitGroup":
 		err = setting.UpdateModelRequestRateLimitGroupByJSONString(value)
 	case "RetryTimes":
-		common.RetryTimes, _ = strconv.Atoi(value)
+		common.RetryTimes, err = optionInt(key, value, common.RetryTimes)
 	case "DataExportInterval":
-		common.DataExportInterval, _ = strconv.Atoi(value)
+		common.DataExportInterval, err = optionInt(key, value, common.DataExportInterval)
 	case "DataExportDefaultTime":
 		common.DataExportDefaultTime = value
 	case "ModelRatio":
@@ -548,17 +598,17 @@ func updateOptionMap(key string, value string) (err error) {
 	//case "ChatLink2":
 	//	common.ChatLink2 = value
 	case "ChannelDisableThreshold":
-		common.ChannelDisableThreshold, _ = strconv.ParseFloat(value, 64)
+		common.ChannelDisableThreshold, err = optionFloat(key, value, common.ChannelDisableThreshold)
 	case "QuotaPerUnit":
-		common.QuotaPerUnit, _ = strconv.ParseFloat(value, 64)
+		common.QuotaPerUnit, err = optionFloat(key, value, common.QuotaPerUnit)
 	case "ModelFallbackMarkup":
-		operation_setting.ModelFallbackMarkup, _ = strconv.ParseFloat(value, 64)
+		operation_setting.ModelFallbackMarkup, err = optionFloat(key, value, operation_setting.ModelFallbackMarkup)
 	case "SensitiveWords":
 		setting.SensitiveWordsFromString(value)
 	case "AutomaticDisableKeywords":
 		operation_setting.AutomaticDisableKeywordsFromString(value)
 	case "StreamCacheQueueLength":
-		setting.StreamCacheQueueLength, _ = strconv.Atoi(value)
+		setting.StreamCacheQueueLength, err = optionInt(key, value, setting.StreamCacheQueueLength)
 	// SMS Configuration
 	case "SMSEnabled":
 		common.SMSEnabled = value == "true"
@@ -635,7 +685,7 @@ func updateOptionMap(key string, value string) (err error) {
 	case "SensitiveActionRequire2FA":
 		common.SensitiveActionRequire2FA = value == "true"
 	case "SessionTimeoutMinutes":
-		common.SessionTimeoutMinutes, _ = strconv.Atoi(value)
+		common.SessionTimeoutMinutes, err = optionInt(key, value, common.SessionTimeoutMinutes)
 		if common.SessionTimeoutMinutes <= 0 {
 			common.SessionTimeoutMinutes = 10080 // Default to 7 days
 		}
@@ -643,11 +693,34 @@ func updateOptionMap(key string, value string) (err error) {
 	return err
 }
 
-// handleConfigUpdate 处理分层配置更新，返回是否已处理
+// handleConfigUpdate is the boolean-only view of applyHierarchicalOption —
+// "does this key belong to a registered hierarchical config" — kept under its
+// original name and shape because this package's tests call it that way
+// (the three TestHandleConfigUpdate_* cases in sqlite_repo_extra9_test.go).
+// Production code calls applyHierarchicalOption so a rejected value is
+// reported rather than dropped.
 func handleConfigUpdate(key, value string) bool {
+	handled, _ := applyHierarchicalOption(key, value)
+	return handled
+}
+
+// applyHierarchicalOption 处理分层配置更新，返回是否已处理以及处理结果。
+//
+// The error half is the point: this used to discard whatever
+// UpdateConfigFromMap returned, so a malformed JSON value for a hierarchical
+// key (gemini.safety_settings, fetch_setting.domain_list, claude.
+// model_headers_settings …) was accepted by the admin API, stored in the
+// options table, and then quietly not applied on any replica.
+func applyHierarchicalOption(key, value string) (bool, error) {
 	parts := strings.SplitN(key, ".", 2)
 	if len(parts) != 2 {
-		return false // 不是分层配置
+		return false, nil // 不是分层配置
+	}
+
+	if canonical, retired := retiredOptionKeys[key]; retired {
+		metrics.RecordOptionParseRejected(key)
+		common.SysError(fmt.Sprintf("option %q is retired, write %q instead; value not applied", key, canonical))
+		return true, fmt.Errorf("option %s is retired: write %s instead", key, canonical)
 	}
 
 	configName := parts[0]
@@ -656,14 +729,17 @@ func handleConfigUpdate(key, value string) bool {
 	// 获取配置对象
 	cfg := config.GlobalConfig.Get(configName)
 	if cfg == nil {
-		return false // 未注册的配置
+		return false, nil // 未注册的配置
 	}
 
 	// 更新配置
 	configMap := map[string]string{
 		configKey: value,
 	}
-	config.UpdateConfigFromMap(cfg, configMap)
+	if updateErr := config.UpdateConfigFromMapStrict(cfg, configMap); updateErr != nil {
+		reportOptionParseFailure(key, updateErr)
+		return true, fmt.Errorf("option %s: %w", key, updateErr)
+	}
 
-	return true // 已处理
+	return true, nil // 已处理
 }
