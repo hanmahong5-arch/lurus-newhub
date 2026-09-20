@@ -13,17 +13,18 @@ import (
 
 type QuotaData = entity.QuotaData
 
-func UpdateQuotaData() {
-	for {
-		if common.DataExportEnabled {
-			common.SysLog("正在更新数据看板数据...")
-			SaveQuotaDataCache()
-		}
-		time.Sleep(time.Duration(common.DataExportInterval) * time.Minute)
-	}
-}
-
 // UpdateQuotaDataWithContext updates quota data with context cancellation support.
+//
+// The ctx.Done() arm flushes the in-memory cache before returning (cycle 13
+// L11): CacheQuotaData only ever reaches the DB from this loop's ticker tick
+// or from this final flush — a pod that receives SIGTERM between two ticks
+// (DataExportInterval defaults to minutes) used to just log "quota data
+// update stopped" and drop whatever was buffered, silently losing that
+// window's usage-dashboard data on every rolling deploy. Gated on
+// DataExportEnabled for the same reason the ticker branch is: the flag is
+// the single on/off switch for this feature, and a shutdown flush must not
+// write quota_data rows a disabled deployment would never have written on
+// its own.
 func UpdateQuotaDataWithContext(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(common.DataExportInterval) * time.Minute)
 	defer ticker.Stop()
@@ -31,7 +32,12 @@ func UpdateQuotaDataWithContext(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			common.SysLog("quota data update stopped")
+			if common.DataExportEnabled {
+				common.SysLog("quota data update stopped, flushing cache")
+				SaveQuotaDataCache()
+			} else {
+				common.SysLog("quota data update stopped")
+			}
 			return
 		case <-ticker.C:
 			if common.DataExportEnabled {

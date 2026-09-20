@@ -226,6 +226,18 @@ ssh root@100.122.83.20 "kubectl -n lurus-newhub get deploy lurus-newhub \
   -o jsonpath='{.spec.template.spec.containers[0].image}'"
 ```
 
+## Expected transient 503 during a rollout
+
+Right after a rollout is triggered (or a manual SIGTERM), the outgoing pod's
+`/api/health` and `/api/status` answer `503 {"status":"draining"}`
+immediately — this is the readiness/liveness flip described in
+`doc/runbook/graceful-drain.md`, not a failed deploy. It clears once the old
+pod actually exits (within `terminationGracePeriodSeconds`, prod/UAT: 90s)
+and the new pod's own probes take over. A relay stream that was still
+running when the old pod's `GRACEFUL_SHUTDOWN_TIMEOUT` (75s) elapsed is cut
+by design — see that runbook's "What gets cut" section before treating a
+`graceful shutdown: budget exceeded` log line as a bug.
+
 ## Notes / verify-before-trust
 
 - `100.122.83.20` is R6's Tailscale IP (`lurus/CLAUDE.md` Server Landing

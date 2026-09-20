@@ -50,21 +50,103 @@ func TestStartCleanupTaskWithContext_ImmediateCancellation(t *testing.T) {
 	}
 }
 
+// TestInitNotifyLimitCleanup is the oracle for cycle 13 L11's notify-limit
+// fix: InitNotifyLimitCleanup must actually start the cleanup goroutine
+// (observable via cleanupCancel becoming non-nil — Once.Do blocks until its
+// closure returns, and that closure sets cleanupCancel before launching the
+// goroutine, so there is no window where this is nil right after Init
+// returns) and StopNotifyLimitCleanup must be able to cancel it (observable
+// via cleanupCtx.Err() flipping non-nil). resetNotifyLimitCleanupForTest
+// gives this a fresh cleanupOnce regardless of what earlier tests in this
+// binary already did to the shared package state — see its doc comment.
 func TestInitNotifyLimitCleanup(t *testing.T) {
-	// Reset cleanupOnce for testing
-	// Note: In production, this should only be called once
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	resetNotifyLimitCleanupForTest()
+	t.Cleanup(resetNotifyLimitCleanupForTest)
+
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// This test just verifies no panic occurs
-	// The actual cleanup task won't do much in this short time
 	InitNotifyLimitCleanup(ctx)
 
-	// Wait for context to expire
-	<-ctx.Done()
+	if cleanupCancel == nil {
+		t.Fatal("InitNotifyLimitCleanup did not start the cleanup goroutine: cleanupCancel is nil")
+	}
+	if cleanupCtx == nil || cleanupCtx.Err() != nil {
+		t.Fatal("cleanup context must be live (not already done) immediately after InitNotifyLimitCleanup")
+	}
 
-	// Give some time for cleanup task to stop
-	time.Sleep(50 * time.Millisecond)
+	StopNotifyLimitCleanup()
+	if cleanupCtx.Err() == nil {
+		t.Fatal("StopNotifyLimitCleanup must cancel the cleanup goroutine's context")
+	}
+}
+
+// TestCheckMemoryLimit_LazyStartGoesThroughInitNotifyLimitCleanup is the
+// direct oracle for the fix: before cycle 13 L11, checkMemoryLimit's lazy
+// start called the deprecated startCleanupTask through the SAME cleanupOnce
+// InitNotifyLimitCleanup uses, so whichever of the two callers ran first
+// silently claimed the Once and the other's semantics never applied. Under
+// the old code this test's first assertion fails: checkMemoryLimit's lazy
+// path never touched cleanupCancel at all.
+func TestCheckMemoryLimit_LazyStartGoesThroughInitNotifyLimitCleanup(t *testing.T) {
+	resetNotifyLimitCleanupForTest()
+	t.Cleanup(resetNotifyLimitCleanupForTest)
+
+	if cleanupCancel != nil {
+		t.Fatal("test setup: cleanupCancel should be nil before the first checkMemoryLimit call")
+	}
+
+	if _, err := checkMemoryLimit(1, "lazy-start-probe"); err != nil {
+		t.Fatalf("checkMemoryLimit: %v", err)
+	}
+
+	if cleanupCancel == nil {
+		t.Fatal("checkMemoryLimit's lazy start must go through InitNotifyLimitCleanup and capture a cancel func")
+	}
+	if cleanupCtx == nil || cleanupCtx.Err() != nil {
+		t.Fatal("checkMemoryLimit's lazy-started cleanup context must not already be done")
+	}
+
+	// Prove this is the SAME cancellable Once path InitNotifyLimitCleanup
+	// uses, not a second, uncancellable goroutine: StopNotifyLimitCleanup
+	// must be able to reach it.
+	StopNotifyLimitCleanup()
+	if cleanupCtx.Err() == nil {
+		t.Fatal("StopNotifyLimitCleanup must cancel the context captured by checkMemoryLimit's lazy start")
+	}
+}
+
+// TestInitNotifyLimitCleanup_LoseTheRaceToCheckMemoryLimit is the same
+// oracle with the two entry points hit in the opposite order — the plan's
+// "两种顺序下两测试都有意义" requirement: whichever of
+// InitNotifyLimitCleanup/checkMemoryLimit's lazy start wins cleanupOnce, the
+// other must still observe a live, cancellable cleanup context afterward
+// (not silently no-op against a goroutine only the winner could see).
+func TestInitNotifyLimitCleanup_LoseTheRaceToCheckMemoryLimit(t *testing.T) {
+	resetNotifyLimitCleanupForTest()
+	t.Cleanup(resetNotifyLimitCleanupForTest)
+
+	// checkMemoryLimit's lazy path wins the race this time.
+	if _, err := checkMemoryLimit(2, "lazy-start-wins-race"); err != nil {
+		t.Fatalf("checkMemoryLimit: %v", err)
+	}
+	if cleanupCancel == nil {
+		t.Fatal("checkMemoryLimit should have won cleanupOnce and started the goroutine")
+	}
+
+	// InitNotifyLimitCleanup now loses the race (Once already consumed) —
+	// it must still leave a live, stoppable cleanup behind.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	InitNotifyLimitCleanup(ctx)
+
+	if cleanupCtx == nil || cleanupCtx.Err() != nil {
+		t.Fatal("losing the race must not leave the cleanup context in a dead/nil state")
+	}
+	StopNotifyLimitCleanup()
+	if cleanupCtx.Err() == nil {
+		t.Fatal("StopNotifyLimitCleanup must still be able to cancel the goroutine checkMemoryLimit started")
+	}
 }
 
 func TestCheckNotificationLimit_Memory(t *testing.T) {
