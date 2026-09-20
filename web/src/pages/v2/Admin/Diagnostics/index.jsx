@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
 import { API, showSuccess } from '../../../../helpers';
+import { classifyLoad } from '../../../../helpers/loadState';
 
 /*
  * v2 admin — Diagnostics (L8, cycle 9). One page for two root-gated
@@ -57,25 +58,27 @@ const yesNo = (tr, v) =>
 
 const fmtPct = (v) => `${Number(v ?? 0).toFixed(1)}%`;
 
-// Classifies one Promise.allSettled result from either GET into a shape
-// this page can render without guessing: 'ok' carries the handler's own
-// `data` object (plus `scope` when the response has one); 'forbidden'
-// covers both refusal shapes documented on fetchAll below; 'error' is a
-// genuine backend failure (network error, or the 500 GetAdminTotpStatsV2
-// answers when its aggregate query fails, v2_admin_security.go:42-46) and
-// must not be rendered as zeroed data.
+// Classifies one Promise.allSettled result from either GET using the shared
+// classifyLoad() (helpers/loadState.js), then extracts the handler's own
+// `data` object (plus `scope` when the response has one) for the 'ok' case.
+// classifyLoad's 'unauthenticated' collapses into 'forbidden' here: neither
+// caller below distinguishes "not logged in" from "logged in without root",
+// and both refusal shapes this page has actually seen are already
+// 'forbidden' — a logged-in non-root session's HTTP 200 {"success":false}
+// from the session-auth branch (internal/adapter/middleware/auth.go:305-311)
+// and a non-root Bearer JWT's 403 from RootJWTAuth's JWT branch
+// (internal/adapter/middleware/admin_jwt_auth.go:92-99). A genuine backend
+// failure (network error, or the 500 GetAdminTotpStatsV2 answers when its
+// aggregate query fails, v2_admin_security.go:42-46) is 'error' and must
+// not be rendered as zeroed data.
 const classifySettled = (settled) => {
-  if (settled.status === 'fulfilled') {
+  const raw = classifyLoad(settled);
+  const status = raw === 'unauthenticated' ? 'forbidden' : raw;
+  if (status === 'ok' && settled.status === 'fulfilled') {
     const body = settled.value?.data;
-    if (body?.success) {
-      return { status: 'ok', data: body.data, scope: body.scope ?? null };
-    }
-    return { status: 'forbidden', data: null, scope: null };
+    return { status, data: body?.data, scope: body?.scope ?? null };
   }
-  if (settled.reason?.response?.status === 403) {
-    return { status: 'forbidden', data: null, scope: null };
-  }
-  return { status: 'error', data: null, scope: null };
+  return { status, data: null, scope: null };
 };
 
 const V2AdminDiagnostics = () => {

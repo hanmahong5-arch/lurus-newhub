@@ -248,6 +248,15 @@ const resolvesDotted = (bundle, key) => {
   );
 };
 
+// Like resolvesDotted, but also accepts the CLDR plural-suffixed sibling:
+// t('console.admin.users.count', { count: n }) resolves through
+// count_one/count_other and never through a literal `count` leaf. Without
+// this, the reference scan below reports every plural console.* key as
+// missing (26 false positives, measured while writing the gate) on top of
+// the 15 keys that were genuinely absent from en.json.
+const resolvesDottedPlural = (bundle, key) =>
+  PLURAL_SUFFIXES.some((s) => resolvesDotted(bundle, key + s));
+
 const NOTIFIER_OPEN =
   /\b(?:showSuccess|showError|showWarning|showInfo|showNotice|setError|setErrMsg|Notification\.(?:error|success|warning|info)|Toast\.(?:error|success|warning|info)|Modal\.(?:error|warning|info|confirm))\s*\(/g;
 
@@ -696,6 +705,68 @@ describe('i18n integrity', () => {
       missing,
       `zh has no fallback, so these render as the raw identifier for a ` +
         `Chinese operator. Add each to src/i18n/locales/zh.json:\n  ` +
+        missing.join('\n  '),
+    ).toEqual([]);
+  });
+
+  /*
+   * The two console.* symmetry checks above only compare bundle-to-bundle:
+   * a key present in NEITHER bundle is symmetric (vacuously) and neither
+   * catches it. That is exactly how 15 keys reached the v2 console — 11 in
+   * CommandPalette/index.jsx, 3 in Admin/Diagnostics + Admin/Users
+   * (console.common.yes/no/error), 1 in Settings/index.jsx — every one of
+   * them called with a literal console.* key and an English default, so the
+   * page still rendered, in the DEFAULT text, on every locale; nothing here
+   * was ever exercised by a test that would have caught the identifier or
+   * the fallback-to-Chinese cases the other gates in this file are named
+   * for. This closes that gap for the two directories a v2 console lane
+   * most often edits: it reads what src/pages/v2 and src/components
+   * actually CALL, not what either bundle happens to declare.
+   *
+   * The floor on files/keys scanned is a canary for the glob itself — an
+   * empty match set would make the missing-keys assertion below pass
+   * vacuously, same reasoning as the other fail-fast floors in this repo's
+   * structural gates.
+   */
+  it('every console.* key referenced under src/pages/v2 and src/components resolves in en.json', () => {
+    const scanDirs = ['src/pages/v2', 'src/components'].map((d) =>
+      path.resolve(process.cwd(), d),
+    );
+    const scannedFiles = [];
+    for (const dir of scanDirs) sourceFiles(dir, scannedFiles);
+    expect(
+      scannedFiles.length,
+      'this gate scanned suspiciously few source files — the directory list ' +
+        'or the glob it reuses from sourceFiles() may be broken',
+    ).toBeGreaterThanOrEqual(20);
+
+    const referenced = new Map();
+    for (const file of scannedFiles) {
+      const src = fs.readFileSync(file, 'utf8');
+      T_CALL.lastIndex = 0;
+      let m;
+      while ((m = T_CALL.exec(src))) {
+        const key = unescapeLiteral(m[2]);
+        if (!key.startsWith('console.')) continue;
+        if (!referenced.has(key)) referenced.set(key, rel(file));
+      }
+    }
+    expect(
+      referenced.size,
+      'this gate matched suspiciously few console.* key references — the ' +
+        'T_CALL regex or the console. prefix filter may be broken',
+    ).toBeGreaterThanOrEqual(500);
+
+    const missing = [...referenced]
+      .filter(([key]) => !resolvesDottedPlural(en, key))
+      .map(([key, file]) => `${file}  ${key}`);
+    expect(
+      missing,
+      `These console.* keys are called from src/pages/v2 or src/components ` +
+        `and en.json has neither the key nor its plural-suffixed form, so ` +
+        `every locale — English included — shows the raw identifier. Add ` +
+        `each to src/i18n/locales/en.json (and src/i18n/locales/zh.json, ` +
+        `for the symmetry gate above):\n  ` +
         missing.join('\n  '),
     ).toEqual([]);
   });

@@ -20,6 +20,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import { API, showError, showSuccess } from '../../../../helpers';
+import { classifyLoad } from '../../../../helpers/loadState';
 
 /*
  * v2 admin — audit trail. Wired to the four already-shipped root endpoints:
@@ -233,7 +234,15 @@ const V2AdminAudit = () => {
   const [total, setTotal] = useState(0);
   const [actions, setActions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [forbidden, setForbidden] = useState(false);
+  // classifyLoad() outcome of the last events fetch: null until the first
+  // attempt settles. 'forbidden' (403, or the session-auth branch's 200
+  // {success:false}) gets the existing "Admin access required" panel;
+  // everything else that is not 'ok' gets a separate error-with-retry
+  // panel — a permission refusal and "the request failed" are different
+  // claims and must not share copy.
+  const [loadStatus, setLoadStatus] = useState(null);
+  const forbidden = loadStatus === 'forbidden';
+  const loadError = loadStatus != null && loadStatus !== 'ok' && !forbidden;
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState(null);
 
@@ -255,12 +264,19 @@ const V2AdminAudit = () => {
       if (f.actor_id) params.actor_id = f.actor_id;
 
       const res = await API.get('/api/v2/admin/audit/events', { params });
-      if (res?.data?.success) {
+      const result = classifyLoad(res);
+      setLoadStatus(result);
+      if (result === 'ok') {
         setEvents(res.data.data.events ?? []);
         setTotal(res.data.data.total ?? 0);
+      } else {
+        setEvents([]);
+        setTotal(0);
       }
     } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
+      setLoadStatus(classifyLoad(err));
+      setEvents([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -304,7 +320,8 @@ const V2AdminAudit = () => {
         }
       }
     } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
+      const result = classifyLoad(err);
+      if (result === 'forbidden') setLoadStatus('forbidden');
     } finally {
       setVerifying(false);
     }
@@ -335,7 +352,8 @@ const V2AdminAudit = () => {
         tr('console.admin.audit.crumb', 'audit'),
       ]}
       actions={
-        !forbidden && (
+        !forbidden &&
+        !loadError && (
           <a
             className='btn ghost'
             data-testid='audit-export-btn'
@@ -360,7 +378,12 @@ const V2AdminAudit = () => {
                     'console.admin.audit.forbidden_title',
                     'Admin access required',
                   )
-                : tr('console.admin.audit.count', { count: total })}
+                : loadError
+                  ? tr(
+                      'console.admin.audit.error_title',
+                      "Couldn't load the audit trail",
+                    )
+                  : tr('console.admin.audit.count', { count: total })}
           </h1>
           <div className='sub'>
             {tr(
@@ -386,6 +409,31 @@ const V2AdminAudit = () => {
                 'You do not have permission to read the audit trail. Contact a platform administrator.',
               )}
             </div>
+          </div>
+        </div>
+      ) : loadError ? (
+        <div style={{ padding: 24 }}>
+          <div className='panel' style={{ padding: '20px 24px' }}>
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr(
+                'console.admin.audit.error_title',
+                "Couldn't load the audit trail",
+              )}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 14 }}>
+              {tr(
+                'console.admin.audit.error_body',
+                'Something went wrong loading this page.',
+              )}
+            </div>
+            <button
+              type='button'
+              className='btn ghost sm'
+              data-testid='audit-retry-btn'
+              onClick={() => fetchEvents(page, filters)}
+            >
+              {tr('console.common.retry', 'retry')}
+            </button>
           </div>
         </div>
       ) : (

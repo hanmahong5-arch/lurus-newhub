@@ -26,6 +26,9 @@ import 'react-toastify/dist/ReactToastify.css';
 import { StatusProvider } from './context/Status';
 import { ThemeProvider } from './context/Theme';
 import PageLayout from './components/layout/PageLayout';
+import ErrorBoundary, {
+  installPreloadErrorReload,
+} from './components/common/ErrorBoundary';
 // Importing this before render is also what puts <html lang> on the language
 // being rendered: i18n.js subscribes to languageChanged and index.html ships
 // lang="en" until then. It lives there rather than here because a module that
@@ -74,6 +77,14 @@ function SemiLocaleWrapper({ children }) {
 
 // initialization
 
+// Self-heal for a stale open tab after a rolling release: a dynamic
+// import() 404ing on a chunk hash the new deployment no longer serves fires
+// this event, and the reload (at most once per session) fetches the fresh
+// bundle instead of leaving the tab stuck. See components/common/
+// ErrorBoundary.jsx for why this and the boundary below are separate
+// mechanisms.
+installPreloadErrorReload();
+
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
@@ -87,7 +98,9 @@ root.render(
         >
           <ThemeProvider>
             <SemiLocaleWrapper>
-              <PageLayout />
+              <ErrorBoundary>
+                <PageLayout />
+              </ErrorBoundary>
             </SemiLocaleWrapper>
           </ThemeProvider>
         </BrowserRouter>

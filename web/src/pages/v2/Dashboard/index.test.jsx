@@ -754,3 +754,115 @@ describe('Dashboard page — /api/uptime/status panel', () => {
     expect(screen.queryByTestId('dash-uptime-panel')).toBeNull();
   });
 });
+
+// ─── L7 (cycle 13): honest load-failure reporting ─────────────────────────
+//
+// fetchData() fetches /user/me and /logs. Before this lane, ANY failure of
+// either call — a 502, a dropped connection, a 200 {success:false} refusal,
+// a 403, a 401 — left `me`/`logs` at their initial empty values, which the
+// KPI strip could not tell apart from "fetched, and this account is
+// genuinely idle": it printed "no traffic in last 5 min" for a dashboard
+// that had not, in fact, checked. Each of the five failure shapes below
+// must instead show the retry banner and must NOT print the
+// confirmed-empty copy.
+describe('Dashboard page — honest load failure (meStatus/logsStatus)', () => {
+  const FAILURE_MODES = [
+    [
+      '502 from the server',
+      () => Promise.reject({ response: { status: 502 } }),
+    ],
+    [
+      'a rejected/dropped connection',
+      () => Promise.reject(new Error('network down')),
+    ],
+    [
+      '200 {success:false}',
+      () => Promise.resolve({ data: { success: false, message: 'nope' } }),
+    ],
+    ['403', () => Promise.reject({ response: { status: 403 } })],
+    ['401', () => Promise.reject({ response: { status: 401 } })],
+  ];
+
+  // Both fetchData() calls fail the same way; the other three (fetchExtras)
+  // succeed emptily so only the KPI-strip failure is under test.
+  const wireFailingKpiStrip = (makeOutcome) => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me') || u.includes('/logs')) return makeOutcome();
+      return Promise.resolve({ data: { success: true, data: {} } });
+    });
+  };
+
+  it.each(FAILURE_MODES)(
+    'shows the retry banner and hides "confirmed empty" copy for %s',
+    async (_label, makeOutcome) => {
+      wireFailingKpiStrip(makeOutcome);
+
+      render(React.createElement(HFDashboard));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('dashboard-load-error')).toBeTruthy(),
+      );
+      expect(screen.getByTestId('dashboard-retry-btn')).toBeTruthy();
+      // "confirmed empty" claims a check happened and found nothing — false
+      // when the fetch itself never answered.
+      expect(screen.queryByText('no traffic in last 5 min')).toBeNull();
+      expect(screen.queryByText('No recent requests found.')).toBeNull();
+      expect(
+        screen.queryByText(
+          'once a relay call is consumed, the model breakdown lands here.',
+        ),
+      ).toBeNull();
+      // No formatted-zero KPI either — "$0.00" is as much a confirmed-empty
+      // claim as the prose above.
+      expect(screen.queryByText('$0.00')).toBeNull();
+    },
+  );
+
+  it('a successful fetch with real rows shows real numbers, not the retry banner', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me')) {
+        return Promise.resolve({
+          data: { success: true, data: makeMe({ request_count: 12 }) },
+        });
+      }
+      if (u.includes('/logs')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: { logs: [makeLog({ created_at: now - 5 })], total: 1 },
+          },
+        });
+      }
+      return Promise.resolve({ data: { success: true, data: {} } });
+    });
+
+    render(React.createElement(HFDashboard));
+
+    await waitFor(() => screen.getByText('12'));
+    expect(screen.queryByTestId('dashboard-load-error')).toBeNull();
+  });
+
+  it('the retry button re-issues both fetchData calls', async () => {
+    let kpiCallCount = 0;
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me') || u.includes('/logs')) {
+        kpiCallCount += 1;
+        return Promise.reject({ response: { status: 500 } });
+      }
+      return Promise.resolve({ data: { success: true, data: {} } });
+    });
+
+    render(React.createElement(HFDashboard));
+    await waitFor(() => screen.getByTestId('dashboard-retry-btn'));
+    const callsBeforeRetry = kpiCallCount;
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByTestId('dashboard-retry-btn'));
+
+    await waitFor(() => expect(kpiCallCount).toBeGreaterThan(callsBeforeRetry));
+  });
+});

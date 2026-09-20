@@ -29,6 +29,7 @@ import HFShell from '../../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../../helpers';
 import { getQuotaPerUSD } from '../../../../helpers/formatting';
+import { classifyLoad } from '../../../../helpers/loadState';
 import { useSecureVerification } from '../../../../hooks/common/useSecureVerification';
 import { createApiCalls } from '../../../../services/secureVerification';
 // Lazy: SecureVerificationModal's Semi UI import chain (Tabs → lottie) crashes
@@ -256,7 +257,15 @@ const HFAdminUsers = () => {
   const { t: tr } = useTranslation();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [forbidden, setForbidden] = useState(false);
+  // classifyLoad() outcome of the last list fetch: null until the first
+  // attempt settles, then 'ok' | 'forbidden' | 'unauthenticated' | 'error'.
+  // 'forbidden' (403, or the session-auth branch's 200 {success:false}) and
+  // everything else that is not 'ok' are rendered as two DIFFERENT panels
+  // below — a permission refusal is not the same claim as "the request
+  // failed, try again" and must not share copy with it.
+  const [loadStatus, setLoadStatus] = useState(null);
+  const forbidden = loadStatus === 'forbidden';
+  const loadError = loadStatus != null && loadStatus !== 'ok' && !forbidden;
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [editing, setEditing] = useState(null);
@@ -303,7 +312,6 @@ const HFAdminUsers = () => {
 
   const fetchUsers = useCallback(async (kw = '', status = '') => {
     setLoading(true);
-    setForbidden(false);
     try {
       const params = new URLSearchParams({ page: '1', page_size: '50' });
       if (kw.trim()) params.set('keyword', kw.trim());
@@ -311,11 +319,12 @@ const HFAdminUsers = () => {
       const res = await API.get(`/api/v2/admin/users?${params.toString()}`, {
         skipErrorHandler: true,
       });
-      if (res?.data?.success) {
-        setUsers(res.data.data.users ?? []);
-      }
+      const result = classifyLoad(res);
+      setLoadStatus(result);
+      setUsers(result === 'ok' ? (res?.data?.data?.users ?? []) : []);
     } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
+      setLoadStatus(classifyLoad(err));
+      setUsers([]);
     } finally {
       setLoading(false);
     }
@@ -373,7 +382,7 @@ const HFAdminUsers = () => {
       ]}
       actions={
         <>
-          {!loading && !forbidden && (
+          {!loading && !forbidden && !loadError && (
             <span className='muted mono' style={{ fontSize: 11 }}>
               {tr('console.admin.users.count', { count: users.length })}
             </span>
@@ -408,7 +417,9 @@ const HFAdminUsers = () => {
                     'console.admin.users.forbidden_title',
                     'Admin access required',
                   )
-                : tr('console.admin.users.count', { count: users.length })}
+                : loadError
+                  ? tr('console.admin.users.error_title', "Couldn't load users")
+                  : tr('console.admin.users.count', { count: users.length })}
           </h1>
           <div className='sub'>
             {tr(
@@ -434,6 +445,28 @@ const HFAdminUsers = () => {
                 'You do not have permission to manage users. Contact a platform administrator.',
               )}
             </div>
+          </div>
+        </div>
+      ) : loadError ? (
+        <div style={{ padding: 24 }}>
+          <div className='panel' style={{ padding: '20px 24px' }}>
+            <div className='strong' style={{ marginBottom: 6 }}>
+              {tr('console.admin.users.error_title', "Couldn't load users")}
+            </div>
+            <div className='muted' style={{ fontSize: 12, marginBottom: 14 }}>
+              {tr(
+                'console.admin.users.error_body',
+                'Something went wrong loading this page.',
+              )}
+            </div>
+            <button
+              type='button'
+              className='btn ghost sm'
+              data-testid='users-retry-btn'
+              onClick={() => fetchUsers(keyword, statusFilter)}
+            >
+              {tr('console.common.retry', 'retry')}
+            </button>
           </div>
         </div>
       ) : (

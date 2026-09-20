@@ -246,3 +246,72 @@ describe('Admin Audit page', () => {
     expect(screen.queryByTestId('audit-export-btn')).toBeNull();
   });
 });
+
+// ─── L7 (cycle 13): three-state load status ───────────────────────────────
+//
+// Before this lane, fetchEvents only special-cased a rejected 403 — every
+// OTHER failure (a 500, a dropped connection, or the session-auth branch's
+// 200 {success:false} refusal, which never reaches the catch block at all)
+// left `events` at its initial [] and rendered "No audit events recorded
+// yet.": the same copy a genuinely empty tenant would show.
+describe('Admin Audit page — three-state load status (rows / forbidden / error-with-retry)', () => {
+  it('shows the forbidden panel, not the empty table, for a 200 {success:false} refusal', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: '无权进行此操作，权限不足' },
+    });
+
+    render(<HFAdminAudit />);
+
+    await waitFor(() =>
+      screen.getByText(/You do not have permission to read the audit trail/),
+    );
+    expect(screen.queryByText('No audit events recorded yet.')).toBeNull();
+    expect(screen.queryByTestId('audit-retry-btn')).toBeNull();
+  });
+
+  it('shows an error-with-retry panel, not the empty table or the forbidden panel, on a 500', async () => {
+    API.get.mockRejectedValue({ response: { status: 500 } });
+
+    render(<HFAdminAudit />);
+
+    await waitFor(() => screen.getByTestId('audit-retry-btn'));
+    expect(
+      screen.getAllByText("Couldn't load the audit trail").length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText('No audit events recorded yet.')).toBeNull();
+    expect(
+      screen.queryByText(/You do not have permission to read the audit trail/),
+    ).toBeNull();
+    expect(screen.queryByTestId('audit-export-btn')).toBeNull();
+  });
+
+  it('shows an error-with-retry panel on a dropped/network-level rejection', async () => {
+    API.get.mockRejectedValue(new Error('network down'));
+
+    render(<HFAdminAudit />);
+
+    await waitFor(() => screen.getByTestId('audit-retry-btn'));
+    expect(screen.queryByText('No audit events recorded yet.')).toBeNull();
+  });
+
+  it('the retry control re-fetches and can recover into the rows state', async () => {
+    let shouldSucceed = false;
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/audit/actions')) {
+        return Promise.resolve(actionsResponse(['token.created']));
+      }
+      return shouldSucceed
+        ? Promise.resolve(eventsResponse([makeEvent()]))
+        : Promise.reject({ response: { status: 500 } });
+    });
+
+    render(<HFAdminAudit />);
+    await waitFor(() => screen.getByTestId('audit-retry-btn'));
+
+    shouldSucceed = true;
+    fireEvent.click(screen.getByTestId('audit-retry-btn'));
+
+    await waitFor(() => screen.getByTestId('audit-row-41'));
+    expect(screen.queryByTestId('audit-retry-btn')).toBeNull();
+  });
+});
