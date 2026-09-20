@@ -151,7 +151,14 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 	// the two always describe the same window.
 	windowStart := startTime
 	if windowStart <= 0 {
-		windowStart = time.Now().AddDate(0, 0, -logStatDefaultWindowDays).Unix()
+		// Anchor the default window on the caller's end_time when one was
+		// given, otherwise on now: anchoring on now with an older end_time
+		// would produce a window that ends before it starts (empty result).
+		anchor := time.Now()
+		if endTime > 0 {
+			anchor = time.Unix(endTime, 0)
+		}
+		windowStart = anchor.AddDate(0, 0, -logStatDefaultWindowDays).Unix()
 	}
 
 	// Window totals — apply exactly the GetLogsV2 filters, tenant scoped

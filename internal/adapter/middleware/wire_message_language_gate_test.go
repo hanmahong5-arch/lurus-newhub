@@ -79,19 +79,16 @@ import (
 // two categories every entry falls into and for why the key is the literal's
 // text rather than its line.
 var wireMessageGateWhitelist = map[string]string{
-	"internal/adapter/repo/redemption.go | 无效的兑换码":                                                                                                           "ErrRedemptionInvalid — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
-	"internal/adapter/repo/redemption.go | 该兑换码已使用":                                                                                                          "ErrRedemptionUsed — switch-contract text, cycle13 plan §2 (the finding #7 fix: 已被使用 → 已使用)",
-	"internal/adapter/repo/redemption.go | 该兑换码已过期":                                                                                                          "ErrRedemptionExpired — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
-	"internal/adapter/repo/redemption.go | 用户不存在":                                                                                                            "ErrRedemptionUserNotFound — switch-contract text (the 不存在 marker), cycle13 plan §2 (unchanged this cycle)",
-	"internal/adapter/repo/redemption.go | 该兑换码不属于当前租户":                                                                                                      "ErrRedemptionWrongTenant — switch-contract text, cycle13 plan §2 (unchanged this cycle; matches no classifier marker, a gap switch_redeem.go's G5a comment already documents)",
-	"internal/adapter/repo/redemption.go | 服务暂不可用，请稍后重试":                                                                                                     "ErrRedemptionFailed — the pre-existing generic fallback switch_redeem_test.go's TestSwitchRedeemAnonymous_RawDBErrorSanitized pins",
-	"internal/adapter/repo/redemption.go | 未提供兑换码":                                                                                                           "Redeem() empty-key guard — pinned byte-for-byte by cov_repo-deep_redemption_redeem_test.go:66 (that test file is not owned by L3)",
-	"internal/adapter/repo/redemption.go | 无效的 user id":                                                                                                      "Redeem() zero-userId guard — pinned byte-for-byte by cov_repo-deep_redemption_redeem_test.go:69 (that test file is not owned by L3)",
-	"internal/adapter/repo/ability.go | 数据库一致性被破坏":                                                                                                           "pre-existing; reaches a relay caller through GetRandomSatisfiedChannel, but ability.go is outside cycle13 L3's Owned list — follow-up, not fixed here",
-	"internal/adapter/repo/ability.go | 已经有一个修复任务在运行中，请稍后再试":                                                                                                 "pre-existing admin fix-abilities guard; ability.go is outside cycle13 L3's Owned list",
-	"internal/adapter/repo/user.go | id 为空！":                                                                                                                 "pre-existing argument guard (nine sites); user.go is outside cycle13 L3's Owned list and the text is referenced by a1_provisioned_token_auth_test.go / cover_r2_billing_test.go",
-	"internal/adapter/repo/user.go | email 为空！":                                                                                                              "pre-existing argument guard; user.go is outside cycle13 L3's Owned list",
-	"internal/adapter/repo/user.go | quota 不能为负数！":                                                                                                           "pre-existing argument guard (three sites); user.go is outside cycle13 L3's Owned list",
+	"internal/adapter/repo/redemption.go | 无效的兑换码":       "ErrRedemptionInvalid — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
+	"internal/adapter/repo/redemption.go | 该兑换码已使用":      "ErrRedemptionUsed — switch-contract text, cycle13 plan §2 (the finding #7 fix: 已被使用 → 已使用)",
+	"internal/adapter/repo/redemption.go | 该兑换码已过期":      "ErrRedemptionExpired — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
+	"internal/adapter/repo/redemption.go | 用户不存在":        "ErrRedemptionUserNotFound — switch-contract text (the 不存在 marker), cycle13 plan §2 (unchanged this cycle)",
+	"internal/adapter/repo/redemption.go | 该兑换码不属于当前租户":  "ErrRedemptionWrongTenant — switch-contract text, cycle13 plan §2 (unchanged this cycle; matches no classifier marker, a gap switch_redeem.go's G5a comment already documents)",
+	"internal/adapter/repo/redemption.go | 服务暂不可用，请稍后重试": "ErrRedemptionFailed — the pre-existing generic fallback switch_redeem_test.go's TestSwitchRedeemAnonymous_RawDBErrorSanitized pins",
+	"internal/adapter/repo/redemption.go | 未提供兑换码":       "Redeem() empty-key guard — pinned byte-for-byte by cov_repo-deep_redemption_redeem_test.go:66 (that test file is not owned by L3)",
+	"internal/adapter/repo/redemption.go | 无效的 user id":  "Redeem() zero-userId guard — pinned byte-for-byte by cov_repo-deep_redemption_redeem_test.go:69 (that test file is not owned by L3)",
+	"internal/adapter/repo/user.go | id 为空！":             "pre-existing argument guard (nine sites); user.go is outside cycle13 L3's Owned list and the text is referenced by a1_provisioned_token_auth_test.go / cover_r2_billing_test.go",
+	"internal/adapter/repo/user.go | email 为空！":          "pre-existing argument guard; user.go is outside cycle13 L3's Owned list",
 	"internal/app/relay/helper/valid_request.go | size an unexpected error occurred in the parameter, please use 'x' instead of the multiplication sign '×'": "English prose that quotes the literal × (U+00D7 multiplication sign, not a CJK character) while telling the caller not to use it; valid_request.go is outside cycle13 L3's Owned list",
 }
 

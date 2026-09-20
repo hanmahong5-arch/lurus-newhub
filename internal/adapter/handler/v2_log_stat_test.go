@@ -442,3 +442,39 @@ func TestGetAllLogStatV2_DefaultWindowBound(t *testing.T) {
 		t.Errorf("window_start missing on /logs/stat/all: %v", data["window_start"])
 	}
 }
+
+// TestGetLogStatV2_DefaultWindowAnchoredOnEndTime pins the anchor of the
+// default window: with only end_time supplied, the 30-day window ends at
+// end_time (not at now), so a caller asking for a past period does not get
+// a window that ends before it starts. Mutation that must go red: anchor the
+// default on time.Now() regardless of end_time.
+func TestGetLogStatV2_DefaultWindowAnchoredOnEndTime(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	now := common.GetTimestamp()
+	endTime := now - 86400*90                                                    // 90 days ago
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "gpt-4o", 700, 70, 80, now-86400*100) // inside [end-30d, end]
+	seedStatLog(t, ctx, ctx.NormalUser.Id, "gpt-4o", 25, 2, 3, now-86400)        // after end_time
+
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet,
+		"/api/v2/test-tenant/logs/stat?end_time="+strconv.FormatInt(endTime, 10), nil, nil)
+	AssertV2Status(t, w, http.StatusOK)
+	resp := AssertV2Success(t, w)
+	data := resp["data"].(map[string]interface{})
+
+	if got := int(data["total_requests"].(float64)); got != 1 {
+		t.Errorf("total_requests = %d, want 1 — the 100-day-old row sits inside [end_time-30d, end_time]", got)
+	}
+	if got := int(data["total_quota"].(float64)); got != 700 {
+		t.Errorf("total_quota = %d, want 700 — yesterday's row is after end_time", got)
+	}
+	windowStart, ok := data["window_start"].(float64)
+	if !ok {
+		t.Fatalf("window_start missing from the response: %v", data["window_start"])
+	}
+	want := float64(endTime - 86400*logStatDefaultWindowDays)
+	if windowStart < want-120 || windowStart > want+120 {
+		t.Errorf("window_start = %.0f, want ~%.0f (end_time - %d days), not anchored on now", windowStart, want, logStatDefaultWindowDays)
+	}
+}

@@ -246,12 +246,15 @@ func aggregateInvoiceMonths(userID int, tenantID string, fromTS, toTS int64) ([]
 	for _, all := range allRows {
 		billable := billableByMonth[all.Month] // zero value if the month has no billable rows
 		buckets = append(buckets, invoiceMonthBucket{
-			Month:                all.Month,
-			Quota:                billable.QuotaSum,
-			AmountCNY:            float64(billable.QuotaSum) / common.QuotaPerUnit,
-			RequestCount:         billable.RequestCount,
-			UnbilledQuota:        all.QuotaSum - billable.QuotaSum,
-			UnbilledRequestCount: all.RequestCount - billable.RequestCount,
+			Month:        all.Month,
+			Quota:        billable.QuotaSum,
+			AmountCNY:    float64(billable.QuotaSum) / common.QuotaPerUnit,
+			RequestCount: billable.RequestCount,
+			// The two aggregates are separate round trips; a row that lands
+			// between them can make the difference negative, which must not
+			// reach a customer-facing response.
+			UnbilledQuota:        max(all.QuotaSum-billable.QuotaSum, 0),
+			UnbilledRequestCount: max(all.RequestCount-billable.RequestCount, 0),
 		})
 	}
 	return buckets, nil

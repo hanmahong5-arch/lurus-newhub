@@ -20,7 +20,7 @@ Verify a deploy landed:
 
 ```bash
 kubectl -n argocd get application lurus-newhub -o jsonpath='{.status.sync.status} {.status.health.status}{"\n"}'
-curl -fsS https://hub.lurus.cn/api/health | jq .
+for i in 1 2 3 4 5 6; do code=$(curl -sS -o /tmp/health.json -w '%{http_code}' https://hub.lurus.cn/api/health); [ "$code" = 200 ] && break; echo "health=$code (draining pod during a rollout answers 503; retrying)"; sleep 10; done; jq . /tmp/health.json
 ```
 
 If the Application shows `OutOfSync`/`Unknown` for longer than one poll
@@ -224,7 +224,7 @@ for i in $(seq 30); do code=$(curl -s -o /dev/null -w '%{http_code}' https://hub
 # deep health (200 healthy / 503 degraded). NB: r6-stage serves hub.lurus.cn;
 # test-newhub.lurus.cn has pointed at the isolated UAT instance (:30851) since
 # 2026-08-30, so verifying there proves nothing about this deployment.
-curl -fsS https://hub.lurus.cn/api/health | jq .
+for i in 1 2 3 4 5 6; do code=$(curl -sS -o /tmp/health.json -w '%{http_code}' https://hub.lurus.cn/api/health); [ "$code" = 200 ] && break; echo "health=$code (draining pod during a rollout answers 503; retrying)"; sleep 10; done; jq . /tmp/health.json
 # liveness (DB-free):
 # /api/status answers 503 while a pod is draining (see "Expected transient
 # 503 during a rollout"), so poll for a 200 instead of failing on the first

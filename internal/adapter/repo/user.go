@@ -855,7 +855,7 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 
 func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota must not be negative")
 	}
 	// Read RedisEnabled on the caller's goroutine and gate the cache-refresh
 	// spawn on it: the detached pool goroutine must not read mutable globals
@@ -887,7 +887,7 @@ func increaseUserQuota(id int, quota int) (err error) {
 
 func DecreaseUserQuota(id int, quota int) (err error) {
 	if quota < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota must not be negative")
 	}
 	// gate cache spawn on RedisEnabled (see IncreaseUserQuota)
 	if common.RedisEnabled {
@@ -932,7 +932,7 @@ func decreaseUserQuota(id int, quota int) (err error) {
 // success. The DB row is the authoritative guard.
 func DecreaseUserQuotaIfEnough(id int, quota int) (ok bool, err error) {
 	if quota < 0 {
-		return false, errors.New("quota 不能为负数！")
+		return false, errors.New("quota must not be negative")
 	}
 	result := DB.Model(&User{}).
 		Where("id = ? AND quota >= ?", id, quota).
