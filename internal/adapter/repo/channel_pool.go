@@ -123,12 +123,34 @@ func ClearMultiKeyCooldown(channel *Channel, keyIndex int) {
 }
 
 // ListOpenRouterMultiKeyChannels returns all enabled-or-auto-disabled OpenRouter
-// channels that have multi-key mode active. Used by the reaper to scan for
-// expired cooldowns. Returns []*Channel (clones, safe to read without locks
-// for the inspection pass; mutations require the per-channel polling lock).
+// channels that have multi-key mode active, across every tenant. Used by the
+// reaper (internal/app/openrouter_pool/reaper.go) to scan for expired
+// cooldowns — cooldown recovery is platform-wide housekeeping, not a
+// caller-facing view, so this stays deliberately tenant-blind. Returns
+// []*Channel (clones, safe to read without locks for the inspection pass;
+// mutations require the per-channel polling lock).
+//
+// Any caller-facing surface must go through
+// ListOpenRouterMultiKeyChannelsForScope instead — see that function's doc
+// for why (cycle 13, V1DOORS/SECURITY-14): GetOpenRouterApiPoolStatus used to
+// call this unscoped function directly, so any AdminAuth-level (not just
+// root) caller could read every other tenant's OpenRouter channel names and
+// masked key prefixes.
 func ListOpenRouterMultiKeyChannels() ([]*Channel, error) {
+	return ListOpenRouterMultiKeyChannelsForScope(AllTenantsForAdmin())
+}
+
+// ListOpenRouterMultiKeyChannelsForScope is the tenant-scoped variant for
+// caller-facing admin reads (GetOpenRouterApiPoolStatus,
+// GET /api/openrouter-sync/api-pool). Pass ForTenant(callerTenantID) for a
+// non-root caller and AllTenantsForAdmin() only for a platform root — the
+// same convention as handler.DeleteHistoryLogs / repo.GetAllLogs. scope.apply
+// filters on the channels table's tenant_id column the same way it already
+// filters the logs table in log.go; the two tables share the column name and
+// TenantScope carries no table-specific state.
+func ListOpenRouterMultiKeyChannelsForScope(scope TenantScope) ([]*Channel, error) {
 	var channels []*Channel
-	err := DB.Where("type = ?", constant.ChannelTypeOpenRouter).Find(&channels).Error
+	err := scope.apply(DB.Where("type = ?", constant.ChannelTypeOpenRouter)).Find(&channels).Error
 	if err != nil {
 		return nil, err
 	}

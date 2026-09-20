@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -537,6 +538,13 @@ func AdminCreateApiKey(c *gin.Context) {
 		return
 	}
 
+	// Details carry name/key_prefix/scopes only — apiKey.Scopes is already the
+	// JSON-array string CreateInternalApiKey persisted, and apiKey never holds
+	// the raw key (only its hash); the returned `key` local is not read here.
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, adminId,
+		governance.ActionInternalKeyCreated, governance.ResourceInternalKey, apiKey.Id,
+		fmt.Sprintf(`{"name":%q,"key_prefix":%q,"scopes":%s}`, apiKey.Name, apiKey.KeyPrefix, apiKey.Scopes)))
+
 	// IMPORTANT: Only return the full key ONCE during creation
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -569,6 +577,10 @@ func AdminDeleteApiKey(c *gin.Context) {
 		return
 	}
 
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+		governance.ActionInternalKeyDeleted, governance.ResourceInternalKey, keyId,
+		fmt.Sprintf(`{"key_id":%d}`, keyId)))
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "API key deleted successfully",
@@ -595,6 +607,10 @@ func AdminToggleApiKey(c *gin.Context) {
 		})
 		return
 	}
+
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+		governance.ActionInternalKeyToggled, governance.ResourceInternalKey, keyId,
+		fmt.Sprintf(`{"key_id":%d}`, keyId)))
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -652,6 +668,16 @@ func AdminUpdateApiKey(c *gin.Context) {
 		})
 		return
 	}
+
+	// scopesJSON mirrors what UpdateInternalApiKey just persisted — built the
+	// same way (json.Marshal) rather than hand-copied, so Details cannot drift
+	// from the stored value. Marshal error on a []string is not reachable, but
+	// scopesJSON stays nil (renders as the JSON literal null) rather than
+	// panicking if it ever were.
+	scopesJSON, _ := json.Marshal(req.Scopes)
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+		governance.ActionInternalKeyUpdated, governance.ResourceInternalKey, keyId,
+		fmt.Sprintf(`{"name":%q,"scopes":%s}`, req.Name, scopesJSON)))
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

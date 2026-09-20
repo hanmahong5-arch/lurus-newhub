@@ -714,6 +714,16 @@ func GetChannelKey(c *gin.Context) {
 	// 记录操作日志
 	repo.RecordLog(userId, repo.LogTypeSystem, fmt.Sprintf("查看渠道密钥信息 (渠道ID: %d)", channelId))
 
+	// Security audit trail (cycle 13 L4, V1DOORS/SECURITY-14): the RecordLog
+	// line above is a logs row, and DELETE /api/log/ can remove logs rows —
+	// this call goes to the separate, non-purgeable audit_events table.
+	// Details carry the channel id and its tenant only; channel.Key never
+	// enters Details — that field only appears in the JSON response below,
+	// which the caller already passed SecureVerificationRequired to see.
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, userId,
+		governance.ActionChannelKeyAccessed, governance.ResourceChannel, channelId,
+		fmt.Sprintf(`{"channel_id":%d,"tenant_id":%q}`, channelId, channel.TenantId)))
+
 	// 返回渠道密钥
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

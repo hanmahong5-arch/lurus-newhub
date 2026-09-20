@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
@@ -250,14 +252,26 @@ func DeleteHistoryLogs(c *gin.Context) {
 	// Root performs platform-wide retention cleanup; a tenant admin may only
 	// delete their own tenant's logs — never another tenant's history.
 	scope := repo.AllTenantsForAdmin()
+	scopeLabel := "all_tenants"
 	if c.GetInt("role") < common.RoleRootUser {
 		scope = repo.ForTenant(c.GetString("tenant_id"))
+		scopeLabel = c.GetString("tenant_id")
 	}
 	count, err := repo.DeleteOldLog(c.Request.Context(), scope, targetTimestamp, 100)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+
+	// Audit trail (cycle 13 L4, finding #8): this was the only unbounded
+	// synchronous delete over the logs table and previously left no trail of
+	// its own — the deleted rows' own log history vanished with them. This
+	// write goes to the separate audit_events table, which this handler
+	// cannot purge.
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+		governance.ActionLogsPurged, governance.ResourceLog, 0,
+		fmt.Sprintf(`{"cutoff":%d,"scope":%q,"deleted":%d}`, targetTimestamp, scopeLabel, count)))
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
