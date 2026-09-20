@@ -42,7 +42,7 @@ do).
 | [credit-pool-low](credit-pool-low.md) | netdata `newhub_credit_pool` — `lurus_gateway_credit_pool_balance` | warning / critical |
 | [channel-breaker-open](channel-breaker-open.md) | netdata `newhub_channel_breaker_open` — `lurus_gateway_circuit_breaker_state` | warning |
 | [billing-outbox-backlog](billing-outbox-backlog.md) | netdata `newhub_billing_outbox_backlog` — `lurus_billing_outbox_pending` | warning |
-| [relay-5xx-elevated](relay-5xx-elevated.md) | netdata `newhub_relay_5xx_elevated` — `requests_total{status=5*}` (bound to `path=/api/health` only, see the runbook) | warning |
+| [relay-5xx-elevated](relay-5xx-elevated.md) | netdata `newhub_relay_5xx_elevated` — `lurus_gateway_non_probe_5xx_total` (5xx on every route except the two kubelet probe paths; rebound 2026-09-20) | warning |
 | [cost-spike-429](cost-spike-429.md) | netdata `newhub_cost_spike_429` — `requests_total{status=429}` | warning |
 | [quota-cap-402](quota-cap-402.md) | netdata `newhub_quota_cap_402` — `requests_total{status=402}` | warning |
 | [upstream-5xx-burst](upstream-5xx-burst.md) | netdata `newhub_upstream_5xx_burst` — `relay_errors_total{error_type="upstream_5xx"}` | warning / critical |
@@ -51,6 +51,9 @@ do).
 | [settlement-failed](settlement-failed.md) | netdata `newhub_settlement_failed` — `lurus_billing_settlement_failed_total{path}` | warning |
 | [db-pool-saturation](db-pool-saturation.md) | netdata `newhub_db_slow_queries` — `lurus_gateway_db_slow_query_total{db}` | warning |
 | [db-pool-saturation](db-pool-saturation.md) | netdata `newhub_channel_cache_stale` — `lurus_gateway_channel_cache_sync_failed_total{query}` | warning |
+| [metrics-scrape-stale](metrics-scrape-stale.md) | netdata `newhub_metrics_scrape_stale` — `lurus_gateway_instance_info` (`$now - $last_collected_t`, one alarm per pod chart) | warning / critical |
+| [log-retention](log-retention.md) | netdata `newhub_log_retention_backlog` — `lurus_gateway_log_retention_pending_rows{table}` | warning |
+| [settlement-failed](settlement-failed.md) | netdata `newhub_billing_task_refund_unreversed` — `lurus_billing_task_refund_wallet_unreversed_total` | warning |
 
 | [release-download-gate](release-download-gate.md) | `RELEASE_GATED_PRODUCTS` entitlement gate (mechanism shipped, default OFF) | activation |
 
@@ -68,6 +71,8 @@ do).
 | [oidc-enable-activation](oidc-enable-activation.md) | Turning `OIDC_ENABLED` on (Lutu search is dark without it) — blast radius across four auth paths, and the order that keeps `/api/v2/admin/**` reachable |
 | [channel-auto-ban](channel-auto-ban.md) | Investigating why a channel flipped status with no operator action, or tuning `ChannelDisableThreshold`/`AutoTestChannelEnabled` |
 | [platform-dependency-degraded](platform-dependency-degraded.md) | platform-core is down/slow, or any outbound dependency (Redis, NATS, webhook, bark/gotify, SMTP, provider admin calls) is hanging — what each caller does and the time bound it now has |
+| [graceful-drain](graceful-drain.md) | Tuning `GRACEFUL_SHUTDOWN_TIMEOUT`/`terminationGracePeriodSeconds`, or investigating a `graceful shutdown: budget exceeded` log line, a relay stream cut around a deploy window, or a `newhub_relay_5xx_elevated` WARNING that overlaps a rollout |
+| [privacy-erasure](privacy-erasure.md) | PIPL §47 账号擦除级联:六个步骤各处置了什么、`download_logs` 为什么不在级联里(写入时最小化)、以及 cycle-13 之前完成的请求需要一次性重放(O-erasure-backfill,带 SQL 配方与 4-eyes 要求) |
 
 ## When to add a runbook
 

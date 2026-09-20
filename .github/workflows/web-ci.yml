@@ -164,6 +164,34 @@ jobs:
           # every green local run used — the bridge's cosmetic "default" slug is
           # not routable, so a 'default' fallback here would fail in CI only.
           E2E_TENANT_SLUG: ${{ secrets.E2E_TENANT_SLUG || 'lurus' }}
+      - name: Assert the e2e run was not hollow (passed count + skip budget)
+        # A Playwright run that authenticates against the wrong instance, or
+        # whose global setup silently bails, still exits 0 while reporting a
+        # handful of skipped specs. The suite has been 33 passed / 1 legit skip
+        # (x2 browsers) since 2026-08-30, so a run that passes fewer than 30 or
+        # skips more than 2 has stopped being the nightly proof it is kept for.
+        # results.json is written by the json reporter in web/playwright.config.ts.
+        if: always()
+        run: |
+          report=web/playwright-report/results.json
+          if [ ! -f "$report" ]; then
+            echo "::error::$report is missing — the json reporter did not run, so the counts below cannot be checked. Do not read a green step as a green suite."
+            exit 1
+          fi
+          expected=$(jq '.stats.expected // -1' "$report")
+          skipped=$(jq '.stats.skipped // -1' "$report")
+          unexpected=$(jq '.stats.unexpected // -1' "$report")
+          echo "playwright stats: expected(passed)=$expected unexpected(failed)=$unexpected skipped=$skipped"
+          rc=0
+          if [ "$expected" -lt 30 ]; then
+            echo "::error::only $expected specs passed (floor 30) — the suite ran hollow or specs were lost."
+            rc=1
+          fi
+          if [ "$skipped" -gt 2 ]; then
+            echo "::error::$skipped specs were skipped (budget 2) — a skipped spec proves nothing; find out what stopped running."
+            rc=1
+          fi
+          exit $rc
       - uses: actions/upload-artifact@v4
         if: always()
         with:

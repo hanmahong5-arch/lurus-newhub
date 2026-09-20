@@ -252,10 +252,11 @@ of the same PR — read the live values with the Verify commands in
 `graceful-drain.md` rather than trusting these numbers). A relay stream that
 was still running when the old pod's `GRACEFUL_SHUTDOWN_TIMEOUT` elapsed is
 cut by design — see that runbook's "What gets cut" section before treating a
-`graceful shutdown: budget exceeded` log line as a bug, and its "The 5xx
-alarm will see these 503s" section before treating a
-`newhub_relay_5xx_elevated` WARNING inside the deploy window as an
-incident.
+`graceful shutdown: budget exceeded` log line as a bug. Since 2026-09-20
+`newhub_relay_5xx_elevated` excludes the probe paths (see that runbook's
+"The 5xx alarm no longer sees these 503s" section), so a WARNING from it
+inside the deploy window is no longer expected drain noise — it means real
+customer-facing 5xx during the rollout and is worth stopping for.
 
 ## Notes / verify-before-trust
 

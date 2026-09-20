@@ -16,6 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -94,6 +97,7 @@ vi.mock('./pages/v2/Chat', () => stub('v2-chat'));
 vi.mock('./pages/v2/Tenants', () => stub('v2-tenants'));
 vi.mock('./pages/v2/Pricing', () => stub('v2-pricing'));
 vi.mock('./pages/v2/Redemption', () => stub('v2-redemption'));
+vi.mock('./pages/v2/Projects', () => stub('v2-projects'));
 vi.mock('./pages/v2/Billing', () => stub('v2-billing'));
 vi.mock('./pages/v2/Settings', () => stub('v2-settings'));
 vi.mock('./pages/v2/Flows', () => stub('v2-flows'));
@@ -145,18 +149,23 @@ afterEach(() => {
 describe('App — legacy console redirects', () => {
   // These redirects are the v1 sunset contract (story-11-3). If a target
   // slug is edited on one side only, users silently land on 404.
+  //
+  // The third column is the guard the TARGET route carries. It is asserted by
+  // name rather than as "any gate": models and channel moved to AdminRoute in
+  // cycle 13 L7/W, and a test that accepted whichever gate happened to render
+  // would go on passing if one of them were downgraded back to PrivateRoute.
   it.each([
-    ['/console', '/console/v2/dashboard'],
-    ['/console/v2', '/console/v2/dashboard'],
-    ['/console/log', '/console/v2/log'],
-    ['/console/models', '/console/v2/models'],
-    ['/console/channel', '/console/v2/channel'],
-    ['/console/token', '/console/v2/token'],
-    ['/console/playground', '/console/v2/playground'],
-  ])('%s redirects to %s', async (from, to) => {
+    ['/console', '/console/v2/dashboard', 'private-gate'],
+    ['/console/v2', '/console/v2/dashboard', 'private-gate'],
+    ['/console/log', '/console/v2/log', 'private-gate'],
+    ['/console/models', '/console/v2/models', 'admin-gate'],
+    ['/console/channel', '/console/v2/channel', 'admin-gate'],
+    ['/console/token', '/console/v2/token', 'private-gate'],
+    ['/console/playground', '/console/v2/playground', 'private-gate'],
+  ])('%s redirects to %s', async (from, to, gate) => {
     renderAt(from);
     expect(pathname()).toBe(to);
-    expect(await screen.findByTestId('private-gate')).toBeInTheDocument();
+    expect(await screen.findByTestId(gate)).toBeInTheDocument();
   });
 
   // Deliberate asymmetry: the retired "deployment" screen folds into the
@@ -194,17 +203,12 @@ describe('App — route guards', () => {
       ['dashboard', 'v2-dashboard'],
       ['log', 'v2-log'],
       ['tasks', 'v2-tasks'],
-      ['channel', 'v2-channel'],
       ['token', 'v2-token'],
       ['playground', 'v2-playground'],
       ['cmdk', 'v2-cmdk'],
-      ['models', 'v2-models'],
       ['chat', 'v2-chat'],
-      ['pricing', 'v2-pricing'],
-      ['redemption', 'v2-redemption'],
       ['billing', 'v2-billing'],
       ['settings', 'v2-settings'],
-      ['flows', 'v2-flows'],
       ['design-system', 'v2-design-system'],
       ['states', 'v2-states'],
       // Stays on PrivateRoute: the audit subgroup is mounted at
@@ -257,6 +261,30 @@ describe('App — route guards', () => {
   // Public on purpose: a suspended account must be able to read the
   // explanation page without PrivateRoute bouncing it back into the login
   // bridge (see the comment in App.jsx).
+  // Cycle-13 L7/W: six console screens whose nav entries carry minRole:10 in
+  // components/hifi/HFShell.jsx, and whose write endpoints refuse a plain
+  // member, still RENDERED for one if they typed the URL — an admin console
+  // full of failing calls instead of an honest refusal. AdminRoute now gates
+  // the route element itself.
+  //
+  // Both assertions matter: admin-gate must CONTAIN the page (not merely be
+  // somewhere on screen), and private-gate must be absent, so swapping the
+  // guard back to PrivateRoute cannot pass by leaving both gates rendered.
+  it.each([
+    ['channel', 'v2-channel'],
+    ['models', 'v2-models'],
+    ['pricing', 'v2-pricing'],
+    ['redemption', 'v2-redemption'],
+    ['projects', 'v2-projects'],
+    ['flows', 'v2-flows'],
+  ])('/console/v2/%s is admin-only', async (slug, testId) => {
+    const view = renderAt(`/console/v2/${slug}`);
+    const page = await screen.findByTestId(testId);
+    expect(screen.getByTestId('admin-gate'), slug).toContainElement(page);
+    expect(screen.queryByTestId('private-gate'), slug).toBeNull();
+    view.unmount();
+  });
+
   it('the account-disabled landing is reachable without PrivateRoute', async () => {
     renderAt('/console/v2/account-disabled');
     expect(
@@ -292,21 +320,30 @@ describe('App — route guards', () => {
   // The legacy Semi UI shells are gone (console-one-surface, 2026-09-07) —
   // both routes now redirect straight into the v2 pages that replaced them,
   // same as the other /console/* -> /console/v2/* redirects above.
+  // The fourth column is the guard the target route carries: /console/topup
+  // lands on Billing (PrivateRoute), /console/redemption on Redemption, which
+  // is AdminRoute since cycle 13 L7/W.
   it.each([
-    ['/console/topup', '/console/v2/billing', 'v2-billing'],
-    ['/console/redemption', '/console/v2/redemption', 'v2-redemption'],
-  ])('%s redirects to %s', async (from, to, testId) => {
+    ['/console/topup', '/console/v2/billing', 'v2-billing', 'private-gate'],
+    [
+      '/console/redemption',
+      '/console/v2/redemption',
+      'v2-redemption',
+      'admin-gate',
+    ],
+  ])('%s redirects to %s', async (from, to, testId, gate) => {
     renderAt(from);
     expect(pathname()).toBe(to);
     expect(await screen.findByTestId(testId)).toBeInTheDocument();
-    expect(screen.getByTestId('private-gate')).toBeInTheDocument();
+    expect(screen.getByTestId(gate)).toBeInTheDocument();
   });
 
-  // /console/redemption was AdminRoute-gated at HEAD; the redirect must stay
-  // wrapped in AdminRoute too, or a non-admin reaches
-  // /console/v2/redemption's PrivateRoute-only gate through the legacy path
-  // even though the same page is unreachable to them from anywhere else in
-  // the console. The final DOM after the redirect completes only shows the
+  // /console/redemption was AdminRoute-gated at HEAD and the redirect must
+  // stay wrapped in AdminRoute too. This used to be the only thing standing
+  // between a non-admin and the redemption page, because the v2 target was
+  // PrivateRoute-only; since cycle 13 L7/W the target carries AdminRoute as
+  // well, so the two now agree instead of the legacy path being the weaker
+  // of the pair. The final DOM after the redirect completes only shows the
   // TARGET route's guard (private-gate) — see the adminRouteChildren comment
   // above — so this asserts on what AdminRoute was invoked with instead.
   it('/console/redemption stays behind AdminRoute even though it only redirects', () => {
@@ -484,5 +521,55 @@ describe('App — /pricing auth gating from HeaderNavModules', () => {
     });
     expect(await screen.findByTestId('page-about')).toBeInTheDocument();
     expect(screen.queryByTestId('private-gate')).toBeNull();
+  });
+});
+
+// Cycle-13 L7/W: every routed page in App.jsx is a lazy() chunk, so every
+// route element is a <Suspense>. A page that throws while rendering — or a
+// chunk whose import rejects, which happens for real to a tab left open
+// across a rolling release — unmounts the tree back to the nearest boundary,
+// and with none in the route element the visitor got a blank white screen.
+// index.jsx's single top-level boundary is not enough on its own: it catches
+// the throw, but it replaces the WHOLE app including the navigation, so
+// there is no way back. One boundary per route element keeps the failure
+// inside the page.
+//
+// This is asserted against App.jsx's source rather than the DOM because
+// ErrorBoundary renders its children untouched on the happy path — it leaves
+// no marker to query. ErrorBoundary's own catching behaviour is proven in
+// components/common/ErrorBoundary.test.jsx.
+describe('App — every Suspense route element has an error boundary', () => {
+  const APP_SRC = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'App.jsx'),
+    'utf8',
+  );
+
+  it('imports ErrorBoundary', () => {
+    expect(APP_SRC).toMatch(
+      /import\s+ErrorBoundary\s+from\s+'\.\/components\/common\/ErrorBoundary'/,
+    );
+  });
+
+  it('opens one ErrorBoundary for every Suspense', () => {
+    const suspense = (APP_SRC.match(/<Suspense[\s>]/g) || []).length;
+    const boundaries = (APP_SRC.match(/<ErrorBoundary>/g) || []).length;
+    expect(
+      suspense,
+      'App.jsx has no <Suspense> blocks — this gate is counting nothing',
+    ).toBeGreaterThan(10);
+    expect(
+      boundaries,
+      `App.jsx has ${suspense} <Suspense> blocks but ${boundaries} <ErrorBoundary> wrappers — a route element without one turns a page-level throw into a blank screen`,
+    ).toBe(suspense);
+  });
+
+  it('puts the boundary INSIDE the Suspense, not around it', () => {
+    // Outside, the boundary would also swallow the lazy() suspension
+    // promise's rejection path differently and would replace the fallback
+    // rather than the page. Every opening tag pair must read
+    // `<Suspense ...>` then `<ErrorBoundary>`.
+    const pairs = APP_SRC.match(/<Suspense[\s\S]*?>\s*<ErrorBoundary>/g) || [];
+    const suspense = (APP_SRC.match(/<Suspense[\s>]/g) || []).length;
+    expect(pairs.length).toBe(suspense);
   });
 });

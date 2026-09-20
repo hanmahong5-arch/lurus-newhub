@@ -52,8 +52,10 @@ const (
 // TenantGateTotal counts the tenant-lifecycle and tenant-binding decisions the
 // gateway makes on the authentication paths, by outcome:
 //
-//   - repo.TenantGate (internal/adapter/repo/tenant.go), reached from the three
-//     middleware/auth.go gates — session console, relay token, playground token
+//   - repo.TenantGate (internal/adapter/repo/tenant.go), reached from the
+//     middleware/auth.go gates (session console, relay token, playground
+//     token), the cookie arm of middleware/oidc_auth.go, and the raw-token /
+//     provision handlers listed in that function's doc comment
 //     — for a request whose owning tenant row is disabled/suspended, or whose
 //     tenant id resolves to no row at all (never existed, or soft-deleted by
 //     repo.DeleteTenant; tenants use gorm.DeletedAt, so a deleted tenant's
@@ -86,8 +88,8 @@ var TenantGateTotal = promauto.NewCounterVec(
 )
 
 // RecordTenantGate increments the tenant-gate counter for one of the outcomes
-// documented above. Writers: repo.TenantGate (the three middleware/auth.go
-// gates), handler.OIDCCallback (organization binding) and
+// documented above. Writers: repo.TenantGate (see its doc comment for the
+// current caller list), handler.OIDCCallback (organization binding) and
 // handler.autoCreateBridgedUser (seat cap).
 func RecordTenantGate(outcome string) {
 	TenantGateTotal.WithLabelValues(outcome).Inc()

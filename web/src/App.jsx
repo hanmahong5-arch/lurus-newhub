@@ -22,6 +22,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Loading from './components/common/ui/Loading';
 import HfRouteFallback from './components/hifi/HfRouteFallback';
 import { AuthRedirect, PrivateRoute, AdminRoute, RootRoute } from './helpers';
+import ErrorBoundary from './components/common/ErrorBoundary';
 import OidcRedirect from './components/auth/OidcRedirect';
 import NotFound from './pages/NotFound';
 import Forbidden from './pages/Forbidden';
@@ -130,7 +131,9 @@ function App() {
           path='/'
           element={
             <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-              <Home />
+              <ErrorBoundary>
+                <Home />
+              </ErrorBoundary>
             </Suspense>
           }
         />
@@ -138,7 +141,9 @@ function App() {
           path='/setup'
           element={
             <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-              <Setup />
+              <ErrorBoundary>
+                <Setup />
+              </ErrorBoundary>
             </Suspense>
           }
         />
@@ -171,7 +176,9 @@ function App() {
           element={
             <RootRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <OpenRouterSync />
+                <ErrorBoundary>
+                  <OpenRouterSync />
+                </ErrorBoundary>
               </Suspense>
             </RootRoute>
           }
@@ -196,7 +203,9 @@ function App() {
           element={
             <AdminRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <User />
+                <ErrorBoundary>
+                  <User />
+                </ErrorBoundary>
               </Suspense>
             </AdminRoute>
           }
@@ -227,7 +236,9 @@ function App() {
           path='/bridge-login'
           element={
             <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-              <BridgeLogin />
+              <ErrorBoundary>
+                <BridgeLogin />
+              </ErrorBoundary>
             </Suspense>
           }
         />
@@ -246,7 +257,9 @@ function App() {
           path='/oauth/oidc'
           element={
             <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-              <OidcCallback />
+              <ErrorBoundary>
+                <OidcCallback />
+              </ErrorBoundary>
             </Suspense>
           }
         />
@@ -255,7 +268,9 @@ function App() {
           element={
             <RootRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <Setting />
+                <ErrorBoundary>
+                  <Setting />
+                </ErrorBoundary>
               </Suspense>
             </RootRoute>
           }
@@ -265,7 +280,9 @@ function App() {
           element={
             <PrivateRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <PersonalSetting />
+                <ErrorBoundary>
+                  <PersonalSetting />
+                </ErrorBoundary>
               </Suspense>
             </PrivateRoute>
           }
@@ -291,7 +308,9 @@ function App() {
           element={
             <PrivateRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <Midjourney />
+                <ErrorBoundary>
+                  <Midjourney />
+                </ErrorBoundary>
               </Suspense>
             </PrivateRoute>
           }
@@ -301,7 +320,9 @@ function App() {
           element={
             <PrivateRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <Task />
+                <ErrorBoundary>
+                  <Task />
+                </ErrorBoundary>
               </Suspense>
             </PrivateRoute>
           }
@@ -315,12 +336,16 @@ function App() {
                   fallback={<Loading></Loading>}
                   key={location.pathname}
                 >
-                  <Pricing />
+                  <ErrorBoundary>
+                    <Pricing />
+                  </ErrorBoundary>
                 </Suspense>
               </PrivateRoute>
             ) : (
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <Pricing />
+                <ErrorBoundary>
+                  <Pricing />
+                </ErrorBoundary>
               </Suspense>
             )
           }
@@ -329,7 +354,9 @@ function App() {
           path='/about'
           element={
             <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-              <About />
+              <ErrorBoundary>
+                <About />
+              </ErrorBoundary>
             </Suspense>
           }
         />
@@ -337,7 +364,9 @@ function App() {
           path='/user-agreement'
           element={
             <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-              <UserAgreement />
+              <ErrorBoundary>
+                <UserAgreement />
+              </ErrorBoundary>
             </Suspense>
           }
         />
@@ -345,7 +374,9 @@ function App() {
           path='/privacy-policy'
           element={
             <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-              <PrivacyPolicy />
+              <ErrorBoundary>
+                <PrivacyPolicy />
+              </ErrorBoundary>
             </Suspense>
           }
         />
@@ -354,7 +385,9 @@ function App() {
           element={
             <PrivateRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <Chat />
+                <ErrorBoundary>
+                  <Chat />
+                </ErrorBoundary>
               </Suspense>
             </PrivateRoute>
           }
@@ -365,7 +398,9 @@ function App() {
           element={
             <PrivateRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <Chat2Link />
+                <ErrorBoundary>
+                  <Chat2Link />
+                </ErrorBoundary>
               </Suspense>
             </PrivateRoute>
           }
@@ -381,7 +416,9 @@ function App() {
           path='/console/v2/account-disabled'
           element={
             <Suspense fallback={<HfRouteFallback />}>
-              <V2AccountDisabled />
+              <ErrorBoundary>
+                <V2AccountDisabled />
+              </ErrorBoundary>
             </Suspense>
           }
         />
@@ -389,19 +426,19 @@ function App() {
           ['dashboard', V2Dashboard],
           ['log', V2Log],
           ['tasks', V2Tasks],
-          ['channel', V2Channel],
+          ['channel', V2Channel, AdminRoute],
           ['token', V2Token],
           ['playground', V2Playground],
           ['cmdk', V2CmdK],
-          ['models', V2Models],
+          ['models', V2Models, AdminRoute],
           ['chat', V2Chat],
           ['tenants', V2Tenants, RootRoute],
-          ['pricing', V2Pricing],
-          ['redemption', V2Redemption],
-          ['projects', V2Projects],
+          ['pricing', V2Pricing, AdminRoute],
+          ['redemption', V2Redemption, AdminRoute],
+          ['projects', V2Projects, AdminRoute],
           ['billing', V2Billing],
           ['settings', V2Settings],
-          ['flows', V2Flows],
+          ['flows', V2Flows, AdminRoute],
           ['design-system', V2DesignSystem],
           ['states', V2States],
           ['admin/users', V2AdminUsers, RootRoute],
@@ -419,6 +456,12 @@ function App() {
           // The RootRoute rows mirror components/hifi/HFShell.jsx minRole:100
           // exactly: every backend call those pages make is under
           // /api/v2/admin, which api-v2-router.go mounts behind RootJWTAuth.
+          // The AdminRoute rows mirror HFShell.jsx minRole:10 the same way:
+          // channel/models/pricing/redemption/projects/flows are hidden from a
+          // plain member's navigation, and their write endpoints refuse one,
+          // but before cycle 13 the URL still rendered the whole screen — a
+          // member who typed or bookmarked it got an admin console full of
+          // failing calls instead of an honest refusal.
         ].map(([slug, Component, Guard = PrivateRoute]) => (
           <Route
             key={slug}
@@ -429,7 +472,9 @@ function App() {
                   fallback={<HfRouteFallback />}
                   key={location.pathname}
                 >
-                  <Component />
+                  <ErrorBoundary>
+                    <Component />
+                  </ErrorBoundary>
                 </Suspense>
               </Guard>
             }

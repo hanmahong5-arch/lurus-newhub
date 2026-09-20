@@ -206,6 +206,13 @@ func TestAdminWriteRoutesAreAudited(t *testing.T) {
 	common.RedisEnabled = false
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
+	// cycle 13 L4: SetApiRouter brings the six v1 routes registered in
+	// handler/audit_coverage_gen.go (AuditExplicitRoutes +
+	// rootGatedWritesOutsideAdmin) into engine.Routes(), the same call
+	// cmd/server makes before SetApiV2Router. Without it the reverse check at
+	// the bottom of this test reports all six as stale entries even though
+	// they are registered in production.
+	SetApiRouter(engine)
 	SetApiV2Router(engine)
 	SetInternalApiRouter(engine)
 

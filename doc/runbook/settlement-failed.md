@@ -75,6 +75,26 @@ counter increment — only the `common.SysLog` line each site already wrote:
 These are this cycle's documented non-goals, not an oversight discovered
 after the fact — extending the seam to them is next-cycle scope.
 
+## Billing exclusion (cycle13 L2)
+
+A `settlement="failed"` row (this alarm) and a manual channel-test probe row
+(`other.source="channel_test"`, `internal/adapter/handler/channel-test.go`'s
+`channelProbeLogSource`) are both `type=consume` rows with a real `Quota`
+that nobody's wallet paid — the same two markers this alarm's badge and the
+manual probe write onto the row itself. Since cycle13 L2, neither counts
+toward a customer's billed total: `repo.BillableConsumePredicate`
+(`internal/adapter/repo/log.go`) excludes both markers from
+`GET /api/v2/:tenant_slug/billing/invoices` (`aggregateInvoiceMonths`,
+`internal/adapter/handler/v2_billing_invoices.go`) and from
+`GET /v1/billing/usage` (`repo.GetUserLogStatByPeriod`). The invoices
+response surfaces what it excluded instead of silently dropping it: each
+monthly bucket adds `unbilled_quota` (the excluded quota sum) and
+`unbilled_request_count` (the excluded row count) alongside the existing
+`quota`/`amount_cny`/`request_count`, which now cover only the billable
+rows. A row appearing in `unbilled_quota` is not itself a refund signal —
+see "Reconcile" below for what a flagged row's pool/wallet state actually
+requires.
+
 ## Detect
 
 ```

@@ -135,19 +135,22 @@ readiness:
   one already in progress. A liveness 503 here is honest (the pod truly is
   not meant to keep serving) and harmless.
 
-### The 5xx alarm will see these 503s
+### The 5xx alarm no longer sees these 503s (since 2026-09-20)
 
 `newhub_relay_5xx_elevated`
-(`deploy/r6-host-netdata/health.d/newhub.conf`) watches
-`lurus_gateway_requests_total` with `chart labels: status=5*`, and its own
-comment records that the series it is bound to in practice is the
-`/api/health` one. Each probe answered 503 during a drain lands in exactly
-that series (readinessProbe `periodSeconds: 5` × the drain window × the
-replica count), so a WARNING from it inside a deploy window is the drain
-gate doing its job, not an availability incident. Rescoping the alarm to
-relay paths is an observability-lane item — until that lands, treat a
-`newhub_relay_5xx_elevated` WARNING whose window overlaps a rollout as
-expected, and check `graceful shutdown:` log lines before escalating.
+(`deploy/r6-host-netdata/health.d/newhub.conf`) used to watch
+`lurus_gateway_requests_total` with `chart labels: status=5*`, whose only
+live chart was the `/api/health` one — so every probe 503 answered during a
+drain landed in it. The observability lane rebound it to
+`lurus_gateway_non_probe_5xx_total`
+(`internal/pkg/metrics/middleware.go`), which excludes `/api/health` and
+`/api/status` in code, so drain 503s do not reach it at all.
+
+The consequence is the opposite of the old advice: a
+`newhub_relay_5xx_elevated` WARNING whose window overlaps a rollout now
+means real, customer-facing 5xx during the drain — i.e. the drain did NOT
+protect in-flight traffic. Treat it as a signal, not as noise, and read it
+with the `graceful shutdown:` log lines from the pod that was terminating.
 
 ## Environment
 

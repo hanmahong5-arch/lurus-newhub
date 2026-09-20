@@ -35,7 +35,12 @@ func TestV1IDOR_Completeness(t *testing.T) {
 	// Tokens are intentionally excluded: they are USER-scoped (every v1 token
 	// handler resolves the id under the caller's own user id), a distinct
 	// isolation covered elsewhere, not tenant-by-id IDOR.
-	tenantScopedPrefixes := []string{"/api/channel/", "/api/redemption/", "/api/user/"}
+	// /api/openrouter-sync/ joined the set in cycle 13 L4: its rows describe
+	// process-global sync state, but the group was AdminAuth-gated, so a
+	// tenant admin reached every route under it. The prefix is listed here so
+	// a new route added to that group has to be classified, not so it is
+	// assumed tenant-scoped.
+	tenantScopedPrefixes := []string{"/api/channel/", "/api/redemption/", "/api/user/", "/api/openrouter-sync/"}
 
 	// Proven tenant-isolated by a cross-tenant IDOR test. Key = "METHOD PATH".
 	swept := map[string]bool{
@@ -87,6 +92,15 @@ func TestV1IDOR_Completeness(t *testing.T) {
 		"POST /api/user/totp/confirm":                 "self-service: manages the authenticated user's own TOTP factor",
 		"POST /api/user/totp/disable":                 "self-service: manages the authenticated user's own TOTP factor",
 		"POST /api/user/totp/backup-codes/regenerate": "self-service: manages the authenticated user's own TOTP backup codes",
+		// openrouter-sync: the job catalogue is process-global (no tenant_id
+		// column on the row at all), and every write is RootAuth-gated in
+		// api-router.go, so a tenant admin cannot reach one to cross with.
+		"POST /api/openrouter-sync/jobs":            "RootAuth-gated (root only); not reachable by a tenant admin",
+		"PUT /api/openrouter-sync/jobs/:id":         "RootAuth-gated (root only); not reachable by a tenant admin",
+		"DELETE /api/openrouter-sync/jobs/:id":      "RootAuth-gated (root only); not reachable by a tenant admin",
+		"POST /api/openrouter-sync/jobs/:id/run":    "RootAuth-gated (root only); not reachable by a tenant admin",
+		"POST /api/openrouter-sync/run-all":         "RootAuth-gated (root only); not reachable by a tenant admin",
+		"GET /api/openrouter-sync/jobs/:id/preview": "PreviewOpenRouterSyncJob dry-runs a sync job against the process-global free-model catalog (the same catalog CreateOpenRouterSyncJob mutates); the job row itself carries no tenant_id",
 	}
 
 	isMutation := func(m string) bool {
@@ -136,7 +150,7 @@ func TestV1IDOR_ListScopeCompleteness(t *testing.T) {
 	engine := gin.New()
 	SetApiRouter(engine)
 
-	tenantScopedPrefixes := []string{"/api/channel/", "/api/redemption/", "/api/user/", "/api/task/", "/api/mj/", "/api/models"}
+	tenantScopedPrefixes := []string{"/api/channel/", "/api/redemption/", "/api/user/", "/api/task/", "/api/mj/", "/api/models", "/api/openrouter-sync/"}
 
 	// route -> name of the *_ListTenantScoped test in package handler
 	// (internal/adapter/handler/v1_cross_tenant_idor_test.go) that proves
@@ -176,6 +190,11 @@ func TestV1IDOR_ListScopeCompleteness(t *testing.T) {
 		"GET /api/channel/models":               "ChannelListModels returns the compile-time vendor catalogue built in model.go init(); it issues no query and has no tenant dimension",
 		"GET /api/models":                       "DashboardListModels returns channelId2Models, the same compile-time per-channel-TYPE catalogue from model.go init(); no query, no tenant dimension",
 		"GET /api/models/sync_upstream/preview": "SyncUpstreamPreview reports only names that exist in the public upstream catalogue it fetched (model_sync.go intersects both the local rows and the missing list with it), so a name only one tenant's channel serves cannot appear",
+		// openrouter-sync reads, root-only since cycle 13 L4 (api-router.go).
+		"GET /api/openrouter-sync/jobs":        "RootAuth-gated after the cycle-13 L4 api-router.go edit; ListOpenRouterSyncJobs reads the process-global free-model sync job catalog, not tenant data",
+		"GET /api/openrouter-sync/categories":  "RootAuth-gated after the cycle-13 L4 api-router.go edit; ListOpenRouterSyncCategories reads the process-global OpenRouter model category list",
+		"GET /api/openrouter-sync/last-status": "RootAuth-gated after the cycle-13 L4 api-router.go edit; GetOpenRouterSyncLastStatus reads the process-global last-sync-run status",
+		"GET /api/openrouter-sync/api-pool":    "RootAuth-gated after the cycle-13 L4 api-router.go edit; also defence-in-depth tenant-scoped by repo.ListOpenRouterMultiKeyChannelsForScope (cycle 13 L4) — proven by handler.TestV1OpenRouterApiPool_TenantScoped in internal/adapter/handler/openrouter_pool_test.go, a different file than the one readHandlerTestSrc greps here, so listed as exempt rather than in listScoped",
 	}
 
 	inScope := func(path string) bool {

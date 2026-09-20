@@ -169,20 +169,6 @@ var ErrTokenQuotaExhausted = errors.New("token unavailable")
 // the other ValidateUserToken failures get.
 var ErrTokenDisabled = errors.New("token status unavailable")
 
-// tokenExhaustedMessage builds the human-readable 402 guidance for a token
-// that has genuinely run out of its own spending cap (QuotaAvailable() ==
-// false). Both the Status==TokenStatusExhausted branch below and the live
-// RemainQuota<=0 downgrade call this single definition so the two call
-// sites can never render diverging text for what must be the identical
-// caller-facing state (TestL3ValidateUserToken_BothBranches_SameSuffix
-// pins the two outputs equal). remainQuota is embedded as a raw integer —
-// same figure/unit as the metadata's token_remain_quota_units — so the
-// wire message itself carries a number instead of forcing the caller to
-// parse metadata for one.
-func tokenExhaustedMessage(remainQuota int) error {
-	return fmt.Errorf("%w (available quota exhausted [remaining %d]; edit the token's remaining quota or set it to unlimited)", ErrTokenQuotaExhausted, remainQuota)
-}
-
 func ValidateUserToken(key string) (token *Token, err error) {
 	if key == "" {
 		return nil, errors.New("no token provided")

@@ -48,7 +48,10 @@ spec:
         app: lurus-newhub
         environment: uat
     spec:
-      terminationGracePeriodSeconds: 40
+      # cycle-13 L11 graceful drain budget: preStop 5s +
+      # GRACEFUL_SHUTDOWN_TIMEOUT 75s + 10s margin = 90. Kept identical to
+      # r6-stage so UAT exercises the same drain shape.
+      terminationGracePeriodSeconds: 90
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -135,6 +138,14 @@ spec:
             # is UAT-sized.
             - name: GLOBAL_V2_RATE_LIMIT
               value: "3000"
+            # Error rows go into the shared logs table (LogTypeError).
+            # Retention is the log-retention leader task (cycle-13 L6): the
+            # window comes from LOG_RETENTION_DAYS, which is UNSET here, so
+            # nothing is deleted and the table is NOT bounded today. Setting
+            # a window is an owner decision -- read
+            # doc/runbook/log-retention.md first (money rows have their own
+            # LOG_RETENTION_MONEY_DAYS window and a 400-day floor, because
+            # the invoice endpoints SUM the logs table directly).
             - name: ERROR_LOG_ENABLED
               value: "true"
             - name: OIDC_ENABLED
@@ -188,25 +199,41 @@ spec:
               value: "master"
             - name: SYNC_FREQUENCY
               value: "60"
-            # Cycle-12 L8 pool ceiling, kept identical to r6-stage so UAT
-            # exercises the same pool shape. replicas: 1 here, so 1 x 20 = 20
-            # PostgreSQL connections today. Same LOG_SQL_DSN caveat as
-            # r6-stage: the x2 in the budget arithmetic is headroom for a log
-            # pool no deployment configures yet.
+            # Cycle-13 pool ceiling, kept identical to r6-stage so UAT
+            # exercises the same pool shape. replicas: 1 here, so 1 x 12 = 12
+            # PostgreSQL connections against the MEASURED server budget
+            # (2026-09-20, R6 ns database, pod lurus-pg-0: max_connections =
+            # 100, 38 in use -- newhub 13, zitadel 8, newhub_uat 5,
+            # identity 3, lucrum 3, other 6).
+            # Only ONE pool here: a second exists solely when LOG_SQL_DSN is
+            # set, and neither manifest sets it (InitLogDB aliases LOG_DB to
+            # DB otherwise). deploy_consistency_test.go counts it that way
+            # rather than assuming x2.
+            # IDLE == OPEN on purpose: ConnMaxIdleTime already reaps idle
+            # connections, so a lower idle cap only buys reconnect churn.
             # Lowering this is an AVAILABILITY knob, not a latency one: the deep
             # readinessProbe's DB ping takes a pooled connection, so a saturated
             # pool answers /api/health with 503 and pulls replicas out of the
             # Service. See doc/runbook/db-pool-saturation.md.
             - name: SQL_MAX_OPEN_CONNS
-              value: "20"
+              value: "12"
             - name: SQL_MAX_IDLE_CONNS
-              value: "5"
+              value: "12"
+            # Per-tenant ceiling on concurrent relay requests: one tenant
+            # cannot spend the whole process upstream concurrency budget.
+            - name: RELAY_MAX_CONCURRENT_PER_TENANT
+              value: "64"
             # Below the 1Gi container limit so the Go heap backs off before the
             # cgroup OOM-kills the pod.
             - name: GOMEMLIMIT
               value: "900MiB"
+            # cycle-13 L11: bounds only how long http.Server.Shutdown waits
+            # for in-flight requests; a stream still running when it elapses
+            # is cut, logged and counted, and the process still exits 0.
+            # Must fit inside terminationGracePeriodSeconds (90) with the 5s
+            # preStop sleep. doc/runbook/graceful-drain.md.
             - name: GRACEFUL_SHUTDOWN_TIMEOUT
-              value: "30s"
+              value: "75s"
             - name: LOG_FORMAT
               value: "json"
           resources:
@@ -222,7 +249,11 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5
-            failureThreshold: 30
+            # 5 + 120x5 = 605s -- the boot-migration budget before kubelet
+            # SIGKILLs the pod mid-statement (039's CREATE INDEX
+            # CONCURRENTLY runs outside a transaction). Kept identical to
+            # r6-stage; locked by deploy_consistency_test.go.
+            failureThreshold: 120
             timeoutSeconds: 3
           livenessProbe:
             httpGet:

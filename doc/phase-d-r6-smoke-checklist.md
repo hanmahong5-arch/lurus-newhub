@@ -2,19 +2,23 @@
 
 > Switch Phase D push 后的 R6 STAGE 部署 + e2e smoke。Point-in-time snapshot; pod-name/commit-lag details distilled out — reusable activation + smoke commands kept.
 >
-> **As-of update 2026-06-13 (Wave-2 C2):** the deploy namespace is now
-> **`lurus-staging`** (was `lurus-newhub` in this 2026-05-19 snapshot — the PG
-> `pg-access-control` netpol only whitelists `lurus-staging`, PR #20 / runbook
-> Infra-1); the `-n` flags below are updated accordingly. Deployment name
-> (`lurus-newhub`), image, secret (`lurus-newhub-secrets`), and the R6 Tailscale
-> host `100.122.83.20` are unchanged (verified). For current deploys prefer
-> `scripts/deploy-stage.sh` (see `doc/runbook/staging-deploy.md`).
+> **As-of correction 2026-09-20:** the deploy namespace is **`lurus-newhub`**.
+> A 2026-06-13 note here said it had moved to `lurus-staging` because the PG
+> `pg-access-control` netpol supposedly only whitelisted that namespace; that
+> netpol no longer exists (`kubectl get netpol -n database` is empty, verified
+> 2026-08-23) and that namespace never materialised on R6 at all, so every
+> command printed here under it could only ever fail. The `-n` flags below now
+> read `lurus-newhub`. The isolated UAT instance added 2026-08-30 is
+> a different namespace again, `lurus-newhub-uat` (NodePort 30851). Deployment
+> name (`lurus-newhub`), image, secret (`lurus-newhub-secrets`), and the R6
+> Tailscale host `100.122.83.20` are unchanged (verified). For current deploys
+> prefer `scripts/deploy-stage.sh` (see `doc/runbook/staging-deploy.md`).
 
 ## R6 facts
 
 | 项 | 值 |
 |---|---|
-| Hub 部署 | k3s, namespace `lurus-staging`, deployment `lurus-newhub` |
+| Hub 部署 | k3s, namespace `lurus-newhub`, deployment `lurus-newhub` |
 | Image | `ghcr.io/hanmahong5-arch/lurus-newhub:main`(浮动 tag, `imagePullPolicy: Always`) |
 | K8s service | `lurus-newhub` NodePort 8850→30850 |
 | 容器 port | 3000 (`/api/status` health) |
@@ -32,9 +36,9 @@
 ```bash
 SECRET_VAL="$(openssl rand -hex 32)"
 # 写入 secret(不自动 rollout):
-ssh root@100.122.83.20 "kubectl patch secret -n lurus-staging lurus-newhub-secrets --type=json -p='[{\"op\":\"add\",\"path\":\"/data/LURUS_WHITELABEL_MASTER_SECRET\",\"value\":\"'$(echo -n "$SECRET_VAL" | base64 -w0)'\"}]'"
+ssh root@100.122.83.20 "kubectl patch secret -n lurus-newhub lurus-newhub-secrets --type=json -p='[{\"op\":\"add\",\"path\":\"/data/LURUS_WHITELABEL_MASTER_SECRET\",\"value\":\"'$(echo -n "$SECRET_VAL" | base64 -w0)'\"}]'"
 # 挂到 deployment env(触发 rollout):
-ssh root@100.122.83.20 "kubectl patch deployment -n lurus-staging lurus-newhub --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/env/-\",\"value\":{\"name\":\"LURUS_WHITELABEL_MASTER_SECRET\",\"valueFrom\":{\"secretKeyRef\":{\"name\":\"lurus-newhub-secrets\",\"key\":\"LURUS_WHITELABEL_MASTER_SECRET\"}}}}]'"
+ssh root@100.122.83.20 "kubectl patch deployment -n lurus-newhub lurus-newhub --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/env/-\",\"value\":{\"name\":\"LURUS_WHITELABEL_MASTER_SECRET\",\"valueFrom\":{\"secretKeyRef\":{\"name\":\"lurus-newhub-secrets\",\"key\":\"LURUS_WHITELABEL_MASTER_SECRET\"}}}}]'"
 ```
 
 > 三铁律提醒: `kubectl patch` 仅临时验证;长期方案 = 找到 newhub GitOps manifest 源 repo(当前无 ArgoCD app for newhub),改 git 后 `kubectl apply -f`。
@@ -42,12 +46,12 @@ ssh root@100.122.83.20 "kubectl patch deployment -n lurus-staging lurus-newhub -
 ### Step B-E — rollout + 验证
 
 ```bash
-ssh root@100.122.83.20 "kubectl rollout restart deployment/lurus-newhub -n lurus-staging"
-ssh root@100.122.83.20 "kubectl rollout status deployment/lurus-newhub -n lurus-staging --timeout=120s"
+ssh root@100.122.83.20 "kubectl rollout restart deployment/lurus-newhub -n lurus-newhub"
+ssh root@100.122.83.20 "kubectl rollout status deployment/lurus-newhub -n lurus-newhub --timeout=120s"
 # 验证新 pod 起新 image(Started > image push 时间, Image ID 变化):
-ssh root@100.122.83.20 "kubectl describe pod -n lurus-staging \$(kubectl get pods -n lurus-staging -l app=lurus-newhub -o name | tail -1 | cut -d/ -f2) | grep -E '(Image ID:|Started:)'"
+ssh root@100.122.83.20 "kubectl describe pod -n lurus-newhub \$(kubectl get pods -n lurus-newhub -l app=lurus-newhub -o name | tail -1 | cut -d/ -f2) | grep -E '(Image ID:|Started:)'"
 # startup log(期望 'listening on :3000' 无 panic):
-ssh root@100.122.83.20 "kubectl logs -n lurus-staging deployment/lurus-newhub --tail=80"
+ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deployment/lurus-newhub --tail=80"
 # GHCR :main 当前 digest:
 gh api /users/hanmahong5-arch/packages/container/lurus-newhub/versions --jq '.[0:3]'
 ```
@@ -66,7 +70,7 @@ TEST_CODE="<新激活码>"
 curl -sk -X POST "$HUB_URL/api/v2/switch/redeem" -H "Content-Type: application/json" \
   -d "{\"code\":\"$TEST_CODE\",\"fingerprint\":\"smoke-$(date +%s)\",\"app_version\":\"smoke\"}" | jq
 # 成功: {"success":true,"data":{"user_token":"sk-...","user_id":...,"quota":...,"tenant_slug":"..."}}
-# 已用: {"success":false,"message":"该兑换码已被使用"}  · 404: router 没注册(镜像旧, 回 Step B)
+# 已用: {"success":false,"message":"该兑换码已使用"}  · 404: router 没注册(镜像旧, 回 Step B)
 
 # 3. Heartbeat(用上一步 user_token + tenant_slug)
 USER_TOKEN="<user_token>"; TENANT_SLUG="<tenant_slug>"
