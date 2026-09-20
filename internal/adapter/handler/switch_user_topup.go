@@ -22,13 +22,16 @@ type switchUserTopupRequest struct {
 // Body: {"key": "<redemption code>"}
 //
 //	200: {"success":true,"data":{"quota":<amount credited by this call>}}
-//	400: malformed body, or the code is invalid/already used/expired
-//	     (the body then also carries error_code REDEMPTION_*, cycle13 L3)
+//	400: malformed body, or the code is invalid/already used/expired/another
+//	     tenant's (the body then also carries error_code REDEMPTION_*, cycle13 L3)
 //	401: missing/unknown/disabled token or user
 //	403: the token's tenant is suspended, with error_code TENANT_DISABLED
 //	     (cycle13 L9's refusal path, via authenticateSwitchRawTokenWithCode;
 //	     the refusal lands before repo.Redeem, so the code stays unspent)
-//	500: transient lookup failure
+//	500: transient lookup failure, or a hub-side fault inside repo.Redeem
+//	     (error_code REDEMPTION_FAILED; the transaction rolled back, so the
+//	     code is still redeemable — a retry is the right client move, which
+//	     is why it is not a 400; redemptionFailureStatus)
 //
 // Authentication is the raw relay token (Token.Key) — see
 // authenticateSwitchRawTokenWithCode (shared with GetSwitchUserInfo).
@@ -45,7 +48,12 @@ func SwitchUserTopup(c *gin.Context) {
 		body := gin.H{"success": false, "message": message}
 		// errorCode is empty for the auth failures that predate it (401s), so
 		// their body shape is unchanged; the suspended-tenant 403 carries
-		// TENANT_DISABLED, which is what a Switch client branches on.
+		// TENANT_DISABLED for a client that wants a machine-readable reason.
+		// The Switch client today reads no error_code at all: it classifies
+		// redemption failures by Chinese substrings of `message` (its
+		// redeem.go) and shows this 403 as a transient error (owner item
+		// O-heartbeat) — so `message` stays the customer-readable sentence,
+		// surfaced verbatim.
 		if errorCode != "" {
 			body["error_code"] = errorCode
 		}
@@ -71,7 +79,7 @@ func SwitchUserTopup(c *gin.Context) {
 	// text, and RedemptionErrorMessage is defence in depth on top.
 	quota, err := repo.Redeem(key, token.UserId)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		c.JSON(redemptionFailureStatus(err, http.StatusBadRequest), gin.H{
 			"success":    false,
 			"message":    repo.RedemptionErrorMessage(err),
 			"error_code": repo.RedemptionErrorCode(err),

@@ -23,6 +23,13 @@ on:
   schedule:
     - cron: '0 19 * * *'
 
+# Same policy as go-ci.yml: a newer push to the same PR branch cancels the
+# superseded run; main (and the nightly schedule, which runs on main's ref)
+# never cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 defaults:
   run:
     working-directory: web
@@ -31,6 +38,7 @@ jobs:
   test:
     name: Lint + Typecheck + Vitest
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -57,6 +65,7 @@ jobs:
   build:
     name: Vite build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: test
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +85,7 @@ jobs:
   security:
     name: bun audit + gitleaks
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # push/PR only. gitleaks-action scans the pushed commit RANGE on those
     # events but the FULL history on schedule/workflow_dispatch, where it
     # trips on known historical doc artifacts (verified 2026-08-30: same
@@ -143,6 +153,9 @@ jobs:
   e2e:
     name: Playwright e2e (UAT)
     runs-on: ubuntu-latest
+    # The suite talks to a remote UAT instance over the network; without this a
+    # hung run burns the runner's 6-hour default.
+    timeout-minutes: 40
     # Branch on event: schedule events carry NO inputs, so a naive
     # `inputs.run_e2e == 'true'` arm alone would never fire nightly.
     if: >-

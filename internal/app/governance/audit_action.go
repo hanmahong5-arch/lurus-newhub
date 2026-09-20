@@ -17,7 +17,7 @@ const (
 	// Authentication and session lifecycle.
 	ActionAuthFailed         = "auth.failed"
 	ActionAuthIPRejected     = "auth.ip_rejected"
-	ActionAuthScopeRejected  = "auth.scope_rejected" // Phase E2: token lacks scope for the relay path
+	ActionAuthScopeRejected  = "auth.scope_rejected" // Phase E2: token lacks scope for the relay path; cycle 13 L4: also a non-root admin refused the internal-key wildcard scope on create/update (ResourceInternalKey)
 	ActionAuthBootstrapped   = "auth.bootstrapped"
 	ActionAuthLoginSuccess   = "auth.login_success"
 	ActionAuthLogout         = "auth.logout"

@@ -257,13 +257,14 @@ var retiredIdentifierAllowlist = map[string]string{
 	filepath.Join("doc", "runbook", "pg-restore.md"):                         "same retirement sentence, English side",
 	filepath.Join("deploy", "k8s", "r6-stage", "README.md"):                  "corrective record: each mention is of the form \"an earlier revision said X, which was wrong\"",
 	filepath.Join("doc", "seam-s1-stage-worklog-2026-06-21.md"):              "dated 2026-06-21 worklog; the 100.98.57.55 mentions ARE the record of the R1-vs-R6 misidentification the same page then corrects",
-	// (b) entries: real stale references, outside the cycle-13 wiring pass's
-	// file ownership. Recorded here rather than silently skipped so the
-	// follow-up is visible and the reverse check keeps them honest.
-	filepath.Join("doc", "oidc-troubleshooting.md"):              "STALE, owner follow-up: the first diagnostic command (~line 23) is still `kubectl logs -n lurus-system -l app=lurus-api`; the live selector is -n lurus-newhub -l app=lurus-newhub",
-	filepath.Join("scripts", "stage-rollback.sh"):                "STALE, owner follow-up: the Mechanism: header block (lines ~9/11) still prints `kubectl rollout undo deployment/lurus-newhub -n lurus-staging` even though NAMESPACE defaults to lurus-newhub twenty lines below",
-	filepath.Join("doc", "process.md"):                           "STALE, owner follow-up: still lists scripts/pg-restore-drill.sh as a monthly automated drill and `bash -n` gate; the script was deleted 2026-09-19",
-	filepath.Join("deploy", "single-node", "docker-compose.yml"): "STALE, owner follow-up: a comment points at scripts/pg-restore-drill.sh, deleted 2026-09-19",
+	// The wiring pass's (b) entries — real stale references it found in files
+	// it did not own (oidc-troubleshooting.md's kubectl selector,
+	// stage-rollback.sh's Mechanism: header, docker-compose.yml's drill
+	// comment) — were fixed in the operator hand-finish and their rows
+	// removed; TestRetiredIdentifierAllowlistIsNotStale is what forces that
+	// removal. process.md stays: it is a dated story record whose file list
+	// names the drill script, now annotated in-line with its deletion.
+	filepath.Join("doc", "process.md"): "dated 2026-06 story record listing the files that change shipped; the pg-restore-drill.sh line carries its 2026-09-19 deletion note in-line",
 }
 
 // retiredIdentifierMaxFileSize bounds the repo-root file scan below — build

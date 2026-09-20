@@ -94,6 +94,14 @@ func resolveSessionIdentity(c *gin.Context, minRole int) bool {
 				// no security. (Several requests arriving together WITH the
 				// same planted cookie still rotate one by one; see
 				// RotateSessionID's residue note.)
+				//
+				// Registry: the id this arm keeps (rotated or freshly minted)
+				// is NOT registered on this request — repo.UpsertUserSessionSeen
+				// (authHelper, further down) sits behind !useAccessToken, which
+				// this arm sets. The session appears in GET /api/v2/auth/sessions
+				// from its NEXT request on, when the cookie alone authenticates
+				// it, and cannot be revoked by id before that. Recorded in the
+				// root doc/coord/contracts.md (cycle 13).
 				if session.ID() != "" {
 					if rotErr := RotateSessionID(c); rotErr != nil {
 						logger.LogWarnKV(c.Request.Context(), "sdk identity session rotation failed",

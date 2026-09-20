@@ -395,8 +395,10 @@ func TestSwitchUserTopup_RawDBErrorReturnsGenericMessage(t *testing.T) {
 	}
 
 	w := ctx.post(t, "Bearer sk-"+tok.Key, map[string]string{"key": code})
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	// A hub-side fault is a 500, not a 400: the code is still redeemable and
+	// the client should retry, not correct its input.
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for a hub-side redemption fault; body: %s", w.Code, w.Body.String())
 	}
 	success, message, _ := decodeTopupEnvelope(t, w)
 	if success {

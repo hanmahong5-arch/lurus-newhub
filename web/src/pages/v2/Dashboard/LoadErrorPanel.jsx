@@ -57,12 +57,23 @@ export function KpiCaption({ children }) {
  * false when it did not — so any non-ok classifyLoad() status swaps in
  * `failedText` instead.
  *
+ * Before the first attempt settles (status null/undefined) neither claim is
+ * true yet: the check has not happened, so it has neither found nothing nor
+ * failed. The first cut returned `okText` there on the reasoning that the
+ * page was showing loading placeholders anyway — but the caption IS on
+ * screen under the "…" KPI number, and it read "no traffic in last 5 min"
+ * for a check that had not run (cycle-13 acceptance minor). It now says
+ * `pendingText`, or nothing at all when the caller has no pending copy —
+ * an empty caption asserts nothing, which is the honest floor.
+ *
  * @param {'ok'|'forbidden'|'unauthenticated'|'error'|null|undefined} status
  * @param {string} okText
  * @param {string} failedText
+ * @param {string} [pendingText]
  * @returns {string}
  */
-export function captionText(status, okText, failedText) {
+export function captionText(status, okText, failedText, pendingText) {
+  if (status === null || status === undefined) return pendingText ?? '';
   return isLoadFailed(status) ? failedText : okText;
 }
 

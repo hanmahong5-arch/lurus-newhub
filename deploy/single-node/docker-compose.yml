@@ -101,7 +101,8 @@ services:
       AWS_S3_FORCE_PATH_STYLE: "true"
       WALG_COMPRESSION_METHOD: ${WALG_COMPRESSION_METHOD:-lz4}
       # When WALG_S3_PREFIX is empty, archive-wal.sh no-ops so PG keeps running.
-      # Restore drill (scripts/pg-restore-drill.sh) skips when target is unset.
+      # (The in-repo restore drill script was removed 2026-09-19; the restore
+      # paths live in doc/runbook/pg-restore.md.)
     volumes:
       - pg_data:/var/lib/postgresql/data
     # PG tuned for 12 GB RAM, 6 logical CPUs, SSD storage.

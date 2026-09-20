@@ -441,12 +441,17 @@ func TestSwitchRedeemAnonymous_RawDBErrorSanitized(t *testing.T) {
 		"fingerprint": fingerprint,
 	})
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 (envelope), got %d, body: %s", w.Code, w.Body.String())
+	// A hub-side fault answers 500 (the envelope is still JSON, which is what
+	// the Switch client parses); the caller-side outcomes keep their 200.
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for a hub-side redemption fault, got %d, body: %s", w.Code, w.Body.String())
 	}
 	env := parseEnvelope(t, w)
 	if success, _ := env["success"].(bool); success {
 		t.Fatalf("expected success=false for a raw DB error, got: %s", w.Body.String())
+	}
+	if code, _ := env["error_code"].(string); code != repo.RedemptionErrorCodeFailed {
+		t.Errorf("error_code = %q, want %q", code, repo.RedemptionErrorCodeFailed)
 	}
 	msg, _ := env["message"].(string)
 	if msg != "服务暂不可用，请稍后重试" {

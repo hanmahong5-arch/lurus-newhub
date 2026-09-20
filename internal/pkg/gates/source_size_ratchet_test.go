@@ -36,7 +36,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/internal_api_ext.go":     1057,
 	"internal/adapter/handler/oauth.go":                978,
 	"internal/adapter/handler/relay.go":                1014,
-	"internal/adapter/middleware/auth.go":              905,
+	"internal/adapter/middleware/auth.go":              913, // +8 (cycle-13 hand-finish): the SDK self-heal arm now records that it registers no session-registry row; comment only
 	"internal/adapter/middleware/oidc_auth.go":         1206,
 	"internal/adapter/provider/claude/relay-claude.go": 940,
 	"internal/adapter/provider/common/relay_info.go":   893,
@@ -47,7 +47,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/repo/token.go":                   794,
 	"internal/adapter/repo/user.go":                    1206,
 	"internal/app/convert.go":                          1304,
-	"internal/app/quota.go":                            1376,
+	"internal/app/quota.go":                            1383, // +7 (cycle-13 hand-finish): the TokenId > 0 guard on the per-key leg and why; one condition, six comment lines
 	"internal/pkg/common/identity_client.go":           834,
 	"internal/pkg/dto/openai_request.go":               1020,
 	// NEW ROW, not a raise: metrics.go crossed the 800 threshold in cycle 13
@@ -56,7 +56,7 @@ var goSourceSizeCeilings = map[string]int{
 	// internal/pkg/metrics belongs to that lane and splitting its central
 	// registry file is its call, not a wiring-step side effect. The row
 	// records the measured count so the next growth has to argue for itself.
-	"internal/pkg/metrics/metrics.go":                   822,
+	"internal/pkg/metrics/metrics.go":                   823, // +1 (cycle-13 hand-finish): the log-retention series comment now says which legs write and when the label is absent
 	"internal/pkg/setting/ratio_setting/model_ratio.go": 944,
 }
 

@@ -251,13 +251,50 @@ describe('Admin Diagnostics page — affinity + TOTP panels', () => {
     );
   });
 
-  it('shows a permission notice when either endpoint answers success:false', async () => {
+  // A 200 {success:false} this page cannot classify is NOT a refusal: the
+  // auth layer in front of these GETs answers refusals as rejected 403s
+  // (see classifySettled's comment), and the handlers answer 200 only with
+  // success:true. The first cut rendered the permission notice here, which
+  // told an operator "you lack access" for a body that said no such thing.
+  // Mutation that must turn this red: re-add the
+  // `if (settled.status === 'fulfilled' && status !== 'ok') status = 'forbidden'`
+  // carve-out in classifySettled.
+  it('renders the unavailable marker — not the permission notice — for a 200 {success:false} it cannot classify', async () => {
     API.get.mockImplementation((url) => {
       if (String(url).includes('/routing/affinity')) {
         return Promise.resolve(affinityResponse(AFFINITY_DATA));
       }
       return Promise.resolve({
         data: { success: false, message: 'root required' },
+      });
+    });
+
+    render(<V2AdminDiagnostics />);
+
+    await waitFor(() => screen.getByTestId('diag-totp-unavailable'));
+    expect(
+      screen.queryByText(/You do not have permission to view diagnostics/),
+    ).toBeNull();
+    // The panel whose GET succeeded still renders its real numbers.
+    expect(screen.getByTestId('diag-affinity-hit').textContent).toBe('137');
+  });
+
+  // Unit-level parity with the shared vocabulary: a resolved body that
+  // classifyLoad DOES recognise as a refusal (error_code PERMISSION_DENIED)
+  // still reaches the permission notice through classifySettled. Not a
+  // shape RootJWTAuth produces today (it rejects with 403), pinned so the
+  // pass-through cannot silently narrow to "rejected only".
+  it('shows the permission notice for a resolved body carrying error_code PERMISSION_DENIED', async () => {
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/routing/affinity')) {
+        return Promise.resolve(affinityResponse(AFFINITY_DATA));
+      }
+      return Promise.resolve({
+        data: {
+          success: false,
+          error_code: 'PERMISSION_DENIED',
+          message: 'permission denied',
+        },
       });
     });
 

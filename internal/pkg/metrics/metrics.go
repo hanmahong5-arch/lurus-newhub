@@ -731,14 +731,15 @@ func SetNATSConnected(connected bool) {
 
 // LogRetentionDeletedTotal / LogRetentionPendingRows are cycle-13 L6's log
 // retention task's two series, declared here (L10) so the netdata alarm
-// this cycle adds (newhub_log_retention_backlog) and L6's own task
-// (internal/lifecycle/log_retention.go, not yet wired as of this
-// declaration — see this cycle's plan §"L6 — 日志保留…") have a stable name
-// to target from the start, rather than the metric and its first caller
-// landing in the same change. Until L6's task calls RecordLogRetention /
-// SetLogRetentionPending, both read zero — the same "declared ahead of its
-// writer" pattern BillingSettlementFailedTotal's "realtime" label above
-// uses for the same reason.
+// this cycle adds (newhub_log_retention_backlog) and the task itself
+// (internal/lifecycle/log_retention.go, started from cmd/server/main.go by
+// the cycle-13 wiring pass) target one stable name. The task writes both
+// through RecordLogRetention / SetLogRetentionPending on every pass of every
+// ENABLED leg; a leg whose window is 0 (LOG_RETENTION_DAYS and
+// LOG_RETENTION_MONEY_DAYS default to 0 = off; DOWNLOAD_LOG_RETENTION_DAYS
+// defaults to 90 = on) never runs, so its `table` label is absent rather
+// than zero — read that as "retention off for that table", not "task
+// broken" (doc/runbook/log-retention.md).
 var (
 	// LogRetentionDeletedTotal counts rows the log-retention task has
 	// deleted, cumulative, by table ("logs" or "download_logs" per the

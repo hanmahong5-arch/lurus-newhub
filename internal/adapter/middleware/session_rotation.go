@@ -89,8 +89,9 @@ var rotateUnsupportedOnce sync.Once
 //   - one rotation per request (sessionRotationDoneKey above); a second call
 //     on the same *gin.Context returns nil without minting anything.
 //   - POST /api/v2/bridge/exchange called WITHOUT a cookie (the usual e2e
-//     shape) rotates nothing: there is no prior id to retire, and the
-//     caller's own Save mints one.
+//     shape) still calls RotateSessionID — the call is unconditional at the
+//     three login sites — but there is no prior id to retire: the rotation's
+//     own Set+Save mints the first id and the identity write's Save keeps it.
 //   - the switch/lutu service callers authenticate with a bearer token
 //     rather than a hub session cookie, so their response shapes are
 //     untouched by this change.

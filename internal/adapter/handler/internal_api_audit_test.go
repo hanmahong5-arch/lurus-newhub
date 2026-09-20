@@ -405,6 +405,14 @@ func TestAdminDeleteApiKey_RecordsInternalKeyDeletedAudit(t *testing.T) {
 	if events[0].ResourceID != key.Id {
 		t.Errorf("ResourceID = %d, want %d", events[0].ResourceID, key.Id)
 	}
+	// A hard delete leaves no row to resolve the id against, so the audit
+	// row must carry the snapshot itself (cycle-13 hand-finish after L4).
+	scopesJSON, _ := json.Marshal([]string{repo.ScopeProvisioning})
+	for _, want := range []string{`"found":true`, `"name":"delete-target"`, `"key_prefix":"lurus_ik_seed"`, `"scopes":` + string(scopesJSON), `"enabled":true`} {
+		if !strings.Contains(events[0].Details, want) {
+			t.Errorf("internal_key.deleted Details = %s, want it to carry %s", events[0].Details, want)
+		}
+	}
 	assertAuditRowsCarryNoKeyMaterial(t, f.DB, seededRawKey, key.KeyHash)
 }
 
@@ -432,6 +440,18 @@ func TestAdminToggleApiKey_RecordsInternalKeyToggledAudit(t *testing.T) {
 	}
 	if events[0].ResourceID != key.Id {
 		t.Errorf("ResourceID = %d, want %d", events[0].ResourceID, key.Id)
+	}
+	// The row must say which way the toggle went, and agree with the table:
+	// the seed is enabled, so one toggle disables.
+	var after repo.InternalApiKey
+	if err := f.DB.First(&after, key.Id).Error; err != nil {
+		t.Fatalf("re-read key: %v", err)
+	}
+	if after.Enabled {
+		t.Fatalf("toggle left the seeded (enabled) key enabled")
+	}
+	if !strings.Contains(events[0].Details, `"enabled":false`) {
+		t.Errorf("internal_key.toggled Details = %s, want it to carry the resulting state \"enabled\":false", events[0].Details)
 	}
 	assertAuditRowsCarryNoKeyMaterial(t, f.DB, seededRawKey, key.KeyHash)
 }

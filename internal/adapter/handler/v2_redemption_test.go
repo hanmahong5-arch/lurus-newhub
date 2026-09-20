@@ -127,7 +127,9 @@ func TestRedeemCodeV2_RawDBErrorReturnsGenericMessage(t *testing.T) {
 
 	body := map[string]string{"code": redemption.Key}
 	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPost, "/api/v2/test-tenant/redeem", body, nil)
-	resp := AssertV2Error(t, w, http.StatusBadRequest)
+	// A hub-side fault is a 500 (redemptionFailureStatus), not the 400 a
+	// mistyped code gets.
+	resp := AssertV2Error(t, w, http.StatusInternalServerError)
 
 	msg, _ := resp["message"].(string)
 	if msg != repo.ErrRedemptionFailed.Error() {

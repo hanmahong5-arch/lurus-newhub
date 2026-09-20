@@ -20,6 +20,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import { API, showError } from '../../../helpers';
+import { redeemFailure } from './redeemFailure';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
@@ -168,9 +169,11 @@ const HFBilling = () => {
 
   // Same endpoint and response shape the retired legacy Semi UI topup card
   // used to speak: POST /api/v2/:slug/redeem with a `key` field, answering
-  // { quota_added }.
+  // { quota_added }. Failures go through redeemFailure() so a coded body
+  // reaches showError() as an error OBJECT — see that helper.
   const redeem = async () => {
     if (redeeming || redeemCode.length !== REDEEM_CODE_LENGTH) return;
+    const fallback = tr('console.billing.redeem_failed', 'Redemption failed');
     setRedeeming(true);
     setRedeemResult(null);
     try {
@@ -186,16 +189,11 @@ const HFBilling = () => {
         // local arithmetic that could disagree with the server.
         fetchAll();
       } else {
-        showError(
-          res?.data?.message ||
-            tr('console.billing.redeem_failed', 'Redemption failed'),
-        );
+        showError(redeemFailure(res?.data, fallback, res?.status));
       }
     } catch (err) {
-      showError(
-        err?.response?.data?.message ||
-          tr('console.billing.redeem_failed', 'Redemption failed'),
-      );
+      const r = err?.response;
+      showError(redeemFailure(r?.data, fallback, r?.status));
     } finally {
       setRedeeming(false);
     }

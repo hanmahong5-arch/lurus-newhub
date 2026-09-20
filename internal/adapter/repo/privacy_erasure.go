@@ -426,6 +426,20 @@ func TerminaliseOpenMidjourneyForUser(ctx context.Context, userID int) (int64, e
 // that runs immediately after blanks it again, so the marker is what an
 // operator sees only if the cascade stops between the two statements (the
 // step then re-runs from the persisted cursor).
+//
+// Residue, stated rather than implied (cycle-13 acceptance):
+//   - A poller pass that had already loaded a row before this UPDATE
+//     committed still writes `data`/`fail_reason` back once — the same
+//     in-flight window TerminaliseOpenMidjourneyForUser documents; a re-run
+//     of the step from the persisted cursor scrubs it again.
+//   - Terminal-ising an open task here BYPASSES the refund path. The
+//     poller's FAILURE arm (handler.refundTaskQuota via UpdateTaskBulk) is
+//     what hands a failed submission's money back, and a row that is already
+//     FAILURE never enters that arm — so the key's allowance and the tenant
+//     pool stay debited for a task that never completed. The user's balance
+//     leg is moot (the account is being erased); the pool and key legs are
+//     not, since a reseller's pool paid for them. Owner item
+//     O-erasure-inflight-refund (doc/runbook/privacy-erasure.md).
 func TerminaliseOpenTasksForUser(ctx context.Context, userID int) (int64, error) {
 	result := WithoutTenantIsolationCtx(ctx, DB).Model(&Task{}).
 		Where("user_id = ? AND status NOT IN ?", userID, []string{TaskStatusFailure, TaskStatusSuccess}).

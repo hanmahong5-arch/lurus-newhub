@@ -50,9 +50,36 @@ describe('captionText', () => {
     ).toBe('no traffic in last 5 min');
   });
 
-  it('keeps the confirmed-empty copy before the first attempt settles', () => {
-    // null is the "not attempted yet" sentinel; the page is showing its
-    // loading placeholders at that point, so neither claim is on screen as
+  it('says the pending copy — never the confirmed-empty copy — before the first attempt settles', () => {
+    // null is the "not attempted yet" sentinel. The caption is on screen
+    // under the "…" KPI number at that point, so "no traffic in last 5 min"
+    // there would assert a check that has not run. Mutation that must turn
+    // this red: drop the null branch (the first cut returned okText).
+    expect(
+      captionText(
+        null,
+        'no traffic in last 5 min',
+        'unable to load',
+        'loading…',
+      ),
+    ).toBe('loading…');
+    expect(
+      captionText(
+        undefined,
+        'no traffic in last 5 min',
+        'unable to load',
+        'loading…',
+      ),
+    ).toBe('loading…');
+    // No pending copy given: an empty caption, which asserts nothing.
+    expect(
+      captionText(null, 'no traffic in last 5 min', 'unable to load'),
+    ).toBe('');
+  });
+
+  it.skip('(superseded) kept the confirmed-empty copy before the first attempt settles', () => {
+    // Retained as the record of the first cut's behaviour; the test above
+    // is the live oracle.
     // a statement about the account.
     expect(
       captionText(null, 'no traffic in last 5 min', 'unable to load'),

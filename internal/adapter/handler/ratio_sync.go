@@ -139,7 +139,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 		dbChannels, err := repo.GetChannelsByIds(intIds)
 		if err != nil {
 			logger.LogError(c.Request.Context(), "failed to query channels: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "查询渠道失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "failed to query channels"})
 			return
 		}
 		for _, ch := range dbChannels {
@@ -155,7 +155,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 	}
 
 	if len(upstreams) == 0 {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无有效上游渠道"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "no valid upstream channel"})
 		return
 	}
 

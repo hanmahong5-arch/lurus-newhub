@@ -92,10 +92,26 @@ kubectl logs -n lurus-newhub deploy/lurus-newhub | grep 'log retention'
 - `lurus_gateway_log_retention_deleted_total{table}`
 - `lurus_gateway_log_retention_pending_rows{table}`
 
-> 状态:这两个序列由 cycle-13 L10 在 `internal/pkg/metrics` 声明。在它们接上之前,
-> 本任务把同样的数字写成 SysLog 行(`log retention: deleted N row(s) from <table>` /
-> `log retention: <table> still has N row(s) past the window`)——先按日志核,不要把
-> "`/metrics` 里查不到这个序列"读成"任务没跑"。
+> 状态:两个序列由任务在每轮 pass 里写(`metrics.RecordLogRetention` /
+> `SetLogRetentionPending`,`internal/lifecycle/log_retention.go`;任务由
+> `cmd/server/main.go` 启动)。窗口为 0 的那条腿不跑,它的 `table` 标签就不存在——
+> 那是「没开」,不是「坏了」。任务同时把同样的数字写成 SysLog 行
+> (`log retention: deleted N row(s) from <table>` /
+> `log retention: <table> still has N row(s) past the window`),两边可以互核。
+
+## 039 索引失效(INVALID)怎么查
+
+删除靠 `idx_logs_tenant_created_id`(migration 039,`CREATE INDEX CONCURRENTLY`)走
+`(tenant_id, created_at)` 范围。CIC 中途失败会留下一个 planner 不用的 INVALID 索引,
+而 `IF NOT EXISTS` 下次启动会跳过它——表现为保留任务每批都慢、积压 gauge 不降。先查:
+
+```sql
+SELECT indexrelid::regclass AS invalid_index, indrelid::regclass AS on_table
+  FROM pg_index WHERE NOT indisvalid;
+```
+
+有结果就按 [database.md](database.md) "no-transaction migration" 一节的修复步骤
+(`DROP INDEX CONCURRENTLY` 后手工重建)。设了 `LOG_SQL_DSN` 的部署要在**日志库**上查。
 
 ## 回滚
 

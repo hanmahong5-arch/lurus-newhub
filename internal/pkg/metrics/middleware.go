@@ -53,6 +53,14 @@ func normalizeMethodLabel(method string) string {
 // keeps that out of the 5xx alarm. Other paths a human might also call
 // "a probe" (/api/uptime/status, the model-test endpoints) are not in this
 // map: they are not wired to a kubelet probe and their 5xx are real.
+//
+// The cost of listing /api/status here, stated rather than implied: it is
+// ALSO the console's bootstrap call (web/src reads it on every page load for
+// the option snapshot), so a genuine 500 on it is customer-visible and, by
+// this exclusion, unalarmed. Accepted for now because the alarm layer cannot
+// express "not during a rollout" — the drain gate is what makes the
+// exclusion necessary at all. Re-including it once netdata can be told
+// about rollouts is an owner item (cycle-13 plan §8, O-scrape).
 var kubernetesProbePaths = map[string]bool{
 	"/api/health": true,
 	"/api/status": true,

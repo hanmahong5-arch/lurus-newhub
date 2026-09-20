@@ -777,7 +777,7 @@ func TestCovHandlerPricing_FetchUpstreamRatios_InvalidBaseURLFiltered(t *testing
 	if resp["success"] != false {
 		t.Fatalf("expected success=false when every upstream is filtered out, body=%s", w.Body.String())
 	}
-	if resp["message"] != "无有效上游渠道" {
+	if resp["message"] != "no valid upstream channel" {
 		t.Errorf("unexpected message: %v", resp["message"])
 	}
 }
@@ -833,7 +833,7 @@ func TestCovHandlerPricing_FetchUpstreamRatios_ChannelIDs_NoMatch(t *testing.T) 
 	if resp["success"] != false {
 		t.Fatalf("expected success=false for channel_ids matching nothing, body=%s", w.Body.String())
 	}
-	if resp["message"] != "无有效上游渠道" {
+	if resp["message"] != "no valid upstream channel" {
 		t.Errorf("unexpected message: %v", resp["message"])
 	}
 }
@@ -1342,7 +1342,7 @@ func TestCovHandlerPricing_FetchUpstreamRatios_GetChannelsByIdsDBError(t *testin
 		t.Fatalf("expected 500 when the channels table is gone, got %d body=%s", w.Code, w.Body.String())
 	}
 	resp := handlerPricingParseBody(t, w)
-	if resp["message"] != "查询渠道失败" {
+	if resp["message"] != "failed to query channels" {
 		t.Errorf("unexpected message: %v", resp["message"])
 	}
 }

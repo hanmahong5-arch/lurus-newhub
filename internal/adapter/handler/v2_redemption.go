@@ -93,7 +93,9 @@ func RedeemCodeV2(c *gin.Context) {
 	// string-matching the (Chinese, switch-contract-pinned) message.
 	quota, err := repo.Redeem(redeemCode, tenantCtx.UserID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		// 400 for the caller's mistakes, 500 for a hub-side fault
+		// (REDEMPTION_FAILED) — see redemptionFailureStatus.
+		c.JSON(redemptionFailureStatus(err, http.StatusBadRequest), gin.H{
 			"success":    false,
 			"message":    repo.RedemptionErrorMessage(err),
 			"error_code": repo.RedemptionErrorCode(err),

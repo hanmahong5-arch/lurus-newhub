@@ -241,9 +241,17 @@ func SwitchRedeemAnonymous(c *gin.Context) {
 		// falls back to the same generic text. Log the real error
 		// server-side regardless.
 		common.SysError("switch redeem: redeem failed: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": repo.RedemptionErrorMessage(err),
+		// Caller-side outcomes keep the HTTP 200 envelope this endpoint has
+		// always answered (the Switch client parses the JSON body whatever
+		// the status and classifies by message substring); a hub-side fault
+		// (REDEMPTION_FAILED) answers 500 so a proxy, a log line or a client
+		// that does look at the status can tell an outage from a wrong code.
+		// error_code is additive — the client's substring classifier is
+		// untouched by it.
+		c.JSON(redemptionFailureStatus(err, http.StatusOK), gin.H{
+			"success":    false,
+			"message":    repo.RedemptionErrorMessage(err),
+			"error_code": repo.RedemptionErrorCode(err),
 		})
 		return
 	}

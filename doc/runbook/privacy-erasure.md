@@ -83,6 +83,13 @@ cycle-13 之前没有这条兜底,不认识的游标=静默空转:请求永远 p
    (`writeQuotaDataSnapshot`)。**没覆盖的**:请求还没走到 content 步骤时的 flush——
    那时表里本来就是明文,不算回写。
 3. **本轮之前完成的擦除没有跑过 content 步骤**:见下面的 owner 事项。
+4. **在途任务终态化绕过了退款路径**:content 步骤先把该用户还在轮询中的 `tasks` 行改成
+   FAILURE/100%(`TerminaliseOpenTasksForUser`),轮询器因此不再选中它们——但退款是
+   轮询器的 FAILURE 臂(`handler.refundTaskQuota`)做的,已经是 FAILURE 的行永远进不了
+   那条臂。结果:该任务的 **key 额度与租户池仍然是扣掉的**(用户余额那条腿无所谓,
+   账号正在被擦除;池是经销商付的钱,不无所谓)。同一 UPDATE 提交前已把行读进内存的
+   一次轮询 pass 仍会把 `data`/`fail_reason` 写回一次(与 MJ 的在途窗口同类,
+   步骤从游标重跑会再抹一次)。见下面的 O-erasure-inflight-refund。
 
 ## O-erasure-backfill(owner 事项,一次性)
 
@@ -118,6 +125,18 @@ UPDATE privacy_erasure_requests
   `users.deleted_at` 同样会被 `AnonymizeUserRow` 重写成重放时间。
 - 每条重放会再写一条 `privacy.erasure.completed` 审计事件。
 - **4-eyes**:这是一条批量 UPDATE 合规台账的语句,要第二个人复核 `<cutoff>` 与行数。
+
+## O-erasure-inflight-refund(owner 事项)
+
+擦除时被终态化的在途任务(上面残留第 4 条)没有走退款。要么在 content 步骤终态化**之前**
+对这些行调用与轮询器 FAILURE 臂相同的退款原语(`handler.refundTaskQuota`,它在 handler
+包,repo 层够不到——需要把退款原语下沉或让擦除执行器经 handler 调),要么接受"擦除请求
+里的在途任务不退款"并写进对客说明。查有没有这种行:
+
+```sql
+SELECT id, task_id, quota, submit_time FROM tasks
+ WHERE user_id = :uid AND status = 'FAILURE' AND fail_reason = '[erased]';
+```
 
 ## Verify(重放后 / 新请求完成后)
 

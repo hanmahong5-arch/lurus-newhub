@@ -13,8 +13,18 @@
 -- / 20 MB, so the plan is measured in seek time that does not exist yet;
 -- this ships before the table is large, not after.
 --
--- The trailing `id DESC` matches the (created_at DESC, id DESC) keyset the
--- list endpoints page with, so the same index serves the ORDER BY.
+-- The trailing `id DESC` makes the key order total: created_at has second
+-- resolution, so a busy tenant writes many rows per created_at value, and
+-- the list endpoints order by created_at DESC with offset paging
+-- (repo/log.go GetUserLogsWithParams / GetTenantLogsWithParams) — a total
+-- order lets the planner walk the index without a sort and keeps page
+-- boundaries stable between two reads of the same page.
+--
+-- LOG_SQL_DSN: the migration runner runs against the MAIN database only. A
+-- deployment that points `logs` at a separate database via LOG_SQL_DSN gets
+-- this index created on the wrong database (and recorded as applied); create
+-- it by hand on the log database with the statement below. Neither R6
+-- instance sets LOG_SQL_DSN as of 2026-09-20 (doc/runbook/database.md).
 --
 -- EXECUTION CONTRACT — read internal/pkg/migration/runner.go's
 -- NoTransactionDirective before editing this file:

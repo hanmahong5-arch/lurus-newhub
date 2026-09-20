@@ -929,7 +929,14 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	// If token quota update fails, we release the platform pre-auth rather than
 	// settling — prevents double-debit when local state is inconsistent.
 	localQuotaConsistent := true
-	if !relayInfo.IsPlayground {
+	// TokenId > 0: a caller with no key to charge (handler/task_video.go's
+	// re-settlement when the submission's payer could not be resolved passes
+	// TokenId 0) must not reach DecreaseTokenQuota(0, "", …) — the DB update
+	// matches no row, but the Redis arm keys a cache entry on the empty key
+	// and the batch arm queues a delta for id 0. Skipping the leg is the
+	// honest shape: there is no key ledger to move, and the pool leg above
+	// already skips for the same reason (cycle-13 hand-finish after L1).
+	if !relayInfo.IsPlayground && relayInfo.TokenId > 0 {
 		if quota > 0 {
 			err = decreaseTokenQuotaSeam(relayInfo.TokenId, relayInfo.TokenKey, quota)
 		} else {

@@ -10,8 +10,10 @@ import (
 // dashboard or alert is watching.
 const (
 	// TenantGateOutcomeDisabledDenied — the tenant row exists and
-	// Tenant.IsDisabled(); denied in every mode. This is the pre-cycle-12
-	// behaviour of the three middleware/auth.go call sites, now counted.
+	// Tenant.IsDisabled(); denied in every mode. Before cycle 12 this was
+	// the uncounted behaviour of the middleware/auth.go call sites; since
+	// cycle 13 (L9) the switch raw-token, heartbeat, credit-pool cookie and
+	// provision paths reach the same counter (see TenantGateTotal below).
 	TenantGateOutcomeDisabledDenied = "disabled_denied"
 	// TenantGateOutcomeMissingObserved — no tenant row, and
 	// TENANT_MISSING_MODE is not "enforce" (the default): the request was

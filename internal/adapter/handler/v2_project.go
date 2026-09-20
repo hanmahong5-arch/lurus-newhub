@@ -22,11 +22,15 @@ import (
 //   - WRITES are tenant-admin only (requireTenantAdmin, matching every other
 //     tenant-configuration surface). Renaming or deleting a project re-shapes
 //     every spend report the tenant reads.
-//   - READS are open to any user in the tenant. The token page needs a project
-//     picker, and an ordinary member creating their own key must be able to
-//     use it. This leaks nothing new: a project is a LABEL, not a permission
-//     boundary — this codebase has no tenant-level role table and no
-//     per-project subject to gate on (see entity/project.go).
+//   - READS of the project LIST are open to any user in the tenant. The token
+//     page needs a project picker, and an ordinary member creating their own
+//     key must be able to use it. This leaks nothing new: a project is a
+//     LABEL, not a permission boundary — this codebase has no tenant-level
+//     role table and no per-project subject to gate on (see entity/project.go).
+//   - The SPEND report (GET /projects/spend) is the exception since cycle 13
+//     L9: it rolls up every member's usage, so it is tenant-admin only
+//     (projectAdminCtx), and the console renders a restricted panel for a
+//     member instead of an empty report.
 //
 // Tenant isolation comes from the repo layer: every repo/project.go function
 // takes tenantID as a mandatory positional argument, so a project id belonging

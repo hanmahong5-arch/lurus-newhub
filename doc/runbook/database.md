@@ -38,7 +38,9 @@ UAT 1 副本 × 12 = 12,合计 48,仍在 100 以内且给其它服务留出余�
 `periodSeconds: 5` ⇒ 约 15s 持续失败才摘)。见 `db-pool-saturation.md`。
 
 可选独立日志库:`LOG_SQL_DSN`(不设则日志与主库同库)。设了它,`logs` 表的读写走另一个
-database/pool,连接预算要按两个池算。
+database/pool,连接预算要按两个池算。**migration runner 只跑主库**:039 这类只加索引的
+`CREATE INDEX CONCURRENTLY` 会建在主库并记为已应用,日志库上什么都没有——设了
+`LOG_SQL_DSN` 的部署要手工在日志库上执行 039 里那条语句(R6 两个实例 2026-09-20 均未设)。
 
 ## Backup
 
@@ -174,6 +176,10 @@ SELECT c.relname, i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid =
   WHERE c.relname = 'idx_logs_tenant_created_id';
 DROP INDEX CONCURRENTLY IF EXISTS idx_logs_tenant_created_id;
 -- 然后手工重跑 migrations/039_logs_tenant_created_index.sql 里那条语句
+
+-- 不只查这一个:任何 CIC 失败都会留 INVALID 索引,全库一句话找出来
+SELECT indexrelid::regclass AS invalid_index, indrelid::regclass AS on_table
+  FROM pg_index WHERE NOT indisvalid;
 ```
 
 第一个使用者 = `migrations/039_logs_tenant_created_index.sql`

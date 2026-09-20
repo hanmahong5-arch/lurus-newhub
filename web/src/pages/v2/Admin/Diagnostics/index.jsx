@@ -62,29 +62,30 @@ const fmtPct = (v) => `${Number(v ?? 0).toFixed(1)}%`;
 // classifyLoad() (helpers/loadState.js), then extracts the handler's own
 // `data` object (plus `scope` when the response has one) for the 'ok' case.
 // classifyLoad's 'unauthenticated' collapses into 'forbidden' here: neither
-// caller below distinguishes "not logged in" from "logged in without root",
-// and both refusal shapes this page has actually seen are already
-// 'forbidden' — a logged-in non-root session's HTTP 200 {"success":false}
-// from the session-auth branch (internal/adapter/middleware/auth.go:305-311)
-// and a non-root Bearer JWT's 403 from RootJWTAuth's JWT branch
-// (internal/adapter/middleware/admin_jwt_auth.go:92-99). A genuine backend
-// failure (network error, or the 500 GetAdminTotpStatsV2 answers when its
-// aggregate query fails, v2_admin_security.go:42-46) is 'error' and must
-// not be rendered as zeroed data.
+// caller below distinguishes "not logged in" from "logged in without root".
 //
-// The one place this page is deliberately looser than classifyLoad: a
-// response that RESOLVED with a non-success body counts as the refusal here
-// whatever its message. classifyLoad only trusts the two refusal shapes it
-// can recognise (PERMISSION_DENIED / the v1 minRole message) because other
-// pages' handlers also answer 200 {success:false} for non-permission
-// reasons. These two root-gated GETs answer 200 with success:true
-// (v2_admin_routing.go:63, v2_admin_security.go:48) and take their failure
-// arms out at 500, which axios delivers as a rejection — so a RESOLVED
-// non-success body on this page came from the auth layer in front of them.
+// What a refusal looks like on these two root-gated GETs, checked against
+// the code rather than remembered: both sit behind middleware.RootJWTAuth()
+// (router/api-v2-router.go, the adminRoute group), whose session arm
+// rewrites the v1-shaped HTTP 200 {"success":false,"message":"…权限不足"}
+// into a 403 PERMISSION_DENIED envelope (admin_jwt_auth.go,
+// rootSessionDenialsByMessage) and whose Bearer-JWT arm answers 403
+// outright. A refusal therefore REACHES this page as a rejected 403 — never
+// as a resolved 200 — and classifyLoad reads it as 'forbidden' unaided.
+//
+// So a RESOLVED non-success body is not a refusal in disguise. The handlers
+// themselves (v2_admin_routing.go GetAffinityStatsV2, v2_admin_security.go
+// GetAdminTotpStatsV2) answer 200 only with success:true and take their
+// failure arms out at 500, which axios delivers as a rejection; whatever
+// answers 200 {success:false} is something this page does not understand,
+// and the honest rendering is the per-panel "unavailable" marker ('error'),
+// not the permission notice. The first cut of this file carved that case
+// out as 'forbidden' on the strength of a claim about the session arm that
+// was no longer true at HEAD; the acceptance round caught it and the
+// carve-out is gone.
 const classifySettled = (settled) => {
   const raw = classifyLoad(settled);
-  let status = raw === 'unauthenticated' ? 'forbidden' : raw;
-  if (settled.status === 'fulfilled' && status !== 'ok') status = 'forbidden';
+  const status = raw === 'unauthenticated' ? 'forbidden' : raw;
   if (status === 'ok' && settled.status === 'fulfilled') {
     const body = settled.value?.data;
     return { status, data: body?.data, scope: body?.scope ?? null };

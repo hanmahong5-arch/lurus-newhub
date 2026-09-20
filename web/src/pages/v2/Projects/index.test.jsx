@@ -137,6 +137,22 @@ describe('Projects page', () => {
     await waitFor(() => screen.getByTestId('proj-empty'));
   });
 
+  // The spend panel's three states are list / forbidden / error-with-retry;
+  // the fourth outcome — the report answered and has zero rows — must render
+  // its own empty copy, not a blank panel and not a table with no rows.
+  // Mutation that must turn this red: delete the `spend.length === 0`
+  // branch in the spend panel.
+  it('renders the empty spend state when the report answers with zero rows', async () => {
+    wireGet({ projects: [project()], spend: [] });
+
+    render(<HFProjects />);
+
+    await waitFor(() => screen.getByTestId('proj-spend-empty'));
+    expect(screen.queryByTestId('proj-spend-table')).toBeNull();
+    expect(screen.queryByTestId('proj-spend-error')).toBeNull();
+    expect(screen.queryByTestId('proj-spend-forbidden')).toBeNull();
+  });
+
   it('creates a project via POST with a trimmed name', async () => {
     wireGet({});
     API.post.mockResolvedValue({ data: { success: true, data: project() } });

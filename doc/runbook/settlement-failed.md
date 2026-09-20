@@ -217,3 +217,23 @@ rather than the difference being recorded as a `system` log row that no
 invoice counts. The platform wallet leg of a re-settlement is deliberately
 not fired from the poller: the task's wallet money is bound to the
 submission's pre-auth, which this path has no handle on.
+
+Two more residues of that payer lookup, recorded here rather than implied
+(cycle-13 acceptance):
+
+- `resolveTaskChargeLedger` inspects only the 50 newest matching consume rows
+  (`taskChargeCandidates`). A user who submits more than 50 identically-shaped
+  tasks (same channel, same estimate) inside the lookback window before the
+  first of them settles pushes the real submission out of that window; the
+  refund then resolves against a newer row of the same key. Key and tenant
+  are still right — every candidate must name one key or the lookup declines
+  — only `LogID` may point at a sibling submission.
+- Video re-settlement rewrites the NEWEST row that matches the estimate, not
+  provably the row of the task being settled: with several in-flight video
+  tasks of the same estimate the rewrite can land on a sibling's row. The
+  invoice total is unchanged either way (one row per task, each rewritten
+  once); per-row attribution is what can be off.
+
+Both go away when `tasks` carries `token_id` / `tenant_id` (and the consume
+row's `log_id`) of its own — **O-task-payer**, a later migration, not this
+cycle's.

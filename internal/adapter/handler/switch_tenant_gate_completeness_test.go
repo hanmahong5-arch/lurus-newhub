@@ -71,9 +71,52 @@ var switchTenantGateExemptions = map[string]string{
 		"exempt the bootstrap \"default\" tenant, which this path deliberately refuses instead.",
 }
 
-// switchRouteRegistration matches `switchGroup.POST("/user/topup", mw(), handler.SwitchUserTopup)`.
+// switchRouteRegistration matches ONE registration statement after
+// switchRegistrationStatements has collapsed it onto a single line:
+// `switchGroup.POST("/user/topup", mw(), handler.SwitchUserTopup)`.
 var switchRouteRegistration = regexp.MustCompile(
-	`switchGroup\.(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\(\s*"([^"]*)"\s*,([^\n]*)\)`)
+	`^switchGroup\.(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\(\s*"([^"]*)"\s*,(.*)\)$`)
+
+// switchRegistrationStart finds where each registration statement begins.
+var switchRegistrationStart = regexp.MustCompile(`switchGroup\.(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\(`)
+
+// switchRegistrationStatements cuts the block into one string per
+// registration — from `switchGroup.VERB(` to its matching `)` — with every
+// run of whitespace, newlines included, collapsed to one space. A
+// gofmt-wrapped registration such as
+//
+//	switchGroup.POST("/user/topup",
+//		middleware.RedemptionRateLimit(),
+//		handler.SwitchUserTopup)
+//
+// is therefore ONE statement here. The first cut applied a line-bound regex
+// to the raw block and saw nothing for that shape — a route could have been
+// registered wrapped and never been checked (acceptance minor, closed in the
+// hand-finish; TestSwitchRoutes_SeesWrappedRegistrations pins it).
+func switchRegistrationStatements(t *testing.T, block string) []string {
+	t.Helper()
+	var out []string
+	for _, loc := range switchRegistrationStart.FindAllStringIndex(block, -1) {
+		open := loc[1] - 1 // the "(" the start pattern ends on
+		depth, end := 0, -1
+		for i := open; i < len(block) && end < 0; i++ {
+			switch block[i] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					end = i + 1
+				}
+			}
+		}
+		if end < 0 {
+			t.Fatalf("unbalanced parentheses after %q in the /switch block", block[loc[0]:loc[1]])
+		}
+		out = append(out, strings.Join(strings.Fields(block[loc[0]:end]), " "))
+	}
+	return out
+}
 
 // switchHandlerRef pulls the LAST handler.Xxx reference out of a registration
 // line — gin's final argument is the handler, anything before it is middleware.
@@ -125,7 +168,11 @@ func switchRoutes(t *testing.T, block string) []switchRoute {
 			"gate — extend switchRoutes before landing that")
 	}
 	var out []switchRoute
-	for _, m := range switchRouteRegistration.FindAllStringSubmatch(block, -1) {
+	for _, stmt := range switchRegistrationStatements(t, block) {
+		m := switchRouteRegistration.FindStringSubmatch(stmt)
+		if m == nil {
+			t.Fatalf("registration %q is not a shape this gate can read — extend switchRouteRegistration rather than let it pass unseen", stmt)
+		}
 		refs := switchHandlerRef.FindAllStringSubmatch(m[3], -1)
 		if len(refs) == 0 {
 			t.Errorf("registration %s %s names no handler.Xxx — this gate cannot tell what it runs", m[1], m[2])
@@ -321,5 +368,29 @@ func TestSwitchTenantGateScanFollowsTheSharedHelper(t *testing.T) {
 		t.Errorf("GetSwitchPricing reads as reaching %s via %s — either the rate card really does gate on "+
 			"the tenant now (update the exemption) or the scan is over-reaching",
 			switchTenantGateSink, strings.Join(path, " -> "))
+	}
+}
+
+// TestSwitchRoutes_SeesWrappedRegistrations is the parser's own oracle: a
+// registration gofmt has wrapped across lines must come out as one route
+// with the right handler. Mutation that must turn this red: apply
+// switchRouteRegistration to the raw block line by line again (the first
+// cut) — the wrapped POST then vanishes and only one route is returned.
+func TestSwitchRoutes_SeesWrappedRegistrations(t *testing.T) {
+	block := "\t\t\tswitchGroup.GET(\"/one\", handler.One)\n" +
+		"\t\t\t// a comment between registrations\n" +
+		"\t\t\tswitchGroup.POST(\"/two\",\n" +
+		"\t\t\t\tmiddleware.RedemptionRateLimit(),\n" +
+		"\t\t\t\thandler.Two)\n" +
+		"\t\t\tswitchGroup.GET(\"/three\", middleware.A(), middleware.B(), handler.Three)\n"
+	routes := switchRoutes(t, block)
+	if len(routes) != 3 {
+		t.Fatalf("got %d routes, want 3 (the wrapped POST must not vanish): %+v", len(routes), routes)
+	}
+	want := []switchRoute{{"GET", "/one", "One"}, {"POST", "/two", "Two"}, {"GET", "/three", "Three"}}
+	for i, r := range routes {
+		if r != want[i] {
+			t.Errorf("route %d = %+v, want %+v", i, r, want[i])
+		}
 	}
 }

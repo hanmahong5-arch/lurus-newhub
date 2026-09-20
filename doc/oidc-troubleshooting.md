@@ -20,14 +20,14 @@
 
 ```bash
 # 1. Confirm newhub initialized OIDC (look for the init log line)
-kubectl logs -n lurus-system -l app=lurus-api --tail=200 | grep -i "OIDC\|JWKS"
+kubectl logs -n lurus-newhub -l app=lurus-newhub --tail=200 | grep -i "OIDC\|JWKS"
 #   Expect: "OIDC authentication initialized successfully"
 #           "Successfully refreshed N JWKS keys"
 
 # 2. Verify the provider discovery doc + JWKS are reachable from the pod
-kubectl exec -n lurus-system <pod> -- \
+kubectl exec -n lurus-newhub <pod> -- \
   curl -s <OIDC_ISSUER>/.well-known/openid-configuration | jq '{issuer, jwks_uri}'
-kubectl exec -n lurus-system <pod> -- curl -s <OIDC_JWKS_URI> | jq '.keys | length'
+kubectl exec -n lurus-newhub <pod> -- curl -s <OIDC_JWKS_URI> | jq '.keys | length'
 #   Expect: a non-zero RSA key count.
 
 # 3. Decode a failing token (no verification) to inspect iss/aud/claims

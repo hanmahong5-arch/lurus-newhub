@@ -425,10 +425,14 @@ const HFDashboard = () => {
     !loading && (isLoadFailed(meStatus) || isLoadFailed(logsStatus));
   // What an empty panel's caption says. fetchData() clears `logs` on a
   // failed pass, so every "…and there is nothing" caption below would
-  // otherwise be asserting a check that did not happen.
+  // otherwise be asserting a check that did not happen. Before the first
+  // pass settles (logsStatus null) the caption says loading — the KPI
+  // number above it is already "…", and "no traffic in last 5 min" at that
+  // moment would be a claim about a check that has not run yet.
   const unableText = t('console.dashboard.load_failed_short', 'unable to load');
+  const pendingText = t('console.common.loading', 'loading…');
   const settledCaption = (okText) =>
-    captionText(logsStatus, okText, unableText);
+    captionText(logsStatus, okText, unableText, pendingText);
 
   // Only fetched once onboarding actually needs to render — avoids an
   // extra request for every returning customer who already has a token.

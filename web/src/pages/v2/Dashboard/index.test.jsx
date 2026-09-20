@@ -820,8 +820,35 @@ describe('Dashboard page — honest load failure (meStatus/logsStatus)', () => {
       // No formatted-zero KPI either — "$0.00" is as much a confirmed-empty
       // claim as the prose above.
       expect(screen.queryByText('$0.00')).toBeNull();
+      // And the captions say what DID happen: the absence of the empty
+      // copy alone would also pass for a caption that says nothing.
+      expect(screen.getAllByText('unable to load').length).toBeGreaterThan(0);
     },
   );
+
+  it('says loading — not confirmed-empty — while the first fetch is still in flight', async () => {
+    // Neither KPI-strip call ever settles: the page sits in its pre-settle
+    // window for the whole test. Mutation that must turn this red: pass no
+    // pendingText to captionText (the first cut printed "no traffic in last
+    // 5 min" under a "…" number here).
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me') || u.includes('/logs'))
+        return new Promise(() => {});
+      return Promise.resolve({ data: { success: true, data: {} } });
+    });
+
+    render(React.createElement(HFDashboard));
+
+    expect(screen.queryByText('no traffic in last 5 min')).toBeNull();
+    // Scoped to the QPS panel: the page prints "loading…" in two other
+    // places while loading, so a page-wide count would pass with an empty
+    // caption. The panel's KPI number is "…", so "loading…" inside it can
+    // only be the caption.
+    const qpsPanel = screen.getAllByText('qps')[0].closest('.panel');
+    expect(qpsPanel.textContent).toContain('loading…');
+    expect(screen.queryByTestId('dashboard-load-error')).toBeNull();
+  });
 
   it('a successful fetch with real rows shows real numbers, not the retry banner', async () => {
     const now = Math.floor(Date.now() / 1000);

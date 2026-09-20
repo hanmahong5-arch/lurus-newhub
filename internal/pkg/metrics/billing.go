@@ -140,11 +140,11 @@ var (
 
 	// BillingSettlementFailedTotal counts consume-quota settlement calls that
 	// returned an error, labeled by which relay path failed to settle (text/
-	// claude/audio — the three sites that route through app.SettleConsume:
-	// relay.postConsumeQuota, app.PostClaudeConsumeQuota,
-	// app.PostAudioConsumeQuota). Other PostConsumeQuota callers
-	// (internal/app/relay/mjproxy_handler.go, internal/app/relay/relay_task.go)
-	// and the realtime path (quota.go PostWssConsumeQuota) are not counted
+	// claude/audio/realtime — the four sites that route through
+	// app.SettleConsume: relay.postConsumeQuota, app.PostClaudeConsumeQuota,
+	// app.PostAudioConsumeQuota and, since cycle 13 L1, app.PostWssConsumeQuota).
+	// Other PostConsumeQuota callers (internal/app/relay/mjproxy_handler.go,
+	// internal/app/relay/relay_task.go, handler/task_video.go) are not counted
 	// here — see doc/runbook/settlement-failed.md's "Not covered this cycle"
 	// section. The consume log row for that request is still written at the
 	// same quota it would have carried anyway (neither RecordConsumeLog nor

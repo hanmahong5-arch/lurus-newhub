@@ -26,7 +26,11 @@ package middleware
 //     sessionRotatedAtKey);
 //   - a key it cannot resolve on a session receiver, and an identity key on
 //     a receiver it cannot classify, are reported as PROBLEMS — the gate
-//     fails rather than skipping the site.
+//     fails rather than skipping the site. "Cannot classify" covers a bare
+//     identifier bound neither from sessions.Default(c) nor typed
+//     *gin.Context AND any non-identifier receiver (`h.s.Set(…)`,
+//     `f().Set(…)`, `xs[i].Set(…)`) — the acceptance round found the first
+//     cut treating the latter as "not a session" and staying silent.
 //
 // Two deliberate limits, stated rather than papered over: _test.go files are
 // skipped (the subject is production identity writes), and a write hidden
@@ -40,6 +44,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"sort"
@@ -256,7 +261,7 @@ const (
 	receiverOther   receiverKind = iota // not a gin context and not a session (url.Values, http.Header, a prometheus gauge…)
 	receiverGin                         // c.Set(…) — a gin context key
 	receiverSession                     // a gin-contrib session
-	receiverUnknown                     // a bare identifier the gate cannot place
+	receiverUnknown                     // a receiver the gate cannot place: an unbound bare identifier, or any selector/index/call expression
 )
 
 // classifyReceiver places the expression a .Set() was called on.
@@ -266,7 +271,11 @@ func classifyReceiver(x ast.Expr, ginIdents, sessionIdents map[string]bool) (rec
 	}
 	ident, ok := x.(*ast.Ident)
 	if !ok {
-		return receiverOther, ""
+		// A selector, index or call receiver (`h.s.Set`, `xs[i].Set`,
+		// `f().Set`): the gate cannot place it either, so it is treated like
+		// an unbound identifier — an identity key on it is a problem, any
+		// other key stays silent. Rendered for the problem message.
+		return receiverUnknown, types.ExprString(x)
 	}
 	switch {
 	case ginIdents[ident.Name]:
@@ -495,6 +504,16 @@ func Noise(c *gin.Context) {
 	params.Set("client_id", "x")
 	params.Set(dynamic(), "y")
 }`,
+		// a session reached through a field: the gate cannot place `h.s`, so
+		// the identity write on it must be a PROBLEM, not silence — and the
+		// non-identity write next to it must not add a second one.
+		"g_selector.go": `package p
+type holder struct{ s sessions.Session }
+
+func SelectorReceiver(h holder) {
+	h.s.Set("id", 1)
+	h.s.Set("client_id", "x")
+}`,
 	}
 
 	fset := token.NewFileSet()
@@ -537,6 +556,12 @@ func Noise(c *gin.Context) {
 	}
 	if strings.Contains(problems, "f_noise.go") {
 		t.Errorf("a non-session receiver with an unreadable key is not this gate's business, got: %q", problems)
+	}
+	if n := strings.Count(problems, "g_selector.go"); n != 1 {
+		t.Errorf("an identity write on a receiver the gate cannot place (h.s.Set(\"id\", …)) must be reported exactly once, got %d in: %q", n, problems)
+	}
+	if !strings.Contains(problems, "h.s.Set(\"id\"") {
+		t.Errorf("the problem line must name the receiver expression h.s, got: %q", problems)
 	}
 }
 

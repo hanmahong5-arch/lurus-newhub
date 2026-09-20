@@ -31,7 +31,8 @@ For commercial licensing, please contact support@quantumnous.com
 // rejected". `error_code` is the v2 envelope's machine-readable half
 // (internal/adapter/middleware/admin_jwt_auth.go's denial table); the
 // message string is the v1 session-auth branch's refusal
-// (internal/adapter/middleware/auth.go:321, `roleVal < minRole`), which is
+// (internal/adapter/middleware/auth.go, resolveSessionIdentity's
+// `roleVal < minRole` branch — the literal lives there), which is
 // part of the documented v1 response contract (switch consumes it), not
 // incidental copy. Anything else that answers 200 {success:false} — a
 // rejected filter window, a banned-user notice, a maintenance page — is
