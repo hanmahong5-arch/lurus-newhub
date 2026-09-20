@@ -6,18 +6,22 @@ package lifecycle
 // pod on the cluster (the one still finishing in-flight relay streams when
 // the budget expired) crash-looped instead of exiting cleanly, there was no
 // readiness flip to pull it out of the Service's endpoint list first, and
-// nothing recorded how many requests got cut. Drainer fixes all three: it is
-// the single source of truth GetHealthDetailed (and, once W wires it,
-// GetStatus) consult to fail readiness/liveness the instant a shutdown
+// nothing recorded how many requests got cut. Drainer answers the three: it
+// is the single source of truth GetHealthDetailed (readiness) and GetStatus
+// (startup + liveness) consult to fail their probes the instant a shutdown
 // signal is observed, and it turns a budget timeout into an accounted,
 // non-fatal outcome.
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync/atomic"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
+
+	dto "github.com/prometheus/client_model/go"
 )
 
 // Drainer tracks whether this process has begun draining for shutdown and
@@ -37,9 +41,9 @@ func NewDrainer() *Drainer {
 
 // defaultDrainer is the process-wide instance. Handlers in this codebase are
 // plain gin.HandlerFunc values with no dependency injection (the same
-// pattern common.IsLeader/SetLeader uses for HA state) — health.go, and
-// misc.go's GetStatus once W wires it, import this package and call the
-// free functions below rather than threading a *Drainer through gin.
+// pattern common.IsLeader/SetLeader uses for HA state) — health.go and
+// misc.go's GetStatus import this package and call the free functions below
+// rather than threading a *Drainer through gin.
 var defaultDrainer = NewDrainer()
 
 // Default returns the process-wide Drainer singleton. main.go's shutdown
@@ -75,9 +79,9 @@ func (d *Drainer) IsDraining() bool {
 	return d.draining.Load()
 }
 
-// ResetForTest restores d to the not-draining state. Production code never
-// calls this — draining has no way back for the remaining life of the
-// process it belongs to. It exists so tests that mark the process-wide
+// ResetForTest restores d to the not-draining state. It is meant for tests:
+// draining has no way back for the remaining life of the process it belongs
+// to, so a production caller would be a bug. It exists so tests that mark the process-wide
 // Default() draining (health_draining_test.go, in package handler) can undo
 // that afterward instead of leaking a permanently-drained flag into every
 // later test in the same binary, mirroring the *ForTest reset convention
@@ -87,35 +91,74 @@ func (d *Drainer) ResetForTest() {
 }
 
 // Shutdown marks d draining, then attempts a graceful HTTP shutdown within
-// ctx's deadline. Two outcomes:
+// ctx's deadline. Three outcomes, none of which returns a non-nil error —
+// the caller (main.go) must not FatalLog/os.Exit(1) on a shutdown that ran
+// out of budget, which is exactly what GRACEFUL_SHUTDOWN_TIMEOUT used to
+// cause:
 //
-//   - ctx does not expire first: srv.Shutdown returns nil once every
-//     connection has gone idle and closed on its own. cut is 0 and inflight
-//     is never even consulted — nothing was cut.
-//   - ctx expires first: srv.Shutdown returns ctx's error (normally
-//     context.DeadlineExceeded). That is the expected result of a budget,
-//     not a process failure, so Shutdown always returns a nil error here —
-//     the caller (main.go) must not FatalLog/os.Exit(1) on it, which is
-//     exactly what running out of GRACEFUL_SHUTDOWN_TIMEOUT used to do. cut
-//     is whatever inflight() reports at that instant, logged for the runbook
-//     and (once L10's metrics.go declares lurus_gateway_shutdown_cut_requests_total)
-//     recorded as a counter — until then this SysLog line is the only record,
-//     same placeholder-then-wire pattern as L1's wallet-leg counter.
+//   - srv.Shutdown returns nil: every connection went idle and closed on its
+//     own inside the budget. cut is 0 and inflight is not consulted —
+//     nothing was cut.
+//   - ctx expires first: srv.Shutdown returns context.DeadlineExceeded. That
+//     is the expected result of a budget, not a process failure. cut is
+//     whatever inflightRequests reports at that instant, logged for the
+//     runbook (doc/runbook/graceful-drain.md) and, once a counter named
+//     lurus_gateway_shutdown_cut_requests_total exists in internal/pkg/metrics
+//     (not declared there at the time of writing — grep the package before
+//     assuming otherwise), recorded as a counter too; until then this SysLog
+//     line is the record.
+//   - srv.Shutdown returns some other error: net/http hands back the first
+//     listener-close failure, and it does so only after every connection has
+//     gone idle (net/http.Server.Shutdown returns lnerr from inside the
+//     closeIdleConns loop). So nothing was cut here either — cut is 0 and the
+//     error gets its own log line instead of being dressed up as a budget
+//     timeout with a meaningless count, which is what the first cut of this
+//     file did.
 //
-// inflight may be nil (treated as always-0); srv must not be nil.
+// inflight may be nil, in which case the count comes from the in-flight
+// request gauge; see inflightRequests. srv must not be nil.
 func (d *Drainer) Shutdown(ctx context.Context, srv *http.Server, inflight func() int) (int, error) {
 	d.MarkDraining()
 
 	shutdownErr := srv.Shutdown(ctx)
-	if shutdownErr == nil {
-		common.SysLog("graceful shutdown: complete within budget, cut=0")
+	switch {
+	case shutdownErr == nil:
+		common.SysLog("graceful shutdown: complete within budget, cut=0 requests")
+		return 0, nil
+	case errors.Is(shutdownErr, context.DeadlineExceeded):
+		cut := inflightRequests(inflight)
+		common.SysLogf("graceful shutdown: budget exceeded, cut=%d in-flight request(s)", cut)
+		return cut, nil
+	default:
+		common.SysLogf("graceful shutdown: shutdown error (not a budget timeout), cut=0 requests: %v", shutdownErr)
 		return 0, nil
 	}
+}
 
-	cut := 0
+// inflightRequests reports how many requests were still being served at the
+// moment the shutdown budget expired.
+//
+// The caller may supply its own probe (a test does; main.go may too, e.g.
+// from an http.Server.ConnState hook). With inflight nil the count comes
+// from metrics.ActiveConnections, which despite its name is a request gauge:
+// internal/pkg/metrics/middleware.go:50-51 Incs it on entry and Decs it on
+// exit around c.Next(), and router/main.go:26 installs that middleware on the
+// whole engine. Reading it in-process through the client library's own
+// Write(&dto.Metric{}) — the mechanism testutil.ToFloat64 uses — avoids
+// scraping and parsing /metrics from inside the process that is shutting
+// down. A negative or unreadable value is reported as 0 rather than a
+// nonsense count.
+func inflightRequests(inflight func() int) int {
 	if inflight != nil {
-		cut = inflight()
+		return inflight()
 	}
-	common.SysLogf("graceful shutdown: budget exceeded, cut=%d in-flight request(s): %v", cut, shutdownErr)
-	return cut, nil
+	var m dto.Metric
+	if err := metrics.ActiveConnections.Write(&m); err != nil {
+		return 0
+	}
+	value := m.GetGauge().GetValue()
+	if value <= 0 {
+		return 0
+	}
+	return int(value)
 }

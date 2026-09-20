@@ -25,9 +25,10 @@ Before cycle 13, `cmd/server/main.go`'s shutdown goroutine called
 `httpServer.Shutdown(shutdownCtx)` directly. Three problems:
 
 1. **No readiness flip.** Nothing told `GET /api/health` (the readiness
-   probe) that the pod was shutting down, so kubelet kept routing new
-   traffic to it for the entire window between SIGTERM and the pod actually
-   dying — right when the pod is least able to finish new work.
+   probe) that the pod was shutting down, so the pod stayed in the Service's
+   endpoint list and new traffic kept arriving for the whole window between
+   SIGTERM and the pod actually dying — right when it is least able to
+   finish new work.
 2. **A budget timeout crashed the process.** `httpServer.Shutdown` returns
    `context.DeadlineExceeded` when the budget runs out with connections
    still open. That error propagated through the `errgroup` to `main()`,
@@ -38,11 +39,20 @@ Before cycle 13, `cmd/server/main.go`'s shutdown goroutine called
 3. **No accounting.** Even on the timeout path, there was no count of how
    many connections got cut, only a generic error log line.
 
-`internal/lifecycle/drain.go`'s `Drainer` fixes all three: `MarkDraining`
-flips a process-wide flag `GetHealthDetailed` (and, once wired, `GetStatus`)
-check first and unconditionally; `Shutdown` always returns a nil error
-(a budget timeout is an expected outcome, not a fault) and returns the
-number of connections it had to give up on.
+`internal/lifecycle/drain.go`'s `Drainer` answers the three: `MarkDraining`
+flips a process-wide flag that both `GetHealthDetailed`
+(`internal/adapter/handler/health.go`, readiness) and `GetStatus`
+(`internal/adapter/handler/misc.go`, startup + liveness) check first and
+unconditionally; `Shutdown` returns a nil error on each of its three
+outcomes (a budget timeout is an expected outcome, not a fault) and reports
+how many in-flight **requests** it had to give up on. That count comes from
+`metrics.ActiveConnections`, which `internal/pkg/metrics/middleware.go:50-51`
+Inc/Decs around `c.Next()` for every request the engine serves, so it is a
+request count rather than a connection count. A `srv.Shutdown` error that is
+*not* `context.DeadlineExceeded` (net/http hands back the first
+listener-close failure, and only once every connection has gone idle) gets
+its own log line — `graceful shutdown: shutdown error (not a budget
+timeout)` — and a cut of 0, because on that path nothing was cut.
 
 ## Timeline
 
@@ -53,56 +63,68 @@ T+0s    SIGTERM delivered to the pod (kubelet begins termination)
         │  signal, and gives the Service's endpoint controller time to stop
         │  sending new connections here.
 T+5s    signal.NotifyContext's ctx fires → main.go's shutdown goroutine
-        runs → lifecycle.Default().Shutdown(shutdownCtx, httpServer, inflight):
+        runs → lifecycle.Default().Shutdown(shutdownCtx, httpServer, nil):
         ├─ MarkDraining() — from this instant, GET /api/health and
-        │  GET /api/status answer 503 {"status":"draining"} immediately,
-        │  without touching the DB/Redis/billing checks.
+        │  GET /api/status answer 503 draining immediately, without
+        │  touching the DB/Redis/billing checks.
         ├─ httpServer.Shutdown(shutdownCtx budget) — stops accepting new
         │  connections, waits for in-flight ones to finish on their own.
-T+5s..  Two outcomes:
-T+80s     (a) every connection finishes before the budget elapses:
-              Shutdown returns nil, cut=0, process exits 0.
-          (b) the budget (GRACEFUL_SHUTDOWN_TIMEOUT, prod/UAT: 75s) elapses
-              with connections still open: Shutdown logs
-              "graceful shutdown: budget exceeded, cut=N in-flight
-              request(s)" and returns (N, nil) — NOT an error. The process
-              still exits 0.
-T+90s   terminationGracePeriodSeconds — kubelet SIGKILLs the pod if it has
-        not exited on its own by now. With preStop=5s + GRACEFUL_SHUTDOWN_
-        TIMEOUT=75s that leaves a 10s margin for the rest of run()'s cleanup
-        (DB close, tracing shutdown) — deploy_consistency_test asserts
-        tgps ≥ preStop + graceful + 10 (W-owned gate).
+        │  The nil third argument means "count in-flight requests from
+        │  metrics.ActiveConnections"; a caller may pass its own probe.
+T+5s..  Three outcomes:
+        (a) every connection finishes before the budget elapses:
+            Shutdown returns nil, cut=0, process exits 0.
+        (b) the budget (GRACEFUL_SHUTDOWN_TIMEOUT — see the table below
+            for the manifest value) elapses with connections still open:
+            Shutdown logs "graceful shutdown: budget exceeded, cut=N
+            in-flight request(s)" and returns (N, nil) — NOT an error. The
+            process still exits 0.
+        (c) srv.Shutdown fails for some other reason (a listener-close
+            error): logged as "graceful shutdown: shutdown error (not a
+            budget timeout)" with cut=0, also (0, nil).
+T+tgps  terminationGracePeriodSeconds — kubelet SIGKILLs the pod if it has
+        not exited on its own by now. The target this cycle sets is
+        preStop=5s + GRACEFUL_SHUTDOWN_TIMEOUT=75s + a 10s margin for the
+        rest of run()'s cleanup (DB close, tracing shutdown, the quota_data
+        flush below) = tgps 90. The matching `deploy_consistency_test`
+        assertion (tgps ≥ preStop + graceful + 10) lands with the manifest
+        change in the wiring step of this same PR — until then, read the
+        live values with the Verify commands below rather than trusting
+        this paragraph.
 ```
 
 ## What gets cut
 
 A request is "cut" only if it is still in flight when the graceful-shutdown
 budget (`GRACEFUL_SHUTDOWN_TIMEOUT`) elapses — `http.Server.Shutdown` itself
-never interrupts a connection before that; it just stops accepting new ones
+does not interrupt a connection before that; it just stops accepting new ones
 and waits. In practice this means:
 
 - A relay stream (SSE, or any handler whose response takes longer than the
   budget to finish) started shortly before SIGTERM and still running when
   the budget runs out.
 - **`ReadTimeout`/`WriteTimeout` stay at 0** (cycle 12 do-not-regress,
-  `cmd/server/main.go`'s `buildHTTPServer` doc comment) — a request is never
-  cut by a per-request timeout, only by the shutdown budget itself.
-- A stream longer than `GRACEFUL_SHUTDOWN_TIMEOUT` (75s) is cut on **every**
-  rolling deploy, not just incidents — `STREAMING_TIMEOUT` (300s) is the
-  documented upper bound for how long a relay stream may run, and it is
-  larger than the shutdown budget. Whether to raise
+  `cmd/server/main.go`'s `buildHTTPServer` doc comment) — no per-request
+  timeout cuts a request; the shutdown budget is what does.
+- A stream still running when `GRACEFUL_SHUTDOWN_TIMEOUT` elapses is cut by
+  a routine rolling deploy, not just by incidents — `STREAMING_TIMEOUT`
+  (300s) is the documented upper bound for how long a relay stream may run,
+  and it is larger than the shutdown budget. Whether to raise
   `GRACEFUL_SHUTDOWN_TIMEOUT`/`terminationGracePeriodSeconds` to cover the
-  full streaming timeout is **O-tgps** (owner decision, `_bmad-output/planning-artifacts/cycle13-industrial-grade-2026-09-20.md`
-  §8) — this cycle ships 75s/90s, enough to cover the large majority of
-  relay calls without stretching every rollout's wall-clock time by 5
-  minutes.
+  full streaming timeout is **O-tgps** (owner decision,
+  `_bmad-output/planning-artifacts/cycle13-industrial-grade-2026-09-20.md`
+  §8) — this cycle targets 75s/90s, enough for the large majority of relay
+  calls without stretching each rollout's wall-clock time by 5 minutes.
 
 ## Readiness vs liveness during drain
 
-Both `GET /api/health` (readinessProbe) and `GET /api/status` (startupProbe
-+ livenessProbe, `deploy/k8s/r6-stage/deployment.yaml:271,283`) check
-`lifecycle.IsDraining()` first and answer 503 `{"status":"draining"}` before
-touching any dependency. This is deliberate for both probes, not just
+Both `GET /api/health` (readinessProbe, `internal/adapter/handler/health.go`)
+and `GET /api/status` (startupProbe + livenessProbe,
+`deploy/k8s/r6-stage/deployment.yaml:271,283`, handler in
+`internal/adapter/handler/misc.go`) check `lifecycle.IsDraining()` first and
+answer 503 before touching any dependency — `{"status":"draining"}` from
+health, `{"success":false,"status":"draining"}` from status (that endpoint's
+clients read `success`). This is deliberate for both probes, not just
 readiness:
 
 - **Readiness** failing pulls the pod out of the Service's endpoint list —
@@ -113,13 +135,33 @@ readiness:
   one already in progress. A liveness 503 here is honest (the pod truly is
   not meant to keep serving) and harmless.
 
+### The 5xx alarm will see these 503s
+
+`newhub_relay_5xx_elevated`
+(`deploy/r6-host-netdata/health.d/newhub.conf`) watches
+`lurus_gateway_requests_total` with `chart labels: status=5*`, and its own
+comment records that the series it is bound to in practice is the
+`/api/health` one. Each probe answered 503 during a drain lands in exactly
+that series (readinessProbe `periodSeconds: 5` × the drain window × the
+replica count), so a WARNING from it inside a deploy window is the drain
+gate doing its job, not an availability incident. Rescoping the alarm to
+relay paths is an observability-lane item — until that lands, treat a
+`newhub_relay_5xx_elevated` WARNING whose window overlaps a rollout as
+expected, and check `graceful shutdown:` log lines before escalating.
+
 ## Environment
 
-| Var | Where | Value (prod/UAT) | Note |
+Values in the "target" column are what this cycle's manifest change sets;
+the wiring step of this PR is what edits `deploy/k8s/r6-stage/deployment.yaml`
+and `deploy/k8s/r6-uat/deployment.yaml`. Both files still carried the older
+`40` / `"30s"` pair when this page was written, so read the live values
+(Verify, below) rather than quoting this table at anyone.
+
+| Var | Where | Target | Note |
 |---|---|---|---|
-| `GRACEFUL_SHUTDOWN_TIMEOUT` | manifest env, read by `internal/pkg/config` | `75s` | Code default (no env set) is `30s` — always set explicitly in the manifest. |
-| `terminationGracePeriodSeconds` | pod spec | `90` | Must stay ≥ preStop + `GRACEFUL_SHUTDOWN_TIMEOUT` + 10s margin (enforced by `deploy_consistency_test`, W-owned). |
-| preStop | pod spec | `sleep 5` | Runs before the app process ever observes SIGTERM. |
+| `GRACEFUL_SHUTDOWN_TIMEOUT` | manifest env, read by `internal/pkg/config` | `75s` | Code default (no env set) is `30s`; the manifest sets it explicitly. |
+| `terminationGracePeriodSeconds` | pod spec | `90` | Stays ≥ preStop + `GRACEFUL_SHUTDOWN_TIMEOUT` + 10s margin; the gate for that assertion lands with the manifest change. |
+| preStop | pod spec | `sleep 5` | Runs before the app process observes SIGTERM. Unchanged this cycle. |
 
 ## Verify
 
@@ -133,6 +175,14 @@ ssh root@100.122.83.20 "kubectl -n lurus-newhub get pod <old-pod-name> -o jsonpa
 # Readiness flips within the drain window (curl from inside the cluster or
 # via the NodePort while a rollout is in progress):
 curl -s -o /dev/null -w '%{http_code}\n' https://hub.lurus.cn/api/health
+curl -s -o /dev/null -w '%{http_code}\n' https://hub.lurus.cn/api/status
+
+# The two numbers this page depends on, read from the live Deployment
+# (do this before quoting the table above):
+ssh root@100.122.83.20 "kubectl -n lurus-newhub get deploy lurus-newhub \
+  -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}{\"\\n\"}'"
+ssh root@100.122.83.20 "kubectl -n lurus-newhub get deploy lurus-newhub \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"GRACEFUL_SHUTDOWN_TIMEOUT\")].value}{\"\\n\"}'"
 ```
 
 ## Related
@@ -141,7 +191,10 @@ curl -s -o /dev/null -w '%{http_code}\n' https://hub.lurus.cn/api/health
 - `internal/adapter/repo/usedata.go` — `UpdateQuotaDataWithContext` flushes
   the in-memory quota_data cache on the same shutdown ctx.Done(), so a
   bucket that has not yet hit its periodic flush is not lost on a rolling
-  deploy.
+  deploy. The flush snapshots the cache under its lock and writes with the
+  lock released, under a 10s deadline of its own
+  (`quotaDataShutdownFlushTimeout`), so neither a relay request finishing
+  during the drain nor a slow PG can stretch the shutdown.
 - `internal/app/notify-limit.go` — `InitNotifyLimitCleanup` is the single
   entry point (both main.go's boot-time call and `checkMemoryLimit`'s lazy
   fallback route through the same `sync.Once`) for the notify-limit cleanup
