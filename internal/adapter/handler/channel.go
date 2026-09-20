@@ -716,7 +716,9 @@ func GetChannelKey(c *gin.Context) {
 
 	// Security audit trail (cycle 13 L4, V1DOORS/SECURITY-14): the RecordLog
 	// line above is a logs row, and DELETE /api/log/ can remove logs rows —
-	// this call goes to the separate, non-purgeable audit_events table.
+	// this call goes to the separate audit_events table, which DELETE
+	// /api/log/ cannot touch (its own retention sweep,
+	// lifecycle/audit_cleanup.go, is the path that expires these rows).
 	// Details carry the channel id and its tenant only; channel.Key never
 	// enters Details — that field only appears in the JSON response below,
 	// which the caller already passed SecureVerificationRequired to see.

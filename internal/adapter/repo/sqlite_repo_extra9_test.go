@@ -670,9 +670,9 @@ func TestClearMultiKeyCooldown(t *testing.T) {
 func TestListOpenRouterMultiKeyChannels_Empty(t *testing.T) {
 	setupSQLiteDB(t)
 
-	channels, err := ListOpenRouterMultiKeyChannels()
+	channels, err := ListOpenRouterMultiKeyChannelsForReaper()
 	if err != nil {
-		t.Fatalf("ListOpenRouterMultiKeyChannels: %v", err)
+		t.Fatalf("ListOpenRouterMultiKeyChannelsForReaper: %v", err)
 	}
 	// No OpenRouter channels seeded, so expect empty or non-multikey
 	_ = channels

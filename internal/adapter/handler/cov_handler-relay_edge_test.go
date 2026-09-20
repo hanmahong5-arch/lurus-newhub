@@ -187,7 +187,14 @@ func TestHandlerRelay_ResolvePlaygroundBaseURL(t *testing.T) {
 // single-key OpenRouter channel and a multi-key channel of a different
 // vendor. This exercises the full per-key status classification, the
 // cooldown-remaining clamp for an already-expired cooldown, and the
-// tenant-blind SQL-level filter in repo.ListOpenRouterMultiKeyChannels.
+// type/multi-key filter in repo.ListOpenRouterMultiKeyChannelsForScope.
+//
+// The context carries role = RoleRootUser because since cycle 13 L4 the
+// handler scopes its read to the caller's tenant for any non-root role (see
+// GetOpenRouterApiPoolStatus); root is the caller that legitimately reads
+// across tenants, which is what the decoy-exclusion assertions below are
+// about. The cross-tenant half is pinned separately by
+// TestV1OpenRouterApiPool_TenantScoped in openrouter_pool_test.go.
 func TestHandlerRelay_GetOpenRouterApiPoolStatus_MultiKeySnapshot(t *testing.T) {
 	db, cleanup := handlerRelaySetupDB(t)
 	defer cleanup()
@@ -251,6 +258,7 @@ func TestHandlerRelay_GetOpenRouterApiPoolStatus_MultiKeySnapshot(t *testing.T) 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/api/openrouter-sync/api-pool", nil)
+	c.Set("role", common.RoleRootUser)
 
 	GetOpenRouterApiPoolStatus(c)
 
@@ -333,6 +341,9 @@ func TestHandlerRelay_GetOpenRouterApiPoolStatus_EmptyPool(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/api/openrouter-sync/api-pool", nil)
+	// Root, so the empty result is about the empty pool and not about the
+	// non-root tenant scope failing closed (see the sibling test's comment).
+	c.Set("role", common.RoleRootUser)
 
 	GetOpenRouterApiPoolStatus(c)
 

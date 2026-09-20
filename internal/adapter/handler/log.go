@@ -263,11 +263,12 @@ func DeleteHistoryLogs(c *gin.Context) {
 		return
 	}
 
-	// Audit trail (cycle 13 L4, finding #8): this was the only unbounded
-	// synchronous delete over the logs table and previously left no trail of
-	// its own — the deleted rows' own log history vanished with them. This
-	// write goes to the separate audit_events table, which this handler
-	// cannot purge.
+	// Audit trail (cycle 13 L4, finding #8, which named this handler as an
+	// unbounded synchronous delete over the logs table): it previously left
+	// no trail of its own — the deleted rows' own log history vanished with
+	// them. This write goes to the separate audit_events table, which this
+	// handler cannot purge (pinned by
+	// TestDeleteHistoryLogs_RecordsLogsPurgedAudit_RowSurvivesPurge).
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
 		governance.ActionLogsPurged, governance.ResourceLog, 0,
 		fmt.Sprintf(`{"cutoff":%d,"scope":%q,"deleted":%d}`, targetTimestamp, scopeLabel, count)))

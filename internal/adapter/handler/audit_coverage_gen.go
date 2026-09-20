@@ -102,13 +102,15 @@ var AuditExplicitRoutes = map[string]bool{
 	// v1 privileged writes outside /api/v2/admin (cycle 13, L4,
 	// V1DOORS/SECURITY-14). internal_api.go: the four internal-API-key CRUD
 	// handlers (RootAuth-gated group, api-router.go's apiKeyRoute) — an
-	// internal key grants cross-tenant /internal access, so its own
-	// lifecycle is audited the same as the tenant-whitelist writes in
+	// internal key is a credential for the /internal surface (cross-tenant
+	// when its scope is repo.ScopeAll, otherwise bounded by the
+	// internal_api_key_tenants whitelist), so its own lifecycle is audited
+	// the same as the tenant-whitelist writes in
 	// internal_api_key_admin_v2.go above. channel.go: GetChannelKey reveals
 	// the upstream provider secret (RootAuth + SecureVerificationRequired).
-	// log.go: DeleteHistoryLogs is the only unbounded synchronous delete over
-	// the logs table (AdminAuth — reachable by a tenant admin, not just
-	// root).
+	// log.go: DeleteHistoryLogs deletes logs rows in bulk, which cycle 13
+	// finding #8 named an unbounded synchronous delete (AdminAuth —
+	// reachable by a tenant admin, not just root).
 	"POST /api/api-keys/":          true,
 	"PUT /api/api-keys/:id":        true,
 	"DELETE /api/api-keys/:id":     true,

@@ -5,8 +5,18 @@ package handler
 // AdminAuth-gated (role >= admin, not necessarily root — W raises this to
 // RootAuth as a hand-off), so before the tenant scope added in this lane any
 // tenant admin could see every OTHER tenant's OpenRouter channel names and
-// masked key prefixes through repo.ListOpenRouterMultiKeyChannels, which
-// carried no tenant predicate.
+// masked key prefixes through the unscoped list function (now
+// repo.ListOpenRouterMultiKeyChannelsForReaper), which carries no tenant
+// predicate.
+//
+// The plan named a real-chain oracle (through SetApiRouter). That is not
+// reachable from package handler: internal/adapter/handler/router imports
+// handler, so a handler-package test importing router would be an import
+// cycle, and router/*_test.go belongs to the serial wiring lane W. The
+// handler is therefore driven directly through v1Ctx
+// (v1_cross_tenant_idor_test.go), which sets exactly the keys the auth
+// middleware sets (role / tenant_id / id). The real-chain half for this
+// route is W's RootAuth hand-off plus router/idor_completeness_test.go.
 
 import (
 	"net/http"

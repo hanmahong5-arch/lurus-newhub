@@ -307,10 +307,10 @@ func InternalAdjustQuota(c *gin.Context) {
 		"success": true,
 		"message": "Quota adjusted successfully",
 		"data": gin.H{
-			"user_id":      user.Id,
-			"old_quota":    user.Quota,
-			"adjustment":   req.Amount,
-			"new_quota":    newQuota,
+			"user_id":    user.Id,
+			"old_quota":  user.Quota,
+			"adjustment": req.Amount,
+			"new_quota":  newQuota,
 		},
 	})
 }
@@ -346,9 +346,9 @@ func InternalGetUserBalance(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"user_id":     user.Id,
-			"balance":     user.Quota,                          // Balance in LUT (= quota units)
-			"balance_luc": balanceLuc,                          // Balance in LUC
-			"balance_rmb": balanceLuc,                          // LUC ~ CNY 1:1 (backward compat)
+			"balance":     user.Quota, // Balance in LUT (= quota units)
+			"balance_luc": balanceLuc, // Balance in LUC
+			"balance_rmb": balanceLuc, // LUC ~ CNY 1:1 (backward compat)
 			"used_quota":  user.UsedQuota,
 			"lute": gin.H{
 				"balance":         user.Quota,
@@ -519,6 +519,15 @@ func AdminCreateApiKey(c *gin.Context) {
 		if scope == repo.ScopeAll {
 			userRole := c.GetInt("role")
 			if userRole != common.RoleRootUser {
+				// Cycle 13 L4: the refusal leaves a trail too. A non-root
+				// admin reaching for the wildcard scope is the same class of
+				// event as ActionChannelSensitiveWriteRefused, and without a
+				// row the attempt is invisible (the grant is audited, the
+				// attempt was not). Details carry the requested name and
+				// scope; no key material exists yet at this point.
+				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, adminId,
+					governance.ActionAuthScopeRejected, governance.ResourceInternalKey, 0,
+					fmt.Sprintf(`{"op":"create","name":%q,"requested_scope":%q,"role":%d}`, req.Name, repo.ScopeAll, userRole)))
 				c.JSON(http.StatusForbidden, gin.H{
 					"success": false,
 					"message": "Only root user can create keys with full access",
@@ -538,9 +547,13 @@ func AdminCreateApiKey(c *gin.Context) {
 		return
 	}
 
-	// Details carry name/key_prefix/scopes only — apiKey.Scopes is already the
-	// JSON-array string CreateInternalApiKey persisted, and apiKey never holds
-	// the raw key (only its hash); the returned `key` local is not read here.
+	// Details carry name/key_prefix/scopes — apiKey.Scopes is already the
+	// JSON-array string CreateInternalApiKey persisted, and the InternalApiKey
+	// row holds the key's hash, not the key. The raw `key` local is not
+	// referenced in the Details string below; it appears only in the response
+	// body. assertAuditRowsCarryNoKeyMaterial (internal_api_audit_test.go)
+	// scans every row this handler writes for the raw key, its unrevealed
+	// remainder and its hash.
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, adminId,
 		governance.ActionInternalKeyCreated, governance.ResourceInternalKey, apiKey.Id,
 		fmt.Sprintf(`{"name":%q,"key_prefix":%q,"scopes":%s}`, apiKey.Name, apiKey.KeyPrefix, apiKey.Scopes)))
@@ -650,6 +663,13 @@ func AdminUpdateApiKey(c *gin.Context) {
 		if scope == repo.ScopeAll {
 			userRole := c.GetInt("role")
 			if userRole != common.RoleRootUser {
+				// Same refusal trail as AdminCreateApiKey above (cycle 13
+				// L4) — here the key already exists, so the row carries its
+				// id; still no key material (the raw key is not in the
+				// request and the stored row holds only its hash).
+				governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
+					governance.ActionAuthScopeRejected, governance.ResourceInternalKey, keyId,
+					fmt.Sprintf(`{"op":"update","name":%q,"requested_scope":%q,"role":%d}`, req.Name, repo.ScopeAll, userRole)))
 				c.JSON(http.StatusForbidden, gin.H{
 					"success": false,
 					"message": "Only root user can assign full access",
@@ -671,10 +691,14 @@ func AdminUpdateApiKey(c *gin.Context) {
 
 	// scopesJSON mirrors what UpdateInternalApiKey just persisted — built the
 	// same way (json.Marshal) rather than hand-copied, so Details cannot drift
-	// from the stored value. Marshal error on a []string is not reachable, but
-	// scopesJSON stays nil (renders as the JSON literal null) rather than
-	// panicking if it ever were.
-	scopesJSON, _ := json.Marshal(req.Scopes)
+	// from the stored value. A marshal error on a []string is not reachable
+	// today; the fallback below is here so that if it ever became reachable
+	// the Details string stays parseable JSON — an empty scopesJSON would
+	// render as `"scopes":}`, which is not.
+	scopesJSON, marshalErr := json.Marshal(req.Scopes)
+	if marshalErr != nil || len(scopesJSON) == 0 {
+		scopesJSON = []byte("null")
+	}
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, c.GetInt("id"),
 		governance.ActionInternalKeyUpdated, governance.ResourceInternalKey, keyId,
 		fmt.Sprintf(`{"name":%q,"scopes":%s}`, req.Name, scopesJSON)))

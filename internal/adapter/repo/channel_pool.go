@@ -122,21 +122,21 @@ func ClearMultiKeyCooldown(channel *Channel, keyIndex int) {
 	}
 }
 
-// ListOpenRouterMultiKeyChannels returns all enabled-or-auto-disabled OpenRouter
-// channels that have multi-key mode active, across every tenant. Used by the
-// reaper (internal/app/openrouter_pool/reaper.go) to scan for expired
+// ListOpenRouterMultiKeyChannelsForReaper returns the OpenRouter channels
+// that have multi-key mode active, of any status and in any tenant. Used by
+// the reaper (internal/app/openrouter_pool/reaper.go) to scan for expired
 // cooldowns — cooldown recovery is platform-wide housekeeping, not a
 // caller-facing view, so this stays deliberately tenant-blind. Returns
 // []*Channel (clones, safe to read without locks for the inspection pass;
 // mutations require the per-channel polling lock).
 //
-// Any caller-facing surface must go through
-// ListOpenRouterMultiKeyChannelsForScope instead — see that function's doc
-// for why (cycle 13, V1DOORS/SECURITY-14): GetOpenRouterApiPoolStatus used to
-// call this unscoped function directly, so any AdminAuth-level (not just
-// root) caller could read every other tenant's OpenRouter channel names and
-// masked key prefixes.
-func ListOpenRouterMultiKeyChannels() ([]*Channel, error) {
+// The name carries "ForReaper" so a caller-facing surface cannot pick the
+// tenant-blind variant up by autocomplete (cycle 13, V1DOORS/SECURITY-14):
+// GetOpenRouterApiPoolStatus used to call the unscoped function directly, so
+// any AdminAuth-level (not just root) caller could read every other tenant's
+// OpenRouter channel names and masked key prefixes. Callers that have a
+// tenant context take ListOpenRouterMultiKeyChannelsForScope below.
+func ListOpenRouterMultiKeyChannelsForReaper() ([]*Channel, error) {
 	return ListOpenRouterMultiKeyChannelsForScope(AllTenantsForAdmin())
 }
 

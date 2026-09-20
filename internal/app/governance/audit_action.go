@@ -160,11 +160,18 @@ const (
 	// /api/api-keys(/:id), RootAuth-gated — AdminCreateApiKey /
 	// AdminUpdateApiKey / AdminDeleteApiKey / AdminToggleApiKey in
 	// internal_api.go). Cycle 13 L4: these four writes produced zero audit
-	// trail before this — an internal key grants cross-tenant access to the
-	// /internal surface, so its own CRUD belongs in the same trail as the
-	// tenant-whitelist actions above it. Details never carry the raw key —
-	// only id/name/key_prefix/scopes, the same fields the list endpoint
-	// already exposes.
+	// trail before this — an internal key is a credential for the /internal
+	// surface (cross-tenant when its scope is repo.ScopeAll, otherwise
+	// bounded by the internal_api_key_tenants whitelist), so its own CRUD
+	// belongs in the same trail as the tenant-whitelist actions above it.
+	// Details never carry the raw key — only id/name/key_prefix/scopes, the
+	// same fields the list endpoint already exposes. That "never" is
+	// enforced, not asserted: assertAuditRowsCarryNoKeyMaterial
+	// (handler/internal_api_audit_test.go) scans every audit row each of the
+	// four handler oracles produces for the raw key, the part of it the
+	// 16-char display prefix does not reveal, and the stored hash. A refused
+	// wildcard escalation on the create/update paths records
+	// ActionAuthScopeRejected instead.
 	ActionInternalKeyCreated = "internal_key.created"
 	ActionInternalKeyUpdated = "internal_key.updated"
 	ActionInternalKeyDeleted = "internal_key.deleted"

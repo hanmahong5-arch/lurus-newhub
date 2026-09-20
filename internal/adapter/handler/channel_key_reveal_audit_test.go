@@ -3,8 +3,20 @@ package handler
 // channel_key_reveal_audit_test.go — cycle 13 L4 (V1DOORS/SECURITY-14) oracle:
 // GetChannelKey (POST /api/channel/:id/key) reveals an upstream provider
 // secret and previously left only a logs row (repo.RecordLog) — a row that
-// DELETE /api/log/ can itself remove. This asserts the separate,
-// non-purgeable audit_events row it now also writes.
+// DELETE /api/log/ can itself remove. This asserts the separate audit_events
+// row it now also writes, which DELETE /api/log/ cannot touch.
+//
+// The plan named a real-chain oracle (through SetApiRouter). That is not
+// reachable from package handler: internal/adapter/handler/router imports
+// handler, so a handler-package test importing router would be an import
+// cycle, and router/*_test.go belongs to the serial wiring lane W. The
+// handler is therefore driven directly through v1Ctx
+// (v1_cross_tenant_idor_test.go), which sets exactly the keys the auth
+// middleware sets (role / tenant_id / id). The real-chain half — that these
+// routes are registered and that the AST walk finds their
+// governance.RecordAuditEvent calls — is
+// router/audit_coverage_test.go's TestAdminWriteRoutesAreAudited, together
+// with the six entries this lane added to audit_coverage_gen.go.
 
 import (
 	"fmt"

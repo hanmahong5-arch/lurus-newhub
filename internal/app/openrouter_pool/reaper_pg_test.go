@@ -277,9 +277,9 @@ func TestListOpenRouterMultiKeyChannels_FiltersNonMultiKey(t *testing.T) {
 		t.Fatalf("seed other: %v", err)
 	}
 
-	channels, err := repo.ListOpenRouterMultiKeyChannels()
+	channels, err := repo.ListOpenRouterMultiKeyChannelsForReaper()
 	if err != nil {
-		t.Fatalf("ListOpenRouterMultiKeyChannels: %v", err)
+		t.Fatalf("ListOpenRouterMultiKeyChannelsForReaper: %v", err)
 	}
 	if len(channels) != 1 {
 		t.Fatalf("expected exactly 1 multi-key OpenRouter channel, got %d", len(channels))

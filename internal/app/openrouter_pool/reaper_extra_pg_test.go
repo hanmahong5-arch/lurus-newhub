@@ -69,7 +69,7 @@ func TestReapChannel_SaveWithoutKeyError(t *testing.T) {
 
 	// Drop the channels table AFTER the reaper has listed it (we list first,
 	// then drop, then reap the in-memory copy) so SaveWithoutKey fails.
-	channels, err := repo.ListOpenRouterMultiKeyChannels()
+	channels, err := repo.ListOpenRouterMultiKeyChannelsForReaper()
 	if err != nil {
 		t.Fatalf("list channels: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestReapOnce_LogsAndContinuesOnChannelError(t *testing.T) {
 
 	// Both channels should still have flipped/persisted their cooldown clearing.
 	var chans []*repo.Channel
-	chans, err := repo.ListOpenRouterMultiKeyChannels()
+	chans, err := repo.ListOpenRouterMultiKeyChannelsForReaper()
 	if err != nil {
 		t.Fatalf("relist: %v", err)
 	}

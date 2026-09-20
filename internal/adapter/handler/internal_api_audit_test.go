@@ -14,6 +14,18 @@ package handler
 // this file already wires the hermetic DB + pinned audit writer both
 // handlers need, and because handler.log_test.go does not exist and is not
 // in this lane's Created list.
+//
+// The plan named a real-chain oracle (through SetApiRouter). That is not
+// reachable from package handler: internal/adapter/handler/router imports
+// handler, so a handler-package test importing router would be an import
+// cycle, and router/*_test.go belongs to the serial wiring lane W. The
+// handlers are therefore driven directly through v1Ctx
+// (v1_cross_tenant_idor_test.go), which sets exactly the keys the auth
+// middleware sets (role / tenant_id / id). The real-chain half — that these
+// routes are registered and that the AST walk finds their
+// governance.RecordAuditEvent calls — is
+// router/audit_coverage_test.go's TestAdminWriteRoutesAreAudited, together
+// with the six entries this lane added to audit_coverage_gen.go.
 
 import (
 	"encoding/json"
@@ -92,13 +104,16 @@ func setupInternalKeyAuditFixture(t *testing.T) *internalKeyAuditFixture {
 
 // seedAuditTestInternalApiKey persists an InternalApiKey row directly (not
 // through AdminCreateApiKey) so the Update/Delete/Toggle tests exercise only
-// the handler under test, not a chain through Create first.
-func seedAuditTestInternalApiKey(t *testing.T, db *gorm.DB, name string) *repo.InternalApiKey {
+// the handler under test, not a chain through Create first. It returns the
+// row and the raw key string behind its hash, which the caller feeds to
+// assertAuditRowsCarryNoKeyMaterial.
+func seedAuditTestInternalApiKey(t *testing.T, db *gorm.DB, name string) (*repo.InternalApiKey, string) {
 	t.Helper()
 	scopesJSON, _ := json.Marshal([]string{repo.ScopeProvisioning})
+	rawKey := "lurus_ik_seed_" + name
 	key := &repo.InternalApiKey{
 		Name:      name,
-		KeyHash:   hashTestKey("lurus_ik_seed_" + name),
+		KeyHash:   hashTestKey(rawKey),
 		KeyPrefix: "lurus_ik_seed",
 		Scopes:    string(scopesJSON),
 		Enabled:   true,
@@ -106,7 +121,48 @@ func seedAuditTestInternalApiKey(t *testing.T, db *gorm.DB, name string) *repo.I
 	if err := db.Create(key).Error; err != nil {
 		t.Fatalf("seed internal api key: %v", err)
 	}
-	return key
+	return key, rawKey
+}
+
+// assertAuditRowsCarryNoKeyMaterial scans EVERY audit_events row the test
+// produced — not only the row the caller asserted on — for the key material
+// named in secrets, and fails on the first hit. It is what makes the
+// taxonomy comment's "Details never carry the raw key" (audit_action.go,
+// internal-key block) an enforced claim for all four internal-key handlers
+// rather than an assertion in one of them.
+//
+// What is deliberately NOT a secret here: InternalApiKey.KeyPrefix, the
+// 16-char display prefix (`lurus_ik_` + the first 7 characters of the random
+// tail). AdminListApiKeys already returns it to the same caller, and
+// AdminCreateApiKey puts it in Details on purpose so an operator can match a
+// trail row to a listed key. Callers pass the remainder — the part of the
+// raw key the prefix does not reveal — so a Details string that carried the
+// whole key would still be caught.
+//
+// Fail-fast: zero rows means the handler under test wrote nothing and the
+// scan proved nothing, so that is a failure, not a pass.
+func assertAuditRowsCarryNoKeyMaterial(t *testing.T, db *gorm.DB, secrets ...string) {
+	t.Helper()
+	if len(secrets) == 0 {
+		t.Fatalf("assertAuditRowsCarryNoKeyMaterial called with no secrets to look for")
+	}
+	var rows []entity.AuditEvent
+	if err := db.Model(&entity.AuditEvent{}).Find(&rows).Error; err != nil {
+		t.Fatalf("read audit_events: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("no audit_events rows to scan — the handler under test wrote none")
+	}
+	for _, secret := range secrets {
+		if secret == "" {
+			t.Fatalf("empty secret passed in: the fixture did not produce the material this scan is meant to pin")
+		}
+		for _, ev := range rows {
+			if strings.Contains(ev.Details, secret) {
+				t.Fatalf("audit row %s (id=%d) leaked key material %q: %s", ev.Action, ev.ID, secret, ev.Details)
+			}
+		}
+	}
 }
 
 // ─── AdminCreateApiKey ──────────────────────────────────────────────────────
@@ -157,14 +213,83 @@ func TestAdminCreateApiKey_RecordsInternalKeyCreatedAudit_WithoutRawKey(t *testi
 	if !strings.Contains(ev.Details, "ci-provisioner") {
 		t.Errorf("Details missing key name: %s", ev.Details)
 	}
-	_ = f // fixture installs globals as a side effect; no direct field use here.
+	// Every row, not just this one: the raw key, the part of it the stored
+	// 16-char display prefix does not reveal, and the stored hash.
+	var stored repo.InternalApiKey
+	if err := f.DB.Where("name = ?", "ci-provisioner").First(&stored).Error; err != nil {
+		t.Fatalf("read back the created key row: %v", err)
+	}
+	if len(stored.KeyPrefix) >= len(rawKey) {
+		t.Fatalf("KeyPrefix %q is not shorter than the raw key — the remainder below would be empty", stored.KeyPrefix)
+	}
+	assertAuditRowsCarryNoKeyMaterial(t, f.DB, rawKey, rawKey[len(stored.KeyPrefix):], stored.KeyHash)
+}
+
+// TestAdminCreateApiKey_WildcardRefusedForNonRoot_RecordsScopeRejectedAudit
+// pins the refusal half (cycle 13 L4, D-L4-4): a role-10 admin asking for the
+// wildcard scope is refused 403 by the guard in AdminCreateApiKey, creates no
+// key, and leaves exactly one auth.scope_rejected row on resource
+// internal_key. Without it the grant is audited while the attempt is not.
+func TestAdminCreateApiKey_WildcardRefusedForNonRoot_RecordsScopeRejectedAudit(t *testing.T) {
+	f := setupInternalKeyAuditFixture(t)
+
+	c, w := v1Ctx(http.MethodPost, "/api/api-keys/", map[string]interface{}{
+		"name":   "sneaky-wildcard",
+		"scopes": []string{repo.ScopeUserRead, repo.ScopeAll},
+	}, common.RoleAdminUser, "tenant-a", 77)
+	AdminCreateApiKey(c)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	body := v1Body(t, w)
+	if success, _ := body["success"].(bool); success {
+		t.Fatalf("expected success=false on the refusal, body=%s", w.Body.String())
+	}
+
+	var keyCount int64
+	f.DB.Model(&repo.InternalApiKey{}).Count(&keyCount)
+	if keyCount != 0 {
+		t.Fatalf("refused create still persisted %d internal key row(s)", keyCount)
+	}
+
+	events, _, err := repo.GetAuditEvents("", governance.ActionAuthScopeRejected, 0, "", 0, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("GetAuditEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 auth.scope_rejected row, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.Resource != governance.ResourceInternalKey {
+		t.Errorf("Resource = %q, want %q", ev.Resource, governance.ResourceInternalKey)
+	}
+	if ev.ActorID != 77 {
+		t.Errorf("ActorID = %d, want 77", ev.ActorID)
+	}
+	if ev.TenantID != "tenant-a" {
+		t.Errorf("TenantID = %q, want tenant-a", ev.TenantID)
+	}
+	for _, want := range []string{`"op":"create"`, "sneaky-wildcard", `"requested_scope":"*"`} {
+		if !strings.Contains(ev.Details, want) {
+			t.Errorf("Details missing %s: %s", want, ev.Details)
+		}
+	}
+
+	granted, _, err := repo.GetAuditEvents("", governance.ActionInternalKeyCreated, 0, "", 0, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("GetAuditEvents (created): %v", err)
+	}
+	if len(granted) != 0 {
+		t.Fatalf("a refused create still produced %d internal_key.created row(s)", len(granted))
+	}
 }
 
 // ─── AdminUpdateApiKey ──────────────────────────────────────────────────────
 
 func TestAdminUpdateApiKey_RecordsInternalKeyUpdatedAudit(t *testing.T) {
 	f := setupInternalKeyAuditFixture(t)
-	key := seedAuditTestInternalApiKey(t, f.DB, "update-target")
+	key, seededRawKey := seedAuditTestInternalApiKey(t, f.DB, "update-target")
 
 	c, w := v1Ctx(http.MethodPut, fmt.Sprintf("/api/api-keys/%d", key.Id), map[string]interface{}{
 		"name":   "renamed-key",
@@ -191,13 +316,75 @@ func TestAdminUpdateApiKey_RecordsInternalKeyUpdatedAudit(t *testing.T) {
 	if !strings.Contains(ev.Details, "renamed-key") {
 		t.Errorf("Details missing new name: %s", ev.Details)
 	}
+	assertAuditRowsCarryNoKeyMaterial(t, f.DB, seededRawKey, key.KeyHash)
+}
+
+// TestAdminUpdateApiKey_WildcardRefusedForNonRoot_RecordsScopeRejectedAudit is
+// the same refusal oracle for the update path, where the key already exists:
+// the row carries its id, the stored name is unchanged, and no
+// internal_key.updated row appears.
+func TestAdminUpdateApiKey_WildcardRefusedForNonRoot_RecordsScopeRejectedAudit(t *testing.T) {
+	f := setupInternalKeyAuditFixture(t)
+	key, seededRawKey := seedAuditTestInternalApiKey(t, f.DB, "escalation-target")
+
+	c, w := v1Ctx(http.MethodPut, fmt.Sprintf("/api/api-keys/%d", key.Id), map[string]interface{}{
+		"name":   "escalated",
+		"scopes": []string{repo.ScopeAll},
+	}, common.RoleAdminUser, "tenant-a", 77)
+	c.Params = gin.Params{{Key: "id", Value: strconv.Itoa(key.Id)}}
+	AdminUpdateApiKey(c)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	body := v1Body(t, w)
+	if success, _ := body["success"].(bool); success {
+		t.Fatalf("expected success=false on the refusal, body=%s", w.Body.String())
+	}
+
+	var after repo.InternalApiKey
+	if err := f.DB.First(&after, key.Id).Error; err != nil {
+		t.Fatalf("read back the key row: %v", err)
+	}
+	if after.Name != "escalation-target" || strings.Contains(after.Scopes, repo.ScopeAll) {
+		t.Fatalf("refused update still mutated the row: name=%q scopes=%q", after.Name, after.Scopes)
+	}
+
+	events, _, err := repo.GetAuditEvents("", governance.ActionAuthScopeRejected, 0, "", 0, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("GetAuditEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 auth.scope_rejected row, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.Resource != governance.ResourceInternalKey {
+		t.Errorf("Resource = %q, want %q", ev.Resource, governance.ResourceInternalKey)
+	}
+	if ev.ResourceID != key.Id {
+		t.Errorf("ResourceID = %d, want %d", ev.ResourceID, key.Id)
+	}
+	for _, want := range []string{`"op":"update"`, "escalated", `"requested_scope":"*"`} {
+		if !strings.Contains(ev.Details, want) {
+			t.Errorf("Details missing %s: %s", want, ev.Details)
+		}
+	}
+
+	updated, _, err := repo.GetAuditEvents("", governance.ActionInternalKeyUpdated, 0, "", 0, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("GetAuditEvents (updated): %v", err)
+	}
+	if len(updated) != 0 {
+		t.Fatalf("a refused update still produced %d internal_key.updated row(s)", len(updated))
+	}
+	assertAuditRowsCarryNoKeyMaterial(t, f.DB, seededRawKey, key.KeyHash)
 }
 
 // ─── AdminDeleteApiKey ──────────────────────────────────────────────────────
 
 func TestAdminDeleteApiKey_RecordsInternalKeyDeletedAudit(t *testing.T) {
 	f := setupInternalKeyAuditFixture(t)
-	key := seedAuditTestInternalApiKey(t, f.DB, "delete-target")
+	key, seededRawKey := seedAuditTestInternalApiKey(t, f.DB, "delete-target")
 
 	c, w := v1Ctx(http.MethodDelete, fmt.Sprintf("/api/api-keys/%d", key.Id), nil,
 		common.RoleRootUser, "default", 1)
@@ -218,13 +405,14 @@ func TestAdminDeleteApiKey_RecordsInternalKeyDeletedAudit(t *testing.T) {
 	if events[0].ResourceID != key.Id {
 		t.Errorf("ResourceID = %d, want %d", events[0].ResourceID, key.Id)
 	}
+	assertAuditRowsCarryNoKeyMaterial(t, f.DB, seededRawKey, key.KeyHash)
 }
 
 // ─── AdminToggleApiKey ──────────────────────────────────────────────────────
 
 func TestAdminToggleApiKey_RecordsInternalKeyToggledAudit(t *testing.T) {
 	f := setupInternalKeyAuditFixture(t)
-	key := seedAuditTestInternalApiKey(t, f.DB, "toggle-target")
+	key, seededRawKey := seedAuditTestInternalApiKey(t, f.DB, "toggle-target")
 
 	c, w := v1Ctx(http.MethodPut, fmt.Sprintf("/api/api-keys/%d/toggle", key.Id), nil,
 		common.RoleRootUser, "default", 1)
@@ -245,6 +433,7 @@ func TestAdminToggleApiKey_RecordsInternalKeyToggledAudit(t *testing.T) {
 	if events[0].ResourceID != key.Id {
 		t.Errorf("ResourceID = %d, want %d", events[0].ResourceID, key.Id)
 	}
+	assertAuditRowsCarryNoKeyMaterial(t, f.DB, seededRawKey, key.KeyHash)
 }
 
 // ─── DeleteHistoryLogs ──────────────────────────────────────────────────────

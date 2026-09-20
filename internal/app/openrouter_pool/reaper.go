@@ -73,7 +73,7 @@ func ReapOnce(ctx context.Context, now func() time.Time) (err error) {
 		}
 	}()
 
-	channels, listErr := repo.ListOpenRouterMultiKeyChannels()
+	channels, listErr := repo.ListOpenRouterMultiKeyChannelsForReaper()
 	if listErr != nil {
 		err = fmt.Errorf("list channels: %w", listErr)
 		return err
