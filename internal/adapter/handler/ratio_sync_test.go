@@ -21,6 +21,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -178,5 +181,109 @@ func TestFetchUpstreamRatios_AllowedTargetIsFetched(t *testing.T) {
 	}
 	if n := conns.Load(); n != 1 {
 		t.Errorf("listener saw %d connection(s), want 1 — the allowed target must actually be fetched", n)
+	}
+}
+
+// ratioSyncModuleRoot walks up from this package to the directory holding
+// go.mod, so the marker gate below can read the guards' own sources.
+func ratioSyncModuleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for i := 0; i < 10; i++ {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Fatal("could not find the module root above this package")
+	return ""
+}
+
+// TestFetchUpstreamRatios_DialTimeRefusalIsAlsoFixed closes the other half
+// of the refusal (cycle-13 L8 repair, D-L8-2). The pre-dial check is not the
+// only thing that can refuse this fetch: the shared client's transport
+// re-checks the RESOLVED address at connect time, and that error names the
+// internal address it resolved to. Echoing it back to the caller hands over
+// exactly what the fixed message exists to withhold.
+//
+// The configuration here is a real one, not a contrivance: in IP-whitelist
+// mode (ip_filter_mode) app.ValidateOutboundURL deliberately does NOT
+// resolve domain names (see its doc comment — forcing it there would reject
+// CDN-hosted upstreams whose IPs rotate), while the dial guard applies the
+// private-IP rule to the resolved address regardless of list mode. A host name that
+// resolves to loopback therefore passes the pre-dial check and is refused at
+// the dial. DNS rebinding reaches the same branch with the default settings.
+func TestFetchUpstreamRatios_DialTimeRefusalIsAlsoFixed(t *testing.T) {
+	fs := system_setting.GetFetchSetting()
+	prev := *fs
+	fs.EnableSSRFProtection = true
+	fs.AllowPrivateIp = false
+	fs.IpFilterMode = true
+	fs.ApplyIPFilterForDomain = false
+	fs.DomainFilterMode = false
+	fs.DomainList = nil
+	t.Cleanup(func() { *fs = prev })
+
+	listener, conns := countingLoopbackServer(t)
+	parsed, err := url.Parse(listener)
+	if err != nil {
+		t.Fatalf("parse listener url %q: %v", listener, err)
+	}
+	// Same listener, reached by NAME instead of by literal address.
+	target := "http://localhost:" + parsed.Port()
+
+	// The fixture is only meaningful if the pre-dial check admits this
+	// target — otherwise this would be a second copy of the base_url case.
+	if err := app.ValidateOutboundURL(target); err != nil {
+		t.Fatalf("fixture is wrong: the pre-dial check already refuses %s (%v); this case must reach the DIAL-time guard", target, err)
+	}
+
+	resp := postRatioSync(t, `{"upstreams":[{"name":"probe","base_url":"`+target+`"}],"timeout":2}`)
+
+	if len(resp.Data.TestResults) != 1 {
+		t.Fatalf("test_results = %d entries, want 1: %+v", len(resp.Data.TestResults), resp.Data.TestResults)
+	}
+	got := resp.Data.TestResults[0]
+	if got.Error != ratioSyncEgressRefusedMessage {
+		t.Errorf("error = %q, want the fixed refusal %q — a dial-time refusal must not echo the address it resolved",
+			got.Error, ratioSyncEgressRefusedMessage)
+	}
+	if n := conns.Load(); n != 0 {
+		t.Errorf("the refused target accepted %d connection(s)", n)
+	}
+}
+
+// TestRatioSyncEgressMarkers_StillMatchTheGuards is the drift gate for the
+// classification above. internal/app builds both refusals with fmt.Errorf
+// and no wrapped sentinel, so there is nothing to errors.Is against and the
+// match is on a substring; if either guard is reworded, this fails here
+// instead of silently resuming the leak.
+func TestRatioSyncEgressMarkers_StillMatchTheGuards(t *testing.T) {
+	root := ratioSyncModuleRoot(t)
+	cases := []struct {
+		file    string
+		markers []string
+	}{
+		{filepath.Join("internal", "app", "relay_dial_guard.go"), []string{ssrfDialGuardMarker}},
+		{filepath.Join("internal", "app", "http_client.go"), []string{ssrfRedirectGuardPrefix, ssrfRedirectGuardMarker}},
+	}
+	for _, tc := range cases {
+		body, err := os.ReadFile(filepath.Join(root, tc.file))
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		for _, marker := range tc.markers {
+			if !strings.Contains(string(body), marker) {
+				t.Errorf("%s no longer contains %q — ratio_sync classifies its transport errors on that substring, so the refusal message would start leaking the resolved address again",
+					filepath.ToSlash(tc.file), marker)
+			}
+		}
 	}
 }

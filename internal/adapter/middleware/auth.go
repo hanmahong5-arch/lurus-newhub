@@ -73,6 +73,19 @@ func resolveSessionIdentity(c *gin.Context, minRole int) bool {
 				status = user.Status
 				useAccessToken = true
 				c.Set("identity_account_id", zid.AccountID)
+				// Retire the pre-authentication session id before the
+				// identity write below (session_rotation.go). This arm is the
+				// fourth place an authenticated identity is written into a
+				// browser session, and it is not a login handler: a cookie
+				// planted before the victim opens the console would otherwise
+				// become the victim's authenticated session here, exactly as
+				// it would at the three logins. A failure is logged and the
+				// request continues — the fallback inside RotateSessionID has
+				// already cleared the incoming session's values.
+				if rotErr := RotateSessionID(c); rotErr != nil {
+					logger.LogWarnKV(c.Request.Context(), "sdk identity session rotation failed",
+						"who", user.Username, "account_id", zid.AccountID, "result", rotErr.Error())
+				}
 				// Self-heal: persist the resolved identity into the gin session
 				// so later requests skip the SDK round-trip and survive a
 				// transient cookie drop. Best-effort — a save failure must not

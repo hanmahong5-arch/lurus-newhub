@@ -9,9 +9,12 @@ package handler
 // would pass vacuously. Redis is also the only place the OLD key's deletion
 // can be seen.
 //
-// Each of the three logins gets its own case, because each one calls the
-// rotation itself — removing the call from one must not be covered by the
-// other two.
+// Each of the three login handlers gets its own case, because each one
+// calls the rotation itself — removing the call from one must not be
+// covered by the other two. The helper itself (middleware.RotateSessionID,
+// moved there in the cycle-13 repair round so middleware/auth.go's
+// SDK-bridge self-heal arm can call it too) has its own tests next to it,
+// in internal/adapter/middleware/session_rotation_test.go.
 
 import (
 	"context"
@@ -59,7 +62,6 @@ type rotationCtx struct {
 //	                                  cookie an attacker would put in the
 //	                                  victim's browser
 //	POST /api/v2/bridge/exchange    — the real BridgeExchange handler
-//	GET  /rotate-probe              — rotateSessionID on its own
 //
 // plus a real sqlite repo.DB so the handlers' user lookups run for real.
 func setupRotationRouter(t *testing.T) *rotationCtx {
@@ -122,13 +124,6 @@ func setupRotationRouter(t *testing.T) *rotationCtx {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"session_id": s.ID()})
-	})
-	r.GET("/rotate-probe", func(c *gin.Context) {
-		if err := rotateSessionID(c); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"session_id": sessions.Default(c).ID()})
 	})
 	r.POST("/api/v2/bridge/exchange", BridgeExchange)
 	// ZitaBootstrap reads the platform identity out of the gin context;
@@ -226,37 +221,6 @@ func (ctx *rotationCtx) assertRotated(t *testing.T, planted *http.Cookie, plante
 	}
 	if minted == 0 {
 		t.Errorf("no session key other than the planted one exists after the login (keys=%v) — the login must MINT a new session, not just drop the old one", keys)
-	}
-}
-
-// TestRotateSessionID_MintsNewIDAndDropsOldKey exercises the helper on its
-// own, so a failure in one of the three login wirings can be told apart from
-// a failure in the rotation itself.
-func TestRotateSessionID_MintsNewIDAndDropsOldKey(t *testing.T) {
-	ctx := setupRotationRouter(t)
-	planted, plantedID := ctx.plantSession(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/rotate-probe", nil)
-	req.AddCookie(planted)
-	w := httptest.NewRecorder()
-	ctx.router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("rotate-probe status = %d body=%s", w.Code, w.Body.String())
-	}
-	if strings.Contains(w.Body.String(), `"session_id":"`+plantedID+`"`) {
-		t.Errorf("session id unchanged after rotation: %s", w.Body.String())
-	}
-	ctx.assertRotated(t, planted, plantedID, w)
-
-	// The session's VALUES must survive the rotation — a login carries
-	// things (the PKCE verifier's removal, identity_account_id) across it.
-	newCookie := responseSessionCookie(t, w)
-	probe := httptest.NewRequest(http.MethodGet, "/rotate-probe", nil)
-	probe.AddCookie(newCookie)
-	pw := httptest.NewRecorder()
-	ctx.router.ServeHTTP(pw, probe)
-	if pw.Code != http.StatusOK {
-		t.Errorf("the rotated session is not usable on the next request: %d %s", pw.Code, pw.Body.String())
 	}
 }
 

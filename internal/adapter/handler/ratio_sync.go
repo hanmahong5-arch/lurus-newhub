@@ -28,13 +28,61 @@ const (
 	floatEpsilon          = 1e-9
 )
 
-// ratioSyncEgressRefusedMessage is the ONE answer a caller gets for a target
-// the egress policy refuses. Fixed on purpose: the per-upstream result is
-// echoed back to the caller, so a message that varied with the failure
-// ("connection refused" vs "no such host" vs "i/o timeout") would turn this
-// endpoint back into the internal-network port scanner the check exists to
-// close. English because it travels on the API wire.
+// ratioSyncEgressRefusedMessage is the single answer a caller gets for a
+// target the egress policy refuses — whether it was refused before the dial
+// (app.ValidateOutboundURL, below) or at the dial by the shared client's
+// transport guard. Fixed on purpose: the per-upstream result is echoed back
+// to the caller, so a message that varied with the failure ("connection
+// refused" vs "no such host" vs "10.0.0.5") would turn this endpoint back
+// into the internal-network port scanner the check exists to close. English
+// because it travels on the API wire.
 const ratioSyncEgressRefusedMessage = "upstream URL refused by egress policy"
+
+// The two markers below are how a transport-layer refusal is recognised.
+// internal/app builds both with fmt.Errorf and no wrapped sentinel, so there
+// is no error value to compare against; the match is on the stable part of
+// each message and ratio_sync_test.go's marker gate fails if either guard is
+// reworded.
+//
+//   - ssrfDialGuardMarker ends both forms the dial guard produces
+//     (relay_dial_guard.go: "... to internal address %s blocked by SSRF
+//     guard" and "... resolves to internal address %s, blocked by SSRF
+//     guard"). The pre-dial check cannot cover this one: it validates the
+//     name, the guard validates what the name resolved to at connect time.
+//   - the redirect pair brackets checkRedirect's "redirect to %s blocked:
+//     %v" (http_client.go), whose %v is the validator message naming the
+//     resolved address.
+const (
+	ssrfDialGuardMarker     = "blocked by SSRF guard"
+	ssrfRedirectGuardPrefix = "redirect to "
+	ssrfRedirectGuardMarker = " blocked: "
+)
+
+// ratioSyncUpstreamErrorMessage maps a transport error onto the text the
+// caller is given. An egress refusal collapses to the one fixed message; a
+// transport error that is not a refusal keeps its own text, because it
+// describes a target the policy already admitted and an operator debugging
+// an upstream needs to read it.
+func ratioSyncUpstreamErrorMessage(err error) string {
+	if isEgressRefusal(err) {
+		return ratioSyncEgressRefusedMessage
+	}
+	return err.Error()
+}
+
+// isEgressRefusal reports whether err came from one of the two egress guards
+// on the shared client (dial-time address check, redirect-hop revalidation)
+// rather than from the network.
+func isEgressRefusal(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, ssrfDialGuardMarker) {
+		return true
+	}
+	return strings.Contains(msg, ssrfRedirectGuardPrefix) && strings.Contains(msg, ssrfRedirectGuardMarker)
+}
 
 func nearlyEqual(a, b float64) bool {
 	if a > b {
@@ -185,8 +233,14 @@ func FetchUpstreamRatios(c *gin.Context) {
 				time.Sleep(time.Duration(200*(1<<attempt)) * time.Millisecond)
 			}
 			if lastErr != nil {
+				// The log keeps the full error (an operator reading pod logs
+				// is already inside the boundary); the caller gets the fixed
+				// message when it was the egress policy that refused. The
+				// other two error sinks in this function cannot carry a guard
+				// error: one is a request-build failure, the other a decode
+				// failure after a response arrived.
 				logger.LogWarn(c.Request.Context(), "http error on "+chItem.Name+": "+lastErr.Error())
-				ch <- upstreamResult{Name: uniqueName, Err: lastErr.Error()}
+				ch <- upstreamResult{Name: uniqueName, Err: ratioSyncUpstreamErrorMessage(lastErr)}
 				return
 			}
 			defer resp.Body.Close()

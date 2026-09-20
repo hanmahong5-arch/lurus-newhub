@@ -6,10 +6,13 @@ import "strings"
 // start of a formula rather than as data. Excel, LibreOffice Calc and
 // Google Sheets all evaluate a cell beginning with one of these on import.
 //
-// The tab and carriage return are in the list because a leading whitespace
-// byte is stripped before the formula parser looks at the cell, so
-// "\t=cmd|…" is evaluated exactly like "=cmd|…" while sailing past a naive
-// check that only looks for the four visible characters.
+// The tab and carriage return are in the list because an importer strips
+// those two from the head of the cell before the formula parser looks at
+// it, so "\t=cmd|…" is evaluated exactly like "=cmd|…" while sailing past a
+// naive check that only looks for the four visible characters. A leading
+// SPACE is not stripped that way — " =1+1" stays text — which is why space
+// is deliberately absent from this list; csv_cell_test.go's leading_space
+// row pins that it is left alone.
 const csvFormulaTriggers = "=+-@\t\r"
 
 // csvCell neutralises one CSV cell against formula injection by prefixing a

@@ -429,13 +429,13 @@ func OIDCCallback(c *gin.Context) {
 	}
 
 	// Retire the pre-authentication session id before the first identity
-	// write below (session_rotation.go). This is the login an attacker can
-	// most easily aim a planted cookie at: the victim arrives at
-	// /api/v2/oauth/callback carrying whatever session cookie their browser
-	// already held. A failure is logged and the login continues — the
-	// fallback inside rotateSessionID has already cleared the incoming
+	// write below (middleware/session_rotation.go). This is the login an
+	// attacker can most easily aim a planted cookie at: the victim arrives
+	// at /api/v2/oauth/callback carrying whatever session cookie their
+	// browser already held. A failure is logged and the login continues —
+	// the fallback inside RotateSessionID has already cleared the incoming
 	// session's values.
-	if err := rotateSessionID(c); err != nil {
+	if err := middleware.RotateSessionID(c); err != nil {
 		common.SysError(fmt.Sprintf("oidc callback: session rotation failed for user %d: %v", user.Id, err))
 	}
 
