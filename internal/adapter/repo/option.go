@@ -422,6 +422,28 @@ var numericOptionKinds = map[string]optionValueKind{
 	"ModelFallbackMarkup":                  optionKindNumber,
 }
 
+// positiveRangeOptionKinds lists numeric option keys whose parsed value must
+// additionally land in (0, optionPositiveRangeMax) — a parse-valid but
+// nonsensical write (0, a negative number) for either of these turns every
+// relay call's cost computation into a divide-by-zero or a negative price:
+// QuotaPerUnit is the quota-to-CNY divisor everywhere in this codebase that
+// converts a quota int to a currency amount (v2_billing_invoices.go,
+// billing_self.go, /api/status), and USDExchangeRate is the CNY-to-USD
+// divisor next to it. There is no business meaning above
+// optionPositiveRangeMax either — it exists only to catch a stray extra
+// digit, not to express a rate anyone would configure (cycle13 §2:
+// "QuotaPerUnit/USDExchangeRate 写入加正数范围守卫"; the pre-consume-period
+// freeze, MONEY-2, is out of scope this cycle — see cycle13 §7).
+var positiveRangeOptionKinds = map[string]bool{
+	"QuotaPerUnit":    true,
+	"USDExchangeRate": true,
+}
+
+// optionPositiveRangeMax is the exclusive upper bound positiveRangeOptionKinds
+// enforces; the lower bound is a strict >0 test, so the constant only needs
+// to name the one number.
+const optionPositiveRangeMax = 1e9
+
 // jsonOptionKinds lists the keys whose dispatch hands the value to a
 // JSON-string updater. Validation for these is json.Valid only: the updaters
 // unmarshal into their own shapes and a shape-aware pre-check here would be a
@@ -501,15 +523,20 @@ func ValidateOptionValue(key, value string) error {
 
 	if kind, ok := numericOptionKinds[key]; ok {
 		var err error
+		var parsedFloat float64
 		switch kind {
 		case optionKindInteger:
 			_, err = strconv.Atoi(value)
 		default:
-			_, err = strconv.ParseFloat(value, 64)
+			parsedFloat, err = strconv.ParseFloat(value, 64)
 		}
 		if err != nil {
 			reportOptionParseFailure(key, kind)
 			return optionKindError(key, kind)
+		}
+		if positiveRangeOptionKinds[key] && (parsedFloat <= 0 || parsedFloat >= optionPositiveRangeMax) {
+			reportOptionRangeFailure(key)
+			return optionRangeError(key)
 		}
 		return nil
 	}
@@ -551,6 +578,14 @@ func optionKindError(key string, kind optionValueKind) error {
 	return fmt.Errorf("%w: %s must be a valid %s", ErrOptionValueRejected, key, kind)
 }
 
+// optionRangeError is optionKindError's counterpart for positiveRangeOptionKinds:
+// the value parsed fine but is out of the range that key must stay in. Like
+// optionKindError it never quotes the submitted value — this dispatch is
+// shared with secret-bearing keys (see ErrOptionValueRejected's comment).
+func optionRangeError(key string) error {
+	return fmt.Errorf("%w: %s must be greater than 0 and less than %g", ErrOptionValueRejected, key, optionPositiveRangeMax)
+}
+
 // optionInt parses an integer option value, and on failure keeps previous,
 // reports the key and returns an error for the caller to propagate. Zeroing a
 // setting because its stored string did not parse is how a blank admin field
@@ -584,6 +619,17 @@ func optionFloat(key, value string, previous float64) (float64, error) {
 func reportOptionParseFailure(key string, kind optionValueKind) {
 	metrics.RecordOptionParseRejected(key)
 	common.SysError(fmt.Sprintf("option %s rejected: value is not a valid %s; the previous value is kept", key, kind))
+}
+
+// reportOptionRangeFailure is reportOptionParseFailure's counterpart for a
+// value that parsed but landed outside positiveRangeOptionKinds' range. It
+// reuses the same rejected-option counter: both are "an admin-submitted
+// value for this key did not reach the table", just for a different reason.
+// internal/pkg/metrics is not owned by this cycle's L2 lane (cycle13 §2), so
+// this does not add a new series.
+func reportOptionRangeFailure(key string) {
+	metrics.RecordOptionParseRejected(key)
+	common.SysError(fmt.Sprintf("option %s rejected: value must be greater than 0 and less than %g; the previous value is kept", key, optionPositiveRangeMax))
 }
 
 // retiredOptionKeys maps a hierarchical key that must no longer be written to

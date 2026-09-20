@@ -1022,6 +1022,44 @@ func GetTokenLogsInternal(tokenID, offset, limit int) (logs []*Log, total int64,
 	return logs, total, err
 }
 
+// billableConsumeExcludeSettlementFailed and billableConsumeExcludeChannelProbe
+// are substrings of a log row's Other JSON column that mark quota which was
+// logged but never actually charged. Both are written by callers outside this
+// package, through this same file's RecordConsumeLog (Other is JSON-encoded
+// via common.MapToJsonStr, which never inserts whitespace around ':', so
+// these substrings land byte-for-byte regardless of what else is in the map
+// or its key order): internal/app/settlement_outcome.go's
+// FlagSettlementOutcome sets other["settlement"]="failed" when SettleConsume's
+// debit call errored — the row still carries the quota that would have been
+// charged, not what actually landed; internal/adapter/handler/channel-test.go's
+// probeChannel sets other["source"]=channelProbeLogSource ("channel_test") on
+// every manual channel-test row — probeChannel settles nothing, so the row's
+// Quota is a paper number nobody's wallet paid. This package cannot import
+// either of those (both import repo; repo importing either would be a build
+// cycle), so the two substrings are pinned here as this package's single
+// source of truth and proven against the real writers by
+// TestProbeChannel_RowIsUnbilled (internal/adapter/handler, drives the real
+// probeChannel) and log_billable_test.go (this package, real
+// RecordConsumeLog write, then query back).
+const (
+	billableConsumeExcludeSettlementFailed = `"settlement":"failed"`
+	billableConsumeExcludeChannelProbe     = `"source":"channel_test"`
+)
+
+// BillableConsumePredicate scopes a query to log rows that were both a real
+// charge attempt (type=consume) and actually settled: the Other column
+// carries neither the settlement-failed nor the manual-probe marker. Use as
+// db.Scopes(BillableConsumePredicate) — it already applies the type filter,
+// so callers must not also add a "type = ?" clause. A row with no Other
+// payload (empty string or NULL, the common case) or one that mentions
+// neither marker passes.
+func BillableConsumePredicate(db *gorm.DB) *gorm.DB {
+	return db.Where("type = ?", LogTypeConsume).
+		Where("(other IS NULL OR other = '' OR (other NOT LIKE ? AND other NOT LIKE ?))",
+			"%"+billableConsumeExcludeSettlementFailed+"%",
+			"%"+billableConsumeExcludeChannelProbe+"%")
+}
+
 // LogStatEntry holds aggregated log statistics.
 type LogStatEntry struct {
 	Key        string `json:"key"`
@@ -1034,19 +1072,23 @@ type LogStatEntry struct {
 // GetUserLogStatInternal below); the caller passes a time.Time, so this
 // function is responsible for the .Unix() conversion — binding time.Time
 // directly into the Where clause makes PostgreSQL reject the query with
-// 22P02 (invalid_text_representation). Only LogTypeConsume rows are
-// included: topup/manage rows are written with an EMPTY model_name
-// (RecordLog / RecordLogWithTenant, log.go:199-220/223-, build Log{}
-// without setting Quota at all, so those rows are Quota==0, not "huge" —
-// their actual problem is that grouping by model_name would add a spurious
-// empty-key group to the result), and LogTypeError rows carry a real
-// ModelName but were never billed, so including them would inflate that
-// model's count with requests that cost nothing.
+// 22P02 (invalid_text_representation). Rows are scoped through
+// BillableConsumePredicate rather than a bare type=consume filter (cycle-13
+// L2): topup/manage rows are written with an EMPTY model_name (RecordLog /
+// RecordLogWithTenant, log.go:199-220/223-, build Log{} without setting
+// Quota at all, so those rows are Quota==0, not "huge" — their actual
+// problem is that grouping by model_name would add a spurious empty-key
+// group to the result), LogTypeError rows carry a real ModelName but were
+// never billed, so including them would inflate that model's count with
+// requests that cost nothing, and a settlement-failed or manual-probe
+// consume row would otherwise inflate a customer's self-service usage total
+// with quota nobody actually paid.
 func GetUserLogStatByPeriod(userID int, since time.Time) ([]LogStatEntry, error) {
 	var results []LogStatEntry
 	err := LOG_DB.Model(&Log{}).
 		Select("model_name as key, COUNT(*) as count, COALESCE(SUM(quota), 0) as total_quota").
-		Where("user_id = ? AND type = ? AND created_at >= ?", userID, LogTypeConsume, since.Unix()).
+		Where("user_id = ? AND created_at >= ?", userID, since.Unix()).
+		Scopes(BillableConsumePredicate).
 		Group("model_name").
 		Order("total_quota DESC").
 		Find(&results).Error
