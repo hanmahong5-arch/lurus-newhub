@@ -35,13 +35,37 @@ describe('classifyLoad — raw axios outcomes', () => {
     expect(classifyLoad(axiosOk({ id: 1 }))).toBe('ok');
   });
 
-  it('classifies a resolved 200 {success:false} response as forbidden', () => {
+  it('classifies a resolved 200 {success:false} carrying the v1 refusal message as forbidden', () => {
     // This codebase's session-auth branch answers "insufficient
     // permission" as HTTP 200 {success:false} rather than a 4xx
-    // (middleware/auth.go's minRole check) — the same refusal a customer
+    // (middleware/auth.go:321 minRole check) — the same refusal a customer
     // sees from a 403 must not be misread as "an empty account".
     expect(classifyLoad(axiosRefused('无权进行此操作，权限不足'))).toBe(
       'forbidden',
+    );
+  });
+
+  it('classifies a resolved 200 {success:false, error_code:PERMISSION_DENIED} as forbidden', () => {
+    // The v2 envelope's machine-readable half (admin_jwt_auth.go's denial
+    // table) — recognised without depending on the message wording.
+    expect(
+      classifyLoad({
+        status: 200,
+        data: { success: false, error_code: 'PERMISSION_DENIED', message: '' },
+      }),
+    ).toBe('forbidden');
+  });
+
+  it('classifies a resolved 200 {success:false} that is NOT a refusal as error, not forbidden', () => {
+    // A handler answering 200 {success:false} for a non-permission reason
+    // (a rejected filter window, a maintenance page) previously printed
+    // "Admin access required" on the Users/Audit pages — a false claim on
+    // the very pages this lane exists to make honest.
+    expect(classifyLoad(axiosRefused('时间跨度不能超过 1 个月'))).toBe('error');
+    expect(classifyLoad(axiosRefused('用户已被封禁'))).toBe('error');
+    expect(classifyLoad(axiosRefused(undefined))).toBe('error');
+    expect(classifyLoad({ status: 200, data: 'a login page, not JSON' })).toBe(
+      'error',
     );
   });
 
@@ -77,11 +101,18 @@ describe('classifyLoad — Promise.allSettled() entries', () => {
     expect(classifyLoad(settled)).toBe('ok');
   });
 
-  it('unwraps a fulfilled entry carrying a {success:false} body as forbidden', async () => {
+  it('unwraps a fulfilled entry carrying the v1 refusal body as forbidden', async () => {
+    const [settled] = await Promise.allSettled([
+      Promise.resolve(axiosRefused('无权进行此操作，权限不足')),
+    ]);
+    expect(classifyLoad(settled)).toBe('forbidden');
+  });
+
+  it('unwraps a fulfilled entry carrying an unrecognised {success:false} body as error', async () => {
     const [settled] = await Promise.allSettled([
       Promise.resolve(axiosRefused('nope')),
     ]);
-    expect(classifyLoad(settled)).toBe('forbidden');
+    expect(classifyLoad(settled)).toBe('error');
   });
 
   it('unwraps a rejected entry and classifies its reason', async () => {

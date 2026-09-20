@@ -18,13 +18,35 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 // cycle-13 L7 (console honesty). A handful of v2 pages fetch on mount and
-// then collapse EVERY non-2xx outcome — a 500, a dropped connection, a
+// then collapse each non-2xx outcome — a 500, a dropped connection, a
 // 200 {success:false} permission refusal — into the same empty state a
 // genuinely-empty account would show ("no traffic in last 5 min", "No users
 // yet."). An operator whose session lapsed mid-day, or whose request hit a
 // 502 during a rollout, reads that as "there is nothing here" instead of
 // "we could not check". classifyLoad() gives every such call site one
 // outcome vocabulary so a caller can render the three states separately.
+
+// The two 200-with-{success:false} shapes this console can read as "you are
+// not allowed", as opposed to "the request failed" or "a filter was
+// rejected". `error_code` is the v2 envelope's machine-readable half
+// (internal/adapter/middleware/admin_jwt_auth.go's denial table); the
+// message string is the v1 session-auth branch's refusal
+// (internal/adapter/middleware/auth.go:321, `roleVal < minRole`), which is
+// part of the documented v1 response contract (switch consumes it), not
+// incidental copy. Anything else that answers 200 {success:false} — a
+// rejected filter window, a banned-user notice, a maintenance page — is
+// classified 'error': claiming "Admin access required" for it would be a
+// fresh false statement on the pages this module exists to make honest.
+const PERMISSION_REFUSAL_MESSAGES = ['无权进行此操作，权限不足'];
+const PERMISSION_REFUSAL_ERROR_CODE = 'PERMISSION_DENIED';
+
+function isPermissionRefusalBody(body) {
+  if (!body || typeof body !== 'object') return false;
+  if (body.error_code === PERMISSION_REFUSAL_ERROR_CODE) return true;
+  return PERMISSION_REFUSAL_MESSAGES.includes(
+    String(body.message ?? '').trim(),
+  );
+}
 
 /**
  * Classify one fetch outcome into 'ok' | 'forbidden' | 'unauthenticated' | 'error'.
@@ -39,12 +61,21 @@ For commercial licensing, please contact support@quantumnous.com
  *   - HTTP 401                                -> 'unauthenticated'
  *   - HTTP 403                                -> 'forbidden'
  *   - resolved response, body.success true    -> 'ok'
- *   - resolved response, body.success false   -> 'forbidden' (this codebase's
- *     session-auth branch answers insufficient-permission with HTTP 200
- *     {"success":false,...}, not a 4xx — see internal/adapter/middleware/
- *     auth.go's minRole check)
- *   - anything else (network error, 5xx, a thrown non-axios Error)
- *                                              -> 'error'
+ *   - resolved response, body.success false, body recognisably a permission
+ *     refusal (see isPermissionRefusalBody above)
+ *                                             -> 'forbidden'
+ *   - anything else (network error, 5xx, a thrown non-axios Error, a 200
+ *     whose body failed for some other reason)
+ *                                             -> 'error'
+ *
+ * The 'unauthenticated' bucket is deliberately folded back into an existing
+ * one by every caller shipped in this cycle (Dashboard's single retry
+ * banner, Users/Audit's error-with-retry panel, Diagnostics' forbidden
+ * panel): a 401 on a console page normally means the session lapsed, and
+ * the session-expiry redirect already belongs to the shared API
+ * interceptor. It is a separate value here so the page that wants to say
+ * "your session expired — sign in" can, without re-deriving it from the
+ * HTTP status.
  *
  * @param {*} settledOrError
  * @returns {'ok'|'forbidden'|'unauthenticated'|'error'}
@@ -69,7 +100,8 @@ export function classifyLoad(settledOrError) {
   // asymmetry is what distinguishes "the call answered" from "the call
   // failed" here, not typeof or truthiness.
   if (outcome && typeof outcome === 'object' && 'data' in outcome) {
-    return outcome.data?.success ? 'ok' : 'forbidden';
+    if (outcome.data?.success) return 'ok';
+    return isPermissionRefusalBody(outcome.data) ? 'forbidden' : 'error';
   }
 
   return 'error';

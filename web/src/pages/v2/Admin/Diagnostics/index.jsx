@@ -71,9 +71,20 @@ const fmtPct = (v) => `${Number(v ?? 0).toFixed(1)}%`;
 // failure (network error, or the 500 GetAdminTotpStatsV2 answers when its
 // aggregate query fails, v2_admin_security.go:42-46) is 'error' and must
 // not be rendered as zeroed data.
+//
+// The one place this page is deliberately looser than classifyLoad: a
+// response that RESOLVED with a non-success body counts as the refusal here
+// whatever its message. classifyLoad only trusts the two refusal shapes it
+// can recognise (PERMISSION_DENIED / the v1 minRole message) because other
+// pages' handlers also answer 200 {success:false} for non-permission
+// reasons. These two root-gated GETs answer 200 with success:true
+// (v2_admin_routing.go:63, v2_admin_security.go:48) and take their failure
+// arms out at 500, which axios delivers as a rejection — so a RESOLVED
+// non-success body on this page came from the auth layer in front of them.
 const classifySettled = (settled) => {
   const raw = classifyLoad(settled);
-  const status = raw === 'unauthenticated' ? 'forbidden' : raw;
+  let status = raw === 'unauthenticated' ? 'forbidden' : raw;
+  if (settled.status === 'fulfilled' && status !== 'ok') status = 'forbidden';
   if (status === 'ok' && settled.status === 'fulfilled') {
     const body = settled.value?.data;
     return { status, data: body?.data, scope: body?.scope ?? null };

@@ -19,6 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
 // Deterministic i18n: i18next.t(key, defaultValue) just returns the default
 // (exactly how the real library resolves an untranslated-but-defaulted key),
@@ -239,5 +242,36 @@ describe('installPreloadErrorReload', () => {
     } finally {
       restore();
     }
+  });
+});
+
+// ─── wiring: the boundary has to be INSTALLED, not merely written ────────────
+//
+// web/src/index.jsx calls ReactDOM.createRoot at module scope (documented at
+// index.jsx:33-36), so no test can import it and observe the real tree. The
+// repo already reads that file as text for the same reason
+// (src/z9_entry_icon_barrel.test.js walks its static import graph), so this
+// does too: nothing else fails if the wrap or the preload self-heal is
+// deleted from the entry, which would leave this component correct and
+// unreachable.
+describe('entry wiring (web/src/index.jsx read as text)', () => {
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const ENTRY = join(HERE, '..', '..', 'index.jsx');
+  const source = readFileSync(ENTRY, 'utf8');
+
+  it('imports the boundary and its preload self-heal from this module', () => {
+    expect(source).toMatch(
+      /import\s+ErrorBoundary\s*,\s*\{[\s\S]*?installPreloadErrorReload[\s\S]*?\}\s*from\s*'\.\/components\/common\/ErrorBoundary'/,
+    );
+  });
+
+  it('calls installPreloadErrorReload() at startup', () => {
+    expect(source).toMatch(/^installPreloadErrorReload\(\);$/m);
+  });
+
+  it('renders <PageLayout /> inside <ErrorBoundary>', () => {
+    const wrapped = source.match(/<ErrorBoundary>([\s\S]*?)<\/ErrorBoundary>/);
+    expect(wrapped, 'no <ErrorBoundary> element in index.jsx').toBeTruthy();
+    expect(wrapped[1]).toMatch(/<PageLayout/);
   });
 });

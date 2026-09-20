@@ -87,7 +87,12 @@ vi.mock('@douyinfe/semi-ui', () => {
 
   const Form = ({ children, onSubmit, getFormApi, initValues }) => {
     const [values, setValues] = React.useState(() => ({ ...initValues }));
+    // Re-pointed every render, and read through H inside submitForm below:
+    // the memoised `api` therefore stays stable without closing over the
+    // current render's `onSubmit` (which is what a [] dependency list would
+    // have silently staled, and what react-hooks/exhaustive-deps flags).
     H.submit.current = onSubmit;
+    const initialValues = React.useRef(initValues);
     const api = React.useMemo(
       () => ({
         setValues: (v) => {
@@ -100,15 +105,21 @@ vi.mock('@douyinfe/semi-ui', () => {
         },
         getValue: (k) => H.formValues.current[k],
         getValues: () => H.formValues.current,
-        submitForm: () => onSubmit(H.formValues.current),
+        submitForm: () => H.submit.current(H.formValues.current),
       }),
       [],
     );
+    // Two effects rather than one mount-only effect with a suppressed
+    // dependency warning: seeding form state must happen once (the real
+    // component's initValues prop is a fresh object every render, so a
+    // dependency on it would clobber loaded values), while handing the
+    // parent its form api is idempotent and can re-run freely.
     React.useEffect(() => {
-      H.formValues.current = { ...initValues };
-      getFormApi?.(api);
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+      H.formValues.current = { ...initialValues.current };
     }, []);
+    React.useEffect(() => {
+      getFormApi?.(api);
+    }, [api, getFormApi]);
     return React.createElement(
       'form',
       { 'data-testid': 'form' },

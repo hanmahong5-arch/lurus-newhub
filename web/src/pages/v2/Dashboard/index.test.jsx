@@ -809,6 +809,10 @@ describe('Dashboard page — honest load failure (meStatus/logsStatus)', () => {
       expect(screen.queryByText('no traffic in last 5 min')).toBeNull();
       expect(screen.queryByText('No recent requests found.')).toBeNull();
       expect(
+        screen.queryByText('awaiting requests with latency data'),
+      ).toBeNull();
+      expect(screen.queryByText('No consume traffic yet')).toBeNull();
+      expect(
         screen.queryByText(
           'once a relay call is consumed, the model breakdown lands here.',
         ),
