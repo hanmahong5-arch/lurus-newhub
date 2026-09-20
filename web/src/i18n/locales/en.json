@@ -29,7 +29,10 @@
         "hide": "hide",
         "prev": "← prev",
         "next": "next →",
-        "dismiss": "dismiss"
+        "dismiss": "dismiss",
+        "yes": "yes",
+        "no": "no",
+        "error": "Something went wrong"
       },
       "errors": {
         "network": "Network unreachable — check your connection and try again.",
@@ -39,7 +42,19 @@
         "not_found": "That resource was not found.",
         "rate_limited": "Too many requests — please slow down and try again.",
         "server": "Service temporarily unavailable. Please try again shortly.",
-        "unknown": "Something went wrong. Please try again."
+        "unknown": "Something went wrong. Please try again.",
+        "token_name_invalid": "That token name doesn't meet the requirements — check the length limit.",
+        "token_quota_invalid": "That token quota value is invalid — check the allowed range.",
+        "token_expiry_invalid": "That token expiration time is invalid.",
+        "token_rate_limit_invalid": "That token rate limit value is invalid.",
+        "token_scope_invalid": "The token's permission scope contains an invalid value.",
+        "token_model_limit_invalid": "The token's model allowlist is invalid.",
+        "token_enable_rejected": "This token can't be enabled in its current state — check its quota or expiration settings first.",
+        "redemption_invalid": "That redemption code is invalid or doesn't exist.",
+        "redemption_used": "That redemption code has already been used.",
+        "redemption_expired": "That redemption code has expired.",
+        "redemption_tenant_mismatch": "That redemption code doesn't belong to your tenant.",
+        "redemption_failed": "Redemption failed — please try again shortly."
       },
       "nav": {
         "section_workspace": "workspace",
@@ -196,7 +211,9 @@
         "announcements": "announcements",
         "faq": "faq",
         "api_info": "api info",
-        "uptime": "uptime"
+        "uptime": "uptime",
+        "load_failed": "Unable to load — retry",
+        "load_failed_short": "unable to load"
       },
       "token": {
         "crumb": "tokens",
@@ -543,6 +560,7 @@
         "detail_session_id": "session id",
         "detail_upstream_request_id": "upstream request id",
         "id_window_hint": "id search — showing the last 7 days unless a start date is set",
+        "default_window": "showing the last {{days}} days — set a start date to widen the window",
         "stat_id_scope_hint": "totals above are for the same time window, not filtered by id",
         "settlement_failed": "settlement failed"
       },
@@ -1044,6 +1062,7 @@
         "notify_gotify_url_label": "gotify server url",
         "notify_gotify_token_label": "gotify app token",
         "notify_gotify_priority_label": "gotify priority (0-10)",
+        "notify_unseeded": "current settings could not be loaded - reload before saving",
         "integrations_deferred": "integration registry deferred to v3",
         "configure": "configure",
         "connect": "connect",
@@ -1074,6 +1093,8 @@
           "status_disabled": "disabled",
           "empty": "No users yet.",
           "empty_filtered": "No users match your search.",
+          "error_title": "Couldn't load users",
+          "error_body": "Something went wrong loading this page.",
           "th_user": "user",
           "th_role": "role",
           "th_status": "status",
@@ -1249,6 +1270,8 @@
           "ph_actor": "actor id…",
           "empty": "No audit events recorded yet.",
           "empty_filtered": "No audit events match these filters.",
+          "error_title": "Couldn't load the audit trail",
+          "error_body": "Something went wrong loading this page.",
           "th_time": "time (utc)",
           "th_actor": "actor",
           "th_action": "action",
@@ -1470,7 +1493,18 @@
         "footer_new_tab": "new tab",
         "footer_results_one": "{{count}} result",
         "footer_results_other": "{{count}} results",
-        "open_palette_btn": "⌘K open palette"
+        "open_palette_btn": "⌘K open palette",
+        "crumb_palette": "command palette",
+        "heading_plain": "search anything",
+        "kbd_close": "close palette",
+        "no_results": "no matches",
+        "group_tokens": "tokens",
+        "token_unlimited": "unlimited",
+        "token_remaining": "{{quota}} remaining",
+        "channel_enabled": "enabled",
+        "channel_disabled": "disabled",
+        "per_call_price": "${{price}} / call",
+        "ratio": "ratio {{ratio}}"
       },
       "component": {
         "tenant_switcher": {

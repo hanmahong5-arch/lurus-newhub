@@ -169,28 +169,32 @@ const fmtCost = (quota) => formatUSD(quota);
 
 const PAGE_SIZE = 50;
 
-// request_id/upstream_request_id filter the `other` JSON column via an
-// unindexed extract (internal/adapter/repo/log.go, jsonOtherTextExpr) — a
-// plain index on `logs` is off the table this cycle (a CREATE INDEX would
-// hold ShareLock against the relay's own log writes; see runner.go). So the
-// search and paging paths attach a bounded start_time when an id filter is
-// set and the caller left the date pickers empty; the CSV export button
-// below builds its own id-less query from the same filter state and is not
-// covered by this bound.
-const ID_FILTER_LOOKBACK_SEC = 7 * 24 * 3600; // 7 days
+// DEFAULT_LOOKBACK_SEC bounds every logs/stat query made with no start date —
+// which is how this page opens. Without it the list and the stat header both
+// asked the database to consider every row the tenant ever wrote
+// (serveLogStatV2 now applies a 30-day bound of its own; this is the narrower
+// window the page actually renders).
+const DEFAULT_LOOKBACK_SEC = 7 * 24 * 3600; // 7 days
 
-// Effective lower time bound for a logs/stat query: an explicit start wins;
-// otherwise an active id filter gets the lookback above, anchored on the end
-// bound when one is set (so the computed start_time can never land after an
-// explicit end_time) and on now() otherwise. Returns null when neither an
-// explicit start nor an id filter applies, meaning no bound is sent.
+// ID_FILTER_LOOKBACK_SEC is the window an id search runs over:
+// request_id/upstream_request_id filter the `other` JSON column via an
+// unindexed extract (internal/adapter/repo/log.go, jsonOtherTextExpr), so it
+// must never ride out unbounded. Same length as the default today, named apart
+// because the two answer to different constraints and can move apart.
+const ID_FILTER_LOOKBACK_SEC = DEFAULT_LOOKBACK_SEC;
+
+// Effective lower time bound: an explicit start wins; otherwise the lookback
+// above, anchored on the end bound when one is set (so the computed start_time
+// can never land after an explicit end_time) and on now() otherwise. The CSV
+// export below builds its own query and is deliberately NOT bounded this way.
 const computeStartTimeSec = (start, end, hasIdFilter) => {
   if (start) return Math.floor(new Date(start).getTime() / 1000);
-  if (!hasIdFilter) return null;
   const anchorSec = end
     ? Math.floor(new Date(end).getTime() / 1000)
     : Math.floor(Date.now() / 1000);
-  return anchorSec - ID_FILTER_LOOKBACK_SEC;
+  return (
+    anchorSec - (hasIdFilter ? ID_FILTER_LOOKBACK_SEC : DEFAULT_LOOKBACK_SEC)
+  );
 };
 
 // Live-tail tuning. 3s poll matches the plan; the buffer is bounded so a
@@ -813,6 +817,27 @@ const HFLog = () => {
           {tr(
             'console.log.id_window_hint',
             'id search — showing the last 7 days unless a start date is set',
+          )}
+        </div>
+      )}
+
+      {/* With no start date the queries carry a DEFAULT_LOOKBACK_SEC bound
+          that is otherwise invisible: an empty page would read as "no
+          traffic" rather than "none in the last week". */}
+      {!idFilterActive && !filterStart && (
+        <div
+          data-testid='log-default-window-hint'
+          className='muted mono'
+          style={{
+            fontSize: 11,
+            padding: '6px 28px',
+            borderBottom: '1px solid var(--hf-rule)',
+          }}
+        >
+          {tr(
+            'console.log.default_window',
+            'showing the last {{days}} days — set a start date to widen the window',
+            { days: DEFAULT_LOOKBACK_SEC / 86400 },
           )}
         </div>
       )}

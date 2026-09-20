@@ -18,6 +18,19 @@ import (
 // and always look at the last 60 seconds — matching repo.SumUsedQuota.
 const logStatWindowSeconds = 60
 
+// logStatDefaultWindowDays is the lower bound serveLogStatV2 applies when
+// the caller sends no start_time. Without it an unfiltered request made the
+// database aggregate every row the tenant has ever written — the Log page
+// opens with its date pickers empty, so that was the default request, and
+// on /logs/stat/all it covers every member. 30 days matches what the page
+// shows by default and keeps the aggregate on the
+// (tenant_id, created_at DESC, id DESC) index migration 039 adds.
+//
+// An explicit start_time always wins, including a deliberately tiny one, so
+// "show me everything" is still one parameter away. The bound actually used
+// comes back as window_start.
+const logStatDefaultWindowDays = 30
+
 // logStatView is the aggregate returned by GetLogStatV2. Totals reflect the
 // caller's active filters (same shape as GetLogsV2); rpm/tpm are the last-60s
 // rolling rates for the same tenant/user/model/token scope.
@@ -40,6 +53,12 @@ type logStatView struct {
 	Tpm              int64 `json:"tpm"`
 	StartTime        int64 `json:"start_time"`
 	EndTime          int64 `json:"end_time"`
+	// WindowStart is the created_at lower bound the aggregates actually
+	// ran with: the caller's start_time when they sent one, otherwise the
+	// logStatDefaultWindowDays default. StartTime keeps echoing what the
+	// caller sent (0 when they sent nothing), so a console can tell "I
+	// asked for this" from "the server picked this".
+	WindowStart int64 `json:"window_start"`
 	// ByProduct is the cross-product attribution breakdown (Workstream 0):
 	// the same window filters as the totals above, MINUS the source_product
 	// filter itself, so a caller filtering to one product still sees where
@@ -125,6 +144,16 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 	// Cross-product attribution filter (Workstream 0); "" = no filter.
 	sourceProduct := c.Query("source_product")
 
+	// Effective created_at lower bound. A caller who sends no start_time
+	// gets the logStatDefaultWindowDays default rather than an unbounded
+	// scan of every row this tenant ever wrote; an explicit value (however
+	// small) wins. Both the totals and the by_product breakdown use it, so
+	// the two always describe the same window.
+	windowStart := startTime
+	if windowStart <= 0 {
+		windowStart = time.Now().AddDate(0, 0, -logStatDefaultWindowDays).Unix()
+	}
+
 	// Window totals — apply exactly the GetLogsV2 filters, tenant scoped
 	// (+ user scoped unless tenant-wide).
 	windowQuery := repo.LOG_DB.Model(&repo.Log{}).
@@ -144,9 +173,7 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 	if tokenName != "" {
 		windowQuery = windowQuery.Where("token_name = ?", tokenName)
 	}
-	if startTime > 0 {
-		windowQuery = windowQuery.Where("created_at >= ?", startTime)
-	}
+	windowQuery = windowQuery.Where("created_at >= ?", windowStart)
 	if endTime > 0 {
 		windowQuery = windowQuery.Where("created_at <= ?", endTime)
 	}
@@ -246,9 +273,7 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 	if tokenName != "" {
 		breakdownQuery = breakdownQuery.Where("token_name = ?", tokenName)
 	}
-	if startTime > 0 {
-		breakdownQuery = breakdownQuery.Where("created_at >= ?", startTime)
-	}
+	breakdownQuery = breakdownQuery.Where("created_at >= ?", windowStart)
 	if endTime > 0 {
 		breakdownQuery = breakdownQuery.Where("created_at <= ?", endTime)
 	}
@@ -288,6 +313,7 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 			Tpm:              rate.Tpm,
 			StartTime:        startTime,
 			EndTime:          endTime,
+			WindowStart:      windowStart,
 			ByProduct:        byProduct,
 		},
 	})

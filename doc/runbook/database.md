@@ -22,8 +22,23 @@ kubectl get secret -n lurus-newhub lurus-newhub-secrets \
 同一 PG 上还有 `identity`(platform,表在 `identity.*`/`billing.*` schema——`public` 只有 2 张表,
 直接查 `public` 会误判「表不存在」)、`zitadel`、`lucrum`、`tally`、`newapi`。
 
-App-level pool:`SQL_MAX_IDLE_CONNS`(100)、`SQL_MAX_OPEN_CONNS`(1000)、`SQL_MAX_LIFETIME`(60s)。
-可选独立日志库:`LOG_SQL_DSN`(不设则日志与主库同库)。
+App-level pool:真源是两份 manifest 的 env(`deploy/k8s/r6-stage/deployment.yaml`、
+`deploy/k8s/r6-uat/deployment.yaml`),**不是代码默认值**——代码默认 `SQL_MAX_IDLE_CONNS`=100 /
+`SQL_MAX_OPEN_CONNS`=1000 只在两个变量都不设时生效,线上从不走这条路径。
+cycle-13 定的值是 `SQL_MAX_OPEN_CONNS=12` / `SQL_MAX_IDLE_CONNS=12`(idle==open,回收交给
+`ConnMaxIdleTime`);`SQL_MAX_LIFETIME`=60s。
+
+为什么是 12:2026-09-20 在 `lurus-pg-0` 实测 **`max_connections = 100`**,当时占用 38
+(newhub 13 / zitadel 8 / uat 5 / identity 3 / lucrum 3 / 其它 6)。生产 3 副本 × 12 = 36,
+UAT 1 副本 × 12 = 12,合计 48,仍在 100 以内且给其它服务留出余量。把 PG 抬到 200 要重启
+`lurus-pg-0`(影响同机全部服务),是 owner 事项。
+
+调低这个值是**可用性**旋钮不是延迟旋钮:readinessProbe 打的 `/api/health` 会取一条池内连接,
+池耗尽 ⇒ 该副本 503 ⇒ 被摘出 Service(`timeoutSeconds: 4`,`failureThreshold: 3`,
+`periodSeconds: 5` ⇒ 约 15s 持续失败才摘)。见 `db-pool-saturation.md`。
+
+可选独立日志库:`LOG_SQL_DSN`(不设则日志与主库同库)。设了它,`logs` 表的读写走另一个
+database/pool,连接预算要按两个池算。
 
 ## Backup
 
@@ -124,25 +139,64 @@ schema_migrations/audit_events` **逐表相等**;唯一差异是 `logs`——按
    `doc/coord/migration-ledger.md` 预留。
 
 ```bash
-# 带 migration 的部署后核对
-curl -s https://test-newhub.lurus.cn/api/health          # checks.schema_migrations
-curl -s https://test-newhub.lurus.cn/metrics | grep schema_migrations   # pending 应为 0
+# 带 migration 的部署后核对(生产域名是 hub.lurus.cn;test-newhub 自 2026-08-30 起是 UAT)
+curl -s https://hub.lurus.cn/api/health                  # checks.schema_migrations
+
+# /metrics 在边缘被 nginx 封成 404(双层封堵,2026-08-25),要在节点上直连 NodePort 读:
+ssh <r6> 'curl -s http://localhost:30850/metrics | grep schema_migrations'   # pending 应为 0
+#          UAT 同理走 :30851
+
 kubectl exec -n database lurus-pg-0 -- psql -U postgres -d newhub -c \
   'select version, applied_at from schema_migrations order by version desc limit 5;'
 ```
+
+**启动探针预算**:`startupProbe` = `initialDelaySeconds + failureThreshold × periodSeconds`,
+这是一次 migration 在被 SIGKILL 前能跑多久。cycle-13 把 `failureThreshold` 提到 120
+(5 + 120×5 = **605s ≈ 10 分钟**);在此之前是 30 ⇒ 155s,一条在大表上跑 3 分钟的 migration
+会让 kubelet 杀掉正在建索引的 pod,下次启动再从头来。改 migration 前先看这个预算够不够。
+
+### no-transaction migration(`CREATE INDEX CONCURRENTLY`)
+
+runner 默认把每个文件整体包进一个事务。PostgreSQL 拒绝事务块里的
+`CREATE INDEX CONCURRENTLY`(SQLSTATE 25001),所以大表加索引以前只能人工做。
+现在:**文件第一行**写 `-- lurus:no-transaction`,runner 就不开事务、逐条执行
+(`internal/pkg/migration/runner.go` 的 `NoTransactionDirective`)。规则:
+
+- 这类文件**只允许** `CREATE INDEX CONCURRENTLY IF NOT EXISTS` 语句。runner 在 apply 时拒绝
+  其它语句,`no_transaction_files_structural_test.go` 在 CI 里先拒一次。
+- 可选第二条指令 `-- lurus:requires-table public.logs`:表不存在时跳过该文件的语句并照常记账
+  (等价于其它 migration 的 `to_regclass` DO 块守卫——DO 块本身是事务上下文,装不下 CIC)。
+- **不是原子的**。CIC 跑到一半失败会留下一个 INVALID 索引,而 `IF NOT EXISTS` 下次启动会跳过它
+  并把版本记成已应用 ⇒ 索引永远 INVALID 且没有 planner 会用。修复(人工,不走 runner):
+
+```sql
+SELECT c.relname, i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
+  WHERE c.relname = 'idx_logs_tenant_created_id';
+DROP INDEX CONCURRENTLY IF EXISTS idx_logs_tenant_created_id;
+-- 然后手工重跑 migrations/039_logs_tenant_created_index.sql 里那条语句
+```
+
+第一个使用者 = `migrations/039_logs_tenant_created_index.sql`
+(`idx_logs_tenant_created_id (tenant_id, created_at DESC, id DESC)`)。
+`entity.Log` 上**不要**给这个索引加 `index:` 标签:AutoMigrate 会用非 CONCURRENTLY 的
+`CREATE INDEX` 建同名索引,那正是 039 要避开的锁。
 
 手工变更(AutoMigrate 做不到的重命名/改类型/删除):
 
 ```sql
 ALTER TABLE users RENAME COLUMN old_name TO new_name;
-CREATE INDEX CONCURRENTLY idx_logs_tenant_id ON logs(tenant_id);   -- 大表必须 CONCURRENTLY
+-- 大表加索引改走 no-transaction migration(见上),手工只在修 INVALID 索引时用
 ALTER TABLE tokens ALTER COLUMN quota TYPE bigint;
 ```
 
-`logs`/`audit_events` 的 retention 删除已分批(`id IN (SELECT id … ORDER BY id LIMIT ?)`
-子查询,而非裸 `.Limit().Delete()`——gorm 两种方言的 DeleteClauses 都不渲染 LIMIT,后者会退化
-成一条无界 DELETE 锁住整表)。`AUDIT_CLEANUP_INTERVAL_SECONDS` 现在真的生效(见
-`internal/lifecycle/audit_cleanup.go`)。
+`logs`/`audit_events`/`download_logs` 的 retention 删除已分批
+(`id IN (SELECT id … ORDER BY id LIMIT ?)` 子查询,而非裸 `.Limit().Delete()`——gorm 两种方言的
+DeleteClauses 都不渲染 LIMIT,后者会退化成一条无界 DELETE 锁住整表)。
+`AUDIT_CLEANUP_INTERVAL_SECONDS` 现在真的生效(见 `internal/lifecycle/audit_cleanup.go`)。
+
+`logs` 的按时间保留任务见 **`log-retention.md`**:leader-only,`LOG_RETENTION_DAYS` 默认 0 = 关,
+所以部署它本身不删任何行。在设窗口之前先读那篇——钱行(consume/topup/refund)和诊断行
+(error/system/manage)走两个不同的窗口和下限。
 
 变更前:先备份 · 先在 STAGE 验 · 查长事务(`SELECT * FROM pg_stat_activity WHERE state='active';`)。
 

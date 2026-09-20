@@ -79,10 +79,13 @@ func columnIsNotNullWithDefault(t *testing.T, db *sql.DB, table, column string) 
 func TestIntegration029_CreatesProjectsAndAttributionColumns(t *testing.T) {
 	db := setupPG(t)
 	// tokens/logs stand in for a DR restore that has the data tables but has
+	// created_at on logs because entity.Log always declares it and
+	// 039_logs_tenant_created_index.sql indexes it — a stand-in for logs that
+	// omits it fails 039, not 029.
 	// not booted the app yet. Shapes are trimmed to what 029 touches.
 	if _, err := db.ExecContext(context.Background(), `
 		CREATE TABLE tokens (id bigserial PRIMARY KEY, tenant_id varchar(36) NOT NULL DEFAULT 'default', name text);
-		CREATE TABLE logs   (id bigserial PRIMARY KEY, tenant_id varchar(36) NOT NULL DEFAULT 'default', quota bigint NOT NULL DEFAULT 0);
+		CREATE TABLE logs   (id bigserial PRIMARY KEY, tenant_id varchar(36) NOT NULL DEFAULT 'default', created_at bigint NOT NULL DEFAULT 0, quota bigint NOT NULL DEFAULT 0);
 		INSERT INTO tokens (tenant_id, name) VALUES ('default', 'k1');
 		INSERT INTO logs   (tenant_id, quota) VALUES ('default', 42);
 	`); err != nil {
@@ -224,7 +227,7 @@ func TestIntegration029_Idempotent(t *testing.T) {
 	db := setupPG(t)
 	if _, err := db.ExecContext(context.Background(), `
 		CREATE TABLE tokens (id bigserial PRIMARY KEY, tenant_id varchar(36) NOT NULL DEFAULT 'default');
-		CREATE TABLE logs   (id bigserial PRIMARY KEY, tenant_id varchar(36) NOT NULL DEFAULT 'default');
+		CREATE TABLE logs   (id bigserial PRIMARY KEY, tenant_id varchar(36) NOT NULL DEFAULT 'default', created_at bigint NOT NULL DEFAULT 0);
 	`); err != nil {
 		t.Fatalf("create fixture: %v", err)
 	}
