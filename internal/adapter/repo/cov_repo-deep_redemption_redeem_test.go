@@ -8,6 +8,7 @@ package repo
 // on exactly those two properties plus the ordinary validation branches.
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -142,7 +143,11 @@ func TestRedeem_AlreadyUsedCodeCannotBeRedeemedTwice(t *testing.T) {
 	}
 	// A second redeem attempt (even by a different user) must be rejected —
 	// the code is now Used, not Enabled.
-	if _, err := Redeem(code.Key, u2.Id); err == nil || !strings.Contains(err.Error(), "已被使用") {
+	// ErrRedemptionUsed, not a substring: cycle-13 L3 changed the wording from
+	// 该兑换码已被使用 to 该兑换码已使用 so the Switch classifier's 已使用 marker
+	// matches; this PG-tier test still pinned the old four characters and was
+	// the one assertion the hermetic run could not reach.
+	if _, err := Redeem(code.Key, u2.Id); err == nil || !errors.Is(err, ErrRedemptionUsed) {
 		t.Fatalf("second redeem of an already-used code must be rejected, got %v", err)
 	}
 	var reloadedU2 User
