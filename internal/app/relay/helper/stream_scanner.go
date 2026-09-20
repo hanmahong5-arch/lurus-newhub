@@ -131,6 +131,16 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 	// 改进资源清理，确保所有 goroutine 正确退出
 	defer func() {
+		// Close the upstream body FIRST. A scanner blocked in Scan() on a
+		// stalled upstream can only observe stopChan after Scan returns, so
+		// without this the wait below ran to its full GoroutineShutdownTimeout
+		// on every streaming timeout and the goroutine was still alive when
+		// this function returned (CI -race, 2026-09-19, seed 1789861533657641803:
+		// its deferred DebugEnabled read raced the next test). The outer
+		// defer's Close is then a no-op.
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		// 通知所有 goroutine 停止
 		common.SafeSendBool(stopChan, true)
 

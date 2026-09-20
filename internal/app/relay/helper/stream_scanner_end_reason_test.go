@@ -66,7 +66,15 @@ func TestStreamScannerHandler_RecordsEndReason(t *testing.T) {
 		pr, pw := io.Pipe() // upstream stalls forever
 		defer func() { _ = pw.Close() }()
 		resp := &http.Response{StatusCode: 200, Body: pr, Header: make(http.Header)}
+		start := time.Now()
 		StreamScannerHandler(c, resp, info, func(string) bool { return true })
+		// The handler must close the stalled body before waiting for its
+		// scanner goroutine: with the close after the wait, this path took
+		// StreamingTimeout plus the full GoroutineShutdownTimeout (5 s) and
+		// returned with the goroutine still alive.
+		if elapsed := time.Since(start); elapsed > 3*time.Second {
+			t.Errorf("streaming-timeout path took %v; the stalled body was not closed before the goroutine wait", elapsed)
+		}
 		if info.StreamEndReason != relaycommon.StreamEndTimeout {
 			t.Errorf("StreamEndReason = %q, want %q", info.StreamEndReason, relaycommon.StreamEndTimeout)
 		}
