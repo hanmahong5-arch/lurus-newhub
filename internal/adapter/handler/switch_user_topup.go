@@ -23,7 +23,11 @@ type switchUserTopupRequest struct {
 //
 //	200: {"success":true,"data":{"quota":<amount credited by this call>}}
 //	400: malformed body, or the code is invalid/already used/expired
+//	     (the body then also carries error_code REDEMPTION_*, cycle13 L3)
 //	401: missing/unknown/disabled token or user
+//	403: the token's tenant is suspended (cycle13 L9's refusal path, via
+//	     authenticateSwitchRawToken; this handler forwards its message only,
+//	     not its TENANT_DISABLED error_code)
 //	500: transient lookup failure
 //
 // Authentication is the raw relay token (Token.Key) — see

@@ -231,8 +231,10 @@ func SwitchRedeemAnonymous(c *gin.Context) {
 	if err != nil {
 		// repo.Redeem itself already converts a genuine transaction failure
 		// (e.g. a constraint violation on the Save/Update calls) into the
-		// generic repo.ErrRedemptionFailed sentinel — it never returns a raw
-		// driver/GORM error (cycle13 L3). repo.RedemptionErrorMessage is
+		// generic repo.ErrRedemptionFailed sentinel instead of a raw
+		// driver/GORM error (cycle13 L3, pinned by
+		// repo.TestRedeem_DriverErrorNeverReachesCaller).
+		// repo.RedemptionErrorMessage is
 		// defence-in-depth on top of that: only a known sentinel's own text
 		// (which the Switch classifier's substring markers still see) is
 		// echoed to this anonymous, unauthenticated caller; anything else

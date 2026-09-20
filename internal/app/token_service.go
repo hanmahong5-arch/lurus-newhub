@@ -71,9 +71,10 @@ func ValidateRateLimits(rpm, tpm int) error {
 	return nil
 }
 
-// MaxTokenModelLimitsLength matches the model_limits column's storage limit
-// (varchar(1024), domain/entity/token.go and adapter/repo/token.go — the tag
-// MUST stay byte-identical between the two). Validating it here turns a raw
+// MaxTokenModelLimitsLength matches the model_limits column's storage limit:
+// domain/entity/token.go:22 and adapter/repo/token.go:26 both declare
+// varchar(1024) (read 2026-09-20; no gate enforces that the two stay in
+// sync, so re-check both if either changes). Validating it here turns a raw
 // "value too long for type character varying(1024)" driver error (a 500 that
 // leaks the column type) into a friendly 400 before the row is ever written.
 const MaxTokenModelLimitsLength = 1024
@@ -83,9 +84,10 @@ const MaxTokenModelLimitsLength = 1024
 // leading/trailing/doubled comma) — repo.Token.GetModelLimitsMap splits on
 // "," with no filtering, so an empty entry would key the map on "", which is
 // indistinguishable from "no such model" at relay time (ModelLimitsEnabled's
-// allow-list check). enabled=false always passes: an unused model_limits
-// value is dead data, not a validation target, matching how
-// UpdateTokenV2/CreateTokenV2 persist the pair together.
+// allow-list check). enabled=false skips the checks: an unused model_limits
+// value is dead data, not a validation target
+// (TestCreateTokenV2_ModelLimitsDisabledSkipsValidation pins that), matching
+// how UpdateTokenV2/CreateTokenV2 persist the pair together.
 func ValidateTokenModelLimits(modelLimits string, enabled bool) error {
 	if !enabled {
 		return nil

@@ -222,3 +222,85 @@ func TestRedeem_KnownFailuresReturnTypedSentinels(t *testing.T) {
 		}
 	})
 }
+
+// switchRedeemKind is the classification the Switch desktop client derives
+// from a redeem failure's message text.
+type switchRedeemKind string
+
+const (
+	switchRedeemKindUsed     switchRedeemKind = "used"
+	switchRedeemKindExpired  switchRedeemKind = "expired"
+	switchRedeemKindDisabled switchRedeemKind = "disabled"
+	switchRedeemKindNotFound switchRedeemKind = "not_found"
+)
+
+// classifySwitchRedeemFailure is a REPLICA of 2c-gui-switch's
+// classifyRedeemFailure (internal/redemption/redeem.go, the switch case at
+// :215-241 as read on 2026-09-20), branch for branch and in the same order —
+// the order matters, e.g. 停用/账户 is checked before 不存在. It is a replica,
+// not the function itself: the Switch client is a separate repository and
+// module, so nothing here notices if that file changes. What this buys over
+// the bare substring assertions above is the actual customer-visible outcome
+// per sentinel, including the three that deliberately fall through to the
+// default branch.
+//
+// The httpStatus >= 500 branch is omitted: every redeem failure this repo
+// returns answers 200 (SwitchRedeemAnonymous) or 400 (the other two), so that
+// branch is unreachable from these sentinels.
+func classifySwitchRedeemFailure(message string) switchRedeemKind {
+	low := strings.ToLower(message)
+	switch {
+	case strings.Contains(low, "已使用") || strings.Contains(low, "used") || strings.Contains(low, "redeemed"):
+		return switchRedeemKindUsed
+	case strings.Contains(low, "过期") || strings.Contains(low, "expire"):
+		return switchRedeemKindExpired
+	case strings.Contains(low, "禁用") || strings.Contains(low, "停用") ||
+		strings.Contains(low, "账户") || strings.Contains(low, "帐户") ||
+		strings.Contains(low, "disabled") || strings.Contains(low, "suspend") ||
+		strings.Contains(low, "revoked"):
+		return switchRedeemKindDisabled
+	case strings.Contains(low, "不存在") || strings.Contains(low, "not found") || strings.Contains(low, "invalid"):
+		return switchRedeemKindNotFound
+	default:
+		// classifyRedeemFailure's default is ErrCodeNotFound.
+		return switchRedeemKindNotFound
+	}
+}
+
+// TestRedeemSentinelsClassifyOnTheSwitchClient states, per sentinel, what the
+// Switch client shows its end user today — the outcome half of finding #7,
+// which the substring assertions above cannot express. The two rows the
+// cycle13 fix is about are ErrRedemptionUsed (was not_found before the
+// 已被使用 → 已使用 edit, is used after it) and its pinned
+// pre-cycle13-text counter-example.
+//
+// The three not_found rows are recorded as the present behaviour, not as
+// desirable behaviour: a cross-tenant code and a server-side failure both
+// reach the end user as "code does not exist". Changing them means changing
+// text the Switch client greps, which is a cross-repo contract change and is
+// out of scope for cycle13 L3 (switch_redeem.go's G5a comment says the same
+// about ErrRedemptionWrongTenant).
+func TestRedeemSentinelsClassifyOnTheSwitchClient(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want switchRedeemKind
+	}{
+		{"used", ErrRedemptionUsed.Error(), switchRedeemKindUsed},
+		{"expired", ErrRedemptionExpired.Error(), switchRedeemKindExpired},
+		{"user_not_found", ErrRedemptionUserNotFound.Error(), switchRedeemKindNotFound},
+		{"invalid_code", ErrRedemptionInvalid.Error(), switchRedeemKindNotFound},
+		{"wrong_tenant", ErrRedemptionWrongTenant.Error(), switchRedeemKindNotFound},
+		{"generic_failure", ErrRedemptionFailed.Error(), switchRedeemKindNotFound},
+		// The defect itself: the pre-cycle13 text reached the end user as
+		// "code does not exist" when the code had in fact been redeemed.
+		{"pre_cycle13_used_text", "该兑换码已被使用", switchRedeemKindNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifySwitchRedeemFailure(tc.text); got != tc.want {
+				t.Errorf("classifySwitchRedeemFailure(%q) = %q, want %q", tc.text, got, tc.want)
+			}
+		})
+	}
+}

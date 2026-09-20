@@ -153,8 +153,8 @@ const (
 	RedemptionErrorCodeFailed         = "REDEMPTION_FAILED"
 )
 
-// Package-level sentinel errors Redeem() returns. Each is returned verbatim
-// (never wrapped further) so errors.Is can classify the failure and the
+// Package-level sentinel errors Redeem() returns. Each is returned as-is
+// (no further wrapping) so errors.Is can classify the failure and the
 // three handlers (switch_redeem.go / v2_redemption.go / switch_user_topup.go)
 // can share one mapping (RedemptionErrorCode / RedemptionErrorMessage) instead
 // of three hand-rolled ones.
@@ -205,23 +205,27 @@ var (
 	// switch_redeem.go's G5a comment), not something this cycle fixes.
 	ErrRedemptionWrongTenant = errors.New("该兑换码不属于当前租户")
 
-	// ErrRedemptionFailed is the ONLY error Redeem() returns for anything
-	// that is not one of the sentinels above — in particular, a raw
+	// ErrRedemptionFailed is what Redeem()'s tail returns for a failure that
+	// is not one of the sentinels above — in particular, a raw
 	// transaction/driver failure (a constraint violation, a dropped column, a
 	// connection error). Before cycle13, Redeem() wrapped that raw error text
 	// verbatim into the returned error's message ("兑换失败，"+err.Error()),
 	// and two of its three callers (v2_redemption.go, switch_user_topup.go)
 	// echoed err.Error() straight into the HTTP response body — a caller
 	// could learn column/constraint names from a 400 response. The raw error
-	// is now logged server-side only (common.SysError); every caller sees
-	// this fixed, safe text instead. Text matches the pre-existing generic
+	// is now logged server-side (common.SysError) and each of the three
+	// callers sees this fixed, safe text instead — one HTTP-level test per
+	// caller, listed in TestRedeem_DriverErrorNeverReachesCaller's doc
+	// comment. Text matches the pre-existing generic
 	// fallback switch_redeem.go's sanitizeRedeemError used to hand-roll
 	// ("服务暂不可用，请稍后重试") so TestSwitchRedeemAnonymous_RawDBErrorSanitized's
 	// expectation does not change.
 	ErrRedemptionFailed = errors.New("服务暂不可用，请稍后重试")
 )
 
-// knownRedemptionErrors is every sentinel Redeem() can legitimately return.
+// knownRedemptionErrors is the set of sentinels Redeem() returns today
+// (TestRedeem_KnownFailuresReturnTypedSentinels drives five of them through
+// Redeem; TestRedeem_DriverErrorNeverReachesCaller drives the sixth).
 // redeemKnownError/RedemptionErrorMessage use it to tell a real sentinel
 // apart from a raw driver/transaction error that must not reach a caller.
 var knownRedemptionErrors = []error{
@@ -246,8 +250,8 @@ func redeemKnownError(err error) bool {
 // RedemptionErrorCode maps a Redeem() error to the machine-readable
 // error_code the v2 console / switch_user_topup handlers put on the wire
 // alongside the message text. Anything not in knownRedemptionErrors — which
-// should not happen, since Redeem() only ever returns a sentinel from that
-// set — also falls back to RedemptionErrorCodeFailed rather than returning "".
+// Redeem()'s own tail is written to prevent — also falls back to
+// RedemptionErrorCodeFailed rather than returning "".
 func RedemptionErrorCode(err error) string {
 	switch {
 	case errors.Is(err, ErrRedemptionInvalid):
@@ -265,10 +269,12 @@ func RedemptionErrorCode(err error) string {
 
 // RedemptionErrorMessage returns the safe-to-display text for a Redeem()
 // error: the sentinel's own text when err is one of knownRedemptionErrors, or
-// ErrRedemptionFailed's generic text otherwise. Defense in depth only —
-// Redeem() itself never returns anything else — so a future edit to Redeem()
-// that starts leaking a raw error again fails safe here instead of leaking it
-// to the three handlers that call this.
+// ErrRedemptionFailed's generic text otherwise. Defence in depth: Redeem()'s
+// own tail already converts a non-sentinel error, so this second conversion
+// is for a future edit to Redeem() that starts leaking a raw error again —
+// it fails safe here instead of reaching the three handlers that call this.
+// (Mutation-checked 2026-09-20: with Redeem() returning the raw driver
+// error, all three handler tests stayed green — this function caught it.)
 func RedemptionErrorMessage(err error) string {
 	if err == nil {
 		return ""
@@ -376,7 +382,7 @@ func Redeem(key string, userId int) (quota int, err error) {
 		}
 		// A raw transaction/driver failure — e.g. a constraint violation on
 		// the Update/Save calls above. Log the real text server-side only;
-		// see ErrRedemptionFailed's doc comment for why the caller must never
+		// see ErrRedemptionFailed's doc comment for why the caller must not
 		// see it.
 		common.SysError("redeem: transaction failed: " + err.Error())
 		return 0, ErrRedemptionFailed

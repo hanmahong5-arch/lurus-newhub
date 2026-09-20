@@ -17,8 +17,10 @@ import (
 )
 
 // Token validation error codes (cycle13 L3, ERRCODES-6). Attached alongside
-// the existing message text on every 400 CreateTokenV2/UpdateTokenV2 return
-// for a validation failure, so a caller that wants to branch programmatically
+// the existing message text on the validator-rejection 400s of
+// CreateTokenV2/UpdateTokenV2 — the request-binding and id-parse 400s in
+// this file do not carry one, they are not validator output — so a caller
+// that wants to branch programmatically
 // doesn't have to string-match message (whose text is not itself translated
 // by this change — see token_service.go's validators, pinned by
 // internal/app/token_service_test.go and

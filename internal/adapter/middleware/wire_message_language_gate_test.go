@@ -31,21 +31,35 @@ package middleware
 // in the file exactly once regardless of nesting depth, so a nested target
 // call is matched independently when Inspect reaches it.
 //
-// Named whitelist (wireMessageGateWhitelist): every entry is either (a) text
-// this repo has a documented reason to keep Chinese — today, exactly
-// repo/redemption.go's five Switch-classifier-facing sentinels (the
-// cycle13 plan §2 decision: "其余含 过期/禁用/不存在 的子串不改") plus
-// ErrRedemptionFailed's fallback text (matches a pre-existing string a
-// foreign test — switch_redeem_test.go's
-// TestSwitchRedeemAnonymous_RawDBErrorSanitized — pins) — or (b) pre-existing
-// Chinese text this lane does not own the file for and a foreign test pins
-// byte-for-byte (repo/redemption.go's two Redeem() precondition guards,
-// pinned by cov_repo-deep_redemption_redeem_test.go; repo/ability.go and
-// repo/user.go's argument-validation guards, pinned by
-// cov_handler-identity-log_token_test.go and others — neither file is owned
-// by cycle13 L3). A whitelist hit still counts toward sitesSeen (scanner
-// honesty) and is checked for staleness (every entry must actually match a
-// site, or the whitelist itself has drifted from the source).
+// Out of scope, stated so the gate is not read as covering more than it
+// does: the `c.JSON(http.StatusX, gin.H{"message": "…"})` family. Nineteen of
+// those literals are still Chinese and reach v1/v2 console callers — measured
+// 2026-09-20 across the three scan roots: middleware/auth.go 10,
+// oidc_auth.go 4, secure_verification.go 4, admin_jwt_auth.go 1. None is one
+// of the four constructors above, every one of those files is outside cycle13
+// L3's Owned list (auth.go belongs to cycle13 L8), and the v1 authHelper
+// shape they feed is do-not-regress (200 `{success:false}`, consumed by the
+// Switch client). Widening this scan to gin.H map values is a separate change
+// with its own ownership question.
+//
+// Named whitelist (wireMessageGateWhitelist), keyed by
+// "<repo-relative file> | <decoded literal>" and NOT by line number — other
+// lanes edit these files in parallel and a line-keyed entry would turn an
+// unrelated insertion above it into a red gate. The trade-off, stated
+// plainly: identical text at a NEW site in the same file is whitelisted
+// without a new entry (repo/user.go already has nine "id 为空！" sites behind
+// one entry). Every entry is either (a) text this repo has a documented
+// reason to keep Chinese — repo/redemption.go's Switch-classifier-facing
+// sentinels, the cycle13 plan §2 decision "其余含 过期/禁用/不存在 的子串不改",
+// plus ErrRedemptionFailed's fallback text (which switch_redeem_test.go's
+// TestSwitchRedeemAnonymous_RawDBErrorSanitized pins) — or (b) pre-existing
+// Chinese text in a file cycle13 L3 does not own (repo/ability.go,
+// repo/user.go, app/relay/helper/valid_request.go, and repo/redemption.go's
+// two Redeem() precondition guards, the latter pinned byte-for-byte by
+// cov_repo-deep_redemption_redeem_test.go:66/69). A whitelist hit still
+// counts toward sitesSeen (scanner honesty) and is checked for staleness
+// (every entry must match a scanned site this run, or the whitelist has
+// drifted from the source).
 
 import (
 	"go/ast"
@@ -60,35 +74,25 @@ import (
 	"testing"
 )
 
-// wireMessageGateWhitelist maps "relpath:line" (relpath is repo-root
-// relative, forward-slash, of the FILE; line is the *ast.BasicLit's own
-// line) to a short reason. See the file-level comment for the two
-// categories every entry falls into.
+// wireMessageGateWhitelist maps "<repo-relative, forward-slash file path> |
+// <decoded literal>" to a short reason. See the file-level comment for the
+// two categories every entry falls into and for why the key is the literal's
+// text rather than its line.
 var wireMessageGateWhitelist = map[string]string{
-	"internal/adapter/repo/redemption.go:172":        "ErrRedemptionInvalid — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
-	"internal/adapter/repo/redemption.go:184":        "ErrRedemptionUsed — switch-contract text, cycle13 plan §2 (the finding #7 fix: 已被使用→已使用)",
-	"internal/adapter/repo/redemption.go:188":        "ErrRedemptionExpired — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
-	"internal/adapter/repo/redemption.go:198":        "ErrRedemptionUserNotFound — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
-	"internal/adapter/repo/redemption.go:206":        "ErrRedemptionWrongTenant — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
-	"internal/adapter/repo/redemption.go:221":        "ErrRedemptionFailed — matches the pre-existing generic fallback switch_redeem_test.go's TestSwitchRedeemAnonymous_RawDBErrorSanitized pins",
-	"internal/adapter/repo/redemption.go:284":        "Redeem() empty-key guard — pinned byte-for-byte by cov_repo-deep_redemption_redeem_test.go:66 (not owned by L3)",
-	"internal/adapter/repo/redemption.go:287":        "Redeem() zero-userId guard — pinned byte-for-byte by cov_repo-deep_redemption_redeem_test.go:69 (not owned by L3)",
-	"internal/adapter/repo/ability.go:141":           "pre-existing, out of cycle13 L3 ownership (ability.go not in L3's Owned list)",
-	"internal/adapter/repo/ability.go:380":           "pre-existing, out of cycle13 L3 ownership (ability.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:308":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list; pinned by comments in a1_provisioned_token_auth_test.go)",
-	"internal/adapter/repo/user.go:440":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:477":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:494":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:546":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:572":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:691":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:701":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:708":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:716":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:858":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:890":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/adapter/repo/user.go:935":              "pre-existing, out of cycle13 L3 ownership (user.go not in L3's Owned list)",
-	"internal/app/relay/helper/valid_request.go:199": "the message is English prose but quotes the literal '×' (U+00D7 multiplication sign, not a CJK character) while explaining callers must not use it — pre-existing, out of cycle13 L3 ownership (valid_request.go not in L3's Owned list)",
+	"internal/adapter/repo/redemption.go | 无效的兑换码":                                                                                                           "ErrRedemptionInvalid — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
+	"internal/adapter/repo/redemption.go | 该兑换码已使用":                                                                                                          "ErrRedemptionUsed — switch-contract text, cycle13 plan §2 (the finding #7 fix: 已被使用 → 已使用)",
+	"internal/adapter/repo/redemption.go | 该兑换码已过期":                                                                                                          "ErrRedemptionExpired — switch-contract text, cycle13 plan §2 (unchanged this cycle)",
+	"internal/adapter/repo/redemption.go | 用户不存在":                                                                                                            "ErrRedemptionUserNotFound — switch-contract text (the 不存在 marker), cycle13 plan §2 (unchanged this cycle)",
+	"internal/adapter/repo/redemption.go | 该兑换码不属于当前租户":                                                                                                      "ErrRedemptionWrongTenant — switch-contract text, cycle13 plan §2 (unchanged this cycle; matches no classifier marker, a gap switch_redeem.go's G5a comment already documents)",
+	"internal/adapter/repo/redemption.go | 服务暂不可用，请稍后重试":                                                                                                     "ErrRedemptionFailed — the pre-existing generic fallback switch_redeem_test.go's TestSwitchRedeemAnonymous_RawDBErrorSanitized pins",
+	"internal/adapter/repo/redemption.go | 未提供兑换码":                                                                                                           "Redeem() empty-key guard — pinned byte-for-byte by cov_repo-deep_redemption_redeem_test.go:66 (that test file is not owned by L3)",
+	"internal/adapter/repo/redemption.go | 无效的 user id":                                                                                                      "Redeem() zero-userId guard — pinned byte-for-byte by cov_repo-deep_redemption_redeem_test.go:69 (that test file is not owned by L3)",
+	"internal/adapter/repo/ability.go | 数据库一致性被破坏":                                                                                                           "pre-existing; reaches a relay caller through GetRandomSatisfiedChannel, but ability.go is outside cycle13 L3's Owned list — follow-up, not fixed here",
+	"internal/adapter/repo/ability.go | 已经有一个修复任务在运行中，请稍后再试":                                                                                                 "pre-existing admin fix-abilities guard; ability.go is outside cycle13 L3's Owned list",
+	"internal/adapter/repo/user.go | id 为空！":                                                                                                                 "pre-existing argument guard (nine sites); user.go is outside cycle13 L3's Owned list and the text is referenced by a1_provisioned_token_auth_test.go / cover_r2_billing_test.go",
+	"internal/adapter/repo/user.go | email 为空！":                                                                                                              "pre-existing argument guard; user.go is outside cycle13 L3's Owned list",
+	"internal/adapter/repo/user.go | quota 不能为负数！":                                                                                                           "pre-existing argument guard (three sites); user.go is outside cycle13 L3's Owned list",
+	"internal/app/relay/helper/valid_request.go | size an unexpected error occurred in the parameter, please use 'x' instead of the multiplication sign '×'": "English prose that quotes the literal × (U+00D7 multiplication sign, not a CJK character) while telling the caller not to use it; valid_request.go is outside cycle13 L3's Owned list",
 }
 
 // wireMessageGateSitesFloor is the scanner-honesty floor: today's scan of
@@ -167,9 +171,11 @@ func wireMessageGateStringLiterals(expr ast.Expr) []*ast.BasicLit {
 	return nil
 }
 
-// wireMessageGateASCIIOnly reports the first offending rune (0 if none) in
-// the BasicLit's decoded value.
-func wireMessageGateASCIIOnly(lit *ast.BasicLit) (rune, bool) {
+// wireMessageGateLiteralValue decodes the BasicLit's source token into the
+// string it denotes and reports the first non-ASCII rune in it (0 and false
+// when the literal is pure ASCII). The decoded value doubles as the
+// whitelist key, so it is returned either way.
+func wireMessageGateLiteralValue(lit *ast.BasicLit) (string, rune, bool) {
 	value, err := strconv.Unquote(lit.Value)
 	if err != nil {
 		// Not a plain quoted string (e.g. an unusual raw-string edge case) —
@@ -178,10 +184,10 @@ func wireMessageGateASCIIOnly(lit *ast.BasicLit) (rune, bool) {
 	}
 	for _, r := range value {
 		if r >= 0x80 {
-			return r, true
+			return value, r, true
 		}
 	}
-	return 0, false
+	return value, 0, false
 }
 
 func TestWireMessageLanguageGate_ASCIIOnly(t *testing.T) {
@@ -242,17 +248,17 @@ func TestWireMessageLanguageGate_ASCIIOnly(t *testing.T) {
 
 				for _, arg := range call.Args {
 					for _, lit := range wireMessageGateStringLiterals(arg) {
-						bad, isBad := wireMessageGateASCIIOnly(lit)
+						value, bad, isBad := wireMessageGateLiteralValue(lit)
 						if !isBad {
 							continue
 						}
-						line := fset.Position(lit.Pos()).Line
-						key := rel + ":" + strconv.Itoa(line)
+						key := rel + " | " + value
 						if _, ok := wireMessageGateWhitelist[key]; ok {
 							seenWhitelist[key] = true
 							continue
 						}
-						violations = append(violations, key+": "+targetName+"() argument contains non-ASCII rune "+strconv.QuoteRune(bad)+": "+lit.Value)
+						line := fset.Position(lit.Pos()).Line
+						violations = append(violations, key+" (line "+strconv.Itoa(line)+"): "+targetName+"() argument contains non-ASCII rune "+strconv.QuoteRune(bad))
 					}
 				}
 				return true
