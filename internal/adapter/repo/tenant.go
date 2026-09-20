@@ -201,9 +201,21 @@ var (
 const tenantMissingLogWindow = time.Minute
 
 // TenantGate answers whether a request owned by tenantID may proceed, and if
-// not, why (TenantGateReason*). It is the single decision point behind the
-// three gates in middleware/auth.go — the session/console path, the relay
-// token path and the playground token path.
+// not, why (TenantGateReason*). It is the shared decision the tenant-lifecycle
+// gates take; grep for callers rather than trusting this list, which was
+// accurate on 2026-09-20 (cycle 13):
+//
+//   - middleware/auth.go — the session/console arm (authHelper), the relay
+//     token arm and the playground token arm.
+//   - middleware/oidc_auth.go — the cookie arm of OIDCAuth (the JWT arm takes
+//     the same decision inline, in mapOIDCUserToLurus).
+//   - handler/v2_provision.go (ProvisionV2, right after the slug resolves),
+//     handler/switch_user_info.go (the raw relay-token auth shared by
+//     GET /api/v2/switch/user/info and POST /api/v2/switch/user/topup),
+//     handler/user_heartbeat.go and handler/switch_reconciliation.go — the
+//     Switch-facing surfaces that authenticate by raw Token.Key, which no
+//     auth middleware covers. handler/switch_tenant_gate_completeness_test.go
+//     is the forcing function for that group.
 //
 // Cases:
 //

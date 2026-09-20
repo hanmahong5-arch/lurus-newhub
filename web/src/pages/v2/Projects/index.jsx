@@ -40,8 +40,11 @@ import { quotaToUSD } from '../../../helpers/formatting';
  *
  * A project is a LABEL, not a permission boundary: it carries no members and
  * grants nothing. Writes are tenant-admin gated (403 → the read-only state
- * below); reads are open to every user in the tenant because the Token page's
- * project picker has to work for ordinary members.
+ * below), and so is the tenant-wide spend report (cycle-13 L9 — it rolls up
+ * every member's consume rows, like /logs/stat/all). The project LIST stays
+ * readable by every member (the Token page's picker needs it), so the two
+ * reads carry SEPARATE states: a member gets the list plus a "restricted"
+ * spend panel, never an empty report claiming the tenant has no usage.
  *
  * NOTHING HERE IS A ONE-WAY DOOR. Delete is a soft delete that hands back the
  * ids of the tokens it detached; the banner below turns that into a one-click
@@ -233,6 +236,10 @@ const HFProjects = () => {
   const tenantSlug = useTenantSlug();
   const [rows, setRows] = useState([]);
   const [spend, setSpend] = useState([]);
+  // How the spend read ended: 'ok' | 'forbidden' | 'error'. Kept apart from
+  // `spend`, because an empty array means two opposite things: "the tenant
+  // spent nothing" and "we never found out".
+  const [spendState, setSpendState] = useState('ok');
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
@@ -257,6 +264,28 @@ const HFProjects = () => {
     busy.current.delete(key);
   }, []);
 
+  // skipErrorHandler: a 403 here is the NORMAL answer for a plain member (the
+  // nav entry carries no role gate, so every member loads this page), and the
+  // interceptor would turn each page load into a red toast. The panel states
+  // below carry the outcome instead.
+  const fetchSpend = useCallback(async () => {
+    if (!tenantSlug) return;
+    try {
+      const res = await API.get(`/api/v2/${tenantSlug}/projects/spend`, {
+        skipErrorHandler: true,
+      });
+      if (res?.data?.success) {
+        setSpend(res.data.data?.items ?? []);
+        setSpendState('ok');
+      }
+    } catch (err) {
+      // A failed spend read must not take the CRUD list with it: independent
+      // reads, and the list is the actionable one.
+      setSpend([]);
+      setSpendState(err?.response?.status === 403 ? 'forbidden' : 'error');
+    }
+  }, [tenantSlug]);
+
   const fetchAll = useCallback(async () => {
     if (!tenantSlug) return;
     setLoading(true);
@@ -276,15 +305,8 @@ const HFProjects = () => {
     } finally {
       setLoading(false);
     }
-    try {
-      const res = await API.get(`/api/v2/${tenantSlug}/projects/spend`);
-      if (res?.data?.success) setSpend(res.data.data?.items ?? []);
-    } catch (_) {
-      // The spend report failing must not take the CRUD list with it — they
-      // are independent reads and the list is the actionable one.
-      setSpend([]);
-    }
-  }, [tenantSlug]);
+    await fetchSpend();
+  }, [tenantSlug, fetchSpend]);
 
   useEffect(() => {
     fetchAll();
@@ -463,7 +485,39 @@ const HFProjects = () => {
           >
             {tr('console.projects.spend_title', 'spend by project')}
           </div>
-          {spend.length === 0 ? (
+          {spendState === 'forbidden' ? (
+            <div
+              style={{ padding: '20px 24px' }}
+              data-testid='proj-spend-forbidden'
+            >
+              <div className='strong' style={{ marginBottom: 6 }}>
+                {tr('console.projects.spend_restricted', 'Tenant admins only')}
+              </div>
+              <div className='muted' style={{ fontSize: 12 }}>
+                {tr(
+                  'console.projects.spend_restricted_body',
+                  'Spend across every member of the tenant is restricted to tenant administrators. Your own usage is on the Logs page.',
+                )}
+              </div>
+            </div>
+          ) : spendState === 'error' ? (
+            <div
+              style={{ padding: '20px 24px' }}
+              data-testid='proj-spend-error'
+            >
+              <div className='muted' style={{ fontSize: 12, marginBottom: 8 }}>
+                {tr('console.projects.spend_failed', 'Spend unavailable.')}
+              </div>
+              <button
+                type='button'
+                className='btn ghost'
+                data-testid='proj-spend-retry'
+                onClick={() => fetchSpend()}
+              >
+                {tr('console.common.retry', 'retry')}
+              </button>
+            </div>
+          ) : spend.length === 0 ? (
             <div
               className='muted'
               style={{ padding: '20px 24px', fontSize: 12 }}

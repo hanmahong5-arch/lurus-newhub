@@ -309,6 +309,7 @@ func setupC13TenantReach(t *testing.T) *c13ReachCtx {
 	apiV2.POST("/switch/user/topup", SwitchUserTopup)
 	apiV2.POST("/switch/heartbeat", UserHeartbeat)
 	apiV2.POST("/switch/reconciliation", SwitchReconciliation)
+	apiV2.POST("/switch/redeem", SwitchRedeemAnonymous)
 	apiV2.GET("/:tenant_slug/credit-pool/me", middleware.OIDCAuth(), GetCreditPoolForEndUser)
 
 	return &c13ReachCtx{router: router, db: db, tenant: tenant, user: user, token: token}
@@ -367,6 +368,17 @@ func (c *c13ReachCtx) userQuota(t *testing.T) int {
 		t.Fatalf("read user: %v", err)
 	}
 	return row.Quota
+}
+
+// c13Message pulls the top-level message out of a response envelope.
+func c13Message(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var env map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode envelope: %v raw=%s", err, w.Body.String())
+	}
+	msg, _ := env["message"].(string)
+	return msg
 }
 
 // c13ErrorCode pulls the top-level error_code out of a response envelope.
@@ -439,6 +451,19 @@ func TestSuspendedTenantCannotReachSwitchSurfaces(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
 		}
+		// The machine-readable half of the refusal. The Switch client's
+		// billing caller (internal/billing/client.go doRequest) does not
+		// classify the sentence, so without this field a suspended tenant is
+		// indistinguishable from "the code was rejected" on the wire.
+		if got := c13ErrorCode(t, w); got != "TENANT_DISABLED" {
+			t.Errorf("error_code = %q, want TENANT_DISABLED; body=%s", got, w.Body.String())
+		}
+		// The human half: the same sentence the anonymous redeem path answers
+		// with for the same condition, so the customer reads one wording.
+		if got := c13Message(t, w); got != switchTenantSuspendedMessage {
+			t.Errorf("message = %q, want the shared suspended-reseller sentence %q",
+				got, switchTenantSuspendedMessage)
+		}
 		if got := c.codeStatus(t, "C13REACHCODESUSPENDED0000000000B"); got != common.RedemptionCodeStatusEnabled {
 			t.Errorf("redemption status = %d, want %d — a refused topup must not burn the code",
 				got, common.RedemptionCodeStatusEnabled)
@@ -470,6 +495,39 @@ func TestSuspendedTenantCannotReachSwitchSurfaces(t *testing.T) {
 		}
 		if got := c13ErrorCode(t, w); got != "TENANT_DISABLED" {
 			t.Errorf("error_code = %q, want TENANT_DISABLED; body=%s", got, w.Body.String())
+		}
+	})
+
+	// The anonymous activation path takes the same decision inline rather
+	// than through repo.TenantGate (it has no token or session, so the tenant
+	// comes from the redemption row, and it refuses the bootstrap "default"
+	// tenant outright where the gate would exempt it). That inline arm is the
+	// reason switch_tenant_gate_completeness_test.go exempts this handler, so
+	// the exemption gets an oracle rather than a promise.
+	t.Run("suspended/redeem_anonymous", func(t *testing.T) {
+		c.seedCode(t, "C13REACHCODEREDEEMSUSPENDED000CC", 9_000)
+		w := c.do(t, http.MethodPost, "/api/v2/switch/redeem",
+			`{"code":"C13REACHCODEREDEEMSUSPENDED000CC","fingerprint":"c13-reach-fp"}`, false)
+		// This endpoint reports business failures as 200 + success:false (the
+		// Switch client classifies on the sentence) — do-not-regress.
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (envelope-level failure); body=%s", w.Code, w.Body.String())
+		}
+		var env map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode envelope: %v raw=%s", err, w.Body.String())
+		}
+		if ok, _ := env["success"].(bool); ok {
+			t.Fatalf("success = true, want false — a suspended reseller must not activate a device; body=%s",
+				w.Body.String())
+		}
+		if got := c13Message(t, w); got != switchTenantSuspendedMessage {
+			t.Errorf("message = %q, want the suspended-reseller sentence %q (a different sentence means the "+
+				"refusal came from somewhere else and this cell proves nothing)", got, switchTenantSuspendedMessage)
+		}
+		if got := c.codeStatus(t, "C13REACHCODEREDEEMSUSPENDED000CC"); got != common.RedemptionCodeStatusEnabled {
+			t.Errorf("redemption status = %d, want %d — the refusal must land before repo.Redeem",
+				got, common.RedemptionCodeStatusEnabled)
 		}
 	})
 

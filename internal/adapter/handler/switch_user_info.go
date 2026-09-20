@@ -30,14 +30,6 @@ const switchTenantDisabledCode = "TENANT_DISABLED"
 // machine-readable signal is error_code, not the text.
 const switchTenantSuspendedMessage = "经销商账户已停用，请联系经销商"
 
-// authenticateSwitchRawToken is the four-value form of
-// authenticateSwitchRawTokenWithCode, kept for callers that do not (yet)
-// surface an error_code. New call sites should take the five-value form.
-func authenticateSwitchRawToken(c *gin.Context) (token *repo.Token, user *repo.User, httpStatus int, message string) {
-	token, user, httpStatus, message, _ = authenticateSwitchRawTokenWithCode(c)
-	return token, user, httpStatus, message
-}
-
 // authenticateSwitchRawTokenWithCode extracts and resolves a Switch raw relay token
 // (Token.Key) from the request's `Authorization` header (optional
 // "Bearer "/"sk-" prefixes, optional "-<channel>" suffix) — the same
@@ -58,7 +50,8 @@ func authenticateSwitchRawToken(c *gin.Context) (token *repo.Token, user *repo.U
 // enabled. repo.TenantGate holds the rules: "default"/"" exempt, transient
 // lookup faults fail OPEN, a soft-deleted tenant follows TENANT_MISSING_MODE.
 //
-// Shared by GetSwitchUserInfo and SwitchUserTopup — keep them in lockstep.
+// Shared by GetSwitchUserInfo and SwitchUserTopup — both surface the
+// errorCode, so the two refusals are one client-side branch.
 func authenticateSwitchRawTokenWithCode(c *gin.Context) (token *repo.Token, user *repo.User, httpStatus int, message, errorCode string) {
 	key := strings.TrimSpace(c.Request.Header.Get("Authorization"))
 	if strings.HasPrefix(key, "Bearer ") || strings.HasPrefix(key, "bearer ") {

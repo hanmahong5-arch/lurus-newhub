@@ -25,13 +25,13 @@ type switchUserTopupRequest struct {
 //	400: malformed body, or the code is invalid/already used/expired
 //	     (the body then also carries error_code REDEMPTION_*, cycle13 L3)
 //	401: missing/unknown/disabled token or user
-//	403: the token's tenant is suspended (cycle13 L9's refusal path, via
-//	     authenticateSwitchRawToken; this handler forwards its message only,
-//	     not its TENANT_DISABLED error_code)
+//	403: the token's tenant is suspended, with error_code TENANT_DISABLED
+//	     (cycle13 L9's refusal path, via authenticateSwitchRawTokenWithCode;
+//	     the refusal lands before repo.Redeem, so the code stays unspent)
 //	500: transient lookup failure
 //
 // Authentication is the raw relay token (Token.Key) — see
-// authenticateSwitchRawToken (shared with GetSwitchUserInfo).
+// authenticateSwitchRawTokenWithCode (shared with GetSwitchUserInfo).
 //
 // The redemption itself runs through repo.Redeem, the same
 // find-FOR-UPDATE / mark-used / credit-quota transaction used by
@@ -40,9 +40,16 @@ type switchUserTopupRequest struct {
 // redeem flow (SwitchRedeemAnonymous) — this handler does not reimplement
 // any of that logic, it only resolves which user id to credit.
 func SwitchUserTopup(c *gin.Context) {
-	token, _, httpStatus, message := authenticateSwitchRawToken(c)
+	token, _, httpStatus, message, errorCode := authenticateSwitchRawTokenWithCode(c)
 	if httpStatus != 0 {
-		c.JSON(httpStatus, gin.H{"success": false, "message": message})
+		body := gin.H{"success": false, "message": message}
+		// errorCode is empty for the auth failures that predate it (401s), so
+		// their body shape is unchanged; the suspended-tenant 403 carries
+		// TENANT_DISABLED, which is what a Switch client branches on.
+		if errorCode != "" {
+			body["error_code"] = errorCode
+		}
+		c.JSON(httpStatus, body)
 		return
 	}
 

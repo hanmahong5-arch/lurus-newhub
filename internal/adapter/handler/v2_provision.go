@@ -277,6 +277,15 @@ func ProvisionV2(c *gin.Context) {
 	// the same decision the console, relay and playground gates take, so a
 	// suspended tenant cannot mint fresh relay keys through the desktop
 	// client while its console and existing keys are locked out.
+	//
+	// This runs BEFORE the entitlement token is bound and verified, so an
+	// unauthenticated caller can tell "suspended" from "enabled" for a slug
+	// it names. That is deliberate: the 404 immediately above already tells
+	// the same caller whether the slug exists at all, so the status adds no
+	// enumeration the endpoint did not already offer, and refusing before
+	// the JWKS round-trip keeps a suspended tenant from driving verification
+	// work. Move it below getProvisionVerifier().Verify if that trade ever
+	// changes.
 	if ok, reason := repo.TenantGate(tenant.Id); !ok {
 		common.SysLog("ProvisionV2: refused, tenant gate closed tenant=" + tenant.Id + " reason=" + reason)
 		c.JSON(http.StatusForbidden, gin.H{
