@@ -67,9 +67,10 @@ counter increment — only the `common.SysLog` line each site already wrote:
   task callbacks.
 - `internal/app/relay/relay_task.go:208` — async task (e.g. Suno) settlement
   on fetch.
-- `internal/app/quota.go:231` `PostWssConsumeQuota` — the realtime/websocket
-  settlement path never calls `PostConsumeQuota` at all, so it cannot reach
-  `app.SettleConsume` by construction.
+- `internal/app/quota.go` `PostWssConsumeQuota` — covered since cycle 13: it
+  now routes the session's pre-consumption through `app.SettleConsume` with
+  `path="realtime"` and flags the row's `other.settlement` on failure (see
+  the realtime section at the end of this runbook).
 
 These are this cycle's documented non-goals, not an oversight discovered
 after the fact — extending the seam to them is next-cycle scope.
@@ -135,3 +136,64 @@ upstream-facing alarms.
 Nothing to prevent at the alarm level — a settlement call can fail for
 reasons outside this service (DB contention, platform unreachable). The
 alarm exists so a failure is visible instead of only a log line.
+
+## Realtime sessions (`path="realtime"`, cycle 13)
+
+A `/v1/realtime` request freezes an estimate like every other relay format
+(`handler/relay.go:360` `app.PreConsumeQuota`) and then charges each usage
+event as it arrives (`PreWssConsumeQuota` -> `PostConsumeQuota`). By the end
+of the session the whole cost has already been taken, so the freeze is pure
+surplus.
+
+Until cycle 13 nothing gave it back: `WssHelper` returns as soon as
+`PostWssConsumeQuota` comes back, and `releasePreConsumedOnFailure` only runs
+on an error, so every successful realtime session kept
+`FinalPreConsumedQuota` of the customer's money. `PostWssConsumeQuota` now
+ends with
+
+    SettleConsume(ctx, relayInfo, -FinalPreConsumedQuota, FinalPreConsumedQuota, "realtime")
+
+whose two arguments sum to zero: the user balance and the key allowance get
+the freeze back, the tenant pool and the daily counter are untouched (they
+were moved per event), and a live platform pre-auth reaches
+`PostConsumeQuota`'s zero-usage release arm instead of expiring on the
+platform's TTL.
+
+What you see when it fails: `lurus_billing_settlement_failed_total{path="realtime"}`
+increments and the session's consume row carries `other.settlement="failed"` —
+same two signals as the other paths in this runbook. A failure here means the
+customer was NOT given the freeze back; reconcile by hand from the row
+(`quota` is the session's charge, the freeze is in the request's pre-consume
+log line).
+
+## Async-task refunds and video re-settlement (cycle 13)
+
+A task submission settles through `app.PostConsumeQuota`, which moves four
+ledgers: `users.quota`, `tokens.remain_quota`, the tenant credit pool and
+(for wallet-bridged accounts) the platform wallet. A refund
+(`handler/task_refund.go`) now hands back the first three plus the two
+`used_quota` counters. Two honest gaps remain, both visible in the log:
+
+- **Wallet leg** — lurus-platform has no reverse of a settled debit
+  (**O-refund**). Every refund of a wallet-bridged task logs
+  `{"event":"task_refund_wallet_unreversed", ...}` with the account id and the
+  amount. Reconciliation is a manual platform-side credit.
+- **Unresolved payer** — neither `tasks` nor `midjourneys` carries a
+  `token_id`/`tenant_id` column, so the refund recovers the payer from the
+  submission's consume row (same user, channel and amount). When consume
+  logging was off for that submission, or when two keys of the same user have
+  identically-shaped rows, the payer is not knowable and the refund restores
+  the balance only, logging
+  `{"event":"task_refund_payer_unresolved", ...}` /
+  `{"event":"video_resettle_payer_unresolved", ...}`. Crediting a guessed key
+  or pool would move money onto a payer that never paid, which is why it is
+  left short and reported instead.
+
+A finished video task with real token usage is re-settled against the same
+primitives (`handler/task_video.go` `resettleVideoTask`): the difference is
+charged through `app.PostConsumeQuota` or handed back through the refund
+path, and **the submission's consume row is rewritten to the actual amount**
+rather than the difference being recorded as a `system` log row that no
+invoice counts. The platform wallet leg of a re-settlement is deliberately
+not fired from the poller: the task's wallet money is bound to the
+submission's pre-auth, which this path has no handle on.

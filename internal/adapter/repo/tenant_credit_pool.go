@@ -289,6 +289,63 @@ func TopupPool(poolID int64, tenantID string, amount int64, actorUserID int, rea
 	return newBalance, err
 }
 
+// poolDrawReasonMaxLen is the width of tenant_credit_pool_draws.reason
+// (varchar(32), see entity.TenantCreditPoolDraw). PostgreSQL rejects an
+// over-long value outright (22001), which would turn a hand-back into a lost
+// credit, so composed reasons are truncated to fit rather than trusted.
+const poolDrawReasonMaxLen = 32
+
+// CreditPoolAdjustment hands an already-debited amount back to a tenant pool
+// and records the matching credit draw, for the paths that must undo a
+// post-consume debit: PostConsumeQuota's Phase 3 compensation and the async
+// task refunds. It is the credit counterpart of DebitPool — both move the
+// balance and append to the same audit ledger, so a pool's balance stays
+// explainable from its draws alone.
+//
+// reason is a short free-text detail appended to PoolDrawReasonAdjustment
+// (e.g. "task_refund"); the composed value is truncated to the column width.
+// Long identifiers (task ids, request ids) belong in the caller's log line,
+// not here.
+//
+// Skips, both returning nil because neither tenant was ever debited: a tenant
+// with no pool row (ErrPoolNotFound == "unlimited", the same reading
+// debitTenantPool uses) and an unlimited pool. Returns
+// ErrPoolWouldExceedCeiling when a topup raised the balance while the request
+// was in flight and the hand-back no longer fits under max_balance — the
+// caller must treat that as a lost credit and say so, not swallow it.
+func CreditPoolAdjustment(tenantID string, amount int, reason string) error {
+	if amount <= 0 {
+		return fmt.Errorf("credit amount must be positive, got %d", amount)
+	}
+	if tenantID == "" {
+		return errors.New("credit pool adjustment requires a tenant id")
+	}
+
+	pool, err := GetTenantCreditPool(tenantID)
+	if err != nil {
+		if errors.Is(err, ErrPoolNotFound) {
+			return nil
+		}
+		return err
+	}
+	if pool == nil || pool.IsUnlimited() {
+		return nil
+	}
+
+	drawReason := PoolDrawReasonAdjustment
+	if reason != "" {
+		drawReason = PoolDrawReasonAdjustment + ":" + reason
+	}
+	if runes := []rune(drawReason); len(runes) > poolDrawReasonMaxLen {
+		drawReason = string(runes[:poolDrawReasonMaxLen])
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		_, terr := topupPoolInTx(tx, pool.ID, tenantID, int64(amount), 0, drawReason)
+		return terr
+	})
+}
+
 // ListPoolDraws returns paginated audit-ledger rows for a pool, ordered by
 // created_at DESC. Used by GET /api/v2/admin/tenants/:id/credit-pool/usage.
 // Limit is clamped to [1, 200] to bound query cost.
