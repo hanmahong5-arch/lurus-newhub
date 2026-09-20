@@ -18,7 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 
 // The page now lazily mounts SecureVerificationModal (force-disable 2FA
 // step-up) — its Semi UI import chain pulls in lottie, which throws on
@@ -37,6 +43,13 @@ vi.hoisted(() => {
   );
   HTMLCanvasElement.prototype.getContext = () => ctx;
 });
+
+// The 2FA step-up dialog's Semi UI import chain makes this the heaviest
+// page test in the suite (see the vi.hoisted note above). Under a loaded
+// full-suite run the default 1s waitFor window expired on two different
+// tests here (2026-09-20; both green in isolation at ~2s), so the window is
+// widened for this file only. It widens patience, not any assertion.
+configure({ asyncUtilTimeout: 5000 });
 
 vi.mock('../../../../helpers', () => ({
   API: {
