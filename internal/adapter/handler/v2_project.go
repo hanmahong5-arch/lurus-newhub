@@ -279,14 +279,22 @@ func RestoreProjectV2(c *gin.Context) {
 // GetProjectSpendV2 reports per-project consume spend for the caller's tenant.
 // Route: GET /api/v2/:tenant_slug/projects/spend?start=&end=
 //
-// Readable by any user in the tenant, same as the project listing: the numbers
-// are already visible through GET /logs/all, which shows every member's rows
-// to any tenant admin and each member their own.
+// Tenant-admin only (cycle-13 L9). The numbers here are the whole tenant's
+// consume totals — every member's spend, rolled up by project — which is the
+// same blast radius as GET /logs/all and GET /logs/stat/all, both of which
+// carry the admin gate. The comment this replaced justified the open read by
+// claiming the figures were "already visible through GET /logs/all"; that
+// route refuses a plain member outright (requireTenantAdmin in
+// GetAllLogsV2), and the member-scoped GET /logs returns only the caller's
+// own rows, so the spend report was in fact the one place a plain member
+// could read the tenant's total. The project LIST stays readable by any
+// member — the token page's project picker needs it and it carries no
+// amounts.
 //
 // The response ALWAYS includes the project_id = 0 "unassigned" bucket, so the
 // rows sum to the tenant's total consume spend for the window.
 func GetProjectSpendV2(c *gin.Context) {
-	tenantCtx, ok := projectTenantCtx(c)
+	tenantCtx, ok := projectAdminCtx(c)
 	if !ok {
 		return
 	}

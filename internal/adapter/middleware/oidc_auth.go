@@ -645,6 +645,29 @@ func injectSessionAccountID(c *gin.Context, session sessions.Session, user *repo
 	}
 }
 
+// sessionTenantAdmitted runs the shared tenant gate for the cookie arm of
+// OIDCAuth. It returns true when the request may proceed; when it returns
+// false it has already written the 403 and aborted, so the caller must report
+// the request as handled.
+//
+// Shape matches authHelper's refusal (auth.go) so a console client sees one
+// error_code for "your tenant is locked" no matter which authentication arm
+// answered it.
+func sessionTenantAdmitted(c *gin.Context, tenantID string) bool {
+	if ok, reason := repo.TenantGate(tenantID); !ok {
+		common.SysLog("oidc session fallback: refused, tenant gate closed tenant=" +
+			tenantID + " reason=" + reason)
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "owning tenant is disabled or suspended",
+			"error_code": "TENANT_DISABLED",
+		})
+		c.Abort()
+		return false
+	}
+	return true
+}
+
 func handleSessionFallback(c *gin.Context) bool {
 	// Check if session middleware is available (prevents panic when session store not configured)
 	if _, exists := c.Get(sessions.DefaultKey); !exists {
@@ -702,6 +725,19 @@ func handleSessionFallback(c *gin.Context) bool {
 			tenantID = "default"
 		}
 
+		// Tenant gate (cycle-13 L9): the Bearer arm of OIDCAuth refuses a
+		// suspended tenant inside mapOIDCUserToLurus, and authHelper refuses
+		// one on the session/access-token path, but this arm — the browser
+		// cookie arm every console page uses once the OAuth token is in the
+		// session — checked only the USER's status. A tenant an operator
+		// suspended kept serving its members' console reads (the credit-pool
+		// readback among them) until their session expired. repo.TenantGate
+		// holds the shared rules: "default"/"" exempt, fail-OPEN on a
+		// transient lookup fault, TENANT_MISSING_MODE for a deleted row.
+		if !sessionTenantAdmitted(c, tenantID) {
+			return true
+		}
+
 		// Construct tenant context from session
 		tenantCtx := &TenantContext{
 			TenantID:   tenantID,
@@ -746,6 +782,13 @@ func handleSessionFallback(c *gin.Context) bool {
 		tenantID := user.TenantId
 		if tenantID == "" {
 			tenantID = "default"
+		}
+
+		// Tenant gate: see the non-expired branch above. Both arms need it —
+		// this one serves the same browser with the same cookie once the
+		// stored OAuth token has aged out.
+		if !sessionTenantAdmitted(c, tenantID) {
+			return true
 		}
 
 		tenantCtx := &TenantContext{

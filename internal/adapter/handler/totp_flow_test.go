@@ -339,6 +339,17 @@ type totpDataEnvelope struct {
 // backup codes confirm minted.
 func enrollAndConfirm(t *testing.T, r *gin.Engine) (secret string, backupCodes []string) {
 	t.Helper()
+	secret, backupCodes, _ = enrollAndConfirmWithCode(t, r)
+	return secret, backupCodes
+}
+
+// enrollAndConfirmWithCode is enrollAndConfirm plus the code confirm
+// consumed. A caller that needs to step up afterwards has to know that code:
+// the server refuses a replay of it, so a step-up code that happens to equal
+// it fails for a reason unrelated to what the caller is measuring, and the
+// caller can say so instead of treating it as a product failure.
+func enrollAndConfirmWithCode(t *testing.T, r *gin.Engine) (secret string, backupCodes []string, confirmCode string) {
+	t.Helper()
 	w, env := doJSON(t, r, http.MethodPost, "/api/user/totp/enroll", `{}`, nil)
 	if w.Code != http.StatusOK || !env.Success {
 		t.Fatalf("enroll: status=%d body=%s", w.Code, w.Body.String())
@@ -361,7 +372,7 @@ func enrollAndConfirm(t *testing.T, r *gin.Engine) (secret string, backupCodes [
 	if err := json.Unmarshal(env.Data, &confirmData); err != nil {
 		t.Fatalf("unmarshal confirm data: %v", err)
 	}
-	return enrollData.Secret, confirmData.BackupCodes
+	return enrollData.Secret, confirmData.BackupCodes, code
 }
 
 // TestTotpConfirm_ReturnsBackupCodesOnce: confirm mints 10 codes and returns
@@ -568,7 +579,7 @@ func TestBackupCodes_RegenerateInvalidatesUnused(t *testing.T) {
 	defer cleanup()
 	r := buildTotpFlowRouter(13)
 
-	secret, oldCodes := enrollAndConfirm(t, r)
+	secret, oldCodes, confirmCode := enrollAndConfirmWithCode(t, r)
 
 	// Without step-up, regenerate is refused exactly like disable.
 	w, env := doJSON(t, r, http.MethodPost, "/api/user/totp/backup-codes/regenerate", `{}`, nil)
@@ -576,14 +587,26 @@ func TestBackupCodes_RegenerateInvalidatesUnused(t *testing.T) {
 		t.Fatalf("regenerate without step-up: status=%d code=%q body=%s", w.Code, env.Code, w.Body.String())
 	}
 
-	// Step up with a real TOTP code (the confirm code already spent one).
+	// Step up with a real TOTP code. The code is taken from the PREVIOUS
+	// 30-second step because confirm just consumed the current one and the
+	// server refuses a replay.
 	verifyCode, err := pqtotp.GenerateCode(secret, time.Now().Add(-30*time.Second))
 	if err != nil {
 		t.Fatalf("generate verify code: %v", err)
 	}
+	// The only legitimate skip: the clock crossed a step boundary between
+	// confirm and here, so "the previous step" IS the step confirm spent and
+	// the replay guard would refuse it for a reason this test is not about.
+	// Every OTHER non-200 is a real failure — the blanket skip this replaced
+	// meant a step-up route that had stopped granting anything at all still
+	// reported a green run.
+	if verifyCode == confirmCode {
+		t.Skip("verify code equals the code confirm already consumed (step boundary); rerun-safe skip")
+	}
 	w, env = doJSON(t, r, http.MethodPost, "/api/verify", `{"method":"totp","code":"`+verifyCode+`"}`, nil)
 	if w.Code != http.StatusOK || !env.Success {
-		t.Skip("clock landed on a step boundary collision; rerun-safe skip")
+		t.Fatalf("step-up with a fresh TOTP code: status=%d body=%s (want 200 — regenerate is gated on it)",
+			w.Code, w.Body.String())
 	}
 	verifiedCookies := w.Result().Cookies()
 
