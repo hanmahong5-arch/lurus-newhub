@@ -253,7 +253,8 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 //
 // An id with no entry in channelsIDM is left in rather than dropped — that is
 // a cache/DB consistency error, not a tenant mismatch, and the existing
-// "数据库一致性错误" detection further down the caller still needs to see it.
+// "database consistency error" detection further down the caller still needs
+// to see it.
 //
 // Caller must hold channelSyncLock (read or write).
 func filterChannelsForTenant(ids []int, tenantID string) []int {
@@ -314,7 +315,7 @@ func GetRandomSatisfiedChannelForTenant(tenantID string, group string, model str
 		if channel, ok := channelsIDM[channels[0]]; ok {
 			return channel, nil
 		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
+		return nil, fmt.Errorf("database consistency error: channel #%d does not exist, please contact an administrator", channels[0])
 	}
 
 	// Use pooled map to reduce allocations in hot path
@@ -325,7 +326,7 @@ func GetRandomSatisfiedChannelForTenant(tenantID string, group string, model str
 		if channel, ok := channelsIDM[channelId]; ok {
 			uniquePriorities[int(channel.GetPriority())] = true
 		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+			return nil, fmt.Errorf("database consistency error: channel #%d does not exist, please contact an administrator", channelId)
 		}
 	}
 
@@ -357,7 +358,7 @@ func GetRandomSatisfiedChannelForTenant(tenantID string, group string, model str
 				targetChannels = append(targetChannels, channel)
 			}
 		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+			return nil, fmt.Errorf("database consistency error: channel #%d does not exist, please contact an administrator", channelId)
 		}
 	}
 
@@ -427,7 +428,7 @@ func CacheGetChannel(id int) (*Channel, error) {
 
 	c, ok := channelsIDM[id]
 	if !ok {
-		return nil, fmt.Errorf("渠道# %d，已不存在", id)
+		return nil, fmt.Errorf("channel #%d does not exist", id)
 	}
 	return c, nil
 }
@@ -445,7 +446,7 @@ func CacheGetChannelInfo(id int) (*ChannelInfo, error) {
 
 	c, ok := channelsIDM[id]
 	if !ok {
-		return nil, fmt.Errorf("渠道# %d，已不存在", id)
+		return nil, fmt.Errorf("channel #%d does not exist", id)
 	}
 	return &c.ChannelInfo, nil
 }

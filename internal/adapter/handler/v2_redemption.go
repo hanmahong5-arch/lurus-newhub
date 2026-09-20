@@ -84,12 +84,19 @@ func RedeemCodeV2(c *gin.Context) {
 		return
 	}
 
-	// Redeem the code
+	// Redeem the code. repo.RedemptionErrorMessage/RedemptionErrorCode (not
+	// err.Error() directly) — cycle13 L3: a genuine transaction/driver
+	// failure inside repo.Redeem used to reach this response body verbatim
+	// (constraint/column names included); repo.Redeem itself no longer
+	// returns that raw text, and RedemptionErrorMessage is defence in depth
+	// on top. error_code lets a v2 console/API caller branch without
+	// string-matching the (Chinese, switch-contract-pinned) message.
 	quota, err := repo.Redeem(redeemCode, tenantCtx.UserID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
+			"success":    false,
+			"message":    repo.RedemptionErrorMessage(err),
+			"error_code": repo.RedemptionErrorCode(err),
 		})
 		return
 	}

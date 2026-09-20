@@ -38,15 +38,50 @@ export function resolveErrorMessage(error) {
   // this deployment — without this the user saw the backend's raw English
   // sentence in a zh-default console, because 409 falls through to the
   // backend-message branch at the bottom.
+  //
+  // Every branch below calls t() with a literal key (not a variable) on
+  // purpose — src/i18n/i18n-integrity.test.js scans for exactly that shape
+  // to prove every key it can find is present in en.json; a variable lookup
+  // (e.g. a code->key map) is invisible to that scan and requires a separate
+  // entry in its NON_LITERAL_T_CALLS allowlist, a file this lane does not
+  // own. Cycle-13 L3 added the TOKEN_*/REDEMPTION_* cases: the API contract
+  // now requires error.message be English-only (or, for redemption, the
+  // pre-existing Chinese text the Switch desktop client greps substrings out
+  // of — neither is meant for a zh-default console reader), so these route
+  // through i18n instead of falling to the backend-message branch the way
+  // SESSION_REGISTRY_DISABLED/USER_DISABLED already did.
   const errorCode = error?.response?.data?.error_code;
-  if (errorCode === 'SESSION_REGISTRY_DISABLED') {
-    return t('console.settings.session_registry_disabled');
-  }
-  // 403 USER_DISABLED: a banned account. The 403 branch below shows the
-  // generic "no permission" copy, which tells a banned admin the wrong
-  // thing; the backend minted this code so the console could branch.
-  if (errorCode === 'USER_DISABLED') {
-    return t('console.errors.account_disabled');
+  switch (errorCode) {
+    case 'SESSION_REGISTRY_DISABLED':
+      return t('console.settings.session_registry_disabled');
+    case 'USER_DISABLED':
+      return t('console.errors.account_disabled');
+    case 'TOKEN_NAME_INVALID':
+      return t('console.errors.token_name_invalid');
+    case 'TOKEN_QUOTA_INVALID':
+      return t('console.errors.token_quota_invalid');
+    case 'TOKEN_EXPIRY_INVALID':
+      return t('console.errors.token_expiry_invalid');
+    case 'TOKEN_RATE_LIMIT_INVALID':
+      return t('console.errors.token_rate_limit_invalid');
+    case 'TOKEN_SCOPE_INVALID':
+      return t('console.errors.token_scope_invalid');
+    case 'TOKEN_MODEL_LIMIT_INVALID':
+      return t('console.errors.token_model_limit_invalid');
+    case 'TOKEN_ENABLE_REJECTED':
+      return t('console.errors.token_enable_rejected');
+    case 'REDEMPTION_INVALID':
+      return t('console.errors.redemption_invalid');
+    case 'REDEMPTION_USED':
+      return t('console.errors.redemption_used');
+    case 'REDEMPTION_EXPIRED':
+      return t('console.errors.redemption_expired');
+    case 'REDEMPTION_TENANT_MISMATCH':
+      return t('console.errors.redemption_tenant_mismatch');
+    case 'REDEMPTION_FAILED':
+      return t('console.errors.redemption_failed');
+    default:
+      break;
   }
 
   switch (status) {

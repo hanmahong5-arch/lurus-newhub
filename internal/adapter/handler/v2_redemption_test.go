@@ -19,9 +19,9 @@ func TestRedeemCodeV2_InvalidFormat(t *testing.T) {
 	defer ctx.Cleanup()
 
 	invalidCodes := []string{
-		"short",                     // Too short
+		"short", // Too short
 		"this-is-way-too-long-for-a-redemption-code-32chars", // Too long
-		"",                          // Empty
+		"",                                    // Empty
 		"12345678901234567890123456789012345", // 35 chars (not 32)
 	}
 
@@ -93,7 +93,53 @@ func TestRedeemCodeV2_AlreadyRedeemed(t *testing.T) {
 
 	// Second redemption should fail
 	w = V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPost, "/api/v2/test-tenant/redeem", body, nil)
-	AssertV2Status(t, w, http.StatusBadRequest)
+	resp := AssertV2Error(t, w, http.StatusBadRequest)
+	// cycle13 L3: the response now carries a machine-readable error_code
+	// alongside the (Chinese, switch-contract-pinned) message text, so a v2
+	// console/API caller doesn't have to string-match the message to tell an
+	// already-used code apart from an expired or cross-tenant one.
+	if code, _ := resp["error_code"].(string); code != repo.RedemptionErrorCodeUsed {
+		t.Errorf("error_code = %q, want %q; body: %s", code, repo.RedemptionErrorCodeUsed, w.Body.String())
+	}
+	if msg, _ := resp["message"].(string); !strings.Contains(msg, "已使用") {
+		t.Errorf("message = %q, want it to contain the switch-classifier substring '已使用'", msg)
+	}
+}
+
+// TestRedeemCodeV2_RawDBErrorReturnsGenericMessage is the v2 sibling of
+// switch_redeem_test.go's TestSwitchRedeemAnonymous_RawDBErrorSanitized:
+// before cycle13 L3, RedeemCodeV2 echoed repo.Redeem's error verbatim
+// (err.Error()) into the response body — for a genuine transaction/driver
+// failure that included raw SQL error text (column/constraint names). It now
+// goes through repo.RedemptionErrorMessage like the other two redeem
+// handlers, so the caller only ever sees the fixed, safe fallback text.
+func TestRedeemCodeV2_RawDBErrorReturnsGenericMessage(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	redemption := SeedV2Redemption(t, ctx, ctx.AdminUser.Id)
+
+	// Break users.quota so repo.Redeem's `UPDATE users SET quota = quota + ?`
+	// fails with a raw driver error instead of one of its sentinels.
+	if err := ctx.DB.Exec(`ALTER TABLE users DROP COLUMN quota`).Error; err != nil {
+		t.Fatalf("drop quota column: %v", err)
+	}
+
+	body := map[string]string{"code": redemption.Key}
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPost, "/api/v2/test-tenant/redeem", body, nil)
+	resp := AssertV2Error(t, w, http.StatusBadRequest)
+
+	msg, _ := resp["message"].(string)
+	if msg != repo.ErrRedemptionFailed.Error() {
+		t.Errorf("message = %q, want the generic fallback %q", msg, repo.ErrRedemptionFailed.Error())
+	}
+	lower := strings.ToLower(msg)
+	if strings.Contains(msg, "quota") || strings.Contains(lower, "column") || strings.Contains(lower, "sql") {
+		t.Errorf("message leaks raw DB error text: %q", msg)
+	}
+	if code, _ := resp["error_code"].(string); code != repo.RedemptionErrorCodeFailed {
+		t.Errorf("error_code = %q, want %q", code, repo.RedemptionErrorCodeFailed)
+	}
 }
 
 func TestRedeemCodeV2_NonexistentCode(t *testing.T) {

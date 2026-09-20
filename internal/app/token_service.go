@@ -71,6 +71,36 @@ func ValidateRateLimits(rpm, tpm int) error {
 	return nil
 }
 
+// MaxTokenModelLimitsLength matches the model_limits column's storage limit
+// (varchar(1024), domain/entity/token.go and adapter/repo/token.go — the tag
+// MUST stay byte-identical between the two). Validating it here turns a raw
+// "value too long for type character varying(1024)" driver error (a 500 that
+// leaks the column type) into a friendly 400 before the row is ever written.
+const MaxTokenModelLimitsLength = 1024
+
+// ValidateTokenModelLimits checks the model_limits value against the
+// column's storage limit and rejects a list containing an empty entry (a
+// leading/trailing/doubled comma) — repo.Token.GetModelLimitsMap splits on
+// "," with no filtering, so an empty entry would key the map on "", which is
+// indistinguishable from "no such model" at relay time (ModelLimitsEnabled's
+// allow-list check). enabled=false always passes: an unused model_limits
+// value is dead data, not a validation target, matching how
+// UpdateTokenV2/CreateTokenV2 persist the pair together.
+func ValidateTokenModelLimits(modelLimits string, enabled bool) error {
+	if !enabled {
+		return nil
+	}
+	if len(modelLimits) > MaxTokenModelLimitsLength {
+		return fmt.Errorf("model_limits exceeds the maximum length of %d characters", MaxTokenModelLimitsLength)
+	}
+	for _, m := range strings.Split(modelLimits, ",") {
+		if strings.TrimSpace(m) == "" {
+			return errors.New("model_limits must not contain an empty model name (check for a stray comma)")
+		}
+	}
+	return nil
+}
+
 // NormalizeTokenScopes validates and canonicalizes a scope list. Each entry
 // must be one of types.ValidTokenScopes. Whitespace is trimmed; duplicates
 // are dropped; the result is sorted by the canonical order of

@@ -53,9 +53,18 @@ func SwitchUserTopup(c *gin.Context) {
 		return
 	}
 
+	// repo.RedemptionErrorMessage/RedemptionErrorCode (not err.Error()
+	// directly) — cycle13 L3: a genuine transaction/driver failure inside
+	// repo.Redeem used to reach this response body verbatim (constraint/
+	// column names included); repo.Redeem itself no longer returns that raw
+	// text, and RedemptionErrorMessage is defence in depth on top.
 	quota, err := repo.Redeem(key, token.UserId)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    repo.RedemptionErrorMessage(err),
+			"error_code": repo.RedemptionErrorCode(err),
+		})
 		return
 	}
 

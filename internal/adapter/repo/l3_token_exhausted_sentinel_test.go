@@ -158,10 +158,12 @@ func TestL3ValidateUserToken_StatusDisabled_ErrTokenDisabledSentinel(t *testing.
 // branches (Status==TokenStatusExhausted and RemainQuota<=0) must share —
 // pointing the caller at the TOKEN's own remain_quota/unlimited_quota
 // setting (the token_service.go remedy), not the wallet.
-// The literal " [剩余 0]" reflects both seeded fixtures below carrying
+// The literal " [remaining 0]" reflects both seeded fixtures below carrying
 // RemainQuota=0 — tokenExhaustedMessage(token.go) embeds the actual figure,
 // so this constant only matches when both branches share that same value.
-const tokenExhaustedHintSuffix = "（该令牌可用额度已用尽 [剩余 0]，请修改令牌剩余额度或设置为无限额度）"
+// English since cycle13 L3 (API error.message is English-only by contract —
+// this sentinel used to be Chinese, the exact defect finding #6 named).
+const tokenExhaustedHintSuffix = " (available quota exhausted [remaining 0]; edit the token's remaining quota or set it to unlimited)"
 
 // TestL3ValidateUserToken_BothBranches_SameSuffix is the B3 regression lock:
 // before this fix, Status==TokenStatusExhausted (ValidateUserToken's guard
@@ -200,7 +202,7 @@ func TestL3ValidateUserToken_BothBranches_SameSuffix(t *testing.T) {
 		t.Errorf("both exhaustion branches must render the identical message; status=%q remain=%q",
 			statusErr.Error(), remainErr.Error())
 	}
-	if strings.Contains(statusErr.Error(), "请充值") || strings.Contains(remainErr.Error(), "请充值") {
+	if strings.Contains(statusErr.Error(), "top up") || strings.Contains(remainErr.Error(), "top up") {
 		t.Errorf("hint must not tell the caller to top up the wallet (wrong remedy for a per-token cap): status=%q remain=%q",
 			statusErr.Error(), remainErr.Error())
 	}
@@ -208,9 +210,9 @@ func TestL3ValidateUserToken_BothBranches_SameSuffix(t *testing.T) {
 
 // tokenExhaustedWrongRemedyPhrase is the remedy-specific text that would be
 // FALSE to show a caller whose token's RemainQuota is actually positive (or
-// unlimited): "please edit the token's remaining quota" when there is
+// unlimited): "edit the token's remaining quota" when there is
 // nothing wrong with it. Note ErrTokenQuotaExhausted's own sentinel text
-// ("令牌不可用") is present in EVERY wrapped message by construction
+// ("token unavailable") is present in EVERY wrapped message by construction
 // (fmt.Errorf("%w...", ErrTokenQuotaExhausted) always renders the sentinel's
 // Error() first) — but that shared prefix is NOT what errors.Is matches on:
 // errors.Is compares the wrapped error VALUE's identity through Unwrap(),
@@ -219,7 +221,7 @@ func TestL3ValidateUserToken_BothBranches_SameSuffix(t *testing.T) {
 // diverged in text. The prefix is present here purely for the human reading
 // the wire message; this constant is the specific remedy clause that must
 // NOT appear once RemainQuota/UnlimitedQuota contradict it.
-const tokenExhaustedWrongRemedyPhrase = "请修改令牌剩余额度"
+const tokenExhaustedWrongRemedyPhrase = "edit the token's remaining quota"
 
 // TestL3ValidateUserToken_StatusExhaustedButRemainQuotaPositive_DoesNotClaimExhausted
 // is the R2/B2 regression lock: Status==TokenStatusExhausted does NOT imply
@@ -248,7 +250,7 @@ func TestL3ValidateUserToken_StatusExhaustedButRemainQuotaPositive_DoesNotClaimE
 	if strings.Contains(err.Error(), tokenExhaustedWrongRemedyPhrase) {
 		t.Errorf("message must not tell the caller to edit remain_quota when RemainQuota=5000: %v", err)
 	}
-	if !strings.Contains(err.Error(), "重新启用") {
+	if !strings.Contains(err.Error(), "re-enable") {
 		t.Errorf("message should point the caller at re-enabling the token, got: %v", err)
 	}
 	assertSentinelPrefixDoesNotClaimExhausted(t, err, "RemainQuota=5000")
@@ -265,10 +267,10 @@ func TestL3ValidateUserToken_StatusExhaustedButRemainQuotaPositive_DoesNotClaimE
 func assertSentinelPrefixDoesNotClaimExhausted(t *testing.T, err error, state string) {
 	t.Helper()
 	prefix := err.Error()
-	if i := strings.Index(prefix, "（"); i >= 0 {
+	if i := strings.Index(prefix, "("); i >= 0 {
 		prefix = prefix[:i]
 	}
-	if strings.Contains(prefix, "已用尽") {
+	if strings.Contains(prefix, "exhausted") {
 		t.Errorf("sentinel prefix must not claim the quota is used up when %s; prefix=%q full=%v", state, prefix, err)
 	}
 }

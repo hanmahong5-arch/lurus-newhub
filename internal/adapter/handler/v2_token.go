@@ -16,6 +16,24 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Token validation error codes (cycle13 L3, ERRCODES-6). Attached alongside
+// the existing message text on every 400 CreateTokenV2/UpdateTokenV2 return
+// for a validation failure, so a caller that wants to branch programmatically
+// doesn't have to string-match message (whose text is not itself translated
+// by this change — see token_service.go's validators, pinned by
+// internal/app/token_service_test.go and
+// internal/adapter/handler/cov_handler-identity-log_token_test.go, neither
+// owned by this lane).
+const (
+	tokenErrCodeNameInvalid       = "TOKEN_NAME_INVALID"
+	tokenErrCodeQuotaInvalid      = "TOKEN_QUOTA_INVALID"
+	tokenErrCodeExpiryInvalid     = "TOKEN_EXPIRY_INVALID"
+	tokenErrCodeRateLimitInvalid  = "TOKEN_RATE_LIMIT_INVALID"
+	tokenErrCodeScopeInvalid      = "TOKEN_SCOPE_INVALID"
+	tokenErrCodeModelLimitInvalid = "TOKEN_MODEL_LIMIT_INVALID"
+	tokenErrCodeEnableRejected    = "TOKEN_ENABLE_REJECTED"
+)
+
 // tokenView is the field-whitelisted projection returned by ListTokensV2. It
 // excludes the raw Key (the bearer secret — must never appear in a list, only
 // once on create), tenant_id (implicit from route) and the platform/provisioning
@@ -173,8 +191,9 @@ func CreateTokenV2(c *gin.Context) {
 	// Validate token name
 	if err := app.ValidateTokenName(req.Name); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
+			"success":    false,
+			"message":    err.Error(),
+			"error_code": tokenErrCodeNameInvalid,
 		})
 		return
 	}
@@ -182,8 +201,9 @@ func CreateTokenV2(c *gin.Context) {
 	// Validate quota
 	if err := app.ValidateTokenQuota(req.RemainQuota, req.UnlimitedQuota); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
+			"success":    false,
+			"message":    err.Error(),
+			"error_code": tokenErrCodeQuotaInvalid,
 		})
 		return
 	}
@@ -191,8 +211,9 @@ func CreateTokenV2(c *gin.Context) {
 	// Validate expiry upper bound (unit mistakes would mean "never expires")
 	if err := app.ValidateTokenExpiredTime(req.ExpiredTime); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
+			"success":    false,
+			"message":    err.Error(),
+			"error_code": tokenErrCodeExpiryInvalid,
 		})
 		return
 	}
@@ -200,8 +221,22 @@ func CreateTokenV2(c *gin.Context) {
 	// Validate per-minute rate limits (0 = unlimited)
 	if err := app.ValidateRateLimits(req.RateLimitRPM, req.RateLimitTPM); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
+			"success":    false,
+			"message":    err.Error(),
+			"error_code": tokenErrCodeRateLimitInvalid,
+		})
+		return
+	}
+
+	// Validate the model allowlist (ERRCODES-6 / cycle13 L3): a stray comma
+	// producing an empty entry would otherwise key GetModelLimitsMap on "",
+	// and an oversized value would otherwise fail at INSERT with a raw
+	// "value too long" driver error.
+	if err := app.ValidateTokenModelLimits(req.ModelLimits, req.ModelLimitsEnabled); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    err.Error(),
+			"error_code": tokenErrCodeModelLimitInvalid,
 		})
 		return
 	}
@@ -210,8 +245,9 @@ func CreateTokenV2(c *gin.Context) {
 	scopesNormalized, err := app.NormalizeTokenScopes(req.Scopes)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
+			"success":    false,
+			"message":    err.Error(),
+			"error_code": tokenErrCodeScopeInvalid,
 		})
 		return
 	}
@@ -376,8 +412,9 @@ func UpdateTokenV2(c *gin.Context) {
 	if req.Name != "" {
 		if err := app.ValidateTokenName(req.Name); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"message": err.Error(),
+				"success":    false,
+				"message":    err.Error(),
+				"error_code": tokenErrCodeNameInvalid,
 			})
 			return
 		}
@@ -387,8 +424,9 @@ func UpdateTokenV2(c *gin.Context) {
 	if req.ExpiredTime != 0 {
 		if err := app.ValidateTokenExpiredTime(req.ExpiredTime); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"message": err.Error(),
+				"success":    false,
+				"message":    err.Error(),
+				"error_code": tokenErrCodeExpiryInvalid,
 			})
 			return
 		}
@@ -402,8 +440,9 @@ func UpdateTokenV2(c *gin.Context) {
 	if req.RemainQuota != nil && !token.UnlimitedQuota {
 		if *req.RemainQuota < 0 {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"message": "Quota value cannot be negative",
+				"success":    false,
+				"message":    "Quota value cannot be negative",
+				"error_code": tokenErrCodeQuotaInvalid,
 			})
 			return
 		}
@@ -418,6 +457,21 @@ func UpdateTokenV2(c *gin.Context) {
 		token.ModelLimits = *req.ModelLimits
 	}
 
+	// Validate against the MERGED (existing + just-patched) state, not just
+	// the fields this request happened to send — a caller that only flips
+	// model_limits_enabled=true without resending model_limits must still be
+	// validated against whatever model_limits the token already has.
+	if req.ModelLimitsEnabled != nil || req.ModelLimits != nil {
+		if err := app.ValidateTokenModelLimits(token.ModelLimits, token.ModelLimitsEnabled); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success":    false,
+				"message":    err.Error(),
+				"error_code": tokenErrCodeModelLimitInvalid,
+			})
+			return
+		}
+	}
+
 	if req.AllowIps != nil {
 		token.AllowIps = req.AllowIps
 	}
@@ -430,8 +484,9 @@ func UpdateTokenV2(c *gin.Context) {
 		if *req.Status == common.TokenStatusEnabled {
 			if err := app.CanEnableToken(token); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{
-					"success": false,
-					"message": err.Error(),
+					"success":    false,
+					"message":    err.Error(),
+					"error_code": tokenErrCodeEnableRejected,
 				})
 				return
 			}
@@ -450,8 +505,9 @@ func UpdateTokenV2(c *gin.Context) {
 		}
 		if err := app.ValidateRateLimits(rpm, tpm); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"message": err.Error(),
+				"success":    false,
+				"message":    err.Error(),
+				"error_code": tokenErrCodeRateLimitInvalid,
 			})
 			return
 		}
@@ -477,8 +533,9 @@ func UpdateTokenV2(c *gin.Context) {
 		scopesNormalized, err := app.NormalizeTokenScopes(*req.Scopes)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"message": err.Error(),
+				"success":    false,
+				"message":    err.Error(),
+				"error_code": tokenErrCodeScopeInvalid,
 			})
 			return
 		}

@@ -91,6 +91,46 @@ describe('resolveErrorMessage', () => {
     ).toBe('console.errors.account_disabled');
   });
 
+  // Cycle13 L3: v2_token.go / repo.Redeem now attach error_code to
+  // validation/redemption failures (the API contract requires
+  // error.message be English-only, or — for redemption — the pre-existing
+  // Chinese text the Switch client greps; neither is meant for a
+  // zh-default console reader), so these route through i18n the same way
+  // SESSION_REGISTRY_DISABLED/USER_DISABLED already did.
+  it('maps every known TOKEN_*/REDEMPTION_* error_code to its console.errors key', () => {
+    const cases = [
+      ['TOKEN_NAME_INVALID', 'console.errors.token_name_invalid'],
+      ['TOKEN_QUOTA_INVALID', 'console.errors.token_quota_invalid'],
+      ['TOKEN_EXPIRY_INVALID', 'console.errors.token_expiry_invalid'],
+      ['TOKEN_RATE_LIMIT_INVALID', 'console.errors.token_rate_limit_invalid'],
+      ['TOKEN_SCOPE_INVALID', 'console.errors.token_scope_invalid'],
+      ['TOKEN_MODEL_LIMIT_INVALID', 'console.errors.token_model_limit_invalid'],
+      ['TOKEN_ENABLE_REJECTED', 'console.errors.token_enable_rejected'],
+      ['REDEMPTION_INVALID', 'console.errors.redemption_invalid'],
+      ['REDEMPTION_USED', 'console.errors.redemption_used'],
+      ['REDEMPTION_EXPIRED', 'console.errors.redemption_expired'],
+      [
+        'REDEMPTION_TENANT_MISMATCH',
+        'console.errors.redemption_tenant_mismatch',
+      ],
+      ['REDEMPTION_FAILED', 'console.errors.redemption_failed'],
+    ];
+    for (const [errorCode, wantKey] of cases) {
+      expect(
+        resolveErrorMessage({
+          response: {
+            status: 400,
+            data: {
+              success: false,
+              error_code: errorCode,
+              message: 'raw backend text',
+            },
+          },
+        }),
+      ).toBe(wantKey);
+    }
+  });
+
   it('still falls back to the backend message for an unmapped 409', () => {
     expect(
       resolveErrorMessage({
