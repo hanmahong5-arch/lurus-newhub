@@ -31,7 +31,7 @@ a bind source. `scripts/install-netdata-alarms.sh` only manages
 `newhub.conf` — a second alarm file would need its own bind mount added to
 the container definition first (out of scope for this directory).
 
-`health.d/newhub.conf` currently defines 29 alarms:
+`health.d/newhub.conf` currently defines 30 alarms:
 
 - 8 ported from the host's original 2026-08-20 copy
   (`newhub_platform_breaker_open`, `newhub_billing_outbox_failures`,
@@ -113,6 +113,46 @@ the container definition first (out of scope for this directory).
   the same way `newhub_credit_pool_lookup_miss` above did), and
   `newhub_log_retention_backlog` (cycle-13 L6's log-retention task
   backlog gauge).
+- **1 added 2026-09-20 (cycle-13 L10 repair round)**, also **in-repo only**:
+  `newhub_billing_task_refund_unreversed` — watches
+  `lurus_billing_task_refund_wallet_unreversed_total`, the counter
+  `internal/adapter/handler/task_refund.go` increments when a task refund
+  made every LOCAL ledger whole but could not reverse the platform wallet
+  debit (newhub has no wallet-refund RPC — owner item O-refund). The counter
+  landed in the first cut of this cycle with no alarm bound to it even
+  though its own doc comment calls each increment "a real, uncompensated
+  wallet overcharge"; the reverse gate could not see that because the
+  comment used none of the prose phrasings it matched. The gate now keys on
+  an explicit `// ALERTABLE: <wire name>` marker
+  (`internal/pkg/metrics/netdata_alarm_series_test.go`), carried by the
+  eight money/conservation counters, with a floor so deleting a marker
+  fails instead of silencing the check.
+
+Two existing alarms were also changed in that repair round (no count
+change):
+
+- `newhub_relay_5xx_elevated` was **rebound** from
+  `lurus_gateway_requests_total{status=5*}` to the new series
+  `lurus_gateway_non_probe_5xx_total`
+  (`internal/pkg/metrics/middleware.go`), which counts 5xx on every route
+  except the two kubelet probe paths. The old binding matched, in practice,
+  only the `path=/api/health status=503` chart (operator-verified
+  2026-09-15), and cycle-13 L11 made `/api/health` and `/api/status` answer
+  503 for the whole graceful-shutdown window on purpose — so every rollout
+  would have produced a WARNING with no incident behind it. Expressing "5xx
+  AND not a probe path" as a `chart labels:` filter needs two label
+  conditions at once, and how netdata's simple-pattern engine combines them
+  is live behaviour this repo cannot check from a checkout (the conf's own
+  GATE GAP note is about a line already in the file with that problem), so
+  the split is done in code, where
+  `internal/pkg/metrics/method_label_test.go` proves it.
+- `newhub_metrics_scrape_stale` became a `template:` (one alarm per pod
+  chart) with `warn > 180s` / `crit > 600s`. `lurus_gateway_instance_info`
+  is labelled per pod and the go.d job scrapes one NodePort that
+  round-robins across three replicas, so a given pod's chart is refreshed on
+  about one scrape in three: the first cut's 60s threshold would have been a
+  chronic WARNING. Run the chart-model live check in that block's comment
+  (owner item O-scrape) before installing.
 
 Every alarm reads the same `/metrics` endpoint netdata's go.d `prometheus`
 collector already scrapes on R6 (job name `newhub`,
@@ -160,9 +200,11 @@ unbound ones observed 2026-09-15 (`newhub_credit_pool`,
 `newhub_quota_cap_402`) are each written by production code but have simply
 had no matching data since the scrape job started — see each one's comment
 in `health.d/newhub.conf` and its runbook page for detail. `newhub_relay_5xx_elevated`
-is bound but only to the `path=/api/health status=503` chart, i.e. it
-watches health-check failures, not general relay traffic — see
-`doc/runbook/relay-5xx-elevated.md`.
+was, at that observation, bound only to the `path=/api/health status=503`
+chart, i.e. it watched health-check failures rather than general relay
+traffic. That is what the 2026-09-20 rebinding above addresses; its new
+series is new in the same change, so there is no operator observation of
+the new binding yet — see `doc/runbook/relay-5xx-elevated.md`.
 
 ## Ownership boundary — read this before assuming an alarm pages anyone
 

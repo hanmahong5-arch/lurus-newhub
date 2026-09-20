@@ -102,11 +102,12 @@ func (d *Drainer) ResetForTest() {
 //   - ctx expires first: srv.Shutdown returns context.DeadlineExceeded. That
 //     is the expected result of a budget, not a process failure. cut is
 //     whatever inflightRequests reports at that instant, logged for the
-//     runbook (doc/runbook/graceful-drain.md) and, once a counter named
-//     lurus_gateway_shutdown_cut_requests_total exists in internal/pkg/metrics
-//     (not declared there at the time of writing — grep the package before
-//     assuming otherwise), recorded as a counter too; until then this SysLog
-//     line is the record.
+//     runbook (doc/runbook/graceful-drain.md) and added to
+//     lurus_gateway_shutdown_cut_requests_total (cycle-13 L10,
+//     metrics.RecordShutdownCutRequests). That counter is best effort — the
+//     process exits moments later, so the increment is more likely to be
+//     lost than scraped; the SysLog line is the record that survives, see
+//     the counter's own doc comment.
 //   - srv.Shutdown returns some other error: net/http hands back the first
 //     listener-close failure, and it does so only after every connection has
 //     gone idle (net/http.Server.Shutdown returns lnerr from inside the
@@ -128,6 +129,7 @@ func (d *Drainer) Shutdown(ctx context.Context, srv *http.Server, inflight func(
 	case errors.Is(shutdownErr, context.DeadlineExceeded):
 		cut := inflightRequests(inflight)
 		common.SysLogf("graceful shutdown: budget exceeded, cut=%d in-flight request(s)", cut)
+		metrics.RecordShutdownCutRequests(cut)
 		return cut, nil
 	default:
 		common.SysLogf("graceful shutdown: shutdown error (not a budget timeout), cut=0 requests: %v", shutdownErr)

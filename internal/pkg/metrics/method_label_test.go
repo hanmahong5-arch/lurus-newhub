@@ -141,3 +141,58 @@ func TestNormalizeMethodLabel_Table(t *testing.T) {
 		}
 	}
 }
+
+// TestMiddleware_NonProbe5xxExcludesKubernetesProbePaths is the oracle for
+// NonProbe5xxTotal, the series newhub_relay_5xx_elevated
+// (deploy/r6-host-netdata/health.d/newhub.conf) was rebound to in cycle-13
+// L10's repair round.
+//
+// That alarm used to watch lurus_gateway_requests_total with
+// `chart labels: status=5*`, and the operator's 2026-09-15 live check found
+// the only chart it matched was path=/api/health status=503 — so it was in
+// practice a health-probe alarm. Cycle-13 L11 then made /api/health and
+// /api/status answer 503 for the whole graceful-drain window on purpose,
+// which would have turned every rollout into a WARNING with no incident
+// behind it. A netdata `chart labels:` filter cannot express "this path AND
+// that status" (the file's own GATE GAP/⚠VERIFY notes cover what its
+// simple-pattern syntax can be trusted to do), so the split is made here,
+// in code, where it is testable: a 5xx on a path a Kubernetes probe uses is
+// not counted; a 5xx anywhere else is.
+//
+// Driven through the real gin middleware and httptest, and through the real
+// route templates (c.FullPath()), not a hand-built WithLabelValues call.
+func TestMiddleware_NonProbe5xxExcludesKubernetesProbePaths(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(Middleware())
+	r.GET("/api/health", func(c *gin.Context) { c.Status(http.StatusServiceUnavailable) })
+	r.GET("/api/status", func(c *gin.Context) { c.Status(http.StatusServiceUnavailable) })
+	r.POST("/v1/chat/completions", func(c *gin.Context) { c.Status(http.StatusInternalServerError) })
+	r.GET("/api/user/self", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/api/token/999", func(c *gin.Context) { c.Status(http.StatusNotFound) })
+
+	before := testutil.ToFloat64(NonProbe5xxTotal)
+
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/health", nil),
+		httptest.NewRequest(http.MethodGet, "/api/status", nil),
+		httptest.NewRequest(http.MethodGet, "/api/user/self", nil),
+		httptest.NewRequest(http.MethodGet, "/api/token/999", nil),
+	} {
+		r.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	if got := testutil.ToFloat64(NonProbe5xxTotal) - before; got != 0 {
+		t.Errorf("NonProbe5xxTotal rose by %v after two probe 503s, a 200 and a 404 — want 0. "+
+			"A drain makes /api/health and /api/status answer 503 for the whole shutdown window "+
+			"(internal/lifecycle/drain.go), so counting those would make every rollout look like "+
+			"a 5xx incident", got)
+	}
+
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil))
+
+	if got := testutil.ToFloat64(NonProbe5xxTotal) - before; got != 1 {
+		t.Errorf("NonProbe5xxTotal rose by %v in total after a relay 500 followed the four requests "+
+			"above — want exactly 1: a customer-facing 5xx is what this series exists to count", got)
+	}
+}

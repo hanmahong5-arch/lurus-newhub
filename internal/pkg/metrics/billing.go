@@ -38,7 +38,10 @@ var (
 		},
 	)
 
-	// BillingOutboxFailedTotal counts permanently failed outbox entries.
+	// BillingOutboxFailedTotal counts permanently failed outbox entries — a
+	// settlement this process gave up retrying, i.e. quota consumed with no
+	// wallet debit behind it.
+	// ALERTABLE: lurus_billing_outbox_failed_total
 	BillingOutboxFailedTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -93,6 +96,7 @@ var (
 	// the ledger of record) but the local mirror lost this data point, so the
 	// daily drift reconciliation will show a corresponding gap. Labeled by
 	// which write was lost (user_quota/token_quota).
+	// ALERTABLE: lurus_billing_advisory_meter_lost_total
 	BillingAdvisoryMeterLost = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -109,6 +113,7 @@ var (
 	// < 0.00005 LB). Pure observation — the settle call itself is unchanged —
 	// so this is a leak DETECTOR, not a fix (the wallet-side precision fix is
 	// tracked separately, out of scope here).
+	// ALERTABLE: lurus_billing_zero_amount_charge_total
 	BillingZeroAmountChargeTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -148,6 +153,7 @@ var (
 	// only signal on the row itself that the charge shown on that row may
 	// not have actually settled (SettleConsume's logger.LogError line is a
 	// second, separate signal — see internal/app/settlement_outcome.go).
+	// ALERTABLE: lurus_billing_settlement_failed_total
 	BillingSettlementFailedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -167,8 +173,9 @@ var (
 	// owner item O-refund). Every increment is money charged to a wallet
 	// for work that was later refunded on every OTHER ledger — a real,
 	// uncompensated wallet overcharge, not a rounding artifact. Declared
-	// here (L10) ahead of L1's caller landing — see LogRetentionDeletedTotal's
-	// doc comment above for why that is not a defect in itself.
+	// here by L10; L1's caller landed in the same cycle and is live at
+	// internal/adapter/handler/task_refund.go's refund path.
+	// ALERTABLE: lurus_billing_task_refund_wallet_unreversed_total
 	BillingTaskRefundWalletUnreversedTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -179,17 +186,18 @@ var (
 	)
 )
 
-// init pre-registers the three known path label values with a zero count,
+// init pre-registers the four known path label values with a zero count,
 // matching the pattern in r6_rate_limit_degraded.go — a CounterVec child
 // series only exists on /metrics once its first Inc() fires, so an absent
 // series would otherwise be ambiguous between "no settlement has failed yet"
 // and "this counter isn't wired into a call site at all".
 //
-// "realtime" is pre-registered ahead of any call site: cycle-13 L1 routes
-// quota.go's PostWssConsumeQuota through the same SettleConsume path (see
-// this cycle's plan §"L1 — 钱路守恒") — until that lands, no code increments
-// this label and the series simply reads 0, same as any other wired-but-
-// unused path would.
+// All four have a call site as of cycle-13: "realtime" was pre-registered
+// ahead of one, and L1 then routed quota.go's PostWssConsumeQuota through
+// the same SettleConsume path (internal/app/quota.go's
+// SettleConsume(..., "realtime") call in the zero-usage release arm), so
+// the label now reads 0 because no realtime settlement has failed, not
+// because nothing can write it.
 func init() {
 	BillingSettlementFailedTotal.WithLabelValues("text")
 	BillingSettlementFailedTotal.WithLabelValues("claude")

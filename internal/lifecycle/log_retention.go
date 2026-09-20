@@ -25,6 +25,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
 )
 
@@ -212,22 +213,30 @@ func sweepLogs(ctx context.Context, now time.Time, days int, types []int, cfg Lo
 }
 
 // recordLogRetentionDeleted / recordLogRetentionPending are the two
-// observability hooks. They log today because internal/pkg/metrics is not
-// this lane's to edit: the cycle-13 plan puts
+// observability hooks: they publish the cycle-13 L10 series
 // lurus_gateway_log_retention_deleted_total{table} and
-// lurus_gateway_log_retention_pending_rows{table} in L10, to be reached
-// through metrics.RecordLogRetention / metrics.SetLogRetentionPending once
-// those exist. Swapping the body here is the whole wiring step.
+// lurus_gateway_log_retention_pending_rows{table} (declared in
+// internal/pkg/metrics, watched by the netdata alarm
+// newhub_log_retention_backlog) and keep the SysLog line for the deleting
+// pass, which is what an operator greps after turning retention on.
+//
+// The gauge is published on every pass INCLUDING the zero case, on purpose:
+// a GaugeVec exports no series at all for a label it has never been Set
+// with, so skipping n==0 would make "this pass cleared the backlog"
+// indistinguishable from "this table's pass never ran" — see
+// metrics.SetLogRetentionPending's own doc comment.
 func recordLogRetentionDeleted(table string, n int64) {
 	if n > 0 {
 		common.SysLog(fmt.Sprintf("log retention: deleted %d row(s) from %s", n, table))
 	}
+	metrics.RecordLogRetention(table, int(n))
 }
 
 func recordLogRetentionPending(table string, n int64) {
 	if n > 0 {
 		common.SysLog(fmt.Sprintf("log retention: %s still has %d row(s) past the window (will drain on later passes)", table, n))
 	}
+	metrics.SetLogRetentionPending(table, int(n))
 }
 
 // StartLogRetentionWithContext launches the leader-gated retention sweep.

@@ -77,22 +77,40 @@ var (
 	// (imported almost everywhere) would leak into every test binary that
 	// transitively imports it. Instead it is a companion refresh of the
 	// EXISTING success stamp: every call to RecordLeaderTaskSuccess
-	// recomputes this gauge for every task taskreg currently knows about
+	// recomputes this gauge for the registered tasks taskreg knows about
 	// (not just the one that just succeeded), so whichever registered task
 	// ticks most often — today the OpenRouter pool reaper, every 30s —
-	// doubles as the de-facto refresh heartbeat for the rest. Two honest
-	// limits this does not solve: (1) a task that has NEVER once succeeded
-	// in this process has no series here at all until some task's first
-	// success runs the refresh (matches the GaugeVec "absent means unset"
-	// convention the last-success gauge already uses); (2) exactly like
-	// LeaderTaskLastSuccess (see its doc comment above), this is a
-	// per-PROCESS reading — a demoted replica's copy of a leader-only task's
-	// age freezes at whatever it last computed rather than climbing, so an
-	// alert reading a random replica off the round-robin NodePort scrape
-	// (see newhub.conf's SCRAPE TOPOLOGY note) can under-report a stalled
-	// leader-only task exactly as easily as the raw timestamp series can —
-	// this gauge only saves the alert author from writing `$now - $this`
-	// themselves, it does not solve the replica-attribution problem.
+	// doubles as the de-facto refresh heartbeat for the rest.
+	//
+	// Two classes of task are deliberately left WITHOUT a series here, both
+	// because the number this gauge would carry for them is not an age (see
+	// RecordLeaderTaskSuccess and leader_task_age_test.go's negative
+	// oracle):
+	//   - a task that has not stamped a success in THIS process yet: its
+	//     last-success reading is 0, so "now - last" would be ~1.79e9
+	//     seconds, not an age. channel-health-test is exactly this on a
+	//     default install (registered on every master-capable replica, only
+	//     stamps while AutoTestChannelEnabled is on, which defaults off), so
+	//     publishing that number would have made newhub_task_stalled
+	//     WARNING-by-construction on a healthy leader.
+	//   - a task taskreg reports as Active() == false: operator-disabled, so
+	//     it is not on a schedule it could be late for — the same reading
+	//     GET /api/v2/admin/system/tasks reports as standby rather than
+	//     overdue.
+	// Neither case goes dark: LeaderTaskLastSuccess itself still carries the
+	// task at the 0 its Start*WithContext entry point set at boot, and the
+	// system-tasks endpoint above pairs that with the leader/active metadata
+	// this gauge does not have.
+	//
+	// One honest limit that remains: exactly like LeaderTaskLastSuccess (see
+	// its doc comment above), this is a per-PROCESS reading — a demoted
+	// replica's copy of a leader-only task's age freezes at whatever it last
+	// computed rather than climbing, so an alert reading a random replica
+	// off the round-robin NodePort scrape (see newhub.conf's SCRAPE TOPOLOGY
+	// note) can under-report a stalled leader-only task exactly as easily as
+	// the raw timestamp series can — this gauge only saves the alert author
+	// from writing `$now - $this` themselves, it does not solve the
+	// replica-attribution problem.
 	LeaderTaskAgeSeconds = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
@@ -143,13 +161,26 @@ func SetLeader(held bool) {
 // see taskreg's LeaderOnly field for which ones are.
 //
 // As a companion refresh (see LeaderTaskAgeSeconds's doc comment), every
-// call also recomputes lurus_gateway_leader_task_age_seconds for every task
-// taskreg.Snapshot() currently knows about, not just this one.
+// call also recomputes lurus_gateway_leader_task_age_seconds for the other
+// tasks taskreg.Snapshot() knows about, not just this one — except the two
+// cases where "now - last success" would not be an age: a task that has not
+// stamped a success in this process (reading 0), and a task taskreg reports
+// as Active() == false. Those get their age series DELETED rather than left
+// at a stale value, so the absence is unambiguous however the task's state
+// got there.
 func RecordLeaderTaskSuccess(task string) {
 	now := nowUnix()
 	LeaderTaskLastSuccess.WithLabelValues(task).Set(float64(now))
 	for _, tk := range taskreg.Snapshot() {
+		if tk.Active != nil && !tk.Active() {
+			LeaderTaskAgeSeconds.DeleteLabelValues(tk.Name)
+			continue
+		}
 		last := readGaugeValue(LeaderTaskLastSuccess.WithLabelValues(tk.Name))
+		if last <= 0 {
+			LeaderTaskAgeSeconds.DeleteLabelValues(tk.Name)
+			continue
+		}
 		LeaderTaskAgeSeconds.WithLabelValues(tk.Name).Set(float64(now) - last)
 	}
 }

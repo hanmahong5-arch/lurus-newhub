@@ -505,16 +505,50 @@ func TestNetdataAlarmsHaveARunbookLinkedFromIndex(t *testing.T) {
 //
 // The three checks above all start from the conf file and ask "does this
 // alarm point at something real". This one starts from the OTHER end: a
-// promauto-declared series in this package whose own doc comment asserts,
-// in the imperative/declarative (not a hedged "an alert on X must..."
-// caveat, and not a quoted-and-retracted claim like the ⚠️ NOT ALERTED
-// blocks elsewhere in metrics.go), that it should page or be alerted on —
-// and checks that SOME non-dead conf block actually targets its wire name.
+// series this package declares that says it needs alerting must be the
+// target of some non-dead conf block. Two inputs, in order of authority:
+//   1. an explicit `// ALERTABLE: <wire name>` marker in the doc comment —
+//      machine-checkable, carried today by the money/conservation counters
+//      (see alertableMarkerFloor), and the reason the repair round added
+//      it: prose cannot be enumerated in advance.
+//   2. prose, as a fallback: a doc comment that asserts in the
+//      imperative/declarative (not a hedged "an alert on X must..." caveat,
+//      and not a quoted-and-retracted claim like the ⚠️ NOT ALERTED blocks
+//      elsewhere in metrics.go) that the series should page or be alerted
+//      on.
 // Before this test, three such comments (CreditPoolDebitLostTotal's "alert
 // on any increase", migrations.go's "the condition to page on", and
 // PanicsRecovered's "should page") sat unbound for at least one prior
-// cycle each — this is the gate the cycle-13 plan calls for so the next one
-// does not.
+// cycle each; a fourth (BillingTaskRefundWalletUnreversedTotal) got past
+// the prose-only first cut of this gate, which is what the marker fixes.
+
+// netdataAlertableMarkerRe matches an explicit machine-readable
+// "ALERTABLE: <wire name>" marker in a Go doc comment — the primary input
+// to the reverse gate as of the cycle-13 L10 repair round (D-L10-4). The
+// prose scan below stays (it still catches a comment written without the
+// marker), but prose is the fallback, not the contract: the first cut of
+// this gate matched three hand-picked phrasings and therefore could not see
+// BillingTaskRefundWalletUnreversedTotal, whose comment says every
+// increment is "a real, uncompensated wallet overcharge" and had no alarm
+// bound to it. A marker cannot be missed by rephrasing.
+//
+// The wire name is spelled out in the marker rather than inferred from the
+// declaration below it, so a marker keeps working on a comment that sits
+// over a var() block, over a helper func, or anywhere else the positional
+// association would guess wrong.
+var netdataAlertableMarkerRe = regexp.MustCompile(`ALERTABLE:\s*([a-zA-Z_][a-zA-Z0-9_]*)`)
+
+// alertableMarkerFloor is the number of ALERTABLE markers this package
+// carries today (the money/conservation counters listed in the cycle-13
+// L10 repair decision D-L10-4: credit-pool debit loss and lookup error,
+// advisory meter loss, zero-amount wallet charge, unreversed task refund,
+// settlement failure, permanently failed billing outbox entry, and stranded
+// open topups). The floor is what stops the gate from being satisfied by
+// DELETING a marker instead of wiring the alarm it demands: dropping one
+// below this number fails here even though every remaining marker is bound.
+// Retiring a counter legitimately means lowering this number in the same
+// change, which is a reviewable line in the diff.
+const alertableMarkerFloor = 8
 
 // netdataSelfClaimRe matches the specific imperative/declarative phrasings
 // this package's own comments use today for "this needs an alert" — not a
@@ -648,9 +682,10 @@ func wireNameForDeclaredVarLine(t *testing.T, text string, matchStart, matchEnd 
 // slice of runs it could NOT associate with any series at all (a scan bug,
 // not a missing alarm — reported separately so it fails loudly instead of
 // silently proving nothing).
-func selfClaimedWireNames(t *testing.T, pkgDir string) (claims map[string]string, unassociated []netdataCommentRun) {
+func selfClaimedWireNames(t *testing.T, pkgDir string) (claims, marked map[string]string, unassociated []netdataCommentRun) {
 	t.Helper()
 	claims = map[string]string{}
+	marked = map[string]string{}
 	for _, f := range packageNonTestGoFiles(t, pkgDir) {
 		body, err := os.ReadFile(f)
 		if err != nil {
@@ -659,10 +694,23 @@ func selfClaimedWireNames(t *testing.T, pkgDir string) (claims map[string]string
 		text := string(body)
 		base := filepath.Base(f)
 		for _, run := range commentRunsIn(base, text) {
+			loc := base + ":" + strconv.Itoa(run.startLine+1)
+
+			// Step 0: an explicit ALERTABLE: marker. Unambiguous (the wire
+			// name is written out) and unmissable by rephrasing, so it is
+			// checked before the prose heuristics below and counted
+			// separately for the floor.
+			if mm := netdataAlertableMarkerRe.FindAllStringSubmatch(run.joined, -1); len(mm) > 0 {
+				for _, m := range mm {
+					claims[m[1]] = loc
+					marked[m[1]] = loc
+				}
+				continue
+			}
+
 			if !netdataSelfClaimRe.MatchString(run.joined) {
 				continue
 			}
-			loc := base + ":" + strconv.Itoa(run.startLine+1)
 
 			// Step 1: a literal `lurus_..._...` named directly in the
 			// comment (highest confidence — e.g. migrations.go's block
@@ -698,15 +746,16 @@ func selfClaimedWireNames(t *testing.T, pkgDir string) (claims map[string]string
 			unassociated = append(unassociated, run)
 		}
 	}
-	return claims, unassociated
+	return claims, marked, unassociated
 }
 
 // TestNetdataSelfClaimedAlertableSeriesAreBound is the reverse gate: every
-// series whose own Go doc comment asserts (imperative "alert on any X" /
-// declarative "is the condition to page on" / "should page") that it needs
-// alerting must be the on: target of some non-DEAD conf block. See this
-// section's header comment for the three (now covered) real gaps this
-// found at HEAD before the cycle-13 L10 alarms landed.
+// series that says it needs alerting — through an `// ALERTABLE: <wire
+// name>` marker, or through the prose fallback ("alert on any X" / "is the
+// condition to page on" / "should page") — must be the on: target of some
+// non-DEAD conf block, and the number of markers must not fall below
+// alertableMarkerFloor. See this section's header comment for the four
+// (now covered) real gaps this found.
 func TestNetdataSelfClaimedAlertableSeriesAreBound(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
@@ -717,10 +766,16 @@ func TestNetdataSelfClaimedAlertableSeriesAreBound(t *testing.T) {
 		t.Fatalf("getwd: %v", err)
 	}
 
-	claims, unassociated := selfClaimedWireNames(t, pkgDir)
+	claims, marked, unassociated := selfClaimedWireNames(t, pkgDir)
 	if len(claims) == 0 {
 		t.Fatal("found zero self-claimed-alertable comments — the scan is measuring nothing " +
 			"(expected at least CreditPoolDebitLostTotal, SchemaMigrationsPending, PanicsRecovered)")
+	}
+	if len(marked) < alertableMarkerFloor {
+		t.Errorf("found %d \"ALERTABLE: <wire name>\" markers in this package's doc comments, "+
+			"want at least %d (%v). A money counter whose alarm is inconvenient must not be made "+
+			"to pass this gate by deleting its marker — see alertableMarkerFloor.",
+			len(marked), alertableMarkerFloor, marked)
 	}
 	for _, u := range unassociated {
 		t.Errorf("%s:%d: comment %q matches the self-claim pattern but could not be associated "+
@@ -738,10 +793,13 @@ func TestNetdataSelfClaimedAlertableSeriesAreBound(t *testing.T) {
 
 	for wire, loc := range claims {
 		if !bound[wire] {
-			t.Errorf("%s: comment claims series %q needs alerting (\"alert on any\"/\"condition to "+
-				"page on\"/\"should page\") but no non-DEAD template:/alarm: block in %s targets it "+
-				"via \"on:\" — either wire an alarm, or the claim is stale and should be retracted.",
-				loc, wire, healthDDir)
+			how := "its comment's prose (\"alert on any\"/\"condition to page on\"/\"should page\")"
+			if _, isMarked := marked[wire]; isMarked {
+				how = "an explicit \"ALERTABLE:\" marker"
+			}
+			t.Errorf("%s: %s claims series %q needs alerting, but no non-DEAD template:/alarm: "+
+				"block in %s targets it via \"on:\" — either wire an alarm, or the claim is stale "+
+				"and should be retracted.", loc, how, wire, healthDDir)
 		}
 	}
 }

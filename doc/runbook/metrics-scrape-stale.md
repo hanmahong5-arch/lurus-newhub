@@ -6,7 +6,16 @@
 > (as of 2026-09-20, added in-repo only, NOT installed — the README's
 > "Install" section has the command, and it is owner item O2).
 > **Triggered by**: `$now - $last_collected_t` on
-> `lurus_gateway_instance_info` exceeding 60s (warning) / 300s (critical).
+> `lurus_gateway_instance_info` exceeding 180s (warning) / 600s (critical),
+> as a `template:` — one alarm per chart, and `instance_info` is labelled
+> per pod, so each replica is covered separately. Those thresholds are
+> per-POD gaps, not scrape intervals: the go.d job scrapes one NodePort
+> that round-robins across three replicas every 10s, so a given pod's chart
+> is refreshed on roughly one scrape in three (the first cut of this alarm
+> used 60s, which at that hit rate is an ~8.8% chance of warning at every
+> evaluation with nothing wrong — corrected 2026-09-20 in the cycle-13 L10
+> repair round, D-L10-2, together with the chart-model live check in the
+> alarm block's own comment, owner item O-scrape).
 > `lurus_gateway_instance_info` is a constant-1 "info" gauge
 > (`metrics.SetInstanceInfo`, set once at boot before `/metrics` is
 > mounted — `internal/pkg/metrics/instance.go`) — its VALUE never changes,
@@ -57,6 +66,22 @@ public domain proves nothing here):
 ssh root@100.122.83.20 "curl -s -o /dev/null -w '%{http_code}\n' http://localhost:30850/metrics"
 ssh root@100.122.83.20 "curl -s http://localhost:30850/metrics | grep '^lurus_gateway_instance_info'"
 ```
+
+Because the alarm is per-pod, also check WHICH pod's chart is stale before
+concluding the whole scrape is down — the chart id carries the pod label:
+
+```bash
+ssh root@100.122.83.20 "curl -s 'http://localhost:19999/api/v1/charts' | grep instance_info"
+```
+
+One stale chart out of three is a single replica that stopped answering.
+Charts whose pod name is not in `kubectl -n lurus-newhub get pods` are
+retired replicas from an earlier rollout: netdata unbinds alarms from a
+chart once the collector marks it obsolete, but whether go.d does that
+promptly for a vanished label-set is the second live check recorded in the
+alarm block's comment (owner item O-scrape) — if you are reading a
+CRITICAL for a pod that no longer exists, that check is the answer, not an
+incident. All three current pods stale at once is the scrape path itself.
 
 `200` plus a non-empty `instance_info` line means the endpoint itself is
 healthy RIGHT NOW from the host's network namespace — if the alarm is
@@ -115,8 +140,10 @@ Three independent things can break this, in likelihood order:
 ```bash
 ssh root@100.122.83.20 "curl -s http://localhost:19999/api/v1/alarms?all | grep -A5 newhub_metrics_scrape_stale"
 ```
-returns to CLEAR once a scrape succeeds again (`delay: down 5m` — allow up
-to 5 minutes after the fix for the transition). Confirm the OTHER alarms in
+returns to CLEAR once a scrape lands on that pod again (`delay: down 5m` —
+allow up to 5 minutes after the fix for the transition; with the
+round-robin NodePort, expect a WARNING to clear on one pod's chart before
+the others). Confirm the OTHER alarms in
 the file are moving again too (their own `last_updated` timestamps in the
 same `alarms?all` response should be within one `every:` window of now).
 

@@ -128,10 +128,15 @@ revision (`kubectl rollout undo`). With the ArgoCD Application synced, pause or
 delete the Application first — selfHeal reverts manual rollbacks; the durable
 path is `git revert` of the auto-pin commit.
 
-For immediate emergency rollback (no script):
+For immediate emergency rollback (no script) — note the namespace is
+`lurus-newhub` (2026-09-20 correction: this block said `lurus-staging`, a
+namespace that never materialised on R6, so the command as printed could
+only ever fail), and ArgoCD's selfHeal puts the pinned image back within a
+sync interval, so this buys minutes and nothing more; the durable path is
+`git revert` of the auto-pin commit:
 ```bash
 ssh root@100.122.83.20 \
-  "kubectl -n lurus-staging set image deployment/lurus-newhub lurus-newhub=ghcr.io/hanmahong5-arch/lurus-newhub:main-<prev-sha7>"
+  "kubectl -n lurus-newhub set image deployment/lurus-newhub lurus-newhub=ghcr.io/hanmahong5-arch/lurus-newhub:main-<prev-sha7>"
 ```
 
 ---

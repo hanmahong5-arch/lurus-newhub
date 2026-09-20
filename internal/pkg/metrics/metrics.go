@@ -413,6 +413,7 @@ var (
 	// a hard DB error (not exhaustion) and could NOT be recorded — the honest
 	// residual gap after P0-3. Every increment is a known conservation-law
 	// violation that needs manual reconciliation; alert on any increase.
+	// ALERTABLE: lurus_gateway_credit_pool_debit_lost_total
 	CreditPoolDebitLostTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -432,6 +433,7 @@ var (
 	//                  pooled is the drift signal — the relay silently under-bills.
 	//   lookup_error — a hard DB error resolving the pool row; pool-gating state is
 	//                  unknown and the debit was skipped. Alert on any increase.
+	// ALERTABLE: lurus_gateway_credit_pool_lookup_miss_total
 	CreditPoolLookupMissTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -782,4 +784,39 @@ func RecordLogRetention(table string, n int) {
 // from "this table's pass never ran".
 func SetLogRetentionPending(table string, n int) {
 	LogRetentionPendingRows.WithLabelValues(table).Set(float64(n))
+}
+
+// ShutdownCutRequestsTotal counts requests that were still in flight when a
+// graceful-shutdown budget (GRACEFUL_SHUTDOWN_TIMEOUT) expired and were
+// therefore cut. Written from lifecycle.Drainer.Shutdown's
+// budget-exceeded arm (internal/lifecycle/drain.go) via
+// RecordShutdownCutRequests below; grep that helper for the current set of
+// call sites.
+//
+// Read it as a best-effort record, not an exact one. The increment happens
+// in the last instants of the process: the pod exits immediately after, and
+// the go.d scrape interval is 10s against a NodePort that round-robins
+// across replicas, so a given drain's increment is more likely to be lost
+// with the process than collected. It is a counter because a scrape that
+// DOES land is then comparable across pods; the paired
+// "graceful shutdown: budget exceeded" SysLog line (kept in drain.go) is
+// the record that survives regardless. No netdata alarm is bound to it for
+// that reason — see doc/runbook/graceful-drain.md.
+var ShutdownCutRequestsTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "shutdown_cut_requests_total",
+		Help:      "Requests still in flight when a graceful-shutdown budget expired (best effort: the process exits right after)",
+	},
+)
+
+// RecordShutdownCutRequests adds n cut requests to
+// ShutdownCutRequestsTotal. n <= 0 is ignored so a shutdown that cut
+// nothing cannot be mistaken for one that did.
+func RecordShutdownCutRequests(n int) {
+	if n <= 0 {
+		return
+	}
+	ShutdownCutRequestsTotal.Add(float64(n))
 }
