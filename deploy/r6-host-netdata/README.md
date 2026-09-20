@@ -31,7 +31,7 @@ a bind source. `scripts/install-netdata-alarms.sh` only manages
 `newhub.conf` — a second alarm file would need its own bind mount added to
 the container definition first (out of scope for this directory).
 
-`health.d/newhub.conf` currently defines 14 alarms:
+`health.d/newhub.conf` currently defines 29 alarms:
 
 - 8 ported from the host's original 2026-08-20 copy
   (`newhub_platform_breaker_open`, `newhub_billing_outbox_failures`,
@@ -77,6 +77,42 @@ the container definition first (out of scope for this directory).
   is the same page as `newhub_db_slow_queries`
   (`doc/runbook/db-pool-saturation.md`). Added **in-repo only**; not yet
   installed onto R6 — same header note.
+- 1 that was already live in this file but this count had never mentioned by
+  name: `newhub_rate_limit_memory_fallback` (cycle-12 L4) — a lower-severity
+  sibling of `newhub_rate_limit_degraded` that watches the same
+  `lurus_gateway_rate_limit_degraded_total` series filtered to
+  `check=web_rate_limit_backend_memory` (a credential/abuse bucket that
+  fell back to the process-local limiter, still enforcing, just per replica
+  instead of cluster-wide). See `doc/runbook/rate-limit-degraded.md`, which
+  the two alarms share.
+- **14 added 2026-09-20 (cycle-13 L10)**, alarm completion pass — all
+  **in-repo only**, not yet installed onto R6 (same `scripts/install-netdata-alarms.sh`
+  run, same owner item O2; see the conf file's "STATUS UPDATE 2026-09-20"
+  header note for the full list and the two cross-lane notes on
+  `newhub_log_retention_backlog`/`newhub_task_stalled`):
+  `newhub_metrics_scrape_stale` (the one alarm bound to scrape health
+  itself, not application behavior — every other alarm in the file goes
+  silently stale if this one is red), `newhub_channel_auto_disabled_error` /
+  `newhub_channel_auto_disabled_latency` / `newhub_channel_sole_latency_ban_skipped`
+  (automatic channel status changes made with no operator action —
+  `doc/runbook/channel-auto-ban.md`), `newhub_credit_pool_debit_lost` /
+  `newhub_credit_pool_lookup_miss` (post-consume credit-pool debits lost to
+  hard DB errors — money-conservation violations, `crit`/`warn`
+  respectively), `newhub_billing_advisory_meter_lost` /
+  `newhub_billing_zero_amount_charge` (shadow-ledger write loss / wallet
+  rounding-to-zero under `LOCAL_LEDGER_ADVISORY`), `newhub_credit_pool_stranded_open`
+  (this file had no alarm bound to the gauge `doc/runbook/wallet-revert-stranded.md`
+  already tells operators to read), `newhub_upstream_insufficient_balance`
+  (an upstream provider's own account balance ran out — distinct from
+  newhub's local tenant quota/credit-pool 402s), `newhub_task_stalled` /
+  `newhub_schema_migrations_pending` / `newhub_panics_recovered` (three Go
+  doc comments in `internal/pkg/metrics` claimed "alert on any
+  increase"/"the condition to page on"/"should page" with nothing bound to
+  them — `TestNetdataSelfClaimedAlertableSeriesAreBound`, added this same
+  cycle, is the reverse gate that keeps a fourth one from going unnoticed
+  the same way `newhub_credit_pool_lookup_miss` above did), and
+  `newhub_log_retention_backlog` (cycle-13 L6's log-retention task
+  backlog gauge).
 
 Every alarm reads the same `/metrics` endpoint netdata's go.d `prometheus`
 collector already scrapes on R6 (job name `newhub`,

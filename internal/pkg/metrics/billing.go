@@ -157,6 +157,26 @@ var (
 		},
 		[]string{"path"},
 	)
+
+	// BillingTaskRefundWalletUnreversedTotal counts failed-task and
+	// video-task-recost refunds (cycle-13 L1) whose local-ledger legs
+	// (users.quota, the tenant credit pool, tokens.remain_quota) were made
+	// whole by app.PostConsumeQuota/SettleConsume's shared refund path, but
+	// whose platform WALLET leg could NOT be reversed — newhub has no
+	// wallet-refund RPC (the reverse of WalletDebit; see cycle-13 plan
+	// owner item O-refund). Every increment is money charged to a wallet
+	// for work that was later refunded on every OTHER ledger — a real,
+	// uncompensated wallet overcharge, not a rounding artifact. Declared
+	// here (L10) ahead of L1's caller landing — see LogRetentionDeletedTotal's
+	// doc comment above for why that is not a defect in itself.
+	BillingTaskRefundWalletUnreversedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "billing",
+			Name:      "task_refund_wallet_unreversed_total",
+			Help:      "Task refunds where every local ledger was made whole but the platform wallet leg could not be reversed (no refund RPC)",
+		},
+	)
 )
 
 // init pre-registers the three known path label values with a zero count,
@@ -164,8 +184,23 @@ var (
 // series only exists on /metrics once its first Inc() fires, so an absent
 // series would otherwise be ambiguous between "no settlement has failed yet"
 // and "this counter isn't wired into a call site at all".
+//
+// "realtime" is pre-registered ahead of any call site: cycle-13 L1 routes
+// quota.go's PostWssConsumeQuota through the same SettleConsume path (see
+// this cycle's plan §"L1 — 钱路守恒") — until that lands, no code increments
+// this label and the series simply reads 0, same as any other wired-but-
+// unused path would.
 func init() {
 	BillingSettlementFailedTotal.WithLabelValues("text")
 	BillingSettlementFailedTotal.WithLabelValues("claude")
 	BillingSettlementFailedTotal.WithLabelValues("audio")
+	BillingSettlementFailedTotal.WithLabelValues("realtime")
+}
+
+// BillingTaskRefundWalletUnreversed increments
+// BillingTaskRefundWalletUnreversedTotal. Call once per task refund /
+// recost whose wallet leg could not be reversed — see the counter's doc
+// comment for what "could not" covers.
+func BillingTaskRefundWalletUnreversed() {
+	BillingTaskRefundWalletUnreversedTotal.Inc()
 }

@@ -1,13 +1,22 @@
 # Runbook — Automatic Channel Probing / Auto-Ban
 
-> **Source**: no alert wired to this today (procedure, not an alert
-> trigger) — read this before touching `ChannelDisableThreshold`,
+> **Source**: netdata alarms `newhub_channel_auto_disabled_error`,
+> `newhub_channel_auto_disabled_latency`, `newhub_channel_sole_latency_ban_skipped`
+> (cycle-13 L10, `deploy/r6-host-netdata/health.d/newhub.conf` — see that
+> file's own "STATUS UPDATE 2026-09-20" header note for install state) —
+> also read this before touching `ChannelDisableThreshold`,
 > `AutoTestChannelEnabled`, or investigating why a channel flipped status
-> with no operator action.
-> **Triggered by**: n/a — see "Symptom" below for when to read this.
-> **Severity**: operational (a wrongly-tuned threshold can flap the only
-> channel serving a model, or silently protect a genuinely dead one).
-> **Last review**: 2026-09-19 (cycle-11 L3).
+> with no operator action, independent of whether any alarm has fired.
+> **Triggered by**: `lurus_gateway_channel_auto_status_total{action}`
+> (`internal/pkg/metrics/channel_probe.go`) — nonzero rate for
+> `action=disable_error` / `disable_latency` / `latency_ban_skipped_sole_channel`
+> respectively; each is its own alarm block so the chart carries only one
+> action's rate. All four `action` values are pre-registered at 0
+> (`channel_probe.go` `init()`), so an absent chart means no scrape has
+> landed, not that this build doesn't wire the counter.
+> **Severity**: warning (netdata `to: sysadmin`).
+> **Last review**: 2026-09-20 (cycle-13 L10; procedure content below last
+> reviewed 2026-09-19, cycle-11 L3).
 
 ## Why this needed a fix
 

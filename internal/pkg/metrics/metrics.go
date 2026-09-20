@@ -726,3 +726,60 @@ func SetNATSConnected(connected bool) {
 	}
 	NATSConnected.Set(0)
 }
+
+// LogRetentionDeletedTotal / LogRetentionPendingRows are cycle-13 L6's log
+// retention task's two series, declared here (L10) so the netdata alarm
+// this cycle adds (newhub_log_retention_backlog) and L6's own task
+// (internal/lifecycle/log_retention.go, not yet wired as of this
+// declaration — see this cycle's plan §"L6 — 日志保留…") have a stable name
+// to target from the start, rather than the metric and its first caller
+// landing in the same change. Until L6's task calls RecordLogRetention /
+// SetLogRetentionPending, both read zero — the same "declared ahead of its
+// writer" pattern BillingSettlementFailedTotal's "realtime" label above
+// uses for the same reason.
+var (
+	// LogRetentionDeletedTotal counts rows the log-retention task has
+	// deleted, cumulative, by table ("logs" or "download_logs" per the
+	// plan's two retention tasks).
+	LogRetentionDeletedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "log_retention_deleted_total",
+			Help:      "Rows deleted by the log-retention task, cumulative, by table",
+		},
+		[]string{"table"},
+	)
+
+	// LogRetentionPendingRows is the row count the log-retention task's most
+	// recent pass still had left to delete when it hit its per-pass batch
+	// cap (LOG_RETENTION_MAX_BATCHES_PER_PASS) — i.e. the backlog it did
+	// NOT get to this pass, by table. 0 means the last pass cleared
+	// everything past the cutoff it looked for.
+	LogRetentionPendingRows = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "log_retention_pending_rows",
+			Help:      "Rows still past the retention cutoff after the log-retention task's most recent pass, by table",
+		},
+		[]string{"table"},
+	)
+)
+
+// RecordLogRetention adds n (rows deleted in one pass) to
+// LogRetentionDeletedTotal for the given table. Call with n==0 is a no-op
+// increment (still fine — Add(0) does not create a phantom event) but
+// callers should prefer skipping the call entirely when nothing ran.
+func RecordLogRetention(table string, n int) {
+	LogRetentionDeletedTotal.WithLabelValues(table).Add(float64(n))
+}
+
+// SetLogRetentionPending publishes the backlog LogRetentionPendingRows
+// gauge for the given table. Call once per pass, even when n==0 — a
+// GaugeVec exports no series at all for a label it has never been Set with,
+// so skipping the zero case would make "backlog cleared" indistinguishable
+// from "this table's pass never ran".
+func SetLogRetentionPending(table string, n int) {
+	LogRetentionPendingRows.WithLabelValues(table).Set(float64(n))
+}

@@ -92,12 +92,26 @@ kubectl delete pod -n lurus-newhub <leader-pod>
 ## 告警阈值
 
 监控栈已切 Netdata 自托管:指标由 `/metrics` 暴露、Netdata go.d `prometheus`
-collector 主动抓(**禁为换监控栈改业务代码**)。告警阈值若存在,只会在 R6 主机侧的
-netdata 配置里——本 repo 不跟踪它,也不能证明任何 newhub 阈值已经配好。`deploy/grafana/newhub-alerts.yaml`(连同其余
-`deploy/grafana/*`)已删除,不再是真源。`deploy/k8s/r6-stage/newhub-prometheus-rule.yaml`
-仍保留在 repo 里,但文件头已标注 **NOT DEPLOYED**——它不在
-`deploy/k8s/r6-stage/kustomization.yaml` 的 `resources:` 列表里,且 R6 未跑
-Prometheus Operator,所以没有任何东西在求值这些规则;只作为「曾经决定值得告警」的记录留存。
+collector 主动抓(**禁为换监控栈改业务代码**)。
+
+🔴 **本节 2026-09-20 前的版本说"告警阈值本 repo 不跟踪"是过期的**——自 cycle 9
+起,`deploy/r6-host-netdata/health.d/newhub.conf` 就是仓内真源(旧的
+`deploy/grafana/newhub-alerts.yaml` 已删除、`deploy/k8s/r6-stage/newhub-prometheus-rule.yaml`
+仍标注 **NOT DEPLOYED** 留档,两者都不是真源)。`internal/pkg/metrics/netdata_alarm_series_test.go`
+是结构闸:每条非 `# DEAD` 块的 `on:` 必须解析到一个本包声明且真被生产代码写入的
+Prometheus 序列,否则挡 CI;它证明不了 netdata 主机侧当前是否已装载/是否已绑定图表
+(那是 live、data-dependent 状态,见 conf 文件自己的 `# STATUS`/`# STATUS UPDATE`
+行与各 runbook 的 "LIVE STATUS" 段落)。安装/reload 命令见该目录的 README.md
+"Install" 一节(owner item O2)。
+
+leader-gating 相关的三条告警在这份 conf 里(cycle-13 L10 补齐,`internal/pkg/metrics/instance.go`
+的 `lurus_gateway_leader_task_age_seconds{task}` 是本节上方"🔴 一个被降级的副本…"
+提到的原始时间戳序列的伴随派生值,同样的 leader-gating 注意事项适用):
+
+| 告警 | 序列 | 说明 |
+|---|---|---|
+| `newhub_task_stalled` | `lurus_gateway_leader_task_age_seconds{task}` | 阈值刻意宽松(72h = 3×最慢已注册任务的间隔),见 conf 文件该块注释 |
+| `newhub_schema_migrations_pending` | `lurus_gateway_schema_migrations_pending` | `migrations.go` 注释自称"the condition to page on"——此告警使其成立 |
 
 ## 排障
 

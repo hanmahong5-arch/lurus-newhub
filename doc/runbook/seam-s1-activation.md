@@ -59,27 +59,41 @@ truths, which is the source of truth chosen for this work).
 
 Cluster access: `ssh root@100.122.83.20` (R6, Tailscale).
 
-1. **Create the `newhub` database** on the PG pod (ns `database`, pod `lurus-pg-1`;
+> 🔴 **Corrected 2026-09-20 (cycle-13 L10)**: this whole Part A block still had
+> the PRE-2026-08-22 draft's ns/pod names (`lurus-staging` / `lurus-pg-1`),
+> which contradict the corrected column of the table above and CLAUDE.md's
+> live-verified facts (ns **`lurus-newhub`**, PG pod **`lurus-pg-0`**). Part A
+> is unnecessary anyway (see the status box at the top of this file) — fixed
+> here so a reader who skips straight to it does not copy the wrong ns/pod
+> into a real command. The secret's key list was also short two keys the live
+> Secret actually carries (`OIDC_CLIENT_ID`, `TAVILY_API_KEY`); see CLAUDE.md's
+> "K8s Deployment Facts" Secret row (7 keys total) for the current list.
+
+1. **Create the `newhub` database** on the PG pod (ns `database`, pod `lurus-pg-0`;
    the `newhub` db is absent today). Role `lurus` owns it:
    ```
-   kubectl exec -n database lurus-pg-1 -- psql -U postgres -c \
+   kubectl exec -n database lurus-pg-0 -- psql -U postgres -c \
      "CREATE DATABASE newhub OWNER lurus;"
    ```
    On first boot newhub auto-builds the schema (GORM auto-migrate + embedded
    migration runner; 021 baseline seeds tenant `id=default slug=lurus` + 16
    tenant_configs). No manual DDL needed.
 
-2. **Create the secret** `lurus-newhub-secrets` in ns `lurus-staging` with REAL
+2. **Create the secret** `lurus-newhub-secrets` in ns `lurus-newhub` with REAL
    values (schema in `deploy/k8s/r6-stage/secret-template.yaml`). `SQL_DSN` must be
-   `postgres://lurus:<pw>@lurus-pg-1.database.svc.cluster.local:5432/newhub?sslmode=disable`
-   (non-`postgres://` DSN → boot fast-fail by design):
+   `postgres://lurus:<pw>@lurus-pg-0.database.svc.cluster.local:5432/newhub?sslmode=disable`
+   (non-`postgres://` DSN → boot fast-fail by design). Seven keys total —
+   `OIDC_CLIENT_ID` and `TAVILY_API_KEY` (optional) are easy to miss since
+   they carry no fund-flow logic of their own:
    ```
-   kubectl -n lurus-staging create secret generic lurus-newhub-secrets \
+   kubectl -n lurus-newhub create secret generic lurus-newhub-secrets \
      --from-literal=SESSION_SECRET='<...>' \
-     --from-literal=SQL_DSN='postgres://lurus:<pw>@lurus-pg-1.database.svc.cluster.local:5432/newhub?sslmode=disable' \
+     --from-literal=SQL_DSN='postgres://lurus:<pw>@lurus-pg-0.database.svc.cluster.local:5432/newhub?sslmode=disable' \
+     --from-literal=OIDC_CLIENT_ID='<...>' \
      --from-literal=IDENTITY_SERVICE_INTERNAL_KEY='<platform internal key, scope balance:write>' \
      --from-literal=IDENTITY_SESSION_SECRET='<...>' \
-     --from-literal=LURUS_WHITELABEL_MASTER_SECRET="$(openssl rand -hex 32)"
+     --from-literal=LURUS_WHITELABEL_MASTER_SECRET="$(openssl rand -hex 32)" \
+     --from-literal=TAVILY_API_KEY='<optional>'
    ```
    `IDENTITY_SERVICE_INTERNAL_KEY` is the newhub→platform Bearer key ONLY.
    The fund endpoint runs the OTHER direction: platform calls it with
@@ -94,9 +108,10 @@ Cluster access: `ssh root@100.122.83.20` (R6, Tailscale).
    NATS egress netpol; image `ghcr.io/hanmahong5-arch/lurus-newhub:main`):
    ```
    kubectl apply -k deploy/k8s/r6-stage/
-   kubectl -n lurus-staging rollout status deploy/lurus-newhub
+   kubectl -n lurus-newhub rollout status deploy/lurus-newhub
    ```
-   Expect `1/1` and `GET /api/status` healthy. Confirm migrations applied
+   Expect `3/3` (live replica count, CLAUDE.md's K8s Deployment Facts table)
+   and `GET /api/status` healthy. Confirm migrations applied
    (`schema_migrations` highest = 21).
 
 ---
@@ -121,7 +136,7 @@ Cluster access: `ssh root@100.122.83.20` (R6, Tailscale).
    ```
 
 6. **Set `NEWHUB_BASE_URL`** for platform-core (ns `lurus-platform`) to
-   `http://lurus-newhub.lurus-staging.svc:8850`, then roll out.
+   `http://lurus-newhub.lurus-newhub.svc:8850`, then roll out.
    ⚠️ Verified 2026-06-20 against the live cluster: this key is **absent** from
    `platform-core-secrets` (53 keys, no `NEWHUB_BASE_URL`) — so this is an ADD,
    not an edit. Set it where platform-core reads config (secret key or
@@ -148,7 +163,7 @@ What is drivable via the read-mostly MCP from here: `pg_query` on the pool balan
    ```
    curl -s -o /dev/null -w '%{http_code}' \
      -H "Authorization: Bearer <tenant-token>" \
-     http://lurus-newhub.lurus-staging.svc:8850/v1/chat/completions -d '{...}'
+     http://lurus-newhub.lurus-newhub.svc:8850/v1/chat/completions -d '{...}'
    # expect 402  (pool_exhausted)
    ```
 2. **Trigger** the sandbox paid subscription → platform outbox drains → fund POST.
@@ -172,7 +187,9 @@ What is drivable via the read-mostly MCP from here: `pg_query` on the pool balan
 - `2l-svc-platform` `internal/module/creditpool.go` header comment claims
   "newhub side has been LIVE on R6 since 2026-06-12" — false since teardown;
   also the `CreditPoolConfig.NewhubBaseURL` example string uses the wrong
-  `lurus-newhub.svc:18200`. Update to `lurus-staging.svc:8850` once confirmed.
+  `lurus-newhub.svc:18200`. Update to `lurus-newhub.svc:8850` once confirmed
+  (2026-09-20: the ns is `lurus-newhub`, not `lurus-staging` — see the
+  corrected column in this file's "Named-artifact corrections" table above).
 - `lurus/doc/coord/contracts.md` SEAM S1 section: "newhub side LIVE on R6" and
   "slug `lurus-default`" are stale/swapped (slug is `lurus`; id is `lurus-default`).
 - After redeploy, reconcile the ns/slug truth across service-status + contracts
