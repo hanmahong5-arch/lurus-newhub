@@ -211,6 +211,25 @@ func (s *ReleaseService) GenerateDownloadURL(ctx context.Context, artifact *enti
 // what gets written at insert time is the mitigation instead.
 const maxDownloadLogFieldBytes = 512
 
+// downloadLogUnknownIP is what download_logs stores when repo.MaskIP cannot
+// parse the caller's address (it returns "" for those — zone-scoped IPv6
+// such as "fe80::1%eth0", a host name, anything malformed).
+// DownloadLog.IpAddress is an `inet` column (entity/release.go), and inet
+// rejects the empty string, so writing MaskIP's "" straight through would
+// fail the INSERT inside HandleDownload's fire-and-forget goroutine, whose
+// error only reaches a log line. The unspecified address is accepted by
+// inet and reads as a sentinel rather than as a real caller's address.
+const downloadLogUnknownIP = "0.0.0.0"
+
+// downloadLogMaskedIP coarsens an address for download_logs, falling back
+// to downloadLogUnknownIP when repo.MaskIP cannot parse it.
+func downloadLogMaskedIP(ip string) string {
+	if masked := repo.MaskIP(ip); masked != "" {
+		return masked
+	}
+	return downloadLogUnknownIP
+}
+
 // truncateDownloadLogField caps s to at most maxDownloadLogFieldBytes UTF-8
 // bytes, stopping before a rune that would cross the budget rather than
 // slicing mid-rune — PostgreSQL rejects an invalid UTF-8 byte sequence on
@@ -243,8 +262,10 @@ func (s *ReleaseService) HandleDownload(ctx context.Context, artifactId int64, i
 			// (cycle-13 L5). CountryCode is derived from the ORIGINAL
 			// address — geo lookup is not wired yet either way (see
 			// extractCountryFromIP) but the mask is coarser than a country
-			// boundary would ever need to be.
-			IpAddress:    repo.MaskIP(ipAddress),
+			// boundary would ever need to be. An address MaskIP cannot
+			// parse becomes downloadLogUnknownIP rather than "" — see that
+			// constant for why the inet column makes the difference.
+			IpAddress:    downloadLogMaskedIP(ipAddress),
 			UserAgent:    truncateDownloadLogField(userAgent),
 			Referer:      truncateDownloadLogField(referer),
 			CountryCode:  extractCountryFromIP(ipAddress),

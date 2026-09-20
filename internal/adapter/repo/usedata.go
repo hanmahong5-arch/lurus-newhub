@@ -141,7 +141,22 @@ func writeQuotaDataSnapshot(ctx context.Context, snapshot map[string]*QuotaData)
 				failed++
 			}
 		} else {
-			if err := DB.WithContext(ctx).Table("quota_data").Create(quotaData).Error; err != nil {
+			// Cross-replica half of the PIPL erasure scrub (cycle-13 L5
+			// repair, D-L5-1): this bucket may have been buffered before
+			// another replica ran the cascade for its user, in which case
+			// creating it here writes the plaintext username back into a
+			// table that was just scrubbed. The update branch above
+			// matched an existing row, so its username is whatever that
+			// row already carries; this create branch is where a name
+			// reaches the table anew. One indexed count() on the rare
+			// create path.
+			row := quotaData
+			if quotaData.Username != ErasedMarker && HasErasureScrubbedUserContent(ctx, quotaData.UserID) {
+				scrubbed := *quotaData
+				scrubbed.Username = ErasedMarker
+				row = &scrubbed
+			}
+			if err := DB.WithContext(ctx).Table("quota_data").Create(row).Error; err != nil {
 				failed++
 				common.SysError(fmt.Sprintf("saveQuotaData create error: %s", err))
 			}

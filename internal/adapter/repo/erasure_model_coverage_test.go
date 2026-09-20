@@ -17,6 +17,17 @@ package repo
 //     no personal data, because every entry in this table by construction
 //     DOES have a matching field name.
 //
+// That last rule is a deliberate departure from the cycle-13 plan's
+// parenthetical for this gate ("豁免表初始只含真正无个人数据的表" — the
+// exemption table initially holds only tables with no personal data). As
+// written it cannot be satisfied: a model only ever reaches the exemption
+// table BECAUSE one of its field names matched the personal-data
+// vocabulary, so "has no personal data" is never an available reason. The
+// rule in force is the one above — an exemption states why the per-user
+// cascade has no key to reach the row by, plus the mitigation that stands
+// in for it (cycle-13 L5 repair round, D-L5-4; carried as an accepted
+// deviation in the lane report rather than inferred from this comment).
+//
 // The set of registered models is not a hand-copied list — it is parsed
 // from repo/main.go's actual source via go/ast on every run
 // (erasureMigrateDBModelNames), so a model migrateDB() registers in a later
@@ -25,9 +36,11 @@ package repo
 // silently.
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -122,18 +135,21 @@ var erasureCoveredModels = map[string]string{
 		"(executeErasure's mappings step) — PreferredUsername matches on substring, not the more " +
 		"obvious Email/DisplayName; caught by this gate's substring match, not by the manual review " +
 		"that wrote the cycle-13 plan's table list",
-	"Midjourney": "repo.HardDeleteMidjourneyBatch hard-deletes the user's rows in batches " +
+	"Midjourney": "repo.TerminaliseOpenMidjourneyForUser takes the rows out of the poller's " +
+		"selection, then repo.HardDeleteMidjourneyBatch hard-deletes them in batches " +
 		"(executeErasure's content step, cycle-13 L5)",
 	"QuotaData": "repo.ScrubQuotaDataUsernameForUser overwrites username with ErasedMarker " +
 		"(executeErasure's content step, cycle-13 L5)",
-	"Task": "repo.ScrubTasksForUser blanks properties/data/fail_reason, keeping quota/ids " +
+	"Task": "repo.TerminaliseOpenTasksForUser stops the task poller from writing to the rows, " +
+		"then repo.ScrubTasksForUser blanks properties/data/fail_reason, keeping quota/ids " +
 		"(executeErasure's content step, cycle-13 L5)",
 	"PlaygroundPreset": "repo.HardDeletePlaygroundPresetsForUser hard-deletes the user's rows " +
 		"(executeErasure's content step, cycle-13 L5) — found via this gate, not listed in the " +
 		"cycle-13 plan's own table enumeration",
 	"entity.UserSession": "repo.HardDeleteUserSessions hard-deletes the user's rows (executeErasure's tokens step)",
-	"entity.ChatMessage": "repo.HardDeleteChatMessagesBatch hard-deletes the user's rows via " +
-		"session ownership, in batches (executeErasure's content step, cycle-13 L5)",
+	"entity.ChatMessage": "repo.HardDeleteChatMessagesBatch hard-deletes the user's rows in " +
+		"batches, keyed on session ownership OR the message's own user_id " +
+		"(executeErasure's content step, cycle-13 L5)",
 }
 
 // erasureExemptModels: the matched field cannot be attributed to an
@@ -149,18 +165,22 @@ var erasureExemptModels = map[string]string{
 		"bytes, cycle-13 L5.",
 }
 
-// erasureMigrateDBModelNames parses repo/main.go and returns the type name
-// of every argument migrateDB()'s DB.AutoMigrate(...) call passes, spelled
-// the way erasureModelTypeRegistry keys them.
-func erasureMigrateDBModelNames(t *testing.T, mainGo string) []string {
-	t.Helper()
+// erasureParseMigrateDBModels parses a Go file and returns, for every
+// argument that file's migrateDB() passes to DB.AutoMigrate(...): the type
+// name (spelled the way erasureModelTypeRegistry keys them) of each
+// argument it can read, and the source text of each argument it CANNOT.
+// The second return value is why this is not a t.Helper with a t inside:
+// an argument shape the gate does not understand must be a loud failure at
+// the call site (a dropped argument is a model that escapes classification
+// silently), and the unit test below needs to observe that list for a
+// fixture file rather than have it fataled out from under it.
+func erasureParseMigrateDBModels(path string) (names []string, unparsed []string, err error) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, mainGo, nil, 0)
+	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
-		t.Fatalf("parse %s: %v", mainGo, err)
+		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	var names []string
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Name.Name != "migrateDB" || fn.Body == nil {
@@ -180,12 +200,45 @@ func erasureMigrateDBModelNames(t *testing.T, mainGo string) []string {
 				return true
 			}
 			for _, arg := range call.Args {
-				if name, ok := erasureModelArgName(arg); ok {
-					names = append(names, name)
+				name, ok := erasureModelArgName(arg)
+				if !ok {
+					unparsed = append(unparsed, erasureExprSource(fset, arg))
+					continue
 				}
+				names = append(names, name)
 			}
 			return false
 		})
+	}
+	return names, unparsed, nil
+}
+
+// erasureExprSource renders an AST expression back to source text for a
+// failure message, falling back to its position when printing fails.
+func erasureExprSource(fset *token.FileSet, expr ast.Expr) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, expr); err != nil {
+		return fmt.Sprintf("<unprintable expression at %s>", fset.Position(expr.Pos()))
+	}
+	return fmt.Sprintf("%s (at %s)", buf.String(), fset.Position(expr.Pos()))
+}
+
+// erasureMigrateDBModelNames is the gate's own wrapper: same derivation,
+// with the two ways it can stop being trustworthy — an argument shape it
+// cannot read, or a suspiciously small result — turned into test failures.
+func erasureMigrateDBModelNames(t *testing.T, mainGo string) []string {
+	t.Helper()
+	names, unparsed, err := erasureParseMigrateDBModels(mainGo)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	// A dropped argument is a model nobody classified. Until cycle-13's
+	// repair round these were skipped in silence, so a future
+	// DB.AutoMigrate(models...) or a non-pointer literal could add a
+	// personal-data-bearing table with this gate still green.
+	if len(unparsed) > 0 {
+		t.Fatalf("migrateDB()'s DB.AutoMigrate(...) passes %d argument(s) this gate cannot read: %s\n  — extend erasureModelArgName to cover the shape, or spell the argument &Xxx{} / &pkg.Xxx{}",
+			len(unparsed), strings.Join(unparsed, "; "))
 	}
 	// Fail fast rather than pass vacuously: if the derivation ever stops
 	// matching migrateDB's shape it would return a tiny set (or none) and
@@ -197,8 +250,9 @@ func erasureMigrateDBModelNames(t *testing.T, mainGo string) []string {
 	return names
 }
 
-// erasureModelArgName extracts the type name from one AutoMigrate argument,
-// which is always "&Xxx{}" or "&pkg.Xxx{}".
+// erasureModelArgName extracts the type name from one AutoMigrate argument
+// spelled "&Xxx{}" or "&pkg.Xxx{}" — the two shapes migrateDB uses today.
+// Anything else returns false and is reported by the caller.
 func erasureModelArgName(arg ast.Expr) (string, bool) {
 	unary, ok := arg.(*ast.UnaryExpr)
 	if !ok || unary.Op != token.AND {
@@ -294,5 +348,63 @@ func TestErasureCascadeCoversEveryPersonalDataShapedModel(t *testing.T) {
 	if len(unclassified) > 0 {
 		sort.Strings(unclassified)
 		t.Fatalf("models with a personal-data-shaped field are covered by neither the erasure cascade nor an exemption entry:\n  %s", strings.Join(unclassified, "\n  "))
+	}
+}
+
+// TestErasureModelDerivationRejectsUnparsedAutoMigrateArgs is the mutation
+// surface for the "cannot read this argument" arm added in cycle-13 L5's
+// repair round (D-L5-4). It runs the real derivation over a fixture file
+// rather than repo/main.go, because proving the arm by editing
+// migrateDB()'s own argument list would mean editing a file this lane does
+// not own. The fixture carries both shapes the gate used to drop in
+// silence: a non-pointer composite literal and a variadic slice spread.
+func TestErasureModelDerivationRejectsUnparsedAutoMigrateArgs(t *testing.T) {
+	fixture := filepath.Join(t.TempDir(), "fixture_main.go")
+	var b strings.Builder
+	b.WriteString("package repo\n\nfunc migrateDB() error {\n\treturn DB.AutoMigrate(\n")
+	for i := 0; i < 30; i++ {
+		fmt.Fprintf(&b, "\t\t&Model%d{},\n", i)
+	}
+	b.WriteString("\t\tNotAPointer{},\n")
+	b.WriteString("\t\textraModels...,\n")
+	b.WriteString("\t)\n}\n")
+	if err := os.WriteFile(fixture, []byte(b.String()), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	names, unparsed, err := erasureParseMigrateDBModels(fixture)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	if len(names) != 30 {
+		t.Errorf("readable arguments = %d, want 30", len(names))
+	}
+	if len(unparsed) != 2 {
+		t.Fatalf("unreadable arguments = %d (%v), want 2 — a dropped argument is a model that escapes classification", len(unparsed), unparsed)
+	}
+	joined := strings.Join(unparsed, "; ")
+	for _, want := range []string{"NotAPointer{}", "extraModels"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("unreadable argument list %q does not name %q", joined, want)
+		}
+	}
+}
+
+// TestErasureModelDerivationReadsTheRealMigrateDB keeps the derivation
+// honest about the file it actually guards: every argument of the live
+// migrateDB() must be readable, which is the same condition
+// erasureMigrateDBModelNames fatals on — asserted here as a value so the
+// count is visible in the failure message rather than only as a fatal.
+func TestErasureModelDerivationReadsTheRealMigrateDB(t *testing.T) {
+	root := erasureGateRepoRoot(t)
+	names, unparsed, err := erasureParseMigrateDBModels(filepath.Join(root, "internal", "adapter", "repo", "main.go"))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if len(unparsed) != 0 {
+		t.Errorf("migrateDB() has %d AutoMigrate argument(s) the gate cannot read: %s", len(unparsed), strings.Join(unparsed, "; "))
+	}
+	if len(names) < 30 {
+		t.Errorf("readable models = %d, want >= 30", len(names))
 	}
 }
