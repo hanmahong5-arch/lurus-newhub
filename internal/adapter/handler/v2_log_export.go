@@ -147,7 +147,7 @@ func ExportLogsV2(c *gin.Context) {
 	defer w.Flush()
 
 	// Write the whitelisted header row.
-	if err := w.Write(csvHeader); err != nil {
+	if err := w.Write(csvRow(csvHeader...)); err != nil {
 		common.SysError("ExportLogsV2: write header: " + err.Error())
 		return
 	}
@@ -204,7 +204,10 @@ func ExportLogsV2(c *gin.Context) {
 
 		for _, l := range logs {
 			createdAt := time.Unix(l.CreatedAt, 0).UTC().Format(time.RFC3339)
-			row := []string{
+			// csvRow, not a []string literal: token_name, project_name and
+			// content are user-supplied text, and a spreadsheet evaluates any
+			// cell that starts with a formula trigger (csv_cell.go).
+			row := csvRow(
 				createdAt,
 				strconv.Itoa(l.Type),
 				l.ModelName,
@@ -216,7 +219,7 @@ func ExportLogsV2(c *gin.Context) {
 				strconv.Itoa(l.Quota),
 				l.Ip,
 				l.Content,
-			}
+			)
 			if err := w.Write(row); err != nil {
 				common.SysError("ExportLogsV2: write row: " + err.Error())
 				return

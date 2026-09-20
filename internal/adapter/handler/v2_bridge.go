@@ -95,6 +95,13 @@ func BridgeExchange(c *gin.Context) {
 		return
 	}
 
+	// Retire any pre-authentication session id before this request becomes
+	// an authenticated one (session_rotation.go). A cookie-less exchange —
+	// the ordinary e2e shape — has nothing to retire and is unaffected.
+	if err := rotateSessionID(c); err != nil {
+		common.SysError(fmt.Sprintf("bridge-exchange: session rotation failed for user_id=%d: %v", user.Id, err))
+	}
+
 	session := sessions.Default(c)
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)

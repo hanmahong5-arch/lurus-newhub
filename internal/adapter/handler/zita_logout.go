@@ -48,8 +48,19 @@ func ZitaLogout(c *gin.Context) {
 	// can coexist in one response — the browser applies whichever matches.
 	c.SetCookie(zita.SessionCookieName, "", -1, "/", "", true, true)
 
+	// Open-redirect gate. This endpoint is unauthenticated by design, so the
+	// link that reaches it is whatever a mail or a chat message said; before
+	// cycle-13 L8 its return_to was echoed verbatim into the Location header
+	// (GET) and into data.redirect_to (POST), which the SPA assigns to
+	// window.location. isLurusReturnURL is the same predicate ZitaLogin
+	// (zita_login.go) applies to its own return_to: https, host lurus.cn or
+	// a subdomain of it. Anything else — including a protocol-relative
+	// "//host/" and a same-origin relative path — falls back to /login,
+	// which is where the three in-repo callers already end up (none of them
+	// passes return_to; useHeaderBar.js, HFShell.jsx and
+	// v2/AccountDisabled/index.jsx).
 	returnTo := c.Query("return_to")
-	if returnTo == "" {
+	if returnTo == "" || !isLurusReturnURL(returnTo) {
 		returnTo = "/login"
 	}
 

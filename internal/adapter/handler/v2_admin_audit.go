@@ -199,14 +199,17 @@ func writeAuditEventsCSV(c *gin.Context, events []*entity.AuditEvent, nextCursor
 	}
 
 	w := csv.NewWriter(c.Writer)
-	_ = w.Write([]string{
+	_ = w.Write(csvRow(
 		"id", "tenant_id", "timestamp", "actor_type", "actor_id",
 		"action", "resource", "resource_id", "ip", "request_id",
 		"retention_until", "details",
-	})
+	))
 	rowsWritten := 0
 	for _, e := range events {
-		_ = w.Write([]string{
+		// csvRow, not a []string literal — see csv_cell.go: details is JSON
+		// assembled from request data, so it is the cell an attacker reaches
+		// in the one export a compliance reader is certain to open.
+		_ = w.Write(csvRow(
 			strconv.FormatInt(e.ID, 10),
 			e.TenantID,
 			strconv.FormatInt(e.Timestamp, 10),
@@ -219,7 +222,7 @@ func writeAuditEventsCSV(c *gin.Context, events []*entity.AuditEvent, nextCursor
 			e.RequestID,
 			strconv.FormatInt(e.RetentionUntil, 10),
 			e.Details,
-		})
+		))
 		rowsWritten++
 		// csv.Writer buffers the first write error; bail out early instead of
 		// spinning through the remaining rows once the underlying stream is broken.

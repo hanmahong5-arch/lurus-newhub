@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,8 +12,9 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -27,6 +27,14 @@ const (
 	maxRatioConfigBytes   = 10 << 20 // 10MB
 	floatEpsilon          = 1e-9
 )
+
+// ratioSyncEgressRefusedMessage is the ONE answer a caller gets for a target
+// the egress policy refuses. Fixed on purpose: the per-upstream result is
+// echoed back to the caller, so a message that varied with the failure
+// ("connection refused" vs "no such host" vs "i/o timeout") would turn this
+// endpoint back into the internal-network port scanner the check exists to
+// close. English because it travels on the API wire.
+const ratioSyncEgressRefusedMessage = "upstream URL refused by egress policy"
 
 func nearlyEqual(a, b float64) bool {
 	if a > b {
@@ -108,23 +116,12 @@ func FetchUpstreamRatios(c *gin.Context) {
 
 	sem := make(chan struct{}, maxConcurrentFetches)
 
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	transport := &http.Transport{MaxIdleConns: 100, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: 1 * time.Second, ResponseHeaderTimeout: 10 * time.Second}
-	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			host = addr
-		}
-		// 对 github.io 优先尝试 IPv4，失败则回退 IPv6
-		if strings.HasSuffix(host, "github.io") {
-			if conn, err := dialer.DialContext(ctx, "tcp4", addr); err == nil {
-				return conn, nil
-			}
-			return dialer.DialContext(ctx, "tcp6", addr)
-		}
-		return dialer.DialContext(ctx, network, addr)
-	}
-	client := &http.Client{Transport: transport}
+	// app.GetHttpClient, not a locally built transport: the shared client
+	// carries the relay dial/response-header budgets the gateway's other
+	// outbound calls use AND a CheckRedirect that re-runs the SSRF policy on each
+	// hop — without it, a public host that answers 302 http://127.0.0.1:6379
+	// walks straight around the pre-dial check below.
+	client := app.GetHttpClient()
 
 	for _, chn := range upstreams {
 		wg.Add(1)
@@ -150,6 +147,21 @@ func FetchUpstreamRatios(c *gin.Context) {
 			uniqueName := chItem.Name
 			if chItem.ID != 0 {
 				uniqueName = fmt.Sprintf("%s(%d)", chItem.Name, chItem.ID)
+			}
+
+			// Egress policy on the COMPOSED url, after the endpoint override
+			// has been applied: an absolute `endpoint` replaces base_url
+			// outright, so checking base_url alone would be walked around by
+			// a public base_url plus a loopback endpoint. This is the same
+			// gate channel base_url and the channel test/fetch endpoints
+			// already pass (app.ValidateOutboundURL) — /api/ratio_sync/fetch
+			// was the one body-supplied outbound target without it, which
+			// made an admin session a reader of anything the pod can reach.
+			// It runs BEFORE any dial, and answers one fixed message.
+			if err := app.ValidateOutboundURL(fullURL); err != nil {
+				logger.LogWarn(c.Request.Context(), "ratio_sync: refused outbound target for "+uniqueName+": "+err.Error())
+				ch <- upstreamResult{Name: uniqueName, Err: ratioSyncEgressRefusedMessage}
+				return
 			}
 
 			ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(req.Timeout)*time.Second)

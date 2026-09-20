@@ -121,6 +121,14 @@ func ZitaBootstrap(c *gin.Context) {
 		return
 	}
 
+	// Retire any pre-authentication session id before this request becomes
+	// an authenticated one (session_rotation.go). A failure here is logged
+	// and the login continues — the fallback inside rotateSessionID has
+	// already cleared whatever the incoming cookie carried.
+	if err := rotateSessionID(c); err != nil {
+		common.SysError(fmt.Sprintf("zita-bootstrap: session rotation failed for user %d: %v", user.Id, err))
+	}
+
 	session := sessions.Default(c)
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)

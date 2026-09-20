@@ -103,26 +103,33 @@ var browserOriginGuardSafeMethods = map[string]bool{
 // stops a cross-SITE form POST but not a same-site one from another
 // subdomain, and there is no anti-CSRF token anywhere in the console.
 //
-// Decision table (cycle-12 §2, pinned row by row in
-// browser_origin_guard_test.go):
+// Decision table (cycle-12 §2 as amended by cycle-13 L8, pinned row by row
+// in browser_origin_guard_test.go):
 //
-//	GET / HEAD / OPTIONS ................................. admitted
-//	Authorization or X-API-Key header present ............ admitted
 //	no gin/platform session cookie ....................... admitted
+//	GET / HEAD / OPTIONS ................................. admitted
 //	Sec-Fetch-Site: same-origin | none ................... admitted
 //	Sec-Fetch-Site: same-site | cross-site ............... 403
 //	no Sec-Fetch-Site, Origin in ALLOWED_ORIGINS ......... admitted
 //	no Sec-Fetch-Site, Origin elsewhere .................. 403
 //	no Sec-Fetch-Site, no Origin ......................... admitted
 //
-// Two of those rows are worth their reasons:
+// The cookie row comes FIRST, and there is no credential-header row any
+// more. Cycle-12 had one — "Authorization or X-API-Key present -> admitted"
+// — ahead of the cookie check, on the theory that a credential-header caller
+// is not vulnerable to CSRF. The theory is true of the CALLER and false of
+// the CHECK: the guard saw that a header existed, not that it authenticated
+// anything, while authHelper (auth.go) resolves the session
+// cookie FIRST and ignores the header entirely. So an attacker page that
+// added `Authorization: Bearer anything` to its cross-site fetch skipped the
+// guard and was then authenticated from the victim's cookie — the exemption
+// undid the control for any attacker who read this file.
 //
-// Credential-header callers are skipped because they are not vulnerable in
-// the first place: a browser will not attach an Authorization or X-API-Key
-// header to a cross-site request unless the page's own script sets it, and a
-// page that can set it already has the credential. This is what keeps relay
-// clients, the switch/lutu service callers and the /internal API (X-API-Key)
-// out of the guard entirely.
+// Deleting it costs the credential-header callers nothing: relay clients,
+// the switch/lutu service callers and the /internal API (X-API-Key) carry no
+// hub session cookie, so they are admitted one row earlier by the cookie
+// check — which is also the row that keeps POST /api/v2/bridge/exchange (no
+// cookie on the way in) out of the guard.
 //
 // Sec-Fetch-Site is consulted BEFORE Origin and overrides it: the browser
 // writes Sec-Fetch-Site itself and script cannot forge it, whereas
@@ -147,15 +154,16 @@ func BrowserOriginGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if browserOriginGuardSafeMethods[c.Request.Method] {
-			c.Next()
-			return
-		}
-		if c.GetHeader("Authorization") != "" || c.GetHeader("X-API-Key") != "" {
-			c.Next()
-			return
-		}
+		// Ambient authority first: a request that carries no browser session
+		// cookie cannot be made to act with the victim's credentials, so
+		// nothing below it can apply. Ordering this ahead of the method check
+		// is what makes the "no credential-header exemption" table above
+		// readable top to bottom in the same order the code decides.
 		if !hasBrowserSessionCookie(c) {
+			c.Next()
+			return
+		}
+		if browserOriginGuardSafeMethods[c.Request.Method] {
 			c.Next()
 			return
 		}

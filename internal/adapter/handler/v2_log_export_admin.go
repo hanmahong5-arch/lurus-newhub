@@ -116,7 +116,7 @@ func ExportAdminLogsV2(c *gin.Context) {
 	w := csv.NewWriter(c.Writer)
 	defer w.Flush()
 
-	if err := w.Write(adminLogCSVHeader); err != nil {
+	if err := w.Write(csvRow(adminLogCSVHeader...)); err != nil {
 		common.SysError("ExportAdminLogsV2: write header: " + err.Error())
 		return
 	}
@@ -139,7 +139,10 @@ func ExportAdminLogsV2(c *gin.Context) {
 		}
 
 		for _, l := range logs {
-			row := []string{
+			// csvRow, not a []string literal — see csv_cell.go: username,
+			// token_name, group and model_name carry caller-chosen text, and
+			// this export is read in a spreadsheet by design.
+			row := csvRow(
 				strconv.Itoa(l.Id),
 				time.Unix(l.CreatedAt, 0).UTC().Format(time.RFC3339),
 				l.TenantId,
@@ -158,7 +161,7 @@ func ExportAdminLogsV2(c *gin.Context) {
 				strconv.Itoa(l.ChannelId),
 				l.Group,
 				l.Ip,
-			}
+			)
 			if err := w.Write(row); err != nil {
 				common.SysError("ExportAdminLogsV2: write row: " + err.Error())
 				return
