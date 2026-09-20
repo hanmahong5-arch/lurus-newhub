@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -32,6 +33,14 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
 		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{}, &entity.UserTOTPBackupCode{},
 		&entity.UserSession{}, &entity.AdminPermissionGrant{}, &entity.ResponseRegistry{},
+		// cycle-13 L5 content-disposition surface: chat/Midjourney/tasks/
+		// quota_data/playground_presets. All five are registered in
+		// repo/main.go's migrateDB() unconditionally (unlike the lazily-
+		// created TOTP tables above), so — unlike those — there is no
+		// HasTable guard on the repo primitives that touch them; they must
+		// always be present here.
+		&entity.ChatSession{}, &entity.ChatMessage{}, &repo.Midjourney{},
+		&repo.Task{}, &repo.QuotaData{}, &repo.PlaygroundPreset{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -135,6 +144,66 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 		t.Fatalf("seed response registry row: %v", err)
 	}
 
+	// A saved console-Chat session + 2 messages (cycle-13 L5) — must be
+	// hard-deleted, not merely pseudonymized like logs: Content carries the
+	// conversation verbatim and there is no billing reason to retain it.
+	session := entity.ChatSession{TenantId: "default", UserId: user.Id, Title: "erase fixture chat", Model: "gpt-x"}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("seed chat session: %v", err)
+	}
+	for i, role := range []string{"user", "assistant"} {
+		if err := db.Create(&entity.ChatMessage{
+			SessionId: session.Id, TenantId: "default", UserId: user.Id,
+			Seq: i, Role: role, Content: fmt.Sprintf("erase fixture message %d", i),
+		}).Error; err != nil {
+			t.Fatalf("seed chat message %d: %v", i, err)
+		}
+	}
+
+	// A Midjourney task row (cycle-13 L5) — Prompt/PromptEn carry the
+	// generation request verbatim; must be hard-deleted.
+	if err := db.Create(&repo.Midjourney{
+		UserId: user.Id, Action: "IMAGINE", MjId: "erase-fixture-mj-1",
+		Prompt: "erase fixture mj prompt", PromptEn: "erase fixture mj prompt en", Quota: 5,
+	}).Error; err != nil {
+		t.Fatalf("seed midjourney: %v", err)
+	}
+
+	// An async task row (cycle-13 L5) with a prompt in Properties.Input, a
+	// FailReason that could echo request content, and a raw Data payload —
+	// must be scrubbed in place (quota/ids survive) so cost attribution and
+	// support history are not destroyed the way a hard delete would.
+	task := &repo.Task{
+		TaskID: "erase-fixture-task-1", UserId: user.Id, Quota: 9,
+		FailReason: "erase fixture failure detail",
+		Properties: repo.Properties{Input: "erase fixture task prompt input"},
+		Data:       json.RawMessage(`{"k":"erase fixture task payload"}`),
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	// A quota_data row (cycle-13 L5) — Username is display data; Quota/
+	// Count/TokenUsed are billing data that must survive the scrub.
+	if err := db.Table("quota_data").Create(&repo.QuotaData{
+		UserID: user.Id, Username: "victim", ModelName: "gpt-x",
+		CreatedAt: time.Now().Unix(), Count: 3, Quota: 21, TokenUsed: 100,
+	}).Error; err != nil {
+		t.Fatalf("seed quota_data: %v", err)
+	}
+
+	// A Playground preset (cycle-13 L5) — Prompt carries the user's own
+	// authored text verbatim. Found via
+	// TestErasureCascadeCoversEveryPersonalDataShapedModel
+	// (erasure_model_coverage_test.go), not in the cycle-13 plan's own table
+	// enumeration; must be hard-deleted.
+	if err := db.Create(&repo.PlaygroundPreset{
+		TenantID: "default", UserID: user.Id, Name: "erase fixture preset",
+		Prompt: "erase fixture preset prompt", Models: `["gpt-4o"]`, Params: `{}`,
+	}).Error; err != nil {
+		t.Fatalf("seed playground preset: %v", err)
+	}
+
 	for i := 0; i < logCount; i++ {
 		if err := db.Create(&entity.Log{
 			UserId: user.Id, Username: "victim", TokenName: "tok-0",
@@ -229,6 +298,58 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 		t.Errorf("permission grant still active after erasure — must be revoked")
 	}
 
+	// chat: hard-deleted (cycle-13 L5), both the session and its messages.
+	var chatSessionCount, chatMessageCount int64
+	db.Model(&entity.ChatSession{}).Where("user_id = ?", userID).Count(&chatSessionCount)
+	if chatSessionCount != 0 {
+		t.Errorf("chat sessions remaining = %d, want 0", chatSessionCount)
+	}
+	db.Model(&entity.ChatMessage{}).Where("user_id = ?", userID).Count(&chatMessageCount)
+	if chatMessageCount != 0 {
+		t.Errorf("chat messages remaining = %d, want 0", chatMessageCount)
+	}
+
+	// midjourney: hard-deleted (cycle-13 L5) — Prompt/PromptEn carried the
+	// generation request verbatim.
+	var mjCount int64
+	db.Model(&repo.Midjourney{}).Where("user_id = ?", userID).Count(&mjCount)
+	if mjCount != 0 {
+		t.Errorf("midjourney rows remaining = %d, want 0", mjCount)
+	}
+
+	// playground presets: hard-deleted (cycle-13 L5) — found via the
+	// model-coverage gate, not in the cycle-13 plan's own enumeration.
+	var presetCount int64
+	db.Model(&repo.PlaygroundPreset{}).Where("user_id = ?", userID).Count(&presetCount)
+	if presetCount != 0 {
+		t.Errorf("playground preset rows remaining = %d, want 0", presetCount)
+	}
+
+	// tasks: scrubbed but retained (cycle-13 L5) — quota/ids survive so cost
+	// attribution and support history are not destroyed.
+	var gotTask repo.Task
+	if err := db.Where("user_id = ?", userID).First(&gotTask).Error; err != nil {
+		t.Fatalf("task row must be retained (scrubbed, not deleted): %v", err)
+	}
+	if gotTask.Properties.Input != "" || gotTask.FailReason != "" || len(gotTask.Data) != 0 {
+		t.Errorf("task not scrubbed: properties.input=%q fail_reason=%q data=%q", gotTask.Properties.Input, gotTask.FailReason, string(gotTask.Data))
+	}
+	if gotTask.Quota != 9 || gotTask.TaskID != "erase-fixture-task-1" {
+		t.Errorf("task billing/id fields must survive: quota=%d task_id=%q", gotTask.Quota, gotTask.TaskID)
+	}
+
+	// quota_data: username erased, billing fields retained (cycle-13 L5).
+	var gotQD repo.QuotaData
+	if err := db.Table("quota_data").Where("user_id = ?", userID).First(&gotQD).Error; err != nil {
+		t.Fatalf("quota_data row must be retained: %v", err)
+	}
+	if gotQD.Username != repo.ErasedMarker {
+		t.Errorf("quota_data.username = %q, want %q", gotQD.Username, repo.ErasedMarker)
+	}
+	if gotQD.Quota != 21 || gotQD.Count != 3 || gotQD.TokenUsed != 100 {
+		t.Errorf("quota_data billing fields must survive: quota=%d count=%d token_used=%d", gotQD.Quota, gotQD.Count, gotQD.TokenUsed)
+	}
+
 	// logs: pseudonymized, billing fields retained
 	var dirty int64
 	db.Model(&entity.Log{}).Where("user_id = ? AND username <> ?", userID, repo.ErasedMarker).Count(&dirty)
@@ -315,6 +436,11 @@ func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
 		&repo.User{}, &repo.Token{}, &repo.Log{},
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
 		&entity.PrivacyErasureRequest{}, &entity.UserSession{}, &entity.AdminPermissionGrant{}, &entity.ResponseRegistry{},
+		// Same reasoning as openErasureTestDB above: these five are NOT lazy
+		// like the TOTP tables this helper deliberately omits, so a run
+		// against this DB must still find them.
+		&entity.ChatSession{}, &entity.ChatMessage{}, &repo.Midjourney{},
+		&repo.Task{}, &repo.QuotaData{}, &repo.PlaygroundPreset{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)

@@ -23,6 +23,7 @@ const (
 	ErasureStepNone            = entity.ErasureStepNone
 	ErasureStepTokensDeleted   = entity.ErasureStepTokensDeleted
 	ErasureStepMappingsDeleted = entity.ErasureStepMappingsDeleted
+	ErasureStepContentDeleted  = entity.ErasureStepContentDeleted
 	ErasureStepLogsAnonymized  = entity.ErasureStepLogsAnonymized
 	ErasureStepAuditScrubbed   = entity.ErasureStepAuditScrubbed
 
@@ -254,6 +255,156 @@ func HardDeleteUserSessions(ctx context.Context, userID int) (int64, error) {
 		Delete(&entity.UserSession{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("hard delete user sessions: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// HardDeleteChatMessagesBatch hard-deletes one batch of the user's saved
+// console-Chat messages (cycle-13 L5), identified by session ownership
+// (session_id IN chat_sessions owned by the user) rather than the
+// message's own — currently always consistent, but redundant — user_id
+// column, so a future divergence between the two cannot leave a message
+// behind. Same batch shape as AnonymizeLogsBatch below: a heavy Chat user
+// does not lock the table in one transaction. Callers must drain this
+// before HardDeleteChatSessionsBatch — there is no DB-level ON DELETE
+// CASCADE from chat_messages.session_id to chat_sessions.id (see
+// entity.ChatSession's doc comment). Returns the deleted ids; empty means
+// done.
+func HardDeleteChatMessagesBatch(ctx context.Context, userID int, batchSize int) ([]int, error) {
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	var ids []int
+	err := WithoutTenantIsolationCtx(ctx, DB).Model(&entity.ChatMessage{}).
+		Where("session_id IN (SELECT id FROM chat_sessions WHERE user_id = ?)", userID).
+		Order("id ASC").
+		Limit(batchSize).
+		Pluck("id", &ids).Error
+	if err != nil {
+		return nil, fmt.Errorf("hard delete chat messages batch select: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if err := WithoutTenantIsolationCtx(ctx, DB).Where("id IN ?", ids).Delete(&entity.ChatMessage{}).Error; err != nil {
+		return nil, fmt.Errorf("hard delete chat messages batch delete: %w", err)
+	}
+	return ids, nil
+}
+
+// HardDeleteChatSessionsBatch hard-deletes one batch of the user's saved
+// console-Chat sessions (cycle-13 L5). Same batch shape as
+// AnonymizeLogsBatch; sessions are additionally capped at
+// MaxChatSessionsPerUser (chat_session.go) so in practice this drains in
+// one call, but the loop shape keeps the caller identical to the other
+// batched steps. Call only after HardDeleteChatMessagesBatch has drained —
+// see that function's doc comment.
+func HardDeleteChatSessionsBatch(ctx context.Context, userID int, batchSize int) ([]int, error) {
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	var ids []int
+	err := WithoutTenantIsolationCtx(ctx, DB).Model(&entity.ChatSession{}).
+		Where("user_id = ?", userID).
+		Order("id ASC").
+		Limit(batchSize).
+		Pluck("id", &ids).Error
+	if err != nil {
+		return nil, fmt.Errorf("hard delete chat sessions batch select: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if err := WithoutTenantIsolationCtx(ctx, DB).Where("id IN ?", ids).Delete(&entity.ChatSession{}).Error; err != nil {
+		return nil, fmt.Errorf("hard delete chat sessions batch delete: %w", err)
+	}
+	return ids, nil
+}
+
+// HardDeleteMidjourneyBatch hard-deletes one batch of the user's Midjourney
+// task rows (cycle-13 L5) — Prompt/PromptEn carry the user's original
+// generation request verbatim. Same batch shape as AnonymizeLogsBatch.
+func HardDeleteMidjourneyBatch(ctx context.Context, userID int, batchSize int) ([]int, error) {
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	var ids []int
+	err := WithoutTenantIsolationCtx(ctx, DB).Model(&Midjourney{}).
+		Where("user_id = ?", userID).
+		Order("id ASC").
+		Limit(batchSize).
+		Pluck("id", &ids).Error
+	if err != nil {
+		return nil, fmt.Errorf("hard delete midjourney batch select: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if err := WithoutTenantIsolationCtx(ctx, DB).Where("id IN ?", ids).Delete(&Midjourney{}).Error; err != nil {
+		return nil, fmt.Errorf("hard delete midjourney batch delete: %w", err)
+	}
+	return ids, nil
+}
+
+// HardDeletePlaygroundPresetsForUser hard-deletes every Playground preset
+// the user saved (cycle-13 L5) — Prompt carries the user's own authored
+// prompt text verbatim. Found via
+// TestErasureCascadeCoversEveryPersonalDataShapedModel
+// (erasure_model_coverage_test.go), not named in the cycle-13 plan's own
+// table enumeration. Unlike the batch functions above, presets are created
+// one at a time through a console form rather than accumulating
+// automatically per request, so this is a single statement rather than a
+// batch loop.
+func HardDeletePlaygroundPresetsForUser(ctx context.Context, userID int) (int64, error) {
+	result := WithoutTenantIsolationCtx(ctx, DB).Where("user_id = ?", userID).Delete(&PlaygroundPreset{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("hard delete playground presets: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// ScrubTasksForUser blanks the personal-data-bearing columns of every async
+// task (MJ/Suno/video) row the user owns (cycle-13 L5): properties (Input
+// carries the user's original prompt verbatim; also upstream/origin model
+// names), data (raw upstream/vendor payload, can echo request content) and
+// fail_reason (can echo request content in the error text). Quota, ids,
+// status, channel and every other billing/audit column are left untouched
+// so cost attribution and support history survive the erasure — this is a
+// scrub, not a delete, matching AnonymizeLogsBatch's treatment of logs. Not
+// batched (contrast the chat/Midjourney batch functions above): one user's
+// task rows are bounded by how many async jobs they submitted, not by
+// years of accumulated request history the way logs are.
+func ScrubTasksForUser(ctx context.Context, userID int) (int64, error) {
+	result := WithoutTenantIsolationCtx(ctx, DB).Model(&Task{}).
+		Where("user_id = ?", userID).
+		Updates(map[string]interface{}{
+			"properties":  nil,
+			"data":        nil,
+			"fail_reason": "",
+		})
+	if result.Error != nil {
+		return 0, fmt.Errorf("scrub tasks: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// ScrubQuotaDataUsernameForUser overwrites quota_data.username with
+// ErasedMarker for every row the user owns (cycle-13 L5). Queries against
+// this table go through .Table("quota_data") rather than
+// .Model(&QuotaData{}) throughout usedata.go, so this function matches
+// that convention rather than relying on GORM's pluralization inferring
+// the same table name from the bare struct. quota_data has no soft-delete
+// column; the billing-relevant columns (quota, count, token_used) are
+// retained under the same statutory-retention carve-out AnonymizeLogsBatch
+// documents below — only the display name is personal data here.
+// Resumable: rows already carrying ErasedMarker are excluded, matching
+// AnonymizeLogsBatch's own resume convention.
+func ScrubQuotaDataUsernameForUser(ctx context.Context, userID int) (int64, error) {
+	result := WithoutTenantIsolationCtx(ctx, DB).Table("quota_data").
+		Where("user_id = ? AND username <> ?", userID, ErasedMarker).
+		Update("username", ErasedMarker)
+	if result.Error != nil {
+		return 0, fmt.Errorf("scrub quota data username: %w", result.Error)
 	}
 	return result.RowsAffected, nil
 }

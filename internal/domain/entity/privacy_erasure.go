@@ -23,8 +23,14 @@ const (
 	ErasureStepNone            = ""                 // not started
 	ErasureStepTokensDeleted   = "tokens_deleted"   // tokens hard-deleted (incl. soft-deleted)
 	ErasureStepMappingsDeleted = "mappings_deleted" // user_identity_mapping hard-deleted
-	ErasureStepLogsAnonymized  = "logs_anonymized"  // logs pseudonymized + Meili purge
-	ErasureStepAuditScrubbed   = "audit_scrubbed"   // audit_events ip/details scrubbed
+	// ErasureStepContentDeleted (cycle-13 L5) sits between mappings and logs:
+	// chat_messages/chat_sessions/midjourneys hard-deleted, tasks scrubbed
+	// (properties/data/fail_reason blanked, quota/ids retained), quota_data
+	// username scrubbed, playground_presets hard-deleted. See
+	// lifecycle.executeErasure for the exact call sequence.
+	ErasureStepContentDeleted = "content_deleted"
+	ErasureStepLogsAnonymized = "logs_anonymized" // logs pseudonymized + Meili purge
+	ErasureStepAuditScrubbed  = "audit_scrubbed"  // audit_events ip/details scrubbed
 )
 
 // ErasedMarker replaces personal-data string fields during anonymization.
@@ -40,6 +46,13 @@ const ErasedMarker = "[erased]"
 //
 //	tokens                  hard delete (Unscoped, incl. soft-deleted)
 //	user_identity_mapping   hard delete
+//	chat_messages/sessions  hard delete (cycle-13 L5; messages first, via session ownership)
+//	midjourneys             hard delete (cycle-13 L5; Prompt/PromptEn carry the request verbatim)
+//	playground_presets      hard delete (cycle-13 L5)
+//	tasks                   scrub properties/data/fail_reason in place (cycle-13 L5);
+//	                        quota/ids/status retained (cost attribution + support history)
+//	quota_data              scrub username to ErasedMarker in place (cycle-13 L5);
+//	                        quota/count/token_used retained (statutory-retention carve-out)
 //	users                   anonymize in place + soft delete, lurus_account_id → NULL
 //	logs                    pseudonymize username/token_name/ip/content/other;
 //	                        billing fields retained (PIPL statutory-retention carve-out)

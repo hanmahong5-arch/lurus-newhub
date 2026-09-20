@@ -110,9 +110,12 @@ func runErasurePass(ctx context.Context) {
 //
 //  1. tokens               hard delete (incl. soft-deleted) + user_totps + user_totp_backup_codes + user_sessions + response_registry hard delete
 //  2. user_identity_mapping hard delete
-//  3. logs                 pseudonymize in batches + best-effort Meili purge
-//  4. audit_events         scrub ip/details in batches
-//  5. users                anonymize in place + soft delete → completed
+//  3. content              (cycle-13 L5) chat_messages/chat_sessions/midjourneys hard
+//     delete in batches, tasks scrubbed (properties/data/fail_reason), quota_data
+//     username scrubbed, playground_presets hard delete
+//  4. logs                 pseudonymize in batches + best-effort Meili purge
+//  5. audit_events         scrub ip/details in batches
+//  6. users                anonymize in place + soft delete → completed
 func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error {
 	step := req.Step
 
@@ -168,6 +171,57 @@ func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error 
 	}
 
 	if step == repo.ErasureStepMappingsDeleted {
+		// chat_messages before chat_sessions: messages have no DB-level ON
+		// DELETE CASCADE to their session (entity.ChatSession's doc comment),
+		// so draining the child batch first keeps every partial pass
+		// consistent even if a crash lands between the two loops.
+		for {
+			ids, err := repo.HardDeleteChatMessagesBatch(ctx, req.UserID, erasureBatchSize)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				break
+			}
+		}
+		for {
+			ids, err := repo.HardDeleteChatSessionsBatch(ctx, req.UserID, erasureBatchSize)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				break
+			}
+		}
+		for {
+			ids, err := repo.HardDeleteMidjourneyBatch(ctx, req.UserID, erasureBatchSize)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				break
+			}
+		}
+		if _, err := repo.ScrubTasksForUser(ctx, req.UserID); err != nil {
+			return err
+		}
+		if _, err := repo.ScrubQuotaDataUsernameForUser(ctx, req.UserID); err != nil {
+			return err
+		}
+		// Playground presets: found via the model-coverage forcing-function
+		// test (erasure_model_coverage_test.go), not in the cycle-13 plan's
+		// own table enumeration — Prompt carries the user's authored text
+		// verbatim the same way Midjourney's does.
+		if _, err := repo.HardDeletePlaygroundPresetsForUser(ctx, req.UserID); err != nil {
+			return err
+		}
+		if err := repo.AdvanceErasureStep(ctx, req.ID, repo.ErasureStepContentDeleted, 0); err != nil {
+			return err
+		}
+		step = repo.ErasureStepContentDeleted
+	}
+
+	if step == repo.ErasureStepContentDeleted {
 		var scrubbed int64
 		for {
 			ids, err := repo.AnonymizeLogsBatch(ctx, req.UserID, erasureBatchSize)
