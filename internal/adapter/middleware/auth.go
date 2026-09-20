@@ -82,9 +82,23 @@ func resolveSessionIdentity(c *gin.Context, minRole int) bool {
 				// it would at the three logins. A failure is logged and the
 				// request continues — the fallback inside RotateSessionID has
 				// already cleared the incoming session's values.
-				if rotErr := RotateSessionID(c); rotErr != nil {
-					logger.LogWarnKV(c.Request.Context(), "sdk identity session rotation failed",
-						"who", user.Username, "account_id", zid.AccountID, "result", rotErr.Error())
+				//
+				// Gated on the request having PRESENTED an id, which is what
+				// separates this arm from the three logins: it runs on any
+				// request from an SDK-bridge user whose gin session carries no
+				// identity yet, and a console first screen can fire several of
+				// those at once. With no incoming id there is nothing planted
+				// to inherit and nothing to retire, and the self-heal Save
+				// below mints an id by itself — rotating there would buy a
+				// second store write and a second Set-Cookie per request and
+				// no security. (Several requests arriving together WITH the
+				// same planted cookie still rotate one by one; see
+				// RotateSessionID's residue note.)
+				if session.ID() != "" {
+					if rotErr := RotateSessionID(c); rotErr != nil {
+						logger.LogWarnKV(c.Request.Context(), "sdk identity session rotation failed",
+							"who", user.Username, "account_id", zid.AccountID, "result", rotErr.Error())
+					}
 				}
 				// Self-heal: persist the resolved identity into the gin session
 				// so later requests skip the SDK round-trip and survive a

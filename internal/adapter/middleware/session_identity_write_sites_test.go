@@ -1,7 +1,7 @@
 package middleware
 
-// session_identity_write_sites_test.go — cycle-13 L8 repair round, operator
-// decision D-L8-1.
+// session_identity_write_sites_test.go — cycle-13 L8, operator decisions
+// D-L8-1 (the gate) and D-L8-7 (the two shapes it was blind to).
 //
 // The session-fixation fix is a list of call sites, and a list maintained by
 // hand is a list that goes stale: the first round found three of them and
@@ -11,15 +11,30 @@ package middleware
 // This gate rebuilds the list from the source instead. It parses the
 // non-test files of internal/adapter/handler and internal/adapter/middleware,
 // collects the functions that write an authenticated identity into a gin
-// session (session.Set("id"…) / session.Set("username"…)) and requires that
-// each one calls RotateSessionID earlier in its body. A fifth site added
-// tomorrow fails here rather than at the next security review.
+// session and requires that each one calls RotateSessionID earlier in its
+// body. A fifth site added tomorrow fails here rather than at the next
+// security review.
 //
-// Two deliberate limits, stated rather than papered over:
-//   - _test.go files are skipped; the subject is production identity writes.
-//   - a receiver the gate cannot classify (neither a *gin.Context nor a
-//     value obtained from sessions.Default) is reported as a failure rather
-//     than ignored, so renaming a variable cannot walk around it.
+// What it understands, and what it refuses to guess (the acceptance round
+// walked around the first version with both of these):
+//
+//   - receiver `s` bound anywhere in the file from sessions.Default(c), and
+//     the inline form sessions.Default(c).Set("id", …);
+//   - a key given as a string literal, or as an identifier that resolves to
+//     a string constant declared in either scanned package (the code base
+//     has two of those: SecureVerificationSessionKey and
+//     sessionRotatedAtKey);
+//   - a key it cannot resolve on a session receiver, and an identity key on
+//     a receiver it cannot classify, are reported as PROBLEMS — the gate
+//     fails rather than skipping the site.
+//
+// Two deliberate limits, stated rather than papered over: _test.go files are
+// skipped (the subject is production identity writes), and a write hidden
+// behind a helper that takes the session as a parameter would be attributed
+// to the helper, which is where the rotation would then be required.
+// TestIdentityWriteScanner_SeesBothWriteShapes is the gate's own oracle: it
+// feeds the scanner synthetic sources in each shape, so "the scan found
+// nothing" cannot be mistaken for "there is nothing to find".
 
 import (
 	"go/ast"
@@ -27,9 +42,12 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 )
 
 // identityWriteKeys are the session keys that turn a session into an
@@ -73,6 +91,54 @@ type identityWriteSite struct {
 	function string
 	line     int
 	rotated  bool
+}
+
+// identityWriteScan is what one pass over a set of files produced: the
+// identity-write sites it recognised, and the places it could not classify.
+// Problems are failures, not silence — an unreadable site is exactly the
+// shape a future fifth site would take.
+type identityWriteScan struct {
+	sites    []identityWriteSite
+	problems []string
+}
+
+// stringConstants maps the name of every string constant declared in files
+// to its value. A name declared twice with different values maps to two
+// values and is then treated as unresolvable (see resolveKey).
+func stringConstants(files map[string]*ast.File) map[string][]string {
+	out := map[string][]string{}
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			decl, ok := n.(*ast.GenDecl)
+			if !ok || decl.Tok != token.CONST {
+				return true
+			}
+			for _, spec := range decl.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					if lit, ok := stringLiteral(vs.Values[i]); ok {
+						known := false
+						for _, seen := range out[name.Name] {
+							if seen == lit {
+								known = true
+							}
+						}
+						if !known {
+							out[name.Name] = append(out[name.Name], lit)
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	return out
 }
 
 // collectTypedIdents returns the names bound to *gin.Context parameters and
@@ -119,12 +185,7 @@ func collectTypedIdents(file *ast.File) (ginIdents, sessionIdents map[string]boo
 		case *ast.AssignStmt:
 			// name := sessions.Default(c)
 			for i, rhs := range node.Rhs {
-				call, ok := rhs.(*ast.CallExpr)
-				if !ok || i >= len(node.Lhs) {
-					continue
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || exprPkgSel(sel) != "sessions.Default" {
+				if i >= len(node.Lhs) || !isSessionsDefaultCall(rhs) {
 					continue
 				}
 				if ident, ok := node.Lhs[i].(*ast.Ident); ok {
@@ -137,6 +198,16 @@ func collectTypedIdents(file *ast.File) (ginIdents, sessionIdents map[string]boo
 	return ginIdents, sessionIdents
 }
 
+// isSessionsDefaultCall reports whether expr is a sessions.Default(…) call.
+func isSessionsDefaultCall(expr ast.Expr) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && exprPkgSel(sel) == "sessions.Default"
+}
+
 // exprPkgSel renders a selector as "pkg.Name" when its base is a plain
 // identifier, else "".
 func exprPkgSel(sel *ast.SelectorExpr) string {
@@ -147,7 +218,7 @@ func exprPkgSel(sel *ast.SelectorExpr) string {
 	return base.Name + "." + sel.Sel.Name
 }
 
-// stringLiteral returns the value of a plain string literal argument.
+// stringLiteral returns the value of a plain string literal expression.
 func stringLiteral(expr ast.Expr) (string, bool) {
 	lit, ok := expr.(*ast.BasicLit)
 	if !ok || lit.Kind != token.STRING {
@@ -158,6 +229,53 @@ func stringLiteral(expr ast.Expr) (string, bool) {
 		return "", false
 	}
 	return v, true
+}
+
+// resolveKey turns a Set() key argument into the string it will be at run
+// time: a literal directly, an identifier through the constant table. The
+// second return value is false when the key cannot be pinned down.
+func resolveKey(expr ast.Expr, consts map[string][]string) (string, bool) {
+	if v, ok := stringLiteral(expr); ok {
+		return v, true
+	}
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	values := consts[ident.Name]
+	if len(values) != 1 {
+		return "", false
+	}
+	return values[0], true
+}
+
+// receiverKind classifies the value a Set() call is made on.
+type receiverKind int
+
+const (
+	receiverOther   receiverKind = iota // not a gin context and not a session (url.Values, http.Header, a prometheus gauge…)
+	receiverGin                         // c.Set(…) — a gin context key
+	receiverSession                     // a gin-contrib session
+	receiverUnknown                     // a bare identifier the gate cannot place
+)
+
+// classifyReceiver places the expression a .Set() was called on.
+func classifyReceiver(x ast.Expr, ginIdents, sessionIdents map[string]bool) (receiverKind, string) {
+	if isSessionsDefaultCall(x) {
+		return receiverSession, "sessions.Default(…)"
+	}
+	ident, ok := x.(*ast.Ident)
+	if !ok {
+		return receiverOther, ""
+	}
+	switch {
+	case ginIdents[ident.Name]:
+		return receiverGin, ident.Name
+	case sessionIdents[ident.Name]:
+		return receiverSession, ident.Name
+	default:
+		return receiverUnknown, ident.Name
+	}
 }
 
 // rotationCallPositions returns the positions of every RotateSessionID call
@@ -184,11 +302,104 @@ func rotationCallPositions(body ast.Node) []token.Pos {
 	return out
 }
 
+// scanIdentityWrites is the gate's engine, kept separate from the disk walk
+// so it can be exercised on synthetic sources (see
+// TestIdentityWriteScanner_SeesBothWriteShapes).
+func scanIdentityWrites(fset *token.FileSet, files map[string]*ast.File) identityWriteScan {
+	var scan identityWriteScan
+	consts := stringConstants(files)
+
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		file := files[name]
+		ginIdents, sessionIdents := collectTypedIdents(file)
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			rotations := rotationCallPositions(fn.Body)
+			firstWrite := token.NoPos
+
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) == 0 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Set" {
+					return true
+				}
+				kind, recv := classifyReceiver(sel.X, ginIdents, sessionIdents)
+				if kind == receiverGin || kind == receiverOther {
+					return true
+				}
+				line := fset.Position(call.Pos()).Line
+				key, resolved := resolveKey(call.Args[0], consts)
+
+				if kind == receiverUnknown {
+					// Only interesting when the key IS an identity key:
+					// http.Header, url.Values and friends live here too.
+					if resolved && identityWriteKeys[key] {
+						scan.problems = append(scan.problems, strings.Join([]string{
+							name, ":", strconv.Itoa(line), ": ", recv, ".Set(", strconv.Quote(key),
+							", …): the gate cannot tell whether ", recv, " is a gin context or a session. ",
+							"Bind it from sessions.Default(c) or declare it as sessions.Session so this stays checkable.",
+						}, ""))
+					}
+					return true
+				}
+
+				// A session receiver from here on.
+				if !resolved {
+					scan.problems = append(scan.problems, strings.Join([]string{
+						name, ":", strconv.Itoa(line), ": ", recv, ".Set(<non-constant key>, …): ",
+						"this writes into a gin session under a key the gate cannot read, so it cannot tell an identity ",
+						"write from any other value. Use a string literal or a string constant declared in these packages.",
+					}, ""))
+					return true
+				}
+				if !identityWriteKeys[key] {
+					return true
+				}
+				if firstWrite == token.NoPos || call.Pos() < firstWrite {
+					firstWrite = call.Pos()
+				}
+				return true
+			})
+
+			if firstWrite == token.NoPos {
+				continue
+			}
+			rotated := false
+			for _, pos := range rotations {
+				if pos < firstWrite {
+					rotated = true
+					break
+				}
+			}
+			scan.sites = append(scan.sites, identityWriteSite{
+				file:     name,
+				function: fn.Name.Name,
+				line:     fset.Position(firstWrite).Line,
+				rotated:  rotated,
+			})
+		}
+	}
+	return scan
+}
+
 func TestSessionIdentityWriteSites_RotateFirst(t *testing.T) {
 	root := sessionGateModuleRoot(t)
 	fset := token.NewFileSet()
+	files := map[string]*ast.File{}
 
-	var sites []identityWriteSite
 	for _, rel := range sessionWriteScanDirs {
 		dir := filepath.Join(root, rel)
 		entries, err := os.ReadDir(dir)
@@ -205,98 +416,140 @@ func TestSessionIdentityWriteSites_RotateFirst(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse %s: %v", path, err)
 			}
-			ginIdents, sessionIdents := collectTypedIdents(file)
-
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				rotations := rotationCallPositions(fn.Body)
-				firstWrite := token.NoPos
-
-				ast.Inspect(fn.Body, func(n ast.Node) bool {
-					call, ok := n.(*ast.CallExpr)
-					if !ok || len(call.Args) == 0 {
-						return true
-					}
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok || sel.Sel.Name != "Set" {
-						return true
-					}
-					recv, ok := sel.X.(*ast.Ident)
-					if !ok {
-						return true
-					}
-					key, ok := stringLiteral(call.Args[0])
-					if !ok || !identityWriteKeys[key] {
-						return true
-					}
-					if ginIdents[recv.Name] {
-						return true // c.Set(…) — a gin context key, not a session
-					}
-					if !sessionIdents[recv.Name] {
-						t.Errorf("%s:%d: %s.Set(%q, …): the gate cannot tell whether %q is a gin context or a session. "+
-							"Bind it from sessions.Default(c) or declare it as sessions.Session so this stays checkable.",
-							filepath.Join(rel, name), fset.Position(call.Pos()).Line, recv.Name, key, recv.Name)
-						return true
-					}
-					if firstWrite == token.NoPos || call.Pos() < firstWrite {
-						firstWrite = call.Pos()
-					}
-					return true
-				})
-
-				if firstWrite == token.NoPos {
-					continue
-				}
-				rotated := false
-				for _, pos := range rotations {
-					if pos < firstWrite {
-						rotated = true
-						break
-					}
-				}
-				sites = append(sites, identityWriteSite{
-					file:     filepath.ToSlash(filepath.Join(rel, name)),
-					function: fn.Name.Name,
-					line:     fset.Position(firstWrite).Line,
-					rotated:  rotated,
-				})
-			}
+			files[filepath.ToSlash(filepath.Join(rel, name))] = file
 		}
 	}
 
-	if len(sites) == 0 {
+	scan := scanIdentityWrites(fset, files)
+
+	for _, problem := range scan.problems {
+		t.Errorf("%s", problem)
+	}
+	if len(scan.sites) == 0 {
 		t.Fatal("found 0 session identity-write sites — the scan itself is broken (a gate that sees nothing passes everything)")
 	}
 	// Four sites are wired today (the three logins plus the SDK-bridge
 	// self-heal arm). Fewer means one moved somewhere this gate no longer
 	// looks, which is the case it exists to catch.
-	if len(sites) < 4 {
-		t.Errorf("found %d identity-write sites, want at least 4: %+v", len(sites), sites)
+	if len(scan.sites) < 4 {
+		t.Errorf("found %d identity-write sites, want at least 4: %+v", len(scan.sites), scan.sites)
 	}
-	for _, site := range sites {
+	for _, site := range scan.sites {
 		if !site.rotated {
 			t.Errorf("%s:%d: %s writes an authenticated identity into the gin session without calling RotateSessionID first — "+
 				"a session cookie planted before this point becomes the authenticated session (session fixation)",
 				site.file, site.line, site.function)
 		}
 	}
-	t.Logf("identity-write sites checked: %d", len(sites))
-	for _, site := range sites {
+	t.Logf("identity-write sites checked: %d", len(scan.sites))
+	for _, site := range scan.sites {
 		t.Logf("  %s:%d %s (rotated=%v)", site.file, site.line, site.function, site.rotated)
 	}
 }
 
-// TestSessionStoreKeyPrefix_AgreesWithTheOtherDeleters pins the third copy
-// of the store's key prefix against the two that cannot be imported from
-// here. If boj/redistore's prefix ever changes, all three have to move
-// together or a rotated session id would be deleted under a key nobody
-// wrote.
+// TestIdentityWriteScanner_SeesBothWriteShapes is the gate's own oracle.
+// The acceptance round proved the first version was blind to two shapes it
+// claimed to cover (a chained sessions.Default(c).Set receiver, and a key
+// given as a constant): both walked past it while the site count stayed at
+// four. Reading real files cannot demonstrate that a shape is SEEN, because
+// nobody writes it here — so the scanner is fed each shape directly.
+func TestIdentityWriteScanner_SeesBothWriteShapes(t *testing.T) {
+	sources := map[string]string{
+		// bound receiver, literal key, no rotation
+		"a_bound.go": `package p
+func BoundReceiver(c *gin.Context) {
+	s := sessions.Default(c)
+	s.Set("id", 1)
+}`,
+		// chained receiver, literal key, no rotation
+		"b_chained.go": `package p
+func ChainedReceiver(c *gin.Context) {
+	sessions.Default(c).Set("username", "victim")
+}`,
+		// bound receiver, key behind a constant, no rotation
+		"c_const.go": `package p
+const identityKey = "id"
+
+func ConstantKey(c *gin.Context) {
+	s := sessions.Default(c)
+	s.Set(identityKey, 1)
+}`,
+		// rotated first — a site, but a compliant one
+		"d_rotated.go": `package p
+func Rotated(c *gin.Context) {
+	_ = RotateSessionID(c)
+	s := sessions.Default(c)
+	s.Set("id", 1)
+}`,
+		// a key the gate cannot read, on a session receiver
+		"e_dynamic.go": `package p
+func DynamicKey(c *gin.Context, name string) {
+	s := sessions.Default(c)
+	s.Set(name, 1)
+}`,
+		// not a session: gin context keys and a url.Values must stay silent
+		"f_noise.go": `package p
+func Noise(c *gin.Context) {
+	c.Set("id", 1)
+	params := url.Values{}
+	params.Set("client_id", "x")
+	params.Set(dynamic(), "y")
+}`,
+	}
+
+	fset := token.NewFileSet()
+	files := map[string]*ast.File{}
+	for name, src := range sources {
+		file, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		files[name] = file
+	}
+
+	scan := scanIdentityWrites(fset, files)
+
+	got := map[string]bool{}
+	for _, site := range scan.sites {
+		got[site.function] = site.rotated
+	}
+	for _, want := range []string{"BoundReceiver", "ChainedReceiver", "ConstantKey", "Rotated"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("the scanner did not see %s as an identity-write site — that shape can be added to the two packages and ship unrotated: %+v",
+				want, scan.sites)
+		}
+	}
+	for _, want := range []string{"BoundReceiver", "ChainedReceiver", "ConstantKey"} {
+		if got[want] {
+			t.Errorf("%s has no rotation before its identity write but the scanner reported rotated=true", want)
+		}
+	}
+	if !got["Rotated"] {
+		t.Errorf("Rotated calls RotateSessionID before its write and must be reported as compliant")
+	}
+	if _, ok := got["Noise"]; ok {
+		t.Errorf("c.Set(\"id\", …) and url.Values.Set are not session identity writes; the scanner reported Noise as one")
+	}
+
+	problems := strings.Join(scan.problems, "\n")
+	if !strings.Contains(problems, "e_dynamic.go") {
+		t.Errorf("a Set() on a session under a key the gate cannot read must be reported as a problem, got: %q", problems)
+	}
+	if strings.Contains(problems, "f_noise.go") {
+		t.Errorf("a non-session receiver with an unreadable key is not this gate's business, got: %q", problems)
+	}
+}
+
+// TestSessionStoreKeyPrefix_AgreesWithTheOtherDeleters pins the copies of
+// the store's key prefix that are still spelled by hand against
+// common.SessionStoreKeyPrefix, which middleware now uses. Neither file is
+// callable from here (handler imports this package, not the other way round;
+// repo's deleter is unexported), so a text check is what is left. If
+// boj/redistore's prefix ever changes, every copy has to move together or a
+// rotated session id would be deleted under a key nobody wrote.
 func TestSessionStoreKeyPrefix_AgreesWithTheOtherDeleters(t *testing.T) {
 	root := sessionGateModuleRoot(t)
-	literal := strconv.Quote(sessionStoreKeyPrefix)
+	literal := strconv.Quote(common.SessionStoreKeyPrefix)
 	for _, rel := range []string{
 		filepath.Join("internal", "adapter", "handler", "v2_session_revoke.go"),
 		filepath.Join("internal", "adapter", "repo", "user_session.go"),
@@ -305,8 +558,13 @@ func TestSessionStoreKeyPrefix_AgreesWithTheOtherDeleters(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}
-		if !strings.Contains(string(body), literal+"+") {
-			t.Errorf("%s no longer builds a store key from %s — the three session-key deleters have drifted apart",
+		text := string(body)
+		// Either spelling is fine; what must not happen is a third value.
+		if strings.Contains(text, "common.SessionStoreKeyPrefix+") {
+			continue
+		}
+		if !strings.Contains(text, literal+"+") {
+			t.Errorf("%s builds its session store key from neither %s nor common.SessionStoreKeyPrefix — the session-key deleters have drifted apart",
 				filepath.ToSlash(rel), literal)
 		}
 	}

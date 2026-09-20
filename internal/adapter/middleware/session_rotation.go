@@ -24,14 +24,13 @@ import (
 //     and the rotation would be a no-op.
 const sessionRotatedAtKey = "session_rotated_at"
 
-// sessionStoreKeyPrefix is boj/redistore's default key prefix — the prefix
-// of the store cmd/server/main.go builds. Two other deleters spell the same
-// literal: handler.redisDeleteSessionKey (v2_session_revoke.go) and
-// repo.deleteCappedSessionKeys (user_session.go). Neither is callable from
-// here (handler imports this package, not the other way round; repo's is
-// unexported), so this is a third occurrence rather than a shared constant;
-// session_identity_write_sites_test.go pins that the three still agree.
-const sessionStoreKeyPrefix = "session_"
+// sessionRotationDoneKey is a gin-context (per-request) marker, not a session
+// value: it says "this request already minted a fresh id". Two authenticating
+// middlewares on one chain, or a handler that runs behind UserAuth and
+// rotates again, would otherwise mint a second id and delete the first: each
+// rotation costs a Redis write plus a Set-Cookie, and the browser keeps only
+// the last one. See TestRotateSessionID_AtMostOncePerRequest.
+const sessionRotationDoneKey = "lurus_session_rotated"
 
 // errSessionRotationUnsupported is returned when the session object behind
 // sessions.Default(c) is not the gin-contrib implementation and therefore
@@ -54,10 +53,14 @@ var rotateUnsupportedOnce sync.Once
 //	resolveSessionIdentity (auth.go)           — the SDK-bridge self-heal arm
 //
 // That list is not maintained by hand:
-// session_identity_write_sites_test.go parses both packages, collects the
-// session.Set("id"/"username") sites and fails when one of them does not
-// call RotateSessionID earlier in the same function — so a fifth site
-// cannot appear silently.
+// session_identity_write_sites_test.go parses both packages and fails when
+// an identity write does not call RotateSessionID earlier in the same
+// function. It recognises the two shapes this code base writes —
+// `s.Set("id", …)` on a value bound from sessions.Default(c), and
+// `sessions.Default(c).Set("id", …)` written inline — and reports a receiver
+// or a key it cannot resolve as a failure rather than skipping it, so a
+// fifth site has to be written in a shape nobody here uses AND get past the
+// unclassifiable arm to land unrotated.
 //
 // Why: each of those sites wrote the user's identity into whatever session
 // the incoming cookie already named, and redistore keeps the id it was
@@ -82,12 +85,30 @@ var rotateUnsupportedOnce sync.Once
 // are best-effort and log instead: neither failure undoes the fresh id the
 // browser was just handed.
 //
-// Out of scope by construction: POST /api/v2/bridge/exchange called WITHOUT
-// a cookie (the usual e2e shape) rotates nothing, because there is no prior
-// id to retire; and the switch/lutu service callers authenticate with a
-// bearer token rather than a hub session cookie, so their response shapes
-// are untouched by this change.
+// Scope, stated rather than implied:
+//   - one rotation per request (sessionRotationDoneKey above); a second call
+//     on the same *gin.Context returns nil without minting anything.
+//   - POST /api/v2/bridge/exchange called WITHOUT a cookie (the usual e2e
+//     shape) rotates nothing: there is no prior id to retire, and the
+//     caller's own Save mints one.
+//   - the switch/lutu service callers authenticate with a bearer token
+//     rather than a hub session cookie, so their response shapes are
+//     untouched by this change.
+//   - residue: several requests arriving CONCURRENTLY under the same planted
+//     cookie each rotate, since they do not coordinate and each still sees
+//     the planted id. The browser keeps the last cookie and the earlier new
+//     ids linger in Redis until the store's TTL expires them. They do not
+//     become registry rows on the SDK-bridge path: authHelper's
+//     repo.UpsertUserSessionSeen call sits behind `!useAccessToken`, which
+//     that arm sets. The planted id is deleted by each of them, which is the
+//     property that matters here.
 func RotateSessionID(c *gin.Context) error {
+	if done, exists := c.Get(sessionRotationDoneKey); exists {
+		if rotated, _ := done.(bool); rotated {
+			return nil
+		}
+	}
+
 	s := sessions.Default(c)
 
 	holder, ok := s.(interface{ Session() *gsessions.Session })
@@ -108,6 +129,7 @@ func RotateSessionID(c *gin.Context) error {
 	if err := s.Save(); err != nil {
 		return err
 	}
+	c.Set(sessionRotationDoneKey, true)
 
 	// Nothing to retire: a cookie-backed store carries no id at all, and a
 	// first-ever visit had none either. Guarding on "the id actually
@@ -140,7 +162,7 @@ func deleteStoreSessionKey(c *gin.Context, sessionKey string) {
 	if sessionKey == "" || !common.RedisEnabled || common.RDB == nil {
 		return
 	}
-	if err := common.RedisDel(c.Request.Context(), sessionStoreKeyPrefix+sessionKey); err != nil {
-		common.SysLog("session rotation: RedisDel failed for " + sessionStoreKeyPrefix + sessionKey + ": " + err.Error())
+	if err := common.RedisDel(c.Request.Context(), common.SessionStoreKeyPrefix+sessionKey); err != nil {
+		common.SysLog("session rotation: RedisDel failed for " + common.SessionStoreKeyPrefix + sessionKey + ": " + err.Error())
 	}
 }

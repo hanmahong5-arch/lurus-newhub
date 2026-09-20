@@ -287,3 +287,68 @@ func TestRatioSyncEgressMarkers_StillMatchTheGuards(t *testing.T) {
 		}
 	}
 }
+
+// TestFetchUpstreamRatios_DomainBlacklistIsEnforcedBeforeTheDial is the
+// discriminating case for the PRE-DIAL check (cycle-13 L8 repair r2,
+// D-L8-6). The two refusal cases above are also refused by the shared
+// client's dial-time guard, so on their own they no longer prove the
+// pre-dial check is doing anything: deleting it left them green.
+//
+// This posture takes the dial guard out of the picture — allow_private_ip
+// is the operator lever for in-cluster inference and relay_dial_guard.go
+// returns nil immediately when it is on — and leaves the host on the
+// operator's domain blacklist. Scheme, port, domain list and IP list rules
+// live ONLY in app.ValidateOutboundURL (common/ssrf_protection.go applies
+// them; the dial guard deliberately enforces the private-IP rule alone), so
+// this row is refused by the pre-dial check or by nothing at all.
+//
+// The second half is the control: the SAME listener reached by IP literal
+// (which the domain blacklist cannot match) is fetched for real. Without it
+// a "refused" result here would also be satisfied by an implementation that
+// refuses everything in this configuration.
+func TestFetchUpstreamRatios_DomainBlacklistIsEnforcedBeforeTheDial(t *testing.T) {
+	fs := system_setting.GetFetchSetting()
+	prev := *fs
+	fs.EnableSSRFProtection = true
+	fs.AllowPrivateIp = true
+	fs.DomainFilterMode = false // blacklist mode
+	fs.DomainList = []string{"localhost"}
+	fs.IpFilterMode = false
+	fs.IpList = nil
+	fs.ApplyIPFilterForDomain = false
+	t.Cleanup(func() { *fs = prev })
+
+	listener, conns := countingLoopbackServer(t)
+	parsed, err := url.Parse(listener)
+	if err != nil {
+		t.Fatalf("parse listener url %q: %v", listener, err)
+	}
+
+	blacklisted := "http://localhost:" + parsed.Port()
+	resp := postRatioSync(t, `{"upstreams":[{"name":"probe","base_url":"`+blacklisted+`"}],"timeout":2}`)
+	if len(resp.Data.TestResults) != 1 {
+		t.Fatalf("test_results = %d entries, want 1: %+v", len(resp.Data.TestResults), resp.Data.TestResults)
+	}
+	if got := resp.Data.TestResults[0]; got.Error != ratioSyncEgressRefusedMessage {
+		t.Errorf("status = %q error = %q, want the fixed refusal %q — a host on the operator's domain blacklist was fetched, "+
+			"which means nothing on this endpoint enforces the scheme/port/domain/IP rules any more",
+			got.Status, got.Error, ratioSyncEgressRefusedMessage)
+	}
+	if n := conns.Load(); n != 0 {
+		t.Errorf("the blacklisted host accepted %d connection(s) — the list rules are enforced before the dial or not at all", n)
+	}
+
+	// Control row: same listener, address the blacklist cannot match.
+	allowed := "http://127.0.0.1:" + parsed.Port()
+	ctrl := postRatioSync(t, `{"upstreams":[{"name":"control","base_url":"`+allowed+`"}],"timeout":5}`)
+	if len(ctrl.Data.TestResults) != 1 {
+		t.Fatalf("control test_results = %d entries, want 1: %+v", len(ctrl.Data.TestResults), ctrl.Data.TestResults)
+	}
+	if got := ctrl.Data.TestResults[0]; got.Status != "success" {
+		t.Fatalf("control status = %q error = %q, want \"success\": in this posture loopback is admitted, so the row above "+
+			"must be refused by the domain rule rather than by a blanket refusal", got.Status, got.Error)
+	}
+	if n := conns.Load(); n != 1 {
+		t.Errorf("listener saw %d connection(s) in total, want exactly 1 (the control row) ", n)
+	}
+}

@@ -19,6 +19,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -113,6 +114,20 @@ func setupRotationProbe(t *testing.T) *rotationProbe {
 		}
 		c.JSON(http.StatusOK, gin.H{"session_id": sessions.Default(c).ID()})
 	})
+	// Two rotations inside ONE request, reporting the id each of them left
+	// behind: the per-request marker is what makes the second a no-op.
+	r.GET("/rotate-twice", func(c *gin.Context) {
+		if err := RotateSessionID(c); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		first := sessions.Default(c).ID()
+		if err := RotateSessionID(c); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"first": first, "second": sessions.Default(c).ID()})
+	})
 	// c.Set(zita.ContextKey, …) is the seam OptionalZitaIdentity uses to
 	// publish the platform identity ahead of UserAuth on the real
 	// /api/v2 chain (api-v2-router.go), and the seam the existing
@@ -152,8 +167,8 @@ func (p *rotationProbe) plant(t *testing.T) (cookie *http.Cookie, id string) {
 	if id == "" {
 		t.Fatalf("plant session: empty session id, body=%s", w.Body.String())
 	}
-	if n, err := p.rdb.Exists(context.Background(), sessionStoreKeyPrefix+id).Result(); err != nil || n == 0 {
-		t.Fatalf("plant session: %s%s should exist in Redis (err=%v exists=%d)", sessionStoreKeyPrefix, id, err, n)
+	if n, err := p.rdb.Exists(context.Background(), common.SessionStoreKeyPrefix+id).Result(); err != nil || n == 0 {
+		t.Fatalf("plant session: %s%s should exist in Redis (err=%v exists=%d)", common.SessionStoreKeyPrefix, id, err, n)
 	}
 	return cookie, id
 }
@@ -183,13 +198,13 @@ func (p *rotationProbe) assertRotated(t *testing.T, planted *http.Cookie, plante
 		t.Errorf("the request handed back the SAME session cookie value it was given — a cookie planted before authentication is now the authenticated session")
 	}
 
-	keys, err := p.rdb.Keys(context.Background(), sessionStoreKeyPrefix+"*").Result()
+	keys, err := p.rdb.Keys(context.Background(), common.SessionStoreKeyPrefix+"*").Result()
 	if err != nil {
-		t.Fatalf("redis KEYS %s*: %v", sessionStoreKeyPrefix, err)
+		t.Fatalf("redis KEYS %s*: %v", common.SessionStoreKeyPrefix, err)
 	}
 	minted := 0
 	for _, k := range keys {
-		if k == sessionStoreKeyPrefix+plantedID {
+		if k == common.SessionStoreKeyPrefix+plantedID {
 			t.Errorf("%s still exists in Redis after the identity write — the pre-authentication session must be destroyed, not merely re-cookied", k)
 			continue
 		}
@@ -330,5 +345,94 @@ func TestRotateSessionID_RetiresTheOldRegistryRow(t *testing.T) {
 	}
 	if reloaded.RevokeReason != entity.SessionRevokeReasonRotated {
 		t.Errorf("revoke_reason = %q, want %q", reloaded.RevokeReason, entity.SessionRevokeReasonRotated)
+	}
+}
+
+// sessionKeyCount counts the store's session keys currently in Redis.
+func (p *rotationProbe) sessionKeyCount(t *testing.T) (int, []string) {
+	t.Helper()
+	keys, err := p.rdb.Keys(context.Background(), common.SessionStoreKeyPrefix+"*").Result()
+	if err != nil {
+		t.Fatalf("redis KEYS %s*: %v", common.SessionStoreKeyPrefix, err)
+	}
+	return len(keys), keys
+}
+
+// TestRotateSessionID_AtMostOncePerRequest (D-L8-10). Rotation is reachable
+// more than once in a single request — two authenticating middlewares on one
+// chain, or a handler that rotates behind UserAuth — and each extra rotation
+// costs a Redis write, a Set-Cookie the browser will overwrite, and one more
+// id nobody can reach. The second call on the same gin context has to be a
+// no-op, and "no-op" is observable: the id the request ends on is the id the
+// FIRST rotation minted, and the store holds exactly that one session.
+func TestRotateSessionID_AtMostOncePerRequest(t *testing.T) {
+	p := setupRotationProbe(t)
+	planted, plantedID := p.plant(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/rotate-twice", nil)
+	req.AddCookie(planted)
+	w := httptest.NewRecorder()
+	p.engine.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("rotate-twice status = %d body=%s", w.Code, w.Body.String())
+	}
+
+	var got struct {
+		First  string `json:"first"`
+		Second string `json:"second"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("parse body %s: %v", w.Body.String(), err)
+	}
+	if got.First == "" {
+		t.Fatalf("no id after the first rotation: %s", w.Body.String())
+	}
+	if got.First == plantedID {
+		t.Fatalf("the first rotation did not mint a new id (%s) — this case cannot say anything about the second", plantedID)
+	}
+	if got.Second != got.First {
+		t.Errorf("second rotation minted %q on top of %q — a request must rotate at most once, or every extra call strands a session key nobody holds",
+			got.Second, got.First)
+	}
+
+	n, keys := p.sessionKeyCount(t)
+	if n != 1 {
+		t.Errorf("Redis holds %d session keys after one request, want 1: %v", n, keys)
+	}
+	for _, k := range keys {
+		if k == common.SessionStoreKeyPrefix+plantedID {
+			t.Errorf("%s survived the rotation", k)
+		}
+	}
+}
+
+// TestSDKSelfHealArm_NoHubCookie_MintsOneSessionWithoutRotating (D-L8-10).
+// The self-heal arm runs on EVERY request from an SDK-bridge user whose gin
+// session carries no identity yet — the first screen fires a dozen of those
+// in parallel. When the request brought no hub cookie at all there is no
+// pre-authentication id to retire (nothing was planted, nothing can be
+// fixated), and the identity write below the arm mints an id by itself; a
+// rotation there would only add a second store write and a second Set-Cookie
+// per request. So the arm rotates when the request PRESENTED an id, and this
+// case pins the other branch: one session cookie written, one session key in
+// the store, and the request still authenticated.
+func TestSDKSelfHealArm_NoHubCookie_MintsOneSessionWithoutRotating(t *testing.T) {
+	p := setupRotationProbe(t)
+
+	w := httptest.NewRecorder()
+	p.engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v2/probe", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("probe status = %d body=%s", w.Code, w.Body.String())
+	}
+	if want := fmt.Sprintf(`"id":%d`, p.user.Id); !strings.Contains(w.Body.String(), want) {
+		t.Fatalf("probe body %s does not carry %s — the self-heal arm did not authenticate the request", w.Body.String(), want)
+	}
+
+	if cookies := w.Header().Values("Set-Cookie"); len(cookies) != 1 {
+		t.Errorf("the cookie-less request wrote %d Set-Cookie headers, want 1 (the self-heal save alone): %v",
+			len(cookies), cookies)
+	}
+	if n, keys := p.sessionKeyCount(t); n != 1 {
+		t.Errorf("Redis holds %d session keys after one cookie-less request, want 1: %v", n, keys)
 	}
 }

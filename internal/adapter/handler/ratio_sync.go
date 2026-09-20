@@ -235,10 +235,13 @@ func FetchUpstreamRatios(c *gin.Context) {
 			if lastErr != nil {
 				// The log keeps the full error (an operator reading pod logs
 				// is already inside the boundary); the caller gets the fixed
-				// message when it was the egress policy that refused. The
-				// other two error sinks in this function cannot carry a guard
-				// error: one is a request-build failure, the other a decode
-				// failure after a response arrived.
+				// message when it was the egress policy that refused. This is
+				// the sink the mapping is needed at: the other error sinks in
+				// this function sit either before any dial (the request-build
+				// failure) or after a response has already arrived (non-200
+				// status, decode failure, the upstream's own message, the
+				// unrecognised-shape refusal), so a guard error does not
+				// reach them.
 				logger.LogWarn(c.Request.Context(), "http error on "+chItem.Name+": "+lastErr.Error())
 				ch <- upstreamResult{Name: uniqueName, Err: ratioSyncUpstreamErrorMessage(lastErr)}
 				return
