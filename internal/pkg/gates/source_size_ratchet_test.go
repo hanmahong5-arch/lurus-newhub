@@ -47,7 +47,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/repo/token.go":                   794,
 	"internal/adapter/repo/user.go":                    1206,
 	"internal/app/convert.go":                          1304,
-	"internal/app/quota.go":                            1383, // +7 (cycle-13 hand-finish): the TokenId > 0 guard on the per-key leg and why; one condition, six comment lines
+	"internal/app/quota.go":                            1386, // +10 (cycle-13 hand-finish + the 402 ASCII fix): the TokenId > 0 guard and why, plus three lines saying why the pre-consume rejection formats ASCII
 	"internal/pkg/common/identity_client.go":           834,
 	"internal/pkg/dto/openai_request.go":               1020,
 	// NEW ROW, not a raise: metrics.go crossed the 800 threshold in cycle 13

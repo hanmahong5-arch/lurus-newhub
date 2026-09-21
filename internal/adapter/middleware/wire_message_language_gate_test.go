@@ -10,6 +10,17 @@ package middleware
 // reintroducing a Chinese literal into a wire-facing error constructor.
 //
 // Scope, stated precisely so this is not read as more than it is: a go/ast
+// BLIND SPOT, found the hard way (2026-09-21): this gate reads string
+// LITERALS in the scanned files. A message assembled with %s from a helper in
+// ANOTHER package is ASCII here and not necessarily ASCII on the wire — the
+// pre-consume 402 built in internal/app/quota.go interpolated
+// logger.FormatQuota, which renders a fullwidth ＄ (and ¥ under a CNY
+// display), and a live UAT probe caught it after this gate had been green all
+// cycle. internal/app is not scanned either. The boundary oracle for that
+// path is TestPreConsumeTokenQuota_WireMessageIsASCII_UnderEveryDisplayType
+// (internal/app); a green run here does not prove a wire message is ASCII,
+// only that the literals it scanned are.
+//
 // scan of every non-test .go file under internal/adapter/middleware,
 // internal/adapter/repo, and internal/app/relay (recursive, so its "helper"
 // and "common_handler" subpackages are covered too) for CallExpr nodes whose

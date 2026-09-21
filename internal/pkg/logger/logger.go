@@ -186,7 +186,29 @@ func LogQuota(quota int) string {
 	}
 }
 
-// FormatQuota formats quota value based on display type setting
+// FormatQuotaASCII renders a quota as a plain-ASCII USD amount, whatever the
+// operator has set QuotaDisplayType to. It exists for messages that go out on
+// the API wire.
+//
+// FormatQuota below is display-type dependent by design — the operator picks
+// the currency their logs and console speak. That is the wrong dependency for
+// an error.message: a machine-facing 402 became "＄0.000002" on a default
+// deployment (the fullwidth U+FF04 this package has carried from upstream)
+// and "¥0.0000142" on a CNY one. The cycle-13 AST language gate did not see
+// either, because it scans string LITERALS under middleware/repo/relay and
+// this text is interpolated in from internal/pkg/logger — found instead by a
+// live UAT probe on 2026-09-21, after the claim "the 402 is ASCII on all
+// three wires" had already been written down for the middleware path that
+// was true of.
+//
+// The unit is the API's own: quota / common.QuotaPerUnit, the baseline-USD
+// number every other wire field is denominated in.
+func FormatQuotaASCII(quota int) string {
+	return fmt.Sprintf("$%.6f", float64(quota)/common.QuotaPerUnit)
+}
+
+// FormatQuota formats quota value based on display type setting.
+// NOT for wire messages — see FormatQuotaASCII above.
 func FormatQuota(quota int) string {
 	q := float64(quota)
 	switch operation_setting.GetQuotaDisplayType() {

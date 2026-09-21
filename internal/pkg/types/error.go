@@ -690,10 +690,11 @@ func ErrOptionWithTopupURL() NewAPIErrorOptions {
 // carries the RAW internal quota integer (common.QuotaPerUnit units == 1
 // baseline USD), deliberately NOT the same unit as the human-readable
 // error.message text: PreConsumeQuota's ErrTokenQuotaInsufficient path
-// builds that message via logger.FormatQuota, which renders in whatever
-// currency operation_setting.GetQuotaDisplayType() is configured for (USD,
-// CNY, or a custom currency/rate) — a moving target this hint must not try
-// to match. Naming the raw-unit field explicitly (rather than reusing the
+// builds that message via logger.FormatQuotaASCII, a baseline-USD amount
+// ("$0.000002") that no longer moves with the operator's display currency —
+// it used to use logger.FormatQuota and rendered in whatever
+// operation_setting.GetQuotaDisplayType() was set to, which also put a
+// fullwidth ＄ / ¥ on the wire. Naming the raw-unit field explicitly (rather than reusing the
 // ambiguous "token_remain_quota" name) is the fix for a prior defect where
 // the same JSON response carried this integer under that name right next to
 // a currency-formatted number in .message, differing by ~5x10^5 with no unit

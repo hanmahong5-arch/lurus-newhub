@@ -119,7 +119,7 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 				relayInfo.PlatformPreAuthID = 0
 				return types.NewErrorWithStatusCode(
 					fmt.Errorf("insufficient quota: available %s, required %s",
-						logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
+						logger.FormatQuotaASCII(userQuota), logger.FormatQuotaASCII(preConsumedQuota)),
 					types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
 					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
 					types.ErrOptionWithTopupURL())
@@ -244,7 +244,7 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 					// fast path returns for insufficient local quota.
 					return types.NewErrorWithStatusCode(
 						fmt.Errorf("insufficient quota: available %s, required %s",
-							logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
+							logger.FormatQuotaASCII(userQuota), logger.FormatQuotaASCII(preConsumedQuota)),
 						types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
 						types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
 						types.ErrOptionWithTopupURL())
