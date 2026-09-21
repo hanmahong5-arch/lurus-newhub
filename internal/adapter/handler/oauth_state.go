@@ -2,12 +2,12 @@ package handler
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -35,7 +35,11 @@ func computeStateHMAC(data []byte) string {
 // Format: base64(json).hmac_hex
 // Returns: state (signed), nonce (for ID token verification), error
 func generateOAuthState(tenantSlug string, redirectURL string) (string, string, error) {
-	// Generate random nonce (used for both state and ID token verification)
+	// Generate random nonce (used for both state and ID token verification).
+	// crypto/rand, not math/rand: this nonce is the CSRF binding of the whole
+	// redirect and is checked against the ID token, so it must be
+	// unpredictable, not merely well-distributed (the moved code used
+	// math/rand.Read; the lint pass on the move surfaced it).
 	nonceBytes := make([]byte, 32) // 256 bits for security
 	if _, err := rand.Read(nonceBytes); err != nil {
 		return "", "", fmt.Errorf("failed to generate nonce: %w", err)

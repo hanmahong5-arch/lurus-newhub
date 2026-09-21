@@ -207,7 +207,8 @@ func TestDrainer_ResetForTest(t *testing.T) {
 func TestDefaultDrainer_IsProcessWideSingleton(t *testing.T) {
 	t.Cleanup(func() { Default().ResetForTest() })
 
-	if Default() != Default() {
+	first, second := Default(), Default()
+	if first != second {
 		t.Fatal("Default() must return the same instance on every call")
 	}
 	if IsDraining() {

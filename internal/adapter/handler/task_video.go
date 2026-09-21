@@ -305,6 +305,7 @@ func resettleVideoTask(ctx context.Context, task *repo.Task, modelName string, q
 	if task.SubmitTime <= 0 {
 		since = time.Now().Add(-taskChargeLookback).Unix()
 	}
+	//nolint:contextcheck // repo's cache refresh is detached by design, as at the sites this consolidates
 	ledger, resolved := resolveTaskChargeLedger(task.UserId, task.ChannelId, task.Quota, since)
 	if !resolved {
 		common.SysError(fmt.Sprintf(
@@ -327,6 +328,7 @@ func resettleVideoTask(ctx context.Context, task *repo.Task, modelName string, q
 			OriginModelName: modelName,
 			ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: task.ChannelId},
 		}
+		//nolint:contextcheck // the charge primitive detaches its cache writes, as every relay call site does
 		if err := app.PostConsumeQuota(info, quotaDelta, 0, false); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("补扣费失败: %s", err.Error()))
 			return false
@@ -344,6 +346,7 @@ func resettleVideoTask(ctx context.Context, task *repo.Task, modelName string, q
 		// Nothing to rewrite: keep the pre-cycle-13 behaviour rather than
 		// leaving the re-settlement with no trace at all. (The refund
 		// direction already wrote its own row inside refundTaskQuota.)
+		//nolint:contextcheck // RecordLog's username-cache refresh is detached by design
 		repo.RecordLog(task.UserId, repo.LogTypeSystem, note)
 	}
 	return true

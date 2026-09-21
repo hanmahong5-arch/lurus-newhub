@@ -173,6 +173,7 @@ func refundTaskQuota(ctx context.Context, userId, channelId, quota int, logConte
 	}
 	// A refund of the full charge is identified by that charge: the
 	// submission's consume row carries the same amount.
+	//nolint:contextcheck // repo's cache refresh is detached by design, as at the sites this consolidates
 	ledger, resolved := resolveTaskChargeLedger(userId, channelId, quota, time.Now().Add(-taskChargeLookback).Unix())
 	if !resolved {
 		common.SysError(fmt.Sprintf(

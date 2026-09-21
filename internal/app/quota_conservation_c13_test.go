@@ -204,7 +204,7 @@ func TestEveryPreConsumeSiteHasASettleOrRelease(t *testing.T) {
 		file, perr := parser.ParseFile(fset, path, nil, 0)
 		if perr != nil {
 			// A file another lane is mid-edit on must not turn this gate red.
-			return nil
+			return nil //nolint:nilerr // deliberate: see the line above
 		}
 		filesParsed++
 		dir := filepath.Dir(path)

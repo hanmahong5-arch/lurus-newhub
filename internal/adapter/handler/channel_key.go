@@ -29,14 +29,14 @@ func GetChannelKey(c *gin.Context) {
 	userId := c.GetInt("id")
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		common.ApiError(c, fmt.Errorf("渠道ID格式错误: %v", err))
+		common.ApiError(c, fmt.Errorf("渠道ID格式错误: %w", err))
 		return
 	}
 
 	// 获取渠道信息（包含密钥）
 	channel, err := repo.GetChannelById(channelId, true)
 	if err != nil {
-		common.ApiError(c, fmt.Errorf("获取渠道信息失败: %v", err))
+		common.ApiError(c, fmt.Errorf("获取渠道信息失败: %w", err))
 		return
 	}
 

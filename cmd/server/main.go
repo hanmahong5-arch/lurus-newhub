@@ -445,6 +445,7 @@ func run(ctx context.Context, startTime time.Time) error {
 		// FatalLog + os.Exit(1) from here, crash-looping the busiest pod. nil =
 		// count in-flight requests from metrics.ActiveConnections. Returns nil
 		// in every outcome by design; see doc/runbook/graceful-drain.md.
+		//nolint:contextcheck // the errgroup ctx is already cancelled here; the shutdown budget needs its own deadline (doc/runbook/graceful-drain.md)
 		_, _ = lifecycle.Default().Shutdown(shutdownCtx, httpServer, nil)
 		common.SysLog("HTTP server shutdown complete")
 		return nil

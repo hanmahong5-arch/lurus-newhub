@@ -46,6 +46,7 @@ func UpdateQuotaDataWithContext(ctx context.Context) {
 				// its own bounded deadline — passing ctx down would fail
 				// every query before it started.
 				flushCtx, cancelFlush := context.WithTimeout(context.Background(), quotaDataShutdownFlushTimeout)
+				//nolint:contextcheck // see above: the loop ctx is cancelled, the flush needs its own bounded deadline
 				flushQuotaDataCache(flushCtx)
 				cancelFlush()
 			} else {
