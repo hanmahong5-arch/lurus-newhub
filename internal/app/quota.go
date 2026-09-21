@@ -220,11 +220,11 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	quota := calculateAudioQuota(quotaInfo)
 
 	if userQuota < quota {
-		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
+		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuotaASCII(userQuota), logger.FormatQuotaASCII(quota))
 	}
 
 	if !token.UnlimitedQuota && token.RemainQuota < quota {
-		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
+		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuotaASCII(token.RemainQuota), logger.FormatQuotaASCII(quota))
 	}
 
 	err = PostConsumeQuota(relayInfo, quota, 0, false)
@@ -808,8 +808,11 @@ func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 		if tok, gErr := repo.GetTokenByKey(relayInfo.TokenKey, false); gErr == nil && tok != nil {
 			remain = tok.RemainQuota
 		}
+		// FormatQuotaASCII, not FormatQuota: this error reaches the customer as
+		// a 402 error.message (pre_consume_quota.go wraps it), and the wire is
+		// ASCII whatever currency the operator's console speaks.
 		return fmt.Errorf("%w, token remain quota: %s, need quota: %s",
-			ErrTokenQuotaInsufficient, logger.FormatQuota(remain), logger.FormatQuota(quota))
+			ErrTokenQuotaInsufficient, logger.FormatQuotaASCII(remain), logger.FormatQuotaASCII(quota))
 	}
 	return nil
 }
