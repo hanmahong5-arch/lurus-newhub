@@ -6,9 +6,10 @@
 #   bash scripts/stage-rollback.sh --restore  # restore forward (undo the rollback)
 #
 # Mechanism:
-#   rollback: kubectl rollout undo deployment/lurus-newhub -n lurus-staging
-#             (Kubernetes keeps the previous ReplicaSet; undo swaps back to it)
-#   restore:  kubectl rollout undo deployment/lurus-newhub -n lurus-staging
+#   rollback: kubectl rollout undo deployment/lurus-newhub -n "$NAMESPACE"
+#             (NAMESPACE defaults to lurus-newhub, the live ns — see below;
+#             Kubernetes keeps the previous ReplicaSet; undo swaps back to it)
+#   restore:  kubectl rollout undo deployment/lurus-newhub -n "$NAMESPACE"
 #             (calling undo again steps forward in revision history)
 #
 # Idempotency: running the script twice with no change in state between runs is

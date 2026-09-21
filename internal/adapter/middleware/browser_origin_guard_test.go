@@ -131,23 +131,49 @@ func TestBrowserOriginGuard_DecisionTable(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "cross_site_with_authorization_admitted",
+			// Cycle-13 L8. This row used to be 200: the guard consulted the
+			// credential headers BEFORE the cookie, so any attacker-supplied
+			// Authorization value — it does not have to authenticate
+			// anything — bought a pass out of the guard while authHelper
+			// still authenticated the request from the cookie it ignored.
+			// The junk value below is the whole point: it is not a
+			// credential, and the request is still a cookie-authenticated
+			// cross-site write.
+			name:       "cross_site_cookie_plus_junk_authorization_rejected",
 			method:     http.MethodPost,
 			cookies:    []*http.Cookie{ginSessionCookie()},
-			headers:    map[string]string{"Sec-Fetch-Site": "cross-site", "Authorization": "Bearer sk-not-a-real-key"},
-			wantStatus: http.StatusOK,
+			headers:    map[string]string{"Sec-Fetch-Site": "cross-site", "Authorization": "Bearer not-a-real-key"},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "CROSS_SITE_REQUEST",
 		},
 		{
-			name:       "cross_site_with_api_key_admitted",
+			name:       "cross_site_cookie_plus_junk_api_key_rejected",
 			method:     http.MethodPost,
 			cookies:    []*http.Cookie{ginSessionCookie()},
 			headers:    map[string]string{"Sec-Fetch-Site": "cross-site", "X-API-Key": "lurus_ik_not_a_real_key"},
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusForbidden,
+			wantCode:   "CROSS_SITE_REQUEST",
 		},
 		{
 			name:       "cross_site_without_cookie_admitted",
 			method:     http.MethodPost,
 			headers:    map[string]string{"Sec-Fetch-Site": "cross-site"},
+			wantStatus: http.StatusOK,
+		},
+		{
+			// The relay / switch / lutu / internal-API callers: a credential
+			// header and NO browser session cookie. They keep passing, and
+			// they pass because of the cookie row, not because of the header
+			// — which is what makes deleting the header exemption safe.
+			name:       "credential_header_without_cookie_admitted",
+			method:     http.MethodPost,
+			headers:    map[string]string{"Sec-Fetch-Site": "cross-site", "Authorization": "Bearer sk-relay-client"},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "api_key_header_without_cookie_admitted",
+			method:     http.MethodPost,
+			headers:    map[string]string{"Sec-Fetch-Site": "cross-site", "X-API-Key": "lurus_ik_internal_caller"},
 			wantStatus: http.StatusOK,
 		},
 		{

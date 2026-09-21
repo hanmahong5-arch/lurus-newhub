@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -119,6 +120,15 @@ func ZitaBootstrap(c *gin.Context) {
 			"message": "User account is disabled",
 		})
 		return
+	}
+
+	// Retire any pre-authentication session id before this request becomes
+	// an authenticated one (middleware/session_rotation.go). A failure here
+	// is logged and the login continues — the fallback inside
+	// RotateSessionID has already cleared whatever the incoming cookie
+	// carried.
+	if err := middleware.RotateSessionID(c); err != nil {
+		common.SysError(fmt.Sprintf("zita-bootstrap: session rotation failed for user %d: %v", user.Id, err))
 	}
 
 	session := sessions.Default(c)

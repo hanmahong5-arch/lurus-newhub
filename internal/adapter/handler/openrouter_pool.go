@@ -12,9 +12,18 @@ import (
 
 // GetOpenRouterApiPoolStatus handles GET /api/openrouter-sync/api-pool.
 // Returns a snapshot of every multi-key OpenRouter channel's per-key state
-// for admin monitoring. Key strings are masked (prefix only) — never returned in full.
+// for admin monitoring. Key strings are masked (prefix only) — never returned
+// in full. The route is AdminAuth-gated today (role >= admin, not
+// necessarily root — W hand-off raises it to RootAuth), so a tenant admin can
+// reach this handler; the scope below keeps that caller to their own
+// tenant's channels the same way handler.DeleteHistoryLogs and
+// handler.GetAllLogs already scope their reads (cycle 13, V1DOORS/SECURITY-14).
 func GetOpenRouterApiPoolStatus(c *gin.Context) {
-	channels, err := repo.ListOpenRouterMultiKeyChannels()
+	scope := repo.AllTenantsForAdmin()
+	if c.GetInt("role") < common.RoleRootUser {
+		scope = repo.ForTenant(c.GetString("tenant_id"))
+	}
+	channels, err := repo.ListOpenRouterMultiKeyChannelsForScope(scope)
 	if err != nil {
 		common.ApiError(c, err)
 		return

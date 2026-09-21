@@ -22,12 +22,23 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /*
- * File-size ratchet for web/src (cycle 12 W, 2026-09-19). Every non-test
- * .js/.jsx above THRESHOLD lines on that day is listed with its line count as
- * its ceiling. A listed file may shrink (lower its row in the same change), it
- * may not grow past its ceiling, and no unlisted file may cross THRESHOLD.
- * This is not a review of the listed files; it is what stops the next cycle's
+ * File-size ratchet for web/src. Every non-test .js/.jsx above THRESHOLD
+ * lines is listed with its measured line count as its ceiling. The ratchet
+ * is two-sided: a listed file may not grow past its ceiling, and a listed
+ * file BELOW its ceiling fails too, with the replacement row to paste. It is
+ * not a review of the listed files; it is what stops the next cycle's
  * extractions from being undone quietly.
+ *
+ * The shrink side used to be a console.info nobody read, so the numbers went
+ * stale within a day of being written. Since cycle 13 (plan section 2,
+ * "只许缩不许长") the win has to be recorded by the same change that won it,
+ * and growth is paid for by extracting into a sibling module rather than by
+ * a quiet +40 here.
+ *
+ * Measured 2026-09-20 (cycle-13 W). Log/index.jsx came down from 1794 by the
+ * extraction of pages/v2/Log/window.js (the query time bound) and
+ * pages/v2/Log/row.js (row interpretation); Dashboard/index.jsx came down
+ * from 1324 by L7's LoadErrorPanel extraction.
  */
 const CEILINGS = {
   'components/hifi/HFShell.jsx': 950,
@@ -38,12 +49,12 @@ const CEILINGS = {
   'helpers/utils.jsx': 899,
   'pages/Setting/Ratio/UpstreamRatioSync.jsx': 873,
   'pages/v2/Admin/ModelRateLimits/index.jsx': 915,
-  'pages/v2/Billing/index.jsx': 835,
+  'pages/v2/Billing/index.jsx': 833, // redeemFailure() extracted to Billing/redeemFailure.js (cycle-13 hand-finish)
   'pages/v2/Channel/index.jsx': 1906,
   'pages/v2/Chat/index.jsx': 879,
-  'pages/v2/Dashboard/index.jsx': 1247,
+  'pages/v2/Dashboard/index.jsx': 1242, // +4 (cycle-13 hand-finish): pre-settle caption — one const and a three-line rationale
   'pages/v2/Flows/index.jsx': 1446,
-  'pages/v2/Log/index.jsx': 1769,
+  'pages/v2/Log/index.jsx': 1726,
   'pages/v2/Playground/index.jsx': 1084,
   'pages/v2/Pricing/index.jsx': 801,
   'pages/v2/Settings/index.jsx': 1909,
@@ -98,7 +109,7 @@ describe('web/src file-size ratchet', () => {
           );
         else if (n < CEILINGS[r])
           shrank.push(
-            `${r}: ${n} lines, ceiling ${CEILINGS[r]} — lower the ceiling`,
+            `${r}: ${n} lines, ceiling ${CEILINGS[r]} — replace that row with:  '${r}': ${n},`,
           );
       } else if (n > THRESHOLD) {
         unlisted.push(`${r}: ${n} lines and not in CEILINGS`);
@@ -108,10 +119,10 @@ describe('web/src file-size ratchet', () => {
       if (!seen.has(r))
         over.push(`${r}: listed but not found — remove the row`);
     }
-    if (shrank.length)
-      console.info(
-        `files below their ceiling (lower them):\n  ${shrank.join('\n  ')}`,
-      );
+    expect(
+      shrank,
+      'a file is below its ceiling — lower the row in the same change that shrank the file, or the ratchet quietly becomes permission to grow back',
+    ).toEqual([]);
     expect(
       [...over, ...unlisted],
       'a file may shrink, not grow: extract from it or raise its row with a reason in the commit',

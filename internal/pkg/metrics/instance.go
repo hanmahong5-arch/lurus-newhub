@@ -3,8 +3,11 @@ package metrics
 import (
 	"time"
 
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskreg"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // These three series make replica-level attribution possible: which replica
@@ -66,7 +69,76 @@ var (
 		Name:      "instance_info",
 		Help:      "Constant 1, labeled with this instance's pod, namespace and version",
 	}, []string{"pod", "namespace", "version"})
+
+	// LeaderTaskAgeSeconds is a derived per-task gauge: seconds between "now"
+	// and this process's own LeaderTaskLastSuccess{task} reading, at the
+	// moment it was last refreshed. There is deliberately no ticker for it —
+	// a background goroutine started unconditionally from this package
+	// (imported almost everywhere) would leak into every test binary that
+	// transitively imports it. Instead it is a companion refresh of the
+	// EXISTING success stamp: every call to RecordLeaderTaskSuccess
+	// recomputes this gauge for the registered tasks taskreg knows about
+	// (not just the one that just succeeded), so whichever registered task
+	// ticks most often — today the OpenRouter pool reaper, every 30s —
+	// doubles as the de-facto refresh heartbeat for the rest.
+	//
+	// Two classes of task are deliberately left WITHOUT a series here, both
+	// because the number this gauge would carry for them is not an age (see
+	// RecordLeaderTaskSuccess and leader_task_age_test.go's negative
+	// oracle):
+	//   - a task that has not stamped a success in THIS process yet: its
+	//     last-success reading is 0, so "now - last" would be ~1.79e9
+	//     seconds, not an age. channel-health-test is exactly this on a
+	//     default install (registered on every master-capable replica, only
+	//     stamps while AutoTestChannelEnabled is on, which defaults off), so
+	//     publishing that number would have made newhub_task_stalled
+	//     WARNING-by-construction on a healthy leader.
+	//   - a task taskreg reports as Active() == false: operator-disabled, so
+	//     it is not on a schedule it could be late for — the same reading
+	//     GET /api/v2/admin/system/tasks reports as standby rather than
+	//     overdue.
+	// Neither case goes dark: LeaderTaskLastSuccess itself still carries the
+	// task at the 0 its Start*WithContext entry point set at boot, and the
+	// system-tasks endpoint above pairs that with the leader/active metadata
+	// this gauge does not have.
+	//
+	// One honest limit that remains: exactly like LeaderTaskLastSuccess (see
+	// its doc comment above), this is a per-PROCESS reading — a demoted
+	// replica's copy of a leader-only task's age freezes at whatever it last
+	// computed rather than climbing, so an alert reading a random replica
+	// off the round-robin NodePort scrape (see newhub.conf's SCRAPE TOPOLOGY
+	// note) can under-report a stalled leader-only task exactly as easily as
+	// the raw timestamp series can — this gauge only saves the alert author
+	// from writing `$now - $this` themselves, it does not solve the
+	// replica-attribution problem.
+	LeaderTaskAgeSeconds = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "leader_task_age_seconds",
+		Help:      "Seconds since {task}'s last successful pass in this process, refreshed whenever any registered task succeeds",
+	}, []string{"task"})
 )
+
+// nowUnix is RecordLeaderTaskSuccess's clock, indirected for
+// leader_task_age_test.go's frozen-clock assertions (mirrors handler
+// package's systemTasksNow seam, v2_admin_system_tasks.go); production
+// leaves it as the real wall clock.
+var nowUnix = func() int64 { return time.Now().Unix() }
+
+// readGaugeValue reads a gauge's current value through the client library's
+// own Write(&dto.Metric{}) — the same mechanism prometheus/client_golang's
+// testutil.ToFloat64 uses internally — rather than scraping and parsing the
+// /metrics text exposition format. handler.readGaugeValue
+// (v2_admin_system_tasks.go) is the identical pattern one layer up; this
+// package cannot import that one (handler imports metrics, not the
+// reverse), so it keeps its own copy.
+func readGaugeValue(g prometheus.Gauge) float64 {
+	var m dto.Metric
+	if err := g.Write(&m); err != nil {
+		return 0
+	}
+	return m.GetGauge().GetValue()
+}
 
 // SetLeader publishes the current HA leadership state. Called from
 // common.SetLeader.
@@ -87,8 +159,30 @@ func SetLeader(held bool) {
 // reconcile, the OpenRouter pool reaper, channel-health-test) that call it
 // directly from their own tick body; not every caller is leader-gated —
 // see taskreg's LeaderOnly field for which ones are.
+//
+// As a companion refresh (see LeaderTaskAgeSeconds's doc comment), every
+// call also recomputes lurus_gateway_leader_task_age_seconds for the other
+// tasks taskreg.Snapshot() knows about, not just this one — except the two
+// cases where "now - last success" would not be an age: a task that has not
+// stamped a success in this process (reading 0), and a task taskreg reports
+// as Active() == false. Those get their age series DELETED rather than left
+// at a stale value, so the absence is unambiguous however the task's state
+// got there.
 func RecordLeaderTaskSuccess(task string) {
-	LeaderTaskLastSuccess.WithLabelValues(task).Set(float64(time.Now().Unix()))
+	now := nowUnix()
+	LeaderTaskLastSuccess.WithLabelValues(task).Set(float64(now))
+	for _, tk := range taskreg.Snapshot() {
+		if tk.Active != nil && !tk.Active() {
+			LeaderTaskAgeSeconds.DeleteLabelValues(tk.Name)
+			continue
+		}
+		last := readGaugeValue(LeaderTaskLastSuccess.WithLabelValues(tk.Name))
+		if last <= 0 {
+			LeaderTaskAgeSeconds.DeleteLabelValues(tk.Name)
+			continue
+		}
+		LeaderTaskAgeSeconds.WithLabelValues(tk.Name).Set(float64(now) - last)
+	}
 }
 
 // SetInstanceInfo publishes this pod's identity. Called once from

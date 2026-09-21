@@ -413,6 +413,7 @@ var (
 	// a hard DB error (not exhaustion) and could NOT be recorded — the honest
 	// residual gap after P0-3. Every increment is a known conservation-law
 	// violation that needs manual reconciliation; alert on any increase.
+	// ALERTABLE: lurus_gateway_credit_pool_debit_lost_total
 	CreditPoolDebitLostTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -432,6 +433,7 @@ var (
 	//                  pooled is the drift signal — the relay silently under-bills.
 	//   lookup_error — a hard DB error resolving the pool row; pool-gating state is
 	//                  unknown and the debit was skipped. Alert on any increase.
+	// ALERTABLE: lurus_gateway_credit_pool_lookup_miss_total
 	CreditPoolLookupMissTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -725,4 +727,97 @@ func SetNATSConnected(connected bool) {
 		return
 	}
 	NATSConnected.Set(0)
+}
+
+// LogRetentionDeletedTotal / LogRetentionPendingRows are cycle-13 L6's log
+// retention task's two series, declared here (L10) so the netdata alarm
+// this cycle adds (newhub_log_retention_backlog) and the task itself
+// (internal/lifecycle/log_retention.go, started from cmd/server/main.go by
+// the cycle-13 wiring pass) target one stable name. The task writes both
+// through RecordLogRetention / SetLogRetentionPending on every pass of every
+// ENABLED leg; a leg whose window is 0 (LOG_RETENTION_DAYS and
+// LOG_RETENTION_MONEY_DAYS default to 0 = off; DOWNLOAD_LOG_RETENTION_DAYS
+// defaults to 90 = on) never runs, so its `table` label is absent rather
+// than zero — read that as "retention off for that table", not "task
+// broken" (doc/runbook/log-retention.md).
+var (
+	// LogRetentionDeletedTotal counts rows the log-retention task has
+	// deleted, cumulative, by table ("logs" or "download_logs" per the
+	// plan's two retention tasks).
+	LogRetentionDeletedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "log_retention_deleted_total",
+			Help:      "Rows deleted by the log-retention task, cumulative, by table",
+		},
+		[]string{"table"},
+	)
+
+	// LogRetentionPendingRows is the row count the log-retention task's most
+	// recent pass still had left to delete when it hit its per-pass batch
+	// cap (LOG_RETENTION_MAX_BATCHES_PER_PASS) — i.e. the backlog it did
+	// NOT get to this pass, by table. 0 means the last pass cleared
+	// everything past the cutoff it looked for.
+	LogRetentionPendingRows = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "log_retention_pending_rows",
+			Help:      "Rows still past the retention cutoff after the log-retention task's most recent pass, by table",
+		},
+		[]string{"table"},
+	)
+)
+
+// RecordLogRetention adds n (rows deleted in one pass) to
+// LogRetentionDeletedTotal for the given table. Call with n==0 is a no-op
+// increment (still fine — Add(0) does not create a phantom event) but
+// callers should prefer skipping the call entirely when nothing ran.
+func RecordLogRetention(table string, n int) {
+	LogRetentionDeletedTotal.WithLabelValues(table).Add(float64(n))
+}
+
+// SetLogRetentionPending publishes the backlog LogRetentionPendingRows
+// gauge for the given table. Call once per pass, even when n==0 — a
+// GaugeVec exports no series at all for a label it has never been Set with,
+// so skipping the zero case would make "backlog cleared" indistinguishable
+// from "this table's pass never ran".
+func SetLogRetentionPending(table string, n int) {
+	LogRetentionPendingRows.WithLabelValues(table).Set(float64(n))
+}
+
+// ShutdownCutRequestsTotal counts requests that were still in flight when a
+// graceful-shutdown budget (GRACEFUL_SHUTDOWN_TIMEOUT) expired and were
+// therefore cut. Written from lifecycle.Drainer.Shutdown's
+// budget-exceeded arm (internal/lifecycle/drain.go) via
+// RecordShutdownCutRequests below; grep that helper for the current set of
+// call sites.
+//
+// Read it as a best-effort record, not an exact one. The increment happens
+// in the last instants of the process: the pod exits immediately after, and
+// the go.d scrape interval is 10s against a NodePort that round-robins
+// across replicas, so a given drain's increment is more likely to be lost
+// with the process than collected. It is a counter because a scrape that
+// DOES land is then comparable across pods; the paired
+// "graceful shutdown: budget exceeded" SysLog line (kept in drain.go) is
+// the record that survives regardless. No netdata alarm is bound to it for
+// that reason — see doc/runbook/graceful-drain.md.
+var ShutdownCutRequestsTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "shutdown_cut_requests_total",
+		Help:      "Requests still in flight when a graceful-shutdown budget expired (best effort: the process exits right after)",
+	},
+)
+
+// RecordShutdownCutRequests adds n cut requests to
+// ShutdownCutRequestsTotal. n <= 0 is ignored so a shutdown that cut
+// nothing cannot be mistaken for one that did.
+func RecordShutdownCutRequests(n int) {
+	if n <= 0 {
+		return
+	}
+	ShutdownCutRequestsTotal.Add(float64(n))
 }

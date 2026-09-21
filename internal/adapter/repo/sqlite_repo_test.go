@@ -1644,7 +1644,7 @@ func TestInternalApiKey_Toggle(t *testing.T) {
 		t.Fatal("key should be enabled after creation")
 	}
 
-	if err := ToggleInternalApiKey(apiKey.Id); err != nil {
+	if _, err := ToggleInternalApiKey(apiKey.Id); err != nil {
 		t.Fatalf("ToggleInternalApiKey: %v", err)
 	}
 	got, _ := GetInternalApiKeyById(apiKey.Id)
@@ -1653,7 +1653,7 @@ func TestInternalApiKey_Toggle(t *testing.T) {
 	}
 
 	// Toggle back
-	if err := ToggleInternalApiKey(apiKey.Id); err != nil {
+	if _, err := ToggleInternalApiKey(apiKey.Id); err != nil {
 		t.Fatalf("ToggleInternalApiKey 2: %v", err)
 	}
 	got, _ = GetInternalApiKeyById(apiKey.Id)

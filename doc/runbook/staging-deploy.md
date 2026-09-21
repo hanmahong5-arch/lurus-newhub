@@ -20,7 +20,7 @@ Verify a deploy landed:
 
 ```bash
 kubectl -n argocd get application lurus-newhub -o jsonpath='{.status.sync.status} {.status.health.status}{"\n"}'
-curl -fsS https://hub.lurus.cn/api/health | jq .
+for i in 1 2 3 4 5 6; do code=$(curl -sS -o /tmp/health.json -w '%{http_code}' https://hub.lurus.cn/api/health); [ "$code" = 200 ] && break; echo "health=$code (draining pod during a rollout answers 503; retrying)"; sleep 10; done; jq . /tmp/health.json
 ```
 
 If the Application shows `OutOfSync`/`Unknown` for longer than one poll
@@ -183,7 +183,10 @@ git push origin main
 
 # 3. ArgoCD converges on its next sync; kubelet finds the digest locally.
 ssh root@100.122.83.20 "kubectl -n lurus-newhub rollout status deployment/lurus-newhub --timeout=180s"
-curl -fsS https://hub.lurus.cn/api/status
+# /api/status answers 503 while a pod is draining (see "Expected transient
+# 503 during a rollout"), so poll for a 200 instead of failing on the first
+# reply:
+for i in $(seq 30); do code=$(curl -s -o /dev/null -w '%{http_code}' https://hub.lurus.cn/api/status); [ "$code" = 200 ] && break; sleep 3; done; echo "api/status -> $code"
 ```
 
 Do NOT `kubectl set image` here: selfHeal puts the git-pinned digest back, so
@@ -209,7 +212,10 @@ ssh root@100.122.83.20 "kubectl -n lurus-newhub rollout undo deployment/lurus-ne
   kubectl -n lurus-newhub rollout status deployment/lurus-newhub --timeout=120s"
 # 3. verify, then land the matching git revert and re-enable automated sync by
 #    re-applying deploy/k8s/argocd/application.yaml
-curl -fsS https://hub.lurus.cn/api/status
+# /api/status answers 503 while a pod is draining (see "Expected transient
+# 503 during a rollout"), so poll for a 200 instead of failing on the first
+# reply:
+for i in $(seq 30); do code=$(curl -s -o /dev/null -w '%{http_code}' https://hub.lurus.cn/api/status); [ "$code" = 200 ] && break; sleep 3; done; echo "api/status -> $code"
 ```
 
 ## Verify
@@ -218,13 +224,39 @@ curl -fsS https://hub.lurus.cn/api/status
 # deep health (200 healthy / 503 degraded). NB: r6-stage serves hub.lurus.cn;
 # test-newhub.lurus.cn has pointed at the isolated UAT instance (:30851) since
 # 2026-08-30, so verifying there proves nothing about this deployment.
-curl -fsS https://hub.lurus.cn/api/health | jq .
+for i in 1 2 3 4 5 6; do code=$(curl -sS -o /tmp/health.json -w '%{http_code}' https://hub.lurus.cn/api/health); [ "$code" = 200 ] && break; echo "health=$code (draining pod during a rollout answers 503; retrying)"; sleep 10; done; jq . /tmp/health.json
 # liveness (DB-free):
-curl -fsS https://hub.lurus.cn/api/status
+# /api/status answers 503 while a pod is draining (see "Expected transient
+# 503 during a rollout"), so poll for a 200 instead of failing on the first
+# reply:
+for i in $(seq 30); do code=$(curl -s -o /dev/null -w '%{http_code}' https://hub.lurus.cn/api/status); [ "$code" = 200 ] && break; sleep 3; done; echo "api/status -> $code"
 # active image:
 ssh root@100.122.83.20 "kubectl -n lurus-newhub get deploy lurus-newhub \
   -o jsonpath='{.spec.template.spec.containers[0].image}'"
 ```
+
+## Expected transient 503 during a rollout
+
+Right after a rollout is triggered (or a manual SIGTERM), the outgoing pod
+answers `503 {"status":"draining"}` on `/api/health` and
+`503 {"success":false,"status":"draining"}` on `/api/status` — this is the
+readiness/liveness flip described in `doc/runbook/graceful-drain.md`, not a
+failed deploy. Which is why the verification steps above poll instead of
+using `curl -fsS`: a single `-f` request that happens to land on the pod
+that is shutting down exits 22 and fails the step for the wrong reason.
+
+It clears once the old pod exits and the new pod's probes take over, bounded
+by `terminationGracePeriodSeconds` (the target this cycle sets is 90s, with
+`GRACEFUL_SHUTDOWN_TIMEOUT` 75s; the manifest edit lands in the wiring step
+of the same PR — read the live values with the Verify commands in
+`graceful-drain.md` rather than trusting these numbers). A relay stream that
+was still running when the old pod's `GRACEFUL_SHUTDOWN_TIMEOUT` elapsed is
+cut by design — see that runbook's "What gets cut" section before treating a
+`graceful shutdown: budget exceeded` log line as a bug. Since 2026-09-20
+`newhub_relay_5xx_elevated` excludes the probe paths (see that runbook's
+"The 5xx alarm no longer sees these 503s" section), so a WARNING from it
+inside the deploy window is no longer expected drain noise — it means real
+customer-facing 5xx during the rollout and is worth stopping for.
 
 ## Notes / verify-before-trust
 

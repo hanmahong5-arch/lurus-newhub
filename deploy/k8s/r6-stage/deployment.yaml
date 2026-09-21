@@ -33,7 +33,12 @@ spec:
       # (Was "parity with base deploy/k8s/deployment.yaml"; that base manifest
       # set was deleted 2026-08-24 — it still described the retired lurus-api
       # image in ns lurus-system. This overlay is the only newhub manifest.)
-      terminationGracePeriodSeconds: 40
+      # cycle-13 L11 graceful drain budget: preStop 5s +
+      # GRACEFUL_SHUTDOWN_TIMEOUT 75s + 10s margin for the remaining
+      # cleanup in run() (DB close, tracing shutdown, quota_data flush) = 90.
+      # Locked by deploy/k8s/deploy_consistency_test.go
+      # TestGracefulShutdownBudget; see doc/runbook/graceful-drain.md.
+      terminationGracePeriodSeconds: 90
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -114,9 +119,15 @@ spec:
             # UAT 2026-08-26 P-finding: the code default is FALSE, so from
             # launch until 2026-08-29 the gateway recorded ZERO error logs —
             # upstream relay failures left no queryable trace. Rows go into
-            # the shared logs table (LogTypeError) and age out through the
-            # same DeleteOldLog retention as consume logs, so volume is
-            # bounded.
+            # the shared logs table (LogTypeError). Retention is the
+            # log-retention leader task (cycle-13 L6): the window comes from
+            # LOG_RETENTION_DAYS, which is UNSET here, so nothing is deleted
+            # and the table is NOT bounded today. DeleteOldLog, which the
+            # previous text named, only ever ran from the operator-driven
+            # DELETE /api/log/. Setting a window is an owner decision --
+            # read doc/runbook/log-retention.md first (money rows have their
+            # own LOG_RETENTION_MONEY_DAYS window and a 400-day floor,
+            # because the invoice endpoints SUM the logs table directly).
             - name: ERROR_LOG_ENABLED
               value: "true"
             # OIDC ON since 2026-08-23. The formerly-missing credential now
@@ -227,28 +238,43 @@ spec:
               value: "master"
             - name: SYNC_FREQUENCY
               value: "60"
-            # Cycle-12 L8 pool ceiling. 3 replicas x 20 = 60 PostgreSQL
-            # connections today, on an instance shared with platform and the
-            # IdP; the code default is 1000 per pool (currentPoolSettings in
-            # internal/adapter/repo/main.go). A SECOND pool exists only if
-            # LOG_SQL_DSN is ever set -- InitLogDB aliases LOG_DB to DB
-            # otherwise, and neither manifest sets it -- so the x2 in the
-            # deploy_consistency_test.go budget arithmetic is headroom for that
-            # case, not today's count.
+            # Cycle-13 pool ceiling, sized against a MEASURED server budget
+            # (2026-09-20, R6 ns database, pod lurus-pg-0):
+            # max_connections = 100, 38 in use -- newhub 13, zitadel 8,
+            # newhub_uat 5, identity 3, lucrum 3, other 6. This deployment is
+            # the only multi-replica consumer: 3 replicas x 12 = 36.
+            # The previous rationale (2 pools x 20) was wrong for THIS
+            # deployment: a second pool exists only when LOG_SQL_DSN is set,
+            # and neither manifest sets it -- InitLogDB aliases LOG_DB to DB
+            # otherwise. deploy_consistency_test.go now counts pools that way
+            # (2 only if LOG_SQL_DSN is declared in the same manifest, else 1)
+            # instead of assuming x2 everywhere.
+            # IDLE == OPEN on purpose: ConnMaxIdleTime already reaps idle
+            # connections, so a lower idle cap only buys reconnect churn
+            # under the steady load 3 replicas produce.
             # Lowering this is an AVAILABILITY knob, not a latency one: the deep
             # readinessProbe's DB ping takes a pooled connection, so a saturated
             # pool answers /api/health with 503 and pulls replicas out of the
             # Service. See doc/runbook/db-pool-saturation.md.
             - name: SQL_MAX_OPEN_CONNS
-              value: "20"
+              value: "12"
             - name: SQL_MAX_IDLE_CONNS
-              value: "5"
+              value: "12"
+            # Per-tenant ceiling on concurrent relay requests: one tenant
+            # cannot spend the whole process upstream concurrency budget.
+            - name: RELAY_MAX_CONCURRENT_PER_TENANT
+              value: "64"
             # Below the 1Gi container limit so the Go heap backs off before the
             # cgroup OOM-kills the pod.
             - name: GOMEMLIMIT
               value: "900MiB"
+            # cycle-13 L11: bounds only how long http.Server.Shutdown waits
+            # for in-flight requests. A stream still running when it elapses
+            # is cut, logged and counted -- the process still exits 0.
+            # Must fit inside terminationGracePeriodSeconds (90) together
+            # with the 5s preStop sleep. doc/runbook/graceful-drain.md.
             - name: GRACEFUL_SHUTDOWN_TIMEOUT
-              value: "30s"
+              value: "75s"
             - name: LOG_FORMAT
               value: "json"
             # Lutu APP web_search tool — proxies to Tavily server-side
@@ -273,7 +299,14 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5
-            failureThreshold: 30
+            # 5 + 120x5 = 605s. This is the whole budget a boot migration
+            # has before kubelet SIGKILLs the pod mid-statement: 039's
+            # CREATE INDEX CONCURRENTLY on the logs table runs outside a
+            # transaction, so a kill leaves an INVALID index behind. The
+            # old 30 (=155s) was under that. Locked by
+            # deploy_consistency_test.go TestStartupProbeBudgetCoversAMigration;
+            # doc/runbook/database.md publishes the same 605s.
+            failureThreshold: 120
             timeoutSeconds: 3
           # Liveness stays SHALLOW (/api/status, no dependency checks). A deep
           # liveness that pinged the shared PG would restart all 3 pods at once

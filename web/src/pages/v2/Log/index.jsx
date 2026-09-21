@@ -38,7 +38,19 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
  * lands on any pod where an SSE stream would pin to one and break on churn.
  */
 
-const LOG_TYPE_ERROR = 5;
+import {
+  LOG_TYPE_ERROR,
+  attemptTagClass,
+  isSettlementFailed,
+  outcomeTag,
+  parseOther,
+  parseRouteAttempts,
+} from './row';
+import {
+  DEFAULT_LOOKBACK_SEC,
+  ID_FILTER_LOOKBACK_SEC,
+  computeStartTimeSec,
+} from './window';
 
 // Cross-product attribution (PR #168, 2026-09-07). Every relay format writes
 // Other.source_product; a row without one predates that PR or hit an
@@ -57,58 +69,6 @@ const SOURCE_PRODUCTS = [
   'memorus',
   'tally',
 ];
-
-// Outcome derived from the log type — error logs (type 5) must not render as a
-// green "200". We do not store the upstream HTTP status, so this reports the
-// recorded outcome class, not a fabricated status code. `label` doubles as the
-// i18n key suffix (console.log.outcome_<label>).
-const outcomeTag = (r) =>
-  Number(r?.type) === LOG_TYPE_ERROR
-    ? { cls: 'tag error', label: 'error' }
-    : { cls: 'tag ok', label: 'ok' };
-
-// Per-attempt routing trace, written by the relay only when a request bounced
-// across channels (single-attempt requests carry none). It lives under
-// other.admin_info, which the API strips for non-admin callers — so an empty
-// list here means "not applicable or not visible to you", never an error.
-const parseRouteAttempts = (row) => {
-  if (!row?.other) return [];
-  try {
-    const other =
-      typeof row.other === 'string' ? JSON.parse(row.other) : row.other;
-    const attempts = other?.admin_info?.route_attempts;
-    return Array.isArray(attempts) ? attempts : [];
-  } catch (_) {
-    return [];
-  }
-};
-
-const attemptTagClass = (outcome) =>
-  outcome === 'success'
-    ? 'tag ok'
-    : outcome === 'breaker_open'
-      ? 'tag'
-      : 'tag error';
-
-// The row's auxiliary payload (tier-filtered server-side): user rows carry
-// cache token counts and request_path; tenant-admin rows additionally carry
-// admin_info. Absent or corrupt payloads read as null, never as an error.
-const parseOther = (row) => {
-  if (!row?.other) return null;
-  try {
-    const o = typeof row.other === 'string' ? JSON.parse(row.other) : row.other;
-    return o && typeof o === 'object' ? o : null;
-  } catch (_) {
-    return null;
-  }
-};
-
-// L7: other.settlement is written by app.FlagSettlementOutcome
-// (internal/app/settlement_outcome.go) only when the consume-quota
-// settlement call for this row's request returned an error — the row still
-// shows a price (the debit path is untouched), so this is the only signal
-// on the row itself that the charge may not have actually landed.
-const isSettlementFailed = (row) => parseOther(row)?.settlement === 'failed';
 
 // Time to first token. Two identical hardcoded `NotAvailable` cells used to
 // live in the trace table and the live tail, both claiming "the log schema has
@@ -168,30 +128,6 @@ const fmtTok = (prompt, completion) => {
 const fmtCost = (quota) => formatUSD(quota);
 
 const PAGE_SIZE = 50;
-
-// request_id/upstream_request_id filter the `other` JSON column via an
-// unindexed extract (internal/adapter/repo/log.go, jsonOtherTextExpr) — a
-// plain index on `logs` is off the table this cycle (a CREATE INDEX would
-// hold ShareLock against the relay's own log writes; see runner.go). So the
-// search and paging paths attach a bounded start_time when an id filter is
-// set and the caller left the date pickers empty; the CSV export button
-// below builds its own id-less query from the same filter state and is not
-// covered by this bound.
-const ID_FILTER_LOOKBACK_SEC = 7 * 24 * 3600; // 7 days
-
-// Effective lower time bound for a logs/stat query: an explicit start wins;
-// otherwise an active id filter gets the lookback above, anchored on the end
-// bound when one is set (so the computed start_time can never land after an
-// explicit end_time) and on now() otherwise. Returns null when neither an
-// explicit start nor an id filter applies, meaning no bound is sent.
-const computeStartTimeSec = (start, end, hasIdFilter) => {
-  if (start) return Math.floor(new Date(start).getTime() / 1000);
-  if (!hasIdFilter) return null;
-  const anchorSec = end
-    ? Math.floor(new Date(end).getTime() / 1000)
-    : Math.floor(Date.now() / 1000);
-  return anchorSec - ID_FILTER_LOOKBACK_SEC;
-};
 
 // Live-tail tuning. 3s poll matches the plan; the buffer is bounded so a
 // long-running tail can't grow memory without limit (drop oldest at the cap).
@@ -813,6 +749,27 @@ const HFLog = () => {
           {tr(
             'console.log.id_window_hint',
             'id search — showing the last 7 days unless a start date is set',
+          )}
+        </div>
+      )}
+
+      {/* With no start date the queries carry a DEFAULT_LOOKBACK_SEC bound
+          that is otherwise invisible: an empty page would read as "no
+          traffic" rather than "none in the last week". */}
+      {!idFilterActive && !filterStart && (
+        <div
+          data-testid='log-default-window-hint'
+          className='muted mono'
+          style={{
+            fontSize: 11,
+            padding: '6px 28px',
+            borderBottom: '1px solid var(--hf-rule)',
+          }}
+        >
+          {tr(
+            'console.log.default_window',
+            'showing the last {{days}} days — set a start date to widen the window',
+            { days: DEFAULT_LOOKBACK_SEC / 86400 },
           )}
         </div>
       )}

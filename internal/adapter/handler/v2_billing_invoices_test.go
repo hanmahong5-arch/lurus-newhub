@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -141,6 +143,28 @@ func seedLog(t *testing.T, ctx *invoiceCtx, quota int, createdAt int64) {
 	}
 	if err := ctx.db.Create(l).Error; err != nil {
 		t.Fatalf("seed log: %v", err)
+	}
+}
+
+// seedLogWithOther inserts a LogTypeConsume row with the given quota, unix
+// timestamp and raw Other JSON string. Unlike RecordConsumeLog's own
+// json.Marshal, the caller controls the exact bytes under test — used to
+// pin repo.BillableConsumePredicate's LIKE patterns against the exact
+// substrings settlement_outcome.go and channel-test.go write (see
+// repo.BillableConsumePredicate's doc comment for why this package cannot
+// import either of those to derive the string instead).
+func seedLogWithOther(t *testing.T, ctx *invoiceCtx, quota int, createdAt int64, other string) {
+	t.Helper()
+	l := &repo.Log{
+		UserId:    ctx.userID,
+		TenantId:  ctx.tenantID,
+		Type:      repo.LogTypeConsume,
+		Quota:     quota,
+		CreatedAt: createdAt,
+		Other:     other,
+	}
+	if err := ctx.db.Create(l).Error; err != nil {
+		t.Fatalf("seed log with other: %v", err)
 	}
 }
 
@@ -378,5 +402,141 @@ func TestV2Billing_InvoiceViewForbiddenFields(t *testing.T) {
 		if amountCNY := bucket["amount_cny"].(float64); amountCNY <= 0 {
 			t.Errorf("quota=%v > 0 but amount_cny=%v <= 0 — billing calculation is wrong", quota, amountCNY)
 		}
+	}
+}
+
+// TestInvoiceMonths_ExcludesUnbilledRows is cycle13 L2's core oracle: a
+// month with a clean row, a channel-test-probe row and a settlement-failed
+// row must bill only the clean row — amount_cny/quota/request_count — and
+// must surface the other two as unbilled_quota/unbilled_request_count
+// instead of silently dropping them from the response (v2_billing_invoices.go
+// used to SUM(quota) over every type=consume row unconditionally).
+func TestInvoiceMonths_ExcludesUnbilledRows(t *testing.T) {
+	ctx := setupInvoiceRouter(t)
+
+	when := monthStart(2026, time.January) + 100
+	seedLog(t, ctx, 1000, when)                                          // clean
+	seedLogWithOther(t, ctx, 2000, when+10, `{"source":"channel_test"}`) // manual probe
+	seedLogWithOther(t, ctx, 3000, when+20, `{"settlement":"failed"}`)   // settlement failed
+
+	w := getInvoices(ctx, "from=2026-01&to=2026-01")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	resp := parseInvoiceResp(t, w)
+	items := resp["data"].(map[string]interface{})["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	bucket := items[0].(map[string]interface{})
+
+	if quota := bucket["quota"].(float64); quota != 1000 {
+		t.Errorf("quota = %v, want 1000 (only the clean row is billable)", quota)
+	}
+	if rc := bucket["request_count"].(float64); rc != 1 {
+		t.Errorf("request_count = %v, want 1", rc)
+	}
+	if uq := bucket["unbilled_quota"].(float64); uq != 5000 {
+		t.Errorf("unbilled_quota = %v, want 5000 (2000 probe + 3000 settlement-failed)", uq)
+	}
+	if urc := bucket["unbilled_request_count"].(float64); urc != 2 {
+		t.Errorf("unbilled_request_count = %v, want 2", urc)
+	}
+	wantAmount := 1000.0 / common.QuotaPerUnit
+	if amt := bucket["amount_cny"].(float64); amt != wantAmount {
+		t.Errorf("amount_cny = %v, want %v (billable-only)", amt, wantAmount)
+	}
+}
+
+// TestProbeChannel_RowIsUnbilled drives the real probeChannel (via
+// testChannel, channel-test.go — same package, so the unexported function is
+// directly reachable) against a local httptest upstream, then asserts the
+// resulting consume-log row is excluded from ListInvoicesV2's billable
+// bucket and counted in unbilled_quota/unbilled_request_count instead. This
+// is the strong form of TestInvoiceMonths_ExcludesUnbilledRows above: the
+// "source":"channel_test" marker comes from the real production write path
+// (probeChannel, channel-test.go:481), not a hand-built Other string, so a
+// drift between that literal and repo.BillableConsumePredicate's LIKE
+// pattern shows up here even though this package cannot import repo's
+// pattern to compare it directly (see BillableConsumePredicate's doc
+// comment).
+func TestProbeChannel_RowIsUnbilled(t *testing.T) {
+	setupContextTierChannelTestDB(t) // seeds user id 1 + Channel/Log/Option tables (context_tier_channel_test_test.go)
+	allowLoopbackEgress(t)
+	app.InitHttpClient()
+
+	const model = "billing-l2-probe-model"
+	seedModelRatio(t, model) // channel_probe_auto_test.go — probeChannel needs a configured ratio before it will call the upstream at all
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-l2","choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}`))
+	}))
+	defer upstream.Close()
+
+	channel := &repo.Channel{
+		Type:    1, // OpenAI
+		Status:  common.ChannelStatusEnabled,
+		Name:    "billing-l2-probe-channel",
+		Key:     "sk-billing-l2-probe",
+		Models:  model,
+		Group:   "default",
+		BaseURL: func() *string { u := upstream.URL; return &u }(),
+	}
+	if err := repo.DB.Create(channel).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	result := testChannel(channel, model, "")
+	if result.localErr != nil {
+		t.Fatalf("testChannel localErr: %v", result.localErr)
+	}
+	if result.newAPIError != nil {
+		t.Fatalf("testChannel newAPIError: %v", result.newAPIError.Error())
+	}
+
+	var probeRow repo.Log
+	if err := repo.DB.Where("channel_id = ?", channel.Id).Order("id desc").First(&probeRow).Error; err != nil {
+		t.Fatalf("query probe log row: %v", err)
+	}
+	if probeRow.Quota <= 0 {
+		t.Fatalf("probe row quota = %d, want > 0 (otherwise billable vs. unbilled is not distinguishable)", probeRow.Quota)
+	}
+	if !strings.Contains(probeRow.Other, `"source":"channel_test"`) {
+		t.Fatalf("probe row Other = %q, does not carry the channel_test marker probeChannel is supposed to write", probeRow.Other)
+	}
+
+	router := gin.New()
+	router.GET("/api/v2/:tenant_slug/billing/invoices", func(c *gin.Context) {
+		c.Set("tenant_context", &middleware.TenantContext{TenantID: "default", UserID: 1})
+		c.Next()
+	}, ListInvoicesV2)
+
+	now := time.Now().UTC()
+	month := fmt.Sprintf("%04d-%02d", now.Year(), now.Month())
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/default/billing/invoices?from="+month+"&to="+month, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("invoices status = %d, body: %s", w.Code, w.Body.String())
+	}
+	resp := parseInvoiceResp(t, w)
+	items := resp["data"].(map[string]interface{})["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1 (the probe row's month)", len(items))
+	}
+	bucket := items[0].(map[string]interface{})
+	if quota := bucket["quota"].(float64); quota != 0 {
+		t.Errorf("billable quota = %v, want 0 — a channel-test probe must not be billed", quota)
+	}
+	if rc := bucket["request_count"].(float64); rc != 0 {
+		t.Errorf("billable request_count = %v, want 0", rc)
+	}
+	if uq := bucket["unbilled_quota"].(float64); uq != float64(probeRow.Quota) {
+		t.Errorf("unbilled_quota = %v, want %d (the probe row's own quota)", uq, probeRow.Quota)
+	}
+	if urc := bucket["unbilled_request_count"].(float64); urc != 1 {
+		t.Errorf("unbilled_request_count = %v, want 1", urc)
 	}
 }

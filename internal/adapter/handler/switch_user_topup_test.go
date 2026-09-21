@@ -184,6 +184,21 @@ func decodeTopupEnvelope(t *testing.T, w *httptest.ResponseRecorder) (success bo
 	return envelope.Success, envelope.Message, envelope.Data.Quota
 }
 
+// decodeTopupErrorCode reads only the error_code field a failed redeem now
+// carries (cycle13 L3) — a separate helper rather than widening
+// decodeTopupEnvelope's return signature, which every other test in this
+// file calls positionally.
+func decodeTopupErrorCode(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var envelope struct {
+		ErrorCode string `json:"error_code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v, raw: %s", err, w.Body.String())
+	}
+	return envelope.ErrorCode
+}
+
 // ---------------------------------------------------------------------------
 // Success: quota lands on the token owner's account and the code flips to
 // used.
@@ -337,6 +352,10 @@ func TestSwitchUserTopup_CrossTenantCodeRejected(t *testing.T) {
 	if quota != 0 {
 		t.Errorf("data.quota = %d, want 0", quota)
 	}
+	// cycle13 L3: a machine-readable error_code rides alongside the message.
+	if code := decodeTopupErrorCode(t, w); code != repo.RedemptionErrorCodeTenantMismatch {
+		t.Errorf("error_code = %q, want %q", code, repo.RedemptionErrorCodeTenantMismatch)
+	}
 
 	// The money half: no balance moved and the code is still spendable by its
 	// rightful tenant.
@@ -353,6 +372,47 @@ func TestSwitchUserTopup_CrossTenantCodeRejected(t *testing.T) {
 	}
 	if refreshedCode.Status != common.RedemptionCodeStatusEnabled {
 		t.Errorf("redemption status = %d, want %d (a rejected attempt must not consume the code)", refreshedCode.Status, common.RedemptionCodeStatusEnabled)
+	}
+}
+
+// TestSwitchUserTopup_RawDBErrorReturnsGenericMessage is the switch_user_topup
+// sibling of switch_redeem_test.go's TestSwitchRedeemAnonymous_RawDBErrorSanitized
+// and v2_redemption_test.go's TestRedeemCodeV2_RawDBErrorReturnsGenericMessage:
+// before cycle13 L3 this handler echoed repo.Redeem's error verbatim
+// (err.Error()) — for a genuine transaction/driver failure that included raw
+// SQL error text. It now goes through repo.RedemptionErrorMessage, so the
+// caller only ever sees the fixed, safe fallback text.
+func TestSwitchUserTopup_RawDBErrorReturnsGenericMessage(t *testing.T) {
+	ctx := setupSwitchUserTopupTest(t)
+	tok := ctx.seedToken(t, repo.Token{})
+	code := common.GetRandomString(32)
+	ctx.seedRedemption(t, code, 100_000)
+
+	// Break users.quota so repo.Redeem's `UPDATE users SET quota = quota + ?`
+	// fails with a raw driver error instead of one of its sentinels.
+	if err := ctx.db.Exec(`ALTER TABLE users DROP COLUMN quota`).Error; err != nil {
+		t.Fatalf("drop quota column: %v", err)
+	}
+
+	w := ctx.post(t, "Bearer sk-"+tok.Key, map[string]string{"key": code})
+	// A hub-side fault is a 500, not a 400: the code is still redeemable and
+	// the client should retry, not correct its input.
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for a hub-side redemption fault; body: %s", w.Code, w.Body.String())
+	}
+	success, message, _ := decodeTopupEnvelope(t, w)
+	if success {
+		t.Fatalf("success = true, want false for a raw DB error")
+	}
+	if message != repo.ErrRedemptionFailed.Error() {
+		t.Errorf("message = %q, want the generic fallback %q", message, repo.ErrRedemptionFailed.Error())
+	}
+	lower := strings.ToLower(message)
+	if strings.Contains(message, "quota") || strings.Contains(lower, "column") || strings.Contains(lower, "sql") {
+		t.Errorf("message leaks raw DB error text: %q", message)
+	}
+	if code := decodeTopupErrorCode(t, w); code != repo.RedemptionErrorCodeFailed {
+		t.Errorf("error_code = %q, want %q", code, repo.RedemptionErrorCodeFailed)
 	}
 }
 

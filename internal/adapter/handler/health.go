@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/lifecycle"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 
@@ -16,6 +17,21 @@ import (
 // GetHealthDetailed returns a detailed health check including dependency connectivity.
 // GET /api/health
 func GetHealthDetailed(c *gin.Context) {
+	// Readiness must pull this pod out of the Service's endpoint list the
+	// instant a shutdown signal is observed (lifecycle.Drainer.MarkDraining,
+	// called from main.go's shutdown goroutine before srv.Shutdown even
+	// starts waiting out its budget) — cycle 13 L11. This check stays first
+	// and unconditional, ahead of every DB/Redis/billing probe below, so a
+	// draining pod never waits on a slow dependency before reporting 503;
+	// readiness (this endpoint) and liveness (GET /api/status, gated the
+	// same way) both go through it — see doc/runbook/graceful-drain.md for
+	// why a liveness 503 here does not itself trigger an extra kubelet
+	// restart once SIGTERM has already been sent.
+	if lifecycle.IsDraining() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "draining"})
+		return
+	}
+
 	checks := make(map[string]string)
 	healthy := true
 

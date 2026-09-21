@@ -9,6 +9,19 @@ on:
       - 'go.sum'
       - '.golangci.yml'
       - '.github/workflows/go-ci.yml'
+      # Directories a Go test in this module reads by literal path, so a change
+      # to one of them can turn this workflow red without touching any .go file:
+      # deploy/k8s/deploy_consistency_test.go walks deploy/, scripts/, doc/runbook/
+      # and the workflow files; internal/pkg/migration reads migrations/;
+      # internal/pkg/gates and the router contract gates read web/src/.
+      # deploy/k8s/deploy_consistency_test.go TestGoCIPathsCoverWhatGoTestsRead
+      # fails when a directory in that set is missing from this list.
+      - 'deploy/**'
+      - 'migrations/**'
+      - 'scripts/**'
+      - 'doc/runbook/**'
+      - 'web/src/**'
+      - '.env.example'
   pull_request:
     branches: [main]
     paths:
@@ -17,11 +30,33 @@ on:
       - 'go.sum'
       - '.golangci.yml'
       - '.github/workflows/go-ci.yml'
+      # Directories a Go test in this module reads by literal path, so a change
+      # to one of them can turn this workflow red without touching any .go file:
+      # deploy/k8s/deploy_consistency_test.go walks deploy/, scripts/, doc/runbook/
+      # and the workflow files; internal/pkg/migration reads migrations/;
+      # internal/pkg/gates and the router contract gates read web/src/.
+      # deploy/k8s/deploy_consistency_test.go TestGoCIPathsCoverWhatGoTestsRead
+      # fails when a directory in that set is missing from this list.
+      - 'deploy/**'
+      - 'migrations/**'
+      - 'scripts/**'
+      - 'doc/runbook/**'
+      - 'web/src/**'
+      - '.env.example'
+
+# A push that supersedes an in-flight run of the same branch should cancel it:
+# this workflow is ~8 jobs, several of them minutes long, and a stale run tells
+# nobody anything. main is excluded on purpose — its runs are the record the
+# auto-pin/deploy path reads, so they always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:
     name: go build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # `actions/checkout` refuses paths outside GITHUB_WORKSPACE, so check
@@ -75,6 +110,7 @@ jobs:
   coverage-gate:
     name: coverage gate (app/repo/handler baselines)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Thresholds are CURRENT BASELINE (ratcheted 2026-08-09) — not aspirational.
     # They prevent regression. Raise them in the same PR that lifts the underlying
     # coverage (ratchet upward, never downward), with a measured before/after in
@@ -260,6 +296,7 @@ jobs:
   vet:
     name: go vet
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # `actions/checkout` refuses paths outside GITHUB_WORKSPACE, so check
@@ -299,6 +336,7 @@ jobs:
   gosec:
     name: gosec security scan
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -346,6 +384,7 @@ jobs:
   lint:
     name: golangci-lint (gate new issues)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # fetch-depth: 0 gives only-new-issues the base commit to diff against.
       - uses: actions/checkout@v4
@@ -396,6 +435,7 @@ jobs:
   race:
     name: go test -race (short, hermetic)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     # BLOCKING (re-blocked 2026-06-03). History: -race surfaced pre-existing data
     # races — PR #5 fixed 3 deterministic clusters and re-blocked; PR #7 reverted to
     # report-only after an intermittent slog cross-test race; PR #8 fixed that
@@ -507,6 +547,7 @@ jobs:
   pg-integration:
     name: repo integration tests (disposable Postgres)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # The internal/adapter/repo integration tests (token / user-quota / tenant /
     # internal-api-key) reach the database through SetupTestDB, which t.Skip()s
     # when TEST_POSTGRES_DSN is unset — so before this job they NEVER ran in CI
@@ -561,15 +602,27 @@ jobs:
         with:
           go-version: '1.25.x'
           cache: true
-      - name: go test repo + migration packages against Postgres
+      - name: go test repo + migration + entity packages against Postgres
         # -short skips the !testing.Short() stress tests; the PG integration tests
         # gate on the DSN (not on -short), so they all run here. -v + tee lets the
         # next step assert the harness sentinel actually executed.
+        #
+        # internal/domain/entity is here because the audit hash-chain's real
+        # behaviour is PostgreSQL-specific: TestAuditEvent_BeforeCreate_Postgres_
+        # {LocksAndLinksChain,ConcurrentWritersDoNotForkChain,
+        # ChainLinkFailureRollsBackAndFallsOpen} need SELECT ... FOR UPDATE and
+        # real concurrent transactions, which the hermetic sqlite tier cannot
+        # provide — they skip everywhere else, so until now nothing ran them.
+        #
+        # -shuffle=on randomises order within each package and prints the seed on
+        # both pass and fail: these suites share process-global state (repo.DB,
+        # common flags), and a fixed order hides an ordering dependency until the
+        # day something unrelated reorders the file.
         env:
           TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
         run: |
           set -o pipefail
-          go test -short -count=1 -timeout=15m -v ./internal/adapter/repo/... ./internal/pkg/migration/... 2>&1 | tee /tmp/pg-test.log
+          go test -short -count=1 -shuffle=on -timeout=15m -v ./internal/adapter/repo/... ./internal/pkg/migration/... ./internal/domain/entity/... 2>&1 | tee /tmp/pg-test.log
       - name: Assert the PG harness was not hollow (sentinel ran + passed)
         # Defends against a misconfigured DSN that would make SetupTestDB t.Skip
         # the whole suite into a vacuous green. The sentinel only PASSes when it
@@ -588,6 +641,7 @@ jobs:
   lint-debt-ceiling:
     name: lint debt ceiling (whole-repo count, ratchet down only)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Complements — does not replace — the `lint` job above. That job runs
     # --new-from-rev=origin/main, so it only ever sees findings a PR ADDS; the
     # pre-existing baseline is invisible to it and, until this job existed, was

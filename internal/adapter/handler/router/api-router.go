@@ -199,18 +199,25 @@ func SetApiRouter(router *gin.Engine) {
 		openrouterSyncRoute := apiRouter.Group("/openrouter-sync")
 		openrouterSyncRoute.Use(middleware.AdminAuth())
 		{
-			// Sync jobs mutate the GLOBAL free-model catalog for all tenants;
-			// job reads stay at admin, but create/update/delete/run are root.
-			openrouterSyncRoute.GET("/jobs", handler.ListOpenRouterSyncJobs)
+			// Sync jobs mutate the GLOBAL free-model catalog for all tenants,
+			// and their READS are just as cross-tenant: a sync job row, the
+			// OpenRouter category list, the last-run status and the multi-key
+			// api-pool view all describe process-global state that no tenant
+			// owns. Since cycle 13 L4 the four reads are root-only too — a
+			// tenant admin (role 10) could previously enumerate every
+			// tenant's OpenRouter pool key state through /api-pool.
+			// /jobs/:id/preview stays on AdminAuth: it is a dry run that
+			// mutates nothing and was not part of that finding.
+			openrouterSyncRoute.GET("/jobs", middleware.RootAuth(), handler.ListOpenRouterSyncJobs)
 			openrouterSyncRoute.POST("/jobs", middleware.RootAuth(), handler.CreateOpenRouterSyncJob)
 			openrouterSyncRoute.PUT("/jobs/:id", middleware.RootAuth(), handler.UpdateOpenRouterSyncJob)
 			openrouterSyncRoute.DELETE("/jobs/:id", middleware.RootAuth(), handler.DeleteOpenRouterSyncJob)
 			openrouterSyncRoute.POST("/jobs/:id/run", middleware.RootAuth(), handler.RunOpenRouterSyncJob)
 			openrouterSyncRoute.POST("/run-all", middleware.RootAuth(), handler.RunAllOpenRouterSyncJobs)
 			openrouterSyncRoute.GET("/jobs/:id/preview", handler.PreviewOpenRouterSyncJob)
-			openrouterSyncRoute.GET("/categories", handler.ListOpenRouterSyncCategories)
-			openrouterSyncRoute.GET("/last-status", handler.GetOpenRouterSyncLastStatus)
-			openrouterSyncRoute.GET("/api-pool", handler.GetOpenRouterApiPoolStatus)
+			openrouterSyncRoute.GET("/categories", middleware.RootAuth(), handler.ListOpenRouterSyncCategories)
+			openrouterSyncRoute.GET("/last-status", middleware.RootAuth(), handler.GetOpenRouterSyncLastStatus)
+			openrouterSyncRoute.GET("/api-pool", middleware.RootAuth(), handler.GetOpenRouterApiPoolStatus)
 		}
 
 		// Admin log routes (view all users' logs)

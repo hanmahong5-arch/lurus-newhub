@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -103,9 +104,9 @@ func NewReleaseService(releaseRepo *repo.ReleaseRepository) *ReleaseService {
 		host := strings.TrimPrefix(strings.TrimPrefix(pub, "https://"), "http://")
 		secure := strings.HasPrefix(pub, "https://")
 		if pc, err := minio.New(host, &minio.Options{
-			Creds:   credentials.NewStaticV4(cfg.Storage.MinIOAccessKey, cfg.Storage.MinIOSecretKey, ""),
-			Secure:  secure,
-			Region:  "us-east-1",
+			Creds:  credentials.NewStaticV4(cfg.Storage.MinIOAccessKey, cfg.Storage.MinIOSecretKey, ""),
+			Secure: secure,
+			Region: "us-east-1",
 		}); err != nil {
 			slog.Warn("failed to initialize MinIO presign client, presigned URLs will use internal endpoint", "error", err)
 		} else {
@@ -202,6 +203,52 @@ func (s *ReleaseService) GenerateDownloadURL(ctx context.Context, artifact *enti
 	return presignedURL.String(), nil
 }
 
+// maxDownloadLogFieldBytes caps how much of a raw User-Agent/Referer header
+// download_logs keeps (cycle-13 L5, download_logs minimization). This table
+// has no user_id/tenant_id column — a download log row cannot be attributed
+// to an erasure subject, so it is not part of the privacy-erasure cascade
+// (see the exemption entry in erasure_model_coverage_test.go); minimizing
+// what gets written at insert time is the mitigation instead.
+const maxDownloadLogFieldBytes = 512
+
+// downloadLogUnknownIP is what download_logs stores when repo.MaskIP cannot
+// parse the caller's address (it returns "" for those — zone-scoped IPv6
+// such as "fe80::1%eth0", a host name, anything malformed).
+// DownloadLog.IpAddress is an `inet` column (entity/release.go), and inet
+// rejects the empty string, so writing MaskIP's "" straight through would
+// fail the INSERT inside HandleDownload's fire-and-forget goroutine, whose
+// error only reaches a log line. The unspecified address is accepted by
+// inet and reads as a sentinel rather than as a real caller's address.
+const downloadLogUnknownIP = "0.0.0.0"
+
+// downloadLogMaskedIP coarsens an address for download_logs, falling back
+// to downloadLogUnknownIP when repo.MaskIP cannot parse it.
+func downloadLogMaskedIP(ip string) string {
+	if masked := repo.MaskIP(ip); masked != "" {
+		return masked
+	}
+	return downloadLogUnknownIP
+}
+
+// truncateDownloadLogField caps s to at most maxDownloadLogFieldBytes UTF-8
+// bytes, stopping before a rune that would cross the budget rather than
+// slicing mid-rune — PostgreSQL rejects an invalid UTF-8 byte sequence on
+// insert into a text/varchar column, so a naive s[:512] risks turning an
+// oversized-but-legal header into an insert failure.
+func truncateDownloadLogField(s string) string {
+	if len(s) <= maxDownloadLogFieldBytes {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if b.Len()+utf8.RuneLen(r) > maxDownloadLogFieldBytes {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // HandleDownload handles download logic: logging and count increment
 func (s *ReleaseService) HandleDownload(ctx context.Context, artifactId int64, ipAddress, userAgent, referer string) error {
 	go func() { // #nosec G118 — intentional fire-and-forget: download log is best-effort; request context must not propagate.
@@ -209,10 +256,18 @@ func (s *ReleaseService) HandleDownload(ctx context.Context, artifactId int64, i
 		defer cancel()
 
 		log := &entity.DownloadLog{
-			ArtifactId:   artifactId,
-			IpAddress:    ipAddress,
-			UserAgent:    userAgent,
-			Referer:      referer,
+			ArtifactId: artifactId,
+			// IP is coarsened before it is ever persisted, same /24-IPv4 /
+			// /48-IPv6 mask repo.MaskIP already applies to the sessions list
+			// (cycle-13 L5). CountryCode is derived from the ORIGINAL
+			// address — geo lookup is not wired yet either way (see
+			// extractCountryFromIP) but the mask is coarser than a country
+			// boundary would ever need to be. An address MaskIP cannot
+			// parse becomes downloadLogUnknownIP rather than "" — see that
+			// constant for why the inet column makes the difference.
+			IpAddress:    downloadLogMaskedIP(ipAddress),
+			UserAgent:    truncateDownloadLogField(userAgent),
+			Referer:      truncateDownloadLogField(referer),
 			CountryCode:  extractCountryFromIP(ipAddress),
 			Status:       "initiated",
 			DownloadedAt: time.Now(),

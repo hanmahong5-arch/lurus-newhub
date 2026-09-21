@@ -29,7 +29,10 @@
         "hide": "收起",
         "prev": "← 上一页",
         "next": "下一页 →",
-        "dismiss": "忽略"
+        "dismiss": "忽略",
+        "yes": "是",
+        "no": "否",
+        "error": "出现错误"
       },
       "errors": {
         "network": "网络不可达 —— 请检查网络连接后重试。",
@@ -39,7 +42,19 @@
         "not_found": "未找到对应的资源。",
         "rate_limited": "请求过于频繁，请稍后再试。",
         "server": "服务暂时不可用，请稍后重试。",
-        "unknown": "出现了一点问题，请稍后重试。"
+        "unknown": "出现了一点问题，请稍后重试。",
+        "token_name_invalid": "令牌名称不符合要求，请检查长度限制。",
+        "token_quota_invalid": "令牌额度数值无效，请检查取值范围。",
+        "token_expiry_invalid": "令牌过期时间无效。",
+        "token_rate_limit_invalid": "令牌速率限制数值无效。",
+        "token_scope_invalid": "令牌权限范围包含无效值。",
+        "token_model_limit_invalid": "令牌模型白名单格式无效。",
+        "token_enable_rejected": "当前状态下无法启用该令牌，请先检查额度或过期时间设置。",
+        "redemption_invalid": "兑换码无效或不存在。",
+        "redemption_used": "该兑换码已使用。",
+        "redemption_expired": "该兑换码已过期。",
+        "redemption_tenant_mismatch": "该兑换码不属于当前租户。",
+        "redemption_failed": "兑换失败，请稍后重试。"
       },
       "nav": {
         "section_workspace": "工作区",
@@ -196,7 +211,9 @@
         "announcements": "公告",
         "faq": "常见问题",
         "api_info": "API 信息",
-        "uptime": "可用性"
+        "uptime": "可用性",
+        "load_failed": "无法加载 — 请重试",
+        "load_failed_short": "无法加载"
       },
       "token": {
         "crumb": "令牌",
@@ -543,6 +560,7 @@
         "detail_session_id": "会话 ID",
         "detail_upstream_request_id": "上游请求 ID",
         "id_window_hint": "按 ID 搜索 — 未设置开始时间时默认展示最近 7 天",
+        "default_window": "当前展示最近 {{days}} 天 — 设置开始时间可扩大范围",
         "stat_id_scope_hint": "以上汇总为同一时间窗口内的数据，未按 ID 过滤",
         "settlement_failed": "结算失败"
       },
@@ -924,6 +942,9 @@
         "col_spend": "消费",
         "spend_title": "按项目消费",
         "spend_empty": "暂无用量记录。",
+        "spend_restricted": "仅租户管理员可见",
+        "spend_restricted_body": "全租户的按项目消费仅租户管理员可见。你自己的用量在日志页。",
+        "spend_failed": "消费数据加载失败。",
         "spend_total": "合计",
         "unassigned": "未分配",
         "toast_saved": "项目已保存",
@@ -1044,6 +1065,7 @@
         "notify_gotify_url_label": "gotify 服务器地址",
         "notify_gotify_token_label": "gotify 应用令牌",
         "notify_gotify_priority_label": "gotify 优先级（0-10）",
+        "notify_unseeded": "当前设置未能加载——请刷新后再保存",
         "integrations_deferred": "集成注册表延期至 v3",
         "configure": "配置",
         "connect": "连接",
@@ -1074,6 +1096,8 @@
           "status_disabled": "禁用",
           "empty": "暂无用户。",
           "empty_filtered": "没有匹配的用户。",
+          "error_title": "无法加载用户列表",
+          "error_body": "加载本页时出现问题。",
           "th_user": "用户",
           "th_role": "角色",
           "th_status": "状态",
@@ -1249,6 +1273,8 @@
           "ph_actor": "操作者 ID…",
           "empty": "暂无审计事件。",
           "empty_filtered": "没有符合筛选条件的审计事件。",
+          "error_title": "无法加载审计日志",
+          "error_body": "加载本页时出现问题。",
           "th_time": "时间（UTC）",
           "th_actor": "操作者",
           "th_action": "操作",
@@ -1470,7 +1496,18 @@
         "footer_new_tab": "新标签页",
         "footer_results_one": "{{count}} 条结果",
         "footer_results_other": "{{count}} 条结果",
-        "open_palette_btn": "⌘K 打开命令面板"
+        "open_palette_btn": "⌘K 打开命令面板",
+        "crumb_palette": "命令面板",
+        "heading_plain": "搜索任意内容",
+        "kbd_close": "关闭命令面板",
+        "no_results": "无匹配结果",
+        "group_tokens": "令牌",
+        "token_unlimited": "无限",
+        "token_remaining": "剩余 {{quota}}",
+        "channel_enabled": "已启用",
+        "channel_disabled": "已禁用",
+        "per_call_price": "${{price}} / 次",
+        "ratio": "倍率 {{ratio}}"
       },
       "component": {
         "tenant_switcher": {

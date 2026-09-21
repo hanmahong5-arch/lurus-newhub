@@ -24,6 +24,12 @@ import (
 //   - HTTP 200 with envelope {success, message, data} where data is
 //     {status: "active"|"expired"|"revoked", expires_at, quota}
 //
+// Added cycle-13 L9: HTTP 403 with error_code TENANT_DISABLED and data
+// {status:"suspended"} when the token's owning tenant is suspended. Today's
+// Switch client treats any non-401/404 rejection as a transient failure it
+// does not latch on, which is the intended "locked, not revoked" reading;
+// giving it its own UI state is the switch owner's call (O-heartbeat).
+//
 // Authentication is a raw user_token (Token.Key) in the `Authorization`
 // header. We deliberately do NOT use middleware.UserAuth() here — that
 // middleware resolves the user's *access_token* (User.AccessToken), not a
@@ -50,6 +56,13 @@ const (
 	heartbeatStatusActive  = "active"
 	heartbeatStatusExpired = "expired"
 	heartbeatStatusRevoked = "revoked"
+	// heartbeatStatusSuspended is reported when the token itself is fine but
+	// an operator suspended the owning tenant. It rides in a 403 envelope
+	// with success=false, so a Switch build that only knows
+	// active/expired/revoked never parses it (its client short-circuits on
+	// the envelope) — it is there for operators and for a client that grows
+	// a branch for it (contract note O-heartbeat).
+	heartbeatStatusSuspended = "suspended"
 )
 
 // UserHeartbeat handles POST /api/v2/:tenant_slug/user/heartbeat and the
@@ -169,6 +182,36 @@ func UserHeartbeat(c *gin.Context) {
 			})
 			return
 		}
+	}
+
+	// 6b. Owning-tenant gate. Applies to BOTH routes (it sits outside the
+	//     slug branch above) because the single-tenant fallback carries the
+	//     same token, with the same tenant on it. Before this, a suspended
+	//     tenant's EndUser kept being told "active" every five minutes while
+	//     every relay call it made was already refused by the token gate in
+	//     middleware/auth.go — the heartbeat was the one surface that still
+	//     said the account was fine. repo.TenantGate carries the shared
+	//     rules ("default"/"" exempt, fail-OPEN on a transient lookup fault,
+	//     TENANT_MISSING_MODE for a soft-deleted row).
+	//
+	//     403 is a new shape for this endpoint: 2c-gui-switch's heartbeat
+	//     client (internal/redemption/heartbeat.go callHub) hard-maps 401 to
+	//     "revoked" and 404 to "legacy hub, keep working"; anything else with
+	//     success=false surfaces as a rejection it does not latch on, which is
+	//     the intended "locked, not revoked" reading. Whether it gets its own
+	//     UI state is the switch owner's call (O-heartbeat).
+	if ok, reason := repo.TenantGate(token.TenantId); !ok {
+		common.SysLog("heartbeat: refused, tenant gate closed tenant=" +
+			token.TenantId + " reason=" + reason)
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "owning tenant is disabled or suspended",
+			"error_code": switchTenantDisabledCode,
+			"data": gin.H{
+				"status": heartbeatStatusSuspended,
+			},
+		})
+		return
 	}
 
 	// 7. Active path. Best-effort update accessed_time (last-seen) so the

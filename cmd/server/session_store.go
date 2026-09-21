@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+
 	"github.com/gin-contrib/sessions"
 	sessionredis "github.com/gin-contrib/sessions/redis"
 )
@@ -49,5 +51,16 @@ func parseRedisSessionTarget(redisURL string) (addr, password string, db int) {
 func newRedisSessionStore(redisURL string, secret []byte) (sessions.Store, string, int, error) {
 	addr, password, db := parseRedisSessionTarget(redisURL)
 	store, err := sessionredis.NewStoreWithDB(10, "tcp", addr, "", password, strconv.Itoa(db), secret)
+	if err == nil {
+		// Say the Redis key prefix out loud instead of inheriting
+		// boj/redistore's default: three other places delete session keys by
+		// name (middleware.deleteStoreSessionKey, handler.redisDeleteSessionKey,
+		// repo.deleteCappedSessionKeys) and they build the key from
+		// common.SessionStoreKeyPrefix. Same value as the default today, so this
+		// changes no behaviour; it makes the agreement checkable (see
+		// internal/adapter/middleware/session_identity_write_sites_test.go).
+		// The only error this can return is "that Store is not the redis one".
+		_ = sessionredis.SetKeyPrefix(store, common.SessionStoreKeyPrefix)
+	}
 	return store, addr, db, err
 }

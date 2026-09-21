@@ -332,7 +332,7 @@ func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 	var modelRequest ModelRequest
 	err := common.UnmarshalBodyReusable(c, &modelRequest)
 	if err != nil {
-		return nil, errors.New("无效的请求, " + err.Error())
+		return nil, errors.New("invalid request, " + err.Error())
 	}
 	return &modelRequest, nil
 }
@@ -352,7 +352,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			midjourneyRequest := dto.MidjourneyRequest{}
 			err = common.UnmarshalBodyReusable(c, &midjourneyRequest)
 			if err != nil {
-				return nil, false, errors.New("无效的midjourney请求, " + err.Error())
+				return nil, false, errors.New("invalid midjourney request, " + err.Error())
 			}
 			midjourneyModel, mjErr, success := app.GetMjRequestModel(relayMode, &midjourneyRequest)
 			if mjErr != nil {
@@ -360,7 +360,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			}
 			if midjourneyModel == "" {
 				if !success {
-					return nil, false, fmt.Errorf("无效的请求, 无法解析模型")
+					return nil, false, fmt.Errorf("invalid request, unable to resolve model")
 				} else {
 					// task fetch, task fetch by condition, notify
 					shouldSelectChannel = false

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -95,6 +96,24 @@ func SwitchReconciliation(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "token does not belong to this tenant"})
 			return
 		}
+	}
+
+	// 4b. Owning-tenant gate (cycle-13 L9). Outside the slug branch above, so
+	//     the public /switch/reconciliation route is covered too: the figures
+	//     this returns are the tenant's own billing-relevant totals, and a
+	//     tenant an operator suspended should stop answering them on the same
+	//     request that stops answering the heartbeat. repo.TenantGate holds
+	//     the shared rules ("default"/"" exempt, fail-OPEN on a transient
+	//     lookup fault, TENANT_MISSING_MODE for a soft-deleted row).
+	if ok, reason := repo.TenantGate(token.TenantId); !ok {
+		common.SysLog("switch reconciliation: refused, tenant gate closed tenant=" +
+			token.TenantId + " reason=" + reason)
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "owning tenant is disabled or suspended",
+			"error_code": switchTenantDisabledCode,
+		})
+		return
 	}
 
 	// 5. Aggregate this user's consume logs by model within the window. A single

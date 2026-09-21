@@ -54,6 +54,19 @@ func StopNotifyLimitCleanup() {
 	}
 }
 
+// resetNotifyLimitCleanupForTest clears the cleanup singleton so a test can
+// exercise InitNotifyLimitCleanup and checkMemoryLimit's lazy-start path
+// against a fresh sync.Once, regardless of what earlier tests in this binary
+// already did to the shared package state. Matches this codebase's *ForTest
+// reset convention (e.g. totp.ResetStateForTest, resetRankingsCacheForTest).
+// It is meant for tests: in production cleanupOnce fires once per process
+// and there is no reason to rearm it.
+func resetNotifyLimitCleanupForTest() {
+	cleanupOnce = sync.Once{}
+	cleanupCtx = nil
+	cleanupCancel = nil
+}
+
 // startCleanupTaskWithContext starts a background task to clean up expired entries.
 // It respects context cancellation for graceful shutdown.
 func startCleanupTaskWithContext(ctx context.Context) {
@@ -77,27 +90,6 @@ func startCleanupTaskWithContext(ctx context.Context) {
 			})
 		}
 	}
-}
-
-// startCleanupTask starts a background task to clean up expired entries.
-// Deprecated: Use InitNotifyLimitCleanup with context instead.
-func startCleanupTask() {
-	go func() {
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			now := time.Now()
-			notifyLimitStore.Range(func(key, value interface{}) bool {
-				if limit, ok := value.(limitCount); ok {
-					if now.Sub(limit.Timestamp) >= getDuration() {
-						notifyLimitStore.Delete(key)
-					}
-				}
-				return true
-			})
-		}
-	}()
 }
 
 // CheckNotificationLimit checks if the user has exceeded their notification limit
@@ -142,8 +134,20 @@ func checkRedisLimit(ctx context.Context, userId int, notifyType string) (bool, 
 }
 
 func checkMemoryLimit(userId int, notifyType string) (bool, error) {
-	// Ensure cleanup task is started
-	cleanupOnce.Do(startCleanupTask)
+	// Ensure cleanup task is started. Routed through the same Once-guarded
+	// InitNotifyLimitCleanup main.go calls at boot (cycle 13 L11 fix) —
+	// this used to call the deprecated ctx-less startCleanupTask directly
+	// through the same cleanupOnce, so whichever of the two callers ran
+	// first silently won and the loser's semantics were dropped: with this
+	// path winning the race, cleanupCancel stayed nil and
+	// StopNotifyLimitCleanup had nothing to cancel, so the goroutine
+	// outlived the shutdown it was supposed to observe.
+	// context.Background() here matters if this genuinely wins the race
+	// against main.go's boot-time call, which takes a request arriving
+	// before the HTTP server starts accepting traffic; either way the
+	// goroutine this starts is reachable through StopNotifyLimitCleanup,
+	// which the previous shape could not manage.
+	InitNotifyLimitCleanup(context.Background())
 
 	key := fmt.Sprintf("%d:%s:%s", userId, notifyType, time.Now().Format("2006010215"))
 	now := time.Now()

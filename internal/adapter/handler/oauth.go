@@ -1,11 +1,9 @@
 package handler
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -428,6 +426,17 @@ func OIDCCallback(c *gin.Context) {
 		return
 	}
 
+	// Retire the pre-authentication session id before the first identity
+	// write below (middleware/session_rotation.go). This is the login an
+	// attacker can most easily aim a planted cookie at: the victim arrives
+	// at /api/v2/oauth/callback carrying whatever session cookie their
+	// browser already held. A failure is logged and the login continues —
+	// the fallback inside RotateSessionID has already cleared the incoming
+	// session's values.
+	if err := middleware.RotateSessionID(c); err != nil {
+		common.SysError(fmt.Sprintf("oidc callback: session rotation failed for user %d: %v", user.Id, err))
+	}
+
 	// Resolve platform account ID for billing integration and persist the
 	// link onto the user row BEFORE the auto-create-token step below, so a
 	// brand-new user's very first token is minted already wallet-linked
@@ -599,83 +608,6 @@ func OIDCLogout(c *gin.Context) {
 // ============================================================================
 // Helper functions
 // ============================================================================
-
-// computeStateHMAC computes HMAC-SHA256 of data using SessionSecret as the key.
-func computeStateHMAC(data []byte) string {
-	mac := hmac.New(sha256.New, []byte(common.SessionSecret))
-	mac.Write(data)
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// generateOAuthState generates a state parameter and nonce for OAuth flow.
-// The state is HMAC-signed to prevent tampering.
-// Format: base64(json).hmac_hex
-// Returns: state (signed), nonce (for ID token verification), error
-func generateOAuthState(tenantSlug string, redirectURL string) (string, string, error) {
-	// Generate random nonce (used for both state and ID token verification)
-	nonceBytes := make([]byte, 32) // 256 bits for security
-	if _, err := rand.Read(nonceBytes); err != nil {
-		return "", "", fmt.Errorf("failed to generate nonce: %w", err)
-	}
-	nonce := base64.URLEncoding.EncodeToString(nonceBytes)
-
-	// Create state data
-	stateData := OAuthStateData{
-		TenantSlug:  tenantSlug,
-		RedirectURL: redirectURL,
-		Nonce:       nonce,
-		CreatedAt:   time.Now(),
-	}
-
-	// Serialize to JSON
-	stateJSON, err := json.Marshal(stateData)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal state: %w", err)
-	}
-
-	// Encode as base64
-	payload := base64.URLEncoding.EncodeToString(stateJSON)
-
-	// Sign with HMAC-SHA256 using SessionSecret
-	sig := computeStateHMAC([]byte(payload))
-
-	// Final state format: payload.signature
-	state := payload + "." + sig
-	return state, nonce, nil
-}
-
-// parseOAuthState parses and validates the state parameter.
-// Verifies HMAC-SHA256 signature before parsing to prevent tampering.
-// Expected format: base64(json).hmac_hex
-func parseOAuthState(state string) (*OAuthStateData, error) {
-	// Split into payload and signature
-	dotIdx := strings.LastIndex(state, ".")
-	if dotIdx < 0 {
-		return nil, fmt.Errorf("invalid state format: missing signature")
-	}
-	payload := state[:dotIdx]
-	sig := state[dotIdx+1:]
-
-	// Verify HMAC signature
-	expectedSig := computeStateHMAC([]byte(payload))
-	if !hmac.Equal([]byte(sig), []byte(expectedSig)) {
-		return nil, fmt.Errorf("invalid state signature")
-	}
-
-	// Decode base64
-	stateJSON, err := base64.URLEncoding.DecodeString(payload)
-	if err != nil {
-		return nil, fmt.Errorf("invalid base64 encoding: %w", err)
-	}
-
-	// Parse JSON
-	var stateData OAuthStateData
-	if err := json.Unmarshal(stateJSON, &stateData); err != nil {
-		return nil, fmt.Errorf("invalid JSON: %w", err)
-	}
-
-	return &stateData, nil
-}
 
 // orgIDPlaceholderSuffix is the tail the SQL baseline gives a tenant row whose
 // IdP organization has not been created yet. Two seeded rows carry one today:

@@ -5,6 +5,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/lifecycle"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
@@ -35,6 +36,22 @@ func TestStatus(c *gin.Context) {
 }
 
 func GetStatus(c *gin.Context) {
+	// Draining gate (cycle 13 L11). /api/status is what both the startupProbe
+	// and the livenessProbe hit (deploy/k8s/r6-stage/deployment.yaml,
+	// deploy/k8s/r6-uat/deployment.yaml), so once main.go's shutdown goroutine
+	// has marked the process draining this has to answer 503 the same way the
+	// readiness endpoint GetHealthDetailed does. It sits ahead of the settings
+	// reads below for the same reason it does there: a draining pod should not
+	// take the OptionMap RLock or touch the DB before saying it is on the way
+	// out. A liveness 503 inside the drain window does not add a restart —
+	// SIGTERM has already been delivered; see doc/runbook/graceful-drain.md.
+	if lifecycle.IsDraining() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"status":  "draining",
+		})
+		return
+	}
 
 	cs := console_setting.GetConsoleSetting()
 	common.OptionMapRWMutex.RLock()

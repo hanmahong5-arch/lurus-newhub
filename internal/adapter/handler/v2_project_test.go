@@ -79,8 +79,13 @@ func TestProjectV2_WritesRequireTenantAdmin_ReadsDoNot(t *testing.T) {
 	existing := seedOwnProject(t, ctx, "Marketing")
 	path := fmt.Sprintf("/api/v2/test-tenant/projects/%d", existing.Id)
 
-	// Reads: open to a plain member.
-	for _, p := range []string{"/api/v2/test-tenant/projects", path, "/api/v2/test-tenant/projects/spend"} {
+	// Reads: the CRUD list and a single project stay open to a plain member
+	// (the token page's project picker needs them, and neither carries
+	// amounts). /projects/spend is NOT in this list any more: it rolls up
+	// every member's consume spend for the whole tenant, so cycle-13 L9 put
+	// it behind the same tenant-admin gate /logs/all and /logs/stat/all
+	// carry — pinned by TestGetProjectSpendV2_ForbiddenForNormalUser.
+	for _, p := range []string{"/api/v2/test-tenant/projects", path} {
 		w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, p, nil, nil)
 		AssertV2Status(t, w, http.StatusOK)
 	}

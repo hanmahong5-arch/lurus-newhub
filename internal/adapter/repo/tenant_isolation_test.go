@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -255,7 +256,7 @@ func TestRedeem_TenantMismatch(t *testing.T) {
 	// Create redemption code with different tenant
 	key := common.GetUUID()
 	redemption := &Redemption{
-		UserId:      1, // doesn't matter for this test
+		UserId:      1,                 // doesn't matter for this test
 		TenantId:    "tenant_redeem_b", // Different tenant!
 		Key:         key,
 		Status:      common.RedemptionCodeStatusEnabled,
@@ -272,8 +273,13 @@ func TestRedeem_TenantMismatch(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for tenant mismatch in Redeem, got nil")
 	}
-	if err != nil && err.Error() != "兑换失败，该兑换码不属于当前租户" {
-		t.Logf("Got expected error: %v", err)
+	// The old check compared against repo.Redeem's pre-cycle-13 WRAPPED
+	// sentence and only t.Logf'd, so it could not fail whatever Redeem
+	// returned. Since cycle 13 L3 the repo layer returns typed sentinels and
+	// the customer-facing wording lives in the handler, so assert the
+	// sentinel — that is the thing callers branch on.
+	if !errors.Is(err, ErrRedemptionWrongTenant) {
+		t.Errorf("Redeem across tenants must return ErrRedemptionWrongTenant, got %v", err)
 	}
 }
 

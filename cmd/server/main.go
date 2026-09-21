@@ -174,6 +174,13 @@ func run(ctx context.Context, startTime time.Time) error {
 		return nil
 	})
 
+	// Background task: notify-limit cleanup (cycle 13 L11) — evicts expired
+	// entries from the in-memory rate-limit map used when Redis is disabled.
+	// checkMemoryLimit's lazy-start fallback (internal/app/notify-limit.go)
+	// routes through this same sync.Once-guarded entry point, so whichever
+	// runs first leaves a cancellable goroutine behind.
+	app.InitNotifyLimitCleanup(ctx)
+
 	// Hub data processing: channel scoring + usage aggregation
 	hub.Init(func(flushCtx context.Context, buckets []hub.UsageBucket) error {
 		// Persist aggregated usage buckets to quota_data table
@@ -297,6 +304,11 @@ func run(ctx context.Context, startTime time.Time) error {
 		// revoked >30 days ago or idle (never revoked) >90 days. Leader-gated
 		// internally, same pattern as StartSecretRotationWithContext.
 		lifecycle.StartSessionSweepWithContext(ctx)
+		// cycle-13 L6: logs / download_logs age-based retention. Leader-gated
+		// internally, same pattern as StartSessionSweepWithContext. Deletes
+		// NOTHING until LOG_RETENTION_DAYS / LOG_RETENTION_MONEY_DAYS are set
+		// (both default 0 = off); see doc/runbook/log-retention.md.
+		lifecycle.StartLogRetentionWithContext(ctx)
 		// cycle-8 L7 (tasks-plugins-12): response_registry retention sweep —
 		// hard-deletes rows whose RESPONSE_REGISTRY_TTL_DAYS has elapsed.
 		// Leader-gated internally, same pattern as StartSecretRotationWithContext.
@@ -422,14 +434,19 @@ func run(ctx context.Context, startTime time.Time) error {
 
 		// Graceful shutdown timeout is configurable (config.Get().Server.GracefulShutdownTimeout,
 		// internal/pkg/config/config.go:50; env GRACEFUL_SHUTDOWN_TIMEOUT, config.go:113,
-		// default 30s) so it can be raised to match terminationGracePeriodSeconds:40
+		// default 30s) so it can be raised to match terminationGracePeriodSeconds:90
 		// without a code change.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), config.Get().Server.GracefulShutdownTimeout)
 		defer cancel()
 
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("HTTP server shutdown error: %w", err)
-		}
+		// cycle 13 L11: the Drainer marks readiness/liveness draining before it
+		// starts waiting, and turns a budget timeout into an accounted,
+		// non-fatal outcome — a blown GRACEFUL_SHUTDOWN_TIMEOUT used to reach
+		// FatalLog + os.Exit(1) from here, crash-looping the busiest pod. nil =
+		// count in-flight requests from metrics.ActiveConnections. Returns nil
+		// in every outcome by design; see doc/runbook/graceful-drain.md.
+		//nolint:contextcheck // the errgroup ctx is already cancelled here; the shutdown budget needs its own deadline (doc/runbook/graceful-drain.md)
+		_, _ = lifecycle.Default().Shutdown(shutdownCtx, httpServer, nil)
 		common.SysLog("HTTP server shutdown complete")
 		return nil
 	})

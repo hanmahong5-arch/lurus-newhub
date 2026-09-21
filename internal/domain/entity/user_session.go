@@ -66,4 +66,12 @@ const (
 	SessionRevokeReasonLogout            = "logout"
 	SessionRevokeReasonAdminRevoked      = "admin_revoked"
 	SessionRevokeReasonCapExceeded       = "cap_exceeded"
+	// SessionRevokeReasonRotated marks the row of a session id that a login
+	// (or the SDK-bridge self-heal) retired by minting a fresh id —
+	// middleware.RotateSessionID. Deliberately distinct from "logout" and
+	// "user_revoked": nobody signed out and nobody revoked anything, the row
+	// simply describes a session key that no longer exists, and a support
+	// reader asking "why did this device disappear" deserves the real
+	// answer.
+	SessionRevokeReasonRotated = "rotated"
 )

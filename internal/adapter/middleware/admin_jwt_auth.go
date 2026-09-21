@@ -159,12 +159,42 @@ func RootJWTAuth() gin.HandlerFunc {
 // caller whose access token is simply invalid that it lacks a role, so it
 // would never re-authenticate.
 func rootSessionAuth(c *gin.Context) {
-	admitted, capture := captureSessionDenial(c)
+	admitted, capture := captureSessionDenial(c, resolveRootSession)
 	if admitted {
 		c.Next()
 		return
 	}
 	capture.rewriteAsV2Denial(c)
+}
+
+// AdminSessionAuth is rootSessionAuth's role-10 sibling, for v2 groups whose
+// audience is a tenant admin rather than the platform operator.
+//
+// middleware.AdminAuth() refuses a plain member with HTTP 200
+// {"success":false,"message":"无权进行此操作，权限不足"} — v1's shape, which
+// this cycle's do-not-regress list keeps for the v1 surface because the
+// Switch client parses it. On /api/v2 it is the wrong answer twice over: a
+// browser treats 200 as success, and the console has no error_code to branch
+// on, so a member hitting the tenant channels admin screen saw an empty
+// table rather than a refusal. The denial goes through exactly the machinery
+// RootAuth's admin routes already use, so both v2 surfaces answer the same
+// envelope.
+//
+// The role shortfall needs no new entry in rootSessionDenialsByMessage:
+// auth.go writes the identical "无权进行此操作，权限不足" message for ANY
+// minRole shortfall, so the existing 403 PERMISSION_DENIED row already
+// classifies it. (Verified by reading resolveSessionIdentity's role branch,
+// and pinned by TestRootSessionDenials_CoverEveryTwoHundredRefusal, which
+// parses auth.go rather than trusting this comment.)
+func AdminSessionAuth() func(c *gin.Context) {
+	return func(c *gin.Context) {
+		admitted, capture := captureSessionDenial(c, resolveAdminSession)
+		if admitted {
+			c.Next()
+			return
+		}
+		capture.rewriteAsV2Denial(c)
+	}
 }
 
 // resolveRootSession is the seam rootSessionAuth resolves through. It is a
@@ -173,6 +203,12 @@ func rootSessionAuth(c *gin.Context) {
 // production never reassigns it.
 var resolveRootSession = func(c *gin.Context) bool {
 	return resolveSessionIdentity(c, common.RoleRootUser)
+}
+
+// resolveAdminSession is AdminSessionAuth's seam, same shape and same reason
+// as resolveRootSession above; production never reassigns it.
+var resolveAdminSession = func(c *gin.Context) bool {
+	return resolveSessionIdentity(c, common.RoleAdminUser)
 }
 
 // captureSessionDenial runs the session resolution with the capture
@@ -188,12 +224,15 @@ var resolveRootSession = func(c *gin.Context) bool {
 // which is the very 2xx-on-failure shape this lane exists to remove.
 // c.Writer is restored before anything downstream runs, so the handler chain
 // and the rewrite both write to the real writer.
-func captureSessionDenial(c *gin.Context) (bool, *sessionDenialCapture) {
+// resolve is passed in rather than read from a package var so the same
+// capture/rewrite machinery serves both the root and the tenant-admin gate
+// (cycle 13 L7/W) without a second copy of the panic-safety reasoning above.
+func captureSessionDenial(c *gin.Context, resolve func(*gin.Context) bool) (bool, *sessionDenialCapture) {
 	original := c.Writer
 	capture := &sessionDenialCapture{ResponseWriter: original}
 	c.Writer = capture
 	defer func() { c.Writer = original }()
-	return resolveRootSession(c), capture
+	return resolve(c), capture
 }
 
 // sessionDenialCapture buffers the body and status a middleware writes while

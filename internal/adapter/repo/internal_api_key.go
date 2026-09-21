@@ -120,14 +120,18 @@ func DeleteInternalApiKey(id int) error {
 	return DB.Delete(&InternalApiKey{}, id).Error
 }
 
-// ToggleInternalApiKey enables/disables an API key
-func ToggleInternalApiKey(id int) error {
+// ToggleInternalApiKey flips an API key's enabled flag and returns the
+// resulting state, so the caller's audit row can say which way it went.
+func ToggleInternalApiKey(id int) (enabled bool, err error) {
 	var key InternalApiKey
-	err := DB.First(&key, id).Error
-	if err != nil {
-		return err
+	if err = DB.First(&key, id).Error; err != nil {
+		return false, err
 	}
-	return DB.Model(&key).Update("enabled", !key.Enabled).Error
+	enabled = !key.Enabled
+	if err = DB.Model(&key).Update("enabled", enabled).Error; err != nil {
+		return false, err
+	}
+	return enabled, nil
 }
 
 // UpdateInternalApiKey updates an API key

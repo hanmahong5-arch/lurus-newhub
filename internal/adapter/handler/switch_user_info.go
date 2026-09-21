@@ -11,7 +11,26 @@ import (
 	"gorm.io/gorm"
 )
 
-// authenticateSwitchRawToken extracts and resolves a Switch raw relay token
+// switchTenantDisabledCode is the machine-readable error_code the raw-token
+// Switch endpoints answer with when the token's owning tenant is suspended or
+// disabled. Same string the console/relay gates use (middleware/auth.go), so
+// one client-side branch covers every surface.
+const switchTenantDisabledCode = "TENANT_DISABLED"
+
+// switchTenantSuspendedMessage is the sentence a Switch client shows its user
+// verbatim. It is deliberately the SAME sentence the anonymous redeem path
+// already answers with for the same condition (switch_redeem.go's suspended-
+// reseller arm), so a customer reads one wording across activation, top-up
+// and the quota card. Read 2026-09-20 in 2c-gui-switch
+// internal/redemption/redeem.go: classifyRedeemFailure branches on
+// 禁用/停用/账户 before 不存在, so a message routed through it types as
+// "disabled" rather than "code does not exist". The billing client's own
+// top-up call (internal/billing/client.go doRequest) does not classify — it
+// prefixes the HTTP status and shows the sentence as-is — which is why the
+// machine-readable signal is error_code, not the text.
+const switchTenantSuspendedMessage = "经销商账户已停用，请联系经销商"
+
+// authenticateSwitchRawTokenWithCode extracts and resolves a Switch raw relay token
 // (Token.Key) from the request's `Authorization` header (optional
 // "Bearer "/"sk-" prefixes, optional "-<channel>" suffix) — the same
 // convention as /api/v2/switch/heartbeat, and deliberately NOT
@@ -19,12 +38,21 @@ import (
 // Token.Key and would reject every Switch client.
 //
 // On success, httpStatus is 0 and token/user are non-nil. On failure,
-// token/user are nil and httpStatus/message describe the response the
-// caller should immediately return unchanged (401 for any auth failure,
-// 500 for a transient lookup failure).
+// token/user are nil and httpStatus/message/errorCode describe the response
+// the caller should immediately return unchanged (401 for any auth failure,
+// 403 when the owning tenant is suspended, 500 for a transient lookup
+// failure). errorCode is empty for the failures that predate it.
 //
-// Shared by GetSwitchUserInfo and SwitchUserTopup — keep them in lockstep.
-func authenticateSwitchRawToken(c *gin.Context) (token *repo.Token, user *repo.User, httpStatus int, message string) {
+// Tenant gate (cycle-13 L9): a token whose tenant an operator suspended is
+// refused here, which is what stops a suspended reseller's end user from
+// burning a fresh redemption code into a dead account through
+// SwitchUserTopup — the refusal lands before repo.Redeem, so the code stays
+// enabled. repo.TenantGate holds the rules: "default"/"" exempt, transient
+// lookup faults fail OPEN, a soft-deleted tenant follows TENANT_MISSING_MODE.
+//
+// Shared by GetSwitchUserInfo and SwitchUserTopup — both surface the
+// errorCode, so the two refusals are one client-side branch.
+func authenticateSwitchRawTokenWithCode(c *gin.Context) (token *repo.Token, user *repo.User, httpStatus int, message, errorCode string) {
 	key := strings.TrimSpace(c.Request.Header.Get("Authorization"))
 	if strings.HasPrefix(key, "Bearer ") || strings.HasPrefix(key, "bearer ") {
 		key = strings.TrimSpace(key[7:])
@@ -35,29 +63,38 @@ func authenticateSwitchRawToken(c *gin.Context) (token *repo.Token, user *repo.U
 		key = key[:idx]
 	}
 	if key == "" {
-		return nil, nil, http.StatusUnauthorized, "missing Authorization token"
+		return nil, nil, http.StatusUnauthorized, "missing Authorization token", ""
 	}
 
 	tok, err := repo.GetTokenByKey(key, false)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil, http.StatusInternalServerError, "token lookup failed"
+		return nil, nil, http.StatusInternalServerError, "token lookup failed", ""
 	}
 	if err != nil || tok == nil {
-		return nil, nil, http.StatusUnauthorized, "token not found"
+		return nil, nil, http.StatusUnauthorized, "token not found", ""
 	}
 	if tok.Status == common.TokenStatusDisabled {
-		return nil, nil, http.StatusUnauthorized, "token disabled"
+		return nil, nil, http.StatusUnauthorized, "token disabled", ""
 	}
 
 	usr, err := repo.GetUserById(tok.UserId)
 	if err != nil || usr == nil {
-		return nil, nil, http.StatusUnauthorized, "user not found"
+		return nil, nil, http.StatusUnauthorized, "user not found", ""
 	}
 	if usr.Status == common.UserStatusDisabled {
-		return nil, nil, http.StatusUnauthorized, "user disabled"
+		return nil, nil, http.StatusUnauthorized, "user disabled", ""
 	}
 
-	return tok, usr, 0, ""
+	// Owning tenant last: a suspended tenant is an operator decision about
+	// the account, not about the credential, so the more specific token/user
+	// verdicts above still surface first.
+	if ok, reason := repo.TenantGate(tok.TenantId); !ok {
+		common.SysLog("switch raw-token auth: refused, tenant gate closed tenant=" +
+			tok.TenantId + " reason=" + reason)
+		return nil, nil, http.StatusForbidden, switchTenantSuspendedMessage, switchTenantDisabledCode
+	}
+
+	return tok, usr, 0, "", ""
 }
 
 // GetSwitchUserInfo returns the quota/identity snapshot for the user owning
@@ -71,17 +108,23 @@ func authenticateSwitchRawToken(c *gin.Context) (token *repo.Token, user *repo.U
 //	200: {"success":true,"data":{quota,used_quota,remaining_quota,daily_quota,
 //	     group,username,display_name,role}}
 //	401: missing/unknown/disabled token or user
+//	403: the token's owning tenant is suspended or disabled, with
+//	     error_code TENANT_DISABLED (cycle-13 L9)
 //	500: transient lookup failure
 //
-// Authentication: see authenticateSwitchRawToken.
+// Authentication: see authenticateSwitchRawTokenWithCode.
 //
 // remaining_quota is the amount actually spendable through THIS token: the
 // user balance when the token is unlimited, else the token's own remaining
 // allowance capped by the user balance.
 func GetSwitchUserInfo(c *gin.Context) {
-	token, user, httpStatus, message := authenticateSwitchRawToken(c)
+	token, user, httpStatus, message, errorCode := authenticateSwitchRawTokenWithCode(c)
 	if httpStatus != 0 {
-		c.JSON(httpStatus, gin.H{"success": false, "message": message})
+		body := gin.H{"success": false, "message": message}
+		if errorCode != "" {
+			body["error_code"] = errorCode
+		}
+		c.JSON(httpStatus, body)
 		return
 	}
 

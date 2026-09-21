@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider"
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/relay"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
@@ -195,18 +197,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor provider.TaskAdaptor, ch
 									logger.LogQuota(preConsumedQuota),
 									taskResult.TotalTokens,
 								))
-								if err := repo.DecreaseUserQuota(task.UserId, quotaDelta); err != nil {
-									logger.LogError(ctx, fmt.Sprintf("补扣费失败: %s", err.Error()))
-								} else {
-									repo.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
-									repo.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
+								note := fmt.Sprintf("视频任务成功补扣费，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，补扣费 %s",
+									modelRatio, finalGroupRatio, taskResult.TotalTokens,
+									logger.LogQuota(preConsumedQuota), logger.LogQuota(actualQuota), logger.LogQuota(quotaDelta))
+								if resettleVideoTask(ctx, task, modelName, quotaDelta, actualQuota, note) {
 									task.Quota = actualQuota // 更新任务记录的实际扣费额度
-
-									// 记录消费日志
-									logContent := fmt.Sprintf("视频任务成功补扣费，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，补扣费 %s",
-										modelRatio, finalGroupRatio, taskResult.TotalTokens,
-										logger.LogQuota(preConsumedQuota), logger.LogQuota(actualQuota), logger.LogQuota(quotaDelta))
-									repo.RecordLog(task.UserId, repo.LogTypeSystem, logContent)
 								}
 							} else if quotaDelta < 0 {
 								// 需要退还多扣的费用
@@ -224,10 +219,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor provider.TaskAdaptor, ch
 								// over-estimated pre-consume leaves used_quota showing the
 								// estimate forever — that asymmetry lived inside this single
 								// if/else until 2026-09-01.
-								refundLog := fmt.Sprintf("视频任务成功退还多扣费用，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，退还 %s",
+								note := fmt.Sprintf("视频任务成功退还多扣费用，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，退还 %s",
 									modelRatio, finalGroupRatio, taskResult.TotalTokens,
 									logger.LogQuota(preConsumedQuota), logger.LogQuota(actualQuota), logger.LogQuota(refundQuota))
-								if refundTaskQuota(ctx, task.UserId, task.ChannelId, refundQuota, refundLog) {
+								if resettleVideoTask(ctx, task, modelName, quotaDelta, actualQuota, note) {
 									task.Quota = actualQuota // 更新任务记录的实际扣费额度
 								}
 							} else {
@@ -275,6 +270,112 @@ func updateVideoSingleTask(ctx context.Context, adaptor provider.TaskAdaptor, ch
 	}
 
 	return nil
+}
+
+// videoResettleSlack is how far before a task's submit time the
+// re-settlement looks for the submission's consume row. The row is written in
+// the same deferred block that inserts the task (relay/relay_task.go), so the
+// two timestamps are within a second of each other in production; the slack
+// only has to absorb clock skew between replicas.
+const videoResettleSlack = 10 * 60
+
+// resettleVideoTask applies the difference between a video task's
+// pre-consumed estimate and its actual token cost to the three LOCAL ledgers
+// the submission moved (user balance, per-key allowance, tenant pool), and
+// rewrites the submission's consume row to the real amount. The platform
+// wallet leg is deliberately left alone — see the note on the charge branch
+// below.
+//
+// Before this, the top-up branch called repo.DecreaseUserQuota on its own and
+// wrote a system log row: the user's balance carried the actual cost while
+// the per-key allowance and the tenant pool were left holding the estimate,
+// and no invoice — which sums consume rows — ever saw the difference. The
+// refund direction had the mirror gap.
+//
+// Returns whether the money moved, so the caller keeps gating "record the
+// actual charge on the task row" on success exactly as before.
+func resettleVideoTask(ctx context.Context, task *repo.Task, modelName string, quotaDelta, actualQuota int, note string) bool {
+	if quotaDelta == 0 {
+		return false
+	}
+
+	// Resolve the payer BEFORE the money moves: the submission's consume row
+	// is identified by the amount it still carries (task.Quota, the estimate).
+	since := task.SubmitTime - videoResettleSlack
+	if task.SubmitTime <= 0 {
+		since = time.Now().Add(-taskChargeLookback).Unix()
+	}
+	//nolint:contextcheck // repo's cache refresh is detached by design, as at the sites this consolidates
+	ledger, resolved := resolveTaskChargeLedger(task.UserId, task.ChannelId, task.Quota, since)
+	if !resolved {
+		common.SysError(fmt.Sprintf(
+			`{"event":"video_resettle_payer_unresolved","who":"user:%d","what":"task %s re-settles %d but no single consume row names the key","result":"user balance re-settled; per-key allowance, tenant pool and the consume row are NOT"}`,
+			task.UserId, task.TaskID, quotaDelta))
+	}
+
+	if quotaDelta > 0 {
+		// The charge goes through the same primitive a relay charge does, so
+		// the extra cost reaches the key and the pool. IdentityAccountID is
+		// deliberately left unset: the platform wallet leg of a task is bound
+		// to the submission's pre-auth, and this poller has no pre-auth to
+		// settle against — see the wallet note in creditTaskLedgers
+		// (O-refund) for the other direction.
+		info := &relaycommon.RelayInfo{
+			UserId:          task.UserId,
+			TokenId:         ledger.TokenID,
+			TokenKey:        ledger.TokenKey,
+			UsingGroup:      task.Group,
+			OriginModelName: modelName,
+			ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: task.ChannelId},
+		}
+		//nolint:contextcheck // the charge primitive detaches its cache writes, as every relay call site does
+		if err := app.PostConsumeQuota(info, quotaDelta, 0, false); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("补扣费失败: %s", err.Error()))
+			return false
+		}
+		repo.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
+		repo.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
+	} else if !refundTaskCharge(ctx, task.UserId, task.ChannelId, -quotaDelta, note, ledger, resolved, "video_resettle") {
+		// The hand-back is the DIFFERENCE, while the row that names the payer
+		// carries the estimate — so the ledger resolved above is passed down
+		// rather than looked up again by an amount no row ever carried.
+		return false
+	}
+
+	if !rewriteTaskConsumeRow(ctx, ledger, resolved, actualQuota, note) && quotaDelta > 0 {
+		// Nothing to rewrite: keep the pre-cycle-13 behaviour rather than
+		// leaving the re-settlement with no trace at all. (The refund
+		// direction already wrote its own row inside refundTaskQuota.)
+		//nolint:contextcheck // RecordLog's username-cache refresh is detached by design
+		repo.RecordLog(task.UserId, repo.LogTypeSystem, note)
+	}
+	return true
+}
+
+// rewriteTaskConsumeRow points the submission's consume row at what the task
+// actually cost. That row is what the invoice and usage-report queries sum
+// (v2_billing_invoices.go aggregateInvoiceMonths, billing_self.go), so a
+// re-settlement recorded anywhere else bills the estimate forever.
+//
+// Returns whether the row was rewritten.
+func rewriteTaskConsumeRow(ctx context.Context, ledger taskChargeLedger, resolved bool, actualQuota int, note string) bool {
+	if !resolved || ledger.LogID <= 0 || repo.LOG_DB == nil {
+		return false
+	}
+	var row repo.Log
+	if err := repo.LOG_DB.First(&row, ledger.LogID).Error; err != nil {
+		logger.LogError(ctx, fmt.Sprintf("re-settlement could not read consume row %d: %s", ledger.LogID, err.Error()))
+		return false
+	}
+	updates := map[string]interface{}{"quota": actualQuota}
+	if note != "" && !strings.Contains(row.Content, note) {
+		updates["content"] = strings.TrimPrefix(row.Content+"，"+note, "，")
+	}
+	if err := repo.LOG_DB.Model(&repo.Log{}).Where("id = ?", ledger.LogID).Updates(updates).Error; err != nil {
+		logger.LogError(ctx, fmt.Sprintf("re-settlement could not rewrite consume row %d: %s", ledger.LogID, err.Error()))
+		return false
+	}
+	return true
 }
 
 func redactVideoResponseBody(body []byte) []byte {

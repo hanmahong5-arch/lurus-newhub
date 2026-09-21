@@ -274,11 +274,11 @@ Sprint 进展: 5 个 review 状态 story (7-1, 7-4, 7-2 ADR, 8-1, 8-2). 下一�
 - `deploy/single-node/docker-compose.yml` — PG 切自定义镜像，加 archive_mode=on + archive_command + archive_timeout=60s（RPO ≤1min）
 - `deploy/single-node/.env.example` — 7 个新 WALG_* 变量含运维注释
 - `doc/runbook/pg-restore.md` — §A 全量 / §B PITR / §C 单表 三条路径 + 故障排查矩阵
-- `scripts/pg-restore-drill.sh` — 月度自动化 drill（throwaway PG → fetch LATEST → 表存在断言 → PASS/FAIL）
+- `scripts/pg-restore-drill.sh` — 月度自动化 drill（throwaway PG → fetch LATEST → 表存在断言 → PASS/FAIL）——**已于 2026-09-19 删除**（它演练的是 wal-g/S3 链路，不是现役的 pg_dump 备份；见 `doc/runbook/database.md`）
 
 **Verification**:
 - `docker compose config` 渲染 ✅（修了 .env 内联注释被当 value 的 bug）
-- `bash -n scripts/pg-restore-drill.sh` ✅
+- `bash -n scripts/pg-restore-drill.sh` ✅（当时；脚本已于 2026-09-19 删除）
 - archive_command 渲染干净（弃用 $$ escape 改用 wrapper script）
 
 **SLO**: RPO ≤5min / RTO ≤30min / 月度 drill 100% pass

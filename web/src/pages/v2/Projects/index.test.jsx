@@ -77,9 +77,15 @@ const project = (o = {}) => ({
 });
 
 // The page issues two GETs against the same mock — branch on the URL.
-const wireGet = ({ projects = [], spend = [], spendFails = false } = {}) => {
+const wireGet = ({
+  projects = [],
+  spend = [],
+  spendFails = false,
+  spendError = null,
+} = {}) => {
   API.get.mockImplementation((url) => {
     if (String(url).endsWith('/projects/spend')) {
+      if (spendError) return Promise.reject(spendError);
       return spendFails
         ? Promise.reject(new Error('boom'))
         : Promise.resolve({ data: { success: true, data: { items: spend } } });
@@ -129,6 +135,22 @@ describe('Projects page', () => {
     render(<HFProjects />);
 
     await waitFor(() => screen.getByTestId('proj-empty'));
+  });
+
+  // The spend panel's three states are list / forbidden / error-with-retry;
+  // the fourth outcome — the report answered and has zero rows — must render
+  // its own empty copy, not a blank panel and not a table with no rows.
+  // Mutation that must turn this red: delete the `spend.length === 0`
+  // branch in the spend panel.
+  it('renders the empty spend state when the report answers with zero rows', async () => {
+    wireGet({ projects: [project()], spend: [] });
+
+    render(<HFProjects />);
+
+    await waitFor(() => screen.getByTestId('proj-spend-empty'));
+    expect(screen.queryByTestId('proj-spend-table')).toBeNull();
+    expect(screen.queryByTestId('proj-spend-error')).toBeNull();
+    expect(screen.queryByTestId('proj-spend-forbidden')).toBeNull();
   });
 
   it('creates a project via POST with a trimmed name', async () => {
@@ -258,13 +280,68 @@ describe('Projects page', () => {
     expect(screen.getByText('#17')).toBeTruthy();
   });
 
-  it('shows the spend empty state without breaking the list', async () => {
+  it('says the spend read failed — not that there is no spend — and offers a retry', async () => {
+    // "No usage recorded yet." is a claim about the tenant. A failed read
+    // knows nothing about the tenant, so it gets its own panel; the CRUD
+    // list is an independent read and must survive either way.
     wireGet({ projects: [project()], spendFails: true });
 
     render(<HFProjects />);
 
     await waitFor(() => screen.getByTestId('proj-row-3'));
-    expect(screen.getByTestId('proj-spend-empty')).toBeTruthy();
+    await waitFor(() => screen.getByTestId('proj-spend-error'));
+    expect(screen.queryByTestId('proj-spend-empty')).toBeNull();
+
+    // Retry re-fires the spend read alone and replaces the panel.
+    wireGet({
+      projects: [project()],
+      spend: [
+        {
+          project_id: 0,
+          name: '',
+          unassigned: true,
+          count: 1,
+          total_quota: 500000,
+        },
+      ],
+    });
+    fireEvent.click(screen.getByTestId('proj-spend-retry'));
+    await waitFor(() => screen.getByTestId('proj-spend-table'));
+  });
+
+  it('reads the spend report with the global toast handler disabled', async () => {
+    wireGet({ projects: [project()] });
+
+    render(<HFProjects />);
+
+    await waitFor(() => screen.getByTestId('proj-row-3'));
+    const spendCall = API.get.mock.calls.find(([url]) =>
+      String(url).endsWith('/projects/spend'),
+    );
+    // helpers/api.js returns early on this flag, which is what stops the
+    // tenant-admin 403 below from raising a page-wide red toast on every
+    // member's page load. h1_api.test.jsx ("passes straight through when the
+    // caller opted out of handling") pins that half of the chain.
+    expect(spendCall[1]).toEqual({ skipErrorHandler: true });
+  });
+
+  it('renders the restricted state, never the empty copy, when spend is admin-only', async () => {
+    // GET /projects/spend is tenant-admin only (cycle-13 L9). Every member
+    // sees this page — the nav entry carries no role gate — so a plain
+    // member loads it and the panel must say "restricted", not "no usage".
+    wireGet({
+      projects: [project()],
+      spendError: { response: { status: 403 } },
+    });
+
+    render(<HFProjects />);
+
+    await waitFor(() => screen.getByTestId('proj-spend-forbidden'));
+    expect(screen.queryByTestId('proj-spend-empty')).toBeNull();
+    expect(screen.queryByText('No usage recorded yet.')).toBeNull();
+    expect(screen.queryByTestId('proj-spend-error')).toBeNull();
+    // The CRUD list is a separate read, open to members: it must still show.
+    expect(screen.getByTestId('proj-row-3')).toBeTruthy();
   });
 
   it('shows the forbidden panel on 403', async () => {
@@ -273,6 +350,8 @@ describe('Projects page', () => {
     render(<HFProjects />);
 
     await waitFor(() => screen.getByTestId('proj-forbidden'));
+    // Both reads are admin-gated for this caller, so both panels say so.
+    expect(screen.getByTestId('proj-spend-forbidden')).toBeTruthy();
   });
 });
 

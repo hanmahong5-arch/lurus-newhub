@@ -404,13 +404,13 @@ func TestLogRepo_GetUserLogStatInternal_ByDay(t *testing.T) {
 
 // ─── Channel pool ─────────────────────────────────────────────────────────────
 
-func TestChannelPool_ListOpenRouterMultiKeyChannels(t *testing.T) {
+func TestChannelPool_ListOpenRouterMultiKeyChannelsForReaper(t *testing.T) {
 	cleanup := setupSQLiteDB(t)
 	defer cleanup()
 
-	channels, err := ListOpenRouterMultiKeyChannels()
+	channels, err := ListOpenRouterMultiKeyChannelsForReaper()
 	if err != nil {
-		t.Fatalf("ListOpenRouterMultiKeyChannels: %v", err)
+		t.Fatalf("ListOpenRouterMultiKeyChannelsForReaper: %v", err)
 	}
 	_ = channels
 }

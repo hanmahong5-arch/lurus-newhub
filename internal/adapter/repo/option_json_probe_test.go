@@ -5,6 +5,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 )
 
 // TestOptionJSONProbesCoverEveryJSONKey keeps jsonOptionProbes and
@@ -100,5 +103,94 @@ func TestOptionParse_WrongShapeJSONIsRefusedBeforeItIsPersisted(t *testing.T) {
 	}
 	if !found || stored != `{"default":"default group"}` {
 		t.Errorf("stored UserUsableGroups = %q (found=%v), want the previous valid document", stored, found)
+	}
+}
+
+// ─── cycle13 L2: positive-range guard for QuotaPerUnit / USDExchangeRate ──────
+//
+// This file also owns these two range-guard oracles (rather than a new file)
+// because cycle13 L2's Owned list names option_json_probe_test.go, not a
+// dedicated file, for the ValidateOptionValue range change (see
+// positiveRangeOptionKinds' doc comment in option.go).
+
+// TestUpdateOption_RejectsNonPositiveQuotaPerUnit is cycle13 L2's range-guard
+// oracle: QuotaPerUnit is the quota-to-CNY divisor used everywhere a quota
+// int becomes a currency amount (v2_billing_invoices.go, billing_self.go,
+// /api/status) — 0 divides by zero and a negative number prices everything
+// negative, and both parse fine, so ValidateOptionValue's pre-existing
+// strconv.ParseFloat check alone does not catch either. Mutation that turns
+// this red: delete the positiveRangeOptionKinds check in ValidateOptionValue.
+func TestUpdateOption_RejectsNonPositiveQuotaPerUnit(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+	restoreOptionMapForTest(t)
+
+	previous := common.QuotaPerUnit
+	t.Cleanup(func() { common.QuotaPerUnit = previous })
+
+	if err := UpdateOption("QuotaPerUnit", "500000"); err != nil {
+		t.Fatalf("UpdateOption(500000): %v", err)
+	}
+	if common.QuotaPerUnit != 500000 {
+		t.Fatalf("QuotaPerUnit = %v after a valid write, want 500000", common.QuotaPerUnit)
+	}
+
+	for _, bad := range []string{"0", "-1", "abc"} {
+		err := UpdateOption("QuotaPerUnit", bad)
+		if err == nil {
+			t.Errorf("UpdateOption(QuotaPerUnit, %q) returned nil, want a rejection", bad)
+			continue
+		}
+		if !errors.Is(err, ErrOptionValueRejected) {
+			t.Errorf("UpdateOption(QuotaPerUnit, %q) error %v does not wrap ErrOptionValueRejected", bad, err)
+		}
+		if common.QuotaPerUnit != 500000 {
+			t.Errorf("QuotaPerUnit = %v after rejecting %q, want the previous 500000", common.QuotaPerUnit, bad)
+		}
+		stored, found, storeErr := GetOptionValue(DB, "QuotaPerUnit")
+		if storeErr != nil {
+			t.Fatalf("read back QuotaPerUnit: %v", storeErr)
+		}
+		if !found || stored != "500000" {
+			t.Errorf("stored QuotaPerUnit = %q (found=%v) after rejecting %q, want the previous 500000 row untouched", stored, found, bad)
+		}
+	}
+
+	// A value at the top of the legitimate range must still be accepted —
+	// the guard exists to catch a stray extra digit, not to restrict what
+	// rate an operator can configure (cycle13 §7 defers the pre-consume-period
+	// freeze, MONEY-2, to a later cycle).
+	if err := UpdateOption("QuotaPerUnit", "999999999"); err != nil {
+		t.Errorf("UpdateOption(QuotaPerUnit, 999999999) rejected a legitimate in-range value: %v", err)
+	}
+}
+
+// TestUpdateOption_RejectsNonPositiveUSDExchangeRate pins the same guard's
+// second key — option_validation_gate_test.go's own convention is to pin
+// more than the one key a report named, since the dispatch is shared.
+func TestUpdateOption_RejectsNonPositiveUSDExchangeRate(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+	restoreOptionMapForTest(t)
+
+	previous := operation_setting.USDExchangeRate
+	t.Cleanup(func() { operation_setting.USDExchangeRate = previous })
+
+	if err := UpdateOption("USDExchangeRate", "7.3"); err != nil {
+		t.Fatalf("UpdateOption(7.3): %v", err)
+	}
+
+	for _, bad := range []string{"0", "-7.3"} {
+		err := UpdateOption("USDExchangeRate", bad)
+		if err == nil {
+			t.Errorf("UpdateOption(USDExchangeRate, %q) returned nil, want a rejection", bad)
+			continue
+		}
+		if !errors.Is(err, ErrOptionValueRejected) {
+			t.Errorf("UpdateOption(USDExchangeRate, %q) error %v does not wrap ErrOptionValueRejected", bad, err)
+		}
+	}
+	if operation_setting.USDExchangeRate != 7.3 {
+		t.Errorf("USDExchangeRate = %v after rejected writes, want the previous 7.3", operation_setting.USDExchangeRate)
 	}
 }

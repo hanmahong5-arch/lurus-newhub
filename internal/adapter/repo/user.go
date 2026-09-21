@@ -632,35 +632,6 @@ func (user *User) Update(_ ...bool) error {
 	return updateUserCache(*user)
 }
 
-func (user *User) Edit() error {
-	newUser := *user
-	updates := map[string]interface{}{
-		"username":     newUser.Username,
-		"display_name": newUser.DisplayName,
-		"group":        newUser.Group,
-		"quota":        newUser.Quota,
-		"remark":       newUser.Remark,
-	}
-	// Edit is only reachable from the admin update path (handler.UpdateUser), which
-	// has already enforced CheckPermission/CheckRolePromotion; the self-service path
-	// (handler.UpdateSelf) goes through Update() with a clean struct and can never
-	// reach here. Zero means "not provided" in the decoded JSON payload (valid
-	// values start at 1, see common.UserStatusEnabled), so skip it to avoid
-	// resetting role/status on partial updates.
-	if newUser.Role != 0 {
-		updates["role"] = newUser.Role
-	}
-	if newUser.Status != 0 {
-		updates["status"] = newUser.Status
-	}
-
-	DB.First(&user, user.Id)
-	if err := DB.Model(user).Updates(updates).Error; err != nil {
-		return err
-	}
-	return updateUserCache(*user)
-}
-
 func (user *User) Delete() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
@@ -830,7 +801,7 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 
 func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota must not be negative")
 	}
 	// Read RedisEnabled on the caller's goroutine and gate the cache-refresh
 	// spawn on it: the detached pool goroutine must not read mutable globals
@@ -862,7 +833,7 @@ func increaseUserQuota(id int, quota int) (err error) {
 
 func DecreaseUserQuota(id int, quota int) (err error) {
 	if quota < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota must not be negative")
 	}
 	// gate cache spawn on RedisEnabled (see IncreaseUserQuota)
 	if common.RedisEnabled {
@@ -907,7 +878,7 @@ func decreaseUserQuota(id int, quota int) (err error) {
 // success. The DB row is the authoritative guard.
 func DecreaseUserQuotaIfEnough(id int, quota int) (ok bool, err error) {
 	if quota < 0 {
-		return false, errors.New("quota 不能为负数！")
+		return false, errors.New("quota must not be negative")
 	}
 	result := DB.Model(&User{}).
 		Where("id = ? AND quota >= ?", id, quota).

@@ -37,23 +37,41 @@ DoD items enumerated from the Wave-UAT plan. Status as of Sε completion.
 
 ---
 
-## 2. Operational Steps to UAT
+## 2. Operational Steps to UAT — 🔴 RETIRED, historical record only (2026-09-20)
 
-- Configure `STAGING_KUBECONFIG` repo secret (provided manually by infra team — this is the only remaining blocker for STAGE deployment).
-- Configure `E2E_BRIDGE_TOKEN` secret in `lurus-newhub-staging-secrets` (used by bridge exchange endpoint).
-- Trigger staging deploy:
+Every step below describes a deploy mechanism that no longer exists:
+`deploy-staging.yml` is deleted (see the file-top note), `ns lurus-staging`
+never materialised on R6 (real ns is `lurus-newhub`; the isolated UAT
+instance added 2026-08-30 is `ns lurus-newhub-uat`, NodePort 30851 — see
+CLAUDE.md's "UAT Instance" section), and `lurus-newhub-staging-secrets` was
+never the live Secret name (`lurus-newhub-secrets` in prod's ns,
+`lurus-newhub-uat-secrets`-equivalent in UAT's — check
+`deploy/k8s/r6-uat/README.md` for the exact name). Do not run any command in
+this section; it is kept, struck through, so the historical record of what
+this handbook USED to instruct is not silently deleted (same convention
+`doc/runbook/deployment.md` uses for its own retired-identifier history).
+
+~~- Configure `STAGING_KUBECONFIG` repo secret (provided manually by infra team — this is the only remaining blocker for STAGE deployment).~~
+~~- Configure `E2E_BRIDGE_TOKEN` secret in `lurus-newhub-staging-secrets` (used by bridge exchange endpoint).~~
+~~- Trigger staging deploy:~~
   ```
   gh workflow run deploy-staging.yml
   ```
-- Verify pod age <5 min:
+~~- Verify pod age <5 min:~~
   ```
   ssh root@100.122.83.20 'kubectl -n lurus-staging get pods'
   ```
-- After pod is Running: run smoke tests (Section 3).
-- After Sγ (Playwright e2e) lands: trigger full e2e suite:
+~~- After pod is Running: run smoke tests (Section 3).~~
+~~- After Sγ (Playwright e2e) lands: trigger full e2e suite:~~
   ```
   gh workflow run web-ci.yml -f run_e2e=true
   ```
+
+**Current deploy mechanism**: merge to `main` → `docker-image-main.yml` builds
+`:main` → auto-pin commit updates both `deploy/k8s/r6-stage/deployment.yaml`
+and `deploy/k8s/r6-uat/deployment.yaml` → ArgoCD converges both. See
+`doc/runbook/staging-deploy.md` for the full, current procedure and the
+manual `SKIP_SECRETS=1 bash scripts/deploy-stage.sh` fallback.
 
 ---
 
@@ -110,10 +128,15 @@ revision (`kubectl rollout undo`). With the ArgoCD Application synced, pause or
 delete the Application first — selfHeal reverts manual rollbacks; the durable
 path is `git revert` of the auto-pin commit.
 
-For immediate emergency rollback (no script):
+For immediate emergency rollback (no script) — note the namespace is
+`lurus-newhub` (2026-09-20 correction: this block said `lurus-staging`, a
+namespace that never materialised on R6, so the command as printed could
+only ever fail), and ArgoCD's selfHeal puts the pinned image back within a
+sync interval, so this buys minutes and nothing more; the durable path is
+`git revert` of the auto-pin commit:
 ```bash
 ssh root@100.122.83.20 \
-  "kubectl -n lurus-staging set image deployment/lurus-newhub lurus-newhub=ghcr.io/hanmahong5-arch/lurus-newhub:main-<prev-sha7>"
+  "kubectl -n lurus-newhub set image deployment/lurus-newhub lurus-newhub=ghcr.io/hanmahong5-arch/lurus-newhub:main-<prev-sha7>"
 ```
 
 ---

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
@@ -93,6 +94,14 @@ func BridgeExchange(c *gin.Context) {
 			"message": "user account is disabled",
 		})
 		return
+	}
+
+	// Retire any pre-authentication session id before this request becomes
+	// an authenticated one (middleware/session_rotation.go). A cookie-less
+	// exchange — the ordinary e2e shape — has nothing to retire and is
+	// unaffected.
+	if err := middleware.RotateSessionID(c); err != nil {
+		common.SysError(fmt.Sprintf("bridge-exchange: session rotation failed for user_id=%d: %v", user.Id, err))
 	}
 
 	session := sessions.Default(c)

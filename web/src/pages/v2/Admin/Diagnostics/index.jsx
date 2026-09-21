@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
 import { API, showSuccess } from '../../../../helpers';
+import { classifyLoad } from '../../../../helpers/loadState';
 
 /*
  * v2 admin — Diagnostics (L8, cycle 9). One page for two root-gated
@@ -57,25 +58,39 @@ const yesNo = (tr, v) =>
 
 const fmtPct = (v) => `${Number(v ?? 0).toFixed(1)}%`;
 
-// Classifies one Promise.allSettled result from either GET into a shape
-// this page can render without guessing: 'ok' carries the handler's own
-// `data` object (plus `scope` when the response has one); 'forbidden'
-// covers both refusal shapes documented on fetchAll below; 'error' is a
-// genuine backend failure (network error, or the 500 GetAdminTotpStatsV2
-// answers when its aggregate query fails, v2_admin_security.go:42-46) and
-// must not be rendered as zeroed data.
+// Classifies one Promise.allSettled result from either GET using the shared
+// classifyLoad() (helpers/loadState.js), then extracts the handler's own
+// `data` object (plus `scope` when the response has one) for the 'ok' case.
+// classifyLoad's 'unauthenticated' collapses into 'forbidden' here: neither
+// caller below distinguishes "not logged in" from "logged in without root".
+//
+// What a refusal looks like on these two root-gated GETs, checked against
+// the code rather than remembered: both sit behind middleware.RootJWTAuth()
+// (router/api-v2-router.go, the adminRoute group), whose session arm
+// rewrites the v1-shaped HTTP 200 {"success":false,"message":"…权限不足"}
+// into a 403 PERMISSION_DENIED envelope (admin_jwt_auth.go,
+// rootSessionDenialsByMessage) and whose Bearer-JWT arm answers 403
+// outright. A refusal therefore REACHES this page as a rejected 403 — never
+// as a resolved 200 — and classifyLoad reads it as 'forbidden' unaided.
+//
+// So a RESOLVED non-success body is not a refusal in disguise. The handlers
+// themselves (v2_admin_routing.go GetAffinityStatsV2, v2_admin_security.go
+// GetAdminTotpStatsV2) answer 200 only with success:true and take their
+// failure arms out at 500, which axios delivers as a rejection; whatever
+// answers 200 {success:false} is something this page does not understand,
+// and the honest rendering is the per-panel "unavailable" marker ('error'),
+// not the permission notice. The first cut of this file carved that case
+// out as 'forbidden' on the strength of a claim about the session arm that
+// was no longer true at HEAD; the acceptance round caught it and the
+// carve-out is gone.
 const classifySettled = (settled) => {
-  if (settled.status === 'fulfilled') {
+  const raw = classifyLoad(settled);
+  const status = raw === 'unauthenticated' ? 'forbidden' : raw;
+  if (status === 'ok' && settled.status === 'fulfilled') {
     const body = settled.value?.data;
-    if (body?.success) {
-      return { status: 'ok', data: body.data, scope: body.scope ?? null };
-    }
-    return { status: 'forbidden', data: null, scope: null };
+    return { status, data: body?.data, scope: body?.scope ?? null };
   }
-  if (settled.reason?.response?.status === 403) {
-    return { status: 'forbidden', data: null, scope: null };
-  }
-  return { status: 'error', data: null, scope: null };
+  return { status, data: null, scope: null };
 };
 
 const V2AdminDiagnostics = () => {

@@ -156,7 +156,7 @@ func SearchUserTokens(userId int, keyword string, token string) (tokens []*Token
 // wrap this sentinel even when the Status==TokenStatusExhausted branch's
 // RemainQuota is actually positive (see the branch below) — the caller still
 // needs the 402 token-management guidance, just with a different message.
-var ErrTokenQuotaExhausted = errors.New("令牌不可用")
+var ErrTokenQuotaExhausted = errors.New("token unavailable")
 
 // ErrTokenDisabled is the sentinel for a token whose Status is neither
 // Enabled, Exhausted, nor Expired. The `token.Status != TokenStatusEnabled`
@@ -168,20 +168,6 @@ var ErrTokenQuotaExhausted = errors.New("令牌不可用")
 // the token_disabled error code instead of the generic invalid_request 401
 // the other ValidateUserToken failures get.
 var ErrTokenDisabled = errors.New("token status unavailable")
-
-// tokenExhaustedMessage builds the human-readable 402 guidance for a token
-// that has genuinely run out of its own spending cap (QuotaAvailable() ==
-// false). Both the Status==TokenStatusExhausted branch below and the live
-// RemainQuota<=0 downgrade call this single definition so the two call
-// sites can never render diverging text for what must be the identical
-// caller-facing state (TestL3ValidateUserToken_BothBranches_SameSuffix
-// pins the two outputs equal). remainQuota is embedded as a raw integer —
-// same figure/unit as the metadata's token_remain_quota_units — so the
-// wire message itself carries a number instead of forcing the caller to
-// parse metadata for one.
-func tokenExhaustedMessage(remainQuota int) error {
-	return fmt.Errorf("%w（该令牌可用额度已用尽 [剩余 %d]，请修改令牌剩余额度或设置为无限额度）", ErrTokenQuotaExhausted, remainQuota)
-}
 
 func ValidateUserToken(key string) (token *Token, err error) {
 	if key == "" {
@@ -196,17 +182,17 @@ func ValidateUserToken(key string) (token *Token, err error) {
 			// request) without also flipping Status back to Enabled —
 			// CanEnableToken/the enable transition only runs when the
 			// request body explicitly sets status=Enabled (token.go:230).
-			// Asserting "额度已用尽，请修改剩余额度" in that state is false
+			// Asserting "available quota exhausted, edit remaining quota" in that state is false
 			// (the metadata this error feeds — see
 			// types.ErrOptionWithTokenDisabledHint — already reports the
 			// raised remain_quota) and points the caller at a field that's
 			// already fine; the real remedy is re-enabling the token.
 			if token.QuotaAvailable() {
-				remainDesc := "无限额度"
+				remainDesc := "unlimited"
 				if !token.UnlimitedQuota {
 					remainDesc = fmt.Sprintf("%d", token.RemainQuota)
 				}
-				return token, fmt.Errorf("%w（该令牌剩余额度充足 [%s]，但令牌当前处于已禁用状态，请前往令牌管理页重新启用）", ErrTokenQuotaExhausted, remainDesc)
+				return token, fmt.Errorf("%w (remaining quota is sufficient [%s], but the token is currently disabled; re-enable it from the token management page)", ErrTokenQuotaExhausted, remainDesc)
 			}
 			return token, tokenExhaustedMessage(token.RemainQuota)
 		} else if token.Status == common.TokenStatusExpired {
@@ -248,7 +234,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 
 func GetTokenByIds(id int, userId int) (*Token, error) {
 	if id == 0 || userId == 0 {
-		return nil, errors.New("id 或 userId 为空！")
+		return nil, errors.New("id or userId is empty")
 	}
 	token := Token{Id: id, UserId: userId}
 	err := DB.First(&token, "id = ? and user_id = ?", id, userId).Error
@@ -257,7 +243,7 @@ func GetTokenByIds(id int, userId int) (*Token, error) {
 
 func GetTokenById(id int) (*Token, error) {
 	if id == 0 {
-		return nil, errors.New("id 为空！")
+		return nil, errors.New("id is empty")
 	}
 	token := Token{Id: id}
 	err := DB.First(&token, "id = ?", id).Error
@@ -563,7 +549,7 @@ func GetOtherEnabledSwitchProvisionTokens(userID int, namePrefix, excludeName st
 func DeleteTokenById(id int, userId int) (err error) {
 	// Why we need userId here? In case user want to delete other's token.
 	if id == 0 || userId == 0 {
-		return errors.New("id 或 userId 为空！")
+		return errors.New("id or userId is empty")
 	}
 	token := Token{Id: id, UserId: userId}
 	err = DB.Where(token).First(&token).Error
@@ -575,7 +561,7 @@ func DeleteTokenById(id int, userId int) (err error) {
 
 func IncreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota cannot be negative")
 	}
 	if common.RedisEnabled {
 		AsyncGo(func() {
@@ -605,7 +591,7 @@ func increaseTokenQuota(id int, quota int) (err error) {
 
 func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota cannot be negative")
 	}
 	if common.RedisEnabled {
 		AsyncGo(func() {
@@ -662,7 +648,7 @@ func decreaseTokenQuota(id int, quota int) (err error) {
 //     remain_quota from going negative regardless.
 func DecreaseTokenQuotaIfEnough(id int, key string, quota int) (ok bool, err error) {
 	if quota < 0 {
-		return false, errors.New("quota 不能为负数！")
+		return false, errors.New("quota cannot be negative")
 	}
 	result := DB.Model(&Token{}).
 		Where("id = ? AND remain_quota >= ?", id, quota).
@@ -772,10 +758,11 @@ func CountProvisionedTokensByTenant(creatorUserID int, tenantID string, includeR
 	return total, err
 }
 
-// BatchDeleteTokens 删除指定用户的一组令牌，返回成功删除数量
+// BatchDeleteTokens deletes a set of tokens belonging to the given user and
+// returns the number successfully deleted.
 func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	if len(ids) == 0 {
-		return 0, errors.New("ids 不能为空！")
+		return 0, errors.New("ids cannot be empty")
 	}
 
 	tx := DB.Begin()

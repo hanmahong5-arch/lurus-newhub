@@ -92,12 +92,35 @@ kubectl delete pod -n lurus-newhub <leader-pod>
 ## 告警阈值
 
 监控栈已切 Netdata 自托管:指标由 `/metrics` 暴露、Netdata go.d `prometheus`
-collector 主动抓(**禁为换监控栈改业务代码**)。告警阈值若存在,只会在 R6 主机侧的
-netdata 配置里——本 repo 不跟踪它,也不能证明任何 newhub 阈值已经配好。`deploy/grafana/newhub-alerts.yaml`(连同其余
-`deploy/grafana/*`)已删除,不再是真源。`deploy/k8s/r6-stage/newhub-prometheus-rule.yaml`
-仍保留在 repo 里,但文件头已标注 **NOT DEPLOYED**——它不在
-`deploy/k8s/r6-stage/kustomization.yaml` 的 `resources:` 列表里,且 R6 未跑
-Prometheus Operator,所以没有任何东西在求值这些规则;只作为「曾经决定值得告警」的记录留存。
+collector 主动抓(**禁为换监控栈改业务代码**)。
+
+🔴 **本节 2026-09-20 前的版本说"告警阈值本 repo 不跟踪"是过期的**——自 cycle 9
+起,`deploy/r6-host-netdata/health.d/newhub.conf` 就是仓内真源(旧的
+`deploy/grafana/newhub-alerts.yaml` 已删除、`deploy/k8s/r6-stage/newhub-prometheus-rule.yaml`
+仍标注 **NOT DEPLOYED** 留档,两者都不是真源)。`internal/pkg/metrics/netdata_alarm_series_test.go`
+是结构闸:每条非 `# DEAD` 块的 `on:` 必须解析到一个本包声明且真被生产代码写入的
+Prometheus 序列,否则挡 CI;它证明不了 netdata 主机侧当前是否已装载/是否已绑定图表
+(那是 live、data-dependent 状态,见 conf 文件自己的 `# STATUS`/`# STATUS UPDATE`
+行与各 runbook 的 "LIVE STATUS" 段落)。安装/reload 命令见该目录的 README.md
+"Install" 一节(owner item O2)。
+
+leader-gating 相关的两条告警在这份 conf 里(cycle-13 L10 补齐,`internal/pkg/metrics/instance.go`
+的 `lurus_gateway_leader_task_age_seconds{task}` 是本节上方"🔴 一个被降级的副本…"
+提到的原始时间戳序列的伴随派生值,同样的 leader-gating 注意事项适用):
+
+| 告警 | 序列 | 说明 |
+|---|---|---|
+| `newhub_task_stalled` | `lurus_gateway_leader_task_age_seconds{task}` | 阈值刻意宽松(72h = 3×最慢已注册任务的间隔),见 conf 文件该块注释 |
+| `newhub_schema_migrations_pending` | `lurus_gateway_schema_migrations_pending` | `migrations.go` 注释自称"the condition to page on"——此告警使其成立 |
+
+🔴 `newhub_task_stalled` **看不见两类任务**(2026-09-20 修复轮 D-L10-1):本进程里
+**一次都没成功过**的任务(原始时间戳读作 0,`now - 0` 是 57 年而不是"年龄",
+默认关闭 `AutoTestChannelEnabled` 时的 channel-health-test 就是这一类——第一版
+把这个数发出去,健康 leader 上该告警会恒 WARNING),以及 taskreg 里
+`Active() == false` 的任务(被管理员关掉,不在任何排期上)。两类都不会消失于无形:
+`lurus_gateway_leader_task_last_success_timestamp_seconds` 仍带着启动时写的 0,
+`GET /api/v2/admin/system/tasks`(按 pod、root-only)带 leader/active 元数据,
+判"standby 还是真 overdue"要看它,不要看这条告警。
 
 ## 排障
 

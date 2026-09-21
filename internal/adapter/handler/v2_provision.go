@@ -96,6 +96,16 @@ func normalizeModelList(models []string) []string {
 	return out
 }
 
+// provisionTenantIsPinned reports whether a tenant id identifies a specific
+// customer tenant, as opposed to the bootstrap/system tenant ("default") or a
+// legacy row that carries no tenant at all (""). Those two are the values
+// every pre-cycle-13 bridged user and token was written with, so the
+// cross-tenant refusal below treats them as "unpinned" and lets the call
+// through rather than stranding those accounts.
+func provisionTenantIsPinned(tenantID string) bool {
+	return tenantID != "" && tenantID != "default"
+}
+
 // reconcileSiblingProvisionTokens disables the OTHER enabled
 // switch-provision-* tokens this user holds (O4: one live switch-provision-*
 // token per user is the invariant) after this call's OWN mint/refresh/replay
@@ -245,7 +255,9 @@ func setProvisionVerifier(v *entverify.Verifier) {
 // 403 AUD_MISMATCH · 403 ENTITLEMENT_STALE (token verified but
 // Freshness==Grace, i.e. past its hard exp) · 403 PLAN_NOT_ELIGIBLE ·
 // 403 USER_DISABLED · 403 TOKEN_REVOKED (same-named relay token exists but
-// was administratively disabled) · 404 TENANT_NOT_FOUND.
+// was administratively disabled) · 403 TENANT_DISABLED (the slug's tenant is
+// suspended/disabled) · 403 TENANT_MISMATCH (the platform account already has
+// a hub user in another pinned tenant) · 404 TENANT_NOT_FOUND.
 func ProvisionV2(c *gin.Context) {
 	slug := c.Param("tenant_slug")
 	tenant, err := repo.GetTenantBySlug(slug)
@@ -254,6 +266,32 @@ func ProvisionV2(c *gin.Context) {
 			"success":    false,
 			"message":    "tenant not found: verify the slug in the URL path",
 			"error_code": "TENANT_NOT_FOUND",
+		})
+		return
+	}
+
+	// The slug resolved to a row — but an operator may have suspended it.
+	// repo.TenantGate holds the whole decision (the bootstrap "default"
+	// exemption, fail-OPEN on a transient lookup fault so a DB hiccup cannot
+	// 403 every provision, and TENANT_MISSING_MODE for a soft-deleted row),
+	// the same decision the console, relay and playground gates take, so a
+	// suspended tenant cannot mint fresh relay keys through the desktop
+	// client while its console and existing keys are locked out.
+	//
+	// This runs BEFORE the entitlement token is bound and verified, so an
+	// unauthenticated caller can tell "suspended" from "enabled" for a slug
+	// it names. That is deliberate: the 404 immediately above already tells
+	// the same caller whether the slug exists at all, so the status adds no
+	// enumeration the endpoint did not already offer, and refusing before
+	// the JWKS round-trip keeps a suspended tenant from driving verification
+	// work. Move it below getProvisionVerifier().Verify if that trade ever
+	// changes.
+	if ok, reason := repo.TenantGate(tenant.Id); !ok {
+		common.SysLog("ProvisionV2: refused, tenant gate closed tenant=" + tenant.Id + " reason=" + reason)
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "tenant is disabled or suspended",
+			"error_code": "TENANT_DISABLED",
 		})
 		return
 	}
@@ -337,18 +375,24 @@ func ProvisionV2(c *gin.Context) {
 		return
 	}
 
-	// Find-or-create the bridged hub user — the SAME path zita-bootstrap uses
-	// (lurus_account_id is unique, so one platform account maps to one hub user
-	// regardless of which tenant slug the client called).
+	// Find-or-create the bridged hub user — the SAME path zita-bootstrap uses.
+	// lurus_account_id is unique, so one platform account maps to one hub user
+	// whichever tenant slug the client called; the slug decides which tenant a
+	// NEW user is created in, and a call whose slug disagrees with an existing
+	// user's pinned tenant is refused below rather than served from the other
+	// tenant.
 	user, err := repo.GetUserByLurusAccountID(accountID)
 	autoCreated := false
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		// "default" preserves this endpoint's existing behavior exactly —
-		// tenant invite consumption (N2) is wired into ZitaBootstrap's
-		// auto-create branch only; ProvisionV2 already resolves `tenant`
-		// from :tenant_slug above but that is a pre-existing, separately
-		// tracked gap (recon N2 evidence #2), out of scope here.
-		user, err = autoCreateBridgedUser(accountID, "default")
+		// The account lands in the tenant the URL resolved, not the literal
+		// "default" this branch used to pass. Until cycle-13 L9 every
+		// switch-provisioned customer became a "default" user whose relay
+		// token therefore carried tenant_id "default" too (the mint below
+		// stamps user.TenantId) — so their spend debited the bootstrap
+		// tenant's credit pool, their logs filed under the bootstrap tenant,
+		// and the tenant whose slug they called saw none of it. The seat cap
+		// inside autoCreateBridgedUser now measures that same tenant.
+		user, err = autoCreateBridgedUser(accountID, tenant.Id)
 		// The seat cap lives inside autoCreateBridgedUser (cycle 12 L9) so both
 		// bridge callers honour tenants.max_users. Mapped to the same 403
 		// TENANT_SEAT_LIMIT ZitaBootstrap answers, not to the generic 500 an
@@ -385,6 +429,40 @@ func ProvisionV2(c *gin.Context) {
 			"success":    false,
 			"message":    "hub account is disabled",
 			"error_code": "USER_DISABLED",
+		})
+		return
+	}
+
+	// Cross-tenant refusal. The account already had a hub user, and that user
+	// belongs to a different pinned tenant than the slug resolved. Every step
+	// below stamps the USER's tenant onto the relay token, so the previous
+	// behaviour was to answer 200 with a working key for the OTHER tenant —
+	// a hand-off across a tenant boundary the caller could not see in the
+	// response. Refuse, and leave the attempt in the audit trail (details
+	// name both tenants; they never carry the token or the entitlement).
+	//
+	// "default" (and a legacy empty string) on either side is deliberately
+	// not a mismatch: it is the tenant every pre-cycle-13 bridged user was
+	// created in, so treating it as a conflict would lock out exactly the
+	// accounts the auto-create branch above now files correctly.
+	if provisionTenantIsPinned(user.TenantId) && provisionTenantIsPinned(tenant.Id) &&
+		user.TenantId != tenant.Id {
+		details, _ := json.Marshal(map[string]any{
+			"reason":         "tenant_mismatch",
+			"tenant_id":      tenant.Id,
+			"user_tenant_id": user.TenantId,
+			"account_id":     accountID,
+			"source":         "switch-provision",
+		})
+		governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, user.Id,
+			governance.ActionAuthFailed, governance.ResourceTenant, 0, string(details)))
+		common.SysLog("ProvisionV2: refused, account belongs to another tenant" +
+			" url_tenant=" + tenant.Id + " user_tenant=" + user.TenantId +
+			" account_id=" + strconv.FormatInt(accountID, 10))
+		c.JSON(http.StatusForbidden, gin.H{
+			"success":    false,
+			"message":    "this platform account belongs to another tenant; provision through that tenant's slug",
+			"error_code": "TENANT_MISMATCH",
 		})
 		return
 	}

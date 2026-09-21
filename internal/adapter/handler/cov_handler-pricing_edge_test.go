@@ -20,9 +20,11 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -477,8 +479,29 @@ func TestCovHandlerPricing_GetSyncableChannels_EmptyBaseURLExcluded(t *testing.T
 // local httptest.Server so no real external network is touched)
 // ===========================================================================
 
+// handlerPricingAllowLoopbackEgress prepares the process for a fetch aimed
+// at a loopback httptest server. Since cycle-13 L8 FetchUpstreamRatios runs
+// on the shared relay client and vets its composed URL with
+// app.ValidateOutboundURL, so a fixture needs the two things production has:
+// an initialised shared client (cmd/server/main.go calls InitHttpClient at
+// boot — without it client.Do dereferences a nil *http.Client) and an egress
+// policy that admits the target (production refuses loopback on purpose;
+// allow_private_ip is the operator lever for in-cluster upstreams). The
+// refusal itself is covered by ratio_sync_test.go, which is where that
+// behaviour belongs; these cases are about the parsing and retry paths
+// behind it.
+func handlerPricingAllowLoopbackEgress(t *testing.T) {
+	t.Helper()
+	app.InitHttpClient()
+	fs := system_setting.GetFetchSetting()
+	prev := *fs
+	fs.AllowPrivateIp = true
+	t.Cleanup(func() { *fs = prev })
+}
+
 func handlerPricingUpstreamServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	handlerPricingAllowLoopbackEgress(t)
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/ratio_config", func(w http.ResponseWriter, r *http.Request) {
@@ -675,6 +698,7 @@ func TestCovHandlerPricing_FetchUpstreamRatios_ErrorPaths(t *testing.T) {
 func TestCovHandlerPricing_FetchUpstreamRatios_ConnectionRefused_Retries(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
+	handlerPricingAllowLoopbackEgress(t)
 
 	// A server we immediately close: the URL is well-formed but nothing is
 	// listening, forcing the handler's 3-attempt retry loop to exhaust and
@@ -753,7 +777,7 @@ func TestCovHandlerPricing_FetchUpstreamRatios_InvalidBaseURLFiltered(t *testing
 	if resp["success"] != false {
 		t.Fatalf("expected success=false when every upstream is filtered out, body=%s", w.Body.String())
 	}
-	if resp["message"] != "无有效上游渠道" {
+	if resp["message"] != "no valid upstream channel" {
 		t.Errorf("unexpected message: %v", resp["message"])
 	}
 }
@@ -809,7 +833,7 @@ func TestCovHandlerPricing_FetchUpstreamRatios_ChannelIDs_NoMatch(t *testing.T) 
 	if resp["success"] != false {
 		t.Fatalf("expected success=false for channel_ids matching nothing, body=%s", w.Body.String())
 	}
-	if resp["message"] != "无有效上游渠道" {
+	if resp["message"] != "no valid upstream channel" {
 		t.Errorf("unexpected message: %v", resp["message"])
 	}
 }
@@ -1318,7 +1342,7 @@ func TestCovHandlerPricing_FetchUpstreamRatios_GetChannelsByIdsDBError(t *testin
 		t.Fatalf("expected 500 when the channels table is gone, got %d body=%s", w.Code, w.Body.String())
 	}
 	resp := handlerPricingParseBody(t, w)
-	if resp["message"] != "查询渠道失败" {
+	if resp["message"] != "failed to query channels" {
 		t.Errorf("unexpected message: %v", resp["message"])
 	}
 }

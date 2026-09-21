@@ -1022,63 +1022,33 @@ func GetTokenLogsInternal(tokenID, offset, limit int) (logs []*Log, total int64,
 	return logs, total, err
 }
 
+// billableConsumeExcludeSettlementFailed and billableConsumeExcludeChannelProbe
+// are substrings of a log row's Other JSON column that mark quota which was
+// logged but never actually charged. Both are written by callers outside this
+// package, through this same file's RecordConsumeLog (Other is JSON-encoded
+// via common.MapToJsonStr, which never inserts whitespace around ':', so
+// these substrings land byte-for-byte regardless of what else is in the map
+// or its key order): internal/app/settlement_outcome.go's
+// FlagSettlementOutcome sets other["settlement"]="failed" when SettleConsume's
+// debit call errored — the row still carries the quota that would have been
+// charged, not what actually landed; internal/adapter/handler/channel-test.go's
+// probeChannel sets other["source"]=channelProbeLogSource ("channel_test") on
+// every manual channel-test row — probeChannel settles nothing, so the row's
+// Quota is a paper number nobody's wallet paid. This package cannot import
+// either of those (both import repo; repo importing either would be a build
+// cycle), so the two substrings are pinned here as this package's single
+// source of truth and proven against the real writers by
+// TestProbeChannel_RowIsUnbilled (internal/adapter/handler, drives the real
+// probeChannel) and log_billable_test.go (this package, real
+// RecordConsumeLog write, then query back).
+const (
+	billableConsumeExcludeSettlementFailed = `"settlement":"failed"`
+	billableConsumeExcludeChannelProbe     = `"source":"channel_test"`
+)
+
 // LogStatEntry holds aggregated log statistics.
 type LogStatEntry struct {
 	Key        string `json:"key"`
 	Count      int64  `json:"count"`
 	TotalQuota int64  `json:"total_quota"`
-}
-
-// GetUserLogStatByPeriod returns consume-usage stats filtered by time period
-// and grouped by model. created_at is a unix-epoch bigint (see
-// GetUserLogStatInternal below); the caller passes a time.Time, so this
-// function is responsible for the .Unix() conversion — binding time.Time
-// directly into the Where clause makes PostgreSQL reject the query with
-// 22P02 (invalid_text_representation). Only LogTypeConsume rows are
-// included: topup/manage rows are written with an EMPTY model_name
-// (RecordLog / RecordLogWithTenant, log.go:199-220/223-, build Log{}
-// without setting Quota at all, so those rows are Quota==0, not "huge" —
-// their actual problem is that grouping by model_name would add a spurious
-// empty-key group to the result), and LogTypeError rows carry a real
-// ModelName but were never billed, so including them would inflate that
-// model's count with requests that cost nothing.
-func GetUserLogStatByPeriod(userID int, since time.Time) ([]LogStatEntry, error) {
-	var results []LogStatEntry
-	err := LOG_DB.Model(&Log{}).
-		Select("model_name as key, COUNT(*) as count, COALESCE(SUM(quota), 0) as total_quota").
-		Where("user_id = ? AND type = ? AND created_at >= ?", userID, LogTypeConsume, since.Unix()).
-		Group("model_name").
-		Order("total_quota DESC").
-		Find(&results).Error
-	return results, err
-}
-
-// GetUserLogStatInternal returns aggregated usage stats (by model or day).
-func GetUserLogStatInternal(userID int, groupBy string) ([]LogStatEntry, error) {
-	var results []LogStatEntry
-	var selectExpr, groupExpr string
-	switch groupBy {
-	case "day":
-		// created_at is a unix-epoch bigint: PG has no DATE(bigint), so it
-		// needs the TO_TIMESTAMP conversion. The SQLite arm exists only for
-		// the hermetic unit-test tier (same convention as v2_log_cluster.go).
-		var dayExpr string
-		if common.UsingPostgreSQL {
-			dayExpr = "TO_CHAR(TO_TIMESTAMP(created_at), 'YYYY-MM-DD')"
-		} else {
-			dayExpr = "strftime('%Y-%m-%d', datetime(created_at, 'unixepoch'))"
-		}
-		selectExpr = dayExpr + " as key, COUNT(*) as count, COALESCE(SUM(quota), 0) as total_quota"
-		groupExpr = dayExpr
-	default:
-		selectExpr = "model_name as key, COUNT(*) as count, COALESCE(SUM(quota), 0) as total_quota"
-		groupExpr = "model_name"
-	}
-	err := LOG_DB.Model(&Log{}).
-		Select(selectExpr).
-		Where("user_id = ?", userID).
-		Group(groupExpr).
-		Order("total_quota DESC").
-		Find(&results).Error
-	return results, err
 }

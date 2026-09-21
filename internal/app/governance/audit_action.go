@@ -17,7 +17,7 @@ const (
 	// Authentication and session lifecycle.
 	ActionAuthFailed         = "auth.failed"
 	ActionAuthIPRejected     = "auth.ip_rejected"
-	ActionAuthScopeRejected  = "auth.scope_rejected" // Phase E2: token lacks scope for the relay path
+	ActionAuthScopeRejected  = "auth.scope_rejected" // Phase E2: token lacks scope for the relay path; cycle 13 L4: also a non-root admin refused the internal-key wildcard scope on create/update (ResourceInternalKey)
 	ActionAuthBootstrapped   = "auth.bootstrapped"
 	ActionAuthLoginSuccess   = "auth.login_success"
 	ActionAuthLogout         = "auth.logout"
@@ -156,9 +156,45 @@ const (
 	ActionInternalKeyTenantGranted = "internal_key.tenant_granted"
 	ActionInternalKeyTenantRevoked = "internal_key.tenant_revoked"
 
+	// Internal API key lifecycle (v1 POST/PUT/DELETE/PUT-toggle
+	// /api/api-keys(/:id), RootAuth-gated — AdminCreateApiKey /
+	// AdminUpdateApiKey / AdminDeleteApiKey / AdminToggleApiKey in
+	// internal_api.go). Cycle 13 L4: these four writes produced zero audit
+	// trail before this — an internal key is a credential for the /internal
+	// surface (cross-tenant when its scope is repo.ScopeAll, otherwise
+	// bounded by the internal_api_key_tenants whitelist), so its own CRUD
+	// belongs in the same trail as the tenant-whitelist actions above it.
+	// Details never carry the raw key — only id/name/key_prefix/scopes, the
+	// same fields the list endpoint already exposes. That "never" is
+	// enforced, not asserted: assertAuditRowsCarryNoKeyMaterial
+	// (handler/internal_api_audit_test.go) scans every audit row each of the
+	// four handler oracles produces for the raw key, the part of it the
+	// 16-char display prefix does not reveal, and the stored hash. A refused
+	// wildcard escalation on the create/update paths records
+	// ActionAuthScopeRejected instead.
+	ActionInternalKeyCreated = "internal_key.created"
+	ActionInternalKeyUpdated = "internal_key.updated"
+	ActionInternalKeyDeleted = "internal_key.deleted"
+	ActionInternalKeyToggled = "internal_key.toggled"
+
 	// Security incidents.
 	ActionSensitiveBlocked      = "security.sensitive_blocked"
 	ActionWhitelabelKeyAccessed = "security.whitelabel_key_accessed"
+	// ActionChannelKeyAccessed is recorded by GetChannelKey (POST
+	// /api/channel/:id/key — RootAuth + CriticalRateLimit +
+	// SecureVerificationRequired). Reading the upstream provider secret is
+	// its own security event, distinct from ActionChannelCreated/Updated
+	// (neither of which ever puts the key in Details). Details carry the
+	// channel id and its tenant, never the key value.
+	ActionChannelKeyAccessed = "security.channel_key_accessed"
+
+	// ActionLogsPurged is recorded by DeleteHistoryLogs (DELETE /api/log/,
+	// AdminAuth) — cycle 13 finding #8 named this the only unbounded
+	// synchronous delete over the logs table, and it previously left no
+	// audit trail of its own (only the deleted rows' own history vanished
+	// with them). Details carry the cutoff timestamp, the caller's tenant
+	// scope, and the row count actually removed.
+	ActionLogsPurged = "logs.purged"
 
 	// Billing events. Mirror gRPC platform-side WalletDebit / WalletCredit /
 	// quota consumption so a single audit trail is searchable end-to-end.
@@ -311,6 +347,11 @@ const (
 	// is keyed by the vendor's string response_id, not a numeric id, and
 	// that string is already in Details.
 	ResourceResponse = "response"
+	// ResourceLog is used by ActionLogsPurged (L4, cycle 13) — the resource
+	// acted on is a batch of logs rows, not a single one, so ResourceID on
+	// that event is always 0 (like ResourceSessionAffinity/ResourceResponse
+	// above); the row count removed lives in Details instead.
+	ResourceLog = "log"
 )
 
 // validAuditActions is the canonical registry, used by IsValidAuditAction.
@@ -377,8 +418,14 @@ var validAuditActions = map[string]struct{}{
 	ActionTenantInviteRevoked:          {},
 	ActionInternalKeyTenantGranted:     {},
 	ActionInternalKeyTenantRevoked:     {},
+	ActionInternalKeyCreated:           {},
+	ActionInternalKeyUpdated:           {},
+	ActionInternalKeyDeleted:           {},
+	ActionInternalKeyToggled:           {},
 	ActionSensitiveBlocked:             {},
 	ActionWhitelabelKeyAccessed:        {},
+	ActionChannelKeyAccessed:           {},
+	ActionLogsPurged:                   {},
 	ActionBillingDebit:                 {},
 	ActionBillingCredit:                {},
 	ActionBillingQuotaConsumed:         {},

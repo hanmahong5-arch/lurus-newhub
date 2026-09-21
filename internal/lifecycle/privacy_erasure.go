@@ -110,9 +110,16 @@ func runErasurePass(ctx context.Context) {
 //
 //  1. tokens               hard delete (incl. soft-deleted) + user_totps + user_totp_backup_codes + user_sessions + response_registry hard delete
 //  2. user_identity_mapping hard delete
-//  3. logs                 pseudonymize in batches + best-effort Meili purge
-//  4. audit_events         scrub ip/details in batches
-//  5. users                anonymize in place + soft delete → completed
+//  3. content              (cycle-13 L5) chat_messages/chat_sessions/midjourneys hard
+//     delete in batches (midjourneys terminal-ised first), open tasks terminal-ised
+//     then scrubbed (properties/data/fail_reason), quota_data username scrubbed
+//     (incl. this replica's write-behind cache), playground_presets hard delete
+//
+// A cursor value none of the steps below recognises is an error, not a
+// silent no-op — see the final return.
+//  4. logs                 pseudonymize in batches + best-effort Meili purge
+//  5. audit_events         scrub ip/details in batches
+//  6. users                anonymize in place + soft delete → completed
 func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error {
 	step := req.Step
 
@@ -168,6 +175,72 @@ func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error 
 	}
 
 	if step == repo.ErasureStepMappingsDeleted {
+		// chat_messages before chat_sessions: messages have no DB-level ON
+		// DELETE CASCADE to their session (entity.ChatSession's doc comment),
+		// so draining the child batch first keeps every partial pass
+		// consistent even if a crash lands between the two loops.
+		for {
+			ids, err := repo.HardDeleteChatMessagesBatch(ctx, req.UserID, erasureBatchSize)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				break
+			}
+		}
+		for {
+			ids, err := repo.HardDeleteChatSessionsBatch(ctx, req.UserID, erasureBatchSize)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				break
+			}
+		}
+		// Midjourney rows are taken out of the poller's selection before
+		// they are deleted: repo.MjUpdate is DB.Save, which re-Creates a
+		// row whose UPDATE matched nothing, so a poller pass running
+		// against rows it loaded earlier can resurrect a deleted row
+		// (residue documented on TerminaliseOpenMidjourneyForUser).
+		if _, err := repo.TerminaliseOpenMidjourneyForUser(ctx, req.UserID); err != nil {
+			return err
+		}
+		for {
+			ids, err := repo.HardDeleteMidjourneyBatch(ctx, req.UserID, erasureBatchSize)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				break
+			}
+		}
+		// Async tasks are scrubbed in place, not deleted, so the poller has
+		// to be told to stop first — otherwise its next 15s sync writes
+		// data/fail_reason back from the upstream response (cycle-13 L5
+		// repair, D-L5-3).
+		if _, err := repo.TerminaliseOpenTasksForUser(ctx, req.UserID); err != nil {
+			return err
+		}
+		if _, err := repo.ScrubTasksForUser(ctx, req.UserID); err != nil {
+			return err
+		}
+		if _, err := repo.ScrubQuotaDataUsernameForUser(ctx, req.UserID); err != nil {
+			return err
+		}
+		// Playground presets: found via the model-coverage forcing-function
+		// test (erasure_model_coverage_test.go), not in the cycle-13 plan's
+		// own table enumeration — Prompt carries the user's authored text
+		// verbatim the same way Midjourney's does.
+		if _, err := repo.HardDeletePlaygroundPresetsForUser(ctx, req.UserID); err != nil {
+			return err
+		}
+		if err := repo.AdvanceErasureStep(ctx, req.ID, repo.ErasureStepContentDeleted, 0); err != nil {
+			return err
+		}
+		step = repo.ErasureStepContentDeleted
+	}
+
+	if step == repo.ErasureStepContentDeleted {
 		var scrubbed int64
 		for {
 			ids, err := repo.AnonymizeLogsBatch(ctx, req.UserID, erasureBatchSize)
@@ -225,7 +298,17 @@ func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error 
 			ResourceID: req.UserID,
 			Details:    fmt.Sprintf(`{"event_id":%q,"account_id":%d}`, req.EventID, req.AccountID),
 		})
+		return nil
 	}
 
-	return nil
+	// Reached only when the entry cursor matched none of the branches
+	// above — each branch advances into the next one and the last returns.
+	// That happens when the row carries a step value a NEWER build wrote —
+	// a later cycle adds a step, then the deployment rolls back to this
+	// binary. Returning nil here would leave the request pending forever
+	// while runErasurePass kept stamping the leader-task heartbeat, so the
+	// pass records it as a per-request error (last_error) instead. The
+	// mirror case cannot be fixed from here: a build older than cycle-13
+	// has no arm like this one and still no-ops on content_deleted.
+	return fmt.Errorf("unknown erasure step %q: this build has no cascade branch for it (cursor written by a newer build?)", step)
 }

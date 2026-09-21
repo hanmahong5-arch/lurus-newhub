@@ -1,0 +1,71 @@
+-- lurus:no-transaction
+-- 039_logs_tenant_created_index.sql
+-- Adds the (tenant_id, created_at DESC, id DESC) index the tenant-scoped log
+-- reads have never had (cycle-13 L6).
+--
+-- WHY: every v2 log read is tenant-scoped and time-ordered —
+-- repo.GetUserLogsWithParams / GetAllLogsV2 / serveLogStatV2
+-- (internal/adapter/handler/v2_log_stat.go) all filter `tenant_id = ?` and
+-- then order or bound by created_at. The closest existing index is
+-- idx_tenant_user_created (tenant_id, user_id, created_at), which a
+-- tenant-wide query (no user_id predicate) can only use for the leading
+-- tenant_id column. On 2026-09-20 the production logs table was 29,607 rows
+-- / 20 MB, so the plan is measured in seek time that does not exist yet;
+-- this ships before the table is large, not after.
+--
+-- The trailing `id DESC` makes the key order total: created_at has second
+-- resolution, so a busy tenant writes many rows per created_at value, and
+-- the list endpoints order by created_at DESC with offset paging
+-- (repo/log.go GetUserLogsWithParams / GetTenantLogsWithParams) — a total
+-- order lets the planner walk the index without a sort and keeps page
+-- boundaries stable between two reads of the same page.
+--
+-- LOG_SQL_DSN: the migration runner runs against the MAIN database only. A
+-- deployment that points `logs` at a separate database via LOG_SQL_DSN gets
+-- this index created on the wrong database (and recorded as applied); create
+-- it by hand on the log database with the statement below. Neither R6
+-- instance sets LOG_SQL_DSN as of 2026-09-20 (doc/runbook/database.md).
+--
+-- EXECUTION CONTRACT — read internal/pkg/migration/runner.go's
+-- NoTransactionDirective before editing this file:
+--   * The FIRST line above opts this file out of the runner's
+--     one-transaction-per-file rule. PostgreSQL rejects CREATE INDEX
+--     CONCURRENTLY inside any transaction block (SQLSTATE 25001), and a
+--     plain CREATE INDEX on this table would hold a ShareLock that blocks
+--     the relay's own consume-log INSERTs for the whole build.
+--   * A no-transaction file may contain nothing but
+--     CREATE INDEX CONCURRENTLY IF NOT EXISTS statements. The runner
+--     rejects anything else at apply time, and
+--     no_transaction_files_structural_test.go rejects it in CI first.
+--   * NOT ATOMIC. If this build fails part way (cancelled deploy, disk
+--     pressure, a deadlock with a concurrent DDL) PostgreSQL leaves an
+--     INVALID index row behind. `IF NOT EXISTS` then SKIPS it on the next
+--     boot and the version records as applied, so the index stays INVALID
+--     and no planner will use it. REPAIR (operator, outside the runner):
+--         SELECT indisvalid FROM pg_index i JOIN pg_class c
+--           ON c.oid = i.indexrelid WHERE c.relname = 'idx_logs_tenant_created_id';
+--         DROP INDEX CONCURRENTLY IF EXISTS idx_logs_tenant_created_id;
+--     then re-run the statement below by hand. doc/runbook/database.md
+--     carries the same steps.
+--   * A concurrent build on a large table can run for minutes. The runner
+--     lifts statement_timeout for the whole critical section, and the
+--     startup probe budget in deploy/k8s/*/deployment.yaml has to cover it.
+--
+-- REQUIRES-TABLE: the second directive makes the runner skip this file
+-- (recording the version) when `logs` does not exist. Every transactional
+-- migration since 022 gets that behaviour from a to_regclass DO $$ guard,
+-- which is unavailable here — a DO block is a transaction context, so it
+-- cannot hold CREATE INDEX CONCURRENTLY. On the normal boot path GORM
+-- AutoMigrate creates `logs` before the runner starts
+-- (internal/adapter/repo/main.go), so the skip only applies to runner-first
+-- databases (a partial DR restore, the empty-database integration tests) —
+-- where the consequence is that this index is absent and has to be created
+-- by hand with the statement below.
+-- lurus:requires-table public.logs
+--
+-- AutoMigrate note: entity.Log deliberately carries NO `index:` tag for this
+-- index. GORM emits a plain, non-CONCURRENT CREATE INDEX during AutoMigrate,
+-- which is the lock this migration exists to avoid; see the comment on
+-- entity.Log.TenantId. This file owns idx_logs_tenant_created_id.
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_logs_tenant_created_id ON logs (tenant_id, created_at DESC, id DESC);

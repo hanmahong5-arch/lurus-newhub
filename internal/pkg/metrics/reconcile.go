@@ -46,6 +46,7 @@ var (
 	// the open state after the latest reconcile sweep. Non-zero for more than
 	// one sweep interval means compensation keeps failing (e.g. pool ceiling)
 	// and a human needs to look.
+	// ALERTABLE: newhub_credit_pool_stranded_open
 	CreditPoolStrandedOpen = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "newhub_credit_pool_stranded_open",

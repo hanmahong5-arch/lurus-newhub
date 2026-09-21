@@ -72,6 +72,14 @@ const EditUserModal = (props) => {
   const getInitValues = () => ({
     username: '',
     display_name: '',
+    // cycle-13 L7: the console no longer offers a control to type a new
+    // password here (auth is OIDC-only; the entity this PUTs to has had no
+    // Password column for a while, so the field was already inert on the
+    // backend) — see submit() below, which strips it from the outgoing
+    // payload regardless. The key stays in the form's own state, forced
+    // blank by loadUser() on every load, purely so a fetched record can
+    // never carry a real password value into this component even
+    // transiently.
     password: '',
     github_id: '',
     oidc_id: '',
@@ -104,6 +112,8 @@ const EditUserModal = (props) => {
     const res = await API.get(url);
     const { success, message, data } = res.data;
     if (success) {
+      // Forced blank regardless of what the response carries — see the
+      // comment on getInitValues()'s `password` key above.
       data.password = '';
       formApiRef.current?.setValues({ ...getInitValues(), ...data });
     } else {
@@ -124,6 +134,11 @@ const EditUserModal = (props) => {
     setLoading(true);
     try {
       let payload = { ...values };
+      // No control in this form can change it (see getInitValues() above),
+      // and the account entity this PUTs to has had no Password column for
+      // a while — but the outgoing request must not carry the key at all,
+      // not merely carry it blank.
+      delete payload.password;
       if (typeof payload.quota === 'string')
         payload.quota = parseInt(payload.quota) || 0;
       if (typeof payload.daily_quota === 'string')
@@ -253,15 +268,12 @@ const EditUserModal = (props) => {
                       />
                     </Col>
 
-                    <Col span={24}>
-                      <Form.Input
-                        field='password'
-                        label={t('密码')}
-                        placeholder={t('请输入新的密码，最短 8 位')}
-                        mode='password'
-                        showClear
-                      />
-                    </Col>
+                    {/* cycle-13 L7: no password field here — auth is
+                        OIDC-only and the account entity submit() PUTs to
+                        has had no Password column for a while, so this
+                        control (and everything it posted) was already
+                        inert on the backend; see submit() above, which
+                        also drops the key from the outgoing payload. */}
 
                     <Col span={24}>
                       <Form.Input

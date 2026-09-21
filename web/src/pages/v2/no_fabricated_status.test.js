@@ -85,6 +85,15 @@ For commercial licensing, please contact support@quantumnous.com
  *     Those files are outside the lane's ownership this cycle; the list is
  *     also carried in the lane return value as a next-cycle item. Audit is
  *     the compliance-visible one and Diagnostics the incident-visible one.
+ *
+ *     Cycle 13 (L7) closed Dashboard, Admin/Users, Admin/Audit (both sites)
+ *     and Admin/Diagnostics through helpers/loadState.js classifyLoad()
+ *     (Diagnostics by dropping a carve-out rather than adding a state), and
+ *     L9 made Projects' spend panel tri-state. Re-running the same grep on
+ *     2026-09-20 leaves: Admin/ModelRateLimits (3 sites), Admin/Authz,
+ *     Tenants, Projects' LIST read (index.jsx:303), plus the five pages that
+ *     already had the oracle and Rankings/Flows as before. Still not fixed
+ *     here; still a next-cycle item.
  */
 import fs from 'node:fs';
 import path from 'node:path';

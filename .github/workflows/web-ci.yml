@@ -23,6 +23,13 @@ on:
   schedule:
     - cron: '0 19 * * *'
 
+# Same policy as go-ci.yml: a newer push to the same PR branch cancels the
+# superseded run; main (and the nightly schedule, which runs on main's ref)
+# never cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 defaults:
   run:
     working-directory: web
@@ -31,6 +38,7 @@ jobs:
   test:
     name: Lint + Typecheck + Vitest
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -57,6 +65,7 @@ jobs:
   build:
     name: Vite build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: test
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +85,7 @@ jobs:
   security:
     name: bun audit + gitleaks
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # push/PR only. gitleaks-action scans the pushed commit RANGE on those
     # events but the FULL history on schedule/workflow_dispatch, where it
     # trips on known historical doc artifacts (verified 2026-08-30: same
@@ -143,6 +153,9 @@ jobs:
   e2e:
     name: Playwright e2e (UAT)
     runs-on: ubuntu-latest
+    # The suite talks to a remote UAT instance over the network; without this a
+    # hung run burns the runner's 6-hour default.
+    timeout-minutes: 40
     # Branch on event: schedule events carry NO inputs, so a naive
     # `inputs.run_e2e == 'true'` arm alone would never fire nightly.
     if: >-
@@ -164,6 +177,34 @@ jobs:
           # every green local run used — the bridge's cosmetic "default" slug is
           # not routable, so a 'default' fallback here would fail in CI only.
           E2E_TENANT_SLUG: ${{ secrets.E2E_TENANT_SLUG || 'lurus' }}
+      - name: Assert the e2e run was not hollow (passed count + skip budget)
+        # A Playwright run that authenticates against the wrong instance, or
+        # whose global setup silently bails, still exits 0 while reporting a
+        # handful of skipped specs. The suite has been 33 passed / 1 legit skip
+        # (x2 browsers) since 2026-08-30, so a run that passes fewer than 30 or
+        # skips more than 2 has stopped being the nightly proof it is kept for.
+        # results.json is written by the json reporter in web/playwright.config.ts.
+        if: always()
+        run: |
+          report=web/playwright-report/results.json
+          if [ ! -f "$report" ]; then
+            echo "::error::$report is missing — the json reporter did not run, so the counts below cannot be checked. Do not read a green step as a green suite."
+            exit 1
+          fi
+          expected=$(jq '.stats.expected // -1' "$report")
+          skipped=$(jq '.stats.skipped // -1' "$report")
+          unexpected=$(jq '.stats.unexpected // -1' "$report")
+          echo "playwright stats: expected(passed)=$expected unexpected(failed)=$unexpected skipped=$skipped"
+          rc=0
+          if [ "$expected" -lt 30 ]; then
+            echo "::error::only $expected specs passed (floor 30) — the suite ran hollow or specs were lost."
+            rc=1
+          fi
+          if [ "$skipped" -gt 2 ]; then
+            echo "::error::$skipped specs were skipped (budget 2) — a skipped spec proves nothing; find out what stopped running."
+            rc=1
+          fi
+          exit $rc
       - uses: actions/upload-artifact@v4
         if: always()
         with:

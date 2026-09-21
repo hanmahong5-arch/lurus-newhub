@@ -2,8 +2,10 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,6 +34,14 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
 		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{}, &entity.UserTOTPBackupCode{},
 		&entity.UserSession{}, &entity.AdminPermissionGrant{}, &entity.ResponseRegistry{},
+		// cycle-13 L5 content-disposition surface: chat/Midjourney/tasks/
+		// quota_data/playground_presets. All five are registered in
+		// repo/main.go's migrateDB() unconditionally (unlike the lazily-
+		// created TOTP tables above), so — unlike those — there is no
+		// HasTable guard on the repo primitives that touch them; they must
+		// always be present here.
+		&entity.ChatSession{}, &entity.ChatMessage{}, &repo.Midjourney{},
+		&repo.Task{}, &repo.QuotaData{}, &repo.PlaygroundPreset{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -135,6 +145,74 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 		t.Fatalf("seed response registry row: %v", err)
 	}
 
+	// A saved console-Chat session + 2 messages (cycle-13 L5) — must be
+	// hard-deleted, not merely pseudonymized like logs: Content carries the
+	// conversation verbatim and there is no billing reason to retain it.
+	session := entity.ChatSession{TenantId: "default", UserId: user.Id, Title: "erase fixture chat", Model: "gpt-x"}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("seed chat session: %v", err)
+	}
+	for i, role := range []string{"user", "assistant"} {
+		if err := db.Create(&entity.ChatMessage{
+			SessionId: session.Id, TenantId: "default", UserId: user.Id,
+			Seq: i, Role: role, Content: fmt.Sprintf("erase fixture message %d", i),
+		}).Error; err != nil {
+			t.Fatalf("seed chat message %d: %v", i, err)
+		}
+	}
+
+	// A Midjourney task row (cycle-13 L5) — Prompt/PromptEn carry the
+	// generation request verbatim; must be hard-deleted.
+	// Status/Progress make it a row repo.GetAllUnFinishTasks still polls,
+	// which is why the cascade terminal-ises before deleting.
+	if err := db.Create(&repo.Midjourney{
+		UserId: user.Id, Action: "IMAGINE", MjId: "erase-fixture-mj-1",
+		Prompt: "erase fixture mj prompt", PromptEn: "erase fixture mj prompt en", Quota: 5,
+		Status: "SUBMITTED", Progress: "30%",
+	}).Error; err != nil {
+		t.Fatalf("seed midjourney: %v", err)
+	}
+
+	// An async task row (cycle-13 L5) with a prompt in Properties.Input, a
+	// FailReason that could echo request content, and a raw Data payload —
+	// must be scrubbed in place (quota/ids survive) so cost attribution and
+	// support history are not destroyed the way a hard delete would.
+	// Status/Progress make it a row repo.GetAllUnFinishSyncTasks still
+	// polls (status not FAILURE/SUCCESS and progress not "100%"), so the
+	// cascade has to terminal-ise it or the task poller writes data and
+	// fail_reason back from the upstream response after the scrub.
+	task := &repo.Task{
+		TaskID: "erase-fixture-task-1", UserId: user.Id, Quota: 9,
+		Status: repo.TaskStatusInProgress, Progress: "50%",
+		FailReason: "erase fixture failure detail",
+		Properties: repo.Properties{Input: "erase fixture task prompt input"},
+		Data:       json.RawMessage(`{"k":"erase fixture task payload"}`),
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	// A quota_data row (cycle-13 L5) — Username is display data; Quota/
+	// Count/TokenUsed are billing data that must survive the scrub.
+	if err := db.Table("quota_data").Create(&repo.QuotaData{
+		UserID: user.Id, Username: "victim", ModelName: "gpt-x",
+		CreatedAt: time.Now().Unix(), Count: 3, Quota: 21, TokenUsed: 100,
+	}).Error; err != nil {
+		t.Fatalf("seed quota_data: %v", err)
+	}
+
+	// A Playground preset (cycle-13 L5) — Prompt carries the user's own
+	// authored text verbatim. Found via
+	// TestErasureCascadeCoversEveryPersonalDataShapedModel
+	// (erasure_model_coverage_test.go), not in the cycle-13 plan's own table
+	// enumeration; must be hard-deleted.
+	if err := db.Create(&repo.PlaygroundPreset{
+		TenantID: "default", UserID: user.Id, Name: "erase fixture preset",
+		Prompt: "erase fixture preset prompt", Models: `["gpt-4o"]`, Params: `{}`,
+	}).Error; err != nil {
+		t.Fatalf("seed playground preset: %v", err)
+	}
+
 	for i := 0; i < logCount; i++ {
 		if err := db.Create(&entity.Log{
 			UserId: user.Id, Username: "victim", TokenName: "tok-0",
@@ -229,6 +307,58 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 		t.Errorf("permission grant still active after erasure — must be revoked")
 	}
 
+	// chat: hard-deleted (cycle-13 L5), both the session and its messages.
+	var chatSessionCount, chatMessageCount int64
+	db.Model(&entity.ChatSession{}).Where("user_id = ?", userID).Count(&chatSessionCount)
+	if chatSessionCount != 0 {
+		t.Errorf("chat sessions remaining = %d, want 0", chatSessionCount)
+	}
+	db.Model(&entity.ChatMessage{}).Where("user_id = ?", userID).Count(&chatMessageCount)
+	if chatMessageCount != 0 {
+		t.Errorf("chat messages remaining = %d, want 0", chatMessageCount)
+	}
+
+	// midjourney: hard-deleted (cycle-13 L5) — Prompt/PromptEn carried the
+	// generation request verbatim.
+	var mjCount int64
+	db.Model(&repo.Midjourney{}).Where("user_id = ?", userID).Count(&mjCount)
+	if mjCount != 0 {
+		t.Errorf("midjourney rows remaining = %d, want 0", mjCount)
+	}
+
+	// playground presets: hard-deleted (cycle-13 L5) — found via the
+	// model-coverage gate, not in the cycle-13 plan's own enumeration.
+	var presetCount int64
+	db.Model(&repo.PlaygroundPreset{}).Where("user_id = ?", userID).Count(&presetCount)
+	if presetCount != 0 {
+		t.Errorf("playground preset rows remaining = %d, want 0", presetCount)
+	}
+
+	// tasks: scrubbed but retained (cycle-13 L5) — quota/ids survive so cost
+	// attribution and support history are not destroyed.
+	var gotTask repo.Task
+	if err := db.Where("user_id = ?", userID).First(&gotTask).Error; err != nil {
+		t.Fatalf("task row must be retained (scrubbed, not deleted): %v", err)
+	}
+	if gotTask.Properties.Input != "" || gotTask.FailReason != "" || len(gotTask.Data) != 0 {
+		t.Errorf("task not scrubbed: properties.input=%q fail_reason=%q data=%q", gotTask.Properties.Input, gotTask.FailReason, string(gotTask.Data))
+	}
+	if gotTask.Quota != 9 || gotTask.TaskID != "erase-fixture-task-1" {
+		t.Errorf("task billing/id fields must survive: quota=%d task_id=%q", gotTask.Quota, gotTask.TaskID)
+	}
+
+	// quota_data: username erased, billing fields retained (cycle-13 L5).
+	var gotQD repo.QuotaData
+	if err := db.Table("quota_data").Where("user_id = ?", userID).First(&gotQD).Error; err != nil {
+		t.Fatalf("quota_data row must be retained: %v", err)
+	}
+	if gotQD.Username != repo.ErasedMarker {
+		t.Errorf("quota_data.username = %q, want %q", gotQD.Username, repo.ErasedMarker)
+	}
+	if gotQD.Quota != 21 || gotQD.Count != 3 || gotQD.TokenUsed != 100 {
+		t.Errorf("quota_data billing fields must survive: quota=%d count=%d token_used=%d", gotQD.Quota, gotQD.Count, gotQD.TokenUsed)
+	}
+
 	// logs: pseudonymized, billing fields retained
 	var dirty int64
 	db.Model(&entity.Log{}).Where("user_id = ? AND username <> ?", userID, repo.ErasedMarker).Count(&dirty)
@@ -315,6 +445,11 @@ func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
 		&repo.User{}, &repo.Token{}, &repo.Log{},
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
 		&entity.PrivacyErasureRequest{}, &entity.UserSession{}, &entity.AdminPermissionGrant{}, &entity.ResponseRegistry{},
+		// Same reasoning as openErasureTestDB above: these five are NOT lazy
+		// like the TOTP tables this helper deliberately omits, so a run
+		// against this DB must still find them.
+		&entity.ChatSession{}, &entity.ChatMessage{}, &repo.Midjourney{},
+		&repo.Task{}, &repo.QuotaData{}, &repo.PlaygroundPreset{},
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -513,5 +648,204 @@ func TestPrivacyErasure_StartRegistersHeartbeat(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("taskreg.Snapshot() does not contain %q after StartPrivacyErasureWithContext", privacyErasureTaskName)
+	}
+}
+
+// TestExecuteErasure_QuotaDataCachePurged is the cycle-13 L5 repair oracle
+// (D-L5-1) for the in-process half of the quota_data re-contamination
+// window: repo.LogQuotaData buffers each relay call's bucket in the
+// process-wide repo.CacheQuotaData map and only writes it out
+// DataExportInterval minutes later, so a call that completed just before
+// the cascade ran used to re-insert the plaintext username minutes after
+// ScrubQuotaDataUsernameForUser had blanked it (the flush's SELECT keys on
+// the cached plaintext username, misses the scrubbed row and falls through
+// to Create). Exercises the real path: real LogQuotaData, real
+// executeErasure, real SaveQuotaDataCache.
+func TestExecuteErasure_QuotaDataCachePurged(t *testing.T) {
+	db := openErasureTestDB(t)
+	userID, row := seedErasureFixture(t, db, 2)
+
+	clearQuotaDataCache := func() {
+		repo.CacheQuotaDataLock.Lock()
+		repo.CacheQuotaData = make(map[string]*repo.QuotaData)
+		repo.CacheQuotaDataLock.Unlock()
+	}
+	clearQuotaDataCache()
+	t.Cleanup(clearQuotaDataCache)
+
+	// A relay call that landed seconds before the erasure executor ran.
+	repo.LogQuotaData(userID, "victim", "gpt-x", 5, time.Now().Unix(), 10)
+
+	var seeded int64
+	db.Table("quota_data").Where("user_id = ?", userID).Count(&seeded)
+	if seeded != 1 {
+		t.Fatalf("fixture quota_data rows = %d, want 1", seeded)
+	}
+
+	if err := executeErasure(context.Background(), row); err != nil {
+		t.Fatalf("executeErasure: %v", err)
+	}
+
+	// The buckets themselves are gone: the flush has nothing of this user's
+	// left to write. Asserted on the cache because the row-level assertion
+	// below is also satisfied by the second, cross-replica layer (the
+	// completed-erasure check in writeQuotaDataSnapshot), which would mask
+	// a missing purge here.
+	repo.CacheQuotaDataLock.Lock()
+	leftover := 0
+	for _, bucket := range repo.CacheQuotaData {
+		if bucket != nil && bucket.UserID == userID {
+			leftover++
+		}
+	}
+	repo.CacheQuotaDataLock.Unlock()
+	if leftover != 0 {
+		t.Errorf("quota_data cache still holds %d bucket(s) for the erased user after the cascade, want 0", leftover)
+	}
+
+	// The ticker tick that would have followed minutes later.
+	repo.SaveQuotaDataCache()
+
+	var plaintext int64
+	db.Table("quota_data").Where("user_id = ? AND username <> ?", userID, repo.ErasedMarker).Count(&plaintext)
+	if plaintext != 0 {
+		t.Errorf("quota_data rows carrying the plaintext username after the cascade + SaveQuotaDataCache = %d, want 0 (the cache must be purged for the erased user inside the scrub)", plaintext)
+	}
+	var after int64
+	db.Table("quota_data").Where("user_id = ?", userID).Count(&after)
+	if after != seeded {
+		t.Errorf("quota_data rows for the erased user = %d after the flush, want %d — a purged bucket writes nothing at all, marker or not", after, seeded)
+	}
+}
+
+// TestExecuteErasure_TerminalisesOpenTasks is the cycle-13 L5 repair oracle
+// (D-L5-3): scrubbing properties/data/fail_reason is not enough while the
+// row is still one repo.GetAllUnFinishSyncTasks hands to the task poller —
+// the poller writes data/fail_reason back from the upstream response on its
+// next 15s sync. The cascade terminal-ises the user's open task rows first,
+// and the assertion below runs the poller's own query rather than a
+// hand-built predicate.
+func TestExecuteErasure_TerminalisesOpenTasks(t *testing.T) {
+	db := openErasureTestDB(t)
+	userID, row := seedErasureFixture(t, db, 2)
+
+	var before repo.Task
+	if err := db.Where("user_id = ?", userID).First(&before).Error; err != nil {
+		t.Fatalf("fixture task: %v", err)
+	}
+	if before.Status == repo.TaskStatusFailure || before.Status == repo.TaskStatusSuccess {
+		t.Fatalf("fixture task is already terminal (status=%q) — this oracle needs a pollable row", before.Status)
+	}
+
+	if err := executeErasure(context.Background(), row); err != nil {
+		t.Fatalf("executeErasure: %v", err)
+	}
+
+	var got repo.Task
+	if err := db.Where("user_id = ?", userID).First(&got).Error; err != nil {
+		t.Fatalf("task row must be retained (scrubbed, not deleted): %v", err)
+	}
+	if got.Status != repo.TaskStatusFailure {
+		t.Errorf("task status after erasure = %q, want %q (an open task keeps being written to by the poller)", got.Status, repo.TaskStatusFailure)
+	}
+	if got.Properties.Input != "" {
+		t.Errorf("task properties.input = %q, want blank", got.Properties.Input)
+	}
+	if got.Quota != 9 {
+		t.Errorf("task quota = %d, want 9 (billing columns survive the terminal-ise)", got.Quota)
+	}
+	// The poller's own selection: nothing of this user's may come back.
+	for _, open := range repo.GetAllUnFinishSyncTasks(100) {
+		if open.UserId == userID {
+			t.Errorf("repo.GetAllUnFinishSyncTasks still returns the erased user's task %q (status=%q progress=%q) — the poller will rewrite data/fail_reason after the scrub", open.TaskID, open.Status, open.Progress)
+		}
+	}
+}
+
+// TestExecuteErasure_UnknownStepIsAnError is the cycle-13 L5 repair oracle
+// (D-L5-4) for rollback safety. executeErasure resumes from a persisted
+// cursor; a value written by a NEWER build (this cycle added
+// content_deleted, a later one will add more) matches no branch in this
+// binary. Without the final arm the function returned nil having done
+// nothing, MarkErasureCompleted was never called, the row stayed pending
+// forever and runErasurePass kept stamping the leader-task heartbeat — a
+// silent wedge. It must surface as a recorded error instead.
+func TestExecuteErasure_UnknownStepIsAnError(t *testing.T) {
+	db := openErasureTestDB(t)
+	userID, row := seedErasureFixture(t, db, 2)
+
+	row.Step = "some_step_a_newer_build_wrote"
+	err := executeErasure(context.Background(), row)
+	if err == nil {
+		t.Fatalf("executeErasure returned nil for an unknown step cursor — the request would sit pending forever with the heartbeat still advancing")
+	}
+	if !strings.Contains(err.Error(), "some_step_a_newer_build_wrote") {
+		t.Errorf("error %q does not name the unknown cursor value", err.Error())
+	}
+
+	var after entity.PrivacyErasureRequest
+	if dbErr := db.Where("id = ?", row.ID).First(&after).Error; dbErr != nil {
+		t.Fatalf("read back request: %v", dbErr)
+	}
+	if after.Status != repo.ErasureStatusPending {
+		t.Errorf("request status = %q, want %q (an unrecognised cursor must not complete the request)", after.Status, repo.ErasureStatusPending)
+	}
+	var userCount int64
+	db.Model(&repo.User{}).Where("id = ?", userID).Count(&userCount)
+	if userCount != 1 {
+		t.Errorf("user row count = %d, want 1 (no disposition may run for an unrecognised cursor)", userCount)
+	}
+}
+
+// TestExecuteErasure_MidjourneyTerminalisedBeforeDelete is the wiring
+// oracle for the Midjourney half of D-L5-3. The rows are deleted moments
+// later, so no row-state assertion can see whether the cascade took them
+// out of the poller's selection first — this one records the statements
+// GORM actually issues (a Before callback on update/delete) and checks the
+// order. Deleting the TerminaliseOpenMidjourneyForUser call from
+// executeErasure leaves every other test in this package green.
+func TestExecuteErasure_MidjourneyTerminalisedBeforeDelete(t *testing.T) {
+	db := openErasureTestDB(t)
+	_, row := seedErasureFixture(t, db, 2)
+
+	var mu sync.Mutex
+	var trace []string
+	record := func(op string) func(tx *gorm.DB) {
+		return func(tx *gorm.DB) {
+			mu.Lock()
+			trace = append(trace, op+":"+tx.Statement.Table)
+			mu.Unlock()
+		}
+	}
+	if err := db.Callback().Update().Before("gorm:update").Register("erase_trace_update", record("update")); err != nil {
+		t.Fatalf("register update callback: %v", err)
+	}
+	if err := db.Callback().Delete().Before("gorm:delete").Register("erase_trace_delete", record("delete")); err != nil {
+		t.Fatalf("register delete callback: %v", err)
+	}
+
+	if err := executeErasure(context.Background(), row); err != nil {
+		t.Fatalf("executeErasure: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	firstUpdate, firstDelete := -1, -1
+	for i, ev := range trace {
+		if ev == "update:midjourneys" && firstUpdate < 0 {
+			firstUpdate = i
+		}
+		if ev == "delete:midjourneys" && firstDelete < 0 {
+			firstDelete = i
+		}
+	}
+	if firstDelete < 0 {
+		t.Fatalf("no DELETE against midjourneys in %v — the fixture no longer exercises the branch", trace)
+	}
+	if firstUpdate < 0 {
+		t.Fatalf("no UPDATE against midjourneys: the rows were deleted while the poller could still hand them to repo.MjUpdate, which re-Creates a row whose UPDATE matched nothing")
+	}
+	if firstUpdate > firstDelete {
+		t.Errorf("midjourneys deleted (statement %d) before being taken out of the poller's selection (statement %d)", firstDelete, firstUpdate)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,8 +12,9 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -27,6 +27,62 @@ const (
 	maxRatioConfigBytes   = 10 << 20 // 10MB
 	floatEpsilon          = 1e-9
 )
+
+// ratioSyncEgressRefusedMessage is the single answer a caller gets for a
+// target the egress policy refuses — whether it was refused before the dial
+// (app.ValidateOutboundURL, below) or at the dial by the shared client's
+// transport guard. Fixed on purpose: the per-upstream result is echoed back
+// to the caller, so a message that varied with the failure ("connection
+// refused" vs "no such host" vs "10.0.0.5") would turn this endpoint back
+// into the internal-network port scanner the check exists to close. English
+// because it travels on the API wire.
+const ratioSyncEgressRefusedMessage = "upstream URL refused by egress policy"
+
+// The two markers below are how a transport-layer refusal is recognised.
+// internal/app builds both with fmt.Errorf and no wrapped sentinel, so there
+// is no error value to compare against; the match is on the stable part of
+// each message and ratio_sync_test.go's marker gate fails if either guard is
+// reworded.
+//
+//   - ssrfDialGuardMarker ends both forms the dial guard produces
+//     (relay_dial_guard.go: "... to internal address %s blocked by SSRF
+//     guard" and "... resolves to internal address %s, blocked by SSRF
+//     guard"). The pre-dial check cannot cover this one: it validates the
+//     name, the guard validates what the name resolved to at connect time.
+//   - the redirect pair brackets checkRedirect's "redirect to %s blocked:
+//     %v" (http_client.go), whose %v is the validator message naming the
+//     resolved address.
+const (
+	ssrfDialGuardMarker     = "blocked by SSRF guard"
+	ssrfRedirectGuardPrefix = "redirect to "
+	ssrfRedirectGuardMarker = " blocked: "
+)
+
+// ratioSyncUpstreamErrorMessage maps a transport error onto the text the
+// caller is given. An egress refusal collapses to the one fixed message; a
+// transport error that is not a refusal keeps its own text, because it
+// describes a target the policy already admitted and an operator debugging
+// an upstream needs to read it.
+func ratioSyncUpstreamErrorMessage(err error) string {
+	if isEgressRefusal(err) {
+		return ratioSyncEgressRefusedMessage
+	}
+	return err.Error()
+}
+
+// isEgressRefusal reports whether err came from one of the two egress guards
+// on the shared client (dial-time address check, redirect-hop revalidation)
+// rather than from the network.
+func isEgressRefusal(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, ssrfDialGuardMarker) {
+		return true
+	}
+	return strings.Contains(msg, ssrfRedirectGuardPrefix) && strings.Contains(msg, ssrfRedirectGuardMarker)
+}
 
 func nearlyEqual(a, b float64) bool {
 	if a > b {
@@ -83,7 +139,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 		dbChannels, err := repo.GetChannelsByIds(intIds)
 		if err != nil {
 			logger.LogError(c.Request.Context(), "failed to query channels: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "查询渠道失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "failed to query channels"})
 			return
 		}
 		for _, ch := range dbChannels {
@@ -99,7 +155,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 	}
 
 	if len(upstreams) == 0 {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无有效上游渠道"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "no valid upstream channel"})
 		return
 	}
 
@@ -108,23 +164,12 @@ func FetchUpstreamRatios(c *gin.Context) {
 
 	sem := make(chan struct{}, maxConcurrentFetches)
 
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	transport := &http.Transport{MaxIdleConns: 100, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: 1 * time.Second, ResponseHeaderTimeout: 10 * time.Second}
-	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			host = addr
-		}
-		// 对 github.io 优先尝试 IPv4，失败则回退 IPv6
-		if strings.HasSuffix(host, "github.io") {
-			if conn, err := dialer.DialContext(ctx, "tcp4", addr); err == nil {
-				return conn, nil
-			}
-			return dialer.DialContext(ctx, "tcp6", addr)
-		}
-		return dialer.DialContext(ctx, network, addr)
-	}
-	client := &http.Client{Transport: transport}
+	// app.GetHttpClient, not a locally built transport: the shared client
+	// carries the relay dial/response-header budgets the gateway's other
+	// outbound calls use AND a CheckRedirect that re-runs the SSRF policy on each
+	// hop — without it, a public host that answers 302 http://127.0.0.1:6379
+	// walks straight around the pre-dial check below.
+	client := app.GetHttpClient()
 
 	for _, chn := range upstreams {
 		wg.Add(1)
@@ -152,6 +197,21 @@ func FetchUpstreamRatios(c *gin.Context) {
 				uniqueName = fmt.Sprintf("%s(%d)", chItem.Name, chItem.ID)
 			}
 
+			// Egress policy on the COMPOSED url, after the endpoint override
+			// has been applied: an absolute `endpoint` replaces base_url
+			// outright, so checking base_url alone would be walked around by
+			// a public base_url plus a loopback endpoint. This is the same
+			// gate channel base_url and the channel test/fetch endpoints
+			// already pass (app.ValidateOutboundURL) — /api/ratio_sync/fetch
+			// was the one body-supplied outbound target without it, which
+			// made an admin session a reader of anything the pod can reach.
+			// It runs BEFORE any dial, and answers one fixed message.
+			if err := app.ValidateOutboundURL(fullURL); err != nil {
+				logger.LogWarn(c.Request.Context(), "ratio_sync: refused outbound target for "+uniqueName+": "+err.Error())
+				ch <- upstreamResult{Name: uniqueName, Err: ratioSyncEgressRefusedMessage}
+				return
+			}
+
 			ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(req.Timeout)*time.Second)
 			defer cancel()
 
@@ -173,8 +233,17 @@ func FetchUpstreamRatios(c *gin.Context) {
 				time.Sleep(time.Duration(200*(1<<attempt)) * time.Millisecond)
 			}
 			if lastErr != nil {
+				// The log keeps the full error (an operator reading pod logs
+				// is already inside the boundary); the caller gets the fixed
+				// message when it was the egress policy that refused. This is
+				// the sink the mapping is needed at: the other error sinks in
+				// this function sit either before any dial (the request-build
+				// failure) or after a response has already arrived (non-200
+				// status, decode failure, the upstream's own message, the
+				// unrecognised-shape refusal), so a guard error does not
+				// reach them.
 				logger.LogWarn(c.Request.Context(), "http error on "+chItem.Name+": "+lastErr.Error())
-				ch <- upstreamResult{Name: uniqueName, Err: lastErr.Error()}
+				ch <- upstreamResult{Name: uniqueName, Err: ratioSyncUpstreamErrorMessage(lastErr)}
 				return
 			}
 			defer resp.Body.Close()

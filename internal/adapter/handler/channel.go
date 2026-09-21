@@ -686,44 +686,6 @@ func GetChannel(c *gin.Context) {
 	return
 }
 
-// GetChannelKey 返回渠道的上游密钥。路由 POST /api/channel/:id/key 受
-// RootAuth(admin-only) + CriticalRateLimit + SecureVerificationRequired 保护:
-// 调用方须先 POST /api/verify 通过会话级二次验证(5 分钟有效),否则中间件返回
-// 403 VERIFICATION_REQUIRED。强认证因子(MFA)在 OIDC IdP 登录完成,本地二次验证
-// 为敏感操作的会话级再确认。
-func GetChannelKey(c *gin.Context) {
-	userId := c.GetInt("id")
-	channelId, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		common.ApiError(c, fmt.Errorf("渠道ID格式错误: %v", err))
-		return
-	}
-
-	// 获取渠道信息（包含密钥）
-	channel, err := repo.GetChannelById(channelId, true)
-	if err != nil {
-		common.ApiError(c, fmt.Errorf("获取渠道信息失败: %v", err))
-		return
-	}
-
-	if channel == nil {
-		common.ApiError(c, fmt.Errorf("渠道不存在"))
-		return
-	}
-
-	// 记录操作日志
-	repo.RecordLog(userId, repo.LogTypeSystem, fmt.Sprintf("查看渠道密钥信息 (渠道ID: %d)", channelId))
-
-	// 返回渠道密钥
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "获取成功",
-		"data": map[string]interface{}{
-			"key": channel.Key,
-		},
-	})
-}
-
 // validateChannelConfigDocuments runs the four save-time document validators
 // (param_override, header_override, model_mapping, setting) against a
 // channel's non-nil fields. param_override runs a structural pre-pass over

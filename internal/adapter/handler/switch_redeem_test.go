@@ -3,7 +3,6 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -387,55 +386,18 @@ func TestSwitchRedeemAnonymous_RaceOnSameCode(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Defect #9: repo.Redeem wraps every transaction failure as
-// "兑换失败，<inner>". <inner> is normally one of a small set of known
-// sentinel strings, but a genuine DB/driver failure inside the transaction
-// (e.g. a constraint violation on the Update/Save calls) returns raw error
-// text instead. sanitizeRedeemError must only pass through the known
-// sentinels and replace anything else with a generic message.
+// Defect #9: repo.Redeem used to wrap every transaction failure as
+// "兑换失败，<inner>" (a genuine DB/driver failure inside the transaction,
+// e.g. a constraint violation on the Update/Save calls, produced raw error
+// text instead of one of its known sentinel strings). cycle13 L3 moved the
+// fix into repo.Redeem itself (it now returns the fixed repo.ErrRedemptionFailed
+// sentinel for any non-sentinel transaction error, never the raw text — see
+// redemption.go) plus repo.RedemptionErrorMessage as defence in depth; the
+// unit-level coverage for that mapping (TestRedemptionErrorMessage_*) now
+// lives in internal/adapter/repo/redemption_test.go, next to the sentinels it
+// tests. TestSwitchRedeemAnonymous_RawDBErrorSanitized below is the
+// full-HTTP-handler proof that the fix reaches this endpoint's response body.
 // ---------------------------------------------------------------------------
-
-// TestSanitizeRedeemError_KnownSentinelsPassThrough exhaustively covers every
-// inner message repo.Redeem can produce (internal/adapter/repo/redemption.go
-// Redeem(), each wrapped with its "兑换失败，" prefix here to match what the
-// handler actually receives) and asserts they come back unchanged — this is
-// the "no regression on the sentinel path" guarantee.
-func TestSanitizeRedeemError_KnownSentinelsPassThrough(t *testing.T) {
-	sentinels := []string{
-		"无效的兑换码",
-		"该兑换码已被使用",
-		"该兑换码已过期",
-		"用户不存在",
-		"该兑换码不属于当前租户",
-	}
-	for _, s := range sentinels {
-		wrapped := errors.New("兑换失败，" + s)
-		got := sanitizeRedeemError(wrapped)
-		if got != s {
-			t.Errorf("sentinel %q: expected passthrough, got %q", s, got)
-		}
-	}
-}
-
-// TestSanitizeRedeemError_UnknownErrorReplaced asserts any error that isn't
-// one of the known sentinels (in particular, raw driver/GORM error text
-// containing schema details like constraint or column names) is replaced
-// with the generic message and never leaks a recognizable substring of the
-// original.
-func TestSanitizeRedeemError_UnknownErrorReplaced(t *testing.T) {
-	cases := []string{
-		`兑换失败，pq: duplicate key value violates unique constraint "idx_redemptions_key"`,
-		`兑换失败，no such column: quota`,
-		`兑换失败，dial tcp 10.0.0.5:5432: connect: connection refused`,
-	}
-	const generic = "服务暂不可用，请稍后重试"
-	for _, raw := range cases {
-		got := sanitizeRedeemError(errors.New(raw))
-		if got != generic {
-			t.Errorf("input %q: expected generic message %q, got leaked text %q", raw, generic, got)
-		}
-	}
-}
 
 // TestSwitchRedeemAnonymous_RawDBErrorSanitized drives the full HTTP handler
 // with a redemption whose backing transaction fails on a raw SQL error (the
@@ -479,12 +441,17 @@ func TestSwitchRedeemAnonymous_RawDBErrorSanitized(t *testing.T) {
 		"fingerprint": fingerprint,
 	})
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 (envelope), got %d, body: %s", w.Code, w.Body.String())
+	// A hub-side fault answers 500 (the envelope is still JSON, which is what
+	// the Switch client parses); the caller-side outcomes keep their 200.
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for a hub-side redemption fault, got %d, body: %s", w.Code, w.Body.String())
 	}
 	env := parseEnvelope(t, w)
 	if success, _ := env["success"].(bool); success {
 		t.Fatalf("expected success=false for a raw DB error, got: %s", w.Body.String())
+	}
+	if code, _ := env["error_code"].(string); code != repo.RedemptionErrorCodeFailed {
+		t.Errorf("error_code = %q, want %q", code, repo.RedemptionErrorCodeFailed)
 	}
 	msg, _ := env["message"].(string)
 	if msg != "服务暂不可用，请稍后重试" {

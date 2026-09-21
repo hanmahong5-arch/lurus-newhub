@@ -22,11 +22,22 @@ const (
 // there is no FX source wired into this package. Add it back only once a
 // real conversion is available (see operation_setting.USDExchangeRate for
 // the site-wide rate already used elsewhere, if that becomes the source).
+//
+// Quota/AmountCNY/RequestCount cover only rows repo.BillableConsumePredicate
+// accepts — a settlement that SettleConsume flagged failed, or a manual
+// channel-test probe, no longer count as a customer charge (cycle13 L2).
+// UnbilledQuota/UnbilledRequestCount are the rest of that month's
+// type=consume rows: quota that was logged but that nobody's wallet ever
+// paid, surfaced instead of silently dropped so an operator reconciling a
+// month's total against a raw log count is not left wondering where rows
+// went.
 type invoiceMonthBucket struct {
-	Month        string  `json:"month"`         // "YYYY-MM"
-	Quota        int64   `json:"quota"`         // raw quota units consumed
-	AmountCNY    float64 `json:"amount_cny"`    // quota / QuotaPerUnit (1 CNY per QuotaPerUnit)
-	RequestCount int64   `json:"request_count"` // number of log rows
+	Month                string  `json:"month"`                  // "YYYY-MM"
+	Quota                int64   `json:"quota"`                  // billable quota units consumed
+	AmountCNY            float64 `json:"amount_cny"`             // quota / QuotaPerUnit (1 CNY per QuotaPerUnit)
+	RequestCount         int64   `json:"request_count"`          // number of billable log rows
+	UnbilledQuota        int64   `json:"unbilled_quota"`         // quota logged but excluded from billing (settlement-failed / channel-test)
+	UnbilledRequestCount int64   `json:"unbilled_request_count"` // number of log rows excluded from billing
 }
 
 // ListInvoicesV2 returns monthly spend buckets for the authenticated user in
@@ -164,55 +175,86 @@ type rawMonthRow struct {
 	RequestCount int64  `gorm:"column:request_count"`
 }
 
-// aggregateInvoiceMonths runs the per-month GROUP BY depending on whether
-// we are connected to PostgreSQL or SQLite. The SQLite arm exists only for
-// the hermetic glebarez unit-test tier; runtime is always PostgreSQL.
-func aggregateInvoiceMonths(userID int, tenantID string, fromTS, toTS int64) ([]invoiceMonthBucket, error) {
-	var rows []rawMonthRow
-
+// monthGroupExpr is the per-dialect SQL expression that buckets a row's
+// unix-epoch created_at into its "YYYY-MM" calendar month. The SQLite arm
+// exists only for the hermetic glebarez unit-test tier; runtime is always
+// PostgreSQL.
+func monthGroupExpr() string {
 	if common.UsingPostgreSQL {
-		err := repo.LOG_DB.
-			Model(&repo.Log{}).
-			Select(
-				"TO_CHAR(TO_TIMESTAMP(created_at), 'YYYY-MM') AS month, "+
-					"COALESCE(SUM(quota), 0) AS quota_sum, "+
-					"COUNT(*) AS request_count",
-			).
-			Where("user_id = ? AND tenant_id = ? AND type = ? AND created_at >= ? AND created_at < ?",
-				userID, tenantID, repo.LogTypeConsume, fromTS, toTS).
-			Group("TO_CHAR(TO_TIMESTAMP(created_at), 'YYYY-MM')").
-			Order("month DESC").
-			Scan(&rows).Error
-		if err != nil {
-			return nil, err
-		}
+		return "TO_CHAR(TO_TIMESTAMP(created_at), 'YYYY-MM')"
+	}
+	return "STRFTIME('%Y-%m', DATETIME(created_at, 'unixepoch'))"
+}
+
+// queryInvoiceMonthRows runs the per-month GROUP BY for one user/tenant/range,
+// either over every type=consume row (billableOnly=false) or, scoped through
+// repo.BillableConsumePredicate, only the rows that actually settled
+// (billableOnly=true). aggregateInvoiceMonths runs both and takes the
+// difference to get the unbilled bucket, instead of duplicating
+// BillableConsumePredicate's marker strings here (cycle13 L2 — the predicate
+// lives in repo/log.go, the one place that owns those literals).
+func queryInvoiceMonthRows(userID int, tenantID string, fromTS, toTS int64, billableOnly bool) ([]rawMonthRow, error) {
+	var rows []rawMonthRow
+	monthExpr := monthGroupExpr()
+
+	tx := repo.LOG_DB.
+		Model(&repo.Log{}).
+		Select(monthExpr+" AS month, "+
+			"COALESCE(SUM(quota), 0) AS quota_sum, "+
+			"COUNT(*) AS request_count").
+		Where("user_id = ? AND tenant_id = ? AND created_at >= ? AND created_at < ?",
+			userID, tenantID, fromTS, toTS)
+
+	if billableOnly {
+		tx = tx.Scopes(repo.BillableConsumePredicate)
 	} else {
-		// SQLite fallback — strftime on unix epoch.
-		err := repo.LOG_DB.
-			Model(&repo.Log{}).
-			Select(
-				"STRFTIME('%Y-%m', DATETIME(created_at, 'unixepoch')) AS month, "+
-					"COALESCE(SUM(quota), 0) AS quota_sum, "+
-					"COUNT(*) AS request_count",
-			).
-			Where("user_id = ? AND tenant_id = ? AND type = ? AND created_at >= ? AND created_at < ?",
-				userID, tenantID, repo.LogTypeConsume, fromTS, toTS).
-			Group("STRFTIME('%Y-%m', DATETIME(created_at, 'unixepoch'))").
-			Order("month DESC").
-			Scan(&rows).Error
-		if err != nil {
-			return nil, err
-		}
+		tx = tx.Where("type = ?", repo.LogTypeConsume)
 	}
 
-	buckets := make([]invoiceMonthBucket, 0, len(rows))
-	for _, r := range rows {
-		amountCNY := float64(r.QuotaSum) / common.QuotaPerUnit
+	err := tx.Group(monthExpr).Order("month DESC").Scan(&rows).Error
+	return rows, err
+}
+
+// aggregateInvoiceMonths returns one bucket per calendar month in range,
+// split into the billable quota (what repo.BillableConsumePredicate accepts)
+// and the unbilled remainder (settlement-failed / channel-test rows —
+// cycle13 L2). It runs the GROUP BY twice — once unfiltered, once scoped to
+// billable — and subtracts, rather than computing both in one query with a
+// hand-rolled CASE WHEN that would have to re-embed the same marker
+// substrings BillableConsumePredicate already owns.
+func aggregateInvoiceMonths(userID int, tenantID string, fromTS, toTS int64) ([]invoiceMonthBucket, error) {
+	allRows, err := queryInvoiceMonthRows(userID, tenantID, fromTS, toTS, false)
+	if err != nil {
+		return nil, err
+	}
+	billableRows, err := queryInvoiceMonthRows(userID, tenantID, fromTS, toTS, true)
+	if err != nil {
+		return nil, err
+	}
+
+	billableByMonth := make(map[string]rawMonthRow, len(billableRows))
+	for _, r := range billableRows {
+		billableByMonth[r.Month] = r
+	}
+
+	// Iterate allRows (not billableRows) so the result keeps every month that
+	// has ANY consume row, including a month whose rows are entirely
+	// unbilled — that used to be silently included in the pre-L2 total, and
+	// must still be visible, just moved into unbilled_quota rather than
+	// dropped from the response altogether.
+	buckets := make([]invoiceMonthBucket, 0, len(allRows))
+	for _, all := range allRows {
+		billable := billableByMonth[all.Month] // zero value if the month has no billable rows
 		buckets = append(buckets, invoiceMonthBucket{
-			Month:        r.Month,
-			Quota:        r.QuotaSum,
-			AmountCNY:    amountCNY,
-			RequestCount: r.RequestCount,
+			Month:        all.Month,
+			Quota:        billable.QuotaSum,
+			AmountCNY:    float64(billable.QuotaSum) / common.QuotaPerUnit,
+			RequestCount: billable.RequestCount,
+			// The two aggregates are separate round trips; a row that lands
+			// between them can make the difference negative, which must not
+			// reach a customer-facing response.
+			UnbilledQuota:        max(all.QuotaSum-billable.QuotaSum, 0),
+			UnbilledRequestCount: max(all.RequestCount-billable.RequestCount, 0),
 		})
 	}
 	return buckets, nil

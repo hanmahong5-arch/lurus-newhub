@@ -13,17 +13,26 @@ import (
 
 type QuotaData = entity.QuotaData
 
-func UpdateQuotaData() {
-	for {
-		if common.DataExportEnabled {
-			common.SysLog("正在更新数据看板数据...")
-			SaveQuotaDataCache()
-		}
-		time.Sleep(time.Duration(common.DataExportInterval) * time.Minute)
-	}
-}
+// quotaDataShutdownFlushTimeout bounds the shutdown flush's DB work. The
+// flush runs after GRACEFUL_SHUTDOWN_TIMEOUT has already been spent draining
+// HTTP, inside the same terminationGracePeriodSeconds, so it gets a small
+// budget of its own rather than the caller's (already-cancelled) context: a
+// PG that has gone away must not be able to hold the process open until
+// kubelet SIGKILLs it.
+const quotaDataShutdownFlushTimeout = 10 * time.Second
 
 // UpdateQuotaDataWithContext updates quota data with context cancellation support.
+//
+// The ctx.Done() arm flushes the in-memory cache before returning (cycle 13
+// L11): CacheQuotaData reaches the DB from this loop's ticker tick, from
+// this final flush, or from a direct SaveQuotaDataCache call — a pod that
+// receives SIGTERM between two ticks (DataExportInterval defaults to
+// minutes) used to just log "quota data update stopped" and drop whatever
+// was buffered, silently losing that window's usage-dashboard data on a
+// rolling deploy. Gated on DataExportEnabled for the same reason the ticker
+// branch is: the flag is the single on/off switch for this feature, and a
+// shutdown flush must not write quota_data rows a disabled deployment would
+// not have written on its own.
 func UpdateQuotaDataWithContext(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(common.DataExportInterval) * time.Minute)
 	defer ticker.Stop()
@@ -31,7 +40,18 @@ func UpdateQuotaDataWithContext(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			common.SysLog("quota data update stopped")
+			if common.DataExportEnabled {
+				common.SysLog("quota data update stopped, flushing cache")
+				// ctx is already cancelled at this point, so the flush gets
+				// its own bounded deadline — passing ctx down would fail
+				// every query before it started.
+				flushCtx, cancelFlush := context.WithTimeout(context.Background(), quotaDataShutdownFlushTimeout)
+				//nolint:contextcheck // see above: the loop ctx is cancelled, the flush needs its own bounded deadline
+				flushQuotaDataCache(flushCtx)
+				cancelFlush()
+			} else {
+				common.SysLog("quota data update stopped")
+			}
 			return
 		case <-ticker.C:
 			if common.DataExportEnabled {
@@ -75,33 +95,84 @@ func LogQuotaData(userId int, username string, modelName string, quota int, crea
 	logQuotaDataCache(userId, username, modelName, quota, createdAt, tokenUsed)
 }
 
+// SaveQuotaDataCache flushes the in-memory bucket cache to quota_data. It is
+// the periodic (ticker) entry point and keeps its historical signature for
+// the callers outside this file; the shutdown path uses flushQuotaDataCache
+// directly so it can pass a bounded context.
 func SaveQuotaDataCache() {
+	flushQuotaDataCache(context.Background())
+}
+
+// flushQuotaDataCache detaches the cache and writes it out. The two halves
+// are separate on purpose (cycle 13 L11): the lock is held just long enough
+// to swap the map, and the DB round trips happen without it, so a relay
+// request completing during the drain window — LogQuotaData takes the same
+// lock — is not blocked behind however long PG takes.
+func flushQuotaDataCache(ctx context.Context) {
+	writeQuotaDataSnapshot(ctx, takeQuotaDataSnapshot())
+}
+
+// takeQuotaDataSnapshot swaps the live cache for an empty map and returns
+// what was in it. Buckets logged after this returns accumulate in the fresh
+// map and go out with the next flush rather than being lost.
+func takeQuotaDataSnapshot() map[string]*QuotaData {
 	CacheQuotaDataLock.Lock()
 	defer CacheQuotaDataLock.Unlock()
-	size := len(CacheQuotaData)
+	snapshot := CacheQuotaData
+	CacheQuotaData = make(map[string]*QuotaData)
+	return snapshot
+}
+
+// writeQuotaDataSnapshot upserts each bucket of an already-detached
+// snapshot. It does not take CacheQuotaDataLock — see flushQuotaDataCache —
+// and every query carries ctx, so a shutdown flush is bounded by
+// quotaDataShutdownFlushTimeout instead of by whatever PG feels like.
+func writeQuotaDataSnapshot(ctx context.Context, snapshot map[string]*QuotaData) {
 	// 如果缓存中有数据，就保存到数据库中
 	// 1. 先查询数据库中是否有数据
 	// 2. 如果有数据，就更新数据
 	// 3. 如果没有数据，就插入数据
-	for _, quotaData := range CacheQuotaData {
+	failed := 0
+	for _, quotaData := range snapshot {
 		quotaDataDB := &QuotaData{}
-		DB.Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
+		DB.WithContext(ctx).Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
 			quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt).First(quotaDataDB)
 		if quotaDataDB.Id > 0 {
-			//quotaDataDB.Count += quotaData.Count
-			//quotaDataDB.Quota += quotaData.Quota
-			//DB.Table("quota_data").Save(quotaDataDB)
-			increaseQuotaData(quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.Count, quotaData.Quota, quotaData.CreatedAt, quotaData.TokenUsed)
+			if err := increaseQuotaData(ctx, quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.Count, quotaData.Quota, quotaData.CreatedAt, quotaData.TokenUsed); err != nil {
+				failed++
+			}
 		} else {
-			DB.Table("quota_data").Create(quotaData)
+			// Cross-replica half of the PIPL erasure scrub (cycle-13 L5
+			// repair, D-L5-1): this bucket may have been buffered before
+			// another replica ran the cascade for its user, in which case
+			// creating it here writes the plaintext username back into a
+			// table that was just scrubbed. The update branch above
+			// matched an existing row, so its username is whatever that
+			// row already carries; this create branch is where a name
+			// reaches the table anew. One indexed count() on the rare
+			// create path.
+			row := quotaData
+			if quotaData.Username != ErasedMarker && HasErasureScrubbedUserContent(ctx, quotaData.UserID) {
+				scrubbed := *quotaData
+				scrubbed.Username = ErasedMarker
+				row = &scrubbed
+			}
+			if err := DB.WithContext(ctx).Table("quota_data").Create(row).Error; err != nil {
+				failed++
+				common.SysError(fmt.Sprintf("saveQuotaData create error: %s", err))
+			}
 		}
 	}
-	CacheQuotaData = make(map[string]*QuotaData)
-	common.SysLog(fmt.Sprintf("保存数据看板数据成功，共保存%d条数据", size))
+	if failed > 0 {
+		// Dropped rather than retried: these rows are dashboard aggregates,
+		// and the caller may be a process on its way out.
+		common.SysError(fmt.Sprintf("保存数据看板数据失败%d条（共%d条）", failed, len(snapshot)))
+	}
+	common.SysLog(fmt.Sprintf("保存数据看板数据成功，共保存%d条数据", len(snapshot)-failed))
 }
 
-func increaseQuotaData(userId int, username string, modelName string, count int, quota int, createdAt int64, tokenUsed int) {
-	err := DB.Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
+func increaseQuotaData(ctx context.Context, userId int, username string, modelName string, count int, quota int, createdAt int64, tokenUsed int) error {
+	err := DB.WithContext(ctx).Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
 		userId, username, modelName, createdAt).Updates(map[string]interface{}{
 		"count":      gorm.Expr("count + ?", count),
 		"quota":      gorm.Expr("quota + ?", quota),
@@ -110,6 +181,7 @@ func increaseQuotaData(userId int, username string, modelName string, count int,
 	if err != nil {
 		common.SysLog(fmt.Sprintf("increaseQuotaData error: %s", err))
 	}
+	return err
 }
 
 // applyQuotaData constrains a quota_data query to one tenant. quota_data has no

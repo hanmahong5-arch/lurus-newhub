@@ -53,6 +53,13 @@ var debitWalletGRPC = common.DebitWalletGRPC
 // trip to lurus-platform.
 var settleWithBreaker = common.SettleWithBreaker
 
+// decreaseTokenQuotaSeam is a test seam over the per-key debit in
+// PostConsumeQuota's Phase 3, same convention as the seams above. Phase 3's
+// failure branch is the one place three ledgers can disagree about a single
+// request, and a DB write failure is not reachable from a hermetic test by
+// any other means (the sqlite fixture's UPDATE succeeds by construction).
+var decreaseTokenQuotaSeam = repo.DecreaseTokenQuota
+
 type TokenDetails struct {
 	TextTokens  int
 	AudioTokens int
@@ -314,6 +321,30 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 	other := GenerateWssOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+
+	// Settle the session's pre-consumption. A realtime request is frozen like
+	// every other relay format (handler/relay.go:360) and then charged event
+	// by event (PreWssConsumeQuota -> PostConsumeQuota), so by the time the
+	// session ends the freeze is pure surplus: the whole cost has already been
+	// taken. WssHelper returns as soon as this function comes back and
+	// releasePreConsumedOnFailure only runs on an error, so without this call
+	// the freeze was neither settled nor released and the customer kept paying
+	// FinalPreConsumedQuota for every realtime session.
+	//
+	// The delta is therefore the negative of the freeze and the pre-consumed
+	// argument is the freeze itself: their sum is 0, which keeps the pool
+	// (Phase 2.5, debited per event already) and the daily counter untouched
+	// and routes a live platform pre-auth into PostConsumeQuota's zero-usage
+	// release arm. FinalPreConsumedQuota is deliberately left in place for the
+	// caller's observability (handler/relay.go's span cost and
+	// hub.RecordRelayOutcome read it after this returns); nothing downstream
+	// refunds on the success path, so leaving it cannot double-refund.
+	if relayInfo.FinalPreConsumedQuota != 0 {
+		settleErr := SettleConsume(ctx, relayInfo, 0-relayInfo.FinalPreConsumedQuota,
+			relayInfo.FinalPreConsumedQuota, "realtime")
+		FlagSettlementOutcome(other, settleErr)
+	}
+
 	logParams := repo.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.InputTokens,
@@ -749,7 +780,7 @@ var ErrTokenQuotaInsufficient = errors.New("token quota is not enough")
 
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 	if quota < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota must not be negative")
 	}
 	if relayInfo.IsPlayground {
 		return nil
@@ -794,87 +825,6 @@ func sourceProductOf(relayInfo *relaycommon.RelayInfo) string {
 	return ratio_setting.DefaultSourceProduct
 }
 
-// debitTenantPool records the post-consume debit against the token's tenant
-// credit pool. Three outcomes (P0-3, ADR 2026-06-10 pool-overdraft):
-//
-//  1. Normal: DebitPool succeeds — relay_debit draw row.
-//  2. Exhausted: the gate admitted a request that out-raced the balance.
-//     The user quota and upstream tokens are already spent, so we record the
-//     debt via OverdraftDebitPool (balance goes negative, relay_overdraft
-//     draw row) instead of dropping the debit. The negative balance keeps
-//     the relay gate closed until a topup repays it.
-//  3. Hard DB error: the debit is lost — CRITICAL structured log +
-//     CreditPoolDebitLostTotal counter (honest residual gap, needs manual
-//     reconciliation).
-//
-// Tokens without a tenant, tenants without a pool row, and unlimited pools
-// all skip the debit (pool gate semantics: no pool = unlimited).
-func debitTenantPool(relayInfo *relaycommon.RelayInfo, quota int) {
-	tok, terr := repo.GetTokenById(relayInfo.TokenId)
-	if terr != nil || tok == nil || tok.TenantId == "" {
-		return
-	}
-	pool, perr := repo.GetTenantCreditPool(tok.TenantId)
-	if perr != nil {
-		if errors.Is(perr, repo.ErrPoolNotFound) {
-			// Distinct from IsUnlimited(): this tenant has NO pool row at all,
-			// which is either a legitimate "no pool configured" tenant or a
-			// tenant-id/pool drift (orphaned token pointing at a tenant that
-			// never got a pool row). Surface it — a silent return here would
-			// hide the same class of bug the tenant-id drift incident found.
-			metrics.CreditPoolLookupMissTotal.WithLabelValues(tok.TenantId, "no_pool").Inc()
-			common.SysLog(fmt.Sprintf(
-				`{"event":"pool_lookup_miss","who":"tenant:%s","what":"post-consume debit %d skipped: no credit pool row (token %d)","result":"treated as unlimited, verify tenant-id is not drifted"}`,
-				tok.TenantId, quota, relayInfo.TokenId))
-			return
-		}
-		// Hard DB error resolving the pool row — same severity as a lost debit,
-		// since we can't even tell whether this tenant is pool-gated.
-		metrics.CreditPoolLookupMissTotal.WithLabelValues(tok.TenantId, "lookup_error").Inc()
-		common.SysError(fmt.Sprintf(
-			`{"event":"pool_lookup_error","who":"tenant:%s","what":"post-consume debit %d: credit pool lookup failed (token %d)","result":"debit skipped, conservation broken: %s"}`,
-			tok.TenantId, quota, relayInfo.TokenId, perr.Error()))
-		return
-	}
-	if pool == nil || pool.IsUnlimited() {
-		return
-	}
-
-	derr := repo.DebitPool(pool.ID, tok.TenantId, int64(quota), relayInfo.TokenId, 0)
-	if derr == nil {
-		metrics.CreditPoolDebitTotal.WithLabelValues(tok.TenantId).Inc()
-		after := pool.CurrentBalance - int64(quota)
-		metrics.CreditPoolBalance.WithLabelValues(tok.TenantId).Set(float64(after))
-		governance.RecordAuditEvent(governance.NewDetachedAuditEvent(
-			tok.TenantId, governance.ActorSystem, relayInfo.UserId,
-			governance.ActionBillingDebit, governance.ResourceTenant, int(pool.ID),
-			fmt.Sprintf(`{"quota":%d,"pool_id":%d,"token_id":%d}`, quota, pool.ID, relayInfo.TokenId)))
-		maybeAlertPoolThreshold(pool, after)
-		return
-	}
-
-	if errors.Is(derr, repo.ErrPoolExhausted) {
-		newBalance, oerr := repo.OverdraftDebitPool(pool.ID, tok.TenantId, int64(quota), relayInfo.TokenId, 0)
-		if oerr == nil {
-			metrics.CreditPoolOverdraftTotal.WithLabelValues(tok.TenantId).Inc()
-			metrics.CreditPoolBalance.WithLabelValues(tok.TenantId).Set(float64(newBalance))
-			common.SysLog(fmt.Sprintf(
-				`{"event":"pool_overdraft","who":"tenant:%s","what":"post-consume debit %d on exhausted pool %d (token %d)","result":"recorded as relay_overdraft, new_balance=%d"}`,
-				tok.TenantId, quota, pool.ID, relayInfo.TokenId, newBalance))
-			maybeAlertPoolThreshold(pool, newBalance)
-			return
-		}
-		derr = oerr
-	}
-
-	// Hard DB error on either path: the debit is dropped. This is the honest
-	// residual gap — surface it loudly instead of a quiet info log.
-	metrics.CreditPoolDebitLostTotal.Inc()
-	common.SysError(fmt.Sprintf(
-		`{"event":"pool_debit_lost","who":"tenant:%s","what":"post-consume debit %d on pool %d (token %d) failed","result":"debit NOT recorded, conservation broken: %s"}`,
-		tok.TenantId, quota, pool.ID, relayInfo.TokenId, derr.Error()))
-}
-
 // creditPoolAlertHookTimeout bounds the detached pool-threshold publish
 // below. AMENDMENT (plan doc §14, L4): this hook runs only after the debit
 // has already succeeded (it can never alter the debit result or the HTTP
@@ -893,58 +843,6 @@ const creditPoolAlertHookTimeout = 2 * time.Second
 // injection cannot reach in this hermetic tier — and assert the audit-row
 // behaviour below without a live NATS server.
 var publishPoolThresholdSeam = hubnats.PublishPoolThreshold
-
-// maybeAlertPoolThreshold fires the pool-threshold publisher (best-effort)
-// when a just-applied debit crosses the pool's alert_threshold_pct and the
-// schema dedup window has elapsed since the last fire. It never alters the
-// debit result: publisher errors are logged + counted, not returned or
-// retried here — hubnats.PublishPoolThreshold's own schema+Redis dedup
-// (internal/pkg/nats/pool_threshold.go) remains authoritative; this precheck
-// only avoids a DB read on every below-threshold debit.
-//
-// pool is the pre-debit snapshot read earlier in debitTenantPool; newBalance
-// is the post-debit balance from the branch that just committed (normal
-// DebitPool: pool.CurrentBalance-quota; overdraft: OverdraftDebitPool's
-// returned balance).
-func maybeAlertPoolThreshold(pool *repo.TenantCreditPool, newBalance int64) {
-	after := *pool
-	after.CurrentBalance = newBalance
-	if !after.ShouldAlert() {
-		return
-	}
-	if pool.AlertFiredAt != nil && time.Since(*pool.AlertFiredAt) < hubnats.SchemaDedupWindow() {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), creditPoolAlertHookTimeout)
-	defer cancel()
-	fired, delivery, err := publishPoolThresholdSeam(ctx, pool.TenantID, pool.ID, after.CurrentBalance, pool.MaxBalance, pool.AlertThresholdPct)
-	if err != nil {
-		metrics.CreditPoolAlertHookErrorTotal.Inc()
-		common.SysError(fmt.Sprintf(
-			`{"event":"pool_threshold_alert_failed","who":"tenant:%s","what":"pool %d threshold publish failed","result":"debit unaffected, alert not delivered: %s"}`,
-			pool.TenantID, pool.ID, err.Error()))
-	}
-	// fired==true means the schema mark (durable dedup) already landed even
-	// when err != nil (e.g. the NATS publish itself failed after marking —
-	// see hubnats.publishPoolThreshold step 3 vs 4). The dedup window is
-	// already consumed either way, so this crossing must leave a durable
-	// audit trace now — returning early here would suppress the pool for
-	// the whole window with nothing but a log line to show for it.
-	if !fired {
-		return
-	}
-	details := fmt.Sprintf(`{"pool_id":%d,"balance":%d,"max_balance":%d,"threshold_pct":%d,"delivery":%q}`,
-		pool.ID, after.CurrentBalance, pool.MaxBalance, pool.AlertThresholdPct, delivery)
-	if err != nil {
-		details = fmt.Sprintf(`{"pool_id":%d,"balance":%d,"max_balance":%d,"threshold_pct":%d,"delivery":%q,"error":%q}`,
-			pool.ID, after.CurrentBalance, pool.MaxBalance, pool.AlertThresholdPct, delivery, err.Error())
-	}
-	governance.RecordAuditEvent(governance.NewDetachedAuditEvent(
-		pool.TenantID, governance.ActorSystem, 0,
-		governance.ActionBillingPoolThreshold, governance.ResourceTenant, int(pool.ID),
-		details))
-}
 
 func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int, sendEmail bool) (err error) {
 	// Track A: for platform-governed requests under LOCAL_LEDGER_ADVISORY the
@@ -979,9 +877,26 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 		}
 	}
 
-	// Phase 2: Update daily quota (non-critical, best-effort)
-	if userLedger && quota > 0 {
-		if dailyErr := repo.PostConsumeDailyQuota(relayInfo.UserId, quota); dailyErr != nil {
+	// Phase 2: Update daily quota (non-critical, best-effort).
+	//
+	// The measure is the REQUEST'S COST — quota + preConsumedQuota, the same
+	// total Phase 2.5 debits the pool below — not the post-consume delta
+	// `quota`. The delta is the difference against the pre-consumed estimate:
+	// a request whose estimate covered most of its cost counted only the
+	// remainder against the daily cap, and one whose estimate overshot
+	// (negative delta) counted nothing at all, so daily_quota admitted a
+	// multiple of the spend it was configured to allow.
+	//
+	// Refund paths (a negative total: ReturnPreConsumedQuota, the realtime
+	// settlement below) do NOT roll the counter back. repo.IncreaseDailyUsed
+	// rejects negative amounts by design, and daily_used is reset on a UTC-day
+	// boundary rather than being derived from the ledger, so a subtraction
+	// applied after a reset would take the refund out of the NEXT day's
+	// allowance. The counter therefore over-states a refunded request until
+	// the next reset; the daily cap is a rate limit, not an account balance.
+	dailyConsumed := quota + preConsumedQuota
+	if userLedger && dailyConsumed > 0 {
+		if dailyErr := repo.PostConsumeDailyQuota(relayInfo.UserId, dailyConsumed); dailyErr != nil {
 			common.SysLog("failed to update daily quota: " + dailyErr.Error())
 		}
 	}
@@ -997,8 +912,9 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	// request by the pre-consumed amount and dropped the debit entirely when
 	// the estimate met or exceeded the actual cost (quota <= 0).
 	poolDebit := quota + preConsumedQuota
+	poolDebited := false
 	if poolDebit > 0 && relayInfo.TokenId > 0 {
-		debitTenantPool(relayInfo, poolDebit)
+		poolDebited = debitTenantPool(relayInfo, poolDebit)
 	}
 
 	// PHASE B SEAM (project budget enforcement / chargeback) — NOT IMPLEMENTED.
@@ -1013,9 +929,16 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	// If token quota update fails, we release the platform pre-auth rather than
 	// settling — prevents double-debit when local state is inconsistent.
 	localQuotaConsistent := true
-	if !relayInfo.IsPlayground {
+	// TokenId > 0: a caller with no key to charge (handler/task_video.go's
+	// re-settlement when the submission's payer could not be resolved passes
+	// TokenId 0) must not reach DecreaseTokenQuota(0, "", …) — the DB update
+	// matches no row, but the Redis arm keys a cache entry on the empty key
+	// and the batch arm queues a delta for id 0. Skipping the leg is the
+	// honest shape: there is no key ledger to move, and the pool leg above
+	// already skips for the same reason (cycle-13 hand-finish after L1).
+	if !relayInfo.IsPlayground && relayInfo.TokenId > 0 {
 		if quota > 0 {
-			err = repo.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)
+			err = decreaseTokenQuotaSeam(relayInfo.TokenId, relayInfo.TokenKey, quota)
 		} else {
 			err = repo.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, -quota)
 		}
@@ -1040,6 +963,16 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 							relayInfo.UserId, -quota, compErr.Error()))
 					}
 				}
+			}
+			// The Phase 2.5 debit belongs to the same request, and this request
+			// is now charged to nobody: Phase 1 was just handed back and Phase 3
+			// never landed. Leaving the pool debited settled one request as
+			// three different amounts (user 0, key 0, tenant the full cost) and
+			// walked the tenant's balance down with no matching user spend.
+			// Gated on poolDebited so a skipped or lost debit is never "handed
+			// back" — that would credit balance the tenant never spent.
+			if poolDebited {
+				creditTenantPool(relayInfo, poolDebit, "token_write")
 			}
 			// Don't return yet — must still handle platform pre-auth release below
 		}

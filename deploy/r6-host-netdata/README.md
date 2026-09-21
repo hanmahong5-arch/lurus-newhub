@@ -31,7 +31,7 @@ a bind source. `scripts/install-netdata-alarms.sh` only manages
 `newhub.conf` — a second alarm file would need its own bind mount added to
 the container definition first (out of scope for this directory).
 
-`health.d/newhub.conf` currently defines 14 alarms:
+`health.d/newhub.conf` currently defines 30 alarms:
 
 - 8 ported from the host's original 2026-08-20 copy
   (`newhub_platform_breaker_open`, `newhub_billing_outbox_failures`,
@@ -77,6 +77,82 @@ the container definition first (out of scope for this directory).
   is the same page as `newhub_db_slow_queries`
   (`doc/runbook/db-pool-saturation.md`). Added **in-repo only**; not yet
   installed onto R6 — same header note.
+- 1 that was already live in this file but this count had never mentioned by
+  name: `newhub_rate_limit_memory_fallback` (cycle-12 L4) — a lower-severity
+  sibling of `newhub_rate_limit_degraded` that watches the same
+  `lurus_gateway_rate_limit_degraded_total` series filtered to
+  `check=web_rate_limit_backend_memory` (a credential/abuse bucket that
+  fell back to the process-local limiter, still enforcing, just per replica
+  instead of cluster-wide). See `doc/runbook/rate-limit-degraded.md`, which
+  the two alarms share.
+- **14 added 2026-09-20 (cycle-13 L10)**, alarm completion pass — all
+  **in-repo only**, not yet installed onto R6 (same `scripts/install-netdata-alarms.sh`
+  run, same owner item O2; see the conf file's "STATUS UPDATE 2026-09-20"
+  header note for the full list and the two cross-lane notes on
+  `newhub_log_retention_backlog`/`newhub_task_stalled`):
+  `newhub_metrics_scrape_stale` (the one alarm bound to scrape health
+  itself, not application behavior — every other alarm in the file goes
+  silently stale if this one is red), `newhub_channel_auto_disabled_error` /
+  `newhub_channel_auto_disabled_latency` / `newhub_channel_sole_latency_ban_skipped`
+  (automatic channel status changes made with no operator action —
+  `doc/runbook/channel-auto-ban.md`), `newhub_credit_pool_debit_lost` /
+  `newhub_credit_pool_lookup_miss` (post-consume credit-pool debits lost to
+  hard DB errors — money-conservation violations, `crit`/`warn`
+  respectively), `newhub_billing_advisory_meter_lost` /
+  `newhub_billing_zero_amount_charge` (shadow-ledger write loss / wallet
+  rounding-to-zero under `LOCAL_LEDGER_ADVISORY`), `newhub_credit_pool_stranded_open`
+  (this file had no alarm bound to the gauge `doc/runbook/wallet-revert-stranded.md`
+  already tells operators to read), `newhub_upstream_insufficient_balance`
+  (an upstream provider's own account balance ran out — distinct from
+  newhub's local tenant quota/credit-pool 402s), `newhub_task_stalled` /
+  `newhub_schema_migrations_pending` / `newhub_panics_recovered` (three Go
+  doc comments in `internal/pkg/metrics` claimed "alert on any
+  increase"/"the condition to page on"/"should page" with nothing bound to
+  them — `TestNetdataSelfClaimedAlertableSeriesAreBound`, added this same
+  cycle, is the reverse gate that keeps a fourth one from going unnoticed
+  the same way `newhub_credit_pool_lookup_miss` above did), and
+  `newhub_log_retention_backlog` (cycle-13 L6's log-retention task
+  backlog gauge).
+- **1 added 2026-09-20 (cycle-13 L10 repair round)**, also **in-repo only**:
+  `newhub_billing_task_refund_unreversed` — watches
+  `lurus_billing_task_refund_wallet_unreversed_total`, the counter
+  `internal/adapter/handler/task_refund.go` increments when a task refund
+  made every LOCAL ledger whole but could not reverse the platform wallet
+  debit (newhub has no wallet-refund RPC — owner item O-refund). The counter
+  landed in the first cut of this cycle with no alarm bound to it even
+  though its own doc comment calls each increment "a real, uncompensated
+  wallet overcharge"; the reverse gate could not see that because the
+  comment used none of the prose phrasings it matched. The gate now keys on
+  an explicit `// ALERTABLE: <wire name>` marker
+  (`internal/pkg/metrics/netdata_alarm_series_test.go`), carried by the
+  eight money/conservation counters, with a floor so deleting a marker
+  fails instead of silencing the check.
+
+Two existing alarms were also changed in that repair round (no count
+change):
+
+- `newhub_relay_5xx_elevated` was **rebound** from
+  `lurus_gateway_requests_total{status=5*}` to the new series
+  `lurus_gateway_non_probe_5xx_total`
+  (`internal/pkg/metrics/middleware.go`), which counts 5xx on every route
+  except the two kubelet probe paths. The old binding matched, in practice,
+  only the `path=/api/health status=503` chart (operator-verified
+  2026-09-15), and cycle-13 L11 made `/api/health` and `/api/status` answer
+  503 for the whole graceful-shutdown window on purpose — so every rollout
+  would have produced a WARNING with no incident behind it. Expressing "5xx
+  AND not a probe path" as a `chart labels:` filter needs two label
+  conditions at once, and how netdata's simple-pattern engine combines them
+  is live behaviour this repo cannot check from a checkout (the conf's own
+  GATE GAP note is about a line already in the file with that problem), so
+  the split is done in code, where
+  `internal/pkg/metrics/method_label_test.go` proves it.
+- `newhub_metrics_scrape_stale` became a `template:` (one alarm per pod
+  chart) with `warn > 180s` / `crit > 600s`. `lurus_gateway_instance_info`
+  is labelled per pod and the go.d job scrapes one NodePort that
+  round-robins across three replicas, so a given pod's chart is refreshed on
+  about one scrape in three: the first cut's 60s threshold would have been a
+  chronic WARNING. Run the chart-model live check in that block's comment
+  (owner item O-scrape) before installing.
 
 Every alarm reads the same `/metrics` endpoint netdata's go.d `prometheus`
 collector already scrapes on R6 (job name `newhub`,
@@ -124,9 +200,11 @@ unbound ones observed 2026-09-15 (`newhub_credit_pool`,
 `newhub_quota_cap_402`) are each written by production code but have simply
 had no matching data since the scrape job started — see each one's comment
 in `health.d/newhub.conf` and its runbook page for detail. `newhub_relay_5xx_elevated`
-is bound but only to the `path=/api/health status=503` chart, i.e. it
-watches health-check failures, not general relay traffic — see
-`doc/runbook/relay-5xx-elevated.md`.
+was, at that observation, bound only to the `path=/api/health status=503`
+chart, i.e. it watched health-check failures rather than general relay
+traffic. That is what the 2026-09-20 rebinding above addresses; its new
+series is new in the same change, so there is no operator observation of
+the new binding yet — see `doc/runbook/relay-5xx-elevated.md`.
 
 ## Ownership boundary — read this before assuming an alarm pages anyone
 

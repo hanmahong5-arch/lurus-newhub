@@ -2,7 +2,6 @@ package repo
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -422,6 +421,28 @@ var numericOptionKinds = map[string]optionValueKind{
 	"ModelFallbackMarkup":                  optionKindNumber,
 }
 
+// positiveRangeOptionKinds lists numeric option keys whose parsed value must
+// additionally land in (0, optionPositiveRangeMax) — a parse-valid but
+// nonsensical write (0, a negative number) for either of these turns every
+// relay call's cost computation into a divide-by-zero or a negative price:
+// QuotaPerUnit is the quota-to-CNY divisor everywhere in this codebase that
+// converts a quota int to a currency amount (v2_billing_invoices.go,
+// billing_self.go, /api/status), and USDExchangeRate is the CNY-to-USD
+// divisor next to it. There is no business meaning above
+// optionPositiveRangeMax either — it exists only to catch a stray extra
+// digit, not to express a rate anyone would configure (cycle13 §2:
+// "QuotaPerUnit/USDExchangeRate 写入加正数范围守卫"; the pre-consume-period
+// freeze, MONEY-2, is out of scope this cycle — see cycle13 §7).
+var positiveRangeOptionKinds = map[string]bool{
+	"QuotaPerUnit":    true,
+	"USDExchangeRate": true,
+}
+
+// optionPositiveRangeMax is the exclusive upper bound positiveRangeOptionKinds
+// enforces; the lower bound is a strict >0 test, so the constant only needs
+// to name the one number.
+const optionPositiveRangeMax = 1e9
+
 // jsonOptionKinds lists the keys whose dispatch hands the value to a
 // JSON-string updater. Validation for these is json.Valid only: the updaters
 // unmarshal into their own shapes and a shape-aware pre-check here would be a
@@ -482,75 +503,6 @@ var jsonOptionProbes = map[string]func(string) error{
 	"AudioCompletionRatio": jsonShape[map[string]float64],
 }
 
-// jsonShape is the generic probe: decode into a throwaway T and report the
-// decoder's verdict. It allocates nothing the caller keeps.
-func jsonShape[T any](value string) error {
-	var probe T
-	return json.Unmarshal([]byte(value), &probe)
-}
-
-// ValidateOptionValue reports whether value can be applied to key, changing
-// nothing at all. UpdateOption calls it before it writes the row.
-//
-// A key it does not recognise is not an error: most options are free-form
-// strings and booleans (`value == "true"`), which cannot fail to parse.
-func ValidateOptionValue(key, value string) error {
-	if canonical, retired := retiredOptionKeys[key]; retired {
-		return fmt.Errorf("%w: %s; write %s instead", errOptionKeyRetired, key, canonical)
-	}
-
-	if kind, ok := numericOptionKinds[key]; ok {
-		var err error
-		switch kind {
-		case optionKindInteger:
-			_, err = strconv.Atoi(value)
-		default:
-			_, err = strconv.ParseFloat(value, 64)
-		}
-		if err != nil {
-			reportOptionParseFailure(key, kind)
-			return optionKindError(key, kind)
-		}
-		return nil
-	}
-
-	if kind, ok := jsonOptionKinds[key]; ok {
-		probe, known := jsonOptionProbes[key]
-		if !known {
-			// TestOptionJSONProbesCoverEveryJSONKey keeps the two tables equal;
-			// a key that slipped through is refused rather than persisted blind.
-			return fmt.Errorf("%w: %s has no shape probe", ErrOptionValueRejected, key)
-		}
-		if err := probe(value); err != nil {
-			reportOptionParseFailure(key, kind)
-			return optionKindError(key, kind)
-		}
-		return nil
-	}
-
-	parts := strings.SplitN(key, ".", 2)
-	if len(parts) != 2 {
-		return nil
-	}
-	cfg := config.GlobalConfig.Get(parts[0])
-	if cfg == nil {
-		return nil
-	}
-	if err := config.ValidateConfigValue(cfg, parts[1], value); err != nil {
-		// config's error names the expected type and nothing else
-		// (config.parseKindError), so it is safe to log and to return.
-		metrics.RecordOptionParseRejected(key)
-		common.SysError(fmt.Sprintf("option %s rejected: %v; the previous value is kept", key, err))
-		return fmt.Errorf("%w: %s %w", ErrOptionValueRejected, key, err)
-	}
-	return nil
-}
-
-// optionKindError is the single shape of a rejection message.
-func optionKindError(key string, kind optionValueKind) error {
-	return fmt.Errorf("%w: %s must be a valid %s", ErrOptionValueRejected, key, kind)
-}
-
 // optionInt parses an integer option value, and on failure keeps previous,
 // reports the key and returns an error for the caller to propagate. Zeroing a
 // setting because its stored string did not parse is how a blank admin field
@@ -584,6 +536,17 @@ func optionFloat(key, value string, previous float64) (float64, error) {
 func reportOptionParseFailure(key string, kind optionValueKind) {
 	metrics.RecordOptionParseRejected(key)
 	common.SysError(fmt.Sprintf("option %s rejected: value is not a valid %s; the previous value is kept", key, kind))
+}
+
+// reportOptionRangeFailure is reportOptionParseFailure's counterpart for a
+// value that parsed but landed outside positiveRangeOptionKinds' range. It
+// reuses the same rejected-option counter: both are "an admin-submitted
+// value for this key did not reach the table", just for a different reason.
+// internal/pkg/metrics is not owned by this cycle's L2 lane (cycle13 §2), so
+// this does not add a new series.
+func reportOptionRangeFailure(key string) {
+	metrics.RecordOptionParseRejected(key)
+	common.SysError(fmt.Sprintf("option %s rejected: value must be greater than 0 and less than %g; the previous value is kept", key, optionPositiveRangeMax))
 }
 
 // retiredOptionKeys maps a hierarchical key that must no longer be written to

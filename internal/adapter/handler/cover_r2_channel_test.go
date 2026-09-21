@@ -969,7 +969,7 @@ func TestR2Chan_FetchUpstreamRatios(t *testing.T) {
 		t.Errorf("expected 400 for invalid body, got %d", w.Code)
 	}
 
-	// no upstreams/channels → success:false "无有效上游渠道"
+	// no upstreams/channels → success:false "no valid upstream channel"
 	c, w = r2chanNewCtx(http.MethodPost, "/", map[string]interface{}{})
 	FetchUpstreamRatios(c)
 	if w.Code != http.StatusOK {

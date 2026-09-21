@@ -1264,3 +1264,76 @@ describe('Log page — settlement outcome', () => {
     vi.useRealTimers();
   });
 });
+
+describe('Log page — default time window', () => {
+  // ── default time window (cycle-13 L6) ─────────────────────────────────────
+  //
+  // GET /logs and GET /logs/stat used to ride out with no lower time bound
+  // whenever the caller left the date pickers empty — which is how the page
+  // opens. serveLogStatV2 now binds 30 days server-side; the page asks for
+  // the 7 days it actually renders and says so.
+
+  const startTimeOf = (url) => {
+    const qs = url.split('?')[1] || '';
+    const raw = new URLSearchParams(qs).get('start_time');
+    return raw === null ? null : Number(raw);
+  };
+
+  it('bounds the first load with a default start_time when no date filter is set', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find(
+        (u) => u.includes('/logs?') && u.includes('page='),
+      );
+      const statCall = urls.find((u) => u.includes('/logs/stat'));
+      expect(logsCall).toBeDefined();
+      expect(statCall).toBeDefined();
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const sevenDays = 7 * 24 * 3600;
+      for (const url of [logsCall, statCall]) {
+        const start = startTimeOf(url);
+        expect(start).not.toBeNull();
+        expect(nowSec - start).toBeGreaterThan(sevenDays - 120);
+        expect(nowSec - start).toBeLessThan(sevenDays + 120);
+      }
+    });
+  });
+
+  it('shows the default-window hint until a start date is set', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    expect(screen.getByTestId('log-default-window-hint')).toBeTruthy();
+
+    fireEvent.change(screen.getByTitle('start time'), {
+      target: { value: '2026-01-01T00:00' },
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId('log-default-window-hint')).toBeNull(),
+    );
+  });
+
+  it('lets an explicit start date replace the default bound', async () => {
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    API.get.mockClear();
+
+    const explicit = Math.floor(new Date('2026-01-01T00:00').getTime() / 1000);
+    fireEvent.change(screen.getByTitle('start time'), {
+      target: { value: '2026-01-01T00:00' },
+    });
+    fireEvent.click(screen.getByText('search'));
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      const logsCall = urls.find(
+        (u) => u.includes('/logs?') && u.includes('page='),
+      );
+      expect(logsCall).toBeDefined();
+      expect(startTimeOf(logsCall)).toBe(explicit);
+    });
+  });
+});

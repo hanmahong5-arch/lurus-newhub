@@ -98,6 +98,25 @@ var AuditExplicitRoutes = map[string]bool{
 	"POST /api/v2/:tenant_slug/pricing":      true,
 	"POST /api/v2/:tenant_slug/models":       true,
 	"DELETE /api/v2/:tenant_slug/models/:id": true,
+
+	// v1 privileged writes outside /api/v2/admin (cycle 13, L4,
+	// V1DOORS/SECURITY-14). internal_api.go: the four internal-API-key CRUD
+	// handlers (RootAuth-gated group, api-router.go's apiKeyRoute) — an
+	// internal key is a credential for the /internal surface (cross-tenant
+	// when its scope is repo.ScopeAll, otherwise bounded by the
+	// internal_api_key_tenants whitelist), so its own lifecycle is audited
+	// the same as the tenant-whitelist writes in
+	// internal_api_key_admin_v2.go above. channel.go: GetChannelKey reveals
+	// the upstream provider secret (RootAuth + SecureVerificationRequired).
+	// log.go: DeleteHistoryLogs deletes logs rows in bulk, which cycle 13
+	// finding #8 named an unbounded synchronous delete (AdminAuth —
+	// reachable by a tenant admin, not just root).
+	"POST /api/api-keys/":          true,
+	"PUT /api/api-keys/:id":        true,
+	"DELETE /api/api-keys/:id":     true,
+	"PUT /api/api-keys/:id/toggle": true,
+	"POST /api/channel/:id/key":    true,
+	"DELETE /api/log/":             true,
 }
 
 // isMutatingWriteMethod reports whether method is one AuditWriteGuard treats
@@ -115,16 +134,27 @@ func isMutatingWriteMethod(method string) bool {
 
 // rootGatedWritesOutsideAdmin is the literal allow-list of mutating routes
 // outside /api/v2/admin and /internal/admin that IsAdminWriteRoute still
-// treats as in scope: each enforces requirePlatformRoot inside the handler
-// (not via a RootJWTAuth-gated group) because the resource it writes is
-// process-global (pricing ratios / the model catalog), not tenant-scoped —
-// see v2_pricing_write.go and v2_models_write.go. Grown by hand, not by
-// prefix, so a new tenant-scoped route never falls into this bucket by
-// accident.
+// treats as in scope. The original three enforce requirePlatformRoot inside
+// the handler (not via a RootJWTAuth-gated group) because the resource they
+// write is process-global (pricing ratios / the model catalog), not
+// tenant-scoped — see v2_pricing_write.go and v2_models_write.go. The six v1
+// entries added in cycle 13 L4 are gated by RootAuth or AdminAuth at the
+// route-group level instead (api-router.go) but are equally privileged
+// writes with no /api/v2/admin prefix to fall under automatically — internal
+// API keys, a channel's upstream secret, and an unbounded logs purge. Grown
+// by hand, not by prefix, so a new tenant-scoped v1 CRUD route never falls
+// into this bucket by accident.
 var rootGatedWritesOutsideAdmin = map[string]bool{
 	"POST /api/v2/:tenant_slug/pricing":      true,
 	"POST /api/v2/:tenant_slug/models":       true,
 	"DELETE /api/v2/:tenant_slug/models/:id": true,
+
+	"POST /api/api-keys/":          true,
+	"PUT /api/api-keys/:id":        true,
+	"DELETE /api/api-keys/:id":     true,
+	"PUT /api/api-keys/:id/toggle": true,
+	"POST /api/channel/:id/key":    true,
+	"DELETE /api/log/":             true,
 }
 
 // IsAdminWriteRoute reports whether (method, path) is in scope for the L2

@@ -27,6 +27,8 @@ import {
   quotaToUSD,
   formatUSD,
 } from '../../../helpers/formatting';
+import { classifyLoad, isLoadFailed } from '../../../helpers/loadState';
+import LoadErrorPanel, { KpiCaption, captionText } from './LoadErrorPanel';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
   useRoutableModels,
@@ -236,6 +238,25 @@ const OnboardingCurlBlock = ({
   );
 };
 
+// The footnote line under an all-time KPI number ("all-time quota", "in
+// workspace"). Four panels shipped the same eleven lines of markup; this is
+// that markup once, so a change to the KPI footer is one edit rather than
+// four that can drift apart.
+const KpiFootNote = ({ children }) => (
+  <div
+    style={{
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-end',
+      marginTop: 8,
+    }}
+  >
+    <span className='mono muted' style={{ fontSize: 10 }}>
+      {children}
+    </span>
+  </div>
+);
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 const HFDashboard = () => {
@@ -247,6 +268,13 @@ const HFDashboard = () => {
   // Server-reported row count for the window; `logs` is only the first page.
   const [logTotal, setLogTotal] = useState(null);
   const [loading, setLoading] = useState(true);
+  // classifyLoad() outcome ('ok'|'forbidden'|'unauthenticated'|'error') for
+  // each of the two fetchData() calls, null until the first attempt settles.
+  // Kept separate from `me`/`logs` themselves so a KPI can tell "checked,
+  // genuinely empty" apart from "could not check" instead of collapsing
+  // both into the same '—' / "no traffic" copy.
+  const [meStatus, setMeStatus] = useState(null);
+  const [logsStatus, setLogsStatus] = useState(null);
 
   // /api/data/self/ — per (user, model, hour) quota rows for the trailing
   // DASHBOARD_TREND_WINDOW_SECONDS window (usedata.go:141 GetQuotaDataByUserId).
@@ -266,33 +294,41 @@ const HFDashboard = () => {
     setLoading(true);
     const startTime =
       Math.floor(Date.now() / 1000) - DASHBOARD_REALTIME_WINDOW_SECONDS;
-    try {
-      // skipErrorHandler: a stale/absent session must NOT stack a red toast on
-      // mount. The page degrades gracefully on its own — KPIs fall back to '—'
-      // and the onboarding / empty states render — so a failed fetch is a calm
-      // empty dashboard, not an error wall.
-      const [meRes, logsRes] = await Promise.all([
-        API.get(`/api/v2/${tenantSlug}/user/me`, { skipErrorHandler: true }),
-        API.get(
-          `/api/v2/${tenantSlug}/logs?page=1&page_size=${DASHBOARD_LOG_PAGE_SIZE}&start_time=${startTime}`,
-          { skipErrorHandler: true },
-        ),
-      ]);
-      if (meRes?.data?.success) setMe(meRes.data.data);
-      if (logsRes?.data?.success) {
-        // GET /logs returns { logs: [...] }; tolerate { items } / bare array
-        // too. The prior code read only `.items`, so the 5-min realtime KPIs
-        // were always empty against the real backend.
-        const items = logsRes.data.data?.logs ?? logsRes.data.data?.items ?? [];
-        setLogs(Array.isArray(items) ? items : []);
-        const total = logsRes.data.data?.total;
-        setLogTotal(typeof total === 'number' ? total : null);
-      }
-    } catch (e) {
-      // Intentionally silent — the degraded empty state IS the UX here.
-    } finally {
-      setLoading(false);
+    // skipErrorHandler: a stale/absent session must NOT stack a red toast on
+    // mount — the page reports the failure itself (meStatus/logsStatus,
+    // rendered as the retry banner + per-KPI copy below) instead of the
+    // shared interceptor's toast. Promise.allSettled (not Promise.all): one
+    // call's rejection must not blank the OTHER call's status, matching
+    // fetchExtras below.
+    const [meSettled, logsSettled] = await Promise.allSettled([
+      API.get(`/api/v2/${tenantSlug}/user/me`, { skipErrorHandler: true }),
+      API.get(
+        `/api/v2/${tenantSlug}/logs?page=1&page_size=${DASHBOARD_LOG_PAGE_SIZE}&start_time=${startTime}`,
+        { skipErrorHandler: true },
+      ),
+    ]);
+
+    const meResult = classifyLoad(meSettled);
+    setMeStatus(meResult);
+    setMe(meResult === 'ok' ? (meSettled.value?.data?.data ?? null) : null);
+
+    const logsResult = classifyLoad(logsSettled);
+    setLogsStatus(logsResult);
+    if (logsResult === 'ok') {
+      // GET /logs returns { logs: [...] }; tolerate { items } / bare array
+      // too. The prior code read only `.items`, so the 5-min realtime KPIs
+      // were always empty against the real backend.
+      const body = logsSettled.value?.data?.data;
+      const items = body?.logs ?? body?.items ?? [];
+      setLogs(Array.isArray(items) ? items : []);
+      const total = body?.total;
+      setLogTotal(typeof total === 'number' ? total : null);
+    } else {
+      setLogs([]);
+      setLogTotal(null);
     }
+
+    setLoading(false);
   }, [tenantSlug]);
 
   useEffect(() => {
@@ -304,6 +340,11 @@ const HFDashboard = () => {
   // middleware under the "Public routes" block (api-router.go:24-32). None
   // of the three are under /api/v2/:slug/, so unlike fetchData this does not
   // wait on tenantSlug — it fires once on mount and again on "refresh".
+  // Scope note (cycle-13 L7): only fetchData's two calls report their
+  // failures. The panels fed from here — usage trend (/api/data/self/),
+  // announcements/FAQ (/api/status) and uptime (/api/uptime/status) — still
+  // render their empty state when their call fails; giving them the same
+  // per-panel status is the next cycle's work.
   const fetchExtras = useCallback(async () => {
     const end = Math.floor(Date.now() / 1000);
     const start = end - DASHBOARD_TREND_WINDOW_SECONDS;
@@ -346,6 +387,13 @@ const HFDashboard = () => {
     fetchExtras();
   }, [fetchExtras]);
 
+  // Both passes at once — the header's "refresh" and the load-error
+  // banner's "retry" mean the same thing to the reader.
+  const refreshAll = useCallback(() => {
+    fetchData();
+    fetchExtras();
+  }, [fetchData, fetchExtras]);
+
   // Derive spend KPI from user/me
   const spendUSD = me ? parseFloat(quotaToUSD(me.used_quota ?? 0)) : null;
   const remainUSD =
@@ -369,6 +417,22 @@ const HFDashboard = () => {
   const costByModel = computeCostByModel(logs).slice(0, 6);
   const hasRealtimeData = logs.length > 0;
   const showOnboarding = !loading && me && (me.token_count ?? 0) === 0;
+  // Visible once either call has settled into a non-ok outcome — a single
+  // banner covers the three failure shapes classifyLoad() distinguishes
+  // (forbidden / unauthenticated / error) rather than a message per shape,
+  // since each of them leaves the reader with the same next step: "retry".
+  const loadFailed =
+    !loading && (isLoadFailed(meStatus) || isLoadFailed(logsStatus));
+  // What an empty panel's caption says. fetchData() clears `logs` on a
+  // failed pass, so every "…and there is nothing" caption below would
+  // otherwise be asserting a check that did not happen. Before the first
+  // pass settles (logsStatus null) the caption says loading — the KPI
+  // number above it is already "…", and "no traffic in last 5 min" at that
+  // moment would be a claim about a check that has not run yet.
+  const unableText = t('console.dashboard.load_failed_short', 'unable to load');
+  const pendingText = t('console.common.loading', 'loading…');
+  const settledCaption = (okText) =>
+    captionText(logsStatus, okText, unableText, pendingText);
 
   // Only fetched once onboarding actually needs to render — avoids an
   // extra request for every returning customer who already has a token.
@@ -484,19 +548,13 @@ const HFDashboard = () => {
                   })
                 : ''}
           </span>
-          <button
-            type='button'
-            className='btn'
-            onClick={() => {
-              fetchData();
-              fetchExtras();
-            }}
-          >
+          <button type='button' className='btn' onClick={refreshAll}>
             {t('console.common.refresh')}
           </button>
         </>
       }
     >
+      {loadFailed && <LoadErrorPanel onRetry={refreshAll} />}
       {showOnboarding && (
         <OnboardingCurlBlock
           username={me?.username}
@@ -553,18 +611,7 @@ const HFDashboard = () => {
           <div className='display' style={{ fontSize: 32, marginTop: 4 }}>
             {loading ? '…' : me ? `$${spendUSD.toFixed(2)}` : '—'}
           </div>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-end',
-              marginTop: 8,
-            }}
-          >
-            <span className='mono muted' style={{ fontSize: 10 }}>
-              {t('console.dashboard.all_time_quota')}
-            </span>
-          </div>
+          <KpiFootNote>{t('console.dashboard.all_time_quota')}</KpiFootNote>
         </div>
 
         {/* ── KPI: Remaining quota (real) ── */}
@@ -573,20 +620,11 @@ const HFDashboard = () => {
           <div className='display' style={{ fontSize: 32, marginTop: 4 }}>
             {loading ? '…' : (remainUSD ?? '—')}
           </div>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-end',
-              marginTop: 8,
-            }}
-          >
-            <span className='mono muted' style={{ fontSize: 10 }}>
-              {me && me.remaining_quota >= 0
-                ? t('console.dashboard.until_topup')
-                : t('console.dashboard.unlimited_plan')}
-            </span>
-          </div>
+          <KpiFootNote>
+            {me && me.remaining_quota >= 0
+              ? t('console.dashboard.until_topup')
+              : t('console.dashboard.unlimited_plan')}
+          </KpiFootNote>
         </div>
 
         {/* ── KPI: Total requests (real) ── */}
@@ -599,18 +637,7 @@ const HFDashboard = () => {
                 ? (me.request_count ?? 0).toLocaleString()
                 : '—'}
           </div>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-end',
-              marginTop: 8,
-            }}
-          >
-            <span className='mono muted' style={{ fontSize: 10 }}>
-              {t('console.dashboard.all_time')}
-            </span>
-          </div>
+          <KpiFootNote>{t('console.dashboard.all_time')}</KpiFootNote>
         </div>
 
         {/* ── KPI: Active tokens (real) ── */}
@@ -619,18 +646,7 @@ const HFDashboard = () => {
           <div className='display' style={{ fontSize: 32, marginTop: 4 }}>
             {loading ? '…' : me ? (me.token_count ?? 0) : '—'}
           </div>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-end',
-              marginTop: 8,
-            }}
-          >
-            <span className='mono muted' style={{ fontSize: 10 }}>
-              {t('console.dashboard.in_workspace')}
-            </span>
-          </div>
+          <KpiFootNote>{t('console.dashboard.in_workspace')}</KpiFootNote>
         </div>
 
         {/* ── KPI: QPS (derived from last 5min of logs) ── */}
@@ -646,18 +662,11 @@ const HFDashboard = () => {
           >
             {loading ? '…' : hasRealtimeData ? formatQPS(qps) : '—'}
           </div>
-          <div
-            style={{
-              marginTop: 8,
-              fontSize: 10,
-              color: 'var(--hf-ink-3)',
-              fontFamily: 'var(--hf-mono)',
-            }}
-          >
+          <KpiCaption>
             {hasRealtimeData
               ? t('console.dashboard.qps_active')
-              : t('console.dashboard.qps_idle')}
-          </div>
+              : settledCaption(t('console.dashboard.qps_idle'))}
+          </KpiCaption>
         </div>
 
         {/* ── KPI: Latency P50/P95/P99 (P99 anchors the SLO) ── */}
@@ -700,18 +709,11 @@ const HFDashboard = () => {
               </div>
             ))}
           </div>
-          <div
-            style={{
-              marginTop: 8,
-              fontSize: 10,
-              color: 'var(--hf-ink-3)',
-              fontFamily: 'var(--hf-mono)',
-            }}
-          >
+          <KpiCaption>
             {p99 != null
               ? t('console.dashboard.latency_active')
-              : t('console.dashboard.latency_idle')}
-          </div>
+              : settledCaption(t('console.dashboard.latency_idle'))}
+          </KpiCaption>
         </div>
 
         {/* ── KPI: Error rate (derived from log type 5 share) ── */}
@@ -731,18 +733,11 @@ const HFDashboard = () => {
           >
             {loading ? '…' : hasRealtimeData ? formatErrorRate(errorRate) : '—'}
           </div>
-          <div
-            style={{
-              marginTop: 8,
-              fontSize: 10,
-              color: 'var(--hf-ink-3)',
-              fontFamily: 'var(--hf-mono)',
-            }}
-          >
+          <KpiCaption>
             {hasRealtimeData
               ? t('console.dashboard.error_rate_active')
-              : t('console.dashboard.qps_idle')}
-          </div>
+              : settledCaption(t('console.dashboard.qps_idle'))}
+          </KpiCaption>
         </div>
 
         {/* ── Cost by model · last 5 min (derived from /logs aggregation) ── */}
@@ -762,7 +757,7 @@ const HFDashboard = () => {
                   ? t('console.dashboard.models_active', {
                       count: costByModel.length,
                     })
-                  : t('console.dashboard.no_consume')}
+                  : settledCaption(t('console.dashboard.no_consume'))}
               </div>
             </div>
             <span className='faint mono' style={{ fontSize: 10 }}>
@@ -781,7 +776,7 @@ const HFDashboard = () => {
                 textAlign: 'center',
               }}
             >
-              {t('console.dashboard.cost_empty')}
+              {settledCaption(t('console.dashboard.cost_empty'))}
             </div>
           )}
           {costByModel.length > 0 && (
@@ -875,7 +870,7 @@ const HFDashboard = () => {
           {loading && <HfSkeletonRows rows={4} />}
           {!loading && recentLogs.length === 0 && (
             <div className='muted' style={{ fontSize: 12 }}>
-              {t('console.dashboard.no_recent')}
+              {settledCaption(t('console.dashboard.no_recent'))}
             </div>
           )}
           {!loading && recentLogs.length > 0 && (

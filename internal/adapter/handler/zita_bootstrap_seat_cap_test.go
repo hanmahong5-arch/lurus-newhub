@@ -279,13 +279,18 @@ func TestZitaBootstrap_TenantRowMissing_Admitted(t *testing.T) {
 // TestProvisionV2_SeatCapReached_Rejected is the second caller: a
 // switch-issued entitlement token for a brand-new account hits the same
 // ceiling, because the check lives in autoCreateBridgedUser rather than in
-// ZitaBootstrap. ProvisionV2 always provisions into "default", so that is the
-// tenant this test caps.
+// ZitaBootstrap. Since cycle-13 L9 ProvisionV2 files the account into the
+// tenant the URL slug resolved, so that is the tenant this test caps.
 func TestProvisionV2_SeatCapReached_Rejected(t *testing.T) {
 	r, ctx, key := setupProvisionTest(t)
 	enableSeatCapAudit(t, ctx)
 
-	seedSeatCapTenant(t, ctx, "default", 1, 1)
+	// SetupV2TestRouter already seeded three users in this tenant, so a
+	// ceiling of 1 is full.
+	if err := ctx.DB.Model(&repo.Tenant{}).Where("id = ?", ctx.TenantID).
+		Update("max_users", 1).Error; err != nil {
+		t.Fatalf("cap the URL tenant: %v", err)
+	}
 
 	tok := provSignRS256(t, key, "test-kid",
 		provClaims("990501", map[string]string{"plan_code": "cc_pro", "quota": "120000"}))
@@ -293,7 +298,7 @@ func TestProvisionV2_SeatCapReached_Rejected(t *testing.T) {
 	beforeDenied := seatLimitDeniedCount(t)
 	code, resp := provisionReq(t, r, ctx.TenantID, map[string]any{"entitlement_token": tok})
 	if code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 — the \"default\" tenant is at max_users=1; body=%v", code, resp)
+		t.Fatalf("status = %d, want 403 — tenant %s is at max_users=1; body=%v", code, ctx.TenantID, resp)
 	}
 	if resp["error_code"] != "TENANT_SEAT_LIMIT" {
 		t.Errorf("error_code = %v, want TENANT_SEAT_LIMIT (not the generic PROVISION_FAILED 500); body=%v",
@@ -306,8 +311,8 @@ func TestProvisionV2_SeatCapReached_Rejected(t *testing.T) {
 		t.Errorf("tenant_gate_total{outcome=%q} = %v, want %v", metrics.TenantGateOutcomeSeatLimitDenied, after, beforeDenied+1)
 	}
 	details := seatCapAuditDetails(t, ctx)
-	if details["reason"] != "tenant_seat_limit" || details["tenant_id"] != "default" {
-		t.Errorf("audit details = %v, want reason=tenant_seat_limit tenant_id=default", details)
+	if details["reason"] != "tenant_seat_limit" || details["tenant_id"] != ctx.TenantID {
+		t.Errorf("audit details = %v, want reason=tenant_seat_limit tenant_id=%s", details, ctx.TenantID)
 	}
 }
 

@@ -175,9 +175,9 @@ func SwitchRedeemAnonymous(c *gin.Context) {
 	// G5a: a code with no tenant (or explicitly "default") is not a
 	// reseller activation code — reject before provisioning anything, so no
 	// anonymous account or token gets sedimented for a code that was never
-	// meant to be redeemed this way. The message is one of
-	// switchRedeemKnownErrors' sentinels (it's also what repo.Redeem now
-	// returns for the same underlying cross-tenant mismatch — see
+	// meant to be redeemed this way. The message text matches
+	// repo.ErrRedemptionWrongTenant's own text (it's also what repo.Redeem
+	// now returns for the same underlying cross-tenant mismatch — see
 	// redemption.go's Redeem), so the two paths report identically.
 	//
 	// Client-side caveat, read 2026-08-27 in 2c-gui-switch
@@ -229,18 +229,29 @@ func SwitchRedeemAnonymous(c *gin.Context) {
 	// reuse it instead of duplicating the FOR UPDATE / mark-used logic.
 	quotaAdded, err := repo.Redeem(code, user.Id)
 	if err != nil {
-		// repo.Redeem wraps the underlying message as "兑换失败，<inner>".
-		// <inner> is usually one of a small set of known sentinel strings,
-		// but on a genuine transaction failure (e.g. a constraint violation
-		// on the Save/Update calls) it can also be a raw driver/GORM error.
-		// Never echo that raw text to this anonymous, unauthenticated
-		// caller — only the known sentinels are safe to pass through so
-		// the Switch classifier still sees its substring markers; anything
-		// else is replaced with a generic message and logged server-side.
+		// repo.Redeem itself already converts a genuine transaction failure
+		// (e.g. a constraint violation on the Save/Update calls) into the
+		// generic repo.ErrRedemptionFailed sentinel instead of a raw
+		// driver/GORM error (cycle13 L3, pinned by
+		// repo.TestRedeem_DriverErrorNeverReachesCaller).
+		// repo.RedemptionErrorMessage is
+		// defence-in-depth on top of that: only a known sentinel's own text
+		// (which the Switch classifier's substring markers still see) is
+		// echoed to this anonymous, unauthenticated caller; anything else
+		// falls back to the same generic text. Log the real error
+		// server-side regardless.
 		common.SysError("switch redeem: redeem failed: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": sanitizeRedeemError(err),
+		// Caller-side outcomes keep the HTTP 200 envelope this endpoint has
+		// always answered (the Switch client parses the JSON body whatever
+		// the status and classifies by message substring); a hub-side fault
+		// (REDEMPTION_FAILED) answers 500 so a proxy, a log line or a client
+		// that does look at the status can tell an outage from a wrong code.
+		// error_code is additive — the client's substring classifier is
+		// untouched by it.
+		c.JSON(redemptionFailureStatus(err, http.StatusOK), gin.H{
+			"success":    false,
+			"message":    repo.RedemptionErrorMessage(err),
+			"error_code": repo.RedemptionErrorCode(err),
 		})
 		return
 	}
@@ -369,33 +380,11 @@ func provisionSwitchEndUserToken(userID int, tenantID string, quota int) (*repo.
 	return token, nil
 }
 
-// switchRedeemKnownErrors is the exact set of inner messages
-// repo.Redeem (internal/adapter/repo/redemption.go) can wrap as
-// "兑换失败，<inner>". These are controlled, translated strings the Switch
-// client's classifyRedeemFailure() greps substrings out of ("已使用" /
-// "过期" / "禁用" / "不存在") — they are safe to return to an unauthenticated
-// caller verbatim. Anything else reaching this set (e.g. a raw
-// driver/GORM error from the transaction's Update/Save calls) is not a
-// known sentinel and must not be echoed back; see sanitizeRedeemError.
-var switchRedeemKnownErrors = map[string]bool{
-	"无效的兑换码":       true,
-	"该兑换码已被使用":     true,
-	"该兑换码已过期":      true,
-	"用户不存在":        true,
-	"该兑换码不属于当前租户": true,
-}
-
-// sanitizeRedeemError strips repo.Redeem's "兑换失败，" wrapper and returns
-// the inner message unchanged if it's one of the known sentinel strings.
-// Any other error — including raw driver/GORM error text such as
-// constraint or column names — is replaced with a generic message so it
-// never reaches this endpoint's anonymous, unauthenticated caller. The
-// caller of this function is responsible for logging the real error
-// server-side before calling it.
-func sanitizeRedeemError(err error) string {
-	message := strings.TrimPrefix(err.Error(), "兑换失败，")
-	if switchRedeemKnownErrors[message] {
-		return message
-	}
-	return "服务暂不可用，请稍后重试"
-}
+// switchRedeemKnownErrors / sanitizeRedeemError used to live here, hand-rolled
+// around repo.Redeem's old "兑换失败，<inner>" string-wrapping convention.
+// cycle13 L3 moved that mapping to repo.RedemptionErrorMessage
+// (internal/adapter/repo/redemption.go), built on typed sentinel errors
+// (errors.Is) instead of string-prefix-stripping + a string-keyed set, so
+// v2_redemption.go and switch_user_topup.go can share it too instead of
+// hand-rolling their own (they used to echo repo.Redeem's raw error text
+// verbatim — see RedemptionErrorMessage's doc comment).

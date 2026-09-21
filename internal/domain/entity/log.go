@@ -37,13 +37,33 @@ type Log struct {
 	// that takes a ShareLock and blocks every INSERT — including the relay's
 	// own consume-log writes — and it runs inside
 	// withPGAdvisoryLock(bootAutoMigrateLockID, migrateDB) on every
-	// master-capable replica of every rolling update. CREATE INDEX
-	// CONCURRENTLY is structurally impossible in the embedded runner too
-	// (applyOne wraps each file body in one transaction; PG rejects CIC
-	// inside a transaction). Adding this index later is therefore an
-	// operational step under MIGRATIONS_AUTO_RUN=false, not a struct tag.
+	// master-capable replica of every rolling update.
+	//
+	// It used to be true that CREATE INDEX CONCURRENTLY was unavailable in
+	// the embedded runner as well (applyOne wrapped every file body in one
+	// transaction and PostgreSQL rejects CIC inside one), which left "apply
+	// it by hand under MIGRATIONS_AUTO_RUN=false" as the only route. That is
+	// no longer the case: a migration whose first line is
+	// `-- lurus:no-transaction` runs outside any transaction, one statement
+	// at a time (internal/pkg/migration/runner.go, NoTransactionDirective),
+	// and 039_logs_tenant_created_index.sql is the first file to use it. The
+	// route for a new index on this table is that directive — still not a
+	// struct tag.
 	ProjectId int `json:"project_id" gorm:"not null;default:0"`
 }
+
+// INDEXES ON `logs` THAT THIS STRUCT DELIBERATELY DOES NOT DECLARE
+//
+//   - idx_logs_tenant_created_id (tenant_id, created_at DESC, id DESC) is
+//     owned by migrations/039_logs_tenant_created_index.sql, which builds it
+//     CONCURRENTLY. Declaring it here as well would make AutoMigrate create
+//     the same name with a plain, lock-taking CREATE INDEX on whichever
+//     replica wins the boot lease — the exact cost 039 exists to avoid — and
+//     whichever ran first would silently decide how the other behaved.
+//
+// A `gorm:"index:idx_logs_tenant_created_id"` tag added to any field above
+// therefore reintroduces the lock. Add index DDL for this table to a
+// no-transaction migration instead.
 
 // don't use iota, avoid change log type value
 const (

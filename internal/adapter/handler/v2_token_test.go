@@ -117,6 +117,11 @@ func TestCreateTokenV2_NameTooLong(t *testing.T) {
 			t.Errorf("unexpected error message: %s", msg)
 		}
 	}
+	// cycle13 L3 (ERRCODES-6): a machine-readable error_code rides alongside
+	// the (unchanged, Chinese) message text.
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeNameInvalid {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeNameInvalid)
+	}
 }
 
 func TestCreateTokenV2_NegativeQuota(t *testing.T) {
@@ -137,6 +142,9 @@ func TestCreateTokenV2_NegativeQuota(t *testing.T) {
 		if msg != "额度值不能为负数" {
 			t.Errorf("unexpected error message: %s", msg)
 		}
+	}
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeQuotaInvalid {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeQuotaInvalid)
 	}
 }
 
@@ -202,6 +210,9 @@ func TestUpdateTokenV2_ExpiredToEnabled(t *testing.T) {
 		if msg != "令牌已过期，无法启用，请先修改令牌过期时间，或者设置为永不过期" {
 			t.Errorf("unexpected error message: %s", msg)
 		}
+	}
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeEnableRejected {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeEnableRejected)
 	}
 }
 
@@ -424,6 +435,9 @@ func TestUpdateTokenV2_NameValidation(t *testing.T) {
 			t.Errorf("unexpected error message: %s", msg)
 		}
 	}
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeNameInvalid {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeNameInvalid)
+	}
 }
 
 // TestCreateTokenV2_WithScopes confirms scope round-trip through the v2 API:
@@ -487,6 +501,103 @@ func TestCreateTokenV2_RejectsUnknownScope(t *testing.T) {
 	resp := ParseV2Response(t, w)
 	if msg, _ := resp["message"].(string); !strings.Contains(msg, "writeall") {
 		t.Errorf("expected error message to name the bad scope, got: %q", msg)
+	}
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeScopeInvalid {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeScopeInvalid)
+	}
+}
+
+// TestCreateTokenV2_ModelLimitsInvalid drives app.ValidateTokenModelLimits
+// (cycle13 L3, ERRCODES-6) through the real handler: model_limits_enabled=true
+// with a model_limits value containing an empty entry (a stray comma) must
+// reject with 400 + error_code TOKEN_MODEL_LIMIT_INVALID rather than writing
+// a row whose GetModelLimitsMap() would key on "" — indistinguishable from
+// "no such model" at relay time.
+func TestCreateTokenV2_ModelLimitsInvalid(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	body := map[string]interface{}{
+		"name":                 "Bad Model Limits Token",
+		"unlimited_quota":      true,
+		"model_limits_enabled": true,
+		"model_limits":         "gpt-4o,,gpt-4o-mini",
+	}
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPost, "/api/v2/test-tenant/tokens", body, nil)
+	AssertV2Status(t, w, http.StatusBadRequest)
+	resp := ParseV2Response(t, w)
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeModelLimitInvalid {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeModelLimitInvalid)
+	}
+}
+
+// TestCreateTokenV2_ModelLimitsDisabledSkipsValidation confirms
+// model_limits_enabled=false skips the model_limits checks — an unused value
+// is dead data, not a validation target (matches ValidateTokenModelLimits'
+// own contract).
+func TestCreateTokenV2_ModelLimitsDisabledSkipsValidation(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	body := map[string]interface{}{
+		"name":                 "Disabled Model Limits Token",
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "gpt-4o,,gpt-4o-mini", // would be invalid if enabled
+	}
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPost, "/api/v2/test-tenant/tokens", body, nil)
+	AssertV2Status(t, w, http.StatusCreated)
+}
+
+// TestUpdateTokenV2_ModelLimitsInvalid is the update-path sibling: the
+// validation must run against the MERGED (existing + patched) state, not
+// just the fields present in this request.
+func TestUpdateTokenV2_ModelLimitsInvalid(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	token := SeedV2Token(t, ctx, ctx.NormalUser.Id, "Model Limits Update Target")
+
+	body := map[string]interface{}{
+		"model_limits_enabled": true,
+		"model_limits":         "gpt-4o,,gpt-4o-mini",
+	}
+	path := fmt.Sprintf("/api/v2/test-tenant/tokens/%d", token.Id)
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPut, path, body, nil)
+	AssertV2Status(t, w, http.StatusBadRequest)
+	resp := ParseV2Response(t, w)
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeModelLimitInvalid {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeModelLimitInvalid)
+	}
+
+	// The rejected update must not have persisted model_limits_enabled=true
+	// with the bad list.
+	var stored repo.Token
+	if err := ctx.DB.First(&stored, token.Id).Error; err != nil {
+		t.Fatalf("failed to reload token: %v", err)
+	}
+	if stored.ModelLimitsEnabled {
+		t.Errorf("expected model_limits_enabled to stay false after a rejected update, got true")
+	}
+}
+
+// TestCreateTokenV2_RateLimitInvalid drives app.ValidateRateLimits through
+// the real handler for a negative rpm — the v2 wire boundary for the
+// existing token_service.go validator, now with error_code attached.
+func TestCreateTokenV2_RateLimitInvalid(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	body := map[string]interface{}{
+		"name":            "Bad Rate Limit Token",
+		"unlimited_quota": true,
+		"rate_limit_rpm":  -5,
+	}
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPost, "/api/v2/test-tenant/tokens", body, nil)
+	AssertV2Status(t, w, http.StatusBadRequest)
+	resp := ParseV2Response(t, w)
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeRateLimitInvalid {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeRateLimitInvalid)
 	}
 }
 
@@ -663,6 +774,9 @@ func TestCreateTokenV2_AbsurdExpiredTimeRejected(t *testing.T) {
 	if msg, _ := resp["message"].(string); !strings.Contains(msg, "过期时间无效") {
 		t.Errorf("expected 过期时间无效 error family, got %q", msg)
 	}
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeExpiryInvalid {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeExpiryInvalid)
+	}
 }
 
 func TestUpdateTokenV2_AbsurdExpiredTimeRejected(t *testing.T) {
@@ -677,6 +791,10 @@ func TestUpdateTokenV2_AbsurdExpiredTimeRejected(t *testing.T) {
 	path := fmt.Sprintf("/api/v2/test-tenant/tokens/%d", token.Id)
 	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPut, path, body, nil)
 	AssertV2Status(t, w, http.StatusBadRequest)
+	resp := ParseV2Response(t, w)
+	if code, _ := resp["error_code"].(string); code != tokenErrCodeExpiryInvalid {
+		t.Errorf("error_code = %q, want %q", code, tokenErrCodeExpiryInvalid)
+	}
 
 	// Stored token must keep its original expiry.
 	var stored repo.Token
@@ -685,5 +803,61 @@ func TestUpdateTokenV2_AbsurdExpiredTimeRejected(t *testing.T) {
 	}
 	if stored.ExpiredTime != -1 {
 		t.Errorf("expected stored ExpiredTime=-1, got %d", stored.ExpiredTime)
+	}
+}
+
+// TestUpdateTokenV2_ValidationFailuresCarryErrorCode covers the three
+// UpdateTokenV2 rejection sites that cycle13 L3 (ERRCODES-6) attached an
+// error_code to and that no other test in this file drives: the
+// negative-remain_quota branch, the rate-limit validator and the scope
+// normalizer. Each case goes through the real v2 router (V2RequestAsUser →
+// the registered handler), so dropping the error_code field from any of the
+// three turns the matching case red. The message text is asserted non-empty
+// only — this change adds a field, it does not translate the existing
+// (Chinese) validator messages, which token_service.go's own tests pin.
+func TestUpdateTokenV2_ValidationFailuresCarryErrorCode(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	cases := []struct {
+		name     string
+		body     map[string]interface{}
+		wantCode string
+	}{
+		{
+			name: "negative_remain_quota",
+			// unlimited_quota is flipped off in the same request: the handler
+			// applies that field before the remain_quota check, so this drives
+			// the merged state rather than the seeded token's own flag.
+			body:     map[string]interface{}{"unlimited_quota": false, "remain_quota": -1000},
+			wantCode: tokenErrCodeQuotaInvalid,
+		},
+		{
+			name:     "negative_rate_limit",
+			body:     map[string]interface{}{"rate_limit_rpm": -5},
+			wantCode: tokenErrCodeRateLimitInvalid,
+		},
+		{
+			name:     "unknown_scope",
+			body:     map[string]interface{}{"scopes": []string{"not-a-real-scope"}},
+			wantCode: tokenErrCodeScopeInvalid,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			token := SeedV2Token(t, ctx, ctx.NormalUser.Id, "ErrCode "+tc.name)
+			path := fmt.Sprintf("/api/v2/test-tenant/tokens/%d", token.Id)
+			w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodPut, path, tc.body, nil)
+
+			AssertV2Status(t, w, http.StatusBadRequest)
+			resp := ParseV2Response(t, w)
+			if code, _ := resp["error_code"].(string); code != tc.wantCode {
+				t.Errorf("error_code = %q, want %q; body: %s", code, tc.wantCode, w.Body.String())
+			}
+			if msg, _ := resp["message"].(string); msg == "" {
+				t.Errorf("message must stay non-empty alongside error_code; body: %s", w.Body.String())
+			}
+		})
 	}
 }

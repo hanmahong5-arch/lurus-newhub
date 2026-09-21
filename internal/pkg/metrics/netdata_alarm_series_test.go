@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -496,5 +497,376 @@ func TestNetdataAlarmsHaveARunbookLinkedFromIndex(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("every block under health.d/ is marked DEAD — the scan is measuring nothing")
+	}
+}
+
+// --- Reverse honesty gate (cycle-13 L10): a Go comment that self-describes
+// a series as alertable must actually be bound by some on: line. -----------
+//
+// The three checks above all start from the conf file and ask "does this
+// alarm point at something real". This one starts from the OTHER end: a
+// series this package declares that says it needs alerting must be the
+// target of some non-dead conf block. Two inputs, in order of authority:
+//   1. an explicit `// ALERTABLE: <wire name>` marker in the doc comment —
+//      machine-checkable, carried today by the money/conservation counters
+//      (see alertableMarkerFloor), and the reason the repair round added
+//      it: prose cannot be enumerated in advance.
+//   2. prose, as a fallback: a doc comment that asserts in the
+//      imperative/declarative (not a hedged "an alert on X must..." caveat,
+//      and not a quoted-and-retracted claim like the ⚠️ NOT ALERTED blocks
+//      elsewhere in metrics.go) that the series should page or be alerted
+//      on.
+// Before this test, three such comments (CreditPoolDebitLostTotal's "alert
+// on any increase", migrations.go's "the condition to page on", and
+// PanicsRecovered's "should page") sat unbound for at least one prior
+// cycle each; a fourth (BillingTaskRefundWalletUnreversedTotal) got past
+// the prose-only first cut of this gate, which is what the marker fixes.
+
+// netdataAlertableMarkerRe matches an explicit machine-readable
+// "ALERTABLE: <wire name>" marker in a Go doc comment — the primary input
+// to the reverse gate as of the cycle-13 L10 repair round (D-L10-4). The
+// prose scan below stays (it still catches a comment written without the
+// marker), but prose is the fallback, not the contract: the first cut of
+// this gate matched three hand-picked phrasings and therefore could not see
+// BillingTaskRefundWalletUnreversedTotal, whose comment says every
+// increment is "a real, uncompensated wallet overcharge" and had no alarm
+// bound to it. A marker cannot be missed by rephrasing.
+//
+// The wire name is spelled out in the marker rather than inferred from the
+// declaration below it, so a marker keeps working on a comment that sits
+// over a var() block, over a helper func, or anywhere else the positional
+// association would guess wrong.
+var netdataAlertableMarkerRe = regexp.MustCompile(`ALERTABLE:\s*([a-zA-Z_][a-zA-Z0-9_]*)`)
+
+// alertableMarkerFloor is the number of ALERTABLE markers this package
+// carries today (the money/conservation counters listed in the cycle-13
+// L10 repair decision D-L10-4: credit-pool debit loss and lookup error,
+// advisory meter loss, zero-amount wallet charge, unreversed task refund,
+// settlement failure, permanently failed billing outbox entry, and stranded
+// open topups). The floor is what stops the gate from being satisfied by
+// DELETING a marker instead of wiring the alarm it demands: dropping one
+// below this number fails here even though every remaining marker is bound.
+// Retiring a counter legitimately means lowering this number in the same
+// change, which is a reviewable line in the diff.
+const alertableMarkerFloor = 8
+
+// netdataSelfClaimRe matches the specific imperative/declarative phrasings
+// this package's own comments use today for "this needs an alert" — not a
+// bare "alert"/"page" (which also appears in ⚠️ NOT ALERTED disclaimers,
+// var names like CreditPoolAlertTotal, and hedged caveats like instance.go's
+// "an alert on this series must not blanket-qualify with..."). Deliberately
+// narrow (first cut, like several thresholds in newhub.conf itself) — a
+// future comment phrased differently needs a pattern added here, same as
+// any other textual heuristic in this file.
+var netdataSelfClaimRe = regexp.MustCompile(`(?i)\balert on any\b|\bcondition to page on\b|\bshould page\b`)
+
+// netdataBacktickWireNameRe matches a backtick-introduced `lurus_..._...`
+// literal in a comment — the highest-confidence association: the author
+// named the exact wire name themselves (migrations.go's block comment does
+// this, since its claim sits above a two-gauge var() block rather than
+// immediately over the one gauge it is actually about). Deliberately does
+// NOT require an immediate closing backtick: migrations.go's comment writes
+// the wire name as part of a larger backtick-quoted EXPRESSION
+// ("`lurus_gateway_schema_migrations_pending > 0`"), so anchoring on the
+// closing backtick would miss it.
+var netdataBacktickWireNameRe = regexp.MustCompile("`(lurus_[a-zA-Z0-9_]+)")
+
+// netdataCommentRun is one maximal contiguous run of "//"-prefixed comment
+// lines in a Go source file, with its text joined into one string (so a
+// phrase wrapped across lines, e.g. panic.go's "...should\npage,...", reads
+// as adjacent text — the same reason productionMetricInfo's Name-field scan
+// does not simply grep line by line).
+type netdataCommentRun struct {
+	file      string
+	startLine int // 0-indexed, inclusive
+	endLine   int // 0-indexed, inclusive
+	joined    string
+	// afterOffset is the byte offset, into the SAME full file text
+	// commentRunsIn was called with, where the first non-comment line after
+	// this run begins ("" text / -1 if the run reaches EOF). Kept as an
+	// offset into the full text — not a standalone extracted line — because
+	// resolving a declaration's wire name needs to scan hundreds of bytes
+	// AHEAD of that line for its Namespace:/Subsystem:/Name: fields, which
+	// live on the lines that follow it, not on the line itself.
+	afterOffset int
+	afterLine   string // just the first non-comment line's own text, for the declaredMetricVarRe pre-check
+}
+
+// commentRunsIn splits body into its maximal contiguous "//" comment runs.
+func commentRunsIn(file, body string) []netdataCommentRun {
+	lines := strings.Split(body, "\n")
+	// lineOffset[i] is the byte offset of lines[i] within body.
+	lineOffset := make([]int, len(lines)+1)
+	off := 0
+	for i, l := range lines {
+		lineOffset[i] = off
+		off += len(l) + 1 // +1 for the '\n' strings.Split consumed
+	}
+	lineOffset[len(lines)] = off
+
+	var runs []netdataCommentRun
+	i := 0
+	for i < len(lines) {
+		trimmed := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(trimmed, "//") {
+			i++
+			continue
+		}
+		start := i
+		var parts []string
+		for i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "//") {
+			parts = append(parts, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i]), "//")))
+			i++
+		}
+		after, afterOffset := "", -1
+		if i < len(lines) {
+			after = lines[i]
+			afterOffset = lineOffset[i]
+		}
+		runs = append(runs, netdataCommentRun{
+			file: file, startLine: start, endLine: i - 1,
+			joined: strings.Join(parts, " "), afterLine: after, afterOffset: afterOffset,
+		})
+	}
+	return runs
+}
+
+// wireNameForDeclaredVarLine resolves the Prometheus wire name for a
+// "VarName = promauto.NewXxx(" match spanning text[matchStart:matchEnd],
+// using the identical Namespace/Subsystem/Name window-scan
+// productionMetricInfo uses for every declared var — factored out here so
+// this test does not need productionMetricInfo's full byWireName map (keyed
+// the wrong direction for this lookup) or a second copy of the window logic.
+// text must be the FULL file text (not just the matched line): the
+// Namespace:/Subsystem:/Name: fields this looks for live on the lines AFTER
+// the match, which only exist in the full text.
+func wireNameForDeclaredVarLine(t *testing.T, text string, matchStart, matchEnd int) string {
+	t.Helper()
+	windowEnd := len(text)
+	if next := strings.Index(text[matchEnd:], "promauto.New"); next >= 0 {
+		windowEnd = matchEnd + next
+	}
+	if windowEnd-matchEnd > 1200 {
+		windowEnd = matchEnd + 1200
+	}
+	window := text[matchEnd:windowEnd]
+
+	nm := netdataNameFieldRe.FindStringSubmatch(window)
+	if nm == nil {
+		return ""
+	}
+	var parts []string
+	if nsm := netdataNamespaceFieldRe.FindStringSubmatch(window); nsm != nil {
+		if nsm[1] != "" {
+			parts = append(parts, nsm[1])
+		} else {
+			parts = append(parts, namespace)
+		}
+	}
+	if subm := netdataSubsystemFieldRe.FindStringSubmatch(window); subm != nil {
+		if subm[1] != "" {
+			parts = append(parts, subm[1])
+		} else {
+			parts = append(parts, subsystem)
+		}
+	}
+	parts = append(parts, nm[1])
+	return strings.Join(parts, "_")
+}
+
+// selfClaimedWireNames scans this package's own non-test .go files for
+// every comment run matching netdataSelfClaimRe and resolves each to the
+// wire name(s) it is claiming alertability for, per the two-step
+// association in this function's inline comments. Returns a map of wire
+// name -> the file:line the claim lives at (for the error message), and a
+// slice of runs it could NOT associate with any series at all (a scan bug,
+// not a missing alarm — reported separately so it fails loudly instead of
+// silently proving nothing).
+func selfClaimedWireNames(t *testing.T, pkgDir string) (claims, marked map[string]string, unassociated []netdataCommentRun) {
+	t.Helper()
+	claims = map[string]string{}
+	marked = map[string]string{}
+	for _, f := range packageNonTestGoFiles(t, pkgDir) {
+		body, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		text := string(body)
+		base := filepath.Base(f)
+		for _, run := range commentRunsIn(base, text) {
+			loc := base + ":" + strconv.Itoa(run.startLine+1)
+
+			// Step 0: an explicit ALERTABLE: marker. Unambiguous (the wire
+			// name is written out) and unmissable by rephrasing, so it is
+			// checked before the prose heuristics below and counted
+			// separately for the floor.
+			if mm := netdataAlertableMarkerRe.FindAllStringSubmatch(run.joined, -1); len(mm) > 0 {
+				for _, m := range mm {
+					claims[m[1]] = loc
+					marked[m[1]] = loc
+				}
+				continue
+			}
+
+			if !netdataSelfClaimRe.MatchString(run.joined) {
+				continue
+			}
+
+			// Step 1: a literal `lurus_..._...` named directly in the
+			// comment (highest confidence — e.g. migrations.go's block
+			// comment, which sits over a two-gauge var() and would
+			// otherwise resolve to the wrong/both declarations).
+			if bm := netdataBacktickWireNameRe.FindAllStringSubmatch(run.joined, -1); len(bm) > 0 {
+				for _, m := range bm {
+					claims[m[1]] = loc
+				}
+				continue
+			}
+
+			// Step 2: the comment sits immediately above one declared
+			// var's own "VarName = promauto.New...(" line. Pre-check
+			// against the isolated line first (cheap, and keeps the
+			// "is this even a declaration line" question separate from
+			// "where in the full text do I resolve its fields from");
+			// the actual resolution re-matches against the FULL file text
+			// at the run's real offset, because wireNameForDeclaredVarLine
+			// needs the lines AFTER the declaration, which the isolated
+			// afterLine string does not contain.
+			if run.afterOffset >= 0 && declaredMetricVarRe.MatchString(run.afterLine) {
+				if m := declaredMetricVarRe.FindStringSubmatchIndex(text[run.afterOffset:]); m != nil {
+					absStart, absEnd := run.afterOffset+m[0], run.afterOffset+m[1]
+					wire := wireNameForDeclaredVarLine(t, text, absStart, absEnd)
+					if wire != "" {
+						claims[wire] = loc
+						continue
+					}
+				}
+			}
+
+			unassociated = append(unassociated, run)
+		}
+	}
+	return claims, marked, unassociated
+}
+
+// TestNetdataSelfClaimedAlertableSeriesAreBound is the reverse gate: every
+// series that says it needs alerting — through an `// ALERTABLE: <wire
+// name>` marker, or through the prose fallback ("alert on any X" / "is the
+// condition to page on" / "should page") — must be the on: target of some
+// non-DEAD conf block, and the number of markers must not fall below
+// alertableMarkerFloor. See this section's header comment for the four
+// (now covered) real gaps this found.
+func TestNetdataSelfClaimedAlertableSeriesAreBound(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	pkgDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	claims, marked, unassociated := selfClaimedWireNames(t, pkgDir)
+	if len(claims) == 0 {
+		t.Fatal("found zero self-claimed-alertable comments — the scan is measuring nothing " +
+			"(expected at least CreditPoolDebitLostTotal, SchemaMigrationsPending, PanicsRecovered)")
+	}
+	if len(marked) < alertableMarkerFloor {
+		t.Errorf("found %d \"ALERTABLE: <wire name>\" markers in this package's doc comments, "+
+			"want at least %d (%v). A money counter whose alarm is inconvenient must not be made "+
+			"to pass this gate by deleting its marker — see alertableMarkerFloor.",
+			len(marked), alertableMarkerFloor, marked)
+	}
+	for _, u := range unassociated {
+		t.Errorf("%s:%d: comment %q matches the self-claim pattern but could not be associated "+
+			"with any declared series (no backtick-quoted wire name, and the next line is not a "+
+			"promauto declaration) — fix the scan or the comment.", u.file, u.startLine+1, u.joined)
+	}
+
+	blocks := parseNetdataAlarmBlocks(t, root)
+	bound := map[string]bool{}
+	for _, b := range blocks {
+		if !b.dead && b.onMetric != "" {
+			bound[b.onMetric] = true
+		}
+	}
+
+	for wire, loc := range claims {
+		if !bound[wire] {
+			how := "its comment's prose (\"alert on any\"/\"condition to page on\"/\"should page\")"
+			if _, isMarked := marked[wire]; isMarked {
+				how = "an explicit \"ALERTABLE:\" marker"
+			}
+			t.Errorf("%s: %s claims series %q needs alerting, but no non-DEAD template:/alarm: "+
+				"block in %s targets it via \"on:\" — either wire an alarm, or the claim is stale "+
+				"and should be retracted.", loc, how, wire, healthDDir)
+		}
+	}
+}
+
+// --- README count gate (cycle-13 L10) ---------------------------------
+
+// netdataReadmeCountRe matches "currently defines N alarms" in
+// deploy/r6-host-netdata/README.md's headline count sentence.
+var netdataReadmeCountRe = regexp.MustCompile(`currently defines (\d+) alarms`)
+
+// TestNetdataReadmeAlarmCountMatchesConf pins README.md's headline "health.d/
+// newhub.conf currently defines N alarms" sentence to the ACTUAL non-DEAD
+// template:/alarm: block count in the conf file, and requires every one of
+// those block names to appear somewhere in the README text — the prose
+// breakdown a reader relies on to know what the N alarms actually are.
+// Before this test the README's own bullet-by-bullet breakdown had to be
+// hand-maintained in lockstep with the conf file with nothing checking that
+// it still summed to the number in the headline sentence.
+func TestNetdataReadmeAlarmCountMatchesConf(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	blocks := parseNetdataAlarmBlocks(t, root)
+	if len(blocks) == 0 {
+		t.Fatal("found zero template:/alarm: blocks under health.d/ — the scan is measuring nothing")
+	}
+	wantCount := 0
+	var names []string
+	for _, b := range blocks {
+		if b.dead {
+			continue
+		}
+		wantCount++
+		names = append(names, b.name)
+	}
+	if wantCount == 0 {
+		t.Fatal("every block under health.d/ is marked DEAD — the scan is measuring nothing")
+	}
+
+	readmePath := filepath.Join(root, filepath.FromSlash("deploy/r6-host-netdata/README.md"))
+	readmeBody, readErr := os.ReadFile(readmePath)
+	if readErr != nil {
+		t.Fatalf("read %s: %v", readmePath, readErr)
+	}
+	readme := string(readmeBody)
+
+	m := netdataReadmeCountRe.FindStringSubmatch(readme)
+	if m == nil {
+		t.Fatalf("%s: found no \"currently defines N alarms\" sentence — the README's headline "+
+			"count sentence was renamed or removed; this test has nothing to check against", readmePath)
+	}
+	gotCount, convErr := strconv.Atoi(m[1])
+	if convErr != nil {
+		t.Fatalf("%s: \"currently defines %s alarms\" — %q is not an integer", readmePath, m[1], m[1])
+	}
+	if gotCount != wantCount {
+		t.Errorf("%s says \"currently defines %d alarms\", but health.d/*.conf has %d non-DEAD "+
+			"template:/alarm: blocks — update the README sentence (and its bullet breakdown) to "+
+			"match.", readmePath, gotCount, wantCount)
+	}
+
+	for _, name := range names {
+		if !strings.Contains(readme, name) {
+			t.Errorf("%s: alarm block %q is not named anywhere in the README — a reader counting "+
+				"\"%d alarms\" has no way to find out what this one is or why it exists.",
+				readmePath, name, wantCount)
+		}
 	}
 }

@@ -205,7 +205,12 @@ func SetApiV2Router(router *gin.Engine) {
 		// ================================================================
 
 		tenantChannels := apiV2.Group("/:tenant_slug/channels")
-		tenantChannels.Use(middleware.AdminAuth())
+		// AdminSessionAuth, not AdminAuth: the v1 refusal shape is HTTP 200
+		// {success:false} and a browser reads that as success. Cycle 13 L7/W
+		// routes the role-10 shortfall through the same rewrite RootAuth's
+		// admin routes use, so a plain member gets 403 PERMISSION_DENIED and
+		// the console can tell "refused" from "no channels".
+		tenantChannels.Use(middleware.AdminSessionAuth())
 		tenantChannels.Use(middleware.TenantSlugGuard())
 		{
 			tenantChannels.GET("", handler.ListChannelsV2)
@@ -230,13 +235,13 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantLogs.GET("/cluster", handler.GetLogClusterV2)
 			// Aggregate header (RPM/TPM/total requests/total quota) over the
 			// active filters — mirrors GetLogsV2's filter shape.
-			tenantLogs.GET("/stat", handler.GetLogStatV2)
+			tenantLogs.GET("/stat", middleware.CriticalRateLimit(), handler.GetLogStatV2)
 			// Tenant-wide stat (admin gate in the handler) — pairs with
 			// GET /all so the header can summarise the same rows it lists.
-			tenantLogs.GET("/stat/all", handler.GetAllLogStatV2)
+			tenantLogs.GET("/stat/all", middleware.CriticalRateLimit(), handler.GetAllLogStatV2)
 			// Wave 3 Phase 2 (2026-05-20): CSV export with streaming writer
 			// and a 50k-row hard cap (clamped silently above that).
-			tenantLogs.GET("/export", handler.ExportLogsV2)
+			tenantLogs.GET("/export", middleware.CriticalRateLimit(), handler.ExportLogsV2)
 		}
 
 		// ================================================================

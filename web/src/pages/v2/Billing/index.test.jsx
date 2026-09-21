@@ -74,6 +74,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import HFBilling from './index';
+import { redeemFailure } from './redeemFailure';
 import { API, showError } from '../../../helpers';
 
 const fakeInvoices = [
@@ -408,6 +409,52 @@ describe('Billing — redeem a code', () => {
     });
     // No credited figure may appear for a rejected code.
     expect(screen.queryByTestId('redeem-result')).toBeNull();
+  });
+
+  // Cycle-13 L3 gave the redeem endpoint error_codes; the backend message
+  // stays Chinese by contract (the Switch client greps it), so the console
+  // must map the CODE, which showError() only does when handed the error
+  // object rather than the message string. Mutation that must turn this
+  // red: hand showError the message string again (the first cut).
+  it('hands a coded rejection to showError as an error object so the code, not the Chinese message, is what gets rendered', async () => {
+    await renderReady();
+    API.post.mockRejectedValue({
+      response: {
+        status: 400,
+        data: {
+          success: false,
+          error_code: 'REDEMPTION_USED',
+          message: '该兑换码已使用',
+        },
+      },
+    });
+
+    fireEvent.change(screen.getByTestId('redeem-input'), {
+      target: { value: CODE },
+    });
+    fireEvent.click(screen.getByTestId('redeem-submit'));
+
+    await waitFor(() => expect(showError).toHaveBeenCalled());
+    const arg = showError.mock.calls.at(-1)[0];
+    expect(typeof arg).not.toBe('string');
+    expect(arg?.response?.data?.error_code).toBe('REDEMPTION_USED');
+    expect(screen.queryByTestId('redeem-result')).toBeNull();
+  });
+
+  it('redeemFailure keeps the plain-message fallback for a body without a code', () => {
+    expect(redeemFailure({ message: 'nope' }, 'Redemption failed', 400)).toBe(
+      'nope',
+    );
+    expect(redeemFailure(undefined, 'Redemption failed', undefined)).toBe(
+      'Redemption failed',
+    );
+    const coded = redeemFailure(
+      { error_code: 'REDEMPTION_FAILED', message: 'x' },
+      'Redemption failed',
+      500,
+    );
+    expect(coded.response.status).toBe(500);
+    expect(coded.response.data.error_code).toBe('REDEMPTION_FAILED');
   });
 });
 
