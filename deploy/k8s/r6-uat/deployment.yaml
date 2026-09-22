@@ -34,6 +34,9 @@ metadata:
     environment: uat
 spec:
   replicas: 1
+  # Same as r6-stage: keep one superseded ReplicaSet instead of the default
+  # ten. UAT had 11 of them for a single running pod.
+  revisionHistoryLimit: 1
   selector:
     matchLabels:
       app: lurus-newhub
