@@ -77,6 +77,36 @@ const Trend = ({ row }) => {
   );
 };
 
+// Share as a bar plus the number (openrouter.ai leaderboard): the column
+// is read by comparing rows, which a bare percentage makes you do in your
+// head.
+const ShareBar = ({ pct }) => (
+  <span
+    data-testid='rankings-share'
+    style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
+  >
+    <span
+      style={{
+        width: 72,
+        height: 6,
+        borderRadius: 3,
+        background: 'var(--hf-sunken)',
+        overflow: 'hidden',
+      }}
+    >
+      <span
+        style={{
+          display: 'block',
+          height: '100%',
+          width: `${Math.max(0, Math.min(100, pct || 0))}%`,
+          background: 'var(--hf-accent)',
+        }}
+      />
+    </span>
+    {fmtPct(pct)}
+  </span>
+);
+
 const HFRankings = () => {
   const { t: tr } = useTranslation();
   const tenantSlug = useTenantSlug();
@@ -396,9 +426,13 @@ const HFRankings = () => {
                             : `${r.requests_growth_pct >= 0 ? '+' : ''}${r.requests_growth_pct.toFixed(1)}%`}
                         </td>
                         <td style={tdStyle}>{fmtInt(r.total_tokens)}</td>
-                        <td style={tdStyle}>{fmtPct(r.token_share_pct)}</td>
+                        <td style={tdStyle}>
+                          <ShareBar pct={r.token_share_pct} />
+                        </td>
                         <td style={tdStyle}>{usd(r.quota)}</td>
-                        <td style={tdStyle}>{fmtPct(r.quota_share_pct)}</td>
+                        <td style={tdStyle}>
+                          <ShareBar pct={r.quota_share_pct} />
+                        </td>
                       </tr>
                     ))}
                   </tbody>

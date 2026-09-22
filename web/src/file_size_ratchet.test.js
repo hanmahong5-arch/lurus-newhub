@@ -56,7 +56,7 @@ const CEILINGS = {
   'pages/v2/Billing/index.jsx': 833, // redeemFailure() extracted to Billing/redeemFailure.js (cycle-13 hand-finish)
   'pages/v2/Channel/index.jsx': 1908, // +2 (cycle-15 P1): import of the extracted ChannelTypeLabel/ChannelTypeSelect (components/hifi/HfModelName.jsx)
   'pages/v2/Chat/index.jsx': 879,
-  'pages/v2/Dashboard/index.jsx': 1242, // +4 (cycle-13 hand-finish): pre-settle caption — one const and a three-line rationale
+  'pages/v2/Dashboard/index.jsx': 1190, // 1242 → 1190 (cycle-15 P3): daily bucketing moved to components/hifi/activitySeries.js
   'pages/v2/Flows/index.jsx': 1446,
   'pages/v2/Log/index.jsx': 1731, // +5 (cycle-15 P1): vendor logo in both model cells + status column moved beside the time
   'pages/v2/Playground/index.jsx': 1084,

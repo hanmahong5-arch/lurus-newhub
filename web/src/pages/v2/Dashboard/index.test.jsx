@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 // ─── mocks ───────────────────────────────────────────────────────────────────
 
@@ -482,8 +482,11 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
     render(React.createElement(HFDashboard));
 
     // Panel total — proves the per-day aggregation actually summed the rows,
-    // not just echoed a truthy fetch.
-    await waitFor(() => screen.getByText('$2.0000'));
+    // not just echoed a truthy fetch. (By test id: the y-axis ceiling can
+    // read the same amount.)
+    await waitFor(() =>
+      expect(screen.getByTestId('activity-total').textContent).toBe('$2.0000'),
+    );
 
     // Model distribution — highest-consuming model first.
     const row0 = await waitFor(() => screen.getByTestId('model-dist-row-0'));
@@ -508,6 +511,18 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
     // hard-coded "29" that could silently drift from
     // DASHBOARD_TREND_WINDOW_SECONDS (index.jsx:70).
     expect(screen.getByText('last 29 days')).toBeTruthy();
+
+    // Stacked by model (openrouter.ai Activity): each model is its own
+    // segment and legend entry, not one undifferentiated bar.
+    const legend = screen.getByTestId('activity-legend');
+    expect(legend.textContent).toContain('model-a');
+    expect(legend.textContent).toContain('model-b');
+    expect(chart.querySelectorAll('[data-model="model-a"]').length).toBe(1);
+    expect(chart.querySelectorAll('[data-model="model-b"]').length).toBe(1);
+
+    // Switching the metric re-measures the same rows: requests, not spend.
+    fireEvent.click(screen.getByTestId('activity-metric-requests'));
+    expect(screen.getByTestId('activity-total').textContent).toBe('3');
   });
 
   it('treats the >30-day refusal (success:false, HTTP 200) as an empty state, not a toast', async () => {
@@ -605,7 +620,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
   });
 
   // The trend chart's bars are keyed on the LOCAL calendar day
-  // (index.jsx localDayKey), matching the label HfUsageTrendChart renders via
+  // (index.jsx localDayKey), matching the label HfActivityChart renders via
   // toLocaleDateString. Two rows exactly one hour apart, straddling local
   // midnight, must land in two distinct day buckets — with the old
   // UTC-keyed bucketing (Math.floor(ts / 86400) * 86400) this test's runtime
