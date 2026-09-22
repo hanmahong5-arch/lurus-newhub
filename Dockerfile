@@ -24,6 +24,9 @@ COPY lurus-proto-go/ /shared/lurus-proto-go/
 # Copy zita-sdk-go (identity SDK, ADR-0011) — pinned via CI checkout ref
 COPY zita-sdk-go/ /shared/zita-sdk-go/
 
+# Copy lurus-entkit (offline entitlement-token verifier, platform ADR 0030)
+COPY lurus-entkit/ /shared/lurus-entkit/
+
 ADD go.mod go.sum ./
 RUN go mod download
 

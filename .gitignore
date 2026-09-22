@@ -57,3 +57,4 @@ _bmad/
 
 # Staged by deploy/single-node/build.sh; canonical copy lives at ../shared/lurus-proto-go
 /lurus-proto-go/
+/lurus-entkit/
