@@ -18,7 +18,7 @@ STAMP="${PROTO_DST}/.staged-by-build-script"
 
 cleanup() {
   if [[ -f "${STAMP}" ]]; then
-    rm -rf "${PROTO_DST}"
+    rm -rf "${PROTO_DST}" "${HUB_ROOT}/lurus-entkit"
   fi
 }
 trap cleanup EXIT INT TERM
@@ -43,6 +43,17 @@ else
   cp -r "${PROTO_SRC}" "${PROTO_DST}"
 fi
 touch "${STAMP}"
+
+# The entitlement kit (Dockerfile: COPY lurus-entkit/) is staged the same way.
+KIT_SRC="$(cd "${HUB_ROOT}/.." && pwd)/shared/lurus-entkit"
+KIT_DST="${HUB_ROOT}/lurus-entkit"
+if [[ ! -d "${KIT_SRC}" ]]; then
+  echo "ERROR: lurus-entkit not found at ${KIT_SRC}" >&2
+  exit 1
+fi
+rm -rf "${KIT_DST}"
+cp -r "${KIT_SRC}" "${KIT_DST}"
+rm -rf "${KIT_DST}/.git"
 
 VERSION="$(cat "${HUB_ROOT}/VERSION" 2>/dev/null)"
 [[ -z "${VERSION}" ]] && VERSION="dev"

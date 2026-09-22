@@ -188,11 +188,17 @@ jobs:
           ref: e2611da1e01ef77b8227571204d6780a6364fea3
           path: _sibling/zita-sdk-go
           fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          path: _sibling/lurus-entkit
+          fetch-depth: 1
       - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
         run: |
           mkdir -p ../shared
           mv _sibling/lurus-proto-go ../shared/lurus-proto-go
           mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          mv _sibling/lurus-entkit ../shared/lurus-entkit
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
@@ -316,11 +322,17 @@ jobs:
           ref: e2611da1e01ef77b8227571204d6780a6364fea3
           path: _sibling/zita-sdk-go
           fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          path: _sibling/lurus-entkit
+          fetch-depth: 1
       - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
         run: |
           mkdir -p ../shared
           mv _sibling/lurus-proto-go ../shared/lurus-proto-go
           mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          mv _sibling/lurus-entkit ../shared/lurus-entkit
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         # The Go binary embeds web/dist via //go:embed (see web/embed.go).
@@ -353,11 +365,17 @@ jobs:
           ref: e2611da1e01ef77b8227571204d6780a6364fea3
           path: _sibling/zita-sdk-go
           fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          path: _sibling/lurus-entkit
+          fetch-depth: 1
       - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
         run: |
           mkdir -p ../shared
           mv _sibling/lurus-proto-go ../shared/lurus-proto-go
           mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          mv _sibling/lurus-entkit ../shared/lurus-entkit
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
@@ -404,11 +422,17 @@ jobs:
           ref: e2611da1e01ef77b8227571204d6780a6364fea3
           path: _sibling/zita-sdk-go
           fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          path: _sibling/lurus-entkit
+          fetch-depth: 1
       - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
         run: |
           mkdir -p ../shared
           mv _sibling/lurus-proto-go ../shared/lurus-proto-go
           mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          mv _sibling/lurus-entkit ../shared/lurus-entkit
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
@@ -466,11 +490,17 @@ jobs:
           ref: e2611da1e01ef77b8227571204d6780a6364fea3
           path: _sibling/zita-sdk-go
           fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          path: _sibling/lurus-entkit
+          fetch-depth: 1
       - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
         run: |
           mkdir -p ../shared
           mv _sibling/lurus-proto-go ../shared/lurus-proto-go
           mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          mv _sibling/lurus-entkit ../shared/lurus-entkit
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
@@ -591,11 +621,17 @@ jobs:
           ref: e2611da1e01ef77b8227571204d6780a6364fea3
           path: _sibling/zita-sdk-go
           fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          path: _sibling/lurus-entkit
+          fetch-depth: 1
       - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
         run: |
           mkdir -p ../shared
           mv _sibling/lurus-proto-go ../shared/lurus-proto-go
           mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          mv _sibling/lurus-entkit ../shared/lurus-entkit
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
@@ -673,11 +709,17 @@ jobs:
           ref: e2611da1e01ef77b8227571204d6780a6364fea3
           path: _sibling/zita-sdk-go
           fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          path: _sibling/lurus-entkit
+          fetch-depth: 1
       - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
         run: |
           mkdir -p ../shared
           mv _sibling/lurus-proto-go ../shared/lurus-proto-go
           mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          mv _sibling/lurus-entkit ../shared/lurus-entkit
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |

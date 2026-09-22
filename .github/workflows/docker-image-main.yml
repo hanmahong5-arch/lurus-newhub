@@ -91,6 +91,13 @@ jobs:
           path: zita-sdk-go
           fetch-depth: 1
 
+      - name: Check out lurus-entkit (entitlement kit)
+        uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          path: lurus-entkit
+          fetch-depth: 1
+
       - name: Determine version
         id: version
         run: |
