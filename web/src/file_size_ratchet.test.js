@@ -43,7 +43,9 @@ import { describe, expect, it } from 'vitest';
 const CEILINGS = {
   // 950 → 948 (2026-09-22): the local readTenantSlug copy gave way to the
   // shared one in hooks/common/useTenantSlug.js.
-  'components/hifi/HFShell.jsx': 948,
+  // 948 → 887 (2026-09-22): the root tenant list and its localStorage
+  // "switch" went — the server never followed it (403 TENANT_MISMATCH).
+  'components/hifi/HFShell.jsx': 887,
   'components/settings/AuthSettingPage.jsx': 1086,
   'components/settings/SystemSetting.jsx': 1490,
   'components/settings/personal/cards/NotificationSettings.jsx': 930,

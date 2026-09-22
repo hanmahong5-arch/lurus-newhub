@@ -240,12 +240,12 @@ describe('Chat page', () => {
     // API.post called twice: the completion, then the session-create save.
     await waitFor(() => expect(API.post).toHaveBeenCalledTimes(2));
     const [sendUrl, sendPayload] = API.post.mock.calls[0];
-    expect(sendUrl).toBe('/api/v2/acme/chat/send');
+    expect(sendUrl).toBe('/api/v2/~/chat/send');
     expect(sendPayload.model).toBe('rt-alpha');
     expect(sendPayload.messages).toEqual([{ role: 'user', content: 'hello' }]);
 
     const [persistUrl, persistPayload] = API.post.mock.calls[1];
-    expect(persistUrl).toBe('/api/v2/acme/chat/sessions');
+    expect(persistUrl).toBe('/api/v2/~/chat/sessions');
     expect(persistPayload.messages).toEqual([
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'hi from rt-alpha' },
@@ -255,8 +255,10 @@ describe('Chat page', () => {
   // 2b. Regression: /console/v2/chat is a static route with no :tenant_slug
   //     segment, so deriving the slug from useParams() posted every message to
   //     /api/v2/default/chat/send — a slug no tenant owns, so TenantSlugGuard
-  //     404'd the whole page. The slug must come from the stored tenant.
-  it('posts to the stored tenant slug, never the literal default', async () => {
+  //     404'd the whole page. Now the path carries the self-tenant alias,
+  //     which the server resolves from the session — whatever slug a login
+  //     left in storage is not consulted for routing at all.
+  it('posts to the self-tenant alias, never a stored or literal slug', async () => {
     window.localStorage.setItem('tenant_slug', 'lurus');
     API.post.mockResolvedValueOnce(chatResponse('pong'));
     render(<HFChat />);
@@ -269,11 +271,9 @@ describe('Chat page', () => {
 
     await waitFor(() => expect(API.post).toHaveBeenCalledTimes(2));
     const urls = API.post.mock.calls.map(([u]) => u);
-    expect(urls).toEqual([
-      '/api/v2/lurus/chat/send',
-      '/api/v2/lurus/chat/sessions',
-    ]);
+    expect(urls).toEqual(['/api/v2/~/chat/send', '/api/v2/~/chat/sessions']);
     expect(urls.some((u) => u.includes('/api/v2/default/'))).toBe(false);
+    expect(urls.some((u) => u.includes('/api/v2/lurus/'))).toBe(false);
   });
 
   // 3. Multi-turn — second send forwards the *full* history (user + asst +
@@ -312,7 +312,7 @@ describe('Chat page', () => {
 
     await waitFor(() => expect(API.patch).toHaveBeenCalledTimes(1));
     const [patchUrl, patchPayload] = API.patch.mock.calls[0];
-    expect(patchUrl).toBe('/api/v2/acme/chat/sessions/101');
+    expect(patchUrl).toBe('/api/v2/~/chat/sessions/101');
     expect(patchPayload.messages).toEqual([
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'first reply' },
@@ -423,7 +423,7 @@ describe('Chat page', () => {
     await waitFor(() => {
       expect(screen.getByText('earlier chat')).toBeTruthy();
     });
-    expect(API.get).toHaveBeenCalledWith('/api/v2/acme/chat/sessions');
+    expect(API.get).toHaveBeenCalledWith('/api/v2/~/chat/sessions');
     expect(screen.queryByText(/no saved conversations yet/i)).toBeNull();
   });
 
@@ -438,7 +438,7 @@ describe('Chat page', () => {
   //    message history — the round trip's "fetch" half, driven from the UI.
   it('opens a saved session from the sidebar and loads its messages', async () => {
     wireGet((url) => {
-      if (url === '/api/v2/acme/chat/sessions') {
+      if (url === '/api/v2/~/chat/sessions') {
         return Promise.resolve({
           data: {
             success: true,
@@ -455,7 +455,7 @@ describe('Chat page', () => {
           },
         });
       }
-      if (url === '/api/v2/acme/chat/sessions/7') {
+      if (url === '/api/v2/~/chat/sessions/7') {
         return Promise.resolve({
           data: {
             success: true,
@@ -514,7 +514,7 @@ describe('Chat page', () => {
     fireEvent.click(screen.getByTestId('session-delete-9'));
 
     await waitFor(() => {
-      expect(API.delete).toHaveBeenCalledWith('/api/v2/acme/chat/sessions/9');
+      expect(API.delete).toHaveBeenCalledWith('/api/v2/~/chat/sessions/9');
     });
     await waitFor(() => {
       expect(screen.queryByText('to delete')).toBeNull();
@@ -530,7 +530,7 @@ describe('Chat page', () => {
   //     that loss has no undo).
   it('drops an in-flight turn and never persists it when the user switches sessions mid-flight', async () => {
     wireGet((url) => {
-      if (url === '/api/v2/acme/chat/sessions') {
+      if (url === '/api/v2/~/chat/sessions') {
         return Promise.resolve({
           data: {
             success: true,
@@ -553,7 +553,7 @@ describe('Chat page', () => {
           },
         });
       }
-      if (url === '/api/v2/acme/chat/sessions/1') {
+      if (url === '/api/v2/~/chat/sessions/1') {
         return Promise.resolve({
           data: {
             success: true,
@@ -566,7 +566,7 @@ describe('Chat page', () => {
           },
         });
       }
-      if (url === '/api/v2/acme/chat/sessions/2') {
+      if (url === '/api/v2/~/chat/sessions/2') {
         return Promise.resolve({
           data: {
             success: true,
@@ -643,7 +643,7 @@ describe('Chat page', () => {
   //     "not saved" marker rather than vanishing silently.
   it('falls back to creating a new session after a 404 on PATCH, and shows a not-saved marker', async () => {
     wireGet((url) => {
-      if (url === '/api/v2/acme/chat/sessions') {
+      if (url === '/api/v2/~/chat/sessions') {
         return Promise.resolve({
           data: {
             success: true,
@@ -660,7 +660,7 @@ describe('Chat page', () => {
           },
         });
       }
-      if (url === '/api/v2/acme/chat/sessions/55') {
+      if (url === '/api/v2/~/chat/sessions/55') {
         return Promise.resolve({
           data: {
             success: true,
@@ -710,7 +710,7 @@ describe('Chat page', () => {
 
     // The PATCH was attempted against the (now-gone) session and 404'd.
     await waitFor(() => expect(API.patch).toHaveBeenCalledTimes(1));
-    expect(API.patch.mock.calls[0][0]).toBe('/api/v2/acme/chat/sessions/55');
+    expect(API.patch.mock.calls[0][0]).toBe('/api/v2/~/chat/sessions/55');
 
     // The swallowed failure is NOT invisible.
     await waitFor(() =>
@@ -954,7 +954,7 @@ describe('Chat page', () => {
   // silently switch to whatever the picker currently shows.
   it('opening a saved session adopts its model', async () => {
     wireGet((url) => {
-      if (url === '/api/v2/acme/chat/sessions') {
+      if (url === '/api/v2/~/chat/sessions') {
         return Promise.resolve({
           data: {
             success: true,
@@ -971,7 +971,7 @@ describe('Chat page', () => {
           },
         });
       }
-      if (url === '/api/v2/acme/chat/sessions/3') {
+      if (url === '/api/v2/~/chat/sessions/3') {
         return Promise.resolve({
           data: {
             success: true,
@@ -1024,7 +1024,7 @@ describe('Chat page', () => {
       if (String(url).includes('/models/routable')) {
         return Promise.resolve(routableResponse(makeRoutableTwo()));
       }
-      if (url === '/api/v2/acme/chat/sessions') {
+      if (url === '/api/v2/~/chat/sessions') {
         return Promise.resolve({
           data: {
             success: true,
@@ -1041,7 +1041,7 @@ describe('Chat page', () => {
           },
         });
       }
-      if (url === '/api/v2/acme/chat/sessions/3') {
+      if (url === '/api/v2/~/chat/sessions/3') {
         return Promise.resolve({
           data: {
             success: true,

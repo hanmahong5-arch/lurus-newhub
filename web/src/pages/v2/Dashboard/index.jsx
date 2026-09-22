@@ -558,7 +558,7 @@ const HFDashboard = () => {
       {showOnboarding && (
         <OnboardingCurlBlock
           username={me?.username}
-          tenantSlug={tenantSlug}
+          tenantSlug={me?.tenant_slug}
           model={onboardingModel?.id}
           resolved={onboardingModelsResolved}
           error={onboardingModelsError}

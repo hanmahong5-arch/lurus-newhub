@@ -1430,10 +1430,15 @@ components:
       name: tenant_slug
       in: path
       required: true
-      description: Tenant identifier (slug)
+      description: >-
+        Tenant identifier (slug). On routes behind TenantSlugGuard the
+        reserved value `~` means "the tenant this session authenticated into";
+        the server resolves it from the session, and it is what the console
+        sends. An explicit slug must equal that tenant (403 TENANT_MISMATCH
+        otherwise). `GET /user/me` reports the real slug as `tenant_slug`.
       schema:
         type: string
-        pattern: '^[a-z0-9-]+$'
+        pattern: '^([a-z0-9-]+|~)$'
         example: lurus
     Page:
       name: page

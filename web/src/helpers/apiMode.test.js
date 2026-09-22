@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 
 import {
   isV2Mode,
@@ -24,7 +24,7 @@ import {
   setTenantSlug,
   clearTenantSlug,
   v2Url,
-  ensureTenantSlug,
+  SELF_TENANT_SLUG,
 } from './apiMode';
 
 // These helpers persist their one piece of state in jsdom's localStorage
@@ -68,102 +68,30 @@ describe('tenant slug helpers (apiMode)', () => {
 describe('v2Url', () => {
   afterEach(() => clearTenantSlug());
 
-  it('builds the path using the configured tenant slug', () => {
-    setTenantSlug('acme');
-    expect(v2Url('/tokens?p=1&size=10')).toBe(
-      '/api/v2/acme/tokens?p=1&size=10',
-    );
+  // The server resolves the alias from the session
+  // (internal/adapter/middleware/tenant_scope.go SelfTenantSlug); the two
+  // spellings must agree or every console request 404s.
+  it('uses the self-tenant alias the server resolves', () => {
+    expect(SELF_TENANT_SLUG).toBe('~');
+    expect(v2Url('/tokens?p=1&size=10')).toBe('/api/v2/~/tokens?p=1&size=10');
   });
 
-  it('invents no tenant when no slug is set', () => {
-    // It used to answer '/api/v2/lurus/tenants' — this deployment's own
-    // tenant slug, compiled into the frontend, for a browser that had never
-    // been told which tenant it belongs to. The single caller
-    // (helpers/token.js) gates on isV2Mode(), i.e. "a slug is stored", so
-    // this path is not one a request travels; what matters is that no
-    // deployment-specific name is minted here.
+  it('ignores whatever slug a login stored', () => {
+    // A stored slug is display-only. It used to be the routing value, and a
+    // stale or missing one (2026-09-10, 2026-09-22) broke every panel.
+    setTenantSlug('acme');
+    expect(v2Url('/tokens')).toBe('/api/v2/~/tokens');
+  });
+
+  it('never builds an empty tenant segment', () => {
+    // '/api/v2//x' is collapsed by nginx merge_slashes into '/api/v2/x', a
+    // different platform-scoped route.
     clearTenantSlug();
-    expect(v2Url('/tenants')).not.toContain('lurus');
-    expect(v2Url('/tenants')).toBe('/api/v2//tenants');
+    expect(v2Url('/tenants')).toBe('/api/v2/~/tenants');
+    expect(v2Url('/tenants')).not.toContain('//');
   });
 
   it('appends an empty path segment unchanged', () => {
-    setTenantSlug('acme');
-    expect(v2Url('')).toBe('/api/v2/acme');
-  });
-});
-
-// GET /api/v2/auth/session-info is the console's only way to learn its own
-// routing slug that does not depend on a platform cookie — see
-// handler/oauth.go GetSessionInfo, which resolves it from the user's tenant
-// when the session does not carry one.
-describe('ensureTenantSlug', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    vi.stubGlobal('fetch', vi.fn());
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    clearTenantSlug();
-  });
-
-  const answers = (slug, ok = true) =>
-    fetch.mockResolvedValue({
-      ok,
-      json: async () => ({ success: true, data: { tenant_slug: slug } }),
-    });
-
-  it('returns the stored slug without asking the server', async () => {
-    setTenantSlug('acme');
-    await expect(ensureTenantSlug()).resolves.toBe('acme');
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it('asks the server when nothing is stored, and stores the answer', async () => {
-    answers('lurus');
-    await expect(ensureTenantSlug()).resolves.toBe('lurus');
-    expect(getTenantSlug()).toBe('lurus');
-    expect(String(fetch.mock.calls[0][0])).toContain(
-      '/api/v2/auth/session-info',
-    );
-  });
-
-  it('re-asks under force, because the stored slug is what was just rejected', async () => {
-    setTenantSlug('default');
-    answers('lurus');
-    await expect(ensureTenantSlug({ force: true })).resolves.toBe('lurus');
-    expect(getTenantSlug()).toBe('lurus');
-  });
-
-  it('collapses concurrent callers into a single request', async () => {
-    answers('lurus');
-    const all = await Promise.all([
-      ensureTenantSlug(),
-      ensureTenantSlug(),
-      ensureTenantSlug(),
-    ]);
-    expect(all).toEqual(['lurus', 'lurus', 'lurus']);
-    expect(fetch).toHaveBeenCalledTimes(1);
-  });
-
-  it('answers "" — and stores nothing — when the session is not valid', async () => {
-    fetch.mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
-    await expect(ensureTenantSlug()).resolves.toBe('');
-    expect(getTenantSlug()).toBe('');
-  });
-
-  it('answers "" when the request itself fails', async () => {
-    fetch.mockRejectedValue(new Error('offline'));
-    await expect(ensureTenantSlug()).resolves.toBe('');
-    expect(getTenantSlug()).toBe('');
-  });
-
-  it('releases the in-flight slot after a failure, so a later call can retry', async () => {
-    fetch.mockRejectedValueOnce(new Error('offline'));
-    await expect(ensureTenantSlug()).resolves.toBe('');
-    answers('lurus');
-    await expect(ensureTenantSlug()).resolves.toBe('lurus');
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(v2Url('')).toBe('/api/v2/~');
   });
 });

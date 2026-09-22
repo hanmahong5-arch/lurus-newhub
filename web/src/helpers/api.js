@@ -25,7 +25,7 @@ import {
 } from './utils';
 import axios from 'axios';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
-import { setTenantSlug, ensureTenantSlug } from './apiMode';
+import { setTenantSlug } from './apiMode';
 
 export let API = axios.create({
   baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
@@ -221,45 +221,11 @@ function addResponseInterceptor(instance) {
           }
         }
       }
-      // Tenant-slug self-heal. The slug in a v2 path comes from this
-      // browser's own storage, put there by whichever login established the
-      // session — or from the placeholder, when no login ever wrote one.
-      // Either way the server has just said no tenant carries it, so
-      // re-resolve the slug and replay the request against the answer. Once
-      // per request; if the slug cannot be resolved the normal handler
-      // takes over.
-      //
-      // It re-resolves rather than re-bootstrapping. This error code says
-      // "the slug is wrong", not "the session is gone": routing it through
-      // the bridge meant a browser whose platform cookie had expired paid a
-      // 401 (and eventually a 429) for every panel that reported a slug
-      // problem, and never repaired the slug at all, because the only way
-      // it could learn one was through a login it could no longer perform.
-      // GET /api/v2/auth/session-info needs nothing but the newhub session
-      // cookie the failing request already carried.
-      if (
-        error.response?.status === 404 &&
-        error.response?.data?.error_code === 'TENANT_NOT_FOUND' &&
-        config &&
-        !config._retriedAfterSlugRepair &&
-        /^\/api\/v2\/[^/]+\//.test(String(config.url || ''))
-      ) {
-        try {
-          // force: the stored slug is exactly what the server just rejected.
-          const slug = await ensureTenantSlug({ force: true });
-          if (slug) {
-            config._retriedAfterSlugRepair = true;
-            config.skipErrorHandler = true;
-            config.url = String(config.url).replace(
-              /^\/api\/v2\/[^/]+\//,
-              `/api/v2/${slug}/`,
-            );
-            return await instance(config);
-          }
-        } catch (e) {
-          // Resolution declined, or the replay failed too — fall through.
-        }
-      }
+      // There is no tenant-slug repair here any more. Console paths carry the
+      // self-tenant alias (helpers/apiMode.js SELF_TENANT_SLUG), which the
+      // server resolves from the session, so a 404 TENANT_NOT_FOUND now means
+      // the caller's own tenant row is gone — nothing a re-resolved slug and
+      // a replay could fix.
       showError(error);
       return Promise.reject(error);
     },

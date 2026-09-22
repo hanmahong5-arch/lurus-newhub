@@ -129,7 +129,7 @@ describe('Models page', () => {
     });
     // Last call must target the correct tenant slug.
     const lastCall = API.get.mock.calls.at(-1);
-    expect(lastCall[0]).toContain('/api/v2/acme/models');
+    expect(lastCall[0]).toContain('/api/v2/~/models');
 
     // All 3 model names should appear
     await waitFor(() => {
@@ -461,7 +461,7 @@ describe('Models page', () => {
     });
 
     const [url, body] = API.post.mock.calls[0];
-    expect(url).toContain('/api/v2/acme/models');
+    expect(url).toContain('/api/v2/~/models');
     expect(body.model_name).toBe('my-model');
   });
 

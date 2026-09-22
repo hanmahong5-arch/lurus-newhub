@@ -151,7 +151,7 @@ describe('Pricing page', () => {
     render(<PricingPage />);
 
     await waitFor(() => {
-      expect(API.get).toHaveBeenCalledWith('/api/v2/acme/pricing');
+      expect(API.get).toHaveBeenCalledWith('/api/v2/~/pricing');
     });
 
     await waitFor(() => {
@@ -208,7 +208,7 @@ describe('Pricing page', () => {
     // read from the last GET response (data.version === 5).
     await waitFor(() => {
       expect(API.post).toHaveBeenCalledWith(
-        '/api/v2/acme/pricing',
+        '/api/v2/~/pricing',
         expect.arrayContaining([
           expect.objectContaining({ model_name: 'model-a', model_ratio: 3.0 }),
         ]),
@@ -316,7 +316,7 @@ describe('Pricing page', () => {
 
     await waitFor(() => {
       expect(API.post).toHaveBeenCalledWith(
-        '/api/v2/acme/pricing/preview',
+        '/api/v2/~/pricing/preview',
         expect.arrayContaining([
           expect.objectContaining({ model_name: 'model-a' }),
           expect.objectContaining({ model_name: 'model-b' }),
@@ -419,7 +419,7 @@ describe('Pricing page', () => {
 
     await waitFor(() => {
       expect(API.post).toHaveBeenCalledWith(
-        '/api/v2/acme/pricing',
+        '/api/v2/~/pricing',
         expect.arrayContaining([
           expect.objectContaining({
             model_name: 'model-a',
@@ -469,7 +469,7 @@ describe('Pricing page', () => {
 
     await waitFor(() => {
       expect(API.post).toHaveBeenCalledWith(
-        '/api/v2/acme/pricing',
+        '/api/v2/~/pricing',
         expect.arrayContaining([
           expect.objectContaining({
             model_name: 'model-a',

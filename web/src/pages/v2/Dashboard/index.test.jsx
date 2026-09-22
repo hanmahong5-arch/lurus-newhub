@@ -136,7 +136,7 @@ describe('Dashboard page — KPI cards read lowercase keys', () => {
 });
 
 describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
-  it('fetches /api/v2/acme/user/me and /api/v2/acme/logs', async () => {
+  it('fetches /api/v2/~/user/me and /api/v2/~/logs', async () => {
     API.get
       .mockResolvedValueOnce({ data: { success: true, data: makeMe() } })
       .mockResolvedValueOnce({
@@ -148,8 +148,8 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
 
     await waitFor(() => {
       const calls = API.get.mock.calls.map((c) => c[0]);
-      expect(calls.some((u) => u.includes('/api/v2/acme/user/me'))).toBe(true);
-      expect(calls.some((u) => u.includes('/api/v2/acme/logs'))).toBe(true);
+      expect(calls.some((u) => u.includes('/api/v2/~/user/me'))).toBe(true);
+      expect(calls.some((u) => u.includes('/api/v2/~/logs'))).toBe(true);
     });
   });
 
@@ -198,6 +198,23 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
     render(React.createElement(HFDashboard));
 
     await waitFor(() => screen.getByText(/0 tokens/));
+  });
+
+  // Requests go to /api/v2/~/..., so the tenant the page names on screen has
+  // to come from the server (user/me tenant_slug), never from the path.
+  it('names the tenant user/me reports, not the path alias', async () => {
+    API.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: makeMe({ token_count: 0, tenant_slug: 'lurus' }),
+      },
+    });
+
+    render(React.createElement(HFDashboard));
+
+    const title = await waitFor(() => screen.getByText(/0 tokens/));
+    expect(title.textContent).toContain('lurus');
+    expect(title.textContent).not.toContain('~');
   });
 
   // L1 (cycle-11): the onboarding curl's "model" field used to be a

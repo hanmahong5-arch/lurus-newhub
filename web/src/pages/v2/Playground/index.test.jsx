@@ -192,7 +192,7 @@ describe('Playground page', () => {
     expect(usr.value).toBe('list 3 primes');
   });
 
-  // 2. Click "run all 3" → POST /api/v2/acme/playground/run with current
+  // 2. Click "run all 3" → POST /api/v2/~/playground/run with current
   //    form state; response items render into 3 columns by index order.
   it('runs fan-out and renders 3 columns', async () => {
     API.post.mockResolvedValueOnce(
@@ -229,7 +229,7 @@ describe('Playground page', () => {
       expect(API.post).toHaveBeenCalledTimes(1);
     });
     const [url, body] = API.post.mock.calls[0];
-    expect(url).toBe('/api/v2/acme/playground/run');
+    expect(url).toBe('/api/v2/~/playground/run');
     expect(body.models).toEqual(['rt-alpha', 'rt-beta', 'rt-gamma']);
     expect(body.user).toMatch(/capital of Australia/);
 
@@ -392,7 +392,7 @@ describe('Playground page', () => {
       expect(API.post).toHaveBeenCalledTimes(1);
     });
     const [url, body] = API.post.mock.calls[0];
-    expect(url).toBe('/api/v2/acme/playground/presets');
+    expect(url).toBe('/api/v2/~/playground/presets');
     expect(body.name).toBe('my-save');
     await waitFor(() => {
       expect(showSuccess).toHaveBeenCalledWith('Preset saved');

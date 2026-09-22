@@ -133,10 +133,7 @@ describe('channel test button', () => {
     fireEvent.click(screen.getByTestId('test-btn-42'));
 
     await waitFor(() => {
-      expect(API.post).toHaveBeenCalledWith(
-        '/api/v2/acme/channels/42/test',
-        {},
-      );
+      expect(API.post).toHaveBeenCalledWith('/api/v2/~/channels/42/test', {});
     });
 
     await waitFor(() => {
@@ -210,7 +207,7 @@ describe('sync upstream models modal', () => {
 
     await waitFor(() => {
       expect(API.put).toHaveBeenCalledWith(
-        '/api/v2/acme/channels/99',
+        '/api/v2/~/channels/99',
         expect.objectContaining({ models: expect.stringContaining('gpt-4o') }),
       );
     });
@@ -293,7 +290,7 @@ describe('clone channel', () => {
     fireEvent.click(screen.getByText('create channel'));
     await waitFor(() => {
       expect(API.post).toHaveBeenCalledWith(
-        '/api/v2/acme/channels',
+        '/api/v2/~/channels',
         expect.objectContaining({ name: 'Cloneable copy' }),
       );
     });
@@ -323,8 +320,8 @@ describe('test all enabled channels', () => {
       );
       expect(testCalls.length).toBe(2);
     });
-    expect(API.post).toHaveBeenCalledWith('/api/v2/acme/channels/1/test', {});
-    expect(API.post).toHaveBeenCalledWith('/api/v2/acme/channels/2/test', {});
+    expect(API.post).toHaveBeenCalledWith('/api/v2/~/channels/1/test', {});
+    expect(API.post).toHaveBeenCalledWith('/api/v2/~/channels/2/test', {});
   });
 });
 

@@ -29,9 +29,12 @@ vi.mock('../../helpers', () => ({
   },
 }));
 
+const switcherProps = vi.hoisted(() => ({ current: null }));
 vi.mock('./TenantSwitcher', () => ({
-  default: () =>
-    React.createElement('div', { 'data-testid': 'tenant-switcher' }),
+  default: (props) => {
+    switcherProps.current = props;
+    return React.createElement('div', { 'data-testid': 'tenant-switcher' });
+  },
 }));
 
 vi.mock('../../hooks/common/useFormDraft', () => ({
@@ -39,6 +42,7 @@ vi.mock('../../hooks/common/useFormDraft', () => ({
 }));
 
 import HFShell, { visibleNavItems, NAV_SECTIONS } from './HFShell';
+import { API } from '../../helpers';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -639,5 +643,25 @@ describe('HFShell root-only rail entries', () => {
     ]) {
       expect(screen.getByText(label).closest('a')).toBeTruthy();
     }
+  });
+});
+
+// The switcher used to list every tenant for root and "switch" by writing
+// the chosen slug to localStorage. The server takes the tenant from the
+// session, so every request after a switch was 403 TENANT_MISMATCH
+// (reproduced on UAT 2026-09-22). It now shows the session's tenant only.
+describe('HFShell tenant switcher', () => {
+  it('offers root only its own tenant, and nothing to switch to', () => {
+    API.get.mockClear();
+    setBridgedUser(100);
+    window.localStorage.setItem('tenant_slug', 'lurus');
+    renderShell();
+
+    const urls = API.get.mock.calls.map(([u]) => String(u));
+    expect(urls.some((u) => u.includes('/api/v2/admin/tenants'))).toBe(false);
+    expect(switcherProps.current.tenants).toEqual([
+      { id: 'lurus', name: 'lurus', mode: 'Reseller' },
+    ]);
+    expect(switcherProps.current.onSelect).toBeUndefined();
   });
 });

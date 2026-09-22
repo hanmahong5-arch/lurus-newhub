@@ -29,7 +29,6 @@ import PageLayout from './components/layout/PageLayout';
 import ErrorBoundary, {
   installPreloadErrorReload,
 } from './components/common/ErrorBoundary';
-import { prepareTenantSlug } from './helpers/apiMode';
 // Importing this before render is also what puts <html lang> on the language
 // being rendered: i18n.js subscribes to languageChanged and index.html ships
 // lang="en" until then. It lives there rather than here because a module that
@@ -111,11 +110,8 @@ const app = (
   </React.StrictMode>
 );
 
-// Resolve this browser's tenant slug BEFORE the first render when a signed-in
-// shim has no slug stored. Every v2 page reads it synchronously
-// (hooks/common/useTenantSlug) and puts it in the path of its mount fetches,
-// so a slug that arrives later is a slug that arrives after the whole first
-// wave of requests has already been sent to the wrong place. Returns
-// immediately (a resolved promise) when there is nothing to resolve, and
-// never rejects — see helpers/apiMode.js prepareTenantSlug.
-prepareTenantSlug().finally(() => root.render(app));
+// No tenant resolution gates the first render: every tenant-scoped path is
+// built with the self-tenant alias (helpers/apiMode.js SELF_TENANT_SLUG),
+// which the server resolves from the session, so there is nothing the
+// browser has to learn before its first wave of requests.
+root.render(app);
