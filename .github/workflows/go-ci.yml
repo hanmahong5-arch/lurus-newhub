@@ -73,11 +73,17 @@ jobs:
           ref: e2611da1e01ef77b8227571204d6780a6364fea3
           path: _sibling/zita-sdk-go
           fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          path: _sibling/lurus-entkit
+          fetch-depth: 1
       - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
         run: |
           mkdir -p ../shared
           mv _sibling/lurus-proto-go ../shared/lurus-proto-go
           mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          mv _sibling/lurus-entkit ../shared/lurus-entkit
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         # The Go binary embeds web/dist via //go:embed (see web/embed.go).
@@ -92,20 +98,17 @@ jobs:
           go-version: '1.25.x'
           cache: true
       - run: go build ./...
-      - name: Vendor consistency + conformance gate (pkg/entverify)
-        # Guards the vendored offline entitlement-token verifier copy at
-        # internal/pkg/entverify/ against silent drift from its source of
-        # truth (lurus-platform pkg/entverify) and proves the four
-        # entitlement-token trust-boundary invariants still hold on THIS
-        # copy. Runs after setup-go (needs the Go toolchain for the second
-        # command) even though it only depends on the "Relocate sibling
-        # repos" step above — platform is not one of the checked-out
-        # siblings, so the vendor script falls back to a pinned sha256 here.
-        # See scripts/check-entverify-vendor.sh and
-        # internal/pkg/entverify/entitlement_conformance_test.go.
+      - name: Entitlement kit resolves + its verifier tests pass (lurus-entkit)
+        # The offline entitlement-token verifier behind POST /api/v2/:tenant/provision
+        # is no longer a vendored copy: it is the shared module
+        # github.com/LurusTech/lurus-entkit (replace'd to ../shared/lurus-entkit,
+        # checked out above). The signer x verifier conformance gate lives in
+        # the platform repo (internal/pkg/entsign, -tags=entitlement_token_gate);
+        # here we prove the exact kit revision this build links still passes
+        # its own verifier suite, so a broken mirror cannot ship silently.
         run: |
-          bash scripts/check-entverify-vendor.sh
-          go test -tags=entitlement_token_gate ./internal/pkg/entverify/ -run EntitlementTokenConformance -v
+          go list -m github.com/LurusTech/lurus-entkit
+          (cd ../shared/lurus-entkit && go test ./entverify/)
 
   coverage-gate:
     name: coverage gate (app/repo/handler baselines)

@@ -15,7 +15,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
-	"github.com/LurusTech/lurus-hub/internal/pkg/entverify"
+	"github.com/LurusTech/lurus-entkit/entverify"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

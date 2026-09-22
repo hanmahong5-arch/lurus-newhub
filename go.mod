@@ -83,6 +83,7 @@ require (
 )
 
 require (
+	github.com/LurusTech/lurus-entkit v0.0.0
 	github.com/LurusTech/lurus-proto-go v0.0.0
 	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect
 	github.com/alibabacloud-go/debug v1.0.1 // indirect
@@ -181,3 +182,7 @@ require (
 )
 
 replace github.com/LurusTech/lurus-proto-go => ../shared/lurus-proto-go
+
+// Entitlement kit (offline verifier for POST /api/v2/:tenant/provision). Source of
+// truth: 2l-svc-platform/pkg/entkit; shared/lurus-entkit is its subtree mirror.
+replace github.com/LurusTech/lurus-entkit => ../shared/lurus-entkit
