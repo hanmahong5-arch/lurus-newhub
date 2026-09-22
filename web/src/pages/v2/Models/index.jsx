@@ -16,14 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
-import { API, isRoot, showError, showSuccess } from '../../../helpers';
+import {
+  API,
+  getServerAddress,
+  isRoot,
+  showError,
+  showSuccess,
+} from '../../../helpers';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import { useTenantModels } from '../../../hooks/models/useTenantModels';
+import { useRoutableModels } from '../../../hooks/models/useRoutableModels';
+import Marketplace from './Marketplace';
+import { buildCatalog } from './catalog';
 
 /* HiFi 7 — Models catalog. Wired to GET /api/v2/:tenant_slug/models (2026-05-19).
    Wave 3 Phase 1 (2026-05-20): add-model modal + try ↗ navigate wired.
@@ -105,7 +114,38 @@ const DRAFT_INITIAL = {
   model_price: '',
 };
 
-const STATUS_LABEL = { 1: 'active', 0: 'disabled' };
+// Root-only: the tenant allow-list state of one model (see file header).
+const Availability = ({ allowlist, id, tr }) => {
+  const state = describeModelAvailability(allowlist, id);
+  return (
+    <span
+      className={'tag' + (state === 'blocked' ? ' warn' : '')}
+      data-testid={`model-availability-${id}`}
+      data-availability={state}
+    >
+      {
+        {
+          unrestricted: tr(
+            'console.models.availability_unrestricted',
+            'tenant allow-list: unrestricted',
+          ),
+          allowed: tr(
+            'console.models.availability_allowed',
+            'on tenant allow-list',
+          ),
+          observed: tr(
+            'console.models.availability_observed',
+            'off tenant allow-list — still answers (observe mode)',
+          ),
+          blocked: tr(
+            'console.models.availability_blocked',
+            'blocked by tenant allow-list (enforce mode)',
+          ),
+        }[state]
+      }
+    </span>
+  );
+};
 
 const HFModels = () => {
   const tenantSlug = useTenantSlug();
@@ -130,15 +170,69 @@ const HFModels = () => {
     rootUser = false;
   }
 
-  const [vendor, setVendor] = useState('');
   const {
     items: models,
-    total,
-    vendorCounts,
     loading,
     error: modelsError,
     refetch: refetchModels,
-  } = useTenantModels(tenantSlug, { limit: 100, offset: 0, vendor });
+  } = useTenantModels(tenantSlug, { limit: 100, offset: 0 });
+  const { items: routable, loading: routableLoading } = useRoutableModels(
+    tenantSlug,
+    { skipErrorHandler: true },
+  );
+
+  // Prices (ratios → $/1M in catalog.js) and the caller's group multiplier.
+  const [pricing, setPricing] = useState({ rows: [], groupRatio: {} });
+  // Tokens/requests per model over 7 days. The rankings endpoint is
+  // tenant-admin gated server-side; for anyone else this stays empty and the
+  // cards read 0 rather than inventing a number.
+  const [usage, setUsage] = useState([]);
+  useEffect(() => {
+    if (!tenantSlug) return undefined;
+    let cancelled = false;
+    API.get(`/api/v2/${tenantSlug}/pricing`, { skipErrorHandler: true })
+      .then((res) => {
+        if (cancelled || !res?.data?.success) return;
+        setPricing({
+          rows: res.data.data?.pricing || [],
+          groupRatio: res.data.data?.group_ratio || {},
+        });
+      })
+      .catch(() => {});
+    API.get(`/api/v2/${tenantSlug}/analytics/rankings?by=model&hours=168`, {
+      skipErrorHandler: true,
+    })
+      .then((res) => {
+        if (!cancelled && res?.data?.success)
+          setUsage(res.data.data?.rows || []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantSlug]);
+
+  const userGroup = useMemo(() => {
+    try {
+      return (
+        JSON.parse(localStorage.getItem('user') || '{}').group || 'default'
+      );
+    } catch (_) {
+      return 'default';
+    }
+  }, []);
+  const entries = useMemo(
+    () =>
+      buildCatalog({
+        routable,
+        pricing: pricing.rows,
+        catalogue: models,
+        usage,
+        groupRatio: pricing.groupRatio[userGroup] ?? 1,
+      }),
+    [routable, pricing, models, usage, userGroup],
+  );
+  const callable = entries.filter((e) => e.routable).length;
 
   // Surface load failures as one toast per failed fetch, message from the
   // response body when the backend sent one. Before the shared hook the page
@@ -171,9 +265,6 @@ const HFModels = () => {
       if (el.open && typeof el.close === 'function') el.close();
     }
   }, [addOpen]);
-
-  // Build vendor filter pills from vendor_counts; add "all" pseudo-entry.
-  const vendorNames = Object.keys(vendorCounts).filter(Boolean).sort();
 
   // Tenant model allow-list (root only — see the file-header comment).
   // `allowlist` stays null for a non-root viewer (no fetch attempted) or on
@@ -265,7 +356,7 @@ const HFModels = () => {
         active='models'
         crumbs={[
           tr('console.nav.section_routing_models', 'routing & models'),
-          tr('console.models.crumb', 'model management'),
+          tr('console.models.market.eyebrow', 'model marketplace'),
         ]}
         actions={
           <>
@@ -299,205 +390,49 @@ const HFModels = () => {
         <div className='hf-page-head'>
           <div>
             <div className='lbl' style={{ marginBottom: 6 }}>
-              {tr('console.models.catalog', 'catalog')}
+              {tr('console.models.market.eyebrow', 'model marketplace')}
             </div>
             <h1>
-              {loading ? '…' : total}{' '}
+              {loading && routableLoading && entries.length === 0
+                ? '…'
+                : entries.length}{' '}
               <span className='muted' style={{ fontWeight: 400 }}>
                 {tr('console.models.unit_models', 'models')}
               </span>
             </h1>
+            <div className='muted' style={{ fontSize: 13, marginTop: 4 }}>
+              {tr(
+                'console.models.market.subtitle',
+                '{{n}} callable with your keys · prices per 1M tokens, after your group multiplier',
+                { n: callable },
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Vendor filter pills */}
-        <div
-          style={{
-            display: 'flex',
-            gap: 10,
-            padding: '14px 28px',
-            borderBottom: '1px solid var(--hf-rule)',
-            background: 'var(--hf-paper)',
-            alignItems: 'center',
-            flexWrap: 'wrap',
+        <Marketplace
+          entries={entries}
+          loading={loading || routableLoading}
+          tr={tr}
+          base={getServerAddress()}
+          onTry={(id) =>
+            navigate(
+              `/console/v2/playground?prefill_model=${encodeURIComponent(id)}`,
+            )
+          }
+          onKeys={() => navigate('/console/v2/token')}
+          onCopy={(text) => {
+            navigator.clipboard?.writeText(text).then(
+              () => showSuccess(tr('console.common.copied', 'copied')),
+              () => {},
+            );
           }}
-        >
-          <span className='lbl'>{tr('console.models.vendor', 'vendor')}</span>
-          <button
-            key='all'
-            type='button'
-            data-testid='vendor-filter-all'
-            onClick={() => setVendor('')}
-            className={'pill ' + (!vendor ? 'solid' : '')}
-            style={{
-              cursor: 'pointer',
-              border: '1px solid var(--hf-rule)',
-              background: !vendor ? 'var(--hf-ink)' : 'var(--hf-elev)',
-              color: !vendor ? 'var(--hf-bg)' : 'var(--hf-ink-2)',
-            }}
-          >
-            {tr('console.models.all', 'all')} ({total})
-          </button>
-          {vendorNames.map((v) => (
-            <button
-              key={v}
-              type='button'
-              data-testid={`vendor-filter-${v}`}
-              onClick={() => setVendor(v)}
-              className={'pill ' + (vendor === v ? 'solid' : '')}
-              style={{
-                cursor: 'pointer',
-                border: '1px solid var(--hf-rule)',
-                background: vendor === v ? 'var(--hf-ink)' : 'var(--hf-elev)',
-                color: vendor === v ? 'var(--hf-bg)' : 'var(--hf-ink-2)',
-              }}
-            >
-              {v} ({vendorCounts[v] ?? 0})
-            </button>
-          ))}
-        </div>
-
-        {/* Model grid */}
-        {loading ? (
-          <div
-            data-testid='models-loading'
-            style={{
-              padding: 48,
-              textAlign: 'center',
-              color: 'var(--hf-ink-2)',
-            }}
-          >
-            {tr('console.common.loading', 'loading…')}
-          </div>
-        ) : (
-          <div
-            style={{
-              padding: 24,
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: 14,
-            }}
-          >
-            {models.map((m) => (
-              <div
-                key={m.id}
-                className='panel'
-                data-testid={`model-card-${m.model_name}`}
-                style={{
-                  padding: 18,
-                  position: 'relative',
-                  overflow: 'hidden',
-                }}
-              >
-                <div className='lbl' style={{ color: 'var(--hf-ink-2)' }}>
-                  {m.vendor ||
-                    tr('console.models.unknown_vendor', 'unknown vendor')}
-                </div>
-                <div
-                  className='display'
-                  style={{
-                    fontSize: 20,
-                    marginTop: 6,
-                    letterSpacing: '-0.025em',
-                  }}
-                >
-                  {m.model_name}
-                </div>
-                <div
-                  className='muted mono'
-                  style={{ fontSize: 11, marginTop: 4 }}
-                >
-                  {tr('console.models.status', 'status')}:{' '}
-                  {STATUS_LABEL[m.status]
-                    ? tr(
-                        `console.models.status_${STATUS_LABEL[m.status]}`,
-                        STATUS_LABEL[m.status],
-                      )
-                    : m.status}
-                </div>
-
-                {/* Tenant model allow-list state — root only, see the
-                    file-header comment. `allowlist` is null for a
-                    non-root viewer or a failed fetch, so nothing renders
-                    here for them; their real state stays the status line
-                    above, which every viewer already gets. */}
-                {rootUser && allowlist && (
-                  <div
-                    data-testid={`model-availability-${m.model_name}`}
-                    data-availability={describeModelAvailability(
-                      allowlist,
-                      m.model_name,
-                    )}
-                    className='mono'
-                    style={{
-                      fontSize: 11,
-                      marginTop: 4,
-                      color:
-                        describeModelAvailability(allowlist, m.model_name) ===
-                        'blocked'
-                          ? 'var(--hf-warn)'
-                          : 'var(--hf-ink-2)',
-                    }}
-                  >
-                    {
-                      {
-                        unrestricted: tr(
-                          'console.models.availability_unrestricted',
-                          'tenant allow-list: unrestricted',
-                        ),
-                        allowed: tr(
-                          'console.models.availability_allowed',
-                          'on tenant allow-list',
-                        ),
-                        observed: tr(
-                          'console.models.availability_observed',
-                          'off tenant allow-list — still answers (observe mode)',
-                        ),
-                        blocked: tr(
-                          'console.models.availability_blocked',
-                          'blocked by tenant allow-list (enforce mode)',
-                        ),
-                      }[describeModelAvailability(allowlist, m.model_name)]
-                    }
-                  </div>
-                )}
-
-                <div style={{ display: 'flex', gap: 6, marginTop: 14 }}>
-                  {/* Playground's readURLParams (L1, cycle-11) now reads
-                      ?prefill_model= and drops it into the compare draft if
-                      it's routable — before this lane the query param was
-                      appended but Playground never read it, so "try" landed
-                      on the page's default draft, not this model. */}
-                  <button
-                    type='button'
-                    className='btn sm'
-                    data-testid={`model-try-${m.model_name}`}
-                    onClick={() =>
-                      navigate(
-                        `/console/v2/playground?prefill_model=${encodeURIComponent(m.model_name)}`,
-                      )
-                    }
-                  >
-                    {tr('console.models.try_btn', 'try')} ↗
-                  </button>
-                </div>
-              </div>
-            ))}
-            {models.length === 0 && !loading && (
-              <div
-                data-testid='models-empty'
-                style={{
-                  gridColumn: '1/-1',
-                  padding: 48,
-                  textAlign: 'center',
-                  color: 'var(--hf-ink-2)',
-                }}
-              >
-                {tr('console.models.empty', 'no models yet')}
-              </div>
-            )}
-          </div>
-        )}
+          availabilityFor={
+            rootUser && allowlist
+              ? (id) => <Availability allowlist={allowlist} id={id} tr={tr} />
+              : undefined
+          }
+        />
       </HFShell>
 
       {/* ── Add Model dialog ─────────────────────────────────────────────── */}
