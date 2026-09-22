@@ -1175,3 +1175,19 @@ html[lang^='zh'] .hf-side .nav-h {
   --hf-series-6: #2fb3b3;
   --hf-series-other: #6f6a5c;
 }
+
+/* Collapsible sidebar section heading (HfNav.jsx) — reads as .nav-h, acts
+ * as a button. */
+.hf-side .nav-h-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+.hf-side .nav-h-toggle:hover {
+  color: var(--hf-ink-2);
+}

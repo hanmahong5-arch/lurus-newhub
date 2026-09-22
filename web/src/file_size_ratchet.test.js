@@ -45,7 +45,9 @@ const CEILINGS = {
   // shared one in hooks/common/useTenantSlug.js.
   // 948 → 887 (2026-09-22): the root tenant list and its localStorage
   // "switch" went — the server never followed it (403 TENANT_MISMATCH).
-  'components/hifi/HFShell.jsx': 887,
+  // 887 → 843 (2026-09-22 cycle-15 P4): nav section/item rendering moved to
+  // components/hifi/HfNav.jsx with the collapsible admin sections.
+  'components/hifi/HFShell.jsx': 843,
   'components/settings/AuthSettingPage.jsx': 1086,
   'components/settings/SystemSetting.jsx': 1490,
   'components/settings/personal/cards/NotificationSettings.jsx': 930,
@@ -58,7 +60,7 @@ const CEILINGS = {
   'pages/v2/Chat/index.jsx': 879,
   'pages/v2/Dashboard/index.jsx': 1190, // 1242 → 1190 (cycle-15 P3): daily bucketing moved to components/hifi/activitySeries.js
   'pages/v2/Flows/index.jsx': 1446,
-  'pages/v2/Log/index.jsx': 1731, // +5 (cycle-15 P1): vendor logo in both model cells + status column moved beside the time
+  'pages/v2/Log/index.jsx': 1684, // 1731 → 1684 (cycle-15 P4): stat header extracted to Log/StatHeader.jsx
   'pages/v2/Playground/index.jsx': 1084,
   'pages/v2/Pricing/index.jsx': 805, // +4 (cycle-15 P1): vendor logo in the model cell
   'pages/v2/Settings/index.jsx': 1909,

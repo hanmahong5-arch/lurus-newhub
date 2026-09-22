@@ -53,6 +53,7 @@ import {
   LuZap,
 } from 'react-icons/lu';
 import TenantSwitcher from './TenantSwitcher';
+import { HfNavItem, HfNavSection, useNavSections } from './HfNav';
 import { API } from '../../helpers';
 import { clearAllDrafts } from '../../hooks/common/useFormDraft';
 import { readTenantSlug } from '../../hooks/common/useTenantSlug';
@@ -326,6 +327,7 @@ export const NAV_SECTIONS = [
   },
   {
     h: 'governance',
+    collapsible: true,
     hKey: 'console.nav.section_governance',
     minRole: 10,
     items: [
@@ -413,6 +415,7 @@ export const NAV_SECTIONS = [
   },
   {
     h: 'operations & insights',
+    collapsible: true,
     hKey: 'console.nav.section_operations',
     minRole: 10,
     items: [
@@ -626,6 +629,7 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
   const currentTenant = useCurrentTenant(user);
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = () => setNavOpen(false);
+  const [isSectionOpen, toggleSection] = useNavSections();
   const navigate = useNavigate();
   const tasksFeatureEnabled = navItemEnabledByFeatureFlags('mj-logs');
 
@@ -690,73 +694,25 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
         </button>
 
         {visibleNavItems(user).map((s) => (
-          <div className='nav-section' key={s.h}>
-            <div className='nav-h'>{t(s.hKey, s.h)}</div>
+          <HfNavSection
+            key={s.h}
+            s={s}
+            t={t}
+            open={isSectionOpen(s, activeId)}
+            onToggle={toggleSection}
+          >
             {s.items
               .filter((it) => it.id !== 'mj-logs' || tasksFeatureEnabled)
-              .map((it) => {
-                const className =
-                  'nav-i' + (activeId === it.id ? ' active' : '');
-                const Glyph = it.glyph;
-                const inner = (
-                  <>
-                    <span className='nav-glyph' aria-hidden='true'>
-                      <Glyph size={14} />
-                    </span>
-                    <span className='nav-label'>
-                      {t(it.key, it.label)}
-                      {it.legacyBridge && (
-                        <span
-                          className='nav-legacy-tag'
-                          data-testid={`nav-legacy-tag-${it.id}`}
-                          title={t(
-                            'console.nav.legacy_hint',
-                            'opens the legacy console page, not this v2 shell',
-                          )}
-                        >
-                          {' '}
-                          ↗
-                        </span>
-                      )}
-                    </span>
-                    {it.badge && <span className='nav-badge'>{it.badge}</span>}
-                  </>
-                );
-                // Deferred surfaces render as a non-interactive, greyed entry
-                // carrying an honest reason — never a dead link.
-                if (it.disabled) {
-                  return (
-                    <div
-                      key={it.id}
-                      className={className}
-                      data-testid={`nav-disabled-${it.id}`}
-                      aria-disabled='true'
-                      title={t(
-                        it.titleKey,
-                        it.title || 'not available in v2 yet',
-                      )}
-                      style={{ opacity: 0.4, cursor: 'not-allowed' }}
-                    >
-                      {inner}
-                    </div>
-                  );
-                }
-                return it.href ? (
-                  <Link
-                    key={it.id}
-                    to={it.href}
-                    className={className}
-                    onClick={closeNav}
-                  >
-                    {inner}
-                  </Link>
-                ) : (
-                  <div key={it.id} className={className}>
-                    {inner}
-                  </div>
-                );
-              })}
-          </div>
+              .map((it) => (
+                <HfNavItem
+                  key={it.id}
+                  it={it}
+                  t={t}
+                  active={activeId === it.id}
+                  onNavigate={closeNav}
+                />
+              ))}
+          </HfNavSection>
         ))}
 
         <div className='footer'>
