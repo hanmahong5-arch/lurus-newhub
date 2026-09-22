@@ -1038,3 +1038,119 @@ html[lang^='zh'] .hf-side .nav-h {
 .hf table.t td {
   word-break: keep-all;
 }
+
+/* ── Shared primitives (cycle 15) ──────────────────────────────────────────
+ * Pages inlined their own input/code/drawer styles (Channel's inputStyle is
+ * the fourth copy). New surfaces use these instead. */
+.hf .hf-input {
+  font-family: var(--hf-sans);
+  font-size: 13px;
+  padding: 7px 10px;
+  border: 1px solid var(--hf-rule);
+  background: var(--hf-elev);
+  color: var(--hf-ink);
+  border-radius: 6px;
+  outline: none;
+}
+.hf .hf-input:focus {
+  border-color: var(--hf-accent);
+  box-shadow: 0 0 0 3px var(--hf-focus);
+}
+.hf .hf-code {
+  margin: 8px 0 0;
+  padding: 14px 16px;
+  background: var(--hf-code-bg);
+  color: var(--hf-code-ink);
+  font-family: var(--hf-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.hf .truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hf .hf-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--hf-rule);
+  border-radius: 8px;
+  background: var(--hf-sunken);
+}
+.hf .hf-seg .btn {
+  border-color: transparent;
+}
+
+/* Right-hand detail drawer over a dimmed page (model marketplace). */
+.hf .hf-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(10, 9, 8, 0.28);
+  display: flex;
+  justify-content: flex-end;
+}
+.hf .hf-drawer {
+  width: min(560px, 100vw);
+  height: 100%;
+  overflow-y: auto;
+  background: var(--hf-paper);
+  border-left: 1px solid var(--hf-rule);
+  box-shadow: -12px 0 32px rgba(10, 9, 8, 0.12);
+  padding: 24px 26px 40px;
+  animation: hf-drawer-in 0.18s ease-out;
+}
+@keyframes hf-drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* Model marketplace: facet rail + results (openrouter.ai/models layout). */
+.hf .hf-market {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 28px;
+  padding: 22px 28px 40px;
+  align-items: start;
+}
+.hf .hf-market-rail {
+  position: sticky;
+  top: 12px;
+}
+.hf .hf-market-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.hf .hf-model-card {
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease,
+    transform 0.12s ease;
+}
+.hf .hf-model-card:hover,
+.hf .hf-model-card:focus-visible {
+  border-color: var(--hf-rule-strong);
+  box-shadow: 0 6px 18px rgba(10, 9, 8, 0.06);
+  transform: translateY(-1px);
+  outline: none;
+}
+@media (max-width: 960px) {
+  .hf .hf-market {
+    grid-template-columns: 1fr;
+  }
+  .hf .hf-market-rail {
+    position: static;
+  }
+}
