@@ -54,13 +54,13 @@ const CEILINGS = {
   'pages/Setting/Ratio/UpstreamRatioSync.jsx': 873,
   'pages/v2/Admin/ModelRateLimits/index.jsx': 915,
   'pages/v2/Billing/index.jsx': 833, // redeemFailure() extracted to Billing/redeemFailure.js (cycle-13 hand-finish)
-  'pages/v2/Channel/index.jsx': 1906,
+  'pages/v2/Channel/index.jsx': 1908, // +2 (cycle-15 P1): import of the extracted ChannelTypeLabel/ChannelTypeSelect (components/hifi/HfModelName.jsx)
   'pages/v2/Chat/index.jsx': 879,
   'pages/v2/Dashboard/index.jsx': 1242, // +4 (cycle-13 hand-finish): pre-settle caption — one const and a three-line rationale
   'pages/v2/Flows/index.jsx': 1446,
-  'pages/v2/Log/index.jsx': 1726,
+  'pages/v2/Log/index.jsx': 1731, // +5 (cycle-15 P1): vendor logo in both model cells + status column moved beside the time
   'pages/v2/Playground/index.jsx': 1084,
-  'pages/v2/Pricing/index.jsx': 801,
+  'pages/v2/Pricing/index.jsx': 805, // +4 (cycle-15 P1): vendor logo in the model cell
   'pages/v2/Settings/index.jsx': 1909,
   'pages/v2/Tenants/index.jsx': 995,
   'pages/v2/Token/index.jsx': 1671,

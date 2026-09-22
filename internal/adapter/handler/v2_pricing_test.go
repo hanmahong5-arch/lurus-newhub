@@ -373,3 +373,58 @@ func TestGetPricingV2_ContextTiersPrefill(t *testing.T) {
 		t.Errorf("%s: context_tiers = %v, want omitted (no configured entry)", withoutTiers, withoutRow["context_tiers"])
 	}
 }
+
+// 7. OutputPriceAndMetadata — the row carries completion_ratio (the output
+// price multiplier) and the model's catalogue description. The v2 projection
+// used to drop both, so the console's pricing page showed an empty
+// "completion ratio" column and could never state an output price.
+func TestGetPricingV2_CompletionRatioAndDescription(t *testing.T) {
+	ctx := setupPricingRouter(t)
+	if err := ctx.db.AutoMigrate(&repo.Model{}); err != nil {
+		t.Fatalf("migrate models: %v", err)
+	}
+
+	model := "c15-output-price-model"
+	ch := &repo.Channel{Type: 1, Status: common.ChannelStatusEnabled, Name: "c15-output-price-channel", Models: model, Group: "default"}
+	if err := ctx.db.Create(ch).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := ctx.db.Create(&repo.Ability{Group: "default", Model: model, ChannelId: ch.Id, Enabled: true}).Error; err != nil {
+		t.Fatalf("seed ability: %v", err)
+	}
+	if err := ctx.db.Create(&repo.Model{ModelName: model, Description: "a model for the output-price oracle", Status: 1}).Error; err != nil {
+		t.Fatalf("seed model meta: %v", err)
+	}
+
+	prev, _ := json.Marshal(ratio_setting.GetCompletionRatioMap())
+	t.Cleanup(func() {
+		_ = ratio_setting.UpdateCompletionRatioByJSONString(string(prev))
+		repo.InvalidatePricingCache()
+	})
+	if err := ratio_setting.UpdateCompletionRatioByJSONString(`{"` + model + `":3.5}`); err != nil {
+		t.Fatalf("seed completion ratio: %v", err)
+	}
+	repo.InvalidatePricingCache()
+
+	w := getPricing(ctx, ctx.tenantSlug)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	data, _ := parsePricing(t, w)["data"].(map[string]interface{})
+	rows, _ := data["pricing"].([]interface{})
+	var row map[string]interface{}
+	for _, r := range rows {
+		if m, _ := r.(map[string]interface{}); m != nil && m["model_name"] == model {
+			row = m
+		}
+	}
+	if row == nil {
+		t.Fatalf("no pricing row for %q, rows: %v", model, rows)
+	}
+	if cr, _ := row["completion_ratio"].(float64); cr != 3.5 {
+		t.Errorf("completion_ratio = %v, want 3.5", row["completion_ratio"])
+	}
+	if row["description"] != "a model for the output-price oracle" {
+		t.Errorf("description = %v, want the catalogue description", row["description"])
+	}
+}

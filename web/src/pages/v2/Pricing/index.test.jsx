@@ -21,6 +21,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 
 // Mock helpers BEFORE importing the component.
+vi.mock('@lobehub/icons', () => ({}));
+
 vi.mock('../../../helpers', () => ({
   API: {
     get: vi.fn(),

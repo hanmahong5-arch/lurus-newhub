@@ -69,6 +69,13 @@ func GetPricingV2(c *gin.Context) {
 		QuotaType  interface{} `json:"quota_type"`
 		ModelRatio interface{} `json:"model_ratio"`
 		ModelPrice interface{} `json:"model_price"`
+		// Output price multiplier. Without it the console's pricing page
+		// showed an empty "completion ratio" column and could not state an
+		// output price at all — the catalogue already carries it.
+		CompletionRatio float64 `json:"completion_ratio"`
+		Description     string  `json:"description,omitempty"`
+		Icon            string  `json:"icon,omitempty"`
+		Tags            string  `json:"tags,omitempty"`
 		// CacheRatio is nil (omitted) when the live cache_ratio map has no
 		// entry for this model; when present it can be either an admin edit
 		// or one of ratio_setting's shipped defaultCacheRatio entries seeded
@@ -101,6 +108,10 @@ func GetPricingV2(c *gin.Context) {
 			QuotaType:              p.QuotaType,
 			ModelRatio:             p.ModelRatio,
 			ModelPrice:             p.ModelPrice,
+			CompletionRatio:        p.CompletionRatio,
+			Description:            p.Description,
+			Icon:                   p.Icon,
+			Tags:                   p.Tags,
 			EnableGroups:           p.EnableGroup,
 			SupportedEndpointTypes: p.SupportedEndpointTypes,
 		}

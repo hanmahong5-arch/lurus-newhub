@@ -470,7 +470,8 @@
         "multi_key_deferred": "multi-key management needs a backend key-pool model — deferred",
         "confirm_delete_title": "Delete channel \"{{name}}\"?",
         "confirm_delete_route": "Requests will stop routing through this channel",
-        "confirm_irreversible": "This action cannot be undone"
+        "confirm_irreversible": "This action cannot be undone",
+        "field_type_named": "provider type"
       },
       "log": {
         "crumb": "usage & logs",
@@ -1448,7 +1449,8 @@
         "col_quota_share": "spend share",
         "total_tokens_in_window": "total tokens in window",
         "scope_tenant": "this tenant",
-        "scope_all": "all tenants"
+        "scope_all": "all tenants",
+        "unnamed": "unresolved (request refused before routing)"
       },
       "palette": {
         "group_navigate": "navigate",

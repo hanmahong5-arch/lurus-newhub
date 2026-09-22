@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfModelName from '../../../components/hifi/HfModelName';
 import { API, showError, showSuccess } from '../../../helpers';
 import useFormDraft from '../../../hooks/common/useFormDraft';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
@@ -388,7 +389,10 @@ const PricingPage = () => {
                     <React.Fragment key={row.model_name ?? i}>
                       <tr>
                         <td className='strong mono' style={{ fontSize: 12 }}>
-                          {row.model_name}
+                          <HfModelName
+                            model={row.model_name}
+                            vendor={row.vendor}
+                          />
                         </td>
                         <td>{row.vendor ?? '—'}</td>
                         <td>

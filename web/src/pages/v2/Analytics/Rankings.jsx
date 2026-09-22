@@ -22,6 +22,7 @@ import HFShell from '../../../components/hifi/HFShell';
 import { API, isRoot } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
+import HfVendorIcon from '../../../components/hifi/HfVendorIcon';
 
 /*
  * v2 tenant-admin — Model / vendor / group performance rankings leaderboard.
@@ -355,7 +356,36 @@ const HFRankings = () => {
                     {rows.map((r) => (
                       <tr key={r.name} data-testid='rankings-row'>
                         <td style={tdStyle}>{r.rank}</td>
-                        <td style={tdStyle}>{r.name}</td>
+                        <td style={tdStyle} data-testid='rankings-name'>
+                          {/* Requests refused before a model was resolved
+                              log an empty model name; they rank as one
+                              blank-named row unless it is labelled. */}
+                          {r.name ? (
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 8,
+                              }}
+                            >
+                              {by !== 'group' && (
+                                <HfVendorIcon
+                                  size={16}
+                                  model={by === 'model' ? r.name : undefined}
+                                  vendor={by === 'vendor' ? r.name : undefined}
+                                />
+                              )}
+                              {r.name}
+                            </span>
+                          ) : (
+                            <span className='muted'>
+                              {tr(
+                                'console.rankings.unnamed',
+                                'unresolved (request refused before routing)',
+                              )}
+                            </span>
+                          )}
+                        </td>
                         <td style={tdStyle}>
                           <Trend row={r} />
                         </td>

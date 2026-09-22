@@ -1000,3 +1000,41 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── CJK typography (cycle 15, D1/D2) ──────────────────────────────────────
+ * The label ramp (.lbl / .tag / th / .nav-h) is an uppercase-mono treatment
+ * designed for Latin: 9–10px JetBrains Mono tracked 0.08–0.16em. Applied to
+ * Chinese it tracked every glyph apart ("我 的 账 户") and set CJK at 9px,
+ * falling back through the mono stack to a system face anyway. Under a zh
+ * <html lang> (kept current by i18n/i18n.js) the same roles use the sans
+ * stack at a legible size with no tracking; Latin keeps its treatment.
+ */
+html[lang^='zh'] .hf .lbl,
+html[lang^='zh'] .hf .tag,
+html[lang^='zh'] .hf table.t th,
+html[lang^='zh'] .hf-side .nav-h {
+  font-family: var(--hf-sans);
+  letter-spacing: 0.02em;
+}
+html[lang^='zh'] .hf .lbl,
+html[lang^='zh'] .hf table.t th {
+  font-size: 12px;
+}
+html[lang^='zh'] .hf .tag,
+html[lang^='zh'] .hf-side .nav-h {
+  font-size: 11px;
+}
+
+/* Column headers, tags and status pills never break mid-word: a narrow
+ * column used to stack "上游" / "错误" one glyph per line (Log page). A table
+ * inside .hf-table-scroll already scrolls sideways, so its cells stay on one
+ * line too — breaking "18:27:56" or "$0.0001" in the middle is worse than a
+ * horizontal scroll. CJK text elsewhere keeps words whole. */
+.hf table.t th,
+.hf .tag,
+.hf .hf-table-scroll table.t td {
+  white-space: nowrap;
+}
+.hf table.t td {
+  word-break: keep-all;
+}
