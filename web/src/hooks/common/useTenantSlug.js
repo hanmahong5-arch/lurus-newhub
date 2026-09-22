@@ -19,17 +19,33 @@ For commercial licensing, please contact support@quantumnous.com
 
 import { useState } from 'react';
 
-// The slug a browser falls back to when it has never been told otherwise.
-// Not every deployment has a tenant by this name.
-export const DEFAULT_TENANT_SLUG = 'default';
+// What goes in the path when this browser has not been told its tenant.
+//
+// It used to be the literal 'default' — the *id* of the tenant both
+// deployments seed, whose routing *slug* is 'lurus'. A browser that reached
+// the console without a stored slug (the login wrote it only on the
+// bootstrap's success path) therefore asked for /api/v2/default/... and
+// TenantSlugGuard answered 404 TENANT_NOT_FOUND to every panel, while the
+// shell still rendered as signed in. Live on hub.lurus.cn, 2026-09-22: 20
+// such 404s in one browser window.
+//
+// This placeholder is not a guess at a tenant name: no row can carry it, so
+// the 404 is immediate and helpers/api.js re-resolves the slug and replays
+// the request (the repair keys on TENANT_NOT_FOUND). The empty string would
+// NOT do — nginx merge_slashes collapses /api/v2//user/me into
+// /api/v2/user/me, a different, platform-scoped route.
+//
+// In the normal case nothing is ever built from this: src/index.jsx resolves
+// the slug before the first render (helpers/apiMode.js prepareTenantSlug).
+export const UNRESOLVED_TENANT_SLUG = '-';
 
 /** The stored tenant slug, read synchronously. */
 export const readTenantSlug = () => {
   try {
-    return localStorage.getItem('tenant_slug') || DEFAULT_TENANT_SLUG;
+    return localStorage.getItem('tenant_slug') || UNRESOLVED_TENANT_SLUG;
   } catch (_) {
     // Private mode denies localStorage entirely.
-    return DEFAULT_TENANT_SLUG;
+    return UNRESOLVED_TENANT_SLUG;
   }
 };
 

@@ -55,6 +55,7 @@ import {
 import TenantSwitcher from './TenantSwitcher';
 import { API } from '../../helpers';
 import { clearAllDrafts } from '../../hooks/common/useFormDraft';
+import { readTenantSlug } from '../../hooks/common/useTenantSlug';
 import { HfToastHost } from './HfToast';
 
 // Single source of truth: pathname suffix → nav item id.
@@ -562,13 +563,10 @@ export const useBridgedUser = () => {
   return user;
 };
 
-const readTenantSlug = () => {
-  try {
-    return localStorage.getItem('tenant_slug') || 'default';
-  } catch (_) {
-    return 'default';
-  }
-};
+// readTenantSlug is imported, not redeclared: this file carried a third copy
+// of the same fallback ('default', the tenant *id* rather than its routing
+// slug) while helpers/apiMode.js had a fourth ('lurus'). One concept, one
+// answer — see hooks/common/useTenantSlug.js.
 
 const inferModeFromRole = (role) => {
   // Map v1 role ints to TenantSwitcher mode buckets.

@@ -25,7 +25,7 @@ import {
 } from './utils';
 import axios from 'axios';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
-import { setTenantSlug } from './apiMode';
+import { setTenantSlug, ensureTenantSlug } from './apiMode';
 
 export let API = axios.create({
   baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
@@ -79,6 +79,32 @@ patchAPIInstance(API);
 // SINGLE bootstrap — every waiter shares it, then retries.
 let bootstrapInFlight = null;
 
+// ...but that only collapses ONE wave. The slot was cleared on failure as
+// well as on success, so each subsequent wave of reads bought its own
+// bootstrap POST against a platform session that is simply gone: live on
+// hub.lurus.cn 2026-09-22, one console window produced five 401s on
+// zita-bootstrap and then two 429s, because the server's BootstrapRateLimit
+// is 5 per 60 seconds and answers with an empty body. The window here is the
+// same 60 seconds: inside it, a bootstrap that just failed is not re-bought
+// and the caller takes the failure path immediately.
+const BOOTSTRAP_FAILURE_COOLDOWN_MS = 60_000;
+let bootstrapFailedUntil = 0;
+
+// Drop the memo. Called by updateAPI() — which runs when a login, a logout or
+// an account switch has just changed what the next bootstrap would see — and
+// by the tests, which need each case to start from a clean slot.
+export function resetBootstrapCooldown() {
+  bootstrapFailedUntil = 0;
+}
+
+function bootstrapCooldownError() {
+  const err = new Error(
+    'zita-bootstrap is in its failure cooldown — the platform session could not be re-established',
+  );
+  err.bootstrap_cooldown = true;
+  return err;
+}
+
 // Bridge refusals that are terminal for this browser: retrying the login
 // cannot clear them, an administrator has to act. Kept next to ensureSession
 // because that is where they are recognised; the login screen has the same
@@ -115,6 +141,9 @@ function withBootstrapErrorCode(error, code) {
 
 function ensureSession(instance) {
   if (!bootstrapInFlight) {
+    if (Date.now() < bootstrapFailedUntil) {
+      return Promise.reject(bootstrapCooldownError());
+    }
     bootstrapInFlight = instance
       .post('/api/v2/auth/zita-bootstrap', {}, { skipErrorHandler: true })
       .then((res) => {
@@ -125,6 +154,7 @@ function ensureSession(instance) {
           if (res.data.data.tenant_slug) {
             setTenantSlug(res.data.data.tenant_slug);
           }
+          bootstrapFailedUntil = 0;
           return res.data.data;
         }
         throw withBootstrapErrorCode(
@@ -133,6 +163,9 @@ function ensureSession(instance) {
         );
       })
       .catch((error) => {
+        // Open the cooldown here rather than in the finally, so only a
+        // FAILED bootstrap closes the door on the next wave of reads.
+        bootstrapFailedUntil = Date.now() + BOOTSTRAP_FAILURE_COOLDOWN_MS;
         throw withBootstrapErrorCode(
           error,
           error?.error_code ?? error?.response?.data?.error_code,
@@ -190,14 +223,20 @@ function addResponseInterceptor(instance) {
       }
       // Tenant-slug self-heal. The slug in a v2 path comes from this
       // browser's own storage, put there by whichever login established the
-      // session. A login before this fix stored the tenant *id* where the
-      // routing slug belonged — "default" for a tenant slugged "lurus" —
-      // and TenantSlugGuard has answered 404 TENANT_NOT_FOUND to every
-      // panel of that browser ever since, with no way for the operator to
-      // tell what went wrong. Ask the server who this session belongs to,
-      // adopt the slug it names, and replay the request against it. Once
-      // per request; if the bootstrap cannot answer (a bridge session
-      // carries no platform cookie) the normal handler takes over.
+      // session — or from the placeholder, when no login ever wrote one.
+      // Either way the server has just said no tenant carries it, so
+      // re-resolve the slug and replay the request against the answer. Once
+      // per request; if the slug cannot be resolved the normal handler
+      // takes over.
+      //
+      // It re-resolves rather than re-bootstrapping. This error code says
+      // "the slug is wrong", not "the session is gone": routing it through
+      // the bridge meant a browser whose platform cookie had expired paid a
+      // 401 (and eventually a 429) for every panel that reported a slug
+      // problem, and never repaired the slug at all, because the only way
+      // it could learn one was through a login it could no longer perform.
+      // GET /api/v2/auth/session-info needs nothing but the newhub session
+      // cookie the failing request already carried.
       if (
         error.response?.status === 404 &&
         error.response?.data?.error_code === 'TENANT_NOT_FOUND' &&
@@ -206,18 +245,19 @@ function addResponseInterceptor(instance) {
         /^\/api\/v2\/[^/]+\//.test(String(config.url || ''))
       ) {
         try {
-          const refreshed = await ensureSession(instance);
-          if (refreshed?.tenant_slug) {
+          // force: the stored slug is exactly what the server just rejected.
+          const slug = await ensureTenantSlug({ force: true });
+          if (slug) {
             config._retriedAfterSlugRepair = true;
             config.skipErrorHandler = true;
             config.url = String(config.url).replace(
               /^\/api\/v2\/[^/]+\//,
-              `/api/v2/${refreshed.tenant_slug}/`,
+              `/api/v2/${slug}/`,
             );
             return await instance(config);
           }
         } catch (e) {
-          // Bootstrap declined, or the replay failed too — fall through.
+          // Resolution declined, or the replay failed too — fall through.
         }
       }
       showError(error);
@@ -229,6 +269,9 @@ function addResponseInterceptor(instance) {
 addResponseInterceptor(API);
 
 export function updateAPI() {
+  // A login, a logout or an account switch is what calls this; whatever the
+  // last bootstrap failed at no longer describes the next one.
+  resetBootstrapCooldown();
   API = axios.create({
     baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
       ? import.meta.env.VITE_REACT_APP_SERVER_URL
