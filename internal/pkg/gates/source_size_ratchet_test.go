@@ -34,7 +34,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/channel.go":              2459,
 	"internal/adapter/handler/deployment.go":           810,
 	"internal/adapter/handler/internal_api_ext.go":     1057,
-	"internal/adapter/handler/oauth.go":                978,
+	"internal/adapter/handler/oauth.go":                997, // +19 (2026-09-22 hotfix): GetSessionInfo resolves tenant_slug from the user's tenant when the session carries none — the only path by which an already-established console session can learn its own routing slug without a re-login
 	"internal/adapter/handler/relay.go":                1014,
 	"internal/adapter/middleware/auth.go":              913, // +8 (cycle-13 hand-finish): the SDK self-heal arm now records that it registers no session-registry row; comment only
 	"internal/adapter/middleware/oidc_auth.go":         1206,
