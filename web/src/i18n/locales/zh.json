@@ -1577,6 +1577,12 @@
         "usage_ring": {
           "aria_label": "{{label}}：已使用 {{pct}}%"
         }
+      },
+      "activity": {
+        "other": "其他",
+        "spend": "消费",
+        "tokens": "Token",
+        "requests": "请求"
       }
     },
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

@@ -20,7 +20,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
-import HfUsageTrendChart from '../../../components/hifi/HfUsageTrendChart';
+import HfActivityChart from '../../../components/hifi/HfActivityChart';
 import { API, getServerAddress } from '../../../helpers';
 import {
   getQuotaPerUSD,
@@ -447,46 +447,8 @@ const HFDashboard = () => {
   const recentLogs = pickRecent(logs, 5);
 
   // ── /api/data/self/ derived panels ──────────────────────────────────────
-  // Dense per-day series across the full requested window (zero-fill days
-  // with no rows) so the trend reflects the window even when traffic is
-  // sparse, rather than only the days a row happens to exist for.
-  //
-  // Buckets key on the BROWSER's local calendar day, not the UTC day: this
-  // bar's label is rendered by HfUsageTrendChart via
-  // `new Date(day*1000).toLocaleDateString(...)`, i.e. in local time. Keying
-  // on UTC days would silently offset every bucket by the browser's UTC
-  // offset — e.g. a UTC+8 reader's 00:00–08:00 local traffic would land in
-  // the *previous* UTC day's bucket, so "today"'s bar would miss the first
-  // 8 hours of today and "yesterday"'s bar would carry them instead. Using
-  // `setDate` (not a fixed 86400s step) to walk the window keeps this correct
-  // across a DST transition, where a local day is not always 24h long.
-  const localDayKey = (tsSeconds) => {
-    const d = new Date(tsSeconds * 1000);
-    d.setHours(0, 0, 0, 0);
-    return Math.floor(d.getTime() / 1000);
-  };
-  const trendByDay = useMemo(() => {
-    if (!quotaWindow.start || !quotaWindow.end) return [];
-    const totals = new Map();
-    for (const row of quotaRows) {
-      const ts = Number(row?.created_at) || 0;
-      if (!ts) continue;
-      const day = localDayKey(ts);
-      totals.set(day, (totals.get(day) || 0) + (Number(row?.quota) || 0));
-    }
-    const endDay = localDayKey(quotaWindow.end);
-    const cursor = new Date(quotaWindow.start * 1000);
-    cursor.setHours(0, 0, 0, 0);
-    const days = [];
-    let day = Math.floor(cursor.getTime() / 1000);
-    while (day <= endDay) {
-      days.push({ day, quota: totals.get(day) || 0 });
-      cursor.setDate(cursor.getDate() + 1);
-      day = Math.floor(cursor.getTime() / 1000);
-    }
-    return days;
-  }, [quotaRows, quotaWindow]);
-  const trendTotalQuota = trendByDay.reduce((sum, d) => sum + d.quota, 0);
+  // The daily, per-model series (local-day buckets, zero-filled) is built in
+  // components/hifi/activitySeries.js for HfActivityChart.
   const hasUsageData = quotaLoaded && quotaRows.length > 0;
 
   const modelDistribution = useMemo(() => {
@@ -948,27 +910,8 @@ const HFDashboard = () => {
             entirely, not an empty state, when it's off. */}
         {showUsageTrend && (
           <div className='panel' style={{ gridColumn: 'span 7', padding: 18 }}>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'baseline',
-                marginBottom: 12,
-              }}
-            >
-              <div>
-                <div className='lbl'>{t('console.dashboard.usage_trend')}</div>
-                <div className='display' style={{ fontSize: 18, marginTop: 2 }}>
-                  {hasUsageData
-                    ? formatUSD(trendTotalQuota)
-                    : t('console.dashboard.no_consume')}
-                </div>
-              </div>
-              <span className='faint mono' style={{ fontSize: 10 }}>
-                {t('console.dashboard.usage_trend_window', {
-                  days: DASHBOARD_TREND_WINDOW_SECONDS / DAY_SECONDS,
-                })}
-              </span>
+            <div className='lbl' style={{ marginBottom: 8 }}>
+              {t('console.dashboard.usage_trend')}
             </div>
             {!quotaLoaded && <HfSkeletonRows rows={3} />}
             {quotaLoaded && !hasUsageData && (
@@ -985,7 +928,12 @@ const HFDashboard = () => {
               </div>
             )}
             {hasUsageData && (
-              <HfUsageTrendChart days={trendByDay} formatValue={formatUSD} />
+              <HfActivityChart
+                rows={quotaRows}
+                end={quotaWindow.end}
+                formatSpend={formatUSD}
+                maxDays={DASHBOARD_TREND_WINDOW_SECONDS / DAY_SECONDS}
+              />
             )}
           </div>
         )}

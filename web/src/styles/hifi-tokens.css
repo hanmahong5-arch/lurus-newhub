@@ -1154,3 +1154,24 @@ html[lang^='zh'] .hf-side .nav-h {
     position: static;
   }
 }
+
+/* Categorical series for stacked charts (activity chart). Brand accent
+ * first; the rest are the hi-fi status hues plus three neutrals-adjacent
+ * extensions, chosen to stay distinct from each other in both themes.
+ * no token counterpart — the brand package ships no data-viz ramp. */
+:root {
+  --hf-series-1: var(--hf-accent);
+  --hf-series-2: #2c5fb0;
+  --hf-series-3: #1f7a4f;
+  --hf-series-4: #c9912a;
+  --hf-series-5: #7a4fb0;
+  --hf-series-6: #0e8a8a;
+  --hf-series-other: #b3ad9c;
+}
+[data-theme='dark'] {
+  --hf-series-2: #5b8ee0;
+  --hf-series-3: #3fae7a;
+  --hf-series-5: #a07ad6;
+  --hf-series-6: #2fb3b3;
+  --hf-series-other: #6f6a5c;
+}
