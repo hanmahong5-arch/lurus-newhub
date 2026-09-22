@@ -20,6 +20,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import HfModelName from '../../../components/hifi/HfModelName';
+import StatHeader from './StatHeader';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, showSuccess, isAdmin } from '../../../helpers';
@@ -775,55 +776,7 @@ const HFLog = () => {
         </div>
       )}
 
-      {/* Aggregate stat header — GET /logs/stat over the active filters.
-          requests/quota reflect the full filter window; rpm/tpm are rolling
-          last-60s rates. Honest — until the first successful fetch. */}
-      <div
-        data-testid='log-stat-header'
-        style={{
-          display: 'flex',
-          gap: 30,
-          padding: '10px 28px',
-          borderBottom: '1px solid var(--hf-rule)',
-          background: 'var(--hf-paper)',
-          flexWrap: 'wrap',
-        }}
-      >
-        {[
-          [
-            tr('console.log.stat_requests', 'requests'),
-            stat ? Number(stat.total_requests ?? 0).toLocaleString() : '—',
-            tr('console.log.in_window', 'in window'),
-          ],
-          [
-            tr('console.log.stat_quota', 'quota'),
-            stat ? formatUSD(Number(stat.total_quota ?? 0)) : '—',
-            tr('console.log.in_window', 'in window'),
-          ],
-          [
-            tr('console.log.stat_rpm', 'rpm'),
-            stat ? Number(stat.rpm ?? 0).toLocaleString() : '—',
-            tr('console.log.last_60s', 'last 60s'),
-          ],
-          [
-            tr('console.log.stat_tpm', 'tpm'),
-            stat ? Number(stat.tpm ?? 0).toLocaleString() : '—',
-            tr('console.log.last_60s', 'last 60s'),
-          ],
-        ].map(([l, v, sub]) => (
-          <div key={l}>
-            <div className='lbl'>
-              {l}
-              <span className='faint' style={{ marginLeft: 5 }}>
-                · {sub}
-              </span>
-            </div>
-            <div className='display' style={{ fontSize: 20, marginTop: 2 }}>
-              {statLoading ? '…' : v}
-            </div>
-          </div>
-        ))}
-      </div>
+      <StatHeader stat={stat} loading={statLoading} tr={tr} />
 
       {/* /logs/stat has no request_id/upstream_request_id parameter, so the
           header above cannot be narrowed to the id search the same way the

@@ -563,7 +563,10 @@
         "id_window_hint": "id search — showing the last 7 days unless a start date is set",
         "default_window": "showing the last {{days}} days — set a start date to widen the window",
         "stat_id_scope_hint": "totals above are for the same time window, not filtered by id",
-        "settlement_failed": "settlement failed"
+        "settlement_failed": "settlement failed",
+        "stat_tokens": "tokens in → out",
+        "stat_cache_read": "cache reads",
+        "stat_cache_sub": "tokens served from cache"
       },
       "models": {
         "crumb": "model management",

@@ -389,6 +389,9 @@ describe('Log page', () => {
             data: {
               total_requests: 42,
               total_quota: 1_000_000,
+              prompt_tokens: 1_250_000,
+              completion_tokens: 3400,
+              cache_read_tokens: 800_000,
               rpm: 3,
               tpm: 1500,
             },
@@ -413,6 +416,12 @@ describe('Log page', () => {
       expect(header.textContent).toContain('$2.0000'); // 1_000_000 / 500_000
       expect(header.textContent).toContain('1,500'); // tpm, locale-formatted
     });
+    // The token split and cache reads the endpoint already returned but the
+    // header never showed (cycle 15 P4).
+    expect(screen.getByTestId('log-stat-tokens').textContent).toContain(
+      '1.3M → 3.4K',
+    );
+    expect(screen.getByTestId('log-stat-cache').textContent).toContain('800K');
   });
 
   // 6. TTFT. A row with no first token still renders an honest n/a cell (never

@@ -665,3 +665,39 @@ describe('HFShell tenant switcher', () => {
     expect(switcherProps.current.onSelect).toBeUndefined();
   });
 });
+
+// A root operator saw 26 links in one column; the two admin sections now
+// fold behind their headings (components/hifi/HfNav.jsx).
+describe('HFShell collapsible admin sections', () => {
+  const items = (h) => screen.getByTestId(`nav-section-items-${h}`);
+
+  it('folds the admin sections by default, keeping the workspace open', () => {
+    setBridgedUser(100);
+    renderShell();
+    expect(items('governance').hidden).toBe(true);
+    expect(items('operations & insights').hidden).toBe(true);
+    expect(items('workspace').hidden).toBe(false);
+  });
+
+  it('keeps a section open while the current page is inside it', () => {
+    setBridgedUser(100);
+    render(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(HFShell, { active: 'admin-gateway' }, 'body'),
+      ),
+    );
+    expect(items('operations & insights').hidden).toBe(false);
+  });
+
+  it('opens on click and remembers the choice', () => {
+    setBridgedUser(100);
+    const { unmount } = renderShell();
+    fireEvent.click(screen.getByTestId('nav-section-toggle-governance'));
+    expect(items('governance').hidden).toBe(false);
+    unmount();
+    renderShell();
+    expect(items('governance').hidden).toBe(false);
+  });
+});

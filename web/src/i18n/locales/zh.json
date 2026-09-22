@@ -563,7 +563,10 @@
         "id_window_hint": "按 ID 搜索 — 未设置开始时间时默认展示最近 7 天",
         "default_window": "当前展示最近 {{days}} 天 — 设置开始时间可扩大范围",
         "stat_id_scope_hint": "以上汇总为同一时间窗口内的数据，未按 ID 过滤",
-        "settlement_failed": "结算失败"
+        "settlement_failed": "结算失败",
+        "stat_tokens": "Token 输入 → 输出",
+        "stat_cache_read": "缓存读取",
+        "stat_cache_sub": "命中缓存的 token"
       },
       "models": {
         "crumb": "模型管理",

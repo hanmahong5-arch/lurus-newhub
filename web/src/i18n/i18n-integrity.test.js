@@ -326,17 +326,17 @@ const LANGUAGE_ENDONYMS = new Set(['中文']);
  * table, the case after it reads the table.
  */
 const NON_LITERAL_T_CALLS = {
-  'src/components/hifi/HFShell.jsx  s.hKey': {
-    count: 1,
+  'src/components/hifi/HfNav.jsx  s.hKey': {
+    count: 2,
     reason:
-      'console.nav.section_* from the v2 nav model, called as t(s.hKey, s.h): the second argument is the English heading, so a key no bundle holds degrades to English rather than to an identifier. All 33 console.nav.* keys resolve in en.json today.',
+      'console.nav.section_* from the v2 nav model (HFShell NAV_SECTIONS), called as t(s.hKey, s.h) — once for a collapsible heading, once for a fixed one: the second argument is the English heading, so a key no bundle holds degrades to English rather than to an identifier. All 33 console.nav.* keys resolve in en.json today.',
   },
-  'src/components/hifi/HFShell.jsx  it.key': {
+  'src/components/hifi/HfNav.jsx  it.key': {
     count: 1,
     reason:
       'console.nav.* item key, called as t(it.key, it.label) — English default, same family as s.hKey.',
   },
-  'src/components/hifi/HFShell.jsx  it.titleKey': {
+  'src/components/hifi/HfNav.jsx  it.titleKey': {
     count: 1,
     reason:
       "console.nav.* tooltip for a deferred entry, called as t(it.titleKey, it.title || 'not available in v2 yet') — English default.",
