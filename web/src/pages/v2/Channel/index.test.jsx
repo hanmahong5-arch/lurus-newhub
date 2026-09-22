@@ -23,6 +23,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 // ─── mocks ───────────────────────────────────────────────────────────────────
 
+// Vendor logos come from a ~4 MB icon pack loaded on first render; the
+// page's behaviour does not depend on it, and loading it per test file is
+// what made this file time out under full-suite load.
+vi.mock('@lobehub/icons', () => ({}));
+
 vi.mock('../../../helpers', () => ({
   API: {
     get: vi.fn(),
@@ -294,6 +299,44 @@ describe('clone channel', () => {
         expect.objectContaining({ name: 'Cloneable copy' }),
       );
     });
+  });
+});
+
+// ─── provider type is named, not a bare integer ──────────────────────────────
+
+describe('channel provider type', () => {
+  it('names the type in the list instead of printing its id', async () => {
+    API.get.mockResolvedValue(
+      mockListResponse([{ ...makeChannel(7, 'Suno one'), type: 36 }]),
+    );
+    render(React.createElement(HFChannel));
+    await waitFor(() => screen.getByText('Suno one'));
+    const cell = screen.getByTestId('channel-type-label');
+    expect(cell.textContent).toContain('Suno');
+    expect(cell.textContent).not.toBe('36');
+  });
+
+  it('offers named types in the create form, keeping the numeric id as the value', async () => {
+    const ch = makeChannel(99, 'Cloneable');
+    API.get.mockResolvedValue(mockListResponse([ch]));
+    API.post.mockResolvedValue({ data: { success: true } });
+    render(React.createElement(HFChannel));
+    await waitFor(() => screen.getByText('Cloneable'));
+    fireEvent.click(
+      await waitFor(() =>
+        screen.getAllByRole('button').find((b) => b.textContent === '▸'),
+      ),
+    );
+    fireEvent.click(await waitFor(() => screen.getByTestId('clone-btn-99')));
+    const select = await waitFor(() =>
+      screen.getByTestId('channel-type-select'),
+    );
+    const opt = Array.from(select.options).find((o) => o.value === '14');
+    expect(opt.textContent).toMatch(/Claude/);
+    fireEvent.change(select, { target: { value: '14' } });
+    fireEvent.click(screen.getByText('create channel'));
+    await waitFor(() => expect(API.post).toHaveBeenCalled());
+    expect(Number(API.post.mock.calls[0][1].type)).toBe(14);
   });
 });
 

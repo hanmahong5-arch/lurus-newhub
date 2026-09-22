@@ -470,7 +470,8 @@
         "multi_key_deferred": "多密钥管理需要后端密钥池模型 —— 已延期",
         "confirm_delete_title": "删除渠道 \"{{name}}\" ?",
         "confirm_delete_route": "停止通过此渠道路由请求",
-        "confirm_irreversible": "此操作无法撤销"
+        "confirm_irreversible": "此操作无法撤销",
+        "field_type_named": "供应商类型"
       },
       "log": {
         "crumb": "用量与日志",
@@ -1448,7 +1449,8 @@
         "col_quota_share": "消费占比",
         "total_tokens_in_window": "窗口内总 tokens",
         "scope_tenant": "本租户",
-        "scope_all": "全部租户"
+        "scope_all": "全部租户",
+        "unnamed": "未识别模型（请求在路由前被拒）"
       },
       "palette": {
         "group_navigate": "导航",

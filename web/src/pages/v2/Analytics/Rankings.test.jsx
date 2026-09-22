@@ -20,6 +20,8 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
+vi.mock('@lobehub/icons', () => ({}));
+
 vi.mock('../../../helpers', () => ({
   API: { get: vi.fn() },
   isRoot: vi.fn(() => false),
@@ -91,6 +93,21 @@ describe('Rankings page', () => {
     // Top row moved up 1 (rank_delta=1) -> ▲1; second row is_new -> "new".
     expect(screen.getByText('▲1')).toBeInTheDocument();
     expect(screen.getByText('new')).toBeInTheDocument();
+  });
+
+  // Requests refused before routing log model_name ''. They ranked as a
+  // row with a blank name (UAT, 2026-09-22).
+  it('labels the empty-name bucket instead of rendering a blank name', async () => {
+    const p = payload();
+    p.data.data.rows[1] = { ...p.data.data.rows[1], name: '' };
+    API.get.mockResolvedValue(p);
+    render(<HFRankings />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId('rankings-row')).toHaveLength(2),
+    );
+    const names = screen.getAllByTestId('rankings-name');
+    expect(names[1].textContent.trim()).not.toBe('');
+    expect(names[1].textContent).toMatch(/unresolved/);
   });
 
   it('calls the tenant-scoped rankings endpoint with the resolved slug', async () => {

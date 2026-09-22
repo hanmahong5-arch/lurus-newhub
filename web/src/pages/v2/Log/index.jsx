@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfModelName from '../../../components/hifi/HfModelName';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, showSuccess, isAdmin } from '../../../helpers';
@@ -106,6 +107,7 @@ const TtftCell = ({ row }) => {
   );
 };
 
+// created_at is whole seconds; a millisecond field would always read .000.
 const fmtTime = (unixSec) => {
   if (!unixSec) return '—';
   const d = new Date(unixSec * 1000);
@@ -113,7 +115,6 @@ const fmtTime = (unixSec) => {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    fractionalSecondDigits: 3,
   });
 };
 
@@ -977,6 +978,7 @@ const HFLog = () => {
                     <thead>
                       <tr>
                         <th>{tr('console.log.th_timestamp', 'timestamp')}</th>
+                        <th>{tr('console.log.th_code', 'code')}</th>
                         <th>{tr('console.log.th_dur', 'dur')}</th>
                         <th>{tr('console.log.th_ttft', 'ttft')}</th>
                         <th>{tr('console.log.th_model', 'model')}</th>
@@ -985,7 +987,6 @@ const HFLog = () => {
                         <th>{tr('console.log.th_token', 'token')}</th>
                         <th>{tr('console.log.th_tok', 'tok')}</th>
                         <th>$</th>
-                        <th>{tr('console.log.th_code', 'code')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1006,39 +1007,6 @@ const HFLog = () => {
                           <td className='mono muted'>
                             {fmtTime(r.created_at)}
                           </td>
-                          <td className='mono'>
-                            {r.total_latency_ms ?? '—'}
-                            {r.total_latency_ms != null && (
-                              <span className='faint'>ms</span>
-                            )}
-                          </td>
-                          <td className='mono'>
-                            <TtftCell row={r} />
-                          </td>
-                          <td className='strong'>{r.model_name || '—'}</td>
-                          <td className='mono muted'>
-                            {parseOther(r)?.source_product ||
-                              DEFAULT_SOURCE_PRODUCT}
-                          </td>
-                          <td className='mono muted'>
-                            {r.channel_name ? (
-                              r.channel_name
-                            ) : r.channel ? (
-                              `#${r.channel}`
-                            ) : (
-                              <NotAvailable
-                                reason={tr(
-                                  'console.log.upstream_na_reason',
-                                  'upstream channel id not recorded on this log row',
-                                )}
-                              />
-                            )}
-                          </td>
-                          <td className='mono muted'>{r.token_name || '—'}</td>
-                          <td className='mono muted'>
-                            {fmtTok(r.prompt_tokens, r.completion_tokens)}
-                          </td>
-                          <td className='mono'>{fmtCost(r.quota)}</td>
                           <td>
                             {(() => {
                               const o = outcomeTag(r);
@@ -1064,6 +1032,41 @@ const HFLog = () => {
                               </span>
                             )}
                           </td>
+                          <td className='mono'>
+                            {r.total_latency_ms ?? '—'}
+                            {r.total_latency_ms != null && (
+                              <span className='faint'>ms</span>
+                            )}
+                          </td>
+                          <td className='mono'>
+                            <TtftCell row={r} />
+                          </td>
+                          <td className='strong'>
+                            <HfModelName model={r.model_name} />
+                          </td>
+                          <td className='mono muted'>
+                            {parseOther(r)?.source_product ||
+                              DEFAULT_SOURCE_PRODUCT}
+                          </td>
+                          <td className='mono muted'>
+                            {r.channel_name ? (
+                              r.channel_name
+                            ) : r.channel ? (
+                              `#${r.channel}`
+                            ) : (
+                              <NotAvailable
+                                reason={tr(
+                                  'console.log.upstream_na_reason',
+                                  'upstream channel id not recorded on this log row',
+                                )}
+                              />
+                            )}
+                          </td>
+                          <td className='mono muted'>{r.token_name || '—'}</td>
+                          <td className='mono muted'>
+                            {fmtTok(r.prompt_tokens, r.completion_tokens)}
+                          </td>
+                          <td className='mono'>{fmtCost(r.quota)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1672,7 +1675,9 @@ const HFLog = () => {
                           <td className='mono'>
                             <TtftCell row={r} />
                           </td>
-                          <td className='strong'>{r.model_name || '—'}</td>
+                          <td className='strong'>
+                            <HfModelName model={r.model_name} />
+                          </td>
                           <td className='mono muted'>
                             {r.channel_name ? (
                               r.channel_name

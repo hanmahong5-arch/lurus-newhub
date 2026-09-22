@@ -31,6 +31,8 @@ import {
 // isAdmin defaults to false so the tenant-wide toggle stays hidden unless a
 // test opts in via mockIsAdmin.
 const mockIsAdmin = vi.fn(() => false);
+vi.mock('@lobehub/icons', () => ({}));
+
 vi.mock('../../../helpers', () => ({
   API: {
     get: vi.fn(),

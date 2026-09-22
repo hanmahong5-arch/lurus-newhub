@@ -29,6 +29,10 @@ import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
+import {
+  ChannelTypeLabel,
+  ChannelTypeSelect,
+} from '../../../components/hifi/HfModelName';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
@@ -574,12 +578,10 @@ const ChannelModal = ({ tenantSlug, existing, prefill, onDone, onClose }) => {
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span className='lbl'>
-            {t('console.channel.field_type', 'type (int)')}
+            {t('console.channel.field_type_named', 'provider type')}
           </span>
-          <input
+          <ChannelTypeSelect
             style={inputStyle}
-            type='number'
-            min='1'
             value={form.type}
             onChange={set('type')}
           />
@@ -1601,7 +1603,7 @@ const HFChannel = () => {
                         tabIndex={0}
                         aria-expanded={isOpen}
                       >
-                        {ch.type ?? '—'}
+                        <ChannelTypeLabel type={ch.type} />
                       </td>
 
                       {/* Model count */}
