@@ -299,7 +299,7 @@ const HFRedemption = () => {
 
   const fetchRedemptions = useCallback(
     async (targetPage = 1) => {
-      if (!tenantSlug || tenantSlug === 'default') return;
+      if (!tenantSlug) return;
       setLoading(true);
       try {
         const res = await API.get(

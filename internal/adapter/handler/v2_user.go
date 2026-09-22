@@ -95,10 +95,14 @@ func GetSelfV2(c *gin.Context) {
 			"request_count":   user.RequestCount,
 			"group":           user.Group,
 			"tenant_id":       tenantCtx.TenantID,
-			"token_count":     tokenCount,
-			"idp_user":        tenantCtx.IDPSubject,
-			"roles":           tenantCtx.Roles,
-			"daily_quota":     dailyQuota,
+			// The real slug even when the request came in as the self-tenant
+			// alias: TenantSlugGuard rewrites the param before this runs. The
+			// console calls this route as /api/v2/~/user/me and shows this.
+			"tenant_slug": c.Param("tenant_slug"),
+			"token_count": tokenCount,
+			"idp_user":    tenantCtx.IDPSubject,
+			"roles":       tenantCtx.Roles,
+			"daily_quota": dailyQuota,
 			// v1 GetSelf parity (kept so this payload stays a strict superset)
 			"setting":         user.Setting,
 			"sidebar_modules": userSetting.SidebarModules,

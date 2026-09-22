@@ -219,7 +219,7 @@ describe('Settings page', () => {
     await waitFor(() => {
       // Sessions API must have been called with the correct slug.
       const calls = API.get.mock.calls.map((c) => c[0]);
-      expect(calls.some((u) => u.includes('/acme/sessions'))).toBe(true);
+      expect(calls.some((u) => u.includes('/~/sessions'))).toBe(true);
     });
 
     await waitFor(() => {
@@ -746,7 +746,7 @@ describe('Settings page', () => {
     // API was called with the right endpoints
     const calls = API.get.mock.calls.map((c) => c[0]);
     expect(calls.some((u) => u.includes('/user/billing/summary'))).toBe(true);
-    expect(calls.some((u) => u.includes('/acme/billing/topups'))).toBe(true);
+    expect(calls.some((u) => u.includes('/~/billing/topups'))).toBe(true);
   });
 
   // 7b. A customer with no billing history gets the empty panel, not a spinner.

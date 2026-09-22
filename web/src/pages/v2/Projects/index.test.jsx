@@ -172,7 +172,7 @@ describe('Projects page', () => {
     fireEvent.click(screen.getByTestId('proj-save'));
 
     await waitFor(() => {
-      expect(API.post).toHaveBeenCalledWith('/api/v2/acme/projects', {
+      expect(API.post).toHaveBeenCalledWith('/api/v2/~/projects', {
         name: 'Research',
         description: 'R&D spend',
       });
@@ -200,7 +200,7 @@ describe('Projects page', () => {
 
     await waitFor(() => {
       expect(API.put).toHaveBeenCalledWith(
-        '/api/v2/acme/projects/3',
+        '/api/v2/~/projects/3',
         expect.objectContaining({ name: 'Growth' }),
       );
     });
@@ -220,7 +220,7 @@ describe('Projects page', () => {
     fireEvent.click(screen.getByTestId('confirm-ok'));
 
     await waitFor(() => {
-      expect(API.delete).toHaveBeenCalledWith('/api/v2/acme/projects/3');
+      expect(API.delete).toHaveBeenCalledWith('/api/v2/~/projects/3');
     });
   });
 
@@ -376,7 +376,7 @@ describe('Projects page — reversibility', () => {
     await waitFor(() => {
       // The ids must ride along, or the tokens stay unassigned and the "undo"
       // is only half an undo.
-      expect(API.post).toHaveBeenCalledWith('/api/v2/acme/projects/3/restore', {
+      expect(API.post).toHaveBeenCalledWith('/api/v2/~/projects/3/restore', {
         reattach_token_ids: [11, 12],
       });
     });
@@ -421,7 +421,7 @@ describe('Projects page — reversibility', () => {
 
     fireEvent.click(screen.getByTestId('proj-restore-btn-4'));
     await waitFor(() => {
-      expect(API.post).toHaveBeenCalledWith('/api/v2/acme/projects/4/restore', {
+      expect(API.post).toHaveBeenCalledWith('/api/v2/~/projects/4/restore', {
         reattach_token_ids: [],
       });
     });

@@ -101,20 +101,14 @@ beforeEach(() => {
   // The bootstrap failure memo is module state, so a case that fails the
   // bridge would otherwise mute the bridge for every case after it.
   resetBootstrapCooldown();
-  // helpers/apiMode.js resolves the tenant slug over window.fetch.
+  // Stubbed so a regression that starts looking the tenant up over
+  // window.fetch again is visible (see the TENANT_NOT_FOUND case).
   vi.stubGlobal('fetch', vi.fn());
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
-
-// A session-info answer, the shape helpers/apiMode.js reads.
-const namesTenant = (slug) =>
-  fetch.mockResolvedValue({
-    ok: true,
-    json: async () => ({ success: true, data: { tenant_slug: slug } }),
-  });
 
 describe('in-flight GET de-duplication', () => {
   it('shares one request between concurrent identical GETs', async () => {
@@ -287,97 +281,26 @@ describe('401 session self-heal interceptor', () => {
   });
 });
 
-describe('tenant slug self-heal interceptor', () => {
-  const tenantNotFound = (url = '/api/v2/-/user/me') => ({
-    response: { status: 404, data: { error_code: 'TENANT_NOT_FOUND' } },
-    config: { url },
-  });
-
-  it('adopts the slug the server names and replays the request against it', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    namesTenant('lurus');
-    const err = tenantNotFound();
-
-    const res = await onRejected()(err);
-
-    // The replayed URL must carry the resolved slug, not the stored one.
-    expect(err.config.url).toBe('/api/v2/lurus/user/me');
-    expect(err.config._retriedAfterSlugRepair).toBe(true);
-    expect(API).toHaveBeenCalledWith(err.config);
-    expect(res).toEqual({ data: { replayed: true } });
-    expect(showError).not.toHaveBeenCalled();
-  });
-
-  // The repair asks who the session belongs to; it does not try to log in
-  // again. A browser whose platform cookie has expired can still answer the
-  // first question and cannot answer the second — routing this error code
-  // through the bridge is what turned "the slug is wrong" into a burst of
-  // 401s (and then 429s) that repaired nothing.
-  it('re-resolves the slug instead of re-running the login bridge', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    localStorage.setItem('tenant_slug', 'default');
-    namesTenant('lurus');
-
-    await onRejected()(tenantNotFound());
-
-    expect(API.post).not.toHaveBeenCalled();
-    expect(String(fetch.mock.calls[0][0])).toContain(
-      '/api/v2/auth/session-info',
-    );
-    // The repaired slug is kept, so the next request starts from it.
-    expect(localStorage.getItem('tenant_slug')).toBe('lurus');
-  });
-
-  it('rewrites only the tenant segment, leaving the rest of the path intact', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    namesTenant('lurus');
-    const err = tenantNotFound('/api/v2/default/logs/self?page=2');
-
-    await onRejected()(err);
-
-    expect(err.config.url).toBe('/api/v2/lurus/logs/self?page=2');
-  });
-
-  it('leaves a 404 that is not about the tenant alone', async () => {
+// Console paths carry the self-tenant alias, which the server resolves from
+// the session, so there is no slug left for the browser to get wrong. A 404
+// TENANT_NOT_FOUND now means the caller's own tenant row is gone; there used
+// to be a repair here that re-resolved the slug and replayed the request, and
+// it must not come back — replaying cannot fix a missing tenant.
+describe('TENANT_NOT_FOUND', () => {
+  it('is reported once, with no slug lookup, replay or login bridge', async () => {
     localStorage.setItem('user', JSON.stringify({ id: 1 }));
     const err = {
-      response: { status: 404, data: { error_code: 'NOT_FOUND' } },
-      config: { url: '/api/v2/lurus/user/me' },
+      response: { status: 404, data: { error_code: 'TENANT_NOT_FOUND' } },
+      config: { url: '/api/v2/~/user/me' },
     };
 
     await expect(onRejected()(err)).rejects.toBe(err);
+
     expect(fetch).not.toHaveBeenCalled();
-    expect(showError).toHaveBeenCalledWith(err);
-  });
-
-  it('does not touch a path with no tenant segment to repair', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    const err = tenantNotFound('/api/status');
-
-    await expect(onRejected()(err)).rejects.toBe(err);
-    expect(fetch).not.toHaveBeenCalled();
-    expect(showError).toHaveBeenCalledWith(err);
-  });
-
-  it('gives up rather than replaying when the server names no slug', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    fetch.mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
-    const err = tenantNotFound();
-
-    await expect(onRejected()(err)).rejects.toBe(err);
     expect(API).not.toHaveBeenCalled();
-    expect(err.config.url).toBe('/api/v2/-/user/me');
-    expect(showError).toHaveBeenCalledWith(err);
-  });
-
-  it('repairs a given request only once', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    namesTenant('lurus');
-    const err = tenantNotFound();
-    err.config._retriedAfterSlugRepair = true;
-
-    await expect(onRejected()(err)).rejects.toBe(err);
-    expect(fetch).not.toHaveBeenCalled();
+    expect(API.post).not.toHaveBeenCalled();
+    expect(err.config.url).toBe('/api/v2/~/user/me');
+    expect(showError).toHaveBeenCalledTimes(1);
     expect(showError).toHaveBeenCalledWith(err);
   });
 });
@@ -725,11 +648,12 @@ describe('fetchTokenKeys', () => {
     err.mockRestore();
   });
 
-  it('switches to the tenant-scoped v2 path once a slug is set', async () => {
+  it('switches to the tenant-scoped v2 path once a v2 login happened', async () => {
     localStorage.setItem('tenant_slug', 'acme');
     API.__rawGet.mockResolvedValue({ data: { success: true, data: [] } });
     await fetchTokenKeys();
-    expect(API.__rawGet.mock.calls[0][0]).toContain('acme');
+    // The alias, not the stored slug: the server names the tenant.
+    expect(API.__rawGet.mock.calls[0][0]).toBe('/api/v2/~/tokens?p=1&size=10');
   });
 });
 

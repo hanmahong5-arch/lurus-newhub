@@ -95,7 +95,7 @@ afterEach(() => {
 });
 
 describe('Log page', () => {
-  // 1. Switching to Cluster tab triggers GET /api/v2/acme/logs/cluster?bucket=hour
+  // 1. Switching to Cluster tab triggers GET /api/v2/~/logs/cluster?bucket=hour
   it('switches to Cluster tab and fetches with default bucket=hour', async () => {
     API.get.mockImplementation((url) => {
       if (url.includes('/logs/cluster')) {
@@ -372,7 +372,7 @@ describe('Log page', () => {
     fireEvent.click(exportBtn);
 
     // href must point to the export endpoint for the current tenant slug.
-    expect(assignedHref).toContain('/api/v2/acme/logs/export');
+    expect(assignedHref).toContain('/api/v2/~/logs/export');
     expect(assignedHref).toContain('model_name=gpt-4o');
     expect(assignedHref).toContain('token_name=my-token');
   });
@@ -402,9 +402,7 @@ describe('Log page', () => {
 
     await waitFor(() => {
       const calls = API.get.mock.calls.map(([u]) => u);
-      expect(calls.some((u) => u.includes('/api/v2/acme/logs/stat'))).toBe(
-        true,
-      );
+      expect(calls.some((u) => u.includes('/api/v2/~/logs/stat'))).toBe(true);
     });
 
     await waitFor(() => {
@@ -653,7 +651,7 @@ describe('Log page', () => {
     fireEvent.click(screen.getByTestId('log-tenant-wide'));
     await waitFor(() => {
       const urls = API.get.mock.calls.map(([u]) => u);
-      expect(urls.some((u) => u.includes('/api/v2/acme/logs/all?'))).toBe(true);
+      expect(urls.some((u) => u.includes('/api/v2/~/logs/all?'))).toBe(true);
       // The stat header must follow the scope — a caller-scoped header over a
       // tenant-wide table would misreport every aggregate.
       expect(urls.some((u) => u.includes('/logs/stat/all'))).toBe(true);

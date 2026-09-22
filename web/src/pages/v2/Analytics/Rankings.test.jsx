@@ -101,7 +101,7 @@ describe('Rankings page', () => {
       expect(API.get).toHaveBeenCalled();
     });
     const [url] = API.get.mock.calls[0];
-    expect(url).toBe('/api/v2/acme/analytics/rankings?by=model&hours=24');
+    expect(url).toBe('/api/v2/~/analytics/rankings?by=model&hours=24');
   });
 
   it('switching to the vendor tab re-fetches with by=vendor', async () => {

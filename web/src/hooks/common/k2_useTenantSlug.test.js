@@ -20,11 +20,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
-import {
-  useTenantSlug,
-  readTenantSlug,
-  UNRESOLVED_TENANT_SLUG,
-} from './useTenantSlug';
+import { useTenantSlug, readTenantSlug } from './useTenantSlug';
+import { SELF_TENANT_SLUG } from '../../helpers/apiMode';
 
 beforeEach(() => {
   localStorage.clear();
@@ -32,75 +29,54 @@ beforeEach(() => {
 });
 
 describe('useTenantSlug', () => {
-  it('is already correct on the very first render, and never changes after', () => {
-    // The whole point. Ten v2 pages each seeded state with the literal
-    // 'default' and only read localStorage in an effect, so their first render
-    // — and every fetch keyed on the slug — used a tenant the browser was
-    // never given. Where no tenant is named 'default', TenantSlugGuard answers
-    // that first request 404.
-    //
-    // Asserting result.current would NOT catch that: renderHook wraps in
-    // act(), which flushes effects before the value is read, so a hook that
-    // resolves late looks identical from the outside. Recording what each
-    // render actually saw is what distinguishes them — reverting this hook to
-    // a useEffect makes `seen` ['default', 'acme'] and this test red.
-    localStorage.setItem('tenant_slug', 'acme');
-    const seen = [];
-    renderHook(() => {
-      const slug = useTenantSlug();
-      seen.push(slug);
-      return slug;
-    });
-    expect(seen).toEqual(['acme']);
-  });
-
-  it('does not re-render when nothing about the slug changed', () => {
-    // Fetch effects list the slug in their dependencies; a value that settles
-    // late re-fires every one of them.
-    localStorage.setItem('tenant_slug', 'acme');
+  it('is the self-tenant alias on the very first render, and never changes', () => {
+    // Pages key their mount fetches on this value. Asserting result.current
+    // would not catch a value that settles late (renderHook flushes effects
+    // before it is read); recording what each render saw does.
     const seen = [];
     const { rerender } = renderHook(() => {
       const slug = useTenantSlug();
       seen.push(slug);
       return slug;
     });
-    const afterMount = seen.length;
     rerender();
-    expect(seen.slice(afterMount)).toEqual(['acme']);
+    expect(new Set(seen)).toEqual(new Set([SELF_TENANT_SLUG]));
   });
 
-  it('falls back when nothing is stored', () => {
-    expect(readTenantSlug()).toBe(UNRESOLVED_TENANT_SLUG);
+  it('does not route by whatever slug a login stored', () => {
+    // The stored slug was the routing value until 2026-09-22; a missing one
+    // fell back to 'default' (a tenant id) and every panel 404'd, and the
+    // root tenant switcher wrote another tenant's slug that the server then
+    // refused with 403 TENANT_MISMATCH on every request.
+    localStorage.setItem('tenant_slug', 'acme');
     const { result } = renderHook(() => useTenantSlug());
-    expect(result.current).toBe(UNRESOLVED_TENANT_SLUG);
+    expect(result.current).toBe(SELF_TENANT_SLUG);
   });
 
-  it('falls back when localStorage throws, as it does in private mode', () => {
+  it('routes the same with nothing stored and with storage denied', () => {
+    expect(renderHook(() => useTenantSlug()).result.current).toBe(
+      SELF_TENANT_SLUG,
+    );
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('access denied');
     });
-    expect(readTenantSlug()).toBe(UNRESOLVED_TENANT_SLUG);
+    expect(renderHook(() => useTenantSlug()).result.current).toBe(
+      SELF_TENANT_SLUG,
+    );
+  });
+});
+
+describe('readTenantSlug (display only)', () => {
+  it('returns the slug the last login reported', () => {
+    localStorage.setItem('tenant_slug', 'acme');
+    expect(readTenantSlug()).toBe('acme');
   });
 
-  it('treats an empty stored slug as absent', () => {
-    // '' would otherwise build /api/v2//channels — and nginx merge_slashes
-    // turns that into /api/v2/channels, a different route, rather than a
-    // clean 404.
-    localStorage.setItem('tenant_slug', '');
-    expect(readTenantSlug()).toBe(UNRESOLVED_TENANT_SLUG);
-  });
-
-  // The fallback is not allowed to be a plausible tenant name. 'default' —
-  // the tenant *id* both deployments use, whose routing slug is 'lurus' —
-  // was the value here until 2026-09-22, and every panel of a browser with
-  // no stored slug asked for /api/v2/default/... and was answered 404.
-  it('falls back to a value no tenant can carry, not to a tenant id', () => {
-    expect(UNRESOLVED_TENANT_SLUG).not.toBe('default');
-    expect(UNRESOLVED_TENANT_SLUG).not.toBe('lurus');
-    // Non-empty (see above) and a single path segment, so the request that
-    // carries it reaches TenantSlugGuard and comes back 404
-    // TENANT_NOT_FOUND — the code helpers/api.js repairs and replays.
-    expect(UNRESOLVED_TENANT_SLUG).not.toBe('');
-    expect(UNRESOLVED_TENANT_SLUG).not.toContain('/');
+  it("returns '' when none was reported or storage is denied", () => {
+    expect(readTenantSlug()).toBe('');
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('access denied');
+    });
+    expect(readTenantSlug()).toBe('');
   });
 });

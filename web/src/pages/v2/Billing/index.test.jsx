@@ -154,7 +154,7 @@ describe('Billing page', () => {
     // slug state initialising from localStorage asynchronously).
     await waitFor(() => {
       const calls = API.get.mock.calls.map(([url]) => url);
-      expect(calls).toContain('/api/v2/acme/billing/invoices');
+      expect(calls).toContain('/api/v2/~/billing/invoices');
     });
 
     const calls = API.get.mock.calls.map(([url]) => url);
@@ -355,7 +355,7 @@ describe('Billing — redeem a code', () => {
 
     await waitFor(() => {
       expect(API.post).toHaveBeenCalledWith(
-        '/api/v2/acme/redeem',
+        '/api/v2/~/redeem',
         { key: CODE },
         expect.anything(),
       );

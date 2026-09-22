@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -563,11 +563,6 @@ export const useBridgedUser = () => {
   return user;
 };
 
-// readTenantSlug is imported, not redeclared: this file carried a third copy
-// of the same fallback ('default', the tenant *id* rather than its routing
-// slug) while helpers/apiMode.js had a fourth ('lurus'). One concept, one
-// answer — see hooks/common/useTenantSlug.js.
-
 const inferModeFromRole = (role) => {
   // Map v1 role ints to TenantSwitcher mode buckets.
   // role 100 = root, 10 = admin → manage tenant pool; else Personal/EndUser.
@@ -575,73 +570,27 @@ const inferModeFromRole = (role) => {
   return 'Personal';
 };
 
-// Real tenants + active tenant for TenantSwitcher.
-// Admin (root) attempts /api/v2/admin/tenants; everyone falls back to a
-// single-item list derived from the bridged user. Empty/error → still
-// renders a non-DEMO list so users never see "acme · prod" placeholder.
-const useRealTenants = (user) => {
-  const [tenants, setTenants] = useState(null);
-
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-
+// The tenant the switcher shows: the one this session is in, and only that.
+//
+// It used to list every tenant for root (GET /api/v2/admin/tenants) and
+// "switch" by writing the chosen slug to localStorage and reloading. The
+// server never followed: TenantSlugGuard takes the tenant from the session
+// and refuses any other slug, so after a switch every panel answered 403
+// TENANT_MISMATCH (reproduced on UAT 2026-09-22: /api/v2/switch/user/me and
+// /api/v2/switch/tokens as root). There is no server-side tenant switch to
+// wire it to, so the list offers none. Console requests no longer name a
+// tenant at all (helpers/apiMode.js SELF_TENANT_SLUG); the slug here is the
+// display value the last login reported.
+const useCurrentTenant = (user) =>
+  useMemo(() => {
+    if (!user) return null;
     const slug = readTenantSlug();
-    const fallbackName =
-      user.tenant_name || user.display_name || user.username || slug;
-    const fallback = [
-      {
-        id: slug,
-        name: fallbackName,
-        mode: inferModeFromRole(user.role),
-      },
-    ];
-
-    // Only root (100) can list all tenants. Skip the call otherwise.
-    if (user.role !== 100) {
-      if (!cancelled) setTenants(fallback);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    API.get('/api/v2/admin/tenants?page_size=50', { skipErrorHandler: true })
-      .then((res) => {
-        if (cancelled) return;
-        const rows = res?.data?.data?.tenants;
-        if (!Array.isArray(rows) || rows.length === 0) {
-          setTenants(fallback);
-          return;
-        }
-        setTenants(
-          rows.map((t) => ({
-            id: t.slug || t.id,
-            name: t.name || t.slug || String(t.id),
-            mode: 'Reseller',
-          })),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setTenants(fallback);
-      });
-
-    return () => {
-      cancelled = true;
+    return {
+      id: slug,
+      name: user.tenant_name || slug || user.display_name || user.username,
+      mode: inferModeFromRole(user.role),
     };
   }, [user]);
-
-  return tenants;
-};
-
-const switchTenantSlug = (slug) => {
-  try {
-    localStorage.setItem('tenant_slug', slug);
-  } catch (_) {
-    // ignore — private mode
-  }
-  // Trigger a re-fetch of tenant-scoped data by reloading.
-  window.location.reload();
-};
 
 const handleLogout = async () => {
   try {
@@ -674,12 +623,7 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
   // is shared across the whole app.
   const toggleLang = () => i18n.changeLanguage(isZh ? 'en' : 'zh');
   const user = useBridgedUser();
-  const tenants = useRealTenants(user);
-  const currentSlug = readTenantSlug();
-  const currentTenant =
-    (tenants && tenants.find((t) => t.id === currentSlug)) ||
-    (tenants && tenants[0]) ||
-    null;
+  const currentTenant = useCurrentTenant(user);
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = () => setNavOpen(false);
   const navigate = useNavigate();
@@ -832,14 +776,9 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
             </a>
           </div>
           <TenantSwitcher
-            tenants={tenants ?? []}
+            tenants={currentTenant ? [currentTenant] : []}
             tenantName={currentTenant?.name ?? ''}
             mode={currentTenant?.mode ?? 'Personal'}
-            onSelect={(tenantId) => {
-              if (tenantId && tenantId !== currentSlug) {
-                switchTenantSlug(tenantId);
-              }
-            }}
           />
         </div>
       </aside>

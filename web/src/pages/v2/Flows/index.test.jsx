@@ -220,7 +220,7 @@ describe('Flows page — newToken wizard', () => {
     });
 
     const [url, body] = API.post.mock.calls[0];
-    expect(url).toBe('/api/v2/acme/tokens');
+    expect(url).toBe('/api/v2/~/tokens');
     expect(body.name).toBe('my-token');
     expect(body.group).toBe('team-a');
     expect(body.unlimited_quota).toBe(false);
@@ -336,7 +336,7 @@ describe('Flows page — newChannel wizard (real handler-chain contract)', () =>
 
     await waitFor(() => expect(API.post).toHaveBeenCalledTimes(1));
     const [url, body] = API.post.mock.calls[0];
-    expect(url).toBe('/api/v2/acme/channels');
+    expect(url).toBe('/api/v2/~/channels');
     expect(body.name).toBe('openai/main-2');
     expect(body.key).toBe('sk-test-key-12345');
     expect(body.models).toBe('claude-3-opus,claude-3-sonnet');
@@ -532,7 +532,7 @@ describe('Flows page — newChannel wizard (real handler-chain contract)', () =>
 
     await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
     expect(API.get.mock.calls[0][0]).toBe(
-      '/api/v2/acme/channels/99/upstream-models',
+      '/api/v2/~/channels/99/upstream-models',
     );
 
     // The "new" model is pre-selected and shown with a checkbox; the
@@ -548,7 +548,7 @@ describe('Flows page — newChannel wizard (real handler-chain contract)', () =>
 
     await waitFor(() => expect(API.put).toHaveBeenCalledTimes(1));
     const [url, body] = API.put.mock.calls[0];
-    expect(url).toBe('/api/v2/acme/channels/99');
+    expect(url).toBe('/api/v2/~/channels/99');
     // Merge of the channel's original models ('gpt-4', set at create) with
     // the selected new model ('gpt-4o') — not a blind overwrite.
     expect(body.models).toBe('gpt-4,gpt-4o');
@@ -579,10 +579,7 @@ describe('Flows page — newChannel wizard (real handler-chain contract)', () =>
     fireEvent.click(screen.getByTestId('newchannel-test-btn'));
 
     await waitFor(() => {
-      expect(API.post).toHaveBeenCalledWith(
-        '/api/v2/acme/channels/99/test',
-        {},
-      );
+      expect(API.post).toHaveBeenCalledWith('/api/v2/~/channels/99/test', {});
       expect(screen.getByTestId('newchannel-test-result').textContent).toMatch(
         /88ms/,
       );

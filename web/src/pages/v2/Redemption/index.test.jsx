@@ -139,7 +139,7 @@ describe('Redemption page', () => {
 
     // Verify API was called with correct tenant slug.
     expect(API.get).toHaveBeenCalledWith(
-      expect.stringContaining('/api/v2/acme/redemptions'),
+      expect.stringContaining('/api/v2/~/redemptions'),
     );
 
     // Delete buttons use data-testid with row id.
@@ -195,7 +195,7 @@ describe('Redemption page', () => {
 
     await waitFor(() => {
       expect(API.post).toHaveBeenCalledWith(
-        `/api/v2/acme/redemptions`,
+        `/api/v2/~/redemptions`,
         expect.objectContaining({ name: 'batch-promo' }),
       );
     });
@@ -236,7 +236,7 @@ describe('Redemption page', () => {
     fireEvent.click(screen.getByTestId('confirm-ok'));
 
     await waitFor(() => {
-      expect(API.delete).toHaveBeenCalledWith(`/api/v2/acme/redemptions/5`);
+      expect(API.delete).toHaveBeenCalledWith(`/api/v2/~/redemptions/5`);
     });
 
     expect(showSuccess).toHaveBeenCalledWith('Redemption code deleted');
