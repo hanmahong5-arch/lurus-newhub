@@ -159,15 +159,17 @@ key `platform-core` 只有 `balance:write / user:delete / provisioning`，**没�
 
 ## BMAD
 
-| Resource | Path |
-|----------|------|
-| PRD | `./_bmad-output/planning-artifacts/prd.md` |
-| Epics | `./_bmad-output/planning-artifacts/epics.md` |
-| Architecture | `./_bmad-output/planning-artifacts/architecture.md` |
-| Sprint Status | `./_bmad-output/planning-artifacts/sprint-status.yaml` |
-| Project Context | `./_bmad-output/planning-artifacts/project-context.md` |
+| Resource | Path | 状态 |
+|----------|------|------|
+| PRD | `./_bmad-output/planning-artifacts/prd.md` | 2026-08-09 |
+| Epics | `./_bmad-output/planning-artifacts/epics.md` | 2026-05-07 |
+| Architecture | `./_bmad-output/planning-artifacts/architecture.md` | 2026-04-23 |
+| Project Context | `./_bmad-output/planning-artifacts/project-context.md` | 2026-04-23 |
+| Sprint Status | `./_bmad-output/planning-artifacts/sprint-status.yaml` | **2026-05-05 快照,非当前状态** |
 
-**Story 文档规则（Epic 6+ 严格执行）**: 实现前建 story 文档 → 通过 `dev-story/checklist.md` → 含验证证据才可标 done。违反 = 工作无效。
+**当轮计划**: `_bmad-output/planning-artifacts/cycle<N>-*.md`,一轮一份。git 里只剩 `cycle13-industrial-grade-2026-09-20.md`(最近完成的一轮)与 `cycle11-first-customer-2026-09-19.md`(被 `internal/pkg/metrics/l7_settlement_failed_zero_init_test.go` 引用);更早各轮在 git 历史里。
+
+⚠️ 原 "Story 文档规则(Epic 6+ 严格执行 → `dev-story/checklist.md`)" 已删:**本仓从来没有 `dev-story/checklist.md`**(2026-09-22 全仓 grep 核实),且 2026-05 之后 14 轮工作没有一轮建过 story 文档 —— 实际形态是「当轮计划文档 + PR 正文带实跑证据」。
 
 ---
-_BMAD artifacts last review: 2026-05-18 — governance: `lurus/doc/audit/2026-05-18-bmad-output-stale.md`._
+_2026-09-22 文档瘦身: 删除 62 份一次性产物(story/acceptance/各轮计划/审计报告),doc 79→63、_bmad-output 62→16;保留 runbook、ADR/decisions、契约、对外材料与被代码引用的文档。_

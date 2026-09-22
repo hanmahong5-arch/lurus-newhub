@@ -211,5 +211,4 @@ STAGE target: `test-newhub.lurus.cn` (R6); management key provisioned via operat
 - **Middleware**: `internal/adapter/middleware/internal_api_auth.go`
 - **Companion**: `_bmad-output/planning-artifacts/adr-2026-05-18-budget-alerts.md` (alert event taxonomy)
 - **Runbook**: `doc/runbook/pool-threshold-alert.md` (operator triage on `CreditPoolBalanceLow`)
-- **Story**: `_bmad-output/planning-artifacts/story-q3-phase2-credit-pool.md` (BMAD dev-story)
 - **Consumer**: `2c-gui-switch` (Wails desktop, Reseller mode integration)

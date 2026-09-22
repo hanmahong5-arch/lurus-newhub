@@ -262,9 +262,10 @@ var retiredIdentifierAllowlist = map[string]string{
 	// stage-rollback.sh's Mechanism: header, docker-compose.yml's drill
 	// comment) — were fixed in the operator hand-finish and their rows
 	// removed; TestRetiredIdentifierAllowlistIsNotStale is what forces that
-	// removal. process.md stays: it is a dated story record whose file list
-	// names the drill script, now annotated in-line with its deletion.
-	filepath.Join("doc", "process.md"): "dated 2026-06 story record listing the files that change shipped; the pg-restore-drill.sh line carries its 2026-09-19 deletion note in-line",
+	// removal. doc/process.md's row went the same way on 2026-09-22: the
+	// entries that named the retired drill script were part of the
+	// 2026-02→05 progress log that the doc slim deleted, so the file is back
+	// under the gate with no exemption.
 }
 
 // retiredIdentifierMaxFileSize bounds the repo-root file scan below — build

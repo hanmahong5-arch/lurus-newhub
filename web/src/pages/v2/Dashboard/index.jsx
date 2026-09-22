@@ -63,8 +63,8 @@ const fmtTs = (ts) => {
 };
 
 // Realtime KPI tiles derived from the last DASHBOARD_REALTIME_WINDOW_SECONDS
-// window of /api/v2/{slug}/logs. No dedicated metrics endpoint exists yet;
-// see _bmad-output/planning-artifacts/hardening-swarm-2026-05-18-acceptance.md.
+// window of /api/v2/{slug}/logs. No dedicated metrics endpoint exists yet —
+// /metrics is Prometheus-format and operator-only (nginx 404s it publicly).
 
 // GET /api/v2/:slug/logs rejects page_size > 100 by falling back to 20
 // (v2_log.go), so asking for more than this returns *fewer* rows, not more.

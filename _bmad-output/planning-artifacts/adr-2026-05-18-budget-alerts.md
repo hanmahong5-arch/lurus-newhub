@@ -3,7 +3,7 @@
 **Status**: Proposed  
 **Date**: 2026-05-18  
 **Author**: Architect (lurus-newhub)  
-**References**: competitive-intel-2026-05-18.md (finding #7, #14), story-7-5 newhub-alerts.yaml
+**References**: story-7-5 newhub-alerts.yaml
 
 ---
 
