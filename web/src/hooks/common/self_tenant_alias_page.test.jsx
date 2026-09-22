@@ -41,7 +41,11 @@ vi.mock('../../helpers', () => ({
   showError: vi.fn(),
   showSuccess: vi.fn(),
   isRoot: vi.fn(() => false),
+  getServerAddress: () => 'https://hub.example.test',
 }));
+
+// The Models page renders vendor logos from a ~4 MB pack; not under test.
+vi.mock('@lobehub/icons', () => ({}));
 
 vi.mock('../../components/hifi/HFShell', () => ({
   default: ({ children }) => React.createElement('div', null, children),
