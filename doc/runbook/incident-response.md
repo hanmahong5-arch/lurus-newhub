@@ -181,4 +181,4 @@ ssh root@100.122.83.20 "kubectl get all -n lurus-newhub"
 
 ## Postmortem (after P0/P1)
 
-Create `doc/audit/YYYY-MM-DD-title.md` (the repo's actual postmortem/incident-writeup location — see e.g. `doc/audit/2026-06-01-ci-red-diagnosis-and-followups.md`) with: Date, Duration, Severity, Impact, Timeline, Root Cause, Resolution, Action Items.
+Create `doc/audit/YYYY-MM-DD-title.md` (the repo's postmortem/incident-writeup location) with: Date, Duration, Severity, Impact, Timeline, Root Cause, Resolution, Action Items.

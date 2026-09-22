@@ -92,8 +92,7 @@ become committed only once P1-5 (backups) + alert paging land — see §5.**
 - Billing is hard to lose: transactional outbox (SKIP LOCKED + idempotent) + breaker +
   cached-balance degrade.
 - Dependency hangs bounded: PG `statement_timeout`, Meilisearch and Tavily client timeouts;
-  Redis, platform gRPC and NATS budgets are cycle-12 work
-  (`_bmad-output/planning-artifacts/cycle12-industrial-grade-2026-09-19.md`).
+  Redis, platform gRPC and NATS budgets shipped in the 2026-09-19 reliability round.
 - Backups: daily `pg_dump` CronJob to a PVC, host-cron off-site rsync, weekly restore drill
   (`doc/runbook/database.md`, `doc/runbook/pg-restore.md`); no WAL archiving, so RPO is up
   to 24 h.

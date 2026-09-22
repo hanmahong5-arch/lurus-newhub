@@ -11,6 +11,15 @@ spec:
   # STAGE: kill the leader pod and confirm a standby takes over within the
   # lease TTL. Only the leader runs master-only background tasks.
   replicas: 3
+  # One superseded ReplicaSet, not ten. Every auto-pin leaves a new RS behind
+  # and the default (10) had accumulated 11 of them per namespace, each
+  # pinning a pod template nobody can reach any more — ArgoCD does not manage
+  # ReplicaSets, so nothing was ever cleaning them up. The rollback path here
+  # is `revert the pin commit`, not `kubectl rollout undo`
+  # (doc/runbook/staging-deploy.md); 1 keeps a single undo step as a local
+  # escape hatch for the case where GitHub is unreachable from R6, which has
+  # happened (2026-09-03, ArgoCD + ImagePullBackOff).
+  revisionHistoryLimit: 1
   selector:
     matchLabels:
       app: lurus-newhub

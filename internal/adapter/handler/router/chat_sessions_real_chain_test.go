@@ -1,7 +1,7 @@
 package router
 
-// chat_sessions_real_chain_test.go — REAL-CHAIN oracle for cycle-10 L3
-// (console-completion-cycle10-2026-09-16.md, migration 038).
+// chat_sessions_real_chain_test.go — REAL-CHAIN oracle for the console chat
+// session store (migration 038).
 // internal/adapter/handler/v2_chat_session_test.go mounts the five
 // GET/POST/PATCH/DELETE handlers directly on a bare gin.New() with
 // "id"/"tenant_context" hand-seeded via c.Set — sound for the repo-wiring

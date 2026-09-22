@@ -1,7 +1,6 @@
 -- 038_create_chat_sessions.sql
--- Idempotent PG-only creation of chat_sessions + chat_messages (cycle-10 L3,
--- console-completion-cycle10-2026-09-16.md): a client-driven, best-effort
--- SAVE of a v2 console Chat conversation.
+-- Idempotent PG-only creation of chat_sessions + chat_messages: a
+-- client-driven, best-effort SAVE of a v2 console Chat conversation.
 --
 -- WHY: POST /api/v2/:tenant_slug/chat/send (handler.ChatSend,
 -- internal/adapter/handler/v2_chat.go) already runs a real multi-turn
