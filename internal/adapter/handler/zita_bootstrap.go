@@ -131,6 +131,21 @@ func ZitaBootstrap(c *gin.Context) {
 		common.SysError(fmt.Sprintf("zita-bootstrap: session rotation failed for user %d: %v", user.Id, err))
 	}
 
+	// tenant_slug lets the v2 frontend route every subsequent API call
+	// through /api/v2/:tenant_slug/... without an extra round trip to look
+	// up the slug. user.TenantId is a UUID; resolve it to the human-readable
+	// slug here. resolveTenantSlug answers "" — never an invented literal —
+	// when the tenant row cannot be read; see that function.
+	//
+	// It is written to the SESSION as well as the response body because the
+	// body is read exactly once, by the tab that performed the login. Any
+	// other tab, or the same tab after localStorage was cleared, has no way
+	// back to it: GET /api/v2/auth/session-info is the only slug source that
+	// costs no platform cookie, and it reads this key. Without it that
+	// endpoint answered "" for every bridge-established session, and the
+	// console fell back to a slug no tenant row carries (404 on every panel).
+	tenantSlug := resolveTenantSlug(user.TenantId)
+
 	session := sessions.Default(c)
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
@@ -138,6 +153,7 @@ func ZitaBootstrap(c *gin.Context) {
 	session.Set("status", user.Status)
 	session.Set("group", user.Group)
 	session.Set("identity_account_id", id.AccountID)
+	session.Set("tenant_slug", tenantSlug)
 	if err := session.Save(); err != nil {
 		common.SysError(fmt.Sprintf("zita-bootstrap: session save failed: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -160,13 +176,6 @@ func ZitaBootstrap(c *gin.Context) {
 		governance.ActionAuthBootstrapped, governance.ResourceUser, user.Id,
 		string(details),
 	))
-
-	// tenant_slug lets the v2 frontend route every subsequent API call
-	// through /api/v2/:tenant_slug/... without an extra round trip to look
-	// up the slug. user.TenantId is a UUID; resolve it to the human-readable
-	// slug here. Missing/empty TenantId falls back to "default" so the
-	// frontend still has a routable value.
-	tenantSlug := resolveTenantSlug(user.TenantId)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

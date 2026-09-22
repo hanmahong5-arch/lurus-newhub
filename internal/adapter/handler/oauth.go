@@ -545,8 +545,27 @@ func GetSessionInfo(c *gin.Context) {
 		return
 	}
 
-	// Get tenant_slug from session (stored during OAuth callback)
+	// Get tenant_slug from session (stored by the OAuth callback above and,
+	// since the same cycle as this fallback, by ZitaBootstrap).
+	//
+	// Sessions minted before that were saved without the key, so this
+	// endpoint — the console's only way to learn its routing slug that does
+	// not need a platform cookie — answered "" for every one of them, and
+	// the console fell back to a literal that TenantSlugGuard 404s. Resolve
+	// it from the user's own tenant instead, and write it back so an
+	// existing login pays the lookup once rather than on every call. A
+	// tenant that cannot be resolved leaves the field "" (resolveTenantSlug
+	// never invents a slug) and nothing is written.
 	tenantSlug, _ := session.Get("tenant_slug").(string)
+	if tenantSlug == "" {
+		if resolved := resolveTenantSlug(user.TenantId); resolved != "" {
+			tenantSlug = resolved
+			session.Set("tenant_slug", tenantSlug)
+			if err := session.Save(); err != nil {
+				common.SysError(fmt.Sprintf("GetSessionInfo: failed to persist recovered tenant_slug for user %d: %v", userId, err))
+			}
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

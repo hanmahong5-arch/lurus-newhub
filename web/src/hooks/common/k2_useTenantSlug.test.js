@@ -23,7 +23,7 @@ import { renderHook } from '@testing-library/react';
 import {
   useTenantSlug,
   readTenantSlug,
-  DEFAULT_TENANT_SLUG,
+  UNRESOLVED_TENANT_SLUG,
 } from './useTenantSlug';
 
 beforeEach(() => {
@@ -70,21 +70,37 @@ describe('useTenantSlug', () => {
   });
 
   it('falls back when nothing is stored', () => {
-    expect(readTenantSlug()).toBe(DEFAULT_TENANT_SLUG);
+    expect(readTenantSlug()).toBe(UNRESOLVED_TENANT_SLUG);
     const { result } = renderHook(() => useTenantSlug());
-    expect(result.current).toBe(DEFAULT_TENANT_SLUG);
+    expect(result.current).toBe(UNRESOLVED_TENANT_SLUG);
   });
 
   it('falls back when localStorage throws, as it does in private mode', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('access denied');
     });
-    expect(readTenantSlug()).toBe(DEFAULT_TENANT_SLUG);
+    expect(readTenantSlug()).toBe(UNRESOLVED_TENANT_SLUG);
   });
 
   it('treats an empty stored slug as absent', () => {
-    // '' would otherwise build /api/v2//channels, which routes nowhere.
+    // '' would otherwise build /api/v2//channels — and nginx merge_slashes
+    // turns that into /api/v2/channels, a different route, rather than a
+    // clean 404.
     localStorage.setItem('tenant_slug', '');
-    expect(readTenantSlug()).toBe(DEFAULT_TENANT_SLUG);
+    expect(readTenantSlug()).toBe(UNRESOLVED_TENANT_SLUG);
+  });
+
+  // The fallback is not allowed to be a plausible tenant name. 'default' —
+  // the tenant *id* both deployments use, whose routing slug is 'lurus' —
+  // was the value here until 2026-09-22, and every panel of a browser with
+  // no stored slug asked for /api/v2/default/... and was answered 404.
+  it('falls back to a value no tenant can carry, not to a tenant id', () => {
+    expect(UNRESOLVED_TENANT_SLUG).not.toBe('default');
+    expect(UNRESOLVED_TENANT_SLUG).not.toBe('lurus');
+    // Non-empty (see above) and a single path segment, so the request that
+    // carries it reaches TenantSlugGuard and comes back 404
+    // TENANT_NOT_FOUND — the code helpers/api.js repairs and replays.
+    expect(UNRESOLVED_TENANT_SLUG).not.toBe('');
+    expect(UNRESOLVED_TENANT_SLUG).not.toContain('/');
   });
 });

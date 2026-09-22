@@ -41,7 +41,9 @@ import { describe, expect, it } from 'vitest';
  * from 1324 by L7's LoadErrorPanel extraction.
  */
 const CEILINGS = {
-  'components/hifi/HFShell.jsx': 950,
+  // 950 → 948 (2026-09-22): the local readTenantSlug copy gave way to the
+  // shared one in hooks/common/useTenantSlug.js.
+  'components/hifi/HFShell.jsx': 948,
   'components/settings/AuthSettingPage.jsx': 1086,
   'components/settings/SystemSetting.jsx': 1490,
   'components/settings/personal/cards/NotificationSettings.jsx': 930,

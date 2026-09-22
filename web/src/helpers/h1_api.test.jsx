@@ -75,6 +75,7 @@ import { showError } from './utils';
 import {
   API,
   updateAPI,
+  resetBootstrapCooldown,
   buildApiPayload,
   handleApiError,
   processModelsData,
@@ -97,7 +98,23 @@ beforeEach(() => {
   API.mockReset();
   API.mockResolvedValue({ data: { replayed: true } });
   showError.mockClear();
+  // The bootstrap failure memo is module state, so a case that fails the
+  // bridge would otherwise mute the bridge for every case after it.
+  resetBootstrapCooldown();
+  // helpers/apiMode.js resolves the tenant slug over window.fetch.
+  vi.stubGlobal('fetch', vi.fn());
 });
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+// A session-info answer, the shape helpers/apiMode.js reads.
+const namesTenant = (slug) =>
+  fetch.mockResolvedValue({
+    ok: true,
+    json: async () => ({ success: true, data: { tenant_slug: slug } }),
+  });
 
 describe('in-flight GET de-duplication', () => {
   it('shares one request between concurrent identical GETs', async () => {
@@ -271,16 +288,14 @@ describe('401 session self-heal interceptor', () => {
 });
 
 describe('tenant slug self-heal interceptor', () => {
-  const tenantNotFound = (url = '/api/v2/default/user/me') => ({
+  const tenantNotFound = (url = '/api/v2/-/user/me') => ({
     response: { status: 404, data: { error_code: 'TENANT_NOT_FOUND' } },
     config: { url },
   });
 
   it('adopts the slug the server names and replays the request against it', async () => {
     localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    API.post.mockResolvedValue({
-      data: { success: true, data: { id: 9, tenant_slug: 'lurus' } },
-    });
+    namesTenant('lurus');
     const err = tenantNotFound();
 
     const res = await onRejected()(err);
@@ -293,11 +308,29 @@ describe('tenant slug self-heal interceptor', () => {
     expect(showError).not.toHaveBeenCalled();
   });
 
+  // The repair asks who the session belongs to; it does not try to log in
+  // again. A browser whose platform cookie has expired can still answer the
+  // first question and cannot answer the second — routing this error code
+  // through the bridge is what turned "the slug is wrong" into a burst of
+  // 401s (and then 429s) that repaired nothing.
+  it('re-resolves the slug instead of re-running the login bridge', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    localStorage.setItem('tenant_slug', 'default');
+    namesTenant('lurus');
+
+    await onRejected()(tenantNotFound());
+
+    expect(API.post).not.toHaveBeenCalled();
+    expect(String(fetch.mock.calls[0][0])).toContain(
+      '/api/v2/auth/session-info',
+    );
+    // The repaired slug is kept, so the next request starts from it.
+    expect(localStorage.getItem('tenant_slug')).toBe('lurus');
+  });
+
   it('rewrites only the tenant segment, leaving the rest of the path intact', async () => {
     localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    API.post.mockResolvedValue({
-      data: { success: true, data: { id: 9, tenant_slug: 'lurus' } },
-    });
+    namesTenant('lurus');
     const err = tenantNotFound('/api/v2/default/logs/self?page=2');
 
     await onRejected()(err);
@@ -309,11 +342,11 @@ describe('tenant slug self-heal interceptor', () => {
     localStorage.setItem('user', JSON.stringify({ id: 1 }));
     const err = {
       response: { status: 404, data: { error_code: 'NOT_FOUND' } },
-      config: { url: '/api/v2/default/user/me' },
+      config: { url: '/api/v2/lurus/user/me' },
     };
 
     await expect(onRejected()(err)).rejects.toBe(err);
-    expect(API.post).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
     expect(showError).toHaveBeenCalledWith(err);
   });
 
@@ -322,34 +355,91 @@ describe('tenant slug self-heal interceptor', () => {
     const err = tenantNotFound('/api/status');
 
     await expect(onRejected()(err)).rejects.toBe(err);
-    expect(API.post).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
     expect(showError).toHaveBeenCalledWith(err);
   });
 
   it('gives up rather than replaying when the server names no slug', async () => {
     localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    API.post.mockResolvedValue({
-      data: { success: true, data: { id: 9 } },
-    });
+    fetch.mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
     const err = tenantNotFound();
 
     await expect(onRejected()(err)).rejects.toBe(err);
     expect(API).not.toHaveBeenCalled();
-    expect(err.config.url).toBe('/api/v2/default/user/me');
+    expect(err.config.url).toBe('/api/v2/-/user/me');
     expect(showError).toHaveBeenCalledWith(err);
   });
 
   it('repairs a given request only once', async () => {
     localStorage.setItem('user', JSON.stringify({ id: 1 }));
-    API.post.mockResolvedValue({
-      data: { success: true, data: { id: 9, tenant_slug: 'lurus' } },
-    });
+    namesTenant('lurus');
     const err = tenantNotFound();
     err.config._retriedAfterSlugRepair = true;
 
     await expect(onRejected()(err)).rejects.toBe(err);
-    expect(API.post).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
     expect(showError).toHaveBeenCalledWith(err);
+  });
+});
+
+// The 401 heal is per-wave, and a console page mounts several waves. When the
+// platform session is genuinely gone, every wave used to buy its own bridge
+// POST: five 401s, then 429s from BootstrapRateLimit (5/60s) with an empty
+// body, and a console that stayed on screen reporting "could not load" with
+// no way out. Live on hub.lurus.cn, 2026-09-22.
+describe('bootstrap failure cooldown', () => {
+  const panel = (n) => ({
+    response: { status: 401 },
+    config: { url: `/api/v2/lurus/panel/${n}` },
+  });
+
+  const failWaves = async (count) => {
+    for (let i = 0; i < count; i += 1) {
+      const err = panel(i);
+      await expect(onRejected()(err)).rejects.toBe(err);
+    }
+  };
+
+  it('buys ONE bootstrap for a run of 401s, not one per request', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    API.post.mockRejectedValue({ response: { status: 401 } });
+
+    // Sequential, not concurrent: the in-flight collapse cannot help here,
+    // only the cooldown can.
+    await failWaves(5);
+
+    expect(API.post).toHaveBeenCalledTimes(1);
+    // Each request still reports its own failure — the cooldown suppresses
+    // the retry, not the truth.
+    expect(showError).toHaveBeenCalledTimes(5);
+  });
+
+  it('keeps healing when the bootstrap SUCCEEDS (no cooldown on success)', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    API.post.mockResolvedValue({
+      data: { success: true, data: { id: 9, tenant_slug: 'lurus' } },
+    });
+
+    await onRejected()(panel(1));
+    await onRejected()(panel(2));
+
+    expect(API.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('tries again once the cooldown window has passed', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 1 }));
+    API.post.mockRejectedValue({ response: { status: 401 } });
+    const base = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(base);
+
+    await failWaves(2);
+    expect(API.post).toHaveBeenCalledTimes(1);
+
+    clock.mockReturnValue(base + 60_001);
+    await failWaves(1);
+    expect(API.post).toHaveBeenCalledTimes(2);
+
+    clock.mockRestore();
   });
 });
 
