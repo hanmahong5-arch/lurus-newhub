@@ -273,6 +273,9 @@ type JWKSManager struct {
 	refreshMu  sync.Mutex
 	// minRefreshInterval prevents too frequent refreshes on key not found
 	minRefreshInterval time.Duration
+	// refreshInterval: jwksRefreshInterval captured at construction, so the
+	// refresh goroutine never reads the package var (-race, 2026-09-23).
+	refreshInterval time.Duration
 }
 
 // oidcHTTPClient is the HTTP client used for JWKS fetching.
@@ -399,6 +402,7 @@ func NewJWKSManagerWithContext(ctx context.Context, jwksURI string) *JWKSManager
 		jwksURI:            jwksURI,
 		publicKeys:         make(map[string]*rsa.PublicKey),
 		minRefreshInterval: 30 * time.Second, // Prevent refresh more than once per 30 seconds
+		refreshInterval:    jwksRefreshInterval,
 	}
 
 	// Initial key fetch
@@ -472,7 +476,11 @@ func (m *JWKSManager) refreshKeys() error {
 
 // autoRefreshWithContext periodically refreshes JWKS keys with context support
 func (m *JWKSManager) autoRefreshWithContext(ctx context.Context) {
-	m.refreshTicker = time.NewTicker(jwksRefreshInterval)
+	interval := m.refreshInterval
+	if interval <= 0 {
+		interval = jwksRefreshInterval
+	}
+	m.refreshTicker = time.NewTicker(interval)
 	defer m.refreshTicker.Stop()
 
 	for {
