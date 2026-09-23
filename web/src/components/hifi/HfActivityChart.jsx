@@ -169,16 +169,21 @@ const HfActivityChart = ({
             tr('console.activity.requests', 'requests'),
           )}
         </div>
-        <div className='hf-seg' hidden={!!fixedWindow}>
-          {seg(range === 'h24', () => setRange('h24'), 'range-24h', '24H')}
-          {seg(range === 7, () => setRange(7), 'range-7', '7D')}
-          {seg(
-            range === maxDays,
-            () => setRange(maxDays),
-            `range-${maxDays}`,
-            `${maxDays}D`,
-          )}
-        </div>
+        {/* Not rendered (not merely hidden) when the host page fixes the
+            window: .hf-seg sets display, which beats [hidden], and the
+            buttons would do nothing (rankings, 2026-09-23). */}
+        {!fixedWindow && (
+          <div className='hf-seg'>
+            {seg(range === 'h24', () => setRange('h24'), 'range-24h', '24H')}
+            {seg(range === 7, () => setRange(7), 'range-7', '7D')}
+            {seg(
+              range === maxDays,
+              () => setRange(maxDays),
+              `range-${maxDays}`,
+              `${maxDays}D`,
+            )}
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
