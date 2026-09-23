@@ -118,18 +118,26 @@ func getCachedRankings(tenantID, by string, hours int) (*rankingsCacheEntry, err
 }
 
 // parseRankingsParams reads and validates the `by`/`hours` query params
-// shared by the root and tenant rankings routes. `by` must be "model",
-// "vendor" or "group" — any other value is rejected with a non-empty
+// shared by the root and tenant rankings routes. `by` must be one of
+// rankingDimensions — any other value is rejected with a non-empty
 // errMsg (unknown `by` used to fall back to "model" silently, which let a
 // typo mint an unbounded number of cache-key dimensions; now the caller
 // must ask for one of the dimensions the leaderboard actually supports).
 // `hours` is clamped to [1,720] then snapped to a cache-friendly preset; an
 // unparsable `hours` (empty string, non-integer) falls back to
 // rankingsDefaultHours rather than silently clamping to the 1-hour preset.
+// rankingDimensions is the closed set of leaderboard dimensions (see
+// repo.GetRankings). key/user/product answer "who and what is spending":
+// per API key, per member, per calling product (X-Lurus-Product).
+var rankingDimensions = map[string]bool{
+	"model": true, "vendor": true, "group": true,
+	"key": true, "user": true, "product": true,
+}
+
 func parseRankingsParams(c *gin.Context) (by string, hours int, errMsg string) {
 	by = c.DefaultQuery("by", "model")
-	if by != "model" && by != "vendor" && by != "group" {
-		return "", 0, "by must be model, vendor or group"
+	if !rankingDimensions[by] {
+		return "", 0, "by must be model, vendor, group, key, user or product"
 	}
 	h, atoiErr := strconv.Atoi(c.DefaultQuery("hours", strconv.Itoa(rankingsDefaultHours)))
 	if atoiErr != nil {
@@ -169,7 +177,7 @@ func writeRankingsResponse(c *gin.Context, by string, hours int, entry *rankings
 // per model, per channel-type vendor, or per logs.group, scoped to the
 // caller's own tenant.
 //
-// GET /api/v2/:tenant_slug/analytics/rankings?by=model|vendor|group&hours=1..720
+// GET /api/v2/:tenant_slug/analytics/rankings?by=model|vendor|group|key|user|product&hours=1..720
 //
 // Tenant id comes from the resolved tenant context, never from the query —
 // cross-tenant market share is impossible by construction (mirrors

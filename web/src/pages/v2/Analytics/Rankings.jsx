@@ -53,6 +53,19 @@ const HOUR_PRESETS = [
   [720, 'hours_720', 'last 30d'],
 ];
 
+// Leaderboard dimensions — the closed set the backend accepts
+// (rankingDimensions in v2_analytics_rankings.go). key/user/product answer
+// "who and what is spending": per API key (shown as "owner / key name"),
+// per member, per calling product (X-Lurus-Product).
+const BY_DIMENSIONS = [
+  ['model', 'by model'],
+  ['vendor', 'by vendor'],
+  ['group', 'by group'],
+  ['key', 'by API key'],
+  ['user', 'by member'],
+  ['product', 'by product'],
+];
+
 const fmtInt = (n) => Number(n ?? 0).toLocaleString();
 
 const fmtPct = (v) => `${Number(v ?? 0).toFixed(1)}%`;
@@ -217,7 +230,7 @@ const HFRankings = () => {
           <div className='sub'>
             {tr(
               'console.rankings.sub',
-              'rank · trend · share vs the previous window, per model, per vendor or per group',
+              'rank · trend · share vs the previous window, per model, vendor, group, API key, member or product',
             )}
           </div>
         </div>
@@ -278,30 +291,20 @@ const HFRankings = () => {
                 </span>
               </>
             )}
-            <button
-              type='button'
-              data-testid='rankings-by-model'
-              className={'btn sm' + (by === 'model' ? ' primary' : '')}
-              onClick={() => setBy('model')}
-            >
-              {tr('console.rankings.by_model', 'by model')}
-            </button>
-            <button
-              type='button'
-              data-testid='rankings-by-vendor'
-              className={'btn sm' + (by === 'vendor' ? ' primary' : '')}
-              onClick={() => setBy('vendor')}
-            >
-              {tr('console.rankings.by_vendor', 'by vendor')}
-            </button>
-            <button
-              type='button'
-              data-testid='rankings-by-group'
-              className={'btn sm' + (by === 'group' ? ' primary' : '')}
-              onClick={() => setBy('group')}
-            >
-              {tr('console.rankings.by_group', 'by group')}
-            </button>
+            {BY_DIMENSIONS.map(([dim, fallback]) => (
+              <button
+                key={dim}
+                type='button'
+                data-testid={`rankings-by-${dim}`}
+                className={'btn sm' + (by === dim ? ' primary' : '')}
+                onClick={() => setBy(dim)}
+              >
+                {tr(`console.rankings.by_${dim}`, fallback)}
+              </button>
+            ))}
+            <span aria-hidden='true' style={{ opacity: 0.4, padding: '0 4px' }}>
+              |
+            </span>
             {HOUR_PRESETS.map(([h, key, fallback]) => (
               <button
                 key={h}
@@ -429,7 +432,7 @@ const HFRankings = () => {
                                 gap: 8,
                               }}
                             >
-                              {by !== 'group' && (
+                              {(by === 'model' || by === 'vendor') && (
                                 <HfVendorIcon
                                   size={16}
                                   model={by === 'model' ? r.name : undefined}

@@ -367,6 +367,22 @@ func TestParseRankingsParams_AcceptsGroup(t *testing.T) {
 	}
 }
 
+// TestParseRankingsParams_AcceptsKeyUserProduct: the cycle-17 "who and
+// what is spending" dimensions are accepted; near-misses are not.
+func TestParseRankingsParams_AcceptsKeyUserProduct(t *testing.T) {
+	for _, dim := range []string{"key", "user", "product"} {
+		by, _, errMsg := parseRankingsParams(newRankingsParamsContext("by=" + dim))
+		if errMsg != "" || by != dim {
+			t.Errorf("by=%s: got by=%q errMsg=%q, want accepted", dim, by, errMsg)
+		}
+	}
+	for _, bad := range []string{"token", "users", "Product"} {
+		if _, _, errMsg := parseRankingsParams(newRankingsParamsContext("by=" + bad)); errMsg == "" {
+			t.Errorf("by=%s: want rejected", bad)
+		}
+	}
+}
+
 // TestTenantRankingsV2_ByGroup_ScopedToOwnTenant mounts GetTenantRankingsV2
 // directly on a bare gin.New() (setupTenantRankingsRouter) with
 // tenant_context hand-seeded by mockAuth's c.Set — not the production
