@@ -23,6 +23,7 @@ import { API, isRoot } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import HfVendorIcon from '../../../components/hifi/HfVendorIcon';
+import HfActivityChart from '../../../components/hifi/HfActivityChart';
 
 /*
  * v2 tenant-admin — Model / vendor / group performance rankings leaderboard.
@@ -122,6 +123,9 @@ const HFRankings = () => {
   const [scope, setScope] = useState('tenant');
   const [hours, setHours] = useState(24);
   const [rows, setRows] = useState([]);
+  // Hourly usage for the ranked names (server: repo.GetRankingSeries), drawn
+  // as the stacked trend above the table (openrouter.ai/rankings).
+  const [series, setSeries] = useState({ points: [], end: 0 });
   const [cachedAt, setCachedAt] = useState(null);
   const [totalTokens, setTotalTokens] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -148,6 +152,10 @@ const HFRankings = () => {
         if (cancelled) return;
         if (res?.data?.success) {
           setRows(res.data.data?.rows ?? []);
+          setSeries({
+            points: res.data.data?.series ?? [],
+            end: res.data.data?.window?.end ?? 0,
+          });
           setCachedAt(res.data.data?.cached_at ?? null);
           setTotalTokens(res.data.data?.total_tokens ?? 0);
         }
@@ -337,6 +345,29 @@ const HFRankings = () => {
                 </div>
               ) : null}
 
+              {!loading && rows.length > 0 && series.points.length > 0 && (
+                <div
+                  className='panel'
+                  style={{ padding: 18, marginBottom: 14 }}
+                  data-testid='rankings-trend'
+                >
+                  <HfActivityChart
+                    rows={series.points.map((p) => ({
+                      created_at: p.t,
+                      model_name: p.name,
+                      token_used: p.tokens,
+                      count: p.requests,
+                      quota: p.quota,
+                    }))}
+                    end={series.end}
+                    formatSpend={usd}
+                    defaultMetric='tokens'
+                    fixedWindow={
+                      hours <= 24 ? { hours } : { days: Math.round(hours / 24) }
+                    }
+                  />
+                </div>
+              )}
               {loading ? (
                 <div className='muted' data-testid='rankings-loading'>
                   {tr('console.common.loading', 'loading…')}

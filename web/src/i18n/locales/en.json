@@ -661,6 +661,13 @@
           "cheapest": "cheapest",
           "description": "description",
           "remove": "remove"
+        },
+        "perf": {
+          "thin": "too little traffic to measure",
+          "error_rate": "errors",
+          "th_p50": "p50 · 24h",
+          "sort_fastest": "fastest (p50)",
+          "window": "last 24h, your tenant"
         }
       },
       "playground": {

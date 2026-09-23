@@ -66,6 +66,9 @@ const fmtHour = (ts) =>
  * @param {number} p.end          window end, unix seconds
  * @param {(quota:number)=>string} p.formatSpend
  * @param {number} [p.maxDays=30] the fetched window; the long range option
+ * @param {{hours:number}|{days:number}} [p.fixedWindow] a window chosen by
+ *   the host page (rankings presets); hides the range switch
+ * @param {'spend'|'tokens'|'requests'} [p.defaultMetric='spend']
  * @param {number} [p.height=180]
  */
 const HfActivityChart = ({
@@ -73,10 +76,12 @@ const HfActivityChart = ({
   end,
   formatSpend,
   maxDays = 30,
+  fixedWindow,
+  defaultMetric = 'spend',
   height = 180,
 }) => {
   const { t: tr } = useTranslation();
-  const [metric, setMetric] = useState('spend');
+  const [metric, setMetric] = useState(defaultMetric);
   const [range, setRange] = useState(maxDays);
   const [hover, setHover] = useState(null);
 
@@ -86,11 +91,13 @@ const HfActivityChart = ({
     () =>
       buildActivity(
         rows,
-        range === 'h24'
-          ? { end, hours: 24, metric }
-          : { end, days: range, metric },
+        fixedWindow
+          ? { end, ...fixedWindow, metric }
+          : range === 'h24'
+            ? { end, hours: 24, metric }
+            : { end, days: range, metric },
       ),
-    [rows, end, range, metric],
+    [rows, end, range, metric, fixedWindow],
   );
   const fmtBucket = data.unit === 'hour' ? fmtHour : fmtDay;
   const fmt = metric === 'spend' ? formatSpend : compact;
@@ -135,9 +142,11 @@ const HfActivityChart = ({
           {fmt(data.total)}
         </div>
         <div className='faint' style={{ fontSize: 12 }}>
-          {range === 'h24'
-            ? tr('console.activity.last_24h', 'last 24 hours')
-            : tr('console.dashboard.usage_trend_window', { days: range })}
+          {fixedWindow
+            ? null
+            : range === 'h24'
+              ? tr('console.activity.last_24h', 'last 24 hours')
+              : tr('console.dashboard.usage_trend_window', { days: range })}
         </div>
         <span style={{ flex: 1 }} />
         <div className='hf-seg'>
@@ -160,7 +169,7 @@ const HfActivityChart = ({
             tr('console.activity.requests', 'requests'),
           )}
         </div>
-        <div className='hf-seg'>
+        <div className='hf-seg' hidden={!!fixedWindow}>
           {seg(range === 'h24', () => setRange('h24'), 'range-24h', '24H')}
           {seg(range === 7, () => setRange(7), 'range-7', '7D')}
           {seg(

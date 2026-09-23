@@ -54,6 +54,9 @@ type rankingsCacheEntry struct {
 	windowStart, windowEnd  int64
 	rows                    []repo.RankingRow
 	totalTokens, totalQuota int64
+	// series is hourly usage for exactly the names in rows (the chart above
+	// the leaderboard); fetched with the rows, cached with them.
+	series []repo.RankingSeriesPoint
 }
 
 // rankingsCache is per-pod (in-process sync.Map, no shared backing store):
@@ -93,6 +96,14 @@ func getCachedRankings(tenantID, by string, hours int) (*rankingsCacheEntry, err
 	if err != nil {
 		return nil, err
 	}
+	names := make([]string, len(rows))
+	for i, r := range rows {
+		names[i] = r.Name
+	}
+	series, err := repo.GetRankingSeries(start, end, tenantID, by, names)
+	if err != nil {
+		return nil, err
+	}
 	entry := &rankingsCacheEntry{
 		cachedAt:    time.Now().Unix(),
 		windowStart: start,
@@ -100,6 +111,7 @@ func getCachedRankings(tenantID, by string, hours int) (*rankingsCacheEntry, err
 		rows:        rows,
 		totalTokens: totalTokens,
 		totalQuota:  totalQuota,
+		series:      series,
 	}
 	rankingsCache.Store(key, entry)
 	return entry, nil
@@ -147,6 +159,7 @@ func writeRankingsResponse(c *gin.Context, by string, hours int, entry *rankings
 			"rows":         entry.rows,
 			"total_tokens": entry.totalTokens,
 			"total_quota":  entry.totalQuota,
+			"series":       entry.series,
 		},
 	})
 }
