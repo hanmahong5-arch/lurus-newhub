@@ -48,10 +48,13 @@ var modelFamilyRules = []familyRule{
 	{"o4-", "", 1.0},
 
 	// --- DeepSeek ---
-	{"deepseek-", "chat", 0.07},
-	{"deepseek-", "coder", 0.07},
-	{"deepseek-", "reasoner", 0.275},
-	{"deepseek-", "", 0.07},
+	// (list prices 2026-09-23; see defaultModelRatio — every non-pro name
+	// DeepSeek accepts is answered by deepseek-flash)
+	{"deepseek-", "pro", 0.66},
+	{"deepseek-", "chat", 0.15},
+	{"deepseek-", "coder", 0.15},
+	{"deepseek-", "reasoner", 0.15},
+	{"deepseek-", "", 0.15},
 
 	// --- Qwen ---
 	{"qwen-", "turbo", 0.86},

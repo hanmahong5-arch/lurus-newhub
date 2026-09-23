@@ -246,9 +246,15 @@ var defaultModelRatio = map[string]float64{
 	"command-r-plus":         1.5,
 	"command-r-08-2024":      0.075,
 	"command-r-plus-08-2024": 1.25,
-	"deepseek-chat":          0.27 / 2,
-	"deepseek-coder":         0.27 / 2,
-	"deepseek-reasoner":      0.55 / 2, // 0.55 / 1k tokens
+	// DeepSeek list (peak) prices, api-docs.deepseek.com, 2026-09-23. The
+	// legacy names are served by deepseek-flash ($0.30/1M in); off-peak is
+	// half, which a flat ratio cannot express, so the peak price is charged.
+	"deepseek-chat":     0.30 / 2,
+	"deepseek-coder":    0.30 / 2,
+	"deepseek-reasoner": 0.30 / 2,
+	"deepseek-flash":    0.30 / 2,
+	"deepseek-v4-flash": 0.30 / 2,
+	"deepseek-v4-pro":   1.32 / 2,
 	// Perplexity online 模型对搜索额外收费，有需要应自行调整，此处不计入搜索费用
 	"llama-3-sonar-small-32k-chat":   0.2 / 1000 * USD,
 	"llama-3-sonar-small-32k-online": 0.2 / 1000 * USD,
@@ -489,7 +495,7 @@ func GetModelRatio(name string) (float64, bool, string) {
 
 // PricingSource holds the pricing source details for a model.
 type PricingSource struct {
-	Source    string  `json:"source"`               // "explicit", "family_fallback", "none"
+	Source    string  `json:"source"` // "explicit", "family_fallback", "none"
 	Ratio     float64 `json:"ratio"`
 	Family    string  `json:"family,omitempty"`
 	BaseRatio float64 `json:"base_ratio,omitempty"`
@@ -731,6 +737,19 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		return 2, true
 	case "llama3-70b-8192":
 		return 0.79 / 0.59, true
+	}
+	// DeepSeek's own API (api-docs.deepseek.com/quick_start/pricing, read
+	// 2026-09-23): deepseek-v4-pro outputs at 3x its input price; every
+	// other name it accepts (deepseek-chat, -reasoner, -v4-flash are legacy
+	// aliases, answered by deepseek-flash) at 4x. Without this they fell to
+	// 1 and output was billed at the input price. Names with a "/" are other
+	// hosts' DeepSeek builds, priced by those hosts. Not locked: an admin
+	// CompletionRatio entry still wins.
+	if strings.HasPrefix(name, "deepseek-") && !strings.Contains(name, "/") {
+		if strings.HasPrefix(name, "deepseek-v4-pro") {
+			return 3, false
+		}
+		return 4, false
 	}
 	return 1, false
 }

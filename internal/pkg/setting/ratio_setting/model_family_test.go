@@ -37,9 +37,10 @@ func TestModelFamilyFallback(t *testing.T) {
 		{"o4 mini", "o4-mini-2025-99-99", 0.55, true},
 
 		// DeepSeek
-		{"deepseek chat", "deepseek-chat-v3", 0.07, true},
-		{"deepseek reasoner", "deepseek-reasoner-v2", 0.275, true},
-		{"deepseek unknown", "deepseek-v99", 0.07, true},
+		{"deepseek chat", "deepseek-chat-v3", 0.15, true},
+		{"deepseek reasoner", "deepseek-reasoner-v2", 0.15, true},
+		{"deepseek pro", "deepseek-v5-pro", 0.66, true},
+		{"deepseek unknown", "deepseek-v99", 0.15, true},
 
 		// Unknown provider — no match
 		{"unknown", "llama-3-70b", 0, false},
