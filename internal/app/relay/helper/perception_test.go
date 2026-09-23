@@ -6,6 +6,7 @@ import (
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 )
 
@@ -93,8 +94,15 @@ func TestComputeLurusExtension_BillingModes(t *testing.T) {
 }
 
 func TestComputeLurusExtension_CostAndBalance(t *testing.T) {
+	// LB is the CNY wallet unit; quota is USD-priced. At 5 CNY/USD one LB
+	// is QuotaPerUnit/5 quota (currency.LucToLut).
+	prevRate := operation_setting.USDExchangeRate
+	operation_setting.USDExchangeRate = 5
+	t.Cleanup(func() { operation_setting.USDExchangeRate = prevRate })
+	lb := common.QuotaPerUnit / 5
+
 	info := &relaycommon.RelayInfo{
-		UserQuota: int(common.QuotaPerUnit * 10), // 10 LB
+		UserQuota: int(lb * 10), // 10 LB
 		PriceData: types.PriceData{
 			ModelRatio: 2.0,
 			GroupRatioInfo: types.GroupRatioInfo{
@@ -105,7 +113,7 @@ func TestComputeLurusExtension_CostAndBalance(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 42},
 	}
-	quota := int(common.QuotaPerUnit * 2) // 2 LB cost
+	quota := int(lb * 2) // 2 LB cost
 	ext := ComputeLurusExtension(info, usage, quota)
 
 	if ext.CostLB != 2.0 {

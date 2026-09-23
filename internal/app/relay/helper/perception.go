@@ -4,9 +4,11 @@ import (
 	"strconv"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
-	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
-	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
+
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
+	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/shopspring/decimal"
@@ -110,7 +112,7 @@ func ComputeLurusExtension(info *relaycommon.RelayInfo, usage *dto.Usage, totalQ
 		return nil
 	}
 
-	costLB := float64(totalQuota) / common.QuotaPerUnit
+	costLB := currency.QuotaToCNY(totalQuota)
 
 	var billingMode string
 	switch {
@@ -122,7 +124,7 @@ func ComputeLurusExtension(info *relaycommon.RelayInfo, usage *dto.Usage, totalQ
 		billingMode = "legacy"
 	}
 
-	balanceRemaining := float64(info.UserQuota-totalQuota) / common.QuotaPerUnit
+	balanceRemaining := currency.QuotaToCNY(info.UserQuota - totalQuota)
 	if balanceRemaining < 0 {
 		balanceRemaining = 0
 	}

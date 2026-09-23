@@ -425,10 +425,10 @@ var numericOptionKinds = map[string]optionValueKind{
 // additionally land in (0, optionPositiveRangeMax) — a parse-valid but
 // nonsensical write (0, a negative number) for either of these turns every
 // relay call's cost computation into a divide-by-zero or a negative price:
-// QuotaPerUnit is the quota-to-CNY divisor everywhere in this codebase that
-// converts a quota int to a currency amount (v2_billing_invoices.go,
-// billing_self.go, /api/status), and USDExchangeRate is the CNY-to-USD
-// divisor next to it. There is no business meaning above
+// QuotaPerUnit is the quota-to-USD divisor (quota is USD-priced) and
+// USDExchangeRate the USD-to-CNY multiplier next to it; together they are
+// every CNY amount (currency.LucToLut: wallet debits, invoices,
+// /api/status). There is no business meaning above
 // optionPositiveRangeMax either — it exists only to catch a stray extra
 // digit, not to express a rate anyone would configure (cycle13 §2:
 // "QuotaPerUnit/USDExchangeRate 写入加正数范围守卫"; the pre-consume-period

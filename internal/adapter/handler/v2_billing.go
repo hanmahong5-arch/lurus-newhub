@@ -11,6 +11,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -317,7 +318,7 @@ func TopUpV2(c *gin.Context) {
 	}
 
 	// Credit product quota
-	quotaAmount := int(req.AmountCNY * common.QuotaPerUnit)
+	quotaAmount := currency.CNYToQuota(req.AmountCNY)
 	if err := repo.IncreaseUserQuota(userID, quotaAmount, true); err != nil {
 		// Rollback: credit wallet back
 		rollbackErr := common.CreditWalletGRPC(

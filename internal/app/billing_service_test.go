@@ -33,9 +33,11 @@ func setUSDExchangeRate(t *testing.T, rate float64) {
 func TestCalculateDisplayAmount_Lute_ReturnsLucEquivalent(t *testing.T) {
 	setQuotaDisplayType(t, operation_setting.QuotaDisplayTypeLute)
 
+	setUSDExchangeRate(t, 5)
 	quota := 1_000_000
-	// LUT → LUC display divides by the LUC→LUT rate, which equals QuotaPerUnit.
-	want := float64(quota) / common.QuotaPerUnit
+	// LUT → LUC (= CNY) display: quota is USD-priced, so 1,000,000 quota is
+	// $2, which is CNY 10 at 5 CNY/USD (currency.LucToLut).
+	want := 10.0
 	got := CalculateDisplayAmount(quota)
 	if got != want {
 		t.Errorf("CalculateDisplayAmount(%d) with LUTE = %f, want %f", quota, got, want)

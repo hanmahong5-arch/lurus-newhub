@@ -13,6 +13,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -442,7 +443,7 @@ func TestInvoiceMonths_ExcludesUnbilledRows(t *testing.T) {
 	if urc := bucket["unbilled_request_count"].(float64); urc != 2 {
 		t.Errorf("unbilled_request_count = %v, want 2", urc)
 	}
-	wantAmount := 1000.0 / common.QuotaPerUnit
+	wantAmount := currency.QuotaToCNY(1000)
 	if amt := bucket["amount_cny"].(float64); amt != wantAmount {
 		t.Errorf("amount_cny = %v, want %v (billable-only)", amt, wantAmount)
 	}

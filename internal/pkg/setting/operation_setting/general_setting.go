@@ -24,8 +24,13 @@ type GeneralSetting struct {
 }
 
 // Pricing variables (retained from removed payment_setting.go for quota display)
-var USDExchangeRate float64 = 7.3 // 1 USD = X CNY
-var Price float64 = 2.0           // unit price
+// DefaultUSDExchangeRate is USDExchangeRate's initial value. Quota is
+// priced in USD, the platform wallet in CNY; this is the bridge (see
+// currency.LucToLut).
+const DefaultUSDExchangeRate = 7.3
+
+var USDExchangeRate float64 = DefaultUSDExchangeRate // 1 USD = X CNY
+var Price float64 = 2.0                              // unit price
 
 // 默认配置
 //

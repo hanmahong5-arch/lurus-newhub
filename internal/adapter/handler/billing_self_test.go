@@ -9,6 +9,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -145,7 +146,7 @@ func TestSelfBillingUsage_ExcludesUnbilledRows(t *testing.T) {
 		t.Fatalf("parse body: %v — raw: %s", err, w.Body.String())
 	}
 
-	wantCost := 1000.0 / common.QuotaPerUnit
+	wantCost := currency.QuotaToCNY(1000)
 	if got := resp["total_cost_lb"].(float64); got != wantCost {
 		t.Errorf("total_cost_lb = %v, want %v (only the clean row's 1000 quota)", got, wantCost)
 	}
@@ -181,7 +182,7 @@ func TestSelfBillingUsage_HappyPathUnaffected(t *testing.T) {
 		t.Fatalf("parse body: %v — raw: %s", err, w.Body.String())
 	}
 
-	wantCost := 2000.0 / common.QuotaPerUnit
+	wantCost := currency.QuotaToCNY(2000)
 	if got := resp["total_cost_lb"].(float64); got != wantCost {
 		t.Errorf("total_cost_lb = %v, want %v", got, wantCost)
 	}

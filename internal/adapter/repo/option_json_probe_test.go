@@ -114,9 +114,8 @@ func TestOptionParse_WrongShapeJSONIsRefusedBeforeItIsPersisted(t *testing.T) {
 // positiveRangeOptionKinds' doc comment in option.go).
 
 // TestUpdateOption_RejectsNonPositiveQuotaPerUnit is cycle13 L2's range-guard
-// oracle: QuotaPerUnit is the quota-to-CNY divisor used everywhere a quota
-// int becomes a currency amount (v2_billing_invoices.go, billing_self.go,
-// /api/status) — 0 divides by zero and a negative number prices everything
+// oracle: QuotaPerUnit is the quota-to-USD divisor behind every currency
+// amount (and, with USDExchangeRate, every CNY one — currency.LucToLut) — 0 divides by zero and a negative number prices everything
 // negative, and both parse fine, so ValidateOptionValue's pre-existing
 // strconv.ParseFloat check alone does not catch either. Mutation that turns
 // this red: delete the positiveRangeOptionKinds check in ValidateOptionValue.

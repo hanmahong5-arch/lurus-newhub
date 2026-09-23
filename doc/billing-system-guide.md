@@ -22,7 +22,7 @@
 
 ## 计费模式
 
-- **预付费 (充值)**: 先充后用,按消耗扣费。换算 `QuotaPerUnit = 500,000`(每元 quota 单位,可按汇率配),即 ¥1 = 50万 quota。API: `GET /api/user/topup` → `POST /api/user/pay {amount, payment_method}`;回调 `GET /api/user/epay/notify`、`POST /api/pay/stripe`、`POST /api/pay/creem`。
+- **预付费 (充值)**: 先充后用,按消耗扣费。换算:quota 按**美元**计价(`QuotaPerUnit = 500,000` quota = $1,模型倍率即上游美元价),钱包按人民币,桥是 `USDExchangeRate`(默认 7.3):¥1 = 500,000 / 7.3 ≈ 68,493 quota(`internal/pkg/currency.LucToLut`)。2026-09-23 前这里写的是 ¥1 = 50万 quota,代码也照此扣费,等于按成本的 1/7.3 收钱。API: `GET /api/user/topup` → `POST /api/user/pay {amount, payment_method}`;回调 `GET /api/user/epay/notify`、`POST /api/pay/stripe`、`POST /api/pay/creem`。
 - **订阅制**: 周期性额度 + 日限额,到期前 24h 自动从余额扣费续费 (`auto_renew=true`)。默认套餐:
 
   | 套餐 | 价格 | 总额度 | 日限额 | 有效期 |

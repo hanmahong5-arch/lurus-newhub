@@ -7,6 +7,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 
 	"github.com/gin-gonic/gin"
 )
@@ -60,12 +61,12 @@ func SelfBillingUsage(c *gin.Context) {
 	var totalCostLB float64
 	byModel := make([]gin.H, 0, len(stats))
 	for _, s := range stats {
-		costLB := float64(s.TotalQuota) / common.QuotaPerUnit
+		costLB := currency.QuotaToCNY(int(s.TotalQuota))
 		totalCostLB += costLB
 		byModel = append(byModel, gin.H{
-			"model":    s.Key,
-			"count":    s.Count,
-			"cost_lb":  costLB,
+			"model":   s.Key,
+			"count":   s.Count,
+			"cost_lb": costLB,
 		})
 	}
 
