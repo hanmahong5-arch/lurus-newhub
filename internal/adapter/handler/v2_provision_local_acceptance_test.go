@@ -33,7 +33,7 @@ func localPlatformToken(t *testing.T, base, utok, product string) (string, map[s
 	if err != nil {
 		t.Fatalf("local platform unreachable: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("local platform token %s: HTTP %d %s", product, resp.StatusCode, body)
