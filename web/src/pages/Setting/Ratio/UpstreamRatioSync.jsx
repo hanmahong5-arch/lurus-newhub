@@ -160,7 +160,7 @@ export default function UpstreamRatioSync(props) {
               name === '官方倍率预设';
             if (!merged[id]) {
               merged[id] = isOfficial
-                ? '/llm-metadata/api/ailurus/ratio_config-v1-base.json'
+                ? '/llm-metadata/api/newapi/ratio_config-v1-base.json'
                 : DEFAULT_ENDPOINT;
             }
           });
