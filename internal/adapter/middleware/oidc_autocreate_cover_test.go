@@ -154,9 +154,14 @@ func TestNewJWKSManager_Direct(t *testing.T) {
 	srv := createTestJWKSServer(t, jwks)
 	defer srv.Close()
 
-	mgr := NewJWKSManager(srv.URL)
+	// With a cancelled-at-cleanup context: NewJWKSManager's Background
+	// context left the refresh goroutine running for the rest of the package
+	// run, where it raced later tests' writes to jwksRefreshInterval.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	mgr := NewJWKSManagerWithContext(ctx, srv.URL)
 	if mgr == nil {
-		t.Fatalf("NewJWKSManager returned nil")
+		t.Fatalf("NewJWKSManagerWithContext returned nil")
 	}
 	if key, err := mgr.getKeyWithRefresh("direct-kid"); err != nil || key == nil {
 		t.Errorf("getKeyWithRefresh err=%v key=%v, want fetched key", err, key)
