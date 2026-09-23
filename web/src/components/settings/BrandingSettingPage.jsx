@@ -17,19 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import React, { useContext, useEffect, useRef, useState } from 'react';
-import {
-  Banner,
-  Button,
-  Col,
-  Form,
-  Row,
-  Modal,
-  Space,
-  Card,
-} from '@douyinfe/semi-ui';
+import { Banner, Button, Col, Form, Row, Card } from '@douyinfe/semi-ui';
 import { API, showError, showSuccess, timestamp2string } from '../../helpers';
-import { sanitizeHtml } from '../../helpers/sanitize';
-import { marked } from 'marked';
 import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
 import Text from '@douyinfe/semi-ui/lib/es/typography/text';
@@ -44,12 +33,7 @@ const BrandingSettingPage = () => {
     HomePageContent: '',
   });
   const [loading, setLoading] = useState(false);
-  const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [statusState] = useContext(StatusContext);
-  const [updateData, setUpdateData] = useState({
-    tag_name: '',
-    content: '',
-  });
 
   const [loadingInput, setLoadingInput] = useState({
     SystemName: false,
@@ -57,7 +41,6 @@ const BrandingSettingPage = () => {
     HomePageContent: false,
     About: false,
     Footer: false,
-    CheckUpdate: false,
   });
 
   const formApiRef = useRef();
@@ -139,37 +122,6 @@ const BrandingSettingPage = () => {
     }
   };
 
-  const checkUpdate = async () => {
-    try {
-      setLoadingInput((s) => ({ ...s, CheckUpdate: true }));
-      const res = await fetch(
-        'https://api.github.com/repos/Calcium-Ion/lurus-api/releases/latest',
-        {
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'lurus-api-update-checker',
-          },
-        },
-      ).then((response) => response.json());
-
-      const { tag_name, body } = res;
-      if (tag_name === statusState?.status?.version) {
-        showSuccess(t('已是最新版本：{{version}}', { version: tag_name }));
-      } else {
-        setUpdateData({
-          tag_name: tag_name,
-          content: marked.parse(body),
-        });
-        setShowUpdateModal(true);
-      }
-    } catch (error) {
-      showError(t('检查更新失败，请稍后再试'));
-    } finally {
-      setLoadingInput((s) => ({ ...s, CheckUpdate: false }));
-    }
-  };
-
   const getOptions = async () => {
     const res = await API.get('/api/option/');
     const { success, message, data } = res.data;
@@ -193,13 +145,6 @@ const BrandingSettingPage = () => {
     getOptions();
   }, []);
 
-  const openGitHubRelease = () => {
-    window.open(
-      `https://github.com/Calcium-Ion/lurus-api/releases/tag/${updateData.tag_name}`,
-      '_blank',
-    );
-  };
-
   const getStartTimeString = () => {
     const timestamp = statusState?.status?.start_time;
     return statusState.status ? timestamp2string(timestamp) : '';
@@ -222,19 +167,12 @@ const BrandingSettingPage = () => {
             <Form.Section text={t('系统信息')}>
               <Row>
                 <Col span={16}>
-                  <Space>
-                    <Text>
-                      {t('当前版本')}：
-                      {statusState?.status?.version || t('未知')}
-                    </Text>
-                    <Button
-                      type='primary'
-                      onClick={checkUpdate}
-                      loading={loadingInput['CheckUpdate']}
-                    >
-                      {t('检查更新')}
-                    </Button>
-                  </Space>
+                  {/* No "check for updates": it compared this build against
+                      the upstream project's GitHub releases, which are not
+                      releases of this product. */}
+                  <Text>
+                    {t('当前版本')}：{statusState?.status?.version || t('未知')}
+                  </Text>
                 </Col>
               </Row>
               <Row>
@@ -326,32 +264,6 @@ const BrandingSettingPage = () => {
           </Card>
         </Form>
       </Col>
-
-      <Modal
-        title={t('新版本') + '：' + updateData.tag_name}
-        visible={showUpdateModal}
-        onCancel={() => setShowUpdateModal(false)}
-        footer={[
-          <Button
-            key='details'
-            type='primary'
-            onClick={() => {
-              setShowUpdateModal(false);
-              openGitHubRelease();
-            }}
-          >
-            {t('详情')}
-          </Button>,
-        ]}
-      >
-        {/* Third-party content, not operator-authored: `body` comes from
-            api.github.com's latest-release JSON, so this takes the strict
-            profile (no <style>, no form controls) even though the file it
-            lives in is a settings page. */}
-        <div
-          dangerouslySetInnerHTML={{ __html: sanitizeHtml(updateData.content) }}
-        ></div>
-      </Modal>
     </Row>
   );
 };

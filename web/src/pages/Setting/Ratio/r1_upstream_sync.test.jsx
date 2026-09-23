@@ -356,7 +356,7 @@ describe('UpstreamRatioSync channel discovery', () => {
     const endpoints = JSON.parse(screen.getByTestId('endpoints').textContent);
     expect(endpoints['1']).toBe('/api/ratio_config');
     expect(endpoints['-100']).toBe(
-      '/llm-metadata/api/ailurus/ratio_config-v1-base.json',
+      '/llm-metadata/api/newapi/ratio_config-v1-base.json',
     );
   });
 

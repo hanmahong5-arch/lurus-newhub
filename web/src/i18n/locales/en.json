@@ -2601,7 +2601,7 @@
     "我已了解禁用两步验证将永久删除所有相关设置和备用码，此操作不可撤销": "I have understood that disabling two-factor authentication will permanently delete all related settings and backup codes, this operation cannot be undone",
     "我已阅读并同意": "I have read and agree to",
     "或": "or",
-    "或其兼容lurus-api-worker格式的其他版本": "or other versions compatible with lurus-api-worker format",
+    "或其兼容new-api-worker格式的其他版本": "or other versions compatible with new-api-worker format",
     "或手动输入密钥：": "Or manually enter the secret:",
     "所有上游数据均可信": "All upstream data is reliable",
     "所有密钥已复制到剪贴板": "All keys have been copied to the clipboard",

@@ -386,12 +386,6 @@ const PROFILE_BY_SINK = {
       'the body of an operator-authored announcement',
     ],
   },
-  'components/settings/BrandingSettingPage.jsx': {
-    'updateData.content': [
-      'sanitizeHtml',
-      'release notes fetched from api.github.com — third party, not the operator',
-    ],
-  },
   'components/settings/OtherSetting.jsx': {
     'updateData.content': [
       'sanitizeHtml',

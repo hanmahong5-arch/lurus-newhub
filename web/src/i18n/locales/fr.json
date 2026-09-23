@@ -1115,7 +1115,7 @@
     "我已了解禁用两步验证将永久删除所有相关设置和备用码，此操作不可撤销": "J'ai compris que la désactivation de l'authentification à deux facteurs supprimera définitivement tous les paramètres et codes de sauvegarde associés, cette opération ne peut pas être annulée",
     "我已阅读并同意": "J'ai lu et j'accepte",
     "或": "Ou",
-    "或其兼容lurus-api-worker格式的其他版本": "ou d'autres versions compatibles avec le format lurus-api-worker",
+    "或其兼容new-api-worker格式的其他版本": "ou d'autres versions compatibles avec le format new-api-worker",
     "或手动输入密钥：": "Ou saisissez manuellement le secret :",
     "所有上游数据均可信": "Toutes les données en amont sont fiables",
     "所有密钥已复制到剪贴板": "Toutes les clés ont été copiées dans le presse-papiers",

@@ -1097,7 +1097,7 @@
     "我已了解禁用两步验证将永久删除所有相关设置和备用码，此操作不可撤销": "Tôi đã hiểu rằng việc vô hiệu hóa xác thực hai yếu tố sẽ xóa vĩnh viễn tất cả các cài đặt liên quan và mã dự phòng, thao tác này không thể hoàn tác",
     "我已阅读并同意": "Tôi đã đọc và đồng ý với",
     "或": "hoặc",
-    "或其兼容lurus-api-worker格式的其他版本": "hoặc các phiên bản khác tương thích với định dạng lurus-api-worker",
+    "或其兼容new-api-worker格式的其他版本": "hoặc các phiên bản khác tương thích với định dạng new-api-worker",
     "或手动输入密钥：": "Hoặc nhập khóa thủ công:",
     "所有上游数据均可信": "Tất cả dữ liệu thượng nguồn đều đáng tin cậy",
     "所有密钥已复制到剪贴板": "Tất cả các khóa đã được sao chép vào khay nhớ tạm",
