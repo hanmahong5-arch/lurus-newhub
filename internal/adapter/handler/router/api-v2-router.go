@@ -284,6 +284,10 @@ func SetApiV2Router(router *gin.Engine) {
 		// rate-limit bucket as zita-bootstrap (structurally identical
 		// credential exchange).
 		apiV2.POST("/:tenant_slug/provision", middleware.BootstrapRateLimit(), handler.ProvisionV2)
+		// cc_* plan quota onto the buyer's own balance, idempotent per paid
+		// subscription period (migration 040). Own rate-limit bucket: see
+		// PlanGrantRateLimit.
+		apiV2.POST("/:tenant_slug/plan-grant", middleware.PlanGrantRateLimit(), handler.PlanGrantV2)
 
 		tenantSessions := apiV2.Group("/:tenant_slug/sessions")
 		tenantSessions.Use(middleware.UserAuth())

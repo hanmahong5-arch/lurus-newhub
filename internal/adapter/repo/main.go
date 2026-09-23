@@ -542,6 +542,9 @@ func migrateDB() error {
 		// lesson noted above).
 		&entity.ChatSession{},
 		&entity.ChatMessage{},
+		// cc_* plan quota grant ledger (migration 040) — idempotency rows for
+		// handler.PlanGrantV2; dual-creation like 036/038.
+		&entity.PlanQuotaGrant{},
 	)
 	if err != nil {
 		return err
