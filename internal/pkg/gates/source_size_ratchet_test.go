@@ -57,7 +57,7 @@ var goSourceSizeCeilings = map[string]int{
 	// registry file is its call, not a wiring-step side effect. The row
 	// records the measured count so the next growth has to argue for itself.
 	"internal/pkg/metrics/metrics.go":                   823, // +1 (cycle-13 hand-finish): the log-retention series comment now says which legs write and when the label is absent
-	"internal/pkg/setting/ratio_setting/model_ratio.go": 944,
+	"internal/pkg/setting/ratio_setting/model_ratio.go": 963, // +19 (2026-09-23): DeepSeek list prices + the output-multiplier rule, with the price source
 }
 
 // sourceSizeThreshold is the line count above which a non-test Go file needs

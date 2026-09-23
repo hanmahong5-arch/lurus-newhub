@@ -138,9 +138,12 @@ func TestCompute_NormalSaving(t *testing.T) {
 		t.Errorf("expected one conservative opportunity → gpt-4o-mini, got %+v",
 			res.Conservative.TopOpportunities)
 	}
-	// Aggressive (deepseek-chat) must be strictly cheaper than conservative here.
-	if res.Aggressive.TotalSavingsQuota <= res.Conservative.TotalSavingsQuota {
-		t.Errorf("expected aggressive > conservative, got aggr=%d cons=%d",
-			res.Aggressive.TotalSavingsQuota, res.Conservative.TotalSavingsQuota)
+	// Aggressive sub deepseek-chat at DeepSeek's list price (ratio 0.15,
+	// completionRatio 4): effAlt = (100 + 200*4)*0.15 = 135,
+	// savings = 1000*(1 - 135/1125) = 880. At list prices it saves LESS than
+	// gpt-4o-mini here — this used to assert the opposite, which only held
+	// while deepseek output was billed at its input price.
+	if res.Aggressive.TotalSavingsQuota != 880 {
+		t.Errorf("aggressive savings = %d, want 880", res.Aggressive.TotalSavingsQuota)
 	}
 }
