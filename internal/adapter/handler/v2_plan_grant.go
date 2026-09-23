@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LurusTech/lurus-entkit/entverify"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
-	"github.com/LurusTech/lurus-hub/internal/pkg/entverify"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
