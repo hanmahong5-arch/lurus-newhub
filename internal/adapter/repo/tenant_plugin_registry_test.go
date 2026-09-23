@@ -63,6 +63,7 @@ var registeredModels = []interface{}{
 	&entity.TenantInvite{},
 	&entity.ResponseRegistry{},
 	&entity.ChatSession{}, &entity.ChatMessage{},
+	&entity.PlanQuotaGrant{},
 }
 
 // tenantColumnExempt maps a GORM-derived table name (not on
@@ -136,6 +137,12 @@ var tenantColumnExempt = map[string]string{
 		"transaction that re-checks the session's tenant_id and user_id), so " +
 		"the column is carried for locality, never used as a query filter; no " +
 		"call site routes this table through WithTenantID/GetTenantDB",
+	"plan_quota_grants": "InsertPlanQuotaGrant/DeletePlanQuotaGrant " +
+		"(plan_quota_grant.go) use the bare DB handle: the insert stamps " +
+		"tenant_id explicitly in the struct literal (handler.PlanGrantV2) and " +
+		"the unique (tenant_id, grant_key) index is the only lookup; the " +
+		"delete keys off the primary key alone — no call site routes this " +
+		"table through WithTenantID/GetTenantDB",
 }
 
 // TestTenantPlugin_AllowListCoversEveryRegisteredTenantColumn is the

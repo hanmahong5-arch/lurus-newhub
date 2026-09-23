@@ -104,11 +104,12 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/:tenant_slug/chat/sessions":      "CreateChatSessionV2 stamps the caller's own (tenant_id, user_id) from tenantCtx (migration 038, cycle-10 L3); cannot target another tenant or user",
 
 		// ---- credential-is-the-resource: the token/code presented IS the auth, mirrors v1's rationale ----
-		"POST /api/v2/:tenant_slug/provision": "public entitlement-token exchange: the platform entitlement token (verified offline against the platform JWKS) is the credential",
-		"POST /api/v2/switch/redeem":          "anonymous activation-code redemption (Phase D Track 2.1): the code itself is the credential, no authenticated caller to cross-tenant-check",
-		"POST /api/v2/switch/heartbeat":       "inline raw-token auth (Token.Key); self-scoped to the token owner",
-		"POST /api/v2/switch/reconciliation":  "inline raw-token auth; self usage-reconciliation for the token owner",
-		"POST /api/v2/switch/user/topup":      "inline raw-token auth; self-service topup for the token owner",
+		"POST /api/v2/:tenant_slug/provision":  "public entitlement-token exchange: the platform entitlement token (verified offline against the platform JWKS) is the credential",
+		"POST /api/v2/:tenant_slug/plan-grant": "public entitlement-token exchange: the platform entitlement token is the credential and PlanGrantV2 credits only the hub user bound to its sub (lurus_account_id), refusing an account pinned to another tenant with 403 TENANT_MISMATCH (same rule as ProvisionV2)",
+		"POST /api/v2/switch/redeem":           "anonymous activation-code redemption (Phase D Track 2.1): the code itself is the credential, no authenticated caller to cross-tenant-check",
+		"POST /api/v2/switch/heartbeat":        "inline raw-token auth (Token.Key); self-scoped to the token owner",
+		"POST /api/v2/switch/reconciliation":   "inline raw-token auth; self usage-reconciliation for the token owner",
+		"POST /api/v2/switch/user/topup":       "inline raw-token auth; self-service topup for the token owner",
 
 		// ---- global catalog entities: no tenant_id column at all (verified: entity/model_meta.go) ----
 		"POST /api/v2/:tenant_slug/models":       "CreateModelV2: entity.Model has no tenant_id column (global catalog); tenant_slug is validated only for route existence, never as a data filter — and because the write is global the handler gates on requirePlatformRoot, not tenant-admin",

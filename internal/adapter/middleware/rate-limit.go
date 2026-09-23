@@ -53,6 +53,7 @@ var rateLimitMemoryFallbackMarks = map[string]string{
 	"BS":     "BootstrapRateLimit: a leaked platform SDK cookie replayed from many client identities auto-creates newhub users; unthrottled, the blast radius is unbounded.",
 	"TB":     "TotpBackupCodesRateLimit: backup-code regeneration invalidates the old set and mints a new one — a second-factor credential path.",
 	"CT":     "CriticalRateLimit: channel-key reveal and TOTP disable share this bucket; both hand out or remove a credential.",
+	"PG":     "PlanGrantRateLimit: credits plan quota onto a buyer's balance — a money path; idempotent per period, but each call still verifies a JWT and hits the DB.",
 	"TU":     "TopupRateLimit: wallet-to-quota transfer. Deliberately unmounted today (see TopupRateLimit), classified here so re-opening that money path does not silently re-open it unthrottled.",
 	"IKP-IP": "InternalApiRateLimit pre-auth IP tier: mounted BEFORE InternalApiAuth precisely to bound invalid-key floods, i.e. internal-API-key guessing. Unlike the per-key tiers it cannot be keyed to an authenticated caller.",
 }
@@ -263,6 +264,15 @@ func RedemptionRateLimit() func(c *gin.Context) {
 // and deciding whether this limiter guards it, is an owner's call.
 func TopupRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(5, 60, "TU")
+}
+
+// PlanGrantRateLimit caps POST /api/v2/:slug/plan-grant to 10/min/IP. It has
+// its own bucket on purpose: sharing BootstrapRateLimit's 5/min would make
+// every Switch login (provision + plan-grant) spend two of the five slots an
+// office NAT shares, and the grant is idempotent, so a tighter shared cap
+// buys nothing.
+func PlanGrantRateLimit() func(c *gin.Context) {
+	return rateLimitFactory(10, 60, "PG")
 }
 
 // BootstrapRateLimit caps zita-bootstrap to 5/min/IP. A leaked SDK cookie
