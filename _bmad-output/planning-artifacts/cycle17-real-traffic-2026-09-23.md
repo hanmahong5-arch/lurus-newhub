@@ -56,19 +56,50 @@ unfixed main. Deployed digest `61f6d8e9`.
   before `/v1/audio/` was kept on newapi); newapi relay calls after the switch
   window: 0. Rollback: IngressRoute back to `lurus-newapi:3000`.
 
+## Incident: the default tenant's credit pool (09:19–14:02 UTC)
+
+The pre-cutover review checked rate limits, the cost-spike fuse and
+per-tenant concurrency — not the credit pool. The `default` tenant's pool
+held ~75,000 quota ($0.15; a 199.5M draw on 09-16 had emptied it). Internal
+traffic used it up 16 minutes after the switch, and from 09:19 every relay
+call got 402 `pool_exhausted` — ~1,043 calls over 4.7 h, counted from the R1
+bridge access log.
+
+It went unseen because the check read hub's `logs` table, and the pool gate
+wrote nothing there ("400 ok, 2 errors" was reported while it was failing).
+Restored 14:02 by making Lurus's own tenant pool unlimited (`max_balance=-1`;
+per-user quota still applies). After: bridge 14:00 hour 1,170×200.
+
+Follow-ups shipped:
+- #213 pool rejections (exhausted, not-configured under enforce) write an
+  error-log row, at most one per tenant per minute.
+- Lesson: verify a cutover at the entry point (the bridge's status codes),
+  not at a table the failure path may never write to.
+
+## Also shipped after the first record
+
+| Item | PR | Evidence |
+|---|---|---|
+| DeepSeek output billed at input price; v4-pro input at 1/3 | #212 + prod `ModelRatio` | official page read 2026-09-23 (peak prices); live call: 12 in + 29 out → 19 quota = (12+29×4)×0.15 |
+| OIDC tests poisoned by the c13 JWKS stub under `-shuffle` | #214 | CI seed 1790172913506686629: main 11 FAIL → 0 |
+
+The local machine ran out of commit memory mid-cycle: 2,217 orphaned
+`postcss.js` workers from another project's Next.js build (104 GB). They
+were killed (parent already gone); nothing of this repo was involved.
+
 ## Found, not fixed (next)
 
-1. **Output tokens billed at input price.** Hub has no completion-ratio rule for
-   DeepSeek or GLM, so both are 1; DeepSeek's output is ~4× its input price.
-   Cache hits are billed at full input price. Must be fixed from the vendors'
-   official price pages before the first paying customer — the two sources on
-   hand (newapi options, the upstream preset) disagree.
+1. ~~DeepSeek output billed at input price~~ — fixed (#212). **GLM** still has
+   completion ratio 1 and several ratios that do not match Zhipu's current
+   page (e.g. glm-4-plus ¥50 vs ¥5, glm-4.7 flat vs tiered ¥2/¥8); unused
+   today (the Zhipu account only serves the free glm-4-flash).
 2. **Official ratio preset sync still fails.** #209 fixed the 404, but upstream
    changed the file to `billing_expr` (tiered price expressions); hub parses
    neither shape now. Correction posted on #209.
-3. **`tenant_configs` rate limits are decorative.** `rate_limit.requests_per_minute`
-   / `requests_per_day` are seeded per tenant and read nowhere; the real limits
-   are `tenants.rpm_limit/tpm_limit`.
+3. **`tenant_configs` rows are mostly decorative.** Of the seeded keys only
+   `quota.new_user_quota` (and `models.allowlist`) are read; `rate_limit.*`,
+   `billing.*`, `features.*`, `security.*` are read nowhere and no route
+   exposes them. The real rate limits are `tenants.rpm_limit/tpm_limit`.
 4. **platform-core still provisions users/keys on newapi** (`NEWAPI_INTERNAL_URL
    = https://newapi.lurus.cn`) and its `newapi_sync` hard-codes CNY 1 = 500,000
    quota (the same bug as #210, on the old gateway). Keys minted there after the
