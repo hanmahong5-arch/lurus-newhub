@@ -6,6 +6,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"gorm.io/gorm"
 )
@@ -237,26 +238,56 @@ func rankingsGroupExpr() string {
 	return `COALESCE(NULLIF(` + logGroupCol + `, ''), '(ungrouped)')`
 }
 
-// getGroupUsageTotals is GetModelUsageTotals' group-column-keyed sibling.
-// Unexported: GetRankings is its only caller today, mirroring
-// getVendorUsageTotals.
-func getGroupUsageTotals(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
-	base := LOG_DB.Model(&entity.Log{}).
-		Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
-		Where("created_at >= ? AND created_at <= ?", startTime, endTime)
-	if tenantID != "" {
-		base = base.Where("tenant_id = ?", tenantID)
+// rankingsNameExpr is the SQL aggregation key for every leaderboard
+// dimension except "vendor" (channel_type ids, mapped to names in Go):
+//   - group: logs.group, see rankingsGroupExpr.
+//   - key: who called with which API key, as "username / token_name". A
+//     token name alone is not unique — every user can have a key called
+//     "default" — so the owner is part of the label.
+//   - user: username.
+//   - product: the X-Lurus-Product attribution tag; untagged rows fold into
+//     the default product exactly as GetSpendByProduct does.
+//   - anything else: model_name.
+//
+// Empty values fold into one explicit bracketed bucket rather than a
+// blank-named row (the console uses the name as the row key).
+func rankingsNameExpr(by string) string {
+	switch by {
+	case "group":
+		return rankingsGroupExpr()
+	case "key":
+		return `COALESCE(NULLIF(username, ''), '(unknown)') || ' / ' || COALESCE(NULLIF(token_name, ''), '(no key)')`
+	case "user":
+		return `COALESCE(NULLIF(username, ''), '(unknown)')`
+	case "product":
+		return `COALESCE(` + jsonOtherTextExpr("source_product") + `, '` + ratio_setting.DefaultSourceProduct + `')`
 	}
-	var rows []RankingUsageTotal
-	err := base.
-		Select(rankingsGroupExpr() + ` AS name,
-			COUNT(*) AS requests,
-			COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-			COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-			COALESCE(SUM(quota), 0) AS quota`).
-		Group(rankingsGroupExpr()).
-		Find(&rows).Error
-	return rows, err
+	return "model_name"
+}
+
+// getExprUsageTotals is GetModelUsageTotals' sibling for the dimensions
+// keyed by a SQL expression (rankingsNameExpr). Unexported: GetRankings is
+// its only caller, mirroring getVendorUsageTotals.
+func getExprUsageTotals(by string) func(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
+	expr := rankingsNameExpr(by)
+	return func(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
+		base := LOG_DB.Model(&entity.Log{}).
+			Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
+			Where("created_at >= ? AND created_at <= ?", startTime, endTime)
+		if tenantID != "" {
+			base = base.Where("tenant_id = ?", tenantID)
+		}
+		var rows []RankingUsageTotal
+		err := base.
+			Select(expr + ` AS name,
+				COUNT(*) AS requests,
+				COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+				COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+				COALESCE(SUM(quota), 0) AS quota`).
+			Group(expr).
+			Find(&rows).Error
+		return rows, err
+	}
 }
 
 // RankingRow is one leaderboard entry returned by GetRankings: the current
@@ -284,9 +315,8 @@ const rankingsMaxRows = 20
 // preceding window of equal length, then returns the top `limit` groups by
 // current-window tokens with rank/rank_delta/share/growth attached.
 //
-// by == "vendor" groups by channel_type; by == "group" groups by the logs
-// table's `group` column (see rankingsGroupExpr); anything else groups by
-// model_name. rank_delta is (previous rank - current rank): positive means
+// by == "vendor" groups by channel_type; "group", "key", "user" and
+// "product" group by rankingsNameExpr; anything else groups by model_name. rank_delta is (previous rank - current rank): positive means
 // the group moved up the leaderboard. A group absent from the previous
 // window gets rank_delta=0, is_new=true, and a nil requests_growth_pct (no
 // baseline to divide by). token_share_pct/quota_share_pct are shares of the
@@ -307,8 +337,8 @@ func GetRankings(startTime, endTime int64, tenantID, by string, limit int) (rows
 	switch by {
 	case "vendor":
 		fetch = getVendorUsageTotals
-	case "group":
-		fetch = getGroupUsageTotals
+	case "group", "key", "user", "product":
+		fetch = getExprUsageTotals(by)
 	}
 
 	current, err := fetch(startTime, endTime, tenantID)
@@ -388,19 +418,16 @@ const rankingSeriesMaxPoints = 720 * rankingsMaxRows
 
 // GetRankingSeries returns hourly usage over [startTime, endTime] for the
 // named groups only (a leaderboard's top rows), keyed the same way as
-// GetRankings: by model_name, by channel_type vendor name, or by logs.group.
+// GetRankings: by channel_type vendor name, or by rankingsNameExpr.
 // One grouped query; for by == "vendor" the channel_type ids are mapped to
 // names afterwards and filtered, as in getVendorUsageTotals.
 func GetRankingSeries(startTime, endTime int64, tenantID, by string, names []string) ([]RankingSeriesPoint, error) {
 	if len(names) == 0 {
 		return []RankingSeriesPoint{}, nil
 	}
-	nameExpr := "model_name"
-	switch by {
-	case "vendor":
+	nameExpr := rankingsNameExpr(by)
+	if by == "vendor" {
 		nameExpr = "channel_type"
-	case "group":
-		nameExpr = rankingsGroupExpr()
 	}
 	const bucketExpr = "(created_at - (created_at % 3600))"
 
