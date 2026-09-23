@@ -154,6 +154,10 @@ describe('Rankings page', () => {
       24,
     );
     expect(trend.querySelectorAll('[data-nonzero="true"]')).toHaveLength(2);
+    // The page's period presets own the window: the chart's own range
+    // switch would be dead buttons here, so it is not rendered at all.
+    expect(screen.queryByTestId('activity-range-24h')).toBeNull();
+    expect(screen.queryByTestId('activity-range-7')).toBeNull();
   });
 
   it('draws no trend when the response carries no series', async () => {

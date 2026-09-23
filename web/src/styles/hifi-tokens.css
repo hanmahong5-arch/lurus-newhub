@@ -1217,3 +1217,10 @@ html[lang^='zh'] .hf-side .nav-h {
     margin-left: 28px;
   }
 }
+
+/* [hidden] must hide. The UA rule is `[hidden] { display: none }` at the
+ * lowest specificity, so any .hf class that sets display (.hf-seg, .panel,
+ * .btn…) silently un-hides an element marked hidden. */
+.hf [hidden] {
+  display: none !important;
+}
