@@ -110,6 +110,61 @@ describe('Rankings page', () => {
     expect(names[1].textContent).toMatch(/unresolved/);
   });
 
+  // openrouter.ai/rankings: the leaderboard sits under a stacked trend of the
+  // same names. Tokens by default (the leaderboard ranks by tokens), the
+  // page's own period presets decide the window.
+  it('draws the ranked names as a stacked trend above the table', async () => {
+    const hour = Math.floor(Date.now() / 1000 / 3600) * 3600;
+    const p = payload({
+      window: { start: hour - 23 * 3600, end: hour + 60 },
+      series: [
+        {
+          t: hour,
+          name: 'gpt-4o',
+          tokens: 600,
+          requests: 20,
+          quota: 3_000_000,
+        },
+        {
+          t: hour - 3600,
+          name: 'gpt-4o',
+          tokens: 300,
+          requests: 10,
+          quota: 1_500_000,
+        },
+        {
+          t: hour,
+          name: 'deepseek-chat',
+          tokens: 300,
+          requests: 10,
+          quota: 1_500_000,
+        },
+      ],
+    });
+    API.get.mockResolvedValue(p);
+    render(<HFRankings />);
+
+    const trend = await waitFor(() => screen.getByTestId('rankings-trend'));
+    expect(screen.getByTestId('activity-total').textContent).toBe('1.2K');
+    const legend = screen.getByTestId('activity-legend').textContent;
+    expect(legend).toContain('gpt-4o');
+    expect(legend).toContain('deepseek-chat');
+    // 24h preset → 24 hourly bars, two of them carrying usage.
+    expect(trend.querySelectorAll('[data-testid="activity-bar"]')).toHaveLength(
+      24,
+    );
+    expect(trend.querySelectorAll('[data-nonzero="true"]')).toHaveLength(2);
+  });
+
+  it('draws no trend when the response carries no series', async () => {
+    API.get.mockResolvedValue(payload());
+    render(<HFRankings />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId('rankings-row')).toHaveLength(2),
+    );
+    expect(screen.queryByTestId('rankings-trend')).toBeNull();
+  });
+
   it('calls the tenant-scoped rankings endpoint with the resolved slug', async () => {
     API.get.mockResolvedValue(payload());
     render(<HFRankings />);

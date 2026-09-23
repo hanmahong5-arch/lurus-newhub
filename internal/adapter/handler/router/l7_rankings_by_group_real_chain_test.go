@@ -155,6 +155,10 @@ func TestRankingsByGroupRealChain_ScopedToOwnTenant(t *testing.T) {
 				TotalTokens int64  `json:"total_tokens"`
 				Quota       int64  `json:"quota"`
 			} `json:"rows"`
+			Series []struct {
+				Name   string `json:"name"`
+				Tokens int64  `json:"tokens"`
+			} `json:"series"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -180,5 +184,17 @@ func TestRankingsByGroupRealChain_ScopedToOwnTenant(t *testing.T) {
 	}
 	if row.Quota != 30 {
 		t.Fatalf("row.quota = %d, want 30 (the other tenant's 30000 must not be merged in)", row.Quota)
+	}
+	// The trend series (cycle 16 P8) follows the same tenant scope: the
+	// same group name from the other tenant must not be summed in.
+	var seriesTokens int64
+	for _, p := range resp.Data.Series {
+		if p.Name != "premium" {
+			t.Fatalf("series carries %q, not a ranked row", p.Name)
+		}
+		seriesTokens += p.Tokens
+	}
+	if seriesTokens != 150 {
+		t.Fatalf("series tokens = %d, want 150 (own tenant only)", seriesTokens)
 	}
 }

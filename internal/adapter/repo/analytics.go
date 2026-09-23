@@ -370,6 +370,103 @@ func GetRankings(startTime, endTime int64, tenantID, by string, limit int) (rows
 	return out, totalTokens, totalQuota, nil
 }
 
+// RankingSeriesPoint is one (hour, group) cell of a leaderboard's time
+// series. T is the start of a UTC-aligned hour; the console buckets hours
+// into the reader's local days itself, which the server cannot do without
+// knowing the reader's zone.
+type RankingSeriesPoint struct {
+	T        int64  `json:"t"`
+	Name     string `json:"name"`
+	Tokens   int64  `json:"tokens"`
+	Requests int64  `json:"requests"`
+	Quota    int64  `json:"quota"`
+}
+
+// rankingSeriesMaxPoints bounds the response: 720 hours × 20 names is the
+// worst case the rankings presets allow.
+const rankingSeriesMaxPoints = 720 * rankingsMaxRows
+
+// GetRankingSeries returns hourly usage over [startTime, endTime] for the
+// named groups only (a leaderboard's top rows), keyed the same way as
+// GetRankings: by model_name, by channel_type vendor name, or by logs.group.
+// One grouped query; for by == "vendor" the channel_type ids are mapped to
+// names afterwards and filtered, as in getVendorUsageTotals.
+func GetRankingSeries(startTime, endTime int64, tenantID, by string, names []string) ([]RankingSeriesPoint, error) {
+	if len(names) == 0 {
+		return []RankingSeriesPoint{}, nil
+	}
+	nameExpr := "model_name"
+	switch by {
+	case "vendor":
+		nameExpr = "channel_type"
+	case "group":
+		nameExpr = rankingsGroupExpr()
+	}
+	const bucketExpr = "(created_at - (created_at % 3600))"
+
+	q := LOG_DB.Model(&entity.Log{}).
+		Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
+		Where("created_at >= ? AND created_at <= ?", startTime, endTime)
+	if tenantID != "" {
+		q = q.Where("tenant_id = ?", tenantID)
+	}
+	if by != "vendor" {
+		q = q.Where(nameExpr+" IN ?", names)
+	} else {
+		q = q.Where("channel_type > 0")
+	}
+
+	type raw struct {
+		T                int64
+		Name             string
+		ChannelType      int
+		Requests         int64
+		PromptTokens     int64
+		CompletionTokens int64
+		Quota            int64
+	}
+	nameSelect := nameExpr + " AS name"
+	if by == "vendor" {
+		nameSelect = "channel_type"
+	}
+	var rows []raw
+	err := q.Select(bucketExpr + ` AS t, ` + nameSelect + `,
+			COUNT(*) AS requests,
+			COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+			COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+			COALESCE(SUM(quota), 0) AS quota`).
+		Group(bucketExpr + ", " + nameExpr).
+		Order("t ASC").
+		Limit(rankingSeriesMaxPoints).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
+	out := make([]RankingSeriesPoint, 0, len(rows))
+	for _, r := range rows {
+		name := r.Name
+		if by == "vendor" {
+			name = constant.GetChannelTypeName(r.ChannelType)
+			if !want[name] {
+				continue
+			}
+		}
+		out = append(out, RankingSeriesPoint{
+			T:        r.T,
+			Name:     name,
+			Tokens:   r.PromptTokens + r.CompletionTokens,
+			Requests: r.Requests,
+			Quota:    r.Quota,
+		})
+	}
+	return out, nil
+}
+
 // sortRankingTotalsByTokens orders by total tokens desc (GetRankings' rank
 // basis), breaking ties on name for a deterministic order across otherwise
 // tied groups (both in tests and in a live tie).
