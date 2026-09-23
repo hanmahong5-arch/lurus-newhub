@@ -321,6 +321,9 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantModels.POST("", handler.CreateModelV2)
 			tenantModels.DELETE("/:id", handler.DeleteModelV2)
 			tenantModels.GET("/routable", handler.ListRoutableModelsV2)
+			// Per-model latency / error rate for this tenant (cycle 16):
+			// quality for every member, volume for tenant admins only.
+			tenantModels.GET("/performance", handler.ListModelPerformanceV2)
 		}
 
 		tenantPricing := apiV2.Group("/:tenant_slug/pricing")
