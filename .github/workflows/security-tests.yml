@@ -60,6 +60,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: LurusTech/lurus-entkit
+          # pinned: bump deliberately after a kit release (2l-svc-platform pkg/entkit)
+          ref: 90c81f1a9193a205a6b7c904686ae9dd238daefe
           path: _sibling/lurus-entkit
           fetch-depth: 1
 
