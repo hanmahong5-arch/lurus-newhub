@@ -41,36 +41,55 @@ export const localDayKey = (tsSeconds) => {
   return Math.floor(d.getTime() / 1000);
 };
 
+// Local clock hour (not unix-hour floor: a UTC+5:30 reader's hours start
+// at :30 in unix time).
+export const localHourKey = (tsSeconds) => {
+  const d = new Date(tsSeconds * 1000);
+  d.setMinutes(0, 0, 0);
+  return Math.floor(d.getTime() / 1000);
+};
+
 /**
  * @param {Array} rows
  * @param {object} o
  * @param {number} o.end       window end (unix seconds)
- * @param {number} o.days      how many local days, ending with o.end's day
+ * @param {number} [o.days]    how many local days, ending with o.end's day
+ * @param {number} [o.hours]   OR how many local clock hours, ending with
+ *                             o.end's hour — the rows are hourly, so a 24h
+ *                             view needs no second fetch
  * @param {'spend'|'tokens'|'requests'} [o.metric='spend']
  * @param {number} [o.topN=6]  models drawn individually; the rest fold into OTHER
  * @returns {{days: Array<{day:number,total:number,parts:Object<string,number>}>,
- *            series: Array<{model:string,total:number}>, total:number}}
+ *            series: Array<{model:string,total:number}>, total:number,
+ *            unit: 'day'|'hour'}}
+ *   `day` is the bucket start (a local day or hour) whatever the unit.
  */
-export function buildActivity(rows, { end, days, metric = 'spend', topN = 6 }) {
+export function buildActivity(
+  rows,
+  { end, days, hours, metric = 'spend', topN = 6 },
+) {
   const field = METRIC_FIELD[metric] || 'quota';
-  const endDay = localDayKey(end);
-  const cursor = new Date(endDay * 1000);
-  cursor.setDate(cursor.getDate() - (days - 1));
-  const startDay = Math.floor(cursor.getTime() / 1000);
+  const unit = hours ? 'hour' : 'day';
+  const keyOf = unit === 'hour' ? localHourKey : localDayKey;
+  const lastKey = keyOf(end);
+  const cursor = new Date(lastKey * 1000);
+  if (unit === 'hour') cursor.setHours(cursor.getHours() - (hours - 1));
+  else cursor.setDate(cursor.getDate() - (days - 1));
+  const firstKey = Math.floor(cursor.getTime() / 1000);
 
-  const byDay = new Map();
+  const byBucket = new Map();
   const byModel = new Map();
   for (const row of rows || []) {
     const ts = Number(row?.created_at) || 0;
     if (!ts) continue;
-    const day = localDayKey(ts);
-    if (day < startDay || day > endDay) continue;
+    const key = keyOf(ts);
+    if (key < firstKey || key > lastKey) continue;
     const v = Number(row?.[field]) || 0;
     if (!v) continue;
     const model = row?.model_name || '—';
     byModel.set(model, (byModel.get(model) || 0) + v);
-    if (!byDay.has(day)) byDay.set(day, new Map());
-    const m = byDay.get(day);
+    if (!byBucket.has(key)) byBucket.set(key, new Map());
+    const m = byBucket.get(key);
     m.set(model, (m.get(model) || 0) + v);
   }
 
@@ -86,24 +105,26 @@ export function buildActivity(rows, { end, days, metric = 'spend', topN = 6 }) {
     : shown;
 
   const out = [];
-  const walk = new Date(startDay * 1000);
-  for (let day = startDay; day <= endDay; ) {
+  const walk = new Date(firstKey * 1000);
+  for (let key = firstKey; key <= lastKey; ) {
     const parts = {};
     let total = 0;
-    for (const [model, v] of byDay.get(day) || []) {
-      const key = keep.has(model) ? model : OTHER;
-      parts[key] = (parts[key] || 0) + v;
+    for (const [model, v] of byBucket.get(key) || []) {
+      const k = keep.has(model) ? model : OTHER;
+      parts[k] = (parts[k] || 0) + v;
       total += v;
     }
-    out.push({ day, total, parts });
-    walk.setDate(walk.getDate() + 1);
-    day = Math.floor(walk.getTime() / 1000);
+    out.push({ day: key, total, parts });
+    if (unit === 'hour') walk.setHours(walk.getHours() + 1);
+    else walk.setDate(walk.getDate() + 1);
+    key = Math.floor(walk.getTime() / 1000);
   }
 
   return {
     days: out,
     series,
     total: ranked.reduce((s, r) => s + r.total, 0),
+    unit,
   };
 }
 

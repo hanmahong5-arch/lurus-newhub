@@ -18,7 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import { describe, it, expect } from 'vitest';
-import { buildActivity, localDayKey, niceCeil, OTHER } from './activitySeries';
+import {
+  buildActivity,
+  localDayKey,
+  localHourKey,
+  niceCeil,
+  OTHER,
+} from './activitySeries';
 
 // Noon local time N days before a fixed local "today".
 const today = new Date(2026, 8, 22, 12, 0, 0);
@@ -77,6 +83,41 @@ describe('buildActivity', () => {
     const r = buildActivity([row(10, 'old', 9), row(0, 'new', 1)], {
       end,
       days: 7,
+    });
+    expect(r.series.map((s) => s.model)).toEqual(['new']);
+  });
+});
+
+describe('buildActivity — hourly', () => {
+  // Rows are hourly, so the 24h view is the same rows bucketed by hour.
+  const hourRow = (hoursAgo, model, quota) => {
+    const d = new Date(today);
+    d.setHours(12 - hoursAgo, 15, 0, 0);
+    return {
+      created_at: Math.floor(d.getTime() / 1000),
+      model_name: model,
+      quota,
+    };
+  };
+  const noon = at(0, 12);
+
+  it('makes one zero-filled bucket per local hour, ending with the current one', () => {
+    const r = buildActivity([hourRow(0, 'a', 2), hourRow(3, 'a', 5)], {
+      end: noon,
+      hours: 24,
+    });
+    expect(r.unit).toBe('hour');
+    expect(r.days).toHaveLength(24);
+    expect(r.days[23].day).toBe(localHourKey(noon));
+    expect(r.days[23].total).toBe(2);
+    expect(r.days[20].total).toBe(5);
+    expect(r.days.filter((d) => d.total > 0)).toHaveLength(2);
+  });
+
+  it('drops rows older than the hour window', () => {
+    const r = buildActivity([hourRow(30, 'old', 9), hourRow(1, 'new', 1)], {
+      end: noon,
+      hours: 24,
     });
     expect(r.series.map((s) => s.model)).toEqual(['new']);
   });

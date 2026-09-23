@@ -1191,3 +1191,29 @@ html[lang^='zh'] .hf-side .nav-h {
 .hf-side .nav-h-toggle:hover {
   color: var(--hf-ink-2);
 }
+
+/* Model compare (Models/Compare.jsx): a wider drawer and a sticky selection
+ * bar along the bottom of the marketplace. */
+.hf .hf-drawer.hf-drawer-wide {
+  width: min(980px, 100vw);
+}
+.hf .hf-compare-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 28px 0 306px;
+  padding: 10px 14px;
+  background: var(--hf-elev);
+  border: 1px solid var(--hf-rule-strong);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(10, 9, 8, 0.12);
+  font-size: 13px;
+}
+@media (max-width: 960px) {
+  .hf .hf-compare-bar {
+    margin-left: 28px;
+  }
+}

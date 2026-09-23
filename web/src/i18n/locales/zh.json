@@ -649,6 +649,18 @@
           "cap_rerank": "重排序",
           "cap_video": "视频生成",
           "per_m": "/百万"
+        },
+        "compare": {
+          "add": "+ 对比",
+          "added": "✓ 已加入对比",
+          "selected": "已选 {{n}} 个",
+          "max": "最多 {{n}} 个",
+          "clear": "清空",
+          "open": "开始对比",
+          "title": "模型对比",
+          "cheapest": "最便宜",
+          "description": "介绍",
+          "remove": "移除"
         }
       },
       "playground": {
@@ -1585,7 +1597,9 @@
         "other": "其他",
         "spend": "消费",
         "tokens": "Token",
-        "requests": "请求"
+        "requests": "请求",
+        "last_24h": "近 24 小时",
+        "empty": "这段时间没有用量。"
       }
     },
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

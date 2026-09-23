@@ -34,6 +34,7 @@ import {
   sortCatalog,
   vendorFacets,
 } from './catalog';
+import { CompareBar, CompareDrawer, MAX_COMPARE } from './Compare';
 
 // capability → the relay path a client calls for it.
 const CAPABILITY_PATH = {
@@ -126,7 +127,15 @@ const FacetRow = ({ checked, onChange, label, count, icon, testid }) => (
 const toggle = (list, v) =>
   list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 
-const ModelCard = ({ e, tr, onOpen, onTry, availability }) => (
+const ModelCard = ({
+  e,
+  tr,
+  onOpen,
+  onTry,
+  availability,
+  compared,
+  onCompare,
+}) => (
   <div
     className='panel hf-model-card'
     role='button'
@@ -196,6 +205,20 @@ const ModelCard = ({ e, tr, onOpen, onTry, availability }) => (
         </span>
       ))}
       {availability}
+      <button
+        type='button'
+        className={'btn sm' + (compared ? ' primary' : '')}
+        aria-pressed={compared}
+        data-testid={`model-compare-${e.id}`}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          onCompare(e.id);
+        }}
+      >
+        {compared
+          ? tr('console.models.compare.added', '✓ comparing')
+          : tr('console.models.compare.add', '+ compare')}
+      </button>
       {e.routable && (
         <button
           type='button'
@@ -548,6 +571,16 @@ const Marketplace = ({
   const [sort, setSort] = useState('popular');
   const [view, setView] = useState('list');
   const [openId, setOpenId] = useState(null);
+  const [compareIds, setCompareIds] = useState([]);
+  const [comparing, setComparing] = useState(false);
+  const toggleCompare = (id) =>
+    setCompareIds((l) =>
+      l.includes(id)
+        ? l.filter((x) => x !== id)
+        : l.length >= MAX_COMPARE
+          ? l
+          : [...l, id],
+    );
 
   const vFacets = useMemo(() => vendorFacets(entries), [entries]);
   const cFacets = useMemo(() => capabilityFacets(entries), [entries]);
@@ -718,11 +751,30 @@ const Marketplace = ({
                 onOpen={setOpenId}
                 onTry={onTry}
                 availability={availabilityFor?.(e.id)}
+                compared={compareIds.includes(e.id)}
+                onCompare={toggleCompare}
               />
             ))}
           </div>
         )}
       </section>
+
+      <CompareBar
+        ids={compareIds}
+        tr={tr}
+        onOpen={() => setComparing(true)}
+        onClear={() => setCompareIds([])}
+      />
+      {comparing && compareIds.length > 0 && (
+        <CompareDrawer
+          tr={tr}
+          entries={compareIds
+            .map((id) => entries.find((e) => e.id === id))
+            .filter(Boolean)}
+          onClose={() => setComparing(false)}
+          onRemove={toggleCompare}
+        />
+      )}
 
       {open && (
         <ModelDrawer
