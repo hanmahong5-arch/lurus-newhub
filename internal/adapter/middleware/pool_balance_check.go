@@ -84,6 +84,8 @@ func PoolBalanceCheck() gin.HandlerFunc {
 					)
 					renderRejection(c, apiErr, gin.H{"tenant_id": tenantID})
 					c.Abort()
+					recordMiddlewareErrorLogOncePer(c, "pool_not_configured:"+tenantID, http.StatusPaymentRequired,
+						"tenant credit pool is not configured (one row per tenant per minute)", string(types.ErrorCodePoolNotConfigured))
 					return
 				case setting.CreditPoolRequiredLog:
 					group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
@@ -124,6 +126,8 @@ func PoolBalanceCheck() gin.HandlerFunc {
 			)
 			renderRejection(c, apiErr, gin.H{"tenant_id": tenantID})
 			c.Abort()
+			recordMiddlewareErrorLogOncePer(c, "pool_exhausted:"+tenantID, http.StatusPaymentRequired,
+				"tenant credit pool exhausted (one row per tenant per minute)", string(types.ErrorCodePoolExhausted))
 			return
 		}
 

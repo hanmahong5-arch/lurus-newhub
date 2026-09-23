@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -78,6 +80,32 @@ func recordMiddlewareErrorLog(c *gin.Context, statusCode int, message string, co
 	other["source_product"] = ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader))
 	repo.RecordErrorLog(c, userId, c.GetInt("channel_id"), c.GetString("original_model"),
 		c.GetString("token_name"), message, c.GetInt("token_id"), 0, false, c.GetString("group"), other)
+}
+
+// rejectionLogInterval bounds recordMiddlewareErrorLogOncePer: at most one
+// row per key per interval per replica.
+const rejectionLogInterval = time.Minute
+
+var rejectionLogLast sync.Map // key -> time.Time of the last row written
+
+// recordMiddlewareErrorLogOncePer is recordMiddlewareErrorLog for gates that
+// reject a whole tenant at once (credit pool exhausted / not configured):
+// every request of that tenant fails the same way, so a row per request
+// would flood the log, but no row at all left the tenant — and the
+// operator — blind. On 2026-09-23 an exhausted pool rejected ~1,000
+// internal calls over 4.7 hours with nothing in the logs but a Prometheus
+// counter. One row per key per minute is the middle ground: the rejection
+// is visible where the tenant looks, the flood is not.
+func recordMiddlewareErrorLogOncePer(c *gin.Context, key string, statusCode int, message string, codeStr string) {
+	now := time.Now()
+	prev, loaded := rejectionLogLast.LoadOrStore(key, now)
+	if loaded {
+		last := prev.(time.Time)
+		if now.Sub(last) < rejectionLogInterval || !rejectionLogLast.CompareAndSwap(key, last, now) {
+			return
+		}
+	}
+	recordMiddlewareErrorLog(c, statusCode, message, codeStr)
 }
 
 func abortWithMidjourneyMessage(c *gin.Context, statusCode int, code int, description string) {
