@@ -65,8 +65,8 @@ spec:
           # docker-image-main.yml (bump_r6_manifest job) — same mechanism as
           # deploy/k8s/r6-stage/deployment.yaml, both files are rewritten by
           # every :main build so UAT always runs the digest prod runs.
-          # pin: main-20260922-8c1bd81 run=35784552193
-          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:65c663241fe31d265ffd9e0c349bae45531d29c571ca8154e9487f8ca75fd07b
+          # pin: main-20260923-859ce3e run=35822496557
+          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:449665f6cf4917f89c5f68fb0c0057302ae1a974f4e7ff59b31ed0542f1c02df
           imagePullPolicy: IfNotPresent
           # --log-dir= (empty): file-based logging is a no-op here
           # (internal/pkg/logger/logger.go's SetupLogger gates on
