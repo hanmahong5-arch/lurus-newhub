@@ -90,6 +90,7 @@ const serve = ({
   pricing = [],
   groupRatio = { default: 1 },
   usage = null,
+  performance = [],
   extra = () => null,
 } = {}) =>
   API.get.mockImplementation((url) => {
@@ -97,6 +98,9 @@ const serve = ({
     const hit = extra(u);
     if (hit) return hit;
     if (u.includes('/models/routable')) return ok({ items: routable });
+    if (u.includes('/models/performance')) {
+      return ok({ hours: 24, items: performance });
+    }
     if (u.includes('/models')) {
       return ok({
         items: catalogue,
@@ -360,6 +364,55 @@ describe('Models marketplace', () => {
     expect(
       screen.getByTestId('model-compare-m-4').getAttribute('aria-pressed'),
     ).toBe('false');
+  });
+
+  // Per-model latency / error rate for this tenant (cycle 16 P7).
+  it('shows 24h p50 and error rate, and says so when the sample is thin', async () => {
+    serve({
+      ...UAT,
+      performance: [
+        {
+          model_name: 'deepseek-chat',
+          p50_latency_ms: 1234,
+          p95_latency_ms: 3100,
+          error_rate: 0.021,
+          enough_samples: true,
+        },
+        {
+          model_name: 'faultsim-music',
+          p50_latency_ms: 90,
+          p95_latency_ms: 90,
+          error_rate: 0,
+          enough_samples: false,
+        },
+      ],
+    });
+    render(<HFModels />);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('model-perf-deepseek-chat').textContent,
+      ).toContain('1.2s'),
+    );
+    expect(
+      screen.getByTestId('model-perf-deepseek-chat').textContent,
+    ).toContain('2.1%');
+    // 90 ms from too few samples is not shown as a measurement.
+    const thin = screen.getByTestId('model-perf-faultsim-music');
+    expect(thin.textContent).not.toContain('90ms');
+    expect(thin.textContent).toMatch(/too little traffic/);
+    // gpt-4o has no traffic at all: no line.
+    expect(screen.queryByTestId('model-perf-gpt-4o')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('model-card-deepseek-chat'));
+    const perf = screen.getByTestId('model-drawer-perf');
+    expect(perf.textContent).toContain('3.1s');
+    expect(
+      API.get.mock.calls.some(
+        (c) =>
+          String(c[0]).includes('/api/v2/~/models/performance') &&
+          c[1]?.skipErrorHandler,
+      ),
+    ).toBe(true);
   });
 
   it('says there are no models only when every source is empty', async () => {

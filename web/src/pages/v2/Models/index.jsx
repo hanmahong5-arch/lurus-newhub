@@ -31,6 +31,7 @@ import { useFormDraft } from '../../../hooks/common/useFormDraft';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import { useTenantModels } from '../../../hooks/models/useTenantModels';
 import { useRoutableModels } from '../../../hooks/models/useRoutableModels';
+import { useModelPerformance } from '../../../hooks/models/useModelPerformance';
 import Marketplace from './Marketplace';
 import { buildCatalog } from './catalog';
 
@@ -212,6 +213,9 @@ const HFModels = () => {
     };
   }, [tenantSlug]);
 
+  // p50/p95 latency and error rate over 24h, this tenant only.
+  const performance = useModelPerformance(tenantSlug);
+
   const userGroup = useMemo(() => {
     try {
       return (
@@ -228,9 +232,10 @@ const HFModels = () => {
         pricing: pricing.rows,
         catalogue: models,
         usage,
+        performance,
         groupRatio: pricing.groupRatio[userGroup] ?? 1,
       }),
-    [routable, pricing, models, usage, userGroup],
+    [routable, pricing, models, usage, performance, userGroup],
   );
   const callable = entries.filter((e) => e.routable).length;
 

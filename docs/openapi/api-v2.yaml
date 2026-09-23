@@ -1243,6 +1243,58 @@ paths:
   # Models
   # ============================================================
 
+  /api/v2/{tenant_slug}/models/performance:
+    get:
+      tags: [Channels]
+      summary: Per-Model Latency and Error Rate
+      description: |
+        p50/p95 latency and error rate per model over the last `hours`, for
+        the caller's tenant only (cached per pod for 5 minutes). Every member
+        gets the quality fields; tenant admins also get the volume fields
+        (requests, errors, total_tokens, quota, latency_samples).
+        `enough_samples` is false below `min_samples` latency samples — the
+        percentiles are then noise, not a measurement.
+      operationId: listModelPerformanceV2
+      security:
+        - ZitadelJWT: []
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+        - name: hours
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [1, 24, 168]
+            default: 24
+      responses:
+        '200':
+          description: Per-model performance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      hours: { type: integer }
+                      cached_at: { type: integer, format: int64 }
+                      min_samples: { type: integer }
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            model_name: { type: string }
+                            p50_latency_ms: { type: integer }
+                            p95_latency_ms: { type: integer }
+                            error_rate: { type: number }
+                            enough_samples: { type: boolean }
+        '400':
+          description: hours is not one of 1, 24, 168 (INVALID_WINDOW)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v2/{tenant_slug}/models:
     get:
       tags: [Channels]

@@ -661,6 +661,13 @@
           "cheapest": "最便宜",
           "description": "介绍",
           "remove": "移除"
+        },
+        "perf": {
+          "thin": "流量太少，暂无法衡量",
+          "error_rate": "错误率",
+          "th_p50": "p50 · 24 小时",
+          "sort_fastest": "最快（p50）",
+          "window": "近 24 小时，本租户"
         }
       },
       "playground": {

@@ -26,6 +26,8 @@ import {
   capabilityFacets,
   fmtUsd,
   fmtCompact,
+  fmtMs,
+  fmtPct,
 } from './catalog';
 
 // The UAT state that made the old page say "0 models": two models routable
@@ -152,6 +154,51 @@ describe('filter / sort / facets', () => {
       'openai',
       'anthropic',
     ]);
+  });
+});
+
+describe('performance', () => {
+  const perf = [
+    {
+      model_name: 'deepseek-chat',
+      p50_latency_ms: 850,
+      p95_latency_ms: 2100,
+      error_rate: 0.02,
+      enough_samples: true,
+    },
+    {
+      model_name: 'faultsim-music',
+      p50_latency_ms: 90,
+      p95_latency_ms: 90,
+      error_rate: 0,
+      enough_samples: false,
+    },
+    { model_name: 'not-listed', p50_latency_ms: 1, enough_samples: true },
+  ];
+
+  it('attaches tenant performance by name and ignores unknown models', () => {
+    const entries = buildCatalog({ ...uat, performance: perf });
+    const e = entries.find((x) => x.id === 'deepseek-chat');
+    expect([e.p50Ms, e.p95Ms, e.errorRate, e.enoughSamples]).toEqual([
+      850,
+      2100,
+      0.02,
+      true,
+    ]);
+    expect(entries.map((x) => x.id)).not.toContain('not-listed');
+  });
+
+  it('ranks "fastest" by p50 among models with enough samples only', () => {
+    // faultsim-music is faster on paper (90 ms) but from too few samples.
+    const entries = buildCatalog({ ...uat, performance: perf });
+    expect(sortCatalog(entries, 'fastest')[0].id).toBe('deepseek-chat');
+  });
+
+  it('formats latency and rates', () => {
+    expect(fmtMs(850)).toBe('850ms');
+    expect(fmtMs(1234)).toBe('1.2s');
+    expect(fmtMs(null)).toBe('—');
+    expect(fmtPct(0.0213)).toBe('2.1%');
   });
 });
 

@@ -55,6 +55,7 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
  * @param {Array<object>} src.pricing   rows of GET ~/pricing data.pricing
  * @param {Array<object>} src.catalogue items of GET ~/models
  * @param {Array<{name:string,total_tokens?:number,requests?:number}>} src.usage
+ * @param {Array<object>} [src.performance] items of GET ~/models/performance
  * @param {number} [src.groupRatio=1] the caller's group multiplier
  */
 export function buildCatalog({
@@ -62,6 +63,7 @@ export function buildCatalog({
   pricing = [],
   catalogue = [],
   usage = [],
+  performance = [],
   groupRatio = 1,
 } = {}) {
   const byName = new Map();
@@ -84,6 +86,11 @@ export function buildCatalog({
         requests: 0,
         catalogueId: null,
         status: null,
+        // Tenant-scoped, recent window; null = no traffic measured.
+        p50Ms: null,
+        p95Ms: null,
+        errorRate: null,
+        enoughSamples: false,
       });
     }
     return byName.get(name);
@@ -150,6 +157,15 @@ export function buildCatalog({
     e.requests = num(u.requests) ?? 0;
   }
 
+  for (const pf of performance) {
+    if (!pf?.model_name || !byName.has(pf.model_name)) continue;
+    const e = byName.get(pf.model_name);
+    e.p50Ms = num(pf.p50_latency_ms) || null;
+    e.p95Ms = num(pf.p95_latency_ms) || null;
+    e.errorRate = num(pf.error_rate);
+    e.enoughSamples = !!pf.enough_samples;
+  }
+
   return Array.from(byName.values());
 }
 
@@ -210,7 +226,7 @@ const priceKey = (e, field) => {
   return e[field];
 };
 
-export const SORTS = ['popular', 'name', 'input_asc', 'output_asc'];
+export const SORTS = ['popular', 'name', 'input_asc', 'output_asc', 'fastest'];
 
 export function sortCatalog(entries, sort = 'popular') {
   const out = entries.slice();
@@ -230,6 +246,16 @@ export function sortCatalog(entries, sort = 'popular') {
       return out.sort(byPrice('inputPerM'));
     case 'output_asc':
       return out.sort(byPrice('outputPerM'));
+    case 'fastest':
+      // Only measurements with enough samples rank; the rest follow by name.
+      return out.sort((a, b) => {
+        const pa = a.enoughSamples ? a.p50Ms : null;
+        const pb = b.enoughSamples ? b.p50Ms : null;
+        if (pa == null && pb == null) return byName(a, b);
+        if (pa == null) return 1;
+        if (pb == null) return -1;
+        return pa - pb || byName(a, b);
+      });
     default:
       // Popular: tokens, then requests, then routable before not, then name.
       return out.sort(
@@ -263,4 +289,16 @@ export function fmtCompact(n) {
     if (n >= d) return `${Number((n / d).toFixed(1))}${u}`;
   }
   return String(n);
+}
+
+/** 850 → "850ms", 1234 → "1.2s". */
+export function fmtMs(ms) {
+  if (ms == null) return '—';
+  return ms >= 1000 ? `${Number((ms / 1000).toFixed(1))}s` : `${ms}ms`;
+}
+
+/** 0.0213 → "2.1%". */
+export function fmtPct(r) {
+  if (r == null) return '—';
+  return `${Number((r * 100).toFixed(1))}%`;
 }

@@ -24,7 +24,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useEffect } from 'react';
 import HfVendorIcon from '../../../components/hifi/HfVendorIcon';
-import { CAPABILITIES, fmtCompact, fmtUsd } from './catalog';
+import { CAPABILITIES, fmtCompact, fmtMs, fmtPct, fmtUsd } from './catalog';
 
 export const MAX_COMPARE = 4;
 
@@ -134,6 +134,16 @@ export const CompareDrawer = ({ entries, tr, onClose, onRemove }) => {
       'caps',
       tr('console.models.market.th_caps', 'capabilities'),
       (e) => e.capabilities.map((c) => capLabel(tr, c)).join(' · ') || '—',
+    ],
+    [
+      'p50',
+      tr('console.models.perf.th_p50', 'p50 · 24h'),
+      (e) => (e.enoughSamples ? fmtMs(e.p50Ms) : '—'),
+    ],
+    [
+      'errors',
+      tr('console.models.perf.error_rate', 'errors'),
+      (e) => (e.enoughSamples ? fmtPct(e.errorRate) : '—'),
     ],
     [
       'tokens',
