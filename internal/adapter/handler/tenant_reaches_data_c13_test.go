@@ -275,9 +275,21 @@ func setupC13TenantReach(t *testing.T) *c13ReachCtx {
 	// local JWKS stub (the session arm never fetches a key, but InitOIDCAuth
 	// builds the manager eagerly) and switch it back off afterwards so the
 	// rest of the binary sees the state it had.
+	//
+	// The stub serves the package's shared callback key, not an empty set:
+	// middleware's jwksManager is created once per test binary (sync.Once),
+	// so whichever test calls InitOIDCAuth first seeds the key cache every
+	// later test verifies against. An empty set here, run first under
+	// -shuffle, left all 11 OIDC callback/claim tests failing with "public
+	// key not found for kid" (CI seed 1790172913506686629). Every harness in
+	// this package must serve the same key under the same kid — see
+	// oidcCallbackSharedKey.
+	sharedJWKS := middleware.JWKSet{Keys: []middleware.JWK{
+		rsaPublicKeyToJWKForCallbackTest(&oidcCallbackSharedKey(t).PublicKey),
+	}}
 	jwks := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"keys":[]}`))
+		_ = json.NewEncoder(w).Encode(sharedJWKS)
 	}))
 	t.Cleanup(jwks.Close)
 	t.Setenv("OIDC_ENABLED", "true")
