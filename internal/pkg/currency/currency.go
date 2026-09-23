@@ -5,12 +5,13 @@ import (
 	"math"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 )
 
 // Currency codes for the three-tier monetary system.
 //
 //	Tier 1: LuGold (LUG) — subscription/package unit, 1 LUG = 100 LUC
-//	Tier 2: LuCoin (LUC) — platform-wide credit, 1 LUC ~ CNY 1
+//	Tier 2: LuCoin (LUC) — platform-wide credit, 1 LUC = CNY 1 (wallet unit)
 //	Tier 3: Lute   (LUT) — API product usage credit, 1 LUT = 1 internal quota unit
 //
 // Conversion is ONE-WAY only: LUG -> LUC -> LUT.
@@ -27,22 +28,48 @@ const (
 	// 1 LUG = 100 LUC (a LuGold is like a 100-yuan bill)
 	LugToLuc = 100
 
-	// 1 LUC = QuotaPerUnit LUT.
-	// Since 1 LUT = 1 internal quota unit and QuotaPerUnit = 500,000,
-	// this means 1 LUC (~ CNY 1) buys 500,000 LUT.
-	// The platform wallet debits 1.0 for 500,000 quota — this is already
-	// the live production rate, we just formalize it.
-	//
-	// NOTE: Do NOT hardcode 500000 here; always derive from common.QuotaPerUnit
-	// so that if the base unit ever changes, the currency layer stays correct.
-
+	// 1 LUC (= CNY 1 in the platform wallet) buys LucToLut() LUT; see there.
 	// 1 LUG = LugToLuc * LucToLut() LUT (derived, not hardcoded)
 )
 
-// LucToLut returns the LUC -> LUT exchange rate.
-// Uses the live QuotaPerUnit value so it stays consistent with the relay pipeline.
+// LucToLut returns how much quota 1 LUC — one yuan of platform wallet
+// balance — buys.
+//
+// Quota is priced in US dollars: model ratios are the upstream USD presets
+// (ratio 1 = $0.002 / 1K tokens, deepseek-chat's 0.135 = $0.27 / 1M), so
+// QuotaPerUnit quota is worth $1, not CNY 1. The wallet is in yuan (a CNY 1
+// topup credits 1.0), so one yuan buys QuotaPerUnit / USDExchangeRate quota.
+//
+// This used to return QuotaPerUnit itself, i.e. it treated CNY 1 as $1:
+// every wallet debit, pre-authorisation, wallet-to-quota transfer and
+// invoice amount_cny was 1/USDExchangeRate of the real cost (at 7.3, a
+// customer paid CNY 0.27 for what the upstream charged CNY 1.97).
+//
+// Every yuan<->quota conversion must go through here (QuotaToCNY /
+// CNYToQuota); TestNoRawQuotaPerUnitAtCNYBoundaries pins that.
 func LucToLut() float64 {
-	return common.QuotaPerUnit
+	rate := operation_setting.USDExchangeRate
+	if rate <= 0 {
+		// Unreachable through the option API (positiveRangeOptionKinds
+		// rejects <= 0); never fall back to 1, which is the old bug.
+		rate = operation_setting.DefaultUSDExchangeRate
+	}
+	return common.QuotaPerUnit / rate
+}
+
+// QuotaToCNY converts a quota amount to yuan (LUC) — the amount to debit
+// from, pre-authorise on, or report against the platform wallet.
+func QuotaToCNY(quota int) float64 {
+	return float64(quota) / LucToLut()
+}
+
+// CNYToQuota converts yuan (LUC) to quota, truncated — the quota a CNY
+// amount taken from the wallet buys.
+func CNYToQuota(cny float64) int {
+	if cny <= 0 {
+		return 0
+	}
+	return int(math.Floor(cny * LucToLut()))
 }
 
 // LugToLut returns the LUG -> LUT exchange rate (via LUC).
@@ -176,9 +203,9 @@ type ExchangeInfo struct {
 	SourceAmount   float64 `json:"source_amount"`
 	TargetCurrency string  `json:"target_currency"` // "LUT"
 	TargetAmount   int     `json:"target_amount"`
-	ExchangeRate   float64 `json:"exchange_rate"`   // effective rate (base * VIP bonus)
+	ExchangeRate   float64 `json:"exchange_rate"` // effective rate (base * VIP bonus)
 	VIPLevel       int     `json:"vip_level"`
-	VIPBonus       float64 `json:"vip_bonus"`       // multiplier applied
+	VIPBonus       float64 `json:"vip_bonus"` // multiplier applied
 }
 
 // CalculateExchange computes the exchange result for a LUC -> LUT conversion.

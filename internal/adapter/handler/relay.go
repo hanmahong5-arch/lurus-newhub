@@ -23,6 +23,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
@@ -466,7 +467,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if newAPIError != nil {
 				relayErr = newAPIError.Err
 			}
-			costCNY := float64(relayInfo.FinalPreConsumedQuota) / common.QuotaPerUnit
+			costCNY := currency.QuotaToCNY(relayInfo.FinalPreConsumedQuota)
 			tracing.SetGenAIAttributes(llmSpan,
 				relayInfo.GetEstimatePromptTokens(), 0,
 				costCNY, nil, relayErr)

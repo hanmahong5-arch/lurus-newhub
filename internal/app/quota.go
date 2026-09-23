@@ -16,6 +16,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
@@ -1049,7 +1050,7 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 
 	if relayInfo.IdentityAccountID > 0 && totalQuota > 0 {
 		accountID := relayInfo.IdentityAccountID
-		amountLB := float64(totalQuota) / common.QuotaPerUnit
+		amountLB := currency.QuotaToCNY(totalQuota)
 		warnZeroWalletAmount(accountID, totalQuota, amountLB)
 
 		if relayInfo.PlatformPreAuthID > 0 {

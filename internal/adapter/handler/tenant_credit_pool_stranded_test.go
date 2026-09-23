@@ -90,7 +90,7 @@ func TestTopupCreditPool_WalletDebitUsesQuotaPerUnit(t *testing.T) {
 
 	want := float64(500000) / currency.LucToLut()
 	if *debitAmount != want {
-		t.Errorf("wallet debit amount = %v, want %v (500000 quota / QuotaPerUnit)", *debitAmount, want)
+		t.Errorf("wallet debit amount = %v, want %v (500000 quota / LucToLut)", *debitAmount, want)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestTopupCreditPool_SubGranularityAmountRejected(t *testing.T) {
 	ctx := setupStrandedCtx(t, 10_000_000)
 	debitCalls, _, _, _ := stubWalletSeamsCapture(t, nil)
 
-	w := topupWithKey(ctx, 24, "idem-subgran-1") // 24 quota = 0.000048 LB → rounds to 0.0000
+	w := topupWithKey(ctx, 3, "idem-subgran-1") // 3 quota ≈ 0.000044 LB at 7.3 CNY/USD → rounds to 0.0000
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for a sub-granularity amount, body: %s", w.Code, w.Body.String())
 	}

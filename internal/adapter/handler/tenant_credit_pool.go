@@ -285,10 +285,11 @@ func TopupCreditPool(c *gin.Context) {
 	}
 	accountID := *actor.LurusAccountID
 
-	// 1 LB = QuotaPerUnit quota (currency.LucToLut(), never hardcode 500000 —
+	// 1 LB (CNY 1) = currency.LucToLut() quota (QuotaPerUnit/USDExchangeRate:
+	// quota is USD-priced; never hardcode 500000 —
 	// see currency.go:36), same conversion as quota.go:985 / the v2 transfer /
 	// internal topup. The wallet keeps 4 decimals (numeric(14,4)), so a debit
-	// is exact only for multiples of QuotaPerUnit/10000 quota; the sub-0.0001
+	// is exact only for multiples of LucToLut()/10000 quota; the sub-0.0001
 	// remainder of any other amount is lost to rounding, and anything under
 	// half that granularity rounds to a 0.0000 debit — free pool credit — so
 	// those requests are rejected outright.

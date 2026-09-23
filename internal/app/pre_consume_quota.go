@@ -10,6 +10,7 @@ import (
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
@@ -267,7 +268,7 @@ var preAuthorizeWithBreaker = common.PreAuthorizeWithBreaker
 // platformPreAuthorize calls the platform to freeze wallet balance.
 // High-balance users can skip this call entirely (cache-based trust).
 func platformPreAuthorize(c *gin.Context, estimatedQuota int, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
-	estimatedLB := float64(estimatedQuota) / common.QuotaPerUnit
+	estimatedLB := currency.QuotaToCNY(estimatedQuota)
 	accountID := relayInfo.IdentityAccountID
 
 	// Fast path: skip pre-auth for users with high cached balance.

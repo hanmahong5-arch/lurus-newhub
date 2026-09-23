@@ -7,6 +7,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
@@ -93,11 +94,11 @@ func GetWalletInfo(c *gin.Context) {
 			"success": true,
 			"data": gin.H{
 				"source":         "internal",
-				"balance":        float64(user.Quota) / common.QuotaPerUnit,
+				"balance":        currency.QuotaToCNY(user.Quota),
 				"frozen":         0,
-				"available":      float64(user.Quota) / common.QuotaPerUnit,
+				"available":      currency.QuotaToCNY(user.Quota),
 				"lifetime_topup": 0,
-				"lifetime_spend": float64(user.UsedQuota) / common.QuotaPerUnit,
+				"lifetime_spend": currency.QuotaToCNY(user.UsedQuota),
 			},
 		})
 		return

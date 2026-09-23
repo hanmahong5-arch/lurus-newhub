@@ -8,6 +8,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,7 +35,7 @@ const (
 type invoiceMonthBucket struct {
 	Month                string  `json:"month"`                  // "YYYY-MM"
 	Quota                int64   `json:"quota"`                  // billable quota units consumed
-	AmountCNY            float64 `json:"amount_cny"`             // quota / QuotaPerUnit (1 CNY per QuotaPerUnit)
+	AmountCNY            float64 `json:"amount_cny"`             // currency.QuotaToCNY(quota)
 	RequestCount         int64   `json:"request_count"`          // number of billable log rows
 	UnbilledQuota        int64   `json:"unbilled_quota"`         // quota logged but excluded from billing (settlement-failed / channel-test)
 	UnbilledRequestCount int64   `json:"unbilled_request_count"` // number of log rows excluded from billing
@@ -248,7 +249,7 @@ func aggregateInvoiceMonths(userID int, tenantID string, fromTS, toTS int64) ([]
 		buckets = append(buckets, invoiceMonthBucket{
 			Month:        all.Month,
 			Quota:        billable.QuotaSum,
-			AmountCNY:    float64(billable.QuotaSum) / common.QuotaPerUnit,
+			AmountCNY:    currency.QuotaToCNY(int(billable.QuotaSum)),
 			RequestCount: billable.RequestCount,
 			// The two aggregates are separate round trips; a row that lands
 			// between them can make the difference negative, which must not

@@ -429,7 +429,7 @@ func InternalTopupBalance(c *gin.Context) {
 	}
 
 	// Convert RMB to tokens
-	quotaAmount := int(req.AmountRmb * common.QuotaPerUnit)
+	quotaAmount := currency.CNYToQuota(req.AmountRmb)
 
 	// Add quota
 	err = repo.IncreaseUserQuota(req.UserId, quotaAmount, true)

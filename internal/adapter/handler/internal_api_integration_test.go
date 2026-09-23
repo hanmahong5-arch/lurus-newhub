@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 )
 
 // Error code constants used in integration test assertions.
@@ -32,7 +34,7 @@ func authHeaders() map[string]string {
 // authHeadersWithIdempotency returns auth headers plus an idempotency key.
 func authHeadersWithIdempotency(idempotencyKey string) map[string]string {
 	return map[string]string{
-		"X-API-Key":        testApiKeyAllScopes,
+		"X-API-Key":         testApiKeyAllScopes,
 		"X-Idempotency-Key": idempotencyKey,
 	}
 }
@@ -203,7 +205,6 @@ func TestInteg_CreateUser_InvalidUsername(t *testing.T) {
 	resp := parseResponse(t, w)
 	assertErrorCode(t, resp, ErrCodeValidationFailed)
 }
-
 
 func TestInteg_GetUser_Success(t *testing.T) {
 	router, cleanup := SetupIntegrationRouter(t)
@@ -1061,7 +1062,7 @@ func TestInteg_TopupAndVerifyBalance(t *testing.T) {
 	d2, _ := resp2["data"].(map[string]interface{})
 	finalBalance := d2["balance"].(float64)
 
-	expectedIncrease := topupAmount * common.QuotaPerUnit
+	expectedIncrease := topupAmount * currency.LucToLut() // CNY 25 buys the quota of $25/USDExchangeRate
 	actualIncrease := finalBalance - initialBalance
 	if actualIncrease < expectedIncrease*0.99 || actualIncrease > expectedIncrease*1.01 {
 		t.Errorf("balance increase mismatch: expected ~%v, got %v (initial=%v, final=%v)",
@@ -1622,7 +1623,6 @@ func TestInteg_Topup_MissingReason(t *testing.T) {
 // ============================================================
 // Login Edge Cases
 // ============================================================
-
 
 // ============================================================
 // Update User Edge Cases
