@@ -525,6 +525,54 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
     expect(screen.getByTestId('activity-total').textContent).toBe('3');
   });
 
+  // The rows are hourly (per user, model, hour), so the last 24 hours can be
+  // drawn per hour from the same fetch: 24 buckets, and two rows three hours
+  // apart land in two different bars rather than one day's bar.
+  it('re-buckets the same rows per hour for the 24H view', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const rows = [
+      makeQuotaRow({
+        model_name: 'model-a',
+        created_at: now - 60,
+        quota: 500000,
+      }),
+      makeQuotaRow({
+        model_name: 'model-a',
+        created_at: now - 3 * 3600,
+        quota: 500000,
+      }),
+      // Outside 24 hours: counted by the day views, not by 24H.
+      makeQuotaRow({
+        model_name: 'model-b',
+        created_at: now - 3 * 86400,
+        quota: 500000,
+      }),
+    ];
+    wireDashboard({
+      quota: { data: { success: true, data: rows } },
+      status: EXPORT_ON_STATUS,
+    });
+
+    render(React.createElement(HFDashboard));
+    const chart = await waitFor(() => screen.getByTestId('usage-trend-chart'));
+    await waitFor(() =>
+      expect(screen.getByTestId('activity-total').textContent).toBe('$3.0000'),
+    );
+
+    fireEvent.click(screen.getByTestId('activity-range-24h'));
+    expect(chart.querySelectorAll('[data-testid="activity-bar"]').length).toBe(
+      24,
+    );
+    expect(chart.querySelectorAll('[data-nonzero="true"]').length).toBe(2);
+    expect(screen.getByTestId('activity-total').textContent).toBe('$2.0000');
+    expect(screen.getByText('last 24 hours')).toBeTruthy();
+    expect(screen.queryByTestId('activity-empty')).toBeNull();
+
+    // Requests metric over the same 24h: two rows of count 1.
+    fireEvent.click(screen.getByTestId('activity-metric-requests'));
+    expect(screen.getByTestId('activity-total').textContent).toBe('2');
+  });
+
   it('treats the >30-day refusal (success:false, HTTP 200) as an empty state, not a toast', async () => {
     const { showError } = await import('../../../helpers');
     showError.mockClear();

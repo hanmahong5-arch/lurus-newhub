@@ -649,6 +649,18 @@
           "cap_rerank": "Rerank",
           "cap_video": "Video",
           "per_m": "/M"
+        },
+        "compare": {
+          "add": "+ compare",
+          "added": "✓ comparing",
+          "selected": "{{n}} selected",
+          "max": "up to {{n}}",
+          "clear": "clear",
+          "open": "compare",
+          "title": "compare models",
+          "cheapest": "cheapest",
+          "description": "description",
+          "remove": "remove"
         }
       },
       "playground": {
@@ -1585,7 +1597,9 @@
         "other": "other",
         "spend": "spend",
         "tokens": "tokens",
-        "requests": "requests"
+        "requests": "requests",
+        "last_24h": "last 24 hours",
+        "empty": "No usage in this window."
       }
     },
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Web search {{count}} time / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

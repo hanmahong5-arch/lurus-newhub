@@ -308,6 +308,60 @@ describe('Models marketplace', () => {
     expect(screen.queryByTestId('model-drawer')).toBeNull();
   });
 
+  // openrouter.ai "Compare": pick models, see them side by side, the
+  // cheapest input/output marked.
+  it('compares selected models side by side and marks the cheapest price', async () => {
+    serve(UAT);
+    render(<HFModels />);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('model-card-deepseek-chat').textContent,
+      ).toContain('$0.27'),
+    );
+    expect(screen.queryByTestId('compare-bar')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('model-compare-deepseek-chat'));
+    // One model: the bar shows, comparing is not offered yet.
+    expect(screen.getByTestId('compare-open').disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('model-compare-gpt-4o'));
+    expect(screen.getByTestId('compare-bar').textContent).toContain(
+      '2 selected',
+    );
+    // Toggling the compare button does not open the detail drawer.
+    expect(screen.queryByTestId('model-drawer')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('compare-open'));
+    const table = screen.getByTestId('compare-table');
+    expect(table.querySelectorAll('thead th')).toHaveLength(3);
+    const input = screen.getByTestId('compare-row-input');
+    const cells = input.querySelectorAll('td');
+    // deepseek $0.27/M vs gpt-4o 1.25 × 2 = $2.5/M
+    expect(cells[1].textContent).toContain('$0.27');
+    expect(cells[1].textContent).toContain('cheapest');
+    expect(cells[2].textContent).toContain('$2.5');
+    expect(cells[2].textContent).not.toContain('cheapest');
+  });
+
+  it('caps the comparison at four models', async () => {
+    const many = Array.from({ length: 5 }, (_, i) => ({
+      model_name: `m-${i}`,
+      quota_type: 0,
+      model_ratio: i + 1,
+    }));
+    serve({ pricing: many });
+    render(<HFModels />);
+    await waitFor(() => screen.getByTestId('model-card-m-4'));
+    for (let i = 0; i < 5; i += 1) {
+      fireEvent.click(screen.getByTestId(`model-compare-m-${i}`));
+    }
+    expect(screen.getByTestId('compare-bar').textContent).toContain(
+      '4 selected',
+    );
+    expect(
+      screen.getByTestId('model-compare-m-4').getAttribute('aria-pressed'),
+    ).toBe('false');
+  });
+
   it('says there are no models only when every source is empty', async () => {
     serve({});
     render(<HFModels />);

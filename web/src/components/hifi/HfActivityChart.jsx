@@ -54,6 +54,11 @@ const fmtDay = (ts) =>
     month: 'short',
     day: 'numeric',
   });
+const fmtHour = (ts) =>
+  new Date(ts * 1000).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 
 /**
  * @param {object} p
@@ -75,10 +80,19 @@ const HfActivityChart = ({
   const [range, setRange] = useState(maxDays);
   const [hover, setHover] = useState(null);
 
+  // range: a number of days, or 'h24' for the last 24 local hours (the rows
+  // are hourly, so this is a re-bucketing of the same fetch).
   const data = useMemo(
-    () => buildActivity(rows, { end, days: range, metric }),
+    () =>
+      buildActivity(
+        rows,
+        range === 'h24'
+          ? { end, hours: 24, metric }
+          : { end, days: range, metric },
+      ),
     [rows, end, range, metric],
   );
+  const fmtBucket = data.unit === 'hour' ? fmtHour : fmtDay;
   const fmt = metric === 'spend' ? formatSpend : compact;
   const top = niceCeil(Math.max(0, ...data.days.map((d) => d.total)));
   const colorOf = (model) => {
@@ -121,7 +135,9 @@ const HfActivityChart = ({
           {fmt(data.total)}
         </div>
         <div className='faint' style={{ fontSize: 12 }}>
-          {tr('console.dashboard.usage_trend_window', { days: range })}
+          {range === 'h24'
+            ? tr('console.activity.last_24h', 'last 24 hours')
+            : tr('console.dashboard.usage_trend_window', { days: range })}
         </div>
         <span style={{ flex: 1 }} />
         <div className='hf-seg'>
@@ -145,6 +161,7 @@ const HfActivityChart = ({
           )}
         </div>
         <div className='hf-seg'>
+          {seg(range === 'h24', () => setRange('h24'), 'range-24h', '24H')}
           {seg(range === 7, () => setRange(7), 'range-7', '7D')}
           {seg(
             range === maxDays,
@@ -169,9 +186,13 @@ const HfActivityChart = ({
             minWidth: 44,
           }}
         >
-          <span>{fmt(top)}</span>
-          <span>{fmt(top / 2)}</span>
-          <span>0</span>
+          {top > 0 && (
+            <>
+              <span>{fmt(top)}</span>
+              <span>{fmt(top / 2)}</span>
+              <span>0</span>
+            </>
+          )}
         </div>
         <div style={{ flex: 1, position: 'relative', height }}>
           {[0, 0.5, 1].map((f) => (
@@ -192,7 +213,7 @@ const HfActivityChart = ({
               inset: 0,
               display: 'flex',
               alignItems: 'flex-end',
-              gap: range > 7 ? 3 : 10,
+              gap: data.days.length > 7 ? 3 : 10,
             }}
             onMouseLeave={() => setHover(null)}
           >
@@ -212,7 +233,7 @@ const HfActivityChart = ({
                   opacity: hover == null || hover === i ? 1 : 0.45,
                   minHeight: d.total ? 2 : 0,
                 }}
-                title={`${fmtDay(d.day)} · ${fmt(d.total)}`}
+                title={`${fmtBucket(d.day)} · ${fmt(d.total)}`}
               >
                 {data.series.map((s) =>
                   d.parts[s.model] ? (
@@ -229,6 +250,22 @@ const HfActivityChart = ({
               </div>
             ))}
           </div>
+          {top === 0 && (
+            <div
+              className='faint'
+              data-testid='activity-empty'
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 12,
+              }}
+            >
+              {tr('console.activity.empty', 'No usage in this window.')}
+            </div>
+          )}
           {shownDay && shownDay.total > 0 && (
             <div
               className='panel'
@@ -245,7 +282,7 @@ const HfActivityChart = ({
               }}
             >
               <div className='strong' style={{ marginBottom: 4 }}>
-                {fmtDay(shownDay.day)} · {fmt(shownDay.total)}
+                {fmtBucket(shownDay.day)} · {fmt(shownDay.total)}
               </div>
               {data.series
                 .filter((s) => shownDay.parts[s.model])
@@ -282,9 +319,11 @@ const HfActivityChart = ({
           paddingLeft: 52,
         }}
       >
-        <span>{data.days.length ? fmtDay(data.days[0].day) : ''}</span>
+        <span>{data.days.length ? fmtBucket(data.days[0].day) : ''}</span>
         <span>
-          {data.days.length ? fmtDay(data.days[data.days.length - 1].day) : ''}
+          {data.days.length
+            ? fmtBucket(data.days[data.days.length - 1].day)
+            : ''}
         </span>
       </div>
 
