@@ -273,12 +273,8 @@ type JWKSManager struct {
 	refreshMu  sync.Mutex
 	// minRefreshInterval prevents too frequent refreshes on key not found
 	minRefreshInterval time.Duration
-	// refreshInterval is the background refresh period, captured from
-	// jwksRefreshInterval when the manager is built. The refresh goroutine
-	// used to read the package variable itself, so a manager started with a
-	// never-cancelled context raced every later write to it (tests shorten
-	// the interval): go test -race, CI seed 1790139694534533095. Zero means
-	// "read jwksRefreshInterval", for a manager built as a struct literal.
+	// refreshInterval: jwksRefreshInterval captured at construction, so the
+	// refresh goroutine never reads the package var (-race, 2026-09-23).
 	refreshInterval time.Duration
 }
 
