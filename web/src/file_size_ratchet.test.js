@@ -54,7 +54,8 @@ const CEILINGS = {
   'helpers/render.jsx': 2071,
   'helpers/utils.jsx': 899,
   'pages/Setting/Ratio/UpstreamRatioSync.jsx': 873,
-  'pages/v2/Admin/ModelRateLimits/index.jsx': 915,
+  // pages/v2/Admin/ModelRateLimits/index.jsx left the list (cycle 14, 915 → 757):
+  // LimitModal + inputStyle extracted to ModelRateLimits/LimitModal.jsx.
   'pages/v2/Billing/index.jsx': 833, // redeemFailure() extracted to Billing/redeemFailure.js (cycle-13 hand-finish)
   'pages/v2/Channel/index.jsx': 1908, // +2 (cycle-15 P1): import of the extracted ChannelTypeLabel/ChannelTypeSelect (components/hifi/HfModelName.jsx)
   'pages/v2/Chat/index.jsx': 879,
@@ -64,7 +65,7 @@ const CEILINGS = {
   'pages/v2/Playground/index.jsx': 1084,
   'pages/v2/Pricing/index.jsx': 805, // +4 (cycle-15 P1): vendor logo in the model cell
   'pages/v2/Settings/index.jsx': 1909,
-  'pages/v2/Tenants/index.jsx': 995,
+  'pages/v2/Tenants/index.jsx': 920, // 995 → 920 (cycle 14): StatsDrawer extracted to Tenants/StatsDrawer.jsx; failed-read panel is the shared components/hifi/HfLoadError.jsx
   'pages/v2/Token/index.jsx': 1671,
 };
 

@@ -19,7 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 import { API, showSuccess } from '../../../helpers';
+import { classifyLoad, isLoadFailed } from '../../../helpers/loadState';
 
 /*
  * v2 admin — delegated permission grant management (L4, 2026-09-13,
@@ -44,7 +46,13 @@ const V2AdminAuthz = () => {
   const [catalog, setCatalog] = useState(null);
   const [grants, setGrants] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [forbidden, setForbidden] = useState(false);
+  // How the two reads ended, in classifyLoad()'s vocabulary. Kept as one
+  // status rather than a boolean: "nobody holds a delegated grant" and "we
+  // could not find out who does" are opposite statements about root-gated
+  // powers, and before this the page made the first one for both.
+  const [loadStatus, setLoadStatus] = useState(null);
+  const forbidden = loadStatus === 'forbidden';
+  const loadError = isLoadFailed(loadStatus) && !forbidden;
   const [form, setForm] = useState({
     userId: '',
     resource: '',
@@ -54,32 +62,42 @@ const V2AdminAuthz = () => {
   const [submitting, setSubmitting] = useState(false);
 
   const fetchAll = useCallback(async () => {
-    try {
-      const [catalogRes, grantsRes] = await Promise.all([
-        API.get('/api/v2/admin/authz/catalog'),
-        API.get('/api/v2/admin/authz/grants'),
-      ]);
-      // Grant MANAGEMENT is root-only server-side via RootJWTAuth
-      // (adminRoute) — its session-path rejection of a non-root admin is
-      // HTTP 200 {success:false,...}, not a 403 (auth.go's roleVal<minRole
-      // branch), so a real forbidden response resolves here rather than
-      // throwing. A-F8 (cycle-8 L4 repair round): checking only the catch
-      // block's err.response.status===403 left this branch dead for the
-      // production shape.
-      if (
-        catalogRes?.data?.success === false ||
-        grantsRes?.data?.success === false
-      ) {
-        setForbidden(true);
-        return;
-      }
-      if (catalogRes?.data?.success) setCatalog(catalogRes.data.data);
-      if (grantsRes?.data?.success) setGrants(grantsRes.data.data || []);
-    } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
-    } finally {
-      setLoading(false);
+    setLoading(true);
+    // allSettled, not all: with Promise.all one rejection discards the other
+    // read's outcome, so the page could not tell "the catalog 500ed" from
+    // "the grant list 500ed".
+    const [catalogRes, grantsRes] = await Promise.allSettled([
+      API.get('/api/v2/admin/authz/catalog'),
+      API.get('/api/v2/admin/authz/grants'),
+    ]);
+    // classifyLoad reads both shapes (an allSettled entry or a raw axios
+    // outcome) and both denial shapes:
+    //   - a real 403 / 401, which is what this route answers today — the
+    //     Bearer branch returns 403 directly (admin_jwt_auth.go:69-72) and
+    //     the session fallback rewrites its v1-shaped refusal into a 403
+    //     PERMISSION_DENIED or a 401 (:161-168, rootSessionAuth →
+    //     capture.rewriteAsV2Denial);
+    //   - a 200 whose body IS a recognisable permission refusal, kept as a
+    //     defensive path rather than as a claim about today's server.
+    // Anything else that resolves with success:false — a store outage, a
+    // maintenance page — is 'error', NOT 'forbidden': announcing "Root
+    // access required" for it would be a fresh false statement.
+    const outcomes = [classifyLoad(catalogRes), classifyLoad(grantsRes)];
+    const failures = outcomes.filter(isLoadFailed);
+    const next = failures.includes('forbidden')
+      ? 'forbidden'
+      : (failures[0] ?? 'ok');
+    setLoadStatus(next);
+    if (next === 'ok') {
+      setCatalog(catalogRes.value.data.data);
+      setGrants(grantsRes.value.data.data || []);
+    } else {
+      // Never leave half a page up: a create form with an unread catalog
+      // offers no resources, and a stale list would outlive the failure.
+      setCatalog(null);
+      setGrants([]);
     }
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -183,6 +201,21 @@ const V2AdminAuthz = () => {
               )}
             </div>
           </div>
+        </div>
+      ) : loadError ? (
+        // Not "No grants issued yet." — that sentence states who holds
+        // delegated root powers, and a read that failed found out nothing.
+        <div style={{ padding: 24 }}>
+          <HfLoadError
+            status={loadStatus}
+            title={tr(
+              'console.admin.authz.load_error',
+              'Couldn’t load delegated grants',
+            )}
+            onRetry={fetchAll}
+            testId='authz-load-error'
+            retryTestId='authz-retry'
+          />
         </div>
       ) : (
         <div style={{ padding: 24 }}>

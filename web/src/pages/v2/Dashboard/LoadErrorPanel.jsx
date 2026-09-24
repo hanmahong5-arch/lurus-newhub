@@ -34,6 +34,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { isLoadFailed } from '../../../helpers/loadState';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 
 const CAPTION_STYLE = {
   marginTop: 8,
@@ -81,36 +82,18 @@ export function captionText(status, okText, failedText, pendingText) {
  * Banner shown above the dashboard body when a KPI-strip fetch failed. One
  * banner covers the failure shapes classifyLoad() distinguishes (forbidden
  * / unauthenticated / error) because they all leave the reader with the
- * same next step: retry.
+ * same next step: retry. Rendered by the shared HfLoadError so a failed
+ * read looks the same here as on every other v2 page.
  */
 export default function LoadErrorPanel({ onRetry }) {
   const { t } = useTranslation();
   return (
-    <div
-      data-testid='dashboard-load-error'
-      className='panel'
-      style={{
-        margin: '14px 24px 0',
-        padding: '14px 18px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 12,
-        flexWrap: 'wrap',
-        borderColor: 'var(--hf-err)',
-      }}
-    >
-      <span style={{ fontSize: 12 }}>
-        {t('console.dashboard.load_failed', 'Unable to load — retry')}
-      </span>
-      <button
-        type='button'
-        className='btn ghost sm'
-        data-testid='dashboard-retry-btn'
-        onClick={onRetry}
-      >
-        {t('console.common.retry', 'retry')}
-      </button>
-    </div>
+    <HfLoadError
+      title={t('console.dashboard.load_failed', 'Unable to load usage data')}
+      onRetry={onRetry}
+      testId='dashboard-load-error'
+      retryTestId='dashboard-retry-btn'
+      style={{ margin: '14px 24px 0' }}
+    />
   );
 }

@@ -439,19 +439,23 @@ describe('ContentSettingPage — saving one field at a time', () => {
   });
 
   // ------------------------------------------------------------------
-  // DEFECT (ContentSettingPage.jsx submitNotice / submitUserAgreement /
-  // submitPrivacyPolicy): `updateOption` handles a refusal by calling
-  // showError and RETURNING NORMALLY — it never throws and never returns a
-  // status. The three submit handlers therefore run
+  // WAS A DEFECT (ContentSettingPage.jsx submitNotice / submitUserAgreement /
+  // submitPrivacyPolicy): `updateOption` handled a refusal by calling
+  // showError and RETURNING NORMALLY — it never threw and never returned a
+  // status. The three submit handlers therefore ran
   //   await updateOption(...); showSuccess(t('公告已更新'));
-  // unconditionally, so a save the server rejected is announced to the
-  // operator as "公告已更新". The error toast and the success toast are shown
+  // unconditionally, so a save the server rejected was announced to the
+  // operator as "公告已更新". The error toast and the success toast were shown
   // at the same time; the success is the one that reads as the outcome. The
-  // operator navigates away believing the announcement/user agreement/privacy
-  // policy is live when the old text is still being served — for the two
+  // operator navigated away believing the announcement/user agreement/privacy
+  // policy was live when the old text was still being served — for the two
   // legal documents that is a compliance-visible failure.
+  //
+  // Fixed in cycle-14 L8: updateOption returns false on a refusal and each
+  // caller gates its success toast on that. These two specs were skipped
+  // from the day they were written; they are the fix's oracle, un-skipped.
   // ------------------------------------------------------------------
-  it.skip('a refused save must not be reported as success', async () => {
+  it('a refused save must not be reported as success', async () => {
     await mountLoaded();
     API.put.mockResolvedValue({
       data: { success: false, message: 'notice too long' },
@@ -463,7 +467,7 @@ describe('ContentSettingPage — saving one field at a time', () => {
     expect(showSuccess).not.toHaveBeenCalled();
   });
 
-  it.skip('a refused legal-document save must not be reported as success', async () => {
+  it('a refused legal-document save must not be reported as success', async () => {
     await mountLoaded();
     API.put.mockResolvedValue({
       data: { success: false, message: 'policy rejected' },
@@ -604,17 +608,21 @@ describe('ContentSettingPage — legacy migration', () => {
   });
 
   // ------------------------------------------------------------------
-  // DEFECT (ContentSettingPage.jsx handleMigrate — identical code in
-  // MonitoringSettingPage.jsx and DashboardSetting.jsx): the POST result is
+  // WAS A DEFECT (ContentSettingPage.jsx handleMigrate): the POST result was
   // never inspected. `await API.post(...)` resolving with
-  // `{success:false, message:'…'}` is treated exactly like a success —
-  // "旧配置迁移完成" is shown and the dialog is dismissed. The migration is
+  // `{success:false, message:'…'}` was treated exactly like a success —
+  // "旧配置迁移完成" was shown and the dialog dismissed. The migration is
   // one-way and destructive (the modal's own text says the old configuration
   // is cleared afterwards), so an operator who is told it completed will not
   // re-run it, and will not restore the backup they were asked to take.
-  // Only a transport-level throw is caught.
+  // Only a transport-level throw was caught.
+  //
+  // Fixed in cycle-14 L8 for ContentSettingPage only. The identical code in
+  // MonitoringSettingPage.jsx and DashboardSetting.jsx is NOT in that lane's
+  // ownership and is still unfixed — there is no un-skipped lock for those
+  // two, and adding one here would go red for a file the lane cannot touch.
   // ------------------------------------------------------------------
-  it.skip('a refused migration must not be announced as complete', async () => {
+  it('a refused migration must not be announced as complete', async () => {
     API.get.mockResolvedValue(optionsOk({ ApiInfo: '{"legacy":true}' }));
     API.post.mockResolvedValue({
       data: { success: false, message: 'nothing to migrate' },

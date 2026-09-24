@@ -19,8 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
+import HfLoadError from '../../../../components/hifi/HfLoadError';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
 import { API, showSuccess } from '../../../../helpers';
+import { classifyLoad } from '../../../../helpers/loadState';
+import LimitModal, { inputStyle } from './LimitModal';
 
 /*
  * Per-model rate limits admin (migration 026 / middleware.BusinessModelRateLimit).
@@ -37,176 +40,6 @@ import { API, showSuccess } from '../../../../helpers';
 // backend carves it out); single-tenant installs set per-model caps here first.
 const DEFAULT_TENANT = 'default';
 
-const inputStyle = {
-  fontFamily: 'var(--hf-mono)',
-  fontSize: 12,
-  padding: '5px 8px',
-  border: '1px solid var(--hf-rule)',
-  background: 'var(--hf-sunken)',
-  color: 'var(--hf-ink)',
-  borderRadius: 2,
-  outline: 'none',
-  width: '100%',
-};
-
-// ─── Add / edit modal ─────────────────────────────────────────────────────────
-// `target.isNew` distinguishes create (model editable) from edit (model is the
-// row key — renaming would orphan the old row, so it is delete-then-create).
-
-const LimitModal = ({ tenantId, target, onSaved, onClose }) => {
-  const { t: tr } = useTranslation();
-  const [form, setForm] = useState({
-    model: target.model || '',
-    rpm: target.rate_limit_rpm > 0 ? String(target.rate_limit_rpm) : '',
-    tpm: target.rate_limit_tpm > 0 ? String(target.rate_limit_tpm) : '',
-  });
-  const [saving, setSaving] = useState(false);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    const model = form.model.trim();
-    if (!model) return;
-    setSaving(true);
-    try {
-      const res = await API.put(
-        `/api/v2/admin/tenants/${tenantId}/model-limits`,
-        {
-          model,
-          rate_limit_rpm: Math.max(0, parseInt(form.rpm, 10) || 0),
-          rate_limit_tpm: Math.max(0, parseInt(form.tpm, 10) || 0),
-        },
-      );
-      if (res?.data?.success) {
-        showSuccess(
-          tr('console.model_limits.toast_saved', 'Model limit saved'),
-        );
-        onSaved();
-      }
-    } catch (_) {
-      // error toast shown by the API interceptor
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 420,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {target.isNew
-            ? tr('console.model_limits.modal_new', 'New model limit')
-            : tr('console.model_limits.modal_edit', 'Edit model limit')}
-        </div>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.model_limits.field_model', 'model name')}
-          </span>
-          <input
-            data-testid='mrl-model'
-            style={{
-              ...inputStyle,
-              opacity: target.isNew ? 1 : 0.6,
-              cursor: target.isNew ? 'text' : 'not-allowed',
-            }}
-            value={form.model}
-            disabled={!target.isNew}
-            autoFocus={target.isNew}
-            placeholder='gpt-4o'
-            onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
-          />
-          <span className='muted' style={{ fontSize: 11 }}>
-            {tr(
-              'console.model_limits.field_model_hint',
-              'Exact model name as requested (e.g. gpt-4o). No wildcards.',
-            )}
-          </span>
-        </label>
-
-        <div
-          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}
-        >
-          {[
-            ['rpm', tr('console.model_limits.field_rpm', 'rpm limit')],
-            ['tpm', tr('console.model_limits.field_tpm', 'tpm limit')],
-          ].map(([k, label]) => (
-            <label
-              key={k}
-              style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
-            >
-              <span className='lbl'>{label}</span>
-              <input
-                data-testid={`mrl-${k}`}
-                style={inputStyle}
-                type='number'
-                min='0'
-                placeholder='0'
-                value={form[k]}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, [k]: e.target.value }))
-                }
-              />
-            </label>
-          ))}
-        </div>
-
-        <div className='muted' style={{ fontSize: 11 }}>
-          {tr(
-            'console.model_limits.limits_hint',
-            'Per-minute caps for this model under the tenant. 0 = unlimited.',
-          )}
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 10,
-            marginTop: 4,
-          }}
-        >
-          <button type='button' className='btn ghost' onClick={onClose}>
-            {tr('console.common.cancel', 'cancel')}
-          </button>
-          <button
-            type='submit'
-            className='btn primary'
-            disabled={saving || !form.model.trim()}
-            data-testid='mrl-save'
-          >
-            {saving
-              ? tr('console.common.loading', 'loading…')
-              : tr('console.common.save', 'save')}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-};
-
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 const HFModelRateLimits = () => {
@@ -216,6 +49,11 @@ const HFModelRateLimits = () => {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
+  // A failed limits read is not a tenant with no caps: zero rows under this
+  // page's own "0 = unlimited" subtitle reads as "every model is unlimited
+  // here". Same three-way split as `allowlistError` below, so the two reads
+  // on this page stop contradicting each other.
+  const [limitsError, setLimitsError] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
@@ -266,20 +104,28 @@ const HFModelRateLimits = () => {
     }
   }, []);
 
+  // classifyLoad() (helpers/loadState.js) is the shared vocabulary: 'ok' /
+  // 'forbidden' / 'unauthenticated' / 'error'. Anything but 'ok' reaches one
+  // of the two panels below, never the empty state. 'unauthenticated' folds
+  // into the error panel — the session-expiry redirect belongs to the API
+  // interceptor; this page only has to avoid claiming a count it never read.
   const fetchLimits = useCallback(async (tid) => {
     if (!tid) return;
     setLoading(true);
     setForbidden(false);
+    setLimitsError(false);
+    const fail = (outcome) => {
+      setRows([]);
+      if (outcome === 'forbidden') setForbidden(true);
+      else setLimitsError(true);
+    };
     try {
       const res = await API.get(`/api/v2/admin/tenants/${tid}/model-limits`);
-      if (res?.data?.success) {
-        setRows(res.data.data ?? []);
-      }
+      const outcome = classifyLoad(res);
+      if (outcome === 'ok') setRows(res.data.data ?? []);
+      else fail(outcome);
     } catch (err) {
-      if (err?.response?.status === 403) {
-        setForbidden(true);
-      }
-      setRows([]);
+      fail(classifyLoad(err));
     } finally {
       setLoading(false);
     }
@@ -501,9 +347,11 @@ const HFModelRateLimits = () => {
                     'console.model_limits.admin_required',
                     'Admin access required',
                   )
-                : tr('console.model_limits.count', '{{count}} model limits', {
-                    count: rows.length,
-                  })}
+                : limitsError
+                  ? tr('console.load_error.count_unknown', 'Count unavailable')
+                  : tr('console.model_limits.count', '{{count}} model limits', {
+                      count: rows.length,
+                    })}
           </h1>
           <div className='sub'>
             {tr(
@@ -541,6 +389,19 @@ const HFModelRateLimits = () => {
               >
                 {tr('console.common.loading', 'Loading…')}
               </div>
+            ) : limitsError ? (
+              // Not the empty state: the caps are unknown until a read
+              // succeeds.
+              <HfLoadError
+                variant='inset'
+                title={tr(
+                  'console.model_limits.load_error',
+                  'Couldn’t load model rate limits',
+                )}
+                onRetry={() => fetchLimits(tenantId)}
+                testId='mrl-limits-error'
+                retryTestId='mrl-limits-retry'
+              />
             ) : rows.length === 0 ? (
               <div
                 className='muted'
@@ -675,36 +536,17 @@ const HFModelRateLimits = () => {
                   // malformed 200) must not fall through to the defaults
                   // below, or an enforce-mode tenant with a real
                   // restrictive row reads as "every model reachable".
-                  <div
-                    data-testid='mrl-availability-error'
-                    className='muted'
-                    style={{
-                      fontSize: 12,
-                      marginBottom: 12,
-                      color: 'var(--hf-warn)',
-                      border: '1px solid var(--hf-warn)',
-                      borderRadius: 2,
-                      padding: '8px 10px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                    }}
-                  >
-                    <span>
-                      {tr(
-                        'console.model_limits.availability_error',
-                        'Could not read the allow-list for this tenant — state unknown, not editable.',
-                      )}
-                    </span>
-                    <button
-                      type='button'
-                      className='btn ghost sm'
-                      data-testid='mrl-availability-retry'
-                      onClick={() => fetchAllowlist(tenantId)}
-                    >
-                      {tr('console.model_limits.availability_retry', 'retry')}
-                    </button>
-                  </div>
+                  <HfLoadError
+                    variant='inset'
+                    title={tr(
+                      'console.model_limits.availability_error',
+                      'Could not read the allow-list for this tenant — state unknown, not editable.',
+                    )}
+                    onRetry={() => fetchAllowlist(tenantId)}
+                    testId='mrl-availability-error'
+                    retryTestId='mrl-availability-retry'
+                    style={{ marginBottom: 12 }}
+                  />
                 ) : (
                   <>
                     <div

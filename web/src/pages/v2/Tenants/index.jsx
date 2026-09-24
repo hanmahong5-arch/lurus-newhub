@@ -19,12 +19,15 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
-import { API, showError, showSuccess } from '../../../helpers';
+import { API, showSuccess } from '../../../helpers';
+import { classifyLoad, isLoadFailed } from '../../../helpers/loadState';
 import CreditPoolDrawer from './CreditPoolDrawer';
 import InvitesDrawer from './InvitesDrawer';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
+import StatsDrawer from './StatsDrawer';
 
 /* HiFi 9 — Tenants admin. Wired to /api/v2/admin/tenants (2026-05-11). */
 
@@ -226,115 +229,6 @@ const CreateModal = ({ onCreated, onClose }) => {
   );
 };
 
-// ─── Stats drawer ─────────────────────────────────────────────────────────────
-
-const StatsDrawer = ({ tenant, onClose }) => {
-  const { t: tr } = useTranslation();
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await API.get(`/api/v2/admin/tenants/${tenant.id}/stats`);
-        if (!cancelled && res?.data?.success) {
-          setStats(res.data.data);
-        }
-      } catch (_) {
-        // silently handled
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [tenant.id]);
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <div
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 460,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <div className='strong' style={{ fontSize: 15 }}>
-            {tenant.name} · {tr('console.tenant.stats_title', 'stats')}
-          </div>
-          <button
-            type='button'
-            className='btn ghost sm'
-            onClick={onClose}
-            aria-label={tr('console.common.close', 'close')}
-          >
-            ✕
-          </button>
-        </div>
-
-        {loading && (
-          <div className='muted' style={{ fontSize: 12 }}>
-            {tr('console.common.loading', 'Loading…')}
-          </div>
-        )}
-
-        {!loading && !stats && (
-          <div className='muted' style={{ fontSize: 12 }}>
-            {tr('console.tenant.no_stats', 'No stats available.')}
-          </div>
-        )}
-
-        {!loading && stats && (
-          <div className='panel'>
-            {Object.entries(stats).map(([k, v], i, arr) => (
-              <div
-                key={k}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '160px 1fr',
-                  padding: '10px 16px',
-                  borderBottom:
-                    i < arr.length - 1 ? '1px dashed var(--hf-rule)' : 0,
-                  fontSize: 12,
-                  alignItems: 'center',
-                }}
-              >
-                <span className='lbl'>{k}</span>
-                <span className='mono strong'>{String(v)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
 // ─── Rate-limits modal ────────────────────────────────────────────────────────
 // Edits tenant-level RPM/TPM caps. JSON keys mirror entity/tenant.go tags
 // (rate_limit_rpm / rate_limit_tpm); 0 = unlimited.
@@ -477,7 +371,13 @@ const HFTenants = () => {
   const { t: tr } = useTranslation();
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [forbidden, setForbidden] = useState(false);
+  // How the list read ended, in classifyLoad()'s vocabulary. As a 403-only
+  // boolean every other failure left `tenants` at [] and the header drew
+  // "0 tenants · $0.00 used" — a count AND a money figure asserted from a
+  // read that never answered.
+  const [loadStatus, setLoadStatus] = useState(null);
+  const forbidden = loadStatus === 'forbidden';
+  const loadError = isLoadFailed(loadStatus) && !forbidden;
   const [keyword, setKeyword] = useState('');
   const [creating, setCreating] = useState(false);
   const [statsTarget, setStatsTarget] = useState(null); // tenant object for stats drawer
@@ -493,18 +393,23 @@ const HFTenants = () => {
 
   const fetchTenants = useCallback(async (kw = '') => {
     setLoading(true);
-    setForbidden(false);
     try {
       const params = new URLSearchParams({ page: 1, page_size: 50 });
       if (kw.trim()) params.set('keyword', kw.trim());
       const res = await API.get(`/api/v2/admin/tenants?${params}`);
-      if (res?.data?.success) {
-        setTenants(res.data.data.tenants ?? res.data.data.items ?? []);
-      }
+      const outcome = classifyLoad(res);
+      setLoadStatus(outcome);
+      // Anything but 'ok' empties the list AND suppresses the header's
+      // count/money figures below: an empty array must never reach a caption
+      // that states it as a finding.
+      setTenants(
+        outcome === 'ok'
+          ? (res.data.data.tenants ?? res.data.data.items ?? [])
+          : [],
+      );
     } catch (err) {
-      if (err?.response?.status === 403) {
-        setForbidden(true);
-      }
+      setLoadStatus(classifyLoad(err));
+      setTenants([]);
     } finally {
       setLoading(false);
     }
@@ -573,7 +478,10 @@ const HFTenants = () => {
               {tr('console.common.loading', 'loading…')}
             </span>
           ) : (
-            !forbidden && (
+            // Both halves of this caption come from `tenants`, so both are
+            // false after a failed read: 0 tenants, $0.00 used.
+            !forbidden &&
+            !loadError && (
               <span className='muted mono' style={{ fontSize: 11 }}>
                 {tr('console.tenant.count', '{{count}} tenants', {
                   count: tenants.length,
@@ -605,18 +513,23 @@ const HFTenants = () => {
               ? '…'
               : forbidden
                 ? tr('console.tenant.admin_required', 'Admin access required')
-                : tr('console.tenant.count', '{{count}} tenants', {
-                    count: tenants.length,
+                : loadError
+                  ? tr('console.load_error.count_unknown', 'Count unavailable')
+                  : tr('console.tenant.count', '{{count}} tenants', {
+                      count: tenants.length,
+                    })}
+            {!loading &&
+              !forbidden &&
+              !loadError &&
+              parseFloat(totalUsedUSD) > 0 && (
+                <span className='muted' style={{ fontWeight: 400 }}>
+                  {' '}
+                  ·{' '}
+                  {tr('console.tenant.used_amount', '${{amount}} used', {
+                    amount: totalUsedUSD,
                   })}
-            {!loading && !forbidden && parseFloat(totalUsedUSD) > 0 && (
-              <span className='muted' style={{ fontWeight: 400 }}>
-                {' '}
-                ·{' '}
-                {tr('console.tenant.used_amount', '${{amount}} used', {
-                  amount: totalUsedUSD,
-                })}
-              </span>
-            )}
+                </span>
+              )}
           </h1>
           <div className='sub'>
             {tr(
@@ -640,6 +553,18 @@ const HFTenants = () => {
               )}
             </div>
           </div>
+        </div>
+      ) : loadError ? (
+        // Not "No tenants yet. Create one to get started." — that sentence,
+        // and the $0.00 beside it, are findings; a failed read has none.
+        <div style={{ padding: 24 }}>
+          <HfLoadError
+            status={loadStatus}
+            title={tr('console.tenant.load_error', 'Couldn’t load tenants')}
+            onRetry={() => fetchTenants(keyword)}
+            testId='tenants-load-error'
+            retryTestId='tenants-retry'
+          />
         </div>
       ) : (
         <div style={{ padding: 24 }}>
