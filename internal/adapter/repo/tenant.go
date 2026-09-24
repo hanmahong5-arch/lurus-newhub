@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -432,13 +434,23 @@ func PendingInviteTenantID(code string) (string, bool) {
 	return invite.TenantId, true
 }
 
-// GenerateID generates a unique ID for tenant
-// You can implement this using UUID library or custom logic
+// GenerateID returns a new tenant primary key: "tenant-" + a second-resolution
+// timestamp (kept so ids stay sortable and recognisable in logs) + "-" + 8 hex
+// digits of crypto randomness.
+//
+// The timestamp alone was the whole id until 2026-09-24, so two tenants
+// created within the same second collided on tenants_pkey and the second
+// create failed with a raw "duplicate key" error. Constraints the value must
+// keep: at most 36 bytes (entity.Tenant.Id is size:36) and no ':' (the
+// business rate limiter's keys are prefix+tenantID+":"+model and rely on it).
 func GenerateID() string {
-	// TODO: Implement UUID generation
-	// For now, using a placeholder
-	// In production, use: github.com/google/uuid
-	return "tenant-" + time.Now().Format("20060102150405")
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand does not fail on supported platforms; if it ever does,
+		// fall back to the clock rather than issuing a colliding id.
+		return fmt.Sprintf("tenant-%s-%08x", time.Now().Format("20060102150405"), uint32(time.Now().UnixNano()))
+	}
+	return "tenant-" + time.Now().Format("20060102150405") + "-" + hex.EncodeToString(b[:])
 }
 
 // ============================================================================

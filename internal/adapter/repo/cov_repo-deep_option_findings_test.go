@@ -87,12 +87,12 @@ func TestUpdateOption_ReportsDBWriteError(t *testing.T) {
 
 // ─── tenant.go GenerateID ────────────────────────────────────────────────────
 
-var repoDeepTenantIDRe = regexp.MustCompile(`^tenant-\d{14}$`)
+var repoDeepTenantIDRe = regexp.MustCompile(`^tenant-\d{14}-[0-9a-f]{8}$`)
 
 func TestGenerateID_FormatAndUniquenessAcrossCalls(t *testing.T) {
 	id1 := GenerateID()
 	if !repoDeepTenantIDRe.MatchString(id1) {
-		t.Fatalf("GenerateID() = %q, want to match ^tenant-\\d{14}$", id1)
+		t.Fatalf("GenerateID() = %q, want to match %s", id1, repoDeepTenantIDRe)
 	}
 
 	// The embedded timestamp must be parseable and close to "now" — proves the
@@ -101,7 +101,7 @@ func TestGenerateID_FormatAndUniquenessAcrossCalls(t *testing.T) {
 	// zone info in the layout), so it must be parsed back in Local to compare
 	// meaningfully — parsing as UTC would falsely diverge by the local UTC
 	// offset on any non-UTC machine.
-	tsPart := id1[len("tenant-"):]
+	tsPart := id1[len("tenant-") : len("tenant-")+14]
 	parsed, err := time.ParseInLocation("20060102150405", tsPart, time.Local)
 	if err != nil {
 		t.Fatalf("embedded timestamp %q did not parse as 20060102150405: %v", tsPart, err)
@@ -111,12 +111,12 @@ func TestGenerateID_FormatAndUniquenessAcrossCalls(t *testing.T) {
 	}
 
 	// Calling twice in immediate succession must not panic and must always
-	// conform to the same shape (documents that GenerateID has no uniqueness
-	// guarantee beyond second-resolution — a real business caveat callers of
-	// CreateTenantFromIDP's fallback path should know about).
+	// conform to the same shape. (This used to document that GenerateID had no
+	// uniqueness beyond second resolution; the random suffix added 2026-09-24
+	// fixed that — see TestGenerateID_UniqueWithinOneSecond.)
 	id2 := GenerateID()
 	if !repoDeepTenantIDRe.MatchString(id2) {
-		t.Fatalf("GenerateID() second call = %q, want to match ^tenant-\\d{14}$", id2)
+		t.Fatalf("GenerateID() second call = %q, want to match %s", id2, repoDeepTenantIDRe)
 	}
 }
 
