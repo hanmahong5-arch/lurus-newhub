@@ -181,6 +181,20 @@ single production channel flapped before hysteresis existed — hysteresis
 reduces the blast radius of an unraised threshold, it does not replace
 raising it.
 
+**Read the threshold together with the master switch.** Everything in the
+"Decision rules" and "What changed" sections above is conditional on
+`AutomaticDisableChannelEnabled`, whose **shipped code default is `false`**
+(`internal/pkg/common/constants.go`, pinned by
+`internal/pkg/gates/shipped_defaults_test.go`) — `app.ShouldDisableChannel`
+returns `false` outright when it is off, and `channel_probe_policy.go` gates
+both the error-class and the latency branch on it. With no
+`AutomaticDisableChannelEnabled` row in the `options` table, **no automatic
+ban of any class happens at all**, and `ChannelDisableThreshold` has nothing
+to gate. `AutomaticEnableChannelEnabled` ships `false` the same way, so an
+auto-disabled channel stays disabled until an operator re-enables it. Check
+the live values before concluding a channel "should have been banned":
+`doc/runbook/shipped-defaults.md` carries the one SQL query that reads them.
+
 ## Manual vs "test all" vs the automatic ticker
 
 **Three** distinct paths call into `probeChannel`, not two — the console's

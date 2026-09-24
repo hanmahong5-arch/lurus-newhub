@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"net/http"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -40,27 +40,47 @@ func FlushWriter(c *gin.Context) (err error) {
 	return nil
 }
 
+// SetEventStreamHeaders prepares a streamed (SSE) response. It is called
+// TWICE on a normal streaming relay, and the two calls know different things:
+//
+//	provider/api_request.go doRequest -> SetEventStreamHeaders(c)       // no RelayInfo yet
+//	helper/stream_scanner.go          -> SetEventStreamHeaders(c, info) // channel now chosen
+//
+// The "already set" flag used to short-circuit the whole function, so the
+// second call — the only one that can name the adapter — did nothing, and
+// streamed responses carried none of the perception headers at all. The flag
+// now guards only the static SSE headers; the perception headers are filled
+// in whenever the caller finally has the information, which is idempotent.
+//
+// What a stream can and cannot carry: response headers must be flushed
+// before the first frame, and the cost of the call is not known until the
+// last one. X-Request-Cost/X-Quota-Remaining are therefore absent here on
+// purpose — emitting the pre-request balance under the same name the
+// buffered path uses for the post-charge balance would be a second lie, not
+// a courtesy. CostReportingHeader says so on the wire and points at where
+// the number does arrive: the final usage frame's usage.x_lurus object.
 func SetEventStreamHeaders(c *gin.Context, info ...*relaycommon.RelayInfo) {
 	// 检查是否已经设置过头部
-	if _, exists := c.Get("event_stream_headers_set"); exists {
-		return
+	if _, exists := c.Get("event_stream_headers_set"); !exists {
+		// 设置标志，表示头部已经设置过
+		c.Set("event_stream_headers_set", true)
+
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("Transfer-Encoding", "chunked")
+		c.Writer.Header().Set("X-Accel-Buffering", "no")
+		c.Writer.Header().Set(CostReportingHeader, CostReportingInFinalUsageFrame)
 	}
 
-	// 设置标志，表示头部已经设置过
-	c.Set("event_stream_headers_set", true)
-
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("Transfer-Encoding", "chunked")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-
-	// Set known perception headers at stream start
+	// Fill-in pass: runs on every call, so whichever call first has the
+	// request id or the channel still gets its header onto the response.
+	// Both writes are Set of the same value, so a repeat is a no-op.
 	if reqID := c.GetString(common.RequestIdKey); reqID != "" {
 		c.Writer.Header().Set("X-Request-Id", reqID)
 	}
 	if len(info) > 0 && info[0] != nil && info[0].ChannelMeta != nil {
-		c.Writer.Header().Set("X-Model-Provider", constant.GetChannelTypeName(info[0].ChannelType))
+		c.Writer.Header().Set(RelayAdapterHeader, constant.GetChannelTypeName(info[0].ChannelType))
 	}
 }
 

@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -15,7 +18,6 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 const (
@@ -85,6 +87,61 @@ type createCheckoutRequest struct {
 	ReturnURL     string  `json:"return_url"`
 }
 
+// checkoutIntentWindow is how long two byte-identical checkout requests from
+// the same account count as ONE intent when the caller supplies no
+// Idempotency-Key. It is a fallback, not the mechanism: a client that sends
+// its own key gets exact, unbounded idempotency instead. What the console must
+// send is one key minted when the Pay button is pressed, reused for every
+// retry of THAT press and re-minted for the next one.
+//
+// Two minutes covers what the fallback is for — a double-clicked button, a
+// browser refresh, a retry after a client-side timeout — while still letting a
+// customer deliberately top up the same amount again a few minutes later. Both
+// ends of that trade-off are real: shorter loses genuine double-submits,
+// longer blocks a legitimate repeat top-up by handing back an order that may
+// already be paid.
+const checkoutIntentWindow = 2 * time.Minute
+
+// checkoutIntentNow is the clock the fallback key buckets on. A package-level
+// seam (same convention as the wallet seams in tenant_credit_pool.go) so tests
+// can pin it instead of racing a real window boundary.
+var checkoutIntentNow = time.Now
+
+// checkoutIdempotencyKey derives the key sent to the platform's checkout
+// endpoint, which dedupes on it (and 400s a request that carries none).
+//
+// Order of preference:
+//  1. the caller's Idempotency-Key header, or its X- spelling — same two-header
+//     fallback the credit-pool topup accepts;
+//  2. a DETERMINISTIC digest of the intent (account, amount, method, return
+//     URL) bucketed into checkoutIntentWindow.
+//
+// It was previously an account id plus a fresh random value per HTTP request:
+// correctly plumbed into a dedupe mechanism, then fed a value that could never
+// repeat, so two identical POSTs opened two orders.
+//
+// BLIND SPOT of the fallback: it is a wall-clock bucket, not a sliding window.
+// Two identical requests that straddle a bucket boundary — even a second
+// apart — hash to different keys and open two orders. That is why the header
+// is the real fix and the fallback only narrows the window.
+func checkoutIdempotencyKey(c *gin.Context, accountID int64, req createCheckoutRequest) string {
+	if k := strings.TrimSpace(c.GetHeader("Idempotency-Key")); k != "" {
+		return k
+	}
+	if k := strings.TrimSpace(c.GetHeader("X-Idempotency-Key")); k != "" {
+		return k
+	}
+	bucket := checkoutIntentNow().UTC().Unix() / int64(checkoutIntentWindow/time.Second)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%s|%s|%d",
+		accountID,
+		strconv.FormatFloat(req.AmountCNY, 'f', 4, 64),
+		req.PaymentMethod,
+		req.ReturnURL,
+		bucket,
+	)))
+	return "checkout-" + hex.EncodeToString(sum[:16])
+}
+
 // CreateBillingCheckout creates a wallet topup checkout session via lurus-platform.
 // POST /api/v2/user/billing/checkout
 func CreateBillingCheckout(c *gin.Context) {
@@ -106,8 +163,10 @@ func CreateBillingCheckout(c *gin.Context) {
 		return
 	}
 
-	// Generate idempotency key from request context to prevent duplicate orders
-	idempotencyKey := fmt.Sprintf("api-%d-%s", accountID, uuid.New().String()[:8])
+	// Idempotency key the platform dedupes on — caller-supplied when the
+	// client sends one, otherwise a deterministic per-intent digest. See
+	// checkoutIdempotencyKey for the window and its blind spot.
+	idempotencyKey := checkoutIdempotencyKey(c, accountID, req)
 
 	result, err := common.CreateCheckout(
 		c.Request.Context(),

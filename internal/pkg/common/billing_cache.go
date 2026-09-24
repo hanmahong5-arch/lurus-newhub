@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -133,13 +134,16 @@ func ShouldSkipPreAuth(accountID int64, estimatedLB float64) bool {
 // for trusted balances rather than a blanket 402 that takes the gateway down
 // with the platform. Guards:
 //   - the breaker is actually OPEN (not a balance rejection or a healthy path),
-//   - the pre-auth error is NOT insufficient_balance (never degrade a real
-//     "out of money" — that would hand out free spend),
+//   - the platform did NOT answer this request (platformAnswered is false):
+//     a 4xx verdict — out of money, frozen wallet, rejected product id — is
+//     the platform UP and refusing, which is not the outage this path exists
+//     for, so every one of them still fails closed,
 //   - a fresh cached balance exists (TTL-bounded; absent cache ⇒ no degrade),
 //   - the estimate sits comfortably under that balance (same 3× margin as the
 //     skip-preauth fast path),
 //   - admitting this estimate keeps the tenant under its rolling unsecured-spend
 //     cap (reserveDegradedSpend).
+//
 // The admitted request then takes the existing no-pre-auth post-consume path
 // (legacy wallet debit), identical to the high-balance ShouldSkipPreAuth path —
 // so this introduces no new settlement gap. Metric: billing_degraded_total.
@@ -170,8 +174,8 @@ func degradeAdmissible(breakerOpen, haveFreshCache bool, balance, estimatedLB fl
 	if !breakerOpen {
 		return false // platform healthy ⇒ never skip pre-auth via this path
 	}
-	if preAuthErr != nil && strings.Contains(preAuthErr.Error(), "insufficient_balance") {
-		return false // genuine "out of money" must fail closed, never degrade
+	if platformAnswered(preAuthErr) {
+		return false // the platform gave a verdict — that is not an outage
 	}
 	if !haveFreshCache {
 		return false // no cached balance to trust
@@ -179,6 +183,50 @@ func degradeAdmissible(breakerOpen, haveFreshCache bool, balance, estimatedLB fl
 	// Same trust margin as the high-balance skip-preauth fast path: balance must
 	// clear the floor AND comfortably (3×) exceed this request's estimate.
 	return balance > walletTrustThreshold && balance > estimatedLB*3
+}
+
+// platformAnswered reports whether err is the PLATFORM'S OWN VERDICT on this
+// request, as opposed to evidence that the platform could not be reached. Only
+// the second kind may degrade: "charge from cache, reconcile later" is a
+// response to an outage, and a 4xx is the platform up and refusing.
+//
+// The distinction became load-bearing in cycle-14 L9. Before it, PreAuthorize
+// answered EVERY 400 with ErrInsufficientBalance, so "the platform refused"
+// and "the customer is broke" were the same value and this function could be a
+// single substring test. Splitting them (defect 2) fixed the lie the customer
+// was told — but it also meant that unless this guard widened in the same
+// change, a platform 400 saying wallet_frozen / account_suspended /
+// credit_limit_exceeded would have been served unsecured, because none of
+// those spellings contain the one literal the old test looked for.
+//
+// Three arms, each catching what the others cannot:
+//
+//  1. identity — errors.Is finds the sentinel through any %w chain, including
+//     a carrier whose own Error() never mentions it;
+//  2. type — errors.As finds *PlatformRejectedError, which is every non-balance
+//     4xx the platform explained, whatever word it used;
+//  3. text — a last-resort scan for the sentinel's phrase, which catches a
+//     sentinel flattened by %v (identity lost, text preserved). Arm 3 alone is
+//     what the old policy had, and on its own it both over- and under-matches.
+//
+// BLIND SPOT: an error that is none of the three — a caller that re-describes
+// a platform 4xx in words of its own, or a future platform-rejection type that
+// does not wrap the sentinel and is not *PlatformRejectedError — reads as an
+// outage here and may degrade. The structural half of this guard therefore
+// lives in PreAuthorize: it must keep returning one of these two shapes for
+// every 4xx. This function cannot check that, and no test in this file can.
+func platformAnswered(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrInsufficientBalance) {
+		return true
+	}
+	var rejected *PlatformRejectedError
+	if errors.As(err, &rejected) {
+		return true
+	}
+	return strings.Contains(err.Error(), ErrInsufficientBalance.Error())
 }
 
 // reserveDegradedSpend atomically reserves estimatedLB against the tenant's

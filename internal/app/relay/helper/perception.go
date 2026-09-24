@@ -144,7 +144,34 @@ func ComputeLurusExtension(info *relaycommon.RelayInfo, usage *dto.Usage, totalQ
 	}
 }
 
-// SetPerceptionHeaders writes cost/provider/request-id headers onto the response.
+// Response header names this package emits, and the two values
+// CostReportingHeader can take.
+//
+// RelayAdapterHeader replaced X-Model-Provider (cycle-14 L6). The value was
+// always constant.GetChannelTypeName(info.ChannelType) — the channel's
+// configured adapter family, i.e. the wire dialect we spoke upstream. It is
+// NOT a measurement of who serves the model: an operator can point an
+// OpenAI-typed channel at any OpenAI-compatible endpoint, and a live
+// instance was answering a deepseek-chat call with "OpenAI". The gateway has
+// no way to learn the real provider — the channel's base URL is a
+// configuration value, and an aggregator's endpoint would only name the
+// aggregator — so the honest fix is to report what we do know under a name
+// that says what it is, rather than keep a documented header that lies.
+// Renaming rather than deleting keeps the genuinely useful part: the
+// adapter family tells a caller which response dialect to expect.
+//
+// CostReportingHeader exists because the two response shapes cannot carry
+// the cost the same way; see SetEventStreamHeaders.
+const (
+	RelayAdapterHeader             = "X-Relay-Adapter"
+	CostReportingHeader            = "X-Cost-Reporting"
+	CostReportingInHeaders         = "headers"
+	CostReportingInFinalUsageFrame = "final-usage-frame"
+)
+
+// SetPerceptionHeaders writes the cost/adapter/request-id headers onto a
+// BUFFERED (non-streamed) response, where the whole upstream reply — and so
+// the settled cost — is already in hand before anything is flushed.
 func SetPerceptionHeaders(c *gin.Context, info *relaycommon.RelayInfo, ext *types.LurusUsageExtension) {
 	if c == nil || info == nil {
 		return
@@ -153,10 +180,12 @@ func SetPerceptionHeaders(c *gin.Context, info *relaycommon.RelayInfo, ext *type
 	if ext != nil {
 		c.Writer.Header().Set("X-Request-Cost", perceptionFormatFloat(ext.CostLB))
 		c.Writer.Header().Set("X-Quota-Remaining", perceptionFormatFloat(ext.BalanceRemaining))
+		// Only claim the cost is in the headers when it actually is.
+		c.Writer.Header().Set(CostReportingHeader, CostReportingInHeaders)
 	}
 
 	if info.ChannelMeta != nil {
-		c.Writer.Header().Set("X-Model-Provider", constant.GetChannelTypeName(info.ChannelType))
+		c.Writer.Header().Set(RelayAdapterHeader, constant.GetChannelTypeName(info.ChannelType))
 	}
 
 	if reqID := c.GetString(common.RequestIdKey); reqID != "" {

@@ -18,14 +18,17 @@ import (
 
 // --- common.go remaining branches ---
 
-func TestSetEventStreamHeaders_ModelProviderHeader(t *testing.T) {
+// Renamed from TestSetEventStreamHeaders_ModelProviderHeader: cycle-14 L6
+// replaced X-Model-Provider with X-Relay-Adapter, which is what the value
+// (the channel's adapter family) has always been. Same branch.
+func TestSetEventStreamHeaders_RelayAdapterHeader(t *testing.T) {
 	c, w := writeCtx()
 	info := &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI},
 	}
 	SetEventStreamHeaders(c, info)
-	if got := w.Header().Get("X-Model-Provider"); got == "" {
-		t.Errorf("X-Model-Provider header not set when ChannelMeta present, got %q", got)
+	if got := w.Header().Get(RelayAdapterHeader); got == "" {
+		t.Errorf("%s header not set when ChannelMeta present, got %q", RelayAdapterHeader, got)
 	}
 }
 

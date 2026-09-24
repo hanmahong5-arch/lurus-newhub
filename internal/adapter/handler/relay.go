@@ -18,7 +18,6 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/app/hub"
-	"github.com/LurusTech/lurus-hub/internal/app/openrouter_pool"
 	"github.com/LurusTech/lurus-hub/internal/app/relay"
 	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -29,13 +28,20 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/resilience"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
-	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/tracing"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+// routeAttemptOutcomeSelectError labels an attempt abandoned at the channel
+// SELECTION stage — the candidate was picked but had no usable key
+// (channel:no_available_key / channel:all_keys_cooling), so no upstream was
+// dialled. It lives here rather than beside RouteAttemptOutcomeSuccess /
+// UpstreamErr / BreakerOpen in internal/app/route_attempts.go only because
+// this lane does not own that file; see the hand-off note.
+const routeAttemptOutcomeSelectError = "channel_select_error"
 
 // channelBreakers is the global per-channel circuit breaker registry.
 // Initialized with default config (CB_THRESHOLD=5, CB_TIMEOUT_SEC=30).
@@ -379,6 +385,32 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	// If the loop ends with it still false, every candidate was skipped on an
 	// open circuit breaker and nothing below has written a response.
 	attempted := false
+
+	// reportBreakerOutcome closes the loop that channelBreakers.Allow opens.
+	// EVERY request the breaker admits must report back exactly once: in
+	// HalfOpen the admission consumed the single probe slot, and only a report
+	// gives it back. Until cycle 14 the sole report was RecordFailure on
+	// IsUpstreamFailure, so a probe that ended in a user 4xx, a 402 or a
+	// cancelled request reported nothing at all and left the channel parked in
+	// HalfOpen — excluded from routing until the process restarted.
+	// The three outcomes stay distinct on purpose:
+	//   - nil            → RecordSuccess, the upstream answered; breaker closes.
+	//   - upstream fault → RecordFailure, counts toward the trip threshold.
+	//   - anything else  → RecordInconclusive, hands the probe slot back
+	//     WITHOUT counting a failure, so a caller's own bad request still
+	//     cannot trip a healthy channel (that rule predates this cycle and
+	//     TestRelay_UserErrorDoesNotTripHealthyChannel keeps it).
+	reportBreakerOutcome := func(channelID int, err *types.NewAPIError) {
+		switch {
+		case err == nil:
+			channelBreakers.RecordSuccess(channelID)
+		case types.IsUpstreamFailure(err):
+			channelBreakers.RecordFailure(channelID)
+		default:
+			channelBreakers.RecordInconclusive(channelID)
+		}
+	}
+
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		// One-shot overhead — newhub-side latency budget, excludes retries.
 		if retryParam.GetRetry() == 0 {
@@ -391,6 +423,40 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
+			// A channel-scoped selection failure condemns ONE channel, not the
+			// request: channel:no_available_key and channel:all_keys_cooling
+			// come from repo.Channel.GetNextEnabledKey (channel.go:104/:160)
+			// via middleware.SetupContextForSelectedChannel, i.e. the model
+			// was routable and this one candidate turned out to have no usable
+			// key — other channels serving the model are untouched. Failing
+			// over is exactly what shouldRetry already grants these errors
+			// AFTER a channel has been called; do the same before one has.
+			// "No available channel at all" (ErrorCodeGetChannelFailed, which
+			// getChannel marks SkipRetry) still breaks: nothing to fail over
+			// to, and IsChannelError is false for it.
+			retriesLeft := common.RetryTimes - retryParam.GetRetry()
+			if types.IsChannelError(channelErr) && retriesLeft > 0 && shouldRetry(c, channelErr, retriesLeft) {
+				// Best effort identification: SetupContextForSelectedChannel
+				// stamps the channel id/name/type before GetNextEnabledKey can
+				// fail, so the trace names the channel we are abandoning. Zero
+				// when even that is unknown.
+				failedID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+				failedProvider := constant.GetChannelTypeName(common.GetContextKeyInt(c, constant.ContextKeyChannelType))
+				app.RecordRouteAttempt(c, app.RouteAttempt{
+					ChannelID:   failedID,
+					ChannelName: common.GetContextKeyString(c, constant.ContextKeyChannelName),
+					Provider:    failedProvider,
+					Outcome:     routeAttemptOutcomeSelectError,
+					ErrorCode:   string(channelErr.GetErrorCode()),
+					StatusCode:  channelErr.StatusCode,
+				})
+				metrics.RecordRelayFailover(failedProvider, routeAttemptOutcomeSelectError)
+				metrics.RetryAttempts.WithLabelValues(failedProvider, string(channelErr.GetErrorCode())).Inc()
+				if failedID != 0 {
+					addUsedChannel(c, failedID)
+				}
+				continue
+			}
 			break
 		}
 
@@ -431,6 +497,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			} else {
 				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 			}
+			// The breaker admitted this request and no upstream was dialled —
+			// hand the slot back (413/400 are not the channel's fault).
+			reportBreakerOutcome(channel.Id, newAPIError)
 			break
 		}
 		c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
@@ -492,8 +561,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			app.RecordRouteAttempt(c, attempt)
 		}
 
+		// Tell the breaker what became of the request it admitted — on every
+		// path, before any of the branches below can leave this iteration.
+		reportBreakerOutcome(channel.Id, newAPIError)
+
 		if newAPIError == nil {
-			channelBreakers.RecordSuccess(channel.Id)
 			hub.RecordRelayOutcome(channel.Id, true, relayDuration,
 				c.GetString("tenant_id"),
 				relayInfo.OriginModelName,
@@ -502,11 +574,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			return
 		}
 
-		// Only count provider/network failures toward the breaker. 4xx user errors
-		// and client cancellation must not trip a healthy channel.
-		if types.IsUpstreamFailure(newAPIError) {
-			channelBreakers.RecordFailure(channel.Id)
-		}
 		hub.RecordRelayOutcome(channel.Id, false, relayDuration,
 			c.GetString("tenant_id"),
 			relayInfo.OriginModelName, 0, 0, 0, 0)
@@ -731,96 +798,6 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	return true
-}
-
-func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
-	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
-	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
-	if app.ShouldDisableChannel(channelError.ChannelType, err) && channelError.AutoBan {
-		AsyncGo(func() {
-			app.DisableChannel(channelError, err.Error())
-		})
-	}
-
-	// OpenRouter free-key pool: rate-limited keys get a per-key cooldown rather
-	// than being treated as permanently disabled. No-op for non-OpenRouter or non-429.
-	AsyncGo(func() {
-		openrouter_pool.MaybeMarkCooldown(channelError, err)
-	})
-
-	// Channel-stage errors are recorded (or deliberately skipped) HERE, once
-	// per attempt; mark that so the terminal-error fallback in Relay's deferred
-	// renderer doesn't write the last attempt's error a second time.
-	c.Set(relayErrorLogHandledKey, true)
-	recordRelayErrorLog(c, err)
-}
-
-// relayErrorLogHandledKey marks that processChannelError already owned the
-// error-log decision for this request. The deferred renderer in Relay only
-// records when the flag is absent — i.e. the error happened BEFORE any channel
-// attempt (request validation, token estimation, pricing, channel selection),
-// a class that previously left no error-log row at all.
-const relayErrorLogHandledKey = "relay_error_log_handled"
-
-// recordTerminalRelayError is the deferred renderer's fallback: it records the
-// terminal error ONLY when no channel-stage attempt already owned the logging
-// decision, so the last attempt's error is never written twice.
-func recordTerminalRelayError(c *gin.Context, err *types.NewAPIError) {
-	if c.GetBool(relayErrorLogHandledKey) {
-		return
-	}
-	recordRelayErrorLog(c, err)
-}
-
-func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
-	if !constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) {
-		return
-	}
-	// 保存错误日志到mysql中
-	userId := c.GetInt("id")
-	tokenName := c.GetString("token_name")
-	modelName := c.GetString("original_model")
-	tokenId := c.GetInt("token_id")
-	userGroup := c.GetString("group")
-	channelId := c.GetInt("channel_id")
-	other := make(map[string]interface{})
-	if c.Request != nil && c.Request.URL != nil {
-		other["request_path"] = c.Request.URL.Path
-	}
-	other["error_type"] = err.GetErrorType()
-	other["error_code"] = err.GetErrorCode()
-	other["status_code"] = err.StatusCode
-	other["channel_id"] = channelId
-	other["channel_name"] = c.GetString("channel_name")
-	other["channel_type"] = c.GetInt("channel_type")
-	other["relay_mode"] = c.GetInt("relay_mode")
-	// Workstream 0: error rows never went through genBaseRelayInfo when the
-	// failure happened before GenRelayInfo ran (e.g. request binding), so
-	// RelayInfo.SourceProduct may not exist yet — read the header directly
-	// off the request that is still in hand, same resolver as the success path.
-	other["source_product"] = ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader))
-	if upModel := c.GetString("original_model"); upModel != "" {
-		other["upstream_model"] = upModel
-	}
-	// The vendor's own request/trace id, set by provider.doRequest via
-	// c.Set beside its RelayInfo.UpstreamRequestId write — this is how a
-	// 5xx from upstream still gets it onto the error row without a new
-	// parameter on processChannelError/recordTerminalRelayError. Absent
-	// when the failure happened before any channel attempt reached
-	// doRequest (request validation, channel selection, etc).
-	if upstreamReqId := c.GetString("upstream_request_id"); upstreamReqId != "" {
-		other["upstream_request_id"] = upstreamReqId
-	}
-	adminInfo := make(map[string]interface{})
-	adminInfo["use_channel"] = c.GetStringSlice("use_channel")
-	isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
-	if isMultiKey {
-		adminInfo["is_multi_key"] = true
-		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
-	}
-	other["admin_info"] = adminInfo
-	repo.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveError(), tokenId, 0, false, userGroup, other)
 }
 
 func RelayMidjourney(c *gin.Context) {

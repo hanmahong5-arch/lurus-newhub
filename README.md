@@ -101,7 +101,22 @@ Full reference: [`.env.example`](./.env.example). Selected variables:
 | Relay (OpenAI-compatible + native provider formats) | `POST /v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/*`, `/v1/rerank`; `GET /v1/models`, `/v1beta/models` | `router/relay-router.go` |
 | Internal (service-to-service) | `/internal/{user,token,quota,balance,currency,log,models,admin}/*` | Requires `X-API-Key` header matched against a scope, not `Authorization: Bearer`; `router/internal-api-router.go` |
 
-Full OpenAPI spec: [`docs/openapi/api-v2.yaml`](./docs/openapi/api-v2.yaml).
+Published OpenAPI specs live in [`docs/openapi/`](./docs/openapi/) and are browsable
+through [`docs/openapi/index.html`](./docs/openapi/index.html):
+
+| Spec | Surface | Reconciled against the router? |
+|---|---|---|
+| [`relay.json`](./docs/openapi/relay.json) | Relay (`/v1`, `/v1beta`) — the contract an API customer integrates against | Yes |
+| [`api-v2.json`](./docs/openapi/api-v2.json) + [`api-v2.yaml`](./docs/openapi/api-v2.yaml) | Multi-tenant console API (`/api/v2`); the two files are held to the same operation set | Yes (JSON checked directly, YAML checked against the JSON) |
+| [`api.json`](./docs/openapi/api.json) | Frozen v1 legacy surface (`/api/...`) | No — bytes are gated, paths are not: 56 of 157 documented operations are mounted nowhere (stated in the file as `x-lurus-unreconciled-operations`) |
+
+All three declare `https://hub.lurus.cn` as their server. The gates live in
+`internal/adapter/handler/router/`: `openapi_strict_parse_test.go` parses each spec from
+the bytes as committed (no byte-order-mark tolerance, nothing stripped), and
+`openapi_contract_lock_test.go` fails when a documented path is not mounted, when the two
+`api-v2` twins drift apart, or when an operation is deleted from a spec. What those gates
+do **not** check: they never issue a request, so a documented request body, response body
+or status code can still be wrong.
 
 ## Development conventions
 

@@ -35,8 +35,8 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/deployment.go":           810,
 	"internal/adapter/handler/internal_api_ext.go":     1057,
 	"internal/adapter/handler/oauth.go":                997,  // +19 (2026-09-22 hotfix): GetSessionInfo resolves tenant_slug from the user's tenant when the session carries none — the only path by which an already-established console session can learn its own routing slug without a re-login
-	"internal/adapter/handler/relay.go":                1015, // +1: currency import (CNY cost via currency.QuotaToCNY, not quota/QuotaPerUnit)
-	"internal/adapter/middleware/auth.go":              913,  // +8 (cycle-13 hand-finish): the SDK self-heal arm now records that it registers no session-registry row; comment only
+	"internal/adapter/handler/relay.go":                992,  // -23 (cycle 14): processChannelError + the terminal/error-log recorders moved to relay_errors.go, paying for the channel-select failover and breaker-outcome wiring
+	"internal/adapter/middleware/auth.go":              807,  // -106 (cycle 14): PlaygroundAuth moved to auth_playground.go, paying for the wire-language fixes in resolveSessionIdentity/TokenAuth
 	"internal/adapter/middleware/oidc_auth.go":         1214, // +8 (2026-09-23): JWKSManager.refreshInterval — the refresh goroutine raced tests on jwksRefreshInterval
 	"internal/adapter/provider/claude/relay-claude.go": 940,
 	"internal/adapter/provider/common/relay_info.go":   893,
@@ -48,7 +48,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/repo/user.go":                    1206,
 	"internal/app/convert.go":                          1304,
 	"internal/app/quota.go":                            1387, // +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix): the TokenId > 0 guard and why, plus three lines saying why the pre-consume rejection formats ASCII
-	"internal/pkg/common/identity_client.go":           834,
+	"internal/pkg/common/identity_client.go":           809,  // -25 (cycle 14): the usage-report counter + ReportLLMUsage moved to identity_usage_report.go, paying for the checkout/status error honesty
 	"internal/pkg/dto/openai_request.go":               1020,
 	// NEW ROW, not a raise: metrics.go crossed the 800 threshold in cycle 13
 	// when the observability lane added the counters the fourteen new netdata

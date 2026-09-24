@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
@@ -26,6 +29,156 @@ var (
 	debitWallet  = common.DebitWalletGRPC
 	creditWallet = common.CreditWalletGRPC
 )
+
+// poolTopupFundSourceAdmin is the credit_pool_fund_events.source value the
+// admin topup endpoint stamps on its idempotency rows. It must stay distinct
+// from the three topup_* values app/credit_pool_reconcile.go uses as the
+// stranded-debit state machine ("topup_stranded", "topup_reconciled",
+// "topup_manually_closed"): the background sweep selects on source =
+// "topup_stranded", and app.TryFinalizeStrandedTopup only matches those three,
+// so a successful admin topup's row is invisible to both — which is what keeps
+// a settled credit from being "compensated" a second time.
+const poolTopupFundSourceAdmin = "admin_topup"
+
+// poolTopupFundSourceReverted is the terminal credit_pool_fund_events.source
+// written when the pool credit failed and the wallet revert SUCCEEDED.
+//
+// That outcome — the ordinary ceiling rejection — used to persist nothing at
+// all: the credit transaction rolled back, so the (tenant_id, key) slot stayed
+// free. Re-submitting the same key after the ceiling was raised then found no
+// record and credited the pool, while the platform deduped the debit against
+// one that had already been refunded: net wallet movement zero against a real
+// pool credit. The console drawer only re-mints its key after a SUCCESS, so a
+// 409 keeps the key in hand and makes that the likely path.
+//
+// Like poolTopupFundSourceAdmin it must not be any of the three values the
+// stranded state machine uses (app.FundEventSourceStranded / Reconciled /
+// ManuallyClosed), or the reconcile sweep would "compensate" an attempt whose
+// money is already back in the wallet.
+const poolTopupFundSourceReverted = "topup_reverted"
+
+// poolTopupKeyVerdict is how this handler reads the credit_pool_fund_events
+// row that already occupies a request's (tenant_id, Idempotency-Key) slot.
+//
+// "A row exists" is NOT the same question as "my credit already landed". The
+// key is chosen by a Reseller-authenticated caller, and the table is shared
+// with the platform BillingOutbox funding path and with the stranded-debit
+// state machine — migration 031's header says outright that this event_id
+// space is also used for hand-typed runbook keys like "smoke-1", and describes
+// the symptom of getting the question wrong: 200 success=true replayed=true
+// with nothing credited.
+type poolTopupKeyVerdict int
+
+const (
+	// poolTopupKeySettled — this endpoint's own committed credit, same pool,
+	// same amount: a genuine replay.
+	poolTopupKeySettled poolTopupKeyVerdict = iota
+	// poolTopupKeyAmountMismatch — this endpoint's own credit, but for a
+	// different amount. An operator who corrected a typo and resubmitted is
+	// asking about an intent that never settled.
+	poolTopupKeyAmountMismatch
+	// poolTopupKeyReverted — an attempt on this key failed and the debit was
+	// refunded. Terminal: nothing is owed, so crediting now would be free.
+	poolTopupKeyReverted
+	// poolTopupKeyStranded — the stranded-debit state machine owns this key
+	// (app.TryFinalizeStrandedTopup / ReconcileStrandedTopups settle it).
+	poolTopupKeyStranded
+	// poolTopupKeyForeign — somebody else's row. Not this request's replay at
+	// any price: treating it as one debits the wallet and credits nothing.
+	poolTopupKeyForeign
+)
+
+// classifyPoolTopupKey decides what an existing fund-event row means for THIS
+// request. Provenance first (source), then identity (pool, amount).
+//
+// BLIND SPOT: provenance here is a string column, not a foreign key or an
+// actor id. Any other writer that stamps source = "admin_topup" on this
+// tenant's rows would be read as this endpoint's own credit. Today nothing
+// else writes that value (it is defined in this file and used nowhere else);
+// nothing structurally prevents a future one.
+func classifyPoolTopupKey(evt *repo.CreditPoolFundEvent, poolID, amount int64) poolTopupKeyVerdict {
+	switch evt.Source {
+	case poolTopupFundSourceAdmin:
+		if evt.PoolID != poolID {
+			return poolTopupKeyForeign
+		}
+		if evt.Amount != amount {
+			return poolTopupKeyAmountMismatch
+		}
+		return poolTopupKeySettled
+	case poolTopupFundSourceReverted:
+		return poolTopupKeyReverted
+	case app.FundEventSourceStranded, app.FundEventSourceReconciled, app.FundEventSourceManuallyClosed:
+		return poolTopupKeyStranded
+	default:
+		return poolTopupKeyForeign
+	}
+}
+
+// poolTopupIdempotencyKey resolves the key for one topup intent and reports
+// whether the CALLER supplied it. Both header spellings are accepted and both
+// are trimmed — the checkout handler trims (v2_billing.go
+// checkoutIdempotencyKey) and a key that dedupes on one endpoint but not the
+// other is worth a second pool credit here.
+//
+// No header means a fresh UUID: see the "what this does NOT guarantee" note on
+// TopupCreditPool.
+func poolTopupIdempotencyKey(c *gin.Context) (string, bool) {
+	if k := strings.TrimSpace(c.GetHeader("Idempotency-Key")); k != "" {
+		return k, true
+	}
+	if k := strings.TrimSpace(c.GetHeader("X-Idempotency-Key")); k != "" {
+		return k, true
+	}
+	return "pool-topup:" + uuid.NewString(), false
+}
+
+// poolTopupCollisionEventID derives the event_id under which a stranded debit
+// is recorded when the caller's key is already held by a foreign row.
+//
+// It cannot be the caller's key — that slot is exactly what collided, and
+// app.RecordStrandedTopup treats a unique violation as "already recorded", so
+// recording under the taken key would silently drop the stranded debit. It is
+// a digest rather than a truncation so that two different long keys cannot
+// derive the same id, and so the result always fits
+// repo.PoolFundEventIDMaxLen. Deterministic, so a retry of the same colliding
+// key re-derives it and records nothing new.
+func poolTopupCollisionEventID(idemKey string) string {
+	sum := sha256.Sum256([]byte(idemKey))
+	return "pool-topup-collision:" + hex.EncodeToString(sum[:16])
+}
+
+// respondPoolTopupReplay answers a settled replay: 200 with the balance THAT
+// credit produced, not a fresh read — the caller is asking what its own topup
+// did, and later draws may have moved the live balance since. No metrics write
+// for the same reason: event.NewBalance is a historical value and the gauge
+// tracks the current balance.
+func respondPoolTopupReplay(c *gin.Context, actorID int, tenantID string, pool *repo.TenantCreditPool, amount int64, event *repo.CreditPoolFundEvent) {
+	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,
+		governance.ActionCreditPoolToppedUp, governance.ResourceCreditPool, int(pool.ID),
+		fmt.Sprintf(`{"tenant_id":%q,"amount":%d,"new_balance":%d,"replayed":true}`, tenantID, amount, event.NewBalance)))
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"tenant_id":   tenantID,
+			"new_balance": event.NewBalance,
+			"max_balance": pool.MaxBalance,
+			"replayed":    true,
+		},
+	})
+}
+
+// respondPoolTopupKeyConflict refuses a key whose slot is held by something
+// that is not this request's settled credit. Always success:false — the
+// console renders data.new_balance whenever success is true, so answering 200
+// here is how "nothing was credited" gets reported as "Topup successful".
+func respondPoolTopupKeyConflict(c *gin.Context, code, message string) {
+	c.JSON(http.StatusConflict, gin.H{
+		"success":    false,
+		"message":    message,
+		"error_code": code,
+	})
+}
 
 // Reseller-facing admin handlers for tenant credit pools.
 // Routes registered under /api/v2/admin/tenants/:id/credit-pool* in
@@ -237,18 +390,42 @@ func GetCreditPoolForEndUser(c *gin.Context) {
 //
 // Flow per ADR §9 Q4 (wallet-debit only — no admin-grant path):
 //  1. Lookup pool (must exist).
-//  2. DebitWalletGRPC(amount) — if it fails, return 402.
-//  3. TopupPool(amount) — if it fails (ErrPoolWouldExceedCeiling), call
-//     CreditWalletGRPC for revert; if revert ALSO fails the debit is stranded:
-//     it is persisted as an open credit_pool_fund_events row (source =
-//     "topup_stranded") that the background reconcile sweep compensates
-//     (app.ReconcileStrandedTopups), and the STRANDED log line remains as
-//     operator context.
+//  2. Resolve and validate the Idempotency-Key, then read the
+//     credit_pool_fund_events row that already holds (tenant_id, key) and
+//     classify it (classifyPoolTopupKey). Everything answerable from that row
+//     — a settled replay, a key reused for a different amount, a key whose
+//     attempt was already refunded, a key colliding with an unrelated row —
+//     is answered HERE, before any money moves.
+//  3. DebitWalletGRPC(amount) — if it fails, return 402.
+//  4. FundPoolIdempotentWithReason(amount) keyed on the same Idempotency-Key
+//     the debit used, writing the fund-event row under
+//     UNIQUE(tenant_id, event_id) (migration 031) in the same transaction as
+//     the balance change. Its ErrFundEventExists arm runs the SAME
+//     classification, because that is where the race step 2 cannot see lands
+//     — and there the wallet has already been debited: a foreign row means
+//     the debit is ours and has to be given back, while a row this endpoint
+//     owns means the platform deduped our debit into that intent's.
+//     If the credit fails (e.g. ErrPoolWouldExceedCeiling), CreditWalletGRPC
+//     reverts. A SUCCESSFUL revert writes a terminal "topup_reverted" row so
+//     the key cannot be reused for a free credit; a FAILED revert strands the
+//     debit as a "topup_stranded" row the background sweep compensates
+//     (app.ReconcileStrandedTopups), with the STRANDED log line as operator
+//     context.
+//
+// What this does NOT guarantee: a caller that sends no Idempotency-Key at all
+// gets a fresh UUID per request, so a double-click without the header is two
+// intents — two wallet debits and two pool credits. Nothing on the server can
+// distinguish that from an operator deliberately funding the same tenant the
+// same amount twice, and this endpoint’s caller is a human with the balance
+// in front of them, so the ambiguity is resolved by requiring the header
+// rather than by guessing (the checkout path, whose caller is a paying
+// customer, takes the opposite trade-off — see checkoutIdempotencyKey). The
+// console must send a key; see doc/coord/contracts.md.
 //
 // The two-step is necessarily non-atomic across services, so we accept a
-// narrow stranded-debit window — but every stranded debit is now durable,
-// metered (newhub_credit_pool_stranded_*) and auto-compensated, not log-only.
-// A retried request with the same Idempotency-Key settles its own stranded
+// narrow stranded-debit window — but every stranded debit is durable, metered
+// (newhub_credit_pool_stranded_*) and auto-compensated, not log-only. A
+// retried request with the same Idempotency-Key settles its own stranded
 // event via the claim protocol instead of double-crediting (see
 // app.TryFinalizeStrandedTopup).
 func TopupCreditPool(c *gin.Context) {
@@ -303,20 +480,67 @@ func TopupCreditPool(c *gin.Context) {
 		return
 	}
 	// Idempotency key per topup intent (contracts.md S1 / ADR D4 "deterministic
-	// business key, never random"): honour a caller-supplied Idempotency-Key so a
-	// double-clicked/retried topup dedupes against double-charge; fall back to a
-	// per-request UUID only when absent (no client key → treated as a fresh intent,
-	// NOT content-hashed: a content hash would dedupe two legitimately-identical
-	// topups into one wallet debit but credit the pool twice). The same key flows
-	// to the gRPC debit and its HTTP twin; the revert uses a distinct key so it is
-	// never deduped against the debit.
-	idemKey := c.GetHeader("Idempotency-Key")
-	if idemKey == "" {
-		idemKey = c.GetHeader("X-Idempotency-Key")
+	// business key, never random"). The same key flows to the gRPC debit, to its
+	// HTTP twin, and — since the credit was routed through the idempotent
+	// primitive — into credit_pool_fund_events.event_id. The revert uses a
+	// distinct key so it is never deduped against the debit.
+	idemKey, callerSuppliedKey := poolTopupIdempotencyKey(c)
+
+	if callerSuppliedKey {
+		// The caller now chooses a value that is PERSISTED, in a VARCHAR(128),
+		// inside a transaction that opens after the wallet debit. Validate it
+		// here, where a rejection costs nothing; the same value reaching the
+		// INSERT would cost a 22001 behind a debit that already happened.
+		if verr := repo.ValidateFundEventID(idemKey); verr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success":    false,
+				"message":    "Idempotency-Key rejected: " + verr.Error(),
+				"error_code": "POOL_TOPUP_KEY_INVALID",
+			})
+			return
+		}
+		// Read the slot BEFORE debiting. Every verdict except "the stranded
+		// state machine owns this key" is answerable without moving money, and
+		// answering them here means a colliding or spent key never produces a
+		// debit that has to be reverted.
+		prior, found, lerr := repo.LookupFundEvent(c.Request.Context(), tenantID, idemKey)
+		if lerr != nil {
+			// Unknown, not fresh: proceeding would debit the wallet on a key
+			// whose history we could not read.
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"success":    false,
+				"message":    "could not verify the Idempotency-Key against previous topups: " + lerr.Error(),
+				"error_code": "POOL_TOPUP_KEY_UNVERIFIABLE",
+			})
+			return
+		}
+		if found {
+			switch classifyPoolTopupKey(prior, pool.ID, req.Amount) {
+			case poolTopupKeySettled:
+				respondPoolTopupReplay(c, actorID, tenantID, pool, req.Amount, prior)
+				return
+			case poolTopupKeyAmountMismatch:
+				respondPoolTopupKeyConflict(c, "POOL_TOPUP_KEY_AMOUNT_MISMATCH", fmt.Sprintf(
+					"Idempotency-Key %q already settled a topup of %d quota; %d is a different intent and needs a new key",
+					idemKey, prior.Amount, req.Amount))
+				return
+			case poolTopupKeyReverted:
+				respondPoolTopupKeyConflict(c, "POOL_TOPUP_KEY_REVERTED", fmt.Sprintf(
+					"Idempotency-Key %q was already used by a topup that failed and was refunded; retry with a NEW key",
+					idemKey))
+				return
+			case poolTopupKeyForeign:
+				respondPoolTopupKeyConflict(c, "POOL_TOPUP_KEY_COLLISION", fmt.Sprintf(
+					"Idempotency-Key %q is already held by an unrelated fund event for this tenant (source %q); retry with a NEW key",
+					idemKey, prior.Source))
+				return
+			case poolTopupKeyStranded:
+				// Fall through: settling a stranded intent needs the deduped
+				// debit to have happened first (see the branch below).
+			}
+		}
 	}
-	if idemKey == "" {
-		idemKey = "pool-topup:" + uuid.NewString()
-	}
+
 	debit, derr := debitWallet(
 		c.Request.Context(), accountID, walletAmount,
 		"pool_topup", "Credit pool topup for tenant "+tenantID, "newhub", idemKey,
@@ -369,29 +593,77 @@ func TopupCreditPool(c *gin.Context) {
 		return
 	}
 
-	newBalance, terr := repo.TopupPool(pool.ID, tenantID, req.Amount, actorID, req.Reason)
+	// Pool credit, made idempotent on the SAME key the wallet debit was
+	// deduped with: repo.FundPoolIdempotentWithReason writes a
+	// credit_pool_fund_events row under the UNIQUE(tenant_id, event_id) index
+	// from migration 031, in the same transaction as the balance change.
+	//
+	// Before this the admin path called repo.TopupPool directly, so a retry of
+	// an already-SUCCESSFUL topup was deduped by the platform on the debit side
+	// and then credited the pool a SECOND time: same key, one debit, two
+	// credits. The stranded branch above owns "debit taken, credit never
+	// landed"; this owns "credit already landed". Both key off idemKey and both
+	// live in credit_pool_fund_events, so exactly one of them can apply to a
+	// given (tenant, key) — the stranded branch runs first and returns, and it
+	// only matches the three topup_* state values this path never writes.
+	event, terr := repo.FundPoolIdempotentWithReason(
+		c.Request.Context(), pool.ID, tenantID, req.Amount,
+		idemKey, poolTopupFundSourceAdmin, actorID, req.Reason,
+	)
+	if errors.Is(terr, repo.ErrFundEventExists) {
+		if event == nil {
+			// Unreachable through repo today (both replay arms carry the row),
+			// but this is a money path: dereferencing nil would panic mid
+			// request, and falling into the error branch below would revert a
+			// wallet debit whose credit DID land.
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success":    false,
+				"message":    "topup replay detected but the original fund event could not be read; reconcile by hand before retrying",
+				"error_code": "POOL_TOPUP_REPLAY_UNREADABLE",
+			})
+			return
+		}
+		// The slot was filled between the pre-debit lookup and this credit, so
+		// the same classification decides — but now the wallet HAS been debited.
+		switch classifyPoolTopupKey(event, pool.ID, req.Amount) {
+		case poolTopupKeySettled:
+			// A concurrent twin of this request credited first; the platform
+			// deduped both debits into one. Answer with that credit.
+			respondPoolTopupReplay(c, actorID, tenantID, pool, req.Amount, event)
+		case poolTopupKeyForeign:
+			// Nothing this endpoint wrote owns the key, so the debit is this
+			// request's own money and nothing will ever be credited for it.
+			// Give it back; a failed revert strands under a derived id because
+			// the caller's slot is exactly what is taken.
+			revertPoolTopupDebit(c, accountID, walletAmount, tenantID, pool.ID, req.Amount,
+				idemKey, poolTopupCollisionEventID(idemKey), "key slot taken by source "+event.Source)
+			respondPoolTopupKeyConflict(c, "POOL_TOPUP_KEY_COLLISION", fmt.Sprintf(
+				"Idempotency-Key %q was taken by an unrelated fund event (source %q) while this topup was in flight; nothing was credited — retry with a NEW key",
+				idemKey, event.Source))
+		default:
+			// Amount mismatch, reverted, or stranded: an intent on this same
+			// key that THIS endpoint owns got there first. The platform deduped
+			// this debit into that intent's, so there is no money of ours to
+			// give back — reverting here would refund a debit whose credit (or
+			// pending compensation) is someone else's.
+			respondPoolTopupKeyConflict(c, "POOL_TOPUP_KEY_IN_USE", fmt.Sprintf(
+				"Idempotency-Key %q was claimed by another topup (source %q) while this one was in flight; nothing was credited — retry with a NEW key",
+				idemKey, event.Source))
+		}
+		return
+	}
 	if terr != nil {
-		// Revert the wallet — best effort.
-		if rerr := creditWallet(
-			c.Request.Context(), accountID, walletAmount,
-			"pool_topup_revert",
-			"Revert: pool topup failed for tenant "+tenantID,
-			"newhub", idemKey+":revert",
-		); rerr != nil {
-			// Stranded debit: money left the wallet, pool was not credited,
-			// revert failed too. Persist an open fund event so the background
-			// reconcile sweep (app.ReconcileStrandedTopups) compensates it —
-			// the log line is context for operators, no longer the only trace.
-			if serr := app.RecordStrandedTopup(c.Request.Context(), idemKey, tenantID, pool.ID, req.Amount); serr != nil {
-				common.SysError("failed to persist stranded topup event (log is the only trace!) " +
-					"event_id=" + idemKey + " err=" + serr.Error())
+		if revertPoolTopupDebit(c, accountID, walletAmount, tenantID, pool.ID, req.Amount,
+			idemKey, idemKey, "pool_err="+terr.Error()) {
+			// The money is back, so this key is spent: without a terminal row
+			// the (tenant, key) slot stays free, and re-submitting it after the
+			// ceiling is raised would credit the pool against a debit the
+			// platform dedupes into the one just refunded.
+			if merr := repo.RecordTerminalFundEvent(c.Request.Context(), pool.ID, tenantID,
+				idemKey, req.Amount, poolTopupFundSourceReverted); merr != nil {
+				common.SysError("reverted topup left no terminal fund event — its key can credit the pool for free: " +
+					"event_id=" + idemKey + " tenant=" + tenantID + " err=" + merr.Error())
 			}
-			common.SysError("STRANDED wallet debit — pool topup AND revert both failed. " +
-				"event_id=" + idemKey +
-				" account=" + strconv.FormatInt(accountID, 10) +
-				" tenant=" + tenantID +
-				" amount=" + strconv.FormatInt(req.Amount, 10) +
-				" pool_err=" + terr.Error() + " revert_err=" + rerr.Error())
 		}
 		status := http.StatusInternalServerError
 		code := "POOL_TOPUP_FAILED"
@@ -403,6 +675,7 @@ func TopupCreditPool(c *gin.Context) {
 		return
 	}
 
+	newBalance := event.NewBalance
 	metrics.CreditPoolBalance.WithLabelValues(tenantID).Set(float64(newBalance))
 
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,

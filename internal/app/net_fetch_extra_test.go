@@ -462,7 +462,13 @@ func TestIOCopyBytesGracefully_WritesBodyAndHeaders(t *testing.T) {
 
 	src := &http.Response{
 		StatusCode: http.StatusAccepted,
-		Header:     http.Header{"X-Custom": {"v1"}, "Content-Length": {"999"}},
+		Header: http.Header{
+			"X-Custom":     {"v1"},
+			"Content-Type": {"application/json"},
+			// Copied from src.Header on purpose: it must be recomputed, not
+			// forwarded.
+			"Content-Length": {"999"},
+		},
 	}
 	payload := []byte("copied-bytes")
 	IOCopyBytesGracefully(c, src, payload)
@@ -473,8 +479,16 @@ func TestIOCopyBytesGracefully_WritesBodyAndHeaders(t *testing.T) {
 	if w.Body.String() != "copied-bytes" {
 		t.Errorf("body = %q, want copied-bytes", w.Body.String())
 	}
-	if w.Header().Get("X-Custom") != "v1" {
-		t.Errorf("X-Custom header not propagated: %q", w.Header().Get("X-Custom"))
+	// Cycle-14 L6: the filter is an allow-list now
+	// (app.UpstreamHeadersForwarded). An arbitrary vendor header no longer
+	// propagates — that was how the upstream edge's Server / Eo-Log-Uuid /
+	// Strict-Transport-Security reached customers. The allow-listed ones
+	// still do.
+	if got := w.Header().Get("X-Custom"); got != "" {
+		t.Errorf("X-Custom = %q, want empty: only UpstreamHeadersForwarded names may cross", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json (allow-listed)", got)
 	}
 	// Content-Length must be recomputed from the payload, not copied from src.
 	if got := w.Header().Get("Content-Length"); got != "12" {
@@ -506,7 +520,8 @@ func TestIOCopyBytesGracefully_GatewayRequestIdSurvivesVendorHeader(t *testing.T
 			"Request-Id":          {"vendor-anthropic-id"},
 			"Openai-Request-Id":   {"vendor-relay-id"},
 			"Cf-Ray":              {"vendor-cf-ray"},
-			"X-Custom":            {"kept"},
+			"X-Custom":            {"dropped"},
+			"Content-Type":        {"application/json"},
 		},
 	}
 	IOCopyBytesGracefully(c, src, []byte("body"))
@@ -526,8 +541,15 @@ func TestIOCopyBytesGracefully_GatewayRequestIdSurvivesVendorHeader(t *testing.T
 	if got := w.Header().Get("Cf-Ray"); got != "" {
 		t.Errorf("Cf-Ray = %q, want empty", got)
 	}
-	// An unrelated header must still be copied through unaffected.
-	if got := w.Header().Get("X-Custom"); got != "kept" {
-		t.Errorf("X-Custom = %q, want kept (unrelated headers still copy)", got)
+	// Cycle-14 L6: an unrelated vendor header no longer crosses at all — the
+	// allow-list (UpstreamHeadersForwarded) replaced the deny-list. The
+	// gateway's own id surviving is still the point of this test; what
+	// changed is that it no longer depends on the vendor's name being on a
+	// list somebody remembered to extend.
+	if got := w.Header().Get("X-Custom"); got != "" {
+		t.Errorf("X-Custom = %q, want empty under the allow-list", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json (allow-listed)", got)
 	}
 }

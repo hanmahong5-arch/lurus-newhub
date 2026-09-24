@@ -479,8 +479,11 @@ func DebitWallet(ctx context.Context, accountID int64, amount float64, txType, d
 		var errResp struct {
 			Error string `json:"error"`
 		}
+		// Same sentinel PreAuthorize returns, so a caller that classifies with
+		// errors.Is gets the same answer whichever wallet call produced it.
+		// The message is unchanged ("insufficient_balance").
 		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error == "insufficient_balance" {
-			return nil, fmt.Errorf("insufficient_balance")
+			return nil, ErrInsufficientBalance
 		}
 		return nil, fmt.Errorf("debit failed: status %d", resp.StatusCode)
 	}
@@ -803,32 +806,4 @@ func ListWalletTransactionsHTTP(ctx context.Context, accountID int64, page, page
 		return nil, nil
 	}
 	return &page1, nil
-}
-
-// ReportLLMUsage sends a usage record to lurus-platform for VIP accumulation.
-// Fire-and-forget — errors are logged but not propagated.
-func ReportLLMUsage(ctx context.Context, accountID int64, amountCNY float64) {
-	if IdentityServiceURL == "" {
-		return
-	}
-	body, _ := json.Marshal(map[string]any{
-		"account_id": accountID,
-		"amount_cny": amountCNY,
-	})
-	req, err := http.NewRequestWithContext(ctx,
-		http.MethodPost,
-		IdentityServiceURL+"/internal/v1/usage/report",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+IdentityServiceInternalKey)
-	resp, err := identityClient.Do(req)
-	if err != nil {
-		SysLog(fmt.Sprintf("identity ReportLLMUsage: %v", err))
-		return
-	}
-	resp.Body.Close()
 }

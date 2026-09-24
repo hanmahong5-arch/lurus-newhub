@@ -171,16 +171,27 @@ const (
 )
 
 // WireErrorType maps an HTTP status code to the vendor-taxonomy "type" string
-// for a gateway-originated rejection (errorType == ErrorTypeNewAPIError),
-// selected by which wire the caller is speaking. OpenAI and Anthropic share
-// almost the same buckets; they diverge on 402 (insufficient_quota vs
-// billing_error) and on the two capacity statuses — 503 and 529 — where the
-// Anthropic wire uses overloaded_error (OpenAI's 503 stays the plain 5xx
-// api_error bucket). No literal constructor in this codebase builds a
-// gateway-originated (NewErrorWithStatusCode/ErrorTypeNewAPIError) error with
-// StatusCode 529; the branch is reachable only when a channel's admin-configured
-// status_code_mapping (applied by app/error.go ResetStatusCode) rewrites a
-// gateway-originated status to 529.
+// for the wire the caller is speaking. OpenAI and Anthropic share almost the
+// same buckets; they diverge on 402 (insufficient_quota vs billing_error) and
+// on the two capacity statuses — 503 and 529 — where the Anthropic wire uses
+// overloaded_error (OpenAI's 503 stays the plain 5xx api_error bucket).
+//
+// Reachability — three callers, do not narrow this back to the first one:
+//  1. gateway-originated rejections (errorType == ErrorTypeNewAPIError:
+//     middleware aborts, handler rejections), in both converters' default
+//     branch. No literal constructor in this codebase builds one of those
+//     with StatusCode 529, so for THIS caller 529 arrives only when a
+//     channel's admin-configured status_code_mapping (applied by
+//     app/error.go ResetStatusCode) rewrites the status;
+//  2. every UPSTREAM OpenAI-shaped error (ErrorTypeOpenAIError — which is
+//     what app/error.go's RelayErrorHandler builds for every vendor 4xx/5xx)
+//     rendered on the Anthropic wire, i.e. ToClaudeError's
+//     ErrorTypeOpenAIError branch. A vendor 529 or 503 reaches the
+//     overloaded_error branch straight from the upstream body there, with no
+//     status_code_mapping involved anywhere;
+//  3. the fallback in claudeTypeToOpenAIType, for an upstream Anthropic type
+//     that belongs to neither vocabulary.
+//
 // Any status this table does not name falls back to invalid_request_error
 // for 4xx and api_error for 5xx/unknown — never the bare "new_api_error"
 // literal a caller would otherwise have to special-case.
@@ -218,6 +229,49 @@ func WireErrorType(statusCode int, wire ErrorType) string {
 		return "api_error"
 	}
 	return "invalid_request_error"
+}
+
+// claudeTypeToOpenAIType translates an upstream Anthropic error "type" into
+// the OpenAI-wire vocabulary this gateway emits (the values WireErrorType
+// returns for ErrorTypeOpenAIError). It is the mirror of ToClaudeError's
+// ErrorTypeOpenAIError branch: neither wire may carry the other's private
+// type names.
+//
+// The two vocabularies differ in exactly two members, so this is a
+// translation and NOT a flattening: every shared name is passed through,
+// because it is strictly more specific than the HTTP status, and the status
+// is worthless here — both WithClaudeError call sites
+// (provider/claude/relay-claude.go:692 and :824, the in-band error frames
+// parsed out of a Claude response body) hardcode StatusCode 500.
+//
+// CAUTION — this value is not only rendered: app.ShouldDisableChannel
+// (internal/app/channel.go:85 and the Type switch at :111-125) reads
+// ToOpenAIError().Type to decide whether to auto-ban the channel. Passing the
+// shared names through keeps authentication_error / permission_error
+// disabling the channel exactly as before. billing_error is a deliberate
+// behaviour change: it now reads insufficient_quota, which that switch DOES
+// match, so an Anthropic channel whose upstream account reports a billing
+// failure in-band is auto-banned where before it was not — which is the
+// stated intent of the insufficient_quota rule.
+func claudeTypeToOpenAIType(claudeType string, statusCode int) string {
+	switch claudeType {
+	case "invalid_request_error", "authentication_error", "permission_error",
+		"not_found_error", "request_too_large", "rate_limit_error", "api_error":
+		// In both vocabularies (WireErrorType emits every one of these on the
+		// OpenAI wire too) — keep the vendor's own classification.
+		return claudeType
+	case "overloaded_error":
+		// Anthropic-only (503/529); OpenAI's bucket for those is api_error.
+		return "api_error"
+	case "billing_error":
+		// Anthropic-only (402); OpenAI's bucket for that is insufficient_quota.
+		return "insufficient_quota"
+	}
+	// Outside both vocabularies — WithClaudeError's "upstream_error" default
+	// for a body with no type, or a type Anthropic adds after this was
+	// written. Nothing to translate, so fall back to the status table rather
+	// than put an unrecognised string on the wire.
+	return WireErrorType(statusCode, ErrorTypeOpenAIError)
 }
 
 type NewAPIError struct {
@@ -291,6 +345,23 @@ func (e *NewAPIError) MaskSensitiveError() string {
 	return common.MaskSensitiveInfo(errStr)
 }
 
+// SetMessage rewrites the message the client will read. ToOpenAIError and
+// ToClaudeError below both derive the rendered Message from e.Err in EVERY
+// branch, so a rewrite here reaches the OpenAI, Anthropic and Gemini wires
+// alike (Gemini's converter delegates to ToOpenAIError) — including for the
+// upstream error types (ErrorTypeOpenAIError / ErrorTypeClaudeError), whose
+// stored RelayError keeps the vendor's original text and contributes only
+// type/param/code to the envelope. Before that single source of truth, the
+// two upstream branches returned the stored vendor struct verbatim, so the
+// "(request id: ...)" suffix and the upstream-provider attribution
+// handler/relay.go adds were silently dropped on exactly the most common
+// failure a customer hits (a vendor 429 or 5xx).
+//
+// Two limits on "reaches every wire", both deliberate: if e.Err renders
+// empty, each converter substitutes the ErrorType literal instead (see the
+// tails of both functions), and the envelopes that do NOT go through these
+// converters — middleware/utils.go's abortWithMidjourneyMessage and
+// dto.TaskError — never read e.Err at all, so a rewrite is invisible there.
 func (e *NewAPIError) SetMessage(message string) {
 	e.Err = errors.New(message)
 }
@@ -300,15 +371,23 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	switch e.errorType {
 	case ErrorTypeOpenAIError:
 		if openAIError, ok := e.RelayError.(OpenAIError); ok {
+			// Only Type/Param/Code/Metadata are taken from the vendor's
+			// stored error; Message is re-derived from e.Err below.
 			result = openAIError
 		}
 	case ErrorTypeClaudeError:
 		if claudeError, ok := e.RelayError.(ClaudeError); ok {
+			// Mirror of ToClaudeError's ErrorTypeOpenAIError branch below:
+			// the vendor's type is translated into this wire's vocabulary
+			// instead of being stamped in raw, so overloaded_error /
+			// billing_error — which exist only on Anthropic's wire — cannot
+			// land in an OpenAI envelope's type slot. Unlike that direction
+			// nothing is lost here: the OpenAI envelope HAS a code slot, and
+			// e.errorCode is the vendor type verbatim (WithClaudeError).
 			result = OpenAIError{
-				Message: e.Error(),
-				Type:    claudeError.Type,
-				Param:   "",
-				Code:    e.errorCode,
+				Type:  claudeTypeToOpenAIType(claudeError.Type, e.StatusCode),
+				Param: "",
+				Code:  e.errorCode,
 			}
 		}
 	default:
@@ -322,12 +401,14 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 			errType = WireErrorType(e.StatusCode, ErrorTypeOpenAIError)
 		}
 		result = OpenAIError{
-			Message: e.Error(),
-			Type:    errType,
-			Param:   "",
-			Code:    e.errorCode,
+			Type:  errType,
+			Param: "",
+			Code:  e.errorCode,
 		}
 	}
+	// One source of truth for the rendered message, in EVERY branch: e.Err,
+	// which is what SetMessage writes (see its comment).
+	result.Message = e.Error()
 	// Forward structured Metadata (e.g. {"topup_url":...} on a 402) to the
 	// client envelope. The switch above only carries it for the upstream
 	// OpenAIError case; new_api_error / claude_error errors set it via
@@ -349,15 +430,21 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 	var result ClaudeError
 	switch e.errorType {
 	case ErrorTypeOpenAIError:
-		if openAIError, ok := e.RelayError.(OpenAIError); ok {
-			result = ClaudeError{
-				Message: e.Error(),
-				Type:    fmt.Sprintf("%v", openAIError.Code),
-			}
-		}
+		// The Anthropic envelope has exactly two fields, type and message —
+		// no slot for the vendor's "code". Stamping that code into .type put
+		// a foreign value where an Anthropic SDK expects one of its own type
+		// names, and, because an Anthropic-shaped upstream body carries no
+		// "code" key at all (dto.GeneralErrorResponse leaves Code nil and the
+		// "unknown_error" fallback in WithOpenAIError is written only to
+		// e.errorCode), the COMMON case rendered the literal string "<nil>".
+		// Use the same status-keyed Anthropic taxonomy the default branch
+		// below uses; the vendor code stays reachable on the OpenAI wire and
+		// through GetErrorCode for the error log.
+		result = ClaudeError{Type: WireErrorType(e.StatusCode, ErrorTypeClaudeError)}
 	case ErrorTypeClaudeError:
 		if claudeError, ok := e.RelayError.(ClaudeError); ok {
-			result = claudeError
+			// Type only; Message is re-derived from e.Err below.
+			result = ClaudeError{Type: claudeError.Type}
 		}
 	default:
 		// Mirrors ToOpenAIError's default branch above: only
@@ -368,10 +455,12 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 			errType = WireErrorType(e.StatusCode, ErrorTypeClaudeError)
 		}
 		result = ClaudeError{
-			Message: e.Error(),
-			Type:    errType,
+			Type: errType,
 		}
 	}
+	// Same single source of truth as ToOpenAIError: the rendered message is
+	// e.Err in every branch, so SetMessage reaches this wire too.
+	result.Message = e.Error()
 	if e.errorCode != ErrorCodeCountTokenFailed {
 		result.Message = common.MaskSensitiveInfo(result.Message)
 	}
@@ -630,118 +719,4 @@ func RelayErrorType(err *NewAPIError) string {
 	// 5xx and unclassified (status 0 / channel-capacity) → fail-safe upstream_5xx,
 	// mirroring IsUpstreamFailure's default-true posture.
 	return "upstream_5xx"
-}
-
-func ErrOptionWithSkipRetry() NewAPIErrorOptions {
-	return func(e *NewAPIError) {
-		e.skipRetry = true
-	}
-}
-
-func ErrOptionWithNoRecordErrorLog() NewAPIErrorOptions {
-	return func(e *NewAPIError) {
-		e.recordErrorLog = common.GetPointer(false)
-	}
-}
-
-func ErrOptionWithHideErrMsg(replaceStr string) NewAPIErrorOptions {
-	return func(e *NewAPIError) {
-		if common.DebugEnabled {
-			common.SysLogf("ErrOptionWithHideErrMsg: %s, origin error: %s", replaceStr, e.Err)
-		}
-		e.Err = errors.New(replaceStr)
-	}
-}
-
-func IsRecordErrorLog(e *NewAPIError) bool {
-	if e == nil {
-		return false
-	}
-	if e.recordErrorLog == nil {
-		// default to true if not set
-		return true
-	}
-	return *e.recordErrorLog
-}
-
-// ErrOptionWithTopupURL attaches a {"topup_url": ...} JSON object to the error
-// Metadata so the client can navigate directly to the wallet top-up page.
-// Used for per-user balance exhaustion (HTTP 402).
-// Note: types imports common — no import cycle.
-func ErrOptionWithTopupURL() NewAPIErrorOptions {
-	return func(e *NewAPIError) {
-		raw, _ := json.Marshal(map[string]string{
-			"topup_url": common.IdentityPublicURL + walletTopupPath,
-		})
-		e.Metadata = json.RawMessage(raw)
-	}
-}
-
-// ErrOptionWithTokenQuotaHint attaches structured metadata for a per-TOKEN
-// spending-cap 402 (HTTP 402, ErrorCodeTokenQuotaExhausted): the token's own
-// remain_quota, NOT a wallet top-up link. Unlike ErrOptionWithTopupURL, a
-// wallet top-up cannot fix this state — the remedy is editing the token's
-// remain_quota or switching it to unlimited (see token_service.go's
-// "请先修改令牌剩余额度，或者设置为无限额度" guidance) — so this option
-// deliberately does NOT set a management URL (none exists yet) and does NOT
-// set Retry-After (no data source for "how long until it recovers").
-//
-// The field is named token_remain_quota_units (not token_remain_quota) and
-// carries the RAW internal quota integer (common.QuotaPerUnit units == 1
-// baseline USD), deliberately NOT the same unit as the human-readable
-// error.message text: PreConsumeQuota's ErrTokenQuotaInsufficient path
-// builds that message via logger.FormatQuotaASCII, a baseline-USD amount
-// ("$0.000002") that no longer moves with the operator's display currency —
-// it used to use logger.FormatQuota and rendered in whatever
-// operation_setting.GetQuotaDisplayType() was set to, which also put a
-// fullwidth ＄ / ¥ on the wire. Naming the raw-unit field explicitly (rather than reusing the
-// ambiguous "token_remain_quota" name) is the fix for a prior defect where
-// the same JSON response carried this integer under that name right next to
-// a currency-formatted number in .message, differing by ~5x10^5 with no unit
-// on either — see r2_token_quota_code_test.go / l3_token_quota_402_test.go.
-// remainQuota is NOT floored at zero: a negative value (e.g. from a
-// concurrent settlement draining the token between the read and this call)
-// is passed through as-is — see the negative-value case in
-// r2_token_quota_code_test.go.
-func ErrOptionWithTokenQuotaHint(remainQuota int) NewAPIErrorOptions {
-	return func(e *NewAPIError) {
-		raw, _ := json.Marshal(map[string]any{
-			"reason":                   "token_quota_exhausted",
-			"token_remain_quota_units": remainQuota,
-		})
-		e.Metadata = json.RawMessage(raw)
-	}
-}
-
-// ErrOptionWithTokenDisabledHint is the sibling of ErrOptionWithTokenQuotaHint
-// for the state repo.ValidateUserToken's Status==TokenStatusExhausted branch
-// can also produce: the token's Status flag is still "exhausted" but its
-// RemainQuota has since been raised above zero (or switched to unlimited)
-// without Status being flipped back to Enabled — handler/token.go's
-// app.ApplyTokenUpdate copies RemainQuota but never touches Status; the
-// enable transition only runs when the update request explicitly sets
-// status=Enabled (token.go:230/CanEnableToken). Calling this "token quota
-// exhausted" (ErrOptionWithTokenQuotaHint's reason) would contradict the very
-// remainQuota this metadata reports, so it uses a distinct reason string —
-// the remedy is re-enabling the token in the console, not editing its quota.
-func ErrOptionWithTokenDisabledHint(remainQuota int) NewAPIErrorOptions {
-	return func(e *NewAPIError) {
-		raw, _ := json.Marshal(map[string]any{
-			"reason":                   "token_disabled",
-			"token_remain_quota_units": remainQuota,
-		})
-		e.Metadata = json.RawMessage(raw)
-	}
-}
-
-// ErrOptionWithUpgradeURL attaches a {"upgrade_url": ...} JSON object to the error
-// Metadata so the client can navigate to the plan pricing page.
-// Used for tenant monthly-cap exhaustion (HTTP 402).
-func ErrOptionWithUpgradeURL() NewAPIErrorOptions {
-	return func(e *NewAPIError) {
-		raw, _ := json.Marshal(map[string]string{
-			"upgrade_url": common.IdentityPublicURL + pricingPath,
-		})
-		e.Metadata = json.RawMessage(raw)
-	}
 }
