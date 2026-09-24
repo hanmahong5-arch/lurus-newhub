@@ -284,8 +284,16 @@ func TestTopupCreditPool_RetrySettlesStrandedOnce(t *testing.T) {
 }
 
 // TestTopupCreditPool_FreshKeyStillCreditsNormally guards the normal path:
-// a fresh Idempotency-Key with a healthy pool takes the plain TopupPool
-// branch (no fund event involved).
+// a fresh Idempotency-Key with a healthy pool credits once, reports no
+// reconciled/replayed flag, and leaves exactly ONE fund event behind — the
+// row that makes a retry of this key a replay instead of a second credit.
+//
+// This last assertion used to read "fund events = 0 on the normal path",
+// which described the old repo.TopupPool wiring: the successful admin topup
+// left no idempotency record at all, and that absence is precisely what let a
+// retry of a successful topup credit the pool twice against one deduped wallet
+// debit. The row must also NOT carry one of the stranded state values, or the
+// background sweep would treat a settled credit as an open compensation.
 func TestTopupCreditPool_FreshKeyStillCreditsNormally(t *testing.T) {
 	ctx := setupStrandedCtx(t, 10_000)
 	stubWalletSeams(t, nil)
@@ -302,10 +310,27 @@ func TestTopupCreditPool_FreshKeyStillCreditsNormally(t *testing.T) {
 	if _, hasFlag := data["reconciled"]; hasFlag {
 		t.Errorf("normal path must not report reconciled flag, got %v", data["reconciled"])
 	}
-	var n int64
-	ctx.db.Model(&repo.CreditPoolFundEvent{}).Count(&n)
-	if n != 0 {
-		t.Errorf("fund events = %d, want 0 on the normal path", n)
+	if _, hasFlag := data["replayed"]; hasFlag {
+		t.Errorf("normal path must not report replayed flag, got %v", data["replayed"])
+	}
+	var events []repo.CreditPoolFundEvent
+	if err := ctx.db.Find(&events).Error; err != nil {
+		t.Fatalf("read fund events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("fund events = %d, want 1 — the idempotency record for this key", len(events))
+	}
+	evt := events[0]
+	if evt.EventID != "idem-fresh-1" || evt.TenantID != ctx.tenantID || evt.Amount != 300 || evt.NewBalance != 300 {
+		t.Errorf("fund event = {event_id:%q tenant:%q amount:%d new_balance:%d}, want {idem-fresh-1, %q, 300, 300}",
+			evt.EventID, evt.TenantID, evt.Amount, evt.NewBalance, ctx.tenantID)
+	}
+	if evt.Source != poolTopupFundSourceAdmin {
+		t.Errorf("fund event source = %q, want %q", evt.Source, poolTopupFundSourceAdmin)
+	}
+	switch evt.Source {
+	case app.FundEventSourceStranded, app.FundEventSourceReconciled, app.FundEventSourceManuallyClosed:
+		t.Errorf("a settled admin topup must not wear a stranded-state source (%q) — the sweep would compensate it again", evt.Source)
 	}
 }
 

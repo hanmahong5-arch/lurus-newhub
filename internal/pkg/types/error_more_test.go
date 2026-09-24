@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -384,14 +385,37 @@ func TestToOpenAIError_Serialization(t *testing.T) {
 		}
 	})
 
+	// An Anthropic upstream error rendered into an OpenAI envelope. This
+	// subtest used to assert out.Type == "overloaded_error", i.e. it pinned
+	// the defect: overloaded_error exists only on Anthropic's wire, so that
+	// was a foreign type name in an OpenAI envelope's type slot — the exact
+	// mirror of the "<nil>" defect in the other direction. The full
+	// translation table (including the status/type mismatch cases, where the
+	// hardcoded StatusCode 500 of both real call sites disagrees with the
+	// vendor type) lives in l5_wire_envelope_test.go.
 	t.Run("claude relay error converted to openai shape", func(t *testing.T) {
 		e := WithClaudeError(ClaudeError{Type: "overloaded_error", Message: "busy"}, 529)
 		out := e.ToOpenAIError()
-		if out.Type != "overloaded_error" {
-			t.Errorf("claude type should map to openai Type, got %q", out.Type)
+		if out.Type != "api_error" {
+			t.Errorf("claude overloaded_error should translate to the OpenAI bucket api_error, got %q", out.Type)
+		}
+		// Nothing is lost: the vendor type keeps its place in the code slot.
+		if fmt.Sprintf("%v", out.Code) != "overloaded_error" {
+			t.Errorf("vendor type should survive in Code, got %v", out.Code)
 		}
 		if out.Message == "" {
 			t.Errorf("expected a message")
+		}
+	})
+
+	// A status/type mismatch in the other direction: a shared vocabulary name
+	// must NOT be flattened into the status bucket (500 -> api_error would
+	// lose the auto-ban classification app.ShouldDisableChannel reads).
+	t.Run("claude authentication_error keeps its name on the openai wire", func(t *testing.T) {
+		e := WithClaudeError(ClaudeError{Type: "authentication_error", Message: "bad key"}, 500)
+		out := e.ToOpenAIError()
+		if out.Type != "authentication_error" {
+			t.Errorf("shared type name must survive translation, got %q", out.Type)
 		}
 	})
 
@@ -435,11 +459,17 @@ func TestToOpenAIError_Serialization(t *testing.T) {
 }
 
 func TestToClaudeError_Serialization(t *testing.T) {
+	// The Anthropic envelope's type comes from the status-keyed Anthropic
+	// taxonomy, never from the vendor's "code" — see the table in
+	// l5_wire_envelope_test.go for the nil-code and foreign-code cases this
+	// single subtest could not see (its hardcoded code "rate_limit_error"
+	// happens to also be a legal Anthropic type, so it stayed green while a
+	// codeless upstream body rendered the literal "<nil>" here).
 	t.Run("openai relay error mapped to claude", func(t *testing.T) {
 		e := WithOpenAIError(OpenAIError{Message: "boom", Type: "t", Code: "rate_limit_error"}, 429)
 		out := e.ToClaudeError()
 		if out.Type != "rate_limit_error" {
-			t.Errorf("Type should be openai Code stringified, got %q", out.Type)
+			t.Errorf("Type should be the Anthropic taxonomy value for 429, got %q", out.Type)
 		}
 		if out.Message == "" {
 			t.Errorf("expected message")

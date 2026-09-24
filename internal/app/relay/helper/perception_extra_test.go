@@ -122,8 +122,10 @@ func TestSetPerceptionHeaders(t *testing.T) {
 		if w.Header().Get("X-Quota-Remaining") != "8.5" {
 			t.Errorf("remaining header = %q, want 8.5", w.Header().Get("X-Quota-Remaining"))
 		}
-		if w.Header().Get("X-Model-Provider") == "" {
-			t.Error("provider header should be set")
+		// Cycle-14 L6: X-Model-Provider was renamed to X-Relay-Adapter — the
+		// value is the channel's adapter family, never a measured provider.
+		if w.Header().Get(RelayAdapterHeader) == "" {
+			t.Errorf("%s header should be set", RelayAdapterHeader)
 		}
 		if w.Header().Get("X-Request-Id") != "rid-7" {
 			t.Errorf("request-id header = %q", w.Header().Get("X-Request-Id"))

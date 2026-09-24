@@ -233,7 +233,12 @@ func Distribute() func(c *gin.Context) {
 					if usingGroup == "auto" {
 						showGroup = fmt.Sprintf("auto(%s)", selectGroup)
 					}
-					message := fmt.Sprintf("failed to select an available channel for model %s in group %s (distributor): %s", modelRequest.Model, showGroup, err.Error())
+					// "(distributor)" used to be part of this sentence. It names
+					// an internal component, which tells a customer nothing and
+					// tells an attacker something; it stays in the log line
+					// below instead — see the 404/503 site further down.
+					message := fmt.Sprintf("failed to select an available channel for model %s in group %s: %s", modelRequest.Model, showGroup, err.Error())
+					common.SysLog("distributor: " + message)
 					// 如果错误，但是渠道不为空，说明是数据库一致性问题
 					//if channel != nil {
 					//	common.SysError(fmt.Sprintf("渠道不存在：%d", channel.Id))
@@ -256,7 +261,14 @@ func Distribute() func(c *gin.Context) {
 					if modelNeverConfigured(c, usingGroup, modelRequest.Model) {
 						statusCode = http.StatusNotFound
 					}
-					abortWithOpenAiMessage(c, statusCode, fmt.Sprintf("no available channel for model %s in group %s (distributor)", modelRequest.Model, usingGroup), string(types.ErrorCodeModelNotFound))
+					// The wire sentence carries only what the caller can act on
+					// (which model, which group). Which internal component
+					// refused — "(distributor)", as opposed to the relay
+					// handler's own "(retry)" sibling in handler/relay.go — is
+					// an operator's question, so it is logged rather than sent.
+					message := fmt.Sprintf("no available channel for model %s in group %s", modelRequest.Model, usingGroup)
+					common.SysLog(fmt.Sprintf("distributor: %s (status %d)", message, statusCode))
+					abortWithOpenAiMessage(c, statusCode, message, string(types.ErrorCodeModelNotFound))
 					return
 				}
 				// Defence in depth: CacheGetRandomSatisfiedChannel already
@@ -269,7 +281,13 @@ func Distribute() func(c *gin.Context) {
 				if callerTenantID != "" {
 					owner := channel.TenantId
 					if owner != "" && owner != "default" && owner != callerTenantID {
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("no available channel for model %s in group %s (distributor)", modelRequest.Model, usingGroup), string(types.ErrorCodeModelNotFound))
+						// Same sentence as the no-channel branch above, on
+						// purpose (see the comment block above this if): the
+						// caller must not be able to tell this apart from an
+						// ordinary "no channel". The log line is where the two
+						// are distinguishable.
+						common.SysLog(fmt.Sprintf("distributor: cross-tenant channel %d (owner %s) selected for caller tenant %s, refusing", channel.Id, owner, callerTenantID))
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("no available channel for model %s in group %s", modelRequest.Model, usingGroup), string(types.ErrorCodeModelNotFound))
 						return
 					}
 				}
@@ -332,7 +350,12 @@ func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 	var modelRequest ModelRequest
 	err := common.UnmarshalBodyReusable(c, &modelRequest)
 	if err != nil {
-		return nil, errors.New("invalid request, " + err.Error())
+		// NO "invalid request, " prefix here: every path out of this function
+		// reaches Distribute's single error exit, which already prefixes
+		// "Invalid request, ". Prefixing again is what produced the doubled
+		// sentence a customer was reading off the wire —
+		//   Invalid request, invalid request, unexpected end of JSON input
+		return nil, err
 	}
 	return &modelRequest, nil
 }
@@ -352,7 +375,9 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			midjourneyRequest := dto.MidjourneyRequest{}
 			err = common.UnmarshalBodyReusable(c, &midjourneyRequest)
 			if err != nil {
-				return nil, false, errors.New("invalid midjourney request, " + err.Error())
+				// Same doubled-prefix reasoning as getModelFromRequest above:
+				// Distribute adds "Invalid request, " to whatever comes back.
+				return nil, false, errors.New("unable to parse the midjourney request: " + err.Error())
 			}
 			midjourneyModel, mjErr, success := app.GetMjRequestModel(relayMode, &midjourneyRequest)
 			if mjErr != nil {
@@ -360,7 +385,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			}
 			if midjourneyModel == "" {
 				if !success {
-					return nil, false, fmt.Errorf("invalid request, unable to resolve model")
+					return nil, false, fmt.Errorf("unable to resolve the model from the request")
 				} else {
 					// task fetch, task fetch by condition, notify
 					shouldSelectChannel = false
