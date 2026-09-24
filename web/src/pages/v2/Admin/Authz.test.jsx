@@ -323,15 +323,21 @@ describe('Admin permission grants page', () => {
     expect(screen.queryByTestId('authz-create-form')).toBeNull();
   });
 
-  // A-F8 (cycle-8 L4 repair round): grant MANAGEMENT is root-only server-side
-  // via RootJWTAuth (adminRoute) — a non-root admin's session-path rejection
-  // is HTTP 200 {success:false,...}, not a thrown 403 (auth.go's
-  // roleVal<minRole branch, verified verbatim in the M2 mutation output for
-  // this same handler group). Without also treating success:false as
-  // forbidden, a direct visit by a non-root admin showed the create form and
-  // "No grants issued yet." instead of the notice — the test above alone
-  // never caught this because axios resolves (not rejects) a 200 response.
-  it('shows a permission notice when the response resolves with success:false (real RootJWTAuth session-path shape)', async () => {
+  // A-F8 (cycle-8 L4 repair round) added this for the shape RootJWTAuth's
+  // session fallback produced at the time: HTTP 200 {success:false,
+  // message:'无权进行此操作，权限不足'}.
+  //
+  // cycle-14 L8 correction: that is NO LONGER what this route answers. The
+  // session fallback rewrites its refusal as a real 403 (PERMISSION_DENIED)
+  // and a missing/invalid credential as a 401 — see
+  // internal/adapter/middleware/admin_jwt_auth.go:69-72 (the Bearer branch's
+  // 403) and :161-168 (rootSessionAuth → capture.rewriteAsV2Denial). The
+  // case below is kept as a DEFENSIVE lock, not as a description of today's
+  // server: a v1-shaped refusal body reaching this page must still be read
+  // as a refusal rather than as an empty grant list, which is what
+  // helpers/loadState.js classifyLoad() encodes for every page in this
+  // class.
+  it('shows a permission notice when a v1-shaped refusal body resolves with success:false (defensive — the route itself now answers 403)', async () => {
     API.get.mockResolvedValue({
       data: { success: false, message: '无权进行此操作，权限不足' },
     });
@@ -342,5 +348,85 @@ describe('Admin permission grants page', () => {
       screen.getByText(/Only root can manage delegated permission grants/),
     );
     expect(screen.queryByTestId('authz-create-form')).toBeNull();
+  });
+
+  // cycle-14 L8. fetchAll's catch was 403-only, so every other failure fell
+  // through to `grants` staying [] and the page rendering "No grants issued
+  // yet." — a confident statement about who holds delegated root powers,
+  // made from a read that never happened.
+  it('says the grant read failed — not that no grants are issued — when the GET 500s', async () => {
+    API.get.mockRejectedValue({
+      response: { status: 500, data: { success: false } },
+    });
+
+    render(<V2AdminAuthz />);
+
+    await waitFor(() => screen.getByTestId('authz-load-error'));
+    expect(screen.queryByTestId('authz-empty')).toBeNull();
+    expect(screen.queryByText('No grants issued yet.')).toBeNull();
+    // A read failure is not a permission refusal: saying "Root access
+    // required" here would be a fresh false statement.
+    expect(
+      screen.queryByText(/Only root can manage delegated permission grants/),
+    ).toBeNull();
+  });
+
+  it('treats a 200 carrying success:false that is not a refusal as a failed read, not as an empty list', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: 'grant store unavailable' },
+    });
+
+    render(<V2AdminAuthz />);
+
+    await waitFor(() => screen.getByTestId('authz-load-error'));
+    expect(screen.queryByTestId('authz-empty')).toBeNull();
+    expect(
+      screen.queryByText(/Only root can manage delegated permission grants/),
+    ).toBeNull();
+  });
+
+  it('a failed catalog read does not let the grant list render as empty', async () => {
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/catalog')) {
+        return Promise.reject({ response: { status: 500 } });
+      }
+      return Promise.resolve(grantsResponse([]));
+    });
+
+    render(<V2AdminAuthz />);
+
+    await waitFor(() => screen.getByTestId('authz-load-error'));
+    expect(screen.queryByTestId('authz-empty')).toBeNull();
+  });
+
+  it('recovers on retry once the reads succeed', async () => {
+    let fail = true;
+    API.get.mockImplementation((url) => {
+      if (fail) return Promise.reject({ response: { status: 500 } });
+      if (String(url).includes('/catalog')) {
+        return Promise.resolve(catalogResponse());
+      }
+      return Promise.resolve(
+        grantsResponse([
+          {
+            id: 7,
+            user_id: 42,
+            resource: 'audit',
+            action: 'read',
+            created_at: 1700000000,
+            revoked_at: null,
+          },
+        ]),
+      );
+    });
+
+    render(<V2AdminAuthz />);
+    await waitFor(() => screen.getByTestId('authz-load-error'));
+
+    fail = false;
+    fireEvent.click(screen.getByTestId('authz-retry'));
+
+    await waitFor(() => screen.getByTestId('authz-row-7'));
+    expect(screen.queryByTestId('authz-load-error')).toBeNull();
   });
 });

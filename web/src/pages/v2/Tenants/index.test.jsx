@@ -408,3 +408,59 @@ describe('Tenants page — 403 guard', () => {
     });
   });
 });
+
+// ─── cycle-14 L8: a failed read is not an empty tenant table ────────────────
+//
+// fetchTenants used to set `forbidden` on 403 and swallow every other
+// outcome, leaving `tenants` at [] — so a 500 drew "0 tenants · $0.00 used"
+// in the page header. The money figure is the part the operator quotes.
+
+describe('Tenants page — a failed read is not a zero', () => {
+  it('does not render a tenant count or a dollar figure when the GET 500s', async () => {
+    API.get.mockRejectedValue({
+      response: { status: 500, data: { success: false } },
+    });
+
+    render(React.createElement(HFTenants));
+
+    await waitFor(() => screen.getByTestId('tenants-load-error'));
+    // `/tenants/` alone would match the page's own crumb label, so the
+    // assertion is on the COUNT shape — "0 tenants" — not the word.
+    expect(screen.queryByText(/\d+ tenants/)).toBeNull();
+    expect(screen.queryByText(/\$0\.00 used/)).toBeNull();
+    expect(
+      screen.queryByText('No tenants yet. Create one to get started.'),
+    ).toBeNull();
+    // A transport failure is not a permission refusal.
+    expect(screen.queryByText('Admin access required')).toBeNull();
+  });
+
+  it('treats a 200 carrying success:false as a failed read, not as zero tenants', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: 'tenant store unavailable' },
+    });
+
+    render(React.createElement(HFTenants));
+
+    await waitFor(() => screen.getByTestId('tenants-load-error'));
+    expect(screen.queryByText(/\$0\.00 used/)).toBeNull();
+  });
+
+  it('clears the error and shows the count once a retry succeeds', async () => {
+    let fail = true;
+    API.get.mockImplementation(() =>
+      fail
+        ? Promise.reject({ response: { status: 500 } })
+        : Promise.resolve(listResponse([makeTenant({ used_quota: 0 })])),
+    );
+
+    render(React.createElement(HFTenants));
+    await waitFor(() => screen.getByTestId('tenants-load-error'));
+
+    fail = false;
+    fireEvent.click(screen.getByTestId('tenants-retry'));
+
+    await waitFor(() => screen.getByTestId('tenant-row-tenant-uuid-1'));
+    expect(screen.queryByTestId('tenants-load-error')).toBeNull();
+  });
+});

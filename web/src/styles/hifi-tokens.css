@@ -391,6 +391,69 @@
   border-radius: 2px;
 }
 
+/* ── Load-failure state (components/hifi/HfLoadError.jsx) ──────────────────
+ * One look for "this read failed" on every v2 page: an error-coloured rule on
+ * the leading edge (colour is never the only signal — there is an icon and a
+ * headline), the next step in secondary ink, and the retry button on the
+ * trailing edge where the eye lands after reading. */
+.hf .hf-load-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 20px;
+  border-left: 3px solid var(--hf-err);
+}
+.hf .hf-load-error.is-panel {
+  background: var(--hf-elev);
+  border-top: 1px solid var(--hf-rule);
+  border-right: 1px solid var(--hf-rule);
+  border-bottom: 1px solid var(--hf-rule);
+  border-radius: 2px;
+}
+.hf .hf-load-error__icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--hf-err);
+}
+.hf .hf-load-error__body {
+  flex: 1;
+  min-width: 0;
+}
+.hf .hf-load-error__title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--hf-ink);
+}
+.hf .hf-load-error__detail {
+  margin-top: 4px;
+  max-width: 64ch;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--hf-ink-3);
+}
+.hf .hf-load-error__action {
+  flex: none;
+  align-self: center;
+  height: 32px;
+  padding: 0 14px;
+}
+.hf .hf-load-error__action:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+@media (max-width: 560px) {
+  .hf .hf-load-error {
+    flex-wrap: wrap;
+  }
+  .hf .hf-load-error__action {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 /* Wraps every `table.t` so wide tables scroll horizontally instead of
  * blowing out the page on narrow viewports (no breakpoint previously
  * protected these). */

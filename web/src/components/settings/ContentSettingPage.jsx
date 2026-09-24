@@ -56,14 +56,25 @@ const ContentSettingPage = () => {
 
   const formApiRef = useRef();
 
+  /**
+   * Save one option. Returns TRUE only when the server accepted it.
+   *
+   * cycle-14 L8: this used to show the error toast for a refusal and then
+   * return normally, so each caller below announced "已更新" for a save the
+   * server had rejected — the two toasts appeared together and the success
+   * is the one that reads as the outcome. /api/option/ answers 200 with
+   * {success:false} for a refusal (it does not throw), so the return value
+   * is the only thing a caller can gate on.
+   */
   const updateOption = async (key, value) => {
     const res = await API.put('/api/option/', { key, value });
     const { success, message } = res.data;
-    if (success) {
-      setInputs((prev) => ({ ...prev, [key]: value }));
-    } else {
+    if (!success) {
       showError(message);
+      return false;
     }
+    setInputs((prev) => ({ ...prev, [key]: value }));
+    return true;
   };
 
   const handleInputChange = async (value, e) => {
@@ -74,7 +85,8 @@ const ContentSettingPage = () => {
   const submitNotice = async () => {
     try {
       setLoadingInput((s) => ({ ...s, Notice: true }));
-      await updateOption('Notice', inputs.Notice);
+      const saved = await updateOption('Notice', inputs.Notice);
+      if (!saved) return; // updateOption already surfaced the refusal
       showSuccess(t('公告已更新'));
     } catch (error) {
       showError(t('公告更新失败'));
@@ -86,10 +98,11 @@ const ContentSettingPage = () => {
   const submitUserAgreement = async () => {
     try {
       setLoadingInput((s) => ({ ...s, [LEGAL_USER_AGREEMENT_KEY]: true }));
-      await updateOption(
+      const saved = await updateOption(
         LEGAL_USER_AGREEMENT_KEY,
         inputs[LEGAL_USER_AGREEMENT_KEY],
       );
+      if (!saved) return;
       showSuccess(t('用户协议已更新'));
     } catch (error) {
       showError(t('用户协议更新失败'));
@@ -101,10 +114,11 @@ const ContentSettingPage = () => {
   const submitPrivacyPolicy = async () => {
     try {
       setLoadingInput((s) => ({ ...s, [LEGAL_PRIVACY_POLICY_KEY]: true }));
-      await updateOption(
+      const saved = await updateOption(
         LEGAL_PRIVACY_POLICY_KEY,
         inputs[LEGAL_PRIVACY_POLICY_KEY],
       );
+      if (!saved) return;
       showSuccess(t('隐私政策已更新'));
     } catch (error) {
       showError(t('隐私政策更新失败'));
@@ -160,7 +174,16 @@ const ContentSettingPage = () => {
   const handleMigrate = async () => {
     try {
       setLoading(true);
-      await API.post('/api/option/migrate_console_setting');
+      // Same class as updateOption above: the route answers 200
+      // {success:false} for a refusal. Announcing "迁移完成" for that is the
+      // worst version of it — the migration is one-way and the modal has
+      // just told the operator to back up before running it, so being told
+      // it completed is what stops them from restoring that backup.
+      const res = await API.post('/api/option/migrate_console_setting');
+      if (!res?.data?.success) {
+        showError(t('迁移失败: ') + (res?.data?.message || t('未知错误')));
+        return; // modal stays open so the operator can retry deliberately
+      }
       showSuccess(t('旧配置迁移完成'));
       await refresh();
       setShowMigrateModal(false);
