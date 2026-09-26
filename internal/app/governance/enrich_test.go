@@ -394,3 +394,15 @@ func TestEnrichLogParams_UpstreamRequestId_AbsentWhenEmpty(t *testing.T) {
 		t.Error("Other[upstream_request_id] should be absent, not an empty string, when RelayInfo carries none")
 	}
 }
+
+// The recorded wallet charge travels RelayInfo -> log params unchanged: this
+// hook is the only path from settlement to logs.charged_cny4.
+func TestEnrichLogParams_CarriesTheWalletCharge(t *testing.T) {
+	c := newTestContext()
+	info := &relaycommon.RelayInfo{StartTime: time.Now(), WalletChargeCNY4: 12_345}
+	params := &entity.RecordConsumeLogParams{Other: make(map[string]interface{})}
+	EnrichLogParams(c, info, params)
+	if params.ChargedCNY4 != 12_345 {
+		t.Errorf("ChargedCNY4 = %d, want 12345", params.ChargedCNY4)
+	}
+}

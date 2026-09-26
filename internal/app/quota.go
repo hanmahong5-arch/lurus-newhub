@@ -1069,6 +1069,7 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				_, settleErr := settleWithBreaker(settleCtx, relayInfo.PlatformPreAuthID, amountLB)
 				settleCancel()
 				charged = true
+				relayInfo.WalletChargeCNY4 = currency.CNYToUnits4(amountLB)
 
 				if settleErr != nil {
 					metrics.BillingSettleTotal.WithLabelValues("error").Inc()
@@ -1122,7 +1123,9 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 			// have no pre-auth (flag-off windows, high-balance skip, degraded
 			// admit) — the same double-debit risk, inconsistently applied.
 			charge := localQuotaConsistent || advisory
-			if !charge {
+			if charge {
+				relayInfo.WalletChargeCNY4 = currency.CNYToUnits4(amountLB)
+			} else {
 				// Same severity/shape as the local-inconsistency logs above
 				// (common.SysLog) so the skipped revenue is observable rather
 				// than silently dropped.

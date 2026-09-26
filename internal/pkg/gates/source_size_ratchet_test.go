@@ -39,15 +39,15 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/middleware/auth.go":              807,  // -106 (cycle 14): PlaygroundAuth moved to auth_playground.go, paying for the wire-language fixes in resolveSessionIdentity/TokenAuth
 	"internal/adapter/middleware/oidc_auth.go":         1214, // +8 (2026-09-23): JWKSManager.refreshInterval — the refresh goroutine raced tests on jwksRefreshInterval
 	"internal/adapter/provider/claude/relay-claude.go": 940,
-	"internal/adapter/provider/common/relay_info.go":   893,
+	"internal/adapter/provider/common/relay_info.go":   894, // +1 WalletChargeCNY4 (recorded wallet charge, migration 041)
 	"internal/adapter/provider/gemini/relay-gemini.go": 1427,
 	"internal/adapter/repo/channel.go":                 1226,
-	"internal/adapter/repo/log.go":                     1054,
+	"internal/adapter/repo/log.go":                     1055, // +1 ChargedCNY4 copied onto the row (migration 041)
 	"internal/adapter/repo/option.go":                  948,
 	"internal/adapter/repo/token.go":                   794,
 	"internal/adapter/repo/user.go":                    1206,
 	"internal/app/convert.go":                          1304,
-	"internal/app/quota.go":                            1386, // -1 (legacy debit failure arm moved to billing_debit_outbox.go); +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix): the TokenId > 0 guard and why, plus three lines saying why the pre-consume rejection formats ASCII
+	"internal/app/quota.go":                            1389, // +3 record the wallet charge on both settlement branches (migration 041); -1 (legacy debit failure arm moved to billing_debit_outbox.go); +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix): the TokenId > 0 guard and why, plus three lines saying why the pre-consume rejection formats ASCII
 	"internal/pkg/common/identity_client.go":           809,  // -25 (cycle 14): the usage-report counter + ReportLLMUsage moved to identity_usage_report.go, paying for the checkout/status error honesty
 	"internal/pkg/dto/openai_request.go":               1020,
 	// NEW ROW, not a raise: metrics.go crossed the 800 threshold in cycle 13

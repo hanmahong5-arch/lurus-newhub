@@ -81,6 +81,41 @@ func TestGetGeneration_ResolvesOwnRelayByRequestId(t *testing.T) {
 	}
 }
 
+// TestGetGeneration_ReportsTheRecordedCharge: charged_cny is what the wallet
+// was debited (logs.charged_cny4), and is absent, not 0, when nothing was
+// recorded: a missing charge must not read as "free".
+func TestGetGeneration_ReportsTheRecordedCharge(t *testing.T) {
+	ctx := setupRelaySuccessRouter(t, openAIChatEchoUpstream)
+	relayResp := ctx.postChat(t, `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`, nil)
+	if relayResp.Code != http.StatusOK {
+		t.Fatalf("relay status = %d, body=%s", relayResp.Code, relayResp.Body.String())
+	}
+	reqId := relayResp.Header().Get(common.RequestIdHeader)
+
+	lookup := func() string {
+		rr := ctx.serve(ctx.newAuthedRequest(t, http.MethodGet, "/v1/generation?id="+reqId, ""))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET /v1/generation status = %d, body=%s", rr.Code, rr.Body.String())
+		}
+		return rr.Body.String()
+	}
+	if body := lookup(); strings.Contains(body, "charged_cny") {
+		t.Fatalf("no wallet charge recorded, but the body reports one: %s", body)
+	}
+
+	if err := ctx.db.Model(&repo.Log{}).Where("type = ?", repo.LogTypeConsume).
+		Update("charged_cny4", 12_345).Error; err != nil {
+		t.Fatalf("record charge: %v", err)
+	}
+	var resp generationResponse
+	if err := json.Unmarshal([]byte(lookup()), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Data.ChargedCNY == nil || *resp.Data.ChargedCNY != 1.2345 {
+		t.Fatalf("charged_cny = %v, want 1.2345", resp.Data.ChargedCNY)
+	}
+}
+
 // TestGetGeneration_ForeignTokenReturns404: another caller's token must not
 // resolve someone else's request id.
 func TestGetGeneration_ForeignTokenReturns404(t *testing.T) {
