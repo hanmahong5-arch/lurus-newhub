@@ -31,7 +31,7 @@ a bind source. `scripts/install-netdata-alarms.sh` only manages
 `newhub.conf` — a second alarm file would need its own bind mount added to
 the container definition first (out of scope for this directory).
 
-`health.d/newhub.conf` currently defines 30 alarms:
+`health.d/newhub.conf` currently defines 31 alarms:
 
 - 8 ported from the host's original 2026-08-20 copy
   (`newhub_platform_breaker_open`, `newhub_billing_outbox_failures`,
@@ -131,6 +131,10 @@ the container definition first (out of scope for this directory).
 Two existing alarms were also changed in that repair round (no count
 change):
 
+- 1 added 2026-09-26, **in-repo only**: `newhub_client_errors` — console
+  errors reported from users' browsers (`lurus_gateway_client_errors_total{kind}`,
+  POST /api/client-error). Threshold not yet calibrated: tune after a week of
+  real traffic (extensions produce some `window_error` noise).
 - `newhub_relay_5xx_elevated` was **rebound** from
   `lurus_gateway_requests_total{status=5*}` to the new series
   `lurus_gateway_non_probe_5xx_total`

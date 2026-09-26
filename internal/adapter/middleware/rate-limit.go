@@ -241,6 +241,14 @@ func TotpBackupCodesRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(5, 20*60, "TB")
 }
 
+// ClientErrorReportRateLimit bounds POST /api/client-error to 30 reports per
+// 10 minutes per IP, in its own "CE" bucket: the route is unauthenticated,
+// and sharing CriticalRateLimit's "CT" bucket would let a crash loop (or a
+// flood) throttle the same IP out of TOTP disable and key reveal.
+func ClientErrorReportRateLimit() func(c *gin.Context) {
+	return rateLimitFactory(30, 10*60, "CE")
+}
+
 func DownloadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.DownloadRateLimitNum, common.DownloadRateLimitDuration, "DW")
 }

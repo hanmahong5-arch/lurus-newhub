@@ -45,6 +45,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import i18next from 'i18next';
+import { reportClientError } from '../../helpers/clientErrorReport';
 
 const PRELOAD_ERROR_RELOAD_KEY = 'lurus_preload_error_reloaded';
 
@@ -57,7 +58,8 @@ const PRELOAD_ERROR_RELOAD_KEY = 'lurus_preload_error_reloaded';
  */
 export function installPreloadErrorReload() {
   if (typeof window === 'undefined') return;
-  window.addEventListener('vite:preloadError', () => {
+  window.addEventListener('vite:preloadError', (e) => {
+    reportClientError('chunk_load', e?.payload);
     try {
       if (window.sessionStorage.getItem(PRELOAD_ERROR_RELOAD_KEY)) {
         // Already tried once this session. A second stale-chunk error after
@@ -87,6 +89,7 @@ class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
+    reportClientError('render', error);
     // eslint-disable-next-line no-console
     console.error(
       'ErrorBoundary caught a render error:',
