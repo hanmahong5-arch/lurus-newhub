@@ -1715,7 +1715,7 @@ components:
           description: Billable quota units consumed
         amount_cny:
           type: number
-          description: quota divided by QuotaPerUnit (1 CNY per unit)
+          description: "Amount charged for the month in CNY: the wallet charge recorded at settlement for each request that has one (logs.charged_cny4), plus the quota of the remaining billable rows priced at the current exchange rate (QuotaPerUnit / USDExchangeRate quota per CNY). Changing the exchange rate no longer re-prices recorded charges."
         request_count:
           type: integer
           format: int64

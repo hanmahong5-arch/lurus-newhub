@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -539,5 +541,45 @@ func TestProbeChannel_RowIsUnbilled(t *testing.T) {
 	}
 	if urc := bucket["unbilled_request_count"].(float64); urc != 1 {
 		t.Errorf("unbilled_request_count = %v, want 1", urc)
+	}
+}
+
+// TestInvoiceAmount_UsesTheRecordedChargeNotTodaysRate: a month that was
+// already charged must not change when the operator changes the exchange
+// rate. The invoice used to price every row's quota at the rate current when
+// it was READ, so raising USDExchangeRate rewrote history. Rows that carry a
+// recorded wallet charge (logs.charged_cny4) now contribute exactly that;
+// only rows without one (credit-pool spend, pre-record rows) are priced.
+func TestInvoiceAmount_UsesTheRecordedChargeNotTodaysRate(t *testing.T) {
+	ctx := setupInvoiceRouter(t)
+	jan := monthStart(2026, time.January)
+
+	// Charged at settlement: CNY 1.2345 for 90_000 quota, whatever the rate.
+	charged := &repo.Log{UserId: ctx.userID, TenantId: ctx.tenantID, Type: repo.LogTypeConsume,
+		Quota: 90_000, CreatedAt: jan + 100, ChargedCNY4: 12_345}
+	if err := ctx.db.Create(charged).Error; err != nil {
+		t.Fatalf("seed charged log: %v", err)
+	}
+	// No record (credit-pool spend): priced at the current rate.
+	seedLog(t, ctx, 10_000, jan+200)
+
+	amount := func() float64 {
+		w := getInvoices(ctx, "from=2026-01&to=2026-01")
+		items := parseInvoiceResp(t, w)["data"].(map[string]interface{})["items"].([]interface{})
+		if len(items) != 1 {
+			t.Fatalf("items = %d, want 1: %s", len(items), w.Body.String())
+		}
+		return items[0].(map[string]interface{})["amount_cny"].(float64)
+	}
+
+	prevRate := operation_setting.USDExchangeRate
+	t.Cleanup(func() { operation_setting.USDExchangeRate = prevRate })
+
+	for _, rate := range []float64{7.3, 6.5} {
+		operation_setting.USDExchangeRate = rate
+		want := 1.2345 + currency.QuotaToCNY(10_000)
+		if got := amount(); math.Abs(got-want) > 1e-9 {
+			t.Errorf("rate %.1f: amount_cny = %.6f, want %.6f (1.2345 recorded + %.6f priced)", rate, got, want, currency.QuotaToCNY(10_000))
+		}
 	}
 }

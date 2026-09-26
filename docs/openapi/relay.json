@@ -483,6 +483,7 @@
                         "provider_name": { "type": "string" },
                         "quota": { "type": "integer", "description": "本次调用消耗的 quota 整数（DB 单位，非 USD）" },
                         "total_cost": { "type": "number", "description": "quota / quota_per_unit（管理员可改的选项，默认 500000，当前值以 GET /api/status 的 quota_per_unit 为准；该值未设置时为 0）——本响应体唯一 USD 计价字段" },
+                        "charged_cny": { "type": "number", "description": "本次请求实际从平台钱包扣的人民币金额，结算时记录（精确到 0.0001，钱包自身精度）。未从钱包扣费（信用池/本地额度）或记录上线前的请求不返回此字段——缺失不代表免费" },
                         "usage": {
                           "type": "object",
                           "properties": {
