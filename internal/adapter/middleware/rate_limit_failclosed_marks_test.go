@@ -123,6 +123,7 @@ var rateLimitMarksExemptFromMemoryFallback = map[string]string{
 	"IKW": "InternalApiRateLimit write tier: same, already-authenticated key.",
 	"IKP": "InternalApiRateLimit provisioning tier: same, already-authenticated key.",
 	"IKF": "InternalApiRateLimit pool-fund tier: same, already-authenticated key.",
+	"CE":  "ClientErrorReportRateLimit: browser crash reports. No credential or money behind it; the handler only bumps a fixed-label counter and writes one bounded log line, and the console caps itself at 5 reports per page load. Failing open during a Redis outage is the right trade: that is when crash reports matter most.",
 }
 
 // rateLimitMarkFactories are the calls that create a rate-limit bucket. All

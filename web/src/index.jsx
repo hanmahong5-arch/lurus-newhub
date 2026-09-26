@@ -29,6 +29,7 @@ import PageLayout from './components/layout/PageLayout';
 import ErrorBoundary, {
   installPreloadErrorReload,
 } from './components/common/ErrorBoundary';
+import { installClientErrorReporting } from './helpers/clientErrorReport';
 // Importing this before render is also what puts <html lang> on the language
 // being rendered: i18n.js subscribes to languageChanged and index.html ships
 // lang="en" until then. It lives there rather than here because a module that
@@ -84,6 +85,8 @@ function SemiLocaleWrapper({ children }) {
 // ErrorBoundary.jsx for why this and the boundary below are separate
 // mechanisms.
 installPreloadErrorReload();
+// Uncaught errors and rejections outside React's tree reach the server too.
+installClientErrorReporting();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 

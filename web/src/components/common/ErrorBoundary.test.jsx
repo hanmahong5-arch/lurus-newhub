@@ -30,6 +30,10 @@ vi.mock('i18next', () => ({
   default: { t: (key, defaultValue) => defaultValue ?? key },
 }));
 
+vi.mock('../../helpers/clientErrorReport', () => ({
+  reportClientError: vi.fn(),
+}));
+
 import ErrorBoundary, { installPreloadErrorReload } from './ErrorBoundary';
 
 // React logs a caught error to the console itself (independent of
@@ -86,6 +90,22 @@ describe('ErrorBoundary — catching a synchronous render throw', () => {
       String(c[0]).includes('ErrorBoundary caught a render error'),
     );
     expect(ownCall).toBeTruthy();
+  });
+
+  it('reports the caught error to the server, not only to the console', async () => {
+    const { reportClientError } = await import(
+      '../../helpers/clientErrorReport'
+    );
+    reportClientError.mockClear();
+    render(
+      <ErrorBoundary>
+        <Boom />
+      </ErrorBoundary>,
+    );
+    expect(reportClientError).toHaveBeenCalledWith(
+      'render',
+      expect.objectContaining({ message: 'render exploded' }),
+    );
   });
 
   it('reloads the page when the reload control is clicked', () => {
