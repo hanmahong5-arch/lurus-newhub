@@ -28,6 +28,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 
 	"github.com/gin-gonic/gin"
 )
@@ -58,8 +59,21 @@ var csvHeader = []string{
 	"prompt_tokens",
 	"completion_tokens",
 	"quota",
+	// What the wallet was actually debited, CNY to 4 decimals (the wallet's
+	// precision), from logs.charged_cny4. Empty when nothing was recorded
+	// (credit pool / local quota, or rows older than the record): empty, not
+	// 0.0000, so a finance sum cannot mistake "unknown" for "free".
+	"charged_cny",
 	"ip",
 	"content",
+}
+
+// chargedCNYCell renders logs.charged_cny4 for the export; see csvHeader.
+func chargedCNYCell(units4 int64) string {
+	if units4 <= 0 {
+		return ""
+	}
+	return strconv.FormatFloat(currency.Units4ToCNY(units4), 'f', 4, 64)
 }
 
 // ExportLogsV2 streams the current user's logs as a CSV file.
@@ -217,6 +231,7 @@ func ExportLogsV2(c *gin.Context) {
 				strconv.Itoa(l.PromptTokens),
 				strconv.Itoa(l.CompletionTokens),
 				strconv.Itoa(l.Quota),
+				chargedCNYCell(l.ChargedCNY4),
 				l.Ip,
 				l.Content,
 			)
