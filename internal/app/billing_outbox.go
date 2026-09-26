@@ -40,11 +40,12 @@ const (
 // moves mutual exclusion onto the row itself, where it survives the tick.
 //
 // The second WHERE arm re-claims entries whose lease expired (outboxClaimLease).
-// Table name mirrors entity.BillingOutbox.TableName() — asserted in the tests.
+// %[1]s is the table: billing_outbox (entity.BillingOutbox.TableName(), asserted
+// in the tests) or billing_debit_outbox, which shares the status columns.
 const (
-	outboxClaimHead = `UPDATE billing_outbox SET status = ?, updated_at = ?
+	outboxClaimHead = `UPDATE %[1]s SET status = ?, updated_at = ?
 WHERE id IN (
-	SELECT id FROM billing_outbox
+	SELECT id FROM %[1]s
 	WHERE (status = ? AND next_retry <= ?) OR (status = ? AND updated_at <= ?)
 	ORDER BY next_retry ASC
 	LIMIT 50`
@@ -65,7 +66,7 @@ var billingOutboxDB *gorm.DB
 // InitBillingOutbox sets the DB handle and auto-migrates the outbox table.
 func InitBillingOutbox(db *gorm.DB) error {
 	billingOutboxDB = db
-	return db.AutoMigrate(&entity.BillingOutbox{})
+	return db.AutoMigrate(&entity.BillingOutbox{}, &entity.BillingDebitOutbox{})
 }
 
 // EnqueueSettle writes a settle action to the outbox for reliable retry.
@@ -114,18 +115,23 @@ func EnqueueRelease(accountID, preAuthID int64) error {
 // returns them. Entries it returns are owned by this caller until it writes a
 // terminal status or its claim lease expires — no other replica will see them.
 func claimBillingOutbox(ctx context.Context, now time.Time) ([]entity.BillingOutbox, error) {
+	var entries []entity.BillingOutbox
+	err := claimOutboxRows(ctx, entity.BillingOutbox{}.TableName(), now, &entries)
+	return entries, err
+}
+
+// claimOutboxRows runs the claim statement against one outbox table and scans
+// the claimed rows into dest.
+func claimOutboxRows(ctx context.Context, table string, now time.Time, dest any) error {
 	sql := outboxClaimHead + outboxClaimTail
 	if billingOutboxDB.Name() == "postgres" {
 		sql = outboxClaimHead + outboxClaimLocking + outboxClaimTail
 	}
-
-	var entries []entity.BillingOutbox
-	err := billingOutboxDB.WithContext(ctx).Raw(sql,
+	return billingOutboxDB.WithContext(ctx).Raw(fmt.Sprintf(sql, table),
 		outboxStatusProcessing, now,
 		outboxStatusPending, now,
 		outboxStatusProcessing, now.Add(-outboxClaimLease),
-	).Scan(&entries).Error
-	return entries, err
+	).Scan(dest).Error
 }
 
 // ProcessBillingOutbox claims due entries and retries them.
@@ -144,6 +150,8 @@ func ProcessBillingOutbox(ctx context.Context) error {
 		Where("status IN ?", []string{outboxStatusPending, outboxStatusProcessing}).
 		Count(&pendingCount)
 	metrics.BillingOutboxPending.Set(float64(pendingCount))
+
+	processDebitOutbox(ctx)
 
 	entries, err := claimBillingOutbox(ctx, time.Now())
 	if err != nil {

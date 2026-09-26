@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -197,6 +198,24 @@ func BillingBreakerFailure() {
 	}
 }
 
+// recordBillingOutcome feeds one billing call's result to the breaker. The
+// breaker measures whether the platform is REACHABLE, so only failures to get
+// an answer count against it:
+//   - a verdict (insufficient balance, any other 4xx refusal) is the platform
+//     up and answering: a success. Counting it used to let three empty wallets
+//     in a row open the breaker for every tenant.
+//   - our own caller giving up (context canceled) says nothing about the
+//     platform: not recorded at all.
+func recordBillingOutcome(ctx context.Context, err error) {
+	switch {
+	case err == nil || platformAnswered(err):
+		BillingBreakerSuccess()
+	case errors.Is(ctx.Err(), context.Canceled):
+	default:
+		BillingBreakerFailure()
+	}
+}
+
 // PreAuthorizeWithBreaker wraps PreAuthorizeGRPC with circuit breaker protection.
 // When the breaker is open, returns immediately without making a network call.
 func PreAuthorizeWithBreaker(ctx context.Context, accountID int64, amount float64,
@@ -207,12 +226,10 @@ func PreAuthorizeWithBreaker(ctx context.Context, accountID int64, amount float6
 	}
 
 	result, err := PreAuthorizeGRPC(ctx, accountID, amount, productID, referenceID, description, ttlSeconds)
+	recordBillingOutcome(ctx, err)
 	if err != nil {
-		BillingBreakerFailure()
 		return nil, err
 	}
-
-	BillingBreakerSuccess()
 	return result, nil
 }
 
@@ -223,12 +240,10 @@ func SettleWithBreaker(ctx context.Context, preAuthID int64, actualAmount float6
 	}
 
 	result, err := SettlePreAuthGRPC(ctx, preAuthID, actualAmount)
+	recordBillingOutcome(ctx, err)
 	if err != nil {
-		BillingBreakerFailure()
 		return nil, err
 	}
-
-	BillingBreakerSuccess()
 	return result, nil
 }
 
@@ -238,11 +253,7 @@ func ReleaseWithBreaker(ctx context.Context, preAuthID int64) error {
 		return err
 	}
 
-	if err := ReleasePreAuthGRPC(ctx, preAuthID); err != nil {
-		BillingBreakerFailure()
-		return err
-	}
-
-	BillingBreakerSuccess()
-	return nil
+	err := ReleasePreAuthGRPC(ctx, preAuthID)
+	recordBillingOutcome(ctx, err)
+	return err
 }

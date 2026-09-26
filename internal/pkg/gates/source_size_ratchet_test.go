@@ -47,7 +47,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/repo/token.go":                   794,
 	"internal/adapter/repo/user.go":                    1206,
 	"internal/app/convert.go":                          1304,
-	"internal/app/quota.go":                            1387, // +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix): the TokenId > 0 guard and why, plus three lines saying why the pre-consume rejection formats ASCII
+	"internal/app/quota.go":                            1386, // -1 (legacy debit failure arm moved to billing_debit_outbox.go); +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix): the TokenId > 0 guard and why, plus three lines saying why the pre-consume rejection formats ASCII
 	"internal/pkg/common/identity_client.go":           809,  // -25 (cycle 14): the usage-report counter + ReportLLMUsage moved to identity_usage_report.go, paying for the checkout/status error honesty
 	"internal/pkg/dto/openai_request.go":               1020,
 	// NEW ROW, not a raise: metrics.go crossed the 800 threshold in cycle 13
