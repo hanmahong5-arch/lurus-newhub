@@ -229,6 +229,83 @@ describe('Admin ModelRateLimits page', () => {
       ).toBeGreaterThan(0);
     });
   });
+
+  // cycle-14 L8. The limits read used to set `forbidden` on 403 and then
+  // empty the rows for EVERY other outcome, so a 500 rendered the same
+  // "No per-model limits set for this tenant." an actually-unconfigured
+  // tenant shows — under a subtitle that says 0 means unlimited. The
+  // sibling allow-list read on this very page already had a tri-state, so
+  // the page contradicted itself.
+  it('says the limits read failed — not that the tenant has no limits — when the GET 500s', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/model-allowlist')) {
+        return Promise.resolve(allowlistResponse());
+      }
+      if (u.includes('/model-limits')) {
+        return Promise.reject({
+          response: { status: 500, data: { success: false } },
+        });
+      }
+      return Promise.resolve(tenantsResponse());
+    });
+
+    render(<HFModelRateLimits />);
+
+    await waitFor(() => screen.getByTestId('mrl-limits-error'));
+    expect(screen.queryByTestId('mrl-empty')).toBeNull();
+    expect(screen.queryByText('0 model limits')).toBeNull();
+    expect(
+      screen.queryByText('No per-model limits set for this tenant.'),
+    ).toBeNull();
+  });
+
+  it('treats a 200 carrying success:false on the limits read as a failed read', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/model-allowlist')) {
+        return Promise.resolve(allowlistResponse());
+      }
+      if (u.includes('/model-limits')) {
+        return Promise.resolve({
+          data: { success: false, message: 'database is starting up' },
+        });
+      }
+      return Promise.resolve(tenantsResponse());
+    });
+
+    render(<HFModelRateLimits />);
+
+    await waitFor(() => screen.getByTestId('mrl-limits-error'));
+    expect(screen.queryByTestId('mrl-empty')).toBeNull();
+    expect(screen.queryByText('0 model limits')).toBeNull();
+  });
+
+  it('clears the limits error once a retry succeeds', async () => {
+    let fail = true;
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/model-allowlist')) {
+        return Promise.resolve(allowlistResponse());
+      }
+      if (u.includes('/model-limits')) {
+        if (fail) {
+          return Promise.reject({ response: { status: 500 } });
+        }
+        return Promise.resolve(limitsResponse([makeRow()]));
+      }
+      return Promise.resolve(tenantsResponse());
+    });
+
+    render(<HFModelRateLimits />);
+    await waitFor(() => screen.getByTestId('mrl-limits-error'));
+
+    fail = false;
+    fireEvent.click(screen.getByTestId('mrl-limits-retry'));
+
+    await waitFor(() => screen.getByTestId('mrl-row-3'));
+    expect(screen.queryByTestId('mrl-limits-error')).toBeNull();
+  });
 });
 
 describe('Admin ModelRateLimits page — model availability', () => {

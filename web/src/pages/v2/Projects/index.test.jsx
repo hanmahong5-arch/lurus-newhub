@@ -353,6 +353,87 @@ describe('Projects page', () => {
     // Both reads are admin-gated for this caller, so both panels say so.
     expect(screen.getByTestId('proj-spend-forbidden')).toBeTruthy();
   });
+
+  // cycle-14 L8. The spend panel got its tri-state in cycle 13; the LIST read
+  // next to it kept the 403-only catch, so a 500 drew "0 projects" in the
+  // headline and "No projects yet." in the panel — a page that says one read
+  // could not be checked while stating the other one's result as fact.
+  it('says the project list read failed — not "0 projects" — when the GET 500s', async () => {
+    API.get.mockRejectedValue({
+      response: { status: 500, data: { success: false } },
+    });
+
+    render(<HFProjects />);
+
+    await waitFor(() => screen.getByTestId('proj-list-error'));
+    expect(screen.queryByTestId('proj-empty')).toBeNull();
+    expect(screen.queryByText('0 projects')).toBeNull();
+    expect(screen.queryByTestId('proj-forbidden')).toBeNull();
+  });
+
+  it('treats a 200 carrying success:false on the list read as a failed read', async () => {
+    API.get.mockImplementation((url) => {
+      if (String(url).endsWith('/projects/spend')) {
+        return Promise.resolve({
+          data: { success: true, data: { items: [] } },
+        });
+      }
+      return Promise.resolve({
+        data: { success: false, message: 'project store unavailable' },
+      });
+    });
+
+    render(<HFProjects />);
+
+    await waitFor(() => screen.getByTestId('proj-list-error'));
+    expect(screen.queryByTestId('proj-empty')).toBeNull();
+    expect(screen.queryByText('0 projects')).toBeNull();
+  });
+
+  it('treats a 200 carrying success:false on the spend read as a failed read, not as no usage', async () => {
+    API.get.mockImplementation((url) => {
+      if (String(url).endsWith('/projects/spend')) {
+        return Promise.resolve({
+          data: { success: false, message: 'report timed out' },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { items: [project()] } },
+      });
+    });
+
+    render(<HFProjects />);
+
+    await waitFor(() => screen.getByTestId('proj-spend-error'));
+    expect(screen.queryByTestId('proj-spend-empty')).toBeNull();
+    expect(screen.queryByText('No usage recorded yet.')).toBeNull();
+    // The list read succeeded, so it must still render.
+    expect(screen.getByTestId('proj-row-3')).toBeTruthy();
+  });
+
+  it('clears the list error once a retry succeeds', async () => {
+    let fail = true;
+    API.get.mockImplementation((url) => {
+      if (fail) return Promise.reject({ response: { status: 500 } });
+      if (String(url).endsWith('/projects/spend')) {
+        return Promise.resolve({
+          data: { success: true, data: { items: [] } },
+        });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { items: [project()] } },
+      });
+    });
+
+    render(<HFProjects />);
+    await waitFor(() => screen.getByTestId('proj-list-error'));
+
+    fail = false;
+    fireEvent.click(screen.getByTestId('proj-list-retry'));
+
+    await waitFor(() => screen.getByTestId('proj-row-3'));
+    expect(screen.queryByTestId('proj-list-error')).toBeNull();
+  });
 });
 
 describe('Projects page — reversibility', () => {

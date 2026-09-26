@@ -120,7 +120,6 @@
         "mode_observe": "observe（观察）—— 不在白名单上的模型仍会正常应答，仅被计数",
         "availability_unrestricted": "未配置白名单 —— 该租户可访问目录中的所有模型。",
         "availability_error": "无法读取该租户的白名单 —— 状态未知，暂不可编辑。",
-        "availability_retry": "重试",
         "availability_placeholder": "gpt-4o 或 gpt-4o-*",
         "availability_add": "+ 添加",
         "availability_empty_warning": "保存一个空列表会拒绝该租户的所有模型 —— 这与「未配置白名单」不是一回事。",
@@ -129,7 +128,8 @@
         "availability_toast_saved": "模型白名单已保存",
         "availability_toast_cleared": "模型白名单已清除 —— 该租户已恢复不受限",
         "clear_confirm_title": "删除 {{tenant}} 的白名单？该租户将恢复不受限。",
-        "save_empty_confirm_title": "为 {{tenant}} 保存一个空白名单？这将拒绝所有模型。"
+        "save_empty_confirm_title": "为 {{tenant}} 保存一个空白名单？这将拒绝所有模型。",
+        "load_error": "模型限流规则加载失败"
       },
       "shell": {
         "tagline": "数据处理层",
@@ -212,7 +212,7 @@
         "faq": "常见问题",
         "api_info": "API 信息",
         "uptime": "可用性",
-        "load_failed": "无法加载 — 请重试",
+        "load_failed": "用量数据加载失败",
         "load_failed_short": "无法加载"
       },
       "token": {
@@ -325,7 +325,18 @@
         "creating": "创建中…",
         "create_tenant": "创建租户",
         "stats_title": "统计",
-        "no_stats": "暂无统计数据。",
+        "stats_load_error": "统计数据加载失败",
+        "stat_seats": "已用席位",
+        "stat_tokens": "API 密钥",
+        "stat_channels": "渠道",
+        "stat_quota_used": "已用额度",
+        "stat_quota_remaining": "剩余额度",
+        "stat_quota_cap": "额度上限",
+        "stat_unlimited": "不限",
+        "stat_redemptions": "兑换码",
+        "stat_logs": "请求记录",
+        "stat_last_activity": "最近活动",
+        "stat_never": "从未",
         "confirm_action_title": "对租户 \"{{name}}\" 执行 {{action}} 操作?",
         "confirm_action_consequence": "该操作会影响该租户下所有 token 与 channel",
         "btn_limits": "限流",
@@ -362,7 +373,8 @@
         "toast_invite_revoked": "邀请码已撤销",
         "toast_invite_revoke_failed": "撤销邀请码失败",
         "empty_invites": "尚未签发任何邀请码。",
-        "invite_list_load_failed": "邀请码列表加载失败。"
+        "invite_list_load_failed": "邀请码列表加载失败。",
+        "load_error": "租户列表加载失败"
       },
       "channel": {
         "crumb": "渠道",
@@ -1015,7 +1027,7 @@
         "spend_empty": "暂无用量记录。",
         "spend_restricted": "仅租户管理员可见",
         "spend_restricted_body": "全租户的按项目消费仅租户管理员可见。你自己的用量在日志页。",
-        "spend_failed": "消费数据加载失败。",
+        "spend_failed": "成员消费数据加载失败",
         "spend_total": "合计",
         "unassigned": "未分配",
         "toast_saved": "项目已保存",
@@ -1034,7 +1046,8 @@
         "deleted_hint": "保留是为了让历史用量仍能显示可读名称，也为了让删除不是终局。直接恢复不会重新挂回令牌——只有删除后立即点「撤销」才会。",
         "delete_reversible": "可回退：项目只是停用而非抹除，删除后可立即撤销。",
         "undo_body_one": "已删除「{{name}}」，1 个令牌已变为未分配。",
-        "undo_body_other": "已删除「{{name}}」，{{count}} 个令牌已变为未分配。"
+        "undo_body_other": "已删除「{{name}}」，{{count}} 个令牌已变为未分配。",
+        "load_error": "项目列表加载失败"
       },
       "settings": {
         "crumb": "设置",
@@ -1443,7 +1456,8 @@
           "status_expired": "已过期",
           "field_ttl": "有效期秒数（可选，最长 90 天）",
           "no_expiry": "永不过期",
-          "revoke": "撤销"
+          "revoke": "撤销",
+          "load_error": "委派授权加载失败"
         },
         "diagnostics": {
           "crumb_admin": "运维与洞察",
@@ -1610,6 +1624,16 @@
         "requests": "请求",
         "last_24h": "近 24 小时",
         "empty": "这段时间没有用量。"
+      },
+      "load_error": {
+        "title": "数据加载失败",
+        "title_unauthenticated": "登录已过期",
+        "title_forbidden": "没有查看这些数据的权限",
+        "detail": "服务器没有返回这部分数据，因此这里不会显示为空。请稍后重试。",
+        "detail_unauthenticated": "请重新登录后再重试。",
+        "detail_forbidden": "如需访问，请联系管理员。",
+        "retrying": "正在重试…",
+        "count_unknown": "数量未知"
       }
     },
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

@@ -1,8 +1,8 @@
-﻿{
+{
   "openapi": "3.0.1",
   "info": {
     "title": "后台管理接口",
-    "description": "",
+    "description": "Frozen v1 legacy surface. This document is NOT reconciled against the router: some of the operations below are mounted nowhere — see x-lurus-unreconciled-operations for how many. The reconciled specs are relay.json (relay) and api-v2.json (console API).",
     "version": "1.0.0"
   },
   "tags": [
@@ -7822,7 +7822,18 @@
       }
     }
   },
-  "servers": [],
+  "servers": [
+    {
+      "url": "https://hub.lurus.cn",
+      "description": "Production"
+    }
+  ],
+  "x-lurus-unreconciled-operations": {
+    "count": 56,
+    "of": 157,
+    "measured_by": "internal/adapter/handler/router/openapi_contract_lock_test.go TestOpenAPIContract_LegacySpecStatesItsUnreconciledPaths (real route table)",
+    "meaning": "operations documented here that the running server does not mount; calling them returns 404"
+  },
   "security": [
     {
       "Combination343": []

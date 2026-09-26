@@ -105,7 +105,57 @@ var AutomaticEnableChannelEnabled = false
 var QuotaRemindThreshold = 1000
 var PreConsumedQuota = 500
 
-var RetryTimes = 0
+// RetryTimes is the relay failover budget. internal/adapter/handler/relay.go
+// loops while retry <= RetryTimes, so this is total upstream attempts MINUS
+// one, and shouldRetry is handed RetryTimes-retry as its remaining budget.
+//
+// It shipped at 0 until cycle 14. Zero means no failover at all: one upstream
+// 5xx reached the customer even when another healthy channel served the same
+// model, which made the cross-group / cross-priority failover that
+// internal/app/channel_select.go's doc comment describes, and the "retries
+// cover us" clause in doc/slo-relay.md, both unreachable. The production
+// options table carries no RetryTimes row (operator check, 2026-09), so the
+// value compiled here IS the production value.
+//
+// Why 2 — up to 3 upstream attempts — and not more:
+//
+//   - Each retry is a FRESH upstream call, not a resumption. Its worst case is
+//     RelayDialTimeout (10s) plus RelayResponseHeaderTimeout (90s) before any
+//     response header arrives, and there is no total request deadline to
+//     absorb it (RelayTimeout is deliberately 0 so long SSE streams are never
+//     cut — see the comment above it). The budget is therefore the only thing
+//     capping what a customer waits for against a set of wedged providers:
+//     3 x ~100s is already about five minutes, which is past the point most
+//     callers have abandoned the request. A 4th attempt buys almost nothing
+//     and costs another 100s of that worst case.
+//   - The failure this exists for — a 5xx, a 429, a 307, a channel error —
+//     comes back in well under a second, so in the case that actually happens
+//     the two extra attempts cost latency nobody notices.
+//   - On a wide upstream outage the budget is also an amplification factor
+//     against providers that are already failing. 3x is the most worth
+//     spending; the per-channel circuit breaker absorbs the rest by skipping
+//     channels whose breaker is Open.
+//   - An Open breaker consumes one iteration of that same loop (the `continue`
+//     runs the post statement), so 2 also leaves room to skip two dead
+//     channels and still make one real call — at 1 the same request would
+//     answer 503 without ever calling an upstream.
+//
+// Why raising it does not multiply anyone's money: the pre-authorisation is
+// taken ONCE per request, before the loop — relay.go calls app.PreConsumeQuota
+// outside it, and PreConsumeQuota itself short-circuits when
+// relayInfo.PlatformPreAuthID is already set. Retries reuse that single hold,
+// and the one deferred releasePreConsumedOnFailure still releases exactly one.
+// Settlement happens only on the attempt that succeeds.
+//
+// It is bounded from the other side too: shouldRetry suppresses failover the
+// moment any byte has been written to the client, so this number can never
+// cause a duplicated or interleaved stream.
+//
+// Tune per deployment through the `RetryTimes` row of the options table —
+// there is no environment variable for it. See doc/runbook/shipped-defaults.md
+// for the query that reads the live value, and
+// internal/pkg/gates/shipped_defaults_test.go for the pin.
+var RetryTimes = 2
 
 //var RootUserEmail = ""
 
