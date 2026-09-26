@@ -30,6 +30,7 @@ import {
   formatCNY,
   formatTime,
   formatRelativeTime,
+  parseUSDInput,
 } from './formatting';
 
 describe('quota helpers', () => {
@@ -128,4 +129,29 @@ describe('formatRelativeTime', () => {
   it('em-dashes a missing timestamp', () => {
     expect(formatRelativeTime(0, now)).toBe('—');
   });
+});
+
+describe('parseUSDInput', () => {
+  it.each([
+    ['5', 5],
+    ['5.00', 5],
+    ['$5.00', 5],
+    [' $ 12.5 ', 12.5],
+    ['1,000.50', 1000.5],
+    ['0', 0],
+    ['.5', 0.5],
+  ])('reads %j as %s', (raw, want) => {
+    expect(parseUSDInput(raw)).toBe(want);
+  });
+
+  it.each(['', '   ', '∞', null, undefined])('treats %j as empty', (raw) => {
+    expect(parseUSDInput(raw)).toBeNull();
+  });
+
+  it.each(['five', '-5', '$-5', '5$', '1e3', '5.', 'NaN', 'Infinity', '12 34'])(
+    'refuses %j',
+    (raw) => {
+      expect(Number.isNaN(parseUSDInput(raw))).toBe(true);
+    },
+  );
 });

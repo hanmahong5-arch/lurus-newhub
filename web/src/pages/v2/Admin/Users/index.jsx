@@ -29,6 +29,7 @@ import HFShell from '../../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../../helpers';
 import { getQuotaPerUSD } from '../../../../helpers/formatting';
+import { readUSDField } from '../../../../helpers/moneyInput';
 import { classifyLoad } from '../../../../helpers/loadState';
 import { useSecureVerification } from '../../../../hooks/common/useSecureVerification';
 import { createApiCalls } from '../../../../services/secureVerification';
@@ -89,15 +90,25 @@ const EditModal = ({ user, onSaved, onClose }) => {
 
   const submit = async (e) => {
     e.preventDefault();
+    // An empty or unreadable balance is refused, not saved as 0: that would
+    // wipe the user's balance. A real 0 has to be typed.
+    const quotaUSD = readUSDField(form.quotaUSD, tr);
+    if (quotaUSD === undefined) return;
+    if (quotaUSD === null) {
+      showError(
+        tr(
+          'console.common.invalid_amount',
+          'Enter an amount in dollars, like 5 or 12.50',
+        ),
+      );
+      return;
+    }
     setSaving(true);
     try {
       const body = {
         role: Number(form.role),
         status: Number(form.status),
-        quota: Math.max(
-          0,
-          Math.round((parseFloat(form.quotaUSD) || 0) * getQuotaPerUSD()),
-        ),
+        quota: Math.round(quotaUSD * getQuotaPerUSD()),
         group: form.group.trim() || 'default',
       };
       const res = await API.put(`/api/v2/admin/users/${user.id}`, body);
