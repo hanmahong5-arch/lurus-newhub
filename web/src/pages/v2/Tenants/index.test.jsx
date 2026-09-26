@@ -361,9 +361,10 @@ describe('Tenants page — stats drawer', () => {
       );
     });
 
-    // Stats drawer shows the snake_case key values rendered
+    // Stats drawer labels each value in words, never with the wire field name
     await waitFor(() => screen.getByText('Stats Co · stats'));
-    await waitFor(() => screen.getByText('user_count'));
+    await waitFor(() => screen.getByText('Seats used'));
+    expect(screen.queryByText('user_count')).toBeNull();
   });
 });
 
