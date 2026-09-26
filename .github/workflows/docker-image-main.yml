@@ -149,7 +149,10 @@ jobs:
             ghcr.io/${{ env.GHCR_REPOSITORY }}:${{ steps.version.outputs.value }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Not from the local runner pool (vars.CI_RUNS_ON set): its uplink to
+          # GitHub's cache is ~1MB/s, and a mode=max export there took longer
+          # than the build it would save.
+          cache-to: ${{ !vars.CI_RUNS_ON && 'type=gha,mode=max' || '' }}
           provenance: false
           sbom: false
 
