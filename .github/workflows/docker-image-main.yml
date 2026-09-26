@@ -61,7 +61,7 @@ concurrency:
 jobs:
   build_and_push:
     name: Build & push (amd64)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       packages: write
       contents: read
@@ -149,7 +149,10 @@ jobs:
             ghcr.io/${{ env.GHCR_REPOSITORY }}:${{ steps.version.outputs.value }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Not from the local runner pool (vars.CI_RUNS_ON set): its uplink to
+          # GitHub's cache is ~1MB/s, and a mode=max export there took longer
+          # than the build it would save.
+          cache-to: ${{ !vars.CI_RUNS_ON && 'type=gha,mode=max' || '' }}
           provenance: false
           sbom: false
 
@@ -183,7 +186,7 @@ jobs:
     name: Auto-pin r6-stage + r6-uat manifests
     needs: build_and_push
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: write
     env:
