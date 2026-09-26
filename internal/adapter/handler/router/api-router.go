@@ -33,6 +33,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/setup", handler.GetSetup)
 		apiRouter.POST("/setup", handler.PostSetup)
 		apiRouter.GET("/status", handler.GetStatus)
+		apiRouter.POST("/client-error", middleware.ClientErrorReportRateLimit(), handler.ReportClientError)
 		apiRouter.GET("/health", handler.GetHealthDetailed)
 		apiRouter.GET("/uptime/status", handler.GetUptimeKumaStatus)
 		apiRouter.GET("/notice", handler.GetNotice)
