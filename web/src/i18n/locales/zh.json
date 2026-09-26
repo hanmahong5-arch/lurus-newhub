@@ -530,6 +530,7 @@
         "detail_prompt_tokens": "提示 tokens",
         "detail_completion_tokens": "补全 tokens",
         "detail_cost": "费用",
+        "detail_charged": "实扣",
         "detail_duration": "耗时",
         "detail_streaming": "流式",
         "yes": "是",

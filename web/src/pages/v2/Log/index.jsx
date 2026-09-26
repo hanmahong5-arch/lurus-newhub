@@ -21,10 +21,11 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import HfModelName from '../../../components/hifi/HfModelName';
 import StatHeader from './StatHeader';
+import RouteAttempts from './RouteAttempts';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, showSuccess, isAdmin } from '../../../helpers';
-import { formatUSD } from '../../../helpers/formatting';
+import { formatCNY4, formatUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /* Wave 2: Cluster tab wired. Round 2: Live tail wired via cursor-poll. */
@@ -42,11 +43,9 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 import {
   LOG_TYPE_ERROR,
-  attemptTagClass,
   isSettlementFailed,
   outcomeTag,
   parseOther,
-  parseRouteAttempts,
 } from './row';
 import {
   DEFAULT_LOOKBACK_SEC,
@@ -1129,6 +1128,14 @@ const HFLog = () => {
                         </span>{' '}
                         {fmtCost(selectedLog.quota)}
                       </div>
+                      {selectedLog.charged_cny4 > 0 && (
+                        <div data-testid='log-detail-charged'>
+                          <span className='muted'>
+                            {tr('console.log.detail_charged', 'charged')}:
+                          </span>{' '}
+                          {formatCNY4(selectedLog.charged_cny4)}
+                        </div>
+                      )}
                       <div>
                         <span className='muted'>
                           {tr('console.log.detail_duration', 'duration')}:
@@ -1314,68 +1321,7 @@ const HFLog = () => {
                     </div>
                   </div>
 
-                  {/* Routing trace — only present when the request failed over
-                      between channels. Answers "this request was slow/failed,
-                      what did the gateway actually try?", which the single
-                      channel column cannot. */}
-                  {parseRouteAttempts(selectedLog).length > 0 && (
-                    <div
-                      style={{ padding: '0 20px 20px' }}
-                      data-testid='log-route-attempts'
-                    >
-                      <div className='lbl' style={{ marginBottom: 8 }}>
-                        {tr('console.log.routing', 'routing')}
-                      </div>
-                      <div
-                        className='panel-paper'
-                        style={{
-                          padding: 12,
-                          fontFamily: 'var(--hf-mono)',
-                          fontSize: 11,
-                          lineHeight: 1.7,
-                        }}
-                      >
-                        {parseRouteAttempts(selectedLog).map((a, i) => (
-                          <div
-                            key={`${a.channel_id}-${i}`}
-                            data-testid={`route-attempt-${i}`}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              flexWrap: 'wrap',
-                            }}
-                          >
-                            <span className='muted'>{i + 1}.</span>
-                            <span className='strong'>
-                              #{a.channel_id}
-                              {a.channel_name ? ` ${a.channel_name}` : ''}
-                            </span>
-                            {a.provider && (
-                              <span className='muted'>{a.provider}</span>
-                            )}
-                            <span className={attemptTagClass(a.outcome)}>
-                              {tr(
-                                `console.log.attempt_${a.outcome}`,
-                                a.outcome || 'unknown',
-                              )}
-                            </span>
-                            {a.status_code ? (
-                              <span className='muted'>{a.status_code}</span>
-                            ) : null}
-                            {a.error_code ? (
-                              <span className='faint'>{a.error_code}</span>
-                            ) : null}
-                            <span className='muted'>
-                              {a.duration_ms != null
-                                ? `${a.duration_ms}ms`
-                                : ''}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  <RouteAttempts selectedLog={selectedLog} tr={tr} />
                 </>
               ) : (
                 !loading && (

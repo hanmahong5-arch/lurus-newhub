@@ -61,7 +61,7 @@ const CEILINGS = {
   'pages/v2/Chat/index.jsx': 879,
   'pages/v2/Dashboard/index.jsx': 1190, // 1242 → 1190 (cycle-15 P3): daily bucketing moved to components/hifi/activitySeries.js
   'pages/v2/Flows/index.jsx': 1446,
-  'pages/v2/Log/index.jsx': 1684, // 1731 → 1684 (cycle-15 P4): stat header extracted to Log/StatHeader.jsx
+  'pages/v2/Log/index.jsx': 1630, // 1731 → 1684 (cycle-15 P4): stat header extracted to Log/StatHeader.jsx; → 1630: routing trace moved to Log/RouteAttempts.jsx
   'pages/v2/Playground/index.jsx': 1084,
   'pages/v2/Pricing/index.jsx': 805, // +4 (cycle-15 P1): vendor logo in the model cell
   'pages/v2/Settings/index.jsx': 1909,

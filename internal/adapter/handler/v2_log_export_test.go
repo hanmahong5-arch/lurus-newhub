@@ -368,3 +368,39 @@ func TestV2LogExport_MaxRowsClamp(t *testing.T) {
 		t.Errorf("rows = %d (incl header), want 6 (1 header + 5 data), body:\n%s", len(records), w.Body.String())
 	}
 }
+
+// TestV2LogExport_ChargedCNYColumn: the export carries the recorded wallet
+// charge to 4 decimals, and leaves the cell empty (not 0.0000) for a row
+// with no record, so a spreadsheet sum cannot read "unknown" as "free".
+func TestV2LogExport_ChargedCNYColumn(t *testing.T) {
+	ctx := setupLogExportRouter(t)
+	base := int64(1_700_000_000)
+	seedExportLog(t, ctx, "unrecorded", "tok", base)
+	seedExportLog(t, ctx, "recorded", "tok", base+1)
+	if err := ctx.db.Model(&repo.Log{}).Where("model_name = ?", "recorded").
+		Update("charged_cny4", 12_345).Error; err != nil {
+		t.Fatalf("record charge: %v", err)
+	}
+
+	w := doExportGet(ctx, ctx.tenantSlug, "", "")
+	records, err := csv.NewReader(w.Body).ReadAll()
+	if err != nil {
+		t.Fatalf("parse csv: %v", err)
+	}
+	col := -1
+	for i, h := range records[0] {
+		if h == "charged_cny" {
+			col = i
+		}
+	}
+	if col < 0 {
+		t.Fatalf("no charged_cny column in header %v", records[0])
+	}
+	got := map[string]string{}
+	for _, r := range records[1:] {
+		got[r[2]] = r[col] // model_name is column 2
+	}
+	if got["recorded"] != "1.2345" || got["unrecorded"] != "" {
+		t.Fatalf("charged_cny cells = %v, want recorded=1.2345 and unrecorded empty", got)
+	}
+}

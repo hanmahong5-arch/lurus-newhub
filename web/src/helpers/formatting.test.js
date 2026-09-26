@@ -31,6 +31,7 @@ import {
   formatTime,
   formatRelativeTime,
   parseUSDInput,
+  formatCNY4,
 } from './formatting';
 
 describe('quota helpers', () => {
@@ -154,4 +155,15 @@ describe('parseUSDInput', () => {
       expect(Number.isNaN(parseUSDInput(raw))).toBe(true);
     },
   );
+});
+
+describe('formatCNY4', () => {
+  it('shows recorded 0.0001 CNY units exactly', () => {
+    expect(formatCNY4(12345)).toBe('¥1.2345');
+    expect(formatCNY4(1)).toBe('¥0.0001');
+  });
+  it('dashes a missing record', () => {
+    expect(formatCNY4(0)).toBe('—');
+    expect(formatCNY4(undefined)).toBe('—');
+  });
 });
