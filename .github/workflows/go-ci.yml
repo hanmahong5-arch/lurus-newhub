@@ -98,7 +98,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache: true
+          cache: ${{ !vars.CI_RUNS_ON }}
       - run: go build ./...
       - name: Entitlement kit resolves + its verifier tests pass (lurus-entkit)
         # The offline entitlement-token verifier behind POST /api/v2/:tenant/provision
@@ -211,7 +211,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache: true
+          cache: ${{ !vars.CI_RUNS_ON }}
       - name: Check per-package coverage (statement-weighted)
         env:
           # Un-skips the SetupTestDB-gated tests. Without this the gate measures
@@ -351,7 +351,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache: true
+          cache: ${{ !vars.CI_RUNS_ON }}
       - run: go vet ./...
 
   gosec:
@@ -392,7 +392,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache: true
+          cache: ${{ !vars.CI_RUNS_ON }}
       - name: Install gosec (pinned)
         # Pinned 2026-08-17, was @latest. @latest is both a supply-chain hole
         # (any upstream release lands in CI unreviewed) and a reproducibility
@@ -451,7 +451,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache: true
+          cache: ${{ !vars.CI_RUNS_ON }}
       - name: golangci-lint (curated linters; ratchet — gate only new findings)
         # Pre-existing findings across the module are a known baseline and are NOT
         # gated. The ratchet (a PR may not ADD findings) is enforced with
@@ -521,7 +521,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache: true
+          cache: ${{ !vars.CI_RUNS_ON }}
       # -race needs CGO; ubuntu-latest ships gcc, so CGO_ENABLED defaults to 1.
       # -short keeps it to the hermetic suite (Postgres/MinIO integration tests
       # self-skip without their DSNs).
@@ -654,7 +654,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache: true
+          cache: ${{ !vars.CI_RUNS_ON }}
       - name: go test repo + migration + entity packages against Postgres
         # -short skips the !testing.Short() stress tests; the PG integration tests
         # gate on the DSN (not on -short), so they all run here. -v + tee lets the
@@ -744,7 +744,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache: true
+          cache: ${{ !vars.CI_RUNS_ON }}
       - name: Install golangci-lint (pinned, same version as the lint job)
         # Installed directly rather than via golangci-lint-action because this
         # job needs the raw binary's JSON report on a known path, and needs the
