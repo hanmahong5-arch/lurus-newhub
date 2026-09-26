@@ -82,7 +82,7 @@ vi.mock('../../../components/common/ConfirmDialog', () => ({
 }));
 
 import HFToken from './index';
-import { API } from '../../../helpers';
+import { API, showError } from '../../../helpers';
 
 // Deliberately not 500000 — the point is that the page must not assume the
 // default. 1000 units == $1 here.
@@ -187,6 +187,39 @@ describe('Token page — USD caps use the live quota_per_unit', () => {
     // $5 total = 5000 units, minus the 500 already used → 4500 remaining.
     expect(body.remain_quota).toBe(5 * UNIT - token.used_quota);
     expect(body.unlimited_quota).toBe(false);
+  });
+
+  // The editor opens holding "$2.00". Editing only the digits used to leave
+  // "$5.00", which parseFloat reads as NaN -> 0 -> the key became UNLIMITED.
+  const editCap = async (typed) => {
+    const token = makeToken();
+    wireGet([token]);
+    API.put.mockResolvedValue({ data: { success: true } });
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('monthly cap'));
+    fireEvent.click(
+      screen.getByText('monthly cap').parentElement.querySelector('button'),
+    );
+    const editor = screen.getByDisplayValue('$2.00');
+    fireEvent.change(editor, { target: { value: typed } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    return token;
+  };
+
+  it('keeps the cap when the edit keeps the dollar sign', async () => {
+    const token = await editCap('$5.00');
+    await waitFor(() => expect(API.put).toHaveBeenCalledTimes(1));
+    const [, body] = API.put.mock.calls[0];
+    expect(body.unlimited_quota).toBe(false);
+    expect(body.remain_quota).toBe(5 * UNIT - token.used_quota);
+  });
+
+  it('refuses an unreadable amount instead of removing the cap', async () => {
+    await editCap('five dollars');
+    await waitFor(() => expect(showError).toHaveBeenCalled());
+    expect(API.put).not.toHaveBeenCalled();
+    // The editor stays open with what was typed, so it can be corrected.
+    expect(screen.getByDisplayValue('five dollars')).toBeTruthy();
   });
 
   it('totals used and capped spend at the operator rate', async () => {

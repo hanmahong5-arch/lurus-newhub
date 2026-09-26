@@ -46,6 +46,8 @@ import {
   quotaToUSD,
   formatRelativeTime,
 } from '../../../helpers/formatting';
+import { readUSDField } from '../../../helpers/moneyInput';
+import InlineEdit from './InlineEdit';
 
 // The relay host used to be the module constant 'https://api.lurus.cn'. That
 // domain was retired in 2026-04 and no longer resolves, so every snippet and
@@ -245,7 +247,9 @@ const CreateModal = ({ tenantSlug, projects, onCreated, onClose }) => {
     inFlight.current = true;
     setSaving(true);
     try {
-      const capUSD = parseFloat(form.cap) || 0;
+      const parsedCap = form.unlimited ? null : readUSDField(form.cap, tr);
+      if (parsedCap === undefined) return;
+      const capUSD = parsedCap ?? 0;
       const res = await API.post(`/api/v2/${tenantSlug}/tokens`, {
         name: form.name.trim(),
         unlimited_quota: form.unlimited || capUSD <= 0,
@@ -518,46 +522,6 @@ const CreateModal = ({ tenantSlug, projects, onCreated, onClose }) => {
   );
 };
 
-// ─── Inline setting editor ────────────────────────────────────────────────────
-
-const InlineEdit = ({ value, onSave, onCancel }) => {
-  const [v, setV] = useState(value);
-  const ref = useRef(null);
-
-  useEffect(() => {
-    ref.current?.select();
-  }, []);
-
-  const commit = () => {
-    if (v.trim() !== value) onSave(v.trim());
-    else onCancel();
-  };
-
-  return (
-    <input
-      ref={ref}
-      style={{
-        fontFamily: 'var(--hf-mono)',
-        fontSize: 12,
-        padding: '3px 6px',
-        width: '100%',
-        border: '1px solid var(--hf-rule)',
-        background: 'var(--hf-sunken)',
-        color: 'var(--hf-ink)',
-        borderRadius: 2,
-        outline: 'none',
-      }}
-      value={v}
-      onChange={(e) => setV(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') commit();
-        if (e.key === 'Escape') onCancel();
-      }}
-      onBlur={commit}
-    />
-  );
-};
-
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 const HFToken = () => {
@@ -771,6 +735,10 @@ const HFToken = () => {
 
   const handleSaveField = async (field, rawValue) => {
     if (!token) return;
+    // An unreadable amount keeps the editor open: silently saving it as 0
+    // would remove the cap.
+    const usd = field === 'cap' ? readUSDField(rawValue, tr) : null;
+    if (usd === undefined) return;
     setEditField(null);
     const body = {};
     if (field === 'models') {
@@ -778,8 +746,8 @@ const HFToken = () => {
       body.model_limits_enabled = v !== '' && v !== 'all models';
       body.model_limits = body.model_limits_enabled ? v : '';
     } else if (field === 'cap') {
-      const usd = parseFloat(rawValue) || 0;
-      if (usd <= 0) {
+      // Empty, "∞" or 0 means unlimited, as the field's display says.
+      if (!(usd > 0)) {
         body.unlimited_quota = true;
         body.remain_quota = 0;
       } else {
