@@ -6,6 +6,7 @@
         "org_mismatch": "This account belongs to a different organisation than the tenant you are signing in to. Use your own organisation's sign-in link, or ask an administrator."
       },
       "common": {
+        "invalid_amount": "Enter an amount in dollars, like 5 or 12.50",
         "no_data": "no data",
         "loading": "loading…",
         "save": "save",

@@ -211,10 +211,10 @@ describe('DocumentRenderer — URL content', () => {
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 
-  // DEFECT (skipped): isUrl() accepts any parseable URL, scheme included, so an
-  // admin-supplied "javascript:" document becomes a clickable link that runs
-  // script in the reader's session. Only http/https should reach an href.
-  it.skip('refuses to build a link out of a javascript: URL', async () => {
+  // isUrl() used to accept any parseable URL, scheme included, so an
+  // admin-supplied "javascript:" document became a clickable link that ran
+  // script in the reader's session. Only http/https may reach an href.
+  it('refuses to build a link out of a javascript: URL', async () => {
     API.get.mockReturnValue(ok('javascript:alert(document.cookie)'));
 
     render(<DocumentRenderer {...baseProps} />);
