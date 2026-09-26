@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -77,7 +76,7 @@ func processDebitOutbox(ctx context.Context) {
 				metrics.BillingOutboxFailedTotal.Inc()
 				slog.Error("billing debit outbox permanently failed", "id", e.ID, "ref", e.RefID, "amount_lb", e.AmountLB, "err", err)
 			} else {
-				updates["next_retry"] = time.Now().Add(time.Duration(math.Pow(2, float64(e.RetryCount))) * 5 * time.Second)
+				updates["next_retry"] = time.Now().Add(outboxBackoff(e.RetryCount))
 			}
 		}
 		// Only if the claim is still ours.
