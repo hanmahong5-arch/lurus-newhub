@@ -37,7 +37,7 @@ defaults:
 jobs:
   test:
     name: Lint + Typecheck + Vitest
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
 
   build:
     name: Vite build
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
     needs: test
     steps:
@@ -84,7 +84,7 @@ jobs:
 
   security:
     name: bun audit + gitleaks
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 20
     # push/PR only. gitleaks-action scans the pushed commit RANGE on those
     # events but the FULL history on schedule/workflow_dispatch, where it
@@ -152,7 +152,7 @@ jobs:
 
   e2e:
     name: Playwright e2e (UAT)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     # The suite talks to a remote UAT instance over the network; without this a
     # hung run burns the runner's 6-hour default.
     timeout-minutes: 40
