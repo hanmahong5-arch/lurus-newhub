@@ -52,10 +52,10 @@ func releasePlatformPreAuth(relayInfo *relaycommon.RelayInfo) {
 	if err := common.ReleaseWithBreaker(ctx, preAuthID); err != nil {
 		common.SysLog(fmt.Sprintf("release pre-auth %d failed, enqueuing outbox: %s", preAuthID, err.Error()))
 		if enqErr := EnqueueRelease(relayInfo.IdentityAccountID, preAuthID); enqErr != nil {
-			// Both release and outbox failed — platform TTL (300s) is the safety net.
+			// Both release and outbox failed — platform hold TTL (PreAuthHoldTTL) is the safety net.
 			// Log at highest severity so ops can investigate.
 			common.SysError(fmt.Sprintf("CRITICAL: pre-auth %d stuck frozen — both release and outbox failed. "+
-				"Platform TTL will auto-expire in ≤300s. release_err=%s, outbox_err=%s",
+				"Platform hold will auto-expire within PreAuthHoldTTL. release_err=%s, outbox_err=%s",
 				preAuthID, err.Error(), enqErr.Error()))
 		}
 	}
@@ -258,6 +258,14 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 	return nil
 }
 
+// PreAuthHoldTTL is how long the platform keeps a pre-auth hold settleable.
+// It was 300s. The platform's sweep marks a hold expired once it passes its
+// deadline, and settling an expired hold is refused, so every request longer
+// than that (the concurrency lease allows 1800s) and every settle the outbox
+// retried later was never billed. The hold has to outlive the longest request
+// plus the outbox retry horizon; middleware's lease test pins that sum.
+const PreAuthHoldTTL = time.Hour
+
 // preAuthorizeWithBreaker is the platform freeze call. A var (same seam
 // convention as AsyncGo) because the identity gRPC client dials with
 // WaitForReady, so in a test binary the call burns the whole request deadline
@@ -285,7 +293,7 @@ func platformPreAuthorize(c *gin.Context, estimatedQuota int, relayInfo *relayco
 
 	preAuthStart := time.Now()
 	result, err := preAuthorizeWithBreaker(ctx, accountID, estimatedLB,
-		sourceProductOf(relayInfo), "preauth:"+uuid.NewString(), fmt.Sprintf("relay userId=%d model=%s", relayInfo.UserId, relayInfo.OriginModelName), 300)
+		sourceProductOf(relayInfo), "preauth:"+uuid.NewString(), fmt.Sprintf("relay userId=%d model=%s", relayInfo.UserId, relayInfo.OriginModelName), int(PreAuthHoldTTL.Seconds()))
 	metrics.BillingPreAuthDuration.Observe(time.Since(preAuthStart).Seconds())
 
 	if err != nil {
