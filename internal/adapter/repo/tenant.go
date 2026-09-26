@@ -82,6 +82,12 @@ func GetTenantByIDPOrgID(orgID string) (*Tenant, error) {
 	return &tenant, nil
 }
 
+// ErrTenantConflict is returned by CreateTenantFromIDP when the insert hits a
+// unique constraint: the slug is taken, or a concurrent request created the
+// same IdP organization first. The driver error names the constraint and
+// echoes the key, so callers answer with this instead.
+var ErrTenantConflict = errors.New("a tenant with this slug or IdP organization id already exists")
+
 // CreateTenantFromIDP creates a new tenant from upstream OIDC Organization data.
 // Auto-called when a user from a new OIDC Organization logs in.
 func CreateTenantFromIDP(orgID string, orgDomain string, orgName string) (*Tenant, error) {
@@ -118,6 +124,9 @@ func CreateTenantFromIDP(orgID string, orgDomain string, orgName string) (*Tenan
 
 	err := DB.Create(tenant).Error
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrTenantConflict
+		}
 		return nil, err
 	}
 
