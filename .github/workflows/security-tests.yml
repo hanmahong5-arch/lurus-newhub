@@ -32,7 +32,7 @@ on:
 jobs:
   security-tests:
     name: Security Regression Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -85,7 +85,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
-          cache: true
+          cache: ${{ !vars.CI_RUNS_ON }}
 
       - name: Download dependencies
         run: go mod download

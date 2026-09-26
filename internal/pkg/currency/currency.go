@@ -63,6 +63,23 @@ func QuotaToCNY(quota int) float64 {
 	return float64(quota) / LucToLut()
 }
 
+// CNYUnits4PerYuan is how many recorded units make one yuan: the platform
+// wallet stores amounts as numeric(14,4), so 0.0001 CNY is the smallest
+// amount that can ever move.
+const CNYUnits4PerYuan = 10_000
+
+// CNYToUnits4 is the amount the wallet will actually record for a yuan
+// amount: rounded to its 4 decimals, half away from zero, as numeric(14,4)
+// rounds on insert.
+func CNYToUnits4(cny float64) int64 {
+	return int64(math.Round(cny * CNYUnits4PerYuan))
+}
+
+// Units4ToCNY renders recorded units back as yuan, for display only.
+func Units4ToCNY(units int64) float64 {
+	return float64(units) / CNYUnits4PerYuan
+}
+
 // CNYToQuota converts yuan (LUC) to quota, truncated — the quota a CNY
 // amount taken from the wallet buys.
 func CNYToQuota(cny float64) int {

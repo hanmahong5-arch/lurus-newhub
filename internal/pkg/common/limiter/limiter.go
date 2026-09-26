@@ -13,9 +13,15 @@ import (
 //go:embed lua/rate_limit.lua
 var rateLimitScript string
 
+// rateLimit runs by SHA and falls back to sending the source when Redis
+// answers NOSCRIPT. The limiter used to EvalSha a SHA loaded once at startup:
+// after a Redis restart or SCRIPT FLUSH (or a failed load at boot, SHA "")
+// every call errored, and the model rate limiter fails open on error, so
+// limits were off until the pod restarted.
+var rateLimit = redis.NewScript(rateLimitScript)
+
 type RedisLimiter struct {
-	client         *redis.Client
-	limitScriptSHA string
+	client *redis.Client
 }
 
 var (
@@ -25,15 +31,11 @@ var (
 
 func New(ctx context.Context, r *redis.Client) *RedisLimiter {
 	once.Do(func() {
-		// 预加载脚本
-		limitSHA, err := r.ScriptLoad(ctx, rateLimitScript).Result()
-		if err != nil {
+		// Preload is only an optimisation now: Run reloads on NOSCRIPT.
+		if err := rateLimit.Load(ctx, r).Err(); err != nil {
 			common.SysLog(fmt.Sprintf("Failed to load rate limit script: %v", err))
 		}
-		instance = &RedisLimiter{
-			client:         r,
-			limitScriptSHA: limitSHA,
-		}
+		instance = &RedisLimiter{client: r}
 	})
 
 	return instance
@@ -53,9 +55,9 @@ func (rl *RedisLimiter) Allow(ctx context.Context, key string, opts ...Option) (
 	}
 
 	// 执行限流
-	result, err := rl.client.EvalSha(
+	result, err := rateLimit.Run(
 		ctx,
-		rl.limitScriptSHA,
+		rl.client,
 		[]string{key},
 		config.Requested,
 		config.Rate,

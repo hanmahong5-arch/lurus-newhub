@@ -119,6 +119,7 @@ type RelayInfo struct {
 	// EnrichLogParams -> RecordConsumeLog) has no gin.Context to read from.
 	// It is a label, never an authorization input.
 	ProjectId int
+	WalletChargeCNY4 int64 // wallet charge PostConsumeQuota committed to, 0.0001 CNY (-> entity.Log.ChargedCNY4)
 	// SessionId is the caller-supplied X-Session-Id header, validated
 	// (printable ASCII, <=200 bytes) but never hashed: unlike EndUserHash it
 	// carries no persistent user identity, only a conversation-scoped

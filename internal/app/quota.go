@@ -1069,6 +1069,7 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				_, settleErr := settleWithBreaker(settleCtx, relayInfo.PlatformPreAuthID, amountLB)
 				settleCancel()
 				charged = true
+				relayInfo.WalletChargeCNY4 = currency.CNYToUnits4(amountLB)
 
 				if settleErr != nil {
 					metrics.BillingSettleTotal.WithLabelValues("error").Inc()
@@ -1122,7 +1123,9 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 			// have no pre-auth (flag-off windows, high-balance skip, degraded
 			// admit) — the same double-debit risk, inconsistently applied.
 			charge := localQuotaConsistent || advisory
-			if !charge {
+			if charge {
+				relayInfo.WalletChargeCNY4 = currency.CNYToUnits4(amountLB)
+			} else {
 				// Same severity/shape as the local-inconsistency logs above
 				// (common.SysLog) so the skipped revenue is observable rather
 				// than silently dropped.
@@ -1134,11 +1137,10 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				debitCtx, debitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer debitCancel()
 				if charge {
+					desc := fmt.Sprintf("relay userId=%d", relayInfo.UserId)
 					if _, debitErr := debitWalletGRPC(debitCtx, accountID, amountLB, "llm_usage",
-						fmt.Sprintf("relay userId=%d", relayInfo.UserId), sourceProductOf(relayInfo),
-						refID); debitErr != nil {
-						common.SysLog(fmt.Sprintf("legacy wallet debit failed: accountID=%d, amount=%.4f LB, err=%s",
-							accountID, amountLB, debitErr.Error()))
+						desc, sourceProductOf(relayInfo), refID); debitErr != nil {
+						enqueueFailedLegacyDebit(accountID, amountLB, desc, sourceProductOf(relayInfo), refID, debitErr)
 					}
 				}
 				// Usage reporting stays unconditional, mirroring the pre-auth

@@ -1,4 +1,4 @@
-﻿{
+{
   "openapi": "3.0.1",
   "info": {
     "title": "AI模型接口",
@@ -19,12 +19,6 @@
       "name": "OpenAI格式(Responses)"
     },
     {
-      "name": "图片生成"
-    },
-    {
-      "name": "图片生成/OpenAI兼容格式"
-    },
-    {
       "name": "图片生成/Qwen千问"
     },
     {
@@ -38,6 +32,9 @@
     },
     {
       "name": "视频生成/即梦格式"
+    },
+    {
+      "name": "异步任务/通用"
     },
     {
       "name": "Claude格式(Messages)"
@@ -64,9 +61,6 @@
       "name": "Realtime"
     },
     {
-      "name": "未实现"
-    },
-    {
       "name": "未实现/Fine-tunes"
     },
     {
@@ -74,6 +68,221 @@
     }
   ],
   "paths": {
+    "/pg/chat/completions": {
+      "post": {
+        "summary": "Console playground chat completion",
+        "deprecated": false,
+        "description": "The chat endpoint behind the console Playground page. Same request and response shapes as POST /v1/chat/completions, and billed exactly like it: the request passes the same pool-balance, cost-spike, entitlement, per-model and business rate limits and concurrency cap, and is charged to a token of the signed-in user. Authentication: with an Authorization: Bearer header this is the ordinary token path; without one, the console session cookie is used and the user's first active token pays (one is created if the user has none). A banned user or a disabled or suspended tenant is refused. It is not an integration endpoint for API customers — use /v1/chat/completions.",
+        "operationId": "createPlaygroundChatCompletion",
+        "tags": [
+          "OpenAI格式(Chat)"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "成功创建响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "X-Model-Provider": {
+                "$ref": "#/components/headers/XModelProvider"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/XRateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/XRateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/XRateLimitReset"
+              },
+              "X-RateLimit-Scope": {
+                "$ref": "#/components/headers/XRateLimitScope"
+              },
+              "X-RateLimit-Type": {
+                "$ref": "#/components/headers/XRateLimitType"
+              },
+              "X-Request-Cost": {
+                "$ref": "#/components/headers/XRequestCost"
+              },
+              "X-Quota-Remaining": {
+                "$ref": "#/components/headers/XQuotaRemaining"
+              },
+              "X-Lurus-Affinity-Key": {
+                "$ref": "#/components/headers/XLurusAffinityKey"
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "401": {
+            "description": "认证失败（如 API key 无效）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "402": {
+            "description": "余额/租户信用池不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足（IP/分组/模型/渠道限制）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "404": {
+            "description": "模型未找到（分组下从未配置该模型）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "413": {
+            "description": "请求体过大",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制。X-RateLimit-Limit/Remaining/Scope/Type + Retry-After are written by the rate-limit and concurrency middlewares on this relay chain (BusinessRateLimit and BusinessModelRateLimit, RelayConcurrencyLimit, ModelRequestRateLimit; scopes token/tenant/model/user — the ip and key scopes come from the keyed limiters that guard /api/* and /internal/*, never a /v1 route — except GET/DELETE /v1/responses/:response_id, which mounts its own IP-keyed \"RS\" bucket (scope ip) and, unlike the /api/* and /internal/* keyed limiters, renders the reject through the gateway's OpenAI-wire error envelope so it carries Limit/Remaining/Scope/Type + Retry-After AND a body with error.code — see that path's own 429 entry) — Remaining is 0 and Reset is not sent on a reject. The account/quota (entitlement) and user/cost (cost-spike) 429s on this same path write only X-RateLimit-Scope/Type, no Retry-After or Limit/Remaining.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/XRateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/XRateLimitRemaining"
+              },
+              "X-RateLimit-Scope": {
+                "$ref": "#/components/headers/XRateLimitScope"
+              },
+              "X-RateLimit-Type": {
+                "$ref": "#/components/headers/XRateLimitType"
+              }
+            }
+          },
+          "503": {
+            "description": "无可用渠道 / 全部密钥冷却中",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/models": {
       "get": {
         "summary": "获取模型列表",
@@ -274,6 +483,7 @@
                         "provider_name": { "type": "string" },
                         "quota": { "type": "integer", "description": "本次调用消耗的 quota 整数（DB 单位，非 USD）" },
                         "total_cost": { "type": "number", "description": "quota / quota_per_unit（管理员可改的选项，默认 500000，当前值以 GET /api/status 的 quota_per_unit 为准；该值未设置时为 0）——本响应体唯一 USD 计价字段" },
+                        "charged_cny": { "type": "number", "description": "本次请求实际从平台钱包扣的人民币金额，结算时记录（精确到 0.0001，钱包自身精度）。未从钱包扣费（信用池/本地额度）或记录上线前的请求不返回此字段——缺失不代表免费" },
                         "usage": {
                           "type": "object",
                           "properties": {
@@ -8410,7 +8620,12 @@
     "Distribute",
     "BusinessModelRateLimit"
   ],
-  "servers": [],
+  "servers": [
+    {
+      "url": "https://hub.lurus.cn",
+      "description": "Production"
+    }
+  ],
   "security": [
     {
       "BearerAuth": []

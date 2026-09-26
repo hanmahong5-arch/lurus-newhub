@@ -24,6 +24,12 @@ const (
 	outboxStatusDone       = "done"
 	outboxStatusFailed     = "failed"
 
+	// outboxMaxBackoff caps the 5s·2^n retry delay. Uncapped, the ten
+	// attempts spread over ~2.8h, long after the pre-auth hold they settle
+	// has expired: the platform then refuses the settle ("not active") and
+	// the usage is never billed. See PreAuthHoldTTL.
+	outboxMaxBackoff = 5 * time.Minute
+
 	// outboxClaimLease bounds how long a claimed entry stays owned. A pod killed
 	// between the claim and the terminal update would otherwise wedge its entries
 	// in "processing" forever — nothing else moves them out of that status. Two
@@ -40,11 +46,12 @@ const (
 // moves mutual exclusion onto the row itself, where it survives the tick.
 //
 // The second WHERE arm re-claims entries whose lease expired (outboxClaimLease).
-// Table name mirrors entity.BillingOutbox.TableName() — asserted in the tests.
+// %[1]s is the table: billing_outbox (entity.BillingOutbox.TableName(), asserted
+// in the tests) or billing_debit_outbox, which shares the status columns.
 const (
-	outboxClaimHead = `UPDATE billing_outbox SET status = ?, updated_at = ?
+	outboxClaimHead = `UPDATE %[1]s SET status = ?, updated_at = ?
 WHERE id IN (
-	SELECT id FROM billing_outbox
+	SELECT id FROM %[1]s
 	WHERE (status = ? AND next_retry <= ?) OR (status = ? AND updated_at <= ?)
 	ORDER BY next_retry ASC
 	LIMIT 50`
@@ -65,7 +72,7 @@ var billingOutboxDB *gorm.DB
 // InitBillingOutbox sets the DB handle and auto-migrates the outbox table.
 func InitBillingOutbox(db *gorm.DB) error {
 	billingOutboxDB = db
-	return db.AutoMigrate(&entity.BillingOutbox{})
+	return db.AutoMigrate(&entity.BillingOutbox{}, &entity.BillingDebitOutbox{})
 }
 
 // EnqueueSettle writes a settle action to the outbox for reliable retry.
@@ -110,22 +117,43 @@ func EnqueueRelease(accountID, preAuthID int64) error {
 	return nil
 }
 
+// outboxBackoff is the delay before retry number `retry` (1-based).
+func outboxBackoff(retry int) time.Duration {
+	d := time.Duration(math.Pow(2, float64(retry))) * 5 * time.Second
+	return min(d, outboxMaxBackoff)
+}
+
+// OutboxRetryHorizon is how long after its first failure an outbox entry can
+// still be retried: the sum of every backoff before it is marked failed.
+func OutboxRetryHorizon() time.Duration {
+	var total time.Duration
+	for retry := 1; retry < outboxMaxRetries; retry++ {
+		total += outboxBackoff(retry)
+	}
+	return total
+}
+
 // claimBillingOutbox flips a bounded batch of due entries to "processing" and
 // returns them. Entries it returns are owned by this caller until it writes a
 // terminal status or its claim lease expires — no other replica will see them.
 func claimBillingOutbox(ctx context.Context, now time.Time) ([]entity.BillingOutbox, error) {
+	var entries []entity.BillingOutbox
+	err := claimOutboxRows(ctx, entity.BillingOutbox{}.TableName(), now, &entries)
+	return entries, err
+}
+
+// claimOutboxRows runs the claim statement against one outbox table and scans
+// the claimed rows into dest.
+func claimOutboxRows(ctx context.Context, table string, now time.Time, dest any) error {
 	sql := outboxClaimHead + outboxClaimTail
 	if billingOutboxDB.Name() == "postgres" {
 		sql = outboxClaimHead + outboxClaimLocking + outboxClaimTail
 	}
-
-	var entries []entity.BillingOutbox
-	err := billingOutboxDB.WithContext(ctx).Raw(sql,
+	return billingOutboxDB.WithContext(ctx).Raw(fmt.Sprintf(sql, table),
 		outboxStatusProcessing, now,
 		outboxStatusPending, now,
 		outboxStatusProcessing, now.Add(-outboxClaimLease),
-	).Scan(&entries).Error
-	return entries, err
+	).Scan(dest).Error
 }
 
 // ProcessBillingOutbox claims due entries and retries them.
@@ -144,6 +172,8 @@ func ProcessBillingOutbox(ctx context.Context) error {
 		Where("status IN ?", []string{outboxStatusPending, outboxStatusProcessing}).
 		Count(&pendingCount)
 	metrics.BillingOutboxPending.Set(float64(pendingCount))
+
+	processDebitOutbox(ctx)
 
 	entries, err := claimBillingOutbox(ctx, time.Now())
 	if err != nil {
@@ -180,8 +210,7 @@ func ProcessBillingOutbox(ctx context.Context) error {
 				metrics.BillingOutboxFailedTotal.Inc()
 				slog.Error("billing outbox permanently failed", "id", entry.ID, "action", entry.Action, "preauth_id", entry.PreAuthID, "err", err)
 			} else {
-				backoff := time.Duration(math.Pow(2, float64(entry.RetryCount))) * 5 * time.Second
-				entry.NextRetry = time.Now().Add(backoff)
+				entry.NextRetry = time.Now().Add(outboxBackoff(entry.RetryCount))
 				slog.Warn("billing outbox retry scheduled", "id", entry.ID, "retry", entry.RetryCount, "next", entry.NextRetry, "err", err)
 			}
 			// Atomic update: only update if we still hold the claim

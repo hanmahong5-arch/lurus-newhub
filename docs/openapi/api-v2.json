@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Lurus API V2 - Multi-Tenant Gateway",
-    "description": "Lurus API V2 provides multi-tenant access to LLM API gateway services.\n\n## Authentication\n\nV2 API uses **Zitadel OAuth 2.0** for authentication:\n\n1. Redirect user to `GET /api/v2/{tenant_slug}/auth/login`\n2. User authenticates with Zitadel\n3. Callback redirects to `GET /api/v2/oauth/callback`\n4. Use session cookie or JWT for subsequent requests\n\n## Tenant Isolation\n\nAll tenant-specific endpoints are scoped by `{tenant_slug}` in the URL path.\nUsers can only access data within their assigned tenant.\n\n## Rate Limiting\n\n- Standard endpoints: 100 requests/minute per user\n- Relay endpoints: Based on quota allocation\n",
+    "description": "Lurus API V2 provides multi-tenant access to LLM API gateway services.\n\n## Authentication\n\nV2 authenticates through OpenID Connect. Which provider, which issuer and\nwhich client id are deploy-time configuration, not part of this contract:\nthe console redirects to whatever provider the deployment was given.\n\n1. Redirect the user to `GET /api/v2/{tenant_slug}/auth/login`\n2. The user authenticates with the deployment's configured OIDC provider\n3. The provider calls back to `GET /api/v2/oauth/callback`\n4. Later requests carry the session cookie, or a bearer token for the\n   machine callers that hold one (`OIDCBearer` below)\n\n## Tenant Isolation\n\nAll tenant-specific endpoints are scoped by `{tenant_slug}` in the URL path.\nUsers can only access data within their assigned tenant.\n\n## Rate Limiting\n\n- Every route below `/api/v2` sits behind one shared bucket: 600 requests\n  per 180 s per source IP (`middleware.GlobalV2RateLimit`,\n  api-v2-router.go). It is keyed by the client address, NOT by account or\n  session, so everybody behind one NAT or CGNAT egress address spends the\n  same budget - an office on a single public address shares one bucket.\n- Those numbers are the shipped defaults. An operator retunes them with\n  `GLOBAL_V2_RATE_LIMIT` and `GLOBAL_V2_RATE_LIMIT_DURATION`, so the limit\n  a given deployment enforces may differ.\n- A limit of 0 DISABLES the bucket; it does not mean unlimited. To turn the\n  limiter off deliberately, set `GLOBAL_V2_RATE_LIMIT_ENABLE=false`.\n- A reject is `429` with `Retry-After`, `X-RateLimit-Limit`,\n  `X-RateLimit-Remaining`, `X-RateLimit-Scope: ip`,\n  `X-RateLimit-Type: requests`, and an empty body.\n- Individual routes may add a narrower bucket of their own on top of this\n  one - see the 429 on `POST /api/v2/{tenant_slug}/redeem`.\n- Relay traffic is metered by quota, not by this bucket.\n",
     "version": "2.0.0",
     "contact": {
       "name": "Lurus Support",
@@ -15,18 +15,18 @@
   },
   "servers": [
     {
-      "url": "https://api.lurus.cn",
+      "url": "https://hub.lurus.cn",
       "description": "Production"
     },
     {
       "url": "http://localhost:3000",
-      "description": "Local Development"
+      "description": "Local development"
     }
   ],
   "tags": [
     {
       "name": "OAuth",
-      "description": "OAuth 2.0 authentication flows"
+      "description": "OAuth 2.0 / OpenID Connect authentication flows"
     },
     {
       "name": "User",
@@ -41,8 +41,12 @@
       "description": "API token management"
     },
     {
+      "name": "ChatSessions",
+      "description": "Console chat sessions (client-driven persistence)"
+    },
+    {
       "name": "Billing",
-      "description": "Billing and subscriptions"
+      "description": "Invoice and top-up history. Read-only: this spec documents no route that moves money."
     },
     {
       "name": "Logs",
@@ -51,10 +55,6 @@
     {
       "name": "Redemptions",
       "description": "Redemption codes"
-    },
-    {
-      "name": "Tenant Config",
-      "description": "Tenant configuration (Admin)"
     },
     {
       "name": "Platform Admin",
@@ -68,7 +68,7 @@
           "OAuth"
         ],
         "summary": "Initiate OAuth Login",
-        "description": "Redirects to Zitadel login page with PKCE challenge.\nAfter successful authentication, user is redirected to callback URL.\n",
+        "description": "Redirects to the configured OIDC provider's login page. A PKCE challenge is sent only when OIDC_ENABLE_PKCE=true, which is off by default.\nAfter successful authentication, user is redirected to callback URL.\n",
         "operationId": "zitadelLoginRedirect",
         "parameters": [
           {
@@ -86,10 +86,10 @@
         ],
         "responses": {
           "302": {
-            "description": "Redirect to Zitadel login",
+            "description": "Redirect to the OIDC provider's login page",
             "headers": {
               "Location": {
-                "description": "Zitadel authorization URL",
+                "description": "Authorization URL at the configured OIDC provider",
                 "schema": {
                   "type": "string"
                 }
@@ -111,14 +111,14 @@
           "OAuth"
         ],
         "summary": "OAuth Callback",
-        "description": "Handles OAuth callback from Zitadel.\nExchanges authorization code for tokens and creates session.\n",
+        "description": "Handles the OAuth callback from the configured OIDC provider.\nExchanges authorization code for tokens and creates session.\n",
         "operationId": "zitadelCallback",
         "parameters": [
           {
             "name": "code",
             "in": "query",
             "required": true,
-            "description": "Authorization code from Zitadel",
+            "description": "Authorization code issued by the OIDC provider",
             "schema": {
               "type": "string"
             }
@@ -177,14 +177,14 @@
           "OAuth"
         ],
         "summary": "Logout",
-        "description": "Logs out from Zitadel and clears session",
+        "description": "Logs out at the OIDC provider and clears the session",
         "operationId": "zitadelLogout",
         "responses": {
           "200": {
             "description": "Successfully logged out"
           },
           "302": {
-            "description": "Redirect to Zitadel logout URL"
+            "description": "Redirect to the OIDC provider's logout URL"
           }
         }
       }
@@ -199,7 +199,7 @@
         "operationId": "getSelfV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -232,7 +232,7 @@
         "operationId": "updateSelfV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -280,7 +280,7 @@
         "operationId": "listChannelsV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -327,7 +327,7 @@
         "operationId": "createChannelV2",
         "security": [
           {
-            "ZitadelJWT": [
+            "OIDCBearer": [
               "admin"
             ]
           }
@@ -380,7 +380,7 @@
         "operationId": "getChannelV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -419,7 +419,7 @@
         "operationId": "updateChannelV2",
         "security": [
           {
-            "ZitadelJWT": [
+            "OIDCBearer": [
               "admin"
             ]
           }
@@ -476,7 +476,7 @@
         "operationId": "deleteChannelV2",
         "security": [
           {
-            "ZitadelJWT": [
+            "OIDCBearer": [
               "admin"
             ]
           }
@@ -505,6 +505,228 @@
         }
       }
     },
+    "/api/v2/{tenant_slug}/models": {
+      "get": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "List Model Catalog",
+        "description": "Paginated model catalogue with a whitelist projection. This is NOT the\nOpenAI /v1/models envelope - that one belongs to the relay surface and is\ndocumented in relay.json.",
+        "operationId": "listModelsV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size, 1-100 (values above 100 are clamped)",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": false,
+            "description": "Substring match on the model name",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": false,
+            "description": "Filter by vendor name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model catalogue page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ModelCatalogEntry"
+                          }
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "vendor_counts": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          },
+                          "description": "Model count per vendor name"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing tenant slug or invalid pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Tenant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/models/performance": {
+      "get": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "Per-Model Latency and Error Rate",
+        "description": "p50/p95 latency and error rate per model over the last `hours`, for\nthe caller's tenant only (cached per pod for 5 minutes). Every member\ngets the quality fields; tenant admins also get the volume fields\n(requests, errors, total_tokens, quota, latency_samples).\n`enough_samples` is false below `min_samples` latency samples — the\npercentiles are then noise, not a measurement.\n",
+        "operationId": "listModelPerformanceV2",
+        "security": [
+          {
+            "ZitadelJWT": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "hours",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                1,
+                24,
+                168
+              ],
+              "default": 24
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-model performance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "hours": {
+                          "type": "integer"
+                        },
+                        "cached_at": {
+                          "type": "integer",
+                          "format": "int64"
+                        },
+                        "min_samples": {
+                          "type": "integer"
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "model_name": {
+                                "type": "string"
+                              },
+                              "p50_latency_ms": {
+                                "type": "integer"
+                              },
+                              "p95_latency_ms": {
+                                "type": "integer"
+                              },
+                              "error_rate": {
+                                "type": "number"
+                              },
+                              "enough_samples": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "hours is not one of 1, 24, 168 (INVALID_WINDOW)"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
     "/api/v2/{tenant_slug}/tokens": {
       "get": {
         "tags": [
@@ -515,7 +737,7 @@
         "operationId": "listTokensV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -554,7 +776,7 @@
         "operationId": "createTokenV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -602,7 +824,7 @@
         "operationId": "updateTokenV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -654,7 +876,7 @@
         "operationId": "deleteTokenV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -688,7 +910,7 @@
         "operationId": "listChatSessionsV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -714,7 +936,7 @@
         "operationId": "createChatSessionV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -752,7 +974,7 @@
         "operationId": "getChatSessionV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -784,7 +1006,7 @@
         "operationId": "updateChatSessionV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -826,7 +1048,7 @@
         "operationId": "deleteChatSessionV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -850,6 +1072,117 @@
         }
       }
     },
+    "/api/v2/{tenant_slug}/billing/invoices": {
+      "get": {
+        "tags": [
+          "Billing"
+        ],
+        "summary": "List Monthly Invoices",
+        "description": "Monthly spend buckets for the calling user inside this tenant. Both query\nparameters are optional; the range is always clamped to at most 12 calendar\nmonths. There is deliberately no amount_usd field - no FX source is wired\ninto this endpoint.",
+        "operationId": "listInvoicesV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First month, YYYY-MM",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last month, YYYY-MM",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Monthly spend buckets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/InvoiceMonth"
+                          }
+                        },
+                        "total_invoices": {
+                          "type": "integer"
+                        },
+                        "summary": {
+                          "type": "object",
+                          "properties": {
+                            "total_quota": {
+                              "type": "integer",
+                              "format": "int64"
+                            },
+                            "total_cny": {
+                              "type": "number"
+                            },
+                            "mtd_quota": {
+                              "type": "integer",
+                              "format": "int64",
+                              "description": "Billable quota in the current UTC calendar month"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid from/to range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "description": "Invoice aggregation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/{tenant_slug}/billing/topups": {
       "get": {
         "tags": [
@@ -860,7 +1193,7 @@
         "operationId": "getTopUpsV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -891,176 +1224,6 @@
         }
       }
     },
-    "/api/v2/{tenant_slug}/billing/topup": {
-      "post": {
-        "tags": [
-          "Billing"
-        ],
-        "summary": "Create Top-up",
-        "description": "Initiates a new top-up payment",
-        "operationId": "topUpV2",
-        "security": [
-          {
-            "ZitadelJWT": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/TenantSlug"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TopUpRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Payment URL returned",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TopUpResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        }
-      }
-    },
-    "/api/v2/{tenant_slug}/billing/subscriptions": {
-      "get": {
-        "tags": [
-          "Billing"
-        ],
-        "summary": "List Subscriptions",
-        "description": "Lists user's active subscriptions",
-        "operationId": "getSubscriptionsV2",
-        "security": [
-          {
-            "ZitadelJWT": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/TenantSlug"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Subscription list",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SubscriptionList"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        }
-      }
-    },
-    "/api/v2/{tenant_slug}/billing/subscribe": {
-      "post": {
-        "tags": [
-          "Billing"
-        ],
-        "summary": "Create Subscription",
-        "description": "Subscribes to a plan",
-        "operationId": "subscribeV2",
-        "security": [
-          {
-            "ZitadelJWT": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/TenantSlug"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SubscribeRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Subscription created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Subscription"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        }
-      }
-    },
-    "/api/v2/{tenant_slug}/billing/subscriptions/{id}": {
-      "delete": {
-        "tags": [
-          "Billing"
-        ],
-        "summary": "Cancel Subscription",
-        "description": "Cancels a subscription",
-        "operationId": "cancelSubscriptionV2",
-        "security": [
-          {
-            "ZitadelJWT": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/TenantSlug"
-          },
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Subscription cancelled"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        }
-      }
-    },
     "/api/v2/{tenant_slug}/logs": {
       "get": {
         "tags": [
@@ -1071,7 +1234,7 @@
         "operationId": "getLogsV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -1136,7 +1299,7 @@
         "operationId": "getAllLogsV2",
         "security": [
           {
-            "ZitadelJWT": [
+            "OIDCBearer": [
               "admin"
             ]
           }
@@ -1180,17 +1343,17 @@
         }
       }
     },
-    "/api/v2/{tenant_slug}/redemptions/redeem": {
+    "/api/v2/{tenant_slug}/redeem": {
       "post": {
         "tags": [
           "Redemptions"
         ],
         "summary": "Redeem Code",
-        "description": "Redeems a redemption code for quota",
+        "description": "Redeems a redemption code and credits the quota to the calling user.\nMounted at /api/v2/{tenant_slug}/redeem (api-v2-router.go), NOT under the\n/redemptions collection. Guarded by a 5-requests-per-60-seconds per-IP\nlimiter because the code itself is the only credential.",
         "operationId": "redeemCodeV2",
         "security": [
           {
-            "ZitadelJWT": []
+            "OIDCBearer": []
           }
         ],
         "parameters": [
@@ -1204,13 +1367,19 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "code"
-                ],
+                "description": "Send the 32-character code as either key or code; key wins when both are present.",
                 "properties": {
+                  "key": {
+                    "type": "string",
+                    "minLength": 32,
+                    "maxLength": 32,
+                    "description": "Redemption code (v1-compatible field name)"
+                  },
                   "code": {
                     "type": "string",
-                    "description": "Redemption code"
+                    "minLength": 32,
+                    "maxLength": 32,
+                    "description": "Redemption code (alias of key)"
                   }
                 }
               }
@@ -1219,7 +1388,7 @@
         },
         "responses": {
           "200": {
-            "description": "Code redeemed successfully",
+            "description": "Code redeemed",
             "content": {
               "application/json": {
                 "schema": {
@@ -1228,9 +1397,17 @@
                     "success": {
                       "type": "boolean"
                     },
-                    "quota": {
-                      "type": "integer",
-                      "description": "Quota added"
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "quota_added": {
+                          "type": "integer",
+                          "description": "Quota units credited"
+                        }
+                      }
                     }
                   }
                 }
@@ -1238,13 +1415,68 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/BadRequest"
+            "description": "Missing or malformed code, or the code is unusable (expired, already used, unknown). Body carries success=false, message and error_code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
-          "404": {
-            "description": "Code not found or already used"
+          "429": {
+            "description": "Redemption rate limit exceeded. middleware.RedemptionRateLimit (rate-limit.go) allows 5 attempts per 60 s per client IP in the RD bucket, because the code itself is the only credential and an unthrottled run is code guessing. The reject carries the headers below and an EMPTY body - the limiter writes a bare status, not a JSON envelope, so a client must branch on the status code, not on `success`. If Redis is unreachable this bucket degrades to a process-local limiter rather than failing open, which makes the effective ceiling (replicas x 5) per 60 s until Redis returns. The wider /api/v2 bucket described in info.description applies first.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until this IP's redemption window frees a slot.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Attempts allowed per window. 5 for this bucket.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Attempts left in the window. Always 0 on a reject.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Scope": {
+                "description": "What the bucket is keyed by. Always `ip` here.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "ip"
+                  ]
+                }
+              },
+              "X-RateLimit-Type": {
+                "description": "What is being counted. Always `requests` here.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "requests"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Hub-side redemption fault (error_code REDEMPTION_FAILED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -1259,7 +1491,7 @@
         "operationId": "listRedemptionsV2",
         "security": [
           {
-            "ZitadelJWT": [
+            "OIDCBearer": [
               "admin"
             ]
           }
@@ -1303,7 +1535,7 @@
         "operationId": "createRedemptionV2",
         "security": [
           {
-            "ZitadelJWT": [
+            "OIDCBearer": [
               "admin"
             ]
           }
@@ -1356,7 +1588,7 @@
         "operationId": "deleteRedemptionV2",
         "security": [
           {
-            "ZitadelJWT": [
+            "OIDCBearer": [
               "admin"
             ]
           }
@@ -1386,111 +1618,6 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
-          }
-        }
-      }
-    },
-    "/api/v2/{tenant_slug}/config": {
-      "get": {
-        "tags": [
-          "Tenant Config"
-        ],
-        "summary": "Get Tenant Configs",
-        "description": "Gets all tenant configuration (Admin only)",
-        "operationId": "getTenantConfigs",
-        "security": [
-          {
-            "ZitadelJWT": [
-              "admin"
-            ]
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/TenantSlug"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Tenant configurations",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          }
-        }
-      }
-    },
-    "/api/v2/{tenant_slug}/config/{key}": {
-      "put": {
-        "tags": [
-          "Tenant Config"
-        ],
-        "summary": "Update Tenant Config",
-        "description": "Updates a tenant configuration value (Admin only)",
-        "operationId": "updateTenantConfig",
-        "security": [
-          {
-            "ZitadelJWT": [
-              "admin"
-            ]
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/TenantSlug"
-          },
-          {
-            "name": "key",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "value"
-                ],
-                "properties": {
-                  "value": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Config updated"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -2035,11 +2162,11 @@
   },
   "components": {
     "securitySchemes": {
-      "ZitadelJWT": {
+      "OIDCBearer": {
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "Zitadel OAuth 2.0 JWT token"
+        "description": "Bearer token issued by the deployment's configured OIDC provider. Which provider that is, is deploy-time configuration; no specific vendor is part of this contract."
       },
       "SessionAuth": {
         "type": "apiKey",
@@ -2487,41 +2614,6 @@
           }
         }
       },
-      "TopUpRequest": {
-        "type": "object",
-        "required": [
-          "amount",
-          "payment_method"
-        ],
-        "properties": {
-          "amount": {
-            "type": "number",
-            "minimum": 1
-          },
-          "payment_method": {
-            "type": "string",
-            "enum": [
-              "stripe",
-              "epay",
-              "creem"
-            ]
-          }
-        }
-      },
-      "TopUpResponse": {
-        "type": "object",
-        "properties": {
-          "success": {
-            "type": "boolean"
-          },
-          "payment_url": {
-            "type": "string"
-          },
-          "order_id": {
-            "type": "string"
-          }
-        }
-      },
       "TopUpList": {
         "type": "object",
         "properties": {
@@ -2553,57 +2645,6 @@
           },
           "total": {
             "type": "integer"
-          }
-        }
-      },
-      "Subscription": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "integer"
-          },
-          "plan_id": {
-            "type": "integer"
-          },
-          "plan_name": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "started_at": {
-            "type": "integer"
-          },
-          "expires_at": {
-            "type": "integer"
-          }
-        }
-      },
-      "SubscribeRequest": {
-        "type": "object",
-        "required": [
-          "plan_id"
-        ],
-        "properties": {
-          "plan_id": {
-            "type": "integer"
-          },
-          "payment_method": {
-            "type": "string"
-          }
-        }
-      },
-      "SubscriptionList": {
-        "type": "object",
-        "properties": {
-          "success": {
-            "type": "boolean"
-          },
-          "data": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Subscription"
-            }
           }
         }
       },
@@ -2855,6 +2896,81 @@
           },
           "total_tokens": {
             "type": "integer"
+          }
+        }
+      },
+      "InvoiceMonth": {
+        "type": "object",
+        "description": "One calendar month of billable spend.",
+        "properties": {
+          "month": {
+            "type": "string",
+            "description": "YYYY-MM"
+          },
+          "quota": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Billable quota units consumed"
+          },
+          "amount_cny": {
+            "type": "number",
+            "description": "Amount charged for the month in CNY: the wallet charge recorded at settlement for each request that has one (logs.charged_cny4), plus the quota of the remaining billable rows priced at the current exchange rate (QuotaPerUnit / USDExchangeRate quota per CNY). Changing the exchange rate no longer re-prices recorded charges."
+          },
+          "request_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of billable log rows"
+          },
+          "unbilled_quota": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Quota logged but excluded from billing (settlement-failed or channel-test rows)"
+          },
+          "unbilled_request_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of log rows excluded from billing"
+          }
+        }
+      },
+      "ModelCatalogEntry": {
+        "type": "object",
+        "description": "Whitelist projection of a catalogue model row.",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string",
+            "description": "Vendor display name, empty when unknown"
+          },
+          "name_rule": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "quota_types": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "enable_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "endpoints": {
+            "type": "string"
+          },
+          "created_time": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       }

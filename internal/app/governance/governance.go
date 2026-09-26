@@ -86,6 +86,7 @@ func EnrichLogParams(c *gin.Context, info *relaycommon.RelayInfo, params *entity
 	// something non-zero here or the per-project figures stop summing to the
 	// tenant total.
 	params.ProjectId = info.ProjectId
+	params.ChargedCNY4 = info.WalletChargeCNY4
 	if params.ProjectId == 0 && c != nil {
 		params.ProjectId = common.GetContextKeyInt(c, constant.ContextKeyProjectId)
 	}

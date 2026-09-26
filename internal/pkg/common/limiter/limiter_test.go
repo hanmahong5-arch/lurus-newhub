@@ -193,8 +193,7 @@ func TestAllow_ReturnsErrorOnEvalShaFailure(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	rl := &RedisLimiter{
-		client:         client,
-		limitScriptSHA: "0000000000000000000000000000000000000000",
+		client: client,
 	}
 
 	ctx := context.Background()
@@ -211,8 +210,7 @@ func TestAllow_DefaultsAreAppliedWhenNoOptionsGiven(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	rl := &RedisLimiter{
-		client:         client,
-		limitScriptSHA: "0000000000000000000000000000000000000000",
+		client: client,
 	}
 
 	ctx := context.Background()
@@ -231,8 +229,7 @@ func TestAllow_CustomOptionsForwardedToScript(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	rl := &RedisLimiter{
-		client:         client,
-		limitScriptSHA: "0000000000000000000000000000000000000000",
+		client: client,
 	}
 
 	ctx := context.Background()
@@ -257,8 +254,7 @@ func TestAllow_ConcurrentCallsDoNotRace(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	rl := &RedisLimiter{
-		client:         client,
-		limitScriptSHA: "0000000000000000000000000000000000000000",
+		client: client,
 	}
 
 	ctx := context.Background()

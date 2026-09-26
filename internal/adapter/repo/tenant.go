@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -80,6 +82,12 @@ func GetTenantByIDPOrgID(orgID string) (*Tenant, error) {
 	return &tenant, nil
 }
 
+// ErrTenantConflict is returned by CreateTenantFromIDP when the insert hits a
+// unique constraint: the slug is taken, or a concurrent request created the
+// same IdP organization first. The driver error names the constraint and
+// echoes the key, so callers answer with this instead.
+var ErrTenantConflict = errors.New("a tenant with this slug or IdP organization id already exists")
+
 // CreateTenantFromIDP creates a new tenant from upstream OIDC Organization data.
 // Auto-called when a user from a new OIDC Organization logs in.
 func CreateTenantFromIDP(orgID string, orgDomain string, orgName string) (*Tenant, error) {
@@ -116,6 +124,9 @@ func CreateTenantFromIDP(orgID string, orgDomain string, orgName string) (*Tenan
 
 	err := DB.Create(tenant).Error
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrTenantConflict
+		}
 		return nil, err
 	}
 
@@ -432,13 +443,24 @@ func PendingInviteTenantID(code string) (string, bool) {
 	return invite.TenantId, true
 }
 
-// GenerateID generates a unique ID for tenant
-// You can implement this using UUID library or custom logic
+// GenerateID returns a new tenant primary key: "tenant-" + a second-resolution
+// timestamp (kept so ids stay sortable and recognisable in logs) + "-" + 8 hex
+// digits of crypto randomness.
+//
+// The timestamp alone was the whole id until 2026-09-24, so two tenants
+// created within the same second collided on tenants_pkey and the second
+// create failed with a raw "duplicate key" error. Constraints the value must
+// keep: at most 36 bytes (entity.Tenant.Id is size:36) and no ':' (the
+// business rate limiter's keys are prefix+tenantID+":"+model and rely on it).
 func GenerateID() string {
-	// TODO: Implement UUID generation
-	// For now, using a placeholder
-	// In production, use: github.com/google/uuid
-	return "tenant-" + time.Now().Format("20060102150405")
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand does not fail on supported platforms; if it ever does,
+		// fall back to the clock rather than issuing a colliding id.
+		now := time.Now()
+		return fmt.Sprintf("tenant-%s-%08x", now.Format("20060102150405"), now.Nanosecond())
+	}
+	return "tenant-" + time.Now().Format("20060102150405") + "-" + hex.EncodeToString(b[:])
 }
 
 // ============================================================================

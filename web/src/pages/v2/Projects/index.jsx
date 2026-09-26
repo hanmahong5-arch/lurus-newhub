@@ -25,10 +25,13 @@ import React, {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showSuccess } from '../../../helpers';
+import { classifyLoad } from '../../../helpers/loadState';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import { quotaToUSD } from '../../../helpers/formatting';
+import ProjectModal from './ProjectModal';
 
 /*
  * Cost-attribution projects (migration 029) — the tenant → project → token
@@ -59,18 +62,6 @@ import { quotaToUSD } from '../../../helpers/formatting';
  * and their name for the same reason.
  */
 
-const inputStyle = {
-  fontFamily: 'var(--hf-mono)',
-  fontSize: 12,
-  padding: '5px 8px',
-  border: '1px solid var(--hf-rule)',
-  background: 'var(--hf-sunken)',
-  color: 'var(--hf-ink)',
-  borderRadius: 2,
-  outline: 'none',
-  width: '100%',
-};
-
 const cellStyle = {
   padding: '10px 16px',
   borderBottom: '1px dashed var(--hf-rule)',
@@ -81,153 +72,6 @@ const cellStyle = {
 // live quota_per_unit (getQuotaPerUSD), never the hardcoded default. A `$0.00`
 // row is still a row — the spend table's parts must sum to the whole.
 const fmtUSD = (quota) => `$${quotaToUSD(quota)}`;
-
-// ─── Create / edit modal ──────────────────────────────────────────────────────
-// `target.isNew` distinguishes create from edit. Unlike the model-limits modal
-// the key (name) IS editable on edit: historical log rows reference the numeric
-// id, so a rename re-labels history rather than orphaning it.
-
-const ProjectModal = ({ tenantSlug, target, onSaved, onClose }) => {
-  const { t: tr } = useTranslation();
-  const [form, setForm] = useState({
-    name: target.name || '',
-    description: target.description || '',
-  });
-  const [saving, setSaving] = useState(false);
-  // A ref, not the `saving` state: two submits fired in the same tick (Enter
-  // plus a click) would both read the pre-render value of the state.
-  const inFlight = useRef(false);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    const name = form.name.trim();
-    if (!name || inFlight.current) return;
-    inFlight.current = true;
-    setSaving(true);
-    try {
-      const payload = { name, description: form.description.trim() };
-      const res = target.isNew
-        ? await API.post(`/api/v2/${tenantSlug}/projects`, payload)
-        : await API.put(`/api/v2/${tenantSlug}/projects/${target.id}`, payload);
-      if (res?.data?.success) {
-        showSuccess(tr('console.projects.toast_saved', 'Project saved'));
-        onSaved();
-        return; // unmounted by the parent — leave inFlight latched
-      }
-    } catch (_) {
-      // error toast shown by the API interceptor (409 duplicate name included)
-    }
-    inFlight.current = false;
-    setSaving(false);
-  };
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && !saving && onClose()}
-    >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 420,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {target.isNew
-            ? tr('console.projects.modal_new', 'New project')
-            : tr('console.projects.modal_edit', 'Edit project')}
-        </div>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.projects.field_name', 'name *')}
-          </span>
-          <input
-            data-testid='proj-name'
-            style={inputStyle}
-            value={form.name}
-            autoFocus
-            maxLength={128}
-            disabled={saving}
-            placeholder={tr('console.projects.ph_name', 'e.g. Marketing')}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            required
-          />
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.projects.field_description', 'description')}
-          </span>
-          <input
-            data-testid='proj-description'
-            style={inputStyle}
-            value={form.description}
-            maxLength={512}
-            disabled={saving}
-            placeholder={tr(
-              'console.projects.ph_description',
-              'e.g. brand + growth spend',
-            )}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, description: e.target.value }))
-            }
-          />
-        </label>
-
-        <div className='muted' style={{ fontSize: 11 }}>
-          {tr(
-            'console.projects.modal_hint',
-            'A project is a cost label for reporting. It grants no access and has no members — assign tokens to it on the Tokens page.',
-          )}
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 10,
-            marginTop: 4,
-          }}
-        >
-          <button
-            type='button'
-            className='btn ghost'
-            disabled={saving}
-            onClick={onClose}
-          >
-            {tr('console.common.cancel', 'cancel')}
-          </button>
-          <button
-            type='submit'
-            className='btn primary'
-            disabled={saving || !form.name.trim()}
-            data-testid='proj-save'
-          >
-            {saving
-              ? tr('console.common.loading', 'loading…')
-              : tr('console.common.save', 'save')}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-};
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
@@ -241,7 +85,13 @@ const HFProjects = () => {
   // spent nothing" and "we never found out".
   const [spendState, setSpendState] = useState('ok');
   const [loading, setLoading] = useState(true);
-  const [forbidden, setForbidden] = useState(false);
+  // Same three-way distinction for the LIST read (cycle-14 L8): as a
+  // 403-only boolean a 500 rendered "0 projects" over "No projects yet." —
+  // one read's result stated as fact next to a panel admitting the other
+  // could not be checked.
+  const [listState, setListState] = useState('ok');
+  const forbidden = listState === 'forbidden';
+  const listError = listState === 'error';
   const [editTarget, setEditTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   // The undo offer for the most recent delete: the project plus the token ids
@@ -264,6 +114,13 @@ const HFProjects = () => {
     busy.current.delete(key);
   }, []);
 
+  // classifyLoad() (helpers/loadState.js) collapses to the three states these
+  // panels render. 'error' covers everything that is neither ok nor a
+  // refusal — including a 200 whose body says success:false, which resolves
+  // rather than throwing and so slipped past both catch blocks untouched.
+  const panelState = (outcome) =>
+    outcome === 'ok' || outcome === 'forbidden' ? outcome : 'error';
+
   // skipErrorHandler: a 403 here is the NORMAL answer for a plain member (the
   // nav entry carries no role gate, so every member loads this page), and the
   // interceptor would turn each page load into a red toast. The panel states
@@ -274,15 +131,14 @@ const HFProjects = () => {
       const res = await API.get(`/api/v2/${tenantSlug}/projects/spend`, {
         skipErrorHandler: true,
       });
-      if (res?.data?.success) {
-        setSpend(res.data.data?.items ?? []);
-        setSpendState('ok');
-      }
+      const state = panelState(classifyLoad(res));
+      setSpendState(state);
+      setSpend(state === 'ok' ? (res.data.data?.items ?? []) : []);
     } catch (err) {
       // A failed spend read must not take the CRUD list with it: independent
       // reads, and the list is the actionable one.
       setSpend([]);
-      setSpendState(err?.response?.status === 403 ? 'forbidden' : 'error');
+      setSpendState(panelState(classifyLoad(err)));
     }
   }, [tenantSlug]);
 
@@ -295,12 +151,11 @@ const HFProjects = () => {
       const res = await API.get(
         `/api/v2/${tenantSlug}/projects?include_deleted=1`,
       );
-      if (res?.data?.success) {
-        setRows(res.data.data?.items ?? []);
-        setForbidden(false);
-      }
+      const state = panelState(classifyLoad(res));
+      setListState(state);
+      setRows(state === 'ok' ? (res.data.data?.items ?? []) : []);
     } catch (err) {
-      if (err?.response?.status === 403) setForbidden(true);
+      setListState(panelState(classifyLoad(err)));
       setRows([]);
     } finally {
       setLoading(false);
@@ -411,9 +266,11 @@ const HFProjects = () => {
           <h1>
             {loading
               ? '…'
-              : tr('console.projects.count', '{{count}} projects', {
-                  count: liveRows.length,
-                })}
+              : listError
+                ? tr('console.load_error.count_unknown', 'Count unavailable')
+                : tr('console.projects.count', '{{count}} projects', {
+                    count: liveRows.length,
+                  })}
           </h1>
           <div className='sub'>
             {tr(
@@ -501,22 +358,16 @@ const HFProjects = () => {
               </div>
             </div>
           ) : spendState === 'error' ? (
-            <div
-              style={{ padding: '20px 24px' }}
-              data-testid='proj-spend-error'
-            >
-              <div className='muted' style={{ fontSize: 12, marginBottom: 8 }}>
-                {tr('console.projects.spend_failed', 'Spend unavailable.')}
-              </div>
-              <button
-                type='button'
-                className='btn ghost'
-                data-testid='proj-spend-retry'
-                onClick={() => fetchSpend()}
-              >
-                {tr('console.common.retry', 'retry')}
-              </button>
-            </div>
+            <HfLoadError
+              variant='inset'
+              title={tr(
+                'console.projects.spend_failed',
+                'Couldn’t load spend by member',
+              )}
+              onRetry={() => fetchSpend()}
+              testId='proj-spend-error'
+              retryTestId='proj-spend-retry'
+            />
           ) : spend.length === 0 ? (
             <div
               className='muted'
@@ -626,6 +477,19 @@ const HFProjects = () => {
                 )}
               </div>
             </div>
+          ) : listError ? (
+            // Not "No projects yet." — the distinction the spend panel above
+            // already makes, now made by the read next to it.
+            <HfLoadError
+              variant='inset'
+              title={tr(
+                'console.projects.load_error',
+                'Couldn’t load projects',
+              )}
+              onRetry={() => fetchAll()}
+              testId='proj-list-error'
+              retryTestId='proj-list-retry'
+            />
           ) : liveRows.length === 0 ? (
             <div
               className='muted'

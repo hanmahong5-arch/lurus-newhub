@@ -63,12 +63,12 @@ func ClientGetProfile(c *gin.Context) {
 			"group":            user.Group,
 			"quota":            user.Quota,
 			"used_quota":       user.UsedQuota,
-			"remaining_quota":  user.Quota - user.UsedQuota,
+			"remaining_quota":  user.Quota, // Quota is already the remainder: settlement debits it and credits UsedQuota
 			"request_count":    user.RequestCount,
 			"token_count":      tokenCount,
 			"daily_quota":      dailyQuota,
 			"display_currency": displayType,
-			"display_amount":   calculateDisplayAmount(user.Quota - user.UsedQuota),
+			"display_amount":   calculateDisplayAmount(user.Quota),
 		},
 	})
 }
@@ -107,13 +107,13 @@ func ClientGetUsageSummary(c *gin.Context) {
 		"data": gin.H{
 			"quota":           user.Quota,
 			"used_quota":      user.UsedQuota,
-			"remaining_quota": user.Quota - user.UsedQuota,
+			"remaining_quota": user.Quota, // see ClientGetProfile
 			"period_used":     stat.Quota,
 			"rpm":             stat.Rpm,
 			"tpm":             stat.Tpm,
 			"start_timestamp": startTS,
 			"end_timestamp":   endTS,
-			"display_amount":  calculateDisplayAmount(user.Quota - user.UsedQuota),
+			"display_amount":  calculateDisplayAmount(user.Quota),
 		},
 	})
 }

@@ -157,11 +157,19 @@ func CreateTenant(c *gin.Context) {
 			})
 			return
 		}
+		if errors.Is(err, repo.ErrTenantConflict) {
+			c.JSON(http.StatusConflict, gin.H{
+				"success":    false,
+				"message":    "Slug \"" + req.Slug + "\" or this IdP organization id already belongs to another tenant",
+				"error_code": "TENANT_CONFLICT",
+			})
+			return
+		}
+		// The driver error names tables and constraints: log it, don't return it.
 		common.SysError("Failed to create tenant: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "Failed to create tenant",
-			"error":   err.Error(),
 		})
 		return
 	}

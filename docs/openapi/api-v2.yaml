@@ -6,12 +6,15 @@ info:
 
     ## Authentication
 
-    V2 API uses **Zitadel OAuth 2.0** for authentication:
+    V2 authenticates through OpenID Connect. Which provider, which issuer and
+    which client id are deploy-time configuration, not part of this contract:
+    the console redirects to whatever provider the deployment was given.
 
-    1. Redirect user to `GET /api/v2/{tenant_slug}/auth/login`
-    2. User authenticates with Zitadel
-    3. Callback redirects to `GET /api/v2/oauth/callback`
-    4. Use session cookie or JWT for subsequent requests
+    1. Redirect the user to `GET /api/v2/{tenant_slug}/auth/login`
+    2. The user authenticates with the deployment's configured OIDC provider
+    3. The provider calls back to `GET /api/v2/oauth/callback`
+    4. Later requests carry the session cookie, or a bearer token for the
+       machine callers that hold one (`OIDCBearer` below)
 
     ## Tenant Isolation
 
@@ -20,8 +23,22 @@ info:
 
     ## Rate Limiting
 
-    - Standard endpoints: 100 requests/minute per user
-    - Relay endpoints: Based on quota allocation
+    - Every route below `/api/v2` sits behind one shared bucket: 600 requests
+      per 180 s per source IP (`middleware.GlobalV2RateLimit`,
+      api-v2-router.go). It is keyed by the client address, NOT by account or
+      session, so everybody behind one NAT or CGNAT egress address spends the
+      same budget - an office on a single public address shares one bucket.
+    - Those numbers are the shipped defaults. An operator retunes them with
+      `GLOBAL_V2_RATE_LIMIT` and `GLOBAL_V2_RATE_LIMIT_DURATION`, so the limit
+      a given deployment enforces may differ.
+    - A limit of 0 DISABLES the bucket; it does not mean unlimited. To turn the
+      limiter off deliberately, set `GLOBAL_V2_RATE_LIMIT_ENABLE=false`.
+    - A reject is `429` with `Retry-After`, `X-RateLimit-Limit`,
+      `X-RateLimit-Remaining`, `X-RateLimit-Scope: ip`,
+      `X-RateLimit-Type: requests`, and an empty body.
+    - Individual routes may add a narrower bucket of their own on top of this
+      one - see the 429 on `POST /api/v2/{tenant_slug}/redeem`.
+    - Relay traffic is metered by quota, not by this bucket.
 
   version: 2.0.0
   contact:
@@ -32,28 +49,28 @@ info:
     url: https://lurus.cn/terms
 
 servers:
-  - url: https://api.lurus.cn
+  - url: https://hub.lurus.cn
     description: Production
   - url: http://localhost:3000
-    description: Local Development
+    description: Local development
 
 tags:
   - name: OAuth
-    description: OAuth 2.0 authentication flows
+    description: OAuth 2.0 / OpenID Connect authentication flows
   - name: User
     description: User profile management
   - name: Channels
     description: LLM provider channel management
   - name: Tokens
     description: API token management
+  - name: ChatSessions
+    description: Console chat sessions (client-driven persistence)
   - name: Billing
-    description: Billing and subscriptions
+    description: 'Invoice and top-up history. Read-only: this spec documents no route that moves money.'
   - name: Logs
     description: Usage logs
   - name: Redemptions
     description: Redemption codes
-  - name: Tenant Config
-    description: Tenant configuration (Admin)
   - name: Platform Admin
     description: Platform-level administration
 
@@ -67,7 +84,7 @@ paths:
       tags: [OAuth]
       summary: Initiate OAuth Login
       description: |
-        Redirects to Zitadel login page with PKCE challenge.
+        Redirects to the configured OIDC provider's login page. A PKCE challenge is sent only when OIDC_ENABLE_PKCE=true, which is off by default.
         After successful authentication, user is redirected to callback URL.
       operationId: zitadelLoginRedirect
       parameters:
@@ -80,10 +97,10 @@ paths:
             example: /console
       responses:
         '302':
-          description: Redirect to Zitadel login
+          description: Redirect to the OIDC provider's login page
           headers:
             Location:
-              description: Zitadel authorization URL
+              description: Authorization URL at the configured OIDC provider
               schema:
                 type: string
         '400':
@@ -96,14 +113,14 @@ paths:
       tags: [OAuth]
       summary: OAuth Callback
       description: |
-        Handles OAuth callback from Zitadel.
+        Handles the OAuth callback from the configured OIDC provider.
         Exchanges authorization code for tokens and creates session.
       operationId: zitadelCallback
       parameters:
         - name: code
           in: query
           required: true
-          description: Authorization code from Zitadel
+          description: Authorization code issued by the OIDC provider
           schema:
             type: string
         - name: state
@@ -140,13 +157,13 @@ paths:
     post:
       tags: [OAuth]
       summary: Logout
-      description: Logs out from Zitadel and clears session
+      description: Logs out at the OIDC provider and clears the session
       operationId: zitadelLogout
       responses:
         '200':
           description: Successfully logged out
         '302':
-          description: Redirect to Zitadel logout URL
+          description: Redirect to the OIDC provider's logout URL
 
   # ============================================================
   # User Routes
@@ -159,7 +176,7 @@ paths:
       description: Returns the current authenticated user's profile
       operationId: getSelfV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
       responses:
@@ -177,7 +194,7 @@ paths:
       description: Updates the current user's profile
       operationId: updateSelfV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
       requestBody:
@@ -209,7 +226,7 @@ paths:
       description: Lists all available LLM provider channels
       operationId: listChannelsV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/Page'
@@ -234,7 +251,7 @@ paths:
       description: Creates a new LLM provider channel (Admin only)
       operationId: createChannelV2
       security:
-        - ZitadelJWT: [admin]
+        - OIDCBearer: [admin]
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
       requestBody:
@@ -264,7 +281,7 @@ paths:
       description: Gets a specific channel by ID
       operationId: getChannelV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/ChannelId'
@@ -285,7 +302,7 @@ paths:
       description: Updates a channel (Admin only)
       operationId: updateChannelV2
       security:
-        - ZitadelJWT: [admin]
+        - OIDCBearer: [admin]
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/ChannelId'
@@ -316,7 +333,7 @@ paths:
       description: Deletes a channel (Admin only)
       operationId: deleteChannelV2
       security:
-        - ZitadelJWT: [admin]
+        - OIDCBearer: [admin]
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/ChannelId'
@@ -341,7 +358,7 @@ paths:
       description: Lists all API tokens for the current user
       operationId: listTokensV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/Page'
@@ -361,7 +378,7 @@ paths:
       description: Creates a new API token
       operationId: createTokenV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
       requestBody:
@@ -389,7 +406,7 @@ paths:
       description: Updates an API token
       operationId: updateTokenV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/TokenId'
@@ -418,7 +435,7 @@ paths:
       description: Deletes an API token
       operationId: deleteTokenV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/TokenId'
@@ -442,7 +459,7 @@ paths:
       description: Lists the caller's own saved chat sessions, most-recently-updated first.
       operationId: listChatSessionsV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
       responses:
@@ -458,7 +475,7 @@ paths:
         the full turn array, not a single new turn to append.
       operationId: createChatSessionV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
       responses:
@@ -483,7 +500,7 @@ paths:
       description: Fetches one saved chat session (plus its messages) the caller owns.
       operationId: getChatSessionV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/ChatSessionId'
@@ -502,7 +519,7 @@ paths:
         message list, of a chat session the caller owns.
       operationId: updateChatSessionV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/ChatSessionId'
@@ -528,7 +545,7 @@ paths:
       description: Deletes a chat session (and its messages) the caller owns.
       operationId: deleteChatSessionV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/ChatSessionId'
@@ -544,6 +561,79 @@ paths:
   # Billing Routes
   # ============================================================
 
+  /api/v2/{tenant_slug}/billing/invoices:
+    get:
+      tags: [Billing]
+      summary: List Monthly Invoices
+      description: |
+        Monthly spend buckets for the calling user inside this tenant. Both
+        query parameters are optional; the range is always clamped to at most
+        12 calendar months. There is deliberately no amount_usd field - no FX
+        source is wired into this endpoint.
+      operationId: listInvoicesV2
+      security:
+        - OIDCBearer: []
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+        - name: from
+          in: query
+          description: First month, YYYY-MM
+          schema:
+            type: string
+            pattern: '^[0-9]{4}-[0-9]{2}$'
+        - name: to
+          in: query
+          description: Last month, YYYY-MM
+          schema:
+            type: string
+            pattern: '^[0-9]{4}-[0-9]{2}$'
+      responses:
+        '200':
+          description: Monthly spend buckets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/InvoiceMonth'
+                      total_invoices:
+                        type: integer
+                      summary:
+                        type: object
+                        properties:
+                          total_quota:
+                            type: integer
+                            format: int64
+                          total_cny:
+                            type: number
+                          mtd_quota:
+                            type: integer
+                            format: int64
+                            description: >-
+                              Billable quota in the current UTC calendar month
+        '400':
+          description: Invalid from/to range
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Invoice aggregation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/v2/{tenant_slug}/billing/topups:
     get:
       tags: [Billing]
@@ -551,7 +641,7 @@ paths:
       description: Lists user's top-up history
       operationId: getTopUpsV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/Page'
@@ -566,105 +656,6 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
-  /api/v2/{tenant_slug}/billing/topup:
-    post:
-      tags: [Billing]
-      summary: Create Top-up
-      description: Initiates a new top-up payment
-      operationId: topUpV2
-      security:
-        - ZitadelJWT: []
-      parameters:
-        - $ref: '#/components/parameters/TenantSlug'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TopUpRequest'
-      responses:
-        '200':
-          description: Payment URL returned
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TopUpResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  /api/v2/{tenant_slug}/billing/subscriptions:
-    get:
-      tags: [Billing]
-      summary: List Subscriptions
-      description: Lists user's active subscriptions
-      operationId: getSubscriptionsV2
-      security:
-        - ZitadelJWT: []
-      parameters:
-        - $ref: '#/components/parameters/TenantSlug'
-      responses:
-        '200':
-          description: Subscription list
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SubscriptionList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  /api/v2/{tenant_slug}/billing/subscribe:
-    post:
-      tags: [Billing]
-      summary: Create Subscription
-      description: Subscribes to a plan
-      operationId: subscribeV2
-      security:
-        - ZitadelJWT: []
-      parameters:
-        - $ref: '#/components/parameters/TenantSlug'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SubscribeRequest'
-      responses:
-        '200':
-          description: Subscription created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Subscription'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  /api/v2/{tenant_slug}/billing/subscriptions/{id}:
-    delete:
-      tags: [Billing]
-      summary: Cancel Subscription
-      description: Cancels a subscription
-      operationId: cancelSubscriptionV2
-      security:
-        - ZitadelJWT: []
-      parameters:
-        - $ref: '#/components/parameters/TenantSlug'
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        '204':
-          description: Subscription cancelled
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
   # ============================================================
   # Log Routes
   # ============================================================
@@ -676,7 +667,7 @@ paths:
       description: Gets usage logs for the current user
       operationId: getLogsV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/Page'
@@ -713,7 +704,7 @@ paths:
       description: Gets all users' logs (Admin only)
       operationId: getAllLogsV2
       security:
-        - ZitadelJWT: [admin]
+        - OIDCBearer: [admin]
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/Page'
@@ -739,14 +730,18 @@ paths:
   # Redemption Routes
   # ============================================================
 
-  /api/v2/{tenant_slug}/redemptions/redeem:
+  /api/v2/{tenant_slug}/redeem:
     post:
       tags: [Redemptions]
       summary: Redeem Code
-      description: Redeems a redemption code for quota
+      description: |
+        Redeems a redemption code and credits the quota to the calling user.
+        Mounted at /api/v2/{tenant_slug}/redeem (api-v2-router.go), NOT under
+        the /redemptions collection. Guarded by a 5-requests-per-60-seconds
+        per-IP limiter because the code itself is the only credential.
       operationId: redeemCodeV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
       requestBody:
@@ -755,27 +750,90 @@ paths:
           application/json:
             schema:
               type: object
-              required: [code]
+              description: >-
+                Send the 32-character code as either key or code; key wins when
+                both are present.
               properties:
+                key:
+                  type: string
+                  minLength: 32
+                  maxLength: 32
+                  description: Redemption code (v1-compatible field name)
                 code:
                   type: string
-                  description: Redemption code
+                  minLength: 32
+                  maxLength: 32
+                  description: Redemption code (alias of key)
       responses:
         '200':
-          description: Code redeemed successfully
+          description: Code redeemed
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  success: { type: boolean }
-                  quota: { type: integer, description: Quota added }
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      quota_added:
+                        type: integer
+                        description: Quota units credited
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: >-
+            Missing or malformed code, or the code is unusable (expired,
+            already used, unknown). Body carries success=false, message and
+            error_code.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '404':
-          description: Code not found or already used
+        '429':
+          description: >-
+            Redemption rate limit exceeded. middleware.RedemptionRateLimit
+            (rate-limit.go) allows 5 attempts per 60 s per client IP in the RD
+            bucket, because the code itself is the only credential and an
+            unthrottled run is code guessing. The reject carries the headers
+            below and an EMPTY body - the limiter writes a bare status, not a
+            JSON envelope, so a client must branch on the status code, not on
+            `success`. If Redis is unreachable this bucket degrades to a
+            process-local limiter rather than failing open, which makes the
+            effective ceiling (replicas x 5) per 60 s until Redis returns. The
+            wider /api/v2 bucket described in info.description applies first.
+          headers:
+            Retry-After:
+              description: Seconds until this IP's redemption window frees a slot.
+              schema:
+                type: integer
+            X-RateLimit-Limit:
+              description: Attempts allowed per window. 5 for this bucket.
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: Attempts left in the window. Always 0 on a reject.
+              schema:
+                type: integer
+            X-RateLimit-Scope:
+              description: What the bucket is keyed by. Always `ip` here.
+              schema:
+                type: string
+                enum: [ip]
+            X-RateLimit-Type:
+              description: What is being counted. Always `requests` here.
+              schema:
+                type: string
+                enum: [requests]
+        '500':
+          description: Hub-side redemption fault (error_code REDEMPTION_FAILED)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/v2/{tenant_slug}/redemptions:
     get:
@@ -784,7 +842,7 @@ paths:
       description: Lists all redemption codes (Admin only)
       operationId: listRedemptionsV2
       security:
-        - ZitadelJWT: [admin]
+        - OIDCBearer: [admin]
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - $ref: '#/components/parameters/Page'
@@ -806,7 +864,7 @@ paths:
       description: Creates a new redemption code (Admin only)
       operationId: createRedemptionV2
       security:
-        - ZitadelJWT: [admin]
+        - OIDCBearer: [admin]
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
       requestBody:
@@ -836,7 +894,7 @@ paths:
       description: Deletes a redemption code (Admin only)
       operationId: deleteRedemptionV2
       security:
-        - ZitadelJWT: [admin]
+        - OIDCBearer: [admin]
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
         - name: id
@@ -853,69 +911,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-
-  # ============================================================
-  # Tenant Config Routes (Admin)
-  # ============================================================
-
-  /api/v2/{tenant_slug}/config:
-    get:
-      tags: [Tenant Config]
-      summary: Get Tenant Configs
-      description: Gets all tenant configuration (Admin only)
-      operationId: getTenantConfigs
-      security:
-        - ZitadelJWT: [admin]
-      parameters:
-        - $ref: '#/components/parameters/TenantSlug'
-      responses:
-        '200':
-          description: Tenant configurations
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties:
-                  type: string
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-
-  /api/v2/{tenant_slug}/config/{key}:
-    put:
-      tags: [Tenant Config]
-      summary: Update Tenant Config
-      description: Updates a tenant configuration value (Admin only)
-      operationId: updateTenantConfig
-      security:
-        - ZitadelJWT: [admin]
-      parameters:
-        - $ref: '#/components/parameters/TenantSlug'
-        - name: key
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [value]
-              properties:
-                value:
-                  type: string
-      responses:
-        '200':
-          description: Config updated
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
 
   # ============================================================
   # Platform Admin Routes
@@ -1298,56 +1293,43 @@ paths:
   /api/v2/{tenant_slug}/models:
     get:
       tags: [Channels]
-      summary: List Available Models
+      summary: List Model Catalog
       description: |
-        Returns the list of models available to the tenant, derived from the
-        tenant's active channels. Shape mirrors the OpenAI /v1/models response
-        so SDK clients work without modification.
+        Paginated model catalogue with a whitelist projection. This is NOT the
+        OpenAI /v1/models envelope - that one belongs to the relay surface and
+        is documented in relay.json.
       operationId: listModelsV2
       security:
-        - ZitadelJWT: []
+        - OIDCBearer: []
       parameters:
         - $ref: '#/components/parameters/TenantSlug'
+        - name: limit
+          in: query
+          description: Page size, 1-100 (values above 100 are clamped)
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: keyword
+          in: query
+          description: Substring match on the model name
+          schema:
+            type: string
+        - name: vendor
+          in: query
+          description: Filter by vendor name
+          schema:
+            type: string
       responses:
         '200':
-          description: Model list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  object:
-                    type: string
-                    example: list
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ModelInfo'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          description: Tenant not found
-
-  # ============================================================
-  # Settings (Tenant config alias used by the frontend Settings page)
-  # ============================================================
-
-  /api/v2/{tenant_slug}/settings:
-    get:
-      tags: [Tenant Config]
-      summary: Get Tenant Settings
-      description: |
-        Returns all tenant-scoped configuration key/value pairs.
-        Alias of GET /api/v2/{tenant_slug}/config used by the frontend
-        Settings page.
-      operationId: getTenantSettingsV2
-      security:
-        - ZitadelJWT: []
-      parameters:
-        - $ref: '#/components/parameters/TenantSlug'
-      responses:
-        '200':
-          description: Tenant settings
+          description: Model catalogue page
           content:
             application/json:
               schema:
@@ -1356,105 +1338,37 @@ paths:
                   success:
                     type: boolean
                   data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/TenantConfigEntry'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  # ============================================================
-  # Playground (chat via user session, not token auth)
-  # ============================================================
-
-  /pg/chat/completions:
-    post:
-      tags: [Relay]
-      summary: Playground Chat Completions
-      description: |
-        OpenAI-compatible chat completions endpoint for the in-browser Playground.
-        Uses user session auth (not API token). Sends quota consumption to the
-        user's account. Not suitable for production API client use — use /v1/chat/completions
-        with a token instead.
-      operationId: playgroundChatCompletions
-      security:
-        - SessionAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ChatCompletionRequest'
-      responses:
-        '200':
-          description: Chat completion response (or SSE stream if stream=true)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ChatCompletionResponse'
-            text/event-stream:
-              schema:
-                type: string
-                description: Server-Sent Events stream of chat delta chunks
-        '402':
-          description: Insufficient quota
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ModelCatalogEntry'
+                      total:
+                        type: integer
+                      limit:
+                        type: integer
+                      offset:
+                        type: integer
+                      vendor_counts:
+                        type: object
+                        additionalProperties:
+                          type: integer
+                        description: Model count per vendor name
+        '400':
+          description: Missing tenant slug or invalid pagination
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
-
-  # ============================================================
-  # Relay (token auth — primary LLM API surface)
-  # ============================================================
-
-  /v1/chat/completions:
-    post:
-      tags: [Relay]
-      summary: Chat Completions
-      description: |
-        OpenAI-compatible chat completions relay. Supports streaming (SSE) when
-        stream=true. Auth: Bearer token issued by POST /api/v2/{tenant_slug}/tokens.
-      operationId: relayChatCompletions
-      security:
-        - BearerToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ChatCompletionRequest'
-      responses:
-        '200':
-          description: Completion response or SSE stream
+        '404':
+          description: Tenant not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChatCompletionResponse'
-            text/event-stream:
-              schema:
-                type: string
-        '402':
-          description: Quota exhausted (user or tenant credit pool)
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: object
-                    properties:
-                      code:
-                        type: string
-                        example: pool_exhausted
-                      message:
-                        type: string
-                      tenant_id:
-                        type: string
-        '429':
-          description: Rate limited (cost spike guard)
-        '401':
-          $ref: '#/components/responses/Unauthorized'
+                $ref: '#/components/schemas/Error'
 
 # ============================================================
 # Components
@@ -1462,20 +1376,19 @@ paths:
 
 components:
   securitySchemes:
-    ZitadelJWT:
+    OIDCBearer:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Zitadel OAuth 2.0 JWT token
+      description: >-
+        Bearer token issued by the deployment's configured OIDC provider.
+        Which provider that is, is deploy-time configuration; no specific
+        vendor is part of this contract.
     SessionAuth:
       type: apiKey
       in: cookie
       name: session
       description: Session cookie for platform admin
-    BearerToken:
-      type: http
-      scheme: bearer
-      description: API token issued by POST /api/v2/{tenant_slug}/tokens (sk-xxx)
 
   parameters:
     TenantSlug:
@@ -1766,27 +1679,6 @@ components:
         total:
           type: integer
 
-    TopUpRequest:
-      type: object
-      required: [amount, payment_method]
-      properties:
-        amount:
-          type: number
-          minimum: 1
-        payment_method:
-          type: string
-          enum: [stripe, epay, creem]
-
-    TopUpResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        payment_url:
-          type: string
-        order_id:
-          type: string
-
     TopUpList:
       type: object
       properties:
@@ -1810,40 +1702,34 @@ components:
         total:
           type: integer
 
-    Subscription:
+    InvoiceMonth:
       type: object
+      description: One calendar month of billable spend.
       properties:
-        id:
-          type: integer
-        plan_id:
-          type: integer
-        plan_name:
+        month:
           type: string
-        status:
-          type: string
-        started_at:
+          description: YYYY-MM
+        quota:
           type: integer
-        expires_at:
+          format: int64
+          description: Billable quota units consumed
+        amount_cny:
+          type: number
+          description: "Amount charged for the month in CNY: the wallet charge recorded at settlement for each request that has one (logs.charged_cny4), plus the quota of the remaining billable rows priced at the current exchange rate (QuotaPerUnit / USDExchangeRate quota per CNY). Changing the exchange rate no longer re-prices recorded charges."
+        request_count:
           type: integer
-
-    SubscribeRequest:
-      type: object
-      required: [plan_id]
-      properties:
-        plan_id:
+          format: int64
+          description: Number of billable log rows
+        unbilled_quota:
           type: integer
-        payment_method:
-          type: string
-
-    SubscriptionList:
-      type: object
-      properties:
-        success:
-          type: boolean
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/Subscription'
+          format: int64
+          description: >-
+            Quota logged but excluded from billing (settlement-failed or
+            channel-test rows)
+        unbilled_request_count:
+          type: integer
+          format: int64
+          description: Number of log rows excluded from billing
 
     LogList:
       type: object
@@ -2015,117 +1901,31 @@ components:
         total_tokens:
           type: integer
 
-    ModelInfo:
+    ModelCatalogEntry:
       type: object
-      description: Model descriptor (OpenAI /v1/models shape)
+      description: Whitelist projection of a catalogue model row.
       properties:
         id:
+          type: integer
+        model_name:
           type: string
-          example: gpt-4o
-        object:
+        vendor:
           type: string
-          example: model
-        owned_by:
-          type: string
-          example: openai
-
-    TenantConfigEntry:
-      type: object
-      properties:
-        key:
-          type: string
-          example: default_model
-        value:
-          type: string
-          example: gpt-4o
-
-    ChatMessage:
-      type: object
-      required: [role, content]
-      properties:
-        role:
-          type: string
-          enum: [system, user, assistant, tool]
-        content:
-          oneOf:
-            - type: string
-            - type: array
-              items:
-                type: object
-                properties:
-                  type:
-                    type: string
-                  text:
-                    type: string
-
-    ChatCompletionRequest:
-      type: object
-      required: [model, messages]
-      properties:
-        model:
-          type: string
-          example: gpt-4o
-        messages:
+          description: Vendor display name, empty when unknown
+        name_rule:
+          type: integer
+        status:
+          type: integer
+        quota_types:
           type: array
           items:
-            $ref: '#/components/schemas/ChatMessage'
-        stream:
-          type: boolean
-          default: false
-        temperature:
-          type: number
-          minimum: 0
-          maximum: 2
-        max_tokens:
-          type: integer
-          minimum: 1
-        top_p:
-          type: number
-        stop:
-          oneOf:
-            - type: string
-            - type: array
-              items:
-                type: string
-
-    ChatCompletionChoice:
-      type: object
-      properties:
-        index:
-          type: integer
-        message:
-          $ref: '#/components/schemas/ChatMessage'
-        finish_reason:
-          type: string
-          enum: [stop, length, tool_calls, content_filter]
-
-    ChatCompletionUsage:
-      type: object
-      properties:
-        prompt_tokens:
-          type: integer
-        completion_tokens:
-          type: integer
-        total_tokens:
-          type: integer
-
-    ChatCompletionResponse:
-      type: object
-      properties:
-        id:
-          type: string
-          example: chatcmpl-abc123
-        object:
-          type: string
-          example: chat.completion
-        created:
-          type: integer
-          description: Unix timestamp
-        model:
-          type: string
-        choices:
+            type: integer
+        enable_groups:
           type: array
           items:
-            $ref: '#/components/schemas/ChatCompletionChoice'
-        usage:
-          $ref: '#/components/schemas/ChatCompletionUsage'
+            type: string
+        endpoints:
+          type: string
+        created_time:
+          type: integer
+          format: int64

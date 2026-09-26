@@ -4,12 +4,41 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"sync/atomic"
 )
+
+// ErrInsufficientBalance is the sentinel for the ONE platform rejection that
+// genuinely means "this customer is out of money": a 400 whose body says
+// error=insufficient_balance.
+//
+// Match it with errors.Is, never by substring. A substring match on the
+// message also swallows every other rejection whose text happens to contain
+// the phrase, and — worse, because it is how this went wrong — it matched a
+// label this package itself fabricated for rejections that had nothing to do
+// with balance, which made the graceful-degradation path refuse to degrade on
+// exactly the failures it exists for.
+var ErrInsufficientBalance = errors.New("insufficient_balance")
+
+// PlatformRejectedError is a platform rejection that is NOT about the
+// customer's balance — a validation rule the platform tightened, a missing
+// idempotency key, a product id it stopped recognising. It carries the
+// platform's own reason and status so the customer-facing message can say
+// "the billing service rejected this request" instead of "you are out of
+// money", and so the degrade path can tell the two classes apart.
+type PlatformRejectedError struct {
+	Op     string // the platform call that was rejected, e.g. "pre-authorize"
+	Status int    // the HTTP status the platform answered with
+	Reason string // the body's "error" field, or "unknown" when unparseable
+}
+
+func (e *PlatformRejectedError) Error() string {
+	return fmt.Sprintf("%s rejected by billing service: status=%d reason=%s", e.Op, e.Status, e.Reason)
+}
 
 // billingUnifiedEnabled is an atomic flag controlling the pre-authorize billing path.
 // Use BillingUnifiedEnabled() to read and SetBillingUnifiedEnabled() to write.
@@ -114,10 +143,15 @@ func PreAuthorize(ctx context.Context, accountID int64, amount float64, productI
 	if resp.StatusCode == http.StatusBadRequest {
 		reason := parseErrorResponse(resp.Body)
 		if reason == "insufficient_balance" {
-			return nil, fmt.Errorf("insufficient_balance")
+			return nil, ErrInsufficientBalance
 		}
+		// Any OTHER 400 is the platform refusing the request we sent, not the
+		// customer running out of money. Returning the balance sentinel here
+		// (which this arm used to do, right after logging the real reason)
+		// told the customer a falsehood they could not act on and blinded the
+		// degrade path at the same time.
 		SysLog(fmt.Sprintf("pre-authorize rejected: account=%d, status=%d, reason=%s", accountID, resp.StatusCode, reason))
-		return nil, fmt.Errorf("insufficient_balance")
+		return nil, &PlatformRejectedError{Op: "pre-authorize", Status: resp.StatusCode, Reason: reason}
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		SysLog(fmt.Sprintf("pre-authorize failed: account=%d, status=%d", accountID, resp.StatusCode))

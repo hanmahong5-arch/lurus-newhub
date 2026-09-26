@@ -6,6 +6,7 @@
         "org_mismatch": "This account belongs to a different organisation than the tenant you are signing in to. Use your own organisation's sign-in link, or ask an administrator."
       },
       "common": {
+        "invalid_amount": "Enter an amount in dollars, like 5 or 12.50",
         "no_data": "no data",
         "loading": "loading…",
         "save": "save",
@@ -120,7 +121,6 @@
         "mode_observe": "observe — a model off the list still answers; the miss is only counted",
         "availability_unrestricted": "No allow-list configured — every catalog model is reachable for this tenant.",
         "availability_error": "Could not read the allow-list for this tenant — state unknown, not editable.",
-        "availability_retry": "retry",
         "availability_placeholder": "gpt-4o or gpt-4o-*",
         "availability_add": "+ add",
         "availability_empty_warning": "Saving an empty list denies every model for this tenant — it is not the same as leaving the allow-list unconfigured.",
@@ -129,7 +129,8 @@
         "availability_toast_saved": "Model allow-list saved",
         "availability_toast_cleared": "Model allow-list cleared — tenant is unrestricted",
         "clear_confirm_title": "Remove the allow-list for {{tenant}}? The tenant becomes unrestricted.",
-        "save_empty_confirm_title": "Save an EMPTY allow-list for {{tenant}}? This denies every model."
+        "save_empty_confirm_title": "Save an EMPTY allow-list for {{tenant}}? This denies every model.",
+        "load_error": "Couldn’t load model rate limits"
       },
       "shell": {
         "tagline": "data processing layer",
@@ -212,7 +213,7 @@
         "faq": "faq",
         "api_info": "api info",
         "uptime": "uptime",
-        "load_failed": "Unable to load — retry",
+        "load_failed": "Unable to load usage data",
         "load_failed_short": "unable to load"
       },
       "token": {
@@ -325,7 +326,18 @@
         "creating": "creating…",
         "create_tenant": "create tenant",
         "stats_title": "stats",
-        "no_stats": "No stats available.",
+        "stats_load_error": "Couldn’t load stats",
+        "stat_seats": "Seats used",
+        "stat_tokens": "API keys",
+        "stat_channels": "Channels",
+        "stat_quota_used": "Quota used",
+        "stat_quota_remaining": "Quota remaining",
+        "stat_quota_cap": "Quota cap",
+        "stat_unlimited": "Unlimited",
+        "stat_redemptions": "Redemption codes",
+        "stat_logs": "Requests logged",
+        "stat_last_activity": "Last activity",
+        "stat_never": "Never",
         "confirm_action_title": "Perform {{action}} on tenant \"{{name}}\"?",
         "confirm_action_consequence": "This affects every token and channel under this tenant",
         "btn_limits": "limits",
@@ -362,7 +374,8 @@
         "toast_invite_revoked": "Invite revoked",
         "toast_invite_revoke_failed": "Failed to revoke invite",
         "empty_invites": "No invites issued yet.",
-        "invite_list_load_failed": "Could not load invites."
+        "invite_list_load_failed": "Could not load invites.",
+        "load_error": "Couldn’t load tenants"
       },
       "channel": {
         "crumb": "channels",
@@ -517,6 +530,7 @@
         "detail_prompt_tokens": "prompt tokens",
         "detail_completion_tokens": "completion tokens",
         "detail_cost": "cost",
+        "detail_charged": "charged",
         "detail_duration": "duration",
         "detail_streaming": "streaming",
         "yes": "yes",
@@ -1015,7 +1029,7 @@
         "spend_empty": "No usage recorded yet.",
         "spend_restricted": "Tenant admins only",
         "spend_restricted_body": "Spend across every member of the tenant is restricted to tenant administrators. Your own usage is on the Logs page.",
-        "spend_failed": "Spend unavailable.",
+        "spend_failed": "Couldn’t load spend by member",
         "spend_total": "total",
         "unassigned": "unassigned",
         "toast_saved": "Project saved",
@@ -1034,7 +1048,8 @@
         "deleted_hint": "Kept so past usage still reports under a readable name — and so a delete is never final. Restoring does not re-attach tokens unless you use the undo right after deleting.",
         "delete_reversible": "Reversible: the project is retired, not erased, and you can undo it right after.",
         "undo_body_one": "Deleted \"{{name}}\". 1 token was unassigned.",
-        "undo_body_other": "Deleted \"{{name}}\". {{count}} tokens were unassigned."
+        "undo_body_other": "Deleted \"{{name}}\". {{count}} tokens were unassigned.",
+        "load_error": "Couldn’t load projects"
       },
       "settings": {
         "crumb": "settings",
@@ -1443,7 +1458,8 @@
           "status_expired": "expired",
           "field_ttl": "ttl seconds (optional, max 90d)",
           "no_expiry": "never",
-          "revoke": "Revoke"
+          "revoke": "Revoke",
+          "load_error": "Couldn’t load delegated grants"
         },
         "diagnostics": {
           "crumb_admin": "operations & insights",
@@ -1610,6 +1626,16 @@
         "requests": "requests",
         "last_24h": "last 24 hours",
         "empty": "No usage in this window."
+      },
+      "load_error": {
+        "title": "Couldn’t load this data",
+        "title_unauthenticated": "Your session has expired",
+        "title_forbidden": "You don’t have access to this data",
+        "detail": "The server didn’t return this data, so nothing here is shown as empty. Try again in a moment.",
+        "detail_unauthenticated": "Sign in again, then retry.",
+        "detail_forbidden": "Ask an administrator for access.",
+        "retrying": "Retrying…",
+        "count_unknown": "Count unavailable"
       }
     },
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Web search {{count}} time / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

@@ -101,11 +101,27 @@ func GetHealthDetailed(c *gin.Context) {
 		checks["schema_migrations"] = "ok"
 	}
 
-	// Platform billing service check (via circuit breaker state)
+	// Platform billing service check — OBSERVE the breaker, never use it.
+	// This handler is the readinessProbe target (every 5s in both manifests:
+	// deploy/k8s/r6-stage/deployment.yaml:338-344, r6-uat/deployment.yaml),
+	// and until cycle 14 it called common.BillingBreakerAllow(), which MUTATES:
+	// an open breaker past its cooldown becomes half-open there and the caller
+	// walks off with the single probe slot. The probe then reported neither
+	// success nor failure, and half-open refuses everyone else — so within one
+	// probe interval of any platform blip every real billing call was refused
+	// with "billing service recovering (probe in progress)" until the pod
+	// restarted, while this check cheerfully reported "ok" and
+	// BillingBreakerIsOpen() (false for half-open) kept the degrade path shut.
+	// BillingBreakerState is the read-only accessor; half-open is surfaced
+	// under its own label so an operator can tell "platform is down" from
+	// "we are probing it".
 	if common.BillingUnifiedEnabled() {
-		if err := common.BillingBreakerAllow(); err != nil {
+		switch common.BillingBreakerState() {
+		case common.BillingBreakerStateOpen:
 			checks["billing"] = "circuit_open"
-		} else {
+		case common.BillingBreakerStateHalfOpen:
+			checks["billing"] = "circuit_half_open"
+		default:
 			checks["billing"] = "ok"
 		}
 	} else {

@@ -39,7 +39,13 @@ var wantExposedHeaders = []string{
 	"X-Request-Id", "X-Oneapi-Request-Id",
 	"X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset",
 	"X-RateLimit-Scope", "X-RateLimit-Type", "Retry-After",
-	"X-Model-Provider", "X-Request-Cost", "X-Quota-Remaining",
+	"X-Request-Cost", "X-Quota-Remaining",
+	// Cycle-14 L6: X-Relay-Adapter replaced the mis-named X-Model-Provider
+	// (which is still exposed only while relay.json documents it — see
+	// cors.go), and X-Cost-Reporting names where the cost of this call is
+	// reported, because streamed responses cannot carry it in a header.
+	"X-Relay-Adapter", "X-Cost-Reporting",
+	"X-Model-Provider",
 }
 
 // TestCORS_ExposesCycle5Headers is case (a): a GET from an allowed origin

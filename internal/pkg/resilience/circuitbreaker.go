@@ -38,12 +38,28 @@ type Config struct {
 	Threshold int
 	// Timeout is the duration the breaker stays Open before transitioning to HalfOpen.
 	Timeout time.Duration
+	// HalfOpenTimeout bounds how long HalfOpen may last without an outcome.
+	// HalfOpen admits exactly one probe and then refuses every caller until
+	// that probe reports (recordSuccess / recordFailure / recordInconclusive),
+	// so a probe that never reports at all — a panicking caller, a code path
+	// that forgot to report — used to exclude the channel from routing until
+	// the process restarted. Past this bound allow() re-arms and admits a
+	// fresh probe, which caps the damage at one lost probe window instead of
+	// forever. Zero falls back to Timeout (see getOrCreate).
+	HalfOpenTimeout time.Duration
 	// OnStateChange is called on every state transition (for metrics/logging).
 	OnStateChange func(channelID int, from, to State)
 }
 
+// defaultHalfOpenTimeout is the fallback probe lifetime when neither
+// HalfOpenTimeout nor Timeout is configured. Long enough that a real relay
+// request admitted as the probe normally reports before it expires, short
+// enough that a probe which never reports cannot hide a channel for long.
+const defaultHalfOpenTimeout = 60 * time.Second
+
 // DefaultConfig returns production defaults.
-// Override via env: CB_THRESHOLD (default 5), CB_TIMEOUT_SEC (default 30).
+// Override via env: CB_THRESHOLD (default 5), CB_TIMEOUT_SEC (default 30),
+// CB_HALF_OPEN_TIMEOUT_SEC (default 60).
 func DefaultConfig() Config {
 	threshold := 5
 	if v := os.Getenv("CB_THRESHOLD"); v != "" {
@@ -57,9 +73,16 @@ func DefaultConfig() Config {
 			timeout = time.Duration(n) * time.Second
 		}
 	}
+	halfOpenTimeout := defaultHalfOpenTimeout
+	if v := os.Getenv("CB_HALF_OPEN_TIMEOUT_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			halfOpenTimeout = time.Duration(n) * time.Second
+		}
+	}
 	return Config{
-		Threshold: threshold,
-		Timeout:   timeout,
+		Threshold:       threshold,
+		Timeout:         timeout,
+		HalfOpenTimeout: halfOpenTimeout,
 	}
 }
 
@@ -69,8 +92,12 @@ type breaker struct {
 	state            State
 	consecutiveFails int
 	lastFailTime     time.Time
-	threshold        int
-	timeout          time.Duration
+	// halfOpenSince is when the current HalfOpen probe was admitted. Only
+	// meaningful while state == StateHalfOpen; cleared on every exit from it.
+	halfOpenSince   time.Time
+	threshold       int
+	timeout         time.Duration
+	halfOpenTimeout time.Duration
 }
 
 // allow checks whether a request should be permitted.
@@ -86,11 +113,20 @@ func (b *breaker) allow() bool {
 		// Check if timeout expired → transition to HalfOpen.
 		if time.Since(b.lastFailTime) >= b.timeout {
 			b.state = StateHalfOpen
+			b.halfOpenSince = time.Now()
 			return true // Allow one probe request.
 		}
 		return false
 	case StateHalfOpen:
-		// Only one probe in flight — reject concurrent requests while probing.
+		// The admitted probe has a deadline. Until it expires only one probe
+		// is in flight, so every other caller is refused (the original rule).
+		// Past it we must assume the probe will never report — nothing else
+		// leaves HalfOpen — and admit a fresh one, otherwise this channel is
+		// excluded from routing for the lifetime of the process.
+		if time.Since(b.halfOpenSince) >= b.halfOpenTimeout {
+			b.halfOpenSince = time.Now()
+			return true
+		}
 		return false
 	default:
 		return true
@@ -106,6 +142,7 @@ func (b *breaker) recordSuccess() (State, State) {
 	prev := b.state
 	b.consecutiveFails = 0
 	b.state = StateClosed
+	b.halfOpenSince = time.Time{}
 	return prev, StateClosed
 }
 
@@ -127,8 +164,33 @@ func (b *breaker) recordFailure() (State, State) {
 	case StateHalfOpen:
 		// Probe failed — back to Open.
 		b.state = StateOpen
+		b.halfOpenSince = time.Time{}
 	case StateOpen:
 		// Already open, just update lastFailTime (extends timeout).
+	}
+	return prev, b.state
+}
+
+// recordInconclusive reports that an admitted request finished without saying
+// anything about the upstream's health — a caller-side 4xx, a client
+// cancellation, a request the gateway itself refused to send. It releases the
+// probe slot WITHOUT counting a failure: the channel must not be tripped by
+// its users' own bad requests, but it must not stay hidden either.
+//
+// HalfOpen → Open, restarting the cooldown from now, so the next probe is one
+// timeout away rather than immediate (an unhealthy upstream must not be
+// hammered by a client that keeps sending it 4xx-producing requests).
+// Closed and Open are no-ops: nothing was learned and no slot was held.
+// Returns (previousState, newState) for metrics reporting.
+func (b *breaker) recordInconclusive() (State, State) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	prev := b.state
+	if b.state == StateHalfOpen {
+		b.state = StateOpen
+		b.halfOpenSince = time.Time{}
+		b.lastFailTime = time.Now()
 	}
 	return prev, b.state
 }
@@ -168,9 +230,21 @@ func (r *Registry) getOrCreate(channelID int) *breaker {
 	if b, ok = r.breakers[channelID]; ok {
 		return b
 	}
+	halfOpenTimeout := r.cfg.HalfOpenTimeout
+	if halfOpenTimeout <= 0 {
+		// A Config built by hand (tests, embedders) carries no probe bound.
+		// Fall back to the Open cooldown, which the caller did choose, and
+		// only to the package default when that is unset too — never to 0,
+		// which would make HalfOpen admit every caller.
+		halfOpenTimeout = r.cfg.Timeout
+		if halfOpenTimeout <= 0 {
+			halfOpenTimeout = defaultHalfOpenTimeout
+		}
+	}
 	b = &breaker{
-		threshold: r.cfg.Threshold,
-		timeout:   r.cfg.Timeout,
+		threshold:       r.cfg.Threshold,
+		timeout:         r.cfg.Timeout,
+		halfOpenTimeout: halfOpenTimeout,
 	}
 	r.breakers[channelID] = b
 	return b
@@ -194,6 +268,20 @@ func (r *Registry) RecordSuccess(channelID int) {
 func (r *Registry) RecordFailure(channelID int) {
 	b := r.getOrCreate(channelID)
 	prev, curr := b.recordFailure()
+	if prev != curr && r.cfg.OnStateChange != nil {
+		r.cfg.OnStateChange(channelID, prev, curr)
+	}
+}
+
+// RecordInconclusive records that an admitted request ended without evidence
+// about the upstream — a user 4xx, a client cancellation, a request the
+// gateway refused to send. Callers MUST report one of RecordSuccess /
+// RecordFailure / RecordInconclusive for every request Allow admitted:
+// in HalfOpen the admission consumed the single probe slot, and only a report
+// gives it back.
+func (r *Registry) RecordInconclusive(channelID int) {
+	b := r.getOrCreate(channelID)
+	prev, curr := b.recordInconclusive()
 	if prev != curr && r.cfg.OnStateChange != nil {
 		r.cfg.OnStateChange(channelID, prev, curr)
 	}
@@ -229,12 +317,13 @@ type BreakerSnapshot struct {
 	Threshold int `json:"threshold"`
 	// LastFailUnix is 0 when the breaker has never recorded a failure.
 	LastFailUnix int64 `json:"last_fail_unix"`
-	// ProbeEligibleUnix is when an Open breaker becomes eligible for its
-	// half-open probe. NOTE the state field reports the LAST RECORDED state:
-	// an Open breaker past this instant has not transitioned yet — the switch
-	// to HalfOpen happens on the next admission check, because performing it
-	// here would consume the single probe slot for a mere status read.
-	// Zero unless State is "open".
+	// ProbeEligibleUnix is when this breaker becomes eligible for a (further)
+	// half-open probe: for "open", when the cooldown ends; for "half_open",
+	// when the in-flight probe's own deadline expires and a fresh probe is
+	// admitted in its place. NOTE the state field reports the LAST RECORDED
+	// state: a breaker past this instant has not transitioned yet — the
+	// switch happens on the next admission check, because performing it here
+	// would consume the probe slot for a mere status read. Zero while closed.
 	ProbeEligibleUnix int64 `json:"probe_eligible_unix,omitempty"`
 }
 
@@ -265,6 +354,9 @@ func (r *Registry) Snapshot() []BreakerSnapshot {
 			if b.state == StateOpen {
 				snap.ProbeEligibleUnix = b.lastFailTime.Add(b.timeout).Unix()
 			}
+		}
+		if b.state == StateHalfOpen && !b.halfOpenSince.IsZero() {
+			snap.ProbeEligibleUnix = b.halfOpenSince.Add(b.halfOpenTimeout).Unix()
 		}
 		b.mu.Unlock()
 		out = append(out, snap)

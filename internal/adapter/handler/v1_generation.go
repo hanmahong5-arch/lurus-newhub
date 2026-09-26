@@ -20,6 +20,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 
 	"github.com/gin-gonic/gin"
 )
@@ -41,13 +42,18 @@ type generationUsageView struct {
 }
 
 type generationView struct {
-	Id            string              `json:"id"`
-	RequestId     string              `json:"request_id"`
-	Model         string              `json:"model"`
-	UpstreamModel string              `json:"upstream_model,omitempty"`
-	ProviderName  string              `json:"provider_name"`
-	Quota         int                 `json:"quota"`
-	TotalCost     float64             `json:"total_cost"`
+	Id            string  `json:"id"`
+	RequestId     string  `json:"request_id"`
+	Model         string  `json:"model"`
+	UpstreamModel string  `json:"upstream_model,omitempty"`
+	ProviderName  string  `json:"provider_name"`
+	Quota         int     `json:"quota"`
+	TotalCost     float64 `json:"total_cost"`
+	// ChargedCNY is what the platform wallet was actually debited for this
+	// request, as recorded at settlement (logs.charged_cny4). Absent when the
+	// wallet was not charged (credit pool / local quota) or the row predates
+	// the record. total_cost stays the USD list-price view.
+	ChargedCNY    *float64            `json:"charged_cny,omitempty"`
 	Usage         generationUsageView `json:"usage"`
 	LatencyMs     int                 `json:"latency_ms"`
 	FirstTokenMs  int                 `json:"first_token_ms,omitempty"`
@@ -101,6 +107,12 @@ func GetGeneration(c *gin.Context) {
 		requestId = id
 	}
 
+	var chargedCNY *float64
+	if row.ChargedCNY4 > 0 {
+		v := currency.Units4ToCNY(row.ChargedCNY4)
+		chargedCNY = &v
+	}
+
 	totalCost := 0.0
 	if common.QuotaPerUnit > 0 {
 		totalCost = float64(row.Quota) / common.QuotaPerUnit
@@ -116,6 +128,7 @@ func GetGeneration(c *gin.Context) {
 			ProviderName:  constant.GetChannelTypeName(row.ChannelType),
 			Quota:         row.Quota,
 			TotalCost:     totalCost,
+			ChargedCNY:    chargedCNY,
 			Usage: generationUsageView{
 				PromptTokens:     row.PromptTokens,
 				CompletionTokens: row.CompletionTokens,
