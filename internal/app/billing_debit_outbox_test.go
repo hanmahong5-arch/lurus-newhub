@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -119,5 +120,14 @@ func TestDebitOutbox_BacksOffThenGivesUp(t *testing.T) {
 	db.Where("ref_id = ?", "llm-usage:test").First(&row)
 	if row.Status != outboxStatusFailed || row.RetryCount != outboxMaxRetries {
 		t.Fatalf("after %d failures: status=%q retries=%d, want failed/%d", outboxMaxRetries, row.Status, row.RetryCount, outboxMaxRetries)
+	}
+}
+
+func TestOutboxBackoff_IsCapped(t *testing.T) {
+	if got := outboxBackoff(1); got != 10*time.Second {
+		t.Fatalf("outboxBackoff(1) = %v, want 10s", got)
+	}
+	if got := outboxBackoff(outboxMaxRetries); got != outboxMaxBackoff {
+		t.Fatalf("outboxBackoff(%d) = %v, want the %v cap", outboxMaxRetries, got, outboxMaxBackoff)
 	}
 }
