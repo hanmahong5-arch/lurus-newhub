@@ -61,7 +61,7 @@ concurrency:
 jobs:
   build_and_push:
     name: Build & push (amd64)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       packages: write
       contents: read
@@ -183,7 +183,7 @@ jobs:
     name: Auto-pin r6-stage + r6-uat manifests
     needs: build_and_push
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: write
     env:
