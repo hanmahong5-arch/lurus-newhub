@@ -35,7 +35,7 @@ const (
 type invoiceMonthBucket struct {
 	Month                string  `json:"month"`                  // "YYYY-MM"
 	Quota                int64   `json:"quota"`                  // billable quota units consumed
-	AmountCNY            float64 `json:"amount_cny"`             // currency.QuotaToCNY(quota)
+	AmountCNY            float64 `json:"amount_cny"`             // recorded wallet charges + today's price of unrecorded quota (invoiceAmountCNY)
 	RequestCount         int64   `json:"request_count"`          // number of billable log rows
 	UnbilledQuota        int64   `json:"unbilled_quota"`         // quota logged but excluded from billing (settlement-failed / channel-test)
 	UnbilledRequestCount int64   `json:"unbilled_request_count"` // number of log rows excluded from billing
@@ -174,6 +174,11 @@ type rawMonthRow struct {
 	Month        string `gorm:"column:month"`
 	QuotaSum     int64  `gorm:"column:quota_sum"`
 	RequestCount int64  `gorm:"column:request_count"`
+	// ChargedUnits4 sums logs.charged_cny4 (what the wallet was actually
+	// debited, 0.0001 CNY); ChargedQuota is the quota of the rows that carry
+	// such a record, so the rest can still be priced the old way.
+	ChargedUnits4 int64 `gorm:"column:charged_units4"`
+	ChargedQuota  int64 `gorm:"column:charged_quota"`
 }
 
 // monthGroupExpr is the per-dialect SQL expression that buckets a row's
@@ -182,7 +187,11 @@ type rawMonthRow struct {
 // PostgreSQL.
 func monthGroupExpr() string {
 	if common.UsingPostgreSQL {
-		return "TO_CHAR(TO_TIMESTAMP(created_at), 'YYYY-MM')"
+		// UTC, like the range bounds: TO_TIMESTAMP yields a timestamptz and
+		// TO_CHAR renders it in the SESSION time zone, so on a database set
+		// to Asia/Shanghai a row from 23:30 UTC on the last day of a month
+		// was filed under the next month while the bounds counted it here.
+		return "TO_CHAR(TO_TIMESTAMP(created_at) AT TIME ZONE 'UTC', 'YYYY-MM')"
 	}
 	return "STRFTIME('%Y-%m', DATETIME(created_at, 'unixepoch'))"
 }
@@ -202,6 +211,8 @@ func queryInvoiceMonthRows(userID int, tenantID string, fromTS, toTS int64, bill
 		Model(&repo.Log{}).
 		Select(monthExpr+" AS month, "+
 			"COALESCE(SUM(quota), 0) AS quota_sum, "+
+			"COALESCE(SUM(charged_cny4), 0) AS charged_units4, "+
+			"COALESCE(SUM(CASE WHEN charged_cny4 > 0 THEN quota ELSE 0 END), 0) AS charged_quota, "+
 			"COUNT(*) AS request_count").
 		Where("user_id = ? AND tenant_id = ? AND created_at >= ? AND created_at < ?",
 			userID, tenantID, fromTS, toTS)
@@ -214,6 +225,15 @@ func queryInvoiceMonthRows(userID int, tenantID string, fromTS, toTS int64, bill
 
 	err := tx.Group(monthExpr).Order("month DESC").Scan(&rows).Error
 	return rows, err
+}
+
+// invoiceAmountCNY is what the month's billable rows cost: the recorded
+// wallet charge where settlement wrote one, and the quota priced at today's
+// rate only for rows without a record (credit-pool / local-quota spend and
+// rows older than logs.charged_cny4). An exchange-rate change therefore no
+// longer rewrites a month that was already charged.
+func invoiceAmountCNY(r rawMonthRow) float64 {
+	return currency.Units4ToCNY(r.ChargedUnits4) + currency.QuotaToCNY(int(r.QuotaSum-r.ChargedQuota))
 }
 
 // aggregateInvoiceMonths returns one bucket per calendar month in range,
@@ -249,7 +269,7 @@ func aggregateInvoiceMonths(userID int, tenantID string, fromTS, toTS int64) ([]
 		buckets = append(buckets, invoiceMonthBucket{
 			Month:        all.Month,
 			Quota:        billable.QuotaSum,
-			AmountCNY:    currency.QuotaToCNY(int(billable.QuotaSum)),
+			AmountCNY:    invoiceAmountCNY(billable),
 			RequestCount: billable.RequestCount,
 			// The two aggregates are separate round trips; a row that lands
 			// between them can make the difference negative, which must not

@@ -50,6 +50,14 @@ type Log struct {
 	// route for a new index on this table is that directive — still not a
 	// struct tag.
 	ProjectId int `json:"project_id" gorm:"not null;default:0"`
+	// ChargedCNY4 is what this request actually took from the customer's
+	// platform wallet, in 0.0001 CNY (the wallet's own numeric(14,4) unit),
+	// recorded at settlement (migration 041). 0 = not wallet-charged: a
+	// credit-pool or local-quota request, a release, or a row written before
+	// the column existed. It is the amount of record: re-deriving it from
+	// quota later uses whatever exchange rate is current THEN, which is how
+	// invoices used to re-price history.
+	ChargedCNY4 int64 `json:"charged_cny4" gorm:"type:bigint;not null;default:0"`
 }
 
 // INDEXES ON `logs` THAT THIS STRUCT DELIBERATELY DOES NOT DECLARE
@@ -98,7 +106,8 @@ type RecordConsumeLogParams struct {
 	// Filled by governance.EnrichLogParams — the single chokepoint every
 	// RecordConsumeLog call site passes through. 0 = unassigned.
 	ProjectId      int    `json:"project_id"`
-	LogDetailLevel string `json:"-"` // Governance: "none" skips logging, "full" adds prompt preview
+	ChargedCNY4    int64  `json:"charged_cny4"` // see Log.ChargedCNY4; filled by EnrichLogParams
+	LogDetailLevel string `json:"-"`            // Governance: "none" skips logging, "full" adds prompt preview
 }
 
 // LogQueryParams contains parameters for log queries

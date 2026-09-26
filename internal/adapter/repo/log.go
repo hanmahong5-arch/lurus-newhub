@@ -571,7 +571,8 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		// governance.EnrichLogParams. 0 = unassigned. This value can never be
 		// backfilled: whatever is written here is the row's attribution
 		// forever.
-		ProjectId: params.ProjectId,
+		ProjectId:   params.ProjectId,
+		ChargedCNY4: params.ChargedCNY4,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
