@@ -530,6 +530,7 @@
         "detail_prompt_tokens": "prompt tokens",
         "detail_completion_tokens": "completion tokens",
         "detail_cost": "cost",
+        "detail_charged": "charged",
         "detail_duration": "duration",
         "detail_streaming": "streaming",
         "yes": "yes",

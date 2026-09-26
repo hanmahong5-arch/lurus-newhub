@@ -59,6 +59,11 @@ export function parseUSDInput(raw) {
 export const quotaToUSD = (quota, digits = 2) =>
   ((quota || 0) / getQuotaPerUSD()).toFixed(digits);
 
+// A wallet charge as recorded by the backend (logs.charged_cny4: integer
+// 0.0001 CNY, the wallet's own precision), shown exactly, never re-derived.
+export const formatCNY4 = (units4) =>
+  units4 > 0 ? `¥${(units4 / 10_000).toFixed(4)}` : '—';
+
 // USD cost with a `$` prefix; em-dash for zero/empty so tables stay quiet.
 // A charge that really happened never renders as $0.0000: when it falls below
 // the display precision it floors to the smallest representable amount. Showing

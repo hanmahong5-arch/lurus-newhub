@@ -583,6 +583,22 @@ describe('Log page', () => {
     expect(screen.queryByTestId('log-route-attempts')).toBeNull();
   });
 
+  it('shows the recorded wallet charge exactly', async () => {
+    renderWithLog({ ...logWithOther('{}'), charged_cny4: 12345 });
+    await waitFor(() => screen.getByTestId('log-detail-charged'));
+    expect(screen.getByTestId('log-detail-charged').textContent).toContain(
+      '¥1.2345',
+    );
+  });
+
+  it('omits the charge line for a row the wallet did not pay', async () => {
+    renderWithLog(logWithOther('{}'));
+    await waitFor(() =>
+      expect(screen.getAllByText('gpt-4o').length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByTestId('log-detail-charged')).toBeNull();
+  });
+
   // ── Deep-linking + errors-only + tenant-wide + billing detail ─────────────
 
   it('seeds model/token/type filters from the URL query (deep-link support)', async () => {
