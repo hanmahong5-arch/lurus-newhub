@@ -65,8 +65,8 @@ const CEILINGS = {
   'pages/v2/Playground/index.jsx': 1084,
   'pages/v2/Pricing/index.jsx': 805, // +4 (cycle-15 P1): vendor logo in the model cell
   'pages/v2/Settings/index.jsx': 1909,
-  'pages/v2/Tenants/index.jsx': 920, // 995 → 920 (cycle 14): StatsDrawer extracted to Tenants/StatsDrawer.jsx; failed-read panel is the shared components/hifi/HfLoadError.jsx
-  'pages/v2/Token/index.jsx': 1671,
+  'pages/v2/Tenants/index.jsx': 789, // 995 → 920 (cycle 14), → 789 (LimitsModal moved to Tenants/LimitsModal.jsx): StatsDrawer extracted to Tenants/StatsDrawer.jsx; failed-read panel is the shared components/hifi/HfLoadError.jsx
+  'pages/v2/Token/index.jsx': 1639, // 1671 → 1639: InlineEdit moved to Token/InlineEdit.jsx
 };
 
 const THRESHOLD = 800;

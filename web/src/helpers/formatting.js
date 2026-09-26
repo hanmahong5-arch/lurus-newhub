@@ -38,6 +38,23 @@ export function getQuotaPerUSD() {
   return Number.isFinite(stored) && stored > 0 ? stored : QUOTA_PER_USD;
 }
 
+/**
+ * Parse a dollar amount a person typed: "5", "5.00", "$5", " $1,000.50 ".
+ * Returns null for an empty field or the "∞" the console shows for unlimited,
+ * and NaN for anything that is not a finite, non-negative amount. Callers must
+ * refuse NaN: the pages used to write `parseFloat(x) || 0`, so editing a cap
+ * shown as "$2.00" into "$5.00" parsed as 0 and made the key unlimited.
+ */
+export function parseUSDInput(raw) {
+  const s = String(raw ?? '')
+    .trim()
+    .replace(/^\$\s*/, '')
+    .replace(/,/g, '');
+  if (s === '' || s === '∞') return null;
+  if (!/^\d+(\.\d+)?$|^\.\d+$/.test(s)) return NaN;
+  return Number(s);
+}
+
 // Raw USD-equivalent of a quota amount, fixed to `digits` decimals (string).
 export const quotaToUSD = (quota, digits = 2) =>
   ((quota || 0) / getQuotaPerUSD()).toFixed(digits);
