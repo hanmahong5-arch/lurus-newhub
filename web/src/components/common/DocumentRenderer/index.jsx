@@ -30,10 +30,13 @@ import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../markdown/MarkdownRenderer';
 
 // 检查是否为 URL
+// Only http(s) may become a link: new URL() also parses javascript:, data:
+// and friends, and an admin-supplied "javascript:..." document used to render
+// as a clickable link that ran script in the reader's session.
 const isUrl = (content) => {
   try {
-    new URL(content.trim());
-    return true;
+    const { protocol } = new URL(content.trim());
+    return protocol === 'http:' || protocol === 'https:';
   } catch {
     return false;
   }
