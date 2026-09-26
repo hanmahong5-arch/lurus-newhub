@@ -457,7 +457,8 @@ func GenerateID() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		// crypto/rand does not fail on supported platforms; if it ever does,
 		// fall back to the clock rather than issuing a colliding id.
-		return fmt.Sprintf("tenant-%s-%08x", time.Now().Format("20060102150405"), uint32(time.Now().UnixNano()))
+		now := time.Now()
+		return fmt.Sprintf("tenant-%s-%08x", now.Format("20060102150405"), now.Nanosecond())
 	}
 	return "tenant-" + time.Now().Format("20060102150405") + "-" + hex.EncodeToString(b[:])
 }
