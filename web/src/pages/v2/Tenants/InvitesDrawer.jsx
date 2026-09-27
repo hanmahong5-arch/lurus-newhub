@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { API, showError, showSuccess } from '../../../helpers';
 import { inviteLink } from '../../../helpers/inviteLink';
+import HfDialog from '../../../components/hifi/HfDialog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure derivation helpers — exported for vitest coverage.
@@ -45,29 +46,6 @@ export const isRevocable = (invite) => !!invite && invite.status === 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Drawer component
-
-const overlayStyle = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(0,0,0,0.45)',
-  zIndex: 500,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const panelStyle = {
-  background: 'var(--hf-paper)',
-  border: '1px solid var(--hf-rule)',
-  borderRadius: 4,
-  padding: 28,
-  width: 640,
-  maxHeight: '90vh',
-  overflowY: 'auto',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 16,
-};
 
 const inputStyle = {
   fontFamily: 'var(--hf-mono)',
@@ -100,6 +78,19 @@ const InvitesDrawer = ({ tenantId, tenantName, onClose }) => {
   // never returns it again (handler.ListTenantInvites projects code_prefix).
   const [issuedLink, setIssuedLink] = useState(null);
   const [revoking, setRevoking] = useState(null);
+  const dismissRef = useRef(null);
+
+  // While the link is on screen, Escape, the X and the backdrop must not
+  // throw it away: closing here loses the code for good. Those paths steer
+  // focus onto the explicit dismiss next to the link instead, so the
+  // operator has to act on the notice to leave.
+  const requestClose = () => {
+    if (issuedLink) {
+      dismissRef.current?.focus();
+      return;
+    }
+    onClose();
+  };
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -199,189 +190,181 @@ const InvitesDrawer = ({ tenantId, tenantName, onClose }) => {
   };
 
   return (
-    <div
-      style={overlayStyle}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-      data-testid='invites-overlay'
+    <HfDialog
+      title={
+        <>
+          {tenantName || tenantId} ·{' '}
+          {t('console.tenant.invite_drawer_title', 'invites')}
+        </>
+      }
+      onClose={requestClose}
+      dismissOnBackdrop={!issuedLink}
+      busy={issuing || revoking !== null}
+      width={640}
+      backdropTestId='invites-overlay'
     >
-      <div style={panelStyle}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <div className='strong' style={{ fontSize: 15 }}>
-            {tenantName || tenantId} ·{' '}
-            {t('console.tenant.invite_drawer_title', 'invites')}
-          </div>
-          <button
-            type='button'
-            className='btn ghost sm'
-            onClick={onClose}
-            aria-label={t('console.common.close', 'close')}
-          >
-            ✕
-          </button>
+      <form
+        onSubmit={submitIssue}
+        style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+        data-testid='invite-issue-form'
+      >
+        <div className='strong' style={{ fontSize: 13 }}>
+          {t('console.tenant.invite_issue_section', 'issue invite')}
         </div>
-
-        <form
-          onSubmit={submitIssue}
-          style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
-          data-testid='invite-issue-form'
-        >
-          <div className='strong' style={{ fontSize: 13 }}>
-            {t('console.tenant.invite_issue_section', 'issue invite')}
-          </div>
-          <label className='lbl'>
-            {t('console.tenant.field_ttl_hours', 'ttl (hours)')}
-          </label>
-          <input
-            type='number'
-            min='0'
-            step='1'
-            value={ttlHours}
-            onChange={(e) => setTtlHours(e.target.value)}
-            placeholder={t(
-              'console.tenant.ph_ttl_hours',
-              '72 = 3 days, 0 = never expires',
-            )}
-            style={inputStyle}
-            data-testid='invite-ttl-hours'
-          />
-          <button
-            type='submit'
-            className='btn primary'
-            disabled={issuing}
-            data-testid='invite-issue-submit'
-          >
-            {issuing
-              ? t('console.tenant.invite_issuing', 'issuing…')
-              : t('console.tenant.invite_issue_submit', 'issue invite')}
-          </button>
-        </form>
-
-        {issuedLink && (
-          <div
-            className='panel'
-            style={{ padding: 14 }}
-            data-testid='invite-issued-box'
-          >
-            <div className='lbl' style={{ marginBottom: 4 }}>
-              {t('console.tenant.invite_link_label', 'one-time invite link')}
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input
-                type='text'
-                readOnly
-                value={issuedLink}
-                style={{ ...inputStyle, flex: 1 }}
-                data-testid='invite-issued-link'
-                onFocus={(e) => e.target.select()}
-              />
-              <button
-                type='button'
-                className='btn ghost sm'
-                onClick={copyLink}
-                data-testid='invite-issued-copy'
-              >
-                {t('console.common.copy', 'copy')}
-              </button>
-            </div>
-            <div className='muted' style={{ fontSize: 11, marginTop: 6 }}>
-              {t(
-                'console.tenant.invite_issued_notice',
-                'Shown once — copy this link now. It will not be shown again.',
-              )}
-            </div>
-          </div>
-        )}
-
-        <div data-testid='invite-list'>
-          <div className='strong' style={{ fontSize: 13, marginBottom: 6 }}>
-            {t('console.tenant.invite_list_title', 'issued invites')}
-          </div>
-          {loading ? (
-            <div className='muted' style={{ fontSize: 12 }}>
-              {t('console.common.loading', 'loading…')}
-            </div>
-          ) : loadFailed ? (
-            <div
-              className='muted'
-              style={{ fontSize: 12 }}
-              data-testid='invite-list-load-failed'
-            >
-              {t(
-                'console.tenant.invite_list_load_failed',
-                'Could not load invites.',
-              )}
-            </div>
-          ) : invites.length === 0 ? (
-            <div className='muted' style={{ fontSize: 12 }}>
-              {t('console.tenant.empty_invites', 'No invites issued yet.')}
-            </div>
-          ) : (
-            <table className='table sm' style={{ width: '100%', fontSize: 12 }}>
-              <thead>
-                <tr>
-                  <th>{t('console.tenant.th_invite_code', 'code')}</th>
-                  <th>{t('console.tenant.th_invite_status', 'status')}</th>
-                  <th>{t('console.tenant.th_invite_expiry', 'expires')}</th>
-                  <th>
-                    {t('console.tenant.th_invite_consumer', 'consumed by')}
-                  </th>
-                  <th>{t('console.tenant.th_invite_created', 'created')}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {invites.map((inv) => (
-                  <tr key={inv.id} data-testid={`invite-row-${inv.id}`}>
-                    <td className='mono'>{inv.code_prefix}…</td>
-                    <td>
-                      <span className={statusTagClass(inv.status)}>
-                        {t(
-                          `console.tenant.invite_status_${inviteStatusLabel(inv.status)}`,
-                          inviteStatusLabel(inv.status),
-                        )}
-                      </span>
-                    </td>
-                    <td className='mono'>
-                      {inv.expired_time
-                        ? new Date(inv.expired_time * 1000).toLocaleString()
-                        : t('console.tenant.invite_never_expires', 'never')}
-                    </td>
-                    <td className='mono'>
-                      {inv.consumed_by_account_id ??
-                        t('console.tenant.invite_not_consumed', '—')}
-                    </td>
-                    <td className='mono'>
-                      {new Date(inv.created_at).toLocaleString()}
-                    </td>
-                    <td>
-                      {isRevocable(inv) && (
-                        <button
-                          type='button'
-                          className='btn ghost sm'
-                          disabled={revoking === inv.id}
-                          onClick={() => revoke(inv)}
-                          data-testid={`invite-revoke-btn-${inv.id}`}
-                        >
-                          {revoking === inv.id
-                            ? '…'
-                            : t('console.tenant.btn_revoke', 'revoke')}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <label className='lbl'>
+          {t('console.tenant.field_ttl_hours', 'ttl (hours)')}
+        </label>
+        <input
+          type='number'
+          min='0'
+          step='1'
+          value={ttlHours}
+          onChange={(e) => setTtlHours(e.target.value)}
+          placeholder={t(
+            'console.tenant.ph_ttl_hours',
+            '72 = 3 days, 0 = never expires',
           )}
+          style={inputStyle}
+          data-testid='invite-ttl-hours'
+        />
+        <button
+          type='submit'
+          className='btn primary'
+          disabled={issuing}
+          data-testid='invite-issue-submit'
+        >
+          {issuing
+            ? t('console.tenant.invite_issuing', 'issuing…')
+            : t('console.tenant.invite_issue_submit', 'issue invite')}
+        </button>
+      </form>
+
+      {issuedLink && (
+        <div
+          className='panel'
+          style={{ padding: 14 }}
+          data-testid='invite-issued-box'
+        >
+          <div className='lbl' style={{ marginBottom: 4 }}>
+            {t('console.tenant.invite_link_label', 'one-time invite link')}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type='text'
+              readOnly
+              value={issuedLink}
+              style={{ ...inputStyle, flex: 1 }}
+              data-testid='invite-issued-link'
+              onFocus={(e) => e.target.select()}
+            />
+            <button
+              type='button'
+              className='btn ghost sm'
+              onClick={copyLink}
+              data-testid='invite-issued-copy'
+            >
+              {t('console.common.copy', 'copy')}
+            </button>
+            <button
+              ref={dismissRef}
+              type='button'
+              className='btn ghost sm'
+              onClick={onClose}
+              data-testid='invite-issued-dismiss'
+            >
+              {t('console.common.dismiss', 'dismiss')}
+            </button>
+          </div>
+          <div className='muted' style={{ fontSize: 11, marginTop: 6 }}>
+            {t(
+              'console.tenant.invite_issued_notice',
+              'Shown once — copy this link now. It will not be shown again.',
+            )}
+          </div>
         </div>
+      )}
+
+      <div data-testid='invite-list'>
+        <div className='strong' style={{ fontSize: 13, marginBottom: 6 }}>
+          {t('console.tenant.invite_list_title', 'issued invites')}
+        </div>
+        {loading ? (
+          <div className='muted' style={{ fontSize: 12 }}>
+            {t('console.common.loading', 'loading…')}
+          </div>
+        ) : loadFailed ? (
+          <div
+            className='muted'
+            style={{ fontSize: 12 }}
+            data-testid='invite-list-load-failed'
+          >
+            {t(
+              'console.tenant.invite_list_load_failed',
+              'Could not load invites.',
+            )}
+          </div>
+        ) : invites.length === 0 ? (
+          <div className='muted' style={{ fontSize: 12 }}>
+            {t('console.tenant.empty_invites', 'No invites issued yet.')}
+          </div>
+        ) : (
+          <table className='table sm' style={{ width: '100%', fontSize: 12 }}>
+            <thead>
+              <tr>
+                <th>{t('console.tenant.th_invite_code', 'code')}</th>
+                <th>{t('console.tenant.th_invite_status', 'status')}</th>
+                <th>{t('console.tenant.th_invite_expiry', 'expires')}</th>
+                <th>{t('console.tenant.th_invite_consumer', 'consumed by')}</th>
+                <th>{t('console.tenant.th_invite_created', 'created')}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {invites.map((inv) => (
+                <tr key={inv.id} data-testid={`invite-row-${inv.id}`}>
+                  <td className='mono'>{inv.code_prefix}…</td>
+                  <td>
+                    <span className={statusTagClass(inv.status)}>
+                      {t(
+                        `console.tenant.invite_status_${inviteStatusLabel(inv.status)}`,
+                        inviteStatusLabel(inv.status),
+                      )}
+                    </span>
+                  </td>
+                  <td className='mono'>
+                    {inv.expired_time
+                      ? new Date(inv.expired_time * 1000).toLocaleString()
+                      : t('console.tenant.invite_never_expires', 'never')}
+                  </td>
+                  <td className='mono'>
+                    {inv.consumed_by_account_id ??
+                      t('console.tenant.invite_not_consumed', '—')}
+                  </td>
+                  <td className='mono'>
+                    {new Date(inv.created_at).toLocaleString()}
+                  </td>
+                  <td>
+                    {isRevocable(inv) && (
+                      <button
+                        type='button'
+                        className='btn ghost sm'
+                        disabled={revoking === inv.id}
+                        onClick={() => revoke(inv)}
+                        data-testid={`invite-revoke-btn-${inv.id}`}
+                      >
+                        {revoking === inv.id
+                          ? '…'
+                          : t('console.tenant.btn_revoke', 'revoke')}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
-    </div>
+    </HfDialog>
   );
 };
 

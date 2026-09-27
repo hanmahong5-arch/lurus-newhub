@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfDialog, { HfDialogFooter } from '../../../components/hifi/HfDialog';
 import HfLoadError from '../../../components/hifi/HfLoadError';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
@@ -70,10 +71,6 @@ const CreateModal = ({ onCreated, onClose }) => {
   const [saving, setSaving] = useState(false);
   const nameRef = useRef(null);
 
-  useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
-
   const submit = async (e) => {
     e.preventDefault();
     if (!form.name.trim() || !form.slug.trim()) return;
@@ -114,121 +111,88 @@ const CreateModal = ({ onCreated, onClose }) => {
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    <HfDialog
+      title={tr('console.tenant.modal_title', 'New tenant')}
+      onClose={onClose}
+      as='form'
+      onSubmit={submit}
+      busy={saving}
+      initialFocusRef={nameRef}
     >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 420,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {tr('console.tenant.modal_title', 'New tenant')}
-        </div>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>{tr('console.tenant.field_name', 'name *')}</span>
+        <input
+          ref={nameRef}
+          style={inputStyle}
+          placeholder={tr('console.tenant.ph_name', 'e.g. Acme Corp')}
+          value={form.name}
+          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          required
+        />
+      </label>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.tenant.field_name', 'name *')}
-          </span>
-          <input
-            ref={nameRef}
-            style={inputStyle}
-            placeholder={tr('console.tenant.ph_name', 'e.g. Acme Corp')}
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            required
-          />
-        </label>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>{tr('console.tenant.field_slug', 'slug *')}</span>
+        <input
+          style={inputStyle}
+          placeholder={tr('console.tenant.ph_slug', 'e.g. acme')}
+          value={form.slug}
+          onChange={(e) =>
+            setForm((f) => ({
+              ...f,
+              slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+            }))
+          }
+          required
+        />
+      </label>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.tenant.field_slug', 'slug *')}
-          </span>
-          <input
-            style={inputStyle}
-            placeholder={tr('console.tenant.ph_slug', 'e.g. acme')}
-            value={form.slug}
-            onChange={(e) =>
-              setForm((f) => ({
-                ...f,
-                slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
-              }))
-            }
-            required
-          />
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>{tr('console.tenant.field_plan', 'plan')}</span>
-          <select
-            style={{ ...inputStyle, cursor: 'pointer' }}
-            value={form.plan}
-            onChange={(e) => setForm((f) => ({ ...f, plan: e.target.value }))}
-          >
-            {PLANS.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr(
-              'console.tenant.field_quota_limit',
-              'quota limit ($, 0 = unlimited)',
-            )}
-          </span>
-          <input
-            style={inputStyle}
-            type='number'
-            min='0'
-            step='0.01'
-            placeholder='0'
-            value={form.quota_limit}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, quota_limit: e.target.value }))
-            }
-          />
-        </label>
-
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'flex-end',
-            marginTop: 4,
-          }}
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>{tr('console.tenant.field_plan', 'plan')}</span>
+        <select
+          style={{ ...inputStyle, cursor: 'pointer' }}
+          value={form.plan}
+          onChange={(e) => setForm((f) => ({ ...f, plan: e.target.value }))}
         >
-          <button type='button' className='btn ghost' onClick={onClose}>
-            {tr('console.common.cancel', 'cancel')}
-          </button>
-          <button type='submit' className='btn primary' disabled={saving}>
-            {saving
-              ? tr('console.tenant.creating', 'creating…')
-              : tr('console.tenant.create_tenant', 'create tenant')}
-          </button>
-        </div>
-      </form>
-    </div>
+          {PLANS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr(
+            'console.tenant.field_quota_limit',
+            'quota limit ($, 0 = unlimited)',
+          )}
+        </span>
+        <input
+          style={inputStyle}
+          type='number'
+          min='0'
+          step='0.01'
+          placeholder='0'
+          value={form.quota_limit}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, quota_limit: e.target.value }))
+          }
+        />
+      </label>
+
+      <HfDialogFooter>
+        <button type='button' className='btn ghost' onClick={onClose}>
+          {tr('console.common.cancel', 'cancel')}
+        </button>
+        <button type='submit' className='btn primary' disabled={saving}>
+          {saving
+            ? tr('console.tenant.creating', 'creating…')
+            : tr('console.tenant.create_tenant', 'create tenant')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 

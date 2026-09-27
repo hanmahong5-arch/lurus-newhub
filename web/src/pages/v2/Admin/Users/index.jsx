@@ -26,6 +26,7 @@ import React, {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
+import HfDialog, { HfDialogFooter } from '../../../../components/hifi/HfDialog';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../../helpers';
 import { getQuotaPerUSD } from '../../../../helpers/formatting';
@@ -136,127 +137,100 @@ const EditModal = ({ user, onSaved, onClose }) => {
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    <HfDialog
+      title={tr('console.admin.users.edit_title', 'Edit · {{name}}', {
+        name: user.username,
+      })}
+      onClose={onClose}
+      as='form'
+      onSubmit={submit}
+      busy={saving}
     >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 420,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {tr('console.admin.users.edit_title', 'Edit · {{name}}', {
-            name: user.username,
-          })}
-        </div>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.admin.users.field_role', 'role')}
-          </span>
-          <select
-            data-testid='edit-role'
-            style={{ ...inputStyle, cursor: 'pointer' }}
-            value={form.role}
-            onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
-          >
-            {ROLE_OPTIONS.map(([v, k, l]) => (
-              <option key={v} value={v}>
-                {tr(`console.admin.users.${k}`, l)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.admin.users.field_status', 'status')}
-          </span>
-          <select
-            data-testid='edit-status'
-            style={{ ...inputStyle, cursor: 'pointer' }}
-            value={form.status}
-            onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
-          >
-            {STATUS_OPTIONS.map(([v, k, l]) => (
-              <option key={v} value={v}>
-                {tr(`console.admin.users.${k}`, l)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.admin.users.field_quota_cap', 'quota cap ($)')}
-          </span>
-          <input
-            data-testid='edit-quota'
-            style={inputStyle}
-            type='number'
-            min='0'
-            step='0.01'
-            value={form.quotaUSD}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, quotaUSD: e.target.value }))
-            }
-          />
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.admin.users.field_group', 'group')}
-          </span>
-          <input
-            data-testid='edit-group'
-            style={inputStyle}
-            value={form.group}
-            onChange={(e) => setForm((f) => ({ ...f, group: e.target.value }))}
-            placeholder='default'
-          />
-        </label>
-
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'flex-end',
-            marginTop: 4,
-          }}
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.admin.users.field_role', 'role')}
+        </span>
+        <select
+          data-testid='edit-role'
+          style={{ ...inputStyle, cursor: 'pointer' }}
+          value={form.role}
+          onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
         >
-          <button type='button' className='btn ghost' onClick={onClose}>
-            {tr('console.common.cancel', 'cancel')}
-          </button>
-          <button
-            type='submit'
-            className='btn primary'
-            data-testid='edit-save'
-            disabled={saving}
-          >
-            {saving
-              ? tr('console.admin.users.saving', 'saving…')
-              : tr('console.admin.users.save_changes', 'save changes')}
-          </button>
-        </div>
-      </form>
-    </div>
+          {ROLE_OPTIONS.map(([v, k, l]) => (
+            <option key={v} value={v}>
+              {tr(`console.admin.users.${k}`, l)}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.admin.users.field_status', 'status')}
+        </span>
+        <select
+          data-testid='edit-status'
+          style={{ ...inputStyle, cursor: 'pointer' }}
+          value={form.status}
+          onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
+        >
+          {STATUS_OPTIONS.map(([v, k, l]) => (
+            <option key={v} value={v}>
+              {tr(`console.admin.users.${k}`, l)}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.admin.users.field_quota_cap', 'quota cap ($)')}
+        </span>
+        <input
+          data-testid='edit-quota'
+          style={inputStyle}
+          type='number'
+          min='0'
+          step='0.01'
+          value={form.quotaUSD}
+          onChange={(e) => setForm((f) => ({ ...f, quotaUSD: e.target.value }))}
+        />
+      </label>
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.admin.users.field_group', 'group')}
+        </span>
+        <input
+          data-testid='edit-group'
+          style={inputStyle}
+          value={form.group}
+          onChange={(e) => setForm((f) => ({ ...f, group: e.target.value }))}
+          placeholder='default'
+        />
+      </label>
+
+      <HfDialogFooter>
+        <button
+          type='button'
+          className='btn ghost'
+          disabled={saving}
+          onClick={onClose}
+        >
+          {tr('console.common.cancel', 'cancel')}
+        </button>
+        <button
+          type='submit'
+          className='btn primary'
+          data-testid='edit-save'
+          disabled={saving}
+        >
+          {saving
+            ? tr('console.admin.users.saving', 'saving…')
+            : tr('console.admin.users.save_changes', 'save changes')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 
@@ -293,6 +267,10 @@ const HFAdminUsers = () => {
   // gate is only as strong as the acting root's own 2FA enrollment.
   const [disabling2FA, setDisabling2FA] = useState(null); // the target user row
   const [reason2FA, setReason2FA] = useState('');
+  const close2FA = () => {
+    setDisabling2FA(null);
+    setReason2FA('');
+  };
   const searchRef = useRef(null);
 
   const {
@@ -310,8 +288,7 @@ const HFAdminUsers = () => {
         showSuccess(
           tr('console.admin.users.toast_2fa_disabled', '2FA disabled'),
         );
-        setDisabling2FA(null);
-        setReason2FA('');
+        close2FA();
         await fetchUsers(keyword, statusFilter);
       } else if (result) {
         showError(
@@ -657,111 +634,77 @@ const HFAdminUsers = () => {
       />
 
       {disabling2FA && (
-        <div
-          role='dialog'
-          aria-label={tr(
-            'console.admin.users.disable_2fa_title_short',
-            'Disable 2FA',
+        <HfDialog
+          title={tr(
+            'console.admin.users.disable_2fa_title_full',
+            'Disable 2FA for "{{name}}"?',
+            { name: disabling2FA.username || '' },
           )}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
+          onClose={close2FA}
         >
-          <div
-            className='panel'
-            style={{ padding: 20, width: 420, maxWidth: '90vw' }}
-          >
-            <div className='lbl' style={{ marginBottom: 10 }}>
-              {tr(
-                'console.admin.users.disable_2fa_title_full',
-                'Disable 2FA for "{{name}}"?',
-                { name: disabling2FA.username || '' },
-              )}
-            </div>
-            <div className='muted' style={{ fontSize: 12, marginBottom: 10 }}>
-              {tr(
-                'console.admin.users.disable_2fa_reason_hint',
-                'Removes their TOTP enrollment and backup codes. A reason is required and is recorded in the audit log.',
-              )}
-            </div>
-            <textarea
-              data-testid='disable-2fa-reason'
-              value={reason2FA}
-              onChange={(e) => setReason2FA(e.target.value)}
-              maxLength={200}
-              rows={3}
-              placeholder={tr(
-                'console.admin.users.disable_2fa_reason_placeholder',
-                'e.g. support ticket #4242, user lost their device',
-              )}
-              style={{
-                width: '100%',
-                fontFamily: 'var(--hf-mono)',
-                fontSize: 12,
-                padding: '6px 10px',
-                border: '1px solid var(--hf-rule)',
-                background: 'var(--hf-sunken)',
-                color: 'var(--hf-ink)',
-                borderRadius: 2,
-                outline: 'none',
-                resize: 'vertical',
-              }}
-            />
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 8,
-                marginTop: 12,
-              }}
-            >
-              <button
-                type='button'
-                className='btn ghost sm'
-                onClick={() => {
-                  setDisabling2FA(null);
-                  setReason2FA('');
-                }}
-              >
-                {tr('console.common.cancel', 'cancel')}
-              </button>
-              <button
-                type='button'
-                className='btn sm'
-                style={{ color: 'var(--hf-err)' }}
-                disabled={!reason2FA.trim()}
-                data-testid='disable-2fa-confirm'
-                onClick={() =>
-                  startTotpStepUp(
-                    createApiCalls.custom(
-                      `/api/v2/admin/security/users/${disabling2FA.id}/totp/force-disable`,
-                      'POST',
-                      { reason: reason2FA.trim() },
-                    ),
-                    {
-                      title: tr(
-                        'console.admin.users.disable_2fa_stepup_title',
-                        'Confirm your own identity to continue',
-                      ),
-                      description: tr(
-                        'console.admin.users.disable_2fa_stepup_desc',
-                        'This removes another user’s 2FA — verify it is really you.',
-                      ),
-                    },
-                  )
-                }
-              >
-                {tr('console.admin.users.disable_2fa_confirm', 'disable 2FA')}
-              </button>
-            </div>
+          <div className='muted' style={{ fontSize: 12 }}>
+            {tr(
+              'console.admin.users.disable_2fa_reason_hint',
+              'Removes their TOTP enrollment and backup codes. A reason is required and is recorded in the audit log.',
+            )}
           </div>
-        </div>
+          <textarea
+            data-testid='disable-2fa-reason'
+            value={reason2FA}
+            onChange={(e) => setReason2FA(e.target.value)}
+            maxLength={200}
+            rows={3}
+            placeholder={tr(
+              'console.admin.users.disable_2fa_reason_placeholder',
+              'e.g. support ticket #4242, user lost their device',
+            )}
+            style={{
+              width: '100%',
+              fontFamily: 'var(--hf-mono)',
+              fontSize: 12,
+              padding: '6px 10px',
+              border: '1px solid var(--hf-rule)',
+              background: 'var(--hf-sunken)',
+              color: 'var(--hf-ink)',
+              borderRadius: 2,
+              outline: 'none',
+              resize: 'vertical',
+            }}
+          />
+          <HfDialogFooter>
+            <button type='button' className='btn ghost sm' onClick={close2FA}>
+              {tr('console.common.cancel', 'cancel')}
+            </button>
+            <button
+              type='button'
+              className='btn sm'
+              style={{ color: 'var(--hf-err)' }}
+              disabled={!reason2FA.trim()}
+              data-testid='disable-2fa-confirm'
+              onClick={() =>
+                startTotpStepUp(
+                  createApiCalls.custom(
+                    `/api/v2/admin/security/users/${disabling2FA.id}/totp/force-disable`,
+                    'POST',
+                    { reason: reason2FA.trim() },
+                  ),
+                  {
+                    title: tr(
+                      'console.admin.users.disable_2fa_stepup_title',
+                      'Confirm your own identity to continue',
+                    ),
+                    description: tr(
+                      'console.admin.users.disable_2fa_stepup_desc',
+                      'This removes another user’s 2FA — verify it is really you.',
+                    ),
+                  },
+                )
+              }
+            >
+              {tr('console.admin.users.disable_2fa_confirm', 'disable 2FA')}
+            </button>
+          </HfDialogFooter>
+        </HfDialog>
       )}
 
       <Suspense fallback={null}>

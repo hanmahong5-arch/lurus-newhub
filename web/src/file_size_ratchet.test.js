@@ -59,7 +59,9 @@ const CEILINGS = {
   'pages/v2/Billing/index.jsx': 833, // redeemFailure() extracted to Billing/redeemFailure.js (cycle-13 hand-finish)
   // 1908 → 1904 (cycle-18 L1): the list and upstream-models reads moved onto
   // hooks/common/useTenantRead.js; a failed read renders HfLoadError.
-  'pages/v2/Channel/index.jsx': 1904,
+  // 1904 → 1840 (cycle-18 L3): SyncModelsModal and ChannelModal dropped their
+  // hand-rolled backdrop/panel for components/hifi/HfDialog.
+  'pages/v2/Channel/index.jsx': 1840,
   'pages/v2/Chat/index.jsx': 879,
   // 1190 → 1179 (cycle-18 L4): the private fmtTs (ms-based, fed seconds —
   // every recent request read as 1970) gave way to helpers/formatting.js
@@ -76,10 +78,12 @@ const CEILINGS = {
   // 1909 → 1889 (cycle-18 L4): the page's own formatRelativeTime copy gave
   // way to the same-named helper in helpers/formatting.js.
   'pages/v2/Settings/index.jsx': 1889,
-  'pages/v2/Tenants/index.jsx': 789, // 995 → 920 (cycle 14), → 789 (LimitsModal moved to Tenants/LimitsModal.jsx): StatsDrawer extracted to Tenants/StatsDrawer.jsx; failed-read panel is the shared components/hifi/HfLoadError.jsx
+  'pages/v2/Tenants/index.jsx': 753, // 995 → 920 (cycle 14), → 789 (LimitsModal moved to Tenants/LimitsModal.jsx): StatsDrawer extracted to Tenants/StatsDrawer.jsx; failed-read panel is the shared components/hifi/HfLoadError.jsx; → 753 (CreateModal's backdrop/panel/footer now components/hifi/HfDialog.jsx)
   // 1639 → 1632 (cycle-18 L1): the tokens and projects reads moved onto
   // useTenantRead.
-  'pages/v2/Token/index.jsx': 1632,
+  // 1632 → 1595 (cycle-18 L3): CreateModal dropped its hand-rolled
+  // backdrop/panel for components/hifi/HfDialog.
+  'pages/v2/Token/index.jsx': 1595,
 };
 
 const THRESHOLD = 800;

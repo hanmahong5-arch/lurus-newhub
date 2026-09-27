@@ -179,6 +179,29 @@ describe('Projects page', () => {
     });
   });
 
+  it('the project dialog is a labelled modal; Escape closes it and focus returns to the new button', async () => {
+    wireGet({});
+
+    render(<HFProjects />);
+    await waitFor(() => screen.getByTestId('proj-new-btn'));
+
+    const opener = screen.getByTestId('proj-new-btn');
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() => screen.getByTestId('proj-save'));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleName('New project');
+    expect(dialog.contains(screen.getByTestId('proj-name'))).toBe(true);
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('proj-save')).toBeNull();
+    });
+    expect(document.activeElement).toBe(opener);
+  });
+
   it('edits an existing project via PUT (the name IS editable)', async () => {
     wireGet({ projects: [project()] });
     API.put.mockResolvedValue({ data: { success: true, data: project() } });
@@ -549,6 +572,36 @@ describe('Projects page — repeat-safety', () => {
     d.resolve({ data: { success: true, data: project() } });
     await waitFor(() => {
       expect(API.post).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The backdrop already refused a click while saving; Escape and the X must
+  // refuse the same way, or the in-flight POST lands on a closed form.
+  it('Escape does not dismiss the dialog while the save is in flight', async () => {
+    wireGet({});
+    const d = deferred();
+    API.post.mockReturnValue(d.promise);
+
+    render(<HFProjects />);
+    await waitFor(() => screen.getByTestId('proj-new-btn'));
+    fireEvent.click(screen.getByTestId('proj-new-btn'));
+    await waitFor(() => screen.getByTestId('proj-save'));
+
+    fireEvent.change(screen.getByTestId('proj-name'), {
+      target: { value: 'Research' },
+    });
+    fireEvent.click(screen.getByTestId('proj-save'));
+    await waitFor(() => {
+      expect(screen.getByTestId('proj-save').disabled).toBe(true);
+    });
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.getByRole('button', { name: 'close' })).toBeDisabled();
+    expect(screen.getByTestId('proj-save')).toBeTruthy();
+
+    d.resolve({ data: { success: true, data: project() } });
+    await waitFor(() => {
+      expect(screen.queryByTestId('proj-save')).toBeNull();
     });
   });
 

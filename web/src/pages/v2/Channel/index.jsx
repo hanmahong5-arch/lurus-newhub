@@ -20,6 +20,7 @@ import React, { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import HfLoadError from '../../../components/hifi/HfLoadError';
+import HfDialog, { HfDialogFooter } from '../../../components/hifi/HfDialog';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
@@ -119,153 +120,120 @@ const SyncModelsModal = ({ tenantSlug, channel, onClose, onApply }) => {
   });
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    <HfDialog
+      title={`${t('console.channel.sync_title', 'Sync upstream models')} · ${channel.name}`}
+      onClose={onClose}
+      busy={applying}
+      width={560}
     >
-      <div
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 560,
-          maxHeight: '80vh',
-          overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {t('console.channel.sync_title', 'Sync upstream models')} ·{' '}
-          {channel.name}
+      {loading ? (
+        <div className='muted' style={{ fontSize: 12 }}>
+          {t('console.channel.sync_loading', 'Fetching upstream models…')}
         </div>
-
-        {loading ? (
-          <div className='muted' style={{ fontSize: 12 }}>
-            {t('console.channel.sync_loading', 'Fetching upstream models…')}
+      ) : diff ? (
+        <>
+          <div>
+            <div className='lbl' style={{ marginBottom: 6 }}>
+              {t(
+                'console.channel.sync_upstream_count',
+                'upstream models ({{count}} total)',
+                { count: diff.upstream?.length ?? 0 },
+              )}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {(diff.upstream ?? []).map((m) => (
+                <span key={m} style={pillStyle(false)}>
+                  {m}
+                </span>
+              ))}
+            </div>
           </div>
-        ) : diff ? (
-          <>
+
+          {diff.new?.length > 0 && (
             <div>
-              <div className='lbl' style={{ marginBottom: 6 }}>
+              <div
+                className='lbl'
+                style={{ marginBottom: 6, color: 'var(--hf-ok)' }}
+              >
                 {t(
-                  'console.channel.sync_upstream_count',
-                  'upstream models ({{count}} total)',
-                  { count: diff.upstream?.length ?? 0 },
+                  'console.channel.sync_new_count',
+                  '{{count}} new models — click to toggle',
+                  { count: diff.new.length },
                 )}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {(diff.upstream ?? []).map((m) => (
-                  <span key={m} style={pillStyle(false)}>
+                {diff.new.map((m) => (
+                  <span
+                    key={m}
+                    data-testid={`sync-new-${m}`}
+                    style={pillStyle(selected.has(m))}
+                    onClick={() => toggleModel(m)}
+                  >
+                    + {m}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {diff.missing?.length > 0 && (
+            <div>
+              <div
+                className='lbl'
+                style={{ marginBottom: 6, color: 'var(--hf-warn)' }}
+              >
+                {t(
+                  'console.channel.sync_removed_count',
+                  '{{count}} models removed upstream',
+                  { count: diff.missing.length },
+                )}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {diff.missing.map((m) => (
+                  <span
+                    key={m}
+                    style={{
+                      ...pillStyle(false),
+                      color: 'var(--hf-warn)',
+                      borderColor: 'var(--hf-warn)',
+                      textDecoration: 'line-through',
+                    }}
+                  >
                     {m}
                   </span>
                 ))}
               </div>
             </div>
+          )}
 
-            {diff.new?.length > 0 && (
-              <div>
-                <div
-                  className='lbl'
-                  style={{ marginBottom: 6, color: 'var(--hf-ok)' }}
-                >
-                  {t(
-                    'console.channel.sync_new_count',
-                    '{{count}} new models — click to toggle',
-                    { count: diff.new.length },
-                  )}
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                  {diff.new.map((m) => (
-                    <span
-                      key={m}
-                      data-testid={`sync-new-${m}`}
-                      style={pillStyle(selected.has(m))}
-                      onClick={() => toggleModel(m)}
-                    >
-                      + {m}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
+          {diff.new?.length === 0 && diff.missing?.length === 0 && (
+            <div className='muted' style={{ fontSize: 12 }}>
+              {t(
+                'console.channel.sync_up_to_date',
+                'Model list is already up to date — nothing to sync.',
+              )}
+            </div>
+          )}
+        </>
+      ) : null}
 
-            {diff.missing?.length > 0 && (
-              <div>
-                <div
-                  className='lbl'
-                  style={{ marginBottom: 6, color: 'var(--hf-warn)' }}
-                >
-                  {t(
-                    'console.channel.sync_removed_count',
-                    '{{count}} models removed upstream',
-                    { count: diff.missing.length },
-                  )}
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                  {diff.missing.map((m) => (
-                    <span
-                      key={m}
-                      style={{
-                        ...pillStyle(false),
-                        color: 'var(--hf-warn)',
-                        borderColor: 'var(--hf-warn)',
-                        textDecoration: 'line-through',
-                      }}
-                    >
-                      {m}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {diff.new?.length === 0 && diff.missing?.length === 0 && (
-              <div className='muted' style={{ fontSize: 12 }}>
-                {t(
-                  'console.channel.sync_up_to_date',
-                  'Model list is already up to date — nothing to sync.',
-                )}
-              </div>
-            )}
-          </>
-        ) : null}
-
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'flex-end',
-            marginTop: 4,
-          }}
+      <HfDialogFooter>
+        <button type='button' className='btn ghost' onClick={onClose}>
+          {t('console.common.cancel', 'cancel')}
+        </button>
+        <button
+          type='button'
+          className='btn primary'
+          data-testid='sync-apply-btn'
+          disabled={applying || loading || selected.size === 0}
+          onClick={handleApply}
         >
-          <button type='button' className='btn ghost' onClick={onClose}>
-            {t('console.common.cancel', 'cancel')}
-          </button>
-          <button
-            type='button'
-            className='btn primary'
-            data-testid='sync-apply-btn'
-            disabled={applying || loading || selected.size === 0}
-            onClick={handleApply}
-          >
-            {applying
-              ? t('console.channel.sync_applying', 'applying…')
-              : t('console.channel.sync_apply', 'apply selected models')}
-          </button>
-        </div>
-      </div>
-    </div>
+          {applying
+            ? t('console.channel.sync_applying', 'applying…')
+            : t('console.channel.sync_apply', 'apply selected models')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 
@@ -418,10 +386,6 @@ const ChannelModal = ({ tenantSlug, existing, prefill, onDone, onClose }) => {
   const [saving, setSaving] = useState(false);
   const nameRef = useRef(null);
 
-  useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
-
   const set = (field) => (e) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
 
@@ -492,182 +456,154 @@ const ChannelModal = ({ tenantSlug, existing, prefill, onDone, onClose }) => {
     </label>
   );
 
+  const title = existing
+    ? `${t('console.channel.modal_edit', 'Edit')} · ${existing.name}`
+    : prefill
+      ? `${t('console.channel.modal_clone', 'Clone')} · ${prefill.name}`
+      : t('console.channel.modal_new', 'New channel');
+
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    // No backdrop dismissal: the api key typed below exists nowhere but this
+    // form until it is saved, and a stray click must not throw it away.
+    <HfDialog
+      title={title}
+      onClose={onClose}
+      as='form'
+      onSubmit={submit}
+      busy={saving}
+      width={480}
+      dismissOnBackdrop={false}
+      initialFocusRef={nameRef}
+      backdropTestId='channel-dialog-backdrop'
     >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 480,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-          maxHeight: '90vh',
-          overflowY: 'auto',
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {existing
-            ? `${t('console.channel.modal_edit', 'Edit')} · ${existing.name}`
-            : prefill
-              ? `${t('console.channel.modal_clone', 'Clone')} · ${prefill.name}`
-              : t('console.channel.modal_new', 'New channel')}
-        </div>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span className='lbl'>{t('console.channel.field_name', 'name *')}</span>
+        <input
+          ref={nameRef}
+          style={inputStyle}
+          value={form.name}
+          onChange={set('name')}
+          placeholder={t('console.channel.ph_name', 'e.g. openai/main')}
+          required
+        />
+      </label>
 
+      {!existing && (
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span className='lbl'>
-            {t('console.channel.field_name', 'name *')}
-          </span>
-          <input
-            ref={nameRef}
-            style={inputStyle}
-            value={form.name}
-            onChange={set('name')}
-            placeholder={t('console.channel.ph_name', 'e.g. openai/main')}
-            required
-          />
-        </label>
-
-        {!existing && (
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span className='lbl'>
-              {t('console.channel.field_api_key', 'api key')}
-            </span>
-            <input
-              style={inputStyle}
-              value={form.key}
-              onChange={set('key')}
-              placeholder='sk-...'
-            />
-          </label>
-        )}
-
-        {field(t('console.channel.field_base_url', 'base url'), 'baseURL', {
-          placeholder: 'https://api.openai.com/v1',
-        })}
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span className='lbl'>
-            {t('console.channel.field_type_named', 'provider type')}
-          </span>
-          <ChannelTypeSelect
-            style={inputStyle}
-            value={form.type}
-            onChange={set('type')}
-          />
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span className='lbl'>
-            {t('console.channel.field_models', 'models (comma-separated)')}
+            {t('console.channel.field_api_key', 'api key')}
           </span>
           <input
             style={inputStyle}
-            value={form.models}
-            onChange={set('models')}
-            placeholder='gpt-4o,gpt-4o-mini'
+            value={form.key}
+            onChange={set('key')}
+            placeholder='sk-...'
           />
         </label>
+      )}
 
-        {field(t('console.channel.field_group', 'group'), 'group', {
-          placeholder: 'default',
-        })}
+      {field(t('console.channel.field_base_url', 'base url'), 'baseURL', {
+        placeholder: 'https://api.openai.com/v1',
+      })}
 
-        <div
-          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}
-        >
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span className='lbl'>
-              {t('console.channel.field_weight', 'weight')}
-            </span>
-            <input
-              style={inputStyle}
-              type='number'
-              min='0'
-              step='0.1'
-              value={form.weight}
-              onChange={set('weight')}
-            />
-          </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span className='lbl'>
-              {t('console.channel.field_priority', 'priority')}
-            </span>
-            <input
-              style={inputStyle}
-              type='number'
-              value={form.priority}
-              onChange={set('priority')}
-            />
-          </label>
-        </div>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span className='lbl'>
+          {t('console.channel.field_type_named', 'provider type')}
+        </span>
+        <ChannelTypeSelect
+          style={inputStyle}
+          value={form.type}
+          onChange={set('type')}
+        />
+      </label>
 
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span className='lbl'>
+          {t('console.channel.field_models', 'models (comma-separated)')}
+        </span>
+        <input
+          style={inputStyle}
+          value={form.models}
+          onChange={set('models')}
+          placeholder='gpt-4o,gpt-4o-mini'
+        />
+      </label>
+
+      {field(t('console.channel.field_group', 'group'), 'group', {
+        placeholder: 'default',
+      })}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span className='lbl'>
-            {t(
-              'console.channel.field_model_mapping',
-              'model mapping (from=to, comma-separated or JSON)',
-            )}
+            {t('console.channel.field_weight', 'weight')}
           </span>
           <input
             style={inputStyle}
-            value={form.modelMapping}
-            onChange={set('modelMapping')}
-            placeholder='gpt-4=gpt-4o,gpt-3.5-turbo=gpt-4o-mini'
+            type='number'
+            min='0'
+            step='0.1'
+            value={form.weight}
+            onChange={set('weight')}
           />
         </label>
-
-        {field(t('console.channel.field_tag', 'tag'), 'tag', {
-          placeholder: t('console.channel.ph_tag', 'optional tag'),
-        })}
-
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span className='lbl'>
-            {t('console.channel.field_remark', 'remark')}
+            {t('console.channel.field_priority', 'priority')}
           </span>
           <input
             style={inputStyle}
-            value={form.remark}
-            onChange={set('remark')}
-            placeholder={t('console.channel.ph_remark', 'optional note')}
+            type='number'
+            value={form.priority}
+            onChange={set('priority')}
           />
         </label>
+      </div>
 
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'flex-end',
-            marginTop: 4,
-          }}
-        >
-          <button type='button' className='btn ghost' onClick={onClose}>
-            {t('console.common.cancel', 'cancel')}
-          </button>
-          <button type='submit' className='btn primary' disabled={saving}>
-            {saving
-              ? t('console.channel.saving', 'saving…')
-              : existing
-                ? t('console.channel.save_changes', 'save changes')
-                : t('console.channel.create_channel', 'create channel')}
-          </button>
-        </div>
-      </form>
-    </div>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span className='lbl'>
+          {t(
+            'console.channel.field_model_mapping',
+            'model mapping (from=to, comma-separated or JSON)',
+          )}
+        </span>
+        <input
+          style={inputStyle}
+          value={form.modelMapping}
+          onChange={set('modelMapping')}
+          placeholder='gpt-4=gpt-4o,gpt-3.5-turbo=gpt-4o-mini'
+        />
+      </label>
+
+      {field(t('console.channel.field_tag', 'tag'), 'tag', {
+        placeholder: t('console.channel.ph_tag', 'optional tag'),
+      })}
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span className='lbl'>
+          {t('console.channel.field_remark', 'remark')}
+        </span>
+        <input
+          style={inputStyle}
+          value={form.remark}
+          onChange={set('remark')}
+          placeholder={t('console.channel.ph_remark', 'optional note')}
+        />
+      </label>
+
+      <HfDialogFooter>
+        <button type='button' className='btn ghost' onClick={onClose}>
+          {t('console.common.cancel', 'cancel')}
+        </button>
+        <button type='submit' className='btn primary' disabled={saving}>
+          {saving
+            ? t('console.channel.saving', 'saving…')
+            : existing
+              ? t('console.channel.save_changes', 'save changes')
+              : t('console.channel.create_channel', 'create channel')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 

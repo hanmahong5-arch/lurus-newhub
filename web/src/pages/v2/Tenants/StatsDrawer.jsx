@@ -22,6 +22,7 @@ import { API } from '../../../helpers';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { classifyLoad } from '../../../helpers/loadState';
 import HfLoadError from '../../../components/hifi/HfLoadError';
+import HfDialog from '../../../components/hifi/HfDialog';
 
 // ─── Stats drawer ─────────────────────────────────────────────────────────────
 
@@ -89,109 +90,60 @@ const StatsDrawer = ({ tenant, onClose }) => {
     load();
   }, [load]);
 
-  useEffect(() => {
-    const onKey = (ev) => ev.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  const titleId = `tenant-stats-title-${tenant.id}`;
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 16,
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    <HfDialog
+      title={
+        <>
+          {tenant.name} · {tr('console.tenant.stats_title', 'stats')}
+        </>
+      }
+      onClose={onClose}
+      width={460}
+      testId='tenant-stats-dialog'
     >
-      <div
-        role='dialog'
-        aria-modal='true'
-        aria-labelledby={titleId}
-        data-testid='tenant-stats-dialog'
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 460,
-          maxWidth: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-          }}
-        >
-          <div id={titleId} className='strong' style={{ fontSize: 15 }}>
-            {tenant.name} · {tr('console.tenant.stats_title', 'stats')}
-          </div>
-          <button
-            type='button'
-            className='btn ghost sm'
-            onClick={onClose}
-            aria-label={tr('console.common.close', 'close')}
-          >
-            ✕
-          </button>
+      {status === null && (
+        <div className='muted' style={{ fontSize: 12 }} aria-live='polite'>
+          {tr('console.common.loading', 'Loading…')}
         </div>
+      )}
 
-        {status === null && (
-          <div className='muted' style={{ fontSize: 12 }} aria-live='polite'>
-            {tr('console.common.loading', 'Loading…')}
-          </div>
-        )}
+      {status !== null && status !== 'ok' && (
+        <HfLoadError
+          status={status}
+          variant='inset'
+          title={tr('console.tenant.stats_load_error', 'Couldn’t load stats')}
+          onRetry={load}
+          testId='tenant-stats-error'
+        />
+      )}
 
-        {status !== null && status !== 'ok' && (
-          <HfLoadError
-            status={status}
-            variant='inset'
-            title={tr('console.tenant.stats_load_error', 'Couldn’t load stats')}
-            onRetry={load}
-            testId='tenant-stats-error'
-          />
-        )}
-
-        {status === 'ok' && stats && (
-          <dl className='panel' style={{ margin: 0 }}>
-            {statRows(stats, tr).map(([label, value], i, arr) => (
-              <div
-                key={label}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'minmax(120px, 44%) 1fr',
-                  padding: '10px 16px',
-                  borderBottom:
-                    i < arr.length - 1 ? '1px dashed var(--hf-rule)' : 0,
-                  fontSize: 12,
-                  alignItems: 'center',
-                }}
+      {status === 'ok' && stats && (
+        <dl className='panel' style={{ margin: 0 }}>
+          {statRows(stats, tr).map(([label, value], i, arr) => (
+            <div
+              key={label}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(120px, 44%) 1fr',
+                padding: '10px 16px',
+                borderBottom:
+                  i < arr.length - 1 ? '1px dashed var(--hf-rule)' : 0,
+                fontSize: 12,
+                alignItems: 'center',
+              }}
+            >
+              <dt className='lbl'>{label}</dt>
+              <dd
+                className='mono strong'
+                style={{ margin: 0, textAlign: 'right' }}
               >
-                <dt className='lbl'>{label}</dt>
-                <dd
-                  className='mono strong'
-                  style={{ margin: 0, textAlign: 'right' }}
-                >
-                  {value}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
-      </div>
-    </div>
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </HfDialog>
   );
 };
 

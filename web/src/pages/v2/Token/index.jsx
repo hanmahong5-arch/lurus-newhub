@@ -21,6 +21,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import HfLoadError from '../../../components/hifi/HfLoadError';
+import HfDialog, { HfDialogFooter } from '../../../components/hifi/HfDialog';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import {
   API,
@@ -221,10 +222,6 @@ const CreateModal = ({ tenantSlug, projects, onCreated, onClose }) => {
   // tokens — and a token is not something you want an accidental duplicate of.
   const inFlight = useRef(false);
 
-  useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
-
   const submit = async (e) => {
     e.preventDefault();
     if (!form.name.trim() || inFlight.current) return;
@@ -272,42 +269,59 @@ const CreateModal = ({ tenantSlug, projects, onCreated, onClose }) => {
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    // busy mirrors inFlight: while the POST runs the key is not yet on
+    // screen, so Escape / backdrop / X must not throw the dialog away.
+    <HfDialog
+      title={tr('console.token.modal_title', 'New token')}
+      onClose={onClose}
+      as='form'
+      onSubmit={submit}
+      busy={saving}
+      width={400}
+      initialFocusRef={nameRef}
     >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 400,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {tr('console.token.modal_title', 'New token')}
-        </div>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>{tr('console.token.field_name', 'name *')}</span>
+        <input
+          ref={nameRef}
+          data-testid='token-name-input'
+          style={{
+            fontFamily: 'var(--hf-mono)',
+            fontSize: 12,
+            padding: '5px 8px',
+            border: '1px solid var(--hf-rule)',
+            background: 'var(--hf-sunken)',
+            color: 'var(--hf-ink)',
+            borderRadius: 2,
+            outline: 'none',
+            width: '100%',
+          }}
+          placeholder={tr('console.token.ph_name', 'e.g. prod-backend')}
+          value={form.name}
+          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          required
+        />
+      </label>
 
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <input
+          type='checkbox'
+          checked={form.unlimited}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, unlimited: e.target.checked }))
+          }
+        />
+        <span className='lbl'>
+          {tr('console.token.unlimited_quota', 'unlimited quota')}
+        </span>
+      </label>
+
+      {!form.unlimited && (
         <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
           <span className='lbl'>
-            {tr('console.token.field_name', 'name *')}
+            {tr('console.token.monthly_cap_usd', 'monthly cap ($)')}
           </span>
           <input
-            ref={nameRef}
-            data-testid='token-name-input'
             style={{
               fontFamily: 'var(--hf-mono)',
               fontSize: 12,
@@ -319,31 +333,100 @@ const CreateModal = ({ tenantSlug, projects, onCreated, onClose }) => {
               outline: 'none',
               width: '100%',
             }}
-            placeholder={tr('console.token.ph_name', 'e.g. prod-backend')}
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            required
+            type='number'
+            min='0'
+            step='0.01'
+            placeholder='200'
+            value={form.cap}
+            onChange={(e) => setForm((f) => ({ ...f, cap: e.target.value }))}
           />
         </label>
+      )}
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type='checkbox'
-            checked={form.unlimited}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, unlimited: e.target.checked }))
-            }
-          />
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <input
+          type='checkbox'
+          checked={form.limitModels}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, limitModels: e.target.checked }))
+          }
+        />
+        <span className='lbl'>
+          {tr('console.token.restrict_models', 'restrict models')}
+        </span>
+      </label>
+
+      {form.limitModels && (
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
           <span className='lbl'>
-            {tr('console.token.unlimited_quota', 'unlimited quota')}
+            {tr(
+              'console.token.allowed_models',
+              'allowed models (comma-separated)',
+            )}
           </span>
+          <input
+            style={{
+              fontFamily: 'var(--hf-mono)',
+              fontSize: 12,
+              padding: '5px 8px',
+              border: '1px solid var(--hf-rule)',
+              background: 'var(--hf-sunken)',
+              color: 'var(--hf-ink)',
+              borderRadius: 2,
+              outline: 'none',
+              width: '100%',
+            }}
+            placeholder={tr(
+              'console.token.ph_models',
+              'gpt-4o, claude-3.5-sonnet',
+            )}
+            value={form.models}
+            onChange={(e) => setForm((f) => ({ ...f, models: e.target.value }))}
+          />
         </label>
+      )}
 
-        {!form.unlimited && (
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            <span className='lbl'>
-              {tr('console.token.monthly_cap_usd', 'monthly cap ($)')}
-            </span>
+      {/* Cost-attribution project (migration 029). Reporting only. */}
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.projects.token_field', 'project')}
+        </span>
+        <select
+          data-testid='token-project-select'
+          style={projectSelectStyle}
+          value={form.projectId}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, projectId: e.target.value }))
+          }
+        >
+          <option value=''>
+            {tr('console.projects.token_none', 'unassigned')}
+          </option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <span className='muted' style={{ fontSize: 11 }}>
+          {tr(
+            'console.projects.token_field_hint',
+            "Attributes this key's spend to a project. Reporting only — grants no access.",
+          )}
+        </span>
+      </label>
+
+      {/* Per-token rate limits — 0 / empty = unlimited. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        {[
+          ['rpm', tr('console.token.field_rpm', 'rpm limit')],
+          ['tpm', tr('console.token.field_tpm', 'tpm limit')],
+        ].map(([k, label]) => (
+          <label
+            key={k}
+            style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
+          >
+            <span className='lbl'>{label}</span>
             <input
               style={{
                 fontFamily: 'var(--hf-mono)',
@@ -358,151 +441,31 @@ const CreateModal = ({ tenantSlug, projects, onCreated, onClose }) => {
               }}
               type='number'
               min='0'
-              step='0.01'
-              placeholder='200'
-              value={form.cap}
-              onChange={(e) => setForm((f) => ({ ...f, cap: e.target.value }))}
+              step='1'
+              placeholder={tr('console.token.ph_rate_limit', '0 = unlimited')}
+              value={form[k]}
+              onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
             />
           </label>
-        )}
+        ))}
+      </div>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type='checkbox'
-            checked={form.limitModels}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, limitModels: e.target.checked }))
-            }
-          />
-          <span className='lbl'>
-            {tr('console.token.restrict_models', 'restrict models')}
-          </span>
-        </label>
-
-        {form.limitModels && (
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            <span className='lbl'>
-              {tr(
-                'console.token.allowed_models',
-                'allowed models (comma-separated)',
-              )}
-            </span>
-            <input
-              style={{
-                fontFamily: 'var(--hf-mono)',
-                fontSize: 12,
-                padding: '5px 8px',
-                border: '1px solid var(--hf-rule)',
-                background: 'var(--hf-sunken)',
-                color: 'var(--hf-ink)',
-                borderRadius: 2,
-                outline: 'none',
-                width: '100%',
-              }}
-              placeholder={tr(
-                'console.token.ph_models',
-                'gpt-4o, claude-3.5-sonnet',
-              )}
-              value={form.models}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, models: e.target.value }))
-              }
-            />
-          </label>
-        )}
-
-        {/* Cost-attribution project (migration 029). Reporting only. */}
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.projects.token_field', 'project')}
-          </span>
-          <select
-            data-testid='token-project-select'
-            style={projectSelectStyle}
-            value={form.projectId}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, projectId: e.target.value }))
-            }
-          >
-            <option value=''>
-              {tr('console.projects.token_none', 'unassigned')}
-            </option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <span className='muted' style={{ fontSize: 11 }}>
-            {tr(
-              'console.projects.token_field_hint',
-              "Attributes this key's spend to a project. Reporting only — grants no access.",
-            )}
-          </span>
-        </label>
-
-        {/* Per-token rate limits — 0 / empty = unlimited. */}
-        <div
-          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}
+      <HfDialogFooter>
+        <button type='button' className='btn ghost' onClick={onClose}>
+          {tr('console.common.cancel', 'cancel')}
+        </button>
+        <button
+          type='submit'
+          className='btn primary'
+          disabled={saving}
+          data-testid='token-create-submit'
         >
-          {[
-            ['rpm', tr('console.token.field_rpm', 'rpm limit')],
-            ['tpm', tr('console.token.field_tpm', 'tpm limit')],
-          ].map(([k, label]) => (
-            <label
-              key={k}
-              style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
-            >
-              <span className='lbl'>{label}</span>
-              <input
-                style={{
-                  fontFamily: 'var(--hf-mono)',
-                  fontSize: 12,
-                  padding: '5px 8px',
-                  border: '1px solid var(--hf-rule)',
-                  background: 'var(--hf-sunken)',
-                  color: 'var(--hf-ink)',
-                  borderRadius: 2,
-                  outline: 'none',
-                  width: '100%',
-                }}
-                type='number'
-                min='0'
-                step='1'
-                placeholder={tr('console.token.ph_rate_limit', '0 = unlimited')}
-                value={form[k]}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, [k]: e.target.value }))
-                }
-              />
-            </label>
-          ))}
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'flex-end',
-            marginTop: 4,
-          }}
-        >
-          <button type='button' className='btn ghost' onClick={onClose}>
-            {tr('console.common.cancel', 'cancel')}
-          </button>
-          <button
-            type='submit'
-            className='btn primary'
-            disabled={saving}
-            data-testid='token-create-submit'
-          >
-            {saving
-              ? tr('console.token.creating', 'creating…')
-              : tr('console.token.create_token', 'create token')}
-          </button>
-        </div>
-      </form>
-    </div>
+          {saving
+            ? tr('console.token.creating', 'creating…')
+            : tr('console.token.create_token', 'create token')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 

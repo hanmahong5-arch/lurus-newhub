@@ -21,7 +21,8 @@ For commercial licensing, please contact support@quantumnous.com
 // performance, capabilities with their relay paths, and a copy-paste quick
 // start. Split out of Marketplace.jsx, which renders the list.
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import HfDialog from '../../../components/hifi/HfDialog';
 import HfVendorIcon from '../../../components/hifi/HfVendorIcon';
 import { CAPABILITIES, fmtCompact, fmtMs, fmtPct, fmtUsd } from './catalog';
 
@@ -103,231 +104,215 @@ const ModelDrawer = ({
   availability,
 }) => {
   const [tab, setTab] = useState('curl');
-  useEffect(() => {
-    const onKey = (ev) => ev.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
   const code = tab === 'curl' ? quickStart(e, base) : quickStartPython(e, base);
+  // Escape, backdrop and focus are HfDialog's. The header stays ours: the
+  // primitive's head is a 15px title row, not a vendor icon beside a display
+  // name, so the X lives here and closeButton is off.
   return (
-    <div
-      className='hf-drawer-backdrop'
-      onClick={onClose}
-      data-testid='model-drawer-backdrop'
+    <HfDialog
+      variant='side'
+      ariaLabel={e.id}
+      onClose={onClose}
+      closeButton={false}
+      testId='model-drawer'
+      backdropTestId='model-drawer-backdrop'
     >
-      <aside
-        className='hf-drawer'
-        role='dialog'
-        aria-label={e.id}
-        data-testid='model-drawer'
-        onClick={(ev) => ev.stopPropagation()}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <HfVendorIcon model={e.id} vendor={e.vendor} size={36} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div className='display' style={{ fontSize: 24 }}>
-              {e.id}
-            </div>
-            <div className='muted' style={{ fontSize: 12 }}>
-              {e.vendor ||
-                tr('console.models.unknown_vendor', 'unknown vendor')}
-            </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <HfVendorIcon model={e.id} vendor={e.vendor} size={36} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className='display' style={{ fontSize: 24 }}>
+            {e.id}
           </div>
-          <button
-            type='button'
-            className='btn sm'
-            onClick={onClose}
-            aria-label={tr('console.common.close', 'close')}
-          >
-            ✕
-          </button>
+          <div className='muted' style={{ fontSize: 12 }}>
+            {e.vendor || tr('console.models.unknown_vendor', 'unknown vendor')}
+          </div>
         </div>
-
-        <div
-          style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}
+        <button
+          type='button'
+          className='btn sm'
+          onClick={onClose}
+          aria-label={tr('console.common.close', 'close')}
         >
-          <CallableBadge e={e} tr={tr} />
-          {e.tags.map((t) => (
-            <span key={t} className='tag'>
-              {t}
-            </span>
-          ))}
-          {availability}
-        </div>
+          ✕
+        </button>
+      </div>
 
-        <p style={{ fontSize: 14, lineHeight: 1.6, marginTop: 14 }}>
-          {e.description ||
-            tr(
-              'console.models.market.no_description',
-              'No description yet — an administrator can add one to the model catalogue.',
-            )}
-        </p>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+        <CallableBadge e={e} tr={tr} />
+        {e.tags.map((t) => (
+          <span key={t} className='tag'>
+            {t}
+          </span>
+        ))}
+        {availability}
+      </div>
 
+      <p style={{ fontSize: 14, lineHeight: 1.6, marginTop: 14 }}>
+        {e.description ||
+          tr(
+            'console.models.market.no_description',
+            'No description yet — an administrator can add one to the model catalogue.',
+          )}
+      </p>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, 1fr)',
+          gap: 10,
+          marginTop: 8,
+        }}
+        data-testid='model-drawer-prices'
+      >
+        {e.quotaType === 1 ? (
+          <Stat
+            label={tr('console.models.market.price_per_call', 'price per call')}
+            value={fmtUsd(e.perCall)}
+          />
+        ) : (
+          <>
+            <Stat
+              label={tr('console.models.market.th_input', 'input $/M')}
+              value={fmtUsd(e.inputPerM)}
+              sub={tr('console.models.market.per_million', 'per 1M tokens')}
+            />
+            <Stat
+              label={tr('console.models.market.th_output', 'output $/M')}
+              value={fmtUsd(e.outputPerM)}
+              sub={tr('console.models.market.per_million', 'per 1M tokens')}
+            />
+            <Stat
+              label={tr('console.models.market.th_cache', 'cache read $/M')}
+              value={fmtUsd(e.cacheReadPerM)}
+            />
+          </>
+        )}
+        <Stat
+          label={tr('console.models.market.tokens_7d', 'tokens · 7d')}
+          value={fmtCompact(e.tokens)}
+          sub={`${fmtCompact(e.requests)} ${tr('console.models.market.requests', 'requests')}`}
+        />
+      </div>
+      {(e.p50Ms != null || e.errorRate != null) && (
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(2, 1fr)',
+            gridTemplateColumns: 'repeat(3, 1fr)',
             gap: 10,
-            marginTop: 8,
+            marginTop: 10,
           }}
-          data-testid='model-drawer-prices'
+          data-testid='model-drawer-perf'
         >
-          {e.quotaType === 1 ? (
-            <Stat
-              label={tr(
-                'console.models.market.price_per_call',
-                'price per call',
-              )}
-              value={fmtUsd(e.perCall)}
-            />
-          ) : (
-            <>
-              <Stat
-                label={tr('console.models.market.th_input', 'input $/M')}
-                value={fmtUsd(e.inputPerM)}
-                sub={tr('console.models.market.per_million', 'per 1M tokens')}
-              />
-              <Stat
-                label={tr('console.models.market.th_output', 'output $/M')}
-                value={fmtUsd(e.outputPerM)}
-                sub={tr('console.models.market.per_million', 'per 1M tokens')}
-              />
-              <Stat
-                label={tr('console.models.market.th_cache', 'cache read $/M')}
-                value={fmtUsd(e.cacheReadPerM)}
-              />
-            </>
-          )}
+          <Stat label='p50' value={e.enoughSamples ? fmtMs(e.p50Ms) : '—'} />
+          <Stat label='p95' value={e.enoughSamples ? fmtMs(e.p95Ms) : '—'} />
           <Stat
-            label={tr('console.models.market.tokens_7d', 'tokens · 7d')}
-            value={fmtCompact(e.tokens)}
-            sub={`${fmtCompact(e.requests)} ${tr('console.models.market.requests', 'requests')}`}
+            label={tr('console.models.perf.error_rate', 'errors')}
+            value={e.enoughSamples ? fmtPct(e.errorRate) : '—'}
+            sub={
+              e.enoughSamples
+                ? tr('console.models.perf.window', 'last 24h, your tenant')
+                : tr(
+                    'console.models.perf.thin',
+                    'too little traffic to measure',
+                  )
+            }
           />
         </div>
-        {(e.p50Ms != null || e.errorRate != null) && (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: 10,
-              marginTop: 10,
-            }}
-            data-testid='model-drawer-perf'
-          >
-            <Stat label='p50' value={e.enoughSamples ? fmtMs(e.p50Ms) : '—'} />
-            <Stat label='p95' value={e.enoughSamples ? fmtMs(e.p95Ms) : '—'} />
-            <Stat
-              label={tr('console.models.perf.error_rate', 'errors')}
-              value={e.enoughSamples ? fmtPct(e.errorRate) : '—'}
-              sub={
-                e.enoughSamples
-                  ? tr('console.models.perf.window', 'last 24h, your tenant')
-                  : tr(
-                      'console.models.perf.thin',
-                      'too little traffic to measure',
-                    )
-              }
-            />
-          </div>
+      )}
+      <div className='faint' style={{ fontSize: 11, marginTop: 6 }}>
+        {tr(
+          'console.models.market.price_note',
+          'Prices include your group multiplier.',
         )}
-        <div className='faint' style={{ fontSize: 11, marginTop: 6 }}>
-          {tr(
-            'console.models.market.price_note',
-            'Prices include your group multiplier.',
-          )}
-        </div>
+      </div>
 
-        <div className='lbl' style={{ marginTop: 18 }}>
-          {tr('console.models.market.th_caps', 'capabilities')}
-        </div>
-        <div style={{ marginTop: 6 }}>
-          {e.capabilities.length === 0 && (
-            <span className='muted' style={{ fontSize: 13 }}>
-              —
-            </span>
-          )}
-          {e.capabilities.map((c) => (
-            <div
-              key={c}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                padding: '6px 0',
-                borderBottom: '1px solid var(--hf-rule)',
-                fontSize: 13,
-              }}
-            >
-              <span>{capLabel(tr, c)}</span>
-              <span className='mono muted' style={{ fontSize: 12 }}>
-                {CAPABILITY_PATH[c] || ''}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            marginTop: 18,
-          }}
-        >
-          <span className='lbl' style={{ flex: 1 }}>
-            {tr('console.models.market.quick_start', 'quick start')}
+      <div className='lbl' style={{ marginTop: 18 }}>
+        {tr('console.models.market.th_caps', 'capabilities')}
+      </div>
+      <div style={{ marginTop: 6 }}>
+        {e.capabilities.length === 0 && (
+          <span className='muted' style={{ fontSize: 13 }}>
+            —
           </span>
-          {['curl', 'python'].map((k) => (
-            <button
-              key={k}
-              type='button'
-              className={'btn sm' + (tab === k ? ' primary' : '')}
-              onClick={() => setTab(k)}
-            >
-              {k === 'curl' ? 'cURL' : 'Python'}
-            </button>
-          ))}
-          <button
-            type='button'
-            className='btn sm'
-            data-testid='model-drawer-copy-code'
-            onClick={() => onCopy(code)}
+        )}
+        {e.capabilities.map((c) => (
+          <div
+            key={c}
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              padding: '6px 0',
+              borderBottom: '1px solid var(--hf-rule)',
+              fontSize: 13,
+            }}
           >
-            {tr('console.common.copy', 'copy')}
-          </button>
-        </div>
-        <pre className='hf-code' data-testid='model-drawer-code'>
-          {code}
-        </pre>
+            <span>{capLabel(tr, c)}</span>
+            <span className='mono muted' style={{ fontSize: 12 }}>
+              {CAPABILITY_PATH[c] || ''}
+            </span>
+          </div>
+        ))}
+      </div>
 
-        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          {e.routable && (
-            <button
-              type='button'
-              className='btn primary'
-              data-testid='model-drawer-try'
-              onClick={() => onTry(e.id)}
-            >
-              {tr(
-                'console.models.market.open_playground',
-                'open in playground',
-              )}{' '}
-              ↗
-            </button>
-          )}
-          <button type='button' className='btn' onClick={onKeys}>
-            {tr('console.models.market.get_key', 'get an API key')}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          marginTop: 18,
+        }}
+      >
+        <span className='lbl' style={{ flex: 1 }}>
+          {tr('console.models.market.quick_start', 'quick start')}
+        </span>
+        {['curl', 'python'].map((k) => (
+          <button
+            key={k}
+            type='button'
+            className={'btn sm' + (tab === k ? ' primary' : '')}
+            onClick={() => setTab(k)}
+          >
+            {k === 'curl' ? 'cURL' : 'Python'}
           </button>
+        ))}
+        <button
+          type='button'
+          className='btn sm'
+          data-testid='model-drawer-copy-code'
+          onClick={() => onCopy(code)}
+        >
+          {tr('console.common.copy', 'copy')}
+        </button>
+      </div>
+      <pre className='hf-code' data-testid='model-drawer-code'>
+        {code}
+      </pre>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+        {e.routable && (
           <button
             type='button'
-            className='btn'
-            data-testid='model-drawer-copy-id'
-            onClick={() => onCopy(e.id)}
+            className='btn primary'
+            data-testid='model-drawer-try'
+            onClick={() => onTry(e.id)}
           >
-            {tr('console.models.market.copy_id', 'copy model id')}
+            {tr('console.models.market.open_playground', 'open in playground')}{' '}
+            ↗
           </button>
-        </div>
-      </aside>
-    </div>
+        )}
+        <button type='button' className='btn' onClick={onKeys}>
+          {tr('console.models.market.get_key', 'get an API key')}
+        </button>
+        <button
+          type='button'
+          className='btn'
+          data-testid='model-drawer-copy-id'
+          onClick={() => onCopy(e.id)}
+        >
+          {tr('console.models.market.copy_id', 'copy model id')}
+        </button>
+      </div>
+    </HfDialog>
   );
 };
 

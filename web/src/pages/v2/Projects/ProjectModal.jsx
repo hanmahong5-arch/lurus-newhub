@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { API, showSuccess } from '../../../helpers';
+import HfDialog, { HfDialogFooter } from '../../../components/hifi/HfDialog';
 
 const inputStyle = {
   fontFamily: 'var(--hf-mono)',
@@ -47,6 +48,10 @@ const ProjectModal = ({ tenantSlug, target, onSaved, onClose }) => {
   // A ref, not the `saving` state: two submits fired in the same tick (Enter
   // plus a click) would both read the pre-render value of the state.
   const inFlight = useRef(false);
+  // Handed to the dialog rather than `autoFocus`: an autoFocus child takes
+  // focus during commit, before the dialog records who opened it, so focus
+  // would have nowhere to return on close.
+  const nameRef = useRef(null);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -72,110 +77,83 @@ const ProjectModal = ({ tenantSlug, target, onSaved, onClose }) => {
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && !saving && onClose()}
+    <HfDialog
+      title={
+        target.isNew
+          ? tr('console.projects.modal_new', 'New project')
+          : tr('console.projects.modal_edit', 'Edit project')
+      }
+      onClose={onClose}
+      as='form'
+      onSubmit={submit}
+      busy={saving}
+      initialFocusRef={nameRef}
     >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 420,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {target.isNew
-            ? tr('console.projects.modal_new', 'New project')
-            : tr('console.projects.modal_edit', 'Edit project')}
-        </div>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.projects.field_name', 'name *')}
+        </span>
+        <input
+          data-testid='proj-name'
+          ref={nameRef}
+          style={inputStyle}
+          value={form.name}
+          maxLength={128}
+          disabled={saving}
+          placeholder={tr('console.projects.ph_name', 'e.g. Marketing')}
+          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          required
+        />
+      </label>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.projects.field_name', 'name *')}
-          </span>
-          <input
-            data-testid='proj-name'
-            style={inputStyle}
-            value={form.name}
-            autoFocus
-            maxLength={128}
-            disabled={saving}
-            placeholder={tr('console.projects.ph_name', 'e.g. Marketing')}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            required
-          />
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.projects.field_description', 'description')}
-          </span>
-          <input
-            data-testid='proj-description'
-            style={inputStyle}
-            value={form.description}
-            maxLength={512}
-            disabled={saving}
-            placeholder={tr(
-              'console.projects.ph_description',
-              'e.g. brand + growth spend',
-            )}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, description: e.target.value }))
-            }
-          />
-        </label>
-
-        <div className='muted' style={{ fontSize: 11 }}>
-          {tr(
-            'console.projects.modal_hint',
-            'A project is a cost label for reporting. It grants no access and has no members — assign tokens to it on the Tokens page.',
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.projects.field_description', 'description')}
+        </span>
+        <input
+          data-testid='proj-description'
+          style={inputStyle}
+          value={form.description}
+          maxLength={512}
+          disabled={saving}
+          placeholder={tr(
+            'console.projects.ph_description',
+            'e.g. brand + growth spend',
           )}
-        </div>
+          onChange={(e) =>
+            setForm((f) => ({ ...f, description: e.target.value }))
+          }
+        />
+      </label>
 
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 10,
-            marginTop: 4,
-          }}
+      <div className='muted' style={{ fontSize: 11 }}>
+        {tr(
+          'console.projects.modal_hint',
+          'A project is a cost label for reporting. It grants no access and has no members — assign tokens to it on the Tokens page.',
+        )}
+      </div>
+
+      <HfDialogFooter>
+        <button
+          type='button'
+          className='btn ghost'
+          disabled={saving}
+          onClick={onClose}
         >
-          <button
-            type='button'
-            className='btn ghost'
-            disabled={saving}
-            onClick={onClose}
-          >
-            {tr('console.common.cancel', 'cancel')}
-          </button>
-          <button
-            type='submit'
-            className='btn primary'
-            disabled={saving || !form.name.trim()}
-            data-testid='proj-save'
-          >
-            {saving
-              ? tr('console.common.loading', 'loading…')
-              : tr('console.common.save', 'save')}
-          </button>
-        </div>
-      </form>
-    </div>
+          {tr('console.common.cancel', 'cancel')}
+        </button>
+        <button
+          type='submit'
+          className='btn primary'
+          disabled={saving || !form.name.trim()}
+          data-testid='proj-save'
+        >
+          {saving
+            ? tr('console.common.loading', 'loading…')
+            : tr('console.common.save', 'save')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 
