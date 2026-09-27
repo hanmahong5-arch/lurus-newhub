@@ -53,7 +53,7 @@ go test -run Integration ./...       # 3. integration (env: SQL_DSN)
 cd web && bun run test && bun run lint && bun run eslint && bun run check:casing   # 4. frontend (no typecheck script — plain JS)
 ```
 
-GitHub Actions: setup-go 1.25 → unit tests → race → integration (with services via `SQL_DSN` secret).
+GitHub Actions: setup-go 1.26 → unit tests → race → integration (with services via `SQL_DSN` secret).
 
 ## Test structure
 

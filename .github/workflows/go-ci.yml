@@ -97,7 +97,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: ${{ !vars.CI_RUNS_ON }}
       - run: go build ./...
       - name: Entitlement kit resolves + its verifier tests pass (lurus-entkit)
@@ -214,7 +214,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: Check per-package coverage (statement-weighted)
         env:
@@ -403,7 +403,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: ${{ !vars.CI_RUNS_ON }}
       - run: go vet ./...
 
@@ -444,7 +444,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: Install gosec (pinned)
         # Pinned 2026-08-17, was @latest. @latest is both a supply-chain hole
@@ -505,7 +505,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: Run govulncheck (pinned)
         # Pinned for the two reasons gosec's pin gives above. v1.8.0 is the
@@ -514,17 +514,16 @@ jobs:
         # no diff behind it means a new advisory matched code this module
         # reaches, which is the point of the job.
         #
-        # NOT BLOCKING YET (continue-on-error). The first local run, on a clean
-        # checkout of main a84c6797 with the local go1.26.1 toolchain, reported
-        # 25 reachable vulnerabilities — 20 of them Go standard-library
-        # advisories fixed in go1.26.2 (crypto/x509, crypto/tls, html/template,
-        # net/http, net/mail, …) and 5 across four modules (gorilla/websocket,
-        # quic-go, golang.org/x/net ×2, otel/exporters/otlp) — plus 6
-        # imported-but-unreached and 4 required-but-unreached. A job that is
-        # red on day one gates nothing; the ratchet is: bump the toolchain and
-        # the four modules, re-run, and flip this to blocking in the same PR
-        # that gets it to zero. Until then the job log is the record.
-        continue-on-error: true
+        # BLOCKING since 2026-09-27. The first run (main a84c6797, go1.25)
+        # reported 25 reachable vulnerabilities: 20 standard-library advisories
+        # and 5 across gorilla/websocket, quic-go and otel/exporters/otlp. The
+        # same day's follow-up moved go.mod to go1.26.7 (the latest patch, which
+        # carries every stdlib fix listed) and bumped those three modules;
+        # re-run: "Your code is affected by 0 vulnerabilities" (1 imported but
+        # unreached, 3 required but unreached — govulncheck does not fail on
+        # those). A red run from here on is a new advisory against code this
+        # module reaches: bump the module or the toolchain in a PR of its own,
+        # never continue-on-error this job back to advisory.
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   lint:
@@ -567,7 +566,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: golangci-lint (curated linters; ratchet — gate only new findings)
         # Pre-existing findings across the module are a known baseline and are NOT
@@ -580,7 +579,7 @@ jobs:
         # above provides origin/main) with the same new-issues-only semantics.
         # Action v7 + golangci-lint v2 are required here — v1 (last release
         # v1.64.8) is built with go 1.24 and cannot load this module's go
-        # 1.25.1 directive. Linter set + timeout live in root .golangci.yml.
+        # 1.26.7 directive. Linter set + timeout live in root .golangci.yml.
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
@@ -637,7 +636,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: ${{ !vars.CI_RUNS_ON }}
       # -race needs CGO; ubuntu-latest ships gcc, so CGO_ENABLED defaults to 1.
       # -short keeps it to the hermetic suite (Postgres/MinIO integration tests
@@ -770,7 +769,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: go test repo + migration + entity packages against Postgres
         # -short skips the !testing.Short() stress tests; the PG integration tests
@@ -860,7 +859,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: Install golangci-lint (pinned, same version as the lint job)
         # Installed directly rather than via golangci-lint-action because this

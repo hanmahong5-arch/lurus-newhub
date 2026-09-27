@@ -18,7 +18,7 @@ COPY ./web .
 COPY ./VERSION .
 RUN DISABLE_ESLINT_PLUGIN='true' NODE_OPTIONS=--max-old-space-size=4096 VITE_REACT_APP_VERSION=$(cat VERSION) bun run build
 
-FROM golang:alpine AS builder2
+FROM golang:1.26-alpine AS builder2
 ENV GO111MODULE=on CGO_ENABLED=0
 
 ARG TARGETOS
