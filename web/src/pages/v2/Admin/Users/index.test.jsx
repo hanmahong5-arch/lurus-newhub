@@ -178,6 +178,29 @@ describe('Admin Users page', () => {
     });
   });
 
+  it('the edit dialog is a labelled modal; Escape closes it and focus returns to the edit button', async () => {
+    API.get.mockResolvedValue(listResponse([makeUser()]));
+
+    render(<HFAdminUsers />);
+    await waitFor(() => screen.getByTestId('user-edit-btn-7'));
+
+    const opener = screen.getByTestId('user-edit-btn-7');
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() => screen.getByTestId('edit-save'));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleName('Edit · alice');
+    expect(dialog.contains(screen.getByTestId('edit-role'))).toBe(true);
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('edit-save')).toBeNull();
+    });
+    expect(document.activeElement).toBe(opener);
+  });
+
   it('deletes a user behind the typed-confirm dialog', async () => {
     API.get.mockResolvedValue(listResponse([makeUser()]));
     API.delete.mockResolvedValue({ data: { success: true } });
@@ -244,6 +267,46 @@ describe('Admin Users page', () => {
       );
     });
     // The reason prompt closes on success and the list refetches.
+    await waitFor(() => {
+      expect(screen.queryByTestId('disable-2fa-reason')).toBeNull();
+    });
+  });
+
+  // The step-up modal (Semi, portaled to <body>) opens ON TOP of the reason
+  // prompt. An Escape pressed inside it must not also throw the reason away
+  // — the operator would come back from a cancelled step-up to an empty
+  // table with the typed reason gone.
+  it('the 2FA reason prompt is the dialog itself and ignores an Escape pressed inside the step-up modal', async () => {
+    API.get.mockResolvedValue(listResponse([makeUser()]));
+
+    render(<HFAdminUsers />);
+    await waitFor(() => screen.getByTestId('user-disable-2fa-btn-7'));
+    fireEvent.click(screen.getByTestId('user-disable-2fa-btn-7'));
+    await waitFor(() => screen.getByTestId('disable-2fa-reason'));
+
+    // role + aria-modal sit on the panel that holds the form, not on the
+    // backdrop around it.
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleName(/Disable 2FA/);
+    expect(dialog.contains(screen.getByTestId('disable-2fa-reason'))).toBe(
+      true,
+    );
+    expect(dialog.contains(screen.getByTestId('disable-2fa-confirm'))).toBe(
+      true,
+    );
+
+    // Stand-in for the portaled step-up modal: a focused node outside the
+    // panel.
+    const stepUp = document.createElement('input');
+    document.body.appendChild(stepUp);
+    stepUp.focus();
+    fireEvent.keyDown(stepUp, { key: 'Escape' });
+    expect(screen.getByTestId('disable-2fa-reason')).toBeTruthy();
+    stepUp.remove();
+
+    // With nothing else on top, Escape dismisses the prompt.
+    fireEvent.keyDown(document.body, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByTestId('disable-2fa-reason')).toBeNull();
     });

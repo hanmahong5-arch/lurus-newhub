@@ -444,3 +444,101 @@ describe('channel page — failed read', () => {
     expect(screen.getByText('0 upstream channels')).toBeTruthy();
   });
 });
+
+// ─── the channel forms are real dialogs (HfDialog) ───────────────────────────
+
+describe('channel dialog semantics', () => {
+  const openCreate = async () => {
+    API.get.mockResolvedValue(mockListResponse([]));
+    render(React.createElement(HFChannel));
+    await waitFor(() => screen.getByText('+ new channel'));
+    const opener = screen.getByText('+ new channel');
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() => screen.getByRole('dialog'));
+    return opener;
+  };
+
+  it('the create form is a labelled modal dialog with the name field focused', async () => {
+    await openCreate();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleName('New channel');
+    expect(document.activeElement).toBe(
+      screen.getByPlaceholderText('e.g. openai/main'),
+    );
+  });
+
+  it('the create form closes on Escape', async () => {
+    await openCreate();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('returns focus to "+ new channel" after cancel', async () => {
+    const opener = await openCreate();
+    fireEvent.click(screen.getByText('cancel'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('a backdrop click does not throw away a typed API key', async () => {
+    await openCreate();
+    fireEvent.change(screen.getByPlaceholderText('sk-...'), {
+      target: { value: 'sk-typed-but-unsaved' },
+    });
+    const backdrop = screen.getByTestId('channel-dialog-backdrop');
+    fireEvent.mouseDown(backdrop);
+    fireEvent.click(backdrop);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByDisplayValue('sk-typed-but-unsaved')).toBeTruthy();
+  });
+
+  it('the edit form is named after the channel and hands focus back to its opener', async () => {
+    const ch = makeChannel(5, 'Edit me');
+    API.get.mockResolvedValue(mockListResponse([ch]));
+    render(React.createElement(HFChannel));
+    await waitFor(() => screen.getByText('Edit me'));
+    fireEvent.click(
+      screen.getAllByRole('button').find((b) => b.textContent === '▸'),
+    );
+    const opener = await waitFor(() => screen.getByText('edit all fields'));
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() => screen.getByRole('dialog'));
+    expect(screen.getByRole('dialog')).toHaveAccessibleName('Edit · Edit me');
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('the sync dialog is labelled and still closes itself on a failed read', async () => {
+    const ch = makeChannel(77, 'Failing Sync');
+    let fail = false;
+    API.get.mockImplementation((url) => {
+      if (url.includes('/channels/77/upstream-models')) {
+        return fail
+          ? Promise.resolve({ data: { success: false, message: 'timeout' } })
+          : new Promise(() => {}); // still loading
+      }
+      return Promise.resolve(mockListResponse([ch]));
+    });
+    render(React.createElement(HFChannel));
+    await waitFor(() => screen.getByText('Failing Sync'));
+    fireEvent.click(
+      screen.getAllByRole('button').find((b) => b.textContent === '▸'),
+    );
+    const syncBtn = await waitFor(() => screen.getByTestId('sync-btn-77'));
+    fireEvent.click(syncBtn);
+    expect(await screen.findByRole('dialog')).toHaveAccessibleName(
+      /Sync upstream models · Failing Sync/,
+    );
+    fireEvent.click(screen.getByText('cancel'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    fail = true;
+    fireEvent.click(syncBtn);
+    await waitFor(() => expect(showError).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+});

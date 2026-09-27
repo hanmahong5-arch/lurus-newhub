@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 // react-router-dom stub — useNavigate returns a spy so tests can assert
 // navigation calls without a full router context.
@@ -296,6 +297,81 @@ describe('Models marketplace', () => {
     expect(mockNavigate).toHaveBeenCalledWith(
       '/console/v2/playground?prefill_model=deepseek-chat',
     );
+  });
+
+  // The two side sheets are HfDialog side variants: a named modal that owns
+  // Escape and hands focus back to the card that opened it.
+  it('the detail drawer is a modal named by the model; Escape closes it and focus returns to the card', async () => {
+    serve(UAT);
+    render(<HFModels />);
+    const card = await waitFor(() =>
+      screen.getByTestId('model-card-deepseek-chat'),
+    );
+    card.focus();
+    fireEvent.click(card);
+    const drawer = screen.getByTestId('model-drawer');
+    expect(drawer).toHaveAttribute('role', 'dialog');
+    expect(drawer).toHaveAttribute('aria-modal', 'true');
+    expect(drawer).toHaveAccessibleName('deepseek-chat');
+    // Focus moved into the sheet, so the keypress is the sheet's own.
+    expect(drawer.contains(document.activeElement)).toBe(true);
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByTestId('model-drawer')).toBeNull();
+    expect(document.activeElement).toBe(card);
+  });
+
+  it('a click inside the sheet does not close it; a press-and-release on the backdrop does', async () => {
+    serve(UAT);
+    render(<HFModels />);
+    await waitFor(() => screen.getByTestId('model-card-deepseek-chat'));
+    fireEvent.click(screen.getByTestId('model-card-deepseek-chat'));
+    fireEvent.click(screen.getByTestId('model-drawer-prices'));
+    expect(screen.getByTestId('model-drawer')).toBeDefined();
+    const backdrop = screen.getByTestId('model-drawer-backdrop');
+    fireEvent.mouseDown(backdrop);
+    fireEvent.click(backdrop);
+    expect(screen.queryByTestId('model-drawer')).toBeNull();
+  });
+
+  it('with the compare sheet under the detail drawer, Escape closes only the drawer on top', async () => {
+    serve(UAT);
+    render(<HFModels />);
+    await waitFor(() => screen.getByTestId('model-card-gpt-4o'));
+    fireEvent.click(screen.getByTestId('model-compare-deepseek-chat'));
+    fireEvent.click(screen.getByTestId('model-compare-gpt-4o'));
+    fireEvent.click(screen.getByTestId('compare-open'));
+    const compare = screen.getByTestId('compare-drawer');
+    expect(compare).toHaveAttribute('aria-modal', 'true');
+    expect(compare).toHaveAccessibleName('compare models');
+    expect(compare.classList.contains('hf-drawer-wide')).toBe(true);
+
+    fireEvent.click(screen.getByTestId('model-card-deepseek-chat'));
+    expect(screen.getByTestId('model-drawer')).toBeDefined();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByTestId('model-drawer')).toBeNull();
+    expect(screen.getByTestId('compare-drawer')).toBeDefined();
+  });
+
+  // Models/index.jsx navigates away from inside the drawer; the card that
+  // opened it may be gone by the time the sheet unmounts (here: filtered
+  // out). Closing must not throw and must not focus a detached node.
+  it('closing the drawer after its opener left the page neither throws nor moves focus', async () => {
+    serve(UAT);
+    render(<HFModels />);
+    const card = await waitFor(() =>
+      screen.getByTestId('model-card-deepseek-chat'),
+    );
+    card.focus();
+    fireEvent.click(card);
+    fireEvent.change(screen.getByTestId('models-search'), {
+      target: { value: 'gpt' },
+    });
+    expect(screen.queryByTestId('model-card-deepseek-chat')).toBeNull();
+    expect(screen.getByTestId('model-drawer')).toBeDefined();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByTestId('model-drawer')).toBeNull();
+    expect(card.isConnected).toBe(false);
+    expect(document.activeElement).not.toBe(card);
   });
 
   it('try on a callable card navigates with the prefill param; an uncallable one offers no try', async () => {

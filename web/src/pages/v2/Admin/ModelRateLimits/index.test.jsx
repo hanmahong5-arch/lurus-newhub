@@ -174,6 +174,29 @@ describe('Admin ModelRateLimits page', () => {
     });
   });
 
+  it('the limit dialog is a labelled modal; Escape closes it and focus returns to the new button', async () => {
+    wireGet([]);
+
+    render(<HFModelRateLimits />);
+    await waitFor(() => screen.getByTestId('mrl-new-btn'));
+
+    const opener = screen.getByTestId('mrl-new-btn');
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() => screen.getByTestId('mrl-save'));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleName('New model limit');
+    expect(dialog.contains(screen.getByTestId('mrl-model'))).toBe(true);
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('mrl-save')).toBeNull();
+    });
+    expect(document.activeElement).toBe(opener);
+  });
+
   it('edits an existing row with the model field locked', async () => {
     wireGet([makeRow()]);
     API.put.mockResolvedValue({ data: { success: true, data: makeRow() } });

@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import HfLoadError from '../../../components/hifi/HfLoadError';
+import HfDialog, { HfDialogFooter } from '../../../components/hifi/HfDialog';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
 import { formatTime } from '../../../helpers/formatting';
@@ -53,10 +54,6 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
   const [saving, setSaving] = useState(false);
   const nameRef = useRef(null);
 
-  useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
-
   const submit = async (e) => {
     e.preventDefault();
     if (!form.name.trim()) return;
@@ -82,133 +79,105 @@ const CreateModal = ({ tenantSlug, onCreated, onClose }) => {
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    <HfDialog
+      title={tr('console.redemption.modal_title', 'New redemption code')}
+      onClose={onClose}
+      as='form'
+      onSubmit={submit}
+      busy={saving}
+      width={400}
+      initialFocusRef={nameRef}
     >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 400,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {tr('console.redemption.modal_title', 'New redemption code')}
-        </div>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.redemption.field_name', 'name *')}
-          </span>
-          <input
-            ref={nameRef}
-            style={{
-              fontFamily: 'var(--hf-mono)',
-              fontSize: 12,
-              padding: '5px 8px',
-              border: '1px solid var(--hf-rule)',
-              background: 'var(--hf-sunken)',
-              color: 'var(--hf-ink)',
-              borderRadius: 2,
-              outline: 'none',
-              width: '100%',
-            }}
-            placeholder={tr('console.redemption.ph_name', 'e.g. promo-2025')}
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            required
-            data-testid='redemption-name-input'
-          />
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.redemption.field_count', 'count (max 100)')}
-          </span>
-          <input
-            style={{
-              fontFamily: 'var(--hf-mono)',
-              fontSize: 12,
-              padding: '5px 8px',
-              border: '1px solid var(--hf-rule)',
-              background: 'var(--hf-sunken)',
-              color: 'var(--hf-ink)',
-              borderRadius: 2,
-              outline: 'none',
-              width: '100%',
-            }}
-            type='number'
-            min='1'
-            max='100'
-            value={form.count}
-            onChange={(e) => setForm((f) => ({ ...f, count: e.target.value }))}
-            data-testid='redemption-count-input'
-          />
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.redemption.field_quota', 'quota (quota units)')}
-          </span>
-          <input
-            style={{
-              fontFamily: 'var(--hf-mono)',
-              fontSize: 12,
-              padding: '5px 8px',
-              border: '1px solid var(--hf-rule)',
-              background: 'var(--hf-sunken)',
-              color: 'var(--hf-ink)',
-              borderRadius: 2,
-              outline: 'none',
-              width: '100%',
-            }}
-            type='number'
-            min='1'
-            value={form.quota}
-            onChange={(e) => setForm((f) => ({ ...f, quota: e.target.value }))}
-            data-testid='redemption-quota-input'
-          />
-        </label>
-
-        <div
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.redemption.field_name', 'name *')}
+        </span>
+        <input
+          ref={nameRef}
           style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'flex-end',
-            marginTop: 4,
+            fontFamily: 'var(--hf-mono)',
+            fontSize: 12,
+            padding: '5px 8px',
+            border: '1px solid var(--hf-rule)',
+            background: 'var(--hf-sunken)',
+            color: 'var(--hf-ink)',
+            borderRadius: 2,
+            outline: 'none',
+            width: '100%',
           }}
+          placeholder={tr('console.redemption.ph_name', 'e.g. promo-2025')}
+          value={form.name}
+          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          required
+          data-testid='redemption-name-input'
+        />
+      </label>
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.redemption.field_count', 'count (max 100)')}
+        </span>
+        <input
+          style={{
+            fontFamily: 'var(--hf-mono)',
+            fontSize: 12,
+            padding: '5px 8px',
+            border: '1px solid var(--hf-rule)',
+            background: 'var(--hf-sunken)',
+            color: 'var(--hf-ink)',
+            borderRadius: 2,
+            outline: 'none',
+            width: '100%',
+          }}
+          type='number'
+          min='1'
+          max='100'
+          value={form.count}
+          onChange={(e) => setForm((f) => ({ ...f, count: e.target.value }))}
+          data-testid='redemption-count-input'
+        />
+      </label>
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.redemption.field_quota', 'quota (quota units)')}
+        </span>
+        <input
+          style={{
+            fontFamily: 'var(--hf-mono)',
+            fontSize: 12,
+            padding: '5px 8px',
+            border: '1px solid var(--hf-rule)',
+            background: 'var(--hf-sunken)',
+            color: 'var(--hf-ink)',
+            borderRadius: 2,
+            outline: 'none',
+            width: '100%',
+          }}
+          type='number'
+          min='1'
+          value={form.quota}
+          onChange={(e) => setForm((f) => ({ ...f, quota: e.target.value }))}
+          data-testid='redemption-quota-input'
+        />
+      </label>
+
+      <HfDialogFooter>
+        <button type='button' className='btn ghost' onClick={onClose}>
+          {tr('console.common.cancel', 'cancel')}
+        </button>
+        <button
+          type='submit'
+          className='btn primary'
+          disabled={saving}
+          data-testid='redemption-create-submit'
         >
-          <button type='button' className='btn ghost' onClick={onClose}>
-            {tr('console.common.cancel', 'cancel')}
-          </button>
-          <button
-            type='submit'
-            className='btn primary'
-            disabled={saving}
-            data-testid='redemption-create-submit'
-          >
-            {saving
-              ? tr('console.redemption.creating', 'generating…')
-              : tr('console.redemption.create_submit', 'generate codes')}
-          </button>
-        </div>
-      </form>
-    </div>
+          {saving
+            ? tr('console.redemption.creating', 'generating…')
+            : tr('console.redemption.create_submit', 'generate codes')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 

@@ -708,3 +708,69 @@ describe('Token page — failed read', () => {
     ).toBe(true);
   });
 });
+
+// ─── the create form is a real dialog (HfDialog) ─────────────────────────────
+
+describe('Token page — create dialog semantics', () => {
+  const open = async () => {
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('+ new token'));
+    const opener = screen.getByText('+ new token');
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() => screen.getByTestId('token-name-input'));
+    return opener;
+  };
+
+  it('is a labelled modal dialog with the name field focused', async () => {
+    wireGet([]);
+    await open();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleName('New token');
+    expect(document.activeElement).toBe(screen.getByTestId('token-name-input'));
+  });
+
+  it('closes on Escape', async () => {
+    wireGet([]);
+    await open();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('returns focus to the "+ new token" button after cancel', async () => {
+    wireGet([]);
+    const opener = await open();
+    fireEvent.click(screen.getByText('cancel'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('refuses Escape and the X while the POST is in flight', async () => {
+    // Closing mid-request would drop the key the server is about to hand
+    // back: the credential exists but nobody ever saw it.
+    wireGet([]);
+    let resolve;
+    API.post.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      }),
+    );
+    await open();
+    fireEvent.change(screen.getByTestId('token-name-input'), {
+      target: { value: 'prod' },
+    });
+    fireEvent.click(screen.getByTestId('token-create-submit'));
+    await waitFor(() =>
+      expect(screen.getByRole('dialog')).toHaveAttribute('aria-busy', 'true'),
+    );
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'close' })).toBeDisabled();
+
+    resolve({
+      data: { success: true, data: { id: 9, name: 'prod', key: 'sk-new' } },
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+});

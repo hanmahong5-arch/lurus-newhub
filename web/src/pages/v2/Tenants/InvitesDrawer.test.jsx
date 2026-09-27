@@ -313,3 +313,71 @@ describe('InvitesDrawer render flows', () => {
     expect(screen.queryByTestId('invite-issued-link')).not.toBeInTheDocument();
   });
 });
+
+// ─── Dialog semantics + the one-time link guard ──────────────────────────────
+
+describe('InvitesDrawer as a dialog', () => {
+  const open = async (invites = []) => {
+    API.get.mockImplementationOnce(() => okGet({ invites }));
+    const onClose = vi.fn();
+    render(
+      <InvitesDrawer tenantId='t-acme' tenantName='Acme' onClose={onClose} />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-issue-submit')).not.toBeDisabled(),
+    );
+    return onClose;
+  };
+
+  // Issue one invite so the plaintext link is on screen.
+  const issue = async () => {
+    API.get.mockImplementationOnce(() => okGet({ invites: [PENDING] }));
+    API.post.mockImplementationOnce(() =>
+      okPost({ id: 1, code: 'onetimecode1234567890abcdef', status: 1 }),
+    );
+    fireEvent.submit(screen.getByTestId('invite-issue-form'));
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-issued-link')).toBeInTheDocument(),
+    );
+  };
+
+  it('the panel is a modal dialog named after the tenant', async () => {
+    await open();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleName('Acme · invites');
+    expect(screen.getByTestId('invites-overlay')).not.toBe(dialog);
+  });
+
+  it('Escape closes while no link is pending', async () => {
+    const onClose = await open();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('while the one-time link is shown, backdrop and Escape do not close', async () => {
+    const onClose = await open();
+    await issue();
+
+    const backdrop = screen.getByTestId('invites-overlay');
+    fireEvent.mouseDown(backdrop);
+    fireEvent.click(backdrop);
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    // The X is refused the same way: the only way out is the explicit
+    // dismiss next to the link, and Escape / X steer focus onto it.
+    fireEvent.click(screen.getByRole('button', { name: 'close' }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('invite-issued-dismiss')).toHaveFocus();
+    expect(screen.getByTestId('invite-issued-link')).toBeInTheDocument();
+  });
+
+  it('the explicit dismiss next to the link is what closes the drawer', async () => {
+    const onClose = await open();
+    await issue();
+    fireEvent.click(screen.getByTestId('invite-issued-dismiss'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

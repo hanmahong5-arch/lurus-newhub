@@ -234,3 +234,62 @@ describe('CreditPoolDrawer render flows', () => {
     expect(API.post).not.toHaveBeenCalled();
   });
 });
+
+// ─── Dialog semantics (HfDialog) ────────────────────────────────────────────
+
+describe('CreditPoolDrawer as a dialog', () => {
+  const open = async () => {
+    API.get
+      .mockImplementationOnce(() => okGet(FINITE_POOL))
+      .mockImplementationOnce(() => usage([]));
+    const onClose = vi.fn();
+    render(
+      <CreditPoolDrawer
+        tenantId='t-acme'
+        tenantName='Acme'
+        onClose={onClose}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('topup-submit')).not.toBeDisabled(),
+    );
+    return onClose;
+  };
+
+  it('the panel is a modal dialog named after the tenant', async () => {
+    await open();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleName('Acme · credit pool');
+    // The backdrop keeps its id for the page-level tests; the panel is the
+    // dialog, not the backdrop.
+    expect(screen.getByTestId('credit-pool-overlay')).not.toBe(dialog);
+  });
+
+  it('Escape inside the panel calls onClose once', async () => {
+    const onClose = await open();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a topup in flight refuses Escape and the X', async () => {
+    let settle;
+    API.post.mockImplementationOnce(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const onClose = await open();
+    fireEvent.change(screen.getByTestId('topup-amount'), {
+      target: { value: '500' },
+    });
+    fireEvent.submit(screen.getByTestId('topup-form'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'close' })).toBeDisabled(),
+    );
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    settle({ data: { success: true, data: FINITE_POOL } });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'close' })).not.toBeDisabled(),
+    );
+  });
+});

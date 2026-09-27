@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { API, showSuccess } from '../../../helpers';
+import HfDialog, { HfDialogFooter } from '../../../components/hifi/HfDialog';
 
 // ─── Rate-limits modal ────────────────────────────────────────────────────────
 // Edits tenant-level RPM/TPM caps. JSON keys mirror entity/tenant.go tags
@@ -66,91 +67,58 @@ const LimitsModal = ({ tenant, onSaved, onClose }) => {
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 420,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
+    <HfDialog
+      title={
+        <>
           {tenant.name} · {tr('console.tenant.limits_title', 'rate limits')}
-        </div>
+        </>
+      }
+      onClose={onClose}
+      as='form'
+      onSubmit={submit}
+      busy={saving}
+    >
+      <div className='muted' style={{ fontSize: 11 }}>
+        {tr(
+          'console.tenant.limits_hint',
+          'Aggregate caps across all tokens under this tenant. 0 = unlimited.',
+        )}
+      </div>
 
-        <div className='muted' style={{ fontSize: 11 }}>
-          {tr(
-            'console.tenant.limits_hint',
-            'Aggregate caps across all tokens under this tenant. 0 = unlimited.',
-          )}
-        </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        {[
+          ['rpm', tr('console.tenant.field_rpm', 'rpm limit')],
+          ['tpm', tr('console.tenant.field_tpm', 'tpm limit')],
+        ].map(([k, label]) => (
+          <label
+            key={k}
+            style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
+          >
+            <span className='lbl'>{label}</span>
+            <input
+              style={inputStyle}
+              type='number'
+              min='0'
+              step='1'
+              placeholder={tr('console.tenant.ph_rate_limit', '0 = unlimited')}
+              value={form[k]}
+              onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
+            />
+          </label>
+        ))}
+      </div>
 
-        <div
-          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}
-        >
-          {[
-            ['rpm', tr('console.tenant.field_rpm', 'rpm limit')],
-            ['tpm', tr('console.tenant.field_tpm', 'tpm limit')],
-          ].map(([k, label]) => (
-            <label
-              key={k}
-              style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
-            >
-              <span className='lbl'>{label}</span>
-              <input
-                style={inputStyle}
-                type='number'
-                min='0'
-                step='1'
-                placeholder={tr(
-                  'console.tenant.ph_rate_limit',
-                  '0 = unlimited',
-                )}
-                value={form[k]}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, [k]: e.target.value }))
-                }
-              />
-            </label>
-          ))}
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'flex-end',
-            marginTop: 4,
-          }}
-        >
-          <button type='button' className='btn ghost' onClick={onClose}>
-            {tr('console.common.cancel', 'cancel')}
-          </button>
-          <button type='submit' className='btn primary' disabled={saving}>
-            {saving
-              ? tr('console.common.loading', 'loading…')
-              : tr('console.common.save', 'save')}
-          </button>
-        </div>
-      </form>
-    </div>
+      <HfDialogFooter>
+        <button type='button' className='btn ghost' onClick={onClose}>
+          {tr('console.common.cancel', 'cancel')}
+        </button>
+        <button type='submit' className='btn primary' disabled={saving}>
+          {saving
+            ? tr('console.common.loading', 'loading…')
+            : tr('console.common.save', 'save')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 

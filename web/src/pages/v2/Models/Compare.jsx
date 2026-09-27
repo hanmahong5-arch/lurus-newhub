@@ -22,7 +22,8 @@ For commercial licensing, please contact support@quantumnous.com
 // capabilities and usage in one table. The cheapest input / output price
 // in the set is marked, since that is usually why people compare.
 
-import React, { useEffect } from 'react';
+import React from 'react';
+import HfDialog from '../../../components/hifi/HfDialog';
 import HfVendorIcon from '../../../components/hifi/HfVendorIcon';
 import { CAPABILITIES, fmtCompact, fmtMs, fmtPct, fmtUsd } from './catalog';
 
@@ -74,12 +75,6 @@ export const CompareBar = ({ ids, tr, onOpen, onClear }) =>
   );
 
 export const CompareDrawer = ({ entries, tr, onClose, onRemove }) => {
-  useEffect(() => {
-    const onKey = (ev) => ev.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const perM = (e, field) => (e.quotaType === 1 ? null : e[field]);
   const inBest = cheapestIndex(entries.map((e) => perM(e, 'inputPerM')));
   const outBest = cheapestIndex(entries.map((e) => perM(e, 'outputPerM')));
@@ -157,84 +152,82 @@ export const CompareDrawer = ({ entries, tr, onClose, onRemove }) => {
     ],
   ];
 
+  // Same header arrangement as ModelDrawer: the display-size title and its X
+  // are laid out here, so HfDialog's own head is switched off.
   return (
-    <div className='hf-drawer-backdrop' onClick={onClose}>
-      <aside
-        className='hf-drawer hf-drawer-wide'
-        role='dialog'
-        aria-label={tr('console.models.compare.title', 'compare models')}
-        data-testid='compare-drawer'
-        onClick={(ev) => ev.stopPropagation()}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div className='display' style={{ fontSize: 24, flex: 1 }}>
-            {tr('console.models.compare.title', 'compare models')}
-          </div>
-          <button
-            type='button'
-            className='btn sm'
-            onClick={onClose}
-            aria-label={tr('console.common.close', 'close')}
-          >
-            ✕
-          </button>
+    <HfDialog
+      variant='side'
+      wide
+      ariaLabel={tr('console.models.compare.title', 'compare models')}
+      onClose={onClose}
+      closeButton={false}
+      testId='compare-drawer'
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div className='display' style={{ fontSize: 24, flex: 1 }}>
+          {tr('console.models.compare.title', 'compare models')}
         </div>
-        <div className='hf-table-scroll' style={{ marginTop: 16 }}>
-          <table className='t' data-testid='compare-table'>
-            <thead>
-              <tr>
-                <th />
-                {entries.map((e) => (
-                  <th key={e.id} style={{ textTransform: 'none' }}>
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                      }}
+        <button
+          type='button'
+          className='btn sm'
+          onClick={onClose}
+          aria-label={tr('console.common.close', 'close')}
+        >
+          ✕
+        </button>
+      </div>
+      <div className='hf-table-scroll' style={{ marginTop: 16 }}>
+        <table className='t' data-testid='compare-table'>
+          <thead>
+            <tr>
+              <th />
+              {entries.map((e) => (
+                <th key={e.id} style={{ textTransform: 'none' }}>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    <HfVendorIcon model={e.id} vendor={e.vendor} size={16} />
+                    <span className='mono'>{e.id}</span>
+                    <button
+                      type='button'
+                      className='btn sm'
+                      style={{ padding: '0 6px' }}
+                      aria-label={tr('console.models.compare.remove', 'remove')}
+                      onClick={() => onRemove(e.id)}
                     >
-                      <HfVendorIcon model={e.id} vendor={e.vendor} size={16} />
-                      <span className='mono'>{e.id}</span>
-                      <button
-                        type='button'
-                        className='btn sm'
-                        style={{ padding: '0 6px' }}
-                        aria-label={tr(
-                          'console.models.compare.remove',
-                          'remove',
-                        )}
-                        onClick={() => onRemove(e.id)}
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  </th>
+                      ✕
+                    </button>
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([key, label, cell]) => (
+              <tr key={key} data-testid={`compare-row-${key}`}>
+                <td className='muted'>{label}</td>
+                {entries.map((e, i) => (
+                  <td
+                    key={e.id}
+                    className={key === 'desc' ? '' : 'mono'}
+                    style={
+                      key === 'desc'
+                        ? { whiteSpace: 'normal', minWidth: 200 }
+                        : undefined
+                    }
+                  >
+                    {cell(e, i)}
+                  </td>
                 ))}
               </tr>
-            </thead>
-            <tbody>
-              {rows.map(([key, label, cell]) => (
-                <tr key={key} data-testid={`compare-row-${key}`}>
-                  <td className='muted'>{label}</td>
-                  {entries.map((e, i) => (
-                    <td
-                      key={e.id}
-                      className={key === 'desc' ? '' : 'mono'}
-                      style={
-                        key === 'desc'
-                          ? { whiteSpace: 'normal', minWidth: 200 }
-                          : undefined
-                      }
-                    >
-                      {cell(e, i)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </aside>
-    </div>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </HfDialog>
   );
 };

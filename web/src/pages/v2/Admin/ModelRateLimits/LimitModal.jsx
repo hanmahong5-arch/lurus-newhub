@@ -16,9 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { API, showSuccess } from '../../../../helpers';
+import HfDialog, { HfDialogFooter } from '../../../../components/hifi/HfDialog';
 
 const inputStyle = {
   fontFamily: 'var(--hf-mono)',
@@ -44,6 +45,11 @@ const LimitModal = ({ tenantId, target, onSaved, onClose }) => {
     tpm: target.rate_limit_tpm > 0 ? String(target.rate_limit_tpm) : '',
   });
   const [saving, setSaving] = useState(false);
+  // Handed to the dialog rather than `autoFocus`: an autoFocus child takes
+  // focus during commit, before the dialog records who opened it, so focus
+  // would have nowhere to return on close. On edit the model field is
+  // disabled and the dialog falls through to the first enabled field.
+  const modelRef = useRef(null);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -73,120 +79,94 @@ const LimitModal = ({ tenantId, target, onSaved, onClose }) => {
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    <HfDialog
+      title={
+        target.isNew
+          ? tr('console.model_limits.modal_new', 'New model limit')
+          : tr('console.model_limits.modal_edit', 'Edit model limit')
+      }
+      onClose={onClose}
+      as='form'
+      onSubmit={submit}
+      busy={saving}
+      initialFocusRef={target.isNew ? modelRef : undefined}
     >
-      <form
-        onSubmit={submit}
-        style={{
-          background: 'var(--hf-paper)',
-          border: '1px solid var(--hf-rule)',
-          borderRadius: 4,
-          padding: 28,
-          width: 420,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
-        <div className='strong' style={{ fontSize: 15 }}>
-          {target.isNew
-            ? tr('console.model_limits.modal_new', 'New model limit')
-            : tr('console.model_limits.modal_edit', 'Edit model limit')}
-        </div>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span className='lbl'>
-            {tr('console.model_limits.field_model', 'model name')}
-          </span>
-          <input
-            data-testid='mrl-model'
-            style={{
-              ...inputStyle,
-              opacity: target.isNew ? 1 : 0.6,
-              cursor: target.isNew ? 'text' : 'not-allowed',
-            }}
-            value={form.model}
-            disabled={!target.isNew}
-            autoFocus={target.isNew}
-            placeholder='gpt-4o'
-            onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
-          />
-          <span className='muted' style={{ fontSize: 11 }}>
-            {tr(
-              'console.model_limits.field_model_hint',
-              'Exact model name as requested (e.g. gpt-4o). No wildcards.',
-            )}
-          </span>
-        </label>
-
-        <div
-          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}
-        >
-          {[
-            ['rpm', tr('console.model_limits.field_rpm', 'rpm limit')],
-            ['tpm', tr('console.model_limits.field_tpm', 'tpm limit')],
-          ].map(([k, label]) => (
-            <label
-              key={k}
-              style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
-            >
-              <span className='lbl'>{label}</span>
-              <input
-                data-testid={`mrl-${k}`}
-                style={inputStyle}
-                type='number'
-                min='0'
-                placeholder='0'
-                value={form[k]}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, [k]: e.target.value }))
-                }
-              />
-            </label>
-          ))}
-        </div>
-
-        <div className='muted' style={{ fontSize: 11 }}>
-          {tr(
-            'console.model_limits.limits_hint',
-            'Per-minute caps for this model under the tenant. 0 = unlimited.',
-          )}
-        </div>
-
-        <div
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.model_limits.field_model', 'model name')}
+        </span>
+        <input
+          data-testid='mrl-model'
           style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 10,
-            marginTop: 4,
+            ...inputStyle,
+            opacity: target.isNew ? 1 : 0.6,
+            cursor: target.isNew ? 'text' : 'not-allowed',
           }}
-        >
-          <button type='button' className='btn ghost' onClick={onClose}>
-            {tr('console.common.cancel', 'cancel')}
-          </button>
-          <button
-            type='submit'
-            className='btn primary'
-            disabled={saving || !form.model.trim()}
-            data-testid='mrl-save'
+          ref={modelRef}
+          value={form.model}
+          disabled={!target.isNew}
+          placeholder='gpt-4o'
+          onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
+        />
+        <span className='muted' style={{ fontSize: 11 }}>
+          {tr(
+            'console.model_limits.field_model_hint',
+            'Exact model name as requested (e.g. gpt-4o). No wildcards.',
+          )}
+        </span>
+      </label>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        {[
+          ['rpm', tr('console.model_limits.field_rpm', 'rpm limit')],
+          ['tpm', tr('console.model_limits.field_tpm', 'tpm limit')],
+        ].map(([k, label]) => (
+          <label
+            key={k}
+            style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
           >
-            {saving
-              ? tr('console.common.loading', 'loading…')
-              : tr('console.common.save', 'save')}
-          </button>
-        </div>
-      </form>
-    </div>
+            <span className='lbl'>{label}</span>
+            <input
+              data-testid={`mrl-${k}`}
+              style={inputStyle}
+              type='number'
+              min='0'
+              placeholder='0'
+              value={form[k]}
+              onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
+            />
+          </label>
+        ))}
+      </div>
+
+      <div className='muted' style={{ fontSize: 11 }}>
+        {tr(
+          'console.model_limits.limits_hint',
+          'Per-minute caps for this model under the tenant. 0 = unlimited.',
+        )}
+      </div>
+
+      <HfDialogFooter>
+        <button
+          type='button'
+          className='btn ghost'
+          disabled={saving}
+          onClick={onClose}
+        >
+          {tr('console.common.cancel', 'cancel')}
+        </button>
+        <button
+          type='submit'
+          className='btn primary'
+          disabled={saving || !form.model.trim()}
+          data-testid='mrl-save'
+        >
+          {saving
+            ? tr('console.common.loading', 'loading…')
+            : tr('console.common.save', 'save')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 

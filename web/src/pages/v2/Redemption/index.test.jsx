@@ -421,3 +421,41 @@ describe('Redemption page — failed read', () => {
     expect(screen.queryByTestId('redemption-load-error')).toBeNull();
   });
 });
+
+// ─── the create form is a real dialog (HfDialog) ─────────────────────────────
+
+describe('create dialog semantics', () => {
+  const open = async () => {
+    API.get.mockResolvedValue(mockListOk([]));
+    render(React.createElement(HFRedemption));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+    const opener = screen.getByTestId('redemption-create-btn');
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() => screen.getByTestId('redemption-name-input'));
+    return opener;
+  };
+
+  it('is a labelled modal dialog with the name field focused', async () => {
+    await open();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleName('New redemption code');
+    expect(document.activeElement).toBe(
+      screen.getByTestId('redemption-name-input'),
+    );
+  });
+
+  it('closes on Escape', async () => {
+    await open();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('returns focus to the "+ new code" button after cancel', async () => {
+    const opener = await open();
+    fireEvent.click(screen.getByText('cancel'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(opener);
+  });
+});

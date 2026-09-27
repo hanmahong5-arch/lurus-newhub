@@ -1148,6 +1148,51 @@ html[lang^='zh'] .hf-side .nav-h {
   border-color: transparent;
 }
 
+/* Centred modal dialog (components/hifi/HfDialog.jsx). Panel styling is the
+ * one every hand-rolled console overlay converged on; z-index sits between the
+ * side drawer (50) and the toast host / Semi step-up modal (1000) so both of
+ * those still render above an open dialog. */
+.hf .hf-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.hf .hf-dialog {
+  max-width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--hf-paper);
+  border: 1px solid var(--hf-rule);
+  border-radius: 4px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  outline: none;
+}
+.hf .hf-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.hf .hf-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.hf .hf-dialog-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
 /* Right-hand detail drawer over a dimmed page (model marketplace). */
 .hf .hf-drawer-backdrop {
   position: fixed;
