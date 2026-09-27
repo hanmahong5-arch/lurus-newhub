@@ -109,7 +109,17 @@ DEST_FILE="$NETDATA_HEALTH_DIR/$ALARM_FILENAME"
 if [ -f "$DEST_FILE" ] && cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
 	echo "install-netdata-alarms.sh: $DEST_FILE already up to date"
 else
-	install -m 0644 "$SOURCE_FILE" "$DEST_FILE"
+	# Write IN PLACE (truncate + rewrite the existing inode). The container's
+	# bind mount is per-file, i.e. pinned to the inode that existed when the
+	# container started; `install`/`mv` unlink and recreate, so the container
+	# kept reading the old file while the host showed the new one. That is
+	# exactly what happened here from 2026-09-16 to 2026-09-27: 8 alarms live
+	# while the host copy said 31, then 38, and every reload was a no-op.
+	if [ -f "$DEST_FILE" ]; then
+		cat "$SOURCE_FILE" > "$DEST_FILE"
+	else
+		install -m 0644 "$SOURCE_FILE" "$DEST_FILE"
+	fi
 	echo "install-netdata-alarms.sh: installed $SOURCE_FILE -> $DEST_FILE"
 fi
 
@@ -141,5 +151,19 @@ else
 	echo "install-netdata-alarms.sh: docker exec $NETDATA_CONTAINER netdatacli reload-health FAILED — file installed at $DEST_FILE but the running config is stale until this is resolved" >&2
 	exit 1
 fi
+
+# A reload only re-reads what the container can see. The bind mount is
+# per-file, pinned to the inode present when the container started; if the
+# host file was ever replaced (rather than rewritten in place) the container
+# still reads the OLD inode and every reload above re-reads the old file.
+# Compare inodes — they are the same filesystem — and refuse to report
+# success when they differ: the only repair is a container restart.
+host_inode="$(stat -c %i "$DEST_FILE")"
+ctr_inode="$(docker exec "$NETDATA_CONTAINER" stat -c %i "/etc/netdata/health.d/$ALARM_FILENAME" 2>/dev/null || echo unknown)"
+if [ "$host_inode" != "$ctr_inode" ]; then
+	echo "install-netdata-alarms.sh: STALE BIND — host $DEST_FILE is inode $host_inode but $NETDATA_CONTAINER reads inode $ctr_inode. The reload re-read the OLD file. Restart the container (docker restart $NETDATA_CONTAINER) and re-run." >&2
+	exit 1
+fi
+echo "install-netdata-alarms.sh: container reads the installed inode ($host_inode)"
 
 echo "install-netdata-alarms.sh: verify with: curl -s http://localhost:19999/api/v1/alarms?all | grep -o '\"newhub_[a-z_]*\"' | sort -u"

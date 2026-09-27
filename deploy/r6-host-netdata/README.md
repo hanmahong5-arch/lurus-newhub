@@ -200,28 +200,26 @@ directory does not add or change that scrape config). See `doc/runbook/INDEX.md`
 
 The conf file's own header carries a `# STATUS:` line with the date this
 repo copy was last synced from / installed onto the host — read that line,
-not this README, for the current state. As of 2026-09-16: repo copy synced
-from host 2026-08-20, three new alarms merged 2026-09-16, and the merged file
-**installed** onto R6 (bind source md5 `85abc751e883f732777e75529e2549bb`,
-matching this repo). It is **installed but not loaded**: `netdatacli
-reload-health` inside the `obs-netdata` container does not return (30s timeout,
-netdata v2.10.3, container healthy), so netdata is still evaluating the
-8-template file it read at startup and `newhub_upstream_5xx_burst`,
-`newhub_rate_limit_degraded` and `newhub_failover_suppressed_surge` are **not
-live**. `GET /api/v1/alarms?all` currently lists three newhub alarms, all from
-the original set. Loading the new ones needs a working reload path or an
-`obs-netdata` restart — the latter briefly blinds monitoring for every service
-on R6, not just newhub, so it is an operator call and was deliberately not
-taken here. The previous host file is backed up at
-`/root/c9-netdata/newhub.conf.backup-20260916`.
+not this README, for the current state.
 
-The three alarms added on 2026-09-19 (`newhub_settlement_failed`, cycle-11
-L7, and `newhub_db_slow_queries` + `newhub_channel_cache_stale`, cycle-12 L8)
-are a step behind even that: they were added to this repo copy only, so the
-bind source on R6 no longer matches this file and the md5 above is stale for
-it. All three need the install script run before netdata sees them at all, on
-top of the reload/restart the 2026-09-16 three are still waiting on. Same
-operator item (O2).
+**As of 2026-09-27 the 38-alarm file is installed AND loaded** (bind source
+md5 `79bd3206c5a1ca6cb448a1a4978b5faf`, matching this repo; the container
+reads the same inode as the host, `10485842`). Why it took until now: the
+bind mount is per file, so the container is pinned to the *inode* that
+existed when it started. The install script used `install(1)`, which unlinks
+and recreates the destination — every install since 2026-09-16 changed the
+host inode while the container kept reading the 2026-09-16 file (8
+templates, 19,650 bytes). `netdatacli reload-health` was therefore working
+all along; it just re-read the old inode, which is why the 09-16 notes here
+saw "installed but not loaded" and only 3–8 newhub alarms. Fixed on
+2026-09-27 by writing in place (`cat >` keeps the inode) and by having the
+script compare host and container inodes after the reload and fail with a
+"restart the container" message when they differ. The one-time repair was a
+`docker restart obs-netdata` (every R6 service lost about 25 s of samples;
+the go.d `newhub` job then took ~4 min to create its 172 charts, during which
+alarms attached progressively). Verify with the `curl … /api/v1/alarms?all`
+line the script prints — alarms on charts that have never received a sample
+(e.g. `status=error` counters at zero) attach when the chart first appears.
 
 Several of the 8 originally-ported alarms carry a dated "LIVE STATUS"
 comment recording what the operator observed directly on the R6 host on
