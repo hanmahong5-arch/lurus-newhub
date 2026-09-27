@@ -153,7 +153,10 @@ describe('Pricing page', () => {
     render(<PricingPage />);
 
     await waitFor(() => {
-      expect(API.get).toHaveBeenCalledWith('/api/v2/~/pricing');
+      expect(API.get).toHaveBeenCalledWith(
+        '/api/v2/~/pricing',
+        expect.anything(),
+      );
     });
 
     await waitFor(() => {
@@ -481,5 +484,39 @@ describe('Pricing page', () => {
         { headers: { 'If-Match-Pricing-Version': '5' } },
       );
     });
+  });
+});
+
+// ─── cycle-18 L1: a failed read is not an empty one ─────────────────────────
+// The list read now goes through hooks/common/useTenantRead.js. A 500 must
+// render HfLoadError — not the empty state an account with nothing sees —
+// and retry must re-issue the read.
+describe('Pricing page — failed read', () => {
+  it('renders a retryable load error instead of "no data" on a 500', async () => {
+    let fail = true;
+    API.get.mockImplementation(() =>
+      fail
+        ? Promise.reject({
+            response: { status: 500, data: { success: false } },
+          })
+        : Promise.resolve(fakePricingResponse([])),
+    );
+
+    render(<PricingPage />);
+
+    await waitFor(() => screen.getByTestId('pricing-load-error'));
+    expect(screen.queryByText('no data')).toBeNull();
+    expect(showError).not.toHaveBeenCalled();
+    // The header badge is a plural key; i18next skips plural resolution
+    // when `count` is a string, so passing '—' as the count rendered the
+    // bare key. A failed read shows the dash itself, never the key.
+    const badge = screen.getByTestId('pricing-model-count');
+    expect(badge.textContent).toBe('—');
+    expect(badge.textContent).not.toContain('console.pricing.model_count');
+
+    fail = false;
+    fireEvent.click(screen.getByTestId('pricing-retry'));
+    await waitFor(() => screen.getByText('no data'));
+    expect(screen.queryByTestId('pricing-load-error')).toBeNull();
   });
 });

@@ -977,3 +977,36 @@ describe('Dashboard page — honest load failure (meStatus/logsStatus)', () => {
     await waitFor(() => expect(kpiCallCount).toBeGreaterThan(callsBeforeRetry));
   });
 });
+
+describe('Dashboard page — recent requests carry the real log time', () => {
+  // Backend created_at is unix SECONDS. The page once handed it to a
+  // millisecond formatter, so every row on the console home read as a day in
+  // January 1970 while the announcement dates (already in ms) looked fine.
+  it('formats created_at as the 2025 date it is, not a 1970 one', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me')) {
+        return Promise.resolve({ data: { success: true, data: makeMe() } });
+      }
+      if (u.includes('/logs')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: { logs: [makeLog({ created_at: 1750000000 })], total: 1 },
+          },
+        });
+      }
+      return Promise.resolve({ data: { success: true, data: {} } });
+    });
+
+    const { container } = render(React.createElement(HFDashboard));
+
+    // 1750000000 s = 2025-06-15 23:06 Asia/Shanghai (TZ pinned in
+    // vitest.config.js); read as ms it is 1970-01-21.
+    await waitFor(() =>
+      expect(container.textContent).toMatch(/Jun 15|6月15|Jan 2\d|1月2\d/),
+    );
+    expect(container.textContent).not.toMatch(/1970|1月2\d日|Jan 2\d\b/);
+    expect(container.textContent).toMatch(/Jun 15|6月15/);
+  });
+});

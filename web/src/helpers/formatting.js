@@ -96,15 +96,41 @@ export const formatTime = (ts) => {
   return new Date(ts * 1000).toLocaleString();
 };
 
+// Absolute timestamp (unix seconds) → "YYYY-MM-DD HH:mm:ss" in UTC. Only the
+// audit trail uses this: its hash chain is verified against server-side
+// timestamps, so the column is labelled "time (utc)" and must not follow the
+// browser's zone the way every other page does.
+export const formatTimeUTC = (unixSec) => {
+  if (!unixSec) return '—';
+  const d = new Date(unixSec * 1000);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toISOString().replace('T', ' ').slice(0, 19);
+};
+
+// Compact "Jun 15, 23:06" for dense lists (dashboard recent activity, news).
+// Unix seconds like everything else here — the dashboard once took ms and was
+// handed created_at in seconds, so every row read as January 1970.
+export const formatShortTs = (unixSec) => {
+  if (!unixSec) return '—';
+  return new Date(unixSec * 1000).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 // Wall-clock HH:mm:ss.mmm — used by the live log tail where sub-second
 // precision matters. Fixed en-GB so the 24h layout is stable across locales.
-export const formatClockTime = (unixSec) => {
+// `ms: false` drops the fraction for rows stored in whole seconds, where it
+// would always read .000.
+export const formatClockTime = (unixSec, { ms = true } = {}) => {
   if (!unixSec) return '—';
   return new Date(unixSec * 1000).toLocaleTimeString('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    fractionalSecondDigits: 3,
+    ...(ms ? { fractionalSecondDigits: 3 } : {}),
   });
 };
 

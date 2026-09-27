@@ -84,6 +84,9 @@ vi.mock('react-i18next', () => ({
       return out;
     },
   }),
+  // helpers/formatting (formatTime) imports the i18n instance, which
+  // registers itself with react-i18next at module load.
+  initReactI18next: { type: '3rdParty', init: () => {} },
 }));
 
 import HFRedemption from './index';
@@ -140,6 +143,7 @@ describe('Redemption page', () => {
     // Verify API was called with correct tenant slug.
     expect(API.get).toHaveBeenCalledWith(
       expect.stringContaining('/api/v2/~/redemptions'),
+      expect.anything(),
     );
 
     // Delete buttons use data-testid with row id.
@@ -310,6 +314,7 @@ describe('Redemption page', () => {
     await waitFor(() => {
       expect(API.get).toHaveBeenLastCalledWith(
         expect.stringContaining('page=2'),
+        expect.anything(),
       );
     });
 
@@ -366,6 +371,7 @@ describe('Redemption page', () => {
     await waitFor(() => {
       expect(API.get).toHaveBeenLastCalledWith(
         expect.stringContaining('page=1'),
+        expect.anything(),
       );
     });
     await waitFor(() => screen.getByTestId('redemption-row-1'));
@@ -386,5 +392,32 @@ describe('Redemption page', () => {
     await waitFor(() => {
       expect(screen.getByTestId('hf-shell')).toBeDefined();
     });
+  });
+});
+
+// ─── cycle-18 L1: a failed read is not an empty one ─────────────────────────
+// The list read now goes through hooks/common/useTenantRead.js. A 500 must
+// render HfLoadError — not the empty state an account with nothing sees —
+// and retry must re-issue the read.
+describe('Redemption page — failed read', () => {
+  it('renders a retryable load error instead of "No redemption codes yet" on a 500', async () => {
+    let fail = true;
+    API.get.mockImplementation(() =>
+      fail
+        ? Promise.reject({
+            response: { status: 500, data: { success: false } },
+          })
+        : Promise.resolve(mockListOk([])),
+    );
+
+    render(React.createElement(HFRedemption));
+
+    await waitFor(() => screen.getByTestId('redemption-load-error'));
+    expect(screen.queryByTestId('redemption-empty')).toBeNull();
+
+    fail = false;
+    fireEvent.click(screen.getByTestId('redemption-retry'));
+    await waitFor(() => screen.getByTestId('redemption-empty'));
+    expect(screen.queryByTestId('redemption-load-error')).toBeNull();
   });
 });

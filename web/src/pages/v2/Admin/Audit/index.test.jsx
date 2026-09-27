@@ -315,3 +315,19 @@ describe('Admin Audit page — three-state load status (rows / forbidden / error
     expect(screen.queryByTestId('audit-retry-btn')).toBeNull();
   });
 });
+
+describe('Admin Audit page — the time column is UTC, as its header says', () => {
+  // Every other console page renders local time; audit alone is UTC because
+  // the chain is verified against server-side timestamps. The formatter now
+  // lives in helpers/formatting.js (formatTimeUTC) — this pins the contract
+  // so a swap to the local-time helper cannot pass unnoticed.
+  it('renders 1750000000 as 2025-06-15 15:06:40 regardless of TZ', async () => {
+    routeGet({ events: [makeEvent({ timestamp: 1750000000 })] });
+
+    render(<HFAdminAudit />);
+
+    await waitFor(() => screen.getByTestId('audit-row-41'));
+    const row = within(screen.getByTestId('audit-row-41'));
+    expect(row.getByText('2025-06-15 15:06:40')).toBeTruthy();
+  });
+});

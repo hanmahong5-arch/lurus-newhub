@@ -57,16 +57,29 @@ const CEILINGS = {
   // pages/v2/Admin/ModelRateLimits/index.jsx left the list (cycle 14, 915 → 757):
   // LimitModal + inputStyle extracted to ModelRateLimits/LimitModal.jsx.
   'pages/v2/Billing/index.jsx': 833, // redeemFailure() extracted to Billing/redeemFailure.js (cycle-13 hand-finish)
-  'pages/v2/Channel/index.jsx': 1908, // +2 (cycle-15 P1): import of the extracted ChannelTypeLabel/ChannelTypeSelect (components/hifi/HfModelName.jsx)
+  // 1908 → 1904 (cycle-18 L1): the list and upstream-models reads moved onto
+  // hooks/common/useTenantRead.js; a failed read renders HfLoadError.
+  'pages/v2/Channel/index.jsx': 1904,
   'pages/v2/Chat/index.jsx': 879,
-  'pages/v2/Dashboard/index.jsx': 1190, // 1242 → 1190 (cycle-15 P3): daily bucketing moved to components/hifi/activitySeries.js
+  // 1190 → 1179 (cycle-18 L4): the private fmtTs (ms-based, fed seconds —
+  // every recent request read as 1970) gave way to helpers/formatting.js
+  // formatShortTs.
+  'pages/v2/Dashboard/index.jsx': 1179, // 1242 → 1190 (cycle-15 P3): daily bucketing moved to components/hifi/activitySeries.js
   'pages/v2/Flows/index.jsx': 1446,
-  'pages/v2/Log/index.jsx': 1630, // 1731 → 1684 (cycle-15 P4): stat header extracted to Log/StatHeader.jsx; → 1630: routing trace moved to Log/RouteAttempts.jsx
+  // 1630 → 1623 (cycle-18 L4): the private fmtTime gave way to
+  // helpers/formatting.js formatClockTime({ ms: false }).
+  'pages/v2/Log/index.jsx': 1623, // 1731 → 1684 (cycle-15 P4): stat header extracted to Log/StatHeader.jsx; → 1630: routing trace moved to Log/RouteAttempts.jsx
   'pages/v2/Playground/index.jsx': 1084,
-  'pages/v2/Pricing/index.jsx': 805, // +4 (cycle-15 P1): vendor logo in the model cell
-  'pages/v2/Settings/index.jsx': 1909,
+  // 805 → 804 (cycle-18 L1): the pricing read moved onto useTenantRead; the
+  // failed-read badge renders its dash as text (a string count skips plural).
+  'pages/v2/Pricing/index.jsx': 804,
+  // 1909 → 1889 (cycle-18 L4): the page's own formatRelativeTime copy gave
+  // way to the same-named helper in helpers/formatting.js.
+  'pages/v2/Settings/index.jsx': 1889,
   'pages/v2/Tenants/index.jsx': 789, // 995 → 920 (cycle 14), → 789 (LimitsModal moved to Tenants/LimitsModal.jsx): StatsDrawer extracted to Tenants/StatsDrawer.jsx; failed-read panel is the shared components/hifi/HfLoadError.jsx
-  'pages/v2/Token/index.jsx': 1639, // 1671 → 1639: InlineEdit moved to Token/InlineEdit.jsx
+  // 1639 → 1632 (cycle-18 L1): the tokens and projects reads moved onto
+  // useTenantRead.
+  'pages/v2/Token/index.jsx': 1632,
 };
 
 const THRESHOLD = 800;

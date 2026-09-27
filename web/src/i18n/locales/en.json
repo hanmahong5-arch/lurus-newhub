@@ -217,6 +217,7 @@
         "load_failed_short": "unable to load"
       },
       "token": {
+        "load_error": "Couldn’t load tokens",
         "crumb": "tokens",
         "your_tokens": "your tokens",
         "count_one": "{{count}} token",
@@ -378,6 +379,7 @@
         "load_error": "Couldn’t load tenants"
       },
       "channel": {
+        "load_error": "Couldn’t load channels",
         "crumb": "channels",
         "count_one": "{{count}} upstream channel",
         "count_other": "{{count}} upstream channels",
@@ -935,6 +937,7 @@
         "tier_add": "+ add tier"
       },
       "redemption": {
+        "load_error": "Couldn’t load redemption codes",
         "crumb_section": "admin",
         "crumb": "redemption codes",
         "new_btn": "+ new code",
@@ -1542,6 +1545,7 @@
         "unnamed": "unresolved (request refused before routing)"
       },
       "palette": {
+        "load_error": "Some results couldn’t be loaded",
         "group_navigate": "navigate",
         "group_channels": "channels",
         "group_models": "models",

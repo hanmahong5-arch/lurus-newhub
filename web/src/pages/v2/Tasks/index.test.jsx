@@ -119,6 +119,7 @@ describe('Tasks page (v2)', () => {
 
     expect(API.get).toHaveBeenCalledWith(
       expect.stringContaining('/api/task/self/?'),
+      expect.anything(),
     );
   });
 
@@ -495,5 +496,94 @@ describe('Tasks page (v2)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('hf-shell')).toBeDefined();
     });
+  });
+});
+
+// ─── cycle-18 L1: a failed read is not an empty one ─────────────────────────
+// The list read now goes through hooks/common/useTenantRead.js. A 500 must
+// render HfLoadError — not the empty state an account with nothing sees —
+// and retry must re-issue the read.
+describe('Tasks page — failed read', () => {
+  it('renders a retryable load error instead of "No tasks found." on a 500', async () => {
+    let fail = true;
+    API.get.mockImplementation(() =>
+      fail
+        ? Promise.reject({
+            response: { status: 500, data: { success: false } },
+          })
+        : Promise.resolve(emptyPage()),
+    );
+
+    render(React.createElement(HFTasks));
+
+    await waitFor(() => screen.getByTestId('tasks-load-error'));
+    expect(screen.queryByTestId('tasks-empty')).toBeNull();
+    expect(screen.getByTestId('tasks-range-label').textContent).toBe('—');
+    expect(showError).not.toHaveBeenCalled();
+
+    fail = false;
+    fireEvent.click(screen.getByTestId('tasks-retry'));
+    await waitFor(() => screen.getByTestId('tasks-empty'));
+    expect(screen.queryByTestId('tasks-load-error')).toBeNull();
+    expect(screen.getByTestId('tasks-range-label').textContent).toBe(
+      '0–0 of 0',
+    );
+  });
+
+  it('a 200 carrying success:false is a load error too, not an empty list', async () => {
+    API.get.mockResolvedValue({
+      data: { success: false, message: 'db down', data: { items: [] } },
+    });
+    render(React.createElement(HFTasks));
+    await waitFor(() => screen.getByTestId('tasks-load-error'));
+    expect(screen.queryByTestId('tasks-empty')).toBeNull();
+  });
+});
+
+// ─── cycle-18 L1 repair: same filters must still re-read ────────────────────
+// The list read is keyed on the request path, so search/clear with inputs
+// that produce the path already in flight would change nothing and issue no
+// request. This is the page an operator polls for async task status, so an
+// unchanged search must re-read in place (retry), exactly as before the hook.
+describe('Tasks page (v2) — re-read on unchanged search', () => {
+  it('clicking search twice with unchanged inputs issues a request each time', async () => {
+    API.get.mockResolvedValue(page([makeTask(1)], 1));
+    render(React.createElement(HFTasks));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId('tasks-search-btn'));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByTestId('tasks-search-btn'));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(3));
+    expect(API.get.mock.calls[2][0]).toBe(API.get.mock.calls[1][0]);
+  });
+
+  it('clear on an already-empty query still re-reads', async () => {
+    API.get.mockResolvedValue(page([makeTask(1)], 1));
+    render(React.createElement(HFTasks));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId('tasks-clear-btn'));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(2));
+  });
+
+  it('MJ tab: clicking search twice with unchanged inputs issues a request each time', async () => {
+    API.get.mockImplementation((url) =>
+      url.startsWith('/api/mj/self/')
+        ? Promise.resolve(page([makeMj(9)], 1))
+        : Promise.resolve(emptyPage()),
+    );
+    render(React.createElement(HFTasks));
+    await waitFor(() => expect(API.get).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId('tasks-tab-mj'));
+    await waitFor(() => screen.getByTestId('mj-row-9'));
+    const mjCalls = () =>
+      API.get.mock.calls.filter((c) => c[0].startsWith('/api/mj/self/'));
+    expect(mjCalls()).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId('mj-search-btn'));
+    await waitFor(() => expect(mjCalls()).toHaveLength(2));
+    fireEvent.click(screen.getByTestId('mj-search-btn'));
+    await waitFor(() => expect(mjCalls()).toHaveLength(3));
   });
 });

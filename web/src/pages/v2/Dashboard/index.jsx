@@ -26,6 +26,7 @@ import {
   getQuotaPerUSD,
   quotaToUSD,
   formatUSD,
+  formatShortTs,
 } from '../../../helpers/formatting';
 import { classifyLoad, isLoadFailed } from '../../../helpers/loadState';
 import LoadErrorPanel, { KpiCaption, captionText } from './LoadErrorPanel';
@@ -47,20 +48,6 @@ import {
   formatErrorRate,
   DASHBOARD_REALTIME_WINDOW_SECONDS,
 } from './kpis';
-
-const fmtTs = (ts) => {
-  if (!ts) return '—';
-  try {
-    return new Date(ts).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch (_) {
-    return ts;
-  }
-};
 
 // Realtime KPI tiles derived from the last DASHBOARD_REALTIME_WINDOW_SECONDS
 // window of /api/v2/{slug}/logs. No dedicated metrics endpoint exists yet —
@@ -864,7 +851,7 @@ const HFDashboard = () => {
                   log.model || log.ModelName || log.channel_name || '—';
                 const cost =
                   log.quota != null ? `$${quotaToUSD(log.quota)}` : '—';
-                const ts = fmtTs(log.created_at || log.CreatedAt || null);
+                const ts = formatShortTs(log.created_at || log.CreatedAt);
                 return (
                   <div
                     key={i}
@@ -1047,7 +1034,9 @@ const HFDashboard = () => {
                 >
                   {item?.publishDate && (
                     <div className='mono muted' style={{ fontSize: 9 }}>
-                      {fmtTs(new Date(item.publishDate).getTime())}
+                      {formatShortTs(
+                        Math.floor(new Date(item.publishDate).getTime() / 1000),
+                      )}
                     </div>
                   )}
                   <div style={{ fontSize: 12, marginTop: 2 }}>

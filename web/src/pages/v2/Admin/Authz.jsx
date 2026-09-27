@@ -22,6 +22,7 @@ import HFShell from '../../../components/hifi/HFShell';
 import HfLoadError from '../../../components/hifi/HfLoadError';
 import { API, showSuccess } from '../../../helpers';
 import { classifyLoad, isLoadFailed } from '../../../helpers/loadState';
+import { formatTime } from '../../../helpers/formatting';
 
 /*
  * v2 admin — delegated permission grant management (L4, 2026-09-13,
@@ -35,11 +36,6 @@ import { classifyLoad, isLoadFailed } from '../../../helpers/loadState';
  * Grants are GLOBAL this cycle: the create form has no tenant selector —
  * the server rejects a non-null tenant_id as GRANT_INVALID.
  */
-
-const fmtWhen = (unixSeconds) => {
-  if (!unixSeconds) return '—';
-  return new Date(unixSeconds * 1000).toLocaleString();
-};
 
 const V2AdminAuthz = () => {
   const { t: tr } = useTranslation();
@@ -356,13 +352,15 @@ const V2AdminAuthz = () => {
                         <td className='mono'>{g.user_id}</td>
                         <td className='mono muted'>{g.resource}</td>
                         <td className='mono muted'>{g.action}</td>
-                        <td className='mono muted'>{fmtWhen(g.created_at)}</td>
+                        <td className='mono muted'>
+                          {formatTime(g.created_at)}
+                        </td>
                         <td
                           className='mono muted'
                           data-testid={`authz-expires-${g.id}`}
                         >
                           {g.expires_at
-                            ? fmtWhen(g.expires_at)
+                            ? formatTime(g.expires_at)
                             : tr('console.admin.authz.no_expiry', 'never')}
                         </td>
                         <td>

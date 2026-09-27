@@ -16,21 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
+import { formatTime } from '../../../helpers/formatting';
+import { isLoadFailed } from '../../../helpers/loadState';
+import { useTenantRead } from '../../../hooks/common/useTenantRead';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // Reads tenant slug from localStorage — same pattern as Token/Channel/Models pages.
 
 const PAGE_SIZE = 50;
-
-const fmtTime = (ts) => {
-  if (!ts || ts === 0) return '—';
-  return new Date(ts * 1000).toLocaleString();
-};
 
 // Labels resolved at render via tr() — module scope has no i18n context.
 const statusLabel = (status, tr) => {
@@ -287,43 +286,33 @@ const HFRedemption = () => {
   // Aliased to `tr` per the v2 console convention (avoids shadowing).
   const { t: tr } = useTranslation();
 
-  const [redemptions, setRedemptions] = useState([]);
-  const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newCodes, setNewCodes] = useState(null); // codes shown in banner after create
   const [deleteTarget, setDeleteTarget] = useState(null); // { id, name }
 
+  const {
+    data,
+    status: loadStatus,
+    loading,
+    retry,
+  } = useTenantRead(
+    tenantSlug &&
+      `/api/v2/${tenantSlug}/redemptions?page=${page}&page_size=${PAGE_SIZE}`,
+  );
+  // A failed read leaves the list empty AND `loadFailed` set, so the count
+  // and "No redemption codes yet." below are never stated from it.
+  const redemptions = data?.redemptions ?? [];
+  const total = data?.total ?? 0;
+  const loadFailed = isLoadFailed(loadStatus);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  const fetchRedemptions = useCallback(
-    async (targetPage = 1) => {
-      if (!tenantSlug) return;
-      setLoading(true);
-      try {
-        const res = await API.get(
-          `/api/v2/${tenantSlug}/redemptions?page=${targetPage}&page_size=${PAGE_SIZE}`,
-        );
-        if (res?.data?.success) {
-          const d = res.data.data;
-          setRedemptions(d.redemptions ?? []);
-          setTotal(d.total ?? 0);
-          setPage(targetPage);
-        }
-      } catch (_) {
-        // error toast handled by API interceptor
-      } finally {
-        setLoading(false);
-      }
-    },
-    [tenantSlug],
-  );
-
-  useEffect(() => {
-    fetchRedemptions(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantSlug]);
+  // Same page → re-read in place; another page → a new path the hook reads.
+  const fetchRedemptions = (targetPage = 1) => {
+    if (targetPage === page) return retry();
+    setPage(targetPage);
+    return Promise.resolve();
+  };
 
   const goPage = (next) => {
     fetchRedemptions(next);
@@ -370,7 +359,7 @@ const HFRedemption = () => {
             <span className='muted mono' style={{ fontSize: 11 }}>
               {tr('console.common.loading', 'loading…')}
             </span>
-          ) : (
+          ) : loadFailed ? null : (
             <span className='muted mono' style={{ fontSize: 11 }}>
               {tr('console.redemption.total_count', { count: total })}
             </span>
@@ -389,7 +378,20 @@ const HFRedemption = () => {
       <div style={{ padding: 24 }}>
         <CreatedKeysBanner codes={newCodes} onClose={() => setNewCodes(null)} />
 
-        {!loading && redemptions.length === 0 && (
+        {!loading && loadFailed && (
+          <HfLoadError
+            status={loadStatus}
+            title={tr(
+              'console.redemption.load_error',
+              'Couldn’t load redemption codes',
+            )}
+            onRetry={retry}
+            testId='redemption-load-error'
+            retryTestId='redemption-retry'
+          />
+        )}
+
+        {!loading && !loadFailed && redemptions.length === 0 && (
           <div
             className='muted'
             style={{ fontSize: 13, padding: '40px 0' }}
@@ -456,11 +458,11 @@ const HFRedemption = () => {
                       </span>
                     </td>
                     <td className='mono' style={{ padding: '8px 10px' }}>
-                      {fmtTime(r.created_time)}
+                      {formatTime(r.created_time)}
                     </td>
                     <td className='mono' style={{ padding: '8px 10px' }}>
                       {r.expired_time
-                        ? fmtTime(r.expired_time)
+                        ? formatTime(r.expired_time)
                         : tr('console.redemption.never', 'never')}
                     </td>
                     <td className='mono' style={{ padding: '8px 10px' }}>
