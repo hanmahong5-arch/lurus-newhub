@@ -31,7 +31,7 @@ a bind source. `scripts/install-netdata-alarms.sh` only manages
 `newhub.conf` — a second alarm file would need its own bind mount added to
 the container definition first (out of scope for this directory).
 
-`health.d/newhub.conf` currently defines 31 alarms:
+`health.d/newhub.conf` currently defines 38 alarms:
 
 - 8 ported from the host's original 2026-08-20 copy
   (`newhub_platform_breaker_open`, `newhub_billing_outbox_failures`,
@@ -135,6 +135,38 @@ change):
   errors reported from users' browsers (`lurus_gateway_client_errors_total{kind}`,
   POST /api/client-error). Threshold not yet calibrated: tune after a week of
   real traffic (extensions produce some `window_error` noise).
+- 6 added 2026-09-27 (cycle-18 L7), **in-repo only**: the four SLIs
+  `doc/slo-relay.md` has promised since 2026-05-09 finally have alarms (the
+  conf's "RELAY SLO" section; the doc's "Alerting" table is the same list
+  from the SLO's side). `newhub_relay_error_burst` (crit, 10m) and
+  `newhub_relay_error_budget_slow_burn` (warn, 1h) are per-route absolute
+  floors on `lurus_gateway_relay_requests_total{status=error}` standing in
+  for the 99.5% success ratio, which netdata cannot divide across charts.
+  `newhub_relay_overhead_slow_share` and `newhub_channel_select_slow_share`
+  (warn) evaluate the P99 SLOs as their contrapositive — the share of
+  requests past the 50ms / 10ms bucket, over 1% — inside one histogram
+  chart, each fed by a threshold-less helper template
+  (`newhub_relay_overhead_req_rate` / `newhub_channel_select_req_rate`,
+  `to: silent`) that supplies the denominator over the same 5-minute window.
+  A bucket share rather than a mean of `_sum/_count` because a mean hides
+  exactly the fat tail a P99 SLO exists to catch, and `_sum`/`_count` are
+  separate charts anyway. **⚠VERIFY before install**: the two histogram
+  pairs assume go.d's bucket-chart layout (context
+  `prometheus.newhub.<metric>`, one dimension per `le=<bound>`); the conf
+  section carries the one-line R6 check to run first, and what to do if the
+  layout differs. Runbook links: the error alarms share
+  `relay-5xx-elevated.md`; the latency alarms point at
+  `db-pool-saturation.md` because the SLO doc's own drill-down names a DB
+  lookup under contention as the first suspect and no dedicated
+  relay-latency runbook exists yet (owner item: write one and re-point).
+- 1 added 2026-09-27 (cycle-18 L2), **in-repo only**:
+  `newhub_billing_money_lost` (crit, 1h) on
+  `lurus_billing_money_path_lost_total{stage}` — a wallet movement that
+  failed its live platform call AND could not be parked in the billing
+  outbox (settle / direct debit = unbilled usage; pre-auth release = a
+  customer balance frozen until the platform's hold TTL). The three sites
+  had only a free-text CRITICAL log line before; this is the outbox-down
+  complement of `newhub_billing_outbox_failures` and shares its runbook.
 - `newhub_relay_5xx_elevated` was **rebound** from
   `lurus_gateway_requests_total{status=5*}` to the new series
   `lurus_gateway_non_probe_5xx_total`

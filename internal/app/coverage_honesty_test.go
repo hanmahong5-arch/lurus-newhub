@@ -102,10 +102,20 @@ func TestAppCoverageGate_HonestBaseline(t *testing.T) {
 	// History: 18/58/19 at α9 → 25/59/19 (2026-05-31) → handler 48 (2026-07-20)
 	// → 84/62/64 (2026-08-09, the 232-file corpus) → 86/77/64 (2026-08-17)
 	// → 87/77/73 (2026-09-19).
+	//
+	// 2026-09-27 (cycle 18 L7): two more packages join the gate. Both were
+	// measured locally, hermetic, on this tree: internal/pkg/common 85.3%
+	// (the limiter subpackage at 100% pulls the aggregate 0.1 above the
+	// package's own 85.2) and internal/pkg/metrics 75.8%. Gates are the
+	// measurement minus a 3pt buffer, floored: 82 / 72. Attaching PG in CI
+	// can only move either number up (see the job comment), so a local
+	// hermetic figure is a safe floor here where it was not for repo.
 	want := map[string]int{
 		"internal/app":             87,
 		"internal/adapter/repo":    77,
 		"internal/adapter/handler": 73,
+		"internal/pkg/common":      82,
+		"internal/pkg/metrics":     72,
 	}
 	for pkg, w := range want {
 		got, ok := gates[pkg]

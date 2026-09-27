@@ -194,7 +194,8 @@ jobs:
           expected=$(jq '.stats.expected // -1' "$report")
           skipped=$(jq '.stats.skipped // -1' "$report")
           unexpected=$(jq '.stats.unexpected // -1' "$report")
-          echo "playwright stats: expected(passed)=$expected unexpected(failed)=$unexpected skipped=$skipped"
+          flaky=$(jq '.stats.flaky // -1' "$report")
+          echo "playwright stats: expected(passed)=$expected unexpected(failed)=$unexpected skipped=$skipped flaky=$flaky"
           rc=0
           if [ "$expected" -lt 30 ]; then
             echo "::error::only $expected specs passed (floor 30) — the suite ran hollow or specs were lost."
@@ -202,6 +203,16 @@ jobs:
           fi
           if [ "$skipped" -gt 2 ]; then
             echo "::error::$skipped specs were skipped (budget 2) — a skipped spec proves nothing; find out what stopped running."
+            rc=1
+          fi
+          # A flaky spec is one Playwright retried into a pass. It never turns
+          # the run red on its own, so until 2026-09-27 (cycle 18) this step
+          # did not read stats.flaky at all and a suite could degrade to
+          # pass-on-retry across the board without anyone seeing it. Budget 1:
+          # one retried spec is an isolated timing hiccup; two in one run are
+          # a pattern worth a red build.
+          if [ "$flaky" -gt 1 ]; then
+            echo "::error::$flaky specs passed only on retry (budget 1) — a retried pass is a fail the reporter forgave; fix the race, do not raise the budget."
             rc=1
           fi
           exit $rc
