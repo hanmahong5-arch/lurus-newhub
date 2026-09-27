@@ -3,6 +3,7 @@ package limiter
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -14,6 +15,10 @@ import (
 // restarted. It must reload and keep limiting.
 func TestAllow_SurvivesScriptCacheFlush(t *testing.T) {
 	mr := miniredis.RunT(t)
+	// The script reads the clock from Redis TIME, one-second resolution, at
+	// 1 token/s: across a second boundary (a slow -race run) the bucket
+	// refills and the "must refuse" call below is allowed. Freeze the clock.
+	mr.SetTime(time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC))
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 	resetSingleton(t)
