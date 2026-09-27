@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import {
   configure,
   fireEvent,
@@ -116,6 +116,16 @@ const listResponse = (users) => ({
     data: { users, total: users.length, page: 1, page_size: 50 },
   },
 });
+
+// The page lazy-loads the 2FA step-up modal, and its first import (Semi UI
+// plus lottie) is the slow part of this file. Paid inside whichever test
+// first opened a dialog, it made "edits a user" time out at 5s under a
+// loaded CI run while passing alone. Load it once here, with its own budget,
+// so the tests time what the page does, not how long a module takes to load.
+beforeAll(
+  () => import('../../../../components/common/modals/SecureVerificationModal'),
+  60_000,
+);
 
 beforeEach(() => {
   API.get.mockReset();
