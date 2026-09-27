@@ -22,7 +22,10 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../helpers';
-import { getQuotaPerUSD } from '../../../helpers/formatting';
+import {
+  getQuotaPerUSD,
+  formatRelativeTime,
+} from '../../../helpers/formatting';
 import { TotpService } from '../../../services/secureVerification';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
@@ -74,27 +77,6 @@ const fmtCNY = (v) =>
         maximumFractionDigits: 2,
       })
     : '—';
-
-// formatRelativeTime converts a Unix timestamp (seconds) to a human-readable
-// relative string (e.g. "just now", "3m ago"). No external dependency —
-// avoids adding date-fns for a single call site. `tr` is passed in because
-// module scope has no i18n context.
-const formatRelativeTime = (unixSec, tr) => {
-  if (!unixSec) return '—';
-  const diffSec = Math.floor(Date.now() / 1000) - unixSec;
-  if (diffSec < 60) return tr('console.common.time_just_now', 'just now');
-  if (diffSec < 3600)
-    return tr('console.common.time_minutes_ago', {
-      count: Math.floor(diffSec / 60),
-    });
-  if (diffSec < 86400)
-    return tr('console.common.time_hours_ago', {
-      count: Math.floor(diffSec / 3600),
-    });
-  return tr('console.common.time_days_ago', {
-    count: Math.floor(diffSec / 86400),
-  });
-};
 
 // Labels/descriptions resolved at render via tr() — module scope has no i18n
 // context. Keys: console.settings.section_<id> / section_<id>_desc.
@@ -1120,7 +1102,7 @@ const HFSettings = () => {
                             className='faint'
                             style={{ padding: '8px 8px', textAlign: 'right' }}
                           >
-                            {formatRelativeTime(s.last_seen, tr)}
+                            {formatRelativeTime(s.last_seen)}
                           </td>
                           <td
                             style={{ padding: '8px 8px', textAlign: 'right' }}
@@ -1506,9 +1488,7 @@ const HFSettings = () => {
                               style={{ borderTop: '1px dashed var(--hf-rule)' }}
                             >
                               <td style={{ padding: '8px 12px' }}>
-                                {t.created_at
-                                  ? formatRelativeTime(t.created_at, tr)
-                                  : '—'}
+                                {formatRelativeTime(t.created_at)}
                               </td>
                               {/* Type derived from the row; this list is the
                                   topups ledger, so 'topup' is the accurate

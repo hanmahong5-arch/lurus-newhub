@@ -667,3 +667,44 @@ describe('Token page — repeat-safety', () => {
     });
   });
 });
+
+// ─── cycle-18 L1: a failed read is not an empty one ─────────────────────────
+// The list read now goes through hooks/common/useTenantRead.js. A 500 must
+// render HfLoadError — not the empty state an account with nothing sees —
+// and retry must re-issue the read.
+const reject500 = () =>
+  Promise.reject({ response: { status: 500, data: { success: false } } });
+
+describe('Token page — failed read', () => {
+  it('renders a retryable load error instead of "No tokens yet" on a 500', async () => {
+    let fail = true;
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/models/routable') || u.includes('/projects')) {
+        return Promise.resolve({
+          data: { success: true, data: { items: [] } },
+        });
+      }
+      return fail
+        ? reject500()
+        : Promise.resolve({ data: { success: true, data: { items: [] } } });
+    });
+
+    render(<HFToken />);
+
+    await waitFor(() => screen.getByTestId('token-load-error'));
+    expect(screen.queryByText(/No tokens yet/)).toBeNull();
+    expect(screen.queryByText(/Create a token to get started/)).toBeNull();
+
+    fail = false;
+    const before = API.get.mock.calls.length;
+    fireEvent.click(screen.getByTestId('token-retry'));
+    await waitFor(() => screen.getByText(/No tokens yet/));
+    expect(screen.queryByTestId('token-load-error')).toBeNull();
+    expect(
+      API.get.mock.calls
+        .slice(before)
+        .some(([u]) => String(u).includes('/tokens')),
+    ).toBe(true);
+  });
+});

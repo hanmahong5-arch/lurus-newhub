@@ -414,3 +414,33 @@ describe('channel filters', () => {
     expect(screen.getByText('DisabledChan')).toBeTruthy();
   });
 });
+
+// ─── cycle-18 L1: a failed read is not an empty one ─────────────────────────
+// The list read now goes through hooks/common/useTenantRead.js. A 500 must
+// render HfLoadError — not the empty state an account with nothing sees —
+// and retry must re-issue the read.
+describe('channel page — failed read', () => {
+  it('renders a retryable load error instead of "0 channels · healthy 0" on a 500', async () => {
+    let fail = true;
+    API.get.mockImplementation(() =>
+      fail
+        ? Promise.reject({
+            response: { status: 500, data: { success: false } },
+          })
+        : Promise.resolve(mockListResponse([])),
+    );
+
+    render(React.createElement(HFChannel));
+
+    await waitFor(() => screen.getByTestId('channel-load-error'));
+    expect(screen.queryByText(/No channels yet/)).toBeNull();
+    // The fleet-health cells stay at the placeholder, not a fabricated zero.
+    expect(screen.queryByText('0 upstream channels')).toBeNull();
+
+    fail = false;
+    fireEvent.click(screen.getByTestId('channel-retry'));
+    await waitFor(() => screen.getByText(/No channels yet/));
+    expect(screen.queryByTestId('channel-load-error')).toBeNull();
+    expect(screen.getByText('0 upstream channels')).toBeTruthy();
+  });
+});

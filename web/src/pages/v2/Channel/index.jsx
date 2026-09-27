@@ -16,16 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import React, { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
@@ -34,51 +28,41 @@ import {
   ChannelTypeSelect,
 } from '../../../components/hifi/HfModelName';
 import { API, showError, showSuccess } from '../../../helpers';
+import { isLoadFailed } from '../../../helpers/loadState';
+import { useTenantRead } from '../../../hooks/common/useTenantRead';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 // Bounded concurrency for the "test all enabled" sweep — never fan out an
 // unbounded burst of upstream test calls.
 const BATCH_TEST_CONCURRENCY = 4;
+// Stable identity for "no list yet": a fresh [] per render would re-run the
+// memoised filtered view on every render.
+const NO_CHANNELS = [];
 
 // ─── SyncModelsModal ─────────────────────────────────────────────────────────
 
 const SyncModelsModal = ({ tenantSlug, channel, onClose, onApply }) => {
   const { t } = useTranslation();
-  const [loading, setLoading] = useState(true);
-  const [diff, setDiff] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [applying, setApplying] = useState(false);
 
+  const {
+    data: diff,
+    status: diffStatus,
+    loading,
+  } = useTenantRead(
+    `/api/v2/${tenantSlug}/channels/${channel.id}/upstream-models`,
+  );
+  // Pre-select new models by default; a diff that failed to load has
+  // nothing to apply, so the modal says so and closes.
   useEffect(() => {
-    setLoading(true);
-    API.get(`/api/v2/${tenantSlug}/channels/${channel.id}/upstream-models`)
-      .then((res) => {
-        if (res?.data?.success) {
-          const d = res.data.data;
-          setDiff(d);
-          // Pre-select new models by default.
-          setSelected(new Set(d.new ?? []));
-        } else {
-          showError(
-            t(
-              'console.channel.sync_fetch_failed',
-              'Failed to fetch upstream models',
-            ),
-          );
-          onClose();
-        }
-      })
-      .catch(() => {
-        showError(
-          t(
-            'console.channel.sync_fetch_failed',
-            'Failed to fetch upstream models',
-          ),
-        );
-        onClose();
-      })
-      .finally(() => setLoading(false));
-  }, [tenantSlug, channel.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (diff) setSelected(new Set(diff.new ?? []));
+    if (!isLoadFailed(diffStatus)) return;
+    showError(
+      t('console.channel.sync_fetch_failed', 'Failed to fetch upstream models'),
+    );
+    onClose();
+  }, [diff, diffStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleModel = (m) => {
     setSelected((prev) => {
@@ -1033,9 +1017,6 @@ const HFChannel = () => {
   const { t } = useTranslation();
   const tenantSlug = useTenantSlug();
 
-  const [channels, setChannels] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   // Selection & expansion are keyed by channel id (not list index) so they stay
   // correct when the client-side status filter changes the rendered set.
   const [sel, setSel] = useState(new Set());
@@ -1055,40 +1036,48 @@ const HFChannel = () => {
   const [filterGroup, setFilterGroup] = useState('');
   const [filterStatus, setFilterStatus] = useState('all'); // all|ok|disabled|error
 
-  const fetchChannels = useCallback(
-    async (keyword = '', group = '') => {
-      setLoading(true);
-      try {
-        const params = new URLSearchParams({ page: '1', page_size: '100' });
-        if (keyword.trim()) params.set('keyword', keyword.trim());
-        if (group.trim()) params.set('group', group.trim());
-        const res = await API.get(
-          `/api/v2/${tenantSlug}/channels?${params.toString()}`,
-        );
-        if (res?.data?.success) {
-          const d = res.data.data;
-          setChannels(d.channels ?? []);
-          setTotal(d.total ?? d.channels?.length ?? 0);
-          setSel(new Set());
-          setOpen(null);
-        }
-      } catch (_) {
-      } finally {
-        setLoading(false);
-      }
-    },
-    [tenantSlug],
-  );
+  // The keyword/group the server was last asked with. The inputs above are
+  // drafts until search/Enter; the list path is built from these.
+  const [applied, setApplied] = useState({ keyword: '', group: '' });
+  const listPath = useMemo(() => {
+    if (!tenantSlug) return '';
+    const params = new URLSearchParams({ page: '1', page_size: '100' });
+    if (applied.keyword) params.set('keyword', applied.keyword);
+    if (applied.group) params.set('group', applied.group);
+    return `/api/v2/${tenantSlug}/channels?${params.toString()}`;
+  }, [tenantSlug, applied]);
+  const {
+    data: list,
+    status: loadStatus,
+    loading,
+    retry: refetchChannels,
+  } = useTenantRead(listPath);
+  // A failed read leaves both empty AND `loadFailed` set: the fleet-health
+  // counts and "No channels yet." below are gated on it, so neither is ever
+  // stated from a read that never answered.
+  const channels = list?.channels ?? NO_CHANNELS;
+  const total = list?.total ?? channels.length;
+  const loadFailed = isLoadFailed(loadStatus);
+  useEffect(() => {
+    setSel(new Set());
+    setOpen(null);
+  }, [list]);
+
+  // Same filters → re-read in place (and resolve when it has settled, which
+  // the post-mutation refreshes await); new filters → a new path, which the
+  // hook reads on its own.
+  const fetchChannels = (keyword = '', group = '') => {
+    const next = { keyword: keyword.trim(), group: group.trim() };
+    if (next.keyword === applied.keyword && next.group === applied.group) {
+      return refetchChannels();
+    }
+    setApplied(next);
+    return Promise.resolve();
+  };
 
   // Re-fetch preserving the active keyword/group filters — used by every
   // post-mutation refresh so an edit doesn't silently drop the filter.
-  const applyChannelFilters = useCallback(() => {
-    fetchChannels(filterKeyword, filterGroup);
-  }, [fetchChannels, filterKeyword, filterGroup]);
-
-  useEffect(() => {
-    if (tenantSlug) fetchChannels();
-  }, [fetchChannels, tenantSlug]);
+  const applyChannelFilters = () => fetchChannels(filterKeyword, filterGroup);
 
   // Status filter is client-side; clear stale selection/expansion when it
   // changes so id-based selection never points at a now-hidden row.
@@ -1205,13 +1194,11 @@ const HFChannel = () => {
   };
 
   // Derived summary counts (always over the full set, not the filtered view).
-  const okCount = channels.filter((c) => channelStatus(c) === 'ok').length;
-  const disabledCount = channels.filter(
-    (c) => channelStatus(c) === 'disabled',
-  ).length;
-  const errorCount = channels.filter(
-    (c) => channelStatus(c) === 'error',
-  ).length;
+  const countBy = (st) =>
+    channels.filter((c) => channelStatus(c) === st).length;
+  const okCount = countBy('ok');
+  const disabledCount = countBy('disabled');
+  const errorCount = countBy('error');
 
   // Batch enable/disable — selection holds channel ids.
   const batchSetStatus = async (status) => {
@@ -1279,7 +1266,7 @@ const HFChannel = () => {
             {t('console.channel.crumb', 'channels')}
           </div>
           <h1>
-            {loading
+            {loading || loadFailed
               ? '…'
               : t('console.channel.count', '{{count}} upstream channels', {
                   count: total,
@@ -1293,17 +1280,17 @@ const HFChannel = () => {
           {[
             [
               t('console.channel.stat_healthy', 'healthy'),
-              loading ? '…' : String(okCount),
+              loading || loadFailed ? '…' : String(okCount),
               'var(--hf-ok)',
             ],
             [
               t('console.channel.stat_disabled', 'disabled'),
-              loading ? '…' : String(disabledCount),
+              loading || loadFailed ? '…' : String(disabledCount),
               'var(--hf-warn)',
             ],
             [
               t('console.channel.stat_error', 'error'),
-              loading ? '…' : String(errorCount),
+              loading || loadFailed ? '…' : String(errorCount),
               'var(--hf-err)',
             ],
           ].map(([l, v, c], i) => (
@@ -1487,6 +1474,15 @@ const HFChannel = () => {
         <div style={{ padding: '14px 28px' }}>
           <HfSkeletonRows rows={6} />
         </div>
+      ) : loadFailed ? (
+        <HfLoadError
+          status={loadStatus}
+          title={t('console.channel.load_error', 'Couldn’t load channels')}
+          onRetry={refetchChannels}
+          variant='inset'
+          testId='channel-load-error'
+          retryTestId='channel-retry'
+        />
       ) : visibleChannels.length === 0 ? (
         <div className='muted' style={{ padding: '24px 28px', fontSize: 12 }}>
           {channels.length === 0

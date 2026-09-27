@@ -16,12 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 import HfModelName from '../../../components/hifi/HfModelName';
 import { API, showError, showSuccess } from '../../../helpers';
+import { isLoadFailed } from '../../../helpers/loadState';
 import useFormDraft from '../../../hooks/common/useFormDraft';
+import { useTenantRead } from '../../../hooks/common/useTenantRead';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /* v2 Pricing — GET /api/v2/:tenant_slug/pricing (2026-05-19)
@@ -38,27 +41,20 @@ import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
    clobbered. Preview runs the same batch read-only first. */
 
 const DRAFT_KEY = 'v2-pricing-edits';
+const EMPTY_SHEET = { pricing: [], vendors: [], groupRatio: {}, version: 0 };
 
 const PricingPage = () => {
   const tenantSlug = useTenantSlug();
   // Aliased to `tr` per the v2 console convention (avoids shadowing).
   const { t: tr } = useTranslation();
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const [pricing, setPricing] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [groupRatio, setGroupRatio] = useState({});
   const [vendorFilter, setVendorFilter] = useState('');
-  // PricingVersion read from the last GET; sent back on the next POST.
-  const [version, setVersion] = useState(0);
   // Diff rows from the last preview call; null until Preview is clicked.
   // handleSave and handleFieldChange both clear it (on a successful save, or
   // on any further edit) so a stale preview cannot linger, but neither path
   // has a test asserting the clear — see the lane report.
   const [previewDiffs, setPreviewDiffs] = useState(null);
-  // fetchTick increments trigger a re-fetch without remounting.
-  const [fetchTick, setFetchTick] = useState(0);
   // Per-model expand/collapse state for the context-tiers editor
   // (billing-pricing-14) — a UI-only concern, not persisted in the draft.
   const [expandedTiers, setExpandedTiers] = useState({});
@@ -70,42 +66,29 @@ const PricingPage = () => {
     { schemaVersion: 1 },
   );
 
-  useEffect(() => {
-    if (!tenantSlug) return;
-    setLoading(true);
-    API.get(`/api/v2/${tenantSlug}/pricing`)
-      .then((res) => {
-        const d = res?.data?.data ?? {};
-        setPricing(Array.isArray(d.pricing) ? d.pricing : []);
-        setVendors(Array.isArray(d.vendors) ? d.vendors : []);
-        setGroupRatio(
-          d.group_ratio && typeof d.group_ratio === 'object'
-            ? d.group_ratio
-            : {},
-        );
-        setVersion(typeof d.version === 'number' ? d.version : 0);
-      })
-      .catch((err) => {
-        const msg =
-          err?.response?.data?.message ??
-          tr('console.pricing.load_failed', 'Failed to load pricing data');
-        showError(msg);
-      })
-      .finally(() => setLoading(false));
-    // `tr` intentionally omitted: its identity is not stable under the test
-    // i18n mock and would re-trigger the fetch on every render; the fetch
-    // must run only on slug change / explicit refresh.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantSlug, fetchTick]);
+  // The price table is the numbers a customer is billed on: a failed read
+  // renders HfLoadError below, never "no data".
+  const {
+    data: sheet,
+    status: loadStatus,
+    loading,
+    retry: refreshList,
+  } = useTenantRead(tenantSlug && `/api/v2/${tenantSlug}/pricing`, {
+    parse: (d = {}) => ({
+      pricing: Array.isArray(d.pricing) ? d.pricing : [],
+      vendors: Array.isArray(d.vendors) ? d.vendors : [],
+      groupRatio:
+        d.group_ratio && typeof d.group_ratio === 'object' ? d.group_ratio : {},
+      // PricingVersion read from the last GET; sent back on the next POST.
+      version: typeof d.version === 'number' ? d.version : 0,
+    }),
+  });
+  const { pricing, vendors, groupRatio, version } = sheet ?? EMPTY_SHEET;
+  const loadFailed = isLoadFailed(loadStatus);
 
   // Merge server rows with in-progress edits for display.
   const displayPricing = useMemo(
-    () =>
-      pricing.map((row) => {
-        const e = edits[row.model_name];
-        if (!e) return row;
-        return { ...row, ...e };
-      }),
+    () => pricing.map((row) => ({ ...row, ...edits[row.model_name] })),
     [pricing, edits],
   );
 
@@ -113,8 +96,11 @@ const PricingPage = () => {
     if (!vendorFilter) return displayPricing;
     return displayPricing.filter((p) => p.vendor === vendorFilter);
   }, [displayPricing, vendorFilter]);
-
-  const refreshList = useCallback(() => setFetchTick((n) => n + 1), []);
+  // model_count is a plural key, which i18next only resolves for a numeric
+  // count — a string count renders the bare key — so the dash is its own text.
+  const modelCount = loadFailed
+    ? '—'
+    : tr('console.pricing.model_count', { count: filteredPricing.length });
 
   const handleFieldChange = (modelName, field, value) => {
     setEdits((prev) => ({
@@ -350,10 +336,9 @@ const PricingPage = () => {
             <span
               className='muted mono'
               style={{ fontSize: 10, marginLeft: 'auto' }}
+              data-testid='pricing-model-count'
             >
-              {tr('console.pricing.model_count', {
-                count: filteredPricing.length,
-              })}
+              {modelCount}
             </span>
           </div>
           <div className='hf-table-scroll'>
@@ -703,7 +688,21 @@ const PricingPage = () => {
                       className='muted'
                       style={{ textAlign: 'center', padding: 24 }}
                     >
-                      {tr('console.common.no_data', 'no data')}
+                      {loadFailed ? (
+                        <HfLoadError
+                          status={loadStatus}
+                          title={tr(
+                            'console.pricing.load_failed',
+                            'Failed to load pricing data',
+                          )}
+                          onRetry={refreshList}
+                          variant='inset'
+                          testId='pricing-load-error'
+                          retryTestId='pricing-retry'
+                        />
+                      ) : (
+                        tr('console.common.no_data', 'no data')
+                      )}
                     </td>
                   </tr>
                 )}

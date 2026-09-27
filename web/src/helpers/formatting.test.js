@@ -29,6 +29,9 @@ import {
   formatUSD,
   formatCNY,
   formatTime,
+  formatTimeUTC,
+  formatShortTs,
+  formatClockTime,
   formatRelativeTime,
   parseUSDInput,
   formatCNY4,
@@ -107,6 +110,43 @@ describe('formatTime', () => {
   it('em-dashes empty/zero timestamps', () => {
     expect(formatTime(0)).toBe('—');
     expect(formatTime(null)).toBe('—');
+  });
+});
+
+// TZ=Asia/Shanghai is pinned in vitest.config.js: 1750000000 is
+// 2025-06-15 15:06:40 UTC / 23:06:40 local.
+describe('formatTimeUTC', () => {
+  it('renders UTC, not the local zone', () => {
+    expect(formatTimeUTC(1750000000)).toBe('2025-06-15 15:06:40');
+  });
+  it('em-dashes empty and unparseable input', () => {
+    expect(formatTimeUTC(0)).toBe('—');
+    expect(formatTimeUTC(undefined)).toBe('—');
+    expect(formatTimeUTC('not a number')).toBe('—');
+  });
+});
+
+describe('formatShortTs', () => {
+  it('takes unix seconds and renders the calendar day (not January 1970)', () => {
+    const out = formatShortTs(1750000000);
+    expect(out).toMatch(/Jun 15|6月15/);
+    expect(out).not.toMatch(/1970|Jan|1月/);
+  });
+  it('em-dashes a missing timestamp', () => {
+    expect(formatShortTs(0)).toBe('—');
+    expect(formatShortTs(null)).toBe('—');
+  });
+});
+
+describe('formatClockTime', () => {
+  it('renders the local wall clock with milliseconds by default', () => {
+    expect(formatClockTime(1750000000)).toBe('23:06:40.000');
+  });
+  it('drops the fraction with ms:false for whole-second rows', () => {
+    expect(formatClockTime(1750000000, { ms: false })).toBe('23:06:40');
+  });
+  it('em-dashes a missing timestamp', () => {
+    expect(formatClockTime(0)).toBe('—');
   });
 });
 

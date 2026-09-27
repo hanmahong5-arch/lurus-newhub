@@ -422,9 +422,10 @@ describe('Models marketplace', () => {
     expect(empty.textContent).toMatch(/No models yet/);
   });
 
-  // Lock for the hook's error effect — the page's only failure surface for
-  // a catalogue load that came back but reported failure.
-  it('shows an error toast when the models hook reports success:false', async () => {
+  // Lock for the page's only failure surface for a catalogue load that came
+  // back but reported failure: the marketplace is replaced by the load-error
+  // panel, so "No models yet" is never said about an unread catalogue.
+  it('replaces the marketplace with a load-error panel when the models hook reports success:false', async () => {
     serve({
       extra: (u) =>
         u.includes('/models?')
@@ -434,9 +435,25 @@ describe('Models marketplace', () => {
           : null,
     });
     render(<HFModels />);
-    await waitFor(() => {
-      expect(showError).toHaveBeenCalledWith('tenant not found');
+    const panel = await waitFor(() => screen.getByTestId('models-load-error'));
+    expect(panel.textContent).toContain('Failed to load models');
+    expect(screen.queryByTestId('models-empty')).toBeNull();
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it('a 500 on the catalogue read is a retryable load-error panel, not an empty marketplace', async () => {
+    serve({
+      extra: (u) =>
+        u.includes('/models?')
+          ? Promise.reject({ response: { status: 500, data: {} } })
+          : null,
     });
+    render(<HFModels />);
+    await waitFor(() => screen.getByTestId('models-load-error'));
+    expect(screen.queryByTestId('models-empty')).toBeNull();
+    serve({});
+    fireEvent.click(screen.getByTestId('models-retry'));
+    await waitFor(() => screen.getByTestId('models-empty'));
   });
 
   it('carries no WIP banner — the add button is present and enabled', async () => {

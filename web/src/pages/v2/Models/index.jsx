@@ -20,6 +20,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 import {
   API,
   getServerAddress,
@@ -27,7 +28,9 @@ import {
   showError,
   showSuccess,
 } from '../../../helpers';
+import { classifyLoad } from '../../../helpers/loadState';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
+import { useTenantRead } from '../../../hooks/common/useTenantRead';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import { useTenantModels } from '../../../hooks/models/useTenantModels';
 import { useRoutableModels } from '../../../hooks/models/useRoutableModels';
@@ -183,35 +186,22 @@ const HFModels = () => {
   );
 
   // Prices (ratios → $/1M in catalog.js) and the caller's group multiplier.
-  const [pricing, setPricing] = useState({ rows: [], groupRatio: {} });
+  const { data: pricing } = useTenantRead(
+    tenantSlug && `/api/v2/${tenantSlug}/pricing`,
+    {
+      parse: (d) => ({
+        rows: d?.pricing || [],
+        groupRatio: d?.group_ratio || {},
+      }),
+    },
+  );
   // Tokens/requests per model over 7 days. The rankings endpoint is
-  // tenant-admin gated server-side; for anyone else this stays empty and the
+  // tenant-admin gated server-side; for anyone else this stays null and the
   // cards read 0 rather than inventing a number.
-  const [usage, setUsage] = useState([]);
-  useEffect(() => {
-    if (!tenantSlug) return undefined;
-    let cancelled = false;
-    API.get(`/api/v2/${tenantSlug}/pricing`, { skipErrorHandler: true })
-      .then((res) => {
-        if (cancelled || !res?.data?.success) return;
-        setPricing({
-          rows: res.data.data?.pricing || [],
-          groupRatio: res.data.data?.group_ratio || {},
-        });
-      })
-      .catch(() => {});
-    API.get(`/api/v2/${tenantSlug}/analytics/rankings?by=model&hours=168`, {
-      skipErrorHandler: true,
-    })
-      .then((res) => {
-        if (!cancelled && res?.data?.success)
-          setUsage(res.data.data?.rows || []);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [tenantSlug]);
+  const { data: usage } = useTenantRead(
+    tenantSlug && `/api/v2/${tenantSlug}/analytics/rankings?by=model&hours=168`,
+    { parse: (d) => d?.rows || [] },
+  );
 
   // p50/p95 latency and error rate over 24h, this tenant only.
   const performance = useModelPerformance(tenantSlug);
@@ -229,29 +219,20 @@ const HFModels = () => {
     () =>
       buildCatalog({
         routable,
-        pricing: pricing.rows,
+        pricing: pricing?.rows ?? [],
         catalogue: models,
-        usage,
+        usage: usage ?? [],
         performance,
-        groupRatio: pricing.groupRatio[userGroup] ?? 1,
+        groupRatio: pricing?.groupRatio?.[userGroup] ?? 1,
       }),
     [routable, pricing, models, usage, performance, userGroup],
   );
   const callable = entries.filter((e) => e.routable).length;
 
-  // Surface load failures as one toast per failed fetch, message from the
-  // response body when the backend sent one. Before the shared hook the page
-  // toasted only on a rejected request; a 200 body with success:false left
-  // the list empty and silent.
-  useEffect(() => {
-    if (!modelsError) return;
-    const msg =
-      modelsError?.response?.data?.message ??
-      modelsError?.message ??
-      (typeof modelsError === 'string' ? modelsError : null) ??
-      tr('console.models.load_failed', 'Failed to load models');
-    showError(msg);
-  }, [modelsError, tr]);
+  // A failed catalogue read replaces the marketplace with HfLoadError below.
+  // It used to be a toast: once that faded the page still read "0 models ·
+  // No models yet", a claim about a catalogue that was never read.
+  const modelsLoadStatus = modelsError ? classifyLoad(modelsError) : null;
 
   // Add-model modal state.
   const [addOpen, setAddOpen] = useState(false);
@@ -415,29 +396,39 @@ const HFModels = () => {
           </div>
         </div>
 
-        <Marketplace
-          entries={entries}
-          loading={loading || routableLoading}
-          tr={tr}
-          base={getServerAddress()}
-          onTry={(id) =>
-            navigate(
-              `/console/v2/playground?prefill_model=${encodeURIComponent(id)}`,
-            )
-          }
-          onKeys={() => navigate('/console/v2/token')}
-          onCopy={(text) => {
-            navigator.clipboard?.writeText(text).then(
-              () => showSuccess(tr('console.common.copied', 'copied')),
-              () => {},
-            );
-          }}
-          availabilityFor={
-            rootUser && allowlist
-              ? (id) => <Availability allowlist={allowlist} id={id} tr={tr} />
-              : undefined
-          }
-        />
+        {modelsLoadStatus ? (
+          <HfLoadError
+            status={modelsLoadStatus}
+            title={tr('console.models.load_failed', 'Failed to load models')}
+            onRetry={refetchModels}
+            testId='models-load-error'
+            retryTestId='models-retry'
+          />
+        ) : (
+          <Marketplace
+            entries={entries}
+            loading={loading || routableLoading}
+            tr={tr}
+            base={getServerAddress()}
+            onTry={(id) =>
+              navigate(
+                `/console/v2/playground?prefill_model=${encodeURIComponent(id)}`,
+              )
+            }
+            onKeys={() => navigate('/console/v2/token')}
+            onCopy={(text) => {
+              navigator.clipboard?.writeText(text).then(
+                () => showSuccess(tr('console.common.copied', 'copied')),
+                () => {},
+              );
+            }}
+            availabilityFor={
+              rootUser && allowlist
+                ? (id) => <Availability allowlist={allowlist} id={id} tr={tr} />
+                : undefined
+            }
+          />
+        )}
       </HFShell>
 
       {/* ── Add Model dialog ─────────────────────────────────────────────── */}

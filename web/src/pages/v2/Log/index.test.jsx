@@ -1362,3 +1362,38 @@ describe('Log page — default time window', () => {
     });
   });
 });
+
+describe('Log page — row time is the local wall clock, whole seconds', () => {
+  // created_at is whole seconds; a millisecond field would always read .000,
+  // so the row uses formatClockTime without the fraction. TZ=Asia/Shanghai is
+  // pinned in vitest.config.js, so 1750000000 is 23:06:40 local.
+  it('renders created_at 1750000000 as 23:06:40', async () => {
+    API.get.mockImplementation((url) => {
+      if (/\/logs\/stat/.test(url)) {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      return Promise.resolve({
+        data: {
+          success: true,
+          data: {
+            logs: [
+              {
+                id: 7,
+                type: 2,
+                model_name: 'clock-model',
+                created_at: 1750000000,
+              },
+            ],
+            total: 1,
+          },
+        },
+      });
+    });
+
+    render(<HFLog />);
+
+    await screen.findAllByText('clock-model');
+    // Exact match: the detail panel renders it inside "request · 23:06:40".
+    expect(screen.getByText('23:06:40')).toBeTruthy();
+  });
+});

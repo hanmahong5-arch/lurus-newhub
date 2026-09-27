@@ -25,7 +25,11 @@ import RouteAttempts from './RouteAttempts';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
 import { API, showError, showSuccess, isAdmin } from '../../../helpers';
-import { formatCNY4, formatUSD } from '../../../helpers/formatting';
+import {
+  formatCNY4,
+  formatClockTime,
+  formatUSD,
+} from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
 /* Wave 2: Cluster tab wired. Round 2: Live tail wired via cursor-poll. */
@@ -105,17 +109,6 @@ const TtftCell = ({ row }) => {
       )}
     />
   );
-};
-
-// created_at is whole seconds; a millisecond field would always read .000.
-const fmtTime = (unixSec) => {
-  if (!unixSec) return '—';
-  const d = new Date(unixSec * 1000);
-  return d.toLocaleTimeString('en-GB', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
 };
 
 const fmtTok = (prompt, completion) => {
@@ -957,7 +950,7 @@ const HFLog = () => {
                           }}
                         >
                           <td className='mono muted'>
-                            {fmtTime(r.created_at)}
+                            {formatClockTime(r.created_at, { ms: false })}
                           </td>
                           <td>
                             {(() => {
@@ -1039,7 +1032,7 @@ const HFLog = () => {
                   >
                     <div className='lbl' style={{ marginBottom: 4 }}>
                       {tr('console.log.detail_request', 'request')} ·{' '}
-                      {fmtTime(selectedLog.created_at)}
+                      {formatClockTime(selectedLog.created_at, { ms: false })}
                     </div>
                     <div className='display' style={{ fontSize: 19 }}>
                       {selectedLog.model_name || '—'}
@@ -1563,7 +1556,7 @@ const HFLog = () => {
                       return (
                         <tr key={r.id ?? i}>
                           <td className='mono muted'>
-                            {fmtTime(r.created_at)}
+                            {formatClockTime(r.created_at, { ms: false })}
                           </td>
                           <td className='mono'>
                             {r.total_latency_ms ?? '—'}

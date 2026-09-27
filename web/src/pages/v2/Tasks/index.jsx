@@ -16,11 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
-import { API, showError } from '../../../helpers';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 import { formatUSD } from '../../../helpers/formatting';
+import { isLoadFailed } from '../../../helpers/loadState';
+import { useTenantRead } from '../../../hooks/common/useTenantRead';
 
 /*
  * v2 Tasks page — the destination behind the nav item that today ships
@@ -140,87 +142,84 @@ const cellStyle = { padding: '7px 10px', fontSize: 12 };
 
 // ─── Tasks tab ──────────────────────────────────────────────────────────────
 
-const TasksTab = ({ tr }) => {
-  const [items, setItems] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
+const EMPTY_TASK_QUERY = {
+  page: 1,
+  taskId: '',
+  projectId: '',
+  requestId: '',
+  start: '',
+  end: '',
+};
 
+// project_id/request_id (cycle-8 L10, GetUserTask handler.go:381) were
+// added on top of task_id/date-range; both are exact-match server-side
+// (repo.TaskGetAllUserTask, task.go:118-152) and both are sent as plain
+// query values, matching the legacy /api/task/self hook
+// (web/src/hooks/task-logs/useTaskLogsData.js). The endpoint additionally
+// accepts platform/status/action (task.go:396-405, repo/task.go:126-137),
+// which this page does not surface — neither does the legacy UI
+// (TaskLogsFilters.jsx exposes only dateRange/task_id/project_id/
+// request_id/channel_id).
+const taskPath = (f) => {
+  const params = new URLSearchParams({
+    p: String(f.page),
+    page_size: String(PAGE_SIZE),
+  });
+  if (f.taskId) params.set('task_id', f.taskId);
+  if (f.projectId) params.set('project_id', f.projectId);
+  if (f.requestId) params.set('request_id', f.requestId);
+  if (f.start)
+    params.set(
+      'start_timestamp',
+      String(Math.floor(new Date(f.start).getTime() / 1000)),
+    );
+  if (f.end)
+    params.set(
+      'end_timestamp',
+      String(Math.floor(new Date(f.end).getTime() / 1000)),
+    );
+  return `/api/task/self/?${params.toString()}`;
+};
+
+const TasksTab = ({ tr }) => {
   const [taskId, setTaskId] = useState('');
   const [projectId, setProjectId] = useState('');
   const [requestId, setRequestId] = useState('');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
+  // The page and filters the server was last asked with; the inputs above
+  // are drafts until search/Enter.
+  const [query, setQuery] = useState(EMPTY_TASK_QUERY);
 
+  const path = useMemo(() => taskPath(query), [query]);
+  const { data, status: loadStatus, loading, retry } = useTenantRead(path);
+  // A failed read leaves the list empty AND `loadFailed` set, so "No tasks
+  // found." and the "0–0 of 0" range below are never stated from it.
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const page = data?.page ?? query.page;
+  const loadFailed = isLoadFailed(loadStatus);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  // project_id/request_id (cycle-8 L10, GetUserTask handler.go:381) were
-  // added on top of task_id/date-range; both are exact-match server-side
-  // (repo.TaskGetAllUserTask, task.go:118-152) and both are sent as plain
-  // query values, matching the legacy /api/task/self hook
-  // (web/src/hooks/task-logs/useTaskLogsData.js). The endpoint additionally
-  // accepts platform/status/action (task.go:396-405, repo/task.go:126-137),
-  // which this page does not surface — neither does the legacy UI
-  // (TaskLogsFilters.jsx exposes only dateRange/task_id/project_id/
-  // request_id/channel_id).
-  const fetch = useCallback(
-    async (targetPage, f) => {
-      setLoading(true);
-      try {
-        const params = new URLSearchParams({
-          p: String(targetPage),
-          page_size: String(PAGE_SIZE),
-        });
-        if (f.taskId) params.set('task_id', f.taskId);
-        if (f.projectId) params.set('project_id', f.projectId);
-        if (f.requestId) params.set('request_id', f.requestId);
-        if (f.start)
-          params.set(
-            'start_timestamp',
-            String(Math.floor(new Date(f.start).getTime() / 1000)),
-          );
-        if (f.end)
-          params.set(
-            'end_timestamp',
-            String(Math.floor(new Date(f.end).getTime() / 1000)),
-          );
-        const res = await API.get(`/api/task/self/?${params.toString()}`);
-        if (res?.data?.success) {
-          const d = res.data.data;
-          setItems(d.items ?? []);
-          setTotal(d.total ?? 0);
-          setPage(d.page ?? targetPage);
-        } else {
-          showError(
-            res?.data?.message ||
-              tr('console.tasks.load_failed', 'Failed to load tasks'),
-          );
-        }
-      } catch (_) {
-        // error toast handled by API interceptor
-      } finally {
-        setLoading(false);
-      }
-    },
-    [tr],
-  );
-
-  React.useEffect(() => {
-    fetch(1, { taskId: '', projectId: '', requestId: '', start: '', end: '' });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const search = () => fetch(1, { taskId, projectId, requestId, start, end });
+  // Same path → re-read in place: the hook is keyed on the path, and an
+  // operator polling an async task presses search again with the same
+  // filters expecting a fresh answer, not a no-op.
+  const apply = (next) => {
+    if (taskPath(next) === path) return retry();
+    setQuery(next);
+    return Promise.resolve();
+  };
+  const search = () =>
+    apply({ page: 1, taskId, projectId, requestId, start, end });
   const clear = () => {
     setTaskId('');
     setProjectId('');
     setRequestId('');
     setStart('');
     setEnd('');
-    fetch(1, { taskId: '', projectId: '', requestId: '', start: '', end: '' });
+    apply(EMPTY_TASK_QUERY);
   };
-  const goPage = (next) =>
-    fetch(next, { taskId, projectId, requestId, start, end });
+  const goPage = (next) => setQuery((q) => ({ ...q, page: next }));
 
   return (
     <>
@@ -305,7 +304,18 @@ const TasksTab = ({ tr }) => {
         </div>
       )}
 
-      {!loading && items.length === 0 && (
+      {!loading && loadFailed && (
+        <HfLoadError
+          status={loadStatus}
+          title={tr('console.tasks.load_failed', 'Failed to load tasks')}
+          onRetry={retry}
+          variant='inset'
+          testId='tasks-load-error'
+          retryTestId='tasks-retry'
+        />
+      )}
+
+      {!loading && !loadFailed && items.length === 0 && (
         <div
           className='muted'
           style={{ padding: '30px 28px', fontSize: 12 }}
@@ -423,15 +433,17 @@ const TasksTab = ({ tr }) => {
           {tr('console.common.prev', '← prev')}
         </button>
         <span className='mono muted' data-testid='tasks-range-label'>
-          {tr(
-            'console.tasks.range_of_total',
-            '{{start}}–{{end}} of {{total}}',
-            {
-              start: total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1,
-              end: Math.min(page * PAGE_SIZE, total),
-              total,
-            },
-          )}
+          {loadFailed
+            ? '—'
+            : tr(
+                'console.tasks.range_of_total',
+                '{{start}}–{{end}} of {{total}}',
+                {
+                  start: total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1,
+                  end: Math.min(page * PAGE_SIZE, total),
+                  total,
+                },
+              )}
         </span>
         <button
           type='button'
@@ -449,72 +461,55 @@ const TasksTab = ({ tr }) => {
 
 // ─── MJ tab ─────────────────────────────────────────────────────────────────
 
-const MjTab = ({ tr }) => {
-  const [items, setItems] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
+const EMPTY_MJ_QUERY = { page: 1, mjId: '', start: '', end: '' };
 
+// No project_id/request_id here — entity.Midjourney carries neither column
+// (internal/domain/entity/midjourney.go:3-26); that cost-attribution pair
+// only exists on the Task table (cycle-8 L10). start_timestamp/
+// end_timestamp are sent in *milliseconds* to match Midjourney.SubmitTime's
+// storage unit (see fmtMjTime above) — the legacy /api/mj/self hook
+// (web/src/hooks/mj-logs/useMjLogsData.js) sends raw Date.parse() output
+// for the same reason, unlike the Task tab which divides by 1000.
+const mjPath = (f) => {
+  const params = new URLSearchParams({
+    p: String(f.page),
+    page_size: String(PAGE_SIZE),
+  });
+  if (f.mjId) params.set('mj_id', f.mjId);
+  if (f.start)
+    params.set('start_timestamp', String(new Date(f.start).getTime()));
+  if (f.end) params.set('end_timestamp', String(new Date(f.end).getTime()));
+  return `/api/mj/self/?${params.toString()}`;
+};
+
+const MjTab = ({ tr }) => {
   const [mjId, setMjId] = useState('');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
+  const [query, setQuery] = useState(EMPTY_MJ_QUERY);
 
+  const path = useMemo(() => mjPath(query), [query]);
+  const { data, status: loadStatus, loading, retry } = useTenantRead(path);
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const page = data?.page ?? query.page;
+  const loadFailed = isLoadFailed(loadStatus);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  // No project_id/request_id here — entity.Midjourney carries neither column
-  // (internal/domain/entity/midjourney.go:3-26); that cost-attribution pair
-  // only exists on the Task table (cycle-8 L10). start_timestamp/
-  // end_timestamp are sent in *milliseconds* to match Midjourney.SubmitTime's
-  // storage unit (see fmtMjTime above) — the legacy /api/mj/self hook
-  // (web/src/hooks/mj-logs/useMjLogsData.js) sends raw Date.parse() output
-  // for the same reason, unlike the Task tab which divides by 1000.
-  const fetch = useCallback(
-    async (targetPage, f) => {
-      setLoading(true);
-      try {
-        const params = new URLSearchParams({
-          p: String(targetPage),
-          page_size: String(PAGE_SIZE),
-        });
-        if (f.mjId) params.set('mj_id', f.mjId);
-        if (f.start)
-          params.set('start_timestamp', String(new Date(f.start).getTime()));
-        if (f.end)
-          params.set('end_timestamp', String(new Date(f.end).getTime()));
-        const res = await API.get(`/api/mj/self/?${params.toString()}`);
-        if (res?.data?.success) {
-          const d = res.data.data;
-          setItems(d.items ?? []);
-          setTotal(d.total ?? 0);
-          setPage(d.page ?? targetPage);
-        } else {
-          showError(
-            res?.data?.message ||
-              tr('console.tasks.load_failed', 'Failed to load tasks'),
-          );
-        }
-      } catch (_) {
-        // error toast handled by API interceptor
-      } finally {
-        setLoading(false);
-      }
-    },
-    [tr],
-  );
-
-  React.useEffect(() => {
-    fetch(1, { mjId: '', start: '', end: '' });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const search = () => fetch(1, { mjId, start, end });
+  // Same path → re-read in place (see TasksTab.apply).
+  const apply = (next) => {
+    if (mjPath(next) === path) return retry();
+    setQuery(next);
+    return Promise.resolve();
+  };
+  const search = () => apply({ page: 1, mjId, start, end });
   const clear = () => {
     setMjId('');
     setStart('');
     setEnd('');
-    fetch(1, { mjId: '', start: '', end: '' });
+    apply(EMPTY_MJ_QUERY);
   };
-  const goPage = (next) => fetch(next, { mjId, start, end });
+  const goPage = (next) => setQuery((q) => ({ ...q, page: next }));
 
   return (
     <>
@@ -583,7 +578,18 @@ const MjTab = ({ tr }) => {
         </div>
       )}
 
-      {!loading && items.length === 0 && (
+      {!loading && loadFailed && (
+        <HfLoadError
+          status={loadStatus}
+          title={tr('console.tasks.load_failed', 'Failed to load tasks')}
+          onRetry={retry}
+          variant='inset'
+          testId='mj-load-error'
+          retryTestId='mj-retry'
+        />
+      )}
+
+      {!loading && !loadFailed && items.length === 0 && (
         <div
           className='muted'
           style={{ padding: '30px 28px', fontSize: 12 }}
@@ -695,15 +701,17 @@ const MjTab = ({ tr }) => {
           {tr('console.common.prev', '← prev')}
         </button>
         <span className='mono muted' data-testid='mj-range-label'>
-          {tr(
-            'console.tasks.range_of_total',
-            '{{start}}–{{end}} of {{total}}',
-            {
-              start: total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1,
-              end: Math.min(page * PAGE_SIZE, total),
-              total,
-            },
-          )}
+          {loadFailed
+            ? '—'
+            : tr(
+                'console.tasks.range_of_total',
+                '{{start}}–{{end}} of {{total}}',
+                {
+                  start: total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1,
+                  end: Math.min(page * PAGE_SIZE, total),
+                  total,
+                },
+              )}
         </span>
         <button
           type='button'

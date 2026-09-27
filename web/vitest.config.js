@@ -66,11 +66,16 @@ export default defineConfig({
       // the floor with it in the same PR. Never lower them to make a red build
       // pass — the point of the floor is that losing coverage has to be a
       // decision somebody writes down.
+      // 2026-09-27 (cycle 18): measured 74.20 / 70.46 / 70.16 / 74.83 with
+      // `vitest run --coverage` under node on this tree; the previous floors
+      // (60 / 54 / 55 / 60, from a 63 / 58 / 59 / 64 measurement on
+      // 2026-08-20) had drifted 14 points below what the suite actually
+      // covered, so a whole page could have lost its tests unnoticed.
       thresholds: {
-        statements: 60,
-        branches: 54,
-        functions: 55,
-        lines: 60,
+        statements: 71,
+        branches: 67,
+        functions: 67,
+        lines: 71,
       },
     },
   },

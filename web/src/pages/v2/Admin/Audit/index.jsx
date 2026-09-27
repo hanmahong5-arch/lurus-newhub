@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import { API, showError, showSuccess } from '../../../../helpers';
 import { classifyLoad } from '../../../../helpers/loadState';
+import { formatTimeUTC } from '../../../../helpers/formatting';
 
 /*
  * v2 admin — audit trail. Wired to the four already-shipped root endpoints:
@@ -41,13 +42,6 @@ const PER_PAGE = 20;
 // Rows written before the chain was enabled (or through the fail-open path)
 // carry empty hashes. They are reported, never treated as tampering.
 const isLegacyRow = (e) => !e.row_hash;
-
-const fmtTime = (unixSeconds) => {
-  if (!unixSeconds) return '—';
-  const d = new Date(unixSeconds * 1000);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toISOString().replace('T', ' ').slice(0, 19);
-};
 
 const shortHash = (h) => (h ? `${h.slice(0, 10)}…` : '—');
 
@@ -525,7 +519,7 @@ const V2AdminAudit = () => {
                   {events.map((e) => (
                     <React.Fragment key={e.id}>
                       <tr data-testid={`audit-row-${e.id}`}>
-                        <td className='mono'>{fmtTime(e.timestamp)}</td>
+                        <td className='mono'>{formatTimeUTC(e.timestamp)}</td>
                         <td>
                           <span className='tag'>{e.actor_type || '—'}</span>
                           <span

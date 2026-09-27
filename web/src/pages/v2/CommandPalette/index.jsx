@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell, {
@@ -24,7 +24,10 @@ import HFShell, {
   navItemEnabledByFeatureFlags,
   useBridgedUser,
 } from '../../../components/hifi/HFShell';
-import { API, isAdmin } from '../../../helpers';
+import HfLoadError from '../../../components/hifi/HfLoadError';
+import { isAdmin } from '../../../helpers';
+import { isLoadFailed } from '../../../helpers/loadState';
+import { useTenantRead } from '../../../hooks/common/useTenantRead';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import { useTenantModels } from '../../../hooks/models/useTenantModels';
 
@@ -49,6 +52,9 @@ import { useTenantModels } from '../../../hooks/models/useTenantModels';
  */
 
 const MAX_PER_GROUP = 6;
+// Stable identity for a source that has not answered: a fresh [] per render
+// would rebuild the memoised groups on every render.
+const NONE = [];
 
 // The models group shows a price, which means joining two endpoints: /models
 // is the catalogue (name + vendor) and /pricing carries the ratio or per-call
@@ -83,59 +89,45 @@ const HFCmdK = () => {
   const bridgedUser = useBridgedUser();
 
   // Models come from the shared hook. skipErrorHandler:true here matches the
-  // rest of this page's requests (allSettled degrade-per-source below) — a
+  // rest of this page's requests (one useTenantRead per source below) — a
   // failed models fetch must not trigger a 401 self-heal/toast that would
   // fight the palette's own degrade-independently design.
   const { items: models, loading: modelsLoading } = useTenantModels(
     tenantSlug,
     { limit: 50, skipErrorHandler: true },
   );
-  const [pricing, setPricing] = useState([]);
-  const [tokens, setTokens] = useState([]);
-  const [recent, setRecent] = useState([]);
-  const [channels, setChannels] = useState([]);
-  const [otherLoading, setOtherLoading] = useState(true);
-  const loading = otherLoading || modelsLoading;
-
-  const fetchAll = useCallback(async () => {
-    if (!tenantSlug) return;
-    setOtherLoading(true);
-    // allSettled: one slow or forbidden source must not blank the whole
-    // palette. Each group degrades independently to "not loaded".
-    const requests = [
-      API.get(`/api/v2/${tenantSlug}/pricing`, { skipErrorHandler: true }),
-      API.get(`/api/v2/${tenantSlug}/tokens?p=1&size=${MAX_PER_GROUP}`, {
-        skipErrorHandler: true,
-      }),
-      API.get(`/api/v2/${tenantSlug}/logs?page=1&page_size=${MAX_PER_GROUP}`, {
-        skipErrorHandler: true,
-      }),
-    ];
-    if (admin) {
-      requests.push(
-        API.get(`/api/v2/${tenantSlug}/channels?p=1&size=${MAX_PER_GROUP}`, {
-          skipErrorHandler: true,
-        }),
-      );
-    }
-    const [pRes, tRes, lRes, cRes] = await Promise.allSettled(requests);
-
-    const payload = (res) =>
-      res?.status === 'fulfilled' && res.value?.data?.success
-        ? res.value.data.data
-        : null;
-
-    const pricingData = payload(pRes);
-    setPricing(Array.isArray(pricingData?.pricing) ? pricingData.pricing : []);
-    setTokens(payload(tRes)?.items ?? []);
-    setRecent(payload(lRes)?.logs ?? []);
-    setChannels(admin ? (payload(cRes)?.items ?? []) : []);
-    setOtherLoading(false);
-  }, [tenantSlug, admin]);
-
-  useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+  // One read per source so a slow or forbidden one never blanks the whole
+  // palette. A source that failed is not "empty": its group is dropped like
+  // an empty one (an empty heading would claim "you have none"), and the
+  // result list says so in one inset row with a retry for every failed
+  // source — before that row existed a failed tokens read produced a result
+  // count identical to a tenant with nothing to find.
+  const base = tenantSlug ? `/api/v2/${tenantSlug}` : '';
+  const pricingRead = useTenantRead(base && `${base}/pricing`, {
+    parse: (d) => (Array.isArray(d?.pricing) ? d.pricing : []),
+  });
+  const tokensRead = useTenantRead(
+    base && `${base}/tokens?p=1&size=${MAX_PER_GROUP}`,
+    { parse: (d) => d?.items ?? [] },
+  );
+  const recentRead = useTenantRead(
+    base && `${base}/logs?page=1&page_size=${MAX_PER_GROUP}`,
+    { parse: (d) => d?.logs ?? [] },
+  );
+  // /channels is behind AdminAuth: a non-admin never asks (no group at all
+  // rather than an empty or failed one).
+  const channelsRead = useTenantRead(
+    base && `${base}/channels?p=1&size=${MAX_PER_GROUP}`,
+    { enabled: admin, parse: (d) => d?.items ?? [] },
+  );
+  const pricing = pricingRead.data ?? NONE;
+  const tokens = tokensRead.data ?? NONE;
+  const recent = recentRead.data ?? NONE;
+  const channels = channelsRead.data ?? NONE;
+  const reads = [pricingRead, tokensRead, recentRead, channelsRead];
+  const loading = modelsLoading || reads.some((r) => r.loading);
+  const failedReads = reads.filter((r) => isLoadFailed(r.status));
+  const retryFailed = () => Promise.all(failedReads.map((r) => r.retry()));
 
   const priceByModel = useMemo(() => {
     const map = new Map();
@@ -403,6 +395,19 @@ const HFCmdK = () => {
                   <div className='muted' style={{ padding: '12px 16px' }}>
                     {tr('console.common.loading', 'loading…')}
                   </div>
+                )}
+                {!loading && failedReads.length > 0 && (
+                  <HfLoadError
+                    status={failedReads[0].status}
+                    title={tr(
+                      'console.palette.load_error',
+                      'Some results couldn’t be loaded',
+                    )}
+                    onRetry={retryFailed}
+                    variant='inset'
+                    testId='palette-load-error'
+                    retryTestId='palette-retry'
+                  />
                 )}
                 {!loading && resultCount === 0 && (
                   <div

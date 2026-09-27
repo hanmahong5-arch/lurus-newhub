@@ -217,6 +217,7 @@
         "load_failed_short": "无法加载"
       },
       "token": {
+        "load_error": "令牌列表加载失败",
         "crumb": "令牌",
         "your_tokens": "你的令牌",
         "count_one": "{{count}} 个令牌",
@@ -378,6 +379,7 @@
         "load_error": "租户列表加载失败"
       },
       "channel": {
+        "load_error": "渠道列表加载失败",
         "crumb": "渠道",
         "count_one": "{{count}} 个上游渠道",
         "count_other": "{{count}} 个上游渠道",
@@ -935,6 +937,7 @@
         "tier_add": "+ 添加分级"
       },
       "redemption": {
+        "load_error": "兑换码列表加载失败",
         "crumb_section": "管理",
         "crumb": "兑换码",
         "new_btn": "+ 新建兑换码",
@@ -1542,6 +1545,7 @@
         "unnamed": "未识别模型（请求在路由前被拒）"
       },
       "palette": {
+        "load_error": "部分结果加载失败",
         "group_navigate": "导航",
         "group_channels": "渠道",
         "group_models": "模型",

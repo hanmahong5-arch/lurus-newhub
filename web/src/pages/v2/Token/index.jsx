@@ -16,16 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfLoadError from '../../../components/hifi/HfLoadError';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
 import {
   API,
@@ -33,6 +28,8 @@ import {
   showError,
   showSuccess,
 } from '../../../helpers';
+import { isLoadFailed } from '../../../helpers/loadState';
+import { useTenantRead } from '../../../hooks/common/useTenantRead';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
   useRoutableModels,
@@ -86,27 +83,14 @@ const quotaBarColor = (remainingRatio) => {
 // Cost-attribution projects (migration 029). Readable by every user in the
 // tenant — a project is a label, not a permission — so the picker works for
 // ordinary members, not just tenant admins.
+// A tenant with no projects (or a transient failure) simply shows the
+// "unassigned" option; token creation must never be blocked by it.
 const useProjects = (tenantSlug) => {
-  const [projects, setProjects] = useState([]);
-  useEffect(() => {
-    if (!tenantSlug) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await API.get(`/api/v2/${tenantSlug}/projects`);
-        if (!cancelled && res?.data?.success) {
-          setProjects(res.data.data?.items ?? []);
-        }
-      } catch (_) {
-        // A tenant with no projects (or a transient failure) simply shows the
-        // "unassigned" option; token creation must never be blocked by it.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [tenantSlug]);
-  return projects;
+  const { data } = useTenantRead(
+    tenantSlug && `/api/v2/${tenantSlug}/projects`,
+    { parse: (d) => d?.items ?? [] },
+  );
+  return data ?? [];
 };
 
 const projectSelectStyle = {
@@ -533,9 +517,25 @@ const HFToken = () => {
   // several .map/.filter callbacks — `t` would otherwise shadow the translator.
   const { t: tr } = useTranslation();
 
-  const [tokens, setTokens] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // The list read. A failed read leaves `tokens` empty AND `loadFailed` set,
+  // so the count, the spend summary and "No tokens yet. Create one to get
+  // started." below are only ever stated from a read that answered.
+  const {
+    data: tokenList,
+    status: loadStatus,
+    loading,
+    retry: fetchTokens,
+  } = useTenantRead(tenantSlug && `/api/v2/${tenantSlug}/tokens?p=1&size=100`, {
+    parse: (d) => d.items ?? [],
+  });
+  const tokens = tokenList ?? [];
+  const loadFailed = isLoadFailed(loadStatus);
   const [sel, setSel] = useState(0);
+  // Every (re)read lands the selection back on the first row, as the
+  // inline fetch did before the hook.
+  useEffect(() => {
+    setSel(0);
+  }, [tokenList]);
   const [lang, setLang] = useState('curl');
   const [revealed, setRevealed] = useState(new Set());
   const [rotatedKeys, setRotatedKeys] = useState({}); // id → new sk-xxx key
@@ -550,24 +550,6 @@ const HFToken = () => {
   // from the master-detail index `sel` so the two never collide).
   const [marked, setMarked] = useState(new Set());
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
-
-  const fetchTokens = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await API.get(`/api/v2/${tenantSlug}/tokens?p=1&size=100`);
-      if (res?.data?.success) {
-        setTokens(res.data.data.items ?? []);
-        setSel(0);
-      }
-    } catch (_) {
-    } finally {
-      setLoading(false);
-    }
-  }, [tenantSlug]);
-
-  useEffect(() => {
-    if (tenantSlug) fetchTokens();
-  }, [fetchTokens, tenantSlug]);
 
   const token = tokens[sel];
 
@@ -906,7 +888,7 @@ const HFToken = () => {
             <span className='muted mono' style={{ fontSize: 11 }}>
               {tr('console.common.loading', 'loading…')}
             </span>
-          ) : (
+          ) : loadFailed ? null : (
             <span className='muted mono' style={{ fontSize: 11 }}>
               {tr('console.token.summary', {
                 active: activeCount,
@@ -951,7 +933,7 @@ const HFToken = () => {
               {tr('console.token.your_tokens', 'your tokens')}
             </div>
             <div className='display' style={{ fontSize: 26 }}>
-              {loading
+              {loading || loadFailed
                 ? '…'
                 : tr('console.token.count', {
                     count: tokens.length,
@@ -1034,7 +1016,18 @@ const HFToken = () => {
             </div>
           )}
 
-          {!loading && tokens.length === 0 && (
+          {!loading && loadFailed && (
+            <HfLoadError
+              status={loadStatus}
+              title={tr('console.token.load_error', 'Couldn’t load tokens')}
+              onRetry={fetchTokens}
+              variant='inset'
+              testId='token-load-error'
+              retryTestId='token-retry'
+            />
+          )}
+
+          {!loading && !loadFailed && tokens.length === 0 && (
             <div
               className='muted'
               style={{ padding: '20px 22px', fontSize: 12 }}
@@ -1163,7 +1156,7 @@ const HFToken = () => {
 
         {/* ── Right: token detail ── */}
         <div style={{ overflow: 'auto', padding: 28 }}>
-          {!token && !loading && (
+          {!token && !loading && !loadFailed && (
             <div className='muted' style={{ fontSize: 13 }}>
               {tr(
                 'console.token.detail_empty',

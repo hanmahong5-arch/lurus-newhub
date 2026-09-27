@@ -404,6 +404,48 @@ describe('CommandPalette — real data', () => {
   // Lock for `const loading = otherLoading || modelsLoading` — the palette
   // must still report "loading…" while only the models request (routed
   // through the shared hook) is still in flight.
+  // cycle-18 L1: a source that failed used to be indistinguishable from a
+  // source that was empty — the group was dropped and the result count read
+  // the same as a tenant with nothing to find.
+  it('says so in an inset row when one source fails, and retry re-reads only that source', async () => {
+    let tokensFail = true;
+    API.get.mockImplementation((url) => {
+      const ok = (data) => Promise.resolve({ data: { success: true, data } });
+      if (url.includes('/models')) return ok({ items: [] });
+      if (url.includes('/pricing')) return ok({ pricing: [] });
+      if (url.includes('/tokens'))
+        return tokensFail
+          ? Promise.reject({ response: { status: 500, data: {} } })
+          : ok({ items: [{ id: 1, name: 'after-retry', key: 'sk-1' }] });
+      if (url.includes('/logs')) return ok({ logs: [] });
+      return ok({});
+    });
+
+    render(<HFCmdK />);
+
+    const row = await waitFor(() => screen.getByTestId('palette-load-error'));
+    expect(row.textContent).toContain('Some results couldn’t be loaded');
+    expect(screen.queryByTestId('palette-row-tokens')).toBeNull();
+
+    tokensFail = false;
+    const before = API.get.mock.calls.length;
+    fireEvent.click(screen.getByTestId('palette-retry'));
+    await waitFor(() => expect(screen.getByText('after-retry')).toBeTruthy());
+    expect(screen.queryByTestId('palette-load-error')).toBeNull();
+    const retried = API.get.mock.calls.slice(before).map(([u]) => u);
+    expect(retried).toHaveLength(1);
+    expect(retried[0]).toContain('/tokens');
+  });
+
+  it('shows no failure row when every source answered', async () => {
+    wireGet();
+    render(<HFCmdK />);
+    await waitFor(() =>
+      expect(screen.getAllByText('deepseek-chat').length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByTestId('palette-load-error')).toBeNull();
+  });
+
   it('reports loading while only the models request is still in flight', async () => {
     let resolveModels;
     API.get.mockImplementation((url) => {

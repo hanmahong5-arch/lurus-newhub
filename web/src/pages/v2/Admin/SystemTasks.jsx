@@ -20,6 +20,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import { API } from '../../../helpers';
+import { formatTime } from '../../../helpers/formatting';
 
 /*
  * v2 admin — background-task heartbeats (L3, 2026-09-13). Wired to
@@ -67,11 +68,6 @@ const fmtInterval = (secs) => {
   if (n % 3600 === 0) return `${n / 3600}h`;
   if (n % 60 === 0) return `${n / 60}m`;
   return `${n}s`;
-};
-
-const fmtWhen = (unix) => {
-  if (!unix) return null;
-  return new Date(unix * 1000).toLocaleString();
 };
 
 const V2AdminSystemTasks = () => {
@@ -358,8 +354,7 @@ const V2AdminSystemTasks = () => {
                           : tr('console.admin.system_tasks.no', 'no')}
                       </td>
                       <td className='mono muted'>
-                        {fmtWhen(task.last_success_at) ??
-                          tr('console.admin.system_tasks.never', 'never')}
+                        {formatTime(task.last_success_at)}
                       </td>
                       <td>
                         <span

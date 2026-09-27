@@ -381,35 +381,11 @@ const HARNESS_LIMITS = {};
 // the zero as a finding, which is the defect. So "in class" here means the
 // RENDERED PAGE is indistinguishable, not that the failure was invisible.
 //
-// None of these files are in cycle-14 L8's ownership. They are carried in
-// the lane's hand-off notes with the exact call sites.
-const KNOWN_UNFIXED = {
-  tasks:
-    'Tasks/index.jsx — a 500 renders "No tasks found." over "0–0 of 0", the ' +
-    'same page an account with no async jobs sees.',
-  channel:
-    'Channel/index.jsx — a 500 renders "0 upstream channels", "healthy 0 / ' +
-    'disabled 0 / error 0" and "No channels yet. Add one to get started.": a ' +
-    'fleet-health claim made from a read that never answered.',
-  token:
-    'Token/index.jsx — a 500 renders "No tokens yet. Create one to get ' +
-    'started.", which invites a customer to create a second token they may ' +
-    'already have.',
-  cmdk:
-    'CommandPalette/index.jsx — the palette lists its static nav entries and ' +
-    'silently drops the model/token results whose read failed, so the result ' +
-    'count is identical to a tenant with nothing to find.',
-  models:
-    'Models/index.jsx — a 500 renders "catalog 0 models" and "no models yet", ' +
-    'i.e. "this tenant can route nothing", from an unread catalog.',
-  pricing:
-    'Pricing/index.jsx — a 500 renders the price table as "no data"; prices ' +
-    'are the numbers a customer is billed on.',
-  redemption:
-    'Redemption/index.jsx — a 500 renders "No redemption codes yet. Click ' +
-    '\\"+ new code\\" to generate.", which invites re-issuing codes that may ' +
-    'already exist.',
-};
+// EMPTY as of cycle-18 L1: the seven pages measured in here (tasks, channel,
+// token, cmdk, models, pricing, redemption) now read through
+// hooks/common/useTenantRead.js and render HfLoadError on a failed read, so
+// the main rule holds all of them.
+const KNOWN_UNFIXED = {};
 
 const rel = (p) => path.relative(process.cwd(), p).replace(/\\/g, '/');
 const PAGES_DIR = path.resolve(process.cwd(), 'src/pages/v2');
