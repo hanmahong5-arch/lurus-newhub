@@ -67,9 +67,10 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 //     for the request lifetime once 200+headers arrive, so an in-flight stream is
 //     never cut by it. This is the real "hung upstream" guard.
 //   - A net.Dialer connect timeout is installed ONLY when the transport has no
-//     DialContext yet: the socks5 site sets its own dialer and must not be
-//     clobbered (doing so would break socks5 proxying). socks5 still gets the
-//     ResponseHeaderTimeout guard.
+//     DialContext yet: the socks5 sites set their own dialer and must not be
+//     clobbered (doing so would break socks5 proxying). That dialer carries
+//     RelayDialTimeout itself — see newSocksDialContext — so socks5 gets both
+//     guards.
 //
 // http.Client.Timeout (RelayTimeout) is deliberately left untouched — a TOTAL
 // timeout would cut long legitimate streams (the RELAY_TIMEOUT=0 footgun).
@@ -78,6 +79,43 @@ func applyRelayTransportTimeouts(t *http.Transport) {
 	if t.DialContext == nil {
 		t.DialContext = (&net.Dialer{Timeout: common.RelayDialTimeout}).DialContext
 	}
+}
+
+// newSocksDialContext builds the DialContext for a per-channel socks5/socks5h
+// proxy, shared by NewProxyHttpClient and newForceHTTP1Transport so the two
+// cannot drift. proxy.SOCKS5 is given "tcp", so DNS for the target resolves
+// on the proxy side (socks5 and socks5h behave identically).
+//
+// Two bounds are deliberate, and both are needed. The forward net.Dialer's
+// Timeout caps the TCP connect to the proxy itself. The WithTimeout wrapper
+// caps the SOCKS greeting/auth/CONNECT exchange that follows: a proxy that
+// accepts the socket and then never answers would otherwise pin the relay
+// goroutine forever, because RELAY_TIMEOUT=0 (the production default) leaves
+// the request ctx without a deadline and Client.Timeout unset. Dialing through
+// proxy.ContextDialer rather than Dial is what lets either bound — or the
+// caller's own cancellation — actually abort the handshake; the Dial fallback
+// only exists so the type assertion is not a silent no-op if x/net ever
+// changes the concrete dialer.
+func newSocksDialContext(proxyURL *url.URL) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+	var auth *proxy.Auth
+	if proxyURL.User != nil {
+		auth = &proxy.Auth{User: proxyURL.User.Username()}
+		if password, ok := proxyURL.User.Password(); ok {
+			auth.Password = password
+		}
+	}
+	dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, auth, &net.Dialer{Timeout: common.RelayDialTimeout})
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dctx, cancel := context.WithTimeout(ctx, common.RelayDialTimeout)
+		defer cancel()
+		if cd, ok := dialer.(proxy.ContextDialer); ok {
+			return cd.DialContext(dctx, network, addr)
+		}
+		return dialer.Dial(network, addr)
+	}, nil
 }
 
 // defaultNonStreamReadTimeout bounds a NON-streaming response body read when
@@ -259,32 +297,15 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 		return client, nil
 
 	case "socks5", "socks5h":
-		// 获取认证信息
-		var auth *proxy.Auth
-		if parsedURL.User != nil {
-			auth = &proxy.Auth{
-				User:     parsedURL.User.Username(),
-				Password: "",
-			}
-			if password, ok := parsedURL.User.Password(); ok {
-				auth.Password = password
-			}
-		}
-
-		// 创建 SOCKS5 代理拨号器
-		// proxy.SOCKS5 使用 tcp 参数，所有 TCP 连接包括 DNS 查询都将通过代理进行。行为与 socks5h 相同
-		dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, auth, proxy.Direct)
+		dialContext, err := newSocksDialContext(parsedURL)
 		if err != nil {
 			return nil, err
 		}
-
 		tr := &http.Transport{
 			MaxIdleConns:        common.RelayMaxIdleConns,
 			MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
 			ForceAttemptHTTP2:   true,
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.Dial(network, addr)
-			},
+			DialContext:         dialContext,
 		}
 		// Preserves the socks5 DialContext above (helper only sets it when nil);
 		// adds the ResponseHeaderTimeout hung-upstream guard.
@@ -414,19 +435,9 @@ func newForceHTTP1Transport(proxyURL string) (*http.Transport, error) {
 	case "http", "https":
 		tr.Proxy = http.ProxyURL(parsedURL)
 	case "socks5", "socks5h":
-		var auth *proxy.Auth
-		if parsedURL.User != nil {
-			auth = &proxy.Auth{User: parsedURL.User.Username()}
-			if password, ok := parsedURL.User.Password(); ok {
-				auth.Password = password
-			}
-		}
-		dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, auth, proxy.Direct)
+		tr.DialContext, err = newSocksDialContext(parsedURL)
 		if err != nil {
 			return nil, err
-		}
-		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialer.Dial(network, addr)
 		}
 	default:
 		return nil, fmt.Errorf("unsupported proxy scheme: %s, must be http, https, socks5 or socks5h", parsedURL.Scheme)

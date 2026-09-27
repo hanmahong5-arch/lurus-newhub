@@ -288,9 +288,33 @@ func filterChannelsForTenant(ids []int, tenantID string) []int {
 // foreign-tenant channel can never win the weighted draw even if it would
 // otherwise have the highest priority or the largest weight in the group.
 func GetRandomSatisfiedChannelForTenant(tenantID string, group string, model string, retry int) (*Channel, error) {
+	return GetRandomSatisfiedChannelWhere(tenantID, group, model, retry, nil)
+}
+
+// ChannelPredicate narrows channel selection to channels it accepts. Selection
+// only ever calls it on channels already eligible for (tenant, group, model).
+type ChannelPredicate func(*Channel) bool
+
+// ErrNoChannelSatisfiesPredicate is returned when (tenant, group, model) HAD
+// candidates but the predicate rejected every one of them. It is deliberately
+// not the (nil, nil) of "no candidates at all": the distributor turns that
+// into a never-configured probe and a 404, which would tell an EU-only caller
+// that the model does not exist rather than that no channel is in their
+// region. app.CacheGetRandomSatisfiedChannel wraps it with the filter text.
+var ErrNoChannelSatisfiesPredicate = errors.New("no channel satisfies provider filter")
+
+// GetRandomSatisfiedChannelWhere is GetRandomSatisfiedChannelForTenant with an
+// optional predicate (L8: request-side region / zero-data-retention filter).
+// The predicate is applied after the tenant filter and BEFORE priority/weight
+// bucketing, so a rejected channel can never win the draw; nil is the
+// unfiltered contract every existing caller keeps.
+func GetRandomSatisfiedChannelWhere(tenantID string, group string, model string, retry int, pred ChannelPredicate) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannelForTenant(group, model, retry, tenantID)
+		if pred == nil {
+			return GetChannelForTenant(group, model, retry, tenantID)
+		}
+		return getChannelForTenantWhere(group, model, retry, tenantID, pred)
 	}
 
 	channelSyncLock.RLock()
@@ -309,6 +333,12 @@ func GetRandomSatisfiedChannelForTenant(tenantID string, group string, model str
 
 	if len(channels) == 0 {
 		return nil, nil
+	}
+
+	if pred != nil {
+		if channels = filterChannelsWhere(channels, pred); len(channels) == 0 {
+			return nil, ErrNoChannelSatisfiesPredicate
+		}
 	}
 
 	if len(channels) == 1 {
@@ -417,6 +447,71 @@ func GetRandomSatisfiedChannelForTenant(tenantID string, group string, model str
 	}
 	// return null if no channel is not found
 	return nil, errors.New("channel not found")
+}
+
+// filterChannelsWhere keeps the ids whose cached channel satisfies pred. Like
+// filterChannelsForTenant, an id missing from channelsIDM is kept so the
+// caller's consistency-error detection still sees it.
+//
+// Caller must hold channelSyncLock (read or write).
+func filterChannelsWhere(ids []int, pred ChannelPredicate) []int {
+	filtered := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if channel, ok := channelsIDM[id]; !ok || pred(channel) {
+			filtered = append(filtered, id)
+		}
+	}
+	return filtered
+}
+
+// getChannelForTenantWhere is the DB-fallback twin of the predicate branch
+// above (GetChannelForTenant in ability.go cannot take a Go predicate: it
+// draws inside SQL result order and only loads the winner). Same ability
+// query, same weight+10 draw, but every candidate channel is loaded first so
+// the predicate can reject before the draw rather than after it.
+func getChannelForTenantWhere(group string, model string, retry int, tenantID string, pred ChannelPredicate) (*Channel, error) {
+	channelQuery, err := getChannelQuery(group, model, retry, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	var abilities []Ability
+	if err := channelQuery.Order("weight DESC").Find(&abilities).Error; err != nil {
+		return nil, err
+	}
+	if len(abilities) == 0 {
+		return nil, nil
+	}
+	ids := make([]int, 0, len(abilities))
+	for _, a := range abilities {
+		ids = append(ids, a.ChannelId)
+	}
+	var rows []Channel
+	if err := DB.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	byID := make(map[int]*Channel, len(rows))
+	for i := range rows {
+		byID[rows[i].Id] = &rows[i]
+	}
+	var candidates []Ability
+	weightSum := 0
+	for _, a := range abilities {
+		if ch, ok := byID[a.ChannelId]; ok && pred(ch) {
+			candidates = append(candidates, a)
+			weightSum += int(a.Weight) + 10
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, ErrNoChannelSatisfiesPredicate
+	}
+	weight := common.GetRandomInt(weightSum)
+	for _, a := range candidates {
+		weight -= int(a.Weight) + 10
+		if weight <= 0 {
+			return byID[a.ChannelId], nil
+		}
+	}
+	return byID[candidates[len(candidates)-1].ChannelId], nil
 }
 
 func CacheGetChannel(id int) (*Channel, error) {

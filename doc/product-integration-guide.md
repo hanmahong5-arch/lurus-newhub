@@ -136,7 +136,7 @@ curl https://hub.lurus.cn/v1/key -H "Authorization: Bearer sk-xxxxxxxxxxxx"
 | HTTP | OpenAI 线 `type` | Anthropic 线 `type` | `code`(稳定,跨 wire 相同) | 说明 | 处理 |
 |------|------|------|------|------|------|
 | 400 | `invalid_request_error` | `invalid_request_error` | `invalid_request` 等 | 请求本身有问题(缺模型名/渠道 id 格式错/请求体解析失败) | 检查请求体 |
-| 401 | `authentication_error` | `authentication_error` | `invalid_request` / `session_required` / `token_disabled`(令牌被禁用,主鉴权路径) | Key 无效、未登录、令牌被禁用 | 检查 Token / 重新登录 / 在令牌管理里启用或换一把 |
+| 401 | `authentication_error` | `authentication_error` | `invalid_request` / `session_required` / `token_disabled`(令牌被禁用,主鉴权路径)/ `token_expired`(令牌已过期,2026-09-27 起从 `invalid_request` 拆出) | Key 无效、未登录、令牌被禁用/过期。中转路径的 401 都带 `X-Lurus-Token-State`(见 §E):`unknown` / `disabled` / `expired`,与 `code` 一一对应 | 检查 Token / 重新登录 / 在令牌管理里启用或换一把 |
 | 402 | `insufficient_quota` | `billing_error` | `insufficient_user_quota` / `token_quota_exhausted` / `pool_exhausted` / `pool_not_configured`(租户信用池未配置,`CREDIT_POOL_REQUIRED=enforce` 时) / `tenant_quota_exceeded`(租户月度配额超限) | 钱包/Token/租户资金池额度不足 | 提示充值,`metadata.topup_url` 见 §F |
 | 403 | `permission_error` | `permission_error` | `model_blocked` / `group_not_allowed` / `ip_not_allowed` / `channel_specify_forbidden` / `scope_not_granted` / `user_banned` / `tenant_suspended` / `token_disabled`(令牌被禁用,playground 鉴权路径) | 模型/分组/IP/scope 未授权,账号或租户被封禁,或(playground 路径)令牌被禁用。`model_blocked` 除了令牌自身模型白名单,`TENANT_MODEL_ALLOWLIST_MODE=enforce` 时也会由租户级模型白名单触发(默认 `observe` 只记录不拒绝)。`POST /api/v2/:tenant_slug/provision`(cycle-8 L2,平台 entitlement 换发 relay token)铸造的 `switch-provision-<plan_code>` 令牌按 entitlement `ent.models` claim 精确匹配模型名(不做 dated/undated 别名桥接,`FormatMatchingModelName` 只桥接 gpts/thinking-* 前缀)——plan 只列了 undated 别名时,调用方发 dated 变体一律 `model_blocked`;plan 变更(同一平台账号换 plan_code)会禁用上一个 plan 的令牌,已粘贴旧 key 的客户端收到 `token_disabled`,须从平台 onboarding 引导页重新复制新 key | 按 `code` 定位具体原因,联系管理员放开 |
 | 404 | `not_found_error` | `not_found_error` | `model_not_found` / `task_platform_unknown`(`/v1/tasks/:platform` 的 `:platform` 不是任一已编译 task 适配器名) / `response_not_found`(`GET`/`DELETE /v1/responses/:response_id`——不存在、不属于该用户或租户、渠道已禁用、渠道类型已不再受支持四种情况共用同一网关报文;一旦行存在且渠道可达,渠道自己的 404 会原样透传,不带这个 `code`,与这四种情况是两种不同的报文) | 模型未配置任何可用渠道(区别于"渠道全部暂时不可用"的 503),通用任务路由的平台名无效,或 Responses API 有状态端点查无此 id | 换模型 / 检查 `:platform` 拼写 / 确认 `response_id` 与调用方身份匹配 |
@@ -144,7 +144,7 @@ curl https://hub.lurus.cn/v1/key -H "Authorization: Bearer sk-xxxxxxxxxxxx"
 | 429 | `rate_limit_error` | `rate_limit_error` | `request_rate_limit_exceeded` / `quota_exceeded` / `cost_spike_limit_exceeded` / `business_rate_limit_exceeded` / `concurrency_limit_exceeded` 等 | 限流(见下方 Q4 的另一类 429)。**仅限中转路径**(`/v1/*` 等 relay 路由)网关自身发起的这类 429,`error.message` 都是英文句子,不要拿它做文本匹配——判定读 `code`。其中限流/并发中间件的拒绝(`request_rate_limit_exceeded`/`business_rate_limit_exceeded`/`concurrency_limit_exceeded`)统一是 `<scope> <requests\|tokens\|concurrency> limit exceeded: <n> ...(<code>)` 这一种形状;`quota_exceeded`(entitlement)与 `cost_spike_limit_exceeded`(cost spike)同样是英文,但句式不同、不含 `<n>`。`/api/*` 控制台路由与 `/internal/*` 内部路由上的 ip/key 限流器(`rate-limit.go` 的 keyed 拒绝点)429 只带头,**没有 body**,不要假设那类 429 存在 `error.message` | 稍后重试,读 `Retry-After`/`X-RateLimit-*`(见 §E,并非全部 429 都携带 —— `quota_exceeded` 与 `cost_spike_limit_exceeded` 也带 `X-RateLimit-Scope`/`Type`,见 §E 表) |
 | 500 | `api_error` | `api_error` | `gateway_internal` | 网关自身处理失败(非上游供应商故障) | 重试;持续出现联系运维 |
 | 500 | `upstream_error` | `upstream_error` | 供应商原样透传 | AI 服务商故障 | 重试 / 切模型 |
-| 503 | `api_error` | `overloaded_error` | `channel:all_keys_cooling` / `model_not_found`(无可用渠道时复用此状态码) 等 | 模型配置存在但渠道暂时全部不可用/维护中 | 等待恢复,读 `Retry-After` |
+| 503 | `api_error` | `overloaded_error` | `channel:all_keys_cooling` / `model_not_found`(无可用渠道时复用此状态码)/ `query_data_error`(网关自身查令牌失败,2026-09-27 起;此前这种情况被包装成 401 `invalid_request`,与"key 无效"不可区分)等 | 模型配置存在但渠道暂时全部不可用/维护中;或网关的数据库暂时不可用,**不是对 key 的判定** | 等待恢复,读 `Retry-After`(令牌查库失败固定给 `5`,并带 `X-Lurus-Token-State: lookup_failed`) |
 
 完整 `code` 枚举(所有网关自身可能返回的机器码,不含上游供应商透传值)见 `docs/openapi/relay.json` 的 `components.schemas.GatewayError.code.enum`,由 CI 锁与 `internal/pkg/types` 的 `ErrorCode` 常量表逐条互校,新增/改名任一侧都会挂红。
 
@@ -196,6 +196,17 @@ curl https://hub.lurus.cn/v1/key -H "Authorization: Bearer sk-xxxxxxxxxxxx"
 | `X-Session-Id` | 入站(可选) | 调用方自带的会话粘滞键,两条独立用途:(1) 存储/回显——原始值只要 ≤200 字节可打印 ASCII,就原样写入这次调用日志行的 `session_id` 字段(公开可读级别,不是管理员专属),超限或含控制字符时整体丢弃、不截断;`GET /v1/generation`(见 §F)原样回显,`GET /api/v2/{tenant}/logs`可按它过滤(`logs/stat` 没有这个查询参数)——**只放不透明的会话/对话 id,不要放个人身份信息**,它会被落库和回显。(2) 渠道亲和——网关另外用 (调用方+分组+模型) 加盐对它做 HMAC,决定同一会话的多轮请求是否尽量路由回同一渠道(减少上游 prompt-cache 失效);这条 HMAC 从 2026-09 起会通过 `X-Lurus-Affinity-Key`(见下一行)回显,与上面落库/回显的明文 `session_id` 字段是两回事。 |
 | `X-Lurus-Affinity-Key` | 出站(仅当本次请求携带可识别的会话来源时) | 上一行渠道亲和 HMAC 的回显值。来源三选一,优先级从高到低:`X-Session-Id` 请求头 / OpenAI `prompt_cache_key` / Claude `metadata.user_id`;一次性调用(三者都没有)不带此头,不会出现一个空字符串。目前唯一的用途是给运营方按此值调用管理端点清除单条绑定,调用方无需读它,能读到只是因为它已在 `Access-Control-Expose-Headers` 里。 |
 | 用户维度哈希 | 内部/日志 | 网关不落调用方传入的终端用户原始标识——`EndUserHash` 是按租户加盐的 HMAC(取前 16 字符),只用于按用户维度聚合成本查询,不可逆推原始标识。 |
+| `X-Lurus-Token-State` | 出站(中转路径 TokenAuth 拒绝时必有) | 令牌鉴权的判定:401 上 `unknown`(网关不认识这把 key)/ `disabled`(被禁用)/ `expired`(已过期);503 上 `lookup_failed`(网关自身查库失败,不是对 key 的判定,按 `Retry-After` 重试)。与 §B 的 `code` 一一对应,放在头里是为了让不解析响应体的代理层(见下面的桥接说明)也能读到。 |
+
+**桥接层的回放规则(运营方步骤,改在 newapi 仓)**:hub 前面的 hub-bridge(`2b-svc-newapi/deploy/hub-bridge.yaml` 的 `proxy_intercept_errors on; error_page 401 = @newapi`)把 hub 的**每一个** 401 都回放给 newapi,前提假设是"401 = hub 不认识这把 key"。这个假设在 2026-09-27 之前就不成立:hub 里被禁用/过期的 key 只要 newapi 侧还留着就照样能用,hub 查库失败的那一次请求(连同计费)也会静默漂到 newapi。现在三种判定都写在 `X-Lurus-Token-State` 上,桥接层应改成只在 `unknown` 时回放:
+
+```nginx
+map $upstream_http_x_lurus_token_state $lurus_replay_to_newapi { unknown 1; default 0; }
+# @newapi 入口处:if ($lurus_replay_to_newapi = 0) { return 401; }
+# 或改用 error_page 401 = @maybe_replay,在 @maybe_replay 里按上面的变量分流
+```
+
+`disabled`/`expired` 的 401 与 `lookup_failed` 的 503 都应原样回给调用方;`lookup_failed` 带 `Retry-After: 5`,调用方按此重试即可,不需要桥接层代为切换网关。
 
 ### F. 只持一把 key 的调用方(无控制台权限)
 
@@ -490,3 +501,44 @@ WebSocket 结算路径,根本不调用 `PostConsumeQuota`)都不在这个 cycle 
 
 **目前没有兄弟产品接入 `other.settlement`**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均无对
 `other.settlement` 或 `settlement` 字段的读取)。
+
+### M. 按地域 / 零数据保留过滤渠道(`provider` 对象,cycle-18 L8)
+
+受监管的 EU/CN 客户可以要求一次请求只落在某个地域的渠道,或只落在声明了零数据保留(ZDR)的渠道。
+两侧各一个零迁移的字段:渠道侧写在渠道的 `setting` JSON 里,请求侧写在请求体的 `provider` 对象里
+(对标 OpenRouter 的 in-region routing 与 `data_collection` 过滤器)。
+
+**渠道侧(管理端,`PUT /api/v2/{tenant}/channels/{id}` 的 `setting` 字段,与 `proxy`/`force_format`
+同一份 JSON;没有控制台表单,直接编辑 JSON)**:
+
+| 键 | 取值 | 语义 |
+|----|------|------|
+| `setting.region` | 自由文本,约定小写,如 `eu` / `us` / `cn` | 上游实际所在地域。比较时忽略大小写与首尾空白 |
+| `setting.data_collection` | 仅 `"deny"` 有意义 | 上游不保留任何提示词/补全。不写或写别的值 = 没有做出承诺,**不会**被当作零保留 |
+
+```bash
+# 把 12 号渠道标成「EU 且零保留」;其余 setting 键照旧带上,PUT 是整份覆盖
+curl -X PUT https://hub.lurus.cn/api/v2/acme/channels/12 -H "Authorization: Bearer <access token>"   -d '{"setting":"{\"proxy\":\"\",\"region\":\"eu\",\"data_collection\":\"deny\"}"}'
+```
+
+**请求侧(`/v1/chat/completions`、`/v1/messages`、`/v1/responses` 请求体,组件 schema `ProviderFilter`)**:
+
+```json
+{"model":"gpt-4o","messages":[...],"provider":{"region":"eu","data_collection":"deny"}}
+```
+
+- `region` 非空 ⇒ 只在 `setting.region` 相等的渠道里做加权抽取;`data_collection: "deny"` ⇒ 只在
+  `setting.data_collection == "deny"` 的渠道里抽;两者同时给则都要满足。`"allow"` 或省略 = 不约束。
+- 过滤发生在租户过滤之后、优先级/权重分桶之前(`internal/adapter/repo/channel_cache.go`
+  `GetRandomSatisfiedChannelWhere`),所以被排除的渠道**不可能**靠高优先级或大权重赢得抽取;重试与
+  `auto` 跨分组重试的每一次选择都带着同一个过滤器(`internal/app/channel_select.go`)。
+- 会话亲和(附录 G)命中的渠道若不满足过滤器,会被当作失效绑定忽略,本次由满足过滤器的渠道服务并重新绑定。
+- 没有渠道满足过滤器时返回 **503** `model_not_found`,message 形如
+  `failed to select an available channel for model gpt-4o in group default: no channel satisfies provider filter (region=eu, data_collection=deny)`——
+  与「模型从未配置」的 404 分开,调用方能区分「你的地域没有渠道」和「模型不存在」。
+- `sk-<key>-<channelId>` 显式钉渠道的调用方(附录 G)**不经过**这个过滤器:显式钉渠道就是管理员意图,
+  过滤器只作用于加权选择。
+- 网关只在选择渠道时读取 `provider`,不把它转发给上游(渠道开启 `pass_through_body_enabled` 或全局
+  pass-through 时整个原始请求体原样透传,此时上游会看到它)。
+
+**目前没有兄弟产品接入 `provider`**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均未在请求体里发送该对象)。

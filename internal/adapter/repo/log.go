@@ -573,6 +573,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		// forever.
 		ProjectId:   params.ProjectId,
 		ChargedCNY4: params.ChargedCNY4,
+		PricedCNY4:  params.PricedCNY4,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
@@ -771,29 +772,6 @@ func SumUsedQuota(scope TenantScope, logType int, startTimestamp int64, endTimes
 	stat.Tpm = rate.Tpm
 
 	return stat
-}
-
-// SumUsedToken aggregates token counts across users. scope is the explicit
-// tenant decision (see SumUsedQuota).
-func SumUsedToken(scope TenantScope, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := scope.apply(LOG_DB.Table("logs")).Select("ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0)")
-	if username != "" {
-		tx = tx.Where("username = ?", username)
-	}
-	if tokenName != "" {
-		tx = tx.Where("token_name = ?", tokenName)
-	}
-	if startTimestamp != 0 {
-		tx = tx.Where("created_at >= ?", startTimestamp)
-	}
-	if endTimestamp != 0 {
-		tx = tx.Where("created_at <= ?", endTimestamp)
-	}
-	if modelName != "" {
-		tx = tx.Where("model_name = ?", modelName)
-	}
-	tx.Where("type = ?", LogTypeConsume).Scan(&token)
-	return token
 }
 
 // DeleteOldLog batch-deletes logs older than targetTimestamp. scope is the

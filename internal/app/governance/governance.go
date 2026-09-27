@@ -10,6 +10,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -89,6 +90,14 @@ func EnrichLogParams(c *gin.Context, info *relaycommon.RelayInfo, params *entity
 	params.ChargedCNY4 = info.WalletChargeCNY4
 	if params.ProjectId == 0 && c != nil {
 		params.ProjectId = common.GetContextKeyInt(c, constant.ContextKeyProjectId)
+	}
+	// Record-time price of the quota (migration 042), from params.Quota
+	// alone: RelayInfo only knows a charge when the wallet paid, and the
+	// rows that never touch the wallet (credit pool, local quota) are the
+	// ones an invoice would otherwise re-price at the rate of the day it is
+	// read. Zero quota stays 0, the same value a pre-042 row has.
+	if params.Quota > 0 {
+		params.PricedCNY4 = currency.CNYToUnits4(currency.QuotaToCNY(params.Quota))
 	}
 
 	// Apply log detail level from user setting.

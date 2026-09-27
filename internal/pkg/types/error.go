@@ -105,6 +105,15 @@ const (
 	// wallet top-up. See middleware.TokenAuth and PreConsumeQuota's
 	// ErrTokenQuotaInsufficient branch.
 	ErrorCodeTokenQuotaExhausted ErrorCode = "token_quota_exhausted"
+	// ErrorCodeBillingUnavailable marks a 503 the gateway answers when the
+	// platform wallet could not be ASKED — pre-auth timed out, the billing
+	// breaker is open, the platform is unconfigured — and the degrade path
+	// declined to admit on cached balance. Deliberately not a quota code: the
+	// customer may be fully funded, so it carries no top-up link, does leave
+	// an error-log row, and files under "internal" in RelayErrorType. The
+	// platform's own verdicts (insufficient balance, wallet frozen) stay 402
+	// under ErrorCodeInsufficientUserQuota.
+	ErrorCodeBillingUnavailable ErrorCode = "billing_unavailable"
 
 	// gateway rejection codes — the machine-readable half of a middleware-
 	// stage 4xx/5xx (L3-CONTRACT-TAXONOMY). Every abortWithOpenAiMessage call
@@ -112,6 +121,7 @@ const (
 	// of leaving Code empty; see abort_code_structural_test.go for the sweep.
 	ErrorCodeModelBlocked             ErrorCode = "model_blocked"
 	ErrorCodeTokenDisabled            ErrorCode = "token_disabled"
+	ErrorCodeTokenExpired             ErrorCode = "token_expired"
 	ErrorCodeUserBanned               ErrorCode = "user_banned"
 	ErrorCodeTenantSuspended          ErrorCode = "tenant_suspended"
 	ErrorCodeIpNotAllowed             ErrorCode = "ip_not_allowed"
@@ -675,7 +685,8 @@ func RelayErrorType(err *NewAPIError) string {
 		ErrorCodeCountTokenFailed, ErrorCodeModelPriceError, ErrorCodeInvalidApiType,
 		ErrorCodeJsonMarshalFailed, ErrorCodeGenRelayInfoFailed, ErrorCodeGetChannelFailed,
 		ErrorCodeReadRequestBodyFailed, ErrorCodeConvertRequestFailed, ErrorCodeAccessDenied,
-		ErrorCodeBadRequestBody, ErrorCodeQueryDataError, ErrorCodeUpdateDataError:
+		ErrorCodeBadRequestBody, ErrorCodeQueryDataError, ErrorCodeUpdateDataError,
+		ErrorCodeBillingUnavailable:
 		return "internal"
 	}
 	// From here the error is attributable to the upstream exchange (response

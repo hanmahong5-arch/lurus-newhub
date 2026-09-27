@@ -158,6 +158,9 @@
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/XRequestId"
+              },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
               }
             }
           },
@@ -269,6 +272,9 @@
               },
               "Retry-After": {
                 "$ref": "#/components/headers/RetryAfter"
+              },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
               }
             }
           }
@@ -355,7 +361,11 @@
                 }
               }
             },
-            "headers": {}
+            "headers": {
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
+            }
           }
         },
         "security": [
@@ -435,7 +445,10 @@
               }
             },
             "headers": {
-              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
             }
           }
         },
@@ -622,7 +635,10 @@
               }
             },
             "headers": {
-              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
             }
           },
           "402": {
@@ -697,7 +713,10 @@
             },
             "headers": {
               "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
-              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
             }
           }
         },
@@ -2347,7 +2366,10 @@
               }
             },
             "headers": {
-              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
             }
           },
           "402": {
@@ -2420,7 +2442,10 @@
             },
             "headers": {
               "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
-              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
             }
           }
         },
@@ -2657,7 +2682,10 @@
               }
             },
             "headers": {
-              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
             }
           },
           "402": {
@@ -2730,7 +2758,10 @@
             },
             "headers": {
               "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
-              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
             }
           }
         },
@@ -2791,7 +2822,10 @@
               }
             },
             "headers": {
-              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
             }
           },
           "402": {
@@ -2864,7 +2898,10 @@
             },
             "headers": {
               "X-Request-Id": { "$ref": "#/components/headers/XRequestId" },
-              "Retry-After": { "$ref": "#/components/headers/RetryAfter" }
+              "Retry-After": { "$ref": "#/components/headers/RetryAfter" },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
             }
           }
         },
@@ -3593,6 +3630,26 @@
   },
   "components": {
     "schemas": {
+      "ProviderFilter": {
+        "type": "object",
+        "description": "请求级路由约束(cycle-18 L8,对标 OpenRouter 的 provider 对象)。只在渠道选择阶段生效:region 非空时只会选中渠道 setting.region(不区分大小写)相等的渠道;data_collection 为 \"deny\" 时只会选中渠道 setting.data_collection 同为 \"deny\"(零数据保留)的渠道——未声明的渠道不被假定为零保留。两个键都省略等于没有约束。会话亲和(X-Session-Id 等)命中的渠道若不满足约束会被忽略并重新绑定。无渠道满足约束时返回 503 model_not_found,message 形如 \"failed to select an available channel for model X in group Y: no channel satisfies provider filter (region=eu, data_collection=deny)\"(与「模型从未配置」的 404 区分开)。网关只在选择渠道时读取这个对象,并不把它转发给上游(渠道开启 pass_through_body_enabled 或全局 pass-through 时除外,那时整个原始请求体原样透传);这里未列出的键在网关侧被忽略。渠道侧的 region / data_collection 通过管理端 PUT channel 的 setting JSON 设置,见 doc/product-integration-guide.md 附录 M。\n",
+        "properties": {
+          "region": {
+            "type": "string",
+            "description": "只落在 setting.region 与之相等的渠道,如 eu / us / cn(自由文本,约定小写)",
+            "example": "eu"
+          },
+          "data_collection": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ],
+            "description": "\"deny\" = 只落在声明了零数据保留(setting.data_collection=deny)的渠道;\"allow\" 或省略 = 不约束",
+            "example": "deny"
+          }
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "properties": {
@@ -3681,8 +3738,10 @@
               "pre_consume_token_quota_failed",
               "tenant_quota_exceeded",
               "token_quota_exhausted",
+              "billing_unavailable",
               "model_blocked",
               "token_disabled",
+              "token_expired",
               "user_banned",
               "tenant_suspended",
               "ip_not_allowed",
@@ -4050,6 +4109,9 @@
           "messages"
         ],
         "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderFilter"
+          },
           "model": {
             "type": "string",
             "description": "模型 ID",
@@ -4417,6 +4479,9 @@
           "model"
         ],
         "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderFilter"
+          },
           "model": {
             "type": "string"
           },
@@ -4586,6 +4651,9 @@
           "max_tokens"
         ],
         "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderFilter"
+          },
           "model": {
             "type": "string",
             "example": "claude-3-opus-20240229"
@@ -5914,6 +5982,10 @@
       "RetryAfter": {
         "description": "建议等待多少秒后重试。携带已知恢复时间的 402/429/503 拒绝上出现。",
         "schema": { "type": "integer" }
+      },
+      "XLurusTokenState": {
+        "description": "TokenAuth 拒绝时的判定。401 上取值 unknown（网关不认识这把 key）/ disabled（令牌被禁用）/ expired（令牌已过期）；503 上取值 lookup_failed（网关自身查库失败，不是对 key 的判定，读 Retry-After 后重试）。放在 hub 前面回放 401 到其它网关的桥接层只应在 unknown 时回放。",
+        "schema": { "type": "string", "enum": ["unknown", "disabled", "expired", "lookup_failed"] }
       },
       "XLurusAffinityKey": {
         "description": "会话亲和性绑定的 HMAC 派生键。仅当本次请求携带可识别的会话来源（X-Session-Id 请求头 / OpenAI prompt_cache_key / Claude metadata.user_id）时才出现；一次性调用（无会话来源）不携带此头。可原样传给 DELETE /api/v2/admin/routing/affinity/{key} 清除该绑定。任何经 relay 主路径且带上述会话来源之一的路由都可能出现此头，不限于本文档逐条列出 headers 的端点（例如带 X-Session-Id 的 embeddings/images/rerank 请求）。",

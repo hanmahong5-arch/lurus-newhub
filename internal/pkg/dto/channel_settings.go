@@ -1,5 +1,7 @@
 package dto
 
+import "strings"
+
 type ChannelSettings struct {
 	ForceFormat            bool   `json:"force_format,omitempty"`
 	ThinkingToContent      bool   `json:"thinking_to_content,omitempty"`
@@ -7,6 +9,14 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// Region and DataCollection are operator-declared facts about where the
+	// channel's upstream runs and what it retains (L8). They carry no meaning
+	// on their own; a request's `provider` object (ProviderFilter) matches
+	// against them at channel selection. Free text, compared case-insensitively
+	// after trimming — "eu"/"us"/"cn" by convention. DataCollection is only
+	// ever tested for DataCollectionDeny (zero data retention).
+	Region         string `json:"region,omitempty"`
+	DataCollection string `json:"data_collection,omitempty"`
 	// ForceHTTP1 is never persisted directly — there is no console field or
 	// JSON key for it in this struct's own document. It is derived at relay
 	// time (RelayInfo.InitChannelMeta, provider/common/relay_info.go) from the
@@ -31,6 +41,61 @@ const ForceHTTP1ParamKey = "__lurus_force_http1"
 func ParamOverrideForceHTTP1(paramOverride map[string]interface{}) bool {
 	v, ok := paramOverride[ForceHTTP1ParamKey].(bool)
 	return ok && v
+}
+
+// DataCollectionDeny is the one value of ChannelSettings.DataCollection (and
+// of ProviderFilter.DataCollection) that means anything: the upstream keeps
+// nothing of the prompt or completion. Any other value is "no promise made".
+const DataCollectionDeny = "deny"
+
+// ProviderFilter is a request's routing constraint, parsed by the distributor
+// from the body's `provider` object and carried on the gin context under
+// constant.ContextKeyProviderFilter. A zero filter is no constraint. Region is
+// exact-match (case-insensitive) against ChannelSettings.Region; DataCollection
+// only constrains when it is DataCollectionDeny, in which case the channel must
+// have declared the same — a channel that says nothing is NOT assumed
+// zero-retention.
+type ProviderFilter struct {
+	Region         string
+	DataCollection string
+}
+
+// NormalizeProviderFilter canonicalises the raw request values so the
+// distributor and the channel setting compare like with like ("EU " == "eu").
+func NormalizeProviderFilter(region, dataCollection string) ProviderFilter {
+	return ProviderFilter{
+		Region:         strings.ToLower(strings.TrimSpace(region)),
+		DataCollection: strings.ToLower(strings.TrimSpace(dataCollection)),
+	}
+}
+
+func (f ProviderFilter) IsZero() bool {
+	return f.Region == "" && f.DataCollection != DataCollectionDeny
+}
+
+// Matches reports whether a channel with settings s may serve a request
+// carrying this filter.
+func (f ProviderFilter) Matches(s ChannelSettings) bool {
+	if f.Region != "" && !strings.EqualFold(strings.TrimSpace(s.Region), f.Region) {
+		return false
+	}
+	if f.DataCollection == DataCollectionDeny && !strings.EqualFold(strings.TrimSpace(s.DataCollection), DataCollectionDeny) {
+		return false
+	}
+	return true
+}
+
+// String renders the constraining parts only, in the form the wire error
+// sentence uses: "region=eu, data_collection=deny".
+func (f ProviderFilter) String() string {
+	parts := make([]string, 0, 2)
+	if f.Region != "" {
+		parts = append(parts, "region="+f.Region)
+	}
+	if f.DataCollection == DataCollectionDeny {
+		parts = append(parts, "data_collection="+DataCollectionDeny)
+	}
+	return strings.Join(parts, ", ")
 }
 
 type VertexKeyType string

@@ -35,6 +35,25 @@ type ModelRequest struct {
 	Metadata       *struct {
 		UserId string `json:"user_id"`
 	} `json:"metadata,omitempty"`
+	// Provider is the caller's routing constraint (L8, modelled on the
+	// OpenRouter `provider` object): region pins selection to channels whose
+	// setting.region matches, data_collection "deny" to channels declared
+	// zero-retention. Other keys of the object are ignored here; the typed
+	// re-encode drops the object, so it only reaches the upstream under
+	// pass-through.
+	Provider *struct {
+		Region         string `json:"region"`
+		DataCollection string `json:"data_collection"`
+	} `json:"provider,omitempty"`
+}
+
+// providerFilter is the normalised, context-ready form of Provider; zero when
+// the request sent no constraint (no object, or an object with neither key).
+func (m *ModelRequest) providerFilter() dto.ProviderFilter {
+	if m == nil || m.Provider == nil {
+		return dto.ProviderFilter{}
+	}
+	return dto.NormalizeProviderFilter(m.Provider.Region, m.Provider.DataCollection)
 }
 
 // sessionAffinityRawID mirrors the source precedence of
@@ -220,6 +239,12 @@ func Distribute() func(c *gin.Context) {
 				// (TestDistribute_SessionAffinity_FirstSelectionUsesPin).
 				if key := app.DeriveSessionAffinityKeyFromRaw(c, sessionAffinityRawID(c, modelRequest)); key != "" {
 					common.SetContextKey(c, constant.ContextKeySessionAffinity, key)
+				}
+				// Same reason as the affinity key above: the filter must be on
+				// the context before the first selection, and the relay
+				// handler's retries read the same key.
+				if filter := modelRequest.providerFilter(); !filter.IsZero() {
+					common.SetContextKey(c, constant.ContextKeyProviderFilter, filter)
 				}
 				channel, selectGroup, err = app.CacheGetRandomSatisfiedChannel(&app.RetryParam{
 					Ctx:        c,
@@ -477,7 +502,12 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		modelRequest.Model = req.Model
+		// The whole parsed body, not just Model: this is the branch every
+		// chat/messages/responses request takes, and Provider (and the
+		// body-sourced affinity ids) live on the same struct. Copying one
+		// field here used to drop them on the live path while the unit
+		// tests, which build ModelRequest by hand, stayed green.
+		modelRequest = *req
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/realtime") {
 		//wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01

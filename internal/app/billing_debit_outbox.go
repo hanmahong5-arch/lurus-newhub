@@ -44,8 +44,7 @@ func enqueueFailedLegacyDebit(accountID int64, amountLB float64, description, pr
 	common.SysLog(fmt.Sprintf("legacy wallet debit failed, enqueuing: accountID=%d, amount=%.4f LB, ref=%s, err=%s",
 		accountID, amountLB, refID, debitErr.Error()))
 	if enqErr := EnqueueDebit(accountID, amountLB, "llm_usage", description, productID, refID); enqErr != nil {
-		common.SysError(fmt.Sprintf("CRITICAL: wallet debit %s of %.4f LB for account %d failed (%s) and could not be enqueued (%s); this usage is unbilled",
-			refID, amountLB, accountID, debitErr.Error(), enqErr.Error()))
+		noteMoneyLost("debit", accountID, amountLB, "ref", refID, "err", debitErr, "outbox_err", enqErr)
 	}
 }
 

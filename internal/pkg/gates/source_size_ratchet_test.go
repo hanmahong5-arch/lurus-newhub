@@ -36,18 +36,18 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/internal_api_ext.go":     1057,
 	"internal/adapter/handler/oauth.go":                997,  // +19 (2026-09-22 hotfix): GetSessionInfo resolves tenant_slug from the user's tenant when the session carries none — the only path by which an already-established console session can learn its own routing slug without a re-login
 	"internal/adapter/handler/relay.go":                992,  // -23 (cycle 14): processChannelError + the terminal/error-log recorders moved to relay_errors.go, paying for the channel-select failover and breaker-outcome wiring
-	"internal/adapter/middleware/auth.go":              807,  // -106 (cycle 14): PlaygroundAuth moved to auth_playground.go, paying for the wire-language fixes in resolveSessionIdentity/TokenAuth
+	"internal/adapter/middleware/auth.go":              732,  // -106 (cycle 14): PlaygroundAuth moved to auth_playground.go, paying for the wire-language fixes in resolveSessionIdentity/TokenAuth; -75 (cycle 18 L3): the ValidateUserToken error → rejection mapping moved to auth_token_reject.go
 	"internal/adapter/middleware/oidc_auth.go":         1214, // +8 (2026-09-23): JWKSManager.refreshInterval — the refresh goroutine raced tests on jwksRefreshInterval
 	"internal/adapter/provider/claude/relay-claude.go": 940,
 	"internal/adapter/provider/common/relay_info.go":   894, // +1 WalletChargeCNY4 (recorded wallet charge, migration 041)
 	"internal/adapter/provider/gemini/relay-gemini.go": 1427,
 	"internal/adapter/repo/channel.go":                 1226,
-	"internal/adapter/repo/log.go":                     1055, // +1 ChargedCNY4 copied onto the row (migration 041)
+	"internal/adapter/repo/log.go":                     1033, // +1 ChargedCNY4 copied onto the row (migration 041); +1 PricedCNY4 (migration 042), paid for by moving SumUsedToken to log_billable.go (-23, cycle 18 L5)
 	"internal/adapter/repo/option.go":                  948,
-	"internal/adapter/repo/token.go":                   794,
+	"internal/adapter/repo/token.go":                   809, // +15 (cycle 18 L3): ErrTokenExpired/ErrTokenLookupFailed sentinels so TokenAuth can tell revoked/expired/DB-down apart from an unknown key
 	"internal/adapter/repo/user.go":                    1206,
 	"internal/app/convert.go":                          1304,
-	"internal/app/quota.go":                            1389, // +3 record the wallet charge on both settlement branches (migration 041); -1 (legacy debit failure arm moved to billing_debit_outbox.go); +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix): the TokenId > 0 guard and why, plus three lines saying why the pre-consume rejection formats ASCII
+	"internal/app/quota.go":                            1253, // -136 (cycle 18 L2): PostConsumeQuota's Phase 5 (the platform wallet leg: settle/park, release, legacy debit, zero-usage release) moved as-is to quota_settle.go; earlier: +3 record the wallet charge on both settlement branches (migration 041); -1 (legacy debit failure arm moved to billing_debit_outbox.go); +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix)
 	"internal/pkg/common/identity_client.go":           809,  // -25 (cycle 14): the usage-report counter + ReportLLMUsage moved to identity_usage_report.go, paying for the checkout/status error honesty
 	"internal/pkg/dto/openai_request.go":               1020,
 	// NEW ROW, not a raise: metrics.go crossed the 800 threshold in cycle 13

@@ -35,10 +35,15 @@ const (
 type invoiceMonthBucket struct {
 	Month                string  `json:"month"`                  // "YYYY-MM"
 	Quota                int64   `json:"quota"`                  // billable quota units consumed
-	AmountCNY            float64 `json:"amount_cny"`             // recorded wallet charges + today's price of unrecorded quota (invoiceAmountCNY)
+	AmountCNY            float64 `json:"amount_cny"`             // record-time prices, plus today's price of pre-042 rows (invoiceAmountCNY)
 	RequestCount         int64   `json:"request_count"`          // number of billable log rows
 	UnbilledQuota        int64   `json:"unbilled_quota"`         // quota logged but excluded from billing (settlement-failed / channel-test)
 	UnbilledRequestCount int64   `json:"unbilled_request_count"` // number of log rows excluded from billing
+	// Estimated is true when part of AmountCNY had to be priced at today's
+	// exchange rate because some billable row predates logs.priced_cny4
+	// (migration 042) — that part moves when the rate is edited. A month
+	// recorded entirely after 042 is false and its amount is final.
+	Estimated bool `json:"estimated"`
 }
 
 // ListInvoicesV2 returns monthly spend buckets for the authenticated user in
@@ -175,10 +180,14 @@ type rawMonthRow struct {
 	QuotaSum     int64  `gorm:"column:quota_sum"`
 	RequestCount int64  `gorm:"column:request_count"`
 	// ChargedUnits4 sums logs.charged_cny4 (what the wallet was actually
-	// debited, 0.0001 CNY); ChargedQuota is the quota of the rows that carry
-	// such a record, so the rest can still be priced the old way.
+	// debited, 0.0001 CNY). PricedUnits4 sums logs.priced_cny4 for the rows
+	// without a wallet record (credit-pool / local-quota spend), which is
+	// what their quota was worth on the day. UnpricedQuota is the quota of
+	// the rows that carry neither — written before migration 042 — and is
+	// the only part still priced at today's rate.
 	ChargedUnits4 int64 `gorm:"column:charged_units4"`
-	ChargedQuota  int64 `gorm:"column:charged_quota"`
+	PricedUnits4  int64 `gorm:"column:priced_units4"`
+	UnpricedQuota int64 `gorm:"column:unpriced_quota"`
 }
 
 // monthGroupExpr is the per-dialect SQL expression that buckets a row's
@@ -212,7 +221,8 @@ func queryInvoiceMonthRows(userID int, tenantID string, fromTS, toTS int64, bill
 		Select(monthExpr+" AS month, "+
 			"COALESCE(SUM(quota), 0) AS quota_sum, "+
 			"COALESCE(SUM(charged_cny4), 0) AS charged_units4, "+
-			"COALESCE(SUM(CASE WHEN charged_cny4 > 0 THEN quota ELSE 0 END), 0) AS charged_quota, "+
+			"COALESCE(SUM(CASE WHEN charged_cny4 = 0 THEN priced_cny4 ELSE 0 END), 0) AS priced_units4, "+
+			"COALESCE(SUM(CASE WHEN charged_cny4 = 0 AND priced_cny4 = 0 THEN quota ELSE 0 END), 0) AS unpriced_quota, "+
 			"COUNT(*) AS request_count").
 		Where("user_id = ? AND tenant_id = ? AND created_at >= ? AND created_at < ?",
 			userID, tenantID, fromTS, toTS)
@@ -228,12 +238,20 @@ func queryInvoiceMonthRows(userID int, tenantID string, fromTS, toTS int64, bill
 }
 
 // invoiceAmountCNY is what the month's billable rows cost: the recorded
-// wallet charge where settlement wrote one, and the quota priced at today's
-// rate only for rows without a record (credit-pool / local-quota spend and
-// rows older than logs.charged_cny4). An exchange-rate change therefore no
-// longer rewrites a month that was already charged.
+// wallet charge where settlement wrote one, the record-time price
+// (logs.priced_cny4, migration 042) for the rows the wallet did not pay —
+// credit-pool and local-quota spend, most of production — and today's price
+// only for rows that predate both records. An exchange-rate edit therefore
+// only moves that last, shrinking, share; invoiceEstimated says when it is
+// non-empty.
 func invoiceAmountCNY(r rawMonthRow) float64 {
-	return currency.Units4ToCNY(r.ChargedUnits4) + currency.QuotaToCNY(int(r.QuotaSum-r.ChargedQuota))
+	return currency.Units4ToCNY(r.ChargedUnits4) + currency.Units4ToCNY(r.PricedUnits4) + currency.QuotaToCNY(int(r.UnpricedQuota))
+}
+
+// invoiceEstimated reports whether invoiceAmountCNY had to price any of the
+// month at today's rate — true only while pre-042 rows are in range.
+func invoiceEstimated(r rawMonthRow) bool {
+	return r.UnpricedQuota > 0
 }
 
 // aggregateInvoiceMonths returns one bucket per calendar month in range,
@@ -270,6 +288,7 @@ func aggregateInvoiceMonths(userID int, tenantID string, fromTS, toTS int64) ([]
 			Month:        all.Month,
 			Quota:        billable.QuotaSum,
 			AmountCNY:    invoiceAmountCNY(billable),
+			Estimated:    invoiceEstimated(billable),
 			RequestCount: billable.RequestCount,
 			// The two aggregates are separate round trips; a row that lands
 			// between them can make the difference negative, which must not

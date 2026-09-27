@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
@@ -548,38 +550,132 @@ func TestProbeChannel_RowIsUnbilled(t *testing.T) {
 // already charged must not change when the operator changes the exchange
 // rate. The invoice used to price every row's quota at the rate current when
 // it was READ, so raising USDExchangeRate rewrote history. Rows that carry a
-// recorded wallet charge (logs.charged_cny4) now contribute exactly that;
-// only rows without one (credit-pool spend, pre-record rows) are priced.
+// recorded wallet charge (logs.charged_cny4) contribute exactly that; a row
+// the wallet did not pay (credit-pool spend) contributes its record-time
+// price (logs.priced_cny4, migration 042) — the wallet row's own priced
+// value is ignored, the charge is the amount of record. Neither figure
+// depends on today's rate, so the month is not an estimate.
 func TestInvoiceAmount_UsesTheRecordedChargeNotTodaysRate(t *testing.T) {
 	ctx := setupInvoiceRouter(t)
 	jan := monthStart(2026, time.January)
 
 	// Charged at settlement: CNY 1.2345 for 90_000 quota, whatever the rate.
+	// PricedCNY4 is deliberately a different figure so the assertion can
+	// tell "used the charge" from "used the price".
 	charged := &repo.Log{UserId: ctx.userID, TenantId: ctx.tenantID, Type: repo.LogTypeConsume,
-		Quota: 90_000, CreatedAt: jan + 100, ChargedCNY4: 12_345}
+		Quota: 90_000, CreatedAt: jan + 100, ChargedCNY4: 12_345, PricedCNY4: 13_140}
 	if err := ctx.db.Create(charged).Error; err != nil {
 		t.Fatalf("seed charged log: %v", err)
 	}
-	// No record (credit-pool spend): priced at the current rate.
-	seedLog(t, ctx, 10_000, jan+200)
+	// Credit-pool spend: no wallet charge, priced CNY 0.1460 on the day.
+	pool := &repo.Log{UserId: ctx.userID, TenantId: ctx.tenantID, Type: repo.LogTypeConsume,
+		Quota: 10_000, CreatedAt: jan + 200, PricedCNY4: 1_460}
+	if err := ctx.db.Create(pool).Error; err != nil {
+		t.Fatalf("seed pool log: %v", err)
+	}
 
-	amount := func() float64 {
+	amount := func() (float64, bool) {
 		w := getInvoices(ctx, "from=2026-01&to=2026-01")
 		items := parseInvoiceResp(t, w)["data"].(map[string]interface{})["items"].([]interface{})
 		if len(items) != 1 {
 			t.Fatalf("items = %d, want 1: %s", len(items), w.Body.String())
 		}
-		return items[0].(map[string]interface{})["amount_cny"].(float64)
+		bucket := items[0].(map[string]interface{})
+		return bucket["amount_cny"].(float64), bucket["estimated"].(bool)
 	}
 
 	prevRate := operation_setting.USDExchangeRate
 	t.Cleanup(func() { operation_setting.USDExchangeRate = prevRate })
 
+	const want = 1.2345 + 0.1460
 	for _, rate := range []float64{7.3, 6.5} {
 		operation_setting.USDExchangeRate = rate
-		want := 1.2345 + currency.QuotaToCNY(10_000)
-		if got := amount(); math.Abs(got-want) > 1e-9 {
-			t.Errorf("rate %.1f: amount_cny = %.6f, want %.6f (1.2345 recorded + %.6f priced)", rate, got, want, currency.QuotaToCNY(10_000))
+		got, estimated := amount()
+		if math.Abs(got-want) > 1e-9 {
+			t.Errorf("rate %.1f: amount_cny = %.6f, want %.4f (1.2345 charged + 0.1460 priced at record time)", rate, got, want)
 		}
+		if estimated {
+			t.Errorf("rate %.1f: estimated = true, want false: nothing in the month is priced at today's rate", rate)
+		}
+	}
+}
+
+// recordPricedConsumeLog drives the real settlement-to-log chain —
+// governance.EnrichLogParams then repo.RecordConsumeLog — so the row carries
+// whatever those two stamp on it (logs.priced_cny4 in particular), instead of
+// a hand-built repo.Log{} that would only prove the test's own arithmetic.
+// RecordConsumeLog stamps created_at with the wall clock; the row is
+// backdated afterwards so it lands in the month under test. The consume-log
+// switch is pinned on because other fixtures in this package
+// (SetupIntegrationRouter among them) turn it off and never restore it, and
+// RecordConsumeLog returns before the write when it is off.
+func recordPricedConsumeLog(t *testing.T, ctx *invoiceCtx, quota int, createdAt int64, modelName string) {
+	t.Helper()
+	prevLogEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() { common.LogConsumeEnabled = prevLogEnabled })
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set("tenant_id", ctx.tenantID)
+	params := repo.RecordConsumeLogParams{Quota: quota, ModelName: modelName, Other: map[string]interface{}{}}
+	governance.EnrichLogParams(c, &relaycommon.RelayInfo{StartTime: time.Now()}, &params)
+	repo.RecordConsumeLog(c, ctx.userID, params)
+	if err := ctx.db.Model(&repo.Log{}).
+		Where("user_id = ? AND model_name = ?", ctx.userID, modelName).
+		Update("created_at", createdAt).Error; err != nil {
+		t.Fatalf("backdate priced log: %v", err)
+	}
+}
+
+// TestInvoiceAmount_PoolFundedRowIsRateStable: a row the wallet never paid for
+// (credit-pool / local-quota spend, charged_cny4 = 0) must still be worth
+// what it was worth on the day it was recorded. Until logs.priced_cny4
+// (migration 042) every such row was priced at the exchange rate current
+// when the invoice was READ, so an operator editing USDExchangeRate rewrote
+// every already-settled month for the majority of production rows. Only a
+// row that predates 042 — priced_cny4 = 0 as well — is still re-derived, and
+// the month then says so with estimated=true.
+func TestInvoiceAmount_PoolFundedRowIsRateStable(t *testing.T) {
+	ctx := setupInvoiceRouter(t)
+	jan := monthStart(2026, time.January)
+
+	prevRate := operation_setting.USDExchangeRate
+	t.Cleanup(func() { operation_setting.USDExchangeRate = prevRate })
+
+	// Recorded at 7.3: 73_000 quota = $0.146 = CNY 1.0658, frozen on the row.
+	operation_setting.USDExchangeRate = 7.3
+	recordPricedConsumeLog(t, ctx, 73_000, jan+100, "pool-funded-model")
+
+	read := func() (amount float64, estimated bool) {
+		w := getInvoices(ctx, "from=2026-01&to=2026-01")
+		items := parseInvoiceResp(t, w)["data"].(map[string]interface{})["items"].([]interface{})
+		if len(items) != 1 {
+			t.Fatalf("items = %d, want 1: %s", len(items), w.Body.String())
+		}
+		bucket := items[0].(map[string]interface{})
+		est, _ := bucket["estimated"].(bool)
+		return bucket["amount_cny"].(float64), est
+	}
+
+	const want = 1.0658
+	a, estA := read()
+	operation_setting.USDExchangeRate = 6.5
+	b, estB := read()
+	if math.Abs(a-want) > 1e-9 || math.Abs(b-want) > 1e-9 {
+		t.Errorf("amount_cny at 7.3 = %.6f, at 6.5 = %.6f; want %.4f both times (frozen at record time)", a, b, want)
+	}
+	if estA || estB {
+		t.Errorf("estimated = %v/%v, want false: every row in the month carries a recorded price", estA, estB)
+	}
+
+	// A pre-042 row has neither record; its share is re-derived at today's
+	// rate and the month is flagged so the reader knows the figure can move.
+	seedLog(t, ctx, 10_000, jan+200)
+	c, estC := read()
+	if wantC := want + currency.QuotaToCNY(10_000); math.Abs(c-wantC) > 1e-9 {
+		t.Errorf("amount_cny with a pre-042 row = %.6f, want %.6f (frozen 1.0658 + today's price of 10_000 quota)", c, wantC)
+	}
+	if !estC {
+		t.Errorf("estimated = false, want true once an unpriced row is in the month")
 	}
 }

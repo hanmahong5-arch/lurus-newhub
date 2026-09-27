@@ -35,7 +35,7 @@ func ReturnPreConsumedQuota(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
 	}
 
 	// Release platform wallet freeze — every pre-auth MUST be either settled or released.
-	releasePlatformPreAuth(relayInfo)
+	abandonPreAuth(relayInfo, "request failed after pre-consume")
 }
 
 // releasePlatformPreAuth releases a platform pre-auth with retry-to-outbox fallback.
@@ -52,14 +52,52 @@ func releasePlatformPreAuth(relayInfo *relaycommon.RelayInfo) {
 	if err := common.ReleaseWithBreaker(ctx, preAuthID); err != nil {
 		common.SysLog(fmt.Sprintf("release pre-auth %d failed, enqueuing outbox: %s", preAuthID, err.Error()))
 		if enqErr := EnqueueRelease(relayInfo.IdentityAccountID, preAuthID); enqErr != nil {
-			// Both release and outbox failed — platform hold TTL (PreAuthHoldTTL) is the safety net.
-			// Log at highest severity so ops can investigate.
-			common.SysError(fmt.Sprintf("CRITICAL: pre-auth %d stuck frozen — both release and outbox failed. "+
-				"Platform hold will auto-expire within PreAuthHoldTTL. release_err=%s, outbox_err=%s",
-				preAuthID, err.Error(), enqErr.Error()))
+			// Both release and outbox failed — the platform's PreAuthHoldTTL
+			// sweep is the only thing left that will unfreeze the balance.
+			noteMoneyLost("preauth_release", relayInfo.IdentityAccountID, 0,
+				"preauth_id", preAuthID, "err", err, "outbox_err", enqErr)
 		}
 	}
-	// Keep PlatformPreAuthID for observability in logs/metrics (don't clear to 0).
+}
+
+// abandonPreAuth is one of the hold's two exits (settleOrPark is the other):
+// release it — or park the release in the outbox — and clear the id so no
+// later cleanup can touch the same hold twice. No-op without a hold. Every
+// caller used to hand-copy the release and the clear, and
+// ReturnPreConsumedQuota kept the id "for the logs" against the rest; the
+// reason is logged here instead, so the id can go everywhere.
+func abandonPreAuth(relayInfo *relaycommon.RelayInfo, reason string) {
+	preAuthID := relayInfo.PlatformPreAuthID
+	if preAuthID <= 0 {
+		return
+	}
+	releasePlatformPreAuth(relayInfo)
+	relayInfo.PlatformPreAuthID = 0
+	common.SysLog(fmt.Sprintf("pre-auth %d abandoned (%s): accountID=%d, userId=%d",
+		preAuthID, reason, relayInfo.IdentityAccountID, relayInfo.UserId))
+}
+
+// insufficientUserQuotaError is the local ledger's 402, the same shape from
+// the fast pre-check and from the atomic debit that out-raced it: SkipRetry
+// (another channel costs the same), no error-log row (an empty wallet is not
+// an incident), the top-up link as the remedy. ASCII amounts because the
+// display-currency formatter puts a fullwidth sign on the wire.
+func insufficientUserQuotaError(available, required int) *types.NewAPIError {
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("insufficient quota: available %s, required %s",
+			logger.FormatQuotaASCII(available), logger.FormatQuotaASCII(required)),
+		types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
+		types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
+		types.ErrOptionWithTopupURL())
+}
+
+// rollbackTokenFreeze undoes PreConsumeTokenQuota's per-key debit when a
+// later gate refuses the request, so an aborted request never strands it.
+func rollbackTokenFreeze(relayInfo *relaycommon.RelayInfo, quota int) {
+	if err := repo.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota); err != nil {
+		common.SysError(fmt.Sprintf("token freeze rollback failed: tokenId=%d, quota=%d, err=%s",
+			relayInfo.TokenId, quota, err.Error()))
+	}
 }
 
 // PreConsumeQuota validates the user can afford the request and pre-deducts quota.
@@ -115,23 +153,15 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 				logger.LogInfo(c, fmt.Sprintf("advisory: local balance would 402 (available %s, required %s) — platform-governed, continuing",
 					logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)))
 			} else {
-				// Local quota insufficient — must release platform pre-auth if one was created.
-				releasePlatformPreAuth(relayInfo)
-				relayInfo.PlatformPreAuthID = 0
-				return types.NewErrorWithStatusCode(
-					fmt.Errorf("insufficient quota: available %s, required %s",
-						logger.FormatQuotaASCII(userQuota), logger.FormatQuotaASCII(preConsumedQuota)),
-					types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
-					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
-					types.ErrOptionWithTopupURL())
+				abandonPreAuth(relayInfo, "local quota insufficient")
+				return insufficientUserQuotaError(userQuota, preConsumedQuota)
 			}
 		}
 	}
 
 	// Tenant monthly quota enforcement (runs after user-level check).
 	if apiErr := enforceTenantQuota(c.GetString("tenant_id"), preConsumedQuota); apiErr != nil {
-		releasePlatformPreAuth(relayInfo)
-		relayInfo.PlatformPreAuthID = 0
+		abandonPreAuth(relayInfo, "tenant quota exceeded")
 		return apiErr
 	}
 
@@ -156,8 +186,7 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 					relayInfo.UserId, preConsumedQuota, err.Error()))
 				preConsumedQuota = 0
 			} else {
-				releasePlatformPreAuth(relayInfo)
-				relayInfo.PlatformPreAuthID = 0
+				abandonPreAuth(relayInfo, "token pre-deduct refused")
 				if errors.Is(err, ErrTokenQuotaInsufficient) {
 					// Per-TOKEN spending cap (quota.go:645-649 — "not ledger
 					// state"), same remedy as the TokenAuth 402
@@ -211,10 +240,7 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 				if err := repo.DecreaseUserQuota(relayInfo.UserId, preConsumedQuota); err != nil {
 					// Roll the token freeze back so the shadow ledger stays
 					// consistent, then continue without a local freeze.
-					if compErr := repo.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, preConsumedQuota); compErr != nil {
-						common.SysError(fmt.Sprintf("advisory: token freeze rollback failed: tokenId=%d, quota=%d, err=%s",
-							relayInfo.TokenId, preConsumedQuota, compErr.Error()))
-					}
+					rollbackTokenFreeze(relayInfo, preConsumedQuota)
 					metrics.BillingAdvisoryBypassTotal.WithLabelValues("pre_deduct").Inc()
 					common.SysLog(fmt.Sprintf("advisory: user pre-deduct failed, continuing without local freeze: userId=%d, quota=%d, err=%s",
 						relayInfo.UserId, preConsumedQuota, err.Error()))
@@ -231,24 +257,15 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 					// The token was already atomically debited by PreConsumeTokenQuota
 					// above — roll it back so an aborted request never strands a
 					// per-key debit.
-					if compErr := repo.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, preConsumedQuota); compErr != nil {
-						common.SysError(fmt.Sprintf("token freeze rollback failed: tokenId=%d, quota=%d, err=%s",
-							relayInfo.TokenId, preConsumedQuota, compErr.Error()))
-					}
-					releasePlatformPreAuth(relayInfo)
-					relayInfo.PlatformPreAuthID = 0
+					rollbackTokenFreeze(relayInfo, preConsumedQuota)
+					abandonPreAuth(relayInfo, "user pre-deduct refused")
 					if err != nil {
 						// Real DB error — same error code/path as before.
 						return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 					}
 					// ok == false: balance out-raced the pre-check → the same 402 the
 					// fast path returns for insufficient local quota.
-					return types.NewErrorWithStatusCode(
-						fmt.Errorf("insufficient quota: available %s, required %s",
-							logger.FormatQuotaASCII(userQuota), logger.FormatQuotaASCII(preConsumedQuota)),
-						types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
-						types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
-						types.ErrOptionWithTopupURL())
+					return insufficientUserQuotaError(userQuota, preConsumedQuota)
 				}
 			}
 		}
@@ -266,12 +283,60 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 // plus the outbox retry horizon; middleware's lease test pins that sum.
 const PreAuthHoldTTL = time.Hour
 
+// billingUnavailableRetryAfter is what the 503 below tells the SDK to wait.
+// Shorter than the breaker's 15s cooldown on purpose: the first failures of
+// an outage land here BEFORE the breaker opens, and a transient blip is
+// usually over well within that.
+const billingUnavailableRetryAfter = 5 * time.Second
+
 // preAuthorizeWithBreaker is the platform freeze call. A var (same seam
 // convention as AsyncGo) because the identity gRPC client dials with
 // WaitForReady, so in a test binary the call burns the whole request deadline
 // before falling back to HTTP — which leaves the success path below, and the
 // cache warm-up that hangs off it, otherwise unreachable from tests.
 var preAuthorizeWithBreaker = common.PreAuthorizeWithBreaker
+
+// preAuthFailure maps a failed platform freeze to what the customer is owed.
+// Three shapes, and only the first is about their money:
+//   - the platform said insufficient_balance: 402, top-up link, no error-log
+//     row (an empty wallet is not an incident);
+//   - the platform refused the ACCOUNT for another reason (wallet_frozen,
+//     account_suspended…): still the payer's problem, so 402, but named
+//     after the platform's reason, no top-up link (it would not help), and
+//     an error-log row so support can find it;
+//   - the platform could not be asked (timeout, breaker open or probing,
+//     unconfigured) and the degrade path declined: OUR outage — 503 with
+//     Retry-After, never a top-up prompt, error-log row.
+//
+// Every shape used to take the first arm's 402. A funded customer was told
+// to top up on our timeout, their SDK did not retry (402 is terminal), no
+// error-log row was written, and relay_errors_total filed the outage under
+// insufficient_quota. The breaker needs BillingBreakerDefaultThreshold
+// consecutive failures before the degrade path is even admissible, so the
+// first failures of every outage landed exactly here.
+//
+// SkipRetry on all three: another channel costs the same money.
+func preAuthFailure(err error) *types.NewAPIError {
+	var rejected *common.PlatformRejectedError
+	switch {
+	case errors.Is(err, common.ErrInsufficientBalance):
+		return types.NewErrorWithStatusCode(errors.New("insufficient wallet balance"),
+			types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
+			types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
+			types.ErrOptionWithTopupURL())
+	case errors.As(err, &rejected):
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("billing service rejected this request: %s", rejected.Reason),
+			types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
+			types.ErrOptionWithSkipRetry())
+	default:
+		apiErr := types.NewErrorWithStatusCode(fmt.Errorf("billing service unavailable: %w", err),
+			types.ErrorCodeBillingUnavailable, http.StatusServiceUnavailable,
+			types.ErrOptionWithSkipRetry())
+		apiErr.RetryAfterUnix = time.Now().Add(billingUnavailableRetryAfter).Unix()
+		return apiErr
+	}
+}
 
 // platformPreAuthorize calls the platform to freeze wallet balance.
 // High-balance users can skip this call entirely (cache-based trust).
@@ -298,24 +363,20 @@ func platformPreAuthorize(c *gin.Context, estimatedQuota int, relayInfo *relayco
 
 	if err != nil {
 		// P1-2: when the platform breaker is OPEN, fall back to cached wallet
-		// balance instead of a hard 402 — a billing outage must degrade, not take
-		// the gateway down with it. TryDegradedPreAuth is fail-closed and bounded
-		// (fresh cache + 3× margin + per-tenant unsecured-spend cap); on success
-		// we proceed WITHOUT a pre-auth, taking the same legacy post-consume debit
-		// path as the high-balance skip above. This binding is also why the deep
-		// readiness probe (P0-2) is safe: /api/health no longer 503s on a billing
-		// blip, only on a true DB-down.
+		// balance instead of a hard refusal — a billing outage must degrade, not
+		// take the gateway down with it. TryDegradedPreAuth is fail-closed and
+		// bounded (fresh cache + 3× margin + per-tenant unsecured-spend cap); on
+		// success we proceed WITHOUT a pre-auth, taking the same legacy
+		// post-consume debit path as the high-balance skip above. This binding
+		// is also why the deep readiness probe (P0-2) is safe: /api/health no
+		// longer 503s on a billing blip, only on a true DB-down.
 		if common.TryDegradedPreAuth(c.GetString("tenant_id"), accountID, estimatedLB, err) {
 			logger.LogInfo(c, fmt.Sprintf("billing degraded: admitting account %d on cached balance (estimate %.4f LB, breaker open)",
 				accountID, estimatedLB))
 			relayInfo.PlatformGoverned = true
 			return nil
 		}
-		return types.NewErrorWithStatusCode(
-			fmt.Errorf("insufficient balance or billing service unavailable"),
-			types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
-			types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
-			types.ErrOptionWithTopupURL())
+		return preAuthFailure(err)
 	}
 
 	relayInfo.PlatformPreAuthID = result.PreAuthID

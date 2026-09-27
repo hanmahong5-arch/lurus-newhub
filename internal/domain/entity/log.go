@@ -58,6 +58,15 @@ type Log struct {
 	// quota later uses whatever exchange rate is current THEN, which is how
 	// invoices used to re-price history.
 	ChargedCNY4 int64 `json:"charged_cny4" gorm:"type:bigint;not null;default:0"`
+	// PricedCNY4 is what this row's quota was worth in CNY at the exchange
+	// rate current when it was recorded, in the same 0.0001 CNY unit
+	// (migration 042). Unlike ChargedCNY4 it says nothing about the wallet:
+	// a credit-pool or local-quota row gets it too, which is the point —
+	// those rows have ChargedCNY4 = 0 and were otherwise re-priced at
+	// whatever rate was current when an invoice was READ. 0 = written
+	// before the column existed (or zero quota); readers price those at
+	// today's rate and flag the figure as an estimate.
+	PricedCNY4 int64 `json:"priced_cny4" gorm:"type:bigint;not null;default:0"`
 }
 
 // INDEXES ON `logs` THAT THIS STRUCT DELIBERATELY DOES NOT DECLARE
@@ -107,6 +116,7 @@ type RecordConsumeLogParams struct {
 	// RecordConsumeLog call site passes through. 0 = unassigned.
 	ProjectId      int    `json:"project_id"`
 	ChargedCNY4    int64  `json:"charged_cny4"` // see Log.ChargedCNY4; filled by EnrichLogParams
+	PricedCNY4     int64  `json:"priced_cny4"`  // see Log.PricedCNY4; filled by EnrichLogParams from Quota
 	LogDetailLevel string `json:"-"`            // Governance: "none" skips logging, "full" adds prompt preview
 }
 
