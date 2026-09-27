@@ -199,6 +199,18 @@ func SettlePreAuth(ctx context.Context, preAuthID int64, actualAmount float64) (
 	if resp.StatusCode != http.StatusOK {
 		reason := parseErrorResponse(resp.Body)
 		SysLog(fmt.Sprintf("settle failed: preauth=%d, status=%d, reason=%s", preAuthID, resp.StatusCode, reason))
+		if resp.StatusCode == http.StatusBadRequest {
+			// A 400 is the platform's verdict on this hold (expired, already
+			// settled, malformed), not the platform missing. Typed so the
+			// breaker reads it as an answer (platformAnswered): the outbox
+			// retries a parked settle up to ten times, and as a bare error
+			// each retry of a hold the platform had already decided on was
+			// counted as an unreachable platform — three in a row opened the
+			// breaker for every tenant. The outbox itself keeps retrying:
+			// the wire cannot tell "already settled" from "malformed", and
+			// the platform dedupes on the Idempotency-Key either way.
+			return nil, &PlatformRejectedError{Op: "settle", Status: resp.StatusCode, Reason: reason}
+		}
 		return nil, fmt.Errorf("settle failed: %s", reason)
 	}
 	var result SettlePreAuthResult

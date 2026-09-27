@@ -21,9 +21,9 @@ const (
 	// lets it target a channel owned by any tenant. Absent/false = a mere
 	// tenant-admin override, which Distribute confines to the caller's own tenant.
 	ContextKeyTokenSpecificChannelRootOverride ContextKey = "specific_channel_root_override"
-	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
-	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
-	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
+	ContextKeyTokenModelLimitEnabled           ContextKey = "token_model_limit_enabled"
+	ContextKeyTokenModelLimit                  ContextKey = "token_model_limit"
+	ContextKeyTokenCrossGroupRetry             ContextKey = "token_cross_group_retry"
 	// ContextKeyProjectId carries the authenticated token's cost-attribution
 	// project (migration 029). 0 = unassigned. Set by SetupContextForToken and
 	// copied into RelayInfo.ProjectId, because the settlement path has no
@@ -81,4 +81,11 @@ const (
 	// 401/402/429 to answer in the caller's own wire shape instead of always
 	// answering OpenAI's, which a Claude/Gemini SDK cannot parse.
 	ContextKeyRelayFormat ContextKey = "relay_format"
+
+	// ContextKeyProviderFilter carries the request's routing constraint
+	// (dto.ProviderFilter: region / zero-data-retention), parsed by the
+	// distributor from the body's `provider` object and consumed by
+	// app.CacheGetRandomSatisfiedChannel on every attempt, including the
+	// session-affinity lookup. Absent when the request sent no constraint.
+	ContextKeyProviderFilter ContextKey = "provider_filter"
 )

@@ -169,6 +169,19 @@ var ErrTokenQuotaExhausted = errors.New("token unavailable")
 // the other ValidateUserToken failures get.
 var ErrTokenDisabled = errors.New("token status unavailable")
 
+// ErrTokenExpired covers both expiry paths in ValidateUserToken: a row already
+// downgraded to TokenStatusExpired and a live ExpiredTime in the past. The
+// message stays the sentence callers have seen on the wire since the
+// English-message pass; the sentinel only makes it matchable.
+var ErrTokenExpired = errors.New("token has expired")
+
+// ErrTokenLookupFailed is the one ValidateUserToken failure that is NOT a
+// verdict about the key: DB.First failed for a reason other than NotFound
+// (connection down, timeout, pool exhausted). middleware.TokenAuth answers
+// it with 503 instead of 401 so a bridge that replays "unknown key" 401s to
+// another gateway does not get handed a request the hub never judged.
+var ErrTokenLookupFailed = errors.New("token lookup failed")
+
 func ValidateUserToken(key string) (token *Token, err error) {
 	if key == "" {
 		return nil, errors.New("no token provided")
@@ -196,7 +209,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 			}
 			return token, tokenExhaustedMessage(token.RemainQuota)
 		} else if token.Status == common.TokenStatusExpired {
-			return token, errors.New("token has expired")
+			return token, ErrTokenExpired
 		}
 		if token.Status != common.TokenStatusEnabled {
 			return token, fmt.Errorf("%w", ErrTokenDisabled)
@@ -209,7 +222,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 					common.SysLog("failed to update token status" + err.Error())
 				}
 			}
-			return token, errors.New("token has expired")
+			return token, ErrTokenExpired
 		}
 		if !token.UnlimitedQuota && token.RemainQuota <= 0 {
 			if !common.RedisEnabled {
@@ -227,9 +240,11 @@ func ValidateUserToken(key string) (token *Token, err error) {
 	common.SysLog("ValidateUserToken: failed to get token: " + err.Error())
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, errors.New("invalid token")
-	} else {
-		return nil, errors.New("invalid token: token lookup failed, contact the administrator")
 	}
+	// Both wrapped: callers match the sentinel, and the driver error stays
+	// reachable for errors.Is (context deadline, closed pool). The text is
+	// for logs only — TokenAuth writes its own fixed 503 sentence.
+	return nil, fmt.Errorf("%w: %w", ErrTokenLookupFailed, err)
 }
 
 func GetTokenByIds(id int, userId int) (*Token, error) {

@@ -164,6 +164,29 @@ var (
 		[]string{"path"},
 	)
 
+	// BillingMoneyPathLostTotal counts wallet movements that fell through
+	// BOTH their live platform call and the outbox — the point past which
+	// nothing in this process will retry them. Labeled by stage:
+	//   preauth_release — a hold neither released nor parked: the customer's
+	//                     balance stays frozen until the platform's
+	//                     PreAuthHoldTTL sweep (self-healing, but hours)
+	//   settle          — a hold neither settled nor parked: usage the wallet
+	//                     will never be charged for unless reconciled by hand
+	//   debit           — a no-pre-auth debit neither landed nor parked: same
+	// Every stage already had a CRITICAL log line; the 2026-09-23 incident
+	// (4.7h of 402s, nothing on any dashboard) is what a log-only signal is
+	// worth, and CreditPoolDebitLostTotal only covers the credit-pool path.
+	// ALERTABLE: lurus_billing_money_path_lost_total
+	BillingMoneyPathLostTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "billing",
+			Name:      "money_path_lost_total",
+			Help:      "Wallet movements that failed live AND could not be parked in the outbox, by stage (preauth_release/settle/debit)",
+		},
+		[]string{"stage"},
+	)
+
 	// BillingTaskRefundWalletUnreversedTotal counts failed-task and
 	// video-task-recost refunds (cycle-13 L1) whose local-ledger legs
 	// (users.quota, the tenant credit pool, tokens.remain_quota) were made
@@ -203,6 +226,12 @@ func init() {
 	BillingSettlementFailedTotal.WithLabelValues("claude")
 	BillingSettlementFailedTotal.WithLabelValues("audio")
 	BillingSettlementFailedTotal.WithLabelValues("realtime")
+	// Same reasoning for the three money-path stages: the netdata alarm
+	// binds to the chart, and a chart that only appears on the first loss
+	// cannot be told apart from an alarm bound to nothing.
+	BillingMoneyPathLostTotal.WithLabelValues("preauth_release")
+	BillingMoneyPathLostTotal.WithLabelValues("settle")
+	BillingMoneyPathLostTotal.WithLabelValues("debit")
 }
 
 // BillingTaskRefundWalletUnreversed increments

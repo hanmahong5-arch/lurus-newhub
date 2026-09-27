@@ -117,6 +117,21 @@ func EnqueueRelease(accountID, preAuthID int64) error {
 	return nil
 }
 
+// noteMoneyLost is the single exit for a wallet movement that failed live AND
+// could not be parked here — the point past which nothing in this process
+// retries it. One counter series per stage (the alarm binds to it) and one
+// structured line carrying what a reconciliation needs: which account, which
+// hold or reference, how much. amountLB is 0 for preauth_release — the hold's
+// estimate is not retained past platformPreAuthorize, and what is at stake
+// there is the customer's frozen balance (freed by PreAuthHoldTTL), not
+// unbilled revenue. Callers pass the stage-specific attrs: preauth_id or ref,
+// the live error and the outbox error.
+func noteMoneyLost(stage string, accountID int64, amountLB float64, attrs ...any) {
+	metrics.BillingMoneyPathLostTotal.WithLabelValues(stage).Inc()
+	slog.Error("CRITICAL: billing money path lost — nothing will retry this",
+		append([]any{"event", "billing_money_lost", "stage", stage, "account_id", accountID, "amount_lb", amountLB}, attrs...)...)
+}
+
 // outboxBackoff is the delay before retry number `retry` (1-based).
 func outboxBackoff(retry int) time.Duration {
 	d := time.Duration(math.Pow(2, float64(retry))) * 5 * time.Second

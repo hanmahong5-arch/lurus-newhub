@@ -2,11 +2,13 @@ package app
 
 import (
 	"errors"
+	"fmt"
 
+	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
-	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting"
 	"github.com/gin-gonic/gin"
 )
@@ -48,6 +50,28 @@ func (p *RetryParam) IncreaseRetry() {
 
 func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
+}
+
+// providerFilterPredicate turns the request's provider filter (set by the
+// distributor from the body's `provider` object) into the repo predicate.
+// A request without a filter gets nil, which is the unfiltered contract.
+func providerFilterPredicate(c *gin.Context) (dto.ProviderFilter, repo.ChannelPredicate) {
+	filter, _ := common.GetContextKeyType[dto.ProviderFilter](c, constant.ContextKeyProviderFilter)
+	if filter.IsZero() {
+		return filter, nil
+	}
+	return filter, func(ch *repo.Channel) bool { return filter.Matches(ch.GetSetting()) }
+}
+
+// describeProviderFilterMiss attaches the filter the caller sent to the repo's
+// bare sentinel, so the wire sentence reads "no channel satisfies provider
+// filter (region=eu, data_collection=deny)" and an EU customer can tell a
+// region gap from a general outage. Any other error passes through.
+func describeProviderFilterMiss(err error, filter dto.ProviderFilter) error {
+	if errors.Is(err, repo.ErrNoChannelSatisfiesPredicate) {
+		return fmt.Errorf("%w (%s)", repo.ErrNoChannelSatisfiesPredicate, filter.String())
+	}
+	return err
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -95,9 +119,14 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 	// another) just failed us, so the binding has lost its claim — fall straight
 	// through to weighted selection and let the tail of this function re-pin
 	// whatever actually works.
+	// The provider filter (L8) applies to the pin too: a binding recorded by
+	// an earlier, unconstrained turn must not carry a now-EU-only conversation
+	// onto a US channel. A rejected pin falls through to filtered selection
+	// and the deferred re-pin below moves the binding to whatever served.
+	filter, pred := providerFilterPredicate(param.Ctx)
 	affinityKey := common.GetContextKeyString(param.Ctx, constant.ContextKeySessionAffinity)
 	if affinityKey != "" && param.GetRetry() == 0 {
-		if pinned, group := lookupAffinityChannel(param, affinityKey); pinned != nil {
+		if pinned, group := lookupAffinityChannel(param, affinityKey); pinned != nil && (pred == nil || pred(pinned)) {
 			return pinned, group, nil
 		}
 	}
@@ -126,6 +155,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 			}
 		}
 
+		// A group whose every candidate the filter rejected is a miss for that
+		// group but, if no later group serves either, the answer the caller
+		// gets must name the filter rather than read as "model not found".
+		filterMiss := false
 		for i := startGroupIndex; i < len(autoGroups); i++ {
 			autoGroup := autoGroups[i]
 			// Calculate priorityRetry for current group
@@ -138,8 +171,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = repo.GetRandomSatisfiedChannelForTenant(param.TenantID, autoGroup, param.ModelName, priorityRetry)
+			channel, err = repo.GetRandomSatisfiedChannelWhere(param.TenantID, autoGroup, param.ModelName, priorityRetry, pred)
 			if channel == nil {
+				filterMiss = filterMiss || errors.Is(err, repo.ErrNoChannelSatisfiesPredicate)
+				err = nil
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
 				logger.LogDebug(param.Ctx, "No available channel in group %s for model %s at priorityRetry %d, trying next group", autoGroup, param.ModelName, priorityRetry)
@@ -175,9 +210,14 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 			}
 			break
 		}
+		if channel == nil && filterMiss {
+			err = describeProviderFilterMiss(repo.ErrNoChannelSatisfiesPredicate, filter)
+			return nil, selectGroup, err
+		}
 	} else {
-		channel, err = repo.GetRandomSatisfiedChannelForTenant(param.TenantID, param.TokenGroup, param.ModelName, param.GetRetry())
+		channel, err = repo.GetRandomSatisfiedChannelWhere(param.TenantID, param.TokenGroup, param.ModelName, param.GetRetry(), pred)
 		if err != nil {
+			err = describeProviderFilterMiss(err, filter)
 			return nil, param.TokenGroup, err
 		}
 	}

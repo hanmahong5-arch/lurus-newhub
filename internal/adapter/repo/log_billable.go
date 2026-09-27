@@ -12,7 +12,9 @@ import (
 // cycle-13 wiring pass as a pure move (every function here is byte-identical
 // to the one that stood in log.go); internal/pkg/gates' source-size ratchet
 // holds log.go at its measured line count, so this cycle's additions to that
-// file are paid for by a move rather than by raising the ceiling.
+// file are paid for by a move rather than by raising the ceiling. SumUsedToken
+// followed in cycle 18 (L5) on the same terms, paying for the priced_cny4
+// column write in RecordConsumeLog.
 //
 // Keeping them together is not only about size: the two marker substrings
 // BillableConsumePredicate excludes are owned HERE and nowhere else, so a
@@ -89,4 +91,27 @@ func GetUserLogStatInternal(userID int, groupBy string) ([]LogStatEntry, error) 
 		Order("total_quota DESC").
 		Find(&results).Error
 	return results, err
+}
+
+// SumUsedToken aggregates token counts across users. scope is the explicit
+// tenant decision (see SumUsedQuota).
+func SumUsedToken(scope TenantScope, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
+	tx := scope.apply(LOG_DB.Table("logs")).Select("ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0)")
+	if username != "" {
+		tx = tx.Where("username = ?", username)
+	}
+	if tokenName != "" {
+		tx = tx.Where("token_name = ?", tokenName)
+	}
+	if startTimestamp != 0 {
+		tx = tx.Where("created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("created_at <= ?", endTimestamp)
+	}
+	if modelName != "" {
+		tx = tx.Where("model_name = ?", modelName)
+	}
+	tx.Where("type = ?", LogTypeConsume).Scan(&token)
+	return token
 }

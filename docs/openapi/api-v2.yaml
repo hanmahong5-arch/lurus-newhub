@@ -1715,7 +1715,10 @@ components:
           description: Billable quota units consumed
         amount_cny:
           type: number
-          description: "Amount charged for the month in CNY: the wallet charge recorded at settlement for each request that has one (logs.charged_cny4), plus the quota of the remaining billable rows priced at the current exchange rate (QuotaPerUnit / USDExchangeRate quota per CNY). Changing the exchange rate no longer re-prices recorded charges."
+          description: "Amount charged for the month in CNY: the wallet charge recorded at settlement for each request that has one (logs.charged_cny4), the record-time price (logs.priced_cny4) for billable rows the wallet did not pay (credit-pool / local-quota spend), and only for rows that carry neither record the quota priced at the current exchange rate (QuotaPerUnit / USDExchangeRate quota per CNY). Changing the exchange rate re-prices only that last share; see estimated."
+        estimated:
+          type: boolean
+          description: "True when part of amount_cny was priced at the current exchange rate because some billable row predates logs.priced_cny4 (migration 042); that part changes when the rate is edited. False means every row carries a recorded figure and the amount is final."
         request_count:
           type: integer
           format: int64

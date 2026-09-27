@@ -21,7 +21,10 @@ package app
 //     existing TestPreConsumeQuota_InsufficientLocalQuota_402_CarriesTopupURL
 //     in pre_consume_quota_test.go (unmodified by this lane).
 //   - atomic-debit race (~:206-210): TestR2PreConsumeQuota_ConcurrentDebitRace_LosersHaveTopupURL.
-//   - platform pre-auth failure (~:264-268): TestR2PreConsumeQuota_PlatformPreAuthFailure_HasTopupURL.
+//   - platform pre-auth OUTAGE (~:264-268): TestR2PreConsumeQuota_PlatformPreAuthOutage_Is503NotTopup
+//     — no longer a topup 402 since cycle 18 L2; only the platform's own
+//     insufficient_balance verdict keeps that shape (see
+//     pre_consume_platform_failure_test.go).
 //
 // Reuses the same harness as TestPreConsumeQuota_TokenInsufficientReleasesAndErrors
 // (pre_consume_extra_test.go) — that test proves the rejection itself; this one
@@ -33,6 +36,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -95,13 +99,17 @@ func TestL3PreConsumeQuota_TokenInsufficient_HasTokenQuotaHint(t *testing.T) {
 	}
 }
 
-// TestR2PreConsumeQuota_PlatformPreAuthFailure_HasTopupURL proves the
-// platform-pre-auth-failure 402 (pre_consume_quota.go, platformPreAuthorize's
-// error return) still carries topup_url after the B2 fix — this call site was
-// never touched by B2, but the guarantee is worth pinning explicitly since it
-// is one of the three "genuine user-balance" 402s the B2 fix had to leave
-// alone.
-func TestR2PreConsumeQuota_PlatformPreAuthFailure_HasTopupURL(t *testing.T) {
+// TestR2PreConsumeQuota_PlatformPreAuthOutage_Is503NotTopup pins the
+// platform-pre-auth OUTAGE shape (pre_consume_quota.go, platformPreAuthorize's
+// error return). Until cycle 18 L2 this test locked the opposite — a 402 with
+// topup_url, on the premise that "a platform outage is a USER-BALANCE
+// failure". It is not: the customer may be fully funded, and telling them to
+// top up (with a status their SDK will not retry) hides our outage behind
+// their wallet. Only the platform's own insufficient_balance verdict keeps the
+// 402 + topup_url shape — pre_consume_platform_failure_test.go has the full
+// table; this test keeps the outage arm pinned from the file that used to
+// lock it wrong.
+func TestR2PreConsumeQuota_PlatformPreAuthOutage_Is503NotTopup(t *testing.T) {
 	db := setupServiceTestDB(t)
 	seedPoolTables(t, db)
 
@@ -138,25 +146,22 @@ func TestR2PreConsumeQuota_PlatformPreAuthFailure_HasTopupURL(t *testing.T) {
 
 	apiErr := PreConsumeQuota(c, 1_000, relayInfo)
 	if apiErr == nil {
-		t.Fatal("expected 402 when platform pre-auth fails and degrade denies")
+		t.Fatal("expected an error when platform pre-auth fails and degrade denies")
 	}
-	if apiErr.StatusCode != http.StatusPaymentRequired {
-		t.Fatalf("StatusCode = %d, want 402", apiErr.StatusCode)
+	if apiErr.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("StatusCode = %d, want 503 (a platform outage is OUR failure, not the customer's balance)", apiErr.StatusCode)
 	}
-	if apiErr.GetErrorCode() != types.ErrorCodeInsufficientUserQuota {
-		t.Errorf("errorCode = %q, want %q (a platform outage is a USER-BALANCE failure, not a token cap)",
-			apiErr.GetErrorCode(), types.ErrorCodeInsufficientUserQuota)
+	if apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+		t.Errorf("errorCode = %q — an outage must not wear the out-of-money code", apiErr.GetErrorCode())
 	}
-
-	oaErr := apiErr.ToOpenAIError()
-	var meta struct {
-		TopupURL string `json:"topup_url"`
+	if !types.IsRecordErrorLog(apiErr) {
+		t.Errorf("an outage must leave an error-log row; only a customer's empty wallet is exempt")
 	}
-	if err := json.Unmarshal(oaErr.Metadata, &meta); err != nil {
-		t.Fatalf("unmarshal metadata: %v; metadata=%s", err, oaErr.Metadata)
+	if apiErr.RetryAfterUnix <= 0 {
+		t.Errorf("RetryAfterUnix = %d, want > 0 (503 without Retry-After leaves the SDK guessing)", apiErr.RetryAfterUnix)
 	}
-	if meta.TopupURL == "" {
-		t.Errorf("expected non-empty topup_url in metadata, got: %s", oaErr.Metadata)
+	if strings.Contains(string(apiErr.ToOpenAIError().Metadata), "topup_url") {
+		t.Errorf("an outage must not offer a top-up link, got metadata %s", apiErr.ToOpenAIError().Metadata)
 	}
 }
 

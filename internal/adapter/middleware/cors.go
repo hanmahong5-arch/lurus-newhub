@@ -53,6 +53,11 @@ var CORSExposedHeaders = []string{
 	// exposed so a browser caller/admin tool can read it back to purge that
 	// binding via DELETE /api/v2/admin/routing/affinity/:key.
 	"X-Lurus-Affinity-Key",
+	// X-Lurus-Token-State (cycle 18 L3): the verdict behind a TokenAuth
+	// 401/503 (unknown|disabled|expired|lookup_failed) so a browser SDK can
+	// tell "rotate the key" from "wait and retry" without parsing the
+	// message; the newapi bridge reads the same header to decide replay.
+	"X-Lurus-Token-State",
 }
 
 // X-Lurus-Instance is deliberately absent: its only emitter is /metrics,
