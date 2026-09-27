@@ -113,9 +113,13 @@ jobs:
           (cd ../shared/lurus-entkit && go test ./entverify/)
 
   coverage-gate:
-    name: coverage gate (app/repo/handler baselines)
+    name: coverage gate (app/repo/handler/common/metrics baselines + whole-module floor)
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    # 30 -> 45 on 2026-09-27: the per-package step was measured at 310s with
+    # PG (see below) and the whole-module floor step re-runs the -short suite
+    # once more, hermetic; the race job runs the same suite in about that
+    # time, so the two together fit 45 with room and still fail on a hang.
+    timeout-minutes: 45
     # Thresholds are CURRENT BASELINE (ratcheted 2026-08-09) — not aspirational.
     # They prevent regression. Raise them in the same PR that lifts the underlying
     # coverage (ratchet upward, never downward), with a measured before/after in
@@ -295,6 +299,21 @@ jobs:
           check_pkg "internal/app"             87 "internal/app"             # 87 = 89.7-2.7pt buffer against the 2026-09-19 actual. Prior gate 86 = 89.4-3.4pt (2026-08-17), 84 before that. Was 25 vs an actual 27.0% in 2026-05-31 — a 61pt dead zone once the 2026-07-25 corpus landed.
           check_pkg "internal/adapter/repo"    77 "internal/adapter/repo"    # 64.8% hermetic -> 80.5% with PG. 77 = 80.5-3.5pt buffer. Prior gate 62, i.e. an 18.5pt dead zone, and the old 64.3 "hermetic ceiling" WAS the skip: this package's PG-only tests never ran in this job. Largest single correction in this ratchet.
           check_pkg "internal/adapter/handler" 73 "internal/adapter/handler" # 73 = 75.5-2.5pt buffer against the 2026-09-19 actual. Its PG-gated test (cov_handler-deep-b_logs_test.go:258 skips without TEST_POSTGRES_DSN) exercises too few statements to move the package total at one decimal, so the with-PG and hermetic numbers for this package have tracked each other. Prior gate 64 = 69.1-5.1pt (2026-08-17, carried unchanged from 2026-07-20), i.e. an 11.5pt dead zone by 2026-09-19. Prior to that: 48 from a 52.8% measurement.
+          # 2026-09-27 (cycle 18 L7): internal/pkg/common and internal/pkg/metrics
+          # join the gate — the two best-covered packages that had no gate at
+          # all, so either could have shed 20 points unnoticed. Measured locally
+          # on this tree, hermetic (no TEST_POSTGRES_DSN), with exactly this
+          # function's command; the figure is the `go tool cover -func` total
+          # the gate parses, not the per-package `ok` line:
+          #   internal/pkg/common  85.3%  (common 85.2 + common/limiter 100.0)
+          #   internal/pkg/metrics 75.8%  (the `ok` line prints 76.0)
+          # Gates = measurement − ~3pt buffer, floored: 82 / 72. Attaching PG
+          # can only lift a number (see the job comment), so a local hermetic
+          # figure is a safe floor here in a way it was not for repo. Same rule
+          # as the three above: this job prints what it observes; if that
+          # disagrees, correct these to the printed numbers and say so.
+          check_pkg "internal/pkg/common"      82 "internal/pkg/common"      # 82 = 85.3-3.3pt buffer against the 2026-09-27 local measurement. First gate for this package.
+          check_pkg "internal/pkg/metrics"     72 "internal/pkg/metrics"     # 72 = 75.8-3.8pt buffer against the 2026-09-27 local measurement. First gate for this package.
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""
@@ -305,6 +324,40 @@ jobs:
 
           echo ""
           echo "Coverage gate PASSED."
+      - name: Check whole-module coverage floor (statement-weighted, hermetic)
+        # The per-package gates above watch five packages; every other package
+        # in the module can lose coverage without a number moving. This runs
+        # the -short suite once more as ONE profile and compares the
+        # statement-weighted total `go tool cover -func` prints — the same
+        # figure a developer sees from `go test -cover ./...`, not an average
+        # of package percentages.
+        #
+        # Deliberately WITHOUT TEST_POSTGRES_DSN: the PG-gated suites already
+        # ran once in this job against the service database, and a second
+        # pass over the same instance is not something they were written to
+        # survive. The hermetic total is also exactly what a local run
+        # measures, so the floor below is directly comparable to it.
+        #
+        # Floor (cycle 18 L7, 2026-09-27) = 82.5% measured locally
+        # on a clean checkout of main a84c6797 (`go test -short -p 1
+        # -coverprofile ./...`), minus a 3pt buffer. Ratchet it upward with a
+        # measured before/after, like the per-package gates.
+        run: |
+          set -e
+          FLOOR=79
+          go test -short -timeout=1800s -coverprofile=/tmp/cov-all.out -covermode=atomic ./... > /tmp/test-all.log 2>&1 || {
+            echo "TEST FAILED in the whole-module run — see log below"
+            cat /tmp/test-all.log
+            exit 1
+          }
+          pct=$(go tool cover -func=/tmp/cov-all.out | tail -1 | awk '{ sub(/%$/, "", $NF); print $NF }')
+          echo "whole-module: ${pct}% (floor: ${FLOOR}%)"
+          if awk "BEGIN { exit (${pct}+0 >= ${FLOOR}+0) ? 0 : 1 }"; then
+            echo "  PASS"
+          else
+            echo "  FAIL: whole-module ${pct}% < ${FLOOR}% — add tests, or lower the floor with a measured before/after in the commit"
+            exit 1
+          fi
 
   vet:
     name: go vet
@@ -409,6 +462,70 @@ jobs:
         # All existing HIGH findings are suppressed with #nosec + justification comments.
         # New code must not introduce HIGH/CRITICAL severity issues.
         run: gosec -severity high -confidence medium -exclude-dir=.claude ./internal/... ./cmd/...
+
+  govulncheck:
+    name: govulncheck (known vulnerabilities reachable from this module)
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 30
+    # gosec above reads THIS repo's source for dangerous patterns; nothing
+    # in this workflow asked whether a dependency this module actually calls
+    # into has a published advisory (bun audit does exactly that for web/).
+    # govulncheck answers by call-graph reachability, so an advisory in a
+    # package this module imports but never calls does not go red here.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-proto-go
+          path: _sibling/lurus-proto-go
+          fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: hanmahong5-arch/zita-sdk-go
+          ref: e2611da1e01ef77b8227571204d6780a6364fea3
+          path: _sibling/zita-sdk-go
+          fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: LurusTech/lurus-entkit
+          # pinned: bump deliberately after a kit release (2l-svc-platform pkg/entkit)
+          ref: 90c81f1a9193a205a6b7c904686ae9dd238daefe
+          path: _sibling/lurus-entkit
+          fetch-depth: 1
+      - name: Relocate sibling repos to ../shared (matches go.mod replace paths)
+        run: |
+          mkdir -p ../shared
+          mv _sibling/lurus-proto-go ../shared/lurus-proto-go
+          mv _sibling/zita-sdk-go ../shared/zita-sdk-go
+          mv _sibling/lurus-entkit ../shared/lurus-entkit
+          rmdir _sibling
+      - name: Stub web/dist for //go:embed in web/embed.go
+        run: |
+          mkdir -p web/dist
+          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: ${{ !vars.CI_RUNS_ON }}
+      - name: Run govulncheck (pinned)
+        # Pinned for the two reasons gosec's pin gives above. v1.8.0 is the
+        # newest golang.org/x/vuln release as of 2026-09-27. The vulnerability
+        # DATABASE it queries is not pinned and cannot be — a red run here with
+        # no diff behind it means a new advisory matched code this module
+        # reaches, which is the point of the job.
+        #
+        # NOT BLOCKING YET (continue-on-error). The first local run, on a clean
+        # checkout of main a84c6797 with the local go1.26.1 toolchain, reported
+        # 25 reachable vulnerabilities — 20 of them Go standard-library
+        # advisories fixed in go1.26.2 (crypto/x509, crypto/tls, html/template,
+        # net/http, net/mail, …) and 5 across four modules (gorilla/websocket,
+        # quic-go, golang.org/x/net ×2, otel/exporters/otlp) — plus 6
+        # imported-but-unreached and 4 required-but-unreached. A job that is
+        # red on day one gates nothing; the ratchet is: bump the toolchain and
+        # the four modules, re-run, and flip this to blocking in the same PR
+        # that gets it to zero. Until then the job log is the record.
+        continue-on-error: true
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   lint:
     name: golangci-lint (gate new issues)

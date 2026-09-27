@@ -34,6 +34,41 @@ Status: W1 baseline (2026-05-09); revisit after 7 days of stage data.
 > `relay_total_duration_seconds` / `relay_requests_total` it is a `"success"`. The SLI numerator
 > therefore still overstates success by that share; use `relay_errors_total` to see it.
 
+## Alerting (netdata, 2026-09-27)
+
+Until cycle 18 nothing evaluated any row of the table above: the host runs
+Netdata, not Prometheus, and `deploy/r6-host-netdata/health.d/newhub.conf` had
+31 alarms with none on `relay_overhead_duration_seconds`,
+`relay_total_duration_seconds` or `channel_select_duration_seconds`. The
+"RELAY SLO" section of that file now carries six blocks (four alarms, two
+threshold-less helpers) — **in-repo only; not installed on R6 until the
+operator's next `scripts/install-netdata-alarms.sh` run**, and the two
+histogram pairs carry a live check to run first (that section's ⚠VERIFY note).
+
+None is the SLI verbatim. Netdata's `lookup` reads one chart, and under go.d's
+chart model a label value or a histogram's `_sum`/`_count` are different charts,
+so the ratios in the table cannot be divided there. What each alarm evaluates
+instead:
+
+| SLI | Alarm | Evaluates | Gap to the SLI |
+|---|---|---|---|
+| Success rate > 99.5% | `newhub_relay_error_burst` (crit) | `relay_requests_total{status="error"}` per route, 10m average > 0.05/s (30 failures) | Absolute floor: equals 0.5% at 10 req/s on that route, stricter below it |
+| Success rate > 99.5% | `newhub_relay_error_budget_slow_burn` (warn) | same series, 1h average > 0.01/s (36 failures) | Absolute floor: equals 0.5% at 2 req/s; the slow-burn leg the 10m window misses |
+| Overhead P99 < 50ms | `newhub_relay_overhead_slow_share` (warn) | `100 × (1 − rate(le=0.05) / rate(le=+Inf))` over 5m > 1% | The SLO's exact contrapositive, not a substitute — but 5m, not 7d, and it rests on go.d's bucket-chart layout |
+| Channel select P99 < 10ms | `newhub_channel_select_slow_share` (warn) | `100 × (1 − rate(le=0.01) / rate(le=+Inf))` over 5m > 1% | same |
+
+Why the latency alarms are a bucket share and not a mean of `_sum/_count`: a
+mean of 20ms is compatible with 5% of requests at 300ms, which is precisely the
+P99 breach the SLO exists to catch, and `_sum` and `_count` are separate charts
+anyway. P99 < 50ms holds if and only if fewer than 1% of requests exceed 50ms,
+and 50ms / 10ms are declared bucket bounds of the two histograms, so the share
+is computable inside one chart — with a helper template
+(`newhub_relay_overhead_req_rate` / `newhub_channel_select_req_rate`) supplying
+the denominator over the same 5-minute window, the stock Netdata idiom.
+
+The `status="client_gone"` note above applies unchanged: those requests are
+neither `success` nor `error`, so they are outside both error-rate alarms.
+
 ## Why these targets
 
 - **50ms overhead P99**: most enterprise B2B integrations budget 100-200ms of platform overhead on top of actual work. We target half that to leave headroom for ingress + their client-side processing.
