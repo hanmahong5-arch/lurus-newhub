@@ -68,7 +68,6 @@ func TestDrainerShutdown_CutsInFlightOnTimeout(t *testing.T) {
 	defer cancel()
 
 	inflightCalls := 0
-	start := time.Now()
 	cut, err := d.Shutdown(shutdownCtx, srv, func() int {
 		inflightCalls++
 		if !d.IsDraining() {
@@ -76,7 +75,7 @@ func TestDrainerShutdown_CutsInFlightOnTimeout(t *testing.T) {
 		}
 		return 1
 	})
-	elapsed := time.Since(start)
+	returnedAt := time.Now()
 
 	if err != nil {
 		t.Fatalf("Shutdown returned error %v, want nil (a budget timeout must not surface as an error)", err)
@@ -90,8 +89,11 @@ func TestDrainerShutdown_CutsInFlightOnTimeout(t *testing.T) {
 	if !d.IsDraining() {
 		t.Error("Shutdown must leave the Drainer marked draining")
 	}
-	if elapsed < 200*time.Millisecond {
-		t.Errorf("Shutdown returned after only %v, want to have waited out the ~200ms budget", elapsed)
+	// Compare against the budget's own deadline, not a stopwatch started
+	// after the context was created: the deadline was already running by
+	// then, so a stopwatch read 199.7ms on a CI run that did wait it out.
+	if deadline, _ := shutdownCtx.Deadline(); returnedAt.Before(deadline) {
+		t.Errorf("Shutdown returned %v before its budget's deadline, want it to have waited the budget out", deadline.Sub(returnedAt))
 	}
 
 	// Let the handler finish so Serve can actually return, then drain it.
