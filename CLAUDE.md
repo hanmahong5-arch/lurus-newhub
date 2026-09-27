@@ -28,7 +28,7 @@ AI 数据处理枢纽 — Platform 产品组核心成员。在 New API 开源基
 
 | Layer | Tech |
 |-------|------|
-| Backend | Go 1.25.1, Gin, GORM |
+| Backend | Go 1.26.7, Gin, GORM |
 | Frontend | React 18, Vite, Semi UI (`web/`), Bun |
 | DB | PostgreSQL（runtime 唯一；glebarez SQLite 仅 hermetic 单测 tier） |
 | Cache | Redis — session + channel cache + quota sync all follow the DSN's DB (prod `/2`, UAT `/3`; see the "DB" line above) |

@@ -3,7 +3,7 @@
 # Curated high-signal linters only: correctness + resource-leak + error-wrapping
 # checks that catch real bugs, not style churn. Schema targets golangci-lint v2.
 # v1 binaries (last release v1.64.8) are built with go 1.24 and cannot load this
-# module's `go 1.25.1` directive, so v2 is mandatory here.
+# module's `go 1.26.7` directive, so v2 is mandatory here.
 # Run locally with:  golangci-lint run ./internal/... ./cmd/...
 version: "2"
 
