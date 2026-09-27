@@ -34,6 +34,11 @@ type pricingCtx struct {
 func setupPricingRouter(t *testing.T) *pricingCtx {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
+	// repo.GetPricing caches its result package-wide for a minute. Each test
+	// here builds its own database, so without this the second pricing test
+	// to run (whichever -shuffle picks) is served the first one's models.
+	repo.InvalidatePricingCache()
+	t.Cleanup(repo.InvalidatePricingCache)
 
 	dsn := fmt.Sprintf("file:pricing%d?mode=memory&cache=shared", pricingTestDBCounter.Add(1))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
