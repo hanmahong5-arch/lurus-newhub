@@ -1,4 +1,14 @@
+FROM node:22-slim AS node
+
 FROM oven/bun:latest AS builder
+# bun stays the package manager and script runner. The node binary is here
+# only so that `bun run build` executes vite under node (vite's bin has a
+# node shebang; without a node on PATH bun runs it itself). Under bun the
+# build peaked at 6.5G RSS, measured, and was OOM-killed on the 6-7G CI
+# runners; under node it peaks at ~3.2G. NODE_OPTIONS gives node the ~4G
+# heap it would size for itself on a 16G host instead of deriving a smaller
+# one from the container's cgroup.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
 
 WORKDIR /build
 COPY web/package.json .
@@ -6,7 +16,7 @@ COPY web/bun.lock .
 RUN bun install
 COPY ./web .
 COPY ./VERSION .
-RUN DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat VERSION) bun run build
+RUN DISABLE_ESLINT_PLUGIN='true' NODE_OPTIONS=--max-old-space-size=4096 VITE_REACT_APP_VERSION=$(cat VERSION) bun run build
 
 FROM golang:alpine AS builder2
 ENV GO111MODULE=on CGO_ENABLED=0
