@@ -199,16 +199,15 @@ func SettlePreAuth(ctx context.Context, preAuthID int64, actualAmount float64) (
 	if resp.StatusCode != http.StatusOK {
 		reason := parseErrorResponse(resp.Body)
 		SysLog(fmt.Sprintf("settle failed: preauth=%d, status=%d, reason=%s", preAuthID, resp.StatusCode, reason))
-		if resp.StatusCode == http.StatusBadRequest {
-			// A 400 is the platform's verdict on this hold (expired, already
-			// settled, malformed), not the platform missing. Typed so the
+		if isPreAuthVerdict(resp.StatusCode) {
+			// A verdict on this hold, not the platform missing. Typed so the
 			// breaker reads it as an answer (platformAnswered): the outbox
-			// retries a parked settle up to ten times, and as a bare error
-			// each retry of a hold the platform had already decided on was
-			// counted as an unreachable platform — three in a row opened the
-			// breaker for every tenant. The outbox itself keeps retrying:
-			// the wire cannot tell "already settled" from "malformed", and
-			// the platform dedupes on the Idempotency-Key either way.
+			// retries a parked settle, and as a bare error each retry of a
+			// hold the platform had already decided on was counted as an
+			// unreachable platform — three in a row opened the breaker for
+			// every tenant. The Status lets the outbox tell them apart: 404
+			// and 409 can never succeed on retry; a 400 still may (the
+			// platform's HTTP path files its own DB hiccups under 400).
 			return nil, &PlatformRejectedError{Op: "settle", Status: resp.StatusCode, Reason: reason}
 		}
 		return nil, fmt.Errorf("settle failed: %s", reason)
@@ -243,9 +242,30 @@ func ReleasePreAuth(ctx context.Context, preAuthID int64) error {
 	if resp.StatusCode != http.StatusOK {
 		reason := parseErrorResponse(resp.Body)
 		SysLog(fmt.Sprintf("release failed: preauth=%d, status=%d, reason=%s", preAuthID, resp.StatusCode, reason))
+		if isPreAuthVerdict(resp.StatusCode) {
+			return &PlatformRejectedError{Op: "release", Status: resp.StatusCode, Reason: reason}
+		}
 		return fmt.Errorf("release failed: %s", reason)
 	}
 	return nil
+}
+
+// isPreAuthVerdict reports whether a settle/release status is the platform's
+// decision about the hold (400 malformed-or-refused, 404 no such hold, 409
+// already settled/released) rather than a failure to reach or serve it.
+func isPreAuthVerdict(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusNotFound || status == http.StatusConflict
+}
+
+// PreAuthRetryIsFutile reports whether err is a platform verdict that no
+// retry can change: the hold does not exist (404) or is already in a state
+// this operation cannot reach (409). A 400 is NOT futile — see SettlePreAuth.
+func PreAuthRetryIsFutile(err error) bool {
+	var rejected *PlatformRejectedError
+	if !errors.As(err, &rejected) {
+		return false
+	}
+	return rejected.Status == http.StatusNotFound || rejected.Status == http.StatusConflict
 }
 
 // parseErrorResponse extracts the "error" field from a JSON error response body.

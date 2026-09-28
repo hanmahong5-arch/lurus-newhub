@@ -174,6 +174,15 @@ func claimOutboxRows(ctx context.Context, table string, now time.Time, dest any)
 // ProcessBillingOutbox claims due entries and retries them.
 // The claim is durable (status="processing"), so the 3 replicas' tickers cannot
 // hand the same entry to the platform twice.
+// The platform calls the outbox replays. Vars (same seam convention as
+// debitWalletGRPC and settleWithBreaker) so a test can hand the sweep a
+// platform verdict without a gRPC client that would burn the deadline
+// dialling.
+var (
+	settleOutboxCall  = common.SettlePreAuthGRPC
+	releaseOutboxCall = common.ReleasePreAuthGRPC
+)
+
 func ProcessBillingOutbox(ctx context.Context) error {
 	if billingOutboxDB == nil {
 		return nil
@@ -202,9 +211,9 @@ func ProcessBillingOutbox(ctx context.Context) error {
 
 		switch entry.Action {
 		case outboxActionSettle:
-			_, err = common.SettlePreAuthGRPC(processCtx, entry.PreAuthID, entry.AmountLB)
+			_, err = settleOutboxCall(processCtx, entry.PreAuthID, entry.AmountLB)
 		case outboxActionRelease:
-			err = common.ReleasePreAuthGRPC(processCtx, entry.PreAuthID)
+			err = releaseOutboxCall(processCtx, entry.PreAuthID)
 		default:
 			err = fmt.Errorf("unknown action: %s", entry.Action)
 		}
@@ -220,11 +229,26 @@ func ProcessBillingOutbox(ctx context.Context) error {
 			entry.RetryCount++
 			entry.Error = err.Error()
 			newStatus := outboxStatusPending
-			if entry.RetryCount >= outboxMaxRetries {
+			switch {
+			case common.PreAuthRetryIsFutile(err):
+				// 404 / 409: the platform has decided this hold and no retry
+				// can change it. Ten more attempts would only delay the alarm
+				// by half an hour. A refused SETTLE is revenue nobody will
+				// collect now — the same "money lost" exit as a settle that
+				// could not even be parked; a refused release is not.
+				newStatus = outboxStatusFailed
+				metrics.BillingOutboxFailedTotal.Inc()
+				if entry.Action == outboxActionSettle {
+					noteMoneyLost("settle", entry.AccountID, entry.AmountLB,
+						"preauth_id", entry.PreAuthID, "err", err, "outbox_err", "platform verdict, not retried")
+				} else {
+					slog.Error("billing outbox entry refused by the platform, not retried", "id", entry.ID, "action", entry.Action, "preauth_id", entry.PreAuthID, "err", err)
+				}
+			case entry.RetryCount >= outboxMaxRetries:
 				newStatus = outboxStatusFailed
 				metrics.BillingOutboxFailedTotal.Inc()
 				slog.Error("billing outbox permanently failed", "id", entry.ID, "action", entry.Action, "preauth_id", entry.PreAuthID, "err", err)
-			} else {
+			default:
 				entry.NextRetry = time.Now().Add(outboxBackoff(entry.RetryCount))
 				slog.Warn("billing outbox retry scheduled", "id", entry.ID, "retry", entry.RetryCount, "next", entry.NextRetry, "err", err)
 			}
