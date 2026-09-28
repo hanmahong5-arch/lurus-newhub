@@ -90,26 +90,6 @@ func (s TenantScope) apply(tx *gorm.DB) *gorm.DB {
 	return tx.Where("tenant_id = ?", s.tenantID)
 }
 
-// resolveLogTenantID picks the tenant to stamp on a log row being written:
-// the gin context's tenant_id when present (v1 session auth and the v2
-// tenant-slug middleware both set it), otherwise the owning user's tenant.
-// The fallback matters on the plain /v1 relay path: TokenAuth injects no
-// tenant context, so before this fallback every such row was silently
-// stamped 'default' even when the token belonged to another tenant —
-// polluting the default tenant's log views and hiding the rows from the
-// owning tenant's. System rows (userId 0) keep the 'default' stamp.
-func resolveLogTenantID(ginTenantID string, userId int) string {
-	if ginTenantID != "" {
-		return ginTenantID
-	}
-	if userId > 0 {
-		if uc, err := GetUserCache(userId); err == nil && uc.TenantId != "" {
-			return uc.TenantId
-		}
-	}
-	return "default"
-}
-
 // setRequestIdIfAbsent stamps other["request_id"] from the request-scoped id
 // (middleware.RequestId, read via common.RequestIdKey) when the caller
 // hasn't already put one there. Shared by RecordConsumeLog and
@@ -577,6 +557,9 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
+		// The charge has already happened; this row was the usage record.
+		// Counted so the loss reaches an alarm, not only a log line.
+		metrics.BillingConsumeLogWriteFailedTotal.Inc()
 		logger.LogError(c, "failed to record log: "+err.Error())
 	} else {
 		// Async sync to Meilisearch

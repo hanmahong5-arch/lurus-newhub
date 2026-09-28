@@ -39,6 +39,7 @@ do).
 |---|---|---|
 | [platform-billing-breaker-open](platform-billing-breaker-open.md) | netdata `newhub_platform_breaker_open` — `lurus_billing_circuit_breaker_state` | critical |
 | [billing-outbox-failures](billing-outbox-failures.md) | netdata `newhub_billing_outbox_failures` — `lurus_billing_outbox_failed_total` | critical |
+| [consume-log-write-failed](consume-log-write-failed.md) | netdata `newhub_consume_log_write_failed` — `lurus_billing_consume_log_write_failed_total` | critical |
 | [credit-pool-low](credit-pool-low.md) | netdata `newhub_credit_pool` — `lurus_gateway_credit_pool_balance` | warning / critical |
 | [channel-breaker-open](channel-breaker-open.md) | netdata `newhub_channel_breaker_open` — `lurus_gateway_circuit_breaker_state` | warning |
 | [billing-outbox-backlog](billing-outbox-backlog.md) | netdata `newhub_billing_outbox_backlog` — `lurus_billing_outbox_pending` | warning |
