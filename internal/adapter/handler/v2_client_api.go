@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -68,7 +69,7 @@ func ClientGetProfile(c *gin.Context) {
 			"token_count":      tokenCount,
 			"daily_quota":      dailyQuota,
 			"display_currency": displayType,
-			"display_amount":   calculateDisplayAmount(user.Quota),
+			"display_amount":   app.CalculateDisplayAmount(user.Quota),
 		},
 	})
 }
@@ -113,7 +114,7 @@ func ClientGetUsageSummary(c *gin.Context) {
 			"tpm":             stat.Tpm,
 			"start_timestamp": startTS,
 			"end_timestamp":   endTS,
-			"display_amount":  calculateDisplayAmount(user.Quota),
+			"display_amount":  app.CalculateDisplayAmount(user.Quota),
 		},
 	})
 }
