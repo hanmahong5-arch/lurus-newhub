@@ -73,6 +73,14 @@ operator having delegated the decisions:
 - `calculateDisplayAmount` duplicate + `cny_quota_boundary` blind spot — S,
   first add-on when a lane finishes early next time.
 
+Shipped as follow-ups (2026-09-27/28): settle idempotency (platform #72 +
+hub #226), bridge replay-on-unknown (newapi `hub-bridge.yaml` rev 5, applied
+on R1), alarms + 042 on R6 (#222), dialog consolidation (#224/#225),
+JSON-schema structured output on Claude channels (#227: OpenAI
+`response_format` → Anthropic `output_config.format`, schema normalised the
+way Anthropic's SDKs do it, `json_object` → trailing system instruction;
+aws/vertex Claude channels share the conversion).
+
 ## Operator follow-ups
 
 1. newapi repo: `map $upstream_http_x_lurus_token_state $replay { unknown 1; default 0; }` in the bridge, replay only when set.
