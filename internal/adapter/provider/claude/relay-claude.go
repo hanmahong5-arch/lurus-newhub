@@ -413,6 +413,11 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		claudeRequest.System = systemMessages
 	}
 
+	// response_format after the system blocks: json_object appends to them.
+	if err := applyResponseFormat(textRequest.ResponseFormat, &claudeRequest); err != nil {
+		return nil, err
+	}
+
 	claudeRequest.Prompt = ""
 	claudeRequest.Messages = claudeMessages
 	return &claudeRequest, nil
