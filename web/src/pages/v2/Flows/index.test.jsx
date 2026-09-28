@@ -40,47 +40,8 @@ vi.mock('../../../components/hifi/HFShell', () => ({
     ),
 }));
 
-// ConfirmDialog — use real implementation so armed/disarmed logic is tested.
-// It imports Semi Modal; stub that out.
-vi.mock('@douyinfe/semi-ui', () => {
-  // Semi Button passes extra props (data-testid etc) through.
-  const Button = ({ children, onClick, disabled, loading, ...rest }) =>
-    React.createElement(
-      'button',
-      { onClick, disabled: disabled || loading, ...rest },
-      children,
-    );
-  const Modal = ({ visible, children, footer, title, onCancel, closable }) =>
-    visible
-      ? React.createElement(
-          'div',
-          { 'data-testid': 'modal' },
-          React.createElement('div', null, title),
-          children,
-          footer,
-          closable !== false &&
-            React.createElement(
-              'button',
-              { 'data-testid': 'modal-close', onClick: onCancel },
-              'close',
-            ),
-        )
-      : null;
-  // Semi Input calls onChange(value) not onChange(event).
-  // Wrap to accept both DOM event form (from fireEvent.change) and the raw-value
-  // form that ConfirmDialog passes.
-  const Input = ({ value, onChange, autoFocus: _af, ...rest }) =>
-    React.createElement('input', {
-      type: 'text',
-      value: value ?? '',
-      onChange: (e) => onChange && onChange(e.target.value),
-      ...rest,
-    });
-  const Typography = {
-    Text: ({ children }) => React.createElement('span', null, children),
-  };
-  return { Button, Input, Modal, Typography };
-});
+// ConfirmDialog — the real implementation, so armed/disarmed logic is tested
+// (it renders on HfDialog; nothing to stub).
 
 // Mirror i18next's en behaviour: return the English defaultValue (2nd arg)
 // with {{var}} interpolation, falling back to the key when no default given.

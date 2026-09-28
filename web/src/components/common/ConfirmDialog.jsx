@@ -17,9 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Input, Modal } from '@douyinfe/semi-ui';
+import HfDialog, { HfDialogFooter } from '../hifi/HfDialog';
 
 // Tier 1.3 (2026-05-19) — ConfirmDialog replaces window.confirm() at the
 // three destructive surfaces in the v2 console (token revoke / rotate,
@@ -40,10 +40,26 @@ import { Button, Input, Modal } from '@douyinfe/semi-ui';
 //   - Confirm button is disabled until the input value === confirmText
 //     (strict, case-sensitive equality — no trim, no fuzzy match).
 //   - Esc cancels; Enter (while input focused + matched) confirms.
-//   - onConfirm may return a Promise — during pending the Confirm
-//     button shows loading, Cancel + close-X are disabled so a
-//     double-click can't trigger a second mutation.
-//   - Input autoFocus on open; Semi Modal handles tab-trap.
+//   - onConfirm may return a Promise — during pending the dialog is busy:
+//     Confirm, Cancel, the X and the input are disabled and Escape /
+//     backdrop are refused, so a double-click can't trigger a second
+//     mutation and a reflex Escape can't throw the in-flight one away.
+//   - Focus lands in the input on open; HfDialog owns the tab-trap,
+//     focus return and scroll lock.
+//
+// Cycle 18: rebuilt on components/hifi/HfDialog. This was the last v2
+// surface still reaching Semi's Modal/Input/Button, and the only way to
+// unit-test it was to shim all three — which is how Escape, backdrop and
+// the accessible name went unverified for a year. The props are unchanged;
+// only the surface under them moved.
+
+// Semi Button `type` → hifi .btn modifier (.btn.danger / .btn.warning take a
+// solid fill in hifi-tokens.css, like .primary).
+const BUTTON_CLASS = {
+  danger: 'btn danger',
+  warning: 'btn warning',
+  primary: 'btn primary',
+};
 
 const ConfirmDialog = ({
   visible,
@@ -56,13 +72,17 @@ const ConfirmDialog = ({
   onCancel,
 }) => {
   const { t } = useTranslation();
+  const inputId = useId();
   const [inputValue, setInputValue] = useState('');
   const [pending, setPending] = useState(false);
   const inputRef = useRef(null);
 
   // Reset the typed value every time the dialog opens. Without this a
   // user who hit Cancel after typing "alpha" would find the field still
-  // primed when reopening the dialog for a DIFFERENT resource.
+  // primed when reopening the dialog for a DIFFERENT resource. State lives
+  // here rather than inside the (unmounted-while-hidden) panel so a
+  // resolved onConfirm can still flip `pending` back after the caller
+  // closes the dialog.
   useEffect(() => {
     if (visible) {
       setInputValue('');
@@ -95,41 +115,27 @@ const ConfirmDialog = ({
     }
   };
 
+  if (!visible) return null;
+
   return (
-    <Modal
-      visible={visible}
+    <HfDialog
       title={title}
-      onCancel={pending ? undefined : onCancel}
-      closable={!pending}
-      maskClosable={!pending}
-      footer={
-        <>
-          <Button onClick={onCancel} disabled={pending}>
-            {t('取消')}
-          </Button>
-          <Button
-            type={confirmButtonType}
-            theme='solid'
-            disabled={!armed}
-            loading={pending}
-            onClick={handleConfirm}
-            data-testid='confirm-dialog-confirm'
-          >
-            {confirmButtonText || t('删除')}
-          </Button>
-        </>
-      }
+      onClose={onCancel}
+      busy={pending}
       width={460}
+      initialFocusRef={inputRef}
+      testId='confirm-dialog'
+      backdropTestId='confirm-dialog-backdrop'
     >
       {consequenceList.length > 0 && (
         <ul
           data-testid='confirm-dialog-consequences'
           style={{
-            margin: '0 0 14px',
+            margin: 0,
             padding: '10px 12px 10px 28px',
-            borderLeft: '3px solid var(--semi-color-danger, #fa4d56)',
-            background: 'var(--semi-color-danger-light-default, #fff2f1)',
-            color: 'var(--semi-color-danger, #fa4d56)',
+            borderLeft: '3px solid var(--hf-err)',
+            background: 'var(--hf-sunken)',
+            color: 'var(--hf-err)',
             fontSize: 13,
             lineHeight: 1.6,
             listStyle: 'disc',
@@ -140,20 +146,50 @@ const ConfirmDialog = ({
           ))}
         </ul>
       )}
-      <div style={{ marginBottom: 6, fontSize: 13 }}>
-        {t('请输入 {{name}} 以确认操作:', { name: confirmText })}
+      <div>
+        <label
+          htmlFor={inputId}
+          style={{ display: 'block', marginBottom: 6, fontSize: 13 }}
+        >
+          {t('请输入 {{name}} 以确认操作:', { name: confirmText })}
+        </label>
+        <input
+          id={inputId}
+          ref={inputRef}
+          type='text'
+          className='hf-input'
+          style={{ width: '100%', boxSizing: 'border-box' }}
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={pending}
+          autoComplete='off'
+          spellCheck={false}
+          data-testid='confirm-dialog-input'
+          placeholder={confirmText}
+        />
       </div>
-      <Input
-        ref={inputRef}
-        autoFocus
-        value={inputValue}
-        onChange={setInputValue}
-        onKeyDown={handleKeyDown}
-        disabled={pending}
-        data-testid='confirm-dialog-input'
-        placeholder={confirmText}
-      />
-    </Modal>
+      <HfDialogFooter>
+        <button
+          type='button'
+          className='btn ghost'
+          onClick={onCancel}
+          disabled={pending}
+        >
+          {t('取消')}
+        </button>
+        <button
+          type='button'
+          className={BUTTON_CLASS[confirmButtonType] || 'btn'}
+          disabled={!armed}
+          aria-busy={pending || undefined}
+          onClick={handleConfirm}
+          data-testid='confirm-dialog-confirm'
+        >
+          {confirmButtonText || t('删除')}
+        </button>
+      </HfDialogFooter>
+    </HfDialog>
   );
 };
 

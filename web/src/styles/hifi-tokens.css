@@ -242,6 +242,24 @@
   border-color: var(--hf-accent);
   color: #fff;
 }
+/* Destructive / cautionary actions take a solid fill like .primary, so a
+   "delete" or "rotate key" confirm reads as the consequential button at a
+   glance (Semi's Button type=danger|warning did this before the console's
+   ConfirmDialog moved onto HfDialog). */
+.hf .btn.danger {
+  background: var(--hf-err);
+  color: #fff;
+  border-color: var(--hf-err);
+}
+.hf .btn.warning {
+  background: var(--hf-warn);
+  color: #fff;
+  border-color: var(--hf-warn);
+}
+.hf .btn.danger:hover,
+.hf .btn.warning:hover {
+  filter: brightness(0.92);
+}
 .hf .btn.ghost {
   background: transparent;
   border-color: transparent;
