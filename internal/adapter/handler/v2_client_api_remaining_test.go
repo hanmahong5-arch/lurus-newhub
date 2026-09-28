@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 )
 
 // TestClientAPI_RemainingQuotaIsQuotaNotQuotaMinusUsed pins the balance the
@@ -31,7 +32,7 @@ func TestClientAPI_RemainingQuotaIsQuotaNotQuotaMinusUsed(t *testing.T) {
 		if got := int(data["remaining_quota"].(float64)); got != remaining {
 			t.Errorf("%s remaining_quota = %d, want %d (quota=%d, used=%d)", path, got, remaining, remaining, used)
 		}
-		if got, want := data["display_amount"], calculateDisplayAmount(remaining); fmt.Sprint(got) != fmt.Sprint(want) {
+		if got, want := data["display_amount"], app.CalculateDisplayAmount(remaining); fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("%s display_amount = %v, want %v", path, got, want)
 		}
 	}

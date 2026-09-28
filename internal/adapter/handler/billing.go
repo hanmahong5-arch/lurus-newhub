@@ -6,9 +6,9 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/currency"
-	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 	"github.com/gin-contrib/sessions"
@@ -47,21 +47,11 @@ func GetIdentityOverview(c *gin.Context) {
 	c.JSON(http.StatusOK, ov)
 }
 
-// calculateDisplayAmount converts a raw quota value to the display amount
-// based on the configured display type (USD, CNY, or Tokens).
-func calculateDisplayAmount(quota int) float64 {
-	amount := float64(quota)
-	switch operation_setting.GetQuotaDisplayType() {
-	case operation_setting.QuotaDisplayTypeCNY:
-		amount = amount / common.QuotaPerUnit * operation_setting.USDExchangeRate
-	case operation_setting.QuotaDisplayTypeTokens:
-		// Keep raw token count
-	default:
-		// USD
-		amount = amount / common.QuotaPerUnit
-	}
-	return amount
-}
+// Display amounts come from app.CalculateDisplayAmount — the one
+// implementation that knows every display type. A private copy lived here
+// until 2026-09-28 and lacked the LUTE branch, so under that setting the
+// subscription and client-profile endpoints showed a raw USD figure while
+// every other page showed Lute.
 
 // getSessionAccountID reads the platform account ID from the session.
 // Returns 0 if not available (user didn't login via OAuth or platform was unreachable).
@@ -192,7 +182,7 @@ func GetSubscription(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: types.WireErrorType(http.StatusInternalServerError, types.ErrorTypeOpenAIError), Code: string(types.ErrorCodeGatewayInternal)}})
 			return
 		}
-		totalAmount = calculateDisplayAmount(token.RemainQuota + token.UsedQuota)
+		totalAmount = app.CalculateDisplayAmount(token.RemainQuota + token.UsedQuota)
 		expired = token.ExpiredTime
 		if expired <= 0 {
 			expired = 0
@@ -214,7 +204,7 @@ func GetSubscription(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: err.Error(), Type: types.WireErrorType(http.StatusInternalServerError, types.ErrorTypeOpenAIError), Code: string(types.ErrorCodeGatewayInternal)}})
 			return
 		}
-		totalAmount = calculateDisplayAmount(remainQuota + usedQuota)
+		totalAmount = app.CalculateDisplayAmount(remainQuota + usedQuota)
 	}
 
 	subscription := OpenAISubscriptionResponse{
@@ -259,7 +249,7 @@ func GetUsage(c *gin.Context) {
 
 	usage := OpenAIUsageResponse{
 		Object:     "list",
-		TotalUsage: calculateDisplayAmount(quota) * 100,
+		TotalUsage: app.CalculateDisplayAmount(quota) * 100,
 	}
 	c.JSON(200, usage)
 }
