@@ -175,6 +175,42 @@ describe('Projects page', () => {
       expect(API.post).toHaveBeenCalledWith('/api/v2/~/projects', {
         name: 'Research',
         description: 'R&D spend',
+        // Empty budget field = no cap, sent explicitly so the server never
+        // has to guess between "omitted" and "cleared".
+        monthly_budget_quota: 0,
+      });
+    });
+  });
+
+  it('sends the monthly budget in quota units and shows it in the list', async () => {
+    // 12.5 USD × 500 000 quota/USD (the operator default) = 6 250 000.
+    wireGet({
+      projects: [
+        project({ id: 3, monthly_budget_quota: 6_250_000 }),
+        project({ id: 4, name: 'Ops' }),
+      ],
+    });
+    API.put.mockResolvedValue({ data: { success: true, data: project() } });
+
+    render(<HFProjects />);
+    await waitFor(() => screen.getByTestId('proj-row-3'));
+    expect(screen.getByTestId('proj-budget-3').textContent).toBe('$12.50');
+    expect(screen.getByTestId('proj-budget-4').textContent).toBe('no cap');
+
+    fireEvent.click(screen.getByTestId('proj-edit-btn-3'));
+    await waitFor(() => screen.getByTestId('proj-save'));
+    // The edit dialog shows the stored cap back in USD…
+    expect(screen.getByTestId('proj-budget').value).toBe('12.50');
+    // …and a new figure goes back as quota.
+    fireEvent.change(screen.getByTestId('proj-budget'), {
+      target: { value: '20' },
+    });
+    fireEvent.click(screen.getByTestId('proj-save'));
+    await waitFor(() => {
+      expect(API.put).toHaveBeenCalledWith('/api/v2/~/projects/3', {
+        name: 'Marketing',
+        description: 'brand spend',
+        monthly_budget_quota: 10_000_000,
       });
     });
   });

@@ -511,13 +511,14 @@ const HFProjects = () => {
                   {[
                     tr('console.projects.col_name', 'name'),
                     tr('console.projects.col_description', 'description'),
+                    tr('console.projects.col_budget', 'monthly budget'),
                     '',
                   ].map((h, i) => (
                     <th
                       key={i}
                       className='lbl'
                       style={{
-                        textAlign: i === 2 ? 'right' : 'left',
+                        textAlign: i >= 2 ? 'right' : 'left',
                         padding: '10px 16px',
                         borderBottom: '1px solid var(--hf-rule)',
                         fontSize: 11,
@@ -536,6 +537,15 @@ const HFProjects = () => {
                     </td>
                     <td className='muted' style={cellStyle}>
                       {r.description}
+                    </td>
+                    <td
+                      className='mono'
+                      data-testid={`proj-budget-${r.id}`}
+                      style={{ ...cellStyle, textAlign: 'right' }}
+                    >
+                      {r.monthly_budget_quota > 0
+                        ? fmtUSD(r.monthly_budget_quota)
+                        : tr('console.projects.budget_none', 'no cap')}
                     </td>
                     <td
                       style={{

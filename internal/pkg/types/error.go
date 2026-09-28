@@ -98,6 +98,12 @@ const (
 	ErrorCodeInsufficientUserQuota      ErrorCode = "insufficient_user_quota"
 	ErrorCodePreConsumeTokenQuotaFailed ErrorCode = "pre_consume_token_quota_failed"
 	ErrorCodeTenantQuotaExceeded        ErrorCode = "tenant_quota_exceeded"
+	// ErrorCodeProjectBudgetExceeded marks a per-PROJECT monthly cap rejection
+	// (projects.monthly_budget_quota, migration 043; app.enforceProjectBudget).
+	// The remedy is the tenant admin raising or clearing the project's budget
+	// on the Projects page, or waiting for the UTC month to roll (Retry-After
+	// carries that instant) — not a wallet top-up and not a token edit.
+	ErrorCodeProjectBudgetExceeded ErrorCode = "project_budget_exceeded"
 	// ErrorCodeTokenQuotaExhausted marks a per-TOKEN spending-cap rejection —
 	// distinct from ErrorCodeInsufficientUserQuota (per-USER wallet balance).
 	// The remedy differs: a token-cap 402 is fixed by editing the token's own

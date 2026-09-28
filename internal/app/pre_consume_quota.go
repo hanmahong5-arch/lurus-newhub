@@ -164,6 +164,12 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 		abandonPreAuth(relayInfo, "tenant quota exceeded")
 		return apiErr
 	}
+	// Project monthly budget (migration 043): the token's cost-attribution
+	// project may carry a cap; untagged tokens skip this in one comparison.
+	if apiErr := enforceProjectBudget(c.GetString("tenant_id"), relayInfo.ProjectId, preConsumedQuota); apiErr != nil {
+		abandonPreAuth(relayInfo, "project budget exceeded")
+		return apiErr
+	}
 
 	// Trust optimization: skip local pre-deduction when balance is high enough
 	trustQuota := common.GetTrustQuota()

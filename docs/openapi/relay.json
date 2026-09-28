@@ -3737,6 +3737,7 @@
               "insufficient_user_quota",
               "pre_consume_token_quota_failed",
               "tenant_quota_exceeded",
+              "project_budget_exceeded",
               "token_quota_exhausted",
               "billing_unavailable",
               "model_blocked",
