@@ -207,6 +207,26 @@ var (
 			Help:      "Task refunds where every local ledger was made whole but the platform wallet leg could not be reversed (no refund RPC)",
 		},
 	)
+
+	// BillingConsumeLogWriteFailedTotal counts consume-log rows that could
+	// not be inserted (repo.RecordConsumeLog's LOG_DB.Create failed). By the
+	// time that insert runs the quota has been debited and the wallet
+	// settled, so nothing is lost on the money side — what is lost is the
+	// only record of the usage: the row invoices (logs.priced_cny4 /
+	// charged_cny4), dashboards, per-model analytics and the customer's own
+	// usage view all read. Until 2026-09-28 the failure was one log line;
+	// the 2026-09-23 incident (4.7h of 402s, nothing on any dashboard) is
+	// what a log-only signal is worth. A plain counter, so the series is on
+	// /metrics from boot and 0 means "no row lost", not "never wired".
+	// ALERTABLE: lurus_billing_consume_log_write_failed_total
+	BillingConsumeLogWriteFailedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "billing",
+			Name:      "consume_log_write_failed_total",
+			Help:      "Consume-log rows whose insert failed after the usage was already charged — the usage record (invoice line, dashboard, analytics) is lost",
+		},
+	)
 )
 
 // init pre-registers the four known path label values with a zero count,

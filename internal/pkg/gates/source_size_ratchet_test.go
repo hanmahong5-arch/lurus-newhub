@@ -42,7 +42,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/provider/common/relay_info.go":   894, // +1 WalletChargeCNY4 (recorded wallet charge, migration 041)
 	"internal/adapter/provider/gemini/relay-gemini.go": 1427,
 	"internal/adapter/repo/channel.go":                 1226,
-	"internal/adapter/repo/log.go":                     1033, // +1 ChargedCNY4 copied onto the row (migration 041); +1 PricedCNY4 (migration 042), paid for by moving SumUsedToken to log_billable.go (-23, cycle 18 L5)
+	"internal/adapter/repo/log.go":                     1016, // +3 consume-log write-failure counter (2026-09-28), paid for by moving resolveLogTenantID to log_tenant_resolve.go (-19)
 	"internal/adapter/repo/option.go":                  948,
 	"internal/adapter/repo/token.go":                   809, // +15 (cycle 18 L3): ErrTokenExpired/ErrTokenLookupFailed sentinels so TokenAuth can tell revoked/expired/DB-down apart from an unknown key
 	"internal/adapter/repo/user.go":                    1206,

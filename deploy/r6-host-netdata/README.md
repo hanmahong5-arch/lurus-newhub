@@ -31,7 +31,16 @@ a bind source. `scripts/install-netdata-alarms.sh` only manages
 `newhub.conf` — a second alarm file would need its own bind mount added to
 the container definition first (out of scope for this directory).
 
-`health.d/newhub.conf` currently defines 38 alarms:
+`health.d/newhub.conf` currently defines 39 alarms:
+
+- 1 added 2026-09-28, **in-repo only** until the next
+  `scripts/install-netdata-alarms.sh` run: `newhub_consume_log_write_failed`
+  — watches `lurus_billing_consume_log_write_failed_total`, incremented by
+  `repo.RecordConsumeLog` when the consume-log insert fails. That insert
+  runs after the quota debit and the wallet settlement, so the money side is
+  intact and what is lost is the usage record itself (the row invoices,
+  dashboards and the customer's usage view read). Runbook:
+  `doc/runbook/consume-log-write-failed.md`.
 
 - 8 ported from the host's original 2026-08-20 copy
   (`newhub_platform_breaker_open`, `newhub_billing_outbox_failures`,
