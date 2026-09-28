@@ -35,11 +35,13 @@ import (
 // Name resolution for reports therefore reads through Unscoped()
 // (repo.ResolveProjectNames).
 //
-// Budget enforcement (chargeback) is deliberately NOT part of this model — it
-// lives on the relay hot path and is a separate change. No unused budget
-// column is pre-created here: a column that looks like a spending guard but
-// enforces nothing is exactly the dead configuration the repo's structural
-// tests exist to police.
+// MonthlyBudgetQuota (migration 043) is the one enforced setting: a cap on
+// the project's consume spend per UTC calendar month, in quota units. It is
+// checked on the pre-consume path (app.enforceProjectBudget) and denies with
+// 402 project_budget_exceeded; 0 means no cap. It landed together with its
+// enforcement — a column that looks like a spending guard but enforces
+// nothing is exactly the dead configuration the repo's structural tests
+// exist to police.
 type Project struct {
 	Id int `json:"id" gorm:"primaryKey"`
 	// TenantId is the owning tenant. There is no FK to tenants (neither has
@@ -53,11 +55,13 @@ type Project struct {
 	// cannot express the partial predicate, so the two creation paths would
 	// produce different indexes under the same name and diverge (the failure
 	// mode documented in the header of migration 026).
-	Name        string         `json:"name" gorm:"type:varchar(128);not null"`
-	Description string         `json:"description" gorm:"type:varchar(512);not null;default:''"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
+	Name        string `json:"name" gorm:"type:varchar(128);not null"`
+	Description string `json:"description" gorm:"type:varchar(512);not null;default:''"`
+	// MonthlyBudgetQuota: see the type comment. bigint to match migration 043.
+	MonthlyBudgetQuota int64          `json:"monthly_budget_quota" gorm:"type:bigint;not null;default:0"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	DeletedAt          gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (Project) TableName() string {

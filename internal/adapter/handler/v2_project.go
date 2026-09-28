@@ -46,8 +46,11 @@ type projectView struct {
 	Id          int    `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+	// MonthlyBudgetQuota is the enforced monthly cap in quota units, 0 = none
+	// (migration 043; app.enforceProjectBudget).
+	MonthlyBudgetQuota int64 `json:"monthly_budget_quota"`
+	CreatedAt          int64 `json:"created_at"`
+	UpdatedAt          int64 `json:"updated_at"`
 	// Deleted marks a retired (soft-deleted) row, only ever present when the
 	// caller asked for include_deleted. It is what lets the console show an
 	// undo affordance instead of pretending the project never existed.
@@ -56,12 +59,13 @@ type projectView struct {
 
 func toProjectView(p *entity.Project) projectView {
 	return projectView{
-		Id:          p.Id,
-		Name:        p.Name,
-		Description: p.Description,
-		CreatedAt:   p.CreatedAt.Unix(),
-		UpdatedAt:   p.UpdatedAt.Unix(),
-		Deleted:     p.DeletedAt.Valid,
+		Id:                 p.Id,
+		Name:               p.Name,
+		Description:        p.Description,
+		MonthlyBudgetQuota: p.MonthlyBudgetQuota,
+		CreatedAt:          p.CreatedAt.Unix(),
+		UpdatedAt:          p.UpdatedAt.Unix(),
+		Deleted:            p.DeletedAt.Valid,
 	}
 }
 
@@ -150,6 +154,19 @@ func validateProjectPayload(c *gin.Context, name, description string) bool {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": "Project description is too long",
+		})
+		return false
+	}
+	return true
+}
+
+// validateProjectBudget rejects a negative cap. nil (field omitted) is fine:
+// create treats it as "no cap", update as "leave the cap alone".
+func validateProjectBudget(c *gin.Context, budget *int64) bool {
+	if budget != nil && *budget < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Project monthly budget must be zero or positive",
 		})
 		return false
 	}
@@ -359,8 +376,9 @@ func CreateProjectV2(c *gin.Context) {
 	}
 
 	var req struct {
-		Name        string `json:"name" binding:"required"`
-		Description string `json:"description"`
+		Name               string `json:"name" binding:"required"`
+		Description        string `json:"description"`
+		MonthlyBudgetQuota *int64 `json:"monthly_budget_quota"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -370,7 +388,7 @@ func CreateProjectV2(c *gin.Context) {
 		})
 		return
 	}
-	if !validateProjectPayload(c, req.Name, req.Description) {
+	if !validateProjectPayload(c, req.Name, req.Description) || !validateProjectBudget(c, req.MonthlyBudgetQuota) {
 		return
 	}
 
@@ -378,6 +396,12 @@ func CreateProjectV2(c *gin.Context) {
 	if err != nil {
 		respondProjectRepoErr(c, err, "create project")
 		return
+	}
+	if req.MonthlyBudgetQuota != nil && *req.MonthlyBudgetQuota > 0 {
+		if row, err = repo.SetProjectMonthlyBudget(tenantCtx.TenantID, row.Id, *req.MonthlyBudgetQuota); err != nil {
+			respondProjectRepoErr(c, err, "set project budget")
+			return
+		}
 	}
 
 	detailBytes, _ := json.Marshal(map[string]string{"name": row.Name})
@@ -404,8 +428,9 @@ func UpdateProjectV2(c *gin.Context) {
 	}
 
 	var req struct {
-		Name        string `json:"name" binding:"required"`
-		Description string `json:"description"`
+		Name               string `json:"name" binding:"required"`
+		Description        string `json:"description"`
+		MonthlyBudgetQuota *int64 `json:"monthly_budget_quota"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -415,7 +440,7 @@ func UpdateProjectV2(c *gin.Context) {
 		})
 		return
 	}
-	if !validateProjectPayload(c, req.Name, req.Description) {
+	if !validateProjectPayload(c, req.Name, req.Description) || !validateProjectBudget(c, req.MonthlyBudgetQuota) {
 		return
 	}
 
@@ -430,14 +455,28 @@ func UpdateProjectV2(c *gin.Context) {
 		respondProjectRepoErr(c, err, "update project")
 		return
 	}
+	// Omitted budget = leave the cap alone (a client built before 043 must
+	// not clear caps by renaming); present = set it, 0 clears.
+	if req.MonthlyBudgetQuota != nil {
+		if row, err = repo.SetProjectMonthlyBudget(tenantCtx.TenantID, id, *req.MonthlyBudgetQuota); err != nil {
+			respondProjectRepoErr(c, err, "set project budget")
+			return
+		}
+	}
 
 	// Record the rename explicitly: historical log rows keep only the numeric
 	// id, so without this the audit trail is the only way to reconstruct what
-	// a past report's project label meant.
-	detailBytes, _ := json.Marshal(map[string]string{
+	// a past report's project label meant. The budget goes in for the same
+	// reason: a 402 project_budget_exceeded next month is explained by this.
+	detail := map[string]string{
 		"old_name": prev.Name,
 		"new_name": row.Name,
-	})
+	}
+	if req.MonthlyBudgetQuota != nil {
+		detail["old_monthly_budget_quota"] = strconv.FormatInt(prev.MonthlyBudgetQuota, 10)
+		detail["new_monthly_budget_quota"] = strconv.FormatInt(row.MonthlyBudgetQuota, 10)
+	}
+	detailBytes, _ := json.Marshal(detail)
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, tenantCtx.UserID,
 		governance.ActionProjectUpdated, governance.ResourceProject, row.Id, string(detailBytes)))
 

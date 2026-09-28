@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { API, showSuccess } from '../../../helpers';
+import { getQuotaPerUSD, quotaToUSD } from '../../../helpers/formatting';
 import HfDialog, { HfDialogFooter } from '../../../components/hifi/HfDialog';
 
 const inputStyle = {
@@ -43,6 +44,13 @@ const ProjectModal = ({ tenantSlug, target, onSaved, onClose }) => {
   const [form, setForm] = useState({
     name: target.name || '',
     description: target.description || '',
+    // Edited in USD; stored as quota (monthly_budget_quota). Empty or 0 =
+    // no cap. quotaToUSD renders the stored figure at the operator's live
+    // quota_per_unit so the field shows what the admin typed last time.
+    budgetUSD:
+      target.monthly_budget_quota > 0
+        ? quotaToUSD(target.monthly_budget_quota)
+        : '',
   });
   const [saving, setSaving] = useState(false);
   // A ref, not the `saving` state: two submits fired in the same tick (Enter
@@ -60,7 +68,17 @@ const ProjectModal = ({ tenantSlug, target, onSaved, onClose }) => {
     inFlight.current = true;
     setSaving(true);
     try {
-      const payload = { name, description: form.description.trim() };
+      const budgetUSD = parseFloat(form.budgetUSD);
+      const payload = {
+        name,
+        description: form.description.trim(),
+        // Always sent, so clearing the field clears the cap on the server
+        // (an omitted field means "leave the cap alone" there).
+        monthly_budget_quota:
+          Number.isFinite(budgetUSD) && budgetUSD > 0
+            ? Math.round(budgetUSD * getQuotaPerUSD())
+            : 0,
+      };
       const res = target.isNew
         ? await API.post(`/api/v2/${tenantSlug}/projects`, payload)
         : await API.put(`/api/v2/${tenantSlug}/projects/${target.id}`, payload);
@@ -124,6 +142,32 @@ const ProjectModal = ({ tenantSlug, target, onSaved, onClose }) => {
             setForm((f) => ({ ...f, description: e.target.value }))
           }
         />
+      </label>
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span className='lbl'>
+          {tr('console.projects.field_budget', 'monthly budget (USD)')}
+        </span>
+        <input
+          data-testid='proj-budget'
+          style={inputStyle}
+          type='number'
+          min='0'
+          step='0.01'
+          inputMode='decimal'
+          value={form.budgetUSD}
+          disabled={saving}
+          placeholder={tr('console.projects.ph_budget', 'empty = no cap')}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, budgetUSD: e.target.value }))
+          }
+        />
+        <span className='muted' style={{ fontSize: 11 }}>
+          {tr(
+            'console.projects.budget_hint',
+            'Requests from tokens on this project are refused (402 project_budget_exceeded) once its spend this UTC month would cross the cap.',
+          )}
+        </span>
       </label>
 
       <div className='muted' style={{ fontSize: 11 }}>
