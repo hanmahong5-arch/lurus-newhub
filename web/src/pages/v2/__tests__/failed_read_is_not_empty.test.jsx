@@ -124,6 +124,9 @@ vi.mock('../../../helpers', () => ({
   isAdmin: () => true,
   isRoot: () => true,
   getServerAddress: () => 'http://localhost:3000',
+  // Density toggle (Log, admin Users): same answer in both scenarios.
+  getTableCompactMode: () => false,
+  setTableCompactMode: () => {},
 }));
 
 // Mirror i18next's en behaviour: return the English defaultValue with

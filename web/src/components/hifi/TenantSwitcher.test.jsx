@@ -94,3 +94,47 @@ describe('TenantSwitcher — real-data path (Lane B 2026-05-18)', () => {
     expect(screen.getByText('acme · prod')).toBeInTheDocument();
   });
 });
+
+// There is no server-side tenant/mode switch to wire the three mode buttons
+// to (see the comment above HFShell's TenantSwitcher call site) — without an
+// onSelect handler, they must render as real disabled controls, not merely
+// look inert.
+describe('TenantSwitcher — mode switch requires onSelect', () => {
+  it('renders the mode buttons disabled and leaves the mode label unchanged on click, when no onSelect is passed', () => {
+    render(
+      <TenantSwitcher
+        tenants={tenants}
+        tenantName='acme · prod'
+        mode='Reseller'
+      />,
+    );
+    fireEvent.click(screen.getByRole('button'));
+
+    const personalOption = screen.getByText('Personal').closest('button');
+    expect(personalOption).toBeDisabled();
+
+    fireEvent.click(personalOption);
+    // Mode pill still shows the original mode (Reseller) — the click did
+    // nothing.
+    expect(screen.getAllByText(/reseller/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('still fires onSelect(null, mode) for the mode buttons when onSelect is passed', () => {
+    const onSelect = vi.fn();
+    render(
+      <TenantSwitcher
+        tenants={tenants}
+        tenantName='acme · prod'
+        mode='Reseller'
+        onSelect={onSelect}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button'));
+
+    const personalOption = screen.getByText('Personal').closest('button');
+    expect(personalOption).not.toBeDisabled();
+    fireEvent.click(personalOption);
+
+    expect(onSelect).toHaveBeenCalledWith(null, 'Personal');
+  });
+});

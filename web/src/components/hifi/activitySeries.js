@@ -128,6 +128,33 @@ export function buildActivity(
   };
 }
 
+/**
+ * Running total: cumulative([1, 0, 2]) -> [1, 1, 3]. Used by the activity
+ * chart's optional "cumulative" toggle (dashboard.cumulative) — same length
+ * as the input, first entry unchanged, each later entry is itself plus
+ * every value before it.
+ */
+export function cumulative(values) {
+  let sum = 0;
+  return (values || []).map((v) => (sum += Number(v) || 0));
+}
+
+/**
+ * True when every nonzero bucket in `days` (buildActivity's per-day output,
+ * chronological ascending) falls within the trailing `recentDays` buckets —
+ * i.e. the rest of the window is empty, so a chart defaulting to the full
+ * window would render mostly blank bars. False for an empty/short `days`
+ * (nothing to be sparse relative to) or when nothing is nonzero at all
+ * (that's "no data", a different state the chart already handles).
+ */
+export function isSparseRecent(days, recentDays = 7) {
+  if (!Array.isArray(days) || days.length <= recentDays) return false;
+  const nonZero = days.filter((d) => d.total > 0);
+  if (nonZero.length === 0) return false;
+  const cutoff = days[days.length - recentDays].day;
+  return nonZero.every((d) => d.day >= cutoff);
+}
+
 /** A "nice" axis ceiling ≥ v: 1, 2, 2.5, 5 × 10^k. */
 export function niceCeil(v) {
   if (!(v > 0)) return 0;

@@ -488,9 +488,12 @@ describe('Chat page', () => {
     expect(screen.getAllByText('what is Kyoto').length).toBeGreaterThan(0);
   });
 
-  // 9. Deleting a saved session calls DELETE and removes it from the
-  //    sidebar — the round trip's "delete" half, driven from the UI.
-  it('deletes a saved session from the sidebar', async () => {
+  // 9. Deleting a saved session first opens a confirm dialog — no DELETE
+  //    fires until the user confirms — then removes it from the sidebar.
+  //    Regression: this used to fire DELETE the instant the row's own
+  //    button was clicked, with no way to back out of a stray click
+  //    (reverting the confirm step turns this test red).
+  it('confirms before deleting a saved session, and cancel never deletes', async () => {
     wireGet(() =>
       Promise.resolve({
         data: {
@@ -511,7 +514,21 @@ describe('Chat page', () => {
     render(<HFChat />);
 
     await waitFor(() => expect(screen.getByText('to delete')).toBeTruthy());
+
+    // Click delete — a confirm dialog opens, no DELETE yet.
     fireEvent.click(screen.getByTestId('session-delete-9'));
+    expect(screen.getByTestId('session-delete-confirm-dialog')).toBeTruthy();
+    expect(API.delete).not.toHaveBeenCalled();
+
+    // Cancel — dialog closes, still no DELETE, row still there.
+    fireEvent.click(screen.getByTestId('session-delete-cancel-btn'));
+    expect(screen.queryByTestId('session-delete-confirm-dialog')).toBeNull();
+    expect(API.delete).not.toHaveBeenCalled();
+    expect(screen.getByText('to delete')).toBeTruthy();
+
+    // Delete again, this time confirm — DELETE fires and the row is gone.
+    fireEvent.click(screen.getByTestId('session-delete-9'));
+    fireEvent.click(screen.getByTestId('session-delete-confirm-btn'));
 
     await waitFor(() => {
       expect(API.delete).toHaveBeenCalledWith('/api/v2/~/chat/sessions/9');

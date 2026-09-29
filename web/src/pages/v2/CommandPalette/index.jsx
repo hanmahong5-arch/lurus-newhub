@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HFShell, {
@@ -262,10 +262,83 @@ const HFCmdK = () => {
 
   const resultCount = filtered.reduce((n, g) => n + g.rows.length, 0);
 
+  // Flattened, in the same order the groups render — keyboard nav (Arrow
+  // Up/Down/Home/End) walks this list, and hover (the idx scheme below,
+  // group-index*100 + row-index) stays the single source of truth shared
+  // with mouse hover.
+  const flatRows = useMemo(() => {
+    const out = [];
+    filtered.forEach((gr, gi) => {
+      gr.rows.forEach((row, i) => {
+        out.push({ idx: gi * 100 + i, row });
+      });
+    });
+    return out;
+  }, [filtered]);
+
+  // A fresh query is a fresh list: land back on the first row rather than
+  // stranding hover on an idx that may no longer exist (or now points at an
+  // unrelated row).
+  useEffect(() => {
+    setHover(0);
+  }, [q]);
+
+  const rowRefs = useRef({});
+  // Keep the active row in view as the keyboard moves it. jsdom does not
+  // implement scrollIntoView, so this guards for its existence rather than
+  // assuming every render environment has it.
+  useEffect(() => {
+    const el = rowRefs.current[hover];
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }, [hover]);
+
+  const activeRow = flatRows.find((r) => r.idx === hover);
+
   const go = (row) => {
     if (!row?.href) return;
     setOpen(false);
     navigate(row.href);
+  };
+
+  const onPaletteInputKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      setOpen(false);
+      return;
+    }
+    if (flatRows.length === 0) {
+      if (e.key === 'Enter') e.preventDefault();
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const pos = flatRows.findIndex((r) => r.idx === hover);
+      const next = pos < 0 ? 0 : (pos + 1) % flatRows.length;
+      setHover(flatRows[next].idx);
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const pos = flatRows.findIndex((r) => r.idx === hover);
+      const prev = pos <= 0 ? flatRows.length - 1 : pos - 1;
+      setHover(flatRows[prev].idx);
+      return;
+    }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      setHover(flatRows[0].idx);
+      return;
+    }
+    if (e.key === 'End') {
+      e.preventDefault();
+      setHover(flatRows[flatRows.length - 1].idx);
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeRow) go(activeRow.row);
+    }
   };
 
   return (
@@ -369,11 +442,15 @@ const HFCmdK = () => {
                 <input
                   autoFocus
                   data-testid='palette-input'
+                  role='combobox'
+                  aria-expanded={open}
+                  aria-controls='palette-listbox'
+                  aria-activedescendant={
+                    activeRow ? `palette-option-${activeRow.idx}` : undefined
+                  }
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') setOpen(false);
-                  }}
+                  onKeyDown={onPaletteInputKeyDown}
                   placeholder={tr(
                     'console.palette.ph_search',
                     'go to · search models tokens channels…',
@@ -390,7 +467,11 @@ const HFCmdK = () => {
                 />
                 <span className='kbd'>esc</span>
               </div>
-              <div style={{ overflow: 'auto', flex: 1 }}>
+              <div
+                id='palette-listbox'
+                role='listbox'
+                style={{ overflow: 'auto', flex: 1 }}
+              >
                 {loading && (
                   <div className='muted' style={{ padding: '12px 16px' }}>
                     {tr('console.common.loading', 'loading…')}
@@ -420,7 +501,11 @@ const HFCmdK = () => {
                 )}
                 {filtered.map((gr, gi) => (
                   <div key={gr.key}>
-                    <div className='lbl' style={{ padding: '10px 16px 4px' }}>
+                    <div
+                      className='lbl'
+                      role='presentation'
+                      style={{ padding: '10px 16px 4px' }}
+                    >
                       {gr.title}
                     </div>
                     {gr.rows.map((row, i) => {
@@ -429,14 +514,15 @@ const HFCmdK = () => {
                       return (
                         <div
                           key={`${gr.key}-${i}`}
+                          id={`palette-option-${idx}`}
                           data-testid={`palette-row-${gr.key}`}
-                          role='button'
-                          tabIndex={0}
+                          role='option'
+                          aria-selected={active}
+                          ref={(el) => {
+                            rowRefs.current[idx] = el;
+                          }}
                           onMouseEnter={() => setHover(idx)}
                           onClick={() => go(row)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') go(row);
-                          }}
                           style={{
                             display: 'flex',
                             alignItems: 'center',

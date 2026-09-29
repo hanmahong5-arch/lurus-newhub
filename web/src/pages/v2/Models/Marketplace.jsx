@@ -38,47 +38,102 @@ import {
 import { CompareBar, CompareDrawer, MAX_COMPARE } from './Compare';
 import ModelDrawer, { CallableBadge, capLabel } from './ModelDrawer';
 
+// Below this many models the facet rail / sort / view-toggle chrome is more
+// furniture than filter — a tenant with three models does not need a
+// three-column browser to find them. Any active filter, interactive or
+// arriving on the URL, still renders it (see hasUrlFilterParams below), so
+// this can never trap someone mid-search behind a collapsed rail.
+const SMALL_CATALOG_THRESHOLD = 5;
+
+// Known marketplace filter query keys. A deep link that already carries one
+// of these (e.g. a saved "vendor=OpenAI" link) means the caller arrived
+// wanting to filter, so the small-catalog collapse must not hide the
+// controls that would let them see or change it.
+const URL_FILTER_PARAM_KEYS = ['q', 'vendor', 'cap', 'routable'];
+
+function hasUrlFilterParams() {
+  try {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return URL_FILTER_PARAM_KEYS.some((k) => params.has(k));
+  } catch (_) {
+    return false;
+  }
+}
+
+// A row of small equal-height data pills — mono, low-contrast, no
+// value-based colour coding (OpenRouter/Groq-style scan strip). Price,
+// usage and the "no traffic yet" placeholder all render as one of these so
+// a card's stat row keeps a constant height whether or not it has data.
+const Pill = ({ children, muted, testId }) => (
+  <span
+    className='mono'
+    data-testid={testId}
+    style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+      padding: '2px 7px',
+      borderRadius: 3,
+      background: 'var(--hf-sunken)',
+      color: muted ? 'var(--hf-ink-3)' : 'var(--hf-ink-2)',
+      fontSize: 11,
+      lineHeight: 1.5,
+    }}
+  >
+    {children}
+  </span>
+);
+
 const PriceLine = ({ e, tr }) => {
   if (!e.priced) {
     return (
-      <span className='muted'>
+      <Pill muted>
         {tr('console.models.market.unpriced', 'no price configured')}
-      </span>
+      </Pill>
     );
   }
   if (e.quotaType === 1) {
     return (
-      <span>
-        <b className='mono'>{fmtUsd(e.perCall)}</b>{' '}
+      <Pill>
+        <b>{fmtUsd(e.perCall)}</b>
         {tr('console.models.market.per_call', 'per call')}
-      </span>
+      </Pill>
     );
   }
   return (
-    <span style={{ display: 'inline-flex', gap: 14, flexWrap: 'wrap' }}>
-      <span>
-        <b className='mono'>{fmtUsd(e.inputPerM)}</b>
+    <>
+      <Pill>
+        <b>{fmtUsd(e.inputPerM)}</b>
         {tr('console.models.market.per_m_input', '/M input')}
-      </span>
-      <span>
-        <b className='mono'>{fmtUsd(e.outputPerM)}</b>
+      </Pill>
+      <Pill>
+        <b>{fmtUsd(e.outputPerM)}</b>
         {tr('console.models.market.per_m_output', '/M output')}
-      </span>
+      </Pill>
       {e.cacheReadPerM != null && (
-        <span className='muted'>
+        <Pill muted>
           {tr('console.models.market.cache_read', 'cache read')}{' '}
-          <span className='mono'>{fmtUsd(e.cacheReadPerM)}</span>
+          <b>{fmtUsd(e.cacheReadPerM)}</b>
           {tr('console.models.market.per_m', '/M')}
-        </span>
+        </Pill>
       )}
-    </span>
+    </>
   );
 };
 
 // p50 latency and error rate for this tenant over 24h. A thin sample is
-// said to be thin instead of shown as a measurement.
+// said to be thin instead of shown as a measurement; no sample at all is
+// its own equal-height placeholder rather than an absent element, so a
+// grid of cards does not lose a row of height wherever traffic is missing.
 export const PerfLine = ({ e, tr }) => {
-  if (e.p50Ms == null && e.errorRate == null) return null;
+  if (e.p50Ms == null && e.errorRate == null) {
+    return (
+      <Pill muted testId={`model-perf-${e.id}`}>
+        {tr('console.models.no_traffic_yet', 'no traffic yet')}
+      </Pill>
+    );
+  }
   if (!e.enoughSamples) {
     return (
       <span className='faint' data-testid={`model-perf-${e.id}`}>
@@ -154,14 +209,6 @@ const ModelCard = ({
           {e.vendor || tr('console.models.unknown_vendor', 'unknown vendor')}
         </div>
       </div>
-      <div style={{ textAlign: 'right' }}>
-        <div className='mono strong' style={{ fontSize: 13 }}>
-          {fmtCompact(e.tokens)}
-        </div>
-        <div className='faint' style={{ fontSize: 11 }}>
-          {tr('console.models.market.tokens_7d', 'tokens · 7d')}
-        </div>
-      </div>
     </div>
     <div
       className={e.description ? '' : 'faint'}
@@ -192,6 +239,10 @@ const ModelCard = ({
       }}
     >
       <PriceLine e={e} tr={tr} />
+      <Pill>
+        <b>{fmtCompact(e.tokens)}</b>
+        {tr('console.models.market.tokens_7d', 'tokens · 7d')}
+      </Pill>
       <PerfLine e={e} tr={tr} />
       <span style={{ flex: 1 }} />
       {e.capabilities.map((c) => (
@@ -344,72 +395,85 @@ const Marketplace = ({
   );
   const open = openId ? entries.find((e) => e.id === openId) : null;
   const filtered = q || vendors.length || caps.length || routableOnly;
+  // A small, unfiltered catalog gets the plain single-column layout — see
+  // SMALL_CATALOG_THRESHOLD's comment. Any active filter (interactive or on
+  // the URL) always keeps the full chrome, so this never hides a control
+  // whose state is the reason the page looks the way it does.
+  const smallCatalog =
+    entries.length < SMALL_CATALOG_THRESHOLD &&
+    !filtered &&
+    !hasUrlFilterParams();
 
   return (
-    <div className='hf-market'>
-      <aside className='hf-market-rail' data-testid='models-rail'>
-        <input
-          className='hf-input'
-          type='search'
-          placeholder={tr('console.models.market.search', 'search models…')}
-          value={q}
-          onChange={(ev) => setQ(ev.target.value)}
-          data-testid='models-search'
-          style={{ width: '100%' }}
-        />
-        <label
-          style={{
-            display: 'flex',
-            gap: 8,
-            alignItems: 'center',
-            marginTop: 12,
-            fontSize: 13,
-          }}
-        >
+    <div
+      className='hf-market'
+      style={smallCatalog ? { gridTemplateColumns: '1fr' } : undefined}
+    >
+      {!smallCatalog && (
+        <aside className='hf-market-rail' data-testid='models-rail'>
           <input
-            type='checkbox'
-            checked={routableOnly}
-            onChange={() => setRoutableOnly((v) => !v)}
-            data-testid='models-callable-only'
+            className='hf-input'
+            type='search'
+            placeholder={tr('console.models.market.search', 'search models…')}
+            value={q}
+            onChange={(ev) => setQ(ev.target.value)}
+            data-testid='models-search'
+            style={{ width: '100%' }}
           />
-          {tr('console.models.market.callable_only', 'callable by me only')}
-        </label>
+          <label
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              marginTop: 12,
+              fontSize: 13,
+            }}
+          >
+            <input
+              type='checkbox'
+              checked={routableOnly}
+              onChange={() => setRoutableOnly((v) => !v)}
+              data-testid='models-callable-only'
+            />
+            {tr('console.models.market.callable_only', 'callable by me only')}
+          </label>
 
-        <div className='lbl' style={{ marginTop: 18, marginBottom: 4 }}>
-          {tr('console.models.vendor', 'vendor')}
-        </div>
-        {vFacets.map(({ vendor, count }) => (
-          <FacetRow
-            key={vendor || '_'}
-            testid={`vendor-facet-${vendor || 'unknown'}`}
-            checked={vendors.includes(vendor)}
-            onChange={() => setVendors((l) => toggle(l, vendor))}
-            icon={<HfVendorIcon vendor={vendor} size={16} />}
-            label={
-              vendor || tr('console.models.unknown_vendor', 'unknown vendor')
-            }
-            count={count}
-          />
-        ))}
+          <div className='lbl' style={{ marginTop: 18, marginBottom: 4 }}>
+            {tr('console.models.vendor', 'vendor')}
+          </div>
+          {vFacets.map(({ vendor, count }) => (
+            <FacetRow
+              key={vendor || '_'}
+              testid={`vendor-facet-${vendor || 'unknown'}`}
+              checked={vendors.includes(vendor)}
+              onChange={() => setVendors((l) => toggle(l, vendor))}
+              icon={<HfVendorIcon vendor={vendor} size={16} />}
+              label={
+                vendor || tr('console.models.unknown_vendor', 'unknown vendor')
+              }
+              count={count}
+            />
+          ))}
 
-        {cFacets.length > 0 && (
-          <>
-            <div className='lbl' style={{ marginTop: 18, marginBottom: 4 }}>
-              {tr('console.models.market.th_caps', 'capabilities')}
-            </div>
-            {cFacets.map(({ capability, count }) => (
-              <FacetRow
-                key={capability}
-                testid={`cap-facet-${capability}`}
-                checked={caps.includes(capability)}
-                onChange={() => setCaps((l) => toggle(l, capability))}
-                label={capLabel(tr, capability)}
-                count={count}
-              />
-            ))}
-          </>
-        )}
-      </aside>
+          {cFacets.length > 0 && (
+            <>
+              <div className='lbl' style={{ marginTop: 18, marginBottom: 4 }}>
+                {tr('console.models.market.th_caps', 'capabilities')}
+              </div>
+              {cFacets.map(({ capability, count }) => (
+                <FacetRow
+                  key={capability}
+                  testid={`cap-facet-${capability}`}
+                  checked={caps.includes(capability)}
+                  onChange={() => setCaps((l) => toggle(l, capability))}
+                  label={capLabel(tr, capability)}
+                  count={count}
+                />
+              ))}
+            </>
+          )}
+        </aside>
+      )}
 
       <section className='hf-market-main'>
         <div className='hf-market-toolbar'>
@@ -424,43 +488,47 @@ const Marketplace = ({
                 })}
           </span>
           <span style={{ flex: 1 }} />
-          <select
-            className='hf-input'
-            value={sort}
-            onChange={(ev) => setSort(ev.target.value)}
-            data-testid='models-sort'
-          >
-            <option value='popular'>
-              {tr('console.models.market.sort_popular', 'most used')}
-            </option>
-            <option value='name'>
-              {tr('console.models.market.sort_name', 'name')}
-            </option>
-            <option value='input_asc'>
-              {tr('console.models.market.sort_input', 'input price ↑')}
-            </option>
-            <option value='output_asc'>
-              {tr('console.models.market.sort_output', 'output price ↑')}
-            </option>
-            <option value='fastest'>
-              {tr('console.models.perf.sort_fastest', 'fastest (p50)')}
-            </option>
-          </select>
-          <div className='hf-seg'>
-            {['list', 'table'].map((v) => (
-              <button
-                key={v}
-                type='button'
-                className={'btn sm' + (view === v ? ' primary' : '')}
-                onClick={() => setView(v)}
-                data-testid={`models-view-${v}`}
-              >
-                {v === 'list'
-                  ? tr('console.models.market.view_list', 'list')
-                  : tr('console.models.market.view_table', 'table')}
-              </button>
-            ))}
-          </div>
+          {!smallCatalog && (
+            <select
+              className='hf-input'
+              value={sort}
+              onChange={(ev) => setSort(ev.target.value)}
+              data-testid='models-sort'
+            >
+              <option value='popular'>
+                {tr('console.models.market.sort_popular', 'most used')}
+              </option>
+              <option value='name'>
+                {tr('console.models.market.sort_name', 'name')}
+              </option>
+              <option value='input_asc'>
+                {tr('console.models.market.sort_input', 'input price ↑')}
+              </option>
+              <option value='output_asc'>
+                {tr('console.models.market.sort_output', 'output price ↑')}
+              </option>
+              <option value='fastest'>
+                {tr('console.models.perf.sort_fastest', 'fastest (p50)')}
+              </option>
+            </select>
+          )}
+          {!smallCatalog && (
+            <div className='hf-seg'>
+              {['list', 'table'].map((v) => (
+                <button
+                  key={v}
+                  type='button'
+                  className={'btn sm' + (view === v ? ' primary' : '')}
+                  onClick={() => setView(v)}
+                  data-testid={`models-view-${v}`}
+                >
+                  {v === 'list'
+                    ? tr('console.models.market.view_list', 'list')
+                    : tr('console.models.market.view_table', 'table')}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {loading && entries.length === 0 ? (

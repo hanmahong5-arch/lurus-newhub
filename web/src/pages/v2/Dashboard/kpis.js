@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { localDayKey } from '../../../components/hifi/activitySeries';
+
 const LOG_TYPE_CONSUME = 2;
 const LOG_TYPE_ERROR = 5;
 
@@ -138,3 +140,78 @@ export const formatQPS = (qps) => {
 };
 
 export const DASHBOARD_REALTIME_WINDOW_SECONDS = 300; // 5 min
+
+// ─── KPI-card trend + delta (cycle-19: sparkline + 环比) ──────────────────
+//
+// KpiCards draws a small sparkline + period-over-period delta under the
+// all-time spend/request totals, sourced from the same /api/data/self/ rows
+// HfActivityChart uses. The two pure pieces live here (not in
+// components/hifi/activitySeries.js) because they are KPI-card concerns —
+// a single summed-across-models daily series, not the per-model stack
+// activitySeries builds — and kpis.js is already the home for this page's
+// other derived-number math.
+
+/**
+ * Sum `field` per LOCAL calendar day (see activitySeries.localDayKey — keys
+ * on the browser's clock, not UTC, for the same reason the activity chart
+ * does) for the trailing `days` local days ending on `end`'s day. Always
+ * returns exactly `days` entries, oldest first, zero-filled for days with no
+ * rows — the sparkline needs a fixed-length series so it never reflows.
+ *
+ * @param {Array} rows        /api/data/self/ rows (quota, count, created_at)
+ * @param {object} o
+ * @param {number} o.end      window end, unix seconds
+ * @param {number} o.days     how many local days, ending with o.end's day
+ * @param {'quota'|'count'|'token_used'} [o.field='quota']
+ * @returns {number[]}
+ */
+export function dailyTotals(rows, { end, days, field = 'quota' }) {
+  if (!end || !days || days < 1) return [];
+  const lastKey = localDayKey(end);
+  const cursor = new Date(lastKey * 1000);
+  cursor.setDate(cursor.getDate() - (days - 1));
+  const firstKey = Math.floor(cursor.getTime() / 1000);
+
+  const byDay = new Map();
+  for (const row of rows || []) {
+    const ts = Number(row?.created_at) || 0;
+    if (!ts) continue;
+    const key = localDayKey(ts);
+    if (key < firstKey || key > lastKey) continue;
+    const v = Number(row?.[field]) || 0;
+    byDay.set(key, (byDay.get(key) || 0) + v);
+  }
+
+  const out = [];
+  const walk = new Date(firstKey * 1000);
+  for (let key = firstKey; key <= lastKey; ) {
+    out.push(byDay.get(key) || 0);
+    walk.setDate(walk.getDate() + 1);
+    key = Math.floor(walk.getTime() / 1000);
+  }
+  return out;
+}
+
+// Sum of a plain number array — the one place dailyTotals' output gets
+// collapsed to a single total for percentDelta below.
+export const sumSeries = (values) =>
+  (values || []).reduce((s, v) => s + (Number(v) || 0), 0);
+
+/**
+ * 环比 (period-over-period % change), signed: positive means `current` is
+ * higher than `previous`. Returns `null` when there is nothing honest to
+ * compare against — `previous` is 0, missing, or non-finite — rather than
+ * fabricating a 0% or a divide-by-zero infinity. Both inputs are already-
+ * summed totals (see sumSeries), not raw daily arrays.
+ *
+ * @param {number} current
+ * @param {number} previous
+ * @returns {number|null}
+ */
+export function percentDelta(current, previous) {
+  if (typeof current !== 'number' || !Number.isFinite(current)) return null;
+  if (typeof previous !== 'number' || !Number.isFinite(previous) || !previous) {
+    return null;
+  }
+  return ((current - previous) / previous) * 100;
+}

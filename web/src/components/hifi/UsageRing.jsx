@@ -33,6 +33,8 @@ import { useTranslation } from 'react-i18next';
  *   label   {string} — metric name displayed below the ring
  *   unit    {string} — e.g. "tokens", "$", "req"
  *   size    {number} — SVG dimension in px (default 64)
+ *   compact {boolean} — ring only: no caption, no used/total row (for a card
+ *                       whose own title and figure already say what it is)
  */
 const UsageRing = ({
   used = 0,
@@ -40,6 +42,7 @@ const UsageRing = ({
   label = '',
   unit = '',
   size = 64,
+  compact = false,
 }) => {
   const { t: tr } = useTranslation();
   const pct = total > 0 ? Math.min(used / total, 1) : 0;
@@ -125,36 +128,40 @@ const UsageRing = ({
         </text>
       </svg>
 
-      {/* Label row */}
-      <div
-        style={{
-          fontSize: 9,
-          textTransform: 'uppercase',
-          letterSpacing: '0.12em',
-          color: 'var(--hf-ink-3)',
-          textAlign: 'center',
-        }}
-      >
-        {label}
-      </div>
+      {!compact && (
+        <>
+          {/* Label row */}
+          <div
+            style={{
+              fontSize: 9,
+              textTransform: 'uppercase',
+              letterSpacing: '0.12em',
+              color: 'var(--hf-ink-3)',
+              textAlign: 'center',
+            }}
+          >
+            {label}
+          </div>
 
-      {/* Used / total */}
-      {total > 0 && (
-        <div
-          style={{
-            fontSize: 10,
-            color: 'var(--hf-ink-2)',
-            textAlign: 'center',
-          }}
-        >
-          {fmt(used)}
-          <span style={{ color: 'var(--hf-ink-4)' }}>/{fmt(total)}</span>
-          {unit && (
-            <span style={{ marginLeft: 2, color: 'var(--hf-ink-4)' }}>
-              {unit}
-            </span>
+          {/* Used / total */}
+          {total > 0 && (
+            <div
+              style={{
+                fontSize: 10,
+                color: 'var(--hf-ink-2)',
+                textAlign: 'center',
+              }}
+            >
+              {fmt(used)}
+              <span style={{ color: 'var(--hf-ink-4)' }}>/{fmt(total)}</span>
+              {unit && (
+                <span style={{ marginLeft: 2, color: 'var(--hf-ink-4)' }}>
+                  {unit}
+                </span>
+              )}
+            </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );

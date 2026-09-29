@@ -58,6 +58,7 @@ import { API } from '../../helpers';
 import { clearAllDrafts } from '../../hooks/common/useFormDraft';
 import { readTenantSlug } from '../../hooks/common/useTenantSlug';
 import { HfToastHost } from './HfToast';
+import HfUserMenu, { isMacPlatform } from './HfUserMenu';
 
 // Single source of truth: pathname suffix → nav item id.
 // HFShell uses this to auto-highlight the active item when caller doesn't
@@ -97,33 +98,6 @@ const useV2ActiveId = () => {
   const { pathname } = useLocation();
   const m = pathname.match(/\/console\/v2\/([^/?#]+)/);
   return m ? PATH_TO_ID[m[1]] || '' : '';
-};
-
-const useThemeToggle = () => {
-  const [theme, setTheme] = useState(() => {
-    if (typeof document === 'undefined') return 'light';
-    return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
-  });
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    document.documentElement.dataset.theme = theme;
-    try {
-      localStorage.setItem('lurus-hf-theme', theme);
-    } catch (e) {
-      // ignore — private browsing / disabled storage
-    }
-  }, [theme]);
-  // On first mount, hydrate from storage if no theme yet set.
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('lurus-hf-theme');
-      if (saved === 'light' || saved === 'dark') setTheme(saved);
-    } catch (e) {
-      // ignore
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  return [theme, () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))];
 };
 
 /*
@@ -244,7 +218,7 @@ export const NAV_SECTIONS = [
       // written back with PUT /api/user/setting) since cycle 10, so the
       // sentence that used to stand here was stale by a cycle.
       // /console/personal renders the legacy HeaderBar/SiderBar chrome, not
-      // this shell (PageLayout.jsx's v2 bypass only matches /console/v2/*),
+      // this shell (PageLayout.jsx's v2 bypass only matches /console/v2/ paths),
       // so clicking this item leaves the rail entirely and nothing
       // highlights on the way back. legacyBridge:true marks that in the UI
       // — see the nav-legacy-tag rendering below.
@@ -625,15 +599,7 @@ const handleLogout = async () => {
 const HFShell = ({ active, crumbs = [], actions, children }) => {
   const autoActive = useV2ActiveId();
   const activeId = active != null ? active : autoActive;
-  const [theme, toggleTheme] = useThemeToggle();
-  const { t, i18n } = useTranslation();
-  const isZh = (i18n.resolvedLanguage || i18n.language || 'zh').startsWith(
-    'zh',
-  );
-  // Reuse i18next + the LanguageDetector localStorage cache (i18nextLng) — the
-  // same mechanism the v1 LanguageSelector drives, so the choice persists and
-  // is shared across the whole app.
-  const toggleLang = () => i18n.changeLanguage(isZh ? 'en' : 'zh');
+  const { t } = useTranslation();
   const user = useBridgedUser();
   const currentTenant = useCurrentTenant(user);
   const [navOpen, setNavOpen] = useState(false);
@@ -693,11 +659,15 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
           }}
         >
           <span className='search-label' style={{ color: 'var(--hf-ink-3)' }}>
-            <LuSearch size={12} aria-hidden='true' />{' '}
+            <LuSearch size={12} aria-hidden='true' />
             {t('console.shell.search', 'search anything')}
           </span>
           <span className='kbd-group'>
-            <span className='kbd'>⌘</span>
+            {isMacPlatform() ? (
+              <span className='kbd'>⌘</span>
+            ) : (
+              <span className='kbd'>Ctrl</span>
+            )}
             <span className='kbd'>K</span>
           </span>
         </button>
@@ -740,6 +710,10 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
               <span>{t('console.shell.support', 'Support')}</span>
             </a>
           </div>
+          {/* No onSelect: there is no server-side tenant/mode switch endpoint
+              for this shell to call yet, so TenantSwitcher renders its mode
+              buttons disabled (see the comment on its modeSwitchEnabled
+              line) instead of silently mutating local state for nothing. */}
           <TenantSwitcher
             tenants={currentTenant ? [currentTenant] : []}
             tenantName={currentTenant?.name ?? ''}
@@ -771,76 +745,7 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {actions}
-            <button
-              type='button'
-              className='btn ghost'
-              onClick={toggleLang}
-              title={t('console.shell.toggle_language', 'switch language')}
-              aria-label={t('console.shell.toggle_language', 'switch language')}
-              style={{
-                fontSize: 12,
-                padding: '0 8px',
-                fontFamily: 'var(--hf-mono)',
-              }}
-            >
-              {isZh ? 'EN' : '中'}
-            </button>
-            <button
-              type='button'
-              className='btn ghost'
-              onClick={toggleTheme}
-              title={
-                theme === 'dark'
-                  ? t('console.shell.theme_to_light', 'switch to light')
-                  : t('console.shell.theme_to_dark', 'switch to dark')
-              }
-              aria-label={t('console.shell.toggle_theme', 'toggle theme')}
-              style={{ fontSize: 14, padding: '0 8px' }}
-            >
-              {theme === 'dark' ? '☀' : '◐'}
-            </button>
-            {user && (
-              <span
-                style={{
-                  fontSize: 12,
-                  color: 'var(--hf-ink-2)',
-                  padding: '0 6px',
-                  maxWidth: 160,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-                title={user.email || user.username}
-              >
-                {user.display_name || user.username}
-              </span>
-            )}
-            <button
-              type='button'
-              className='btn ghost'
-              onClick={
-                user
-                  ? handleLogout
-                  : () => {
-                      window.location.href = '/login';
-                    }
-              }
-              title={
-                user
-                  ? t('console.shell.logout', 'log out')
-                  : t('console.shell.login', 'log in')
-              }
-              aria-label={
-                user
-                  ? t('console.shell.logout', 'log out')
-                  : t('console.shell.login', 'log in')
-              }
-              style={{ fontSize: 12, padding: '0 10px' }}
-            >
-              {user
-                ? t('console.shell.logout', 'logout')
-                : t('console.shell.login', 'login')}
-            </button>
+            <HfUserMenu user={user} onLogout={handleLogout} />
           </div>
         </div>
         <div className='hf-body'>{children}</div>

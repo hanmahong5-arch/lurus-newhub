@@ -446,6 +446,148 @@ describe('CommandPalette — real data', () => {
     expect(screen.queryByTestId('palette-load-error')).toBeNull();
   });
 
+  // B-cycle19 L4: the palette used to require a mouse — Tab could not reach
+  // rows at all (they were plain divs with tabIndex/role='button', outside
+  // any listbox semantics) and there was no way to move the active row from
+  // the keyboard. It is now a real combobox+listbox: ArrowDown/ArrowUp walk
+  // the flattened, already-rendered rows (same order top to bottom), wrap at
+  // both ends, and Enter opens whichever row is active — the same
+  // navigate(row.href) path a click uses.
+  describe('keyboard navigation', () => {
+    it('moves the active row with ArrowDown, wrapping at the end back to the first row', async () => {
+      wireGet();
+      render(<HFCmdK />);
+      await waitFor(() => expect(screen.getByText('prod-key')).toBeTruthy());
+
+      const input = screen.getByTestId('palette-input');
+      const optionFor = (text) =>
+        screen.getByText(text).closest('[role="option"]');
+
+      // Unconditional nav rows render in a fixed order: dashboard, playground,
+      // chat, tokens, logs, billing (sliced to MAX_PER_GROUP=6) — 'Chat' is
+      // deterministically the 3rd row regardless of admin/role.
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      expect(optionFor('Chat').getAttribute('aria-selected')).toBe('true');
+      expect(optionFor('Dashboard').getAttribute('aria-selected')).toBe(
+        'false',
+      );
+
+      // Jump to the last row ("actions" is always pushed last, unconditionally
+      // — see the palette's group builder) and confirm one more ArrowDown
+      // wraps back to the first row.
+      fireEvent.keyDown(input, { key: 'End' });
+      const lastRow = screen
+        .getByText('Create token…')
+        .closest('[role="option"]');
+      expect(lastRow.getAttribute('aria-selected')).toBe('true');
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      expect(optionFor('Dashboard').getAttribute('aria-selected')).toBe('true');
+
+      // ArrowUp from the first row wraps back to the last.
+      fireEvent.keyDown(input, { key: 'ArrowUp' });
+      expect(lastRow.getAttribute('aria-selected')).toBe('true');
+    });
+
+    it('jumps to the first/last row on Home/End', async () => {
+      wireGet();
+      render(<HFCmdK />);
+      await waitFor(() => expect(screen.getByText('prod-key')).toBeTruthy());
+
+      const input = screen.getByTestId('palette-input');
+      const optionFor = (text) =>
+        screen.getByText(text).closest('[role="option"]');
+
+      fireEvent.keyDown(input, { key: 'End' });
+      expect(
+        screen
+          .getByText('Create token…')
+          .closest('[role="option"]')
+          .getAttribute('aria-selected'),
+      ).toBe('true');
+
+      fireEvent.keyDown(input, { key: 'Home' });
+      expect(optionFor('Dashboard').getAttribute('aria-selected')).toBe('true');
+    });
+
+    it('exposes the active row via aria-activedescendant on the combobox input', async () => {
+      wireGet();
+      render(<HFCmdK />);
+      await waitFor(() => expect(screen.getByText('prod-key')).toBeTruthy());
+
+      const input = screen.getByTestId('palette-input');
+      expect(input.getAttribute('role')).toBe('combobox');
+      expect(input.getAttribute('aria-expanded')).toBe('true');
+      expect(input.getAttribute('aria-controls')).toBe('palette-listbox');
+
+      const dashboardOption = screen
+        .getByText('Dashboard')
+        .closest('[role="option"]');
+      expect(input.getAttribute('aria-activedescendant')).toBe(
+        dashboardOption.id,
+      );
+
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      const playgroundOption = screen
+        .getByText('Playground')
+        .closest('[role="option"]');
+      expect(input.getAttribute('aria-activedescendant')).toBe(
+        playgroundOption.id,
+      );
+    });
+
+    it('opens the active row on Enter, the same path a click uses', async () => {
+      wireGet();
+      render(<HFCmdK />);
+      await waitFor(() => expect(screen.getByText('prod-key')).toBeTruthy());
+
+      const input = screen.getByTestId('palette-input');
+      fireEvent.keyDown(input, { key: 'ArrowDown' }); // playground
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith('/console/v2/playground');
+      });
+    });
+
+    it('resets the active row to the first row when the query changes', async () => {
+      wireGet();
+      render(<HFCmdK />);
+      await waitFor(() => expect(screen.getByText('prod-key')).toBeTruthy());
+
+      const input = screen.getByTestId('palette-input');
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      expect(
+        screen
+          .getByText('Chat')
+          .closest('[role="option"]')
+          .getAttribute('aria-selected'),
+      ).toBe('true');
+
+      fireEvent.change(input, { target: { value: 'token' } });
+
+      await waitFor(() => {
+        expect(screen.queryByText('Dashboard')).toBeNull();
+      });
+      // First remaining row after filtering is active again.
+      const rows = screen.getAllByRole('option');
+      expect(rows[0].getAttribute('aria-selected')).toBe('true');
+    });
+
+    it('still lets the mouse drive the same active-row state', async () => {
+      wireGet();
+      render(<HFCmdK />);
+      await waitFor(() => expect(screen.getByText('prod-key')).toBeTruthy());
+
+      const playgroundOption = screen
+        .getByText('Playground')
+        .closest('[role="option"]');
+      fireEvent.mouseEnter(playgroundOption);
+      expect(playgroundOption.getAttribute('aria-selected')).toBe('true');
+    });
+  });
+
   it('reports loading while only the models request is still in flight', async () => {
     let resolveModels;
     API.get.mockImplementation((url) => {

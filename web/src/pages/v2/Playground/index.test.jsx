@@ -30,6 +30,10 @@ vi.mock('../../../helpers', () => ({
   },
   showError: vi.fn(),
   showSuccess: vi.fn(),
+  // ViewCodePanel (rendered by "view code") reads this off the same
+  // barrel — see its own comment on why it's the barrel and not
+  // helpers/token.js directly.
+  getServerAddress: () => 'https://hub.lurus.cn',
 }));
 
 // Mock navigator.clipboard so share tests don't fail in jsdom.
@@ -778,5 +782,158 @@ describe('Playground page', () => {
     // Falls back to the default 3-model set rather than staying on the
     // dead single-model draft.
     expect(screen.getByText(/3 models, one prompt/i)).toBeTruthy();
+  });
+
+  // cost pill (cycle-19 L3): shown only for a priced model's own successful
+  // result, never a fabricated $0 for a model with no price at all.
+  it('shows an estimated cost pill only for priced models, never a fabricated $0', async () => {
+    wireGet((url) => {
+      if (String(url).includes('/pricing')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              pricing: [
+                {
+                  model_name: 'rt-alpha',
+                  quota_type: 0,
+                  model_ratio: 1,
+                  completion_ratio: 1,
+                },
+              ],
+              group_ratio: {},
+            },
+          },
+        });
+      }
+      return Promise.reject(new Error('unexpected GET ' + url));
+    });
+    API.post.mockResolvedValueOnce(
+      fakeRunResponse([
+        {
+          model: 'rt-alpha',
+          content: 'priced reply',
+          latency_ms: 100,
+          prompt_tokens: 1000000,
+          completion_tokens: 0,
+        },
+        {
+          model: 'rt-beta',
+          content: 'unpriced reply',
+          latency_ms: 90,
+          prompt_tokens: 1000,
+          completion_tokens: 1,
+        },
+        {
+          model: 'rt-gamma',
+          content: 'also unpriced',
+          latency_ms: 95,
+          prompt_tokens: 1000,
+          completion_tokens: 1,
+        },
+      ]),
+    );
+
+    render(<HFPlayground />);
+    await waitForModelsReady();
+    fireEvent.click(screen.getByTestId('playground-run'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('playground-est-cost-0')).toBeTruthy(),
+    );
+    expect(screen.getByTestId('playground-est-cost-0').textContent).toContain(
+      '$',
+    );
+    // rt-beta / rt-gamma have no pricing row at all — no pill, never a $0.
+    expect(screen.queryByTestId('playground-est-cost-1')).toBeNull();
+    expect(screen.queryByTestId('playground-est-cost-2')).toBeNull();
+  });
+
+  // swap▾ filter (cycle-19 L3): appears once availableModels exceeds the
+  // threshold, filters by substring (case-insensitive), Enter picks the
+  // first match and closes the dropdown.
+  it('filters the swap▾ dropdown once more than 8 models are routable', async () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({
+      id: `rt-model-${i}`,
+      owned_by: 'Vendor',
+      supported_endpoint_types: ['openai'],
+    }));
+    wireGet(undefined, many);
+
+    render(<HFPlayground />);
+    await waitForModelsReady();
+
+    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
+    const filterInput = screen.getByTestId('playground-swap-filter');
+    expect(filterInput).toBeTruthy();
+
+    fireEvent.change(filterInput, { target: { value: 'MODEL-7' } });
+    expect(screen.getByTestId('playground-swap-model-rt-model-7')).toBeTruthy();
+    expect(screen.queryByTestId('playground-swap-model-rt-model-2')).toBeNull();
+
+    fireEvent.keyDown(filterInput, { key: 'Enter' });
+    await waitFor(() =>
+      expect(screen.queryByTestId('playground-swap-dropdown-0')).toBeNull(),
+    );
+  });
+
+  it('shows no swap▾ filter input when 8 or fewer models are routable', async () => {
+    render(<HFPlayground />);
+    await waitForModelsReady();
+    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
+    expect(screen.queryByTestId('playground-swap-filter')).toBeNull();
+  });
+
+  // "view code" (cycle-19 L3): toggles ViewCodePanel in place, filled from
+  // the first compare column's own model.
+  it('toggles the view-code panel and fills it from the first column', async () => {
+    render(<HFPlayground />);
+    await waitForModelsReady();
+
+    expect(screen.queryByTestId('playground-view-code-panel')).toBeNull();
+    fireEvent.click(screen.getByTestId('playground-view-code-btn'));
+    const panel = screen.getByTestId('playground-view-code-panel');
+    expect(panel.textContent).toContain('rt-alpha');
+
+    fireEvent.click(screen.getByTestId('playground-view-code-btn'));
+    expect(screen.queryByTestId('playground-view-code-panel')).toBeNull();
+  });
+
+  // Markdown (cycle-19 L3): a successful column's output renders through
+  // HfMarkdown, not as raw text.
+  it('renders markdown in a successful column output', async () => {
+    API.post.mockResolvedValueOnce(
+      fakeRunResponse([
+        {
+          model: 'rt-alpha',
+          content: '**bold answer**',
+          latency_ms: 100,
+          prompt_tokens: 5,
+          completion_tokens: 2,
+        },
+        {
+          model: 'rt-beta',
+          content: 'plain',
+          latency_ms: 90,
+          prompt_tokens: 5,
+          completion_tokens: 1,
+        },
+        {
+          model: 'rt-gamma',
+          content: 'plain2',
+          latency_ms: 95,
+          prompt_tokens: 5,
+          completion_tokens: 1,
+        },
+      ]),
+    );
+    render(<HFPlayground />);
+    await waitForModelsReady();
+    fireEvent.click(screen.getByTestId('playground-run'));
+
+    await waitFor(() => {
+      const out = screen.getByTestId('playground-output-0');
+      expect(out.querySelector('strong')?.textContent).toBe('bold answer');
+    });
   });
 });

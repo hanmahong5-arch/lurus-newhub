@@ -8,6 +8,30 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!-- Zero-flicker dark mode (v2 console only — the legacy v1 chrome has no
+         --hf-* dark variables, so painting it dark here would tint the wrong
+         pages). Synchronous, pre-stylesheet, tiny (a few hundred bytes as
+         prettier-formatted below — not minified, since this repo has no
+         build step for index.html and re-running prettier would just undo a
+         manual minification): reads the same 'lurus-hf-theme' key
+         components/hifi/useThemeToggle.js reads, falls back to the OS
+         preference, and sets data-theme before first paint so a dark
+         preference never flashes light on refresh. No CSP is sent for this
+         app (see internal/adapter/middleware/security_headers.go), so this
+         inline script is allowed to run. -->
+    <script>
+      try {
+        if (location.pathname.indexOf('/console/v2') === 0) {
+          var s = localStorage.getItem('lurus-hf-theme');
+          if (
+            s === 'dark' ||
+            (s !== 'light' &&
+              matchMedia('(prefers-color-scheme: dark)').matches)
+          )
+            document.documentElement.dataset.theme = 'dark';
+        }
+      } catch (e) {}
+    </script>
     <link rel="icon" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#ffffff" />

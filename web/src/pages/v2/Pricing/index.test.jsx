@@ -487,6 +487,40 @@ describe('Pricing page', () => {
   });
 });
 
+// The "model price" th/td only ever carries a live input for a per-call
+// (quota_type===1) row; every ratio-based row shows a read-only '—' and this
+// page has no control to flip a row's quota_type. So the column is hidden
+// entirely — not shown full of dashes — whenever no visible row is per-call.
+describe('Pricing page — model price column', () => {
+  it('hides the model-price column when every visible row is ratio-based', async () => {
+    API.get.mockResolvedValue(
+      fakePricingResponse([THREE_MODELS[0], THREE_MODELS[2]]),
+    );
+    render(<PricingPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId('pricing-table').textContent).toContain(
+        'model-a',
+      );
+    });
+    expect(screen.queryByTestId('pricing-th-model-price')).toBeNull();
+    expect(
+      screen.queryByTestId('field-model_price-model-a'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the model-price column when a per-call row is present', async () => {
+    API.get.mockResolvedValue(fakePricingResponse(THREE_MODELS));
+    render(<PricingPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId('pricing-table').textContent).toContain(
+        'model-b',
+      );
+    });
+    expect(screen.getByTestId('pricing-th-model-price')).toBeInTheDocument();
+    expect(screen.getByTestId('field-model_price-model-b')).toBeInTheDocument();
+  });
+});
+
 // ─── cycle-18 L1: a failed read is not an empty one ─────────────────────────
 // The list read now goes through hooks/common/useTenantRead.js. A 500 must
 // render HfLoadError — not the empty state an account with nothing sees —

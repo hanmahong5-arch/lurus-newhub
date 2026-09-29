@@ -47,7 +47,7 @@ const CEILINGS = {
   // "switch" went — the server never followed it (403 TENANT_MISMATCH).
   // 887 → 843 (2026-09-22 cycle-15 P4): nav section/item rendering moved to
   // components/hifi/HfNav.jsx with the collapsible admin sections.
-  'components/hifi/HFShell.jsx': 852,
+  'components/hifi/HFShell.jsx': 757, // → 757 cycle-19: theme hook → useThemeToggle.js, identity cluster → HfUserMenu.jsx
   'components/settings/AuthSettingPage.jsx': 1086,
   'components/settings/SystemSetting.jsx': 1490,
   'components/settings/personal/cards/NotificationSettings.jsx': 930,
@@ -56,22 +56,22 @@ const CEILINGS = {
   'pages/Setting/Ratio/UpstreamRatioSync.jsx': 873,
   // pages/v2/Admin/ModelRateLimits/index.jsx left the list (cycle 14, 915 → 757):
   // LimitModal + inputStyle extracted to ModelRateLimits/LimitModal.jsx.
-  'pages/v2/Billing/index.jsx': 833, // redeemFailure() extracted to Billing/redeemFailure.js (cycle-13 hand-finish)
+  'pages/v2/Billing/index.jsx': 803, // redeemFailure() extracted to Billing/redeemFailure.js (cycle-13 hand-finish); → 803 cycle-19: trend → Billing/TrendBars.jsx
   // 1908 → 1904 (cycle-18 L1): the list and upstream-models reads moved onto
   // hooks/common/useTenantRead.js; a failed read renders HfLoadError.
   // 1904 → 1840 (cycle-18 L3): SyncModelsModal and ChannelModal dropped their
   // hand-rolled backdrop/panel for components/hifi/HfDialog.
   'pages/v2/Channel/index.jsx': 1840,
-  'pages/v2/Chat/index.jsx': 879,
+  'pages/v2/Chat/index.jsx': 770, // → 770 cycle-19: session list → Chat/SessionList.jsx
   // 1190 → 1179 (cycle-18 L4): the private fmtTs (ms-based, fed seconds —
   // every recent request read as 1970) gave way to helpers/formatting.js
   // formatShortTs.
-  'pages/v2/Dashboard/index.jsx': 1179, // 1242 → 1190 (cycle-15 P3): daily bucketing moved to components/hifi/activitySeries.js
+  'pages/v2/Dashboard/index.jsx': 1055, // 1242 → 1190 (cycle-15 P3): daily bucketing moved to components/hifi/activitySeries.js; → 1055 cycle-19: KPI strip → KpiCards.jsx, realtime cards → LivePanel.jsx
   'pages/v2/Flows/index.jsx': 1446,
   // 1630 → 1623 (cycle-18 L4): the private fmtTime gave way to
   // helpers/formatting.js formatClockTime({ ms: false }).
-  'pages/v2/Log/index.jsx': 1623, // 1731 → 1684 (cycle-15 P4): stat header extracted to Log/StatHeader.jsx; → 1630: routing trace moved to Log/RouteAttempts.jsx
-  'pages/v2/Playground/index.jsx': 1084,
+  'pages/v2/Log/index.jsx': 1611, // 1731 → 1684 (cycle-15 P4): stat header extracted to Log/StatHeader.jsx; → 1630: routing trace moved to Log/RouteAttempts.jsx; → 1611 cycle-19: CSV export → ExportCsvButton.jsx, outcome chip → OutcomeChip.jsx
+  'pages/v2/Playground/index.jsx': 1083,
   // 805 → 804 (cycle-18 L1): the pricing read moved onto useTenantRead; the
   // failed-read badge renders its dash as text (a string count skips plural).
   'pages/v2/Pricing/index.jsx': 804,
@@ -83,7 +83,7 @@ const CEILINGS = {
   // useTenantRead.
   // 1632 → 1595 (cycle-18 L3): CreateModal dropped its hand-rolled
   // backdrop/panel for components/hifi/HfDialog.
-  'pages/v2/Token/index.jsx': 1595,
+  'pages/v2/Token/index.jsx': 1541, // → 1541 cycle-19: snippet builder → Token/snippets.js
 };
 
 const THRESHOLD = 800;

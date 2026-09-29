@@ -47,6 +47,11 @@ const truncate = (s, n) => (!s ? '' : s.length > n ? `${s.slice(0, n)}…` : s);
 
 // health: null | {ok, last_probe_at, latency_ms, last_error,
 // consecutive_failures, auto_disabled}
+//
+// `variant` distinguishes "never probed" (no health row yet — unknown, not
+// healthy) from "ok" (an actual passing probe): before this, both rendered
+// with the same untoned label, so an operator could not tell a model that
+// had never been checked from one that was confirmed healthy.
 function healthBadge(tr, health) {
   if (!health) {
     return {
@@ -55,6 +60,11 @@ function healthBadge(tr, health) {
         'never probed',
       ),
       tone: undefined,
+      variant: 'never_probed',
+      title: tr(
+        'console.admin.model_pools.never_probed_hint',
+        'Not probed yet — health is unknown, not healthy',
+      ),
     };
   }
   if (health.auto_disabled) {
@@ -64,6 +74,7 @@ function healthBadge(tr, health) {
         'auto-disabled',
       ),
       tone: 'var(--hf-err)',
+      variant: 'auto_disabled',
     };
   }
   if (!health.ok) {
@@ -74,11 +85,13 @@ function healthBadge(tr, health) {
         { count: health.consecutive_failures ?? 0 },
       ),
       tone: 'var(--hf-warn)',
+      variant: 'failing',
     };
   }
   return {
     label: tr('console.admin.model_pools.health_ok', 'ok'),
     tone: undefined,
+    variant: 'ok',
   };
 }
 
@@ -142,6 +155,12 @@ const HFModelPools = () => {
     textAlign: 'left',
     whiteSpace: 'nowrap',
   };
+
+  // requests/errors/latency are the pool table's number columns — L1's `num`
+  // contract right-aligns + tabular-nums them so a scanning eye can compare
+  // magnitudes down the column instead of ragged left-aligned digits.
+  const numThStyle = { ...thStyle, textAlign: 'right' };
+  const numTdStyle = { ...tdStyle, textAlign: 'right' };
 
   return (
     <HFShell
@@ -379,7 +398,7 @@ const HFModelPools = () => {
                                 'health',
                               )}
                             </th>
-                            <th style={thStyle}>
+                            <th className='num' style={numThStyle}>
                               {tr(
                                 'console.admin.model_pools.col_latency',
                                 'latency',
@@ -391,13 +410,13 @@ const HFModelPools = () => {
                                 'last probe',
                               )}
                             </th>
-                            <th style={thStyle}>
+                            <th className='num' style={numThStyle}>
                               {tr(
                                 'console.admin.model_pools.col_requests',
                                 'requests (24h)',
                               )}
                             </th>
-                            <th style={thStyle}>
+                            <th className='num' style={numThStyle}>
                               {tr(
                                 'console.admin.model_pools.col_errors',
                                 'errors (24h)',
@@ -420,21 +439,43 @@ const HFModelPools = () => {
                                   {m.model}
                                 </td>
                                 <td
-                                  style={{ ...tdStyle, color: badge.tone }}
+                                  style={tdStyle}
                                   data-testid={`pool-health-${m.model}`}
+                                  title={
+                                    badge.variant === 'never_probed'
+                                      ? badge.title
+                                      : undefined
+                                  }
                                 >
-                                  {badge.label}
+                                  <span
+                                    className={`hf-health-badge hf-health-badge--${badge.variant}`}
+                                    style={
+                                      badge.variant === 'never_probed'
+                                        ? {
+                                            color: 'var(--hf-ink-3)',
+                                            border:
+                                              '1px dashed var(--hf-ink-3)',
+                                            borderRadius: 4,
+                                            padding: '1px 6px',
+                                          }
+                                        : { color: badge.tone }
+                                    }
+                                  >
+                                    {badge.label}
+                                  </span>
                                 </td>
-                                <td style={tdStyle}>
+                                <td className='num' style={numTdStyle}>
                                   {fmtMs(m.health?.latency_ms)}
                                 </td>
                                 <td style={tdStyle}>
                                   {formatTime(m.health?.last_probe_at)}
                                 </td>
-                                <td style={tdStyle}>
+                                <td className='num' style={numTdStyle}>
                                   {fmtInt(m.requests_24h)}
                                 </td>
-                                <td style={tdStyle}>{fmtInt(m.errors_24h)}</td>
+                                <td className='num' style={numTdStyle}>
+                                  {fmtInt(m.errors_24h)}
+                                </td>
                                 <td
                                   style={tdStyle}
                                   title={m.health?.last_error || ''}

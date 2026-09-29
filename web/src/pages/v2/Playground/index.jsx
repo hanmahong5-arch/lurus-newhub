@@ -16,23 +16,93 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
+import HfMarkdown from '../../../components/hifi/HfMarkdown';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useFormDraft } from '../../../hooks/common/useFormDraft';
+import { useTenantRead } from '../../../hooks/common/useTenantRead';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
   useRoutableModels,
   defaultCompareModels,
+  WIRE_ANTHROPIC,
 } from '../../../hooks/models/useRoutableModels';
+import { buildCatalog, fmtUsd } from '../Models/catalog';
+import {
+  estimateCost,
+  indexCatalogByModel,
+  readURLParams,
+  verdictFor,
+} from './cost';
+import ViewCodePanel from './ViewCodePanel';
 
-// HiFi 5 — Playground multi-model compare. Wired to
-// POST /api/v2/:tenant_slug/playground/run (2026-05-19).
-// Wave 3 Phase 1 — save/blank/swap/share wired (2026-05-20).
-// L1 (cycle-11): the compare draft, the swap list and the run guard all
-// come from GET .../models/routable — there is no literal model list or
-// vendor map anymore (see the routable-draft-sync effect below).
+// Above this many routable models, the swap▾ dropdown grows a filter input.
+const SWAP_FILTER_THRESHOLD = 8;
+
+// Repeated inline style shapes, hoisted so each usage site is one line.
+const alertBannerStyle = (borderColor) => ({
+  marginTop: 10,
+  fontSize: 11,
+  padding: '4px 10px',
+  borderLeft: `2px solid ${borderColor}`,
+  background: 'var(--hf-warn-bg)',
+  color: 'var(--hf-ink-2)',
+});
+const dropdownMenuStyle = (extra) => ({
+  position: 'absolute',
+  top: '100%',
+  zIndex: 100,
+  background: 'var(--hf-paper)',
+  border: '1px solid var(--hf-rule)',
+  borderRadius: 4,
+  boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+  padding: '4px 0',
+  ...extra,
+});
+const dropdownItemStyle = (extra) => ({
+  display: 'block',
+  width: '100%',
+  textAlign: 'left',
+  padding: '6px 12px',
+  ...extra,
+});
+const dropdownHintStyle = {
+  padding: '6px 12px',
+  color: 'var(--hf-ink-2)',
+  fontSize: 11,
+};
+const paramPillInputStyle = (width) => ({
+  width,
+  border: 'none',
+  background: 'transparent',
+  color: 'inherit',
+  outline: 'none',
+  fontFamily: 'var(--hf-mono)',
+});
+const promptTextareaStyle = (fontSize) => ({
+  width: '100%',
+  fontFamily: 'var(--hf-mono)',
+  fontSize,
+  padding: '6px 10px',
+  border: '1px solid var(--hf-rule)',
+  background: 'var(--hf-sunken)',
+  color: 'var(--hf-ink)',
+  borderRadius: 2,
+  resize: 'vertical',
+  outline: 'none',
+});
+
+// HiFi 5 — Playground multi-model compare, POST .../playground/run. The
+// compare draft/swap list/run guard all come from GET .../models/routable
+// (routable-draft-sync effect below) — no literal model list anywhere.
 
 const DEFAULT_FORM = {
   system: 'You are a helpful, concise assistant.',
@@ -40,82 +110,21 @@ const DEFAULT_FORM = {
   temperature: 0.7,
   top_p: 1.0,
   max_tokens: 1024,
-  // Populated once the routable list resolves (routable-draft-sync effect)
-  // — no literal fallback model list.
+  // Populated once routable resolves (draft-sync effect) — no literal list.
   models: [],
-};
-
-// readURLParams extracts ?prompt=&prefill_model=&models=&params= from the
-// current URL for URL-self-contained share links and the Models page's
-// "try ↗" link (prefill_model — a single model id, takes precedence over
-// `models` when both are present since "try" is a more specific intent
-// than a restored multi-model share link).
-function readURLParams() {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const out = {};
-    if (params.has('prompt')) out.user = params.get('prompt');
-    if (params.has('prefill_model')) {
-      const pm = params.get('prefill_model');
-      if (pm) out.models = [pm];
-    } else if (params.has('models')) {
-      try {
-        const m = JSON.parse(params.get('models'));
-        if (Array.isArray(m) && m.length > 0) out.models = m;
-      } catch (_) {}
-    }
-    if (params.has('params')) {
-      try {
-        const p = JSON.parse(params.get('params'));
-        if (p && typeof p === 'object') {
-          if (typeof p.temperature === 'number')
-            out.temperature = p.temperature;
-          if (typeof p.top_p === 'number') out.top_p = p.top_p;
-          if (typeof p.max_tokens === 'number') out.max_tokens = p.max_tokens;
-        }
-      } catch (_) {}
-    }
-    return out;
-  } catch (_) {
-    return {};
-  }
-}
-
-// Sort columns by latency so the fastest is leftmost — gives the user an
-// at-a-glance perf comparison without an extra UI control. Stable: keeps
-// original column index as tiebreaker so the layout doesn't reshuffle
-// between identical runs. `label` doubles as the i18n key suffix
-// (console.playground.verdict_<label>).
-const verdictFor = (item, allItems) => {
-  if (item.error_code) return { label: 'error', color: 'var(--hf-err)' };
-  const sorted = allItems
-    .filter((x) => !x.error_code)
-    .slice()
-    .sort((a, b) => a.latency_ms - b.latency_ms);
-  if (sorted.length && item === sorted[0])
-    return { label: 'fastest', color: 'var(--hf-accent)' };
-  if (sorted.length && item === sorted[sorted.length - 1])
-    return { label: 'slowest', color: 'var(--hf-info)' };
-  return { label: '', color: 'var(--hf-ink-2)' };
 };
 
 const HFPlayground = () => {
   const tenantSlug = useTenantSlug();
-  // Aliased to `tr` per the v2 console convention.
   const { t: tr } = useTranslation();
 
-  // Form state — persisted via useFormDraft so a tab close mid-edit doesn't
-  // lose the user's prompt. Key NOT scoped per-tenant (playground is a
-  // user-level tool; same prompt likely reused across tenants).
+  // Persisted via useFormDraft; key NOT per-tenant (prompt reused across).
   const [form, setForm, clearDraft, , /* isDirty */ restoredFromDraft] =
     useFormDraft('playground-form', DEFAULT_FORM);
   const [running, setRunning] = useState(false);
   const [items, setItems] = useState(null); // null = never run; [] = ran with errors
 
-  // Routing truth for this tenant (L1, cycle-11) — fetched eagerly (not
-  // lazily behind the swap▾ menu, unlike the old useTenantModels wiring)
-  // because the draft-sync effect below and the run-guard both need to
-  // know the routable set before the user ever opens swap▾.
+  // Routing truth — fetched eagerly, draft-sync/run-guard need it sooner.
   const {
     items: routableModels,
     loading: modelsLoading,
@@ -127,18 +136,48 @@ const HFPlayground = () => {
     routableModels.find((m) => m.id === modelId)?.owned_by || '—';
   const noModelsRoutable = modelsResolved && routableModels.length === 0;
 
-  // Apply URL prefill on first mount — takes precedence over the draft only
-  // when share params are present. Preserves draft for fields not in URL.
-  // prefillModelRef remembers a single-model ?prefill_model= (the Models
-  // page's "try ↗" link) so the routable-draft-sync effect below can tell
-  // the user WHY their draft changed, instead of silently dropping it.
+  // Same route + group_ratio lookup as Models/index.jsx — numbers agree.
+  const { data: pricing } = useTenantRead(
+    tenantSlug && `/api/v2/${tenantSlug}/pricing`,
+    {
+      parse: (d) => ({
+        rows: d?.pricing || [],
+        groupRatio: d?.group_ratio || {},
+      }),
+    },
+  );
+  const userGroup = useMemo(() => {
+    try {
+      return (
+        JSON.parse(localStorage.getItem('user') || '{}').group || 'default'
+      );
+    } catch (_) {
+      return 'default';
+    }
+  }, []);
+  const catalogByModel = useMemo(
+    () =>
+      indexCatalogByModel(
+        buildCatalog({
+          routable: routableModels,
+          pricing: pricing?.rows ?? [],
+          groupRatio: pricing?.groupRatio?.[userGroup] ?? 1,
+        }),
+      ),
+    [routableModels, pricing, userGroup],
+  );
+
+  // "view code" — expands ViewCodePanel in place, filled from column 0.
+  const [viewCodeOpen, setViewCodeOpen] = useState(false);
+
+  // URL prefill; prefillModelRef tells draft-sync below WHY draft changed.
   const urlPrefillApplied = useRef(false);
   const prefillModelRef = useRef(null);
   const [prefillUnroutableHint, setPrefillUnroutableHint] = useState(null);
   useEffect(() => {
     if (urlPrefillApplied.current) return;
     urlPrefillApplied.current = true;
-    const prefill = readURLParams();
+    const prefill = readURLParams(window.location.search);
     if (prefill.models && prefill.models.length === 1) {
       prefillModelRef.current = prefill.models[0];
     }
@@ -147,12 +186,7 @@ const HFPlayground = () => {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Routable-draft-sync: once the routable list resolves, drop any draft
-  // model (restored from a stale localStorage draft, or a share-link
-  // ?models= from before a tenant's allow-list changed) that is no longer
-  // routable; if that empties the draft, fall back to the first three
-  // routable models (defaultCompareModels) instead of leaving the compare
-  // grid with zero columns.
+  // Drop draft models no longer routable; fall back to defaultCompareModels.
   useEffect(() => {
     if (!modelsResolved) return;
     const validIds = new Set(routableModels.map((m) => m.id));
@@ -162,9 +196,7 @@ const HFPlayground = () => {
     prefillModelRef.current = null; // only check once, right after resolve
     setForm((prev) => {
       const kept = prev.models.filter((m) => validIds.has(m));
-      // Nothing dropped AND the draft was non-empty to begin with — the
-      // `0 === 0` case (an empty draft, e.g. first mount) must still fall
-      // through to the default-fill branch below, not bail out here.
+      // An empty draft (0 === 0) must still fall through to default-fill.
       if (kept.length === prev.models.length && prev.models.length > 0) {
         return prev;
       }
@@ -181,6 +213,7 @@ const HFPlayground = () => {
   const [presets, setPresets] = useState(null); // null = not yet loaded
   const [blankOpen, setBlankOpen] = useState(false);
   const [swapOpen, setSwapOpen] = useState(null); // colIdx | null
+  const [swapFilter, setSwapFilter] = useState('');
   const blankRef = useRef(null);
   const swapRef = useRef(null);
 
@@ -199,6 +232,16 @@ const HFPlayground = () => {
   }, []);
 
   const update = (k) => (v) => setForm((prev) => ({ ...prev, [k]: v }));
+
+  // Shared run/save/share/view-code params: string form fields → numbers.
+  const currentParams = useCallback(
+    () => ({
+      temperature: Number(form.temperature),
+      top_p: Number(form.top_p),
+      max_tokens: Math.max(1, parseInt(form.max_tokens, 10) || 1024),
+    }),
+    [form.temperature, form.top_p, form.max_tokens],
+  );
 
   // ── Fetch presets (lazy — only when blank▾ is opened) ──
   const fetchPresets = useCallback(async () => {
@@ -233,11 +276,7 @@ const HFPlayground = () => {
         system: form.system,
         user: form.user,
         models: form.models,
-        params: {
-          temperature: Number(form.temperature),
-          top_p: Number(form.top_p),
-          max_tokens: Math.max(1, parseInt(form.max_tokens, 10) || 1024),
-        },
+        params: currentParams(),
       });
       if (res?.data?.success) {
         setItems(res.data.data.items);
@@ -256,7 +295,7 @@ const HFPlayground = () => {
     } finally {
       setRunning(false);
     }
-  }, [form, tenantSlug, tr, noModelsRoutable]);
+  }, [form, tenantSlug, tr, noModelsRoutable, currentParams]);
 
   // ⌘/Ctrl + Enter triggers run from any focus position inside the page.
   useEffect(() => {
@@ -282,11 +321,7 @@ const HFPlayground = () => {
         name: name.trim(),
         prompt: form.user,
         models: JSON.stringify(form.models),
-        params: JSON.stringify({
-          temperature: Number(form.temperature),
-          top_p: Number(form.top_p),
-          max_tokens: Math.max(1, parseInt(form.max_tokens, 10) || 1024),
-        }),
+        params: JSON.stringify(currentParams()),
       });
       if (res?.data?.success) {
         showSuccess(tr('console.playground.preset_saved', 'Preset saved'));
@@ -304,7 +339,7 @@ const HFPlayground = () => {
           tr('console.playground.save_failed', 'Save failed'),
       );
     }
-  }, [form, tenantSlug, tr]);
+  }, [form, tenantSlug, tr, currentParams]);
 
   // ── blank▾ toggle handler ──
   const handleBlankToggle = useCallback(async () => {
@@ -353,14 +388,7 @@ const HFPlayground = () => {
       const params = new URLSearchParams();
       params.set('prompt', form.user);
       params.set('models', JSON.stringify(form.models));
-      params.set(
-        'params',
-        JSON.stringify({
-          temperature: Number(form.temperature),
-          top_p: Number(form.top_p),
-          max_tokens: Math.max(1, parseInt(form.max_tokens, 10) || 1024),
-        }),
-      );
+      params.set('params', JSON.stringify(currentParams()));
       const url =
         window.location.origin +
         window.location.pathname +
@@ -376,7 +404,7 @@ const HFPlayground = () => {
         ),
       );
     }
-  }, [form, tr]);
+  }, [form, tr, currentParams]);
 
   // ── swap▾ toggle handler ──
   const handleSwapToggle = useCallback(
@@ -386,6 +414,7 @@ const HFPlayground = () => {
         return;
       }
       setSwapOpen(colIdx);
+      setSwapFilter('');
       setBlankOpen(false);
     },
     [swapOpen],
@@ -405,15 +434,66 @@ const HFPlayground = () => {
     [setForm],
   );
 
+  const swapFilterActive = availableModels.length > SWAP_FILTER_THRESHOLD;
+  const swapFilteredModels = swapFilterActive
+    ? availableModels.filter((m) =>
+        m.toLowerCase().includes(swapFilter.trim().toLowerCase()),
+      )
+    : availableModels;
+
+  const onSwapFilterKeyDown = useCallback(
+    (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (swapFilteredModels[0]) {
+          toggleModel(swapFilteredModels[0]);
+          setSwapOpen(null);
+        }
+      } else if (e.key === 'Escape') {
+        setSwapOpen(null);
+      }
+    },
+    [swapFilteredModels, toggleModel],
+  );
+
   const displayCols = form.models.map((m, i) => {
     const found = items?.[i];
+    const result = found || null;
+    // Only from a completed, successful run's own token counts.
+    const cost =
+      result && !result.error_code
+        ? estimateCost(
+            catalogByModel.get(m),
+            result.prompt_tokens,
+            result.completion_tokens,
+          )
+        : null;
     return {
       idx: i,
       model: m,
       vendor: vendorFor(m),
-      result: found || null,
+      result,
+      cost,
     };
   });
+
+  // Shared by the 3 N-column grids below and each column's own right rule.
+  const colsGridStyle = (extra) => ({
+    display: 'grid',
+    gridTemplateColumns: `repeat(${form.models.length}, 1fr)`,
+    ...extra,
+  });
+  const colBorderRight = (idx) =>
+    idx < form.models.length - 1 ? '1px solid var(--hf-rule)' : 0;
+
+  const codeColModel = form.models[0];
+  const codeColAnthropicModel = routableModels.some(
+    (m) =>
+      m.id === codeColModel &&
+      m.supported_endpoint_types?.includes(WIRE_ANTHROPIC),
+  )
+    ? codeColModel
+    : undefined;
 
   return (
     <HFShell
@@ -444,30 +524,14 @@ const HFPlayground = () => {
             {blankOpen && (
               <div
                 data-testid='playground-blank-dropdown'
-                style={{
-                  position: 'absolute',
-                  top: '100%',
-                  left: 0,
-                  zIndex: 100,
-                  background: 'var(--hf-paper)',
-                  border: '1px solid var(--hf-rule)',
-                  borderRadius: 4,
-                  minWidth: 180,
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
-                  padding: '4px 0',
-                }}
+                style={dropdownMenuStyle({ left: 0, minWidth: 180 })}
               >
                 <button
                   type='button'
                   className='btn ghost sm'
                   data-testid='playground-blank-clear'
                   onClick={loadBlank}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '6px 12px',
-                  }}
+                  style={dropdownItemStyle()}
                 >
                   {tr('console.playground.blank_clear', 'blank (clear)')}
                 </button>
@@ -486,12 +550,7 @@ const HFPlayground = () => {
                         className='btn ghost sm'
                         data-testid={`playground-preset-item-${p.id}`}
                         onClick={() => loadPreset(p)}
-                        style={{
-                          display: 'block',
-                          width: '100%',
-                          textAlign: 'left',
-                          padding: '6px 12px',
-                        }}
+                        style={dropdownItemStyle()}
                       >
                         {p.name}
                       </button>
@@ -499,13 +558,7 @@ const HFPlayground = () => {
                   </div>
                 )}
                 {presets && presets.length === 0 && (
-                  <div
-                    style={{
-                      padding: '6px 12px',
-                      color: 'var(--hf-ink-2)',
-                      fontSize: 11,
-                    }}
-                  >
+                  <div style={dropdownHintStyle}>
                     {tr('console.playground.no_presets', 'no presets yet')}
                   </div>
                 )}
@@ -563,14 +616,7 @@ const HFPlayground = () => {
 
           {restoredFromDraft && (
             <div
-              style={{
-                marginTop: 10,
-                fontSize: 11,
-                padding: '4px 10px',
-                borderLeft: '2px solid var(--hf-warn)',
-                background: 'var(--hf-warn-bg)',
-                color: 'var(--hf-ink-2)',
-              }}
+              style={alertBannerStyle('var(--hf-warn)')}
               data-testid='playground-restored-banner'
             >
               {tr(
@@ -589,14 +635,7 @@ const HFPlayground = () => {
 
           {prefillUnroutableHint && (
             <div
-              style={{
-                marginTop: 10,
-                fontSize: 11,
-                padding: '4px 10px',
-                borderLeft: '2px solid var(--hf-warn)',
-                background: 'var(--hf-warn-bg)',
-                color: 'var(--hf-ink-2)',
-              }}
+              style={alertBannerStyle('var(--hf-warn)')}
               data-testid='playground-prefill-unroutable'
             >
               {tr(
@@ -609,14 +648,7 @@ const HFPlayground = () => {
 
           {modelsError && (
             <div
-              style={{
-                marginTop: 10,
-                fontSize: 11,
-                padding: '4px 10px',
-                borderLeft: '2px solid var(--hf-err)',
-                background: 'var(--hf-warn-bg)',
-                color: 'var(--hf-ink-2)',
-              }}
+              style={alertBannerStyle('var(--hf-err)')}
               data-testid='playground-models-error'
             >
               {tr(
@@ -628,14 +660,7 @@ const HFPlayground = () => {
 
           {!modelsError && noModelsRoutable && (
             <div
-              style={{
-                marginTop: 10,
-                fontSize: 11,
-                padding: '4px 10px',
-                borderLeft: '2px solid var(--hf-err)',
-                background: 'var(--hf-warn-bg)',
-                color: 'var(--hf-ink-2)',
-              }}
+              style={alertBannerStyle('var(--hf-err)')}
               data-testid='playground-no-models'
             >
               {tr('console.playground.no_models', 'no models available')}
@@ -661,18 +686,7 @@ const HFPlayground = () => {
               value={form.system}
               onChange={(e) => update('system')(e.target.value)}
               rows={2}
-              style={{
-                width: '100%',
-                fontFamily: 'var(--hf-mono)',
-                fontSize: 12,
-                padding: '6px 10px',
-                border: '1px solid var(--hf-rule)',
-                background: 'var(--hf-sunken)',
-                color: 'var(--hf-ink)',
-                borderRadius: 2,
-                resize: 'vertical',
-                outline: 'none',
-              }}
+              style={promptTextareaStyle(12)}
             />
             <div
               className='lbl'
@@ -685,18 +699,7 @@ const HFPlayground = () => {
               value={form.user}
               onChange={(e) => update('user')(e.target.value)}
               rows={3}
-              style={{
-                width: '100%',
-                fontFamily: 'var(--hf-mono)',
-                fontSize: 13,
-                padding: '6px 10px',
-                border: '1px solid var(--hf-rule)',
-                background: 'var(--hf-sunken)',
-                color: 'var(--hf-ink)',
-                borderRadius: 2,
-                resize: 'vertical',
-                outline: 'none',
-              }}
+              style={promptTextareaStyle(13)}
             />
           </div>
 
@@ -722,14 +725,7 @@ const HFPlayground = () => {
                 step='0.1'
                 value={form.temperature}
                 onChange={(e) => update('temperature')(e.target.value)}
-                style={{
-                  width: 48,
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'inherit',
-                  outline: 'none',
-                  fontFamily: 'var(--hf-mono)',
-                }}
+                style={paramPillInputStyle(48)}
               />
             </label>
             <label className='pill' style={{ display: 'inline-flex', gap: 6 }}>
@@ -742,14 +738,7 @@ const HFPlayground = () => {
                 step='0.05'
                 value={form.top_p}
                 onChange={(e) => update('top_p')(e.target.value)}
-                style={{
-                  width: 48,
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'inherit',
-                  outline: 'none',
-                  fontFamily: 'var(--hf-mono)',
-                }}
+                style={paramPillInputStyle(48)}
               />
             </label>
             <label className='pill' style={{ display: 'inline-flex', gap: 6 }}>
@@ -762,17 +751,19 @@ const HFPlayground = () => {
                 step='128'
                 value={form.max_tokens}
                 onChange={(e) => update('max_tokens')(e.target.value)}
-                style={{
-                  width: 64,
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'inherit',
-                  outline: 'none',
-                  fontFamily: 'var(--hf-mono)',
-                }}
+                style={paramPillInputStyle(64)}
               />
             </label>
             <span style={{ flex: 1 }} />
+            <button
+              type='button'
+              className='btn ghost'
+              disabled={!codeColModel}
+              onClick={() => setViewCodeOpen((o) => !o)}
+              data-testid='playground-view-code-btn'
+            >
+              {tr('console.playground.view_code', 'view code')}
+            </button>
             <span className='kbd'>⌘</span>
             <span className='kbd'>↵</span>
             <button
@@ -789,15 +780,20 @@ const HFPlayground = () => {
                   })}
             </button>
           </div>
+          {viewCodeOpen && codeColModel && (
+            <ViewCodePanel
+              model={codeColModel}
+              anthropicModel={codeColAnthropicModel}
+              system={form.system}
+              user={form.user}
+              params={currentParams()}
+            />
+          )}
         </div>
 
         {/* ── Model header strip ── */}
         <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${form.models.length}, 1fr)`,
-            borderBottom: '1px solid var(--hf-rule)',
-          }}
+          style={colsGridStyle({ borderBottom: '1px solid var(--hf-rule)' })}
         >
           {displayCols.map((col) => {
             const v = col.result
@@ -808,10 +804,7 @@ const HFPlayground = () => {
                 key={col.idx}
                 style={{
                   padding: 16,
-                  borderRight:
-                    col.idx < form.models.length - 1
-                      ? '1px solid var(--hf-rule)'
-                      : 0,
+                  borderRight: colBorderRight(col.idx),
                   background: 'var(--hf-paper)',
                 }}
               >
@@ -847,68 +840,72 @@ const HFPlayground = () => {
                     {swapOpen === col.idx && (
                       <div
                         data-testid={`playground-swap-dropdown-${col.idx}`}
-                        style={{
-                          position: 'absolute',
-                          top: '100%',
+                        style={dropdownMenuStyle({
                           right: 0,
-                          zIndex: 100,
-                          background: 'var(--hf-paper)',
-                          border: '1px solid var(--hf-rule)',
-                          borderRadius: 4,
                           minWidth: 200,
                           maxHeight: 260,
                           overflowY: 'auto',
-                          boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
-                          padding: '4px 0',
-                        }}
+                        })}
                       >
-                        {modelsLoading && (
-                          <div
-                            data-testid='playground-swap-loading'
-                            style={{
-                              padding: '6px 12px',
-                              color: 'var(--hf-ink-2)',
-                              fontSize: 11,
-                            }}
-                          >
-                            {tr('console.common.loading', 'loading…')}
-                          </div>
-                        )}
-                        {!modelsLoading && modelsError && (
-                          <div
-                            data-testid='playground-swap-error'
-                            style={{
-                              padding: '6px 12px',
-                              color: 'var(--hf-err)',
-                              fontSize: 11,
-                            }}
-                          >
-                            {tr(
-                              'console.playground.models_load_failed',
-                              'failed to load models',
+                        {swapFilterActive && (
+                          <input
+                            type='text'
+                            autoFocus
+                            data-testid='playground-swap-filter'
+                            placeholder={tr(
+                              'console.playground.swap_filter',
+                              'filter models',
                             )}
+                            value={swapFilter}
+                            onChange={(e) => setSwapFilter(e.target.value)}
+                            onKeyDown={onSwapFilterKeyDown}
+                            style={{
+                              ...promptTextareaStyle(11),
+                              width: 'calc(100% - 16px)',
+                              margin: '2px 8px 6px',
+                              padding: '5px 8px',
+                              resize: 'none',
+                            }}
+                          />
+                        )}
+                        {/* loading → error → empty (filter-empty and
+                            nothing-routable share one honest empty state). */}
+                        {(modelsLoading ||
+                          modelsError ||
+                          swapFilteredModels.length === 0) && (
+                          <div
+                            data-testid={
+                              modelsLoading
+                                ? 'playground-swap-loading'
+                                : modelsError
+                                  ? 'playground-swap-error'
+                                  : 'playground-swap-empty'
+                            }
+                            style={
+                              modelsError
+                                ? {
+                                    ...dropdownHintStyle,
+                                    color: 'var(--hf-err)',
+                                  }
+                                : dropdownHintStyle
+                            }
+                          >
+                            {modelsLoading
+                              ? tr('console.common.loading', 'loading…')
+                              : modelsError
+                                ? tr(
+                                    'console.playground.models_load_failed',
+                                    'failed to load models',
+                                  )
+                                : tr(
+                                    'console.playground.no_models',
+                                    'no models available',
+                                  )}
                           </div>
                         )}
                         {!modelsLoading &&
                           !modelsError &&
-                          availableModels.length === 0 && (
-                            <div
-                              data-testid='playground-swap-empty'
-                              style={{
-                                padding: '6px 12px',
-                                color: 'var(--hf-ink-2)',
-                                fontSize: 11,
-                              }}
-                            >
-                              {tr(
-                                'console.playground.no_models',
-                                'no models available',
-                              )}
-                            </div>
-                          )}
-                        {!modelsLoading &&
-                          !modelsError &&
-                          availableModels.map((m) => {
+                          swapFilteredModels.map((m) => {
                             const selected = form.models.includes(m);
                             return (
                               <button
@@ -920,13 +917,9 @@ const HFPlayground = () => {
                                   toggleModel(m);
                                   setSwapOpen(null);
                                 }}
-                                style={{
-                                  display: 'block',
-                                  width: '100%',
-                                  textAlign: 'left',
-                                  padding: '6px 12px',
+                                style={dropdownItemStyle({
                                   fontWeight: selected ? 700 : 400,
-                                }}
+                                })}
                               >
                                 {selected ? '✓ ' : ''}
                                 {m}
@@ -948,6 +941,21 @@ const HFPlayground = () => {
                         />
                         {col.result.latency_ms}ms
                       </span>
+                      {/* Absent, never a fabricated $0 — see estimateCost. */}
+                      {col.cost != null && (
+                        <span
+                          className='pill'
+                          data-testid={`playground-est-cost-${col.idx}`}
+                          title={tr(
+                            'console.playground.est_cost_hint',
+                            'Estimated from your current price list; your bill is authoritative.',
+                          )}
+                        >
+                          {tr('console.playground.est_cost', 'est. {{cost}}', {
+                            cost: fmtUsd(col.cost),
+                          })}
+                        </span>
+                      )}
                       <span className='pill'>
                         {tr('console.playground.unit_tok', 'tok')}{' '}
                         {col.result.prompt_tokens}↗
@@ -976,30 +984,20 @@ const HFPlayground = () => {
         </div>
 
         {/* ── Output panels ── */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${form.models.length}, 1fr)`,
-            overflow: 'hidden',
-          }}
-        >
+        <div style={colsGridStyle({ overflow: 'hidden' })}>
           {displayCols.map((col) => (
             <div
               key={col.idx}
               data-testid={`playground-col-${col.idx}`}
               style={{
                 padding: 18,
-                borderRight:
-                  col.idx < form.models.length - 1
-                    ? '1px solid var(--hf-rule)'
-                    : 0,
+                borderRight: colBorderRight(col.idx),
                 overflow: 'auto',
                 fontSize: 13,
                 lineHeight: 1.6,
                 color: col.result?.error_code
                   ? 'var(--hf-err)'
                   : 'var(--hf-ink-2)',
-                whiteSpace: 'pre-wrap',
               }}
             >
               {!col.result && running && (
@@ -1015,41 +1013,42 @@ const HFPlayground = () => {
                   )}
                 </span>
               )}
+              {/* Error text is plain, never markdown. */}
               {col.result?.error_code && (
                 <>
                   <div className='strong'>
                     {tr('console.playground.error_label', 'Error')} ·{' '}
                     {col.result.error_code}
                   </div>
-                  <div style={{ marginTop: 6 }}>
+                  <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
                     {col.result.error_message ||
                       tr('console.playground.no_message', '(no message)')}
                   </div>
                 </>
               )}
-              {col.result && !col.result.error_code && col.result.content}
+              {col.result && !col.result.error_code && (
+                <HfMarkdown
+                  content={col.result.content}
+                  testId={`playground-output-${col.idx}`}
+                />
+              )}
             </div>
           ))}
         </div>
 
         {/* ── Footer (token usage + copy) ── */}
         <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${form.models.length}, 1fr)`,
+          style={colsGridStyle({
             borderTop: '1px solid var(--hf-rule)',
             background: 'var(--hf-paper)',
-          }}
+          })}
         >
           {displayCols.map((col) => (
             <div
               key={col.idx}
               style={{
                 padding: '10px 16px',
-                borderRight:
-                  col.idx < form.models.length - 1
-                    ? '1px solid var(--hf-rule)'
-                    : 0,
+                borderRight: colBorderRight(col.idx),
                 display: 'flex',
                 alignItems: 'center',
                 gap: 10,

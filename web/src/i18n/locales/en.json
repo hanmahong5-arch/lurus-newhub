@@ -144,7 +144,9 @@
         "theme_to_light": "switch to light",
         "theme_to_dark": "switch to dark",
         "docs": "Docs",
-        "support": "Support"
+        "support": "Support",
+        "account_menu": "account",
+        "mode_switch_unavailable": "Switching mode is not available yet"
       },
       "not_available": {
         "label": "n/a"
@@ -215,7 +217,12 @@
         "api_info": "api info",
         "uptime": "uptime",
         "load_failed": "Unable to load usage data",
-        "load_failed_short": "unable to load"
+        "load_failed_short": "unable to load",
+        "live_title": "live · last 5 min",
+        "delta_vs_prev": "vs previous {{days}} days",
+        "cumulative": "cumulative",
+        "empty_cost_cta": "send a request in the playground",
+        "empty_recent_cta": "open request logs"
       },
       "token": {
         "load_error": "Couldn’t load tokens",
@@ -583,7 +590,9 @@
         "settlement_failed": "settlement failed",
         "stat_tokens": "tokens in → out",
         "stat_cache_read": "cache reads",
-        "stat_cache_sub": "tokens served from cache"
+        "stat_cache_sub": "tokens served from cache",
+        "compact_rows": "compact rows",
+        "filter_errors_hint": "show only failed requests"
       },
       "models": {
         "crumb": "model management",
@@ -619,6 +628,7 @@
         "price_required": "Price per call is required for pay-per-call billing",
         "adding": "adding…",
         "add": "add",
+        "no_traffic_yet": "no traffic yet",
         "market": {
           "eyebrow": "model marketplace",
           "subtitle": "{{n}} callable with your keys · prices per 1M tokens, after your group multiplier",
@@ -726,7 +736,11 @@
         "no_message": "(no message)",
         "no_models": "no models available",
         "models_load_failed": "failed to load models",
-        "prefill_unroutable": "Model \"{{model}}\" is not routable for this tenant — showing the default compare set instead."
+        "prefill_unroutable": "Model \"{{model}}\" is not routable for this tenant — showing the default compare set instead.",
+        "view_code": "view code",
+        "est_cost": "est. {{cost}}",
+        "est_cost_hint": "Estimated from your current price list; your bill is authoritative.",
+        "swap_filter": "filter models"
       },
       "chat": {
         "crumb": "chat",
@@ -760,7 +774,9 @@
         "model_label": "model",
         "no_routable_models": "No models are routable for this tenant yet",
         "models_load_failed": "Failed to load models",
-        "model_not_found": "Model \"{{model}}\" is no longer routable for this tenant — pick another."
+        "model_not_found": "Model \"{{model}}\" is no longer routable for this tenant — pick another.",
+        "delete_confirm_title": "Delete this conversation?",
+        "delete_confirm_body": "Its saved history is removed from the server and cannot be restored."
       },
       "flows": {
         "crumb": "flows",
@@ -893,7 +909,8 @@
         "amount_invalid": "enter an amount between {{min}} and {{max}} CNY",
         "method_label": "select payment method",
         "no_payment_methods": "No payment method is configured yet — top-up is temporarily unavailable",
-        "method_not_available": "top-up unavailable: no payment method configured"
+        "method_not_available": "top-up unavailable: no payment method configured",
+        "trend_no_invoice": "no invoice"
       },
       "pricing": {
         "crumb_section": "platform",
@@ -935,7 +952,8 @@
         "context_tiers_count_other": "{{count}} tiers",
         "tier_threshold": "threshold tokens",
         "tier_remove": "remove",
-        "tier_add": "+ add tier"
+        "tier_add": "+ add tier",
+        "tiers_none": "not tiered"
       },
       "redemption": {
         "load_error": "Couldn’t load redemption codes",
@@ -1077,7 +1095,7 @@
         "section_integrations": "Integrations",
         "section_integrations_desc": "webhooks, slack, observability",
         "section_danger": "Danger zone",
-        "section_danger_desc": "export, transfer, delete",
+        "section_danger_desc": "delete account",
         "coming_soon": "available in next release",
         "load_profile_failed": "Failed to load profile.",
         "field_display_name": "display name",
@@ -1366,7 +1384,8 @@
           "health_ok": "ok",
           "health_failing": "failing ({{count}})",
           "health_auto_disabled": "auto-disabled",
-          "health_never_probed": "never probed"
+          "health_never_probed": "never probed",
+          "never_probed_hint": "Not probed yet — health is unknown, not healthy"
         },
         "audit": {
           "crumb_admin": "governance",
@@ -1580,7 +1599,13 @@
         "total_tokens_in_window": "total tokens in window",
         "scope_tenant": "this tenant",
         "scope_all": "all tenants",
-        "unnamed": "unresolved (request refused before routing)"
+        "unnamed": "unresolved (request refused before routing)",
+        "empty_title": "No requests in this window",
+        "empty_hint": "Try a wider window, or check back once traffic starts.",
+        "widen_window": "show last 30 days",
+        "label_scope": "scope",
+        "label_by": "group by",
+        "label_window": "window"
       },
       "palette": {
         "load_error": "Some results couldn’t be loaded",

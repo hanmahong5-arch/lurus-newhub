@@ -17,6 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import React from 'react';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -699,5 +702,78 @@ describe('HFShell collapsible admin sections', () => {
     unmount();
     renderShell();
     expect(items('governance').hidden).toBe(false);
+  });
+});
+
+// The zero-flicker dark-mode pre-paint script lives as a plain inline
+// <script> in web/index.html (it must run before React mounts and before any
+// stylesheet, so it cannot be a module this file imports normally). This
+// pulls the exact script text out of index.html and executes it in jsdom —
+// so a regression in the shipped markup fails here, not just "it works on my
+// machine" reasoning about the html file.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const readZeroFlickerScript = () => {
+  const html = fs.readFileSync(
+    path.resolve(HERE, '../../../index.html'),
+    'utf8',
+  );
+  const match = html.match(
+    /<script>\s*([\s\S]*?lurus-hf-theme[\s\S]*?)<\/script>/,
+  );
+  if (!match) {
+    throw new Error('zero-flicker inline script not found in web/index.html');
+  }
+  return match[1];
+};
+
+const runZeroFlickerScript = () => {
+  // eslint-disable-next-line no-new-func
+  const fn = new Function(readZeroFlickerScript());
+  fn();
+};
+
+describe('index.html zero-flicker inline script', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    delete document.documentElement.dataset.theme;
+  });
+
+  it('sets data-theme=dark under /console/v2 when localStorage has dark', () => {
+    window.history.pushState({}, '', '/console/v2/dashboard');
+    window.localStorage.setItem('lurus-hf-theme', 'dark');
+    window.matchMedia = vi.fn().mockReturnValue({ matches: false });
+
+    runZeroFlickerScript();
+
+    expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('sets data-theme=dark under /console/v2 from the OS preference when nothing is stored', () => {
+    window.history.pushState({}, '', '/console/v2/playground');
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true });
+
+    runZeroFlickerScript();
+
+    expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('leaves data-theme unset under /console/v2 when the preference is light', () => {
+    window.history.pushState({}, '', '/console/v2/dashboard');
+    window.localStorage.setItem('lurus-hf-theme', 'light');
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true });
+
+    runZeroFlickerScript();
+
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+  });
+
+  it('does nothing outside /console/v2 (legacy v1 chrome has no dark tokens)', () => {
+    window.history.pushState({}, '', '/console/personal');
+    window.localStorage.setItem('lurus-hf-theme', 'dark');
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true });
+
+    runZeroFlickerScript();
+
+    expect(document.documentElement.dataset.theme).toBeUndefined();
   });
 });
