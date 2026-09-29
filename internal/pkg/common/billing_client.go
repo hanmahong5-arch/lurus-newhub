@@ -140,10 +140,19 @@ func PreAuthorize(ctx context.Context, accountID int64, amount float64, productI
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusBadRequest {
+	if mayCarryInsufficientBalance(resp.StatusCode) {
+		// The body's error code, not the status, decides "out of money": the
+		// platform has answered insufficient_balance with 400, 402 and 409 at
+		// different times and is converging on 402.
 		reason := parseErrorResponse(resp.Body)
-		if reason == "insufficient_balance" {
+		if reason == insufficientBalanceCode {
 			return nil, ErrInsufficientBalance
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			// 402/409 without the balance code: unchanged from before this
+			// status widening — treated like any other non-2xx answer.
+			SysLog(fmt.Sprintf("pre-authorize failed: account=%d, status=%d", accountID, resp.StatusCode))
+			return nil, fmt.Errorf("billing service unavailable")
 		}
 		// Any OTHER 400 is the platform refusing the request we sent, not the
 		// customer running out of money. Returning the balance sentinel here
@@ -266,6 +275,18 @@ func PreAuthRetryIsFutile(err error) bool {
 		return false
 	}
 	return rejected.Status == http.StatusNotFound || rejected.Status == http.StatusConflict
+}
+
+// insufficientBalanceCode is the platform body `error` code meaning the
+// customer's wallet cannot cover the request.
+const insufficientBalanceCode = "insufficient_balance"
+
+// mayCarryInsufficientBalance reports whether a platform status is one the
+// platform has used (400 legacy, 402 target, 409 some paths) to answer
+// insufficient_balance. Only a body error == insufficientBalanceCode under one
+// of these statuses maps to ErrInsufficientBalance.
+func mayCarryInsufficientBalance(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusPaymentRequired || status == http.StatusConflict
 }
 
 // parseErrorResponse extracts the "error" field from a JSON error response body.
