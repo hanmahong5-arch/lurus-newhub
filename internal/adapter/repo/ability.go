@@ -227,6 +227,14 @@ func GetChannelForTenant(group string, model string, retry int, tenantID string)
 // request, just because the model_health read failed; the next probe pass
 // or FixAbility resync catches up.
 func autoDisabledModelsForChannel(db *gorm.DB, channelID int) map[string]bool {
+	// On PostgreSQL a failed statement aborts the surrounding transaction:
+	// querying a missing model_health table inside UpdateAbilities(tx) would
+	// make every later INSERT in that tx fail (SQLSTATE 25P02), so "fail open"
+	// must not even issue the query when the table is absent. SQLite does not
+	// abort, which is why only the PG suite caught this.
+	if !db.Migrator().HasTable(&entity.ModelHealth{}) {
+		return map[string]bool{}
+	}
 	var models []string
 	err := db.Model(&entity.ModelHealth{}).
 		Where("channel_id = ? AND auto_disabled = ?", channelID, true).
