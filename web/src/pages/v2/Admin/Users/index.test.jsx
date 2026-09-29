@@ -178,6 +178,21 @@ describe('Admin Users page', () => {
     });
   });
 
+  it('loads the list once on mount; the debounced search does not refetch it', async () => {
+    API.get.mockResolvedValue(listResponse([makeUser()]));
+
+    render(<HFAdminUsers />);
+    await waitFor(() => screen.getByTestId('user-edit-btn-7'));
+    // Past the 350 ms search debounce: a mount-time second fetch would land here.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const listCalls = API.get.mock.calls.filter(([url]) =>
+      String(url).startsWith('/api/v2/admin/users?'),
+    );
+    expect(listCalls).toHaveLength(1);
+    expect(screen.getByTestId('user-edit-btn-7')).toBeInTheDocument();
+  });
+
   it('the edit dialog is a labelled modal; Escape closes it and focus returns to the edit button', async () => {
     API.get.mockResolvedValue(listResponse([makeUser()]));
 

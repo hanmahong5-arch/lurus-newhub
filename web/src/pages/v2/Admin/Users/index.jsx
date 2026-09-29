@@ -322,8 +322,16 @@ const HFAdminUsers = () => {
     fetchUsers();
   }, [fetchUsers]);
 
-  // Debounced keyword search.
+  // Debounced keyword search. It skips the mount pass: the effect above
+  // already loads the list, and a second fetch 350 ms after mount swapped
+  // the whole table for "Loading…" and remounted every row — an edit dialog
+  // opened in that window then handed focus back to a detached button.
+  const searchArmed = useRef(false);
   useEffect(() => {
+    if (!searchArmed.current) {
+      searchArmed.current = true;
+      return undefined;
+    }
     const id = setTimeout(() => fetchUsers(keyword, statusFilter), 350);
     return () => clearTimeout(id);
   }, [keyword, statusFilter, fetchUsers]);
