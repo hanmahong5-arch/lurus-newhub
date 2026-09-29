@@ -18,8 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 // ─── mocks ───────────────────────────────────────────────────────────────────
 
@@ -33,10 +34,15 @@ vi.mock('../../../helpers', () => ({
 }));
 
 vi.mock('../../../components/hifi/HFShell', () => ({
-  default: ({ children, actions }) =>
+  default: ({ children, actions, crumbs }) =>
     React.createElement(
       'div',
       { 'data-testid': 'hf-shell' },
+      React.createElement(
+        'div',
+        { 'data-testid': 'hf-crumbs' },
+        (crumbs || []).join(' / '),
+      ),
       React.createElement('div', { 'data-testid': 'hf-actions' }, actions),
       children,
     ),
@@ -44,6 +50,15 @@ vi.mock('../../../components/hifi/HFShell', () => ({
 
 import HFDashboard from './index';
 import { API } from '../../../helpers';
+import i18n from '../../../i18n/i18n';
+
+// HfEmptyState's action.href renders a react-router <Link>, which throws
+// outside a Router context — every render() in this file goes through this
+// helper instead of a bare React.createElement(HFDashboard).
+const renderDashboard = () =>
+  render(
+    React.createElement(MemoryRouter, null, React.createElement(HFDashboard)),
+  );
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -82,7 +97,7 @@ describe('Dashboard page — KPI cards read lowercase keys', () => {
       data: { success: true, data: makeMe({ used_quota: 500000 }) },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     // Total spend KPI: $1.00 from 500000 / 500000 = 1.00
     await waitFor(() => screen.getByText('total spend'));
@@ -94,7 +109,7 @@ describe('Dashboard page — KPI cards read lowercase keys', () => {
       data: { success: true, data: makeMe({ token_count: 7 }) },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('active tokens'));
     await waitFor(() => screen.getByText('7'));
@@ -105,7 +120,7 @@ describe('Dashboard page — KPI cards read lowercase keys', () => {
       data: { success: true, data: makeMe({ request_count: 99 }) },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('total requests'));
     await waitFor(() => screen.getByText('99'));
@@ -117,7 +132,7 @@ describe('Dashboard page — KPI cards read lowercase keys', () => {
       data: { success: true, data: makeMe({ remaining_quota: 1000000 }) },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('remaining quota'));
     await waitFor(() => screen.getByText('$2.00'));
@@ -128,10 +143,15 @@ describe('Dashboard page — KPI cards read lowercase keys', () => {
       data: { success: true, data: makeMe({ remaining_quota: -1 }) },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('remaining quota'));
-    await waitFor(() => screen.getByText('∞'));
+    // Two honest "∞"s now render for an unlimited plan: the KPI number
+    // itself and the UsageRing beside it (0/0 also reads as unlimited) —
+    // getAllByText, not getByText, since both are correct.
+    await waitFor(() =>
+      expect(screen.getAllByText('∞').length).toBeGreaterThan(0),
+    );
   });
 });
 
@@ -144,7 +164,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
         data: { success: true, data: { logs: [makeLog()] } },
       });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => {
       const calls = API.get.mock.calls.map((c) => c[0]);
@@ -172,7 +192,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
       });
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     // p50 of [100, 200] = 150ms — only renders if `.logs` was consumed.
     await waitFor(() => {
@@ -185,7 +205,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
       data: { success: true, data: makeMe({ display_name: 'Alice Smith' }) },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText(/Alice Smith/));
   });
@@ -195,7 +215,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
       data: { success: true, data: makeMe({ token_count: 0 }) },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText(/0 tokens/));
   });
@@ -210,7 +230,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
       },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     const title = await waitFor(() => screen.getByText(/0 tokens/));
     expect(title.textContent).toContain('lurus');
@@ -249,7 +269,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
       });
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() =>
       expect(screen.getByText(/"model": "rt-openai-pick"/)).toBeTruthy(),
@@ -273,7 +293,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
       });
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() =>
       expect(screen.getByTestId('dashboard-onboarding-no-models')).toBeTruthy(),
@@ -296,7 +316,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
       });
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() =>
       expect(
@@ -348,7 +368,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
     });
     try {
       const { fireEvent } = await import('@testing-library/react');
-      render(React.createElement(HFDashboard));
+      renderDashboard();
 
       const row = await waitFor(() => screen.getByTestId('cost-model-row-0'));
       fireEvent.click(row);
@@ -368,7 +388,7 @@ describe('Dashboard page — user/me + logs fetched with correct URLs', () => {
       data: { success: true, data: makeMe({ token_count: 2 }) },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.queryByText('total spend') !== null);
     expect(screen.queryByText(/0 tokens/)).toBeNull();
@@ -441,7 +461,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
   it('calls /api/data/self/ without skipErrorHandler (401 self-heal must stay reachable)', async () => {
     wireDashboard();
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('total spend'));
     const call = API.get.mock.calls.find((c) =>
@@ -479,7 +499,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
       status: EXPORT_ON_STATUS,
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     // Panel total — proves the per-day aggregation actually summed the rows,
     // not just echoed a truthy fetch. (By test id: the y-axis ceiling can
@@ -509,7 +529,11 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
 
     // The window label interpolates the real constant rather than a
     // hard-coded "29" that could silently drift from
-    // DASHBOARD_TREND_WINDOW_SECONDS (index.jsx:70).
+    // DASHBOARD_TREND_WINDOW_SECONDS (index.jsx:70). This fixture's traffic
+    // is all inside the trailing 7 days of the 29-day fetch, so the
+    // sparse-window auto-narrow (HfActivityChart) starts the view at 7D —
+    // widen back to 29D to see the constant-driven label.
+    fireEvent.click(screen.getByTestId('activity-range-29'));
     expect(screen.getByText('last 29 days')).toBeTruthy();
 
     // Stacked by model (openrouter.ai Activity): each model is its own
@@ -553,7 +577,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
       status: EXPORT_ON_STATUS,
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
     const chart = await waitFor(() => screen.getByTestId('usage-trend-chart'));
     await waitFor(() =>
       expect(screen.getByTestId('activity-total').textContent).toBe('$3.0000'),
@@ -583,7 +607,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
       status: EXPORT_ON_STATUS,
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('No usage recorded in this window.'));
     expect(showError).not.toHaveBeenCalled();
@@ -598,7 +622,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
       status: EXPORT_ON_STATUS,
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() =>
       screen.getByText('No model consumption recorded in this window.'),
@@ -623,7 +647,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
       status: { data: { success: true, data: { enable_data_export: false } } },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('total spend'));
     expect(screen.queryByTestId('usage-trend-chart')).toBeNull();
@@ -658,7 +682,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
       return wired(url);
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByTestId('dash-faq-panel'));
     expect(screen.getByText('Still up?')).toBeTruthy();
@@ -706,7 +730,7 @@ describe('Dashboard page — usage trend + model distribution (/api/data/self/)'
       status: EXPORT_ON_STATUS,
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     const chart = await waitFor(() => screen.getByTestId('usage-trend-chart'));
     // Two rows one hour apart, on two different local calendar days, must
@@ -739,7 +763,7 @@ describe('Dashboard page — /api/status panels (announcements / faq / api_info)
       },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByTestId('dash-faq-panel'));
     expect(screen.getByText('How do I top up?')).toBeTruthy();
@@ -761,7 +785,7 @@ describe('Dashboard page — /api/status panels (announcements / faq / api_info)
       },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     // Page still renders normally; the malformed FAQ option just yields no panel.
     await waitFor(() => screen.getByText('total spend'));
@@ -788,7 +812,7 @@ describe('Dashboard page — /api/uptime/status panel', () => {
       },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByTestId('dash-uptime-panel'));
     expect(screen.getByText('relay-api')).toBeTruthy();
@@ -814,7 +838,7 @@ describe('Dashboard page — /api/uptime/status panel', () => {
       },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('total spend'));
     expect(screen.queryByTestId('dash-uptime-panel')).toBeNull();
@@ -828,7 +852,7 @@ describe('Dashboard page — /api/uptime/status panel', () => {
       uptime: { data: { success: true, data: [] } },
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('total spend'));
     expect(screen.queryByTestId('dash-uptime-panel')).toBeNull();
@@ -878,7 +902,7 @@ describe('Dashboard page — honest load failure (meStatus/logsStatus)', () => {
     async (_label, makeOutcome) => {
       wireFailingKpiStrip(makeOutcome);
 
-      render(React.createElement(HFDashboard));
+      renderDashboard();
 
       await waitFor(() =>
         expect(screen.getByTestId('dashboard-load-error')).toBeTruthy(),
@@ -918,7 +942,7 @@ describe('Dashboard page — honest load failure (meStatus/logsStatus)', () => {
       return Promise.resolve({ data: { success: true, data: {} } });
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     expect(screen.queryByText('no traffic in last 5 min')).toBeNull();
     // Scoped to the QPS panel: the page prints "loading…" in two other
@@ -950,7 +974,7 @@ describe('Dashboard page — honest load failure (meStatus/logsStatus)', () => {
       return Promise.resolve({ data: { success: true, data: {} } });
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
 
     await waitFor(() => screen.getByText('12'));
     expect(screen.queryByTestId('dashboard-load-error')).toBeNull();
@@ -967,7 +991,7 @@ describe('Dashboard page — honest load failure (meStatus/logsStatus)', () => {
       return Promise.resolve({ data: { success: true, data: {} } });
     });
 
-    render(React.createElement(HFDashboard));
+    renderDashboard();
     await waitFor(() => screen.getByTestId('dashboard-retry-btn'));
     const callsBeforeRetry = kpiCallCount;
 
@@ -999,7 +1023,7 @@ describe('Dashboard page — recent requests carry the real log time', () => {
       return Promise.resolve({ data: { success: true, data: {} } });
     });
 
-    const { container } = render(React.createElement(HFDashboard));
+    const { container } = renderDashboard();
 
     // 1750000000 s = 2025-06-15 23:06 Asia/Shanghai (TZ pinned in
     // vitest.config.js); read as ms it is 1970-01-21.
@@ -1008,5 +1032,116 @@ describe('Dashboard page — recent requests carry the real log time', () => {
     );
     expect(container.textContent).not.toMatch(/1970|1月2\d日|Jan 2\d\b/);
     expect(container.textContent).toMatch(/Jun 15|6月15/);
+  });
+});
+
+// ─── cycle-19: breadcrumb i18n, deduped topbar, empty-state CTAs ─────────────
+
+describe('Dashboard page — breadcrumb goes through i18n', () => {
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  it('renders "workspace / Dashboard" in English', async () => {
+    API.get.mockResolvedValue({ data: { success: true, data: makeMe() } });
+    renderDashboard();
+    await waitFor(() =>
+      expect(screen.getByTestId('hf-crumbs').textContent).toBe(
+        'workspace / Dashboard',
+      ),
+    );
+  });
+
+  // Proves the crumbs prop is built from real tr() calls, not the bare
+  // English literals ['workspace', 'dashboard'] this page used to pass —
+  // a literal renders identically under every locale, this does not.
+  it('renders "工作区 / 概览" under the zh locale', async () => {
+    await i18n.changeLanguage('zh');
+    API.get.mockResolvedValue({ data: { success: true, data: makeMe() } });
+    renderDashboard();
+    await waitFor(() =>
+      expect(screen.getByTestId('hf-crumbs').textContent).toBe('工作区 / 概览'),
+    );
+  });
+});
+
+describe('Dashboard page — no duplicated "spent/remaining" summary in the topbar', () => {
+  it('the topbar actions only ever contain the refresh button, never a requests/spent summary', async () => {
+    API.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: makeMe({ request_count: 42, used_quota: 250000 }),
+      },
+    });
+    renderDashboard();
+
+    await waitFor(() => screen.getByText('total spend'));
+    const actions = screen.getByTestId('hf-actions');
+    expect(actions.textContent).toBe('refresh');
+    // The numbers the old summary repeated now live only in the KPI strip.
+    expect(screen.queryByText(/42 requests/)).toBeNull();
+    expect(screen.queryByText(/\$0\.50 spent/)).toBeNull();
+  });
+
+  it('the h1 no longer appends "· $X remaining" next to the workspace name', async () => {
+    API.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: makeMe({ display_name: 'Alice Smith', remaining_quota: 1000000 }),
+      },
+    });
+    renderDashboard();
+
+    const h1 = await waitFor(() =>
+      screen.getByText('Alice Smith').closest('h1'),
+    );
+    expect(h1.textContent).toBe('Alice Smith');
+  });
+});
+
+describe('Dashboard page — empty-state CTAs link to the right place', () => {
+  it('the cost-by-model empty state links to the playground', async () => {
+    wireDashboard({ status: EXPORT_ON_STATUS });
+    renderDashboard();
+
+    const empty = await waitFor(() =>
+      screen.getByTestId('dashboard-cost-empty'),
+    );
+    const link = empty.querySelector('a');
+    expect(link.getAttribute('href')).toBe('/console/v2/playground');
+    expect(link.textContent).toBe('send a request in the playground');
+  });
+
+  it('the recent-activity empty state links to the log page', async () => {
+    wireDashboard({ status: EXPORT_ON_STATUS });
+    renderDashboard();
+
+    const empty = await waitFor(() =>
+      screen.getByTestId('dashboard-recent-empty'),
+    );
+    const link = empty.querySelector('a');
+    expect(link.getAttribute('href')).toBe('/console/v2/log');
+    expect(link.textContent).toBe('open request logs');
+  });
+
+  // A check that never ran (logs fetch still pending/failed) has nothing
+  // honest to recommend — no CTA when logsStatus isn't a confirmed 'ok'.
+  it('renders no CTA in the empty states when the logs fetch failed', async () => {
+    API.get.mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/user/me') || u.includes('/logs')) {
+        return Promise.reject({ response: { status: 500 } });
+      }
+      return Promise.resolve({ data: { success: true, data: {} } });
+    });
+    renderDashboard();
+
+    const empty = await waitFor(() =>
+      screen.getByTestId('dashboard-cost-empty'),
+    );
+    expect(empty.querySelector('a')).toBeNull();
+    expect(
+      screen.getByTestId('dashboard-recent-empty').querySelector('a'),
+    ).toBeNull();
   });
 });

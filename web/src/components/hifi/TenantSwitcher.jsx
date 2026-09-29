@@ -44,17 +44,17 @@ const MODES = ['Personal', 'Reseller', 'EndUser'];
 const MODE_META = {
   Personal: {
     color: 'var(--hf-info)',
-    bg: 'rgba(44,95,176,0.12)',
+    bg: 'var(--hf-info-bg)',
     glyph: '◉',
   },
   Reseller: {
     color: 'var(--hf-accent)',
-    bg: 'rgba(255,93,31,0.12)',
+    bg: 'var(--hf-accent-bg)',
     glyph: '◈',
   },
   EndUser: {
     color: 'var(--hf-ok)',
-    bg: 'rgba(31,122,79,0.12)',
+    bg: 'var(--hf-ok-bg)',
     glyph: '◎',
   },
 };
@@ -83,6 +83,11 @@ const TenantSwitcher = ({
   onSelect,
 }) => {
   const { t: tr } = useTranslation();
+  // No onSelect means there is no server-side tenant/mode switch to wire this
+  // to (see the comment above the <TenantSwitcher> call site in HFShell.jsx)
+  // — the three mode buttons below render disabled rather than silently
+  // mutating local state for nothing.
+  const modeSwitchEnabled = typeof onSelect === 'function';
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState(modeProp ?? 'Personal');
   const [tenantName, setTenantName] = useState(tenantNameProp ?? '');
@@ -268,10 +273,12 @@ const TenantSwitcher = ({
             right: 0,
             background: 'var(--hf-elev)',
             border: '1px solid var(--hf-rule)',
-            borderRadius: 2,
+            // Menu-tier elevation token, not the trigger's own 2px control
+            // radius — this is a floating popover, not a form control.
+            borderRadius: 'var(--hf-radius-menu)',
             zIndex: 200,
             overflow: 'hidden',
-            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+            boxShadow: 'var(--hf-shadow-menu)',
           }}
         >
           {/* Section: tenants */}
@@ -363,33 +370,50 @@ const TenantSwitcher = ({
               const mm = MODE_META[m];
               const isActive = m === mode;
               return (
-                <div
+                <button
                   key={m}
+                  type='button'
                   role='option'
                   aria-selected={isActive}
-                  tabIndex={0}
-                  onClick={() => handleModeSelect(m)}
+                  disabled={!modeSwitchEnabled}
+                  title={
+                    modeSwitchEnabled
+                      ? undefined
+                      : tr(
+                          'console.shell.mode_switch_unavailable',
+                          'Switching mode is not available yet',
+                        )
+                  }
+                  onClick={() => modeSwitchEnabled && handleModeSelect(m)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleModeSelect(m);
+                    if (modeSwitchEnabled && e.key === 'Enter') {
+                      handleModeSelect(m);
+                    }
                   }}
                   style={{
                     flex: 1,
                     padding: '8px 4px',
                     textAlign: 'center',
-                    cursor: 'pointer',
+                    border: 'none',
                     background: isActive ? mm.bg : 'transparent',
                     borderBottom: isActive
                       ? `2px solid ${mm.color}`
                       : '2px solid transparent',
                     transition: 'background 0.08s',
+                    fontFamily: 'inherit',
+                    cursor: modeSwitchEnabled ? 'pointer' : 'not-allowed',
+                    opacity: modeSwitchEnabled ? 1 : 0.5,
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = mm.bg;
+                    if (modeSwitchEnabled)
+                      e.currentTarget.style.background = mm.bg;
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.background = isActive
-                      ? mm.bg
-                      : 'transparent';
+                    if (modeSwitchEnabled) {
+                      e.currentTarget.style.background = isActive
+                        ? mm.bg
+                        : 'transparent';
+                    }
                   }}
                 >
                   <div style={{ fontSize: 13, color: mm.color }}>
@@ -406,7 +430,7 @@ const TenantSwitcher = ({
                   >
                     {modeLabel(tr, m)}
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>

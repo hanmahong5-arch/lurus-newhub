@@ -72,6 +72,25 @@ vi.mock('../../../../components/hifi/HFShell', () => ({
     ),
 }));
 
+// HfDensityToggle's own localStorage/cross-tab persistence is covered by
+// HfDensityToggle.test.jsx; this file only needs to prove the page mirrors
+// the reported compact value onto its own table className, so a minimal
+// stub stands in rather than pulling useTableCompactMode's helpers-module
+// chain into this file's '../../../../helpers' mock above (which does not
+// export getTableCompactMode/setTableCompactMode).
+vi.mock('../../../../components/hifi/HfDensityToggle', () => ({
+  default: ({ tableKey, onChange }) =>
+    React.createElement(
+      'button',
+      {
+        type: 'button',
+        'data-testid': `density-toggle-${tableKey}`,
+        onClick: () => onChange(true),
+      },
+      'compact rows',
+    ),
+}));
+
 vi.mock('../../../../components/common/ConfirmDialog', () => ({
   default: ({ visible, onConfirm, onCancel, title }) =>
     visible
@@ -425,5 +444,42 @@ describe('Admin Users page — three-state load status (rows / forbidden / error
 
     await waitFor(() => screen.getByText('Alice'));
     expect(screen.queryByTestId('users-retry-btn')).toBeNull();
+  });
+});
+
+// ── Numeric columns and density toggle (cycle-19 L4) ────────────────────────
+describe('Admin Users page — numeric columns and density', () => {
+  it('marks the quota and requests columns (header and cells) with the num class', async () => {
+    API.get.mockResolvedValue(listResponse([makeUser()]));
+
+    render(<HFAdminUsers />);
+    await waitFor(() => screen.getByText('Alice'));
+
+    const table = document.querySelector('table.t');
+    const numHeaders = Array.from(table.querySelectorAll('th')).filter((th) =>
+      th.className.split(' ').includes('num'),
+    );
+    expect(numHeaders.length).toBe(2);
+
+    const numCells = Array.from(table.querySelectorAll('td')).filter((td) =>
+      td.className.split(' ').includes('num'),
+    );
+    expect(numCells.length).toBe(2);
+  });
+
+  it('adds hf-dense to the table once the density toggle reports compact', async () => {
+    API.get.mockResolvedValue(listResponse([makeUser()]));
+
+    render(<HFAdminUsers />);
+    await waitFor(() => screen.getByText('Alice'));
+
+    const table = document.querySelector('table.t');
+    expect(table.className).not.toContain('hf-dense');
+
+    fireEvent.click(screen.getByTestId('density-toggle-v2-admin-users'));
+
+    await waitFor(() => {
+      expect(table.className).toContain('hf-dense');
+    });
   });
 });

@@ -76,6 +76,20 @@
    * info and accent-2 onto the same navy; hi-fi keeps them distinct
    * (`.tag.info` vs `.spark.info`), so info stays a lighter blue. */
   --hf-info: #2c5fb0;
+  /* Soft info-tinted panel/badge background — light theme. RGB is --hf-info
+   * (#2c5fb0) at 8%, the same tint recipe as --hf-accent-bg/--hf-warn-bg
+   * above. Consumed by L2/L4/L5/L6 (TenantSwitcher mode badges, never-probed
+   * chips, etc.) — the name is a contract, do not rename without a repo-wide
+   * grep. */
+  --hf-info-bg: rgba(44, 95, 176, 0.08);
+  /* Soft ok-tinted panel/badge background — light theme. RGB is --hf-ok
+   * (--lt-ok); literal because the token package ships hex only, same
+   * reasoning as --hf-accent-bg. */
+  --hf-ok-bg: rgba(63, 168, 118, 0.1);
+  /* Table row hover — light theme reuses the existing --hf-sunken step
+   * rather than a new colour, per the CSS-discipline pass this token feeds
+   * (`table.t tbody tr:hover` moves onto this name, not a new literal). */
+  --hf-row-hover: var(--hf-sunken);
 
   /* Accent-tinted focus ring, theme-aware. The old inputs used a fixed
    * rgba(0,0,0,.04) shadow that was invisible on the dark canvas; this token
@@ -126,6 +140,23 @@
    * a theme-varying reference would defeat the "always dark" contract. */
   --hf-code-bg: #0a0908;
   --hf-code-ink: #e8e3d4;
+
+  /* ── Elevation tiers (2026-09-29) ─────────────────────────────────────
+   * Three radius steps tied to three shadow weights, so "how rounded" and
+   * "how much it floats" stop being picked independently per component.
+   *   control — buttons/fields/tags/inputs: kept at the literal 2px already
+   *             used all over this file (deliberately NOT aliased here —
+   *             the CSS-discipline pass converts popover/dialog/drawer/toast
+   *             to reference these tokens, but leaves every 2px control
+   *             alone).
+   *   menu    — small floating surfaces: dropdowns (TenantSwitcher, the new
+   *             HfUserMenu), toasts.
+   *   dialog  — large floating surfaces: HfDialog, the detail drawer. */
+  --hf-radius-control: 2px;
+  --hf-radius-menu: 6px;
+  --hf-radius-dialog: 10px;
+  --hf-shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --hf-shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.16);
 }
 
 /* Dark theme. The vendored token file also redefines --lt-* under this same
@@ -168,8 +199,24 @@
   /* product override, token=--lt-info (#5A7BC7) — same info/accent-2 collapse
    * as in light; hi-fi keeps the two distinguishable. */
   --hf-info: #7aaef5;
+  /* Dark-theme info tint — --hf-info (#7aaef5) at 10%; near-black canvas
+   * needs a touch more alpha than light to stay perceptible, same delta the
+   * warn/accent tints above already use between themes. */
+  --hf-info-bg: rgba(122, 174, 245, 0.1);
+  --hf-ok-bg: rgba(90, 204, 146, 0.12);
+  /* Table row hover — dark theme gets its own step rather than aliasing
+   * --hf-sunken (which is near-black here, #06050a — indistinguishable from
+   * --hf-bg as a hover state); --hf-elev is the "one step up" surface. */
+  --hf-row-hover: var(--hf-elev);
 
   --hf-focus: rgba(255, 122, 58, 0.45);
+
+  /* Dark-theme shadows use a higher, near-opaque alpha rather than the light
+   * theme's soft rgba(0,0,0,.12-.16) — on a near-black canvas a light-theme-
+   * strength shadow reads as a flat grey smear instead of a floating panel;
+   * these stay closer to solid black so the menu/dialog visibly lifts. */
+  --hf-shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.55);
+  --hf-shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.7);
 }
 
 .hf {
@@ -281,6 +328,27 @@
   height: 28px;
   padding: 0 8px;
   font-size: 10px;
+}
+/* Disabled buttons previously had no styling at all — same look as an
+ * enabled one, so "why won't this click" was the only signal a user got.
+ * `[aria-disabled='true']` covers non-<button> controls (e.g. TenantSwitcher's
+ * mode options) that cannot carry the native `disabled` attribute the same
+ * way. `pointer-events: none` is what actually keeps a disabled control from
+ * visually reacting to a pointer it is ignoring — a `:hover` override rule
+ * here (as a previous version of this file had) is NOT equivalent: it has
+ * the same specificity as `.btn.primary:hover` / `.btn.danger:hover` /
+ * `.btn.warning:hover` / `.btn.ghost:hover` / `.btn.acc:hover` above, so
+ * whichever wins is decided by source order alone, and hard-coding its
+ * background/border to the base `.btn` resting colors only happens to match
+ * the unstyled variant — every colored variant (e.g. `btn primary` on
+ * Channel/Tenants/LimitsModal Save buttons) would still repaint on hover
+ * while disabled. `pointer-events: none` removes the whole rule instead of
+ * trying to out-specificity it. */
+.hf .btn:disabled,
+.hf .btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .hf .field {
@@ -472,6 +540,39 @@
   }
 }
 
+/* ── Empty state (components/hifi/HfEmptyState.jsx) ─────────────────────────
+ * "Nothing here yet, and here's the next step" — no illustration, just a
+ * small line icon, one line of reason, and (when there is one) a single
+ * primary action. Centered column so it reads as a deliberate state rather
+ * than a gap in the layout. */
+.hf .hf-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 16px;
+  text-align: center;
+}
+.hf .hf-empty-state__icon {
+  width: 22px;
+  height: 22px;
+  color: var(--hf-ink-4);
+}
+.hf .hf-empty-state__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hf-ink-2);
+}
+.hf .hf-empty-state__hint {
+  max-width: 42ch;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--hf-ink-3);
+}
+.hf .hf-empty-state__action {
+  margin-top: 4px;
+}
+
 /* Wraps every `table.t` so wide tables scroll horizontally instead of
  * blowing out the page on narrow viewports (no breakpoint previously
  * protected these). */
@@ -489,6 +590,10 @@
   border-bottom: 1px solid var(--hf-rule);
   font-weight: 400;
   vertical-align: middle;
+  /* Every cell defaults to tabular-nums — cheap and harmless for text
+   * columns, and means a page doesn't have to remember `.num`/`.hf-tnum` on
+   * every single numeric cell to get digits that line up. */
+  font-variant-numeric: tabular-nums;
 }
 .hf table.t th {
   font-family: var(--hf-mono);
@@ -507,7 +612,33 @@
   transition: background 0.08s;
 }
 .hf table.t tbody tr:hover {
-  background: var(--hf-paper);
+  /* var(--hf-row-hover), not --hf-paper directly: dark theme's --hf-paper
+   * (#131210) barely lifts off --hf-bg (#0a0908) — the hover step was nearly
+   * invisible there. --hf-row-hover gives dark its own, brighter step. */
+  background: var(--hf-row-hover);
+}
+
+/* ── Shared data-table utility contract (2026-09-29, L1 step 0) ─────────────
+ * Consumed by L2/L4/L5/L6 — these three class names plus the --hf-info-bg /
+ * --hf-ok-bg / --hf-row-hover variables above are the whole contract; do not
+ * rename or repurpose without checking every lane's plan first.
+ *   .num       numeric column: right-aligned + tabular-nums. Works on both
+ *              <th> and <td> so a header lines up over the figures below it.
+ *   .hf-tnum   tabular-nums only, no alignment change — for inline figures
+ *              that stay left-aligned (e.g. a topbar stat span).
+ *   .hf-dense  add to `table.t` (→ `table.t.hf-dense`) to compress row
+ *              padding for the density toggle (HfDensityToggle). */
+.hf .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.hf .hf-tnum {
+  font-variant-numeric: tabular-nums;
+}
+.hf table.t.hf-dense th,
+.hf table.t.hf-dense td {
+  padding-top: 5px;
+  padding-bottom: 5px;
 }
 
 .hf .spark {
@@ -611,8 +742,16 @@
   text-transform: uppercase;
   letter-spacing: 0.16em;
   color: var(--hf-ink-4);
-  padding: 0 6px 5px;
+  /* +2px top and +2px bottom over the previous 0/5px — a touch more
+   * breathing room above/below each section heading. */
+  padding: 2px 6px 7px;
 }
+/* Nav de-emphasis (visual weight, not access — visibleNavItems/minRole
+ * already decide what's reachable): an inactive rail item's text/icon sit a
+ * step below body-copy ink so the content pane, not the rail, reads as the
+ * loud thing on the page. Hover lifts one step (ink-2); the active item is
+ * untouched — it keeps full ink + the accent left-rail + fill it already
+ * had. */
 .hf-side .nav-i {
   display: flex;
   align-items: center;
@@ -621,13 +760,16 @@
   cursor: pointer;
   border-left: 2px solid transparent;
   margin-left: -2px;
-  transition: background 0.08s;
+  transition:
+    background 0.08s,
+    color 0.08s;
   border-radius: 1px;
   text-decoration: none;
-  color: inherit;
+  color: var(--hf-ink-3);
 }
 .hf-side .nav-i:hover {
   background: var(--hf-sunken);
+  color: var(--hf-ink-2);
 }
 .hf-side .nav-i.active {
   background: var(--hf-sunken);
@@ -636,8 +778,12 @@
 }
 .hf-side .nav-i .nav-glyph {
   width: 11px;
-  color: var(--hf-ink-4);
+  color: var(--hf-ink-3);
   font-size: 10px;
+  transition: color 0.08s;
+}
+.hf-side .nav-i:hover .nav-glyph {
+  color: var(--hf-ink-2);
 }
 .hf-side .nav-i.active .nav-glyph {
   color: var(--hf-accent);
@@ -646,6 +792,14 @@
   margin-left: auto;
   font-size: 9px;
   color: var(--hf-ink-4);
+}
+/* legacyBridge marker (HfNav.jsx) — the item that opens legacy v1 chrome and
+ * drops the rail entirely. Quieter than the surrounding label so it reads as
+ * a footnote, not a second nav-worthy label. */
+.nav-legacy-tag {
+  color: var(--hf-ink-4);
+  font-size: 9px;
+  margin-left: 2px;
 }
 
 .hf-side .footer {
@@ -717,6 +871,13 @@
   letter-spacing: -0.02em;
   color: var(--hf-ink);
   font-weight: 500;
+}
+/* Utility for a figure a page drops into its `HFShell actions` slot (a
+ * request-count, a cost total, …) — tabular-nums so it doesn't jitter as the
+ * digits update. Same contract shape as `.hf-tnum` below, scoped to the
+ * topbar the way `.hf-top .crumb` above is. */
+.hf-top .stat {
+  font-variant-numeric: tabular-nums;
 }
 .hf-body {
   overflow: auto;
@@ -798,7 +959,8 @@
 .hf .field:focus-visible,
 .hf .pill:focus-visible,
 .hf .kbd:focus-visible,
-.hf-side .nav-i:focus-visible {
+.hf-side .nav-i:focus-visible,
+.hf-side .nav-h-toggle:focus-visible {
   outline: none;
   border-color: var(--hf-accent);
   box-shadow: 0 0 0 3px var(--hf-focus);
@@ -899,8 +1061,8 @@
   background: var(--hf-elev);
   border: 1px solid var(--hf-rule);
   border-left: 3px solid var(--hf-ink-4);
-  border-radius: 2px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  border-radius: var(--hf-radius-menu);
+  box-shadow: var(--hf-shadow-menu);
   animation: hf-toast-in 0.15s ease;
 }
 .hf-toast-host .hf-toast.ok {
@@ -962,6 +1124,20 @@
   letter-spacing: 0.04em;
 }
 
+/* Sidebar search button contents (severity-1 fix): both were bare <span>s
+ * with no layout rule of their own, so a child SVG icon and its adjacent
+ * text (or two stacked kbd caps) baseline-aligned by default instead of
+ * vertically centering — the search glyph visibly sat off-row from "search
+ * anything" / "⌘"+"K". inline-flex + align-items:center fixes both; the two
+ * responsive display-toggles below must keep this inline-flex, not fall back
+ * to `block` (which would reintroduce the misalignment at ≤640px). */
+.hf-side .search-label,
+.hf-side .kbd-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ── Responsive breakpoints ──────────────────────────────────────────────
  * `.hf-shell` previously had a single fixed 224px-sidebar/100vh layout with
  * zero breakpoints, so tablet/narrow windows mis-rendered (sidebar never
@@ -994,7 +1170,7 @@
   .hf-side .nav-label,
   .hf-side .nav-i .nav-badge,
   .hf-side .search-label,
-  .hf-side .kbd,
+  .hf-side .kbd-group,
   .hf-side .footer {
     display: none;
   }
@@ -1043,10 +1219,15 @@
   .hf-side .nav-h,
   .hf-side .nav-label,
   .hf-side .nav-i .nav-badge,
-  .hf-side .search-label,
-  .hf-side .kbd,
   .hf-side .footer {
     display: block;
+  }
+  /* NOT `block` — these two are inline-flex rows (icon + text / two kbd
+   * caps); reintroducing `block` here is exactly the severity-1 misalignment
+   * this pass fixed (see the base rule above the breakpoints section). */
+  .hf-side .search-label,
+  .hf-side .kbd-group {
+    display: inline-flex;
   }
   .hf-side .nav-i {
     justify-content: flex-start;
@@ -1073,6 +1254,9 @@
     animation: none;
   }
   .hf-toast-host .hf-toast {
+    animation: none;
+  }
+  .hf .hf-drawer {
     animation: none;
   }
   .hf *,
@@ -1166,6 +1350,65 @@ html[lang^='zh'] .hf-side .nav-h {
   border-color: transparent;
 }
 
+/* Topbar identity menu (components/hifi/HfUserMenu.jsx) — replaces a bare
+ * "username + separate logout button" pair with a single avatar+name trigger
+ * that opens a small role=menu (Settings / Log out). */
+.hf-user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--hf-sunken);
+  color: var(--hf-ink-2);
+  font-family: var(--hf-mono);
+  font-size: 9px;
+  font-weight: 600;
+}
+.hf-user-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hf-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 160px;
+  background: var(--hf-elev);
+  border: 1px solid var(--hf-rule);
+  border-radius: var(--hf-radius-menu);
+  box-shadow: var(--hf-shadow-menu);
+  padding: 4px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.hf-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--hf-ink-2);
+  font-family: var(--hf-sans);
+  font-size: 12px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.hf-menu-item:hover,
+.hf-menu-item:focus-visible {
+  background: var(--hf-sunken);
+  color: var(--hf-ink);
+  outline: none;
+}
+
 /* Centred modal dialog (components/hifi/HfDialog.jsx). Panel styling is the
  * one every hand-rolled console overlay converged on; z-index sits between the
  * side drawer (50) and the toast host / Semi step-up modal (1000) so both of
@@ -1186,7 +1429,8 @@ html[lang^='zh'] .hf-side .nav-h {
   overflow-y: auto;
   background: var(--hf-paper);
   border: 1px solid var(--hf-rule);
-  border-radius: 4px;
+  border-radius: var(--hf-radius-dialog);
+  box-shadow: var(--hf-shadow-dialog);
   padding: 28px;
   display: flex;
   flex-direction: column;
@@ -1226,7 +1470,9 @@ html[lang^='zh'] .hf-side .nav-h {
   overflow-y: auto;
   background: var(--hf-paper);
   border-left: 1px solid var(--hf-rule);
-  box-shadow: -12px 0 32px rgba(10, 9, 8, 0.12);
+  /* Dialog tier, not menu — same reasoning as .hf-dialog above: a full-height
+   * detail drawer is a large floating surface. */
+  box-shadow: var(--hf-shadow-dialog);
   padding: 24px 26px 40px;
   animation: hf-drawer-in 0.18s ease-out;
 }

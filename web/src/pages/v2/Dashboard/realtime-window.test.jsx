@@ -24,6 +24,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('../../../helpers', () => ({
   // The onboarding curl block resolves the relay host at render time.
@@ -45,6 +46,13 @@ vi.mock('../../../components/hifi/HFShell', () => ({
 import HFDashboard from './index';
 import { API } from '../../../helpers';
 import { DASHBOARD_REALTIME_WINDOW_SECONDS } from './kpis';
+
+// HfEmptyState's action.href renders a react-router <Link>, which throws
+// outside a Router context.
+const renderDashboard = () =>
+  render(
+    React.createElement(MemoryRouter, null, React.createElement(HFDashboard)),
+  );
 
 const makeMe = (overrides = {}) => ({
   username: 'testuser',
@@ -84,7 +92,7 @@ describe('Dashboard — realtime window request', () => {
   it('asks for a page size the logs endpoint actually accepts', async () => {
     wire({ logs: [makeLog()], total: 1 });
 
-    render(<HFDashboard />);
+    renderDashboard();
 
     await waitFor(() => {
       const logsURL = API.get.mock.calls
@@ -106,7 +114,7 @@ describe('Dashboard — realtime window request', () => {
     const total = 3 * DASHBOARD_REALTIME_WINDOW_SECONDS;
     wire({ logs: [makeLog(), makeLog()], total });
 
-    render(<HFDashboard />);
+    renderDashboard();
 
     await waitFor(() => screen.getByText('qps'));
     // formatQPS(3) → '3.0'; the page-derived value would be '<0.01'.
@@ -121,7 +129,7 @@ describe('Dashboard — realtime window request', () => {
     window.localStorage.setItem('quota_per_unit', '1000');
     wire({ logs: [makeLog({ quota: 2500 })], total: 1 });
 
-    render(<HFDashboard />);
+    renderDashboard();
 
     // 2500 / 1000 = $2.5000; the default divisor would render $0.0050.
     await waitFor(() => {
@@ -132,7 +140,7 @@ describe('Dashboard — realtime window request', () => {
   it('falls back to the row count when the server sends no total', async () => {
     wire({ logs: [makeLog(), makeLog(), makeLog()] });
 
-    render(<HFDashboard />);
+    renderDashboard();
 
     await waitFor(() => screen.getByText('qps'));
     // 3 / 300 = 0.01 → formatQPS → '0.01'.

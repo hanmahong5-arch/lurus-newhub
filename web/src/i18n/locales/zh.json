@@ -144,7 +144,9 @@
         "theme_to_light": "切换到浅色",
         "theme_to_dark": "切换到深色",
         "docs": "文档",
-        "support": "支持"
+        "support": "支持",
+        "account_menu": "账户",
+        "mode_switch_unavailable": "模式切换暂未开放"
       },
       "not_available": {
         "label": "暂无"
@@ -215,7 +217,12 @@
         "api_info": "API 信息",
         "uptime": "可用性",
         "load_failed": "用量数据加载失败",
-        "load_failed_short": "无法加载"
+        "load_failed_short": "无法加载",
+        "live_title": "实时 · 近 5 分钟",
+        "delta_vs_prev": "较前 {{days}} 天",
+        "cumulative": "累计",
+        "empty_cost_cta": "去调试台发一次请求",
+        "empty_recent_cta": "打开请求日志"
       },
       "token": {
         "load_error": "令牌列表加载失败",
@@ -583,7 +590,9 @@
         "settlement_failed": "结算失败",
         "stat_tokens": "Token 输入 → 输出",
         "stat_cache_read": "缓存读取",
-        "stat_cache_sub": "命中缓存的 token"
+        "stat_cache_sub": "命中缓存的 token",
+        "compact_rows": "紧凑行",
+        "filter_errors_hint": "只看失败的请求"
       },
       "models": {
         "crumb": "模型管理",
@@ -619,6 +628,7 @@
         "price_required": "按次计费必须填写单价",
         "adding": "添加中…",
         "add": "添加",
+        "no_traffic_yet": "暂无流量",
         "market": {
           "eyebrow": "模型广场",
           "subtitle": "{{n}} 个可用你的令牌直接调用 · 价格按每百万 token 计，已含你的分组倍率",
@@ -726,7 +736,11 @@
         "no_message": "（无错误信息）",
         "no_models": "暂无可用模型",
         "models_load_failed": "模型加载失败",
-        "prefill_unroutable": "模型「{{model}}」不可被该租户路由——已改为展示默认对比集。"
+        "prefill_unroutable": "模型「{{model}}」不可被该租户路由——已改为展示默认对比集。",
+        "view_code": "查看代码",
+        "est_cost": "估算 {{cost}}",
+        "est_cost_hint": "按当前价目表估算，以账单为准。",
+        "swap_filter": "筛选模型"
       },
       "chat": {
         "crumb": "对话",
@@ -760,7 +774,9 @@
         "model_label": "模型",
         "no_routable_models": "该租户暂无可路由的模型",
         "models_load_failed": "模型加载失败",
-        "model_not_found": "模型「{{model}}」已不可被该租户路由——请另选一个。"
+        "model_not_found": "模型「{{model}}」已不可被该租户路由——请另选一个。",
+        "delete_confirm_title": "删除这个对话？",
+        "delete_confirm_body": "已保存的记录会从服务器删除，无法恢复。"
       },
       "flows": {
         "crumb": "流程",
@@ -893,7 +909,8 @@
         "amount_invalid": "请输入 {{min}} 到 {{max}} CNY 之间的金额",
         "method_label": "选择支付方式",
         "no_payment_methods": "尚未配置支付方式，充值暂不可用",
-        "method_not_available": "充值暂不可用：未配置支付方式"
+        "method_not_available": "充值暂不可用：未配置支付方式",
+        "trend_no_invoice": "无账单"
       },
       "pricing": {
         "crumb_section": "平台",
@@ -935,7 +952,8 @@
         "context_tiers_count_other": "{{count}} 档",
         "tier_threshold": "阈值 tokens",
         "tier_remove": "移除",
-        "tier_add": "+ 添加分级"
+        "tier_add": "+ 添加分级",
+        "tiers_none": "未分级"
       },
       "redemption": {
         "load_error": "兑换码列表加载失败",
@@ -1077,7 +1095,7 @@
         "section_integrations": "集成",
         "section_integrations_desc": "webhook、slack、可观测性",
         "section_danger": "危险区",
-        "section_danger_desc": "导出、转移、删除",
+        "section_danger_desc": "注销账户",
         "coming_soon": "下个版本提供",
         "load_profile_failed": "加载个人资料失败。",
         "field_display_name": "显示名称",
@@ -1366,7 +1384,8 @@
           "health_ok": "正常",
           "health_failing": "异常（{{count}}）",
           "health_auto_disabled": "已自动禁用",
-          "health_never_probed": "从未探测"
+          "health_never_probed": "从未探测",
+          "never_probed_hint": "尚未探测：健康状况未知，不代表正常"
         },
         "audit": {
           "crumb_admin": "治理",
@@ -1580,7 +1599,13 @@
         "total_tokens_in_window": "窗口内总 tokens",
         "scope_tenant": "本租户",
         "scope_all": "全部租户",
-        "unnamed": "未识别模型（请求在路由前被拒）"
+        "unnamed": "未识别模型（请求在路由前被拒）",
+        "empty_title": "该时间窗内没有请求",
+        "empty_hint": "试试更长的时间窗，或等有流量后再来看。",
+        "widen_window": "查看近 30 天",
+        "label_scope": "范围",
+        "label_by": "分组",
+        "label_window": "时间窗"
       },
       "palette": {
         "load_error": "部分结果加载失败",

@@ -55,6 +55,25 @@ vi.mock('../../../components/hifi/HFShell', () => ({
     ),
 }));
 
+// HfDensityToggle's own persistence (useTableCompactMode → helpers) is
+// covered by HfDensityToggle.test.jsx; this file only needs to prove the
+// page wires the reported compact value onto its own table className, so a
+// minimal stub stands in rather than pulling useTableCompactMode's
+// localStorage/helpers chain into every test above (the '../../../helpers'
+// mock a few lines up does not export getTableCompactMode/setTableCompactMode).
+vi.mock('../../../components/hifi/HfDensityToggle', () => ({
+  default: ({ tableKey, onChange }) =>
+    React.createElement(
+      'button',
+      {
+        type: 'button',
+        'data-testid': `density-toggle-${tableKey}`,
+        onClick: () => onChange(true),
+      },
+      'compact rows',
+    ),
+}));
+
 // Mirror i18next's en behaviour: return the English defaultValue (2nd arg)
 // with {{var}} interpolation, falling back to the key when no default given.
 vi.mock('react-i18next', () => ({
@@ -1193,6 +1212,129 @@ describe('Log page — cross-product attribution', () => {
       const strip = screen.getByTestId('log-by-product-strip');
       expect(strip.textContent).toContain('llm-api');
       expect(strip.textContent).toContain('switch');
+    });
+  });
+});
+
+// ── Error chip filter, density toggle, numeric columns (cycle-19 L4) ───────
+//
+// The trace table's error chip used to be pure decoration (a <span>); it is
+// now a button that opens the same "errors only" filter the toolbar button
+// does (there is no "successes only" filter on the API, so the success chip
+// stays inert). Rows also carry a density toggle (HfDensityToggle, mocked
+// above — its own localStorage/cross-tab contract is covered by
+// HfDensityToggle.test.jsx) and the cost/token/duration columns are marked
+// `num` for right-aligned tabular-nums styling (hifi-tokens.css, L1).
+describe('Log page — error chip filter, density and numeric columns', () => {
+  const baseRow = {
+    total_latency_ms: 340,
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    quota: 500,
+    created_at: Math.floor(Date.now() / 1000),
+  };
+
+  const wireLogs = (logs) => {
+    API.get.mockImplementation((url) => {
+      if (url.includes('/logs/stat')) {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      return Promise.resolve({
+        data: { success: true, data: { logs, total: logs.length } },
+      });
+    });
+  };
+
+  it('clicking the error chip filters to errors-only (type=5) and flips aria-pressed', async () => {
+    wireLogs([{ ...baseRow, id: 1, type: 5, model_name: 'model-a' }]);
+    render(<HFLog />);
+
+    const chip = await screen.findByTitle('show only failed requests');
+    expect(chip.getAttribute('aria-pressed')).toBe('false');
+
+    API.get.mockClear();
+    fireEvent.click(chip);
+
+    await waitFor(() => {
+      const urls = API.get.mock.calls.map(([u]) => u);
+      expect(urls.some((u) => u.includes('type=5'))).toBe(true);
+    });
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTitle('show only failed requests')
+          .getAttribute('aria-pressed'),
+      ).toBe('true');
+    });
+  });
+
+  it('does not change the selected row when the error chip is clicked', async () => {
+    wireLogs([
+      { ...baseRow, id: 1, type: 2, model_name: 'model-a' },
+      { ...baseRow, id: 2, type: 5, model_name: 'model-b' },
+    ]);
+    render(<HFLog />);
+
+    const table = await screen.findByTestId('trace-table');
+    const rows = () => table.querySelectorAll('tbody tr');
+    // The first row auto-selects on load (fetchLogs calls setSelRow(0)) —
+    // its selected style is the accent left border.
+    await waitFor(() => {
+      expect(rows()[0].style.borderLeft).toContain('accent');
+    });
+
+    fireEvent.click(screen.getByTitle('show only failed requests'));
+
+    // Still the first row selected — the chip's own click did not bubble to
+    // the row's onClick (which would have moved selection to the second row,
+    // the one the chip sits inside).
+    expect(rows()[0].style.borderLeft).toContain('accent');
+    expect(rows()[1].style.borderLeft).not.toContain('accent');
+  });
+
+  it('renders the success chip as inert — the API has no "successes only" filter', async () => {
+    wireLogs([{ ...baseRow, id: 1, type: 2, model_name: 'model-a' }]);
+    render(<HFLog />);
+
+    const table = await screen.findByTestId('trace-table');
+    expect(screen.queryByTitle('show only failed requests')).toBeNull();
+    expect(within(table).getByText('ok').tagName).not.toBe('BUTTON');
+  });
+
+  it('renders no emoji on the export button — a real icon takes its place', async () => {
+    wireLogs([]);
+    render(<HFLog />);
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    expect(document.body.textContent).not.toContain('📥');
+  });
+
+  it('marks the dur/tok/cost trace columns (header and cells) with the num class', async () => {
+    wireLogs([{ ...baseRow, id: 1, type: 2, model_name: 'model-a' }]);
+    render(<HFLog />);
+
+    const table = await screen.findByTestId('trace-table');
+    const numHeaders = within(table)
+      .getAllByRole('columnheader')
+      .filter((th) => th.className.split(' ').includes('num'));
+    expect(numHeaders.length).toBeGreaterThanOrEqual(3);
+
+    const numCells = within(table)
+      .getAllByRole('cell')
+      .filter((td) => td.className.split(' ').includes('num'));
+    expect(numCells.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('adds hf-dense to the trace table once the density toggle reports compact', async () => {
+    wireLogs([{ ...baseRow, id: 1, type: 2, model_name: 'model-a' }]);
+    render(<HFLog />);
+
+    const table = await screen.findByTestId('trace-table');
+    expect(table.className).not.toContain('hf-dense');
+
+    fireEvent.click(screen.getByTestId('density-toggle-v2-log'));
+
+    await waitFor(() => {
+      expect(table.className).toContain('hf-dense');
     });
   });
 });

@@ -46,6 +46,7 @@ import {
 } from '../../../helpers/formatting';
 import { readUSDField } from '../../../helpers/moneyInput';
 import InlineEdit from './InlineEdit';
+import { buildSnippets, langTabsFor } from './snippets';
 
 // The relay host used to be the module constant 'https://api.lurus.cn'. That
 // domain was retired in 2026-04 and no longer resolves, so every snippet and
@@ -139,64 +140,9 @@ const copy = async (text) => {
   }
 };
 
-// `host` is the live relay host (see relayHostFromServer) — never a literal.
-// Every snippet below is copy-pasted verbatim by customers, so a stale host
-// here is a broken integration, not a cosmetic issue.
-//
-// L1 (cycle-11): `openaiModel`/`anthropicModel` were ALSO hardcoded
-// literals — same class of bug as the host used to be. Callers resolve
-// both from the routing truth (useRoutableModels,
-// narrowed to this token's own model_limits via intersectTokenLimits)
-// before calling this. anthropicModel may be undefined — the anthropic
-// snippet then never renders (langTabsFor hides its tab to match).
-const buildSnippets = (key, host, { openaiModel, anthropicModel } = {}) => ({
-  curl: `curl ${host}/v1/chat/completions \\
-  -H "Authorization: Bearer ${key}" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"${openaiModel}","messages":[{"role":"user","content":"hi"}]}'`,
-  python: `from openai import OpenAI
-
-client = OpenAI(api_key="${key}", base_url="${host}/v1")
-resp = client.chat.completions.create(
-    model="${openaiModel}",
-    messages=[{"role": "user", "content": "hi"}],
-)
-print(resp.choices[0].message.content)`,
-  node: `import OpenAI from "openai";
-
-const client = new OpenAI({ apiKey: "${key}", baseURL: "${host}/v1" });
-const r = await client.chat.completions.create({
-  model: "${openaiModel}",
-  messages: [{ role: "user", content: "hi" }],
-});`,
-  anthropic: anthropicModel
-    ? `import Anthropic from "@anthropic-ai/sdk";
-
-const client = new Anthropic({
-  apiKey: "${key}",
-  baseURL: "${host}",
-});
-await client.messages.create({
-  model: "${anthropicModel}",
-  max_tokens: 1024,
-  messages: [{ role: "user", content: "hi" }],
-});`
-    : '',
-});
-
-// langTabsFor drops the Anthropic SDK tab when no routable (token-scoped)
-// model speaks the anthropic wire — showing a tab whose snippet embeds
-// "model":"undefined" would be worse than not offering it.
-const ALL_LANG_TABS = [
-  ['curl', 'cURL'],
-  ['python', 'Python'],
-  ['node', 'Node.js'],
-  ['anthropic', 'Anthropic SDK'],
-];
-const langTabsFor = (anthropicModel) =>
-  anthropicModel
-    ? ALL_LANG_TABS
-    : ALL_LANG_TABS.filter(([k]) => k !== 'anthropic');
+// buildSnippets/langTabsFor now live in ./snippets.js (cycle-19 L3) — shared
+// with Playground's ViewCodePanel so "view code" and this page's own
+// snippet panel never drift into two different curl/python/node shapes.
 
 // ─── Create token modal ───────────────────────────────────────────────────────
 

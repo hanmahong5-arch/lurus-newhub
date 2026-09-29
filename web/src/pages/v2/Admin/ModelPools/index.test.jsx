@@ -167,6 +167,56 @@ describe('Admin model pools page', () => {
     );
   });
 
+  // cycle-19 L6: requests/errors/latency are the table's number columns —
+  // they should carry the shared `num` (right-align + tabular-nums) contract
+  // on both header and body cells.
+  it('marks the requests/errors/latency columns with the `num` class', async () => {
+    API.get.mockImplementation(routeGet(resolveWith(poolsResponse(POOLS))));
+
+    render(<HFModelPools />);
+    await waitFor(() => screen.getByText('chan-a'));
+
+    const shell = screen.getByTestId('hf-shell');
+    const headers = Array.from(shell.querySelectorAll('th'));
+    const numHeaders = headers.filter((th) => th.className.includes('num'));
+    expect(numHeaders.map((th) => th.textContent)).toEqual([
+      'latency',
+      'requests (24h)',
+      'errors (24h)',
+    ]);
+
+    const requestRow = screen.getByText('m1').closest('tr');
+    const numCells = Array.from(requestRow.querySelectorAll('td.num'));
+    expect(numCells).toHaveLength(3);
+  });
+
+  // cycle-19 L6: "never probed" (no health row yet) must look distinctly
+  // different from a passing "ok" probe — before this both were an untoned
+  // label indistinguishable from each other.
+  it('gives the never-probed badge a distinct title and class/style from the ok badge', async () => {
+    API.get.mockImplementation(routeGet(resolveWith(poolsResponse(POOLS))));
+
+    render(<HFModelPools />);
+    await waitFor(() => screen.getByText('chan-a'));
+
+    const neverProbed = screen.getByTestId('pool-health-m3');
+    const ok = screen.getByTestId('pool-health-m1');
+
+    expect(neverProbed.title).toBe(
+      'Not probed yet — health is unknown, not healthy',
+    );
+    expect(ok.title).toBe('');
+
+    const neverProbedBadge = neverProbed.querySelector(
+      '.hf-health-badge--never_probed',
+    );
+    const okBadge = ok.querySelector('.hf-health-badge--ok');
+    expect(neverProbedBadge).not.toBeNull();
+    expect(okBadge).not.toBeNull();
+    expect(neverProbedBadge.className).not.toBe(okBadge.className);
+    expect(neverProbedBadge.style.border).not.toBe(okBadge.style.border);
+  });
+
   it('shows an empty state when there are no pools', async () => {
     API.get.mockImplementation(routeGet(resolveWith(poolsResponse([]))));
 

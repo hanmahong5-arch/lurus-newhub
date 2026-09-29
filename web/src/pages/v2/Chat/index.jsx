@@ -26,6 +26,8 @@ import React, {
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import ConfirmDialog from '../../../components/common/ConfirmDialog';
+import HfMarkdown from '../../../components/hifi/HfMarkdown';
+import SessionList from './SessionList';
 import { API, showError, showSuccess } from '../../../helpers';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import {
@@ -206,8 +208,7 @@ const HFChat = () => {
   );
 
   const deleteSession = useCallback(
-    async (id, evt) => {
-      evt?.stopPropagation?.();
+    async (id) => {
       setDeletingSessionId(id);
       try {
         await API.delete(`/api/v2/${tenantSlug}/chat/sessions/${id}`);
@@ -496,140 +497,18 @@ const HFChat = () => {
           minHeight: 0,
         }}
       >
-        <div
-          style={{
-            borderRight: '1px solid var(--hf-rule)',
-            background: 'var(--hf-paper)',
-            overflow: 'auto',
-          }}
-        >
-          <div style={{ padding: '14px 16px' }}>
-            <button
-              type='button'
-              className='btn primary'
-              style={{ width: '100%', justifyContent: 'center' }}
-              onClick={newChat}
-            >
-              {tr('console.chat.new_chat_btn', '+ new chat')}
-            </button>
-          </div>
-          {/* The active draft: shown while there are local turns that are
-              not yet reflected as an entry in `sessions` below — either the
-              persist call for this turn hasn't resolved yet, or it failed
-              (best-effort, see persistSession's comment). Once the draft's
-              id appears in `sessions` it renders as a normal (highlighted)
-              row there instead, so it is never shown twice. */}
-          {messages.length > 0 &&
-            !sessions.some((s) => s.id === activeSessionId) && (
-              <>
-                <div className='lbl' style={{ padding: '8px 16px' }}>
-                  {tr('console.chat.current_session', 'current session')}
-                </div>
-                <div
-                  data-testid='session-row'
-                  style={{
-                    padding: '10px 16px',
-                    background: 'var(--hf-elev)',
-                    borderLeft: '2px solid var(--hf-accent)',
-                    borderBottom: '1px solid var(--hf-rule)',
-                  }}
-                >
-                  <div
-                    className='strong'
-                    style={{
-                      fontSize: 12,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {sessionTitle}
-                  </div>
-                  <div
-                    className='faint mono'
-                    style={{ fontSize: 10, marginTop: 2 }}
-                  >
-                    {tr('console.chat.ago', '{{ago}} ago', {
-                      ago: sessionStartedAgo,
-                    })}{' '}
-                    ·{' '}
-                    {tr('console.chat.turns', '{{count}} turns', {
-                      count: turnCount,
-                    })}
-                  </div>
-                </div>
-              </>
-            )}
-
-          <div className='lbl' style={{ padding: '8px 16px' }}>
-            {tr('console.chat.saved_sessions', 'saved conversations')}
-          </div>
-          {sessions.length === 0 && (
-            <div
-              className='faint'
-              style={{ padding: '4px 16px 14px', fontSize: 11 }}
-            >
-              {tr(
-                'console.chat.no_saved_sessions',
-                'no saved conversations yet',
-              )}
-            </div>
-          )}
-          {sessions.map((s) => (
-            <div
-              key={s.id}
-              data-testid={`session-list-row-${s.id}`}
-              onClick={() => openSession(s.id)}
-              role='button'
-              tabIndex={0}
-              style={{
-                padding: '10px 16px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                background:
-                  s.id === activeSessionId ? 'var(--hf-elev)' : 'transparent',
-                borderLeft:
-                  s.id === activeSessionId
-                    ? '2px solid var(--hf-accent)'
-                    : '2px solid transparent',
-                borderBottom: '1px solid var(--hf-rule)',
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  className='strong'
-                  style={{
-                    fontSize: 12,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {s.title || tr('console.chat.new_chat', 'new chat')}
-                </div>
-                <div
-                  className='faint mono'
-                  style={{ fontSize: 10, marginTop: 2 }}
-                >
-                  {tr('console.chat.messages_count', '{{count}} messages', {
-                    count: s.message_count,
-                  })}
-                </div>
-              </div>
-              <button
-                type='button'
-                className='btn ghost sm'
-                data-testid={`session-delete-${s.id}`}
-                disabled={deletingSessionId === s.id}
-                onClick={(e) => deleteSession(s.id, e)}
-              >
-                {tr('console.common.delete', 'delete')}
-              </button>
-            </div>
-          ))}
-        </div>
+        <SessionList
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          messages={messages}
+          sessionTitle={sessionTitle}
+          sessionStartedAgo={sessionStartedAgo}
+          turnCount={turnCount}
+          deletingSessionId={deletingSessionId}
+          onNewChat={newChat}
+          onOpenSession={openSession}
+          onDeleteSession={deleteSession}
+        />
 
         <div
           style={{
@@ -764,16 +643,28 @@ const HFChat = () => {
                 >
                   {m.role === 'user' ? tr('console.chat.you', 'you') : model}
                 </div>
-                <div
-                  style={{
-                    fontSize: 14,
-                    lineHeight: 1.65,
-                    color: 'var(--hf-ink)',
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
-                  {m.content}
-                </div>
+                {m.role === 'user' ? (
+                  <div
+                    style={{
+                      fontSize: 14,
+                      lineHeight: 1.65,
+                      color: 'var(--hf-ink)',
+                      whiteSpace: 'pre-wrap',
+                    }}
+                  >
+                    {m.content}
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      fontSize: 14,
+                      lineHeight: 1.65,
+                      color: 'var(--hf-ink)',
+                    }}
+                  >
+                    <HfMarkdown content={m.content} />
+                  </div>
+                )}
                 {m.meta && (
                   <div
                     style={{

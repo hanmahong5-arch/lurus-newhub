@@ -23,9 +23,19 @@ For commercial licensing, please contact support@quantumnous.com
 // hover. Bars are HTML, not a stretched SVG, so labels stay crisp at any
 // width. Series maths lives in ./activitySeries.js.
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { buildActivity, niceCeil, OTHER } from './activitySeries';
+import {
+  buildActivity,
+  cumulative,
+  isSparseRecent,
+  niceCeil,
+  OTHER,
+} from './activitySeries';
+
+// How many trailing days count as "recent" for the sparse-window narrow
+// (step below) — matches the sparkline/环比 window KpiCards uses.
+const SPARSE_RECENT_DAYS = 7;
 
 const PALETTE = [
   'var(--hf-series-1)',
@@ -70,6 +80,9 @@ const fmtHour = (ts) =>
  *   the host page (rankings presets); hides the range switch
  * @param {'spend'|'tokens'|'requests'} [p.defaultMetric='spend']
  * @param {number} [p.height=180]
+ * @param {boolean} [p.allowCumulative=false] adds a "cumulative" toggle
+ *   (dashboard.cumulative) that redraws each bar as the running total —
+ *   only the Dashboard page opts in; Rankings never sets this.
  */
 const HfActivityChart = ({
   rows,
@@ -79,11 +92,14 @@ const HfActivityChart = ({
   fixedWindow,
   defaultMetric = 'spend',
   height = 180,
+  allowCumulative = false,
 }) => {
   const { t: tr } = useTranslation();
   const [metric, setMetric] = useState(defaultMetric);
   const [range, setRange] = useState(maxDays);
   const [hover, setHover] = useState(null);
+  const [userPickedRange, setUserPickedRange] = useState(false);
+  const [cumulativeOn, setCumulativeOn] = useState(false);
 
   // range: a number of days, or 'h24' for the last 24 local hours (the rows
   // are hourly, so this is a re-bucketing of the same fetch).
@@ -99,9 +115,44 @@ const HfActivityChart = ({
       ),
     [rows, end, range, metric, fixedWindow],
   );
+
+  // Sparse-window auto-narrow: a 29-day fetch whose only traffic is the last
+  // few days renders mostly blank bars if the initial view is the full
+  // window. Measured against the FULL window (maxDays), independent of
+  // whatever `range` currently is, so this doesn't re-trigger off its own
+  // change. Skipped once the reader has manually picked a range, and never
+  // runs at all when the host page fixes the window (Rankings' presets have
+  // no range switch to narrow).
+  useEffect(() => {
+    if (fixedWindow || userPickedRange) return;
+    const full = buildActivity(rows, { end, days: maxDays, metric });
+    if (isSparseRecent(full.days, SPARSE_RECENT_DAYS)) {
+      setRange(SPARSE_RECENT_DAYS);
+    }
+  }, [rows, end, maxDays, metric, fixedWindow, userPickedRange]);
+
+  const pickRange = (r) => {
+    setUserPickedRange(true);
+    setRange(r);
+  };
+
+  // Cumulative view collapses the per-model stack into one running-total
+  // series — a running total per model would need its own axis story this
+  // toggle isn't trying to tell; OpenRouter's own cumulative view does the
+  // same collapse.
+  const displayDays = useMemo(() => {
+    if (!allowCumulative || !cumulativeOn) return data.days;
+    const totals = cumulative(data.days.map((d) => d.total));
+    return data.days.map((d, i) => ({
+      day: d.day,
+      total: totals[i],
+      parts: totals[i] ? { [OTHER]: totals[i] } : {},
+    }));
+  }, [data, allowCumulative, cumulativeOn]);
+
   const fmtBucket = data.unit === 'hour' ? fmtHour : fmtDay;
   const fmt = metric === 'spend' ? formatSpend : compact;
-  const top = niceCeil(Math.max(0, ...data.days.map((d) => d.total)));
+  const top = niceCeil(Math.max(0, ...displayDays.map((d) => d.total)));
   const colorOf = (model) => {
     if (model === OTHER) return OTHER_COLOR;
     const i = data.series.findIndex((s) => s.model === model);
@@ -109,7 +160,15 @@ const HfActivityChart = ({
   };
   const label = (model) =>
     model === OTHER ? tr('console.activity.other', 'other') : model;
-  const shownDay = hover != null ? data.days[hover] : null;
+  const shownDay = hover != null ? displayDays[hover] : null;
+  // Cumulative bars carry a single OTHER-keyed segment (see displayDays
+  // above) regardless of how many distinct models fed the window — the
+  // model-ranked `data.series` list may not include OTHER at all when there
+  // were ≤ topN models, so the bar segment loop needs its own list here.
+  const barSeries =
+    allowCumulative && cumulativeOn
+      ? [{ model: OTHER, total: 0 }]
+      : data.series;
 
   const seg = (value, onClick, key, text) => (
     <button
@@ -174,13 +233,23 @@ const HfActivityChart = ({
             buttons would do nothing (rankings, 2026-09-23). */}
         {!fixedWindow && (
           <div className='hf-seg'>
-            {seg(range === 'h24', () => setRange('h24'), 'range-24h', '24H')}
-            {seg(range === 7, () => setRange(7), 'range-7', '7D')}
+            {seg(range === 'h24', () => pickRange('h24'), 'range-24h', '24H')}
+            {seg(range === 7, () => pickRange(7), 'range-7', '7D')}
             {seg(
               range === maxDays,
-              () => setRange(maxDays),
+              () => pickRange(maxDays),
               `range-${maxDays}`,
               `${maxDays}D`,
+            )}
+          </div>
+        )}
+        {allowCumulative && (
+          <div className='hf-seg'>
+            {seg(
+              cumulativeOn,
+              () => setCumulativeOn((v) => !v),
+              'cumulative',
+              tr('console.dashboard.cumulative', 'cumulative'),
             )}
           </div>
         )}
@@ -227,11 +296,11 @@ const HfActivityChart = ({
               inset: 0,
               display: 'flex',
               alignItems: 'flex-end',
-              gap: data.days.length > 7 ? 3 : 10,
+              gap: displayDays.length > 7 ? 3 : 10,
             }}
             onMouseLeave={() => setHover(null)}
           >
-            {data.days.map((d, i) => (
+            {displayDays.map((d, i) => (
               <div
                 key={d.day}
                 data-testid='activity-bar'
@@ -249,7 +318,7 @@ const HfActivityChart = ({
                 }}
                 title={`${fmtBucket(d.day)} · ${fmt(d.total)}`}
               >
-                {data.series.map((s) =>
+                {barSeries.map((s) =>
                   d.parts[s.model] ? (
                     <div
                       key={s.model}
@@ -287,7 +356,7 @@ const HfActivityChart = ({
               style={{
                 position: 'absolute',
                 top: 4,
-                [hover > data.days.length / 2 ? 'left' : 'right']: 4,
+                [hover > displayDays.length / 2 ? 'left' : 'right']: 4,
                 padding: '8px 10px',
                 fontSize: 12,
                 minWidth: 180,
@@ -298,27 +367,32 @@ const HfActivityChart = ({
               <div className='strong' style={{ marginBottom: 4 }}>
                 {fmtBucket(shownDay.day)} · {fmt(shownDay.total)}
               </div>
-              {data.series
-                .filter((s) => shownDay.parts[s.model])
-                .map((s) => (
-                  <div
-                    key={s.model}
-                    style={{ display: 'flex', gap: 6, alignItems: 'center' }}
-                  >
-                    <i
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: 2,
-                        background: colorOf(s.model),
-                      }}
-                    />
-                    <span className='truncate' style={{ flex: 1 }}>
-                      {label(s.model)}
-                    </span>
-                    <span className='mono'>{fmt(shownDay.parts[s.model])}</span>
-                  </div>
-                ))}
+              {/* Cumulative mode's single running-total segment has nothing
+                  to break down beyond the line above. */}
+              {!(allowCumulative && cumulativeOn) &&
+                barSeries
+                  .filter((s) => shownDay.parts[s.model])
+                  .map((s) => (
+                    <div
+                      key={s.model}
+                      style={{ display: 'flex', gap: 6, alignItems: 'center' }}
+                    >
+                      <i
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 2,
+                          background: colorOf(s.model),
+                        }}
+                      />
+                      <span className='truncate' style={{ flex: 1 }}>
+                        {label(s.model)}
+                      </span>
+                      <span className='mono'>
+                        {fmt(shownDay.parts[s.model])}
+                      </span>
+                    </div>
+                  ))}
             </div>
           )}
         </div>
@@ -333,10 +407,10 @@ const HfActivityChart = ({
           paddingLeft: 52,
         }}
       >
-        <span>{data.days.length ? fmtBucket(data.days[0].day) : ''}</span>
+        <span>{displayDays.length ? fmtBucket(displayDays[0].day) : ''}</span>
         <span>
-          {data.days.length
-            ? fmtBucket(data.days[data.days.length - 1].day)
+          {displayDays.length
+            ? fmtBucket(displayDays[displayDays.length - 1].day)
             : ''}
         </span>
       </div>

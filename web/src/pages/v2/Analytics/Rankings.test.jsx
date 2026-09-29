@@ -211,6 +211,78 @@ describe('Rankings page', () => {
     });
   });
 
+  // cycle-19 L6: the 13 same-weight buttons split into 3 labelled
+  // role=radiogroup segments (scope / by / window).
+  describe('grouped segmented controls', () => {
+    it('shows a visible label for each group and marks radio/aria-checked', async () => {
+      API.get.mockResolvedValue(payload());
+      render(<HFRankings />);
+      await waitFor(() => {
+        expect(screen.getAllByTestId('rankings-row')).toHaveLength(2);
+      });
+
+      // isRoot() is false by default in this describe block, so only the
+      // by/window groups render — the scope group's root-only visibility is
+      // covered separately in the "cross-tenant scope" describe below.
+      expect(screen.getByText('group by')).toBeInTheDocument();
+      expect(screen.getByText('window')).toBeInTheDocument();
+
+      const byModel = screen.getByTestId('rankings-by-model');
+      expect(byModel).toHaveAttribute('role', 'radio');
+      expect(byModel).toHaveAttribute('aria-checked', 'true');
+      const byVendor = screen.getByTestId('rankings-by-vendor');
+      expect(byVendor).toHaveAttribute('aria-checked', 'false');
+
+      const hours24 = screen.getByTestId('rankings-hours-24');
+      expect(hours24).toHaveAttribute('role', 'radio');
+      expect(hours24).toHaveAttribute('aria-checked', 'true');
+    });
+  });
+
+  // cycle-19 L6: empty result now explains why and offers a way out instead
+  // of a bare "no data" line.
+  describe('empty state with a widen-window action', () => {
+    it('renders the empty title/hint and widens to 720h on click when not already there', async () => {
+      API.get.mockResolvedValue(payload({ rows: [] }));
+      render(<HFRankings />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('No requests in this window'),
+        ).toBeInTheDocument();
+      });
+      expect(
+        screen.getByText(
+          'Try a wider window, or check back once traffic starts.',
+        ),
+      ).toBeInTheDocument();
+
+      const widen = screen.getByText('show last 30 days');
+      API.get.mockResolvedValueOnce(payload({ rows: [], by: 'model' }));
+      fireEvent.click(widen);
+
+      await waitFor(() => {
+        const lastCall = API.get.mock.calls[API.get.mock.calls.length - 1];
+        expect(lastCall[0]).toContain('hours=720');
+      });
+    });
+
+    it('does not render the widen action when already at the 720h window', async () => {
+      API.get.mockResolvedValue(payload({ rows: [] }));
+      render(<HFRankings />);
+      await waitFor(() => screen.getByTestId('rankings-hours-720'));
+
+      fireEvent.click(screen.getByTestId('rankings-hours-720'));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('No requests in this window'),
+        ).toBeInTheDocument();
+      });
+      expect(screen.queryByText('show last 30 days')).toBeNull();
+    });
+  });
+
   it('clears the previous rows and shows an error on a 429 from a later fetch', async () => {
     API.get.mockResolvedValueOnce(payload());
     render(<HFRankings />);
@@ -399,6 +471,21 @@ describe('Rankings — cross-tenant scope (root only)', () => {
         data: { rows: [], cached_at: 0, total_tokens: 0 },
       },
     });
+  });
+
+  it('shows the scope group label and radio semantics for root', async () => {
+    isRoot.mockReturnValue(true);
+    render(React.createElement(HFRankings));
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+
+    expect(screen.getByText('scope')).toBeInTheDocument();
+    const tenantBtn = screen.getByTestId('rankings-scope-tenant');
+    expect(tenantBtn).toHaveAttribute('role', 'radio');
+    expect(tenantBtn).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByTestId('rankings-scope-all')).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
   });
 
   it('offers no scope control to a non-root user and reads the tenant route', async () => {

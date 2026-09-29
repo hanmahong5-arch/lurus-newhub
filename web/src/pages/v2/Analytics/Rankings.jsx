@@ -24,6 +24,7 @@ import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import HfVendorIcon from '../../../components/hifi/HfVendorIcon';
 import HfActivityChart from '../../../components/hifi/HfActivityChart';
+import HfEmptyState from '../../../components/hifi/HfEmptyState';
 
 /*
  * v2 tenant-admin — Model / vendor / group performance rankings leaderboard.
@@ -65,6 +66,22 @@ const BY_DIMENSIONS = [
   ['user', 'by member'],
   ['product', 'by product'],
 ];
+
+// Segmented-control group scaffolding shared by the scope/by/window rows
+// (cycle-19: the 13 previously same-weight buttons split into three labelled
+// groups).
+const groupLabelStyle = {
+  fontFamily: 'var(--hf-mono)',
+  fontSize: 11,
+  color: 'var(--hf-ink-3)',
+  marginBottom: 4,
+};
+
+const segmentRowStyle = {
+  display: 'flex',
+  gap: 4,
+  flexWrap: 'wrap',
+};
 
 const fmtInt = (n) => Number(n ?? 0).toLocaleString();
 
@@ -255,67 +272,103 @@ const HFRankings = () => {
           {/* Tab/preset controls render above the error branch too: a
               transient 5xx/429 must not strand the tenant admin in a
               dead-end panel with no way to switch tab/preset or retry
-              (cycle-7 findings round 2, item 9). */}
+              (cycle-7 findings round 2, item 9). Grouped into three
+              segmented controls (scope / group-by / window) instead of one
+              13-button row with '|' dividers — each group carries its own
+              11px mono label and is a role=radiogroup of role=radio
+              buttons. */}
           <div
             style={{
               display: 'flex',
-              gap: 8,
+              gap: 16,
               marginBottom: 12,
-              alignItems: 'center',
+              alignItems: 'flex-start',
               flexWrap: 'wrap',
             }}
           >
             {rootUser && (
-              <>
-                <button
-                  type='button'
-                  data-testid='rankings-scope-tenant'
-                  className={'btn sm' + (scope === 'tenant' ? ' primary' : '')}
-                  onClick={() => setScope('tenant')}
+              <div>
+                <div style={groupLabelStyle}>
+                  {tr('console.rankings.label_scope', 'scope')}
+                </div>
+                <div
+                  role='radiogroup'
+                  aria-label={tr('console.rankings.label_scope', 'scope')}
+                  style={segmentRowStyle}
                 >
-                  {tr('console.rankings.scope_tenant', 'this tenant')}
-                </button>
-                <button
-                  type='button'
-                  data-testid='rankings-scope-all'
-                  className={'btn sm' + (scope === 'all' ? ' primary' : '')}
-                  onClick={() => setScope('all')}
-                >
-                  {tr('console.rankings.scope_all', 'all tenants')}
-                </button>
-                <span
-                  aria-hidden='true'
-                  style={{ opacity: 0.4, padding: '0 4px' }}
-                >
-                  |
-                </span>
-              </>
+                  <button
+                    type='button'
+                    role='radio'
+                    aria-checked={scope === 'tenant'}
+                    data-testid='rankings-scope-tenant'
+                    className={
+                      'btn sm' + (scope === 'tenant' ? ' primary' : '')
+                    }
+                    onClick={() => setScope('tenant')}
+                  >
+                    {tr('console.rankings.scope_tenant', 'this tenant')}
+                  </button>
+                  <button
+                    type='button'
+                    role='radio'
+                    aria-checked={scope === 'all'}
+                    data-testid='rankings-scope-all'
+                    className={'btn sm' + (scope === 'all' ? ' primary' : '')}
+                    onClick={() => setScope('all')}
+                  >
+                    {tr('console.rankings.scope_all', 'all tenants')}
+                  </button>
+                </div>
+              </div>
             )}
-            {BY_DIMENSIONS.map(([dim, fallback]) => (
-              <button
-                key={dim}
-                type='button'
-                data-testid={`rankings-by-${dim}`}
-                className={'btn sm' + (by === dim ? ' primary' : '')}
-                onClick={() => setBy(dim)}
+            <div>
+              <div style={groupLabelStyle}>
+                {tr('console.rankings.label_by', 'group by')}
+              </div>
+              <div
+                role='radiogroup'
+                aria-label={tr('console.rankings.label_by', 'group by')}
+                style={segmentRowStyle}
               >
-                {tr(`console.rankings.by_${dim}`, fallback)}
-              </button>
-            ))}
-            <span aria-hidden='true' style={{ opacity: 0.4, padding: '0 4px' }}>
-              |
-            </span>
-            {HOUR_PRESETS.map(([h, key, fallback]) => (
-              <button
-                key={h}
-                type='button'
-                data-testid={`rankings-hours-${h}`}
-                className={'btn sm' + (hours === h ? ' primary' : '')}
-                onClick={() => setHours(h)}
+                {BY_DIMENSIONS.map(([dim, fallback]) => (
+                  <button
+                    key={dim}
+                    type='button'
+                    role='radio'
+                    aria-checked={by === dim}
+                    data-testid={`rankings-by-${dim}`}
+                    className={'btn sm' + (by === dim ? ' primary' : '')}
+                    onClick={() => setBy(dim)}
+                  >
+                    {tr(`console.rankings.by_${dim}`, fallback)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={groupLabelStyle}>
+                {tr('console.rankings.label_window', 'window')}
+              </div>
+              <div
+                role='radiogroup'
+                aria-label={tr('console.rankings.label_window', 'window')}
+                style={segmentRowStyle}
               >
-                {tr(`console.rankings.${key}`, fallback)}
-              </button>
-            ))}
+                {HOUR_PRESETS.map(([h, key, fallback]) => (
+                  <button
+                    key={h}
+                    type='button'
+                    role='radio'
+                    aria-checked={hours === h}
+                    data-testid={`rankings-hours-${h}`}
+                    className={'btn sm' + (hours === h ? ' primary' : '')}
+                    onClick={() => setHours(h)}
+                  >
+                    {tr(`console.rankings.${key}`, fallback)}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           {error ? (
@@ -376,9 +429,28 @@ const HFRankings = () => {
                   {tr('console.common.loading', 'loading…')}
                 </div>
               ) : rows.length === 0 ? (
-                <div className='muted' data-testid='rankings-empty'>
-                  {tr('console.common.no_data', 'no data')}
-                </div>
+                <HfEmptyState
+                  testId='rankings-empty'
+                  title={tr(
+                    'console.rankings.empty_title',
+                    'No requests in this window',
+                  )}
+                  hint={tr(
+                    'console.rankings.empty_hint',
+                    'Try a wider window, or check back once traffic starts.',
+                  )}
+                  action={
+                    hours !== 720
+                      ? {
+                          label: tr(
+                            'console.rankings.widen_window',
+                            'show last 30 days',
+                          ),
+                          onClick: () => setHours(720),
+                        }
+                      : undefined
+                  }
+                />
               ) : (
                 <table
                   className='hf-table'

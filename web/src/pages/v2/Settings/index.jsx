@@ -92,7 +92,7 @@ const SECTIONS = [
   ],
   ['team', 'Team & roles', 'not available in this product yet'],
   ['integrations', 'Integrations', 'webhooks, slack, observability'],
-  ['danger', 'Danger zone', 'export, transfer, delete'],
+  ['danger', 'Danger zone', 'delete account'],
 ];
 
 // Integration registry is not implemented — there is no connection store and

@@ -20,6 +20,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, it, expect } from 'vitest';
 import {
   buildActivity,
+  cumulative,
+  isSparseRecent,
   localDayKey,
   localHourKey,
   niceCeil,
@@ -132,5 +134,50 @@ describe('niceCeil', () => {
     [0, 0],
   ])('%s → %s', (v, want) => {
     expect(niceCeil(v)).toBe(want);
+  });
+});
+
+describe('cumulative', () => {
+  it('running total, per the dashboard.cumulative toggle example', () => {
+    expect(cumulative([1, 0, 2])).toEqual([1, 1, 3]);
+  });
+
+  it('treats non-numbers as 0 rather than throwing/NaN-poisoning the rest', () => {
+    expect(cumulative([1, null, 2, undefined, 3])).toEqual([1, 1, 3, 3, 6]);
+  });
+
+  it('empty/missing input returns an empty array', () => {
+    expect(cumulative([])).toEqual([]);
+    expect(cumulative(null)).toEqual([]);
+  });
+});
+
+describe('isSparseRecent', () => {
+  it('true — every nonzero day is inside the trailing window', () => {
+    // 10 days, only the last 3 have traffic: sparse relative to a 7-day tail.
+    const { days } = buildActivity(
+      [row(2, 'a', 5), row(1, 'a', 5), row(0, 'a', 5)],
+      { end, days: 10 },
+    );
+    expect(isSparseRecent(days, 7)).toBe(true);
+  });
+
+  it('false — a nonzero day sits outside the trailing window', () => {
+    // A day 9 ago (outside the trailing 7) also carries traffic.
+    const { days } = buildActivity([row(9, 'a', 5), row(0, 'a', 5)], {
+      end,
+      days: 10,
+    });
+    expect(isSparseRecent(days, 7)).toBe(false);
+  });
+
+  it('false when the window is not longer than the trailing size (nothing to be sparse relative to)', () => {
+    const { days } = buildActivity([row(0, 'a', 5)], { end, days: 7 });
+    expect(isSparseRecent(days, 7)).toBe(false);
+  });
+
+  it('false when every day is zero (a different, already-handled empty state)', () => {
+    const { days } = buildActivity([], { end, days: 10 });
+    expect(isSparseRecent(days, 7)).toBe(false);
   });
 });

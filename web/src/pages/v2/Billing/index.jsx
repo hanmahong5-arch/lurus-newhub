@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import HFShell from '../../../components/hifi/HFShell';
 import { API, showError } from '../../../helpers';
 import { redeemFailure } from './redeemFailure';
+import TrendBars from './TrendBars';
 import { getQuotaPerUSD } from '../../../helpers/formatting';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 
@@ -270,10 +271,6 @@ const HFBilling = () => {
       setRecharging(false);
     }
   };
-
-  // Trend: last 6 invoices in chronological order for the bar chart.
-  const trend = invoices.slice(0, 6).slice().reverse();
-  const trendMax = trend.reduce((m, b) => Math.max(m, b.amount_cny ?? 0), 1);
 
   // The platform BillingSummary DTO emits `balance`; `wallet_balance_cny` was
   // never one of its fields, so reading only that showed an em dash forever.
@@ -764,35 +761,8 @@ const HFBilling = () => {
                 {tr('console.common.loading', 'loading…')}
               </div>
             ) : (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-end',
-                  gap: 8,
-                  height: 100,
-                  marginTop: 14,
-                }}
-              >
-                {trend.map((b, i) => (
-                  <div key={i} style={{ flex: 1, textAlign: 'center' }}>
-                    <div
-                      style={{
-                        height: ((b.amount_cny ?? 0) / trendMax) * 80 + 'px',
-                        background:
-                          i === trend.length - 1
-                            ? 'var(--hf-accent)'
-                            : 'var(--hf-ink-2)',
-                        opacity: i === trend.length - 1 ? 1 : 0.6,
-                      }}
-                    />
-                    <div
-                      className='faint mono'
-                      style={{ fontSize: 9, marginTop: 4 }}
-                    >
-                      {b.month ? b.month.slice(5) : ''}
-                    </div>
-                  </div>
-                ))}
+              <div style={{ marginTop: 14 }}>
+                <TrendBars invoices={invoices} formatCNY={fmtCNY} />
               </div>
             )}
           </div>

@@ -42,6 +42,10 @@ const HFStates = () => {
   return (
     <HFShell
       active='logs'
+      // QA-only surface (route not linked from the nav rail), deliberately
+      // left English-only — it exists to eyeball empty/loading/error/mobile/
+      // modal chrome states, not to be a customer-facing page, so it is not
+      // wired into the i18n key set new pages get held to.
       crumbs={['states', VIEWS.find((v) => v[0] === view)[1]]}
       actions={VIEWS.map(([k, l]) => (
         <button

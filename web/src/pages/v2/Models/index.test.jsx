@@ -169,6 +169,12 @@ beforeEach(() => {
   isRoot.mockReset();
   isRoot.mockReturnValue(false);
   window.localStorage.clear();
+  // The marketplace collapses its facet rail / sort / view-toggle chrome
+  // below 5 unfiltered models (Marketplace.jsx's small-catalog rule); UAT
+  // below has only 3. A clean, param-free URL between tests so that rule's
+  // default state — no test here exercises it directly, that is
+  // Marketplace.test.jsx's job — is what other suites' snapshots expect.
+  window.history.pushState({}, '', '/console/v2/models');
 });
 
 describe('Models marketplace', () => {
@@ -238,6 +244,11 @@ describe('Models marketplace', () => {
   });
 
   it('filters by search, vendor facet and callable-only', async () => {
+    // UAT has only 3 models — below Marketplace's small-catalog threshold —
+    // so a URL filter param keeps the facet rail (search, vendor facets,
+    // callable-only) rendered instead of collapsed; this test is about
+    // interacting with those controls, not about the collapse rule itself.
+    window.history.pushState({}, '', '/console/v2/models?vendor=probe');
     serve(UAT);
     render(<HFModels />);
     await waitFor(() => screen.getByTestId('model-card-gpt-4o'));
@@ -264,6 +275,9 @@ describe('Models marketplace', () => {
   });
 
   it('switches to a table with one row per model', async () => {
+    // Same small-catalog caveat as the filters test above: the view toggle
+    // only renders with an active filter or >=5 models.
+    window.history.pushState({}, '', '/console/v2/models?vendor=probe');
     serve(UAT);
     render(<HFModels />);
     await waitFor(() => screen.getByTestId('model-card-gpt-4o'));
@@ -356,6 +370,8 @@ describe('Models marketplace', () => {
   // opened it may be gone by the time the sheet unmounts (here: filtered
   // out). Closing must not throw and must not focus a detached node.
   it('closing the drawer after its opener left the page neither throws nor moves focus', async () => {
+    // Same small-catalog caveat: the search box needs the rail rendered.
+    window.history.pushState({}, '', '/console/v2/models?vendor=probe');
     serve(UAT);
     render(<HFModels />);
     const card = await waitFor(() =>
@@ -476,8 +492,11 @@ describe('Models marketplace', () => {
     const thin = screen.getByTestId('model-perf-faultsim-music');
     expect(thin.textContent).not.toContain('90ms');
     expect(thin.textContent).toMatch(/too little traffic/);
-    // gpt-4o has no traffic at all: no line.
-    expect(screen.queryByTestId('model-perf-gpt-4o')).toBeNull();
+    // gpt-4o has no traffic at all: an equal-height "no traffic yet"
+    // placeholder, not an absent element (keeps every card's stat row the
+    // same height regardless of which models have been measured).
+    const noTraffic = screen.getByTestId('model-perf-gpt-4o');
+    expect(noTraffic.textContent).toMatch(/no traffic yet/);
 
     fireEvent.click(screen.getByTestId('model-card-deepseek-chat'));
     const perf = screen.getByTestId('model-drawer-perf');

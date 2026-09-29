@@ -26,19 +26,18 @@ import { isLoadFailed } from '../../../helpers/loadState';
 import useFormDraft from '../../../hooks/common/useFormDraft';
 import { useTenantRead } from '../../../hooks/common/useTenantRead';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
+import TierCell from './TierCell';
 
 /* v2 Pricing — GET /api/v2/:tenant_slug/pricing (2026-05-19)
    Write path — POST /api/v2/:tenant_slug/pricing (Epic 12, 2026-05-20).
    Optimistic lock + preview (L1, 2026-09-12): GET returns data.version; POST
-   sends it back as If-Match-Pricing-Version — a stale header gets 409 (the
-   PricingVersion row the server compares against) and this page refetches
-   instead of saving. The header guards the version counter against a lost
-   update to the SAME field on the SAME model. It does not need to guard a
-   concurrent writer's edit to a DIFFERENT model: the server applies this
-   page's batch on top of the database's committed rows read under a
-   row-level lock (see v2_pricing_write.go's UpdatePricingV2 comment), so
-   that other edit survives in the persisted result instead of being
-   clobbered. Preview runs the same batch read-only first. */
+   sends it back as If-Match-Pricing-Version — a stale header gets 409 and
+   this page refetches instead of saving. The header only guards a lost
+   update to the SAME field on the SAME model — the server applies this
+   page's batch on top of rows read under its own row-level lock (see
+   v2_pricing_write.go's UpdatePricingV2 comment), so a concurrent writer's
+   edit to a different model survives instead of being clobbered. Preview
+   runs the same batch read-only first. */
 
 const DRAFT_KEY = 'v2-pricing-edits';
 const EMPTY_SHEET = { pricing: [], vendors: [], groupRatio: {}, version: 0 };
@@ -51,12 +50,11 @@ const PricingPage = () => {
   const [previewing, setPreviewing] = useState(false);
   const [vendorFilter, setVendorFilter] = useState('');
   // Diff rows from the last preview call; null until Preview is clicked.
-  // handleSave and handleFieldChange both clear it (on a successful save, or
-  // on any further edit) so a stale preview cannot linger, but neither path
-  // has a test asserting the clear — see the lane report.
+  // handleSave and handleFieldChange both clear it so a stale preview can't
+  // linger past a save or a further edit.
   const [previewDiffs, setPreviewDiffs] = useState(null);
-  // Per-model expand/collapse state for the context-tiers editor
-  // (billing-pricing-14) — a UI-only concern, not persisted in the draft.
+  // Per-model expand/collapse state for the context-tiers editor — UI-only,
+  // not persisted in the draft.
   const [expandedTiers, setExpandedTiers] = useState({});
 
   // Map of model_name → edited fields. Draft persists across page refresh.
@@ -102,6 +100,13 @@ const PricingPage = () => {
     ? '—'
     : tr('console.pricing.model_count', { count: filteredPricing.length });
 
+  // "model price" only has a live input for a per-call row (td below); ratio
+  // rows are read-only '—', so hide the column rather than show it all dashes.
+  const showModelPriceColumn =
+    filteredPricing.some((row) => row.quota_type === 1) ||
+    Object.values(edits).some((f) => f && 'model_price' in f);
+  const columnCount = showModelPriceColumn ? 9 : 8;
+
   const handleFieldChange = (modelName, field, value) => {
     setEdits((prev) => ({
       ...prev,
@@ -111,12 +116,11 @@ const PricingPage = () => {
     setPreviewDiffs(null);
   };
 
-  // Context-length pricing tier editor (billing-pricing-14): row already
-  // carries the merged (edits-over-server) context_tiers array via
-  // displayPricing's spread, so these helpers read/write it through the same
-  // handleFieldChange path as the flat ratio fields above — an explicit []
-  // (every tier removed) round-trips as item.context_tiers=[] on save, which
-  // the server treats as "clear this model's tiers".
+  // Context-length pricing tier editor (billing-pricing-14): row carries the
+  // merged context_tiers array via displayPricing's spread, so these helpers
+  // read/write it through handleFieldChange like the flat ratio fields above
+  // — an explicit [] round-trips as context_tiers=[], the server's "clear
+  // this model's tiers" signal.
   const updateContextTier = (row, idx, field, value) => {
     const tiers = Array.isArray(row.context_tiers) ? row.context_tiers : [];
     const next = tiers.map((t, i) =>
@@ -355,7 +359,11 @@ const PricingPage = () => {
                       'completion ratio',
                     )}
                   </th>
-                  <th>{tr('console.pricing.th_model_price', 'model price')}</th>
+                  {showModelPriceColumn && (
+                    <th data-testid='pricing-th-model-price'>
+                      {tr('console.pricing.th_model_price', 'model price')}
+                    </th>
+                  )}
                   <th>{tr('console.pricing.th_cache_ratio', 'cache ratio')}</th>
                   <th>
                     {tr('console.pricing.th_context_tiers', 'context tiers')}
@@ -445,40 +453,38 @@ const PricingPage = () => {
                             <span className='mono muted'>—</span>
                           )}
                         </td>
+                        {showModelPriceColumn && (
+                          <td>
+                            {row.quota_type === 1 ? (
+                              <input
+                                type='number'
+                                className='field'
+                                step='0.000001'
+                                min='0.000001'
+                                value={
+                                  edits[row.model_name]?.model_price ??
+                                  row.model_price ??
+                                  ''
+                                }
+                                onChange={(e) =>
+                                  handleFieldChange(
+                                    row.model_name,
+                                    'model_price',
+                                    e.target.value,
+                                  )
+                                }
+                                style={{ width: 90, height: 24, fontSize: 11 }}
+                                data-testid={`field-model_price-${row.model_name}`}
+                              />
+                            ) : (
+                              <span className='mono muted'>—</span>
+                            )}
+                          </td>
+                        )}
                         <td>
-                          {row.quota_type === 1 ? (
-                            <input
-                              type='number'
-                              className='field'
-                              step='0.000001'
-                              min='0.000001'
-                              value={
-                                edits[row.model_name]?.model_price ??
-                                row.model_price ??
-                                ''
-                              }
-                              onChange={(e) =>
-                                handleFieldChange(
-                                  row.model_name,
-                                  'model_price',
-                                  e.target.value,
-                                )
-                              }
-                              style={{ width: 90, height: 24, fontSize: 11 }}
-                              data-testid={`field-model_price-${row.model_name}`}
-                            />
-                          ) : (
-                            <span className='mono muted'>—</span>
-                          )}
-                        </td>
-                        <td>
-                          {/* GET pricing (v2_pricing.go) projects the model's
-                          current cache_ratio when the live map has an entry
-                          for it (an admin edit or a shipped default — both
-                          look the same here), so this prefills from
-                          row.cache_ratio like the other three fields; a
-                          model with no entry at all starts blank instead of
-                          showing a fabricated value. */}
+                          {/* GET pricing projects cache_ratio when the live
+                          map has an entry, so this prefills like the other
+                          three fields; no entry starts blank, not fabricated. */}
                           <input
                             type='number'
                             className='field'
@@ -501,27 +507,21 @@ const PricingPage = () => {
                           />
                         </td>
                         <td>
-                          {/* Tiers only ever apply to the token-based (!UsePrice)
-                          branch (ModelPriceHelper's PerCallModelIgnoresTiers
-                          rule), so the editor is hidden for per-call models
-                          the same way the ratio columns already are. */}
+                          {/* Tiers only apply token-based (ModelPriceHelper's
+                          PerCallModelIgnoresTiers), hidden for per-call rows
+                          same as the ratio columns. */}
                           {row.quota_type === 0 ? (
-                            <button
-                              type='button'
-                              className='btn'
-                              style={{ fontSize: 10, padding: '2px 8px' }}
-                              data-testid={`context-tiers-toggle-${row.model_name}`}
+                            <TierCell
+                              count={tiers.length}
+                              tr={tr}
+                              testId={`context-tiers-toggle-${row.model_name}`}
                               onClick={() =>
                                 setExpandedTiers((prev) => ({
                                   ...prev,
                                   [row.model_name]: !prev[row.model_name],
                                 }))
                               }
-                            >
-                              {tr('console.pricing.context_tiers_count', {
-                                count: tiers.length,
-                              })}
-                            </button>
+                            />
                           ) : (
                             <span className='mono muted'>—</span>
                           )}
@@ -540,7 +540,7 @@ const PricingPage = () => {
                             data-testid={`context-tiers-editor-${row.model_name}`}
                           >
                             <td
-                              colSpan={9}
+                              colSpan={columnCount}
                               style={{
                                 padding: '10px 14px',
                                 background:
@@ -684,7 +684,7 @@ const PricingPage = () => {
                 {filteredPricing.length === 0 && !loading && (
                   <tr>
                     <td
-                      colSpan={9}
+                      colSpan={columnCount}
                       className='muted'
                       style={{ textAlign: 'center', padding: 24 }}
                     >

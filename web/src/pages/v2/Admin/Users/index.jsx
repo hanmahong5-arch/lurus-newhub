@@ -27,6 +27,7 @@ import React, {
 import { useTranslation } from 'react-i18next';
 import HFShell from '../../../../components/hifi/HFShell';
 import HfDialog, { HfDialogFooter } from '../../../../components/hifi/HfDialog';
+import HfDensityToggle from '../../../../components/hifi/HfDensityToggle';
 import ConfirmDialog from '../../../../components/common/ConfirmDialog';
 import { API, showError, showSuccess } from '../../../../helpers';
 import { getQuotaPerUSD } from '../../../../helpers/formatting';
@@ -253,6 +254,9 @@ const HFAdminUsers = () => {
   const loadError = loadStatus != null && loadStatus !== 'ok' && !forbidden;
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  // Row density — HfDensityToggle owns the persisted value; this just
+  // mirrors it onto the table's className.
+  const [compact, setCompact] = useState(false);
   const [editing, setEditing] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [actioning, setActioning] = useState(false);
@@ -493,6 +497,7 @@ const HFAdminUsers = () => {
                 {tr('console.admin.users.status_disabled', 'disabled')}
               </option>
             </select>
+            <HfDensityToggle tableKey='v2-admin-users' onChange={setCompact} />
           </div>
 
           <div className='panel'>
@@ -517,17 +522,17 @@ const HFAdminUsers = () => {
               </div>
             ) : (
               <div className='hf-table-scroll'>
-                <table className='t'>
+                <table className={`t${compact ? ' hf-dense' : ''}`}>
                   <thead>
                     <tr>
                       <th>{tr('console.admin.users.th_user', 'user')}</th>
                       <th>{tr('console.admin.users.th_role', 'role')}</th>
                       <th>{tr('console.admin.users.th_status', 'status')}</th>
                       <th>{tr('console.admin.users.th_group', 'group')}</th>
-                      <th>
+                      <th className='num'>
                         {tr('console.admin.users.th_quota', 'quota used · cap')}
                       </th>
-                      <th>
+                      <th className='num'>
                         {tr('console.admin.users.th_requests', 'requests')}
                       </th>
                       <th></th>
@@ -556,10 +561,12 @@ const HFAdminUsers = () => {
                           </span>
                         </td>
                         <td className='mono muted'>{u.group || 'default'}</td>
-                        <td className='mono'>
+                        <td className='mono num'>
                           ${quotaToUSD(u.used_quota)} / ${quotaToUSD(u.quota)}
                         </td>
-                        <td className='mono muted'>{u.request_count ?? 0}</td>
+                        <td className='mono muted num'>
+                          {u.request_count ?? 0}
+                        </td>
                         <td>
                           <div style={{ display: 'flex', gap: 6 }}>
                             <button

@@ -24,6 +24,9 @@ import StatHeader from './StatHeader';
 import RouteAttempts from './RouteAttempts';
 import NotAvailable from '../../../components/hifi/NotAvailable';
 import HfSkeletonRows from '../../../components/hifi/HfSkeletonRows';
+import HfDensityToggle from '../../../components/hifi/HfDensityToggle';
+import ExportCsvButton from './ExportCsvButton';
+import OutcomeChip from './OutcomeChip';
 import { API, showError, showSuccess, isAdmin } from '../../../helpers';
 import {
   formatCNY4,
@@ -117,6 +120,8 @@ const fmtTok = (prompt, completion) => {
   return `${p}→${c}`;
 };
 
+const NumTh = ({ children }) => <th className='num'>{children}</th>;
+
 // Delegates to the shared helper so the sub-precision floor lives in one place
 // (a real charge must not render as $0.0000 — see formatUSD).
 const fmtCost = (quota) => formatUSD(quota);
@@ -136,6 +141,8 @@ const HFLog = () => {
 
   const [tab, setTab] = useState('trace');
   const [selRow, setSelRow] = useState(0);
+  // Mirrors HfDensityToggle's persisted value onto the trace table.
+  const [traceCompact, setTraceCompact] = useState(false);
 
   // Live tail (cursor-poll) state. `liveCursor` is a ref (not state) so the
   // interval callback always reads the latest id without re-subscribing.
@@ -536,6 +543,7 @@ const HFLog = () => {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const selectedLog = logs[selRow];
+  const traceTableClass = traceCompact ? 't hf-dense' : 't';
 
   // Copy-to-clipboard affordance for the detail-panel id rows below. Mirrors
   // the local `copy` used by the Token page (web/src/pages/v2/Token/index.jsx).
@@ -698,31 +706,16 @@ const HFLog = () => {
           {tr('console.log.clear', 'clear')}
         </button>
         {tab === 'trace' && (
-          <button
-            type='button'
-            className='btn ghost'
-            data-testid='log-export-btn'
-            onClick={() => {
-              const params = new URLSearchParams();
-              if (filterModel) params.set('model_name', filterModel);
-              if (filterToken) params.set('token_name', filterToken);
-              if (filterStart)
-                params.set(
-                  'start_time',
-                  String(Math.floor(new Date(filterStart).getTime() / 1000)),
-                );
-              if (filterEnd)
-                params.set(
-                  'end_time',
-                  String(Math.floor(new Date(filterEnd).getTime() / 1000)),
-                );
-              const qs = params.toString();
-              window.location.href =
-                `/api/v2/${tenantSlug}/logs/export` + (qs ? `?${qs}` : '');
-            }}
-          >
-            📥 {tr('console.log.export_csv', 'export CSV')}
-          </button>
+          <ExportCsvButton
+            tenantSlug={tenantSlug}
+            filterModel={filterModel}
+            filterToken={filterToken}
+            filterStart={filterStart}
+            filterEnd={filterEnd}
+          />
+        )}
+        {tab === 'trace' && (
+          <HfDensityToggle tableKey='v2-log' onChange={setTraceCompact} />
         )}
       </div>
 
@@ -919,19 +912,19 @@ const HFLog = () => {
 
               {!loading && logs.length > 0 && (
                 <div className='hf-table-scroll'>
-                  <table className='t' data-testid='trace-table'>
+                  <table className={traceTableClass} data-testid='trace-table'>
                     <thead>
                       <tr>
                         <th>{tr('console.log.th_timestamp', 'timestamp')}</th>
                         <th>{tr('console.log.th_code', 'code')}</th>
-                        <th>{tr('console.log.th_dur', 'dur')}</th>
+                        <NumTh>{tr('console.log.th_dur', 'dur')}</NumTh>
                         <th>{tr('console.log.th_ttft', 'ttft')}</th>
                         <th>{tr('console.log.th_model', 'model')}</th>
                         <th>{tr('console.log.th_product', 'product')}</th>
                         <th>{tr('console.log.th_upstream', 'upstream')}</th>
                         <th>{tr('console.log.th_token', 'token')}</th>
-                        <th>{tr('console.log.th_tok', 'tok')}</th>
-                        <th>$</th>
+                        <NumTh>{tr('console.log.th_tok', 'tok')}</NumTh>
+                        <th className='num'>$</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -953,17 +946,12 @@ const HFLog = () => {
                             {formatClockTime(r.created_at, { ms: false })}
                           </td>
                           <td>
-                            {(() => {
-                              const o = outcomeTag(r);
-                              return (
-                                <span className={o.cls}>
-                                  {tr(
-                                    `console.log.outcome_${o.label}`,
-                                    o.label,
-                                  )}
-                                </span>
-                              );
-                            })()}
+                            <OutcomeChip
+                              outcome={outcomeTag(r)}
+                              errorsOnly={errorsOnly}
+                              onToggle={toggleErrorsOnly}
+                              tr={tr}
+                            />
                             {isSettlementFailed(r) && (
                               <span
                                 className='tag'
@@ -977,7 +965,7 @@ const HFLog = () => {
                               </span>
                             )}
                           </td>
-                          <td className='mono'>
+                          <td className='mono num'>
                             {r.total_latency_ms ?? '—'}
                             {r.total_latency_ms != null && (
                               <span className='faint'>ms</span>
@@ -1008,10 +996,10 @@ const HFLog = () => {
                             )}
                           </td>
                           <td className='mono muted'>{r.token_name || '—'}</td>
-                          <td className='mono muted'>
+                          <td className='mono muted num'>
                             {fmtTok(r.prompt_tokens, r.completion_tokens)}
                           </td>
-                          <td className='mono'>{fmtCost(r.quota)}</td>
+                          <td className='mono num'>{fmtCost(r.quota)}</td>
                         </tr>
                       ))}
                     </tbody>

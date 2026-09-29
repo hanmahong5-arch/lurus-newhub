@@ -29,6 +29,9 @@ import {
   formatLatencyMs,
   formatErrorRate,
   formatQPS,
+  dailyTotals,
+  sumSeries,
+  percentDelta,
 } from './kpis';
 
 const consume = (ts, latency) => ({
@@ -259,5 +262,114 @@ describe('Dashboard KPI derivations', () => {
       expect(formatQPS(42.6)).toBe('43');
       expect(formatQPS(undefined)).toBe('—');
     });
+  });
+});
+
+// ─── cycle-19: KPI sparkline + 环比 (dailyTotals / percentDelta) ───────────
+
+describe('dailyTotals — per-local-day sums for the KPI sparkline', () => {
+  const DAY = 24 * 60 * 60;
+
+  it('returns exactly `days` entries, zero-filled, oldest first', () => {
+    // Pin `end` to a fixed local noon so the window boundaries are
+    // unambiguous regardless of the hour the suite happens to run at.
+    const end = new Date();
+    end.setHours(12, 0, 0, 0);
+    const endTs = Math.floor(end.getTime() / 1000);
+    const rows = [
+      { created_at: endTs, quota: 100 }, // today
+      { created_at: endTs - 2 * DAY, quota: 40 }, // 2 days ago
+    ];
+    const out = dailyTotals(rows, { end: endTs, days: 5, field: 'quota' });
+    expect(out).toHaveLength(5);
+    // oldest .. newest: [4 ago, 3 ago, 2 ago, 1 ago, today]
+    expect(out).toEqual([0, 0, 40, 0, 100]);
+  });
+
+  it('sums a different field (count) independently of quota', () => {
+    const end = new Date();
+    end.setHours(12, 0, 0, 0);
+    const endTs = Math.floor(end.getTime() / 1000);
+    const rows = [
+      { created_at: endTs, quota: 500, count: 3 },
+      { created_at: endTs, quota: 500, count: 2 },
+    ];
+    const out = dailyTotals(rows, { end: endTs, days: 1, field: 'count' });
+    expect(out).toEqual([5]);
+  });
+
+  it('rows outside the window are excluded', () => {
+    const end = new Date();
+    end.setHours(12, 0, 0, 0);
+    const endTs = Math.floor(end.getTime() / 1000);
+    const rows = [{ created_at: endTs - 10 * DAY, quota: 999 }];
+    const out = dailyTotals(rows, { end: endTs, days: 3, field: 'quota' });
+    expect(out).toEqual([0, 0, 0]);
+  });
+
+  it('an empty rows array (or missing end/days) returns an empty/zero-filled series without throwing', () => {
+    expect(dailyTotals([], { end: 0, days: 3 })).toEqual([]);
+    expect(dailyTotals(null, { end: 123, days: 0 })).toEqual([]);
+  });
+
+  // Same class of bug as the activity chart's local-day bucketing (see
+  // index.test.jsx "buckets two rows straddling local midnight"): two rows
+  // exactly one hour apart, straddling local midnight, must land in two
+  // distinct day buckets. At TZ=UTC (not this suite's pinned zone) a
+  // UTC-day bucket would pass this by accident, so assert the pin first.
+  it('buckets two rows straddling local midnight into two distinct days', () => {
+    expect(new Date().getTimezoneOffset()).not.toBe(0);
+
+    const beforeMidnight = new Date();
+    beforeMidnight.setDate(beforeMidnight.getDate() - 1);
+    beforeMidnight.setHours(23, 30, 0, 0);
+    const afterMidnight = new Date(beforeMidnight);
+    afterMidnight.setHours(24, 30, 0, 0); // rolls to 00:30 local, next day
+
+    const end = new Date(afterMidnight);
+    end.setHours(23, 59, 0, 0);
+    const endTs = Math.floor(end.getTime() / 1000);
+
+    const rows = [
+      { created_at: Math.floor(beforeMidnight.getTime() / 1000), quota: 11 },
+      { created_at: Math.floor(afterMidnight.getTime() / 1000), quota: 22 },
+    ];
+    const out = dailyTotals(rows, { end: endTs, days: 2, field: 'quota' });
+    expect(out).toEqual([11, 22]);
+  });
+
+  it('sumSeries adds a plain number array, treating non-numbers as 0', () => {
+    expect(sumSeries([1, 2, 3])).toBe(6);
+    expect(sumSeries([])).toBe(0);
+    expect(sumSeries(null)).toBe(0);
+  });
+});
+
+describe('percentDelta — 环比', () => {
+  it('returns null when the previous period is 0 — never a fabricated 0%/∞%', () => {
+    expect(percentDelta(30, 0)).toBeNull();
+  });
+
+  it('returns null when the previous period is missing/non-finite', () => {
+    expect(percentDelta(10, null)).toBeNull();
+    expect(percentDelta(10, undefined)).toBeNull();
+    expect(percentDelta(10, NaN)).toBeNull();
+  });
+
+  it('a doubling from the previous period returns +100', () => {
+    expect(percentDelta(20, 10)).toBe(100);
+  });
+
+  it('a halving from the previous period returns -50', () => {
+    expect(percentDelta(5, 10)).toBe(-50);
+  });
+
+  it('composes with sumSeries: current-window total vs prior-window total', () => {
+    // "近 7 天对比前 7 天", shrunk to 2-day windows here: current [10, 20]
+    // sums to 30, prior [5, 5] sums to 10 — a 200% increase (current is 3x
+    // the prior total).
+    const current = sumSeries([10, 20]);
+    const prior = sumSeries([5, 5]);
+    expect(percentDelta(current, prior)).toBe(200);
   });
 });
