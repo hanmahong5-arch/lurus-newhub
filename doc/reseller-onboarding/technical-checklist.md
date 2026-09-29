@@ -18,8 +18,8 @@
 
 - 路由注册：`internal/adapter/handler/router/internal-api-router.go:133-139`
 - Handler 实现：`internal/adapter/handler/provisioning.go:27-336`
-- **Auth**: `X-API-Key: lurus_ik_<management-key>` 头，scope = `provisioning`（中间件 `internal/adapter/middleware/internal_api_auth.go:11-43`，scope check 在 `:46-80`）
-  - **注意**：不是 `Authorization: Bearer ...`。混了会拿到 401。来源：`doc/contracts/switch-provisioning-api.md:30-39`
+- **Auth**: `Authorization: Bearer lurus_ik_<management-key>` 头，scope = `provisioning`（中间件 `internal/adapter/middleware/internal_api_auth.go` `InternalApiAuth`，scope check 在同文件 `RequireScope`）
+  - **注意**：`X-API-Key` 仍接受但已弃用（响应带 `Warning: 299`）；两头都带时以 Bearer 为准。来源：`doc/contracts/switch-provisioning-api.md` §2
 - **Cross-tenant 防护**：narrow-scope key（只有 `provisioning` scope）必须在 `internal_api_key_tenants` 表里有 `(api_key_id, tenant_id)` 白名单行；platform admin key（scope `*`）bypass。见 `internal/adapter/handler/provisioning.go:69-89`（Phase 2 self-audit 2026-05-19 安全修复）。
 - **管理 Key TTL**：90 天，T-14d/T-7d/T-1d NATS 告警触发轮换（ADR §9 Q2，引于 `doc/contracts/switch-provisioning-api.md:53-58`）。
 

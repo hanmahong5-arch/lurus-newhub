@@ -27,7 +27,7 @@ import (
 //	key rotation with no security benefit because the caller set is the
 //	same: lurus-platform internal API key)
 //
-// Auth:   X-API-Key + middleware.RequireScope(repo.ScopeBalanceWrite)
+// Auth:   Authorization: Bearer (or deprecated X-API-Key) + middleware.RequireScope(repo.ScopeBalanceWrite)
 //
 //	(applied in internal-api-router.go), AND a tenant-scope check:
 //	the key must carry repo.ScopeAll, OR have a row in

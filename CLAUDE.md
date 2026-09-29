@@ -134,9 +134,10 @@ env 详表（Required / platform Integration / OIDC / Meilisearch / Runtime Tuni
 
 ## Internal API Scopes
 
-路径前缀 `/internal`，需 **`X-API-Key: lurus_ik_…`** 头 + scope 匹配（`repo.ScopeXxx`）。
-⚠️ 2026-08-25 实测订正：此处原写 `Authorization: Bearer <key>`，是错的——`middleware.InternalApiAuth`
-（`internal_api_auth.go:14`）只读 `X-API-Key`，用 Bearer 会拿到 401 `API key required`。
+路径前缀 `/internal`，需 **`Authorization: Bearer lurus_ik_…`** 头 + scope 匹配（`repo.ScopeXxx`）。
+`X-API-Key: lurus_ik_…` 仍接受但**已弃用**：响应带 `Warning: 299 - "X-API-Key is deprecated; use Authorization: Bearer"`，
+并计入 `lurus_gateway_internal_auth_legacy_header_total{route,key_id}`（判零流量后再移除）。两头都带时**以 Bearer 为准**
+（Bearer 错 → 401，不回退 X-API-Key）；非 Bearer 形式的 Authorization 被忽略、回退 X-API-Key。见 `internal_api_auth.go` `extractInternalApiKey`。
 `/internal/admin/*`（backfill-token-accounts / convergence-stats / rotate-due-tokens / reset-due-pools）要 `ScopeAdmin`；线上唯一那把
 key `platform-core` 只有 `balance:write / user:delete / provisioning`，**没有 admin**，调用前先确认 scope。
 

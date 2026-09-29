@@ -16,7 +16,7 @@ import (
 
 // CreateProvisionedKey issues a Token row tied to a Reseller-owned tenant.
 // Route: POST /internal/v1/provisioning/tenants/:slug/keys
-// Auth:  X-API-Key + scope "provisioning".
+// Auth:  Authorization: Bearer (or deprecated X-API-Key) + scope "provisioning".
 //
 // Returns 201 with the plaintext token key (one-time view, per existing
 // /internal/token convention). Sets tokens.creator_user_id to the API key's
