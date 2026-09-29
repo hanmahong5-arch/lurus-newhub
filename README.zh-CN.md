@@ -99,7 +99,7 @@ deploy/k8s/                # Kubernetes 清单 (staging/UAT overlay)
 | V1(历史遗留,单租户兼容) | `/api/{user,token,channel,redemption,log,data,wallet}/*` | `router/api-router.go` |
 | V2(多租户) | `/api/v2/:tenant_slug/{tokens,projects,channels,logs,redemptions,sessions,models,pricing,billing,chat}/*`,`/api/v2/admin/{tenants,mappings,internal-keys,users,governance}/*` | 角色权限(admin/user/billing_manager);`router/api-v2-router.go` |
 | Relay(OpenAI 兼容 + 原生供应商格式) | `POST /v1/chat/completions`、`/v1/messages`、`/v1/embeddings`、`/v1/images/generations`、`/v1/audio/*`、`/v1/rerank`;`GET /v1/models`、`/v1beta/models` | `router/relay-router.go` |
-| Internal(服务间调用) | `/internal/{user,token,quota,balance,currency,log,models,admin}/*` | 鉴权头是 `X-API-Key` + scope 匹配,**不是** `Authorization: Bearer`;`router/internal-api-router.go` |
+| Internal(服务间调用) | `/internal/{user,token,quota,balance,currency,log,models,admin}/*` | 鉴权头是 `Authorization: Bearer <internal key>` + scope 匹配(`X-API-Key` 仍接受但已弃用,响应带 `Warning: 299` 头);`router/internal-api-router.go` |
 
 完整 OpenAPI 规范：[`docs/openapi/api-v2.yaml`](./docs/openapi/api-v2.yaml)。
 

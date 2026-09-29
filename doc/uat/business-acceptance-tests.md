@@ -486,10 +486,10 @@ Oracle：`success=true`，且 `GET /v1/models` 随后能列出该模型。⚠️
 > 本组验的是"**该拒的必须拒**"。除 TC-G3 外，其余场景对业务数据只读或只产生一次性测试痕迹。
 > **bridge 预算提醒**：TC-G2/G3/G4/G7 都需要会话。全组**共用一份 `cookies.txt`**；确需重新 bridge 时注意 5 次/60s/IP 的上限。
 
-### TC-G1 — internal API：只认 `X-API-Key` + scope 逐条执法
+### TC-G1 — internal API：Bearer 优先、`X-API-Key` 弃用告警 + scope 逐条执法
 
 - **env**：BOTH · **优先级**：P0
-- **串联功能点**：`/metrics` 边界 404 → 未认证管理面 401 → Bearer 头被无视（401）→ 有 key 但缺 scope（403）→ 有 scope 的同一把 key 能过（正控）
+- **串联功能点**：`/metrics` 边界 404 → 未认证管理面 401 → Bearer 有效 key 但缺 scope（403，无 Warning）→ X-API-Key 同样 403 且带弃用 Warning → 有 scope 的同一把 key 能过（正控）
 - **前置**：
   - **PROD**：`$INTERNAL_KEY` = `platform-core` key（scope 只有 `balance:write` / `user:delete` / `provisioning`，**没有** `user:read`、**没有** `admin`）。
   - **UAT**：`newhub_uat` 是全新库，**没有任何预置 internal key**，必须先用 root bridge 会话现场铸一把：
@@ -503,11 +503,11 @@ Oracle：`success=true`，且 `GET /v1/models` 随后能列出该模型。⚠️
 |---|------|--------|
 | 1 | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/metrics"` | **`404`**，无 Prometheus 文本（边缘 nginx 封堵；与 TC-S4 同判据，作为本组基线） |
 | 2 | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/v2/admin/tenants"` | `401`（无凭据）。不得是 200，也不得是 500 |
-| 3 | `curl -sS -w "\n%{http_code}\n" -H "Authorization: Bearer $INTERNAL_KEY" "$BASE/internal/user/1"` | **`401`**，body `message == "API key required"`。internal 鉴权**只读 `X-API-Key` 头**（`internal_api_auth.go:14`），Bearer 形式被完全无视——这是文档化的既定契约，不是缺陷 |
-| 4 | `curl -sS -w "\n%{http_code}\n" -H "X-API-Key: $INTERNAL_KEY" "$BASE/internal/user/1"` | **`403`**（key 有效并通过鉴权，但缺 `ScopeUserRead`）。"有效的 key ≠ 全部权限" |
-| 5 | **正控**：`curl -s -o /dev/null -w "%{http_code}\n" -X DELETE -H "X-API-Key: $INTERNAL_KEY" "$BASE/internal/user/999999999"` | `404`（`USER_NOT_FOUND`）——**明确不是 403**。证明步骤 4 的 403 是 scope 特异性的，而不是这把 key 全局无效或服务挂了。用不存在的 id 保证零副作用 |
+| 3 | `curl -sS -D - -w "\n%{http_code}\n" -H "Authorization: Bearer $INTERNAL_KEY" "$BASE/internal/user/1"` | **`403`**（key 有效并通过鉴权，但缺 `ScopeUserRead`），响应头**无** `Warning`。"有效的 key ≠ 全部权限" |
+| 4 | `curl -sS -D - -w "\n%{http_code}\n" -H "X-API-Key: $INTERNAL_KEY" "$BASE/internal/user/1"` | **`403`**，且响应头含 `Warning: 299 - "X-API-Key is deprecated; use Authorization: Bearer"`（弃用头仍可鉴权，但被标记） |
+| 5 | **正控**：`curl -s -o /dev/null -w "%{http_code}\n" -X DELETE -H "Authorization: Bearer $INTERNAL_KEY" "$BASE/internal/user/999999999"` | `404`（`USER_NOT_FOUND`）——**明确不是 403**。证明步骤 4 的 403 是 scope 特异性的，而不是这把 key 全局无效或服务挂了。用不存在的 id 保证零副作用 |
 
-**回归防守**：`/metrics` 公网可读（真实余额指标外泄）；把"有 key"当成"有全部权限"；文档写 `Authorization: Bearer` 导致调用方永远 401。
+**回归防守**：`/metrics` 公网可读（真实余额指标外泄）；把"有 key"当成"有全部权限"；Bearer 被无视导致与 platform 同形的调用方 401；弃用头静默通过而无 Warning/计数（无法判零流量）。
 
 ---
 

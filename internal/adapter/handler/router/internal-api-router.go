@@ -165,7 +165,7 @@ func SetInternalApiRouter(router *gin.Engine) {
 	}
 
 	// Provisioning API — Reseller sub-tenant key issuance / revocation
-	// (ADR 2026-05-18 §4.2). Auth: X-API-Key + scope "provisioning".
+	// (ADR 2026-05-18 §4.2). Auth: Bearer internal key + scope "provisioning".
 	provisioningGroup := internalGroup.Group("/v1/provisioning")
 	provisioningGroup.Use(middleware.RequireScope(repo.ScopeProvisioning))
 	provisioningGroup.Use(middleware.InternalApiRateLimit(

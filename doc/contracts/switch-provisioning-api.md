@@ -16,7 +16,7 @@ Extracts the Provisioning API contract from the canonical ADR §4.2 into a Switc
 
 ## 2. Authentication
 
-> **🔴 Header**: requires `X-API-Key: <management-key>`, NOT `Authorization: Bearer`. Matches newhub `internal_api_auth.go` middleware (shared by all `/internal/*`). Sending Bearer → 401 `{"success":false,"message":"API key required"}` (middleware reads `X-API-Key` only).
+> **🔴 Header**: send `Authorization: Bearer <management-key>`. `X-API-Key: <management-key>` is still accepted but **deprecated** — such responses carry `Warning: 299 - "X-API-Key is deprecated; use Authorization: Bearer"`. If both headers are sent, the Bearer one decides (a wrong Bearer is 401 even with a valid `X-API-Key`). Matches newhub `internal_api_auth.go` middleware (shared by all `/internal/*`).
 
 - **2.1 Issuing**: a management key is an `internal_api_keys` row with scope `provisioning:write`; issuance is an operator action on newhub (see ADR §9 Q2 for 90-day TTL + T-14d/T-7d/T-1d rotation alert schedule). Switch receives the key out-of-band (1Password / encrypted channel).
 - **2.2 Rotation**: 90-day TTL (ADR §9 Q2), operator-driven via NATS alerts at T-14d/T-7d/T-1d before `expires_at`; rotated key has a fresh value, previous revoked atomically. Switch treats any 401 on a previously-working key as "rotated — fetch new key from secret store".
@@ -35,7 +35,7 @@ POST /internal/v1/provisioning/tenants/:slug/keys
 **Headers**:
 
 ```
-X-API-Key: lurus_ik_<management-key>
+Authorization: Bearer lurus_ik_<management-key>
 Content-Type: application/json
 ```
 
@@ -88,7 +88,7 @@ Content-Type: application/json
 
 | Status | Body shape | Cause |
 |--------|------------|-------|
-| 401 | `{"success": false, "message": "API key required"}` | Missing `X-API-Key` header |
+| 401 | `{"success": false, "message": "API key required"}` | Neither `Authorization: Bearer` nor `X-API-Key` header |
 | 401 | `{"success": false, "message": "Invalid or expired API key"}` | Wrong / rotated / expired management key |
 | 403 | `{"success": false, "message": "Insufficient permissions. Required scope: provisioning:write"}` | Key valid but lacks scope |
 | 404 | `{"success": false, "message": "Tenant not found: <slug>"}` | Slug does not exist |
@@ -101,7 +101,7 @@ Content-Type: application/json
 ```bash
 curl -X POST \
   https://hub.lurus.cn/internal/v1/provisioning/tenants/acme-corp/keys \
-  -H "X-API-Key: lurus_ik_REPLACE_ME" \
+  -H "Authorization: Bearer lurus_ik_REPLACE_ME" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "acme-prod-key-2026-q3",
@@ -122,7 +122,7 @@ DELETE /internal/v1/provisioning/tenants/:slug/keys/:key_id
 **Headers**:
 
 ```
-X-API-Key: lurus_ik_<management-key>
+Authorization: Bearer lurus_ik_<management-key>
 ```
 
 **Path params**:
@@ -135,7 +135,7 @@ X-API-Key: lurus_ik_<management-key>
 
 | Status | Cause |
 |--------|-------|
-| 401 | Missing / invalid `X-API-Key` |
+| 401 | Missing / invalid management key |
 | 403 | Scope `provisioning:write` not granted |
 | 404 | Slug not found, or `key_id` does not belong to that tenant |
 
@@ -144,7 +144,7 @@ X-API-Key: lurus_ik_<management-key>
 ```bash
 curl -X DELETE \
   https://hub.lurus.cn/internal/v1/provisioning/tenants/acme-corp/keys/12345 \
-  -H "X-API-Key: lurus_ik_REPLACE_ME" \
+  -H "Authorization: Bearer lurus_ik_REPLACE_ME" \
   -i
 ```
 
