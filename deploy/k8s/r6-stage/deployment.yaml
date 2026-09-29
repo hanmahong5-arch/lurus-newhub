@@ -185,8 +185,8 @@ spec:
               value: "false"
             # Relay pre-auth against the platform wallet for identity-linked
             # tokens (IdentityAccountID > 0); unlinked traffic keeps the pure
-            # local-quota path. gRPC target = IDENTITY_GRPC_ADDR below,
-            # platform-core verified serving on it 2026-08-23.
+            # local-quota path. Calls go over HTTP to IDENTITY_SERVICE_URL
+            # (the identity gRPC client never worked and was removed).
             - name: BILLING_UNIFIED_ENABLED
               value: "true"
             # Pool-required rollout GRADUATED to enforce (runbook P3.1,
@@ -206,8 +206,6 @@ spec:
               value: "enforce"
             - name: IDENTITY_SERVICE_URL
               value: "http://platform-core.lurus-platform.svc.cluster.local:18104"
-            - name: IDENTITY_GRPC_ADDR
-              value: "platform-core.lurus-platform.svc.cluster.local:18105"
             - name: IDENTITY_PUBLIC_URL
               value: "https://identity.lurus.cn"
             - name: IDENTITY_SERVICE_INTERNAL_KEY
