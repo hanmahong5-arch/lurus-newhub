@@ -2,9 +2,11 @@ package helper
 
 import (
 	"fmt"
+	"strings"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
@@ -74,6 +76,13 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		var success bool
 		var matchName string
 		modelRatio, success, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
+		if !success && isOpenRouterFreeModel(info) {
+			// OpenRouter ":free" variants (e.g. imported by the free-model
+			// sync) cost nothing upstream; price them exactly like a
+			// configured ratio of 0 below, no error.
+			modelRatio = 0
+			success = true
+		}
 		if !success {
 			acceptUnsetRatio := false
 			if info.UserSetting.AcceptUnsetRatioModel {
@@ -270,6 +279,22 @@ func ResettleContextTier(priceData *types.PriceData, modelName string, actualPro
 	priceData.CompletionRatio = completionRatio
 	priceData.CacheRatio = cacheRatio
 	priceData.ContextTierThreshold = threshold
+}
+
+// isOpenRouterFreeModel reports whether info is an OpenRouter-channel relay
+// whose upstream model name (the name actually sent to OpenRouter after
+// model mapping, falling back to the origin name when no mapping applied)
+// ends with ":free". Only called from ModelPriceHelper's unset-ratio branch;
+// a configured price or ratio always wins before this is even reached.
+func isOpenRouterFreeModel(info *relaycommon.RelayInfo) bool {
+	if info.ChannelMeta == nil || info.ChannelType != constant.ChannelTypeOpenRouter {
+		return false
+	}
+	upstreamName := info.UpstreamModelName
+	if upstreamName == "" {
+		upstreamName = info.OriginModelName
+	}
+	return strings.HasSuffix(upstreamName, ":free")
 }
 
 func ContainPriceOrRatio(modelName string) bool {

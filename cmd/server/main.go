@@ -251,6 +251,15 @@ func run(ctx context.Context, startTime time.Time) error {
 		return nil
 	})
 
+	// Background task: active per-model health prober for pooled channels
+	// (internal/app/modelprobe) — probes every model of a multi-model
+	// channel individually, not just the channel's first/TestModel model.
+	// Leader-gated and no-op unless model_probe_setting.enabled is set.
+	g.Go(func() error {
+		handler.StartModelProber(ctx)
+		return nil
+	})
+
 	if common.IsMasterNode && constant.UpdateTask {
 		g.Go(func() error {
 			handler.UpdateMidjourneyTaskBulkWithContext(ctx)
