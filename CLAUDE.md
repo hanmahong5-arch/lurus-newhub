@@ -63,6 +63,9 @@ deploy/k8s/                  # K8s manifests + staging overlay
 cp .env.example .env                        # 复制并填写 SQL_DSN, REDIS_CONN_STRING, SESSION_SECRET
 go run ./cmd/server                         # 后端 port 3000
 cd web && bun install && bun run dev        # 前端 port 5173 (代理到 3000)
+# 多工作树并行跑 docker-compose.dev.yml / docker-compose.yml / docker-compose.meilisearch.yml：
+# 各设 COMPOSE_PROJECT_NAME + NEWHUB_HTTP_PORT / NEWHUB_DEV_REDIS_PORT / NEWHUB_DEV_PG_PORT /
+# NEWHUB_MEILISEARCH_PORT，避免容器名与宿主端口冲突
 
 # --- Build (production) ---
 CGO_ENABLED=0 go build -ldflags "-s -w -X 'github.com/LurusTech/lurus-hub/internal/pkg/common.Version=$(cat VERSION)'" -o lurus-api ./cmd/server

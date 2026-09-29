@@ -1,16 +1,19 @@
 # Meilisearch Docker Compose Configuration / Meilisearch Docker Compose 配置
 # This file provides a standalone Meilisearch service for lurus-api
 # 本文件为 lurus-api 提供独立的 Meilisearch 服务
+#
+# Host port is overridable via NEWHUB_MEILISEARCH_PORT (default 7700); set it
+# plus COMPOSE_PROJECT_NAME to run alongside another worktree's stack
+# (container_name intentionally unset for the same reason).
 
 version: '3.8'
 
 services:
   meilisearch:
     image: getmeili/meilisearch:v1.10
-    container_name: lurus-meilisearch
     restart: always
     ports:
-      - "7700:7700"
+      - "${NEWHUB_MEILISEARCH_PORT:-7700}:7700"
     environment:
       # Master key for authentication - CHANGE THIS IN PRODUCTION!
       # 认证主密钥 - 生产环境请务必修改!

@@ -1,11 +1,15 @@
 ﻿# lurus-api Docker Compose Configuration
-# 
+#
 # Quick Start:
 #   1. docker-compose up -d
 #   2. Access at http://localhost:3000
 #
 # PostgreSQL-only since 2026-06: SQL_DSN must be postgres://|postgresql://,
 # anything else refuses to boot (MySQL and the SQLite dev fallback were removed).
+#
+# Host port is overridable via NEWHUB_HTTP_PORT (default 3000) — set it plus
+# COMPOSE_PROJECT_NAME to run two worktrees' stacks side by side without a
+# port clash (container_name is intentionally unset for the same reason).
 #
 # ⚠️  IMPORTANT: Change all default passwords before deploying to production!
 
@@ -14,11 +18,10 @@ version: '3.4' # For compatibility with older Docker versions
 services:
   lurus-api:
     image: calciumion/lurus-api:latest
-    container_name: lurus-api
     restart: always
     command: --log-dir /app/logs
     ports:
-      - "3000:3000"
+      - "${NEWHUB_HTTP_PORT:-3000}:3000"
     volumes:
       - ./data:/data
       - ./logs:/app/logs
@@ -46,12 +49,10 @@ services:
 
   redis:
     image: redis:latest
-    container_name: redis
     restart: always
 
   postgres:
     image: postgres:15
-    container_name: postgres
     restart: always
     environment:
       POSTGRES_USER: root
