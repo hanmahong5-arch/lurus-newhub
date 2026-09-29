@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
@@ -109,6 +110,40 @@ func TestModelPriceHelper_OpenRouterFreeModel(t *testing.T) {
 		}
 		if pd.QuotaToPreConsume != 0 {
 			t.Errorf("QuotaToPreConsume = %d, want 0", pd.QuotaToPreConsume)
+		}
+	})
+}
+
+// The real relay path: ModelPriceHelper runs before InitChannelMeta, so
+// ChannelMeta is nil and the channel type is only in the gin context (set by
+// the distributor). The first version of the rule missed exactly this.
+func TestModelPriceHelper_OpenRouterFreeModel_ChannelFromGinContext(t *testing.T) {
+	qs := operation_setting.GetQuotaSetting()
+	prev := qs.EnableFreeModelPreConsume
+	qs.EnableFreeModelPreConsume = false
+	t.Cleanup(func() { qs.EnableFreeModelPreConsume = prev })
+
+	t.Run("channel type only in gin context: free", func(t *testing.T) {
+		seedRatios(t, `{}`, `{}`, `{"free":0,"default":1.0}`, map[string]map[string]float64{})
+		c := priceCtx()
+		common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenRouter)
+		info := &relaycommon.RelayInfo{OriginModelName: "google/gemma-4-31b-it:free", UsingGroup: "default"}
+		pd, err := ModelPriceHelper(c, info, 100, &types.TokenCountMeta{})
+		if err != nil {
+			t.Fatalf("want free, got error %v", err)
+		}
+		if !pd.FreeModel || pd.QuotaToPreConsume != 0 {
+			t.Fatalf("want FreeModel with zero pre-consume, got %+v", pd)
+		}
+	})
+
+	t.Run("other channel type in gin context: still rejected", func(t *testing.T) {
+		seedRatios(t, `{}`, `{}`, `{"default":1.0}`, map[string]map[string]float64{})
+		c := priceCtx()
+		common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+		info := &relaycommon.RelayInfo{OriginModelName: "google/gemma-4-31b-it:free", UsingGroup: "default"}
+		if _, err := ModelPriceHelper(c, info, 100, &types.TokenCountMeta{}); err == nil {
+			t.Fatal("want the not-set error for a non-OpenRouter channel")
 		}
 	})
 }

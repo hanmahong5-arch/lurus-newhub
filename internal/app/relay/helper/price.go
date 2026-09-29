@@ -76,7 +76,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		var success bool
 		var matchName string
 		modelRatio, success, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
-		if !success && isOpenRouterFreeModel(info) {
+		if !success && isOpenRouterFreeModel(c, info) {
 			// OpenRouter ":free" variants (e.g. imported by the free-model
 			// sync) cost nothing upstream; price them exactly like a
 			// configured ratio of 0 below, no error.
@@ -281,16 +281,30 @@ func ResettleContextTier(priceData *types.PriceData, modelName string, actualPro
 	priceData.ContextTierThreshold = threshold
 }
 
-// isOpenRouterFreeModel reports whether info is an OpenRouter-channel relay
-// whose upstream model name (the name actually sent to OpenRouter after
-// model mapping, falling back to the origin name when no mapping applied)
-// ends with ":free". Only called from ModelPriceHelper's unset-ratio branch;
-// a configured price or ratio always wins before this is even reached.
-func isOpenRouterFreeModel(info *relaycommon.RelayInfo) bool {
-	if info.ChannelMeta == nil || info.ChannelType != constant.ChannelTypeOpenRouter {
+// isOpenRouterFreeModel reports whether this relay goes to an OpenRouter
+// channel with a model name ending in ":free". Only called from
+// ModelPriceHelper's unset-ratio branch; a configured price or ratio always
+// wins before this is reached.
+//
+// On the real relay path ModelPriceHelper runs BEFORE the handler calls
+// InitChannelMeta, so info.ChannelMeta is still nil there: the channel type
+// comes from the gin context, where the distributor published the channel it
+// selected. Only when ChannelMeta is set (channel test, later calls) is the
+// mapped upstream model name known; otherwise the requested name is used.
+// 2026-09-29: the first version read only ChannelMeta, passed its unit tests
+// (which set ChannelMeta) and never fired in production.
+func isOpenRouterFreeModel(c *gin.Context, info *relaycommon.RelayInfo) bool {
+	channelType := 0
+	upstreamName := ""
+	if info.ChannelMeta != nil {
+		channelType = info.ChannelType
+		upstreamName = info.UpstreamModelName
+	} else if c != nil {
+		channelType = common.GetContextKeyInt(c, constant.ContextKeyChannelType)
+	}
+	if channelType != constant.ChannelTypeOpenRouter {
 		return false
 	}
-	upstreamName := info.UpstreamModelName
 	if upstreamName == "" {
 		upstreamName = info.OriginModelName
 	}
