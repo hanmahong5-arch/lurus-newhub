@@ -198,7 +198,11 @@ describe('Admin Users page', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('edit-save')).toBeNull();
     });
-    expect(document.activeElement).toBe(opener);
+    // HfDialog hands focus back in a passive-effect cleanup, which React can
+    // flush a tick after the DOM removal above (seen on a loaded CI runner).
+    await waitFor(() => {
+      expect(document.activeElement).toBe(opener);
+    });
   });
 
   it('deletes a user behind the typed-confirm dialog', async () => {
