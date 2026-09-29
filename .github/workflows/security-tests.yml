@@ -39,17 +39,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      # The repo's go.mod has `replace` directives pointing at
-      # ../shared/lurus-proto-go and ../shared/zita-sdk-go. `actions/checkout`
-      # refuses paths outside GITHUB_WORKSPACE, so check the sibling repos
+      # The repo's go.mod has a `replace` directive pointing at
+      # ../shared/lurus-entkit. `actions/checkout` refuses paths outside
+      # GITHUB_WORKSPACE, so check the sibling repos
       # into the workspace then move them into the parent ../shared/ dir.
-      - name: Check out lurus-proto-go (sibling dep)
-        uses: actions/checkout@v4
-        with:
-          repository: LurusTech/lurus-proto-go
-          path: _sibling/lurus-proto-go
-          fetch-depth: 1
-
       - name: Check out zita-sdk-go (pinned sibling dep)
         uses: actions/checkout@v4
         with:
@@ -68,7 +61,6 @@ jobs:
       - name: Relocate sibling repos to ../shared
         run: |
           mkdir -p ../shared
-          mv _sibling/lurus-proto-go ../shared/lurus-proto-go
           mv _sibling/zita-sdk-go ../shared/zita-sdk-go
           mv _sibling/lurus-entkit ../shared/lurus-entkit
           rmdir _sibling

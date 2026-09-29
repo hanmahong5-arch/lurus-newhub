@@ -154,8 +154,8 @@ key `platform-core` 只有 `balance:write / user:delete / provisioning`，**没�
 - **PG-only (2026-06)**: `SQL_DSN` 必须 `postgres://`/`postgresql://`，否则 boot fast-fail；MySQL 与 SQLite dev fallback 已删（glebarez SQLite 仅存于 hermetic 单测 tier）
 - **渠道缓存**: Redis 存在时自动启用内存缓存，`SYNC_FREQUENCY` 控制同步周期
 - **Background tasks**: `lifecycle.Manager` 管理，`TickerTask` 封装定时任务
-- **ProtoImport**: 通过独立模块 `lurus-proto-go` 引用 identity gRPC 契约类型（`github.com/LurusTech/lurus-proto-go/identity/v1`）
-- **go.mod replace**: `github.com/LurusTech/lurus-proto-go => ../shared/lurus-proto-go`（本地开发；发布到 GitHub 后移除）
+- **platform 调用只走 HTTP**: identity/钱包调用在 `internal/pkg/common/identity_calls.go`（`*GRPC` 后缀为历史命名，内部直调 HTTP，受 `IDENTITY_TIMEOUT_MS` 总预算约束）；gRPC 客户端与 `lurus-proto-go` 依赖已移除（其生成物无 protoimpl，从未成功过一次调用）
+- **go.mod replace**: 仅 `github.com/LurusTech/lurus-entkit => ../shared/lurus-entkit`
 
 ## BMAD
 

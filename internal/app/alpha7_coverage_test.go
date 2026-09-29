@@ -320,7 +320,7 @@ func TestProcessBillingOutbox_BeforeInit_ReturnsNil(t *testing.T) {
 //
 // RecordDebitSuccess was deleted (2026-09-07): its doc comment claimed it was
 // "Called by DebitWalletGRPC (and its HTTP fallback)", but DebitWalletGRPC has
-// always called metrics.RecordBillingDebit directly (identity_grpc_client.go)
+// never needed it: the debit metric is recorded in common.DebitWallet
 // — this wrapper had zero callers anywhere in the repo. See
 // declared_series_written_test.go for the same class of check on the metrics
 // package's own declared series.

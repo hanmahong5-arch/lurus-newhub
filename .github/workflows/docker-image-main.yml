@@ -74,13 +74,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Check out lurus-proto-go
-        uses: actions/checkout@v4
-        with:
-          repository: LurusTech/lurus-proto-go
-          path: lurus-proto-go
-          fetch-depth: 1
-
       - name: Check out zita-sdk-go (pinned, pre-alpha)
         uses: actions/checkout@v4
         with:

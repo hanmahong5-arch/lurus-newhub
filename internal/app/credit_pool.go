@@ -3,7 +3,7 @@
 // This file is the single call-site for pool-exhaustion and billing-debit metrics
 // so the two counters added in δ2 (Wave-UAT) have an unambiguous home.
 // The actual pool enforcement logic lives in internal/adapter/middleware/pool_balance_check.go;
-// the actual gRPC debit call lives in internal/pkg/common/identity_grpc_client.go.
+// the actual wallet debit call lives in internal/pkg/common/identity_calls.go.
 // This file exposes thin wrappers that are called from those locations so that
 // the metric recording is testable in isolation without importing adapter packages.
 package app

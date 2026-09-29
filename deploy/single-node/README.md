@@ -9,7 +9,7 @@ HTTPS terminator — service listens on `IP:3000`.
 
 - A 32c / 32g Linux box with Docker ≥ 24 and Docker Compose v2
 - The `lurus-hub` repo checked out
-- The sibling `lurus-proto-go` repo at `../shared/lurus-proto-go` (matches the
+- The sibling `lurus-entkit` repo at `../shared/lurus-entkit` (matches the
   `go.mod` replace directive)
 - Network reachability to your OIDC issuer
 
@@ -41,7 +41,7 @@ Redirect URI on that OIDC client, otherwise login will fail with
 ./build.sh
 ```
 
-This stages `../shared/lurus-proto-go` into the build context, runs
+This stages `../shared/lurus-entkit` into the build context, runs
 `docker build`, and tags the result as `lurus-hub:local`. First run takes
 5–10 minutes (bun install + go build + Vite bundle).
 
@@ -112,9 +112,9 @@ need different sizing.
 
 ## Troubleshooting
 
-**`COPY failed: lurus-proto-go: not found`**
+**`COPY failed: lurus-entkit: not found`**
 You ran `docker build` directly instead of `./build.sh`. Use the script — it
-stages the proto repo into the build context.
+stages the entitlement kit into the build context.
 
 **`go: ... proxy.golang.org ... i/o timeout`** (typical on servers in China)
 The default Go module proxy is unreachable. Edit `Dockerfile` and add right
