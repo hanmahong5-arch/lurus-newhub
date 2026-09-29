@@ -595,6 +595,11 @@ func SetApiV2Router(router *gin.Engine) {
 			// Model performance analytics + platform-wide usage-log CSV export
 			// (rate-limited: heavy aggregation / bulk row scans over logs).
 			adminRoute.GET("/analytics/model-performance", middleware.CriticalRateLimit(), handler.GetModelPerformanceV2)
+			// Model pools overview: per-group channel roster with multi-key
+			// state, active-probe health (migration 044) and 24h usage per
+			// model. Same rate-limit rationale as its neighbour above — the
+			// usage join is a GROUP BY over logs.
+			adminRoute.GET("/model-pools", middleware.CriticalRateLimit(), handler.GetModelPoolsV2)
 			// L4 (2026-09-12): period-over-period model/vendor/group
 			// leaderboard, optionally filtered to one tenant. Same rate-limit rationale —
 			// each cache miss runs two GROUP BY aggregates over logs; a hit

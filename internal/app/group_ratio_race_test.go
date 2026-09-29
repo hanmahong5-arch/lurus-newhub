@@ -208,7 +208,7 @@ func TestRegisteredPointerFieldsDecodeInPlace(t *testing.T) {
 	modules := []string{
 		"gemini", "claude", "global", "fetch_setting", "group_ratio_setting",
 		"console_setting", "checkin_setting", "general_setting", "monitor_setting",
-		"quota_setting", "discord", "legal", "oidc",
+		"quota_setting", "discord", "legal", "oidc", "model_probe_setting",
 	}
 
 	jsonUnmarshaler := reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()

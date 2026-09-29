@@ -518,6 +518,9 @@ func migrateDB() error {
 		// Cost-attribution projects (migration 029) — the tenant -> project ->
 		// token dimension. A label, not a permission boundary (entity/project.go)
 		&entity.Project{},
+		// Per-(channel, model) probe results (migration 044) — written by
+		// internal/app/modelprobe, read by the routing cache rebuild
+		&entity.ModelHealth{},
 		// Tenant invite codes (migration 032, N2) — root-issued one-time codes
 		// that route a first-time zita-bridge login into a specific tenant
 		// instead of "default" (handler.ZitaBootstrap's auto-create branch)

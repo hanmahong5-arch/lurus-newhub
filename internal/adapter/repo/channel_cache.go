@@ -83,6 +83,20 @@ func rebuildChannelCache() error {
 		metrics.RecordChannelCacheSyncFailed("abilities")
 		return fmt.Errorf("load abilities for cache rebuild: %w", err)
 	}
+	// Model prober routing lever (internal/app/modelprobe): a (channel,
+	// model) pair the prober has auto-disabled must not be routed to, even
+	// though the channel itself and its other models stay live. Loaded once
+	// per rebuild, not per channel. Fails open (empty map, log only) — a
+	// read failure here must not abort the whole cache rebuild, the same
+	// contract every other failure mode in this function does NOT get
+	// (those return the error and keep the previous table); this one
+	// specifically trades "might route to a model that should be paused"
+	// for "never lose the entire routing table over an unrelated table".
+	autoDisabledPairs, err := LoadAutoDisabledModelPairs()
+	if err != nil {
+		common.SysError("channel cache rebuild: LoadAutoDisabledModelPairs failed, routing as if none were auto-disabled: " + err.Error())
+		autoDisabledPairs = map[int]map[string]bool{}
+	}
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
@@ -109,6 +123,9 @@ func rebuildChannelCache() error {
 			}
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
+				if autoDisabledPairs[channel.Id][model] {
+					continue
+				}
 				if _, ok := newGroup2model2channels[group][model]; !ok {
 					newGroup2model2channels[group][model] = make([]int, 0)
 				}

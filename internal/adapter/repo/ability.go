@@ -213,9 +213,72 @@ func GetChannelForTenant(group string, model string, retry int, tenantID string)
 	return &channel, err
 }
 
+// autoDisabledModelsForChannel returns the set of models the prober
+// (internal/app/modelprobe) has auto-disabled on this channel, queried
+// through db — the SAME handle the caller (AddAbilities/UpdateAbilities) is
+// already using, package DB or an in-flight transaction — not the package
+// global via LoadAutoDisabledModelPairs. That matters for two reasons:
+// AddAbilities(tx) is called by fixtures/bootstrap code before repo.DB is
+// even published (a nil package DB there would panic, not error), and a
+// query inside the caller's own transaction must not read past it.
+//
+// Fails open (returns an empty, non-nil set and logs) on a query error — a
+// channel save must not be blocked, and worse, must not error the whole
+// request, just because the model_health read failed; the next probe pass
+// or FixAbility resync catches up.
+func autoDisabledModelsForChannel(db *gorm.DB, channelID int) map[string]bool {
+	var models []string
+	err := db.Model(&entity.ModelHealth{}).
+		Where("channel_id = ? AND auto_disabled = ?", channelID, true).
+		Pluck("model", &models).Error
+	if err != nil {
+		common.SysLog(fmt.Sprintf("autoDisabledModelsForChannel(%d): query failed, failing open (treating as none auto-disabled): %s", channelID, err.Error()))
+		return map[string]bool{}
+	}
+	out := make(map[string]bool, len(models))
+	for _, m := range models {
+		out[m] = true
+	}
+	return out
+}
+
+// SetChannelModelAbilityEnabled flips every abilities row for
+// (channelID, model) — across every group the channel serves it in — to
+// enabled. It is the DB-fallback routing lever the model prober
+// (internal/app/modelprobe) calls on a disable/recover transition, mirroring
+// what the in-memory cache rebuild (channel_cache.go) does for the
+// MemoryCacheEnabled path.
+//
+// Enabling is guarded: it must not enable ability rows belonging to a
+// channel whose own Status is not enabled — a channel an operator has
+// disabled must not have the prober's recovery quietly turn traffic back on
+// for it.
+func SetChannelModelAbilityEnabled(channelID int, model string, enabled bool) error {
+	if enabled {
+		var channel Channel
+		if err := DB.Select("status").First(&channel, "id = ?", channelID).Error; err != nil {
+			return err
+		}
+		if channel.Status != common.ChannelStatusEnabled {
+			return nil
+		}
+	}
+	return DB.Model(&Ability{}).
+		Where("channel_id = ? AND model = ?", channelID, model).
+		Update("enabled", enabled).Error
+}
+
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
+	// choose DB or provided tx — resolved up front so the auto-disabled
+	// lookup below reads through the same handle the Create calls use.
+	useDB := DB
+	if tx != nil {
+		useDB = tx
+	}
+
 	models_ := strings.Split(channel.Models, ",")
 	groups_ := strings.Split(channel.Group, ",")
+	autoDisabled := autoDisabledModelsForChannel(useDB, channel.Id)
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
@@ -229,7 +292,7 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				Group:     group,
 				Model:     model,
 				ChannelId: channel.Id,
-				Enabled:   channel.Status == common.ChannelStatusEnabled,
+				Enabled:   channel.Status == common.ChannelStatusEnabled && !autoDisabled[model],
 				Priority:  channel.Priority,
 				Weight:    uint(channel.GetWeight()),
 				Tag:       channel.Tag,
@@ -239,11 +302,6 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	}
 	if len(abilities) == 0 {
 		return nil
-	}
-	// choose DB or provided tx
-	useDB := DB
-	if tx != nil {
-		useDB = tx
 	}
 	for _, chunk := range lo.Chunk(abilities, 50) {
 		err := useDB.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk).Error
@@ -288,6 +346,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	// Then add new abilities
 	models_ := strings.Split(channel.Models, ",")
 	groups_ := strings.Split(channel.Group, ",")
+	autoDisabled := autoDisabledModelsForChannel(tx, channel.Id)
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
@@ -301,7 +360,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				Group:     group,
 				Model:     model,
 				ChannelId: channel.Id,
-				Enabled:   channel.Status == common.ChannelStatusEnabled,
+				Enabled:   channel.Status == common.ChannelStatusEnabled && !autoDisabled[model],
 				Priority:  channel.Priority,
 				Weight:    uint(channel.GetWeight()),
 				Tag:       channel.Tag,

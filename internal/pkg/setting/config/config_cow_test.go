@@ -186,11 +186,12 @@ func TestConfigLockCallersAreTheKnownSet(t *testing.T) {
 		// Check under the read lock, release, repair under the write lock,
 		// re-checking. The write half is reached only when the read half found
 		// the value missing, so the two are never held together.
-		"internal/pkg/setting/model_setting/claude.go:GetClaudeSettings":                  "RLock",
-		"internal/pkg/setting/model_setting/claude.go:republishClaudeDefaultMaxTokens":    "Lock",
-		"internal/pkg/setting/ratio_setting/group_ratio.go:GetGroupRatioSetting":          "RLock",
-		"internal/pkg/setting/ratio_setting/group_ratio.go:repairGroupSpecialUsableGroup": "Lock",
-		"internal/pkg/setting/operation_setting/monitor_setting.go:applyMonitorOverride":  "RLock+Lock",
+		"internal/pkg/setting/model_setting/claude.go:GetClaudeSettings":                     "RLock",
+		"internal/pkg/setting/model_setting/claude.go:republishClaudeDefaultMaxTokens":       "Lock",
+		"internal/pkg/setting/ratio_setting/group_ratio.go:GetGroupRatioSetting":             "RLock",
+		"internal/pkg/setting/ratio_setting/group_ratio.go:repairGroupSpecialUsableGroup":    "Lock",
+		"internal/pkg/setting/operation_setting/monitor_setting.go:applyMonitorOverride":     "RLock+Lock",
+		"internal/pkg/setting/operation_setting/model_probe_setting.go:GetModelProbeSetting": "RLock",
 	}
 
 	found := map[string]map[string]bool{}

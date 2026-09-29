@@ -230,7 +230,7 @@ func TestRegisteredConfigModulesAreTheKnownSet(t *testing.T) {
 		"gemini": true, "claude": true, "global": true, "fetch_setting": true,
 		"group_ratio_setting": true, "console_setting": true, "checkin_setting": true,
 		"general_setting": true, "monitor_setting": true, "quota_setting": true,
-		"discord": true, "legal": true, "oidc": true,
+		"discord": true, "legal": true, "oidc": true, "model_probe_setting": true,
 	}
 
 	found := map[string]string{}
