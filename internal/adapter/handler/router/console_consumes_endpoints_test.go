@@ -41,8 +41,25 @@ var (
 	lineCommentRe  = regexp.MustCompile(`(?m)^\s*//.*$`)
 )
 
+// Whole-line // comments go first: a line comment that mentions a glob such as
+// "/console/v2/*" would otherwise open a block comment running to the next
+// "*/" in the file and swallow the real calls in between.
 func stripComments(src string) string {
-	return lineCommentRe.ReplaceAllString(blockCommentRe.ReplaceAllString(src, " "), " ")
+	return blockCommentRe.ReplaceAllString(lineCommentRe.ReplaceAllString(src, " "), " ")
+}
+
+func TestStripCommentsLineCommentGlobDoesNotSwallowCode(t *testing.T) {
+	src := `// only matches /console/v2/*
+const href = '/admin/cost';
+/* doc */ call('/x');
+`
+	got := stripComments(src)
+	if !strings.Contains(got, "/admin/cost") {
+		t.Fatalf("code after a line comment containing a glob was stripped: %q", got)
+	}
+	if strings.Contains(got, "doc") || strings.Contains(got, "only matches") {
+		t.Fatalf("comments survived: %q", got)
+	}
 }
 
 // userFacingProjections are routes whose response is rendered to a human in

@@ -218,7 +218,7 @@ export const NAV_SECTIONS = [
       // written back with PUT /api/user/setting) since cycle 10, so the
       // sentence that used to stand here was stale by a cycle.
       // /console/personal renders the legacy HeaderBar/SiderBar chrome, not
-      // this shell (PageLayout.jsx's v2 bypass only matches /console/v2/*),
+      // this shell (PageLayout.jsx's v2 bypass only matches /console/v2/ paths),
       // so clicking this item leaves the rail entirely and nothing
       // highlights on the way back. legacyBridge:true marks that in the UI
       // — see the nav-legacy-tag rendering below.

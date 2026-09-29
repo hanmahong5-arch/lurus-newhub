@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-// HfMarkdown — the one markdown renderer for /console/v2/* model output
+// HfMarkdown — the one markdown renderer for /console/v2/ model output
 // (Chat's assistant turns, Playground's output columns). Deliberately NOT
 // components/common/markdown/MarkdownRenderer: that one drags in mermaid,
 // katex, highlight.js and its own github-theme CSS to support the legacy
