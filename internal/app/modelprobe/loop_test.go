@@ -57,8 +57,18 @@ func TestLoop_RunsOnTickWhenLeader(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go Loop(ctx, probe, 10*time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		Loop(ctx, probe, 10*time.Millisecond)
+		close(done)
+	}()
+	// Registered after setupRunOnceDB, so it runs FIRST (cleanups are LIFO):
+	// the loop must have returned before repo.DB is swapped back, otherwise
+	// an in-flight RunOnce still writes through it (a data race under -race).
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 
 	select {
 	case <-ran:
