@@ -48,7 +48,7 @@ var debitWalletGRPC = common.DebitWalletGRPC
 
 // settleWithBreaker is a test seam over the pre-auth settlement call, same
 // convention as debitWalletGRPC above — the platform-preauth branch of
-// PostConsumeQuota needs to be exercisable without a real gRPC/HTTP round
+// PostConsumeQuota needs to be exercisable without a real HTTP round
 // trip to lurus-platform.
 var settleWithBreaker = common.SettleWithBreaker
 

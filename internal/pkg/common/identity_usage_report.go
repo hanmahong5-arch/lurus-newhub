@@ -37,8 +37,8 @@ var usageReportTotal = promauto.NewCounterVec(
 // NOT silent: the platform's answer is read, and a refusal is logged and
 // counted on usageReportTotal. Before cycle-13 L9 this function closed the
 // body without looking at the status, so a wrong-scope 403, a renamed route's
-// 404 and a 500 were all indistinguishable from success, including on the
-// gRPC transport, which falls back here.
+// 404 and a 500 were all indistinguishable from success. ReportLLMUsageGRPC
+// (identity_calls.go) is this call under the whole-call identity budget.
 func ReportLLMUsage(ctx context.Context, accountID int64, amountCNY float64) {
 	if IdentityServiceURL == "" {
 		return

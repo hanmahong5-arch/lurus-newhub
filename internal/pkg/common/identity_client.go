@@ -494,10 +494,10 @@ func DebitWallet(ctx context.Context, accountID int64, amount float64, txType, d
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	// Same observation as the gRPC twin's confirmed-success branch
-	// (identity_grpc_client.go DebitWalletGRPC) — this HTTP path is reached
-	// either directly (no gRPC client configured) or as DebitWalletGRPC's own
-	// fallback, and previously recorded nothing in either case.
+	// The single place a confirmed direct wallet debit is observed
+	// (op="debit"). DebitWalletGRPC (identity_calls.go) is this call under
+	// the whole-call identity budget; the gRPC leg it once tried never
+	// completed a call and was removed.
 	if result.Success {
 		metrics.RecordBillingDebit(productID, "debit", amount)
 	}

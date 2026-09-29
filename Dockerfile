@@ -28,9 +28,6 @@ ENV GOEXPERIMENT=greenteagc
 
 WORKDIR /build
 
-# Copy proto-go module (identity gRPC contract types)
-COPY lurus-proto-go/ /shared/lurus-proto-go/
-
 # Copy zita-sdk-go (identity SDK, ADR-0011) — pinned via CI checkout ref
 COPY zita-sdk-go/ /shared/zita-sdk-go/
 

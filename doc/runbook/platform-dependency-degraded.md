@@ -12,15 +12,15 @@
 
 ## What talks to platform-core
 
-Two transports to the same service, and every call tries them in this order:
+One transport: HTTP — `IDENTITY_SERVICE_URL`, default
+`http://platform-core.lurus-platform.svc.cluster.local:18104`. (A gRPC leg on
+:18105 used to be tried first; it never completed a call — the proto types it
+used had no protoimpl — and was removed. `IDENTITY_GRPC_ADDR` on a deployment
+is now ignored.)
 
-1. gRPC — `IDENTITY_GRPC_ADDR`, default
-   `platform-core.lurus-platform.svc.cluster.local:18105`.
-2. HTTP twin — `IDENTITY_SERVICE_URL`, default
-   `http://platform-core.lurus-platform.svc.cluster.local:18104`.
-
-The wrappers are in `internal/pkg/common/identity_grpc_client.go`; the HTTP
-twins in `internal/pkg/common/identity_client.go`. Callers are account lookup
+The budgeted wrappers are in `internal/pkg/common/identity_calls.go` (the
+`*GRPC` suffix is historical); the HTTP calls in
+`internal/pkg/common/identity_client.go`. Callers are account lookup
 on login (`internal/adapter/handler/oauth.go`,
 `internal/adapter/middleware/admin_jwt_auth.go`,
 `internal/adapter/middleware/oidc_auth.go`,
@@ -30,25 +30,19 @@ on login (`internal/adapter/handler/oauth.go`,
 
 ## Time bounds (cycle 12)
 
-One logical identity call is bounded end to end, both transports together:
+One logical identity call is bounded end to end:
 
 | Knob | Default | What it bounds |
 |---|---|---|
-| `IDENTITY_TIMEOUT_MS` | 5000 | the whole call — gRPC leg **plus** HTTP fallback |
-| `IDENTITY_GRPC_TIMEOUT_MS` | 2000 | the gRPC leg alone, inside the total |
+| `IDENTITY_TIMEOUT_MS` | 5000 | the whole HTTP call |
 
-Before cycle 12 each leg had its own 5s, so one call could cost 10s, and the
-gRPC client was built with wait-for-ready, which turned "connection refused"
-into "block until the deadline" instead of failing over immediately. Both are
-fixed; `internal/pkg/common/identity_timeout_test.go` is the oracle.
+`internal/pkg/common/identity_calls_test.go` is the oracle.
 
-Consequence when platform-core is **down** (connection refused): the gRPC leg
-returns in milliseconds, the HTTP leg burns what is left of the 5s, so a
-console request that needs an account lookup is slower by up to ~5s, once, not
-by 10s per lookup.
+Consequence when platform-core is **down** (connection refused): the call
+fails in milliseconds.
 
-Consequence when platform-core is **hung** (accepts, never answers): the gRPC
-leg costs 2s, the HTTP leg the remaining 3s. Same 5s ceiling.
+Consequence when platform-core is **hung** (accepts, never answers): the call
+costs up to the 5s ceiling.
 
 ## What each caller does with a failed lookup
 
@@ -74,16 +68,10 @@ leg costs 2s, the HTTP leg the remaining 3s. Same 5s ceiling.
   `doc/runbook/platform-billing-breaker-open.md`.
 
 The breaker is opened and closed by the money legs only. Account and
-entitlement lookups *read* it and never write it. Reading it: while the breaker
-is open they skip the gRPC leg entirely and go straight to the HTTP twin, so a
-console request during a platform outage stops re-paying
-`IDENTITY_GRPC_TIMEOUT_MS` to rediscover something this process already knows
-(`identityLookupClient`, `internal/pkg/common/identity_grpc_client.go`). Not
-writing it: making the lookup path record failures would let an identity-side
-blip fast-fail the money path, and — on a deployment where
-`BILLING_UNIFIED_ENABLED` is off, so no money leg ever probes — would leave the
-breaker latched open with nothing able to close it. Both halves are pinned by
-`TestAccountLookupSkipsTheGRPCLegWhileTheBreakerIsOpen` and
+entitlement lookups never write it: making the lookup path record failures
+would let an identity-side blip fast-fail the money path, and — on a deployment
+where `BILLING_UNIFIED_ENABLED` is off, so no money leg ever probes — would
+leave the breaker latched open with nothing able to close it. Pinned by
 `TestAccountLookupFailureNeverWritesBreakerState`.
 
 ## Triage
@@ -106,8 +94,7 @@ curl -fsS http://localhost:30850/metrics | grep billing_circuit_breaker_state
 ## Levers
 
 - Shrink the blast radius of a slow platform without a code change:
-  `IDENTITY_TIMEOUT_MS=2000` on the deployment. Below ~1500 the HTTP fallback
-  stops having a useful share of the budget.
+  `IDENTITY_TIMEOUT_MS=2000` on the deployment.
 - There is no switch that makes newhub stop calling platform-core for account
   lookups. The closest lever is `BILLING_UNIFIED_ENABLED=false`, which removes
   the money legs only.

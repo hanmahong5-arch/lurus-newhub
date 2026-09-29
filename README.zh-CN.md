@@ -6,7 +6,7 @@
 
 ## 这是什么
 
-Lurus Hub（Go module 名 `lurus-hub`，仓库名 `lurus-newhub`）是在 [New API](https://github.com/QuantumNous/new-api) 中转基座上定制的衍生项目，New API 本身又衍生自 [One API](https://github.com/songquanpeng/one-api)。在中转能力之上，本仓加了一层数据处理逻辑：按渠道打分、用量聚合、多租户 OIDC 认证，以及一个可选的 gRPC 钩子，用于把用量上报给外部计费服务。
+Lurus Hub（Go module 名 `lurus-hub`，仓库名 `lurus-newhub`）是在 [New API](https://github.com/QuantumNous/new-api) 中转基座上定制的衍生项目，New API 本身又衍生自 [One API](https://github.com/songquanpeng/one-api)。在中转能力之上，本仓加了一层数据处理逻辑：按渠道打分、用量聚合、多租户 OIDC 认证，以及一个可选的 HTTP 钩子，用于把用量上报给外部计费服务。
 
 它是 Lurus 自家产品线的生产大模型网关（`hub.lurus.cn`），因此中转链路、多租户路由、V1/V2 REST API 都在持续实跑。但部分能力默认关闭、按部署环境自行开启：Meilisearch 日志搜索（`MEILISEARCH_ENABLED=false`）、OpenTelemetry 链路追踪（`OTEL_TRACING_ENABLED=false`）、OIDC 登录（`OIDC_ENABLED=false`）、外部计费对接（`BILLING_UNIFIED_ENABLED=false`）。这些是"代码已具备、默认关闭"，不代表在你的部署环境里已经端到端交付——开启后请自行验证。
 
@@ -21,7 +21,7 @@ Lurus Hub（Go module 名 `lurus-hub`，仓库名 `lurus-newhub`）是在 [New A
 - **渠道打分与用量聚合** — 独立于中转链路本身的"数据枢纽"层：加权渠道选择、健康度打分、滚动用量聚合（`internal/app/hub/channel_scorer.go`、`internal/app/hub/usage_aggregator.go`）。
 - **多租户 REST API** — 按 `tenant_slug` 划分的 V2 API，带角色权限（admin/user/billing_manager），并保留一套单租户兼容的 V1 接口供既有集成使用（`internal/adapter/handler/router/api-v2-router.go`、`api-router.go`）。
 - **厂商中立的 OIDC 认证** — 通过标准发现文档（`.well-known/openid-configuration`）对接任意标准 OIDC 身份提供方；默认关闭，配置见 `.env.example`（`OIDC_*`）。
-- **可选的计费对接钩子** — 通过 gRPC/HTTP 把用量上报给配套的账户计费服务；未配置时服务端用自带的 session 认证独立运行（`internal/pkg/common/identity_grpc_client.go`、`usage_report.go`）。
+- **可选的计费对接钩子** — 通过 HTTP 把用量上报给配套的账户计费服务；未配置时服务端用自带的 session 认证独立运行（`internal/pkg/common/identity_calls.go`、`usage_report.go`）。
 - **Prometheus 指标** — `/metrics` 输出 Prometheus 文本格式，请求带反代转发头时会走鉴权检查（`internal/adapter/handler/router/main.go:37,85`；指标定义见 `internal/pkg/metrics/metrics.go`）。
 
 ## 快速开始
@@ -87,7 +87,7 @@ deploy/k8s/                # Kubernetes 清单 (staging/UAT overlay)
 | `MIGRATIONS_AUTO_RUN` | 否 | `true` | 启动时是否跑内置 SQL migration runner |
 | `OIDC_ENABLED` | 否 | `false` | 启用 OIDC 登录;为 true 时 `OIDC_ISSUER`/`OIDC_JWKS_URI`/`OIDC_CLIENT_ID` 变为必填 |
 | `MEILISEARCH_ENABLED` | 否 | `false` | 日志全文搜索 |
-| `IDENTITY_SERVICE_URL` / `IDENTITY_GRPC_ADDR` | 否 | — | 可选的配套账户计费服务(用量上报、钱包扣费) |
+| `IDENTITY_SERVICE_URL` | 否 | — | 可选的配套账户计费服务(用量上报、钱包扣费) |
 | `BILLING_UNIFIED_ENABLED` | 否 | `false` | 切换为预授权/冻结/结算的计费流程,而非事后扣费 |
 | `OTEL_TRACING_ENABLED` | 否 | `false` | 是否通过 OTLP 导出链路追踪 |
 | `METRICS_AUTH_TOKEN` | 否 | (空) | 请求带反代转发头时读取 `/metrics` 需要此令牌;无转发头的直连请求恒放行 |
@@ -113,7 +113,7 @@ deploy/k8s/                # Kubernetes 清单 (staging/UAT overlay)
 
 ## 相关项目
 
-在 Lurus 平台内部,本服务暴露了一组专用路由 `/api/v2/switch/*`(`router/api-v2-router.go`),供 Switch 桌面客户端(仓库 `lurus-switch`)消费,用于激活码兑换、渠道/令牌管理。可选的计费钩子(见上文 `IDENTITY_GRPC_ADDR`)对接的是配套的账户计费核心服务;两处集成均默认关闭、需显式配置才生效,因此本仓可以完全独立运行。
+在 Lurus 平台内部,本服务暴露了一组专用路由 `/api/v2/switch/*`(`router/api-v2-router.go`),供 Switch 桌面客户端(仓库 `lurus-switch`)消费,用于激活码兑换、渠道/令牌管理。可选的计费钩子(见上文 `IDENTITY_SERVICE_URL`)对接的是配套的账户计费核心服务;两处集成均默认关闭、需显式配置才生效,因此本仓可以完全独立运行。
 
 ## 许可证与上游致谢
 

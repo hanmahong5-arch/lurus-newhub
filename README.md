@@ -6,7 +6,7 @@ A multi-tenant LLM gateway: one API in front of 30+ model providers, with per-te
 
 ## What it is
 
-Lurus Hub (module `lurus-hub`, repository `lurus-newhub`) is a customized derivative of the [New API](https://github.com/QuantumNous/new-api) relay, itself descended from [One API](https://github.com/songquanpeng/one-api). On top of the relay it adds a data-processing layer: per-channel scoring, usage aggregation, multi-tenant OIDC auth, and an optional gRPC hook for reporting usage to an external billing service.
+Lurus Hub (module `lurus-hub`, repository `lurus-newhub`) is a customized derivative of the [New API](https://github.com/QuantumNous/new-api) relay, itself descended from [One API](https://github.com/songquanpeng/one-api). On top of the relay it adds a data-processing layer: per-channel scoring, usage aggregation, multi-tenant OIDC auth, and an optional HTTP hook for reporting usage to an external billing service.
 
 It runs as the production LLM gateway behind Lurus's own products (`hub.lurus.cn`), so the relay path, multi-tenant routing, and V1/V2 REST API are exercised continuously. Some capabilities ship disabled by default and are opt-in per deployment: Meilisearch log search (`MEILISEARCH_ENABLED=false`), OpenTelemetry tracing (`OTEL_TRACING_ENABLED=false`), OIDC login (`OIDC_ENABLED=false`), and the external billing integration (`BILLING_UNIFIED_ENABLED=false`). Treat those as available-but-off, not as delivered end-to-end for your deployment until you turn them on and verify.
 
@@ -21,7 +21,7 @@ It runs as the production LLM gateway behind Lurus's own products (`hub.lurus.cn
 - **Channel scoring and usage aggregation** — the "data hub" layer: weighted channel selection, health scoring, and rolling usage aggregation independent of the relay path itself (`internal/app/hub/channel_scorer.go`, `internal/app/hub/usage_aggregator.go`).
 - **Multi-tenant REST API** — `tenant_slug`-scoped V2 API with role-based access (admin/user/billing_manager) plus a V1 single-tenant-compatible surface for existing integrations (`internal/adapter/handler/router/api-v2-router.go`, `api-router.go`).
 - **Vendor-neutral OIDC auth** — login against any standards-compliant identity provider via discovery (`.well-known/openid-configuration`); off by default, config in `.env.example` (`OIDC_*`).
-- **Optional billing hook** — reports usage over gRPC/HTTP to a companion account-and-billing service; the server runs standalone with its own session auth when this is unset (`internal/pkg/common/identity_grpc_client.go`, `usage_report.go`).
+- **Optional billing hook** — reports usage over HTTP to a companion account-and-billing service; the server runs standalone with its own session auth when this is unset (`internal/pkg/common/identity_calls.go`, `usage_report.go`).
 - **Prometheus metrics** — `/metrics` in Prometheus text format, gated by an auth check when the request carries proxy-forwarded headers (`internal/adapter/handler/router/main.go:37,85`; metric definitions in `internal/pkg/metrics/metrics.go`).
 
 ## Quick start
@@ -87,7 +87,7 @@ Full reference: [`.env.example`](./.env.example). Selected variables:
 | `MIGRATIONS_AUTO_RUN` | No | `true` | Run the embedded SQL migration runner on boot |
 | `OIDC_ENABLED` | No | `false` | Enable OIDC login; `OIDC_ISSUER`/`OIDC_JWKS_URI`/`OIDC_CLIENT_ID` become required when true |
 | `MEILISEARCH_ENABLED` | No | `false` | Full-text log search |
-| `IDENTITY_SERVICE_URL` / `IDENTITY_GRPC_ADDR` | No | — | Optional companion billing/identity service (usage reporting, wallet debit) |
+| `IDENTITY_SERVICE_URL` | No | — | Optional companion billing/identity service (usage reporting, wallet debit) |
 | `BILLING_UNIFIED_ENABLED` | No | `false` | Switch to the pre-authorize/freeze/settle billing flow instead of post-hoc debit |
 | `OTEL_TRACING_ENABLED` | No | `false` | Export traces via OTLP |
 | `METRICS_AUTH_TOKEN` | No | (empty) | Required to read `/metrics` through a reverse proxy that adds forwarding headers; direct connections without such headers are always allowed |
@@ -128,7 +128,7 @@ or status code can still be wrong.
 
 ## Related projects
 
-Within the Lurus platform, this service exposes a dedicated route group, `/api/v2/switch/*` (`router/api-v2-router.go`), consumed by the Switch desktop client (repository `lurus-switch`) for activation-code redemption and channel/token management. The optional billing hook (`IDENTITY_GRPC_ADDR`, above) talks to a companion account-and-billing core service; both integrations are off unless explicitly configured, so this repository is fully usable standalone.
+Within the Lurus platform, this service exposes a dedicated route group, `/api/v2/switch/*` (`router/api-v2-router.go`), consumed by the Switch desktop client (repository `lurus-switch`) for activation-code redemption and channel/token management. The optional billing hook (`IDENTITY_SERVICE_URL`, above) talks to a companion account-and-billing core service; both integrations are off unless explicitly configured, so this repository is fully usable standalone.
 
 ## License and upstream attribution
 

@@ -75,19 +75,6 @@ func TestGetIdentityPublicURL_EnvOverride(t *testing.T) {
 	}
 }
 
-// TestGetIdentityGRPCAddr_EnvOverride covers the gRPC host:port override +
-// in-cluster default.
-func TestGetIdentityGRPCAddr_EnvOverride(t *testing.T) {
-	t.Setenv("IDENTITY_GRPC_ADDR", "grpc.example:9000")
-	if got := getIdentityGRPCAddr(); got != "grpc.example:9000" {
-		t.Errorf("override not honoured: %q", got)
-	}
-	t.Setenv("IDENTITY_GRPC_ADDR", "")
-	if got := getIdentityGRPCAddr(); got != "platform-core.lurus-platform.svc.cluster.local:18105" {
-		t.Errorf("default not used when unset: %q", got)
-	}
-}
-
 // TestIsRunningInContainer_NotInContainer forces every container marker off
 // (env vars cleared; the /.dockerenv + /proc/1/cgroup probes are absent on the
 // host test machine) and asserts the negative branch returns false.

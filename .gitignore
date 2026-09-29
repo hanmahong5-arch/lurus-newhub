@@ -55,6 +55,5 @@ nul
 # BMAD framework (lives at root only)
 _bmad/
 
-# Staged by deploy/single-node/build.sh; canonical copy lives at ../shared/lurus-proto-go
-/lurus-proto-go/
+# Staged by deploy/single-node/build.sh; canonical copy lives at ../shared/lurus-entkit
 /lurus-entkit/

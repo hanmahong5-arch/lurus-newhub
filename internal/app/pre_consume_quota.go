@@ -296,10 +296,10 @@ const PreAuthHoldTTL = time.Hour
 const billingUnavailableRetryAfter = 5 * time.Second
 
 // preAuthorizeWithBreaker is the platform freeze call. A var (same seam
-// convention as AsyncGo) because the identity gRPC client dials with
-// WaitForReady, so in a test binary the call burns the whole request deadline
-// before falling back to HTTP — which leaves the success path below, and the
-// cache warm-up that hangs off it, otherwise unreachable from tests.
+// convention as AsyncGo) because in a test binary the real call has no
+// platform to reach and burns the identity budget before failing — which
+// leaves the success path below, and the cache warm-up that hangs off it,
+// otherwise unreachable from tests.
 var preAuthorizeWithBreaker = common.PreAuthorizeWithBreaker
 
 // preAuthFailure maps a failed platform freeze to what the customer is owed.

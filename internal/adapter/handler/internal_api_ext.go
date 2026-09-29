@@ -18,12 +18,12 @@ var usernameRegexp = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
 // resolveAccountByZitadelSub resolves an OIDC subject to its lurus-platform
 // account. Indirected through a package var (defaulting to the
-// gRPC-with-HTTP-fallback resolver) so provisioning tests can stub the platform
+// budgeted HTTP resolver) so provisioning tests can stub the platform
 // dependency without a live identity service. Production keeps the default.
-// NOTE(idp-migration): the underlying gRPC call keeps the GetAccountByZitadelSub
-// name because the shared lurus-proto-go stub has no idp_subject RPC yet (renaming
-// it would not compile); only the wire body/JSON fields are neutralized. The
-// function-name keeps the historical spelling for the same reason.
+// NOTE(idp-migration): the function keeps the historical GetAccountByZitadelSub
+// spelling (and the *GRPC suffix from the removed gRPC leg); it calls the
+// platform over HTTP by idp_subject. Renaming is a mechanical follow-up and
+// changes nothing on the wire.
 var resolveAccountByZitadelSub = common.GetAccountByZitadelSubGRPC
 
 // InternalLogin is no longer supported — auth is delegated to the OIDC provider.

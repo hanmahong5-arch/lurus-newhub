@@ -11,13 +11,9 @@ import (
 
 // TestWithBreaker_SuccessPath drives PreAuthorize/Settle/ReleaseWithBreaker down
 // their happy path (the wrapped call returns nil error) and asserts each records
-// success and leaves the breaker CLOSED. The wrapped *GRPC call marshal-fails on
-// the injected gRPC client and transparently completes over the HTTP twin, so
-// this also proves the breaker treats a successful HTTP fallback as a healthy
-// call (it must not open the circuit just because the gRPC leg was unusable).
+// success and leaves the breaker CLOSED.
 func TestWithBreaker_SuccessPath(t *testing.T) {
 	resetBillingBreaker(t)
-	withInjectedGRPCClient(t)
 
 	newIdentityServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {

@@ -176,8 +176,8 @@ func claimOutboxRows(ctx context.Context, table string, now time.Time, dest any)
 // hand the same entry to the platform twice.
 // The platform calls the outbox replays. Vars (same seam convention as
 // debitWalletGRPC and settleWithBreaker) so a test can hand the sweep a
-// platform verdict without a gRPC client that would burn the deadline
-// dialling.
+// platform verdict without a live platform round trip that would burn the
+// deadline.
 var (
 	settleOutboxCall  = common.SettlePreAuthGRPC
 	releaseOutboxCall = common.ReleasePreAuthGRPC

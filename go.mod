@@ -85,7 +85,6 @@ require (
 
 require (
 	github.com/LurusTech/lurus-entkit v0.0.0
-	github.com/LurusTech/lurus-proto-go v0.0.0
 	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect
 	github.com/alibabacloud-go/debug v1.0.1 // indirect
 	github.com/alibabacloud-go/endpoint-util v1.1.0 // indirect
@@ -169,8 +168,8 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/grpc v1.83.2
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/grpc v1.83.2 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/libc v1.66.10 // indirect
@@ -178,8 +177,6 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.40.1 // indirect
 )
-
-replace github.com/LurusTech/lurus-proto-go => ../shared/lurus-proto-go
 
 // Entitlement kit (offline verifier for POST /api/v2/:tenant/provision). Source of
 // truth: 2l-svc-platform/pkg/entkit; shared/lurus-entkit is its subtree mirror.

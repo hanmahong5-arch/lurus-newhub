@@ -482,7 +482,7 @@ var (
 	// BillingDebitAmountCNY observes the CNY amount of every confirmed wallet
 	// charge to lurus-platform — both directions of it: a pre-auth settling
 	// (op="settle", quota.go PostConsumeQuota) and a direct wallet debit
-	// (op="debit", DebitWalletGRPC and its HTTP twin DebitWallet). Labeled by
+	// (op="debit", common.DebitWallet via DebitWalletGRPC). Labeled by
 	// product (the cross-product attribution tag, not tenant_id — tenant is
 	// not the caller's unit of billing here, product is) and op, so the two
 	// legs stay distinguishable in the same series instead of one silently

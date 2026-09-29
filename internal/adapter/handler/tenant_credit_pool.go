@@ -22,7 +22,7 @@ import (
 )
 
 // Wallet call seams — package-level vars so hermetic tests can inject
-// "debit succeeded / revert failed" without a live platform gRPC endpoint
+// "debit succeeded / revert failed" without a live platform endpoint
 // (same seam convention as app.AsyncGo). Production always uses the real
 // common.* clients.
 var (
@@ -480,8 +480,8 @@ func TopupCreditPool(c *gin.Context) {
 		return
 	}
 	// Idempotency key per topup intent (contracts.md S1 / ADR D4 "deterministic
-	// business key, never random"). The same key flows to the gRPC debit, to its
-	// HTTP twin, and — since the credit was routed through the idempotent
+	// business key, never random"). The same key flows to the wallet debit (HTTP
+	// Idempotency-Key), and — since the credit was routed through the idempotent
 	// primitive — into credit_pool_fund_events.event_id. The revert uses a
 	// distinct key so it is never deduped against the debit.
 	idemKey, callerSuppliedKey := poolTopupIdempotencyKey(c)
