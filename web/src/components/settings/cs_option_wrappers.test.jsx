@@ -158,7 +158,12 @@ describe('ChatsSetting', () => {
 
     render(<ChatsSetting />);
 
-    await waitFor(() => expect(screen.getByTestId('chats-child')).toBeTruthy());
+    // The child renders first with default options and receives the loaded
+    // ones a tick later; wait for the load, not just the mount (this read the
+    // defaults once on a loaded CI runner and saw ChatCacheEnabled undefined).
+    await waitFor(() =>
+      expect(optionsOf('chats-child').ChatCacheEnabled).not.toBeUndefined(),
+    );
     const opts = optionsOf('chats-child');
 
     // Positive: the boolean-typed key really became a boolean...
