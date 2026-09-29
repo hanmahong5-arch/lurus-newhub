@@ -245,6 +245,13 @@ spec:
               value: "master"
             - name: SYNC_FREQUENCY
               value: "60"
+            # OpenRouter free-model sync loop (openrouter_sync.AutoSyncWithContext):
+            # checks every 60 min which sync jobs are due; the free-pool job
+            # itself is scheduled daily. Unset = the loop never starts, which
+            # is why the free list in the old newapi channel went stale
+            # (2026-09-29: 3 of its 40 ":free" models were still free).
+            - name: OPENROUTER_FREE_SYNC_FREQUENCY
+              value: "60"
             # Cycle-13 pool ceiling, sized against a MEASURED server budget
             # (2026-09-20, R6 ns database, pod lurus-pg-0):
             # max_connections = 100, 38 in use -- newhub 13, zitadel 8,
