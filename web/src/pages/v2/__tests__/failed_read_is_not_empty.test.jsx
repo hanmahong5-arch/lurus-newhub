@@ -328,6 +328,7 @@ const PAGES = {
     import('../Admin/CostIntelligence/index.jsx'),
   'admin/model-performance': () =>
     import('../Admin/ModelPerformance/index.jsx'),
+  'admin/model-pools': () => import('../Admin/ModelPools/index.jsx'),
   'admin/rankings': () => import('../Analytics/Rankings.jsx'),
   'admin/model-limits': () => import('../Admin/ModelRateLimits/index.jsx'),
   'admin/system-tasks': () => import('../Admin/SystemTasks.jsx'),
@@ -432,6 +433,7 @@ const PAGE_SOURCE = {
   'admin/settings': 'Admin/Settings/index.jsx',
   'admin/cost-intelligence': 'Admin/CostIntelligence/index.jsx',
   'admin/model-performance': 'Admin/ModelPerformance/index.jsx',
+  'admin/model-pools': 'Admin/ModelPools/index.jsx',
   'admin/rankings': 'Analytics/Rankings.jsx',
   'admin/model-limits': 'Admin/ModelRateLimits/index.jsx',
   'admin/system-tasks': 'Admin/SystemTasks.jsx',

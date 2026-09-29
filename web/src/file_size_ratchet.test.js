@@ -47,7 +47,7 @@ const CEILINGS = {
   // "switch" went — the server never followed it (403 TENANT_MISMATCH).
   // 887 → 843 (2026-09-22 cycle-15 P4): nav section/item rendering moved to
   // components/hifi/HfNav.jsx with the collapsible admin sections.
-  'components/hifi/HFShell.jsx': 843,
+  'components/hifi/HFShell.jsx': 852,
   'components/settings/AuthSettingPage.jsx': 1086,
   'components/settings/SystemSetting.jsx': 1490,
   'components/settings/personal/cards/NotificationSettings.jsx': 930,

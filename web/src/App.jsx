@@ -86,6 +86,7 @@ const V2CostIntelligence = lazy(
 const V2ModelPerformance = lazy(
   () => import('./pages/v2/Admin/ModelPerformance'),
 );
+const V2ModelPools = lazy(() => import('./pages/v2/Admin/ModelPools'));
 const V2Rankings = lazy(() => import('./pages/v2/Analytics/Rankings'));
 const V2SystemTasks = lazy(() => import('./pages/v2/Admin/SystemTasks'));
 const V2AdminAuthz = lazy(() => import('./pages/v2/Admin/Authz'));
@@ -447,6 +448,7 @@ function App() {
           ['admin/settings', V2AdminSettings, RootRoute],
           ['admin/cost-intelligence', V2CostIntelligence, RootRoute],
           ['admin/model-performance', V2ModelPerformance, RootRoute],
+          ['admin/model-pools', V2ModelPools, RootRoute],
           ['admin/rankings', V2Rankings],
           ['admin/model-limits', V2ModelRateLimits, RootRoute],
           ['admin/system-tasks', V2SystemTasks, RootRoute],
