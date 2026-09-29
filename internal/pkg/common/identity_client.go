@@ -481,8 +481,7 @@ func DebitWallet(ctx context.Context, accountID int64, amount float64, txType, d
 		}
 		// Same sentinel PreAuthorize returns, so a caller that classifies with
 		// errors.Is gets the same answer whichever wallet call produced it.
-		// The message is unchanged ("insufficient_balance"). The body code
-		// decides, whether the platform sent it as 400, 402 or 409.
+		// The body code decides, whether the platform sent it as 400, 402 or 409.
 		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error == insufficientBalanceCode {
 			return nil, ErrInsufficientBalance
 		}
