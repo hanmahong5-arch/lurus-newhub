@@ -454,6 +454,15 @@ export const NAV_SECTIONS = [
         badge: '',
         minRole: 100,
       },
+      {
+        id: 'admin-model-pools',
+        href: '/console/v2/admin/model-pools',
+        glyph: LuBoxes,
+        label: 'Model pools',
+        key: 'console.nav.model_pools',
+        badge: '',
+        minRole: 100,
+      },
       // Period-over-period model/vendor leaderboard (rank/trend/share) —
       // L4, 2026-09-12. Beside admin-analytics per the plan's §8 correction.
       {
