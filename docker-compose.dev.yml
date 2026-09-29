@@ -6,27 +6,30 @@
 #   docker compose -f docker-compose.dev.yml up -d
 #   cp .env.dev .env && go run ./cmd/server
 #   cd web && bun run dev
+#
+# Running two worktrees at once: set a distinct COMPOSE_PROJECT_NAME per
+# worktree plus NEWHUB_DEV_REDIS_PORT / NEWHUB_DEV_PG_PORT to avoid host-port
+# clashes (container_name is intentionally unset so compose can namespace
+# containers per project).
 
 services:
   redis:
     image: redis:7-alpine
-    container_name: newhub-dev-redis
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "${NEWHUB_DEV_REDIS_PORT:-6380}:6379"
     networks:
       - newhub-dev
 
   postgres:
     image: postgres:15-alpine
-    container_name: newhub-dev-pg
     restart: unless-stopped
     environment:
       POSTGRES_USER: root
       POSTGRES_PASSWORD: "123456"
       POSTGRES_DB: newhub
     ports:
-      - "5434:5432"
+      - "${NEWHUB_DEV_PG_PORT:-5434}:5432"
     volumes:
       - newhub_dev_pg:/var/lib/postgresql/data
     networks:
