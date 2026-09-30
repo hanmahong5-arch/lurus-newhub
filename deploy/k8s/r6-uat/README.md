@@ -13,6 +13,7 @@ There was no environment where UAT/e2e could run without touching production
 | PostgreSQL | db `newhub` | db `newhub_uat` (role `newhub_uat`) |
 | Redis | DB 2 | DB 3 |
 | GLOBAL_V2_RATE_LIMIT | 600 | **3000** (nightly e2e drives every request from one IP) |
+| CRITICAL_RATE_LIMIT | 20 / 20 min | **200** (audit read/export specs; e2e also runs after every deploy) |
 | OIDC | on | **off** (no IdP client for UAT; bridge login instead) |
 | Billing unified | on | **off** (never debit the real platform wallet) |
 | NATS quota events | on | **off** (never pollute LLM_EVENTS) |

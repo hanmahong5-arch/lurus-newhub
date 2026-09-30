@@ -141,6 +141,16 @@ spec:
             # is UAT-sized.
             - name: GLOBAL_V2_RATE_LIMIT
               value: "3000"
+            # The audit read/export endpoints sit behind the critical limiter
+            # (default 20 req / 20 min / ip). One e2e run spends ~10 of them
+            # from a single IP, and e2e is now dispatched after every deploy
+            # (docker-image-main.yml verify_rollout) as well as nightly, so two
+            # merges within 20 minutes 429'd the audit specs (measured
+            # 2026-09-30: 31 passed / 3 failed, all on /api/v2/admin/audit/*).
+            # Limiter stays ENABLED; only the budget is UAT-sized. Prod keeps
+            # the default.
+            - name: CRITICAL_RATE_LIMIT
+              value: "200"
             # Error rows go into the shared logs table (LogTypeError).
             # Retention is the log-retention leader task (cycle-13 L6): the
             # window comes from LOG_RETENTION_DAYS, which is UNSET here, so
