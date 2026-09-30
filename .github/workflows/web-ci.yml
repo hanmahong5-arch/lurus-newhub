@@ -185,7 +185,11 @@ jobs:
         with:
           bun-version: '1.3.10'
       - run: bun install --frozen-lockfile
-      - run: bunx playwright install --with-deps chromium
+      # --with-deps runs apt-get. The self-hosted pool is rootless with no real
+      # sudo, so there it failed before a single spec ran (every run from
+      # 09-25 to 09-30); its Chromium system packages are part of the machine
+      # definition instead (lurus-deploy local-ci/apt-packages.txt).
+      - run: bunx playwright install $([ "$RUNNER_ENVIRONMENT" = self-hosted ] || echo --with-deps) chromium
       - run: bun run test:e2e
         env:
           E2E_BASE_URL: ${{ secrets.E2E_BASE_URL || 'https://test-newhub.lurus.cn' }}
@@ -203,7 +207,7 @@ jobs:
         # results.json is written by the json reporter in web/playwright.config.ts.
         if: always()
         run: |
-          report=web/playwright-report/results.json
+          report=playwright-report/results.json  # job default working-directory is web/
           if [ ! -f "$report" ]; then
             echo "::error::$report is missing — the json reporter did not run, so the counts below cannot be checked. Do not read a green step as a green suite."
             exit 1
