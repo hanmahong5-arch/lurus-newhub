@@ -207,7 +207,7 @@ jobs:
         # results.json is written by the json reporter in web/playwright.config.ts.
         if: always()
         run: |
-          report=web/playwright-report/results.json
+          report=playwright-report/results.json  # job default working-directory is web/
           if [ ! -f "$report" ]; then
             echo "::error::$report is missing — the json reporter did not run, so the counts below cannot be checked. Do not read a green step as a green suite."
             exit 1
