@@ -16,6 +16,25 @@ selfHeal sync notices that commit and converges the cluster **without any
 further manual step**. This is now the default expectation for a STAGE
 deploy — no SSH, no operator action.
 
+### Automated post-deploy verification
+
+Nobody has to do the "did it actually land" check by hand anymore. When
+`bump_r6_manifest` pins a new digest (`bumped=true` — a no-op rebuild pins
+nothing and skips the rest), `docker-image-main.yml`'s `verify_rollout` job
+polls both `https://hub.lurus.cn/api/status` and
+`https://test-newhub.lurus.cn/api/status` every ~20s for up to 25 minutes
+until `.data.version` on both matches the build just pushed; a stuck rollout
+fails the job with `::error::` naming the stuck instance and the version it
+is still serving (the run's failure email is the alert — no dashboard to
+poll). On success it dispatches `web-ci.yml`'s `e2e` job against UAT without
+waiting for it, and leaves one PR comment naming the outcome with a link to
+that run; the e2e job itself follows up on the same PR with pass/fail once it
+finishes. Both comments carry a hidden `<!-- deploy-verify:VERSION -->` /
+`<!-- deploy-verify-e2e:VERSION -->` marker, so re-running the workflow
+updates the existing comment instead of spamming a new one. A direct push
+(no PR) is verified the same way but posts no comment — there's nowhere to
+put it.
+
 Verify a deploy landed:
 
 ```bash

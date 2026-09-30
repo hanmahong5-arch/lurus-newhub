@@ -182,6 +182,11 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: write
+    outputs:
+      # false when this build's digest matches what was already pinned (e.g.
+      # a doc-adjacent no-op rebuild) — verify_rollout below only makes sense
+      # when a new digest actually went out.
+      bumped: ${{ steps.commit.outputs.bumped }}
     env:
       VERSION: ${{ needs.build_and_push.outputs.version }}
       DIGEST: ${{ needs.build_and_push.outputs.digest }}
@@ -213,11 +218,14 @@ jobs:
           done
 
       - name: Commit & push ([skip ci])
+        id: commit
         run: |
           if git diff --quiet; then
             echo "digest unchanged — nothing to bump"
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "bumped=true" >> "$GITHUB_OUTPUT"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add $FILES
@@ -232,3 +240,120 @@ jobs:
           done
           echo "::error::could not push bump commit after 3 attempts"
           exit 1
+
+  # Close the OTHER half of the process gap: bump_r6_manifest only proves a
+  # digest was pinned in *git* — ArgoCD still has to notice, pull the image
+  # (the R6<->GHCR link has been the slow/flaky part historically, see
+  # doc/runbook/staging-deploy.md's CDN-outage section) and roll the pods
+  # before a merge is actually live. This job polls both instances' public
+  # /api/status until each reports this build's VERSION (25 min budget —
+  # generous next to a normal ArgoCD sync interval + rollout), so a stuck
+  # rollout pages the merger by email instead of waiting for someone to poll
+  # by hand. Once both are confirmed, it fires the UAT e2e suite
+  # (web-ci.yml's `e2e` job, same suite the nightly schedule runs) without
+  # blocking this runner on it, and leaves one PR comment naming the outcome
+  # + a link to the dispatched run; the e2e job itself posts a short
+  # pass/fail follow-up when it finishes. Every comment carries a hidden
+  # `<!-- deploy-verify:VERSION -->` / `<!-- deploy-verify-e2e:VERSION -->`
+  # marker so a workflow re-run updates the existing comment instead of
+  # spamming a new one.
+  verify_rollout:
+    name: Verify rollout reached prod + UAT
+    needs: [build_and_push, bump_r6_manifest]
+    if: needs.bump_r6_manifest.outputs.bumped == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    env:
+      VERSION: ${{ needs.build_and_push.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Poll prod + UAT until both serve this VERSION (25 min timeout)
+        run: |
+          set -u
+          PROD_URL="https://hub.lurus.cn/api/status"
+          UAT_URL="https://test-newhub.lurus.cn/api/status"
+          prod_ok=""; uat_ok=""
+          prod_seen="<unreachable>"; uat_seen="<unreachable>"
+          deadline=$((SECONDS + 25 * 60))
+          while [ "$SECONDS" -lt "$deadline" ] && { [ -z "$prod_ok" ] || [ -z "$uat_ok" ]; }; do
+            if [ -z "$prod_ok" ]; then
+              body=$(curl -fsS --max-time 10 "$PROD_URL" 2>/dev/null || true)
+              v=$(printf '%s' "$body" | jq -r '.data.version // empty' 2>/dev/null || true)
+              [ -n "$v" ] && prod_seen="$v"
+              [ "$v" = "$VERSION" ] && prod_ok=1
+              echo "poll: prod -> ${v:-<no response>}"
+            fi
+            if [ -z "$uat_ok" ]; then
+              body=$(curl -fsS --max-time 10 "$UAT_URL" 2>/dev/null || true)
+              v=$(printf '%s' "$body" | jq -r '.data.version // empty' 2>/dev/null || true)
+              [ -n "$v" ] && uat_seen="$v"
+              [ "$v" = "$VERSION" ] && uat_ok=1
+              echo "poll: uat  -> ${v:-<no response>}"
+            fi
+            { [ -z "$prod_ok" ] || [ -z "$uat_ok" ]; } && sleep 20
+          done
+          fail=0
+          if [ -z "$prod_ok" ]; then
+            echo "::error::prod (hub.lurus.cn) never reached ${VERSION} within 25 min — last seen '${prod_seen}'"
+            fail=1
+          fi
+          if [ -z "$uat_ok" ]; then
+            echo "::error::UAT (test-newhub.lurus.cn) never reached ${VERSION} within 25 min — last seen '${uat_seen}'"
+            fail=1
+          fi
+          exit $fail
+
+      - name: Dispatch UAT e2e (web-ci.yml), don't wait for it
+        id: dispatch
+        run: |
+          set -u
+          # PR number is looked up here too (not just in the comment step
+          # below) so it can ride along as a dispatch input — the e2e job
+          # has no other way to know which PR to report back to.
+          PR_NUMBER=$(gh api "/repos/${REPO}/commits/${{ github.sha }}/pulls" --jq '.[0].number // empty')
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+          payload=$(jq -n --arg pr "$PR_NUMBER" --arg version "$VERSION" \
+            '{ref:"main", inputs:{run_e2e:"true", pr_number:$pr, version:$version}}')
+          echo "$payload" > "$RUNNER_TEMP/dispatch.json"
+          gh api --method POST "/repos/${REPO}/actions/workflows/web-ci.yml/dispatches" \
+            --input "$RUNNER_TEMP/dispatch.json"
+
+          # Best-effort: find the run we just created so the PR comment can
+          # link straight to it instead of the workflow's run list. Not
+          # load-bearing — a miss just falls back to the workflow page below.
+          run_url=""
+          for _ in 1 2 3 4 5 6; do
+            sleep 5
+            # /runs is newest-first; the concurrency group on this workflow
+            # (docker-main-*) doesn't cover web-ci.yml, so in the rare case of
+            # a second concurrent manual dispatch this can point at the wrong
+            # one — acceptable since it's a convenience link, not the gate.
+            run_url=$(gh api "/repos/${REPO}/actions/workflows/web-ci.yml/runs?event=workflow_dispatch&per_page=5" \
+              --jq '.workflow_runs[0].html_url // empty' 2>/dev/null || true)
+            [ -n "$run_url" ] && break
+          done
+          [ -z "$run_url" ] && run_url="https://github.com/${REPO}/actions/workflows/web-ci.yml"
+          echo "run_url=${run_url}" >> "$GITHUB_OUTPUT"
+
+      - name: Post deploy-verify PR comment (idempotent)
+        if: steps.dispatch.outputs.pr_number != ''
+        run: |
+          set -u
+          PR_NUMBER="${{ steps.dispatch.outputs.pr_number }}"
+          RUN_URL="${{ steps.dispatch.outputs.run_url }}"
+          NOW=$(date -u +'%Y-%m-%d %H:%M UTC')
+          MARKER="<!-- deploy-verify:${VERSION} -->"
+          BODY=$(printf 'Deployed %s — prod \xe2\x9c\x93 UAT \xe2\x9c\x93 at %s; e2e: %s\n\n%s' \
+            "$VERSION" "$NOW" "$RUN_URL" "$MARKER")
+          existing=$(gh api "/repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" | head -1)
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "/repos/${REPO}/issues/comments/${existing}" -f body="$BODY"
+          else
+            gh api --method POST "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
+          fi

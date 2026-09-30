@@ -17,6 +17,18 @@ on:
         description: 'Run Playwright e2e against UAT (test-newhub.lurus.cn)'
         required: false
         default: 'false'
+      # The two below are set by docker-image-main.yml's verify_rollout job
+      # when it dispatches this run post-deploy; leave both blank for a plain
+      # manual run — the e2e job's follow-up comment step is skipped when
+      # pr_number is empty.
+      pr_number:
+        description: 'PR number to post the e2e result to (set by verify_rollout)'
+        required: false
+        default: ''
+      version:
+        description: 'Version string being verified (set by verify_rollout)'
+        required: false
+        default: ''
   # Nightly e2e against the isolated UAT instance (test-newhub.lurus.cn →
   # NodePort 30851 since the 2026-08-30 cutover). 19:00 UTC = 03:00 Beijing:
   # off working hours and clear of auto-pin rollouts.
@@ -162,6 +174,11 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.event.inputs.run_e2e == 'true') ||
       github.event_name == 'schedule'
     needs: test
+    # Only the deploy-verify follow-up comment step below needs this; the
+    # nightly schedule run posts nothing and this permission is a no-op for it.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -222,3 +239,35 @@ jobs:
           name: playwright-report
           path: web/playwright-report/
           retention-days: 14
+
+      # Closes the post-deploy verification loop's second half: verify_rollout
+      # (docker-image-main.yml) dispatched this run with pr_number/version set
+      # and does not wait for it, so this is the only place the merger learns
+      # whether e2e actually passed against the new digest. Runs regardless of
+      # job.status (always()); skipped entirely on the nightly schedule and on
+      # a plain manual dispatch, both of which leave pr_number blank (GitHub
+      # coerces the missing input to null, which compares equal to '').
+      - name: Post e2e result to the deploy PR (idempotent)
+        if: always() && github.event.inputs.pr_number != ''
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          VERSION: ${{ github.event.inputs.version }}
+          RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -u
+          icon="✗"
+          [ "$RESULT" = "success" ] && icon="✓"
+          MARKER="<!-- deploy-verify-e2e:${VERSION} -->"
+          BODY=$(printf 'e2e (UAT) for %s: %s %s — %s\n\n%s' \
+            "$VERSION" "$icon" "$RESULT" "$RUN_URL" "$MARKER")
+          existing=$(gh api "/repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" | head -1)
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "/repos/${REPO}/issues/comments/${existing}" -f body="$BODY"
+          else
+            gh api --method POST "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
+          fi
