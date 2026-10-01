@@ -1,0 +1,83 @@
+{
+  "name": "05b_model_pinned_hf_id_english_bundle",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "Which department should handle this?",
+          "criteria": {
+            "billing": "refunds, invoices, charges",
+            "tech": "bugs, outages",
+            "sales": "new purchases"
+          }
+        }
+      },
+      "model": "convaiinnovations/laya"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-length": "654",
+      "content-type": "application/json",
+      "server-timing": "inference;dur=294.12",
+      "x-inference-time-ms": "294.12"
+    },
+    "body": {
+      "model": "laya-rl-agent",
+      "answers": {
+        "dept": {
+          "type": "choice",
+          "choice": "billing",
+          "probabilities": {
+            "billing": 0.9908,
+            "tech": 0.004,
+            "sales": 0.0052
+          },
+          "confidence": 0.9468,
+          "answer_confidence": 0.9908,
+          "action": {
+            "act_probability": 1.0
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 60,
+        "output_tokens": 0,
+        "state_tokens": 25,
+        "state_tokens_dropped": 0,
+        "truncated": false,
+        "truncated_questions": []
+      },
+      "routing": {
+        "model": "english",
+        "repo": "convaiinnovations/laya",
+        "reason": "English Latin text",
+        "detection": {
+          "script": "latin",
+          "script_profile": {
+            "latin": 1.0
+          },
+          "language": "en",
+          "is_english": true,
+          "language_undecided": false,
+          "diacritic_rate": 0.0,
+          "non_latin_fraction": 0.0,
+          "mixed_segment": null
+        },
+        "workflow": null
+      }
+    }
+  },
+  "client_elapsed_ms": 298.1
+}

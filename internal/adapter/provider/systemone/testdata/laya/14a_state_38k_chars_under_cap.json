@@ -1,0 +1,84 @@
+{
+  "name": "14a_state_38k_chars_under_cap",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "<elided 37000 chars>"
+      },
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "Which department should handle this?",
+          "criteria": {
+            "billing": "refunds, invoices, charges",
+            "tech": "bugs, outages",
+            "sales": "new purchases"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-length": "665",
+      "content-type": "application/json",
+      "server-timing": "inference;dur=1962.32",
+      "x-inference-time-ms": "1962.32"
+    },
+    "body": {
+      "model": "laya-rl-agent",
+      "answers": {
+        "dept": {
+          "type": "choice",
+          "choice": "billing",
+          "probabilities": {
+            "billing": 0.8165,
+            "tech": 0.1084,
+            "sales": 0.0751
+          },
+          "confidence": 0.453,
+          "answer_confidence": 0.8165,
+          "action": {
+            "act_probability": 1.0
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 512,
+        "output_tokens": 0,
+        "state_tokens": 7006,
+        "state_tokens_dropped": 6529,
+        "truncated": true,
+        "truncated_questions": [
+          "dept"
+        ]
+      },
+      "routing": {
+        "model": "english",
+        "repo": "convaiinnovations/laya",
+        "reason": "English Latin text",
+        "detection": {
+          "script": "latin",
+          "script_profile": {
+            "latin": 1.0
+          },
+          "language": "en",
+          "is_english": true,
+          "language_undecided": false,
+          "diacritic_rate": 0.0,
+          "non_latin_fraction": 0.0,
+          "mixed_segment": null
+        },
+        "workflow": null
+      }
+    }
+  },
+  "client_elapsed_ms": 1966.9
+}

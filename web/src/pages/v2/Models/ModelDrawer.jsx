@@ -24,7 +24,19 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useState } from 'react';
 import HfDialog from '../../../components/hifi/HfDialog';
 import HfVendorIcon from '../../../components/hifi/HfVendorIcon';
-import { CAPABILITIES, fmtCompact, fmtMs, fmtPct, fmtUsd } from './catalog';
+import {
+  CAPABILITIES,
+  entryCanChat,
+  fmtCompact,
+  fmtMs,
+  fmtPct,
+  fmtUsd,
+} from './catalog';
+import {
+  isSystemOneOnly,
+  systemOneCurl,
+  systemOnePython,
+} from './systemOneSnippets';
 
 // capability → the relay path a client calls for it.
 export const CAPABILITY_PATH = {
@@ -36,6 +48,7 @@ export const CAPABILITY_PATH = {
   'image-generation': 'POST /v1/images/generations',
   'jina-rerank': 'POST /v1/rerank',
   'openai-video': 'POST /v1/video/generations',
+  systemone: 'POST /v1/systemone',
 };
 
 export const capLabel = (tr, c) => {
@@ -69,6 +82,7 @@ const Stat = ({ label, value, sub }) => (
 );
 
 const quickStart = (e, base) => {
+  if (isSystemOneOnly(e)) return systemOneCurl(e.id, base);
   if (
     e.capabilities.includes('embeddings') &&
     !e.capabilities.includes('openai')
@@ -84,7 +98,10 @@ const quickStart = (e, base) => {
   -d '{"model": "${e.id}", "messages": [{"role": "user", "content": "hello"}]}'`;
 };
 
-const quickStartPython = (e, base) => `from openai import OpenAI
+const quickStartPython = (e, base) =>
+  isSystemOneOnly(e)
+    ? systemOnePython(e.id, base)
+    : `from openai import OpenAI
 
 client = OpenAI(base_url="${base}/v1", api_key="YOUR_LURUS_API_KEY")
 resp = client.chat.completions.create(
@@ -289,7 +306,7 @@ const ModelDrawer = ({
       </pre>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-        {e.routable && (
+        {e.routable && entryCanChat(e) && (
           <button
             type='button'
             className='btn primary'

@@ -121,6 +121,12 @@ func TestChannelV2(c *gin.Context) {
 		return
 	}
 
+	// A System One server has no chat endpoint: probe /v1/systemone instead.
+	if isSystemOneChannelType(channel.Type) {
+		testChannelV2SystemOne(c, tenantCtx.UserID, channel, baseURL)
+		return
+	}
+
 	// Pick the first configured model as test model when available.
 	testReqBody := testChannelRequestBody
 	models := channel.GetModels()

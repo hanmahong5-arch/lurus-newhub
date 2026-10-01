@@ -35,5 +35,8 @@ const (
 	APITypeSubmodel
 	APITypeMiniMax
 	APITypeReplicate
+	// APITypeSystemOne serves both TypeSafe (hosted) and System One-compatible
+	// (self-hosted) channels.
+	APITypeSystemOne
 	APITypeDummy // this one is only for count, do not add any channel after this
 )

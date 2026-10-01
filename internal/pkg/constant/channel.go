@@ -54,7 +54,12 @@ const (
 	ChannelTypeDoubaoVideo    = 54
 	ChannelTypeSora           = 55
 	ChannelTypeReplicate      = 56
-	ChannelTypeDummy          // this one is only for count, do not add any channel after this
+	// ChannelTypeTypeSafe is hosted TypeSafe (Jev); ChannelTypeSystemOneCompatible
+	// is a self-hosted Jev-compatible server (e.g. Laya). Both speak
+	// POST /v1/systemone and share APITypeSystemOne.
+	ChannelTypeTypeSafe            = 57
+	ChannelTypeSystemOneCompatible = 58
+	ChannelTypeDummy               = 59 // this one is only for count, do not add any channel after this
 
 )
 
@@ -116,6 +121,8 @@ var ChannelBaseURLs = []string{
 	"https://ark.cn-beijing.volces.com",         //54
 	"https://api.openai.com",                    //55
 	"https://api.replicate.com",                 //56
+	"https://api.typesafe.ai",                   //57
+	"",                                          //58
 }
 
 var ChannelTypeNames = map[int]string{
@@ -172,6 +179,9 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeDoubaoVideo:    "DoubaoVideo",
 	ChannelTypeSora:           "Sora",
 	ChannelTypeReplicate:      "Replicate",
+
+	ChannelTypeTypeSafe:            "TypeSafe",
+	ChannelTypeSystemOneCompatible: "System One compatible (self-hosted)",
 }
 
 func GetChannelTypeName(channelType int) string {

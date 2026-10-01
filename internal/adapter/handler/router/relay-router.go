@@ -188,6 +188,11 @@ func SetRelayRouter(router *gin.Engine) {
 			handler.Relay(c, types.RelayFormatRerank)
 		})
 
+		// native System One decisions (TypeSafe wire); no batch endpoint, no streaming
+		httpRouter.POST("/systemone", func(c *gin.Context) {
+			handler.Relay(c, types.RelayFormatSystemOne)
+		})
+
 		// gemini relay routes
 		httpRouter.POST("/engines/:model/embeddings", func(c *gin.Context) {
 			handler.Relay(c, types.RelayFormatGemini)

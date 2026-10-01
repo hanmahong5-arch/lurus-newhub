@@ -1,0 +1,36 @@
+{
+  "name": "14d_body_over_2MiB",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": "<elided 2097162 chars>",
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "Which department should handle this?",
+          "criteria": {
+            "billing": "refunds, invoices, charges",
+            "tech": "bugs, outages",
+            "sales": "new purchases"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 413,
+    "headers": {
+      "content-length": "35",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "request body too large"
+    }
+  },
+  "client_elapsed_ms": 3.4
+}

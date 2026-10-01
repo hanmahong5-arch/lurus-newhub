@@ -30,6 +30,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/replicate"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/siliconflow"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/submodel"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/systemone"
 	taskali "github.com/LurusTech/lurus-hub/internal/adapter/provider/task/ali"
 	taskdoubao "github.com/LurusTech/lurus-hub/internal/adapter/provider/task/doubao"
 	taskGemini "github.com/LurusTech/lurus-hub/internal/adapter/provider/task/gemini"
@@ -97,6 +98,7 @@ func TestGetAdaptor_DispatchTable(t *testing.T) {
 		{constant.APITypeSubmodel, &submodel.Adaptor{}},
 		{constant.APITypeMiniMax, &minimax.Adaptor{}},
 		{constant.APITypeReplicate, &replicate.Adaptor{}},
+		{constant.APITypeSystemOne, &systemone.Adaptor{}},
 	}
 
 	seen := map[int]bool{}

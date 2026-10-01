@@ -1,0 +1,26 @@
+{
+  "name": "10k_wrong_content_type_form",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/x-www-form-urlencoded"
+    },
+    "body": {
+      "_raw_prefix": "state=x",
+      "_raw_len": 7
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-length": "44",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "request body must be valid JSON"
+    }
+  },
+  "client_elapsed_ms": 7.7
+}

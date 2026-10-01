@@ -485,6 +485,7 @@ func TestSetRelayRouter_NoToken_Rejected(t *testing.T) {
 		{http.MethodPost, "/v1/embeddings"},
 		{http.MethodPost, "/v1/audio/transcriptions"},
 		{http.MethodPost, "/v1/rerank"},
+		{http.MethodPost, "/v1/systemone"},
 		{http.MethodPost, "/v1/moderations"},
 		{http.MethodGet, "/v1/realtime"},
 		{http.MethodPost, "/suno/fetch"},

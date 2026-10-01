@@ -71,6 +71,7 @@ do).
 | [incident-response](incident-response.md) | General incident response framework |
 | [oidc-enable-activation](oidc-enable-activation.md) | Turning `OIDC_ENABLED` on (Lutu search is dark without it) — blast radius across four auth paths, and the order that keeps `/api/v2/admin/**` reachable |
 | [channel-auto-ban](channel-auto-ban.md) | Investigating why a channel flipped status with no operator action, or tuning `ChannelDisableThreshold`/`AutoTestChannelEnabled` |
+| [systemone-channels](systemone-channels.md) | Adding a TypeSafe (Jev) or self-hosted Jev-compatible (Laya) channel for `/v1/systemone`: model mapping, prices, error mapping, laya-serve sizing |
 | [platform-dependency-degraded](platform-dependency-degraded.md) | platform-core is down/slow, or any outbound dependency (Redis, NATS, webhook, bark/gotify, SMTP, provider admin calls) is hanging — what each caller does and the time bound it now has |
 | [graceful-drain](graceful-drain.md) | Tuning `GRACEFUL_SHUTDOWN_TIMEOUT`/`terminationGracePeriodSeconds`, or investigating a `graceful shutdown: budget exceeded` log line, a relay stream cut around a deploy window, or a `newhub_relay_5xx_elevated` WARNING that overlaps a rollout |
 | [privacy-erasure](privacy-erasure.md) | PIPL §47 账号擦除级联:六个步骤各处置了什么、`download_logs` 为什么不在级联里(写入时最小化)、以及 cycle-13 之前完成的请求需要一次性重放(O-erasure-backfill,带 SQL 配方与 4-eyes 要求) |

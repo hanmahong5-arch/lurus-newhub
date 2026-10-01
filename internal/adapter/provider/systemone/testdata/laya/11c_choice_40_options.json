@@ -1,0 +1,156 @@
+{
+  "name": "11c_choice_40_options",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {
+        "q": {
+          "type": "choice",
+          "instructions": "pick",
+          "criteria": {
+            "opt0": "label number 0",
+            "opt1": "label number 1",
+            "opt2": "label number 2",
+            "opt3": "label number 3",
+            "opt4": "label number 4",
+            "opt5": "label number 5",
+            "opt6": "label number 6",
+            "opt7": "label number 7",
+            "opt8": "label number 8",
+            "opt9": "label number 9",
+            "opt10": "label number 10",
+            "opt11": "label number 11",
+            "opt12": "label number 12",
+            "opt13": "label number 13",
+            "opt14": "label number 14",
+            "opt15": "label number 15",
+            "opt16": "label number 16",
+            "opt17": "label number 17",
+            "opt18": "label number 18",
+            "opt19": "label number 19",
+            "opt20": "label number 20",
+            "opt21": "label number 21",
+            "opt22": "label number 22",
+            "opt23": "label number 23",
+            "opt24": "label number 24",
+            "opt25": "label number 25",
+            "opt26": "label number 26",
+            "opt27": "label number 27",
+            "opt28": "label number 28",
+            "opt29": "label number 29",
+            "opt30": "label number 30",
+            "opt31": "label number 31",
+            "opt32": "label number 32",
+            "opt33": "label number 33",
+            "opt34": "label number 34",
+            "opt35": "label number 35",
+            "opt36": "label number 36",
+            "opt37": "label number 37",
+            "opt38": "label number 38",
+            "opt39": "label number 39"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-length": "1190",
+      "content-type": "application/json",
+      "server-timing": "inference;dur=626.62",
+      "x-inference-time-ms": "626.62"
+    },
+    "body": {
+      "model": "laya-rl-agent",
+      "answers": {
+        "q": {
+          "type": "choice",
+          "choice": "opt0",
+          "probabilities": {
+            "opt0": 0.0781,
+            "opt1": 0.0737,
+            "opt2": 0.0515,
+            "opt3": 0.0233,
+            "opt4": 0.0116,
+            "opt5": 0.0162,
+            "opt6": 0.0395,
+            "opt7": 0.0303,
+            "opt8": 0.0438,
+            "opt9": 0.042,
+            "opt10": 0.0513,
+            "opt11": 0.0316,
+            "opt12": 0.021,
+            "opt13": 0.0293,
+            "opt14": 0.0287,
+            "opt15": 0.0189,
+            "opt16": 0.0294,
+            "opt17": 0.0289,
+            "opt18": 0.0323,
+            "opt19": 0.034,
+            "opt20": 0.0298,
+            "opt21": 0.0266,
+            "opt22": 0.0221,
+            "opt23": 0.0253,
+            "opt24": 0.0283,
+            "opt25": 0.0094,
+            "opt26": 0.0114,
+            "opt27": 0.0111,
+            "opt28": 0.0248,
+            "opt29": 0.0358,
+            "opt30": 0.0129,
+            "opt31": 0.012,
+            "opt32": 0.0047,
+            "opt33": 0.0087,
+            "opt34": 0.0055,
+            "opt35": 0.0011,
+            "opt36": 0.0023,
+            "opt37": 0.0061,
+            "opt38": 0.0044,
+            "opt39": 0.0025
+          },
+          "confidence": 0.0678,
+          "answer_confidence": 0.0781,
+          "action": {
+            "act_probability": 1.0
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 193,
+        "output_tokens": 0,
+        "state_tokens": 25,
+        "state_tokens_dropped": 0,
+        "truncated": false,
+        "truncated_questions": []
+      },
+      "routing": {
+        "model": "english",
+        "repo": "convaiinnovations/laya",
+        "reason": "English Latin text",
+        "detection": {
+          "script": "latin",
+          "script_profile": {
+            "latin": 1.0
+          },
+          "language": "en",
+          "is_english": true,
+          "language_undecided": false,
+          "diacritic_rate": 0.0,
+          "non_latin_fraction": 0.0,
+          "mixed_segment": null
+        },
+        "workflow": null
+      }
+    }
+  },
+  "client_elapsed_ms": 632.2
+}

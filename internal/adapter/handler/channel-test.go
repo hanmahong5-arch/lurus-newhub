@@ -106,6 +106,7 @@ func probeChannel(channel *repo.Channel, testModel string, endpointType string, 
 			localErr: fmt.Errorf("%s channel test is not supported", channelTypeName),
 		}
 	}
+	endpointType = probeEndpointType(channel.Type, endpointType)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -119,7 +120,7 @@ func probeChannel(channel *repo.Channel, testModel string, endpointType string, 
 				testModel = strings.TrimSpace(models[0])
 			}
 			if testModel == "" {
-				testModel = "gpt-4o-mini"
+				testModel = probeFallbackModel(channel.Type, "gpt-4o-mini")
 			}
 		}
 	}
@@ -205,24 +206,7 @@ func probeChannel(channel *repo.Channel, testModel string, endpointType string, 
 	var relayFormat types.RelayFormat
 	if endpointType != "" {
 		// 根据指定的端点类型设置 relayFormat
-		switch constant.EndpointType(endpointType) {
-		case constant.EndpointTypeOpenAI:
-			relayFormat = types.RelayFormatOpenAI
-		case constant.EndpointTypeOpenAIResponse:
-			relayFormat = types.RelayFormatOpenAIResponses
-		case constant.EndpointTypeAnthropic:
-			relayFormat = types.RelayFormatClaude
-		case constant.EndpointTypeGemini:
-			relayFormat = types.RelayFormatGemini
-		case constant.EndpointTypeJinaRerank:
-			relayFormat = types.RelayFormatRerank
-		case constant.EndpointTypeImageGeneration:
-			relayFormat = types.RelayFormatOpenAIImage
-		case constant.EndpointTypeEmbeddings:
-			relayFormat = types.RelayFormatEmbedding
-		default:
-			relayFormat = types.RelayFormatOpenAI
-		}
+		relayFormat = relayFormatForEndpoint(constant.EndpointType(endpointType))
 	} else {
 		// 根据请求路径自动检测
 		relayFormat = types.RelayFormatOpenAI
@@ -335,6 +319,8 @@ func probeChannel(channel *repo.Channel, testModel string, endpointType string, 
 				newAPIError: types.NewError(errors.New("invalid rerank request type"), types.ErrorCodeConvertRequestFailed),
 			}
 		}
+	case relayconstant.RelayModeSystemOne:
+		convertedRequest, err = convertSystemOneProbeRequest(adaptor, c, info, request)
 	case relayconstant.RelayModeResponses:
 		// Response 请求 - request 已经是正确的类型
 		if responseReq, ok := request.(*dto.OpenAIResponsesRequest); ok {
@@ -546,6 +532,8 @@ func buildTestRequest(model string, endpointType string, channel *repo.Channel) 
 				Documents: []any{"Deep Learning is a subset of machine learning.", "Machine learning is a field of artificial intelligence."},
 				TopN:      2,
 			}
+		case constant.EndpointTypeSystemOne:
+			return buildSystemOneProbeRequest(model)
 		case constant.EndpointTypeOpenAIResponse:
 			// 返回 OpenAIResponsesRequest
 			return &dto.OpenAIResponsesRequest{

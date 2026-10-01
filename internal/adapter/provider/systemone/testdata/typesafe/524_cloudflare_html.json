@@ -1,0 +1,30 @@
+{
+  "name": "524_cloudflare_html",
+  "source": "synthetic: Cloudflare edge error page (non-JSON body); body is served verbatim as text/html",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": "Help! My payouts have been failing for 3 days.",
+      "model": "jev-latest",
+      "questions": {
+        "is_urgent": {
+          "type": "noul",
+          "instructions": "Does this convey urgency?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 524,
+    "headers": {
+      "content-type": "text/html; charset=UTF-8",
+      "server": "cloudflare"
+    },
+    "body": "<!DOCTYPE html><html><head><title>api.typesafe.ai | 524: A timeout occurred</title></head><body><h1>A timeout occurred</h1><p>Error code 524 sk-test-not-a-real-key</p></body></html>"
+  }
+}

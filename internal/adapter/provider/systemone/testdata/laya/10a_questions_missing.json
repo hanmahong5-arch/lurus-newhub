@@ -1,0 +1,27 @@
+{
+  "name": "10a_questions_missing",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      }
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-length": "68",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "request body must be an object with a 'questions' field"
+    }
+  },
+  "client_elapsed_ms": 4.4
+}

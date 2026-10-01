@@ -1,0 +1,289 @@
+{
+  "name": "11d_65_questions",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {
+        "q0": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q1": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q2": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q3": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q4": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q5": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q6": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q7": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q8": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q9": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q10": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q11": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q12": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q13": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q14": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q15": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q16": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q17": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q18": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q19": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q20": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q21": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q22": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q23": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q24": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q25": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q26": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q27": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q28": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q29": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q30": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q31": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q32": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q33": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q34": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q35": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q36": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q37": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q38": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q39": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q40": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q41": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q42": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q43": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q44": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q45": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q46": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q47": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q48": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q49": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q50": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q51": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q52": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q53": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q54": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q55": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q56": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q57": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q58": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q59": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q60": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q61": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q62": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q63": {
+          "type": "noul",
+          "instructions": "yes?"
+        },
+        "q64": {
+          "type": "noul",
+          "instructions": "yes?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 413,
+    "headers": {
+      "content-length": "41",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "too many questions (65 > 64)"
+    }
+  },
+  "client_elapsed_ms": 3.7
+}

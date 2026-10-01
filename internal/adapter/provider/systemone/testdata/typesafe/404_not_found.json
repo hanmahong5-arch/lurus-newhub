@@ -1,0 +1,38 @@
+{
+  "name": "404_not_found",
+  "source": "real probe against the hosted API, 2026-10-01 (no key / bad key)",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": "Help! My payouts have been failing for 3 days.",
+      "model": "jev-latest",
+      "questions": {
+        "is_urgent": {
+          "type": "noul",
+          "instructions": "Does this convey urgency?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "date": "Thu, 01 Oct 2026 06:20:26 GMT",
+      "content-type": "application/json",
+      "content-length": "22",
+      "server": "cloudflare",
+      "x-typesafe-request-id": "req_01a0f61f13bf7fca9ca7a71182db4ecd",
+      "cf-cache-status": "DYNAMIC",
+      "cf-ray": "a4395c8c2cfb2d6c-BOS",
+      "alt-svc": "h3=\":443\"; ma=86400"
+    },
+    "body": {
+      "detail": "Not Found"
+    }
+  }
+}

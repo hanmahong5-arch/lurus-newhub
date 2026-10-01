@@ -1,0 +1,93 @@
+{
+  "name": "15d_state_dict_nested_list",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "subject": "Refund",
+        "messages": [
+          {
+            "from": "user",
+            "text": "charged twice"
+          }
+        ]
+      },
+      "questions": {
+        "urgency": {
+          "type": "score",
+          "instructions": "How urgent is this?",
+          "criteria": [
+            "not urgent",
+            "soon",
+            "critical"
+          ]
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-length": "763",
+      "content-type": "application/json",
+      "server-timing": "inference;dur=257.02",
+      "x-inference-time-ms": "257.02"
+    },
+    "body": {
+      "model": "laya-rl-agent",
+      "answers": {
+        "urgency": {
+          "type": "score",
+          "score": 0.899,
+          "legend": {
+            "0": "not urgent",
+            "1": "soon",
+            "2": "critical"
+          },
+          "probabilities": {
+            "0": 0.2803,
+            "1": 0.5405,
+            "2": 0.1792
+          },
+          "confidence": 0.0923,
+          "answer_confidence": 0.5405,
+          "action": {
+            "act_probability": 1.0
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 53,
+        "output_tokens": 0,
+        "state_tokens": 25,
+        "state_tokens_dropped": 0,
+        "truncated": false,
+        "truncated_questions": []
+      },
+      "routing": {
+        "model": "english",
+        "repo": "convaiinnovations/laya",
+        "reason": "Latin script, language not identified and no non-English letters; using default (english)",
+        "detection": {
+          "script": "latin",
+          "script_profile": {
+            "latin": 1.0
+          },
+          "language": null,
+          "is_english": true,
+          "language_undecided": true,
+          "diacritic_rate": 0.0,
+          "non_latin_fraction": 0.0,
+          "mixed_segment": null
+        },
+        "workflow": null
+      }
+    }
+  },
+  "client_elapsed_ms": 260.9
+}

@@ -1,0 +1,37 @@
+{
+  "name": "10m_choice_duplicate_label_list",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {
+        "q": {
+          "type": "choice",
+          "instructions": "x",
+          "criteria": [
+            "a",
+            "a"
+          ]
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-length": "156",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "question 'q': choice label 1 ('a') repeats label 0; the labels are the answer keys, so every option needs its own (1, 1.0 and True are one key)"
+    }
+  },
+  "client_elapsed_ms": 4.6
+}

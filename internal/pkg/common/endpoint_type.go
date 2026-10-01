@@ -28,6 +28,10 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI}
 	case constant.ChannelTypeSora:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
+	case constant.ChannelTypeTypeSafe, constant.ChannelTypeSystemOneCompatible:
+		// Return early: the image-generation prefix below keys off the model
+		// name, and these channels never serve an image or chat endpoint.
+		return []constant.EndpointType{constant.EndpointTypeSystemOne}
 	default:
 		if IsOpenAIResponseOnlyModel(modelName) {
 			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIResponse}

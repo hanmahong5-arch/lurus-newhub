@@ -675,6 +675,7 @@
           "cap_image": "Image",
           "cap_rerank": "Rerank",
           "cap_video": "Video",
+          "cap_systemone": "System One",
           "per_m": "/M"
         },
         "compare": {
@@ -4072,6 +4073,8 @@
     "preset_tip_zhipu": "Get your API Key at open.bigmodel.cn/usercenter/apikeys",
     "preset_tip_xai": "Get your API Key at console.x.ai",
     "preset_tip_siliconcloud": "Get your API Key at cloud.siliconflow.cn/account/ak",
+    "preset_tip_typesafe": "Get your API key from your TypeSafe account. Serves jev-latest, jev-preview and jev-1.13.0 on POST /v1/systemone.",
+    "preset_tip_systemone": "Self-hosted System One-compatible server (e.g. Laya). Base URL is required, e.g. http://<host>:8000; the API key is optional. Set model_mapping: laya-english→english, laya-multilingual→multilingual, laya-typed-decisions→typed-decisions, laya-auto→auto.",
     "admin_action_add_channel": "Add Channel",
     "admin_action_create_token": "Create Token",
     "admin_action_view_logs": "View Logs",

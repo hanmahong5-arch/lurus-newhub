@@ -29,6 +29,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/replicate"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/siliconflow"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/submodel"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/systemone"
 	taskali "github.com/LurusTech/lurus-hub/internal/adapter/provider/task/ali"
 	taskdoubao "github.com/LurusTech/lurus-hub/internal/adapter/provider/task/doubao"
 	taskGemini "github.com/LurusTech/lurus-hub/internal/adapter/provider/task/gemini"
@@ -118,6 +119,8 @@ func GetAdaptor(apiType int) provider.Adaptor {
 		return &minimax.Adaptor{}
 	case constant.APITypeReplicate:
 		return &replicate.Adaptor{}
+	case constant.APITypeSystemOne:
+		return &systemone.Adaptor{}
 	}
 	return nil
 }

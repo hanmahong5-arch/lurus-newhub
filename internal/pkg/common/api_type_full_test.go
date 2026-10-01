@@ -45,6 +45,9 @@ func TestChannelType2APIType_FullMatrix(t *testing.T) {
 		constant.ChannelTypeSubmodel:       constant.APITypeSubmodel,
 		constant.ChannelTypeMiniMax:        constant.APITypeMiniMax,
 		constant.ChannelTypeReplicate:      constant.APITypeReplicate,
+
+		constant.ChannelTypeTypeSafe:            constant.APITypeSystemOne,
+		constant.ChannelTypeSystemOneCompatible: constant.APITypeSystemOne,
 	}
 	for channel, wantAPI := range cases {
 		got, ok := ChannelType2APIType(channel)

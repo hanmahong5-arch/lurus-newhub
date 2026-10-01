@@ -1,0 +1,36 @@
+{
+  "name": "10f_state_null",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": null,
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "Which department should handle this?",
+          "criteria": {
+            "billing": "refunds, invoices, charges",
+            "tech": "bugs, outages",
+            "sales": "new purchases"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-length": "32",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "'state' is required"
+    }
+  },
+  "client_elapsed_ms": 4.5
+}

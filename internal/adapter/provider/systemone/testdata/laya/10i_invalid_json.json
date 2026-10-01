@@ -1,0 +1,26 @@
+{
+  "name": "10i_invalid_json",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "_raw_prefix": "{not json",
+      "_raw_len": 9
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-length": "44",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "request body must be valid JSON"
+    }
+  },
+  "client_elapsed_ms": 3.5
+}

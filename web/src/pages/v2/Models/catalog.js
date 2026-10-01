@@ -44,7 +44,13 @@ export const CAPABILITIES = {
   'image-generation': ['cap_image', 'Image'],
   'jina-rerank': ['cap_rerank', 'Rerank'],
   'openai-video': ['cap_video', 'Video'],
+  systemone: ['cap_systemone', 'System One'],
 };
+
+// Whether the playground (chat completions) can run this entry. Unknown
+// capabilities count as yes, like the routable-list filter.
+export const entryCanChat = (e) =>
+  e.capabilities.length === 0 || e.capabilities.includes('openai');
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
@@ -133,8 +139,12 @@ export function buildCatalog({
         e.inputPerM = ratio * USD_PER_M_PER_RATIO * gr;
         const cr = num(p.completion_ratio);
         // completion_ratio 0/absent means "not configured" upstream, where
-        // billing falls back to 1 — show the input price, not $0.
-        e.outputPerM = e.inputPerM * (cr && cr > 0 ? cr : 1);
+        // billing falls back to 1 — show the input price, not $0. System One
+        // is the exception: it bills input tokens only, so its 0 is real.
+        const inputOnly = (p.supported_endpoint_types || []).includes(
+          'systemone',
+        );
+        e.outputPerM = inputOnly ? 0 : e.inputPerM * (cr && cr > 0 ? cr : 1);
         const cache = num(p.cache_ratio);
         e.cacheReadPerM = cache == null ? null : e.inputPerM * cache;
       }

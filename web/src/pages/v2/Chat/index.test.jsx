@@ -840,6 +840,41 @@ describe('Chat page', () => {
     expect(sendPayload.model).toBe('rt-beta');
   });
 
+  // A model whose endpoints do not include chat (a System One model speaks
+  // only POST /v1/systemone) must not be offered, nor become the default:
+  // picking it would send a chat completion that can only fail.
+  it('keeps non-chat models out of the picker and the default pick', async () => {
+    API.get.mockImplementation((url) => {
+      if (String(url).includes('/models/routable')) {
+        return Promise.resolve(
+          routableResponse([
+            {
+              id: 'jev-latest',
+              owned_by: 'typesafe',
+              supported_endpoint_types: ['systemone'],
+            },
+            {
+              id: 'rt-beta',
+              owned_by: 'custom',
+              supported_endpoint_types: ['openai'],
+            },
+          ]),
+        );
+      }
+      return Promise.resolve({
+        data: { success: true, data: { sessions: [] } },
+      });
+    });
+    render(<HFChat />);
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-model-select').value).toBe('rt-beta'),
+    );
+    const options = [
+      ...screen.getByTestId('chat-model-select').querySelectorAll('option'),
+    ].map((o) => o.value);
+    expect(options).toEqual(['rt-beta']);
+  });
+
   // 13b. Before the routable fetch resolves, the page must not have picked
   // ANY model (literal or otherwise) — the pre-resolve window is exactly
   // where a hardcoded vendor model would be observable and sendable, and

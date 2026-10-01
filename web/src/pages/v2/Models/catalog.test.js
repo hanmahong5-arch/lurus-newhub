@@ -94,6 +94,22 @@ describe('buildCatalog', () => {
     expect(e.outputPerM).toBe(2);
   });
 
+  it('shows a System One model with free output (it bills input tokens only)', () => {
+    const e = buildCatalog({
+      pricing: [
+        {
+          model_name: 'jev-latest',
+          quota_type: 0,
+          model_ratio: 0.021,
+          completion_ratio: 0,
+          supported_endpoint_types: ['systemone'],
+        },
+      ],
+    })[0];
+    expect(e.inputPerM).toBeCloseTo(0.042);
+    expect(e.outputPerM).toBe(0);
+  });
+
   it('marks priced-but-not-routable models as such', () => {
     const e = buildCatalog({
       pricing: [{ model_name: 'gpt-x', quota_type: 0, model_ratio: 1 }],

@@ -1,0 +1,33 @@
+{
+  "name": "10d_choice_missing_criteria",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {
+        "q": {
+          "type": "choice",
+          "instructions": "x"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-length": "116",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "question 'q': a choice question takes 'criteria' as a dict of label -> description, or a list of labels"
+    }
+  },
+  "client_elapsed_ms": 5.3
+}

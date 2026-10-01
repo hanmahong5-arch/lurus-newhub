@@ -78,6 +78,34 @@ describe('useRoutableModels', () => {
   // "asked, and the truthful answer is zero" — a page that renders an empty
   // state before the first response would flash it for every real customer
   // on every page load.
+  it('chatOnly drops models whose endpoints exclude chat, keeps unknown ones', async () => {
+    API.get.mockResolvedValueOnce({
+      data: {
+        success: true,
+        data: {
+          items: [
+            { id: 'so', supported_endpoint_types: ['systemone'] },
+            { id: 'emb', supported_endpoint_types: ['embeddings'] },
+            { id: 'chat', supported_endpoint_types: ['anthropic', 'openai'] },
+            { id: 'bare' },
+            { id: 'empty', supported_endpoint_types: [] },
+          ],
+        },
+      },
+    });
+
+    const { result } = renderHook(() =>
+      useRoutableModels('acme', { chatOnly: true }),
+    );
+
+    await waitFor(() => expect(result.current.resolved).toBe(true));
+    expect(result.current.items.map((m) => m.id)).toEqual([
+      'chat',
+      'bare',
+      'empty',
+    ]);
+  });
+
   it('resolved stays false until the first response lands, then true even for an empty list', async () => {
     let resolveFetch;
     API.get.mockImplementationOnce(

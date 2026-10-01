@@ -31,6 +31,17 @@ type Adaptor interface {
 	ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error)
 }
 
+// SystemOneAdaptor is implemented by adaptors that serve POST /v1/systemone.
+// It is deliberately separate from Adaptor so the other 30+ providers (and
+// test fakes) are untouched; the relay helper type-asserts it.
+type SystemOneAdaptor interface {
+	// ConvertSystemOneRequest builds the upstream request body.
+	ConvertSystemOneRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.SystemOneRequest) (any, error)
+	// SystemOneError classifies a non-200 upstream response into the error
+	// the relay returns, deciding caller fault vs channel fault.
+	SystemOneError(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) *types.NewAPIError
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

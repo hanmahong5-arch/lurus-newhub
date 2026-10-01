@@ -1,0 +1,31 @@
+{
+  "name": "10b_question_not_object_list",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": [
+        1,
+        2
+      ]
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-length": "42",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "'questions' must be an object"
+    }
+  },
+  "client_elapsed_ms": 23.5
+}

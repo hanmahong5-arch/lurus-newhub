@@ -118,7 +118,7 @@ type RelayInfo struct {
 	// SourceProduct above: the settlement path (PostConsumeQuota ->
 	// EnrichLogParams -> RecordConsumeLog) has no gin.Context to read from.
 	// It is a label, never an authorization input.
-	ProjectId int
+	ProjectId        int
 	WalletChargeCNY4 int64 // wallet charge PostConsumeQuota committed to, 0.0001 CNY (-> entity.Log.ChargedCNY4)
 	// SessionId is the caller-supplied X-Session-Id header, validated
 	// (printable ASCII, <=200 bytes) but never hashed: unlike EndUserHash it
@@ -666,6 +666,8 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 			return GenRelayInfoRerank(c, request), nil
 		}
 		return nil, errors.New("request is not a RerankRequest")
+	case types.RelayFormatSystemOne:
+		return systemOneRelayInfo(c, request)
 	case types.RelayFormatGemini:
 		return GenRelayInfoGemini(c, request), nil
 	case types.RelayFormatEmbedding:
@@ -688,10 +690,6 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 		return nil, errors.New("invalid relay format")
 	}
 }
-
-//func (info *RelayInfo) SetPromptTokens(promptTokens int) {
-//	info.promptTokens = promptTokens
-//}
 
 func (info *RelayInfo) SetEstimatePromptTokens(promptTokens int) {
 	info.estimatePromptTokens = promptTokens

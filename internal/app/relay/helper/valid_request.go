@@ -43,6 +43,8 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 		request, err = GetAndValidateEmbeddingRequest(c, relayMode)
 	case types.RelayFormatRerank:
 		request, err = GetAndValidateRerankRequest(c)
+	case types.RelayFormatSystemOne:
+		request, err = GetAndValidateSystemOneRequest(c)
 	case types.RelayFormatOpenAIAudio:
 		request, err = GetAndValidAudioRequest(c, relayMode)
 	case types.RelayFormatOpenAIRealtime:
@@ -353,4 +355,129 @@ func GetAndValidateGeminiBatchEmbeddingRequest(c *gin.Context) (*dto.GeminiBatch
 		return nil, err
 	}
 	return request, nil
+}
+
+// System One request caps. Hub-side limits, tighter than a self-hosted
+// server's, so one request cannot demand unbounded estimation work.
+const (
+	systemOneMaxQuestions     = 64
+	systemOneMaxChoiceOptions = 255
+	systemOneMaxScoreLevels   = 10
+	systemOneMinScoreLevels   = 2
+)
+
+// systemOneRefusedFields are top-level fields this endpoint never accepts:
+// the batch field (no batch endpoint) and the prediction-hook arguments
+// (a hook is a callable that has to live where the server runs).
+var systemOneRefusedFields = []string{
+	"states", "hooks", "on_predict_start", "on_predict_end", "hooks_raise", "hooks_timeout",
+}
+
+// GetAndValidateSystemOneRequest checks the body of POST /v1/systemone. Every
+// failure is a plain error so Relay answers 400 (a typed error would default
+// to 500); only a read failure is passed through unwrapped so an oversized
+// body still maps to 413.
+func GetAndValidateSystemOneRequest(c *gin.Context) (*dto.SystemOneRequest, error) {
+	body, err := common.GetRequestBody(c)
+	if err != nil {
+		return nil, err
+	}
+	var top map[string]json.RawMessage
+	if err := common.Unmarshal(body, &top); err != nil {
+		return nil, fmt.Errorf("invalid request body: %w", err)
+	}
+	for _, field := range systemOneRefusedFields {
+		if _, ok := top[field]; ok {
+			return nil, fmt.Errorf("field %q is not supported on this endpoint", field)
+		}
+	}
+	if err := checkSystemOneQuestionShapes(top["questions"]); err != nil {
+		return nil, err
+	}
+	req := &dto.SystemOneRequest{}
+	if err := common.Unmarshal(body, req); err != nil {
+		return nil, fmt.Errorf("invalid request body: %w", err)
+	}
+	if req.Model == "" {
+		return nil, errors.New("model is required")
+	}
+	if len(req.State) == 0 || string(req.State) == "null" {
+		return nil, errors.New("'state' is required")
+	}
+	if len(req.Questions) == 0 {
+		return nil, errors.New("'questions' must be a non-empty object")
+	}
+	if len(req.Questions) > systemOneMaxQuestions {
+		return nil, fmt.Errorf("too many questions: at most %d", systemOneMaxQuestions)
+	}
+	for id, q := range req.Questions {
+		if err := validateSystemOneQuestion(id, q); err != nil {
+			return nil, err
+		}
+	}
+	return req, nil
+}
+
+func validateSystemOneQuestion(id string, q dto.SystemOneQuestion) error {
+	switch q.Type {
+	case "choice", "score", "noul":
+	case "":
+		return fmt.Errorf("question '%s': type is required; use one of ['choice', 'noul', 'score']", id)
+	default:
+		return fmt.Errorf("question '%s': unknown type '%s'; use one of ['choice', 'noul', 'score']", id, q.Type)
+	}
+	if instr := string(q.Instructions); instr == "" || instr == "null" || instr == `""` {
+		return fmt.Errorf("question '%s': instructions is required", id)
+	}
+	switch q.Type {
+	case "choice":
+		n, ok := systemOneCriteriaSize(q.Criteria)
+		if !ok || n == 0 {
+			return fmt.Errorf("question '%s': a choice question takes 'criteria' as a non-empty object of label -> description, or a non-empty list of labels", id)
+		}
+		if n > systemOneMaxChoiceOptions {
+			return fmt.Errorf("question '%s': at most %d choice options", id, systemOneMaxChoiceOptions)
+		}
+	case "score":
+		var levels []json.RawMessage
+		if err := common.Unmarshal(q.Criteria, &levels); err != nil {
+			return fmt.Errorf("question '%s': a score question takes 'criteria' as a list of level descriptions", id)
+		}
+		if len(levels) < systemOneMinScoreLevels || len(levels) > systemOneMaxScoreLevels {
+			return fmt.Errorf("question '%s': a score question needs %d to %d levels", id, systemOneMinScoreLevels, systemOneMaxScoreLevels)
+		}
+	}
+	return nil
+}
+
+// systemOneCriteriaSize counts a choice question's options; ok is false when
+// criteria is neither an object nor a list.
+func systemOneCriteriaSize(raw json.RawMessage) (n int, ok bool) {
+	var asObject map[string]json.RawMessage
+	if common.Unmarshal(raw, &asObject) == nil && asObject != nil {
+		return len(asObject), true
+	}
+	var asList []json.RawMessage
+	if common.Unmarshal(raw, &asList) == nil && asList != nil {
+		return len(asList), true
+	}
+	return 0, false
+}
+
+// checkSystemOneQuestionShapes names the offending question when a value is
+// not an object, which a typed unmarshal would only report as a Go type error.
+func checkSystemOneQuestionShapes(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return errors.New("'questions' is required")
+	}
+	var qs map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &qs); err != nil || qs == nil {
+		return errors.New("'questions' must be an object")
+	}
+	for id, q := range qs {
+		if !strings.HasPrefix(strings.TrimSpace(string(q)), "{") {
+			return fmt.Errorf("question '%s' must be an object", id)
+		}
+	}
+	return nil
 }

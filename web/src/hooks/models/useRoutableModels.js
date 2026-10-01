@@ -17,13 +17,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { API } from '../../helpers';
 
 // The two wires the console builds example snippets for; supported_endpoint_types
 // can carry others (see internal/pkg/constant/endpoint_type.go).
 export const WIRE_OPENAI = 'openai';
 export const WIRE_ANTHROPIC = 'anthropic';
+
+// Not every routable model speaks chat completions (System One answers only
+// POST /v1/systemone, embeddings only /v1/embeddings). A list that does not
+// say is kept: the field is the backend's to fill, and absent means unknown.
+export const speaksChat = (m) => {
+  const t = m?.supported_endpoint_types;
+  return !Array.isArray(t) || t.length === 0 || t.includes(WIRE_OPENAI);
+};
 
 /*
  * One parser for GET /api/v2/:tenant_slug/models/routable, wired against
@@ -39,9 +47,9 @@ export const WIRE_ANTHROPIC = 'anthropic';
  */
 export const useRoutableModels = (
   tenantSlug,
-  { enabled = true, skipErrorHandler = false } = {},
+  { enabled = true, skipErrorHandler = false, chatOnly = false } = {},
 ) => {
-  const [items, setItems] = useState([]);
+  const [all, setAll] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   // resolved distinguishes "have not asked yet / still in flight" (render
@@ -65,7 +73,7 @@ export const useRoutableModels = (
         });
         if (cancelled) return;
         if (!res?.data?.success) {
-          setItems([]);
+          setAll([]);
           // `||` rather than `??`: an empty-string message is falsy and
           // would leave callers unable to tell a failure from an empty
           // (but successfully resolved) catalogue.
@@ -76,11 +84,11 @@ export const useRoutableModels = (
           return;
         }
         const d = res?.data?.data ?? {};
-        setItems(Array.isArray(d.items) ? d.items : []);
+        setAll(Array.isArray(d.items) ? d.items : []);
         setResolved(true);
       } catch (err) {
         if (cancelled) return;
-        setItems([]);
+        setAll([]);
         setError(err);
         setResolved(true);
       } finally {
@@ -92,6 +100,12 @@ export const useRoutableModels = (
       cancelled = true;
     };
   }, [tenantSlug, enabled, skipErrorHandler, refetchTick]);
+
+  // chatOnly is for pickers that send chat completions (Chat, Playground).
+  const items = useMemo(
+    () => (chatOnly ? all.filter(speaksChat) : all),
+    [all, chatOnly],
+  );
 
   return { items, loading, error, resolved, refetch };
 };

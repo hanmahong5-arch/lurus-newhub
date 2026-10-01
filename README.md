@@ -98,7 +98,7 @@ Full reference: [`.env.example`](./.env.example). Selected variables:
 |---|---|---|
 | V1 (legacy, single-tenant compat) | `/api/{user,token,channel,redemption,log,data,wallet}/*` | `router/api-router.go` |
 | V2 (multi-tenant) | `/api/v2/:tenant_slug/{tokens,projects,channels,logs,redemptions,sessions,models,pricing,billing,chat}/*`, `/api/v2/admin/{tenants,mappings,internal-keys,users,governance}/*` | RBAC (admin/user/billing_manager); `router/api-v2-router.go` |
-| Relay (OpenAI-compatible + native provider formats) | `POST /v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/*`, `/v1/rerank`; `GET /v1/models`, `/v1beta/models` | `router/relay-router.go` |
+| Relay (OpenAI-compatible + native provider formats) | `POST /v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/*`, `/v1/rerank`, `/v1/systemone` (typed decisions, TypeSafe-compatible); `GET /v1/models`, `/v1beta/models` | `router/relay-router.go` |
 | Internal (service-to-service) | `/internal/{user,token,quota,balance,currency,log,models,admin}/*` | Requires `Authorization: Bearer <internal key>` matched against a scope (`X-API-Key` still accepted but deprecated — answered with a `Warning: 299` header); `router/internal-api-router.go` |
 
 Published OpenAPI specs live in [`docs/openapi/`](./docs/openapi/) and are browsable
