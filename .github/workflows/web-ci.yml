@@ -268,10 +268,23 @@ jobs:
           MARKER="<!-- deploy-verify-e2e:${VERSION} -->"
           BODY=$(printf 'e2e (UAT) for %s: %s %s — %s\n\n%s' \
             "$VERSION" "$icon" "$RESULT" "$RUN_URL" "$MARKER")
-          existing=$(gh api "/repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" | head -1)
-          if [ -n "$existing" ]; then
-            gh api --method PATCH "/repos/${REPO}/issues/comments/${existing}" -f body="$BODY"
-          else
-            gh api --method POST "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
-          fi
+          # The comment only REPORTS; the job's verdict was decided by the steps
+          # above. GitHub's API drops a connection now and then ("error
+          # connecting to api.github.com" turned #242's green e2e red), so
+          # retry with backoff and, if it still fails, warn instead of failing.
+          upsert() {
+            local found existing
+            found=$(gh api "/repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+              --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id") || return 1
+            existing=$(printf '%s\n' "$found" | head -1)
+            if [ -n "$existing" ]; then
+              gh api --method PATCH "/repos/${REPO}/issues/comments/${existing}" -f body="$BODY" >/dev/null
+            else
+              gh api --method POST "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY" >/dev/null
+            fi
+          }
+          for attempt in 1 2 3 4; do
+            upsert && exit 0
+            sleep $((attempt * 10))
+          done
+          echo "::warning::could not post the PR comment after 4 attempts (GitHub API unreachable)"

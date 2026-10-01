@@ -314,13 +314,16 @@ jobs:
           # PR number is looked up here too (not just in the comment step
           # below) so it can ride along as a dispatch input — the e2e job
           # has no other way to know which PR to report back to.
-          PR_NUMBER=$(gh api "/repos/${REPO}/commits/${{ github.sha }}/pulls" --jq '.[0].number // empty')
+          # Same transient API drops as the comment step below; these two calls
+          # are load-bearing (no dispatch = no e2e), so retry, then fail.
+          retry() { local n; for n in 1 2 3 4; do "$@" && return 0; sleep $((n * 10)); done; return 1; }
+          PR_NUMBER=$(retry gh api "/repos/${REPO}/commits/${{ github.sha }}/pulls" --jq '.[0].number // empty')
           echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
 
           payload=$(jq -n --arg pr "$PR_NUMBER" --arg version "$VERSION" \
             '{ref:"main", inputs:{run_e2e:"true", pr_number:$pr, version:$version}}')
           echo "$payload" > "$RUNNER_TEMP/dispatch.json"
-          gh api --method POST "/repos/${REPO}/actions/workflows/web-ci.yml/dispatches" \
+          retry gh api --method POST "/repos/${REPO}/actions/workflows/web-ci.yml/dispatches" \
             --input "$RUNNER_TEMP/dispatch.json"
 
           # Best-effort: find the run we just created so the PR comment can
@@ -350,10 +353,23 @@ jobs:
           MARKER="<!-- deploy-verify:${VERSION} -->"
           BODY=$(printf 'Deployed %s — prod \xe2\x9c\x93 UAT \xe2\x9c\x93 at %s; e2e: %s\n\n%s' \
             "$VERSION" "$NOW" "$RUN_URL" "$MARKER")
-          existing=$(gh api "/repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" | head -1)
-          if [ -n "$existing" ]; then
-            gh api --method PATCH "/repos/${REPO}/issues/comments/${existing}" -f body="$BODY"
-          else
-            gh api --method POST "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
-          fi
+          # The comment only REPORTS; the job's verdict was decided by the steps
+          # above. GitHub's API drops a connection now and then ("error
+          # connecting to api.github.com" turned #242's green e2e red), so
+          # retry with backoff and, if it still fails, warn instead of failing.
+          upsert() {
+            local found existing
+            found=$(gh api "/repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+              --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id") || return 1
+            existing=$(printf '%s\n' "$found" | head -1)
+            if [ -n "$existing" ]; then
+              gh api --method PATCH "/repos/${REPO}/issues/comments/${existing}" -f body="$BODY" >/dev/null
+            else
+              gh api --method POST "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY" >/dev/null
+            fi
+          }
+          for attempt in 1 2 3 4; do
+            upsert && exit 0
+            sleep $((attempt * 10))
+          done
+          echo "::warning::could not post the PR comment after 4 attempts (GitHub API unreachable)"
