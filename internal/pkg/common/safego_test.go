@@ -216,3 +216,61 @@ func BenchmarkRawGoroutine(b *testing.B) {
 		<-done
 	}
 }
+
+func TestRunTickSafe_RecoversAndReports(t *testing.T) {
+	logged := hookPanicLog(t)
+
+	if RunTickSafe("t", func() {}) {
+		t.Fatal("clean tick reported as panicked")
+	}
+	if !RunTickSafe("task-a", func() { panic("boom") }) {
+		t.Fatal("panicking tick not reported")
+	}
+	msg := waitFor(t, logged, "tick panic log")
+	if !strings.Contains(msg, "task-a") || !strings.Contains(msg, "boom") {
+		t.Errorf("log %q should carry the task name and panic value", msg)
+	}
+}
+
+func TestSuperviseLoop_RestartsAfterPanic(t *testing.T) {
+	logged := hookPanicLog(t)
+	var runs atomic.Int32
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		SuperviseLoop(context.Background(), "loop-a", time.Millisecond, func(context.Context) {
+			if runs.Add(1) == 1 {
+				panic("first run dies")
+			}
+		})
+	}()
+
+	waitFor(t, done, "supervisor to return after the loop finished normally")
+	if got := runs.Load(); got != 2 {
+		t.Errorf("loop ran %d times, want 2 (panic, restart, normal return)", got)
+	}
+	waitFor(t, logged, "panic log")
+}
+
+func TestSuperviseLoop_CancelDuringBackoffStops(t *testing.T) {
+	hookPanicLog(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	var runs atomic.Int32
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		SuperviseLoop(ctx, "loop-b", time.Hour, func(context.Context) {
+			runs.Add(1)
+			panic("always")
+		})
+	}()
+	for runs.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	waitFor(t, done, "supervisor to stop on cancel instead of sleeping the backoff")
+	if runs.Load() != 1 {
+		t.Errorf("loop restarted after cancel: %d runs", runs.Load())
+	}
+}

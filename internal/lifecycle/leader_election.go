@@ -94,7 +94,9 @@ func (m *LeaderManager) Run(ctx context.Context) error {
 			}
 			return ctx.Err()
 		case <-ticker.C:
-			m.step(common.GetTimestamp())
+			// Recovered per tick: Run is a bare errgroup goroutine in
+			// cmd/server/main.go, so a panic here would exit the process.
+			common.RunTickSafe(m.name, func() { m.step(common.GetTimestamp()) })
 		}
 	}
 }
@@ -178,9 +180,16 @@ func (t *LeaderTask) Run(ctx context.Context) error {
 			// stamps the last-success gauge, so a stuck task shows up as a
 			// timestamp that stops advancing rather than one that keeps
 			// ticking regardless of outcome.
-			if err := t.fn(ctx); err == nil {
-				metrics.RecordLeaderTaskSuccess(t.name)
-			}
+			//
+			// A panic in fn is recovered per tick: the callers wrap Run in a
+			// one-shot SafeGoWithContext, so an unrecovered panic here would
+			// end the task for the pod's lifetime. A panicking tick does not
+			// stamp success, so the stuck-task gauge still goes stale.
+			common.RunTickSafe(t.name, func() {
+				if err := t.fn(ctx); err == nil {
+					metrics.RecordLeaderTaskSuccess(t.name)
+				}
+			})
 		}
 	}
 }

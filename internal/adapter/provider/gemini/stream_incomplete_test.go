@@ -4,8 +4,10 @@ package gemini
 // finishReason has abandoned the answer. Before 2026-09-02 the OpenAI-wire
 // caller got a usage frame + [DONE], the Claude-wire caller a message_stop and
 // the Gemini-wire passthrough caller a bare EOF: every SDK read a complete
-// answer. The partial output is still billed from the last cumulative
-// usageMetadata (pre-existing rule; the caller received it).
+// answer. Since 2026-09-30 the truncation is also RETURNED (after the in-band
+// frame is written, helper.SurfaceIncompleteStream): the relay loop then records
+// a breaker failure and bills nothing, where the old nil return settled the
+// partial output from the last usageMetadata as a success.
 
 import (
 	"context"
@@ -13,8 +15,26 @@ import (
 	"testing"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 )
+
+// assertSurfacedIncomplete pins the contract of the error a truncated stream
+// returns once its in-band frame is out: marked as rendered (so relay.go's
+// error renderer writes no second frame), skip-retry (bytes are out) and an
+// upstream failure (breaker).
+func assertSurfacedIncomplete(t *testing.T, apiErr *types.NewAPIError) {
+	t.Helper()
+	if apiErr == nil {
+		t.Fatal("truncated stream with content delivered must return the incomplete-stream error (nil is recorded as a breaker success)")
+	}
+	if !helper.IsIncompleteStreamSurfaced(apiErr) {
+		t.Errorf("error must carry the surfaced marker: %v", apiErr)
+	}
+	if !types.IsSkipRetryError(apiErr) || !types.IsUpstreamFailure(apiErr) {
+		t.Errorf("must be skip-retry and an upstream failure: %v", apiErr)
+	}
+}
 
 const (
 	geminiChunkA        = `{"candidates":[{"content":{"parts":[{"text":"Hel"}]},"index":0}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1,"totalTokenCount":3}}`
@@ -36,11 +56,12 @@ func TestGeminiChatStreamHandler_Incomplete_ErrorFrameOnEveryWire(t *testing.T) 
 			resp := respFromBody(200, sseBody(geminiChunkA, geminiChunkB))
 			defer func() { _ = resp.Body.Close() }()
 			usage, apiErr := GeminiChatStreamHandler(c, info, resp)
-			if apiErr != nil {
-				t.Fatalf("unexpected error: %v", apiErr)
+			assertSurfacedIncomplete(t, apiErr)
+			if usage.CompletionTokens != 0 || usage.TotalTokens != 0 {
+				t.Errorf("a truncated stream is not billed: usage = %+v", usage)
 			}
-			if usage.CompletionTokens != 2 {
-				t.Errorf("partial output still billed from the last usageMetadata: CompletionTokens = %d, want 2", usage.CompletionTokens)
+			if got := strings.Count(w.Body.String(), "upstream stream ended before completion"); got != 1 {
+				t.Errorf("exactly one in-band error frame expected, got %d", got)
 			}
 			out := w.Body.String()
 			if !strings.Contains(out, `"lo"`) {
@@ -100,11 +121,9 @@ func TestGeminiTextGenerationStreamHandler_Incomplete_GeminiErrorEnvelope(t *tes
 	resp := respFromBody(200, sseBody(geminiChunkA, geminiChunkB))
 	defer func() { _ = resp.Body.Close() }()
 	usage, apiErr := GeminiTextGenerationStreamHandler(c, info, resp)
-	if apiErr != nil {
-		t.Fatalf("unexpected error: %v", apiErr)
-	}
-	if usage.CompletionTokens != 2 {
-		t.Errorf("CompletionTokens = %d, want 2", usage.CompletionTokens)
+	assertSurfacedIncomplete(t, apiErr)
+	if usage.CompletionTokens != 0 || usage.TotalTokens != 0 {
+		t.Errorf("a truncated stream is not billed: usage = %+v", usage)
 	}
 	out := w.Body.String()
 	if !strings.HasSuffix(strings.TrimSpace(out), `data: {"error":{"code":502,"message":"upstream stream ended before completion","status":"UNAVAILABLE"}}`) {

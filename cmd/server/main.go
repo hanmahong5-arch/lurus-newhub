@@ -61,7 +61,28 @@ func billingOutboxTick(ctx context.Context) {
 	_ = app.ProcessBillingOutbox(ctx)
 }
 
-// runBillingOutboxLoop ticks the outbox drain until ctx is cancelled.
+// billingOutboxTickFn is the seam runBillingOutboxLoop ticks through, so a test
+// can inject a panicking pass.
+var billingOutboxTickFn = billingOutboxTick
+
+// loopRestartBackoff is how long goSupervised waits before restarting a
+// background loop that panicked.
+const loopRestartBackoff = 5 * time.Second
+
+// goSupervised runs a long-lived background loop on the errgroup. A bare g.Go
+// turns one unrecovered panic in any loop into a process exit that kills every
+// in-flight relay request; here the panic is recovered and the loop restarted
+// after loopRestartBackoff. A normal return (ctx cancelled) keeps the plain
+// errgroup semantics.
+func goSupervised(g *errgroup.Group, ctx context.Context, name string, loop func(ctx context.Context)) {
+	g.Go(func() error {
+		common.SuperviseLoop(ctx, name, loopRestartBackoff, loop)
+		return nil
+	})
+}
+
+// runBillingOutboxLoop ticks the outbox drain until ctx is cancelled. Each tick
+// is recovered on its own, so a panicking pass costs one drain, not the loop.
 func runBillingOutboxLoop(ctx context.Context, interval time.Duration) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -70,7 +91,7 @@ func runBillingOutboxLoop(ctx context.Context, interval time.Duration) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			billingOutboxTick(ctx)
+			common.RunTickSafe("billing-outbox", func() { billingOutboxTickFn(ctx) })
 		}
 	}
 }
@@ -129,9 +150,8 @@ func run(ctx context.Context, startTime time.Time) error {
 	// Slaves (NODE_TYPE=slave) do not participate and are never leader.
 	if common.IsMasterNode {
 		leaderManager := lifecycle.NewLeaderManager()
-		g.Go(func() error {
+		goSupervised(g, ctx, "leader-election", func(ctx context.Context) {
 			_ = leaderManager.Run(ctx)
-			return nil
 		})
 	}
 
@@ -156,22 +176,19 @@ func run(ctx context.Context, startTime time.Time) error {
 		}()
 
 		// Background task: sync channel cache
-		g.Go(func() error {
+		goSupervised(g, ctx, "sync-channel-cache", func(ctx context.Context) {
 			repo.SyncChannelCacheWithContext(ctx, common.SyncFrequency)
-			return nil
 		})
 	}
 
 	// Background task: sync options (hot reload config)
-	g.Go(func() error {
+	goSupervised(g, ctx, "sync-options", func(ctx context.Context) {
 		repo.SyncOptionsWithContext(ctx, common.SyncFrequency)
-		return nil
 	})
 
 	// Background task: update quota dashboard data
-	g.Go(func() error {
+	goSupervised(g, ctx, "update-quota-data", func(ctx context.Context) {
 		repo.UpdateQuotaDataWithContext(ctx)
-		return nil
 	})
 
 	// Background task: notify-limit cleanup (cycle 13 L11) — evicts expired
@@ -190,9 +207,8 @@ func run(ctx context.Context, startTime time.Time) error {
 		}
 		return nil
 	})
-	g.Go(func() error {
+	goSupervised(g, ctx, "hub-background", func(ctx context.Context) {
 		hub.Get().RunBackgroundTasks(ctx)
-		return nil
 	})
 
 	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
@@ -200,9 +216,8 @@ func run(ctx context.Context, startTime time.Time) error {
 		if err != nil {
 			return fmt.Errorf("failed to parse CHANNEL_UPDATE_FREQUENCY: %w", err)
 		}
-		g.Go(func() error {
+		goSupervised(g, ctx, "auto-update-channels", func(ctx context.Context) {
 			handler.AutomaticallyUpdateChannelsWithContext(ctx, frequency)
-			return nil
 		})
 	}
 
@@ -211,9 +226,8 @@ func run(ctx context.Context, startTime time.Time) error {
 		if err != nil {
 			return fmt.Errorf("failed to parse MODEL_SYNC_FREQUENCY: %w", err)
 		}
-		g.Go(func() error {
+		goSupervised(g, ctx, "auto-sync-channel-models", func(ctx context.Context) {
 			handler.AutoSyncChannelModelsWithContext(ctx, frequency)
-			return nil
 		})
 	}
 
@@ -223,51 +237,44 @@ func run(ctx context.Context, startTime time.Time) error {
 		if err != nil {
 			return fmt.Errorf("failed to parse OPENROUTER_FREE_SYNC_FREQUENCY: %w", err)
 		}
-		g.Go(func() error {
+		goSupervised(g, ctx, "openrouter-sync", func(ctx context.Context) {
 			openrouter_sync.AutoSyncWithContext(ctx, frequency)
-			return nil
 		})
 	}
 	// Hourly aggregator runs whenever OpenRouter sync is configured (any sync job present
 	// will benefit from ranking data). Kept independent of OPENROUTER_FREE_SYNC_FREQUENCY
 	// so manual triggers still get fresh ranks even when scheduling is disabled.
 	if common.IsMasterNode {
-		g.Go(func() error {
+		goSupervised(g, ctx, "openrouter-aggregate", func(ctx context.Context) {
 			openrouter_sync.AutoAggregateWithContext(ctx)
-			return nil
 		})
 		// OpenRouter pool reaper: re-enables keys whose rate-limit cooldown has expired.
 		// Runs even when OPENROUTER_FREE_SYNC_FREQUENCY is unset — pool cooldown is
 		// triggered by live relay traffic, not by the sync feature.
-		g.Go(func() error {
+		goSupervised(g, ctx, "openrouter-reap", func(ctx context.Context) {
 			openrouter_pool.AutoReapWithContext(ctx)
-			return nil
 		})
 	}
 
 	// Background task: automatically test channels
-	g.Go(func() error {
+	goSupervised(g, ctx, "auto-test-channels", func(ctx context.Context) {
 		handler.AutomaticallyTestChannelsWithContext(ctx)
-		return nil
 	})
 
 	// Background task: active per-model health prober for pooled channels
 	// (internal/app/modelprobe) — probes every model of a multi-model
 	// channel individually, not just the channel's first/TestModel model.
 	// Leader-gated and no-op unless model_probe_setting.enabled is set.
-	g.Go(func() error {
+	goSupervised(g, ctx, "model-prober", func(ctx context.Context) {
 		handler.StartModelProber(ctx)
-		return nil
 	})
 
 	if common.IsMasterNode && constant.UpdateTask {
-		g.Go(func() error {
+		goSupervised(g, ctx, "update-image-tasks", func(ctx context.Context) {
 			handler.UpdateMidjourneyTaskBulkWithContext(ctx)
-			return nil
 		})
-		g.Go(func() error {
+		goSupervised(g, ctx, "update-tasks", func(ctx context.Context) {
 			handler.UpdateTaskBulkWithContext(ctx)
-			return nil
 		})
 	}
 
@@ -340,9 +347,8 @@ func run(ctx context.Context, startTime time.Time) error {
 			defer cancel()
 			return pprofServer.Shutdown(shutdownCtx)
 		})
-		g.Go(func() error {
+		goSupervised(g, ctx, "system-monitor", func(ctx context.Context) {
 			common.MonitorWithContext(ctx)
-			return nil
 		})
 	}
 
@@ -380,16 +386,23 @@ func run(ctx context.Context, startTime time.Time) error {
 	// instead of each guessing its own Domain/Secure/SameSite.
 	sessionOpts := middleware.SessionCookieBaseOptions()
 	sessionOpts.MaxAge = 7776000 // 90 days
+	// Refuse to boot with a cookie Domain the OIDC callback host is outside of:
+	// the browser would drop the session cookie and every SSO login would end
+	// logged out, silently.
+	if err := ValidateSessionCookieDomain(os.Getenv("OIDC_ENABLED") == "true", sessionOpts.Domain, os.Getenv("OIDC_REDIRECT_URI")); err != nil {
+		return err
+	}
 	var store sessions.Store
 	if redisURL := os.Getenv("REDIS_CONN_STRING"); redisURL != "" {
 		redisStore, redisAddr, redisDB, err := newRedisSessionStore(redisURL, []byte(common.SessionSecret))
 		if err != nil {
-			common.SysLog("Failed to create Redis session store, falling back to cookie: " + err.Error())
-			store = cookie.NewStore([]byte(common.SessionSecret))
+			// No cookie fallback: siblings use Redis sessions, and a pod on a
+			// different store would reject every session they issued.
+			common.SysError(fmt.Sprintf("Session store: Redis (%s db=%d) not reachable at boot, sessions fail until it is: %v", redisAddr, redisDB, err))
 		} else {
-			store = redisStore
 			common.SysLog(fmt.Sprintf("Session store: Redis (%s db=%d)", redisAddr, redisDB))
 		}
+		store = redisStore
 	} else {
 		store = cookie.NewStore([]byte(common.SessionSecret))
 		common.SysLog("Session store: cookie")
@@ -582,10 +595,12 @@ func InitResources(ctx context.Context) error {
 		return err
 	}
 
-	// Initialize Redis
+	// Initialize Redis. Non-fatal like Meilisearch/OIDC/NATS below: InitRedisClient
+	// keeps the client (go-redis reconnects per command) and health reports Redis
+	// as degraded, so a Redis blip at boot must not crash-loop the gateway.
 	err = common.InitRedisClient()
 	if err != nil {
-		return err
+		common.SysError(fmt.Sprintf("Failed to initialize Redis, continuing degraded: %v", err))
 	}
 
 	// Initialize Meilisearch

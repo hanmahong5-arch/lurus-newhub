@@ -180,9 +180,8 @@ func TestOaiResponsesStreamHandler_StashesResponseIdBeforeCompletion(t *testing.
 	body := `data: {"type":"response.created","response":{"id":"resp_early_stash","status":"in_progress"}}` + "\n\n"
 	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
 
-	if _, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp); apiErr != nil {
-		t.Fatalf("unexpected error: %v", apiErr.Error())
-	}
+	_, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp)
+	assertSurfacedIncomplete(t, apiErr) // truncated after the first event: the failure is reported, the id is still stashed
 	got, exists := w.ctx.Get("responses_id")
 	if !exists {
 		t.Fatal("responses_id was not stashed — the mutation 'only stash on response.completed' makes this red")

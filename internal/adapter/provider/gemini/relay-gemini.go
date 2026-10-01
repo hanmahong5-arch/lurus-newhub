@@ -1208,17 +1208,28 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 		return usage, err
 	}
 
+	// Incomplete and nothing delivered yet: fail over (retryable error, zero
+	// usage, nothing written) instead of the in-band frame below, whose nil
+	// return would be recorded as breaker success.
+	if !complete {
+		if apiErr := helper.FailoverIncompleteStream(c, info); apiErr != nil {
+			return &dto.Usage{}, apiErr
+		}
+	}
+
 	// No finishReason ever arrived: the upstream stopped mid-answer. Every
 	// chunk already went out through handleStream, so the caller gets its
 	// wire's error frame instead of the usage frame + [DONE] / Claude-wire
 	// message_stop that would dress the partial answer up as a complete one.
 	// When the caller itself hung up there is nobody left to tell.
 	if !complete && helper.ClientListening(c, info) {
-		helper.StreamError(c, info.RelayFormat, helper.ReportIncompleteStream(c, info))
+		apiErr := helper.SurfaceIncompleteStream(c, info.RelayFormat, info)
 		if info.ClaudeConvertInfo != nil {
 			info.Done = true
 		}
-		return usage, nil
+		// Error return: the relay loop records a breaker failure and releases the
+		// pre-consumed quota instead of billing the partial output.
+		return &dto.Usage{}, apiErr
 	}
 
 	response := helper.GenerateFinalUsageResponse(id, createAt, info.UpstreamModelName, *usage)

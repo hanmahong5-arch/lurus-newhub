@@ -413,8 +413,10 @@ func NewJWKSManagerWithContext(ctx context.Context, jwksURI string) *JWKSManager
 	}
 
 	// Start background refresh with context
+	// Supervised so a panic in one refresh restarts the loop instead of
+	// leaving the key set frozen until the pod restarts.
 	common.SafeGoWithContext(ctx, func(c context.Context) {
-		m.autoRefreshWithContext(c)
+		common.SuperviseLoop(c, "oidc-jwks-refresh", 5*time.Second, m.autoRefreshWithContext)
 	})
 
 	return m

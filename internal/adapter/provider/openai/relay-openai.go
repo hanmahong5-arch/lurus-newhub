@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/openrouter"
@@ -185,6 +186,18 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		return true
 	}, &sawDone)
 
+	// Incomplete before the caller received anything (the newest chunk is held
+	// back, so it counts as undelivered): fail over instead of answering
+	// in-band. Must run before the held-back chunk is flushed below. Nothing
+	// is billed and nothing is written; see helper.FailoverIncompleteStream.
+	// Streams that already delivered frames fall through to the in-band error
+	// further down.
+	if !sawDone && !streamSawFinish(streamItems) {
+		if apiErr := helper.FailoverIncompleteStream(c, info); apiErr != nil {
+			return &dto.Usage{}, apiErr
+		}
+	}
+
 	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if isAudioModel && secondLastStreamData != "" {
 		var streamResp struct {
@@ -267,8 +280,10 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	// normal end (it is still not billed, above). When the caller itself hung
 	// up there is nobody left to tell.
 	if !sawDone && !streamSawFinish(streamItems) && helper.ClientListening(c, info) {
-		HandleIncompleteStream(c, info, lastStreamData)
-		return usage, nil
+		// Nothing is billed (usage is zeroed above). The error return is what
+		// makes the relay loop record a breaker failure and release the
+		// pre-consumed quota; its renderer skips the already-written frame.
+		return usage, HandleIncompleteStream(c, info, lastStreamData)
 	}
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
@@ -408,9 +423,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	receiveChan := make(chan []byte, 100)
 	errChan := make(chan error, 2)
 
-	usage := &dto.RealtimeUsage{}
-	localUsage := &dto.RealtimeUsage{}
-	sumUsage := &dto.RealtimeUsage{}
+	ledger := &realtimeLedger{}
 
 	gopool.Go(func() {
 		defer func() {
@@ -453,10 +466,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					return
 				}
 				logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
-				localUsage.TotalTokens += textToken + audioToken
-				localUsage.InputTokens += textToken + audioToken
-				localUsage.InputTokenDetails.TextTokens += textToken
-				localUsage.InputTokenDetails.AudioTokens += audioToken
+				ledger.addLocalInput(textToken, audioToken)
 
 				err = helper.WssString(c, targetConn, string(message))
 				if err != nil {
@@ -502,23 +512,13 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				if realtimeEvent.Type == dto.RealtimeEventTypeResponseDone {
 					realtimeUsage := realtimeEvent.Response.Usage
 					if realtimeUsage != nil {
-						usage.TotalTokens += realtimeUsage.TotalTokens
-						usage.InputTokens += realtimeUsage.InputTokens
-						usage.OutputTokens += realtimeUsage.OutputTokens
-						usage.InputTokenDetails.AudioTokens += realtimeUsage.InputTokenDetails.AudioTokens
-						usage.InputTokenDetails.CachedTokens += realtimeUsage.InputTokenDetails.CachedTokens
-						usage.InputTokenDetails.TextTokens += realtimeUsage.InputTokenDetails.TextTokens
-						usage.OutputTokenDetails.AudioTokens += realtimeUsage.OutputTokenDetails.AudioTokens
-						usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
-						err := preConsumeUsage(c, info, usage, sumUsage)
-						if err != nil {
+						// The ledger moves the usage into the running sum under its
+						// lock; the quota call below runs outside it.
+						billed := ledger.settleUpstream(realtimeUsage)
+						if err := app.PreWssConsumeQuota(c, info, &billed); err != nil {
 							errChan <- fmt.Errorf("error consume usage: %v", err)
 							return
 						}
-						// 本次计费完成，清除
-						usage = &dto.RealtimeUsage{}
-
-						localUsage = &dto.RealtimeUsage{}
 					} else {
 						textToken, audioToken, err := app.CountTokenRealtime(info, *realtimeEvent, info.UpstreamModelName)
 						if err != nil {
@@ -526,23 +526,14 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 							return
 						}
 						logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
-						localUsage.TotalTokens += textToken + audioToken
 						info.IsFirstRequest = false
-						localUsage.InputTokens += textToken + audioToken
-						localUsage.InputTokenDetails.TextTokens += textToken
-						localUsage.InputTokenDetails.AudioTokens += audioToken
-						err = preConsumeUsage(c, info, localUsage, sumUsage)
-						if err != nil {
+						billed := ledger.settleLocalInput(textToken, audioToken)
+						if err := app.PreWssConsumeQuota(c, info, &billed); err != nil {
 							errChan <- fmt.Errorf("error consume usage: %v", err)
 							return
 						}
-						// 本次计费完成，清除
-						localUsage = &dto.RealtimeUsage{}
-						// print now usage
 					}
-					logger.LogInfo(c, fmt.Sprintf("realtime streaming sumUsage: %v", sumUsage))
-					logger.LogInfo(c, fmt.Sprintf("realtime streaming localUsage: %v", localUsage))
-					logger.LogInfo(c, fmt.Sprintf("realtime streaming localUsage: %v", localUsage))
+					logger.LogInfo(c, fmt.Sprintf("realtime streaming sumUsage: %v", ledger.sumSnapshot()))
 
 				} else if realtimeEvent.Type == dto.RealtimeEventTypeSessionUpdated || realtimeEvent.Type == dto.RealtimeEventTypeSessionCreated {
 					realtimeSession := realtimeEvent.Session
@@ -558,10 +549,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						return
 					}
 					logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
-					localUsage.TotalTokens += textToken + audioToken
-					localUsage.OutputTokens += textToken + audioToken
-					localUsage.OutputTokenDetails.TextTokens += textToken
-					localUsage.OutputTokenDetails.AudioTokens += audioToken
+					ledger.addLocalOutput(textToken, audioToken)
 				}
 
 				err = helper.WssString(c, clientConn, string(message))
@@ -587,17 +575,97 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	case <-c.Done():
 	}
 
-	if usage.TotalTokens != 0 {
-		_ = preConsumeUsage(c, info, usage, sumUsage)
+	// The reader goroutines may still be running here, so drain under the lock.
+	if local := ledger.drainLocal(); local.TotalTokens != 0 {
+		_ = app.PreWssConsumeQuota(c, info, &local)
 	}
 
-	if localUsage.TotalTokens != 0 {
-		_ = preConsumeUsage(c, info, localUsage, sumUsage)
-	}
+	sum := ledger.sumSnapshot()
+	return nil, &sum
+}
 
-	// check usage total tokens, if 0, use local usage
+// realtimeLedger holds the usage counters of a realtime session. The
+// client-reader and target-reader goroutines both feed them while the handler
+// goroutine reads them at teardown, so every access goes through mu. Billing
+// (PreWssConsumeQuota, a DB call) runs on the returned snapshots, never while
+// holding the lock.
+type realtimeLedger struct {
+	mu    sync.Mutex
+	local dto.RealtimeUsage // locally counted tokens not yet billed
+	sum   dto.RealtimeUsage // everything billed so far
+}
 
-	return nil, sumUsage
+func (l *realtimeLedger) addLocalInput(text, audio int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	addLocalInput(&l.local, text, audio)
+}
+
+func (l *realtimeLedger) addLocalOutput(text, audio int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.local.TotalTokens += text + audio
+	l.local.OutputTokens += text + audio
+	l.local.OutputTokenDetails.TextTokens += text
+	l.local.OutputTokenDetails.AudioTokens += audio
+}
+
+// settleUpstream adds an upstream response.done usage to the running sum and
+// returns the amount to bill. The locally counted tokens are dropped: the
+// upstream figure supersedes them.
+func (l *realtimeLedger) settleUpstream(u *dto.RealtimeUsage) dto.RealtimeUsage {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	billed := *u
+	addRealtimeUsage(&l.sum, &billed)
+	l.local = dto.RealtimeUsage{}
+	return billed
+}
+
+// settleLocalInput is the fallback for a response.done without usage: the
+// locally counted tokens plus this event's own are billed instead.
+func (l *realtimeLedger) settleLocalInput(text, audio int) dto.RealtimeUsage {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	addLocalInput(&l.local, text, audio)
+	billed := l.local
+	addRealtimeUsage(&l.sum, &billed)
+	l.local = dto.RealtimeUsage{}
+	return billed
+}
+
+// drainLocal takes the locally counted tokens not yet billed into the sum.
+func (l *realtimeLedger) drainLocal() dto.RealtimeUsage {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	local := l.local
+	addRealtimeUsage(&l.sum, &local)
+	l.local = dto.RealtimeUsage{}
+	return local
+}
+
+func (l *realtimeLedger) sumSnapshot() dto.RealtimeUsage {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sum
+}
+
+func addLocalInput(dst *dto.RealtimeUsage, text, audio int) {
+	dst.TotalTokens += text + audio
+	dst.InputTokens += text + audio
+	dst.InputTokenDetails.TextTokens += text
+	dst.InputTokenDetails.AudioTokens += audio
+}
+
+func addRealtimeUsage(dst, src *dto.RealtimeUsage) {
+	dst.TotalTokens += src.TotalTokens
+	dst.InputTokens += src.InputTokens
+	dst.OutputTokens += src.OutputTokens
+	dst.InputTokenDetails.CachedTokens += src.InputTokenDetails.CachedTokens
+	dst.InputTokenDetails.TextTokens += src.InputTokenDetails.TextTokens
+	dst.InputTokenDetails.AudioTokens += src.InputTokenDetails.AudioTokens
+	dst.OutputTokenDetails.TextTokens += src.OutputTokenDetails.TextTokens
+	dst.OutputTokenDetails.AudioTokens += src.OutputTokenDetails.AudioTokens
 }
 
 func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.RealtimeUsage, totalUsage *dto.RealtimeUsage) error {
@@ -605,17 +673,8 @@ func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.R
 		return fmt.Errorf("invalid usage pointer")
 	}
 
-	totalUsage.TotalTokens += usage.TotalTokens
-	totalUsage.InputTokens += usage.InputTokens
-	totalUsage.OutputTokens += usage.OutputTokens
-	totalUsage.InputTokenDetails.CachedTokens += usage.InputTokenDetails.CachedTokens
-	totalUsage.InputTokenDetails.TextTokens += usage.InputTokenDetails.TextTokens
-	totalUsage.InputTokenDetails.AudioTokens += usage.InputTokenDetails.AudioTokens
-	totalUsage.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
-	totalUsage.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
-	// clear usage
-	err := app.PreWssConsumeQuota(ctx, info, usage)
-	return err
+	addRealtimeUsage(totalUsage, usage)
+	return app.PreWssConsumeQuota(ctx, info, usage)
 }
 
 func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {

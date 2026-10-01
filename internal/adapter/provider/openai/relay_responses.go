@@ -148,6 +148,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var usage = &dto.Usage{PromptTokensIncludeCached: true}
 	var responseTextBuilder strings.Builder
 
+	// sawTerminal: the upstream ended the stream itself. The Responses wire has
+	// no [DONE]; its terminator is one of the typed events below (a bare
+	// [DONE], which some compatible vendors append, counts too — sawDone). A
+	// stream that stops without any of them was abandoned (idle timeout, reset,
+	// EOF) and, like the chat-completions handler, is neither billed nor
+	// presented as a normal end.
+	var sawTerminal bool
+	var sawDone bool
+
 	helper.StreamScannerHandler(c, resp, info, func(data string) bool {
 
 		// 检查当前数据是否包含 completed 状态和 usage 信息
@@ -172,7 +181,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				c.Set("responses_id", streamResponse.Response.ID)
 			}
 			switch streamResponse.Type {
-			case "response.completed":
+			case "error":
+				// Upstream's own in-band error was already forwarded above;
+				// the stream is over from the wire's point of view.
+				sawTerminal = true
+			case "response.completed", "response.incomplete", "response.failed":
+				// All three end the response and may carry the final usage
+				// (incomplete = max_output_tokens / content filter hit, which
+				// the upstream bills); the caller already holds the event.
+				sawTerminal = true
 				if streamResponse.Response != nil {
 					if streamResponse.Response.Usage != nil {
 						if streamResponse.Response.Usage.InputTokens != 0 {
@@ -215,7 +232,23 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 		}
 		return true
-	})
+	}, &sawDone)
+
+	// No terminal event: the upstream stopped mid-answer. Nothing is billed
+	// (the partial text used to be estimated into a charge and the stream ended
+	// as if it had completed). With nothing delivered yet the attempt fails
+	// over; once frames have gone out the caller gets the in-band error frame
+	// (the same OpenAI-wire shape the chat handler uses: the SDK raises on a
+	// frame carrying an "error" key). A caller that hung up gets nothing.
+	if !sawTerminal && !sawDone {
+		if apiErr := helper.FailoverIncompleteStream(c, info); apiErr != nil {
+			return &dto.Usage{}, apiErr
+		}
+		if helper.ClientListening(c, info) {
+			return &dto.Usage{PromptTokensIncludeCached: true}, helper.SurfaceIncompleteStream(c, info.RelayFormat, info)
+		}
+		return &dto.Usage{PromptTokensIncludeCached: true}, nil
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量

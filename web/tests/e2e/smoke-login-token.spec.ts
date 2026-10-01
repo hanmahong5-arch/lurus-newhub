@@ -52,3 +52,55 @@ test.describe('smoke — bridge login + token CRUD', () => {
     }
   });
 });
+
+// Cycle-20 C3. jsdom cannot lay out a grid, so the "detail pane is pushed
+// off-screen on a phone" regression is only provable in a real browser.
+test.describe('token page — phone viewport', () => {
+  test.skip(!BRIDGE_TOKEN, BRIDGE_SKIP);
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  const tokenName = `e2e-narrow-${Date.now()}`;
+  let tokenId = '';
+
+  test('detail pane (snippet, rotate, revoke) stays inside a 390px viewport', async ({
+    page,
+  }) => {
+    const createRes = await page.request.post(v2('/tokens'), {
+      data: { name: tokenName, remain_quota: 1000 },
+    });
+    expect(
+      createRes.ok(),
+      `create token: HTTP ${createRes.status()} ${await createRes.text()}`,
+    ).toBeTruthy();
+    tokenId = String((await createRes.json())?.data?.id ?? '');
+    expect(tokenId).toBeTruthy();
+
+    await page.goto('/console/v2/token');
+    await expect(
+      page.getByText(tokenName, { exact: true }).first(),
+    ).toBeVisible({ timeout: 15_000 });
+
+    const width = page.viewportSize()!.width;
+    const targets = {
+      snippet: page.locator('pre').first(),
+      rotate: page.getByRole('button', { name: /rotate key|轮换密钥/i }),
+      revoke: page.getByRole('button', { name: /^(revoke|撤销)$/i }),
+    };
+    for (const [label, locator] of Object.entries(targets)) {
+      await locator.scrollIntoViewIfNeeded();
+      const box = await locator.boundingBox();
+      expect(box, `${label} has a box`).not.toBeNull();
+      expect(box!.x, `${label} left edge on-screen`).toBeGreaterThanOrEqual(0);
+      expect(
+        box!.x + box!.width,
+        `${label} right edge within ${width}px`,
+      ).toBeLessThanOrEqual(width);
+    }
+  });
+
+  test.afterEach(async ({ page }) => {
+    if (tokenId) {
+      await page.request.delete(v2(`/tokens/${tokenId}`));
+    }
+  });
+});

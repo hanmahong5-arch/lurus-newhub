@@ -412,7 +412,8 @@ func StartCreditPoolReconcileWithContext(ctx context.Context) {
 				common.SysLog("credit-pool stranded reconcile stopped")
 				return
 			case <-ticker.C:
-				runCreditPoolReconcileTick(c)
+				// RunTickSafe: SafeGoWithContext recovers only once, then the loop is gone.
+				common.RunTickSafe(creditPoolReconcileTaskName, func() { runCreditPoolReconcileTick(c) })
 			}
 		}
 	})

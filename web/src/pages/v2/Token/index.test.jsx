@@ -774,3 +774,84 @@ describe('Token page — create dialog semantics', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });
+
+describe('Token page — just-created key (cycle-20 C1/C2)', () => {
+  const oldTok = { ...fakeToken, id: 1, name: 'old-one' };
+  const newTok = { ...fakeToken, id: 9, name: 'fresh-one', key: 'maskedmask' };
+  const CREATED_KEY = 'sk-fresh-secret-0001';
+
+  // The list is mutable: the POST succeeds, then the refetch returns the new
+  // token first (the backend orders id desc), exactly as production does.
+  const createFresh = async () => {
+    const list = [oldTok];
+    wireGet(list);
+    API.post.mockImplementation(async () => {
+      list.unshift(newTok);
+      return {
+        data: {
+          success: true,
+          data: { id: 9, name: 'fresh-one', key: CREATED_KEY },
+        },
+      };
+    });
+    render(<HFToken />);
+    await waitFor(() => screen.getByText('+ new token'));
+    fireEvent.click(screen.getByText('+ new token'));
+    await waitFor(() => screen.getByTestId('token-name-input'));
+    fireEvent.change(screen.getByTestId('token-name-input'), {
+      target: { value: 'fresh-one' },
+    });
+    fireEvent.click(screen.getByTestId('token-create-submit'));
+    await waitFor(() => screen.getByText('fresh-one'));
+  };
+
+  it('C1: the snippet of a freshly created token carries its real key, not YOUR_KEY', async () => {
+    await createFresh();
+    await waitFor(() =>
+      expect(document.querySelector('pre')?.textContent || '').toContain(
+        CREATED_KEY,
+      ),
+    );
+    expect(document.querySelector('pre').textContent).not.toContain('YOUR_KEY');
+  });
+
+  it('C1: another token keeps the placeholder — the key is not smeared across rows', async () => {
+    await createFresh();
+    fireEvent.click(screen.getByText('old-one'));
+    await waitFor(() =>
+      expect(document.querySelector('pre')?.textContent || '').toContain(
+        'YOUR_KEY',
+      ),
+    );
+    expect(document.querySelector('pre').textContent).not.toContain(
+      CREATED_KEY,
+    );
+  });
+
+  it('C2: the copy-your-key banner follows the selected token', async () => {
+    await createFresh();
+    await waitFor(() =>
+      expect(
+        screen.getByText('Token created — copy your key now'),
+      ).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByText('old-one'));
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Token created — copy your key now'),
+      ).toBeNull(),
+    );
+    // The secret must not linger anywhere on the other token's pane.
+    expect(document.body.textContent).not.toContain(CREATED_KEY);
+
+    // Still in memory (same policy as rotation), so selecting the token it
+    // belongs to shows it again.
+    fireEvent.click(screen.getByText('fresh-one'));
+    await waitFor(() =>
+      expect(
+        screen.getByText('Token created — copy your key now'),
+      ).toBeTruthy(),
+    );
+  });
+});

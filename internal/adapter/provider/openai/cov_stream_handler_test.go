@@ -118,8 +118,12 @@ func TestOaiStreamHandler_AbnormalTermination_NoBilling(t *testing.T) {
 	}
 	info.SetEstimatePromptTokens(5)
 	// Stream drops mid-way: no [DONE] terminator ever arrives (simulates
-	// client cancel / upstream connection reset).
-	body := `data: {"id":"c1","model":"gpt-3.5-turbo","choices":[{"delta":{"content":"partial content that would otherwise bill"}}]}` + "\n\n"
+	// client cancel / upstream connection reset). Two chunks: the first one has
+	// reached the caller, so this is the mid-stream path (in-band error frame
+	// plus the surfaced error return); a lone held-back chunk fails over instead, see
+	// stream_failover_test.go.
+	body := `data: {"id":"c1","model":"model-a","choices":[{"delta":{"content":"partial content that would otherwise bill"}}]}` + "\n\n" +
+		`data: {"id":"c1","model":"model-a","choices":[{"delta":{"content":" and more"}}]}` + "\n\n"
 
 	bcResp2 := sseResponse(body)
 	defer func() {
@@ -128,9 +132,7 @@ func TestOaiStreamHandler_AbnormalTermination_NoBilling(t *testing.T) {
 		}
 	}()
 	usage, apiErr := OaiStreamHandler(w.ctx, info, bcResp2)
-	if apiErr != nil {
-		t.Fatalf("unexpected error: %v", apiErr.Error())
-	}
+	assertSurfacedIncomplete(t, apiErr)
 	if usage.TotalTokens != 0 || usage.PromptTokens != 0 || usage.CompletionTokens != 0 {
 		t.Errorf("usage = %+v, want all-zero: abnormal stream end (no [DONE]) must suppress billing", usage)
 	}

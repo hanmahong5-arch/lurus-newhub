@@ -84,7 +84,7 @@ func StartAuditCleanupWithContext(ctx context.Context) {
 		// without waiting a full day — but only if this node already holds
 		// leadership at boot.
 		if common.IsLeader() {
-			runAuditCleanup(c)
+			common.RunTickSafe(auditCleanupTaskName, func() { runAuditCleanup(c) })
 		}
 		for {
 			select {
@@ -96,7 +96,8 @@ func StartAuditCleanupWithContext(ctx context.Context) {
 				if !common.IsLeader() {
 					continue
 				}
-				runAuditCleanup(c)
+				// RunTickSafe: SafeGoWithContext recovers only once, then the loop is gone.
+				common.RunTickSafe(auditCleanupTaskName, func() { runAuditCleanup(c) })
 			}
 		}
 	})

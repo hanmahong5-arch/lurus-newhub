@@ -53,7 +53,7 @@ func StartPrivacyErasureWithContext(ctx context.Context) {
 	common.SafeGoWithContext(ctx, func(c context.Context) {
 		defer ticker.Stop()
 		if common.IsLeader() {
-			runErasurePass(c)
+			common.RunTickSafe(privacyErasureTaskName, func() { runErasurePass(c) })
 		}
 		for {
 			select {
@@ -64,7 +64,8 @@ func StartPrivacyErasureWithContext(ctx context.Context) {
 				if !common.IsLeader() {
 					continue
 				}
-				runErasurePass(c)
+				// RunTickSafe: SafeGoWithContext recovers only once, then the loop is gone.
+				common.RunTickSafe(privacyErasureTaskName, func() { runErasurePass(c) })
 			}
 		}
 	})

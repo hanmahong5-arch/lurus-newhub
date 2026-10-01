@@ -17,11 +17,13 @@ import (
 // A stream the caller abandoned mid-flight leaves apiErr nil (the provider
 // helpers skip the error frame when helper.ClientListening reports nobody is
 // left to write to), so before this label existed such a request counted as
-// an ordinary "success". Known remaining gap, unchanged here: an upstream
-// stream truncated while the caller is still listening goes through
-// helper.ReportIncompleteStream (relay_errors_total{error_type=upstream_*}
-// +1 and a 502/504 frame to the caller) and then returns nil, so it still
-// lands in "success" on these two series.
+// an ordinary "success".
+//
+// An upstream stream truncated while the caller is still listening is NOT a
+// gap any more: the handler writes the in-band error frame and returns the
+// same failure (helper.SurfaceIncompleteStream), so it is classified "error"
+// here, and recorded as a breaker failure by reportBreakerOutcome. Only the
+// client-gone case keeps a nil error and the "client_gone" label.
 func relayOutcome(apiErr *types.NewAPIError, endReason string) string {
 	if apiErr != nil {
 		return "error"

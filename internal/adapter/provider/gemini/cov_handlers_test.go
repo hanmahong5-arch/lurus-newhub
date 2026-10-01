@@ -605,7 +605,7 @@ func TestGeminiTextGenerationStreamHandler_ForwardsRawFramesAndCountsResponses(t
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	body := sseBody(
 		`{"candidates":[{"content":{"parts":[{"text":"a"}]},"index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
-		`{"candidates":[{"content":{"parts":[{"text":"b"}]},"index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}`,
+		`{"candidates":[{"content":{"parts":[{"text":"b"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}`,
 	)
 	bcResp0 := respFromBody(200, body)
 	defer func() {

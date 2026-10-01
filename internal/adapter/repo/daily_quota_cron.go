@@ -30,8 +30,10 @@ func StartDailyQuotaResetCronWithContext(ctx context.Context) {
 
 	common.SafeGoWithContext(ctx, func(c context.Context) {
 		defer ticker.Stop()
-		// Run immediately on startup
-		processDailyQuotaResets()
+		// Run immediately on startup. Each pass is panic-isolated: under the
+		// single outer SafeGoWithContext one panic would end the cron for the
+		// pod's lifetime.
+		common.RunTickSafe("daily-quota-reset", processDailyQuotaResets)
 
 		for {
 			select {
@@ -39,7 +41,7 @@ func StartDailyQuotaResetCronWithContext(ctx context.Context) {
 				common.SysLog("Daily quota reset cron stopped")
 				return
 			case <-ticker.C:
-				processDailyQuotaResets()
+				common.RunTickSafe("daily-quota-reset", processDailyQuotaResets)
 			}
 		}
 	})

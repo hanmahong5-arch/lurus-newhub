@@ -726,7 +726,19 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	return nil
 }
 
+// HandleStreamFinalResponse settles the end of this provider's upstream stream for
+// callers that only need the side effects (the AWS bedrock stream). See
+// handleStreamFinalResponse for the incomplete-stream error it can surface.
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, requestMode int) {
+	_ = handleStreamFinalResponse(c, info, claudeInfo, requestMode)
+}
+
+// handleStreamFinalResponse is HandleStreamFinalResponse plus its one failure:
+// when the upstream stopped without message_delta and the caller is still
+// listening, the in-band error frame is written here and the same failure is
+// returned (helper.SurfaceIncompleteStream) so ClaudeStreamHandler can hand it
+// to the relay loop.
+func handleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, requestMode int) *types.NewAPIError {
 
 	if requestMode == RequestModeCompletion {
 		claudeInfo.Usage = app.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
@@ -772,8 +784,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	// [DONE] and the Claude wire a bare EOF, both of which read as a normal
 	// end. When the caller itself hung up there is nobody left to tell.
 	if requestMode != RequestModeCompletion && !claudeInfo.Done && helper.ClientListening(c, info) {
-		helper.StreamError(c, info.RelayFormat, helper.ReportIncompleteStream(c, info))
-		return
+		return helper.SurfaceIncompleteStream(c, info.RelayFormat, info)
 	}
 
 	if info.RelayFormat == types.RelayFormatClaude {
@@ -793,6 +804,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		}
 		helper.Done(c)
 	}
+	return nil
 }
 
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, requestMode int) (*dto.Usage, *types.NewAPIError) {
@@ -815,7 +827,23 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		return nil, err
 	}
 
-	HandleStreamFinalResponse(c, info, claudeInfo, requestMode)
+	// No message_delta and nothing delivered to the caller yet: fail over
+	// instead of answering in-band (nil would be recorded as breaker success).
+	// Runs before HandleStreamFinalResponse so nothing is written or billed;
+	// once frames have gone out that function keeps the in-band error.
+	if requestMode != RequestModeCompletion && !claudeInfo.Done {
+		if apiErr := helper.FailoverIncompleteStream(c, info); apiErr != nil {
+			return &dto.Usage{}, apiErr
+		}
+	}
+
+	if apiErr := handleStreamFinalResponse(c, info, claudeInfo, requestMode); apiErr != nil {
+		// The in-band frame is out and the caller was told the stream failed:
+		// nothing is billed (the error return skips settlement and the relay
+		// loop releases the pre-consumed quota) and the attempt counts as a
+		// breaker failure.
+		return &dto.Usage{}, apiErr
+	}
 	return claudeInfo.Usage, nil
 }
 

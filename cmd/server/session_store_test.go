@@ -150,3 +150,51 @@ func TestRedisSessionKeyFormat_Canary(t *testing.T) {
 		t.Errorf("expected Redis key %q (\"session_\"+session.ID()) to exist; it does not — a session revoke's RedisDel would be deleting the wrong key", wantKey)
 	}
 }
+
+// TestNewRedisSessionStore_RedisDownAtBootRecovers pins that a pod booting
+// while Redis is unreachable still gets the Redis session store (not nil, so
+// main.go has no reason to fall back to a cookie store its siblings cannot
+// read), and that the same store serves sessions once Redis is back.
+func TestNewRedisSessionStore_RedisDownAtBootRecovers(t *testing.T) {
+	down, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("start miniredis: %v", err)
+	}
+	addr := down.Addr()
+	down.Close() // nothing listens on addr now
+
+	store, _, _, err := newRedisSessionStore("redis://"+addr+"/2", []byte("test-secret"))
+	if err == nil {
+		t.Fatalf("expected the boot ping to report Redis unreachable")
+	}
+	if store == nil {
+		t.Fatalf("store must survive a failed boot ping")
+	}
+
+	up := miniredis.NewMiniRedis()
+	if err := up.StartAddr(addr); err != nil {
+		t.Skipf("could not re-listen on %s: %v", addr, err)
+	}
+	defer up.Close()
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", store))
+	engine.GET("/set", func(c *gin.Context) {
+		s := sessions.Default(c)
+		s.Set("probe", "value")
+		if err := s.Save(); err != nil {
+			c.String(http.StatusInternalServerError, "save: %v", err)
+			return
+		}
+		c.Status(http.StatusOK)
+	})
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/set", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("after Redis came back the session save failed: %d %s", w.Code, w.Body.String())
+	}
+	if len(up.DB(2).Keys()) == 0 {
+		t.Fatalf("session did not land in Redis after recovery")
+	}
+}

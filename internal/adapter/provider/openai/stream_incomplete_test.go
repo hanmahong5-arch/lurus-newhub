@@ -12,6 +12,11 @@ package openai
 //
 // A stream that delivered its finish_reason but not [DONE] is complete for the
 // caller and keeps the normal end. A caller that hung up gets nothing.
+//
+// Since 2026-09-30 the truncated-with-content case also RETURNS the failure
+// (helper.SurfaceIncompleteStream) after writing the frame: nil meant the relay
+// loop recorded a breaker success for a channel that had just cut an answer in
+// half. Complete streams and hung-up callers still return nil.
 
 import (
 	"context"
@@ -21,6 +26,7 @@ import (
 	"testing"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 )
@@ -35,7 +41,7 @@ func truncatedStream() string {
 	return "data: " + incompleteChunk1 + "\n\ndata: " + incompleteChunk2 + "\n\n"
 }
 
-func runIncompleteStream(t *testing.T, format types.RelayFormat, body string, clientGone bool) (*relaycommon.RelayInfo, string, int) {
+func runIncompleteStream(t *testing.T, format types.RelayFormat, body string, clientGone bool) (*relaycommon.RelayInfo, string, int, *types.NewAPIError) {
 	t.Helper()
 	prev := constant.StreamingTimeout
 	constant.StreamingTimeout = 60
@@ -57,15 +63,39 @@ func runIncompleteStream(t *testing.T, format types.RelayFormat, body string, cl
 	info.SetEstimatePromptTokens(5)
 	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
 	usage, apiErr := OaiStreamHandler(w.ctx, info, resp)
-	if apiErr != nil {
-		t.Fatalf("unexpected error: %v", apiErr.Error())
+	if apiErr != nil && !helper.IsIncompleteStreamSurfaced(apiErr) {
+		t.Fatalf("the only error a stream that delivered bytes may return is the surfaced incomplete-stream one, got %v", apiErr.Error())
 	}
-	return info, w.rec.Body.String(), usage.TotalTokens
+	return info, w.rec.Body.String(), usage.TotalTokens, apiErr
+}
+
+// assertSurfacedIncomplete pins the returned error's contract: marked as
+// already rendered, still skip-retry (the frames are out, a failover would
+// append a second answer), an upstream failure for the breaker, and never an
+// auto-ban code.
+func assertSurfacedIncomplete(t *testing.T, apiErr *types.NewAPIError) {
+	t.Helper()
+	if apiErr == nil {
+		t.Fatal("truncated stream with content delivered must return the incomplete-stream error (nil is recorded as a breaker success)")
+	}
+	if !helper.IsIncompleteStreamSurfaced(apiErr) {
+		t.Errorf("error must carry the surfaced marker so the relay's error renderer does not write a second frame: %v", apiErr)
+	}
+	if !types.IsSkipRetryError(apiErr) {
+		t.Error("must stay skip-retry: bytes are already on the caller's stream")
+	}
+	if !types.IsUpstreamFailure(apiErr) {
+		t.Error("must count as an upstream failure for the channel breaker")
+	}
+	if apiErr.GetErrorCode() != types.ErrorCodeUpstreamStreamIncomplete {
+		t.Errorf("error code = %q", apiErr.GetErrorCode())
+	}
 }
 
 func TestOaiStreamHandler_IncompleteStream_ErrorFrameOnEveryWire(t *testing.T) {
 	t.Run("openai wire", func(t *testing.T) {
-		info, body, total := runIncompleteStream(t, types.RelayFormatOpenAI, truncatedStream(), false)
+		info, body, total, apiErr := runIncompleteStream(t, types.RelayFormatOpenAI, truncatedStream(), false)
+		assertSurfacedIncomplete(t, apiErr)
 		if total != 0 {
 			t.Errorf("billing rule unchanged: incomplete stream must not be billed, TotalTokens = %d", total)
 		}
@@ -88,7 +118,8 @@ func TestOaiStreamHandler_IncompleteStream_ErrorFrameOnEveryWire(t *testing.T) {
 	})
 
 	t.Run("claude wire", func(t *testing.T) {
-		_, body, total := runIncompleteStream(t, types.RelayFormatClaude, truncatedStream(), false)
+		_, body, total, apiErr := runIncompleteStream(t, types.RelayFormatClaude, truncatedStream(), false)
+		assertSurfacedIncomplete(t, apiErr)
 		if total != 0 {
 			t.Errorf("TotalTokens = %d, want 0", total)
 		}
@@ -106,7 +137,8 @@ func TestOaiStreamHandler_IncompleteStream_ErrorFrameOnEveryWire(t *testing.T) {
 	})
 
 	t.Run("gemini wire", func(t *testing.T) {
-		_, body, total := runIncompleteStream(t, types.RelayFormatGemini, truncatedStream(), false)
+		_, body, total, apiErr := runIncompleteStream(t, types.RelayFormatGemini, truncatedStream(), false)
+		assertSurfacedIncomplete(t, apiErr)
 		if total != 0 {
 			t.Errorf("TotalTokens = %d, want 0", total)
 		}
@@ -129,13 +161,16 @@ func TestOaiStreamHandler_FinishWithoutDone_KeepsNormalEnd(t *testing.T) {
 	body := truncatedStream() + "data: " + finishChunk + "\n\n"
 	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude, types.RelayFormatGemini} {
 		t.Run(string(format), func(t *testing.T) {
-			_, out, _ := runIncompleteStream(t, format, body, false)
+			_, out, _, apiErr := runIncompleteStream(t, format, body, false)
+			if apiErr != nil {
+				t.Errorf("%s: a complete stream returns no error, got %v", format, apiErr)
+			}
 			if strings.Contains(out, "upstream_stream_incomplete") || strings.Contains(out, "event: error") || strings.Contains(out, `{"error":{"code"`) {
 				t.Errorf("%s: a stream that delivered finish_reason is complete; no error frame:\n%s", format, out)
 			}
 		})
 	}
-	_, out, _ := runIncompleteStream(t, types.RelayFormatClaude, body, false)
+	_, out, _, _ := runIncompleteStream(t, types.RelayFormatClaude, body, false)
 	if !strings.Contains(out, `"stop_reason":"end_turn"`) || !strings.Contains(out, "message_stop") {
 		t.Errorf("claude wire normal end lost:\n%s", out)
 	}
@@ -145,7 +180,10 @@ func TestOaiStreamHandler_FinishWithoutDone_KeepsNormalEnd(t *testing.T) {
 // dead socket.
 func TestOaiStreamHandler_IncompleteStream_ClientGoneWritesNothing(t *testing.T) {
 	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude, types.RelayFormatGemini} {
-		info, out, _ := runIncompleteStream(t, format, truncatedStream(), true)
+		info, out, _, apiErr := runIncompleteStream(t, format, truncatedStream(), true)
+		if apiErr != nil {
+			t.Errorf("%s: a hung-up caller is not a channel failure, the handler must return nil, got %v", format, apiErr)
+		}
 		if info.StreamEndReason != relaycommon.StreamEndClientGone {
 			t.Errorf("%s: StreamEndReason = %q, want %q", format, info.StreamEndReason, relaycommon.StreamEndClientGone)
 		}

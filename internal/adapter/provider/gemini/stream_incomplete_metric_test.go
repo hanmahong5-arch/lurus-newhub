@@ -27,9 +27,8 @@ func TestGeminiStreamHandlers_Incomplete_CountInRelayErrorsTotal(t *testing.T) {
 		}
 		resp := respFromBody(200, sseBody(geminiChunkA, geminiChunkB))
 		defer func() { _ = resp.Body.Close() }()
-		if _, apiErr := GeminiChatStreamHandler(c, info, resp); apiErr != nil {
-			t.Fatal(apiErr)
-		}
+		_, apiErr := GeminiChatStreamHandler(c, info, resp)
+		assertSurfacedIncomplete(t, apiErr)
 		if got := testutil.ToFloat64(series) - before; got != 1 {
 			t.Errorf("delta = %v, want 1", got)
 		}
@@ -45,9 +44,8 @@ func TestGeminiStreamHandlers_Incomplete_CountInRelayErrorsTotal(t *testing.T) {
 		}
 		resp := respFromBody(200, sseBody(geminiChunkA, geminiChunkB))
 		defer func() { _ = resp.Body.Close() }()
-		if _, apiErr := GeminiTextGenerationStreamHandler(c, info, resp); apiErr != nil {
-			t.Fatal(apiErr)
-		}
+		_, apiErr := GeminiTextGenerationStreamHandler(c, info, resp)
+		assertSurfacedIncomplete(t, apiErr)
 		if got := testutil.ToFloat64(series) - before; got != 1 {
 			t.Errorf("delta = %v, want 1", got)
 		}
