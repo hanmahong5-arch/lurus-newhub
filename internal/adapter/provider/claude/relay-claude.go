@@ -726,75 +726,6 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	return nil
 }
 
-func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, requestMode int) {
-
-	if requestMode == RequestModeCompletion {
-		claudeInfo.Usage = app.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-	} else {
-		if claudeInfo.Usage.PromptTokens == 0 {
-			//上游出错
-		}
-		if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
-			if common.DebugEnabled {
-				common.SysLog("claude response usage is not complete, maybe upstream error")
-			}
-			// ResponseText2Usage builds a FRESH usage (prompt kept, completion
-			// re-estimated from the streamed text) — carry over the cache
-			// dimensions already parsed from message_start, or this fallback
-			// silently zeroes them and the settlement charges neither the
-			// cache-read term nor the (1.25x/2x-priced) cache-creation terms.
-			prev := claudeInfo.Usage
-			claudeInfo.Usage = app.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, claudeInfo.Usage.PromptTokens)
-			claudeInfo.Usage.PromptTokensDetails.CachedTokens = prev.PromptTokensDetails.CachedTokens
-			claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = prev.PromptTokensDetails.CachedCreationTokens
-			claudeInfo.Usage.ClaudeCacheCreation5mTokens = prev.ClaudeCacheCreation5mTokens
-			claudeInfo.Usage.ClaudeCacheCreation1hTokens = prev.ClaudeCacheCreation1hTokens
-		}
-	}
-
-	// G2 fix: the streaming counterpart of HandleClaudeResponseData's
-	// c.Set("claude_web_search_requests", ...) below (non-streaming). Before
-	// this, ClaudeStreamHandler -> HandleStreamFinalResponse never set this
-	// key, so app.PostClaudeConsumeQuota / relay.postConsumeQuota always read
-	// claude_web_search_requests==0 for a streamed /v1/messages call and a
-	// Claude native web search tool call went unbilled whenever the client
-	// sent stream=true. claudeInfo.WebSearchRequests survives the
-	// claudeInfo.Usage reassignment above (it lives on ClaudeResponseInfo, not
-	// inside *dto.Usage) so this still fires on the incomplete-usage fallback
-	// path too.
-	if claudeInfo.WebSearchRequests > 0 {
-		c.Set("claude_web_search_requests", claudeInfo.WebSearchRequests)
-	}
-
-	// No message_delta ever arrived: the upstream stopped mid-answer. The
-	// partial text is billed above (the caller received it), and the caller
-	// is told it is partial — before this the OpenAI wire got a usage frame +
-	// [DONE] and the Claude wire a bare EOF, both of which read as a normal
-	// end. When the caller itself hung up there is nobody left to tell.
-	if requestMode != RequestModeCompletion && !claudeInfo.Done && helper.ClientListening(c, info) {
-		helper.StreamError(c, info.RelayFormat, helper.ReportIncompleteStream(c, info))
-		return
-	}
-
-	if info.RelayFormat == types.RelayFormatClaude {
-		//
-	} else if info.RelayFormat == types.RelayFormatOpenAI {
-		if info.ShouldIncludeUsage {
-			// OpenAI-wire caller: prompt_tokens must be the whole prompt with
-			// cached_tokens as the subset that hit the cache (OpenAI usage
-			// reference), while claudeInfo.Usage holds Anthropic input_tokens,
-			// which EXCLUDES cache read/creation. AsOpenAIWire is a value copy
-			// in the caller's semantics; the settlement record is untouched.
-			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, claudeInfo.Usage.AsOpenAIWire())
-			err := helper.ObjectData(c, response)
-			if err != nil {
-				common.SysLog("send final response failed: " + err.Error())
-			}
-		}
-		helper.Done(c)
-	}
-}
-
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, requestMode int) (*dto.Usage, *types.NewAPIError) {
 	claudeInfo := &ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
@@ -815,7 +746,23 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		return nil, err
 	}
 
-	HandleStreamFinalResponse(c, info, claudeInfo, requestMode)
+	// No message_delta and nothing delivered to the caller yet: fail over
+	// instead of answering in-band (nil would be recorded as breaker success).
+	// Runs before HandleStreamFinalResponse so nothing is written or billed;
+	// once frames have gone out that function keeps the in-band error.
+	if requestMode != RequestModeCompletion && !claudeInfo.Done {
+		if apiErr := helper.FailoverIncompleteStream(c, info); apiErr != nil {
+			return &dto.Usage{}, apiErr
+		}
+	}
+
+	if apiErr := handleStreamFinalResponse(c, info, claudeInfo, requestMode); apiErr != nil {
+		// The in-band frame is out and the caller was told the stream failed:
+		// nothing is billed (the error return skips settlement and the relay
+		// loop releases the pre-consumed quota) and the attempt counts as a
+		// breaker failure.
+		return &dto.Usage{}, apiErr
+	}
 	return claudeInfo.Usage, nil
 }
 

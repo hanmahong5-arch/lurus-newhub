@@ -6,8 +6,8 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
+	"github.com/boj/redistore"
 	"github.com/gin-contrib/sessions"
-	sessionredis "github.com/gin-contrib/sessions/redis"
 )
 
 // parseRedisSessionTarget parses REDIS_CONN_STRING (redis://[password@]host:port[/db])
@@ -39,28 +39,41 @@ func parseRedisSessionTarget(redisURL string) (addr, password string, db int) {
 	return addr, password, db
 }
 
+// redisSessionStore is gin-contrib/sessions/redis's store minus its
+// constructor's "ping failed => no store" rule. redistore builds a lazily
+// dialling pool and pings once; the gin-contrib wrapper throws the store away
+// when that ping fails, so a pod that boots during a Redis blip used to fall
+// back to a cookie store for its whole life while its siblings kept Redis
+// sessions — every other request bounced between two session formats. Keeping
+// the store means sessions fail while Redis is down (exactly like a Redis
+// outage on an already-running pod) and work again once it is back.
+type redisSessionStore struct {
+	*redistore.RediStore
+}
+
+func (s *redisSessionStore) Options(options sessions.Options) {
+	s.RediStore.Options = options.ToGorillaOptions()
+}
+
 // newRedisSessionStore builds a Redis-backed gin session store from a
 // REDIS_CONN_STRING-shaped URL. It resolves addr/password/db via
 // parseRedisSessionTarget and connects on that db — NOT a hardcoded "0" —
 // so the session store lands on the same Redis logical DB the rest of the
 // deployment's REDIS_CONN_STRING points at (prod DB 2, UAT DB 3; see
 // parseRedisSessionTarget's doc comment for why this matters). It returns
-// the resolved addr and db alongside the store so the caller can log them,
-// and a non-nil error if the underlying redis connection pool could not be
-// created — the caller decides whether to fall back to a cookie store.
+// the resolved addr and db alongside the store so the caller can log them.
+// The store is always usable; a non-nil error only means Redis did not answer
+// the initial ping (see redisSessionStore).
 func newRedisSessionStore(redisURL string, secret []byte) (sessions.Store, string, int, error) {
 	addr, password, db := parseRedisSessionTarget(redisURL)
-	store, err := sessionredis.NewStoreWithDB(10, "tcp", addr, "", password, strconv.Itoa(db), secret)
-	if err == nil {
-		// Say the Redis key prefix out loud instead of inheriting
-		// boj/redistore's default: three other places delete session keys by
-		// name (middleware.deleteStoreSessionKey, handler.redisDeleteSessionKey,
-		// repo.deleteCappedSessionKeys) and they build the key from
-		// common.SessionStoreKeyPrefix. Same value as the default today, so this
-		// changes no behaviour; it makes the agreement checkable (see
-		// internal/adapter/middleware/session_identity_write_sites_test.go).
-		// The only error this can return is "that Store is not the redis one".
-		_ = sessionredis.SetKeyPrefix(store, common.SessionStoreKeyPrefix)
-	}
-	return store, addr, db, err
+	rs, err := redistore.NewRediStoreWithDB(10, "tcp", addr, "", password, strconv.Itoa(db), secret)
+	// Say the Redis key prefix out loud instead of inheriting boj/redistore's
+	// default: three other places delete session keys by name
+	// (middleware.deleteStoreSessionKey, handler.redisDeleteSessionKey,
+	// repo.deleteCappedSessionKeys) and they build the key from
+	// common.SessionStoreKeyPrefix. Same value as the default today, so this
+	// changes no behaviour; it makes the agreement checkable (see
+	// internal/adapter/middleware/session_identity_write_sites_test.go).
+	rs.SetKeyPrefix(common.SessionStoreKeyPrefix)
+	return &redisSessionStore{rs}, addr, db, err
 }

@@ -293,7 +293,11 @@ func streamSawFinish(streamItems []string) bool {
 // message_delta{stop_reason:end_turn} + message_stop, the OpenAI wire a
 // zero-usage frame + [DONE], the Gemini wire a bare EOF. Nothing is billed for
 // such a stream (the caller zeroes usage), so nothing is quoted either.
-func HandleIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo, lastStreamData string) {
+//
+// It returns the same failure as an error (helper.SurfaceIncompleteStream: the
+// frame is written exactly once, here) so the handler can hand it to the relay
+// loop instead of reporting a success.
+func HandleIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo, lastStreamData string) *types.NewAPIError {
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
 		if info.ClaudeConvertInfo != nil {
@@ -311,7 +315,7 @@ func HandleIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo, lastStr
 		}
 	}
 	// OpenAI wire: the last chunk already went out through sendFinalStreamData.
-	helper.StreamError(c, info.RelayFormat, helper.ReportIncompleteStream(c, info))
+	return helper.SurfaceIncompleteStream(c, info.RelayFormat, info)
 }
 
 func handleLastResponse(lastStreamData string, responseId *string, createAt *int64,

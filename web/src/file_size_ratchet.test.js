@@ -83,7 +83,7 @@ const CEILINGS = {
   // useTenantRead.
   // 1632 → 1595 (cycle-18 L3): CreateModal dropped its hand-rolled
   // backdrop/panel for components/hifi/HfDialog.
-  'pages/v2/Token/index.jsx': 1541, // → 1541 cycle-19: snippet builder → Token/snippets.js
+  'pages/v2/Token/index.jsx': 1540, // → 1541 cycle-19: snippet builder → Token/snippets.js; → 1540 cycle-20: page grid moved to .hf-token-* classes in hifi-tokens.css
 };
 
 const THRESHOLD = 800;

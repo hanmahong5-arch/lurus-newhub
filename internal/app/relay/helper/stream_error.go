@@ -70,12 +70,90 @@ func IncompleteStreamError(info *relaycommon.RelayInfo) *types.NewAPIError {
 	return types.NewErrorWithStatusCode(errors.New(msg), types.ErrorCodeUpstreamStreamIncomplete, status, types.ErrOptionWithSkipRetry())
 }
 
+// surfacedIncompleteStream is the marker SurfaceIncompleteStream hangs on the
+// error's cause. It is a type, not a message or a code, so
+// IsIncompleteStreamSurfaced never has to guess from text: the same error code
+// (upstream_stream_incomplete) is also carried by the retryable pre-first-byte
+// error, which has NOT been rendered anywhere yet.
+type surfacedIncompleteStream struct{ msg string }
+
+func (e *surfacedIncompleteStream) Error() string { return e.msg }
+
+// IsIncompleteStreamSurfaced reports whether err is the error
+// SurfaceIncompleteStream returned: the in-band error frame has ALREADY been
+// written to the caller's stream, so the relay's terminal error renderer must
+// not write a second one (nor count the failure a second time: the
+// relay_errors_total increment happened in ReportIncompleteStream).
+func IsIncompleteStreamSurfaced(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	var marker *surfacedIncompleteStream
+	return errors.As(err.Err, &marker)
+}
+
+// SurfaceIncompleteStream is the mid-stream answer to an upstream that stopped
+// before completing after bytes already reached the caller: write the wire's
+// in-band error frame (StreamError) exactly once and hand the same failure back
+// as the handler's error. Returning it (instead of nil, as before) lets the
+// relay loop treat the attempt as what it was: a breaker FAILURE, a failed
+// route-attempt/request outcome and no billing — while shouldRetry still
+// refuses to fail over (skip-retry, and bytes are written).
+//
+// Call it only for the case FailoverIncompleteStream declined with the caller
+// still listening; a caller that hung up gets neither frame nor error. The
+// failure is counted once in relay_errors_total (ReportIncompleteStream).
+func SurfaceIncompleteStream(c *gin.Context, format types.RelayFormat, info *relaycommon.RelayInfo) *types.NewAPIError {
+	apiErr := ReportIncompleteStream(c, info)
+	StreamError(c, format, apiErr)
+	apiErr.Err = &surfacedIncompleteStream{msg: apiErr.Error()}
+	return apiErr
+}
+
+// FailoverIncompleteStream is the incomplete-stream answer for an attempt
+// that has not yet put a single byte on the caller's connection. The status
+// line is still unspent and the caller has seen nothing, so the right move is
+// the one every other pre-first-byte upstream failure gets: hand a retryable
+// error back to the relay loop, which fails over to another channel and
+// records the failure on this channel's breaker. Writing an in-band error
+// frame here instead (the mid-stream answer) spent the response on a request
+// that nothing had been delivered for, and the nil return it came with was
+// counted as a breaker success.
+//
+// It returns nil when the in-band path applies: the caller already received
+// frames (a retry would append a second response to the same stream; the relay
+// loop's shouldRetry refuses for the same reason) or the caller hung up.
+//
+// The error is deliberately NOT IncompleteStreamError: that one carries
+// skip-retry (frames had left the process) and, for the idle-timeout case, a
+// 504, which shouldRetry never retries. Neither is wanted here, so the status
+// is always 502 and the timeout is only named in the message. It is also not a
+// "channel:" code (those auto-disable the channel; one empty stream is not
+// grounds for that). Nothing is billed: callers return zero usage with it.
+func FailoverIncompleteStream(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
+	if !ClientListening(c, info) || c.Writer.Written() {
+		return nil
+	}
+	msg := "upstream stream ended before any response data"
+	reason, model := "", "unknown"
+	if info != nil {
+		reason = info.StreamEndReason
+		if info.StreamEndReason == relaycommon.StreamEndTimeout {
+			msg = "upstream stream idle timeout before any response data"
+		}
+		if info.OriginModelName != "" {
+			model = info.OriginModelName
+		}
+	}
+	logger.LogWarn(c, fmt.Sprintf("upstream stream incomplete before first byte, failing over: reason=%s model=%s", reason, model))
+	return types.NewErrorWithStatusCode(errors.New(msg), types.ErrorCodeUpstreamStreamIncomplete, http.StatusBadGateway)
+}
+
 // ReportIncompleteStream builds the incomplete-stream error and makes the
-// event visible to operators before it goes to the caller. The stream handler
-// returns no error for an abandoned stream (the frames are out, billing is
-// settled separately), so the relay's terminal-error path never sees it: the
-// request counted as a success and the only trace was a consume-log note. The
-// count now lands in relay_errors_total under the same provider/model/type
+// event visible to operators before it goes to the caller. The relay's
+// terminal-error path skips a surfaced incomplete stream (the frame is already
+// out, see IsIncompleteStreamSurfaced), so this is the one place it is counted:
+// without it the only trace was a consume-log note. The count lands in relay_errors_total under the same provider/model/type
 // taxonomy as every other terminal failure (502 → upstream_5xx, the relay's
 // own idle timeout → upstream_timeout), plus one error line carrying the
 // reason. Call exactly once per abandoned stream.

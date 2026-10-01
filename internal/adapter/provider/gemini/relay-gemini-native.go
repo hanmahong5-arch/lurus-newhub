@@ -91,11 +91,18 @@ func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
+	// Incomplete and nothing delivered yet: fail over instead of the in-band
+	// frame below (see GeminiChatStreamHandler).
+	if !complete {
+		if apiErr := helper.FailoverIncompleteStream(c, info); apiErr != nil {
+			return &dto.Usage{}, apiErr
+		}
+	}
 	// Native passthrough: the frames went out verbatim, so an upstream that
 	// stopped without finishReason left the Gemini-wire caller with a bare
 	// EOF its SDK treats as a normal end. Tell it in the wire's own envelope.
 	if !complete && helper.ClientListening(c, info) {
-		helper.StreamError(c, types.RelayFormatGemini, helper.ReportIncompleteStream(c, info))
+		return &dto.Usage{}, helper.SurfaceIncompleteStream(c, types.RelayFormatGemini, info)
 	}
 	return usage, nil
 }

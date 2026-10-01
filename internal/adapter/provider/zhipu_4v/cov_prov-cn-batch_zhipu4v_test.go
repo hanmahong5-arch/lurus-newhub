@@ -577,6 +577,7 @@ func TestAdaptor_DoResponse_Routing(t *testing.T) {
 		c, w := prov_cn_batch_zhipu4vGinContext()
 		body := prov_cn_batch_zhipu4vSSEBody(
 			`{"type":"message_start","message":{"id":"m1","model":"glm-4v","usage":{"input_tokens":2,"output_tokens":0}}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
 			`{"type":"message_stop"}`,
 		)
 		info := &relaycommon.RelayInfo{

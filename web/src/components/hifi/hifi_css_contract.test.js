@@ -173,4 +173,37 @@ describe('hifi-tokens.css — CSS-discipline contract (2026-09-29)', () => {
       /\.hf-side \.nav-i\.active \{[\s\S]*?color: var\(--hf-ink\);/,
     );
   });
+
+  it('the token page master-detail grid stacks at <=768px instead of pushing the detail pane off-screen (cycle-20 C3)', () => {
+    // Base (desktop) rule: two panes. Isolated from the @media copy below so
+    // deleting only the responsive rule cannot hide behind the base match.
+    const baseStart = CSS.indexOf('.hf-token-grid {');
+    expect(baseStart).toBeGreaterThan(-1);
+    expect(CSS.slice(baseStart, CSS.indexOf('}', baseStart))).toMatch(
+      /grid-template-columns: 380px minmax\(0, 1fr\);/,
+    );
+
+    const mediaStart = CSS.indexOf('@media (max-width: 768px) {', baseStart);
+    expect(mediaStart).toBeGreaterThan(-1);
+    const gridRule = CSS.indexOf('.hf-token-grid {', mediaStart);
+    expect(gridRule).toBeGreaterThan(-1);
+    const body = CSS.slice(gridRule, CSS.indexOf('}', gridRule));
+    // minmax(0, 1fr), not bare 1fr: a bare 1fr track floors at min-content, so
+    // the unbroken snippet <pre> would re-widen the column past the viewport.
+    expect(body).toMatch(/grid-template-columns: minmax\(0, 1fr\);/);
+    expect(body).toMatch(/height: auto;/);
+    // Colours must stay on the theme tokens (dark mode shares this rule).
+    expect(
+      CSS.slice(baseStart, CSS.indexOf('/* [hidden] must hide.', baseStart)),
+    ).not.toMatch(/#[0-9a-f]{3,6};|rgba?\(/i);
+  });
+
+  it('the token page no longer hard-codes its column template inline (an inline style would beat the @media rule)', () => {
+    const src = fs.readFileSync(
+      path.resolve(HERE, '../../pages/v2/Token/index.jsx'),
+      'utf8',
+    );
+    expect(src).not.toContain("'380px 1fr'");
+    expect(src).toContain("className='hf-token-grid'");
+  });
 });

@@ -558,6 +558,7 @@ func TestProv2ndPass_Ali_DoResponse_ClaudeStream(t *testing.T) {
 	c, w := prov_ali_repl_vertex_newGinContext(t)
 	body := prov_2nd_pass_ali_sseBody(
 		`{"type":"message_start","message":{"id":"m1","model":"qwen-max","usage":{"input_tokens":2,"output_tokens":0}}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
 		`{"type":"message_stop"}`,
 	)
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: prov_ali_repl_vertex_nopCloser(body)}

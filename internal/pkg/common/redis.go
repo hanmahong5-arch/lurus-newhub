@@ -86,7 +86,7 @@ func InitRedisClient() (err error) {
 	// Bounded boot connect-retry (A2): a Redis pod not yet Ready when this pod
 	// boots otherwise crashes the process on the first ping. Reuse the same
 	// bounded-backoff helper + budget as the DB path. The ParseURL failure above
-	// stays an immediate FatalLog (config error, not transient).
+	// stays an immediate FatalLog (config error, not transient). Only the boot ping is soft.
 	err = RetryConnect("redis", RetryConfig{
 		MaxAttempts: DBConnectRetries,
 		BaseDelay:   DBConnectRetryBaseDelay,
@@ -98,7 +98,13 @@ func InitRedisClient() (err error) {
 		return perr
 	})
 	if err != nil {
-		FatalLog("Redis ping test failed: " + err.Error())
+		// Soft failure: RDB (built above) and RedisEnabled stay as they are —
+		// ~20 call sites dereference RDB when RedisEnabled is true, and go-redis
+		// reconnects per command, so the client heals once Redis is back. A
+		// FatalLog here crash-looped the gateway through any Redis blip, though
+		// health, NATS, Meilisearch and OIDC all degrade instead.
+		SysError("Redis ping test failed, continuing degraded: " + err.Error())
+		return err
 	}
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis connected to %s", opt.Addr))

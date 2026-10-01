@@ -97,9 +97,7 @@ func TestOaiStreamHandler_InlineUsage_AbnormalEnd_QuotesNoCost(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 
 	usage, apiErr := OaiStreamHandler(w.ctx, info, resp)
-	if apiErr != nil {
-		t.Fatalf("unexpected error: %v", apiErr.Error())
-	}
+	assertSurfacedIncomplete(t, apiErr)
 	if usage.TotalTokens != 0 {
 		t.Fatalf("TotalTokens = %d, want 0 — an abnormally-ended stream must not be billed", usage.TotalTokens)
 	}

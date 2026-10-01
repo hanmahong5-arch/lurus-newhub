@@ -17,7 +17,8 @@ import (
 func TestOaiStreamHandler_IncompleteStream_CountsInRelayErrorsTotal(t *testing.T) {
 	series := metrics.RelayErrorsTotal.WithLabelValues("OpenAI", "unknown", "upstream_5xx", "unknown")
 	before := testutil.ToFloat64(series)
-	runIncompleteStream(t, types.RelayFormatOpenAI, truncatedStream(), false)
+	_, _, _, apiErr := runIncompleteStream(t, types.RelayFormatOpenAI, truncatedStream(), false)
+	assertSurfacedIncomplete(t, apiErr)
 	if got := testutil.ToFloat64(series) - before; got != 1 {
 		t.Errorf("relay_errors_total delta = %v, want exactly 1 per abandoned stream", got)
 	}

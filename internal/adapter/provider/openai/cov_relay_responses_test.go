@@ -7,6 +7,7 @@ package openai
 // dashboards, so mis-extraction directly under- or over-bills tenants.
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -134,7 +135,7 @@ func TestOaiResponsesStreamHandler_NilResponseGuard(t *testing.T) {
 
 func TestOaiResponsesStreamHandler_CompletedEventCarriesUsage(t *testing.T) {
 	w := newRecorderCtx(t)
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "gpt-4o"}}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "model-a"}}
 	body := `data: {"type":"response.output_text.delta","delta":"hi"}` + "\n\n" +
 		`data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[],"usage":{"input_tokens":6,"output_tokens":4,"total_tokens":10}}}` + "\n\n"
 	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
@@ -148,11 +149,15 @@ func TestOaiResponsesStreamHandler_CompletedEventCarriesUsage(t *testing.T) {
 	}
 }
 
-func TestOaiResponsesStreamHandler_NoUsage_EstimatesFromDeltaText(t *testing.T) {
+// A COMPLETED stream (response.completed arrived) whose terminal event carries
+// no usage block still estimates output tokens from the streamed text: the
+// upstream finished, the caller has the whole answer, and billing it is right.
+func TestOaiResponsesStreamHandler_CompletedWithoutUsage_EstimatesFromDeltaText(t *testing.T) {
 	w := newRecorderCtx(t)
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "gpt-4o"}}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "model-a"}}
 	info.SetEstimatePromptTokens(9)
-	body := `data: {"type":"response.output_text.delta","delta":"some streamed text output"}` + "\n\n"
+	body := `data: {"type":"response.output_text.delta","delta":"some streamed text output"}` + "\n\n" +
+		`data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[]}}` + "\n\n"
 	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
 
 	usage, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp)
@@ -168,13 +173,113 @@ func TestOaiResponsesStreamHandler_NoUsage_EstimatesFromDeltaText(t *testing.T) 
 	if usage.TotalTokens != usage.PromptTokens+usage.CompletionTokens {
 		t.Errorf("TotalTokens = %d, want sum", usage.TotalTokens)
 	}
+	if strings.Contains(w.rec.Body.String(), "upstream_stream_incomplete") {
+		t.Errorf("a completed stream gets no error frame:\n%s", w.rec.Body.String())
+	}
+}
+
+// The stream ended with deltas but no terminal event: the upstream stopped
+// mid-answer. Frames already reached the caller, so the in-band error frame
+// goes out, nothing is billed (it used to bill an estimate of the partial
+// text and end silently, like a normal completion) and the same failure is
+// returned so the relay loop records a breaker failure instead of a success.
+func TestOaiResponsesStreamHandler_NoTerminalEvent_InBandErrorAndNoBilling(t *testing.T) {
+	w := newRecorderCtx(t)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "model-a"}}
+	info.SetEstimatePromptTokens(9)
+	body := `data: {"type":"response.output_text.delta","delta":"some streamed text output"}` + "\n\n"
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+
+	usage, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp)
+	assertSurfacedIncomplete(t, apiErr)
+	if usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0 {
+		t.Errorf("incomplete stream must not be billed, usage = %+v", usage)
+	}
+	out := w.rec.Body.String()
+	if !strings.Contains(out, `"code":"upstream_stream_incomplete"`) || !strings.Contains(out, `data: {"error":{`) {
+		t.Errorf("caller must get the in-band error frame:\n%s", out)
+	}
+	if !strings.Contains(out, "some streamed text output") {
+		t.Errorf("delivered delta must still be in the body:\n%s", out)
+	}
+}
+
+// Upstream-declared terminal events are complete as far as the wire goes: the
+// caller already holds the event, so no second (invented) error frame.
+func TestOaiResponsesStreamHandler_TerminalEvents_NoInBandError(t *testing.T) {
+	for _, typ := range []string{"response.completed", "response.incomplete", "response.failed", "error"} {
+		t.Run(typ, func(t *testing.T) {
+			w := newRecorderCtx(t)
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "model-a"}}
+			body := `data: {"type":"response.output_text.delta","delta":"hi"}` + "\n\n" +
+				`data: {"type":"` + typ + `","response":{"id":"r1","output":[],"usage":{"input_tokens":6,"output_tokens":4,"total_tokens":10}}}` + "\n\n"
+			resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+
+			usage, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp)
+			if apiErr != nil {
+				t.Fatalf("unexpected error: %v", apiErr.Error())
+			}
+			if strings.Contains(w.rec.Body.String(), "upstream_stream_incomplete") {
+				t.Errorf("%s is a terminal event; no error frame appended:\n%s", typ, w.rec.Body.String())
+			}
+			if usage.TotalTokens == 0 {
+				t.Errorf("%s: a stream that terminated keeps its usage/estimate, got %+v", typ, usage)
+			}
+		})
+	}
+}
+
+// Nothing reached the caller (empty body, or only SSE comments): fail over with
+// a retryable error, write nothing, bill nothing.
+func TestOaiResponsesStreamHandler_NoTerminalBeforeFirstByte_FailsOver(t *testing.T) {
+	for name, body := range map[string]string{"empty": "", "keepalive comment": ": keepalive\n\n"} {
+		t.Run(name, func(t *testing.T) {
+			w := newRecorderCtx(t)
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "model-a"}}
+			resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+
+			usage, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp)
+			if apiErr == nil {
+				t.Fatalf("empty incomplete stream must return an error; body=%q", w.rec.Body.String())
+			}
+			assertFailoverError(t, apiErr)
+			if w.ctx.Writer.Written() || w.rec.Body.Len() != 0 {
+				t.Errorf("nothing may be written when failing over: %q", w.rec.Body.String())
+			}
+			if usage != nil && (usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0) {
+				t.Errorf("usage = %+v, want zero", usage)
+			}
+		})
+	}
+}
+
+// A caller that hung up gets nothing written (nobody to tell) and no bill.
+func TestOaiResponsesStreamHandler_NoTerminal_ClientGone_WritesNoErrorFrame(t *testing.T) {
+	w := newRecorderCtx(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w.ctx.Request = w.ctx.Request.WithContext(ctx)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "model-a"}}
+	body := `data: {"type":"response.output_text.delta","delta":"hi"}` + "\n\n"
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+
+	usage, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp)
+	if apiErr != nil {
+		t.Fatalf("unexpected error: %v", apiErr.Error())
+	}
+	if strings.Contains(w.rec.Body.String(), "upstream_stream_incomplete") {
+		t.Errorf("caller is gone, no error frame:\n%s", w.rec.Body.String())
+	}
+	if usage.TotalTokens != 0 {
+		t.Errorf("usage = %+v, want zero", usage)
+	}
 }
 
 func TestOaiResponsesStreamHandler_WebSearchToolCallCounted(t *testing.T) {
 	w := newRecorderCtx(t)
 	webSearchTool := &relaycommon.BuildInToolInfo{}
 	info := &relaycommon.RelayInfo{
-		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "gpt-4o"},
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "model-a"},
 		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
 			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{"web_search_preview": webSearchTool},
 		},
@@ -182,23 +287,11 @@ func TestOaiResponsesStreamHandler_WebSearchToolCallCounted(t *testing.T) {
 	body := `data: {"type":"response.output_item.done","item":{"type":"web_search_call"}}` + "\n\n"
 	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
 
-	if _, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp); apiErr != nil {
-		t.Fatalf("unexpected error: %v", apiErr.Error())
-	}
+	// The stream ends without a terminal event, so the handler also reports the
+	// truncation; the tool call seen before the cut is still counted.
+	_, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp)
+	assertSurfacedIncomplete(t, apiErr)
 	if webSearchTool.CallCount != 1 {
 		t.Errorf("CallCount = %d, want 1", webSearchTool.CallCount)
-	}
-}
-
-func TestOaiResponsesStreamHandler_EmptyStream_ZeroUsageNoPanic(t *testing.T) {
-	w := newRecorderCtx(t)
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "gpt-4o"}}
-	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}
-	usage, apiErr := OaiResponsesStreamHandler(w.ctx, info, resp)
-	if apiErr != nil {
-		t.Fatalf("unexpected error: %v", apiErr.Error())
-	}
-	if usage.TotalTokens != 0 {
-		t.Errorf("TotalTokens = %d, want 0 for a completely empty stream", usage.TotalTokens)
 	}
 }

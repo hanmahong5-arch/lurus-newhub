@@ -1242,6 +1242,30 @@
   .hf-page-body {
     padding: var(--hf-sp-4) var(--hf-sp-4);
   }
+  /* Phone topbar: keep only the current crumb and drop the page's stat
+   * figure, so the primary action button stays on one line instead of
+   * wrapping into a two-line block (the stat is repeated on the page). */
+  .hf-top {
+    padding: 0 12px;
+    gap: 8px;
+  }
+  .hf-top .crumb {
+    min-width: 0;
+  }
+  .hf-top .crumb > span {
+    display: none;
+  }
+  .hf-top .crumb b {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hf-top .stat {
+    display: none;
+  }
+  .hf-top .btn {
+    white-space: nowrap;
+  }
 }
 
 /* Respect users who ask for reduced motion — the live pulse becomes a static
@@ -1587,6 +1611,54 @@ html[lang^='zh'] .hf-side .nav-h {
 @media (max-width: 960px) {
   .hf .hf-compare-bar {
     margin-left: 28px;
+  }
+}
+
+/* Token page (pages/v2/Token): list + detail master-detail. Was an inline
+ * '380px 1fr' grid with no responsive rule, so on a phone the detail pane
+ * (snippet, reveal/copy, rotate/revoke) was pushed off-screen. At <=768px the
+ * two panes stack, list above detail, and the shell body scrolls them. */
+.hf-token-grid {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+}
+.hf-token-list {
+  border-right: 1px solid var(--hf-rule);
+  overflow: auto;
+  background: var(--hf-paper);
+  min-width: 0;
+}
+.hf-token-detail {
+  overflow: auto;
+  padding: 28px;
+  min-width: 0;
+}
+@media (max-width: 768px) {
+  .hf-token-grid {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  .hf-token-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--hf-rule);
+    max-height: 40vh;
+  }
+  .hf-token-detail {
+    overflow: visible;
+    padding: 20px 16px;
+  }
+  /* The detail pane's key/value rows (base URL, API key, client endpoints,
+   * settings) are inline grids with a fixed 110-170px label column, which
+   * pushes the copy/edit buttons past a phone's edge. Put the label on its
+   * own line and give value + buttons the full width. `!important` because
+   * the column template is an inline style. */
+  .hf-token-detail div:has(> .lbl) {
+    grid-template-columns: minmax(0, 1fr) auto auto !important;
+  }
+  .hf-token-detail div:has(> .lbl) > .lbl {
+    grid-column: 1 / -1;
   }
 }
 

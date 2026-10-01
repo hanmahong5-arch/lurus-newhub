@@ -139,6 +139,18 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
 
+			// A stream that was cut mid-answer has already been reported to the
+			// caller by its handler (in-band frame, one relay_errors_total
+			// increment): rendering it again would append a second error frame
+			// to the same stream, count the failure twice, and the SetMessage
+			// below would replace the cause the marker rides on. The error is
+			// only returned so the loop can record the breaker failure and
+			// release the pre-consumed quota. Keyed on the explicit marker, and
+			// on bytes actually being out, never on message text.
+			if helper.IsIncompleteStreamSurfaced(newAPIError) && c.Writer.Written() {
+				return
+			}
+
 			// Pre-channel failures (request binding/validation, token estimate,
 			// pricing, pre-consume, channel selection) never pass through
 			// processChannelError, so without this they left no error-log row.
@@ -386,31 +398,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	// open circuit breaker and nothing below has written a response.
 	attempted := false
 
-	// reportBreakerOutcome closes the loop that channelBreakers.Allow opens.
-	// EVERY request the breaker admits must report back exactly once: in
-	// HalfOpen the admission consumed the single probe slot, and only a report
-	// gives it back. Until cycle 14 the sole report was RecordFailure on
-	// IsUpstreamFailure, so a probe that ended in a user 4xx, a 402 or a
-	// cancelled request reported nothing at all and left the channel parked in
-	// HalfOpen — excluded from routing until the process restarted.
-	// The three outcomes stay distinct on purpose:
-	//   - nil            → RecordSuccess, the upstream answered; breaker closes.
-	//   - upstream fault → RecordFailure, counts toward the trip threshold.
-	//   - anything else  → RecordInconclusive, hands the probe slot back
-	//     WITHOUT counting a failure, so a caller's own bad request still
-	//     cannot trip a healthy channel (that rule predates this cycle and
-	//     TestRelay_UserErrorDoesNotTripHealthyChannel keeps it).
-	reportBreakerOutcome := func(channelID int, err *types.NewAPIError) {
-		switch {
-		case err == nil:
-			channelBreakers.RecordSuccess(channelID)
-		case types.IsUpstreamFailure(err):
-			channelBreakers.RecordFailure(channelID)
-		default:
-			channelBreakers.RecordInconclusive(channelID)
-		}
-	}
-
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		// One-shot overhead — newhub-side latency budget, excludes retries.
 		if retryParam.GetRetry() == 0 {
@@ -499,7 +486,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 			// The breaker admitted this request and no upstream was dialled —
 			// hand the slot back (413/400 are not the channel's fault).
-			reportBreakerOutcome(channel.Id, newAPIError)
+			reportBreakerOutcome(channel.Id, newAPIError, relayInfo.StreamEndReason)
 			break
 		}
 		c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
@@ -563,7 +550,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		// Tell the breaker what became of the request it admitted — on every
 		// path, before any of the branches below can leave this iteration.
-		reportBreakerOutcome(channel.Id, newAPIError)
+		reportBreakerOutcome(channel.Id, newAPIError, relayInfo.StreamEndReason)
 
 		if newAPIError == nil {
 			hub.RecordRelayOutcome(channel.Id, true, relayDuration,

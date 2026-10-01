@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync/atomic"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 )
@@ -100,4 +101,41 @@ func MustGo(f func(), maxRetries int) {
 			return
 		}
 	}()
+}
+
+// RunTickSafe runs one iteration of a long-lived background loop and recovers
+// a panic from it, so the loop keeps ticking. SafeGoWithContext only wraps the
+// whole loop once: a single panic is recovered and then the goroutine is gone
+// for the pod's lifetime, silently stopping the task. Wrapping each tick
+// instead turns that into one lost pass. It reports whether tick panicked;
+// the panic is counted under panics_recovered_total{source="background_tick"}
+// and logged with the task name.
+func RunTickSafe(name string, tick func()) (panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			metrics.RecordPanic("background_tick")
+			logGoroutinePanic(fmt.Sprintf("panic in background tick [%s]: %v\n%s", name, r, debug.Stack()))
+		}
+	}()
+	tick()
+	return false
+}
+
+// SuperviseLoop runs loop until it returns normally, restarting it after
+// backoff when it panics. For loops owned by other packages whose bodies are
+// not individually tick-wrapped: under a bare errgroup goroutine a panic would
+// exit the whole process. A normal return (ctx cancelled) ends supervision;
+// ctx cancellation also cuts the backoff short.
+func SuperviseLoop(ctx context.Context, name string, backoff time.Duration, loop func(ctx context.Context)) {
+	for {
+		if !RunTickSafe(name, func() { loop(ctx) }) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+	}
 }

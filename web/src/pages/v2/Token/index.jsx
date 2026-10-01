@@ -195,14 +195,14 @@ const CreateModal = ({ tenantSlug, projects, onCreated, onClose }) => {
         project_id: parseInt(form.projectId, 10) || 0,
       });
       if (res?.data?.success) {
-        const { key } = res.data.data;
+        const { key, id } = res.data.data;
         showSuccess(
           tr(
             'console.token.toast_created',
             "Token created — copy your key now, it won't be shown again.",
           ),
         );
-        onCreated(key);
+        onCreated(key, id);
       }
     } catch (_) {
       // error toast shown by API interceptor
@@ -449,7 +449,9 @@ const HFToken = () => {
   const [revealed, setRevealed] = useState(new Set());
   const [rotatedKeys, setRotatedKeys] = useState({}); // id → new sk-xxx key
   const [creating, setCreating] = useState(false);
-  const [newlyCreatedKey, setNewlyCreatedKey] = useState(null);
+  // {id, key}: the banner belongs to the token it was minted for, so it only
+  // renders while that token is the selected one.
+  const [created, setCreated] = useState(null);
   const [editField, setEditField] = useState(null); // 'models'|'cap'|'expires'|'ips'
   const [saving, setSaving] = useState(false);
   // Tier 1.3: confirm dialog state for rotate / revoke. `intent` is the
@@ -678,9 +680,12 @@ const HFToken = () => {
     }
   };
 
-  const handleCreated = async (key) => {
+  const handleCreated = async (key, id) => {
     setCreating(false);
-    setNewlyCreatedKey(key);
+    setCreated({ id, key });
+    // Same in-memory, never-persisted policy as a rotation: the list only
+    // carries the masked key, so the snippet needs the one-time plaintext.
+    setRotatedKeys((prev) => ({ ...prev, [id]: key }));
     await fetchTokens();
   };
 
@@ -798,7 +803,7 @@ const HFToken = () => {
               {tr('console.common.loading', 'loading…')}
             </span>
           ) : loadFailed ? null : (
-            <span className='muted mono' style={{ fontSize: 11 }}>
+            <span className='muted mono stat' style={{ fontSize: 11 }}>
               {tr('console.token.summary', {
                 active: activeCount,
                 used: totalUsedUSD,
@@ -816,22 +821,9 @@ const HFToken = () => {
         </>
       }
     >
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '380px 1fr',
-          minHeight: 0,
-          height: '100%',
-        }}
-      >
+      <div className='hf-token-grid'>
         {/* ── Left: token list ── */}
-        <div
-          style={{
-            borderRight: '1px solid var(--hf-rule)',
-            overflow: 'auto',
-            background: 'var(--hf-paper)',
-          }}
-        >
+        <div className='hf-token-list'>
           <div
             style={{
               padding: '20px 22px',
@@ -1064,7 +1056,7 @@ const HFToken = () => {
         </div>
 
         {/* ── Right: token detail ── */}
-        <div style={{ overflow: 'auto', padding: 28 }}>
+        <div className='hf-token-detail'>
           {!token && !loading && !loadFailed && (
             <div className='muted' style={{ fontSize: 13 }}>
               {tr(
@@ -1076,7 +1068,7 @@ const HFToken = () => {
 
           {token && (
             <>
-              {newlyCreatedKey && (
+              {created && created.id === token.id && (
                 <div
                   className='panel'
                   style={{
@@ -1106,19 +1098,19 @@ const HFToken = () => {
                       className='mono'
                       style={{ fontSize: 12, flex: 1, wordBreak: 'break-all' }}
                     >
-                      {newlyCreatedKey}
+                      {created.key}
                     </code>
                     <button
                       type='button'
                       className='btn sm'
-                      onClick={() => copy(newlyCreatedKey)}
+                      onClick={() => copy(created.key)}
                     >
                       {tr('console.common.copy', 'copy')}
                     </button>
                     <button
                       type='button'
                       className='btn ghost sm'
-                      onClick={() => setNewlyCreatedKey(null)}
+                      onClick={() => setCreated(null)}
                     >
                       ✕
                     </button>
@@ -1448,7 +1440,14 @@ const HFToken = () => {
               </div>
 
               {/* Actions */}
-              <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 8,
+                  marginTop: 18,
+                }}
+              >
                 <button
                   type='button'
                   className='btn'

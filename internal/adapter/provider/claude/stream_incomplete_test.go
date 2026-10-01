@@ -7,16 +7,20 @@ import (
 	"testing"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
 
 // A native Anthropic upstream that stops before message_delta (claudeInfo.Done
-// false) leaves a partial answer. The partial text is billed (the caller
-// received it; pre-existing rule), and since 2026-09-02 the caller is told it
-// is partial: before, the OpenAI wire got a usage frame + [DONE] and the
-// Claude wire a bare EOF, both of which read as a normal end.
+// false) leaves a partial answer. Since 2026-09-02 the caller is told it is
+// partial: before, the OpenAI wire got a usage frame + [DONE] and the Claude
+// wire a bare EOF, both of which read as a normal end. Since 2026-09-30 the
+// failure is also returned from handleStreamFinalResponse (and so from
+// ClaudeStreamHandler: nothing billed, breaker failure); the exported void
+// HandleStreamFinalResponse, still used by the bedrock stream, keeps the old
+// side-effect-only shape.
 func newIncompleteClaudeCtx(t *testing.T, format types.RelayFormat, clientGone bool) (*gin.Context, *httptest.ResponseRecorder, *relaycommon.RelayInfo, *ClaudeResponseInfo) {
 	t.Helper()
 	w := httptest.NewRecorder()
@@ -87,6 +91,37 @@ func TestHandleStreamFinalResponse_Incomplete_ErrorFrameOnEveryWire(t *testing.T
 			t.Errorf("no frame for a caller that hung up:\n%s", w.Body.String())
 		}
 	})
+}
+
+// handleStreamFinalResponse returns what HandleStreamFinalResponse only
+// renders: the surfaced incomplete-stream error when the caller is still
+// listening, nil for a complete answer, completion mode and a hung-up caller.
+func TestHandleStreamFinalResponse_ReturnsSurfacedErrorOnlyWhenCallerListening(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		c, w, info, claudeInfo := newIncompleteClaudeCtx(t, format, false)
+		apiErr := handleStreamFinalResponse(c, info, claudeInfo, RequestModeMessage)
+		if apiErr == nil || !helper.IsIncompleteStreamSurfaced(apiErr) {
+			t.Fatalf("%s: want the surfaced incomplete-stream error, got %v", format, apiErr)
+		}
+		if w.Body.Len() == 0 {
+			t.Errorf("%s: the in-band frame must have been written before returning", format)
+		}
+
+		c, w, info, claudeInfo = newIncompleteClaudeCtx(t, format, true)
+		if apiErr := handleStreamFinalResponse(c, info, claudeInfo, RequestModeMessage); apiErr != nil || w.Body.Len() != 0 {
+			t.Errorf("%s: hung-up caller: want nil error and no frame, got %v / %q", format, apiErr, w.Body.String())
+		}
+
+		c, _, info, claudeInfo = newIncompleteClaudeCtx(t, format, false)
+		claudeInfo.Done = true
+		if apiErr := handleStreamFinalResponse(c, info, claudeInfo, RequestModeMessage); apiErr != nil {
+			t.Errorf("%s: complete answer must return nil, got %v", format, apiErr)
+		}
+	}
+	c, _, info, claudeInfo := newIncompleteClaudeCtx(t, types.RelayFormatOpenAI, false)
+	if apiErr := handleStreamFinalResponse(c, info, claudeInfo, RequestModeCompletion); apiErr != nil {
+		t.Errorf("completion mode has no message_delta and never reports incomplete, got %v", apiErr)
+	}
 }
 
 // message_delta seen: the answer is complete and the OpenAI-wire caller keeps

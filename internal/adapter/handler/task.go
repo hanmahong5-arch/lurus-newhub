@@ -183,7 +183,7 @@ func updateSunoTaskAll(ctx context.Context, channelId int, taskIds []string, tas
 	}
 	proxy := channel.GetSetting().Proxy
 	forceHTTP1 := dto.ParamOverrideForceHTTP1(channel.GetParamOverride())
-	resp, err := adaptor.FetchTask(*channel.BaseURL, channel.Key, map[string]any{
+	resp, err := adaptor.FetchTask(channel.GetBaseURL(), channel.Key, map[string]any{
 		"ids": taskIds,
 	}, proxy, forceHTTP1)
 	if err != nil {
