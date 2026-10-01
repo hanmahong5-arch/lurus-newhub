@@ -478,6 +478,9 @@ func GetModelRatio(name string) (float64, bool, string) {
 	if ok {
 		return ratio, true, name
 	}
+	if ratio, ok := systemOneDefaultRatio(name); ok {
+		return ratio, true, name
+	}
 
 	// 2. Family-based fallback: match by provider prefix + tier keyword,
 	//    apply configurable markup (default 25%)
@@ -561,23 +564,6 @@ func GetDefaultAudioCompletionRatioMap() map[string]float64 {
 	return defaultAudioCompletionRatio
 }
 
-func GetCompletionRatioMap() map[string]float64 {
-	CompletionRatioMutex.RLock()
-	defer CompletionRatioMutex.RUnlock()
-	return CompletionRatio
-}
-
-func CompletionRatio2JSONString() string {
-	CompletionRatioMutex.RLock()
-	defer CompletionRatioMutex.RUnlock()
-
-	jsonBytes, err := json.Marshal(CompletionRatio)
-	if err != nil {
-		common.SysError("error marshalling completion ratio: " + err.Error())
-	}
-	return string(jsonBytes)
-}
-
 func UpdateCompletionRatioByJSONString(jsonStr string) error {
 	// 同 UpdateModelRatioByJSONString：解析失败不得破坏已生效的补全倍率。
 	tmp := make(map[string]float64)
@@ -613,7 +599,9 @@ func GetCompletionRatio(name string) float64 {
 }
 
 func getHardcodedCompletionModelRatio(name string) (float64, bool) {
-
+	if _, ok := systemOneDefaultRatio(name); ok {
+		return 0, true // output is free: the relay bills input tokens only
+	}
 	isReservedModel := strings.HasSuffix(name, "-all") || strings.HasSuffix(name, "-gizmo-*")
 	if isReservedModel {
 		return 2, false

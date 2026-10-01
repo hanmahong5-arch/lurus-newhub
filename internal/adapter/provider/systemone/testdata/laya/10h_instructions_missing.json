@@ -1,0 +1,36 @@
+{
+  "name": "10h_instructions_missing",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {
+        "q": {
+          "type": "choice",
+          "criteria": {
+            "a": "x",
+            "b": "y"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-length": "82",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "question 'q': no 'instructions'; add the text the model should answer"
+    }
+  },
+  "client_elapsed_ms": 4.2
+}

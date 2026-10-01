@@ -1,0 +1,26 @@
+{
+  "name": "06k_chinese_unicode_surrogate",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "_raw_prefix": "{\"state\":\"\\ud800\",\"questions\":{\"q\":{\"type\":\"noul\",\"instructions\":\"x\"}}}",
+      "_raw_len": 71
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-length": "97",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "request body contains an unpaired surrogate escape; those cannot be encoded as UTF-8"
+    }
+  },
+  "client_elapsed_ms": 14.9
+}

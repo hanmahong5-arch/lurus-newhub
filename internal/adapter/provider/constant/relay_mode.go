@@ -69,6 +69,10 @@ const (
 	// the END of the block, same reasoning as RelayModeResponsesCompact.
 	RelayModeResponsesRetrieve
 	RelayModeResponsesDelete
+
+	// RelayModeSystemOne is POST /v1/systemone (TypeSafe-compatible
+	// classification API). Appended at the END, same reasoning as above.
+	RelayModeSystemOne
 )
 
 func Path2RelayMode(path string) int {
@@ -101,6 +105,8 @@ func Path2RelayMode(path string) int {
 		relayMode = RelayModeAudioTranslation
 	} else if strings.HasPrefix(path, "/v1/rerank") {
 		relayMode = RelayModeRerank
+	} else if strings.HasPrefix(path, "/v1/systemone") {
+		relayMode = RelayModeSystemOne
 	} else if strings.HasPrefix(path, "/v1/realtime") {
 		relayMode = RelayModeRealtime
 	} else if strings.HasPrefix(path, "/v1beta/models") || strings.HasPrefix(path, "/v1/models") {

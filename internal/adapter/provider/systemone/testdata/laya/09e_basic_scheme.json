@@ -1,0 +1,38 @@
+{
+  "name": "09e_basic_scheme",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "Which department should handle this?",
+          "criteria": {
+            "billing": "refunds, invoices, charges",
+            "tech": "bugs, outages",
+            "sales": "new purchases"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-length": "44",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "invalid or missing bearer token"
+    }
+  },
+  "client_elapsed_ms": 25.4
+}

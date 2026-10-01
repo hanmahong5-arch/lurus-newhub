@@ -1,0 +1,38 @@
+{
+  "name": "14b_state_beyond_cap_60k",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "<elided 60004 chars>"
+      },
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "Which department should handle this?",
+          "criteria": {
+            "billing": "refunds, invoices, charges",
+            "tech": "bugs, outages",
+            "sales": "new purchases"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 413,
+    "headers": {
+      "content-length": "50",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "state too large (60004 > 50000 chars)"
+    }
+  },
+  "client_elapsed_ms": 3.2
+}

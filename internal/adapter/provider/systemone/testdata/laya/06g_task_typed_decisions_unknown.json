@@ -1,0 +1,39 @@
+{
+  "name": "06g_task_typed_decisions_unknown",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "我这个月的订阅被重复扣费了两次,请尽快退款,否则我会取消订阅。"
+      },
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "这个请求应该由哪个部门处理?",
+          "criteria": {
+            "billing": "退款、发票、扣费问题",
+            "tech": "故障、错误、系统问题",
+            "sales": "新购买、报价"
+          }
+        }
+      },
+      "task": "nonexistent"
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-length": "244",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "unknown model 'nonexistent'; choose one of ['english', 'multilingual', 'typed-decisions'] (or an alias: ['decisions', 'default', 'en', 'laya', 'laya-multilingual', 'laya-typed-decisions', 'ml', 'multi', 'typed', 'typed_decisions'])"
+    }
+  },
+  "client_elapsed_ms": 4.0
+}

@@ -33,6 +33,7 @@ func TestProvLongtailPath2RelayMode_Table(t *testing.T) {
 		{"audio transcriptions", "/v1/audio/transcriptions", RelayModeAudioTranscription},
 		{"audio translations", "/v1/audio/translations", RelayModeAudioTranslation},
 		{"rerank", "/v1/rerank", RelayModeRerank},
+		{"systemone", "/v1/systemone", RelayModeSystemOne},
 		{"realtime", "/v1/realtime", RelayModeRealtime},
 		{"gemini models v1beta", "/v1beta/models/gemini-pro:generateContent", RelayModeGemini},
 		{"gemini models v1", "/v1/models/gpt-4", RelayModeGemini},

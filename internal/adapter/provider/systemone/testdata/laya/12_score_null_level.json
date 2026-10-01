@@ -1,0 +1,38 @@
+{
+  "name": "12_score_null_level",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {
+        "q": {
+          "type": "score",
+          "instructions": "x",
+          "criteria": [
+            "low",
+            null,
+            "high"
+          ]
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-length": "95",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "question 'q': score level 1 is null; give every level a description, index 0 first"
+    }
+  },
+  "client_elapsed_ms": 3.8
+}

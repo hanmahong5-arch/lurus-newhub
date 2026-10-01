@@ -1,0 +1,84 @@
+{
+  "name": "06l_chinese_long_state_beyond_context",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "<elided 27000 chars>"
+      },
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "这个请求应该由哪个部门处理?",
+          "criteria": {
+            "billing": "退款、发票、扣费问题",
+            "tech": "故障、错误、系统问题",
+            "sales": "新购买、报价"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-length": "742",
+      "content-type": "application/json",
+      "server-timing": "inference;dur=1770.77",
+      "x-inference-time-ms": "1770.77"
+    },
+    "body": {
+      "model": "laya-rl-agent",
+      "answers": {
+        "dept": {
+          "type": "choice",
+          "choice": "billing",
+          "probabilities": {
+            "billing": 0.8478,
+            "tech": 0.0552,
+            "sales": 0.097
+          },
+          "confidence": 0.5211,
+          "answer_confidence": 0.8478,
+          "action": {
+            "act_probability": 1.0
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 1024,
+        "output_tokens": 0,
+        "state_tokens": 15005,
+        "state_tokens_dropped": 14025,
+        "truncated": true,
+        "truncated_questions": [
+          "dept"
+        ]
+      },
+      "routing": {
+        "model": "multilingual",
+        "repo": "convaiinnovations/laya/multilingual",
+        "reason": "non-Latin script (han, 100% of letters); the English checkpoint cannot read it",
+        "detection": {
+          "script": "han",
+          "script_profile": {
+            "han": 1.0
+          },
+          "language": null,
+          "is_english": false,
+          "language_undecided": true,
+          "diacritic_rate": 0.0,
+          "non_latin_fraction": 1.0,
+          "mixed_segment": null
+        },
+        "workflow": null
+      }
+    }
+  },
+  "client_elapsed_ms": 1780.9
+}

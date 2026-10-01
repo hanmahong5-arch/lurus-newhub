@@ -60,6 +60,7 @@ func TestRelayMode_ExistingOrdinalsPinned(t *testing.T) {
 		{"RelayModeResponsesCompact", RelayModeResponsesCompact, 38},
 		{"RelayModeResponsesRetrieve", RelayModeResponsesRetrieve, 39},
 		{"RelayModeResponsesDelete", RelayModeResponsesDelete, 40},
+		{"RelayModeSystemOne", RelayModeSystemOne, 41},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

@@ -1,0 +1,22 @@
+{
+  "name": "13g_root",
+  "request": {
+    "method": "GET",
+    "path": "/",
+    "headers": {
+      "Authorization": "Bearer <redacted>"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "content-length": "22",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "Not Found"
+    }
+  },
+  "client_elapsed_ms": 2.6
+}

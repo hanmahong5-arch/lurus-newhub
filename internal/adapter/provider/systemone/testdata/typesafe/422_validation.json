@@ -1,0 +1,45 @@
+{
+  "name": "422_validation",
+  "source": "synthetic: pydantic detail array per OpenAPI 0.2.0, status/body unverified upstream",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": "Help! My payouts have been failing for 3 days.",
+      "model": "jev-latest",
+      "questions": {
+        "is_urgent": {
+          "type": "noul",
+          "instructions": "Does this convey urgency?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": [
+        {
+          "loc": [
+            "body",
+            "questions",
+            "is_urgent",
+            "criteria"
+          ],
+          "msg": "Field required",
+          "type": "missing",
+          "input": {
+            "type": "choice"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -95,7 +95,7 @@ const HFChat = () => {
     error: modelsError,
     resolved: modelsResolved,
     refetch: refetchModels,
-  } = useRoutableModels(tenantSlug);
+  } = useRoutableModels(tenantSlug, { chatOnly: true });
   const [model, setModel] = useState('');
   // True once the model has been set at least once (by the routable-default
   // effect below OR by openSession adopting a saved session's own model) —

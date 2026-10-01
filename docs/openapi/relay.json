@@ -55,6 +55,9 @@
       "name": "重排序(Rerank)"
     },
     {
+      "name": "System One"
+    },
+    {
       "name": "Moderations"
     },
     {
@@ -3152,6 +3155,239 @@
         ]
       }
     },
+    "/v1/systemone": {
+      "post": {
+        "summary": "System One 评估",
+        "deprecated": false,
+        "description": "对一个 state 同时评估若干类型化问题(noul 是非概率 / choice 单选 / score 评分)。与 TypeSafe 官方 `POST /v1/systemone` 线格式字节兼容:官方 SDK 设置 `TYPESAFE_BASE_URL=https://hub.lurus.cn`(不带 /v1)并以网关 key 作 Bearer 即可直接使用。\n\n公开模型名:`jev-latest` / `jev-preview` / `jev-1.13.0`(TypeSafe 托管),`laya-auto` / `laya-english` / `laya-multilingual` / `laya-typed-decisions`(自托管兼容服务)。上游真实名由渠道的 model_mapping 决定。\n\n计费仅按输入 token(usage.input_tokens),输出免费。当前不支持批量与流式。\n\n错误体沿用网关统一的 OpenAI 风格信封(error.message / error.type / error.code),官方 SDK 按 HTTP 状态码映射异常。",
+        "operationId": "createSystemOne",
+        "tags": [
+          "System One"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SystemOneRequest"
+              },
+              "example": {
+                "state": "Help! My payouts have been failing for 3 days.",
+                "model": "jev-latest",
+                "questions": {
+                  "is_urgent": {
+                    "type": "noul",
+                    "instructions": "Does this convey urgency?"
+                  },
+                  "department": {
+                    "type": "choice",
+                    "instructions": "Which team should handle this?",
+                    "criteria": {
+                      "billing": "Payments, invoicing, refunds",
+                      "technical": "Bugs, outages, integrations",
+                      "sales": "Pricing, upgrades, new accounts"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "评估成功。answers 按调用方给的问题 id 一一对应。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemOneResponse"
+                },
+                "example": {
+                  "model": "jev-1.13.0",
+                  "answers": {
+                    "is_urgent": {
+                      "type": "noul",
+                      "noul": 0.95
+                    },
+                    "department": {
+                      "type": "choice",
+                      "choice": "billing",
+                      "probabilities": {
+                        "billing": 0.88,
+                        "technical": 0.12,
+                        "sales": 0.0
+                      },
+                      "confidence": 0.81
+                    }
+                  },
+                  "usage": {
+                    "input_tokens": 296,
+                    "output_tokens": 0
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/XRateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/XRateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/XRateLimitReset"
+              },
+              "X-RateLimit-Scope": {
+                "$ref": "#/components/headers/XRateLimitScope"
+              },
+              "X-RateLimit-Type": {
+                "$ref": "#/components/headers/XRateLimitType"
+              }
+            }
+          },
+          "400": {
+            "description": "请求体不合法(JSON 解析失败、缺 state/questions、questions 不是对象、含不被接受的批量/钩子字段等),或上游以 400 判定为调用方错误。message 为净化后的文本,不含上游内部信息。不重试、不切换渠道。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "401": {
+            "description": "认证失败(网关 API key 无效)。上游渠道自身的 401/403/404/405 是渠道故障,会触发换渠道,不会以 401 透传给调用方。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
+            }
+          },
+          "402": {
+            "description": "余额/租户信用池不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "413": {
+            "description": "请求体过大(自托管渠道另有 state 字符数、问题数、选项数上限),按上游状态码 413 原样返回,不重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "422": {
+            "description": "问题内容不合法(未知 type、缺 criteria、选项重复、参数越界等),取自上游 detail 字符串、detail.message 或 detail[].msg 的净化文本。调用方错误:不重试、不计入渠道熔断。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制,或所有 System One 渠道均处于上游过载(429/503/529)状态且重试耗尽。前者的响应头与 /v1/embeddings 的 429 一致(限流/并发中间件写 X-RateLimit-Limit/Remaining/Scope/Type + Retry-After;account/quota 与 user/cost 两类 429 只写 Scope/Type);后者在上游给出 Retry-After 或 retry-after-ms 时透传为 Retry-After(秒)。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/XRateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/XRateLimitRemaining"
+              },
+              "X-RateLimit-Scope": {
+                "$ref": "#/components/headers/XRateLimitScope"
+              },
+              "X-RateLimit-Type": {
+                "$ref": "#/components/headers/XRateLimitType"
+              }
+            }
+          },
+          "503": {
+            "description": "无可用渠道 / 全部密钥冷却中 / 所有渠道均因上游故障(凭据失效、连接失败、5xx)而失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "X-Lurus-Token-State": {
+                "$ref": "#/components/headers/XLurusTokenState"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/moderations": {
       "post": {
         "summary": "内容审核",
@@ -5303,6 +5539,326 @@
           "meta": {
             "type": "object",
             "properties": {}
+          }
+        }
+      },
+      "SystemOneRequest": {
+        "type": "object",
+        "required": [
+          "state",
+          "model",
+          "questions"
+        ],
+        "description": "与 TypeSafe 官方 API 一致的请求体。未知顶层字段被丢弃。",
+        "properties": {
+          "state": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {}
+              }
+            ],
+            "description": "被评估的内容:纯文本,或聊天记录/业务记录等结构化数据。"
+          },
+          "model": {
+            "type": "string",
+            "description": "公开模型名,见本操作说明。",
+            "example": "jev-latest"
+          },
+          "questions": {
+            "type": "object",
+            "minProperties": 1,
+            "description": "问题表,键由调用方自定,answers 以同一键返回。",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SystemOneNoulQuestion"
+                },
+                {
+                  "$ref": "#/components/schemas/SystemOneChoiceQuestion"
+                },
+                {
+                  "$ref": "#/components/schemas/SystemOneScoreQuestion"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "noul": "#/components/schemas/SystemOneNoulQuestion",
+                  "choice": "#/components/schemas/SystemOneChoiceQuestion",
+                  "score": "#/components/schemas/SystemOneScoreQuestion"
+                }
+              }
+            }
+          },
+          "lang": {
+            "type": "string",
+            "nullable": true,
+            "description": "仅转发给自托管兼容渠道(语言提示);TypeSafe 渠道不发送。"
+          },
+          "min_confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "仅转发给自托管兼容渠道;低于阈值的答案带 low_confidence=true,答案本身仍返回。"
+          },
+          "max_len": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "仅转发给自托管兼容渠道:state 截断窗口(token)。"
+          },
+          "head_max_len": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "仅转发给自托管兼容渠道:每个问题头部窗口(token)。"
+          }
+        }
+      },
+      "SystemOneNoulQuestion": {
+        "type": "object",
+        "description": "是非题,返回为真的概率。",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "noul"
+            ]
+          },
+          "instructions": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {}
+              }
+            ],
+            "description": "要判断的问题。可为字符串,或把问题与其引用的数据拆成对象/数组(用反引号按字段名引用)。自托管渠道要求非空。"
+          },
+          "criteria": {
+            "type": "object",
+            "description": "可选:各取值的含义。",
+            "properties": {
+              "true": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "array",
+                    "items": {}
+                  }
+                ]
+              },
+              "false": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "array",
+                    "items": {}
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "SystemOneChoiceQuestion": {
+        "type": "object",
+        "description": "单选题,返回所选项与完整概率分布。",
+        "required": [
+          "type",
+          "criteria"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "choice"
+            ]
+          },
+          "instructions": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {}
+              }
+            ],
+            "description": "要判断的问题。可为字符串,或把问题与其引用的数据拆成对象/数组(用反引号按字段名引用)。自托管渠道要求非空。"
+          },
+          "criteria": {
+            "type": "object",
+            "description": "选项 -> 说明(可为 null)。TypeSafe 上限 255 项;自托管渠道每题至多 100 项。",
+            "additionalProperties": {
+              "nullable": true
+            }
+          }
+        }
+      },
+      "SystemOneScoreQuestion": {
+        "type": "object",
+        "description": "评分题,返回按概率加权的分值(可落在两级之间)。",
+        "required": [
+          "type",
+          "criteria"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "score"
+            ]
+          },
+          "instructions": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {}
+              }
+            ],
+            "description": "要判断的问题。可为字符串,或把问题与其引用的数据拆成对象/数组(用反引号按字段名引用)。自托管渠道要求非空。"
+          },
+          "criteria": {
+            "type": "array",
+            "minItems": 1,
+            "description": "按序排列的各级说明。TypeSafe 接受 2 至 10 级;自托管渠道至多 32 级。",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                },
+                {
+                  "type": "array",
+                  "items": {}
+                }
+              ]
+            }
+          }
+        }
+      },
+      "SystemOneAnswer": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "description": "一道题的答案,按上游原样透传,上游新增字段(如 answer_confidence、action、low_confidence)一并保留。noul 答案在 TypeSafe 渠道没有 confidence,自托管渠道有;两家 confidence 的算法不同,阈值不可互换。",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "noul",
+              "choice",
+              "score"
+            ]
+          },
+          "noul": {
+            "type": "number",
+            "description": "type=noul:为真的概率,0..1。"
+          },
+          "choice": {
+            "type": "string",
+            "description": "type=choice:概率最高的选项。"
+          },
+          "score": {
+            "type": "number",
+            "description": "type=score:概率加权分值。"
+          },
+          "legend": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "type=score:级别序号 -> 说明。"
+          },
+          "probabilities": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "type=choice/score:各选项或级别的概率。"
+          },
+          "confidence": {
+            "type": "number",
+            "description": "0..1。"
+          }
+        }
+      },
+      "SystemOneUsage": {
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ],
+        "description": "计费只看 input_tokens,输出不计费。两类渠道的分词器不同,input_tokens 不可跨渠道比较。",
+        "properties": {
+          "input_tokens": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "仅为 true 时出现:自托管渠道静默截断了过长的 state(TypeSafe 超限会直接报错)。"
+          }
+        }
+      },
+      "SystemOneResponse": {
+        "type": "object",
+        "required": [
+          "model",
+          "answers",
+          "usage"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "TypeSafe 渠道为上游返回的版本化 ID(如 jev-1.13.0);自托管渠道为调用方请求的公开模型名。"
+          },
+          "answers": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SystemOneAnswer"
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/SystemOneUsage"
           }
         }
       },

@@ -169,7 +169,7 @@ var contractLockMountedSpecs = []string{"relay.json", "api-v2.json"}
 // contractLockFullyDocumentedGroups for the route groups where that direction
 // is closed structurally.
 var contractLockOperationFloors = map[string]int{
-	"relay.json":  46,
+	"relay.json":  48,
 	"api-v2.json": 42,
 	"api.json":    157,
 }

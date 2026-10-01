@@ -1,0 +1,35 @@
+{
+  "name": "429_rate_limited",
+  "source": "synthetic: body shape and retry-after-ms unverified upstream",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": "Help! My payouts have been failing for 3 days.",
+      "model": "jev-latest",
+      "questions": {
+        "is_urgent": {
+          "type": "noul",
+          "instructions": "Does this convey urgency?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "content-type": "application/json",
+      "retry-after-ms": "1500"
+    },
+    "body": {
+      "detail": {
+        "error_type": "rate_limit_error",
+        "message": "Rate limit exceeded. Retry after a short delay."
+      }
+    }
+  }
+}

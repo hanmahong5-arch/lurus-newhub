@@ -1,0 +1,47 @@
+{
+  "name": "200_choice",
+  "source": "api.md example response",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": "Help! My payouts have been failing for 3 days.",
+      "model": "jev-latest",
+      "questions": {
+        "is_urgent": {
+          "type": "noul",
+          "instructions": "Does this convey urgency?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "model": "jev-1.13.0",
+      "answers": {
+        "department": {
+          "type": "choice",
+          "choice": "billing",
+          "probabilities": {
+            "billing": 0.88,
+            "technical": 0.12,
+            "sales": 0.0
+          },
+          "confidence": 0.81
+        }
+      },
+      "usage": {
+        "input_tokens": 318,
+        "output_tokens": 34
+      }
+    }
+  }
+}

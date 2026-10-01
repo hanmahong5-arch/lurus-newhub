@@ -184,6 +184,16 @@ export const CHANNEL_OPTIONS = [
     color: 'blue',
     label: 'Replicate',
   },
+  {
+    value: 57,
+    color: 'indigo',
+    label: 'TypeSafe',
+  },
+  {
+    value: 58,
+    color: 'cyan',
+    label: 'System One compatible (self-hosted)',
+  },
 ];
 
 export const CHANNEL_PRESETS = {
@@ -236,6 +246,17 @@ export const CHANNEL_PRESETS = {
     name: 'SiliconCloud',
     base_url: 'https://api.siliconflow.cn',
     tip: 'preset_tip_siliconcloud',
+  },
+  57: {
+    name: 'TypeSafe',
+    base_url: 'https://api.typesafe.ai',
+    tip: 'preset_tip_typesafe',
+  },
+  // No default host: a self-hosted server lives wherever the operator put it.
+  58: {
+    name: 'System One (self-hosted)',
+    base_url: '',
+    tip: 'preset_tip_systemone',
   },
 };
 

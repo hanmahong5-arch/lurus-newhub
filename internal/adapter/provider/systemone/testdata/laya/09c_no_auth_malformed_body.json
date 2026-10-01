@@ -1,0 +1,25 @@
+{
+  "name": "09c_no_auth_malformed_body",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "_raw_prefix": "not json",
+      "_raw_len": 8
+    }
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-length": "44",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "invalid or missing bearer token"
+    }
+  },
+  "client_elapsed_ms": 3.1
+}

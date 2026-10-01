@@ -675,6 +675,7 @@
           "cap_image": "图像生成",
           "cap_rerank": "重排序",
           "cap_video": "视频生成",
+          "cap_systemone": "System One",
           "per_m": "/百万"
         },
         "compare": {
@@ -4042,6 +4043,8 @@
     "preset_tip_zhipu": "在 open.bigmodel.cn/usercenter/apikeys 获取 API Key",
     "preset_tip_xai": "在 console.x.ai 获取 API Key",
     "preset_tip_siliconcloud": "在 cloud.siliconflow.cn/account/ak 获取 API Key",
+    "preset_tip_typesafe": "在 TypeSafe 账户获取 API Key。通过 POST /v1/systemone 提供 jev-latest、jev-preview、jev-1.13.0。",
+    "preset_tip_systemone": "自托管的 System One 兼容服务（如 Laya）。必须填写 Base URL，例如 http://<host>:8000；API Key 可不填。请配置 model_mapping：laya-english→english、laya-multilingual→multilingual、laya-typed-decisions→typed-decisions、laya-auto→auto。",
     "admin_action_add_channel": "添加渠道",
     "admin_action_create_token": "创建令牌",
     "admin_action_view_logs": "查看日志",

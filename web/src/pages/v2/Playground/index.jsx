@@ -130,7 +130,7 @@ const HFPlayground = () => {
     loading: modelsLoading,
     error: modelsError,
     resolved: modelsResolved,
-  } = useRoutableModels(tenantSlug);
+  } = useRoutableModels(tenantSlug, { chatOnly: true });
   const availableModels = routableModels.map((m) => m.id).filter(Boolean);
   const vendorFor = (modelId) =>
     routableModels.find((m) => m.id === modelId)?.owned_by || '—';

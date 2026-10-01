@@ -1,0 +1,39 @@
+{
+  "name": "06i_max_len_over_budget",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "我这个月的订阅被重复扣费了两次,请尽快退款,否则我会取消订阅。"
+      },
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "这个请求应该由哪个部门处理?",
+          "criteria": {
+            "billing": "退款、发票、扣费问题",
+            "tech": "故障、错误、系统问题",
+            "sales": "新购买、报价"
+          }
+        }
+      },
+      "max_len": 99999
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-length": "56",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "max_len exceeds server limit (99999 > 8192)"
+    }
+  },
+  "client_elapsed_ms": 2.7
+}

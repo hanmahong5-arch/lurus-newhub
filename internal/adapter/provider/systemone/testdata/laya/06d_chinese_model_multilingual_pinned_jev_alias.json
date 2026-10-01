@@ -1,0 +1,72 @@
+{
+  "name": "06d_chinese_model_multilingual_pinned_jev_alias",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "我这个月的订阅被重复扣费了两次,请尽快退款,否则我会取消订阅。"
+      },
+      "questions": {
+        "dept": {
+          "type": "choice",
+          "instructions": "这个请求应该由哪个部门处理?",
+          "criteria": {
+            "billing": "退款、发票、扣费问题",
+            "tech": "故障、错误、系统问题",
+            "sales": "新购买、报价"
+          }
+        }
+      },
+      "model": "multilingual"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-length": "499",
+      "content-type": "application/json",
+      "server-timing": "inference;dur=1736.93",
+      "x-inference-time-ms": "1736.93"
+    },
+    "body": {
+      "model": "laya-rl-agent",
+      "answers": {
+        "dept": {
+          "type": "choice",
+          "choice": "billing",
+          "probabilities": {
+            "billing": 1.0,
+            "tech": 0.0,
+            "sales": 0.0
+          },
+          "confidence": 0.9997,
+          "answer_confidence": 1.0,
+          "action": {
+            "act_probability": 1.0
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 69,
+        "output_tokens": 0,
+        "state_tokens": 25,
+        "state_tokens_dropped": 0,
+        "truncated": false,
+        "truncated_questions": []
+      },
+      "routing": {
+        "model": "multilingual",
+        "repo": "convaiinnovations/laya/multilingual",
+        "reason": "explicit model='multilingual'",
+        "detection": null,
+        "workflow": null
+      }
+    }
+  },
+  "client_elapsed_ms": 1743.4
+}

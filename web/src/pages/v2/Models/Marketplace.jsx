@@ -27,6 +27,7 @@ import React, { useMemo, useState } from 'react';
 import HfVendorIcon from '../../../components/hifi/HfVendorIcon';
 import {
   capabilityFacets,
+  entryCanChat,
   filterCatalog,
   fmtCompact,
   fmtMs,
@@ -265,7 +266,7 @@ const ModelCard = ({
           ? tr('console.models.compare.added', '✓ comparing')
           : tr('console.models.compare.add', '+ compare')}
       </button>
-      {e.routable && (
+      {e.routable && entryCanChat(e) && (
         <button
           type='button'
           className='btn sm'

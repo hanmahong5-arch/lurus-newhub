@@ -1,0 +1,53 @@
+{
+  "name": "10j_empty_questions",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {}
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-length": "381",
+      "content-type": "application/json",
+      "server-timing": "inference;dur=0.60",
+      "x-inference-time-ms": "0.60"
+    },
+    "body": {
+      "model": "laya-rl-agent",
+      "answers": {},
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0
+      },
+      "routing": {
+        "model": "english",
+        "repo": "convaiinnovations/laya",
+        "reason": "English Latin text",
+        "detection": {
+          "script": "latin",
+          "script_profile": {
+            "latin": 1.0
+          },
+          "language": "en",
+          "is_english": true,
+          "language_undecided": false,
+          "diacritic_rate": 0.0,
+          "non_latin_fraction": 0.0,
+          "mixed_segment": null
+        },
+        "workflow": null
+      }
+    }
+  },
+  "client_elapsed_ms": 28.1
+}

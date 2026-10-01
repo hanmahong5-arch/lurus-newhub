@@ -1,0 +1,30 @@
+{
+  "name": "10g_question_value_string",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "state": {
+        "body": "I was billed twice for my subscription this month and I want a refund, otherwise I will cancel."
+      },
+      "questions": {
+        "q": "which team?"
+      }
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-length": "61",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "question 'q': definition must be a dict, got str"
+    }
+  },
+  "client_elapsed_ms": 4.9
+}

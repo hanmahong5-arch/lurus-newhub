@@ -1,0 +1,23 @@
+{
+  "name": "13f_get_systemone",
+  "request": {
+    "method": "GET",
+    "path": "/v1/systemone",
+    "headers": {
+      "Authorization": "Bearer <redacted>"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 405,
+    "headers": {
+      "content-length": "31",
+      "allow": "POST",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "Method Not Allowed"
+    }
+  },
+  "client_elapsed_ms": 2.8
+}

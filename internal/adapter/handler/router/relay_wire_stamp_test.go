@@ -135,6 +135,45 @@ func TestRelayRouter_StampsWireForResponsesCompact(t *testing.T) {
 		t.Errorf("/v1/responses/compact 401 body = %s, must not be the Gemini envelope", body)
 	}
 	if !strings.Contains(body, `"error":{`) {
-		t.Errorf(`/v1/responses/compact 401 body = %s, want the OpenAI envelope {"error":{...`, body)
+		t.Errorf(`/v1/responses/compact 401 body = %s, want the default envelope {"error":{...`, body)
+	}
+}
+
+// TestRelayRouter_SystemOneBehindTokenAuth drives POST /v1/systemone through
+// the real SetRelayRouter chain without a key. It is a money route (billed
+// per input token), so it must sit behind the same TokenAuth as rerank, and a
+// keyless caller gets the gateway's default error envelope, not another wire's.
+// An unmounted route would answer 404 instead.
+func TestRelayRouter_SystemOneBehindTokenAuth(t *testing.T) {
+	cleanup := relayWireStampEmptyDB(t)
+	defer cleanup()
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetRelayRouter(engine)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/systemone", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("/v1/systemone no key: status = %d, want 401; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, `"type":"error"`) || strings.HasPrefix(body, `{"error":{"code":401`) {
+		t.Errorf("/v1/systemone 401 body = %s, must not be a non-default wire envelope", body)
+	}
+	if !strings.Contains(body, `"error":{`) {
+		t.Errorf(`/v1/systemone 401 body = %s, want the default envelope {"error":{...`, body)
+	}
+
+	// There is no batch endpoint: a sibling path must stay unrouted rather
+	// than fall into a catch-all that relays it.
+	reqBatch := httptest.NewRequest(http.MethodPost, "/v1/systemone/batch", strings.NewReader(`{}`))
+	reqBatch.Header.Set("Content-Type", "application/json")
+	wb := httptest.NewRecorder()
+	engine.ServeHTTP(wb, reqBatch)
+	if wb.Code != http.StatusNotFound {
+		t.Errorf("/v1/systemone/batch: status = %d, want 404 (no batch endpoint)", wb.Code)
 	}
 }

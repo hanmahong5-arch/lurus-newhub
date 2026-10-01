@@ -588,6 +588,36 @@ describe('Playground page', () => {
     expect(screen.queryByTestId('playground-swap-btn-0')).toBeNull();
   });
 
+  // A model that does not speak chat completions (System One answers only
+  // POST /v1/systemone) cannot be compared here: it is neither a swap choice
+  // nor part of the default compare draft.
+  it('swap: offers no model whose endpoints exclude chat', async () => {
+    wireGet(undefined, [
+      {
+        id: 'jev-latest',
+        owned_by: 'typesafe',
+        supported_endpoint_types: ['systemone'],
+      },
+      {
+        id: 'rt-alpha',
+        owned_by: 'Vendor A',
+        supported_endpoint_types: ['openai'],
+      },
+    ]);
+
+    render(<HFPlayground />);
+    await waitForModelsReady();
+
+    fireEvent.click(screen.getByTestId('playground-swap-btn-0'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('playground-swap-model-rt-alpha')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('playground-swap-model-jev-latest')).toBeNull();
+    // Default draft = the one chat model, not [systemone, chat].
+    expect(screen.queryByTestId('playground-col-1')).toBeNull();
+  });
+
   // Lock for the .filter(Boolean) on availableModels — a routable entry
   // with an empty id must not render a blank swap row.
   it('swap: drops a routable entry with no id instead of rendering a blank row', async () => {
