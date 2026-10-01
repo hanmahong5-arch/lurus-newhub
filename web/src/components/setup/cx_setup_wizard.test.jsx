@@ -372,6 +372,16 @@ describe('SetupWizard — step gating', () => {
 });
 
 describe('SetupWizard — submission', () => {
+  // Every successful submit schedules a real 1.5s window.location.reload().
+  // On real timers that timeout outlives its test and fires during a LATER
+  // one, calling the shared `reload` mock (CI under load: "expected reload not
+  // to be called, called 1 times"). Fake timers that still advance with the
+  // wall clock keep waitFor working, and afterEach's useRealTimers drops
+  // whatever is still pending instead of letting it leak.
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
   const reachFinalStep = async (over = {}) => {
     apiGet.mockResolvedValue(setupOk({ root_init: true, ...over }));
     await mount();
