@@ -33,7 +33,7 @@ func ValidateSessionCookieDomain(oidcEnabled bool, cookieDomain, redirectURI str
 	}
 	u, err := url.Parse(redirectURI)
 	if err != nil {
-		return fmt.Errorf("OIDC_REDIRECT_URI %q is not a valid URL (%v): cannot verify that the session cookie (SESSION_COOKIE_DOMAIN=%q) will be accepted by the browser", redirectURI, err, cookieDomain)
+		return fmt.Errorf("OIDC_REDIRECT_URI %q is not a valid URL (%w): cannot verify that the session cookie (SESSION_COOKIE_DOMAIN=%q) will be accepted by the browser", redirectURI, err, cookieDomain)
 	}
 	host := strings.ToLower(u.Hostname())
 	if host == "" {

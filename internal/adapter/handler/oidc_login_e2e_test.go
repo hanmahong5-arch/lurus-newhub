@@ -217,7 +217,7 @@ func (b *e2eBrowser) hasSessionCookie() bool {
 
 func bodyOf(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
@@ -489,6 +489,7 @@ func TestOIDCLoginE2E_CallbackWithoutLoginLeg_Rejected(t *testing.T) {
 	e.browser = &e2eBrowser{t: t, jar: jar, client: &c}
 
 	resp := e.browser.get(cb)
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusFound {
 		t.Fatalf("callback without the login-leg cookie = 302, want a refusal; Set-Cookie=%v", resp.Header.Values("Set-Cookie"))
 	}
@@ -508,6 +509,7 @@ func TestOIDCLoginE2E_CookieDomainForAnotherHost_BrowserDropsSession(t *testing.
 	e := setupLoginE2E(t, &other)
 
 	resp := e.browser.get(e2eHubOrigin + "/api/v2/" + e.slug + "/auth/login")
+	defer func() { _ = resp.Body.Close() }()
 	c := sessionSetCookie(resp)
 	if c == nil {
 		t.Fatalf("login set no session cookie; Set-Cookie=%v", resp.Header.Values("Set-Cookie"))

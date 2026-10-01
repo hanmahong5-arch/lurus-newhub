@@ -105,7 +105,7 @@ func TestOaiStreamHandler_IncompleteBeforeFirstByte_TimeoutStillRetryable(t *tes
 		IsStream:    true,
 	}
 	pr, pw := io.Pipe()
-	defer pw.Close()
+	defer func() { _ = pw.Close() }()
 	resp := &http.Response{StatusCode: 200, Body: pr, Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
 
 	_, apiErr := OaiStreamHandler(w.ctx, info, resp)
