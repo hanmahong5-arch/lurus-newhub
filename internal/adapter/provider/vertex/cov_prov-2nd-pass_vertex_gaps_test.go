@@ -247,6 +247,7 @@ func TestProv2ndPass_Vertex_DoResponse_Stream_Claude(t *testing.T) {
 	c, w := prov_ali_repl_vertex_newGinContext(t)
 	body := prov_2nd_pass_vertex_sseBody(
 		`{"type":"message_start","message":{"id":"m1","model":"claude-3-opus@20240229","usage":{"input_tokens":3,"output_tokens":0}}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
 		`{"type":"message_stop"}`,
 	)
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: prov_ali_repl_vertex_nopCloser(body)}
@@ -295,7 +296,7 @@ func TestProv2ndPass_Vertex_DoResponse_Stream_GeminiNative(t *testing.T) {
 	a := &Adaptor{RequestMode: RequestModeGemini}
 	c, w := prov_ali_repl_vertex_newGinContext(t)
 	body := prov_2nd_pass_vertex_sseBody(
-		`{"candidates":[{"content":{"parts":[{"text":"a"}]},"index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
+		`{"candidates":[{"content":{"parts":[{"text":"a"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
 	)
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: prov_ali_repl_vertex_nopCloser(body)}
 	info := &relaycommon.RelayInfo{

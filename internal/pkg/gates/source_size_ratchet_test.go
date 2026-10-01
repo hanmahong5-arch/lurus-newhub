@@ -35,12 +35,12 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/deployment.go":           810,
 	"internal/adapter/handler/internal_api_ext.go":     1057,
 	"internal/adapter/handler/oauth.go":                997,  // +19 (2026-09-22 hotfix): GetSessionInfo resolves tenant_slug from the user's tenant when the session carries none — the only path by which an already-established console session can learn its own routing slug without a re-login
-	"internal/adapter/handler/relay.go":                992,  // -23 (cycle 14): processChannelError + the terminal/error-log recorders moved to relay_errors.go, paying for the channel-select failover and breaker-outcome wiring
+	"internal/adapter/handler/relay.go":                979,  // -13 (cycle 20): reportBreakerOutcome moved to relay_breaker_outcome.go, paying for the surfaced-incomplete-stream early return in the error renderer
 	"internal/adapter/middleware/auth.go":              732,  // -106 (cycle 14): PlaygroundAuth moved to auth_playground.go, paying for the wire-language fixes in resolveSessionIdentity/TokenAuth; -75 (cycle 18 L3): the ValidateUserToken error → rejection mapping moved to auth_token_reject.go
 	"internal/adapter/middleware/oidc_auth.go":         1214, // +8 (2026-09-23): JWKSManager.refreshInterval — the refresh goroutine raced tests on jwksRefreshInterval
-	"internal/adapter/provider/claude/relay-claude.go": 897, // +5 response_format hook (2026-09-28), paid for by moving mapToolChoice to tool_choice.go (-48)
-	"internal/adapter/provider/common/relay_info.go":   894, // +1 WalletChargeCNY4 (recorded wallet charge, migration 041)
-	"internal/adapter/provider/gemini/relay-gemini.go": 1427,
+	"internal/adapter/provider/claude/relay-claude.go": 844,  // -53 (cycle 20): stream finalization moved to stream_final.go, paying for the zero-byte failover in ClaudeStreamHandler
+	"internal/adapter/provider/common/relay_info.go":   894,  // +1 WalletChargeCNY4 (recorded wallet charge, migration 041)
+	"internal/adapter/provider/gemini/relay-gemini.go": 1438, // +11 (cycle 20): GeminiChatStreamHandler fails over a zero-byte incomplete stream and returns the surfaced mid-stream error instead of nil; the claude/openai/relay.go growth from the same change was paid for by pure moves (stream_final.go, realtime_ledger.go, relay_breaker_outcome.go)
 	"internal/adapter/repo/channel.go":                 1226,
 	"internal/adapter/repo/log.go":                     1016, // +3 consume-log write-failure counter (2026-09-28), paid for by moving resolveLogTenantID to log_tenant_resolve.go (-19)
 	"internal/adapter/repo/option.go":                  948,
