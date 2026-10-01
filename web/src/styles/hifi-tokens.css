@@ -841,6 +841,11 @@
 
 .hf-main {
   display: grid;
+  /* minmax(0, 1fr), not the implicit auto column: an auto track grows to the
+   * widest child's min-content, so an English topbar (crumb + action +
+   * language + theme + user name) 409px wide widened the whole page body
+   * past a 390px phone and every pane inside it overflowed. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 56px 1fr;
   min-height: 0;
   overflow: hidden;
@@ -1265,6 +1270,10 @@
   }
   .hf-top .btn {
     white-space: nowrap;
+  }
+  /* The avatar initials stay; the trigger keeps its aria-label. */
+  .hf-top .hf-user-name {
+    display: none;
   }
 }
 

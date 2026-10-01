@@ -81,6 +81,13 @@ test.describe('token page — phone viewport', () => {
     ).toBeVisible({ timeout: 15_000 });
 
     const width = page.viewportSize()!.width;
+    // The whole scroll body first: a single over-wide child (it was the
+    // English topbar) widens every pane, and the per-element checks below
+    // then fail by a fraction of a pixel with no hint of the real cause.
+    const overflow = await page
+      .locator('.hf-body')
+      .evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow, 'page body scrolls sideways').toBeLessThanOrEqual(0);
     const targets = {
       snippet: page.locator('pre').first(),
       rotate: page.getByRole('button', { name: /rotate key|轮换密钥/i }),
