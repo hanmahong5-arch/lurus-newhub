@@ -331,6 +331,7 @@ func (e *e2eEnv) loginLeg() string {
 	t := e.browser.t
 	t.Helper()
 	resp := e.browser.get(e2eHubOrigin + "/api/v2/" + e.slug + "/auth/login")
+	defer func(r *http.Response) { _ = r.Body.Close() }(resp)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("login = %d %s, want 302 to the IdP", resp.StatusCode, bodyOf(t, resp))
 	}
@@ -339,6 +340,7 @@ func (e *e2eEnv) loginLeg() string {
 		t.Fatalf("login redirected to %q, want the IdP authorize endpoint", authz)
 	}
 	resp = e.browser.get(authz)
+	defer func(r *http.Response) { _ = r.Body.Close() }(resp)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("authorize = %d %s, want 302 back to the app", resp.StatusCode, bodyOf(t, resp))
 	}
@@ -365,6 +367,7 @@ func (e *e2eEnv) getJSON(path string) (int, e2eSessionInfo) {
 	t := e.browser.t
 	t.Helper()
 	resp := e.browser.get(e2eHubOrigin + path)
+	defer func(r *http.Response) { _ = r.Body.Close() }(resp)
 	raw := bodyOf(t, resp)
 	var out e2eSessionInfo
 	_ = json.Unmarshal([]byte(raw), &out)
@@ -379,6 +382,7 @@ func TestOIDCLoginE2E_FullFlow_HostOnlySecureCookieAuthenticatesV2(t *testing.T)
 
 	cb := e.loginLeg()
 	resp := e.browser.get(cb)
+	defer func(r *http.Response) { _ = r.Body.Close() }(resp)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("callback = %d %s, want 302", resp.StatusCode, bodyOf(t, resp))
 	}
@@ -463,6 +467,7 @@ func TestOIDCLoginE2E_TamperedState_Rejected(t *testing.T) {
 	q := u.Query()
 	q.Set("state", q.Get("state")+"x")
 	resp := e.browser.get(e2eRedirectURI + "?" + q.Encode())
+	defer func(r *http.Response) { _ = r.Body.Close() }(resp)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("callback with a tampered state = %d %s, want 400", resp.StatusCode, bodyOf(t, resp))
 	}
@@ -531,6 +536,7 @@ func TestOIDCLoginE2E_DefaultCookieDomain_AcceptedAtHubHost(t *testing.T) {
 	e := setupLoginE2E(t, nil)
 
 	resp := e.browser.get(e.loginLeg())
+	defer func(r *http.Response) { _ = r.Body.Close() }(resp)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("callback = %d %s, want 302", resp.StatusCode, bodyOf(t, resp))
 	}

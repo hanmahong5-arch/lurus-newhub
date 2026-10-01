@@ -26,9 +26,6 @@ func handleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	if requestMode == RequestModeCompletion {
 		claudeInfo.Usage = app.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 	} else {
-		if claudeInfo.Usage.PromptTokens == 0 {
-			//上游出错
-		}
 		if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
 			if common.DebugEnabled {
 				common.SysLog("claude response usage is not complete, maybe upstream error")
@@ -70,9 +67,9 @@ func handleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		return helper.SurfaceIncompleteStream(c, info.RelayFormat, info)
 	}
 
-	if info.RelayFormat == types.RelayFormatClaude {
-		//
-	} else if info.RelayFormat == types.RelayFormatOpenAI {
+	// A caller on the native wire already received message_stop from the upstream;
+	// only an OpenAI-wire caller needs the usage chunk and [DONE] here.
+	if info.RelayFormat == types.RelayFormatOpenAI {
 		if info.ShouldIncludeUsage {
 			// OpenAI-wire caller: prompt_tokens must be the whole prompt with
 			// cached_tokens as the subset that hit the cache (OpenAI usage
