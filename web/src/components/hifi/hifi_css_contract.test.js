@@ -198,6 +198,19 @@ describe('hifi-tokens.css — CSS-discipline contract (2026-09-29)', () => {
     ).not.toMatch(/#[0-9a-f]{3,6};|rgba?\(/i);
   });
 
+  it('the shell main column cannot be widened by its children (phone topbar overflow, cycle-20 follow-up)', () => {
+    const start = CSS.indexOf('.hf-main {');
+    expect(start).toBeGreaterThan(-1);
+    expect(CSS.slice(start, CSS.indexOf('}', start))).toMatch(
+      /grid-template-columns: minmax\(0, 1fr\);/,
+    );
+    const phone = CSS.indexOf('@media (max-width: 640px) {');
+    const rule = CSS.indexOf('.hf-top .hf-user-name {', phone);
+    expect(phone).toBeGreaterThan(-1);
+    expect(rule).toBeGreaterThan(phone);
+    expect(CSS.slice(rule, CSS.indexOf('}', rule))).toMatch(/display: none;/);
+  });
+
   it('the token page no longer hard-codes its column template inline (an inline style would beat the @media rule)', () => {
     const src = fs.readFileSync(
       path.resolve(HERE, '../../pages/v2/Token/index.jsx'),
