@@ -34,6 +34,10 @@ COPY zita-sdk-go/ /shared/zita-sdk-go/
 # Copy lurus-entkit (offline entitlement-token verifier, platform ADR 0030)
 COPY lurus-entkit/ /shared/lurus-entkit/
 
+# Module proxy is a build arg so CI can try a nearby mirror first; go.sum
+# pins every module's hash, so the proxy cannot change what gets built.
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 ADD go.mod go.sum ./
 RUN go mod download
 

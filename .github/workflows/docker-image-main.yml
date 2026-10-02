@@ -148,6 +148,12 @@ jobs:
           cache-to: ${{ !vars.CI_RUNS_ON && 'type=gha,mode=max' || '' }}
           provenance: false
           sbom: false
+          # go mod download used the Dockerfile default (proxy.golang.org),
+          # which the local pool reaches over a cross-border link that went to
+          # a few KB/s for a whole day on 2026-10-01. "|" falls through to the
+          # next proxy on ANY error, not just 404/410; vars.CI_GOPROXY wins.
+          build-args: |
+            GOPROXY=${{ vars.CI_GOPROXY || 'https://goproxy.cn|https://proxy.golang.org|direct' }}
 
       - name: Scan image for HIGH/CRITICAL vulnerabilities (Trivy)
         # BLOCKING gate, absorbed from the deleted build.yaml. ignore-unfixed
