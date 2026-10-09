@@ -146,7 +146,8 @@
         "docs": "文档",
         "support": "支持",
         "account_menu": "账户",
-        "mode_switch_unavailable": "模式切换暂未开放"
+        "mode_switch_unavailable": "模式切换暂未开放",
+        "try_next": "试用新版控制台"
       },
       "not_available": {
         "label": "暂无"
