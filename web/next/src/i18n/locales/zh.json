@@ -19,5 +19,16 @@
   "Go Back": "返回",
   "Back to Home": "回到首页",
   "Try again": "重试",
-  "No Data": "暂无数据"
+  "No Data": "暂无数据",
+  "Workbench": "工作台",
+  "Enterprise Management": "企业管理",
+  "Platform Operations": "平台运营",
+  "Members & Invitations": "成员与邀请",
+  "Departments": "部门",
+  "Bulk Key Issuing": "批量发 Key",
+  "Billing & Reconciliation": "账单与对账",
+  "Data & Security": "数据与安全",
+  "Channels & Account Pools": "渠道与账号池",
+  "Operations Overview": "运营总览",
+  "Platform Rules & Templates": "平台规则与模板"
 }
