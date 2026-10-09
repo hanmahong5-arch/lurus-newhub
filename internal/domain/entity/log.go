@@ -73,6 +73,16 @@ type Log struct {
 	// before the column existed (or zero quota); readers price those at
 	// today's rate and flag the figure as an estimate.
 	PricedCNY4 int64 `json:"priced_cny4" gorm:"type:bigint;not null;default:0"`
+	// ChannelKeyIdx (migration 051) is the index of the upstream key a
+	// multi-key channel used for this request; -1 = single-key channel or a
+	// row written before the column existed. Stamped by the repo log writers
+	// from the request context. NO `index:` tag (see the note above).
+	//
+	// It is a pointer on purpose: GORM treats a zero value as "unset" and
+	// substitutes the column default (-1) for it, which would silently turn
+	// key #0 into "no key". A non-nil pointer to 0 is inserted as 0; nil keeps
+	// the DB default for the writers that never learned about keys.
+	ChannelKeyIdx *int64 `json:"channel_key_idx,omitempty" gorm:"type:bigint;not null;default:-1"`
 }
 
 // INDEXES ON `logs` THAT THIS STRUCT DELIBERATELY DOES NOT DECLARE

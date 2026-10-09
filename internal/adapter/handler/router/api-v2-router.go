@@ -224,6 +224,21 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantMembers.PUT("/:user_id/role", handler.SetTenantMemberRoleV2)
 		}
 
+		// Relay data control (migration 050): tenant-admin log retention and content
+		// rules (admin gate inside the handlers; the tenant is always the caller's own).
+		tenantDataPolicy := apiV2.Group("/:tenant_slug/data-policy")
+		tenantDataPolicy.Use(middleware.UserAuth())
+		tenantDataPolicy.Use(middleware.TenantSlugGuard())
+		{
+			tenantDataPolicy.GET("/retention", handler.GetContentRetentionV2)
+			tenantDataPolicy.PUT("/retention", handler.PutContentRetentionV2)
+			tenantDataPolicy.PUT("/tokens/:id/retention", handler.PutTokenContentRetentionV2)
+			tenantDataPolicy.GET("/rules", handler.ListContentRulesV2)
+			tenantDataPolicy.POST("/rules", handler.CreateContentRuleV2)
+			tenantDataPolicy.PUT("/rules/:id", handler.UpdateContentRuleV2)
+			tenantDataPolicy.DELETE("/rules/:id", handler.DeleteContentRuleV2)
+		}
+
 		// ================================================================
 		// Tenant-scoped Channel Management (session auth — admin only)
 		// ================================================================
@@ -244,6 +259,13 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantChannels.DELETE("/:id", handler.DeleteChannelV2)
 			tenantChannels.POST("/:id/test", handler.TestChannelV2)
 			tenantChannels.GET("/:id/upstream-models", handler.FetchUpstreamModelsV2)
+			tenantChannels.POST("/import", handler.ImportChannelsV2)
+			tenantChannels.GET("/:id/health", handler.GetChannelHealthV2)
+			tenantChannels.POST("/:id/keys/:idx/test", handler.TestChannelKeyV2)
+			tenantChannels.POST("/:id/keys/:idx/restore", handler.RestoreChannelKeyV2)
+			tenantChannels.PUT("/:id/keys/:idx/settings", handler.UpdateChannelKeySettingsV2)
+			tenantChannels.GET("/usage-summary", handler.GetChannelUsageSummaryV2)
+			tenantChannels.GET("/:id/usage", handler.GetChannelUsageV2)
 		}
 
 		// ================================================================
@@ -466,6 +488,10 @@ func SetApiV2Router(router *gin.Engine) {
 		// options-driven; bare-array contract, see GetRecommendedRelays).
 		apiV2.GET("/relays/recommended", handler.GetRecommendedRelays)
 
+		// Anonymous model availability (operational|degraded|down per model);
+		// channel state only, no channel/account/upstream detail. 30s cached.
+		apiV2.GET("/public/model-status", handler.GetPublicModelStatus)
+
 		// Phase D Track 2.2: tenant-scoped heartbeat — sibling of /:tenant_slug/user/me.
 		// No middleware: UserHeartbeat does inline raw-token (Token.Key) auth,
 		// which middleware.UserAuth (access-token based) would otherwise reject.
@@ -585,6 +611,17 @@ func SetApiV2Router(router *gin.Engine) {
 				// per-device session of a user (SESSION_REGISTRY_ENABLED).
 				adminUsers.DELETE("/:id/sessions", handler.RevokeUserSessionsAdminV2)
 			}
+
+			// Platform content rules and channel override templates (migration 050).
+			adminRoute.GET("/content-rules", handler.ListPlatformContentRulesV2)
+			adminRoute.POST("/content-rules", handler.CreatePlatformContentRuleV2)
+			adminRoute.PUT("/content-rules/:id", handler.UpdatePlatformContentRuleV2)
+			adminRoute.DELETE("/content-rules/:id", handler.DeletePlatformContentRuleV2)
+			adminRoute.GET("/channel-templates", handler.ListChannelTemplatesV2)
+			adminRoute.POST("/channel-templates", handler.CreateChannelTemplateV2)
+			adminRoute.PUT("/channel-templates/:id", handler.UpdateChannelTemplateV2)
+			adminRoute.DELETE("/channel-templates/:id", handler.DeleteChannelTemplateV2)
+			adminRoute.POST("/channel-templates/:id/apply", handler.ApplyChannelTemplateV2)
 
 			// System options panels (read + one-key-per-call write). Thin
 			// wrappers over GetOptions/UpdateOption (secret filtering + per-key

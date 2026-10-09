@@ -66,6 +66,12 @@ type ChannelInfo struct {
 	// the reaper after the deadline passes. Distinguishes "temporarily rate-limited"
 	// (entry present, status != Enabled) from "permanently disabled" (no entry).
 	MultiKeyCooldownUntil map[int]int64 `json:"multi_key_cooldown_until,omitempty"`
+
+	// Per-key pool-ops state (account pool, JSON only, no DDL). All keyed by
+	// key index; see channel_key_ops.go for the semantics.
+	MultiKeyProxy  map[int]string  `json:"multi_key_proxy,omitempty"`
+	MultiKeyWeight map[int]int     `json:"multi_key_weight,omitempty"`
+	MultiKeyMeta   map[int]KeyMeta `json:"multi_key_meta,omitempty"`
 }
 
 // Value implements driver.Valuer interface

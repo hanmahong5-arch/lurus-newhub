@@ -412,5 +412,12 @@ func ValidateChannelSetting(raw string) error {
 			Message: "setting failed to decode: " + err.Error(),
 		}
 	}
+	if settings.PlanMonthlyFeeCNY4 < 0 {
+		return &ChannelConfigValidationError{
+			Field:   "setting",
+			Code:    ErrorCodeChannelSettingInvalid,
+			Message: "plan_monthly_fee_cny4 must be >= 0",
+		}
+	}
 	return nil
 }

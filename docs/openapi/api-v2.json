@@ -67,6 +67,10 @@
     {
       "name": "Tenant Admin",
       "description": "Tenant-admin self-service: invites, member roles, audit trail and model allow-list"
+    },
+    {
+      "name": "Status",
+      "description": "Anonymous availability views"
     }
   ],
   "paths": {
@@ -3583,6 +3587,1493 @@
           }
         }
       }
+    },
+    "/api/v2/{tenant_slug}/data-policy/retention": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Get Content Retention",
+        "description": "Reads the relay-content retention setting of the caller's own tenant: the platform default, the tenant override and the effective mode (Tenant admin only).",
+        "operationId": "getContentRetentionV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retention view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ContentRetentionView"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Set Content Retention",
+        "description": "Sets the tenant retention mode. A tenant may tighten past the platform default but never loosen below it (400 RETENTION_CANNOT_LOOSEN). Audited.",
+        "operationId": "putContentRetentionV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentRetentionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated retention view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ContentRetentionView"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST, INVALID_RETENTION or RETENTION_CANNOT_LOOSEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/data-policy/tokens/{id}/retention": {
+      "put": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Set Token Content Retention",
+        "description": "Sets the retention mode of one token of the caller's tenant; it may not be looser than the tenant's effective mode. A token of another tenant answers 404. Audited.",
+        "operationId": "putTokenContentRetentionV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/TokenId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentRetentionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST, INVALID_RETENTION or RETENTION_CANNOT_LOOSEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/data-policy/rules": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "List Tenant Content Rules",
+        "description": "Lists the caller's tenant content rules plus the built-in pattern names and the per-scope limits.",
+        "operationId": "listContentRulesV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ContentRuleList"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Create Tenant Content Rule",
+        "description": "Creates a content rule for the caller's own tenant (the tenant is never read from the body). 409 RULE_LIMIT when the per-scope cap is reached. Audited.",
+        "operationId": "createContentRuleV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ContentRule"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST or INVALID_RULE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "RULE_LIMIT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/data-policy/rules/{id}": {
+      "put": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Update Tenant Content Rule",
+        "description": "Updates a rule of the caller's tenant; an id belonging to another tenant or to the platform scope answers 404 RULE_NOT_FOUND. Audited.",
+        "operationId": "updateContentRuleV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/ContentRuleId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ContentRule"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST or INVALID_RULE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Delete Tenant Content Rule",
+        "description": "Deletes a rule of the caller's tenant; cross-tenant ids answer 404. Audited.",
+        "operationId": "deleteContentRuleV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/ContentRuleId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/channels/import": {
+      "post": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "Import Channel Keys",
+        "description": "Bulk-imports upstream keys. dry_run defaults to true: the response lists per-item status (ready, duplicate, invalid, probe_failed) with a key fingerprint, never the key. With dry_run=false the ready items are written, either as a new multi-key channel (type) or appended to channel_id (which must belong to the caller's tenant, else 403). At most 500 items. Audited.",
+        "operationId": "importChannelKeysV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelImportReport"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/channels/usage-summary": {
+      "get": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "Channel Usage Summary",
+        "description": "Every channel of the caller's tenant over the last 30 days: requests, errors, tokens, quota and cost; plan-fee channels carry a utilization ratio and an idle/overuse verdict and sort first.",
+        "operationId": "getChannelUsageSummaryV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelUsageSummary"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/channels/{id}/usage": {
+      "get": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "Channel Usage",
+        "description": "Usage of one channel per upstream key index plus the channel total, over the window. A channel of another tenant answers 403.",
+        "operationId": "getChannelUsageV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/ChannelId"
+          },
+          {
+            "$ref": "#/components/parameters/UsageWindow"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelUsage"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/channels/{id}/health": {
+      "get": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "Channel Health",
+        "description": "Why a channel can or cannot route right now: the routable flag, machine-readable reasons, the cooldown and per-key health. Key material is never returned, only fingerprints. A channel of another tenant answers 403.",
+        "operationId": "getChannelHealthV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/ChannelId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelHealth"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/channels/{id}/keys/{idx}/test": {
+      "post": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "Test One Channel Key",
+        "description": "Probes one upstream key (egress and key proxy pass the SSRF guard). When the probe passes and the key is currently blocked, the response carries a short-lived restore_proof bound to the blocked state. Audited.",
+        "operationId": "testChannelKeyV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/ChannelId"
+          },
+          {
+            "$ref": "#/components/parameters/KeyIndex"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Probe result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelKeyProbe"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/channels/{id}/keys/{idx}/restore": {
+      "post": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "Restore One Channel Key",
+        "description": "Lifts the block on one key, only when the proof from the key test still matches the key's current state (409 proof_stale otherwise). Audited.",
+        "operationId": "restoreChannelKeyV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/ChannelId"
+          },
+          {
+            "$ref": "#/components/parameters/KeyIndex"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelKeyRestoreRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "restored": {
+                          "type": "boolean"
+                        },
+                        "key_index": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "proof_required or invalid key index",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "proof_stale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/channels/{id}/keys/{idx}/settings": {
+      "put": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "Update Channel Key Settings",
+        "description": "Per-key proxy override (validated by the SSRF guard), weight (0-100, 0 = never picked), name, plan kind, expiry and tags. Needs a multi-key channel. Audited.",
+        "operationId": "updateChannelKeySettingsV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/ChannelId"
+          },
+          {
+            "$ref": "#/components/parameters/KeyIndex"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelKeySettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/public/model-status": {
+      "get": {
+        "tags": [
+          "Status"
+        ],
+        "summary": "Public Model Status",
+        "description": "Anonymous per-model availability (operational, degraded or down) derived from platform-shared channel state. No channel, account or upstream detail is exposed. Cached for 30 seconds.",
+        "operationId": "getPublicModelStatusV2",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Model status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/PublicModelStatus"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "status unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/admin/content-rules": {
+      "get": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "List Platform Content Rules",
+        "description": "Lists platform-scope content rules (Platform Admin only).",
+        "operationId": "listPlatformContentRulesV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ContentRuleList"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Create Platform Content Rule",
+        "description": "Creates a platform-scope rule (scope is fixed server-side). Audited.",
+        "operationId": "createPlatformContentRuleV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ContentRule"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST or INVALID_RULE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "RULE_LIMIT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/admin/content-rules/{id}": {
+      "put": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Update Platform Content Rule",
+        "description": "Updates a platform-scope rule; a tenant rule id answers 404. Audited.",
+        "operationId": "updatePlatformContentRuleV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContentRuleId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ContentRule"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST or INVALID_RULE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Delete Platform Content Rule",
+        "description": "Deletes a platform-scope rule. Audited.",
+        "operationId": "deletePlatformContentRuleV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContentRuleId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/channel-templates": {
+      "get": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "List Channel Override Templates",
+        "description": "Lists reusable param/header override templates (Platform Admin only).",
+        "operationId": "listChannelTemplatesV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChannelOverrideTemplate"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Create Channel Override Template",
+        "description": "Creates an override template. Audited.",
+        "operationId": "createChannelTemplateV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelOverrideTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelOverrideTemplate"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST or INVALID_TEMPLATE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "TEMPLATE_NAME_EXISTS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/admin/channel-templates/{id}": {
+      "put": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Update Channel Override Template",
+        "description": "Updates a template and bumps its version; channels already carrying an older application are not rewritten until it is applied again. Audited.",
+        "operationId": "updateChannelTemplateV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelTemplateId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelOverrideTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelOverrideTemplate"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST or INVALID_TEMPLATE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "TEMPLATE_NAME_EXISTS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Delete Channel Override Template",
+        "description": "Deletes a template. Audited.",
+        "operationId": "deleteChannelTemplateV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelTemplateId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/channel-templates/{id}/apply": {
+      "post": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Apply Channel Override Template",
+        "description": "Applies a template to the listed channels (bulk, per-channel results; one missing channel does not abort the rest). Audited.",
+        "operationId": "applyChannelTemplateV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelTemplateId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "channel_ids"
+                ],
+                "properties": {
+                  "channel_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-channel results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "template_id": {
+                          "type": "integer"
+                        },
+                        "template_version": {
+                          "type": "integer"
+                        },
+                        "results": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST or TOO_MANY_CHANNELS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3655,6 +5146,45 @@
         "required": true,
         "schema": {
           "type": "integer"
+        }
+      },
+      "KeyIndex": {
+        "name": "idx",
+        "in": "path",
+        "required": true,
+        "description": "Zero-based index of the upstream key inside a multi-key channel",
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "ContentRuleId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "ChannelTemplateId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "UsageWindow": {
+        "name": "window",
+        "in": "query",
+        "description": "Aggregation window",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "5h",
+            "24h",
+            "7d",
+            "30d"
+          ]
         }
       }
     },
@@ -4778,6 +6308,625 @@
           "propagation_seconds": {
             "type": "integer",
             "description": "Present on PUT: upper bound before every replica serves the new list"
+          }
+        }
+      },
+      "ContentRetentionView": {
+        "type": "object",
+        "properties": {
+          "platform_default": {
+            "type": "string",
+            "description": "Platform-wide retention mode"
+          },
+          "tenant": {
+            "type": "string",
+            "description": "Tenant override; empty means inherit"
+          },
+          "effective": {
+            "type": "string",
+            "description": "Mode in force: the strictest of the layers"
+          }
+        }
+      },
+      "ContentRetentionRequest": {
+        "type": "object",
+        "properties": {
+          "content_retention": {
+            "type": "string",
+            "enum": [
+              "",
+              "full",
+              "metadata_only",
+              "none"
+            ],
+            "description": "Empty string means inherit"
+          }
+        },
+        "required": [
+          "content_retention"
+        ]
+      },
+      "ContentRule": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "platform",
+              "tenant"
+            ]
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "ordinal": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role_scope": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "pattern_type": {
+            "type": "string"
+          },
+          "builtin": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "replacement": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "description": "observe or enforce"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_by": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          }
+        }
+      },
+      "ContentRuleRequest": {
+        "type": "object",
+        "properties": {
+          "ordinal": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role_scope": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "pattern_type": {
+            "type": "string"
+          },
+          "builtin": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "replacement": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ContentRuleList": {
+        "type": "object",
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContentRule"
+            }
+          },
+          "builtins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_rules": {
+            "type": "integer"
+          },
+          "max_pattern_len": {
+            "type": "integer"
+          }
+        }
+      },
+      "ChannelOverrideTemplate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "param_override": {
+            "type": "string"
+          },
+          "header_override": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "created_by": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          }
+        }
+      },
+      "ChannelOverrideTemplateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "param_override": {
+            "type": "string",
+            "description": "JSON object text"
+          },
+          "header_override": {
+            "type": "string",
+            "description": "JSON object text"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "ChannelImportRequest": {
+        "type": "object",
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "probe": {
+            "type": "boolean"
+          },
+          "channel_id": {
+            "type": "integer",
+            "description": "Append to this multi-key channel of the caller's tenant"
+          },
+          "type": {
+            "type": "integer",
+            "description": "Channel type for a new channel (required without channel_id)"
+          },
+          "group": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "models": {
+            "description": "Array, or comma-separated string",
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "proxy": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "string",
+            "description": "Newline-separated keys, or a JSON array text"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "base_url": {
+                  "type": "string"
+                },
+                "models": {
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "plan_kind": {
+                  "type": "string"
+                },
+                "expires_at": {
+                  "description": "RFC3339 string or Unix seconds",
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ]
+                },
+                "proxy": {
+                  "type": "string"
+                },
+                "weight": {
+                  "type": "integer"
+                },
+                "tags": {
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "key"
+              ]
+            }
+          }
+        }
+      },
+      "ChannelImportReport": {
+        "type": "object",
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ready",
+                    "duplicate",
+                    "invalid",
+                    "probe_failed"
+                  ]
+                },
+                "error_code": {
+                  "type": "string"
+                },
+                "fingerprint": {
+                  "type": "string"
+                },
+                "existing_channel_id": {
+                  "type": "integer"
+                },
+                "probe": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "latency_ms": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "imported": {
+                  "type": "boolean"
+                },
+                "channel_id": {
+                  "type": "integer"
+                },
+                "key_index": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ChannelUsage": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "type": "integer"
+          },
+          "window": {
+            "type": "string",
+            "enum": [
+              "5h",
+              "24h",
+              "7d",
+              "30d"
+            ]
+          },
+          "since": {
+            "type": "integer"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "total": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "plan_monthly_fee_cny4": {
+            "type": "integer"
+          },
+          "utilization": {
+            "type": "number"
+          },
+          "prorated_fee_cny4": {
+            "type": "integer"
+          }
+        }
+      },
+      "ChannelUsageSummary": {
+        "type": "object",
+        "properties": {
+          "window": {
+            "type": "string"
+          },
+          "since": {
+            "type": "integer"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ChannelHealth": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "type": "integer"
+          },
+          "routable": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cooldown_until": {
+            "type": "integer"
+          },
+          "window": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_success_at": {
+            "type": "integer",
+            "nullable": true
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "fingerprint": {
+                  "type": "string"
+                },
+                "routable": {
+                  "type": "boolean"
+                },
+                "reasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cooldown_until": {
+                  "type": "integer"
+                },
+                "window": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "last_error": {
+                  "type": "string"
+                },
+                "last_success_at": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "weight": {
+                  "type": "integer"
+                },
+                "has_proxy": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ChannelKeyProbe": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "latency_ms": {
+            "type": "integer"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "key_index": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "restore_proof": {
+            "type": "string"
+          },
+          "restore_proof_expires_at": {
+            "type": "integer"
+          }
+        }
+      },
+      "ChannelKeyRestoreRequest": {
+        "type": "object",
+        "properties": {
+          "proof": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "proof"
+        ]
+      },
+      "ChannelKeySettings": {
+        "type": "object",
+        "properties": {
+          "proxy": {
+            "type": "string",
+            "description": "Empty string clears the override"
+          },
+          "weight": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "name": {
+            "type": "string"
+          },
+          "plan_kind": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "integer",
+            "description": "Unix seconds; 0 clears"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PublicModelStatus": {
+        "type": "object",
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "operational",
+                    "degraded",
+                    "down"
+                  ]
+                }
+              }
+            }
+          },
+          "updated_at": {
+            "type": "integer"
           }
         }
       }

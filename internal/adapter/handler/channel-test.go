@@ -706,7 +706,7 @@ func testAllChannels(notify bool) error {
 			testAllChannelsLock.Unlock()
 		}()
 
-		for _, channel := range channels {
+		for _, channel := range scheduledTestChannels(channels, notify) {
 			autoProbeChannel(channel, disableThreshold)
 			time.Sleep(common.RequestInterval)
 		}

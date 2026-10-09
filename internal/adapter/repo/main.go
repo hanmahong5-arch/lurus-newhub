@@ -556,6 +556,10 @@ func migrateDB() error {
 		// the other is a no-op; this entry is the sole creator on a fresh database
 		// that skips the SQL runner and on the hermetic SQLite tier.
 		&AccountKeyBinding{},
+		// Relay data control (migration 050) — dual-creation like 049.
+		&ContentRule{},
+		&ChannelOverrideTemplate{},
+		&ChannelTemplateApplication{},
 	)
 	if err != nil {
 		return err
