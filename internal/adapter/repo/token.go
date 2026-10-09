@@ -65,8 +65,10 @@ type Token struct {
 	TrustedIdentityHeaders bool   `json:"trusted_identity_headers" gorm:"not null;default:false"`
 	EmployeeRef            string `json:"employee_ref" gorm:"type:varchar(64);not null;default:''"`
 	// SourceProduct mirrors domain/entity/token.go (migration 049); tag must stay byte-identical.
-	SourceProduct string         `json:"source_product" gorm:"type:varchar(32);not null;default:''"`
-	DeletedAt     gorm.DeletedAt `gorm:"index"`
+	SourceProduct string `json:"source_product" gorm:"type:varchar(32);not null;default:''"`
+	// LogRetention mirrors domain/entity/token.go (migration 050); tag must stay byte-identical.
+	LogRetention string         `json:"content_retention" gorm:"column:content_retention;type:varchar(16);not null;default:''"`
+	DeletedAt    gorm.DeletedAt `gorm:"index"`
 }
 
 func (token *Token) Clean() {

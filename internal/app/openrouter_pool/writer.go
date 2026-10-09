@@ -9,6 +9,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 )
 
@@ -91,6 +92,7 @@ func MaybeMarkCooldown(channelErr types.ChannelError, apiErr *types.NewAPIError)
 	}
 	if !isMulti {
 		app.MarkChannelCooldown(channelErr.ChannelId, 0, until)
+		metrics.RecordChannelCooldown(channelErr.ChannelId, "rate_limit")
 		common.SysLog("channel cooldown: marked channel " +
 			strconv.Itoa(channelErr.ChannelId) +
 			" until " + time.Unix(until, 0).UTC().Format(time.RFC3339))
@@ -107,6 +109,7 @@ func MaybeMarkCooldown(channelErr types.ChannelError, apiErr *types.NewAPIError)
 	if !ok {
 		return
 	}
+	metrics.RecordChannelCooldown(channelErr.ChannelId, "rate_limit")
 	if allParkedUntil > 0 {
 		// Every key is parked. Record it as a channel-level cooldown so
 		// selection skips the channel (its status may be untouched, and the

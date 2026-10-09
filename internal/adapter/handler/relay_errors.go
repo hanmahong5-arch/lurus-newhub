@@ -6,6 +6,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/openrouter_pool"
+	"github.com/LurusTech/lurus-hub/internal/app/planquota"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
@@ -19,7 +20,10 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
-	if app.ShouldDisableChannel(channelError.ChannelType, err) && channelError.AutoBan {
+	// Plan channels: a spent window / low balance is a cooldown to the window reset,
+	// never a ban, and no other cooldown may be written over it.
+	planHandled := planquota.HandleChannelError(channelError, err)
+	if !planHandled && app.ShouldDisableChannel(channelError.ChannelType, err) && channelError.AutoBan {
 		AsyncGo(func() {
 			app.DisableChannel(channelError, err.Error())
 		})
@@ -27,9 +31,11 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 
 	// OpenRouter free-key pool: rate-limited keys get a per-key cooldown rather
 	// than being treated as permanently disabled. Applies to every channel type; no-op for non-429.
-	AsyncGo(func() {
-		openrouter_pool.MaybeMarkCooldown(channelError, err)
-	})
+	if !planHandled {
+		AsyncGo(func() {
+			openrouter_pool.MaybeMarkCooldown(channelError, err)
+		})
+	}
 
 	// Channel-stage errors are recorded (or deliberately skipped) HERE, once
 	// per attempt; mark that so the terminal-error fallback in Relay's deferred

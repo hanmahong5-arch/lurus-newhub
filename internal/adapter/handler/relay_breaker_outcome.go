@@ -31,6 +31,12 @@ import (
 // the handlers' incomplete-stream error (502/504), which IsUpstreamFailure
 // already counts: it used to arrive as nil and be recorded as a success.
 func reportBreakerOutcome(channelID int, err *types.NewAPIError, endReason string) {
+	// The same single choke point feeds the per-channel traffic series
+	// (lurus_channel_requests_total / errors_total). A caller hang-up proved
+	// nothing about the channel, so it is not an attempt there either.
+	if err != nil || endReason != relaycommon.StreamEndClientGone {
+		recordChannelAttempt(channelID, err)
+	}
 	switch {
 	case err == nil && endReason == relaycommon.StreamEndClientGone:
 		channelBreakers.RecordInconclusive(channelID)

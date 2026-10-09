@@ -10,12 +10,16 @@ import (
 type MonitorSetting struct {
 	AutoTestChannelEnabled bool    `json:"auto_test_channel_enabled"`
 	AutoTestChannelMinutes float64 `json:"auto_test_channel_minutes"`
+	// AutoTestChannelMode: all (default, unchanged behaviour) / auto_ban_only /
+	// none. A channel's own setting test_mode overrides it.
+	AutoTestChannelMode string `json:"auto_test_channel_mode"`
 }
 
 // 默认配置
 var monitorSetting = MonitorSetting{
 	AutoTestChannelEnabled: false,
 	AutoTestChannelMinutes: 10,
+	AutoTestChannelMode:    "all",
 }
 
 func init() {

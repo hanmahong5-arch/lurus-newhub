@@ -444,7 +444,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		ProjectId:   common.GetContextKeyInt(c, constant.ContextKeyProjectId),
 		EmployeeRef: common.GetContextKeyString(c, constant.ContextKeyEmployeeRef),
 	}
-	err := LOG_DB.Create(log).Error
+	err := LOG_DB.Create(applyContentRetention(withChannelKeyIdx(c, log))).Error
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	} else {
@@ -526,7 +526,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		ChargedCNY4: params.ChargedCNY4,
 		PricedCNY4:  params.PricedCNY4,
 	}
-	err := LOG_DB.Create(log).Error
+	err := LOG_DB.Create(applyContentRetention(withChannelKeyIdx(c, log))).Error
 	if err != nil {
 		// The charge has already happened; this row was the usage record.
 		// Counted so the loss reaches an alarm, not only a log line.
