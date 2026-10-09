@@ -33,6 +33,9 @@ const (
 	// (migration 045): a validated trusted X-Lurus-Employee header, else the
 	// token's employee_ref, else "". A label, never an authorization claim.
 	ContextKeyEmployeeRef ContextKey = "employee_ref"
+	// ContextKeyTokenSourceProduct carries the product the authenticated token is
+	// bound to (migration 049); the relay default when no allow-listed header.
+	ContextKeyTokenSourceProduct ContextKey = "token_source_product"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"

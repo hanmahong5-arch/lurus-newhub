@@ -523,7 +523,7 @@ func TestEntScope_Statement_LabelsAndAccess(t *testing.T) {
 	if w := c.get("member", "/billing/statement?month=2026-10"); w.Code != http.StatusForbidden {
 		t.Errorf("member status = %d, want 403", w.Code)
 	}
-	for _, q := range []string{"month=2026-13", "month=oct", "month=2026-10&tz=Mars/Base", "month=2026-10&group_by=model"} {
+	for _, q := range []string{"month=2026-13", "month=oct", "month=2026-10&tz=Mars/Base", "month=2026-10&group_by=channel"} {
 		if w := c.get("admin", "/billing/statement?"+q); w.Code != http.StatusBadRequest {
 			t.Errorf("query %q status = %d, want 400", q, w.Code)
 		}
@@ -638,5 +638,45 @@ func TestEntScope_DeptLead_MembershipLookupFailureFailsClosed(t *testing.T) {
 		if rows := entCSV(t, w); len(rows)-1 != 0 {
 			t.Errorf("export: lead got %d rows with failing membership lookup, want 0", len(rows)-1)
 		}
+	}
+}
+
+// group_by=model: one row per model, and the rows add up to the totals for the
+// same window (also equal to the project grouping's totals).
+func TestEntScope_Statement_GroupByModel(t *testing.T) {
+	c := setupEntScope(t)
+	sh := "Asia/Shanghai"
+	c.seed(t, entLogSeed{user: 21, project: c.p1, model: "gpt-x", quota: 500, charged: 30000, priced: 30000, at: entUnix(t, sh, 2026, 10, 5, 12, 0)})
+	c.seed(t, entLogSeed{user: 21, project: c.p1, model: "gpt-x", quota: 700, priced: 12345, at: entUnix(t, sh, 2026, 10, 6, 12, 0)})
+	c.seed(t, entLogSeed{user: 22, project: c.p2, model: "claude-y", quota: 900, charged: 777, priced: 777, at: entUnix(t, sh, 2026, 10, 7, 12, 0)})
+	c.seed(t, entLogSeed{user: 22, project: 0, model: "embed-z", quota: 1000, at: entUnix(t, sh, 2026, 10, 8, 12, 0)})
+	// Outside the month: must not appear.
+	c.seed(t, entLogSeed{user: 21, project: c.p1, model: "gpt-old", quota: 13, charged: 200, priced: 200, at: entUnix(t, sh, 2026, 9, 30, 23, 30)})
+
+	rows, totals := c.statement(t, "admin", "month=2026-10&group_by=model")
+	if len(rows) != 3 {
+		t.Fatalf("rows = %+v, want 3 models", rows)
+	}
+	byKey := map[string]stmtRow{}
+	for _, r := range rows {
+		byKey[r.Key] = r
+		if r.Label != r.Key {
+			t.Errorf("model label = %q, want the model name %q", r.Label, r.Key)
+		}
+	}
+	if g := byKey["gpt-x"]; g.Requests != 2 || g.Quota != 1200 {
+		t.Errorf("gpt-x = %+v, want 2 requests / quota 1200", g)
+	}
+	if got := sumRows(rows); got != totals {
+		t.Errorf("row sum %+v != totals %+v", got, totals)
+	}
+	_, projTotals := c.statement(t, "admin", "month=2026-10&group_by=project")
+	if projTotals != totals {
+		t.Errorf("model totals %+v != project totals %+v", totals, projTotals)
+	}
+	// Dept lead: only own projects' models.
+	leadRows, leadTotals := c.statement(t, "lead", "month=2026-10&group_by=model")
+	if len(leadRows) != 1 || leadRows[0].Key != "gpt-x" || sumRows(leadRows) != leadTotals {
+		t.Errorf("lead rows = %+v totals %+v, want only gpt-x", leadRows, leadTotals)
 	}
 }

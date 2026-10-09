@@ -81,7 +81,7 @@ func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
 	// failure happened before GenRelayInfo ran (e.g. request binding), so
 	// RelayInfo.SourceProduct may not exist yet — read the header directly
 	// off the request that is still in hand, same resolver as the success path.
-	other["source_product"] = ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader))
+	other["source_product"] = ratio_setting.ResolveSourceProductWithDefault(c.GetHeader(ratio_setting.SourceProductHeader), common.GetContextKeyString(c, constant.ContextKeyTokenSourceProduct))
 	if upModel := c.GetString("original_model"); upModel != "" {
 		other["upstream_model"] = upModel
 	}

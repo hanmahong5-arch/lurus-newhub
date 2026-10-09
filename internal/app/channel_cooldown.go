@@ -49,6 +49,10 @@ const (
 	cooldownRedisTimeout  = 300 * time.Millisecond
 )
 
+// cooldownSnapshotReadHook runs between the Redis read and the merge; tests use
+// it to land a manual clear in exactly that window.
+var cooldownSnapshotReadHook func()
+
 // cooldownNow is the clock seam for tests.
 var cooldownNow = time.Now
 
@@ -105,6 +109,11 @@ var (
 	// snapshot, since the local map is their only record.
 	cooldownSynced   = map[cooldownSlot]time.Time{}
 	cooldownRemoteAt time.Time
+	// cooldownGen counts manual clears; cooldownClearedGen holds, per channel,
+	// the generation of its latest clear. A snapshot that started at an earlier
+	// generation is stale for that channel and its slots are discarded.
+	cooldownGen        uint64
+	cooldownClearedGen = map[int]uint64{}
 )
 
 func channelCooldownKey(channelID, keyIdx int) string {
@@ -197,6 +206,7 @@ func refreshCooldownSnapshot() {
 		return
 	}
 	cooldownRemoteAt = now
+	startGen := cooldownGen
 	cooldownMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), cooldownRedisTimeout)
@@ -209,6 +219,9 @@ func refreshCooldownSnapshot() {
 	if err != nil {
 		return
 	}
+	if cooldownSnapshotReadHook != nil {
+		cooldownSnapshotReadHook()
+	}
 	snap := make(map[cooldownSlot]int64, len(entries))
 	for _, e := range entries {
 		member, _ := e.Member.(string)
@@ -219,6 +232,11 @@ func refreshCooldownSnapshot() {
 		snap[slot] = int64(e.Score)
 	}
 	cooldownMu.Lock()
+	for slot := range snap {
+		if cooldownClearedGen[slot.channelID] > startGen {
+			delete(snap, slot)
+		}
+	}
 	cooldownRemote = snap
 	// Redis is the source of truth for entries it accepted: drop the local copy
 	// when the index no longer carries it (lifted elsewhere) or carries an

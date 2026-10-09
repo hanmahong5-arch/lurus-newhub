@@ -36,7 +36,10 @@ type Tenant struct {
 	// the only balance gate for this tenant — a request the platform
 	// pre-authorized is no longer refused by the local user-balance check
 	// (it is only logged). Root-set; default false keeps the local gate.
-	WalletAuthoritative bool           `json:"wallet_authoritative" gorm:"not null;default:false"`
+	WalletAuthoritative bool `json:"wallet_authoritative" gorm:"not null;default:false"`
+	// PayerUserId (migration 048) is the tenant member that owns every
+	// admin-issued key (bulk roster issue); 0 = not set.
+	PayerUserId int64 `json:"payer_user_id" gorm:"type:bigint;not null;default:0"`
 	CreatedAt           time.Time      `json:"created_at"`
 	UpdatedAt           time.Time      `json:"updated_at"`
 	DeletedAt           gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`

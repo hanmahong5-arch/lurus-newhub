@@ -15,6 +15,10 @@ import (
 // when an operator re-enables a channel or key, or a test proves the channel
 // healthy again; deleting only the mirror keys would not lift anything.
 func ClearChannelCooldown(channelID int) {
+	// Stamp the clear before and after the Redis leg: a snapshot read that began
+	// before either stamp may carry the slot and must not be merged back.
+	markCooldownCleared(channelID)
+	defer markCooldownCleared(channelID)
 	cooldownMu.Lock()
 	for slot := range cooldownLocal {
 		if slot.channelID == channelID {
@@ -58,4 +62,14 @@ func ClearChannelCooldown(channelID int) {
 	if _, err := pipe.Exec(ctx); err != nil {
 		common.SysLog("channel cooldown: redis clear failed: " + err.Error())
 	}
+}
+
+// markCooldownCleared advances the clear generation and records it for the
+// channel, so refreshCooldownSnapshot can discard slots of that channel read
+// from Redis before the clear completed.
+func markCooldownCleared(channelID int) {
+	cooldownMu.Lock()
+	cooldownGen++
+	cooldownClearedGen[channelID] = cooldownGen
+	cooldownMu.Unlock()
 }
