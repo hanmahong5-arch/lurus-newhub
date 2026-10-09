@@ -153,6 +153,12 @@ export function mapChannelList(data: unknown): ChannelListResult {
       tag: str(r.tag),
       responseTimeMs: num(r.response_time),
       testTime: num(r.test_time),
+      planKind: str(r.plan_kind),
+      expiresAt: num(r.expires_at),
+      keyCount: num(r.key_count),
+      enabledKeyCount: num(r.enabled_key_count),
+      routable: r.routable === true,
+      unroutableReasons: strList(r.unroutable_reasons),
     }
   })
   return { items, total: num(d.total, items.length) }
@@ -188,7 +194,7 @@ export function mapWindows(value: unknown): PlanWindow[] {
 
 /**
  * The health endpoint's `window` is a free-form map filled by an optional
- * provider (null today). Accept `{windows:[...]}` or a single window object.
+ * plan-quota snapshot (null when the channel was never probed). Accept `{windows:[...]}` or a single window object.
  */
 export function mapHealthWindow(value: unknown): PlanWindow[] {
   const w = rec(value)

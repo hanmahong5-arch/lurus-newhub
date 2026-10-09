@@ -247,6 +247,13 @@ func ListProjectsV2(c *gin.Context) {
 		return
 	}
 
+	// A dept_lead sees only the departments they belong to (zero-usage ones
+	// included: this is membership, not spend). Admins, platform staff and
+	// plain members keep the full list (the token page's project picker).
+	if all, ids := allowedProjectIDs(c, tenantCtx); !all && tenantRoleOf(tenantCtx) == entity.TenantRoleDeptLead {
+		rows = filterProjectsToIDs(rows, ids)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
@@ -254,6 +261,21 @@ func ListProjectsV2(c *gin.Context) {
 			"total": len(rows),
 		},
 	})
+}
+
+// filterProjectsToIDs keeps only the projects whose id is in ids.
+func filterProjectsToIDs(rows []entity.Project, ids []int) []entity.Project {
+	keep := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		keep[id] = struct{}{}
+	}
+	out := make([]entity.Project, 0, len(rows))
+	for _, r := range rows {
+		if _, ok := keep[r.Id]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // RestoreProjectV2 is the undo for DeleteProjectV2.

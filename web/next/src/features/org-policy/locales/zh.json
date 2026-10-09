@@ -92,7 +92,6 @@
   "Observe first, then enforce": "先观察，再拦截",
   "Observe only records matches; requests pass through unchanged.": "“观察”只记录命中，请求原样放行。",
   "Only the first {{n}} keys are listed.": "仅列出前 {{n}} 个密钥。",
-  "Only your own keys are listed; keys of other members are not shown here.": "这里只列出你本人的密钥，不显示其他成员的密钥。",
   "Operator": "操作人",
   "Operator (user id)": "操作人（用户 ID）",
   "Order": "顺序",

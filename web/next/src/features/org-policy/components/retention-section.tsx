@@ -196,7 +196,7 @@ function TokenRetention(props: { floor: Retention }) {
             <NativeSelectOption value=''>{t('Select a key')}</NativeSelectOption>
             {tokens.data.items.map((k) => (
               <NativeSelectOption key={k.id} value={String(k.id)}>
-                {k.name || `#${k.id}`} ({k.key})
+                {k.name || `#${k.id}`} ({k.key}){k.owner ? ` - ${k.owner}` : ''}
               </NativeSelectOption>
             ))}
           </NativeSelect>
@@ -243,8 +243,6 @@ function TokenRetention(props: { floor: Retention }) {
         <h3 className='text-sm font-medium'>{t('Retention for a single key')}</h3>
         <p className='text-muted-foreground text-xs'>
           {t('A key can be stricter than the organization, never looser. Its current setting is not shown here; the result of a save is.')}
-          {' '}
-          {t('Only your own keys are listed; keys of other members are not shown here.')}
         </p>
       </div>
       {picker}

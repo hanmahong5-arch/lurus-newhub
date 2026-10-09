@@ -26,7 +26,6 @@ vi.mock('@/lib/status', async (orig) => {
   }
 })
 
-import { PROBE_CONCURRENCY, mapLimited } from './lib/api'
 import { OpsOverviewPage } from './index'
 
 const NOW_SEC = Math.floor(Date.now() / 1000)
@@ -49,8 +48,7 @@ function ch(id: number, over: Record<string, unknown> = {}) {
 
 interface Setup {
   summary?: unknown
-  health?: Record<number, unknown>
-  detail?: Record<number, unknown>
+  healthSummary?: unknown
   models?: unknown
 }
 
@@ -60,12 +58,11 @@ function serve(s: Setup) {
       if (s.summary instanceof Error) throw s.summary
       return s.summary
     }
-    const m = /^\/channels\/(\d+)(\/health)?$/.exec(path)
-    if (!m) throw new ApiError('not found', { status: 404 })
-    const id = Number(m[1])
-    const v = (m[2] ? s.health : s.detail)?.[id]
-    if (v instanceof Error) throw v
-    return v
+    if (path === '/channels/health-summary') {
+      if (s.healthSummary instanceof Error) throw s.healthSummary
+      return s.healthSummary
+    }
+    throw new ApiError('not found', { status: 404 })
   })
   aGet.mockImplementation(async () => {
     if (s.models instanceof Error) throw s.models
@@ -119,25 +116,44 @@ describe('OpsOverviewPage', () => {
           ch(4, { status: 2 }),
         ],
       },
-      health: {
-        1: {
-          channel_id: 1,
-          routable: true,
-          reasons: [],
-          window: { windows: [{ used_pct: 95 }] },
-        },
-        2: { channel_id: 2, routable: true, reasons: [] },
-        3: {
-          channel_id: 3,
-          routable: false,
-          reasons: ['cooling_429'],
-          last_error: 'rate limited',
-        },
-      },
-      detail: {
-        1: { id: 1, setting: JSON.stringify({ expires_at: NOW_SEC + 3600 }) },
-        2: { id: 2 },
-        3: { id: 3 },
+      healthSummary: {
+        total: 4,
+        truncated: false,
+        channels: [
+          {
+            id: 1,
+            name: 'chan-1',
+            routable: true,
+            reasons: [],
+            expires_at: NOW_SEC + 3600,
+            window_max_used_pct: 95,
+          },
+          {
+            id: 2,
+            name: 'chan-2',
+            routable: true,
+            reasons: [],
+            expires_at: 0,
+            window_max_used_pct: null,
+          },
+          {
+            id: 3,
+            name: 'chan-3',
+            routable: false,
+            reasons: ['cooling_429'],
+            expires_at: 0,
+            window_max_used_pct: null,
+            last_error: 'rate limited',
+          },
+          {
+            id: 4,
+            name: 'chan-4',
+            routable: false,
+            reasons: ['disabled_manual'],
+            expires_at: 0,
+            window_max_used_pct: null,
+          },
+        ],
       },
       models: okModels,
     })
@@ -172,8 +188,7 @@ describe('OpsOverviewPage', () => {
   it('shows an error when model status fails, usage still renders', async () => {
     serve({
       summary: { window: '30d', since: 0, truncated: false, channels: [ch(3)] },
-      health: { 3: { channel_id: 3, routable: true, reasons: [] } },
-      detail: { 3: { id: 3 } },
+      healthSummary: { channels: [], total: 0, truncated: false },
       models: new ApiError('status down', { status: 503 }),
     })
     renderPage()
@@ -183,40 +198,57 @@ describe('OpsOverviewPage', () => {
     expect(screen.getByTestId('usage-section')).toBeInTheDocument()
   })
 
-  it('reports channels whose health could not be read', async () => {
+  it('reads health with ONE request, not one per channel', async () => {
     serve({
       summary: {
         window: '30d',
         since: 0,
         truncated: false,
-        channels: [ch(1), ch(2)],
+        channels: Array.from({ length: 40 }, (_, i) => ch(i + 1)),
       },
-      health: {
-        1: { channel_id: 1, routable: true, reasons: [] },
-        2: new ApiError('denied', { status: 403 }),
-      },
-      detail: { 1: { id: 1 }, 2: { id: 2 } },
+      healthSummary: { channels: [], total: 0, truncated: false },
       models: okModels,
     })
     renderPage()
-    const note = await screen.findByTestId('probes-partial')
-    await waitFor(() => expect(note).toHaveTextContent('#2 (denied)'))
+    await screen.findByTestId('usage-section')
+    await waitFor(() =>
+      expect(tGet).toHaveBeenCalledWith('/channels/health-summary')
+    )
+    const paths = tGet.mock.calls.map((c) => c[0] as string)
+    expect(
+      paths.filter(
+        (p) =>
+          p.startsWith('/channels/') &&
+          p !== '/channels/health-summary' &&
+          p !== '/channels/usage-summary'
+      )
+    ).toEqual([])
+    expect(paths.filter((p) => p === '/channels/health-summary')).toHaveLength(
+      1
+    )
   })
-})
 
-describe('mapLimited', () => {
-  it('never exceeds the concurrency limit and keeps order', async () => {
-    let active = 0
-    let peak = 0
-    const items = Array.from({ length: 20 }, (_, i) => i)
-    const out = await mapLimited(items, PROBE_CONCURRENCY, async (i) => {
-      active++
-      peak = Math.max(peak, active)
-      await new Promise((r) => setTimeout(r, 2))
-      active--
-      return i * 2
+  it('shows an error, not "all routable", when the roll-up fails', async () => {
+    serve({
+      summary: { window: '30d', since: 0, truncated: false, channels: [ch(1)] },
+      healthSummary: new ApiError('denied', { status: 403 }),
+      models: okModels,
     })
-    expect(peak).toBeLessThanOrEqual(PROBE_CONCURRENCY)
-    expect(out).toEqual(items.map((i) => i * 2))
+    renderPage()
+    const errs = await screen.findAllByTestId('probes-error')
+    expect(errs[0]).toHaveTextContent('denied')
+    expect(
+      screen.queryByText('Every channel is routable.')
+    ).not.toBeInTheDocument()
+  })
+
+  it('warns when the server capped the roll-up', async () => {
+    serve({
+      summary: { window: '30d', since: 0, truncated: false, channels: [ch(1)] },
+      healthSummary: { channels: [], total: 0, truncated: true },
+      models: okModels,
+    })
+    renderPage()
+    expect(await screen.findByTestId('probes-partial')).toBeInTheDocument()
   })
 })

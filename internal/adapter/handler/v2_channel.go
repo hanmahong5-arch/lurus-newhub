@@ -45,6 +45,7 @@ type channelView struct {
 	ResponseTime int     `json:"response_time"`
 	TestTime     int64   `json:"test_time"`
 	CreatedTime  int64   `json:"created_time"`
+	channelOps
 }
 
 // ListChannelsV2 retrieves channels for the tenant (admin only)
@@ -149,6 +150,7 @@ func ListChannelsV2(c *gin.Context) {
 	}
 
 	// Project to the field-whitelisted view (masked/empty key, no secrets).
+	opsByID := channelOpsFor(tenantCtx.TenantID, channels)
 	items := make([]channelView, 0, len(channels))
 	for _, ch := range channels {
 		items = append(items, channelView{
@@ -170,6 +172,7 @@ func ListChannelsV2(c *gin.Context) {
 			ResponseTime: ch.ResponseTime,
 			TestTime:     ch.TestTime,
 			CreatedTime:  ch.CreatedTime,
+			channelOps:   opsOrDefault(opsByID, ch),
 		})
 	}
 

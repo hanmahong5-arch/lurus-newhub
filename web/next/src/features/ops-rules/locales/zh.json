@@ -100,5 +100,18 @@
   "User messages": "用户消息",
   "Version": "版本",
   "{{count}} of {{max}} rules used": "已使用 {{count}} / {{max}} 条规则",
-  "{{failed}} of {{count}} channels failed": "{{count}} 个渠道中有 {{failed}} 个失败"
+  "{{failed}} of {{count}} channels failed": "{{count}} 个渠道中有 {{failed}} 个失败",
+  "Application history of {{name}}": "{{name}} 的应用历史",
+  "Applied at": "应用时间",
+  "Applied by": "应用人",
+  "Channel": "渠道",
+  "Channels this template was written into, newest first. Older versions need re-applying.": "该模板写入过的渠道,最新在前。旧版本需要重新应用。",
+  "Close": "关闭",
+  "Could not load the application history": "无法加载应用历史",
+  "History": "历史",
+  "Next": "下一页",
+  "Page {{page}} of {{pages}}": "第 {{page}} / {{pages}} 页",
+  "Previous": "上一页",
+  "This template has not been applied to any channel yet.": "该模板尚未应用到任何渠道。",
+  "{{count}} applications in total": "共 {{count}} 条应用记录"
 }

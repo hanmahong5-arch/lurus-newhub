@@ -73,13 +73,15 @@ export async function saveTokenRetention(tokenId: number, mode: Retention) {
   )
 }
 
-/** Token picker source (server caps size at 100). */
+/** Token picker source: every key of the organization (tenant admin only; server caps size at 100). */
 export const TOKEN_PICK_SIZE = 100
 export const tokenOptionsQueryOptions = queryOptions({
   queryKey: [...policyKey, 'tokens'],
   queryFn: async () =>
     mapTokenOptions(
-      await tenantApi.get('/tokens', { params: { p: 1, size: TOKEN_PICK_SIZE } })
+      await tenantApi.get('/tokens', {
+        params: { scope: 'tenant', p: 1, size: TOKEN_PICK_SIZE },
+      })
     ),
   retry: false,
 })

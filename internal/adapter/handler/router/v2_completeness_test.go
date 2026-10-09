@@ -217,15 +217,16 @@ func TestV2IDOR_Completeness(t *testing.T) {
 
 		// Relay data control (migration 050): platform rules and override templates are
 		// global (no tenant_id dimension), written only behind RootJWTAuth.
-		"POST /api/v2/admin/content-rules":               "RootJWTAuth-gated: creates a platform-scope content rule (scope fixed to platform in the handler, never read from the body)",
-		"PUT /api/v2/admin/content-rules/:id":            "RootJWTAuth-gated: repo.GetContentRule confines the id to scope=platform, so a tenant rule id 404s",
-		"DELETE /api/v2/admin/content-rules/:id":         "RootJWTAuth-gated: repo.DeleteContentRule confines the id to scope=platform",
-		"POST /api/v2/admin/channel-templates":           "RootJWTAuth-gated: override templates are platform-wide, not a per-tenant resource",
-		"PUT /api/v2/admin/channel-templates/:id":        "RootJWTAuth-gated: override templates are platform-wide, not a per-tenant resource",
-		"DELETE /api/v2/admin/channel-templates/:id":     "RootJWTAuth-gated: override templates are platform-wide, not a per-tenant resource",
-		"POST /api/v2/admin/channel-templates/:id/apply": "RootJWTAuth-gated: platform staff bulk-apply a template to chosen channels by design (per-channel results, audited)",
-		"POST /api/v2/:tenant_slug/data-policy/rules":    "CreateContentRuleV2 stamps the caller's own tenant_id from tenantCtx; cannot target another tenant",
-		"PUT /api/v2/:tenant_slug/data-policy/retention": "PutContentRetentionV2 writes the caller's own tenant (tenantSelectionScope), no addressable id",
+		"POST /api/v2/admin/content-rules":                     "RootJWTAuth-gated: creates a platform-scope content rule (scope fixed to platform in the handler, never read from the body)",
+		"PUT /api/v2/admin/content-rules/:id":                  "RootJWTAuth-gated: repo.GetContentRule confines the id to scope=platform, so a tenant rule id 404s",
+		"DELETE /api/v2/admin/content-rules/:id":               "RootJWTAuth-gated: repo.DeleteContentRule confines the id to scope=platform",
+		"POST /api/v2/admin/channel-templates":                 "RootJWTAuth-gated: override templates are platform-wide, not a per-tenant resource",
+		"PUT /api/v2/admin/channel-templates/:id":              "RootJWTAuth-gated: override templates are platform-wide, not a per-tenant resource",
+		"DELETE /api/v2/admin/channel-templates/:id":           "RootJWTAuth-gated: override templates are platform-wide, not a per-tenant resource",
+		"POST /api/v2/admin/channel-templates/:id/apply":       "RootJWTAuth-gated: platform staff bulk-apply a template to chosen channels by design (per-channel results, audited)",
+		"GET /api/v2/admin/channel-templates/:id/applications": "RootJWTAuth-gated read of the platform-wide template application log (append-only, no secrets)",
+		"POST /api/v2/:tenant_slug/data-policy/rules":          "CreateContentRuleV2 stamps the caller's own tenant_id from tenantCtx; cannot target another tenant",
+		"PUT /api/v2/:tenant_slug/data-policy/retention":       "PutContentRetentionV2 writes the caller's own tenant (tenantSelectionScope), no addressable id",
 	}
 
 	isMutation := func(m string) bool {

@@ -8,7 +8,7 @@ import { ApiError } from '@/lib/api'
 import { OrgMembersPage } from './index'
 import { buildInviteBody } from './lib/invite-body'
 import { redeemErrorMessage, roleErrorMessage } from './lib/errors'
-import { buildMembers, mapInviteList, mapIssuedInvite } from './lib/map'
+import { mapInviteList, mapIssuedInvite, mapMemberList } from './lib/map'
 
 const { get, post, put, del } = vi.hoisted(() => ({
   get: vi.fn(),
@@ -43,16 +43,45 @@ function route(handlers: Record<string, unknown>) {
 }
 
 const PROJECTS = { items: [{ id: 7, name: 'Research', deleted: false }] }
-const PROJECT_MEMBERS = {
+const MEMBERS = {
   items: [
+    {
+      user_id: 1,
+      username: 'alice',
+      display_name: 'Alice',
+      email: 'alice@example.com',
+      tenant_role: 'admin',
+      is_payer: true,
+      joined_at: null,
+      departments: [],
+    },
     {
       user_id: 2,
       username: 'bob',
       display_name: 'Bob',
+      email: 'bob@example.com',
       tenant_role: 'dept_lead',
-      added_at: 1700000000,
+      is_payer: false,
+      joined_at: null,
+      departments: [
+        { project_id: 7, name: 'Research', is_lead: true },
+        { project_id: 8, name: 'Ops', is_lead: true },
+      ],
+    },
+    {
+      user_id: 3,
+      username: 'carol',
+      display_name: '',
+      email: 'carol@example.com',
+      tenant_role: '',
+      is_payer: false,
+      joined_at: 1700000000,
+      departments: [],
     },
   ],
+  total: 3,
+  page: 1,
+  page_size: 20,
 }
 const INVITES = {
   invites: [
@@ -102,26 +131,19 @@ beforeEach(() => {
 })
 
 describe('mapping', () => {
-  it('merges department members with the signed-in user', () => {
-    const members = buildMembers(
-      [
-        { project: { id: 7, name: 'Research' }, raw: PROJECT_MEMBERS },
-        { project: { id: 8, name: 'Ops' }, raw: PROJECT_MEMBERS },
-      ],
-      {
-        id: 1,
-        username: 'alice',
-        displayName: 'Alice',
-        email: 'a@x.io',
-        role: 'admin',
-        isPayer: true,
-      }
-    )
-    expect(members.map((m) => m.userId)).toEqual([1, 2])
-    expect(members[1].departments).toEqual(['Research', 'Ops'])
-    expect(members[1].isPayer).toBeNull()
-    expect(members[0].isPayer).toBe(true)
-    expect(members[0].email).toBe('a@x.io')
+  it('maps the tenant roster with real email, payer and departments', () => {
+    const { items, total } = mapMemberList(MEMBERS)
+    expect(total).toBe(3)
+    expect(items.map((m) => m.userId)).toEqual([1, 2, 3])
+    expect(items[1].departments).toEqual(['Research', 'Ops'])
+    expect(items[0].isPayer).toBe(true)
+    expect(items[1].isPayer).toBe(false)
+    expect(items[2].email).toBe('carol@example.com')
+    // falls back to username when there is no display name
+    expect(items[2].name).toBe('carol')
+    // joined_at null => unknown (0), a number is kept
+    expect(items[0].joinedAt).toBe(0)
+    expect(items[2].joinedAt).toBe(1700000000)
   })
 
   it('derives invite state from the server flags', () => {
@@ -180,7 +202,7 @@ describe('OrgMembersPage', () => {
     route({
       '/user/me': ADMIN,
       '/projects': PROJECTS,
-      '/projects/7/members': PROJECT_MEMBERS,
+      '/members': MEMBERS,
       '/invites': INVITES,
     })
     // user/me is read through currentUserQueryOptions.
@@ -205,7 +227,7 @@ describe('OrgMembersPage', () => {
   it('shows a read failure as an error, not an empty list', async () => {
     route({
       '/user/me': ADMIN,
-      '/projects': new ApiError('boom', { status: 500 }),
+      '/members': new ApiError('boom', { status: 500 }),
     })
     renderPage()
     expect(await screen.findByText('Could not load members')).toBeInTheDocument()
@@ -225,7 +247,7 @@ describe('OrgMembersPage', () => {
     route({
       '/user/me': ADMIN,
       '/projects': PROJECTS,
-      '/projects/7/members': PROJECT_MEMBERS,
+      '/members': MEMBERS,
       '/invites': INVITES,
     })
     post.mockResolvedValue({ id: 20, code: 'deadbeef', member_role: '', project_id: 0 })
@@ -254,7 +276,7 @@ describe('OrgMembersPage', () => {
     route({
       '/user/me': ADMIN,
       '/projects': PROJECTS,
-      '/projects/7/members': PROJECT_MEMBERS,
+      '/members': MEMBERS,
       '/invites': INVITES,
     })
     del.mockResolvedValue(undefined)

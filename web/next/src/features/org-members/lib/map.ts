@@ -57,67 +57,34 @@ export function mapProjectMembers(raw: unknown) {
     .filter((m) => m.userId > 0)
 }
 
-export interface SelfRef {
-  id: number
-  username: string
-  displayName: string
-  email: string
-  role: MemberRole
-  isPayer: boolean
+export interface MemberList {
+  items: Member[]
+  total: number
 }
 
-/**
- * The server has no tenant-wide member list; the people it can name are the
- * members of the tenant's departments, plus the signed-in user. Merge them by
- * user id, collecting department names and the earliest join time.
- */
-export function buildMembers(
-  perProject: { project: ProjectRef; raw: unknown }[],
-  self: SelfRef | null
-): Member[] {
-  const byId = new Map<number, Member>()
-  for (const { project, raw } of perProject) {
-    for (const m of mapProjectMembers(raw)) {
-      const cur = byId.get(m.userId)
-      if (cur) {
-        cur.departments.push(project.name)
-        if (m.addedAt > 0 && (cur.joinedAt === 0 || m.addedAt < cur.joinedAt)) {
-          cur.joinedAt = m.addedAt
-        }
-        continue
+/** GET /members -> { items, total } (tenantMemberView). */
+export function mapMemberList(raw: unknown): MemberList {
+  const r = record(raw)
+  const list = Array.isArray(r.items) ? r.items : []
+  const items = list
+    .map((x): Member => {
+      const m = record(x)
+      const deps = Array.isArray(m.departments) ? m.departments : []
+      const username = str(m.username)
+      return {
+        userId: num(m.user_id),
+        name: str(m.display_name) || username,
+        username,
+        role: role(m.tenant_role),
+        departments: deps.map((d) => str(record(d).name)).filter(Boolean),
+        // joined_at is null when the server has no join timestamp.
+        joinedAt: num(m.joined_at),
+        isPayer: m.is_payer === true,
+        email: str(m.email),
       }
-      byId.set(m.userId, {
-        userId: m.userId,
-        name: m.displayName || m.username,
-        username: m.username,
-        role: m.role,
-        departments: [project.name],
-        joinedAt: m.addedAt,
-        isPayer: null,
-        email: '',
-      })
-    }
-  }
-  if (self && self.id > 0) {
-    const cur = byId.get(self.id)
-    if (cur) {
-      cur.isPayer = self.isPayer
-      cur.email = self.email
-      cur.role = self.role
-    } else {
-      byId.set(self.id, {
-        userId: self.id,
-        name: self.displayName || self.username,
-        username: self.username,
-        role: self.role,
-        departments: [],
-        joinedAt: 0,
-        isPayer: self.isPayer,
-        email: self.email,
-      })
-    }
-  }
-  return [...byId.values()].sort((a, b) => a.userId - b.userId)
+    })
+    .filter((m) => m.userId > 0)
+  return { items, total: num(r.total, items.length) }
 }
 
 function inviteState(r: Record<string, unknown>): InviteState {

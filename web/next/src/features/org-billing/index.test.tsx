@@ -14,6 +14,7 @@ import {
   normalizeStatement,
   normalizeSummary,
   statementQuery,
+  currentMonth,
   type StatementData,
 } from './lib/statement'
 
@@ -100,12 +101,22 @@ describe('statement mapping', () => {
 
   it('builds the query and maps invoices / wallet', () => {
     expect(statementQuery('2026-10', 'model', 'csv')).toBe(
-      'month=2026-10&group_by=model&format=csv'
+      'month=2026-10&tz=Asia%2FShanghai&group_by=model&format=csv'
     )
     expect(normalizeInvoices({ items: [{ month: '2026-09', estimated: true }] }))
       .toMatchObject([{ month: '2026-09', estimated: true, quota: 0 }])
     expect(normalizeInvoices(null)).toEqual([])
     expect(normalizeSummary({ balance: 3 }).balance).toBe(3)
+    expect(statementQuery('2026-10', 'project')).toContain('tz=Asia%2FShanghai')
+  })
+
+  it('current month is computed in Asia/Shanghai across month boundaries', () => {
+    // 2026-09-30 17:00 UTC is already 2026-10-01 01:00 in Shanghai
+    expect(currentMonth(new Date('2026-09-30T17:00:00Z'))).toBe('2026-10')
+    // 2026-09-30 15:59 UTC is still 2026-09-30 23:59 in Shanghai
+    expect(currentMonth(new Date('2026-09-30T15:59:00Z'))).toBe('2026-09')
+    // year rollover
+    expect(currentMonth(new Date('2026-12-31T16:00:00Z'))).toBe('2027-01')
   })
 })
 

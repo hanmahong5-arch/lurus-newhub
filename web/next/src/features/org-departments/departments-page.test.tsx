@@ -15,7 +15,7 @@ import {
   parseUserId,
   quotaToDisplayInput,
 } from './lib/form'
-import { mapDepartments, mapSpend, visibleDepartments } from './lib/map'
+import { mapDepartments, mapSpend } from './lib/map'
 
 const { get, post, put, del, statusGet } = vi.hoisted(() => ({
   get: vi.fn(),
@@ -98,13 +98,6 @@ describe('mapping and visibility', () => {
     expect(s.byProject).toEqual({ 1: 5 })
   })
 
-  it('a lead only sees departments present in their own spend report', () => {
-    const all = mapDepartments({ items: [proj(), proj({ id: 2, name: 'Sales' })] })
-    const spend = mapSpend({ items: [{ project_id: 2, total_quota: 1 }] })
-    expect(visibleDepartments(all, spend, false).map((d) => d.id)).toEqual([2])
-    expect(visibleDepartments(all, undefined, false)).toEqual([])
-    expect(visibleDepartments(all, spend, true)).toHaveLength(2)
-  })
 })
 
 describe('form helpers', () => {
@@ -157,6 +150,19 @@ describe('form helpers', () => {
       MONEY
     )
     expect(r.ok && r.body.external_code).toBe('研发部')
+  })
+
+  it('an untouched budget is saved unchanged even when the rate is not 1', () => {
+    const cfg = { ...MONEY, displayType: 'CNY' as const, rate: 7.3 }
+    // 1234567 quota shows rounded to 4 decimals; a naive round trip drifts.
+    const orig = 1234567
+    const shown = quotaToDisplayInput(orig, cfg)
+    const base = { name: 'Ops', description: '', externalCode: '' }
+    const r = buildWriteBody({ ...base, budget: shown }, cfg, orig)
+    expect(r.ok && r.body.monthly_budget_quota).toBe(orig)
+    // an edited value is converted and rounded to an integer
+    const e = buildWriteBody({ ...base, budget: '3.33' }, cfg, orig)
+    expect(e.ok && Number.isInteger(e.body.monthly_budget_quota)).toBe(true)
   })
 
   it('edit input round-trips and misc helpers', () => {
@@ -330,9 +336,8 @@ describe('OrgDepartmentsPage as department lead', () => {
   it('shows only own departments, read only', async () => {
     route({
       '/user/me': LEAD,
-      '/projects': {
-        items: [proj(), proj({ id: 2, name: 'Sales', external_code: 'sales' })],
-      },
+      // The server already narrows a lead's list to their own departments.
+      '/projects': { items: [proj({ id: 2, name: 'Sales', external_code: 'sales' })] },
       '/projects/spend': { items: [{ project_id: 2, total_quota: 500000 }] },
     })
     renderPage()
@@ -345,14 +350,14 @@ describe('OrgDepartmentsPage as department lead', () => {
     expect(screen.getByText('$1.00')).toBeInTheDocument()
   })
 
-  it('a failed spend read is an error for a lead, not an empty page', async () => {
+  it('a lead still sees a zero-usage department; a failed spend read only blanks usage', async () => {
     route({
       '/user/me': LEAD,
       '/projects': { items: [proj()] },
       '/projects/spend': new ApiError('forbidden', { status: 403 }),
     })
     renderPage()
-    expect(await screen.findByText('Could not load your departments')).toBeInTheDocument()
-    expect(screen.getByText('forbidden')).toBeInTheDocument()
+    expect(await screen.findByText('Research')).toBeInTheDocument()
+    expect(screen.queryByText('Could not load your departments')).not.toBeInTheDocument()
   })
 })

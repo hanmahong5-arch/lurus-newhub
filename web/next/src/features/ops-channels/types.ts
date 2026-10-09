@@ -34,6 +34,15 @@ export interface ChannelListItem {
   tag: string
   responseTimeMs: number
   testTime: number
+  /** Declared plan kind ("" = pay-as-you-go), from the list payload. */
+  planKind: string
+  /** Plan end, Unix seconds (0 = never). */
+  expiresAt: number
+  keyCount: number
+  enabledKeyCount: number
+  /** Same verdict as GET /channels/:id/health. */
+  routable: boolean
+  unroutableReasons: string[]
 }
 
 export interface ChannelListResult {

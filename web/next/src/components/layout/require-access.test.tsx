@@ -7,7 +7,9 @@ import { currentUserQueryKey, type CurrentUser } from '@/lib/user'
 import { RequireAccess } from './require-access'
 
 vi.mock('@/features/errors/forbidden', () => ({
-  ForbiddenError: () => <div>403 Forbidden</div>,
+  ForbiddenError: (p: { embedded?: boolean }) => (
+    <div data-embedded={String(!!p.embedded)}>403 Forbidden</div>
+  ),
 }))
 
 function renderGuard(
@@ -30,6 +32,13 @@ describe('RequireAccess', () => {
     renderGuard('tenantAdmin', { tenant_role: '' })
     expect(screen.getByText('403 Forbidden')).toBeTruthy()
     expect(screen.queryByText('secret page')).toBeNull()
+  })
+
+  it('renders the embedded 403 variant (no full-viewport height)', () => {
+    renderGuard('tenantAdmin', { tenant_role: '' })
+    expect(
+      screen.getByText('403 Forbidden').getAttribute('data-embedded')
+    ).toBe('true')
   })
 
   it('shows 403 to a tenant admin on a platform route', () => {

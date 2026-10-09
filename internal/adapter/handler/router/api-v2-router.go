@@ -111,6 +111,9 @@ func SetApiV2Router(router *gin.Engine) {
 		// not tenant data — it is a stand-in for a provider.
 		if handler.FaultSimEnabled() {
 			apiV2.POST("/faultsim/v1/chat/completions", handler.FaultSimChatCompletions)
+			// Success mode (model "ok" / "ok-*") on the other two wires.
+			apiV2.POST("/faultsim/v1/responses", handler.FaultSimResponses)
+			apiV2.POST("/faultsim/v1/messages", handler.FaultSimMessages)
 			// Task-vendor fault simulator (cycle-8 L8): imitates the Suno
 			// wire so a UAT channel (type ChannelTypeSunoAPI, base_url
 			// http://127.0.0.1:3000/api/v2/faultsim, key=FAULTSIM_TOKEN)
@@ -221,6 +224,7 @@ func SetApiV2Router(router *gin.Engine) {
 		tenantMembers.Use(middleware.UserAuth())
 		tenantMembers.Use(middleware.TenantSlugGuard())
 		{
+			tenantMembers.GET("", handler.ListTenantMembersV2)
 			tenantMembers.PUT("/:user_id/role", handler.SetTenantMemberRoleV2)
 		}
 
@@ -261,6 +265,7 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantChannels.GET("/:id/upstream-models", handler.FetchUpstreamModelsV2)
 			tenantChannels.POST("/import", handler.ImportChannelsV2)
 			tenantChannels.GET("/:id/health", handler.GetChannelHealthV2)
+			tenantChannels.GET("/health-summary", handler.GetChannelHealthSummaryV2)
 			tenantChannels.POST("/:id/keys/:idx/test", handler.TestChannelKeyV2)
 			tenantChannels.POST("/:id/keys/:idx/restore", handler.RestoreChannelKeyV2)
 			tenantChannels.PUT("/:id/keys/:idx/settings", handler.UpdateChannelKeySettingsV2)
@@ -622,6 +627,7 @@ func SetApiV2Router(router *gin.Engine) {
 			adminRoute.PUT("/channel-templates/:id", handler.UpdateChannelTemplateV2)
 			adminRoute.DELETE("/channel-templates/:id", handler.DeleteChannelTemplateV2)
 			adminRoute.POST("/channel-templates/:id/apply", handler.ApplyChannelTemplateV2)
+			adminRoute.GET("/channel-templates/:id/applications", handler.ListChannelTemplateApplicationsV2)
 
 			// System options panels (read + one-key-per-call write). Thin
 			// wrappers over GetOptions/UpdateOption (secret filtering + per-key

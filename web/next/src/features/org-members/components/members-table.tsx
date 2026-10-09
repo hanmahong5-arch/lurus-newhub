@@ -25,8 +25,7 @@ interface MembersTableProps {
 export function MembersTable(props: MembersTableProps) {
   const { t } = useTranslation()
   const roleLabel = useRoleLabel()
-  const payerText = (v: boolean | null) => {
-    if (v === null) return '--'
+  const payerText = (v: boolean) => {
     return v ? t('Yes') : t('No')
   }
 
@@ -34,7 +33,7 @@ export function MembersTable(props: MembersTableProps) {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>{t('Name')}</TableHead>
+          <TableHead>{t('Full name')}</TableHead>
           <TableHead>{t('Email')}</TableHead>
           <TableHead>{t('Role')}</TableHead>
           <TableHead>{t('Payer')}</TableHead>

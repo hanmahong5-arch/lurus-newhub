@@ -88,8 +88,18 @@ export function isValidMonth(m: string): boolean {
   return MONTH_RE.test(m)
 }
 
+/** Billing month boundaries are always computed in this zone (server default). */
+export const BILLING_TZ = 'Asia/Shanghai'
+
+/** Current YYYY-MM as seen in Asia/Shanghai, independent of the browser zone. */
 export function currentMonth(now: Date = new Date()): string {
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BILLING_TZ,
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(now)
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
+  return `${get('year')}-${get('month')}`
 }
 
 export function statementQuery(
@@ -97,7 +107,11 @@ export function statementQuery(
   groupBy: GroupBy,
   format?: 'csv'
 ): string {
-  const p = new URLSearchParams({ month, group_by: groupBy })
+  const p = new URLSearchParams({
+    month,
+    tz: BILLING_TZ,
+    group_by: groupBy,
+  })
   if (format) p.set('format', format)
   return p.toString()
 }

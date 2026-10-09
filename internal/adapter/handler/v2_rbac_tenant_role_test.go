@@ -364,6 +364,7 @@ var requireTenantAdminAllowlist = map[string]bool{
 	"requireEmployeeRefAdmin":    true, // employee_ref is the tenant admin's own attribution roster for the tenant's keys
 	"tenantAuditScope":           true, // tenant audit trail: own-tenant rows only, details redacted, no hash chain / channel data
 	"tenantSelectionScope":       true, // tenant admin may only narrow the platform-granted model list
+	"listTenantTokensV2":         true, // scope=tenant: own-tenant tokens, masked keys, no channel data
 }
 
 func TestRequireTenantAdminCallSites_Allowlisted(t *testing.T) {

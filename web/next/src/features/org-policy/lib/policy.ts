@@ -155,6 +155,8 @@ export interface TokenOption {
   id: number
   name: string
   key: string
+  /** Member the key belongs to ('' when unknown). */
+  owner: string
 }
 
 export function mapTokenOptions(raw: unknown): {
@@ -165,7 +167,12 @@ export function mapTokenOptions(raw: unknown): {
   const items = (Array.isArray(r.items) ? r.items : [])
     .map((x) => {
       const t = rec(x)
-      return { id: num(t.id), name: str(t.name), key: str(t.key) }
+      return {
+        id: num(t.id),
+        name: str(t.name),
+        key: str(t.key),
+        owner: str(t.owner_name),
+      }
     })
     .filter((t) => t.id > 0)
   return { items, total: num(r.total, items.length) }

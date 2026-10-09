@@ -220,3 +220,60 @@ func tenantRoleView(user *repo.User) (role string, isPayer bool) {
 	}
 	return user.TenantRole, repo.IsTenantPayer(user.TenantId, user.Id)
 }
+
+// tenantMemberView is one roster entry. Email is shown unmasked to the tenant
+// admin, as in the platform /admin user list. users has no creation timestamp
+// column, so no join time is reported (joined_at is null) rather than a guess.
+type tenantMemberView struct {
+	UserId      int                     `json:"user_id"`
+	Username    string                  `json:"username"`
+	DisplayName string                  `json:"display_name"`
+	Email       string                  `json:"email"`
+	TenantRole  string                  `json:"tenant_role"`
+	IsPayer     bool                    `json:"is_payer"`
+	JoinedAt    *int64                  `json:"joined_at"`
+	Departments []repo.TenantMemberDept `json:"departments"`
+}
+
+// ListTenantMembersV2 — GET /api/v2/:tenant_slug/members (tenant admin).
+// Query: page, page_size (<=100), role (admin|dept_lead|member), keyword.
+func ListTenantMembersV2(c *gin.Context) {
+	tc, ok := projectAdminCtx(c)
+	if !ok {
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	role := c.Query("role")
+	switch role {
+	case "", "admin", "dept_lead", "member":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "role must be admin, dept_lead or member"})
+		return
+	}
+	rows, total, err := repo.ListTenantMembers(tc.TenantID,
+		repo.TenantMemberFilter{Role: role, Keyword: c.Query("keyword")}, (page-1)*pageSize, pageSize)
+	if err != nil {
+		common.SysError("ListTenantMembersV2: " + err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to list members"})
+		return
+	}
+	payerID, _ := repo.TenantPayerID(tc.TenantID)
+	items := make([]tenantMemberView, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, tenantMemberView{
+			UserId: r.User.Id, Username: r.User.Username, DisplayName: r.User.DisplayName,
+			Email: r.User.Email, TenantRole: r.User.TenantRole,
+			IsPayer: payerID > 0 && payerID == r.User.Id, Departments: r.Departments,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{
+		"items": items, "total": total, "page": page, "page_size": pageSize,
+	}})
+}

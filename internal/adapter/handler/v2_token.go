@@ -131,6 +131,15 @@ func ListTokensV2(c *gin.Context) {
 
 	offset := (page - 1) * pageSize
 
+	if scope := c.Query("scope"); scope != "" {
+		if scope != "tenant" {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "scope must be \"tenant\" or omitted"})
+			return
+		}
+		listTenantTokensV2(c, tenantCtx, page, pageSize, offset)
+		return
+	}
+
 	// Get tokens for the user scoped to the current tenant. Explicit
 	// tenant_id filter is defence-in-depth — prevents cross-tenant leakage
 	// even when TenantPlugin is not registered (e.g. hermetic tests).

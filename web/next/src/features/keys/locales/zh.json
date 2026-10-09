@@ -55,7 +55,7 @@
   "Next": "下一页",
   "No API keys yet": "还没有 API 密钥",
   "One per line or comma-separated. Empty = any address.": "每行一个或用逗号分隔，留空表示不限制。",
-  "Oops! Something went wrong": "出错了",
+  "Oops! Something went wrong": "哎呀，出错了",
   "Page {{page}} of {{pages}}": "第 {{page}} / {{pages}} 页",
   "Previous": "上一页",
   "Project": "项目",

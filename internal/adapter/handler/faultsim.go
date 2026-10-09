@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -91,7 +95,115 @@ func faultSimAuthorized(c *gin.Context) bool {
 			got = auth[7:]
 		}
 	}
+	if got == "" {
+		// The Anthropic adaptor sends the channel key as x-api-key.
+		got = c.GetHeader("x-api-key")
+	}
 	return got == want
+}
+
+// Success mode. Business tests (billing, quota, logs, dashboards) need an
+// upstream that ANSWERS, which a fault-only simulator cannot be. A model name
+// that is exactly "ok" or starts with "ok-" (ok, ok-chat, ok-msgs, ...)
+// returns a well-formed success on the wire the request path selects:
+//
+//   - /faultsim/v1/chat/completions: OpenAI chat (JSON, or SSE when stream=true
+//     with usage in the last data frame followed by [DONE])
+//   - /faultsim/v1/responses:        OpenAI Responses
+//   - /faultsim/v1/messages:         Anthropic messages (full event sequence)
+//
+// The wire builders are internal/testkit/fakeupstream's — the same ones the
+// local acceptance stack serves — so there is no second copy to drift. Usage
+// is fixed and predictable (prompt 1000 / completion 500, fakeupstream's
+// DefaultUsage) and can be overridden per request with
+// `X-Faultsim-Usage: "in,out"` so a business test can compute the expected
+// charge. The reply is a fixed short Chinese sentence.
+const faultSimOKReply = "你好，这是模拟上游的固定回复。"
+
+// FaultSimUsageHeader overrides the reported usage: "in,out".
+const FaultSimUsageHeader = "X-Faultsim-Usage"
+
+// IsFaultSimOKModel reports whether model selects success mode.
+func IsFaultSimOKModel(model string) bool {
+	return model == "ok" || strings.HasPrefix(model, "ok-")
+}
+
+func faultSimUsage(c *gin.Context) (fakeupstream.Usage, error) {
+	u := fakeupstream.DefaultUsage
+	raw := strings.TrimSpace(c.GetHeader(FaultSimUsageHeader))
+	if raw == "" {
+		return u, nil
+	}
+	in, out, ok := strings.Cut(raw, ",")
+	pi, err1 := strconv.Atoi(strings.TrimSpace(in))
+	po, err2 := strconv.Atoi(strings.TrimSpace(out))
+	if !ok || err1 != nil || err2 != nil || pi < 0 || po < 0 {
+		return u, fmt.Errorf("%s must be \"in,out\" with non-negative integers, got %q", FaultSimUsageHeader, raw)
+	}
+	return fakeupstream.Usage{PromptTokens: pi, CompletionTokens: po}, nil
+}
+
+// serveFaultSimOK delegates a success answer to the shared fake vendor.
+// vendorPath is the fakeupstream route for the wire.
+func serveFaultSimOK(c *gin.Context, vendorPath string, body map[string]any) {
+	usage, err := faultSimUsage(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "faultsim"}})
+		return
+	}
+	// The OpenAI wire streams usage only when asked; success mode always
+	// reports it so the last frame is billable.
+	if stream, _ := body["stream"].(bool); stream && vendorPath == "/v1/chat/completions" {
+		opts, _ := body["stream_options"].(map[string]any)
+		if opts == nil {
+			opts = map[string]any{}
+		}
+		opts["include_usage"] = true
+		body["stream_options"] = opts
+	}
+	raw, _ := json.Marshal(body)
+	srv := fakeupstream.New(fakeupstream.Config{Usage: usage, Reply: faultSimOKReply})
+	req := c.Request.Clone(c.Request.Context())
+	req.URL.Path = vendorPath
+	req.URL.RawQuery = ""
+	req.Body = io.NopCloser(bytes.NewReader(raw))
+	req.ContentLength = int64(len(raw))
+	srv.Handler().ServeHTTP(c.Writer, req)
+}
+
+func faultSimServe(c *gin.Context, wire, vendorPath string) {
+	if !faultSimAuthorized(c) {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": gin.H{"message": "fault simulator token required", "type": "faultsim"},
+		})
+		return
+	}
+
+	// A malformed body is not interesting here; default to the plain 500 mode
+	// rather than adding a failure shape nobody asked for.
+	body := map[string]any{}
+	_ = c.ShouldBindJSON(&body)
+	model, _ := body["model"].(string)
+
+	mode := model
+	if q := c.Query("mode"); q != "" {
+		mode = q
+	}
+
+	if IsFaultSimOKModel(mode) {
+		serveFaultSimOK(c, vendorPath, body)
+		return
+	}
+	if !fakeupstream.IsFaultMode(mode) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": fmt.Sprintf("unknown fault mode %q; supported: %v, or ok / ok-* for success", mode, FaultSimModes),
+				"type":    "faultsim",
+			},
+		})
+		return
+	}
+	fakeupstream.WriteFault(c.Writer, c.Request, wire, mode, fakeupstream.FaultParamsFromQuery(c.Request))
 }
 
 // FaultSimChatCompletions serves POST /faultsim/v1/chat/completions.
@@ -100,36 +212,17 @@ func faultSimAuthorized(c *gin.Context) bool {
 // needs no special configuration: seed a UAT channel whose model list is the
 // mode names and the mode is selected by asking for that "model".
 func FaultSimChatCompletions(c *gin.Context) {
-	if !faultSimAuthorized(c) {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": gin.H{"message": "fault simulator token required", "type": "faultsim"},
-		})
-		return
-	}
+	faultSimServe(c, fakeupstream.WireOpenAIChat, "/v1/chat/completions")
+}
 
-	var req struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
-	}
-	// A malformed body is not interesting here; default to the plain 500 mode
-	// rather than adding a failure shape nobody asked for.
-	_ = c.ShouldBindJSON(&req)
+// FaultSimResponses serves POST /faultsim/v1/responses (OpenAI Responses).
+func FaultSimResponses(c *gin.Context) {
+	faultSimServe(c, fakeupstream.WireOpenAIResponses, "/v1/responses")
+}
 
-	mode := req.Model
-	if q := c.Query("mode"); q != "" {
-		mode = q
-	}
-
-	if !fakeupstream.IsFaultMode(mode) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{
-				"message": fmt.Sprintf("unknown fault mode %q; supported: %v", mode, FaultSimModes),
-				"type":    "faultsim",
-			},
-		})
-		return
-	}
-	fakeupstream.WriteFault(c.Writer, c.Request, fakeupstream.WireOpenAIChat, mode, fakeupstream.FaultParamsFromQuery(c.Request))
+// FaultSimMessages serves POST /faultsim/v1/messages (Anthropic messages).
+func FaultSimMessages(c *gin.Context) {
+	faultSimServe(c, fakeupstream.WireAnthropic, "/v1/messages")
 }
 
 // --- Task-vendor fault simulator (cycle-8 L8) ---

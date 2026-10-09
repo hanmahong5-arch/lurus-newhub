@@ -170,7 +170,7 @@ var contractLockMountedSpecs = []string{"relay.json", "api-v2.json"}
 // is closed structurally.
 var contractLockOperationFloors = map[string]int{
 	"relay.json":  48,
-	"api-v2.json": 82,
+	"api-v2.json": 85,
 	"api.json":    157,
 }
 

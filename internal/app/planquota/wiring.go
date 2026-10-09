@@ -302,3 +302,15 @@ func HandleChannelError(ce types.ChannelError, e *types.NewAPIError) bool {
 	}
 	return false
 }
+
+// getMem reads the process-memory copy only.
+func (s *redisStore) getMem(id int) (*Snapshot, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snap, ok := s.mem[id]
+	if !ok {
+		return nil, false
+	}
+	cp := *snap
+	return &cp, true
+}

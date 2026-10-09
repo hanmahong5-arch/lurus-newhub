@@ -92,6 +92,15 @@ func addReason(rs []string, r string) []string {
 
 // buildKeyHealth evaluates one key at instant now (Unix seconds).
 func buildKeyHealth(ch *repo.Channel, idx int, now int64) keyHealth {
+	return buildKeyHealthWin(ch, idx, now, ChannelWindowProvider)
+}
+
+// windowFn returns the plan-window description of one key (-1 = channel level).
+type windowFn func(channelID, keyIdx int) map[string]interface{}
+
+// buildKeyHealthWin is buildKeyHealth with an explicit window source, so bulk
+// callers can feed a pre-fetched batch instead of one lookup per key.
+func buildKeyHealthWin(ch *repo.Channel, idx int, now int64, win windowFn) keyHealth {
 	st := snapshotKeyState(ch, idx)
 	kh := keyHealth{
 		Index:       idx,
@@ -139,8 +148,8 @@ func buildKeyHealth(ch *repo.Channel, idx int, now int64) keyHealth {
 	if ch.ChannelInfo.MultiKeyMode == constant.MultiKeyModeWeighted && ch.ChannelInfo.KeyWeight(idx) <= 0 {
 		kh.Reasons = addReason(kh.Reasons, ReasonDisabledManual)
 	}
-	if ChannelWindowProvider != nil {
-		kh.Window = ChannelWindowProvider(ch.Id, idx)
+	if win != nil {
+		kh.Window = win(ch.Id, idx)
 	}
 	kh.Routable = len(kh.Reasons) == 0
 	return kh
@@ -155,11 +164,16 @@ func channelStatusReason(status int) string {
 
 // buildChannelHealth aggregates the channel and all of its keys.
 func buildChannelHealth(ch *repo.Channel, now int64) channelHealth {
+	return buildChannelHealthWin(ch, now, ChannelWindowProvider)
+}
+
+// buildChannelHealthWin is buildChannelHealth with an explicit window source.
+func buildChannelHealthWin(ch *repo.Channel, now int64, win windowFn) channelHealth {
 	h := channelHealth{ChannelID: ch.Id, Reasons: []string{}, Keys: []keyHealth{}}
 	n := channelKeyCount(ch)
 	anyRoutable := false
 	for i := 0; i < n; i++ {
-		kh := buildKeyHealth(ch, i, now)
+		kh := buildKeyHealthWin(ch, i, now, win)
 		h.Keys = append(h.Keys, kh)
 		anyRoutable = anyRoutable || kh.Routable
 		if kh.LastError != "" && h.LastError == "" {
@@ -191,8 +205,8 @@ func buildChannelHealth(ch *repo.Channel, now int64) channelHealth {
 	if h.Routable {
 		h.Reasons = []string{}
 	}
-	if ChannelWindowProvider != nil {
-		h.Window = ChannelWindowProvider(ch.Id, -1)
+	if win != nil {
+		h.Window = win(ch.Id, -1)
 	}
 	return h
 }
