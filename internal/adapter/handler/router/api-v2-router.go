@@ -166,6 +166,7 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantTokens.GET("", handler.ListTokensV2)
 			tenantTokens.POST("", handler.CreateTokenV2)
 			tenantTokens.POST("/batch-delete", handler.DeleteTokensV2)
+			tenantTokens.POST("/batch", handler.BatchCreateTokensV2)
 			tenantTokens.PUT("/:id", handler.UpdateTokenV2)
 			tenantTokens.DELETE("/:id", handler.DeleteTokenV2)
 			tenantTokens.POST("/:id/rotate", handler.RotateTokenV2)
@@ -198,6 +199,18 @@ func SetApiV2Router(router *gin.Engine) {
 			// Undo for DELETE. Safe to replay: restoring a live project is a
 			// no-op, and re-attachment skips tokens reassigned since.
 			tenantProjects.POST("/:id/restore", handler.RestoreProjectV2)
+			// Who a dept_lead leads (tenant admin only).
+			tenantProjects.GET("/:id/members", handler.ListProjectMembersV2)
+			tenantProjects.POST("/:id/members", handler.AddProjectMemberV2)
+			tenantProjects.DELETE("/:id/members", handler.RemoveProjectMemberV2)
+		}
+
+		// Tenant-admin issued onboarding invites that can grant a role/project.
+		tenantInvites := apiV2.Group("/:tenant_slug/invites")
+		tenantInvites.Use(middleware.UserAuth())
+		tenantInvites.Use(middleware.TenantSlugGuard())
+		{
+			tenantInvites.POST("", handler.IssueMyTenantInviteV2)
 		}
 
 		// ================================================================
@@ -353,6 +366,10 @@ func SetApiV2Router(router *gin.Engine) {
 		tenantBilling.Use(middleware.TenantSlugGuard())
 		{
 			tenantBilling.GET("/invoices", handler.ListInvoicesV2)
+			// Tenant monthly statement grouped by project / employee / token
+			// (tenant admin: whole tenant; dept_lead: own projects; the gate
+			// lives in the handler). One GROUP BY over a month of logs.
+			tenantBilling.GET("/statement", middleware.CriticalRateLimit(), handler.GetBillingStatementV2)
 			// Lost in 7835280f, which removed the tenant route group whole
 			// while migrating admin auth; GetTopUpsV2 and its unit tests
 			// stayed, and so did the console call. The v2 billing panel has

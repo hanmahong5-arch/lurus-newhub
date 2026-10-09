@@ -2,7 +2,9 @@ package handler
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,15 +76,33 @@ func resetRankingsCacheForTest() {
 	})
 }
 
-func rankingsCacheKey(tenantID, by string, hours int) string {
-	return tenantID + "|" + by + "|" + strconv.Itoa(hours)
+func rankingsCacheKey(tenantID, by string, hours int, projectIDs []int) string {
+	key := tenantID + "|" + by + "|" + strconv.Itoa(hours)
+	if projectIDs != nil {
+		// A department lead's board must never be served from (or into) the
+		// tenant-wide entry: the project set is part of the key.
+		ids := slices.Clone(projectIDs)
+		slices.Sort(ids)
+		parts := make([]string, len(ids))
+		for i, id := range ids {
+			parts[i] = strconv.Itoa(id)
+		}
+		key += "|p:" + strings.Join(parts, ",")
+	}
+	return key
 }
 
 // getCachedRankings serves repo.GetRankings through a 5-minute in-process
 // cache keyed by (tenantID, by, hours). tenantID is "" for the root route's
 // unfiltered (cross-tenant) view.
 func getCachedRankings(tenantID, by string, hours int) (*rankingsCacheEntry, error) {
-	key := rankingsCacheKey(tenantID, by, hours)
+	return getCachedRankingsForProjects(tenantID, by, hours, nil)
+}
+
+// getCachedRankingsForProjects is getCachedRankings restricted to a project
+// set (nil = unrestricted; empty non-nil = nothing).
+func getCachedRankingsForProjects(tenantID, by string, hours int, projectIDs []int) (*rankingsCacheEntry, error) {
+	key := rankingsCacheKey(tenantID, by, hours, projectIDs)
 	if v, ok := rankingsCache.Load(key); ok {
 		entry := v.(*rankingsCacheEntry)
 		if time.Since(time.Unix(entry.cachedAt, 0)) < rankingsCacheTTL {
@@ -92,7 +112,7 @@ func getCachedRankings(tenantID, by string, hours int) (*rankingsCacheEntry, err
 
 	end := time.Now().Unix()
 	start := end - int64(hours)*3600
-	rows, totalTokens, totalQuota, err := repo.GetRankings(start, end, tenantID, by, rankingsDefaultLimit)
+	rows, totalTokens, totalQuota, err := repo.GetRankingsForProjects(start, end, tenantID, by, rankingsDefaultLimit, projectIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +120,7 @@ func getCachedRankings(tenantID, by string, hours int) (*rankingsCacheEntry, err
 	for i, r := range rows {
 		names[i] = r.Name
 	}
-	series, err := repo.GetRankingSeries(start, end, tenantID, by, names)
+	series, err := repo.GetRankingSeriesForProjects(start, end, tenantID, by, names, projectIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +211,10 @@ func GetTenantRankingsV2(c *gin.Context) {
 		})
 		return
 	}
-	if !requireTenantAdmin(c, tenantCtx) {
+	// Tenant admins see the whole tenant; a department lead sees the same board
+	// restricted to their projects; everyone else is refused.
+	scope := resolveLogReadScope(c, tenantCtx)
+	if !requireTenantAdmin(c, tenantCtx) && !scope.deptLead {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "Admin role required",
@@ -207,7 +230,16 @@ func GetTenantRankingsV2(c *gin.Context) {
 		})
 		return
 	}
-	entry, err := getCachedRankings(tenantCtx.TenantID, by, hours)
+	// The vendor dimension maps channel_type to upstream vendor names, i.e. it
+	// reveals our supply chain; customer tenant admins never get it.
+	if by == "vendor" && !isPlatformStaff(c, tenantCtx) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "Platform staff role required for by=vendor",
+		})
+		return
+	}
+	entry, err := getCachedRankingsForProjects(tenantCtx.TenantID, by, hours, scope.projects())
 	if err != nil {
 		common.SysError("GetTenantRankingsV2: aggregate failed: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{

@@ -143,6 +143,11 @@ func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error 
 		if _, err := repo.HardDeleteUserSessions(ctx, req.UserID); err != nil {
 			return err
 		}
+		// project_members (migration 046) rides along: the dept_lead scope
+		// subject must not outlive the user it names.
+		if _, err := repo.HardDeleteUserProjectMembers(ctx, req.UserID); err != nil {
+			return err
+		}
 		// response_registry rides the same step — same personal-adjacent-data
 		// class as user_sessions above: it holds user_id/token_id/vendor
 		// response ids for up to RESPONSE_REGISTRY_TTL_DAYS (default 30),

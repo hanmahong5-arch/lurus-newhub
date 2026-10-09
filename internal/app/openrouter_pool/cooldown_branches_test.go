@@ -25,7 +25,7 @@ func TestInterpretResetValue_FloatHeader(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Ratelimit-Reset", "45.9") // float, not integer
 
-	got := ParseCooldownUntil(h, nil, now)
+	got := ParseCooldownUntil(h, nil, now, testORType)
 	// int64(45.9) == 45 → seconds-from-now → now+45.
 	if got != nowUnix+45 {
 		t.Fatalf("float reset header: got %d, want %d", got, nowUnix+45)
@@ -43,7 +43,7 @@ func TestInterpretResetValue_GarbageHeader_FallsThrough(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Ratelimit-Reset", "not-a-number")
 
-	got := ParseCooldownUntil(h, nil, now)
+	got := ParseCooldownUntil(h, nil, now, testORType)
 	if got != nowUnix+60 {
 		t.Fatalf("garbage header must fall through to 60s fallback: got %d, want %d", got, nowUnix+60)
 	}
@@ -60,7 +60,7 @@ func TestInterpretResetValue_ZeroReset_FallsThrough(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Ratelimit-Reset", "0")
 
-	got := ParseCooldownUntil(h, nil, now)
+	got := ParseCooldownUntil(h, nil, now, testORType)
 	if got != nowUnix+60 {
 		t.Fatalf("zero reset must fall through to fallback: got %d, want %d", got, nowUnix+60)
 	}
@@ -77,7 +77,7 @@ func TestExtractFromBodyMetadata_InvalidJSON_FallsThrough(t *testing.T) {
 	// No header (so we reach the body path), body is malformed JSON with no
 	// daily keyword → fallback.
 	body := []byte(`{this is not json`)
-	got := ParseCooldownUntil(nil, body, now)
+	got := ParseCooldownUntil(nil, body, now, testORType)
 	if got != nowUnix+60 {
 		t.Fatalf("invalid-JSON body must fall through to fallback: got %d, want %d", got, nowUnix+60)
 	}
@@ -92,7 +92,7 @@ func TestExtractFromBodyMetadata_RetryAfterInMetadata(t *testing.T) {
 	nowUnix := now.Unix()
 
 	body := []byte(`{"error":{"message":"rate limited","metadata":{"headers":{"Retry-After":"90"}}}}`)
-	got := ParseCooldownUntil(nil, body, now)
+	got := ParseCooldownUntil(nil, body, now, testORType)
 	if got != nowUnix+90 {
 		t.Fatalf("Retry-After in body metadata: got %d, want %d", got, nowUnix+90)
 	}
@@ -107,7 +107,7 @@ func TestExtractFromBodyMetadata_RetryAfterZero_FallsThrough(t *testing.T) {
 	nowUnix := now.Unix()
 
 	body := []byte(`{"error":{"message":"rate limited","metadata":{"headers":{"Retry-After":"0"}}}}`)
-	got := ParseCooldownUntil(nil, body, now)
+	got := ParseCooldownUntil(nil, body, now, testORType)
 	if got != nowUnix+60 {
 		t.Fatalf("zero Retry-After in metadata must fall through to fallback: got %d, want %d", got, nowUnix+60)
 	}
@@ -121,7 +121,7 @@ func TestExtractFromBodyMetadata_ResetHeaderVariant(t *testing.T) {
 	nowUnix := now.Unix()
 
 	body := []byte(`{"error":{"metadata":{"headers":{"X-Rate-Limit-Reset":"300"}}}}`)
-	got := ParseCooldownUntil(nil, body, now)
+	got := ParseCooldownUntil(nil, body, now, testORType)
 	// 300 < 86400 → seconds-from-now → now+300.
 	if got != nowUnix+300 {
 		t.Fatalf("hyphenated reset header variant: got %d, want %d", got, nowUnix+300)

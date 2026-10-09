@@ -50,6 +50,8 @@ type User struct {
 	// bridge endpoint binds a newhub user to a platform account. Mirrors
 	// entity.User; both must move together until the duplicate is collapsed.
 	LurusAccountID *int64 `json:"lurus_account_id,omitempty" gorm:"type:bigint;column:lurus_account_id;uniqueIndex"`
+	// TenantRole mirrors entity.User.TenantRole (migration 046).
+	TenantRole string `json:"tenant_role" gorm:"type:varchar(16);not null;default:''"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -59,6 +61,8 @@ func (user *User) ToBaseUser() *UserBase {
 		Quota:          user.Quota,
 		Status:         user.Status,
 		Role:           user.Role,
+		TenantId:       user.TenantId,
+		TenantRole:     user.TenantRole,
 		Username:       user.Username,
 		Setting:        user.Setting,
 		Email:          user.Email,
@@ -76,10 +80,6 @@ func (user *User) GetAccessToken() string {
 		return ""
 	}
 	return *user.AccessToken
-}
-
-func (user *User) SetAccessToken(token string) {
-	user.AccessToken = &token
 }
 
 func (user *User) GetSetting() dto.UserSetting {

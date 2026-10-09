@@ -59,6 +59,12 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"PUT /api/v2/:tenant_slug/projects/:id":          true, // TestUpdateProjectV2_CrossTenantNotFound
 		"DELETE /api/v2/:tenant_slug/projects/:id":       true, // TestDeleteProjectV2_CrossTenantNotFound
 		"POST /api/v2/:tenant_slug/projects/:id/restore": true, // TestRestoreProjectV2_CrossTenantNotFound
+		// enterprise issuing (internal/adapter/handler/v2_enterprise_issue_test.go).
+		"POST /api/v2/:tenant_slug/tokens/batch":           true, // TestBatchCreateTokensV2_CrossTenantProjectRejected
+		"GET /api/v2/:tenant_slug/projects/:id/members":    true, // TestProjectMembersV2_CrossTenantIs404
+		"POST /api/v2/:tenant_slug/projects/:id/members":   true, // TestProjectMembersV2_CrossTenantIs404
+		"DELETE /api/v2/:tenant_slug/projects/:id/members": true, // TestProjectMembersV2_CrossTenantIs404
+		"POST /api/v2/:tenant_slug/invites":                true, // TestIssueMyTenantInviteV2_GrantValidation
 		// playground presets (internal/adapter/handler/v2_cross_tenant_isolation_test.go)
 		"DELETE /api/v2/:tenant_slug/playground/presets/:id": true, // TestDeletePresetV2_CrossTenantIsolation
 		// per-device session registry (L7, internal/adapter/handler/v2_session_revoke_test.go).

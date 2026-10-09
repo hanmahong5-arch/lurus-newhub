@@ -288,3 +288,60 @@ func TestListOpenRouterMultiKeyChannels_FiltersNonMultiKey(t *testing.T) {
 		t.Errorf("listed wrong channel: got id=%d want %d", channels[0].Id, mkID)
 	}
 }
+
+// setChannelType retypes a seeded pool channel (the seed helper makes
+// OpenRouter ones).
+func setChannelType(t *testing.T, id, typ int) {
+	t.Helper()
+	if err := repo.DB.Model(&repo.Channel{}).Where("id = ?", id).Update("type", typ).Error; err != nil {
+		t.Fatalf("retype channel: %v", err)
+	}
+}
+
+// The 429 cooldown applies to every multi-key channel type, so the reaper must
+// recover keys of a non-OpenRouter channel too, flip it back to Enabled, and
+// leave the columns it did not load untouched.
+func TestReapOnce_RecoversNonOpenRouterMultiKeyChannel(t *testing.T) {
+	setupPoolTestDB(t)
+
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	chID := seedMultiKeyChannel(t, 1, common.ChannelStatusAutoDisabled, map[int]int64{
+		0: now.Add(-1 * time.Minute).Unix(),
+	})
+	setChannelType(t, chID, 1) // OpenAI
+	before := reloadChannel(t, chID)
+
+	if err := ReapOnce(context.Background(), fixedNow(now)); err != nil {
+		t.Fatalf("ReapOnce: %v", err)
+	}
+
+	ch := reloadChannel(t, chID)
+	if _, still := ch.ChannelInfo.MultiKeyCooldownUntil[0]; still {
+		t.Errorf("expired key cooldown on a non-OpenRouter channel was not cleared: %v", ch.ChannelInfo.MultiKeyCooldownUntil)
+	}
+	if ch.Status != common.ChannelStatusEnabled {
+		t.Errorf("channel should be Enabled again, got %d", ch.Status)
+	}
+	if ch.Key != before.Key || ch.Name != before.Name || ch.Type != 1 {
+		t.Errorf("reaper write-back clobbered unrelated columns: key=%q name=%q type=%d", ch.Key, ch.Name, ch.Type)
+	}
+}
+
+func TestListMultiKeyChannelsForReaper_IncludesNonOpenRouter_ExcludesSingleKey(t *testing.T) {
+	setupPoolTestDB(t)
+
+	multi := seedMultiKeyChannel(t, 2, common.ChannelStatusEnabled, map[int]int64{})
+	setChannelType(t, multi, 1)
+	single := &repo.Channel{Type: 1, Key: "sk-single", Status: common.ChannelStatusEnabled, Name: "single"}
+	if err := repo.DB.Create(single).Error; err != nil {
+		t.Fatalf("seed single: %v", err)
+	}
+
+	got, err := repo.ListMultiKeyChannelsForReaper()
+	if err != nil {
+		t.Fatalf("ListMultiKeyChannelsForReaper: %v", err)
+	}
+	if len(got) != 1 || got[0].Id != multi {
+		t.Fatalf("listed %d channels (%v), want exactly the OpenAI multi-key channel %d", len(got), got, multi)
+	}
+}

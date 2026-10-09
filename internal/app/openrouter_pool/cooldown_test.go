@@ -75,7 +75,7 @@ func TestParseCooldownUntil(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ParseCooldownUntil(tc.header, []byte(tc.body), now)
+			got := ParseCooldownUntil(tc.header, []byte(tc.body), now, testORType)
 			if tc.wantExact != 0 {
 				if got != tc.wantExact {
 					t.Fatalf("got %d, want %d (delta=%d)", got, tc.wantExact, got-tc.wantExact)
@@ -98,7 +98,7 @@ func TestParseCooldownUntil(t *testing.T) {
 func TestParseCooldownNeverZero(t *testing.T) {
 	// Zero would let the reaper recover instantly, defeating the purpose.
 	now := time.Now()
-	got := ParseCooldownUntil(nil, nil, now)
+	got := ParseCooldownUntil(nil, nil, now, testORType)
 	if got <= now.Unix() {
 		t.Fatalf("ParseCooldownUntil must always return a future timestamp, got %d (now=%d)", got, now.Unix())
 	}

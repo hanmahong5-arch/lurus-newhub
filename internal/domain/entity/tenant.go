@@ -23,7 +23,7 @@ type Tenant struct {
 	MaxUsers int    `json:"max_users" gorm:"type:int;default:100"`
 	// Deprecated: superseded by tenant_credit_pools.max_balance in ADR 2026-05-18
 	// (Accepted §9 Q3). Kept for backward compatibility; removed in a Q4 migration.
-	MaxQuota  int64          `json:"max_quota" gorm:"type:bigint;default:1000000"`
+	MaxQuota int64 `json:"max_quota" gorm:"type:bigint;default:1000000"`
 	// RateLimitRPM caps the tenant's aggregate relay requests per minute across
 	// all of its tokens (sliding window, enforced by
 	// middleware.BusinessRateLimit). 0 = unlimited (backward compat).
@@ -32,9 +32,14 @@ type Tenant struct {
 	// (sliding window read by middleware.BusinessRateLimit, fed by
 	// PostConsumeQuota — internal/app/business_tpm.go). 0 = unlimited.
 	RateLimitTPM int `json:"rate_limit_tpm" gorm:"column:tpm_limit;default:0"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+	// WalletAuthoritative (migration 046): when true, the platform wallet is
+	// the only balance gate for this tenant — a request the platform
+	// pre-authorized is no longer refused by the local user-balance check
+	// (it is only logged). Root-set; default false keeps the local gate.
+	WalletAuthoritative bool           `json:"wallet_authoritative" gorm:"not null;default:false"`
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+	DeletedAt           gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // Tenant status constants

@@ -103,6 +103,7 @@ func TestIntegration039_BuildsLogsTenantCreatedIndex(t *testing.T) {
 		`CREATE TABLE logs (
             id BIGSERIAL PRIMARY KEY,
             tenant_id VARCHAR(36) NOT NULL DEFAULT 'default',
+            project_id BIGINT NOT NULL DEFAULT 0,
             created_at BIGINT NOT NULL DEFAULT 0
         )`); err != nil {
 		t.Fatalf("create logs fixture: %v", err)

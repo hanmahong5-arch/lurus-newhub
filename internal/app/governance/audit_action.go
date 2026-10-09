@@ -60,6 +60,9 @@ const (
 	ActionTokenDeleted       = "token.deleted"
 	ActionTokenBatchDeleted  = "token.batch_deleted"
 	ActionTokenStatusChanged = "token.status_changed"
+	// ActionTokenBatchCreated: POST /tokens/batch issued keys for an employee
+	// roster. The detail carries employee refs and counts, never key material.
+	ActionTokenBatchCreated = "token.batch_created"
 
 	// Channel CRUD (upstream provider config).
 	ActionChannelCreated      = "channel.created"
@@ -111,6 +114,9 @@ const (
 	// separate action rather than a "created" event so the audit trail shows
 	// the mistake AND its correction instead of an unexplained resurrection.
 	ActionProjectRestored = "project.restored"
+	// Department-lead membership (migration 046): who may see a project's data.
+	ActionProjectMemberAdded   = "project.member_added"
+	ActionProjectMemberRemoved = "project.member_removed"
 
 	// System options (global config keys).
 	ActionOptionUpdated = "option.updated"
@@ -149,6 +155,9 @@ const (
 	ActionTenantInviteIssued   = "tenant.invite_issued"
 	ActionTenantInviteConsumed = "tenant.invite_consumed"
 	ActionTenantInviteRevoked  = "tenant.invite_revoked"
+	// ActionTenantInviteGrantFailed: the invite was redeemed but its member_role /
+	// project grant could not be applied; an admin must re-grant by hand.
+	ActionTenantInviteGrantFailed = "tenant.invite_grant_failed"
 
 	// Internal API key tenant whitelist (internal_api_key_tenants — migration
 	// 013/021 §1). Granting/revoking changes which tenants a narrow-scope
@@ -377,6 +386,7 @@ var validAuditActions = map[string]struct{}{
 	ActionTokenDeleted:                 {},
 	ActionTokenBatchDeleted:            {},
 	ActionTokenStatusChanged:           {},
+	ActionTokenBatchCreated:            {},
 	ActionChannelCreated:               {},
 	ActionChannelUpdated:               {},
 	ActionChannelDeleted:               {},
@@ -403,6 +413,8 @@ var validAuditActions = map[string]struct{}{
 	ActionProjectUpdated:               {},
 	ActionProjectDeleted:               {},
 	ActionProjectRestored:              {},
+	ActionProjectMemberAdded:           {},
+	ActionProjectMemberRemoved:         {},
 	ActionOptionUpdated:                {},
 	ActionPricingUpdated:               {},
 	ActionModelSyncTriggered:           {},
@@ -415,6 +427,7 @@ var validAuditActions = map[string]struct{}{
 	ActionTenantBrandUpdated:           {},
 	ActionTenantInviteIssued:           {},
 	ActionTenantInviteConsumed:         {},
+	ActionTenantInviteGrantFailed:      {},
 	ActionTenantInviteRevoked:          {},
 	ActionInternalKeyTenantGranted:     {},
 	ActionInternalKeyTenantRevoked:     {},

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 )
 
 // Cooldown bounds. The lower bound prevents reaper "thrash" (re-enable then
@@ -38,13 +40,14 @@ var dailyKeywords = []string{
 //     s-since-epoch, or s-from-now, with a heuristic that picks the closest sane value.
 //  2. body JSON: {"error":{"metadata":{"headers":{"X-RateLimit-Reset": "..."}}}}
 //     (free-tier OpenRouter responses embed the upstream provider header here).
-//  3. body keyword scan: "free-models-per-day"/"daily" → 24h cooldown.
+//  3. body keyword scan: "free-models-per-day"/"daily" → 24h cooldown
+//     (OpenRouter channels only).
 //  4. Fallback: 60s.
 //
 // The result is always clamped to [now+30s, now+24h]. The function never returns
 // 0; a non-zero value lets the reaper distinguish "auto-recoverable" from
 // "permanently disabled" entries.
-func ParseCooldownUntil(respHeader http.Header, respBody []byte, now time.Time) int64 {
+func ParseCooldownUntil(respHeader http.Header, respBody []byte, now time.Time, channelType int) int64 {
 	// 1. Header
 	if respHeader != nil {
 		if v := respHeader.Get("X-Ratelimit-Reset"); v != "" {
@@ -67,8 +70,9 @@ func ParseCooldownUntil(respHeader http.Header, respBody []byte, now time.Time) 
 		}
 	}
 
-	// 3. Keyword fallback (24h)
-	if len(respBody) > 0 {
+	// 3. Keyword fallback (24h). These keywords are an OpenRouter free-tier
+	// convention, so any other upstream falls through to the 60s default.
+	if channelType == constant.ChannelTypeOpenRouter && len(respBody) > 0 {
 		lower := strings.ToLower(string(respBody))
 		for _, kw := range dailyKeywords {
 			if strings.Contains(lower, kw) {

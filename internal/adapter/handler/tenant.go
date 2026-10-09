@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -227,6 +228,9 @@ func UpdateTenant(c *gin.Context) {
 		// back to unlimited (0) — the non-zero-only map pattern can't.
 		RateLimitRPM *int `json:"rate_limit_rpm"`
 		RateLimitTPM *int `json:"rate_limit_tpm"`
+		// Root-only switch (migration 046): the platform wallet is the only
+		// balance gate. Pointer so an explicit false turns it back off.
+		WalletAuthoritative *bool `json:"wallet_authoritative"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -278,6 +282,9 @@ func UpdateTenant(c *gin.Context) {
 	if req.RateLimitTPM != nil {
 		updates["tpm_limit"] = *req.RateLimitTPM
 	}
+	if req.WalletAuthoritative != nil {
+		updates["wallet_authoritative"] = *req.WalletAuthoritative
+	}
 
 	if len(updates) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -310,8 +317,14 @@ func UpdateTenant(c *gin.Context) {
 	}
 
 	actorID, _ := repo.GetUserID(c)
+	auditDetail := tenantID
+	if req.WalletAuthoritative != nil {
+		// The flag gates local balance enforcement; keep who-flipped-what
+		// traceable, as one machine-readable JSON detail.
+		auditDetail = fmt.Sprintf(`{"tenant_id":%q,"wallet_authoritative":%t}`, tenantID, *req.WalletAuthoritative)
+	}
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,
-		governance.ActionTenantUpdated, governance.ResourceTenant, 0, tenantID))
+		governance.ActionTenantUpdated, governance.ResourceTenant, 0, auditDetail))
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

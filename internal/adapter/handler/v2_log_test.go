@@ -546,6 +546,37 @@ func TestToLogViews_BlanksChannelNameForUsersOnly(t *testing.T) {
 	}
 }
 
+// TestGetLogsV2_CarriesTheWalletCharge drives the user log route end to end:
+// the console's "charged" line reads charged_cny4 off these rows, and until
+// 2026-10-05 the view dropped it, so the line never rendered for anyone.
+func TestGetLogsV2_CarriesTheWalletCharge(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	lg := &repo.Log{
+		UserId:      ctx.NormalUser.Id,
+		TenantId:    ctx.TenantID,
+		Type:        repo.LogTypeConsume,
+		ModelName:   "deepseek-chat",
+		Quota:       450,
+		ChargedCNY4: 66,
+	}
+	if err := ctx.DB.Create(lg).Error; err != nil {
+		t.Fatalf("seed log: %v", err)
+	}
+
+	w := V2RequestAsUser(ctx, ctx.NormalUser, http.MethodGet, "/api/v2/test-tenant/logs", nil, nil)
+	AssertV2Status(t, w, http.StatusOK)
+	resp := AssertV2Success(t, w)
+	logs := resp["data"].(map[string]interface{})["logs"].([]interface{})
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	if got := logs[0].(map[string]interface{})["charged_cny4"]; got != float64(66) {
+		t.Errorf("charged_cny4 = %v, want 66 — the console's charged line reads it from this route", got)
+	}
+}
+
 // TestGetLogsV2_SourceProductFilter is the read side of the cross-product
 // attribution filter (Workstream 0): a sibling product team must be able to
 // pull back exactly the rows it wrote the tag into, scoped to ITS tenant only

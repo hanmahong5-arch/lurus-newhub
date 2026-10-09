@@ -118,7 +118,12 @@ type RelayInfo struct {
 	// SourceProduct above: the settlement path (PostConsumeQuota ->
 	// EnrichLogParams -> RecordConsumeLog) has no gin.Context to read from.
 	// It is a label, never an authorization input.
-	ProjectId        int
+	ProjectId int
+	// EmployeeRef is the resolved employee attribution (migration 045):
+	// trusted X-Lurus-Employee header, else the token's employee_ref. Carried
+	// here for the same reason as ProjectId. A label, never an authorization
+	// input.
+	EmployeeRef      string
 	WalletChargeCNY4 int64 // wallet charge PostConsumeQuota committed to, 0.0001 CNY (-> entity.Log.ChargedCNY4)
 	// SessionId is the caller-supplied X-Session-Id header, validated
 	// (printable ASCII, <=200 bytes) but never hashed: unlike EndUserHash it
@@ -201,7 +206,7 @@ type RelayInfo struct {
 	// degraded-cache admit). LOCAL_LEDGER_ADVISORY only relaxes the local
 	// quota gate for governed requests; unlinked/legacy traffic keeps the full
 	// local gate so advisory mode can never open a free-ride door.
-	PlatformGoverned bool
+	PlatformGoverned, WalletAuthoritative bool // latter: set by PreConsumeQuota from tenants.wallet_authoritative, reused by PostConsumeQuota
 
 	PriceData types.PriceData
 
@@ -506,55 +511,6 @@ func GenRelayInfoOpenAI(c *gin.Context, request dto.Request) *RelayInfo {
 	return info
 }
 
-// deriveSessionId reads X-Session-Id and bounds what it may contain: bytes
-// must be printable ASCII (0x20-0x7E) and the value at most 200 bytes.
-// Anything outside that comes back "" — the field is descriptive metadata on
-// the log row, not a trust boundary, but it must not carry control
-// characters or an unbounded blob into JSON/log rendering.
-func deriveSessionId(c *gin.Context) string {
-	raw := strings.TrimSpace(c.GetHeader("X-Session-Id"))
-	if raw == "" || len(raw) > 200 {
-		return ""
-	}
-	for i := 0; i < len(raw); i++ {
-		if raw[i] < 0x20 || raw[i] > 0x7E {
-			return ""
-		}
-	}
-	return raw
-}
-
-// deriveEndUserHash extracts the caller's own end-user identifier from the
-// request body — OpenAI's `user` field or Anthropic-wire `metadata.user_id`
-// — and returns a tenant-scoped, non-reversible hash of it. The raw value is
-// never returned or stored anywhere; "" when the request carries no such
-// field.
-func deriveEndUserHash(c *gin.Context, tenantID string, request dto.Request) string {
-	var raw string
-	switch r := request.(type) {
-	case *dto.GeneralOpenAIRequest:
-		raw = r.User
-	case *dto.OpenAIResponsesRequest:
-		raw = r.User
-	case *dto.ClaudeRequest:
-		if len(r.Metadata) > 0 {
-			var meta dto.ClaudeMetadata
-			if err := json.Unmarshal(r.Metadata, &meta); err == nil {
-				raw = meta.UserId
-			}
-		}
-	}
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	hash := common.GenerateHMAC("end_user|" + tenantID + "|" + raw)
-	if len(hash) > 16 {
-		hash = hash[:16]
-	}
-	return hash
-}
-
 func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 	//channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
@@ -603,6 +559,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		TokenUnlimited: common.GetContextKeyBool(c, constant.ContextKeyTokenUnlimited),
 		TokenGroup:     tokenGroup,
 		ProjectId:      common.GetContextKeyInt(c, constant.ContextKeyProjectId),
+		EmployeeRef:    common.GetContextKeyString(c, constant.ContextKeyEmployeeRef),
 		// Workstream 0: resolve the cross-product attribution tag here, once,
 		// so every GenRelayInfo* entry point carries it — including MJ/Task,
 		// which build RelayInfo directly and never pass through Relay().

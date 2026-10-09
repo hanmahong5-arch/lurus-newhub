@@ -34,6 +34,7 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
 		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{}, &entity.UserTOTPBackupCode{},
 		&entity.UserSession{}, &entity.AdminPermissionGrant{}, &entity.ResponseRegistry{},
+		&entity.ProjectMember{},
 		// cycle-13 L5 content-disposition surface: chat/Midjourney/tasks/
 		// quota_data/playground_presets. All five are registered in
 		// repo/main.go's migrateDB() unconditionally (unlike the lazily-
@@ -125,6 +126,15 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 		CreatedAt: time.Now().Unix(), LastSeenAt: time.Now().Unix(),
 	}).Error; err != nil {
 		t.Fatalf("seed user session: %v", err)
+	}
+	// A project membership (migration 046) — the dept_lead scope subject must
+	// not survive erasure; another user's row must.
+	for _, uid := range []int64{int64(user.Id), int64(user.Id) + 1000} {
+		if err := db.Create(&entity.ProjectMember{
+			TenantId: "default", ProjectId: 7, UserId: uid, CreatedAt: time.Now().Unix(),
+		}).Error; err != nil {
+			t.Fatalf("seed project member: %v", err)
+		}
 	}
 	// A delegated permission grant (L4) — must not survive erasure either
 	// (cycle-8 L4 repair round, B-F5): security-adjacent access, same class
@@ -286,6 +296,14 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 	db.Unscoped().Model(&entity.UserSession{}).Where("user_id = ?", userID).Count(&sessionCount)
 	if sessionCount != 0 {
 		t.Errorf("user_sessions rows remaining = %d, want 0", sessionCount)
+	}
+
+	// project_members: the erased user's rows are gone, a bystander's remain.
+	var memberCount, bystanderCount int64
+	db.Model(&entity.ProjectMember{}).Where("user_id = ?", userID).Count(&memberCount)
+	db.Model(&entity.ProjectMember{}).Where("user_id = ?", userID+1000).Count(&bystanderCount)
+	if memberCount != 0 || bystanderCount != 1 {
+		t.Errorf("project_members: erased user rows = %d (want 0), bystander rows = %d (want 1)", memberCount, bystanderCount)
 	}
 
 	// response_registry: hard-deleted too, same step (cycle-8 L7 repair

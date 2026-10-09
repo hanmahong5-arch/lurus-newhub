@@ -66,6 +66,12 @@ var csvHeader = []string{
 	"charged_cny",
 	"ip",
 	"content",
+	// Enterprise attribution (migration 045): who inside the customer spent it
+	// (employee_ref), which key carried it and the correlation id the customer
+	// can quote back. project_id is already above.
+	"employee_ref",
+	"token_id",
+	"request_id",
 }
 
 // chargedCNYCell renders logs.charged_cny4 for the export; see csvHeader.
@@ -87,6 +93,10 @@ func chargedCNYCell(units4 int64) string {
 //	start_time  int64  — unix seconds lower bound (inclusive)
 //	end_time    int64  — unix seconds upper bound (inclusive)
 //	max_rows    int    — row cap; clamped to 50000 if higher
+//	project_id  int    — cost-centre filter; 404 for a dept_lead outside it
+//	scope       string — "tenant": every member's rows (tenant admin only, else 403)
+//
+// A department lead exports their projects' rows (all members), not their own.
 func ExportLogsV2(c *gin.Context) {
 	// ── auth & tenant context ──────────────────────────────────────────────────
 	tenantCtx, err := middleware.GetTenantContext(c)
@@ -142,6 +152,23 @@ func ExportLogsV2(c *gin.Context) {
 	// Cost-attribution filter (migration 029); 0 = no filter.
 	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
 
+	tenantWide := c.Query("scope") == "tenant"
+	if tenantWide && !requireTenantAdmin(c, tenantCtx) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "Admin role required",
+		})
+		return
+	}
+	scope := resolveLogReadScope(c, tenantCtx)
+	if scope.rejectProject(c, projectID) {
+		return
+	}
+	exportUserID := scope.userID(tenantCtx.UserID)
+	if tenantWide {
+		exportUserID = 0
+	}
+
 	maxRows, _ := strconv.Atoi(c.DefaultQuery("max_rows", strconv.Itoa(exportDefaultMaxRows)))
 	if maxRows <= 0 {
 		maxRows = exportDefaultMaxRows
@@ -178,15 +205,16 @@ func ExportLogsV2(c *gin.Context) {
 		}
 
 		params := &repo.LogQueryParams{
-			UserID:    tenantCtx.UserID,
-			LogType:   logType,
-			ModelName: modelName,
-			StartTime: startTime,
-			EndTime:   endTime,
-			TokenName: tokenName,
-			ProjectID: projectID,
-			Offset:    offset,
-			Limit:     batchLimit,
+			UserID:     exportUserID,
+			ProjectIDs: scope.projects(),
+			LogType:    logType,
+			ModelName:  modelName,
+			StartTime:  startTime,
+			EndTime:    endTime,
+			TokenName:  tokenName,
+			ProjectID:  projectID,
+			Offset:     offset,
+			Limit:      batchLimit,
 		}
 
 		logs, _, err := repo.GetUserLogsWithParams(repo.ForTenant(tenantCtx.TenantID), params)
@@ -234,6 +262,9 @@ func ExportLogsV2(c *gin.Context) {
 				chargedCNYCell(l.ChargedCNY4),
 				l.Ip,
 				l.Content,
+				l.EmployeeRef,
+				strconv.Itoa(l.TokenId),
+				logOtherString(l.Other, "request_id"),
 			)
 			if err := w.Write(row); err != nil {
 				common.SysError("ExportLogsV2: write row: " + err.Error())

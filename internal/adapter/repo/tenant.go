@@ -589,3 +589,17 @@ func GetTenantLastActivityTime(tenantID string) (int64, error) {
 		Scan(&lastActivity).Error
 	return lastActivity, err
 }
+
+// TenantWalletAuthoritative reports tenants.wallet_authoritative (migration
+// 046) for tenantID. Fail closed: an empty id, a missing row or any lookup
+// error answers false, so the local balance gate stays in force.
+func TenantWalletAuthoritative(tenantID string) bool {
+	if tenantID == "" {
+		return false
+	}
+	var flag bool
+	if err := DB.Model(&Tenant{}).Where("id = ?", tenantID).Select("wallet_authoritative").Limit(1).Scan(&flag).Error; err != nil {
+		return false
+	}
+	return flag
+}

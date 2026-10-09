@@ -195,7 +195,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 
-			// All-keys-cooling (every key in an OpenRouter pool is rate-limited):
+			// All-keys-cooling (every key of the selected multi-key channel is rate-limited):
 			// translate to 503 + Retry-After so clients back off intelligently
 			// instead of seeing a misleading 429. Falls through to the
 			// relayFormat switch below (instead of a hardcoded OpenAI-shaped
@@ -211,7 +211,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				c.Header("Retry-After", strconv.FormatInt(secs, 10))
 				newAPIError.StatusCode = http.StatusServiceUnavailable
 				newAPIError.SetMessage(common.MessageWithRequestId(
-					fmt.Sprintf("All keys in the OpenRouter pool are rate-limited; retry in ~%ds", secs),
+					fmt.Sprintf("All keys of the selected channel are rate-limited; retry in ~%ds", secs),
 					requestId,
 				))
 			}
@@ -411,6 +411,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
+			// A retry whose remaining channels are all cooling must not replace
+			// the real upstream answer (status, Retry-After) of the attempt that
+			// just failed; the all-cooling 503 is for requests never sent upstream.
+			if channelErr.GetErrorCode() == types.ErrorCodeAllChannelsCooling && newAPIError != nil {
+				break
+			}
 			newAPIError = channelErr
 			// A channel-scoped selection failure condemns ONE channel, not the
 			// request: channel:no_available_key and channel:all_keys_cooling
@@ -450,7 +456,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		// Circuit breaker: skip channels whose breaker is Open to avoid
-		// sending traffic to a known-failing upstream provider.
+		// sending traffic to a known-failing upstream provider. Recorded as used first so a skipped sibling is not re-selected.
+		addUsedChannel(c, channel.Id)
 		if !channelBreakers.Allow(channel.Id) {
 			metrics.RecordCircuitBreakerRejection(fmt.Sprintf("%d", channel.Id))
 			// O2 (B3): skipping an Open-breaker channel is a failover event.
@@ -465,7 +472,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			continue
 		}
 
-		addUsedChannel(c, channel.Id)
 		attempted = true
 		// L3 residual (round-2 findings 8/11/15): provider.doRequest only
 		// clears the shared "upstream_request_id" key just before its own
@@ -632,12 +638,6 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-func addUsedChannel(c *gin.Context, channelId int) {
-	useChannel := c.GetStringSlice("use_channel")
-	useChannel = append(useChannel, fmt.Sprintf("%d", channelId))
-	c.Set("use_channel", useChannel)
-}
-
 // getChannelFn is a call seam for getChannel — package-level var so hermetic
 // tests can force a specific channel-selection failure (e.g. the all-keys-
 // cooling 503 special-case in Relay()'s error defer) without a live,
@@ -674,7 +674,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *app.Ret
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("failed to select an available channel for model %s in group %s (retry): %s", info.OriginModelName, selectGroup, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, channelSelectionError(err, info.OriginModelName, selectGroup)
 	}
 	if channel == nil {
 		return nil, types.NewError(fmt.Errorf("no available channel for model %s in group %s (retry)", info.OriginModelName, selectGroup), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -737,7 +737,7 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	if openaiErr.StatusCode == http.StatusTooManyRequests {
-		return true
+		return !app.IsRequestCaused429(openaiErr)
 	}
 	if openaiErr.StatusCode == 307 {
 		return true

@@ -486,13 +486,15 @@ func filterChannelsWhere(ids []int, pred ChannelPredicate) []int {
 // draws inside SQL result order and only loads the winner). Same ability
 // query, same weight+10 draw, but every candidate channel is loaded first so
 // the predicate can reject before the draw rather than after it.
+//
+// Like the memory path, the predicate runs BEFORE priority bucketing: retry
+// indexes the priority tiers that still have an accepted channel, so a fully
+// cooling top tier falls through to the next tier instead of failing the
+// request while healthy lower-tier channels exist.
 func getChannelForTenantWhere(group string, model string, retry int, tenantID string, pred ChannelPredicate) (*Channel, error) {
-	channelQuery, err := getChannelQuery(group, model, retry, tenantID)
-	if err != nil {
-		return nil, err
-	}
+	cond, args := abilityBaseCondition(group, model, tenantID)
 	var abilities []Ability
-	if err := channelQuery.Order("weight DESC").Find(&abilities).Error; err != nil {
+	if err := DB.Where(cond, args...).Order("weight DESC").Find(&abilities).Error; err != nil {
 		return nil, err
 	}
 	if len(abilities) == 0 {
@@ -510,16 +512,41 @@ func getChannelForTenantWhere(group string, model string, retry int, tenantID st
 	for i := range rows {
 		byID[rows[i].Id] = &rows[i]
 	}
-	var candidates []Ability
-	weightSum := 0
+	abilityPriority := func(a Ability) int64 {
+		if a.Priority == nil {
+			return 0
+		}
+		return *a.Priority
+	}
+	var accepted []Ability
+	tiers := map[int64]bool{}
 	for _, a := range abilities {
 		if ch, ok := byID[a.ChannelId]; ok && pred(ch) {
+			accepted = append(accepted, a)
+			tiers[abilityPriority(a)] = true
+		}
+	}
+	if len(accepted) == 0 {
+		return nil, ErrNoChannelSatisfiesPredicate
+	}
+	sortedTiers := make([]int64, 0, len(tiers))
+	for p := range tiers {
+		sortedTiers = append(sortedTiers, p)
+	}
+	sort.Slice(sortedTiers, func(i, j int) bool { return sortedTiers[i] > sortedTiers[j] })
+	if retry < 0 {
+		retry = 0
+	}
+	if retry >= len(sortedTiers) {
+		retry = len(sortedTiers) - 1
+	}
+	var candidates []Ability
+	weightSum := 0
+	for _, a := range accepted {
+		if abilityPriority(a) == sortedTiers[retry] {
 			candidates = append(candidates, a)
 			weightSum += int(a.Weight) + 10
 		}
-	}
-	if len(candidates) == 0 {
-		return nil, ErrNoChannelSatisfiesPredicate
 	}
 	weight := common.GetRandomInt(weightSum)
 	for _, a := range candidates {

@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 
@@ -60,6 +59,10 @@ type tokenView struct {
 	// Safe to expose to the token owner: it is not a privilege, and the
 	// project list itself is readable by every user in the tenant.
 	ProjectId int `json:"project_id"`
+	// EmployeeRef / TrustedIdentityHeaders: enterprise attribution (migration
+	// 045). Neither is a secret; the flag is writable by tenant admins only.
+	EmployeeRef            string `json:"employee_ref"`
+	TrustedIdentityHeaders bool   `json:"trusted_identity_headers"`
 }
 
 // toTokenView projects a single repo.Token into the field-whitelisted view
@@ -88,6 +91,9 @@ func toTokenView(t *repo.Token) tokenView {
 		Group:              t.Group,
 		Scopes:             scopes,
 		ProjectId:          t.ProjectId,
+
+		EmployeeRef:            t.EmployeeRef,
+		TrustedIdentityHeaders: t.TrustedIdentityHeaders,
 	}
 }
 
@@ -179,6 +185,11 @@ func CreateTokenV2(c *gin.Context) {
 		RateLimitRPM       int      `json:"rate_limit_rpm"`       // Requests/min ceiling (0 = unlimited)
 		RateLimitTPM       int      `json:"rate_limit_tpm"`       // Tokens/min ceiling (0 = unlimited)
 		ProjectId          int      `json:"project_id"`           // Cost-attribution project (0 = unassigned)
+		// EmployeeRef: employee this key is issued to ("" = none); unique per tenant.
+		EmployeeRef string `json:"employee_ref"`
+		// TrustedIdentityHeaders: honour X-Lurus-Employee / X-Lurus-Dept on this
+		// key. Tenant admin only (403 otherwise).
+		TrustedIdentityHeaders bool `json:"trusted_identity_headers"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -263,6 +274,10 @@ func CreateTokenV2(c *gin.Context) {
 		return
 	}
 
+	if !checkEnterpriseTokenFields(c, tenantCtx, req.EmployeeRef, 0, req.TrustedIdentityHeaders) {
+		return
+	}
+
 	// Generate token key
 	key, err := app.GenerateTokenKey()
 	if err != nil {
@@ -314,10 +329,17 @@ func CreateTokenV2(c *gin.Context) {
 		RateLimitTPM:       req.RateLimitTPM,
 		ProjectId:          req.ProjectId,
 		IdentityAccountID:  identityAccountID,
+
+		EmployeeRef:            req.EmployeeRef,
+		TrustedIdentityHeaders: req.TrustedIdentityHeaders,
 	}
 
 	err = token.Insert()
 	if err != nil {
+		if repo.IsUniqueViolation(err) {
+			respondEmployeeRefConflict(c)
+			return
+		}
 		common.SysError("Failed to create token: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -333,9 +355,11 @@ func CreateTokenV2(c *gin.Context) {
 		"success": true,
 		"message": "Token created successfully",
 		"data": gin.H{
-			"id":   token.Id,
-			"name": token.Name,
-			"key":  "sk-" + token.Key, // Return full key only on creation
+			"id":                       token.Id,
+			"name":                     token.Name,
+			"key":                      "sk-" + token.Key, // Return full key only on creation
+			"employee_ref":             token.EmployeeRef,
+			"trusted_identity_headers": token.TrustedIdentityHeaders,
 		},
 	})
 }
@@ -399,6 +423,10 @@ func UpdateTokenV2(c *gin.Context) {
 		// ProjectId: nil = no change; 0 unassigns. A pointer, not a plain int,
 		// because 0 is a meaningful value here (unassign) rather than "absent".
 		ProjectId *int `json:"project_id"`
+		// EmployeeRef: nil = no change, "" clears. TrustedIdentityHeaders: nil =
+		// no change; turning it ON is tenant-admin only (turning it off is not).
+		EmployeeRef            *string `json:"employee_ref"`
+		TrustedIdentityHeaders *bool   `json:"trusted_identity_headers"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -526,6 +554,29 @@ func UpdateTokenV2(c *gin.Context) {
 		token.ProjectId = *req.ProjectId
 	}
 
+	if req.EmployeeRef != nil || req.TrustedIdentityHeaders != nil {
+		ref, trusted := token.EmployeeRef, token.TrustedIdentityHeaders
+		if req.EmployeeRef != nil {
+			ref = *req.EmployeeRef
+		}
+		if req.TrustedIdentityHeaders != nil {
+			trusted = *req.TrustedIdentityHeaders
+		}
+		if ref != token.EmployeeRef && !requireEmployeeRefAdmin(c, tenantCtx) {
+			return
+		}
+		// Only a NEW ref is checked for syntax/uniqueness, and only an
+		// enabling flip is privileged: a legacy value is never re-litigated.
+		checkRef, checkTrusted := ref, trusted && !token.TrustedIdentityHeaders
+		if ref == token.EmployeeRef {
+			checkRef = ""
+		}
+		if !checkEnterpriseTokenFields(c, tenantCtx, checkRef, token.Id, checkTrusted) {
+			return
+		}
+		token.EmployeeRef, token.TrustedIdentityHeaders = ref, trusted
+	}
+
 	// Scopes replacement is opt-in: nil = unchanged, non-nil = full replace.
 	// Sending [] clears the allowlist (= no restriction). Record both before/
 	// after in the audit event so admins can reconstruct privilege changes.
@@ -550,6 +601,10 @@ func UpdateTokenV2(c *gin.Context) {
 	// Save changes
 	err = token.Update()
 	if err != nil {
+		if repo.IsUniqueViolation(err) {
+			respondEmployeeRefConflict(c)
+			return
+		}
 		common.SysError("Failed to update token: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -634,72 +689,6 @@ func DeleteTokenV2(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Token deleted successfully",
-	})
-}
-
-// maxBatchDeleteTokens bounds a single batch-delete request. Above this the
-// request is rejected rather than sweeping an unbounded set in one transaction.
-const maxBatchDeleteTokens = 100
-
-// DeleteTokensV2 batch-deletes the caller's own tokens (v2 API with tenant context).
-// Route: POST /api/v2/:tenant_slug/tokens/batch-delete  Body: { "ids": [int] }
-//
-// Ownership is enforced inside repo.BatchDeleteTokens (the delete is scoped to
-// tenantCtx.UserID), so ids belonging to other users are silently ignored and
-// never deleted. An empty list is a no-op (the UI may submit an empty selection).
-func DeleteTokensV2(c *gin.Context) {
-	tenantCtx, err := middleware.GetTenantContext(c)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": "Tenant context not found",
-		})
-		return
-	}
-
-	var req struct {
-		Ids []int `json:"ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid request parameters",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	// Empty selection deletes nothing — succeed with deleted:0 rather than error.
-	if len(req.Ids) == 0 {
-		c.JSON(http.StatusOK, gin.H{"success": true, "deleted": 0})
-		return
-	}
-
-	if len(req.Ids) > maxBatchDeleteTokens {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": fmt.Sprintf("Too many ids: %d (max %d per batch)", len(req.Ids), maxBatchDeleteTokens),
-		})
-		return
-	}
-
-	deleted, err := repo.BatchDeleteTokens(req.Ids, tenantCtx.UserID)
-	if err != nil {
-		common.SysError("Failed to batch-delete tokens: " + err.Error())
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to delete tokens",
-		})
-		return
-	}
-
-	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, tenantCtx.UserID,
-		governance.ActionTokenDeleted, governance.ResourceToken, 0,
-		fmt.Sprintf(`{"action":"batch_delete","count":%d}`, deleted)))
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"deleted": deleted,
 	})
 }
 

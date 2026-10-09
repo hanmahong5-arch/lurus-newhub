@@ -118,6 +118,7 @@ var erasureModelTypeRegistry = map[string]reflect.Type{
 	"entity.ModelRateLimit":             reflect.TypeOf(entity.ModelRateLimit{}),
 	"entity.BillingCheckoutOrder":       reflect.TypeOf(entity.BillingCheckoutOrder{}),
 	"entity.Project":                    reflect.TypeOf(entity.Project{}),
+	"entity.ProjectMember":              reflect.TypeOf(entity.ProjectMember{}),
 	"entity.ModelHealth":                reflect.TypeOf(entity.ModelHealth{}),
 	"entity.TenantInvite":               reflect.TypeOf(entity.TenantInvite{}),
 	"entity.UserSession":                reflect.TypeOf(entity.UserSession{}),

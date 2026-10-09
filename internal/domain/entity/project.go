@@ -58,10 +58,14 @@ type Project struct {
 	Name        string `json:"name" gorm:"type:varchar(128);not null"`
 	Description string `json:"description" gorm:"type:varchar(512);not null;default:''"`
 	// MonthlyBudgetQuota: see the type comment. bigint to match migration 043.
-	MonthlyBudgetQuota int64          `json:"monthly_budget_quota" gorm:"type:bigint;not null;default:0"`
-	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at"`
-	DeletedAt          gorm.DeletedAt `json:"-" gorm:"index"`
+	MonthlyBudgetQuota int64 `json:"monthly_budget_quota" gorm:"type:bigint;not null;default:0"`
+	// ExternalCode (migration 045) is the department code a customer's gateway
+	// sends in X-Lurus-Dept; matched before Name. Unique per tenant among live
+	// rows when non-empty — the partial index exists only in migration 045.
+	ExternalCode string         `json:"external_code" gorm:"type:varchar(64);not null;default:''"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (Project) TableName() string {

@@ -141,12 +141,14 @@ func handleSessionFallback(c *gin.Context) bool {
 
 		// Construct tenant context from session
 		tenantCtx := &TenantContext{
-			TenantID:   tenantID,
-			UserID:     user.Id,
-			IDPSubject: "", // Not available in session
-			Email:      user.Email,
-			Username:   user.Username,
-			Roles:      []string{},
+			TenantID:     tenantID,
+			UserID:       user.Id,
+			IDPSubject:   "", // Not available in session
+			Email:        user.Email,
+			Username:     user.Username,
+			Roles:        []string{},
+			TenantRole:   user.TenantRole,
+			RoleTenantID: user.TenantId,
 		}
 
 		// Inject into gin context
@@ -193,12 +195,14 @@ func handleSessionFallback(c *gin.Context) bool {
 		}
 
 		tenantCtx := &TenantContext{
-			TenantID:   tenantID,
-			UserID:     user.Id,
-			IDPSubject: "",
-			Email:      user.Email,
-			Username:   user.Username,
-			Roles:      []string{},
+			TenantID:     tenantID,
+			UserID:       user.Id,
+			IDPSubject:   "",
+			Email:        user.Email,
+			Username:     user.Username,
+			Roles:        []string{},
+			TenantRole:   user.TenantRole,
+			RoleTenantID: user.TenantId,
 		}
 
 		c.Set("tenant_context", tenantCtx)

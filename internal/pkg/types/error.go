@@ -57,6 +57,11 @@ const (
 	ErrorCodeDoRequestFailed    ErrorCode = "do_request_failed"
 	ErrorCodeGetChannelFailed   ErrorCode = "get_channel_failed"
 	ErrorCodeGenRelayInfoFailed ErrorCode = "gen_relay_info_failed"
+	// ErrorCodeAllChannelsCooling: every channel serving the model is inside a
+	// 429 cooldown. Deliberately not "channel:"-prefixed (that prefix means one
+	// channel is condemned and the request fails over) and distinct from the
+	// provider-filter miss so clients can tell "back off" from "no such region".
+	ErrorCodeAllChannelsCooling ErrorCode = "all_channels_cooling"
 
 	// channel error
 	ErrorCodeChannelNoAvailableKey        ErrorCode = "channel:no_available_key"
