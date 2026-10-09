@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/handler"
+	"github.com/LurusTech/lurus-hub/internal/testkit/fakeupstream"
 
 	"github.com/gin-gonic/gin"
 )
@@ -207,12 +208,36 @@ func TestFaultSimModesProduceTheirFault(t *testing.T) {
 	// Every exported mode must be reachable: the list is what an operator reads.
 	t.Run("every declared mode is implemented", func(t *testing.T) {
 		for _, mode := range handler.FaultSimModes {
+			if mode == fakeupstream.FaultDisconnectBeforeFirstByte {
+				continue // needs a real connection; its own subtest below
+			}
 			w := call(t, mode, "delay_ms=1")
 			if w.Code == http.StatusBadRequest {
 				t.Errorf("mode %q is declared in FaultSimModes but rejected as unknown", mode)
 			}
 		}
 	})
+}
+
+// disconnect_before_first_byte closes the connection, which only a real
+// server can show: a recorder has no connection to close.
+func TestFaultSimDisconnectClosesTheConnection(t *testing.T) {
+	t.Setenv("FAULTSIM_TOKEN", "test-token")
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiV2Router(engine)
+	srv := httptest.NewServer(engine)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+faultSimPath,
+		strings.NewReader(`{"model":"`+fakeupstream.FaultDisconnectBeforeFirstByte+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Faultsim-Token", "test-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatalf("got status %d, want the connection closed before a status line", resp.StatusCode)
+	}
 }
 
 // TestFaultSimTaskRoutesPresentWhenEnabled is the A-F6 lock: the UAT probe
