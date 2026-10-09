@@ -96,3 +96,21 @@ export interface ChannelPage {
   channels: ChannelOption[]
   total: number
 }
+
+/** One row of GET /admin/channel-templates/:id/applications (server log). */
+export interface TemplateApplication {
+  id: number
+  channel_id: number
+  template_id: number
+  template_version: number
+  /** User id of the staff member who applied it. */
+  applied_by: number
+  applied_at: number
+}
+
+export interface ApplicationPage {
+  applications: TemplateApplication[]
+  total: number
+  page: number
+  page_size: number
+}

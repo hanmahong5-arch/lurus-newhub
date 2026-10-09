@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  earliestExpiry,
   expiringSoon,
   formatCostCny4,
-  manualDisabledProbe,
-  maxWindowUsedPct,
+  probeFromSummary,
   reasonTotals,
   totalsOf,
   unroutable,
@@ -29,31 +27,55 @@ function probe(over: Partial<ChannelProbe>): ChannelProbe {
   }
 }
 
-describe('earliestExpiry', () => {
-  it('takes the earliest of setting and per-key ends', () => {
+describe('probeFromSummary', () => {
+  it('maps a roll-up row; unknown window stays null, never 0', () => {
     expect(
-      earliestExpiry({
-        id: 1,
-        setting: JSON.stringify({ expires_at: 500 }),
-        channel_info: { multi_key_meta: { '0': { expires_at: 300 }, '1': {} } },
+      probeFromSummary({
+        id: 7,
+        name: 'zhipu',
+        routable: false,
+        reasons: ['cooling_429'],
+        expires_at: 300,
+        window_max_used_pct: 93.5,
+        cooldown_until: 900,
+        last_error: 'rate limited',
       })
-    ).toBe(300)
-  })
-  it('is null when nothing is declared or the setting is not JSON', () => {
-    expect(earliestExpiry({ id: 1, setting: 'not json' })).toBeNull()
-    expect(earliestExpiry({ id: 1, setting: null })).toBeNull()
-    expect(earliestExpiry({ id: 1, setting: '{"expires_at":0}' })).toBeNull()
-  })
-})
-
-describe('maxWindowUsedPct', () => {
-  it('reads direct and list shapes, null when unknown', () => {
-    expect(maxWindowUsedPct({ used_pct: 40 })).toBe(40)
+    ).toEqual({
+      channelId: 7,
+      name: 'zhipu',
+      expiresAt: 300,
+      windowUsedPct: 93.5,
+      routable: false,
+      reasons: ['cooling_429'],
+      cooldownUntil: 900,
+      lastError: 'rate limited',
+    })
     expect(
-      maxWindowUsedPct({ windows: [{ used_pct: 10 }, { used_pct: 93 }] })
-    ).toBe(93)
-    expect(maxWindowUsedPct(null)).toBeNull()
-    expect(maxWindowUsedPct({})).toBeNull()
+      probeFromSummary({
+        id: 8,
+        name: 'plain',
+        routable: true,
+        reasons: [],
+        expires_at: 0,
+        window_max_used_pct: null,
+      })
+    ).toMatchObject({
+      expiresAt: null,
+      windowUsedPct: null,
+      cooldownUntil: null,
+    })
+  })
+  it('keeps a real 0% window as 0', () => {
+    expect(
+      probeFromSummary({
+        id: 1,
+        name: 'x',
+        routable: true,
+        reasons: [],
+        expires_at: 0,
+        window_max_used_pct: 0,
+      }).windowUsedPct
+    ).toBe(0)
   })
 })
 
@@ -93,14 +115,6 @@ describe('lists', () => {
       ['auth_failed', 1],
       ['disabled_manual', 1],
     ])
-  })
-  it('manualDisabledProbe is unroutable with the manual reason', () => {
-    const c = { channel_id: 9, name: 'x', status: 2 } as SummaryChannel
-    expect(manualDisabledProbe(c)).toMatchObject({
-      channelId: 9,
-      routable: false,
-      reasons: ['disabled_manual'],
-    })
   })
 })
 

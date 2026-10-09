@@ -29,6 +29,7 @@ import {
   updateTemplate,
 } from '../api'
 import type { ApplyRecord, ChannelTemplate, TemplateWriteBody } from '../types'
+import { ApplicationsDialog } from './applications-dialog'
 import { ApplyDialog } from './apply-dialog'
 import { TemplateFormDialog } from './template-form-dialog'
 
@@ -36,6 +37,7 @@ type Dialog =
   | { kind: 'create' }
   | { kind: 'edit'; template: ChannelTemplate }
   | { kind: 'apply'; template: ChannelTemplate }
+  | { kind: 'history'; template: ChannelTemplate }
   | { kind: 'delete'; template: ChannelTemplate }
   | null
 
@@ -95,6 +97,7 @@ export function TemplatesPanel() {
         ...r,
       ])
       setDialog(null)
+      void refresh() // the server-side history changed
       const failed = outcome.results.filter((x) => !x.applied).length
       if (failed === 0) {
         toast.success(
@@ -187,6 +190,15 @@ export function TemplatesPanel() {
                       }
                     >
                       {t('Apply')}
+                    </Button>
+                    <Button
+                      variant='ghost'
+                      size='sm'
+                      onClick={() =>
+                        setDialog({ kind: 'history', template: tpl })
+                      }
+                    >
+                      {t('History')}
                     </Button>
                     <Button
                       variant='ghost'
@@ -284,6 +296,13 @@ export function TemplatesPanel() {
           template={dialog.template}
           saving={edit.isPending}
           onSubmit={(b) => edit.mutate({ id: dialog.template.id, body: b })}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'history' && (
+        <ApplicationsDialog
+          key={dialog.template.id}
+          template={dialog.template}
           onClose={() => setDialog(null)}
         />
       )}

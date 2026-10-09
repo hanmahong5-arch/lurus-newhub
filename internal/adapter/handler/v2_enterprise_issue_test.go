@@ -133,6 +133,9 @@ func newEntEnv(t *testing.T, tenant string) *entEnv {
 	g.DELETE("/invites/:id", RevokeMyTenantInviteV2)
 	g.PUT("/members/:user_id/role", SetTenantMemberRoleV2)
 	g.GET("/user/me", GetSelfV2)
+	g.GET("/members", ListTenantMembersV2)
+	g.GET("/projects", ListProjectsV2)
+	g.GET("/tokens", ListTokensV2)
 	e.r = r
 	return e
 }

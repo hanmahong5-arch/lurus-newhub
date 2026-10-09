@@ -46,6 +46,35 @@ describe('mapChannelList', () => {
     expect(r.items[0]).toMatchObject({ id: 7, name: 'pool-a', status: 3 })
   })
 
+  it('maps the operations columns and fails safe when absent', () => {
+    const r = mapChannelList({
+      channels: [
+        {
+          id: 1,
+          name: 'a',
+          plan_kind: 'kimi_coding',
+          expires_at: 1_900_000_000,
+          key_count: 3,
+          enabled_key_count: 2,
+          routable: false,
+          unroutable_reasons: ['expired', 5],
+        },
+        { id: 2, name: 'b' },
+      ],
+      total: 2,
+    })
+    expect(r.items[0]).toMatchObject({
+      planKind: 'kimi_coding',
+      expiresAt: 1_900_000_000,
+      keyCount: 3,
+      enabledKeyCount: 2,
+      routable: false,
+      unroutableReasons: ['expired'],
+    })
+    // A row without the verdict is never shown as routable.
+    expect(r.items[1]).toMatchObject({ routable: false, unroutableReasons: [] })
+  })
+
   it('tolerates a null channels array', () => {
     expect(mapChannelList({ channels: null, total: 0 }).items).toEqual([])
   })

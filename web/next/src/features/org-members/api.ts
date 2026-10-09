@@ -3,14 +3,13 @@ import { queryOptions } from '@tanstack/react-query'
 import { tenantApi } from '@/lib/api'
 
 import {
-  buildMembers,
+  mapMemberList,
   mapInviteList,
   mapIssuedInvite,
   mapProjects,
   num,
   role,
   str,
-  type SelfRef,
 } from './lib/map'
 import type { InviteWriteBody, MemberRole } from './types'
 
@@ -23,23 +22,25 @@ export const projectsQueryOptions = queryOptions({
   staleTime: 60_000,
 })
 
-/**
- * No tenant-wide member endpoint exists: read each department's members and
- * fold in the signed-in user. Any failed read fails the whole list.
- */
-export function membersQueryOptions(self: SelfRef | null) {
+export interface MembersQuery {
+  page: number
+  keyword: string
+}
+
+/** GET /members: the tenant roster (admin only), paged and keyword-filtered. */
+export function membersQueryOptions(q: MembersQuery) {
   return queryOptions({
-    queryKey: [...membersQueryKey, 'list', self?.id ?? 0, self?.role ?? ''],
-    queryFn: async () => {
-      const projects = mapProjects(await tenantApi.get('/projects'))
-      const perProject = await Promise.all(
-        projects.map(async (project) => ({
-          project,
-          raw: await tenantApi.get(`/projects/${project.id}/members`),
-        }))
-      )
-      return buildMembers(perProject, self)
-    },
+    queryKey: [...membersQueryKey, 'list', q.page, q.keyword],
+    queryFn: async () =>
+      mapMemberList(
+        await tenantApi.get('/members', {
+          params: {
+            page: q.page,
+            page_size: PAGE_SIZE,
+            ...(q.keyword ? { keyword: q.keyword } : {}),
+          },
+        })
+      ),
   })
 }
 

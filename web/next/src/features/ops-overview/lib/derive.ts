@@ -1,12 +1,4 @@
-import type {
-  ChannelDetail,
-  ChannelHealth,
-  ChannelProbe,
-  SummaryChannel,
-} from './types'
-
-/** channel status 2 = switched off by an operator (common.ChannelStatusManuallyDisabled). */
-export const STATUS_MANUALLY_DISABLED = 2
+import type { ChannelProbe, HealthSummaryItem, SummaryChannel } from './types'
 
 export const EXPIRY_WARN_SECONDS = 72 * 3600
 export const WINDOW_WARN_PCT = 90
@@ -26,84 +18,22 @@ function positiveInt(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null
 }
 
-/**
- * Earliest declared end of a channel: the channel-level plan end inside
- * `setting`, or any per-key end in `multi_key_meta`. null when none is set;
- * a malformed `setting` string is treated as "none declared".
- */
-export function earliestExpiry(detail: ChannelDetail): number | null {
-  const candidates: number[] = []
-  if (typeof detail.setting === 'string' && detail.setting.trim() !== '') {
-    try {
-      const parsed: unknown = JSON.parse(detail.setting)
-      if (typeof parsed === 'object' && parsed !== null) {
-        const v = positiveInt((parsed as { expires_at?: unknown }).expires_at)
-        if (v !== null) candidates.push(v)
-      }
-    } catch {
-      // not a JSON document: no declared end
-    }
-  }
-  const meta = detail.channel_info?.multi_key_meta
-  if (meta && typeof meta === 'object') {
-    for (const m of Object.values(meta)) {
-      const v = positiveInt(m?.expires_at)
-      if (v !== null) candidates.push(v)
-    }
-  }
-  return candidates.length > 0 ? Math.min(...candidates) : null
+/** A finite number, else null (an unknown window is null, never 0). */
+function finiteOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
-/**
- * Highest used percent in a health `window` snapshot. Accepts either
- * `{used_pct}` or `{windows:[{used_pct}]}` (planquota.Snapshot); anything
- * else means no window is known (null), never 0.
- */
-export function maxWindowUsedPct(
-  window: Record<string, unknown> | null | undefined
-): number | null {
-  if (!window || typeof window !== 'object') return null
-  const values: number[] = []
-  const direct = window.used_pct
-  if (typeof direct === 'number' && Number.isFinite(direct)) values.push(direct)
-  const list = window.windows
-  if (Array.isArray(list)) {
-    for (const w of list) {
-      const p = (w as { used_pct?: unknown } | null)?.used_pct
-      if (typeof p === 'number' && Number.isFinite(p)) values.push(p)
-    }
-  }
-  return values.length > 0 ? Math.max(...values) : null
-}
-
-export function buildProbe(
-  channel: SummaryChannel,
-  health: ChannelHealth,
-  detail: ChannelDetail
-): ChannelProbe {
+/** Map one server roll-up row; the server already folded plan and key ends. */
+export function probeFromSummary(item: HealthSummaryItem): ChannelProbe {
   return {
-    channelId: channel.channel_id,
-    name: channel.name,
-    expiresAt: earliestExpiry(detail),
-    windowUsedPct: maxWindowUsedPct(health.window),
-    routable: health.routable,
-    reasons: Array.isArray(health.reasons) ? health.reasons : [],
-    cooldownUntil: positiveInt(health.cooldown_until),
-    lastError: health.last_error ?? '',
-  }
-}
-
-/** A channel an operator switched off is not read; its state is already known. */
-export function manualDisabledProbe(channel: SummaryChannel): ChannelProbe {
-  return {
-    channelId: channel.channel_id,
-    name: channel.name,
-    expiresAt: null,
-    windowUsedPct: null,
-    routable: false,
-    reasons: ['disabled_manual'],
-    cooldownUntil: null,
-    lastError: '',
+    channelId: item.id,
+    name: item.name,
+    expiresAt: positiveInt(item.expires_at),
+    windowUsedPct: finiteOrNull(item.window_max_used_pct),
+    routable: item.routable === true,
+    reasons: Array.isArray(item.reasons) ? item.reasons : [],
+    cooldownUntil: positiveInt(item.cooldown_until),
+    lastError: item.last_error ?? '',
   }
 }
 

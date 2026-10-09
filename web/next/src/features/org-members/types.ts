@@ -9,10 +9,10 @@ export interface Member {
   role: MemberRole
   /** Names of the departments (projects) the member belongs to. */
   departments: string[]
-  /** Earliest project-membership time, unix seconds; 0 = unknown. */
+  /** Join time, unix seconds; 0 = the server has no join timestamp. */
   joinedAt: number
-  /** Only known for the signed-in user (user/me); null = the API does not say. */
-  isPayer: boolean | null
+  /** Whether the member is the tenant payer. */
+  isPayer: boolean
   email: string
 }
 

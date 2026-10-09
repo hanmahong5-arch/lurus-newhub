@@ -64,19 +64,3 @@ export function mapMembers(raw: unknown): DepartmentMember[] {
     }
   })
 }
-
-/**
- * What the signed-in person gets to see. A tenant admin sees every
- * department. A department lead gets only the departments the spend endpoint
- * returns for them (the server filters that report to their own projects; the
- * project list itself is tenant-wide and must not be shown as "mine").
- */
-export function visibleDepartments(
-  all: Department[],
-  spend: SpendResult | undefined,
-  isAdmin: boolean
-): Department[] {
-  if (isAdmin) return all
-  if (spend === undefined) return []
-  return all.filter((d) => d.id in spend.byProject)
-}

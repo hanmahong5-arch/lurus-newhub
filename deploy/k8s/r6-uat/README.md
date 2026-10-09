@@ -104,3 +104,22 @@ by this lane, which only ships the route+handler code):
      field — no real Suno-compatible vendor key involved anywhere.
    - The same GET with a different user's token → 404 `Task not found`,
      byte-identical to a random `task_id`.
+
+## Business-test seed
+
+`scripts/uat/seed.ts` (usage: `scripts/uat/README.md`) builds the demo tenants,
+accounts, keys, redemption codes and demo channels through the management API
+only (bridge session + an internal API key), and writes an account table and a
+`secrets.csv` outside the repo. It is idempotent and has a `--dry-run`. The
+walk-through for business testers is `doc/uat/business-test-guide.md`. Note
+the fault simulator above also has a success mode (a model named `ok` or
+`ok-*` returns a fixed answer with usage 1000 prompt / 500 completion tokens,
+overridable per request with `X-Faultsim-Usage: "in,out"`), on all three wires
+(`/faultsim/v1/chat/completions`, `/faultsim/v1/responses`,
+`/faultsim/v1/messages`). With `FAULTSIM_TOKEN` exported the seed maps the demo
+model to `ok-chat`, so no real upstream is needed for the billed scenarios
+(4-8, 10, 12, 13). **Operator step (not done by the seed or the code change):**
+`FAULTSIM_TOKEN` must be set in the UAT deployment as described in the "Fault
+simulator" section above; until then the routes do not exist and those
+scenarios stay blocked. `--upstream-base-url` remains available for a real
+upstream.

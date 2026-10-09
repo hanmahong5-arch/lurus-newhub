@@ -15,6 +15,7 @@ import { ErrorState } from '@/components/error-state'
 import { PageHeader } from '@/components/layout/page-header'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toApiError } from '@/lib/api'
 import { currentUserQueryOptions, userAccess } from '@/lib/user'
@@ -39,7 +40,7 @@ import {
   inviteErrorMessage,
   roleErrorMessage,
 } from './lib/errors'
-import { inviteLink, role as toRole, type SelfRef } from './lib/map'
+import { inviteLink } from './lib/map'
 import type {
   Invite,
   InviteWriteBody,
@@ -62,30 +63,18 @@ export function OrgMembersPage() {
   const access = userAccess(me.data)
   const canManage = access.isTenantAdmin
 
-  const self = useMemo<SelfRef | null>(
-    () =>
-      me.data
-        ? {
-            id: me.data.id,
-            username: me.data.username,
-            displayName: me.data.display_name ?? '',
-            email: me.data.email ?? '',
-            role: toRole(me.data.tenant_role),
-            isPayer: me.data.is_payer === true,
-          }
-        : null,
-    [me.data]
-  )
-
   const [page, setPage] = useState(1)
+  const [memberPage, setMemberPage] = useState(1)
+  const [keyword, setKeyword] = useState('')
   const [dialog, setDialog] = useState<Dialog>(null)
   const [dialogError, setDialogError] = useState<string | null>(null)
   // Full invite codes exist only in memory, from the create response.
   const [codes, setCodes] = useState<Record<number, string>>({})
 
   const members = useQuery({
-    ...membersQueryOptions(self),
-    enabled: canManage && self !== null,
+    ...membersQueryOptions({ page: memberPage, keyword }),
+    placeholderData: keepPreviousData,
+    enabled: canManage,
   })
   const invites = useQuery({
     ...invitesQueryOptions(page),
@@ -165,31 +154,55 @@ export function OrgMembersPage() {
         onRetry={() => void members.refetch()}
       />
     )
-  } else if (members.data.length === 0) {
+  } else if (members.data.items.length === 0) {
     membersBody = (
       <EmptyState
         icon={Users}
-        title={t('No members yet')}
-        description={t('Invite people to your organization.')}
+        title={keyword ? t('No matching members') : t('No members yet')}
+        description={
+          keyword
+            ? t('Try a different search.')
+            : t('Invite people to your organization.')
+        }
         bordered
       />
     )
   } else {
+    const memberPages = Math.max(1, Math.ceil(members.data.total / PAGE_SIZE))
     membersBody = (
-      <div className='grid min-w-0 gap-2'>
+      <div className='grid min-w-0 gap-3'>
         <div className='min-w-0 rounded-lg border'>
           <MembersTable
-            members={members.data}
+            members={members.data.items}
             selfId={me.data?.id ?? 0}
             canEdit
             onEditRole={(m) => setDialog({ kind: 'role', member: m })}
           />
         </div>
-        <p className='text-muted-foreground text-xs'>
-          {t(
-            'Lists the members of your departments and you. People who belong to no department are not listed; change their role by user ID.'
-          )}
-        </p>
+        <div className='flex items-center justify-end gap-2 text-sm'>
+          <Button
+            variant='outline'
+            size='sm'
+            disabled={memberPage <= 1}
+            onClick={() => setMemberPage(Math.max(1, memberPage - 1))}
+          >
+            {t('Previous')}
+          </Button>
+          <span>
+            {t('Page {{page}} of {{pages}}', {
+              page: memberPage,
+              pages: memberPages,
+            })}
+          </span>
+          <Button
+            variant='outline'
+            size='sm'
+            disabled={memberPage >= memberPages}
+            onClick={() => setMemberPage(memberPage + 1)}
+          >
+            {t('Next')}
+          </Button>
+        </div>
       </div>
     )
   }
@@ -284,7 +297,17 @@ export function OrgMembersPage() {
 
         {canManage && (
           <TabsContent value='members' className='grid gap-3'>
-            <div className='flex justify-end'>
+            <div className='flex items-center justify-between gap-2'>
+              <Input
+                className='max-w-xs'
+                placeholder={t('Search by name or email')}
+                aria-label={t('Search members')}
+                value={keyword}
+                onChange={(e) => {
+                  setKeyword(e.target.value)
+                  setMemberPage(1)
+                }}
+              />
               <Button
                 variant='outline'
                 onClick={() => setDialog({ kind: 'role', member: null })}

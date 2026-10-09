@@ -77,7 +77,8 @@ const REASON_LABELS: Record<string, string> = {
 
 function useReasonLabel() {
   const { t } = useTranslation()
-  return (code: string) => (code in REASON_LABELS ? t(REASON_LABELS[code]) : code)
+  return (code: string) =>
+    code in REASON_LABELS ? t(REASON_LABELS[code]) : code
 }
 
 function formatTime(sec: number): string {
@@ -131,7 +132,9 @@ export function UsageSection(props: {
         />
       </div>
       {props.truncated && (
-        <Muted>{t('Only the first channels are listed (list truncated).')}</Muted>
+        <Muted>
+          {t('Only the first channels are listed (list truncated).')}
+        </Muted>
       )}
       {props.channels.length === 0 ? (
         <Muted>{t('No channels.')}</Muted>
@@ -151,7 +154,8 @@ export function UsageSection(props: {
             {props.channels.map((c) => (
               <TableRow key={c.channel_id}>
                 <TableCell>
-                  {c.name} <span className='text-muted-foreground'>#{c.channel_id}</span>
+                  {c.name}{' '}
+                  <span className='text-muted-foreground'>#{c.channel_id}</span>
                 </TableCell>
                 <TableCell className='text-right'>
                   {typeof c.utilization === 'number'
@@ -192,20 +196,28 @@ function Stat(props: { label: string; value: string }) {
 
 export function ExpiringList(props: { rows: ChannelProbe[]; nowSec: number }) {
   const { t } = useTranslation()
-  if (props.rows.length === 0) return <Muted>{t('Nothing expires within 72 hours.')}</Muted>
+  if (props.rows.length === 0) {
+    return <Muted>{t('Nothing expires within 72 hours.')}</Muted>
+  }
   return (
     <ul className='divide-y text-sm' data-testid='expiring-list'>
       {props.rows.map((p) => (
-        <li key={p.channelId} className='flex items-center justify-between py-2'>
+        <li
+          key={p.channelId}
+          className='flex items-center justify-between py-2'
+        >
           <span>
-            {p.name} <span className='text-muted-foreground'>#{p.channelId}</span>
+            {p.name}{' '}
+            <span className='text-muted-foreground'>#{p.channelId}</span>
           </span>
           <span className='flex items-center gap-2'>
             <span className='text-muted-foreground'>
               {formatTime(p.expiresAt ?? 0)}
             </span>
             <StatusBadge
-              variant={(p.expiresAt ?? 0) <= props.nowSec ? 'danger' : 'warning'}
+              variant={
+                (p.expiresAt ?? 0) <= props.nowSec ? 'danger' : 'warning'
+              }
               label={formatLeft(p.expiresAt ?? 0, props.nowSec, t)}
               copyable={false}
             />
@@ -218,13 +230,19 @@ export function ExpiringList(props: { rows: ChannelProbe[]; nowSec: number }) {
 
 export function WindowList(props: { rows: ChannelProbe[] }) {
   const { t } = useTranslation()
-  if (props.rows.length === 0) return <Muted>{t('No plan window is above 90%.')}</Muted>
+  if (props.rows.length === 0) {
+    return <Muted>{t('No plan window is above 90%.')}</Muted>
+  }
   return (
     <ul className='divide-y text-sm' data-testid='window-list'>
       {props.rows.map((p) => (
-        <li key={p.channelId} className='flex items-center justify-between py-2'>
+        <li
+          key={p.channelId}
+          className='flex items-center justify-between py-2'
+        >
           <span>
-            {p.name} <span className='text-muted-foreground'>#{p.channelId}</span>
+            {p.name}{' '}
+            <span className='text-muted-foreground'>#{p.channelId}</span>
           </span>
           <StatusBadge
             variant='danger'
@@ -240,7 +258,9 @@ export function WindowList(props: { rows: ChannelProbe[] }) {
 export function UnroutableList(props: { rows: ChannelProbe[] }) {
   const { t } = useTranslation()
   const label = useReasonLabel()
-  if (props.rows.length === 0) return <Muted>{t('Every channel is routable.')}</Muted>
+  if (props.rows.length === 0) {
+    return <Muted>{t('Every channel is routable.')}</Muted>
+  }
   return (
     <Table data-testid='unroutable-list'>
       <TableHeader>
@@ -254,7 +274,8 @@ export function UnroutableList(props: { rows: ChannelProbe[] }) {
         {props.rows.map((p) => (
           <TableRow key={p.channelId}>
             <TableCell>
-              {p.name} <span className='text-muted-foreground'>#{p.channelId}</span>
+              {p.name}{' '}
+              <span className='text-muted-foreground'>#{p.channelId}</span>
             </TableCell>
             <TableCell>
               <div className='flex flex-wrap gap-1'>
@@ -300,7 +321,9 @@ function ModelStatusSection() {
     )
   }
   if (!q.data) return <Loading />
-  if (q.data.models.length === 0) return <Muted>{t('No models are published.')}</Muted>
+  if (q.data.models.length === 0) {
+    return <Muted>{t('No models are published.')}</Muted>
+  }
   const stateLabel: Record<ModelState, string> = {
     operational: t('Operational'),
     degraded: t('Degraded'),
@@ -323,10 +346,10 @@ function ModelStatusSection() {
 
 // ---- page --------------------------------------------------------------------
 
-function HealthSections(props: { channels: SummaryChannel[] }) {
+function HealthSections() {
   const { t } = useTranslation()
   const label = useReasonLabel()
-  const q = useQuery(probesQuery(props.channels))
+  const q = useQuery(probesQuery)
   const nowSec = Math.floor(Date.now() / 1000)
 
   if (q.isError) {
@@ -349,29 +372,16 @@ function HealthSections(props: { channels: SummaryChannel[] }) {
   const data = q.data
   const body = (render: (d: NonNullable<typeof data>) => ReactNode) =>
     data ? render(data) : <Loading />
-  const notice = data && (data.failures.length > 0 || data.skipped > 0) && (
+  const notice = data?.truncated === true && (
     <div
       className='border-warning/50 rounded-md border p-3 text-sm'
       data-testid='probes-partial'
     >
-      {data.failures.length > 0 && (
-        <p>
-          {t('{{count}} channels could not be read:', {
-            count: data.failures.length,
-          })}{' '}
-          {data.failures
-            .slice(0, 5)
-            .map((f) => `#${f.channelId} (${f.message})`)
-            .join(', ')}
-        </p>
-      )}
-      {data.skipped > 0 && (
-        <p>
-          {t('{{count}} channels beyond the read limit were not checked.', {
-            count: data.skipped,
-          })}
-        </p>
-      )}
+      <p>
+        {t(
+          'The channel list is capped; the health roll-up below is incomplete.'
+        )}
+      </p>
     </div>
   )
   const reasons = data ? reasonTotals(data.probes) : []
@@ -430,10 +440,6 @@ export function OpsOverviewPage() {
     usage = <Loading />
   }
 
-  let health: ReactNode = <Loading />
-  if (summary.data) health = <HealthSections channels={summary.data.channels} />
-  else if (summary.isError) health = null
-
   return (
     <div className='space-y-4'>
       <PageHeader
@@ -446,7 +452,7 @@ export function OpsOverviewPage() {
       >
         {usage}
       </TitledCard>
-      {health}
+      <HealthSections />
       <TitledCard
         title={t('Public model status')}
         description={t('What the public status page shows')}

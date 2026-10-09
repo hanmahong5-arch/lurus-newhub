@@ -77,7 +77,7 @@ export function DepartmentFormDialog(props: Props) {
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (props.saving) return
-    const built = buildWriteBody(form, money)
+    const built = buildWriteBody(form, money, department?.monthlyBudgetQuota)
     if (!built.ok) {
       setError(built.error)
       return
