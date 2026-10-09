@@ -925,7 +925,7 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 		return false
 	}
 	if taskErr.StatusCode == http.StatusTooManyRequests {
-		return true
+		return !app.IsRequestCaused429(types.WithOpenAIError(types.OpenAIError{Message: taskErr.Message}, http.StatusTooManyRequests))
 	}
 	if taskErr.StatusCode == 307 {
 		return true

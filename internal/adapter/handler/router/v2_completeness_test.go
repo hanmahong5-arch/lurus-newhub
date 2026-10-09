@@ -65,6 +65,9 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/:tenant_slug/projects/:id/members":   true, // TestProjectMembersV2_CrossTenantIs404
 		"DELETE /api/v2/:tenant_slug/projects/:id/members": true, // TestProjectMembersV2_CrossTenantIs404
 		"POST /api/v2/:tenant_slug/invites":                true, // TestIssueMyTenantInviteV2_GrantValidation
+		"DELETE /api/v2/:tenant_slug/invites/:id":          true, // TestRevokeMyTenantInviteV2_CrossTenantIs404
+		"PUT /api/v2/:tenant_slug/models/allowlist":        true, // TestTenantModelAllowlist_CrossTenantIsolation
+		"PUT /api/v2/:tenant_slug/members/:user_id/role":   true, // TestSetTenantMemberRoleV2_CrossTenantUserIs404
 		// playground presets (internal/adapter/handler/v2_cross_tenant_isolation_test.go)
 		"DELETE /api/v2/:tenant_slug/playground/presets/:id": true, // TestDeletePresetV2_CrossTenantIsolation
 		// per-device session registry (L7, internal/adapter/handler/v2_session_revoke_test.go).
@@ -106,6 +109,7 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"POST /api/v2/:tenant_slug/channels":           "CreateChannelV2 stamps the caller's tenant_id from tenantCtx; cannot target another tenant",
 		"POST /api/v2/:tenant_slug/redemptions":        "CreateRedemptionV2 stamps the caller's own tenant_id; cannot target another tenant",
 		"POST /api/v2/:tenant_slug/projects":           "CreateProjectV2 stamps the caller's own tenant_id from tenantCtx; cannot target another tenant",
+		"POST /api/v2/:tenant_slug/invites/redeem":     "self-service: RedeemMyTenantInviteV2 applies the grant to the caller's OWN user row only, and repo.RedeemInviteForExistingUser refuses (404, code left unspent) any code whose tenant is not the caller's own (TestRedeemMyTenantInviteV2_CrossTenantRejectedAndNotConsumed)",
 		"POST /api/v2/:tenant_slug/redeem":             "self-service: RedeemCodeV2 redeems into the caller's own balance (mirrors v1's POST /api/user/topup exemption)",
 		"POST /api/v2/:tenant_slug/chat/sessions":      "CreateChatSessionV2 stamps the caller's own (tenant_id, user_id) from tenantCtx (migration 038, cycle-10 L3); cannot target another tenant or user",
 
@@ -158,6 +162,7 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"DELETE /api/v2/admin/tenants/:id/credit-pool":              "RootJWTAuth-gated: root manages every tenant's credit pool by design",
 		"POST /api/v2/admin/tenants/:id/invites":                    "RootJWTAuth-gated: root mints onboarding invite codes for every tenant by design (N2)",
 		"GET /api/v2/admin/tenants/:id/invites":                     "RootJWTAuth-gated: root reads every tenant's invite list by design; projection is prefix-only (see TestListTenantInvites_NeverReturnsFullCode, internal/adapter/handler/tenant_invite_admin_test.go)",
+		"PUT /api/v2/admin/tenants/:id/members/:user_id/role":       "RootJWTAuth-gated: root assigns the first admin / payer of any tenant by design; repo.SetTenantMemberRole requires the user to belong to the addressed tenant (foreign user 404, TestSetTenantMemberRoleAdmin)",
 		"DELETE /api/v2/admin/tenants/:id/invites/:invite_id":       "RootJWTAuth-gated: repo.RevokeTenantInvite scopes by (id, tenant_id) itself — a code belonging to a different tenant 404s as not-found, same as the credit-pool group above",
 		"GET /api/v2/admin/mappings/:id":                            "RootJWTAuth-gated: root reads platform user-identity mappings across every tenant by design",
 		"DELETE /api/v2/admin/mappings/:id":                         "RootJWTAuth-gated: root manages platform user-identity mappings across every tenant by design",

@@ -41,6 +41,7 @@ var statementGroupExpr = map[string]string{
 	"project":  "CAST(project_id AS TEXT)",
 	"employee": "employee_ref",
 	"token":    "CAST(token_id AS TEXT)",
+	"model":    "model_name",
 }
 
 // parseStatementMonth resolves month (YYYY-MM, default: the current month in
@@ -59,9 +60,9 @@ func parseStatementMonth(month string, loc *time.Location) (start, end time.Time
 
 // GetBillingStatementV2 is the tenant monthly statement: every billable
 // consume row of the calendar month (in the caller's time zone) grouped by
-// project, employee or token, with totals that are exactly the sum of the rows.
+// project, employee, token or model, with totals that are exactly the sum of the rows.
 //
-// GET /api/v2/:tenant_slug/billing/statement?month=YYYY-MM&tz=Asia/Shanghai&group_by=project|employee|token[&format=csv]
+// GET /api/v2/:tenant_slug/billing/statement?month=YYYY-MM&tz=Asia/Shanghai&group_by=project|employee|token|model[&format=csv]
 //
 // Tenant admins see the whole tenant. A department lead sees only the rows of
 // their own projects — the unassigned (project 0) bucket is therefore hidden
@@ -90,7 +91,7 @@ func GetBillingStatementV2(c *gin.Context) {
 	groupBy := c.DefaultQuery("group_by", "project")
 	groupExpr, ok := statementGroupExpr[groupBy]
 	if !ok {
-		badRequest("group_by must be project, employee or token")
+		badRequest("group_by must be project, employee, token or model")
 		return
 	}
 	start, end, month, monthErr := parseStatementMonth(c.Query("month"), loc)
@@ -197,6 +198,8 @@ func queryStatementRows(tenantID, groupBy, groupExpr string, fromTS, toTS int64,
 			row.Label = r.Grp
 		case "token":
 			row.Label = r.Label
+		case "model":
+			row.Label = r.Grp
 		}
 		rows = append(rows, row)
 	}

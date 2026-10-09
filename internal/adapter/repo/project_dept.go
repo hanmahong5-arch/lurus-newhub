@@ -1,10 +1,14 @@
 package repo
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/redis/go-redis/v9"
 )
 
 // project_dept.go — department-header -> project resolution for the relay
@@ -25,6 +29,13 @@ const (
 	// text), so the map must not grow without bound; at the cap it is simply
 	// reset, which only costs one extra query per live code.
 	deptCacheMax = 4096
+	// deptVersionKey is a Redis counter bumped by every project write; each
+	// replica compares it with the value it last saw and drops its own cache on
+	// a change, so a rename is honoured fleet-wide in about deptVersionPollEvery
+	// instead of waiting out deptCacheTTL on the other replicas.
+	deptVersionKey       = "dept_cache_ver"
+	deptVersionPollEvery = time.Second
+	deptRedisTimeout     = 300 * time.Millisecond
 )
 
 type deptCacheEntry struct {
@@ -37,13 +48,73 @@ var (
 	deptCacheMu  sync.Mutex
 	deptCache    = map[string]deptCacheEntry{}
 	deptCacheNow = time.Now // swapped by tests
+
+	// deptVerSeen is the Redis version this replica's cache corresponds to;
+	// deptVerKnown is false until the first successful read. deptVerPolledAt
+	// throttles the Redis read to one per deptVersionPollEvery.
+	deptVerSeen     int64
+	deptVerKnown    bool
+	deptVerPolledAt time.Time
 )
 
 // ResetProjectDeptCache drops every cached mapping (tests, and any writer
 // that wants an immediate effect instead of waiting out the TTL).
+//
+// With Redis it also bumps the shared version counter so the other replicas
+// drop theirs at their next poll. Without Redis (or when it errors) the other
+// replicas fall back to the TTL, exactly as before.
 func ResetProjectDeptCache() {
 	deptCacheMu.Lock()
 	deptCache = map[string]deptCacheEntry{}
+	deptCacheMu.Unlock()
+	bumpDeptVersion()
+}
+
+func bumpDeptVersion() {
+	if !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deptRedisTimeout)
+	defer cancel()
+	v, err := common.RDB.Incr(ctx, deptVersionKey).Result()
+	if err != nil {
+		common.SysLog("dept cache: redis version bump failed, other replicas fall back to TTL: " + err.Error())
+		return
+	}
+	deptCacheMu.Lock()
+	deptVerSeen, deptVerKnown = v, true
+	deptCacheMu.Unlock()
+}
+
+// syncDeptCacheVersion drops the local cache when another replica bumped the
+// shared version. At most one Redis read per deptVersionPollEvery; a Redis error
+// leaves the cache alone (the TTL still bounds staleness).
+func syncDeptCacheVersion(now time.Time) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	deptCacheMu.Lock()
+	if !deptVerPolledAt.IsZero() && now.Sub(deptVerPolledAt) < deptVersionPollEvery {
+		deptCacheMu.Unlock()
+		return
+	}
+	deptVerPolledAt = now
+	deptCacheMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), deptRedisTimeout)
+	defer cancel()
+	v, err := common.RDB.Get(ctx, deptVersionKey).Int64()
+	if err != nil {
+		if !errors.Is(err, redis.Nil) {
+			return
+		}
+		v = 0 // counter never bumped yet
+	}
+	deptCacheMu.Lock()
+	if deptVerKnown && v != deptVerSeen {
+		deptCache = map[string]deptCacheEntry{}
+	}
+	deptVerSeen, deptVerKnown = v, true
 	deptCacheMu.Unlock()
 }
 
@@ -61,6 +132,7 @@ func ResolveProjectByDeptCode(tenantID, dept string) (projectID int, found bool)
 	}
 	key := tenantID + "\x00" + dept
 	now := deptCacheNow()
+	syncDeptCacheVersion(now)
 
 	deptCacheMu.Lock()
 	if e, ok := deptCache[key]; ok && now.Before(e.expires) {

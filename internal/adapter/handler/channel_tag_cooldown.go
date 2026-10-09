@@ -17,6 +17,11 @@ func refreshAfterTagEnable(c *gin.Context, tag string) {
 	if c.GetInt("role") >= common.RoleRootUser {
 		chans, err = repo.GetChannelsByTag(tag, false, false)
 	} else {
+		// GetChannelsByTagAndTenant drops the tenant filter for an empty id, which
+		// would list (and un-cool) every tenant's channels under this tag.
+		if c.GetString("tenant_id") == "" {
+			return
+		}
 		chans, err = repo.GetChannelsByTagAndTenant(c.GetString("tenant_id"), tag, false)
 	}
 	if err != nil {

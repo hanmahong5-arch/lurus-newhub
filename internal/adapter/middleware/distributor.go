@@ -118,6 +118,21 @@ func Distribute() func(c *gin.Context) {
 				common.SysLog("tenant model allow-list would deny model " + modelRequest.Model + " for tenant " + tc.TenantID + " (observe mode)")
 			}
 		}
+		// Tenant-admin self-narrowing (tenantpolicy.SelectionConfigKey): always
+		// enforced (it is the tenant's own explicit choice, so the platform's
+		// observe-first rollout mode does not apply) and ANDed with the
+		// platform list above, so it can only shrink access. Read faults fail
+		// open, same as the platform list.
+		if tc, terr := GetTenantContext(c); terr == nil && tc != nil && tc.TenantID != "" && modelRequest != nil && modelRequest.Model != "" {
+			selected, sconfigured, serr := tenantpolicy.LoadSelection(tc.TenantID)
+			if serr != nil {
+				common.SysLog("tenant model selection read failed for tenant " + tc.TenantID + ", failing open: " + serr.Error())
+			} else if sconfigured && !tenantpolicy.ModelAllowed(selected, modelRequest.Model) {
+				metrics.RecordTenantModelDenied(tc.TenantID, "enforced")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "Model "+modelRequest.Model+" is not allowed for this tenant", string(types.ErrorCodeModelBlocked))
+				return
+			}
+		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {

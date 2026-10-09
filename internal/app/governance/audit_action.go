@@ -158,6 +158,9 @@ const (
 	// ActionTenantInviteGrantFailed: the invite was redeemed but its member_role /
 	// project grant could not be applied; an admin must re-grant by hand.
 	ActionTenantInviteGrantFailed = "tenant.invite_grant_failed"
+	// ActionTenantMemberRoleSet: a member's tenant_role (and/or payer flag) was
+	// changed by root or a tenant admin.
+	ActionTenantMemberRoleSet = "tenant.member_role_set"
 
 	// Internal API key tenant whitelist (internal_api_key_tenants — migration
 	// 013/021 §1). Granting/revoking changes which tenants a narrow-scope
@@ -428,6 +431,7 @@ var validAuditActions = map[string]struct{}{
 	ActionTenantInviteIssued:           {},
 	ActionTenantInviteConsumed:         {},
 	ActionTenantInviteGrantFailed:      {},
+	ActionTenantMemberRoleSet:          {},
 	ActionTenantInviteRevoked:          {},
 	ActionInternalKeyTenantGranted:     {},
 	ActionInternalKeyTenantRevoked:     {},

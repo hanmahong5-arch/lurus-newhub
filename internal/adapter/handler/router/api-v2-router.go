@@ -211,6 +211,17 @@ func SetApiV2Router(router *gin.Engine) {
 		tenantInvites.Use(middleware.TenantSlugGuard())
 		{
 			tenantInvites.POST("", handler.IssueMyTenantInviteV2)
+			tenantInvites.GET("", handler.ListMyTenantInvitesV2)
+			tenantInvites.POST("/redeem", handler.RedeemMyTenantInviteV2)
+			tenantInvites.DELETE("/:id", handler.RevokeMyTenantInviteV2)
+		}
+
+		// Tenant-admin role assignment (own tenant only; keeps >= 1 admin).
+		tenantMembers := apiV2.Group("/:tenant_slug/members")
+		tenantMembers.Use(middleware.UserAuth())
+		tenantMembers.Use(middleware.TenantSlugGuard())
+		{
+			tenantMembers.PUT("/:user_id/role", handler.SetTenantMemberRoleV2)
 		}
 
 		// ================================================================
@@ -341,6 +352,19 @@ func SetApiV2Router(router *gin.Engine) {
 			// Per-model latency / error rate for this tenant (cycle 16):
 			// quality for every member, volume for tenant admins only.
 			tenantModels.GET("/performance", handler.ListModelPerformanceV2)
+			// Tenant-admin self-service narrowing of the platform-granted model list
+			// (admin gate inside the handler).
+			tenantModels.GET("/allowlist", handler.GetTenantModelAllowlistV2)
+			tenantModels.PUT("/allowlist", handler.PutTenantModelAllowlistV2)
+		}
+
+		// Tenant-scoped audit trail (tenant-admin gate inside the handler).
+		tenantAudit := apiV2.Group("/:tenant_slug/audit")
+		tenantAudit.Use(middleware.UserAuth())
+		tenantAudit.Use(middleware.TenantSlugGuard())
+		{
+			tenantAudit.GET("", handler.ListTenantAuditV2)
+			tenantAudit.GET("/export.csv", middleware.CriticalRateLimit(), handler.ExportTenantAuditCSVV2)
 		}
 
 		tenantPricing := apiV2.Group("/:tenant_slug/pricing")
@@ -522,6 +546,8 @@ func SetApiV2Router(router *gin.Engine) {
 				tenantMgmt.POST("/:id/invites", handler.IssueTenantInvite)
 				tenantMgmt.GET("/:id/invites", handler.ListTenantInvites)
 				tenantMgmt.DELETE("/:id/invites/:invite_id", handler.RevokeTenantInvite)
+				// First admin / payer bootstrap (root only).
+				tenantMgmt.PUT("/:id/members/:user_id/role", handler.SetTenantMemberRoleAdmin)
 			}
 
 			mappingRoute := adminRoute.Group("/mappings")

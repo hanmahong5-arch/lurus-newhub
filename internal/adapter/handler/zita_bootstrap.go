@@ -106,6 +106,8 @@ func ZitaBootstrap(c *gin.Context) {
 		autoCreated = true
 		applyInviteGrant(c, user, tenantID, grant)
 		common.SysLog(fmt.Sprintf("zita-bootstrap: auto-created user %s (id=%d, lurus_account_id=%d, tenant_id=%s)", user.Username, user.Id, id.AccountID, tenantID))
+	} else if err == nil {
+		redeemInviteForExistingLogin(c, user)
 	} else if err != nil {
 		common.SysError(fmt.Sprintf("zita-bootstrap: lookup failed (account_id=%d): %v", id.AccountID, err))
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -178,6 +180,7 @@ func ZitaBootstrap(c *gin.Context) {
 		string(details),
 	))
 
+	tenantRole, isPayer := tenantRoleView(user)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
@@ -189,6 +192,8 @@ func ZitaBootstrap(c *gin.Context) {
 			"group":        user.Group,
 			"email":        user.Email,
 			"tenant_slug":  tenantSlug,
+			"tenant_role":  tenantRole,
+			"is_payer":     isPayer,
 		},
 	})
 }
@@ -272,6 +277,30 @@ func applyInviteGrant(c *gin.Context, user *repo.User, tenantID string, grant re
 		c, governance.ActorSystem, 0,
 		governance.ActionTenantInviteGrantFailed, governance.ResourceUser, user.Id,
 		string(details),
+	))
+}
+
+// redeemInviteForExistingLogin lets an already-bridged user redeem an
+// ?invite=<code> of THEIR OWN tenant on a repeat login (role / project grant
+// only — the tenant never changes). A foreign, spent, expired or revoked code is
+// ignored: the login is never blocked by an invite.
+func redeemInviteForExistingLogin(c *gin.Context, user *repo.User) {
+	code := c.Query("invite")
+	if code == "" || user == nil {
+		return
+	}
+	if _, err := repo.RedeemInviteForExistingUser(code, user.Id); err != nil {
+		common.SysLog(fmt.Sprintf("zita-bootstrap: invite not applied to existing user %d: %v", user.Id, err))
+		return
+	}
+	// Refresh the in-memory row so this response already carries the new role.
+	if fresh, err := repo.GetUserById(user.Id, false); err == nil && fresh != nil {
+		*user = *fresh
+	}
+	governance.RecordAuditEvent(governance.NewAuditEvent(
+		c, governance.ActorUser, user.Id,
+		governance.ActionTenantInviteConsumed, governance.ResourceTenant, 0,
+		fmt.Sprintf(`{"tenant_id":%q,"user_id":%d,"existing_user":true}`, user.TenantId, user.Id),
 	))
 }
 

@@ -46,12 +46,13 @@ import (
 // concerned.
 var AuditExplicitRoutes = map[string]bool{
 	// api-v2-router.go: adminRoute (RootJWTAuth) — tenant.go
-	"POST /api/v2/admin/tenants":             true,
-	"PUT /api/v2/admin/tenants/:id":          true,
-	"DELETE /api/v2/admin/tenants/:id":       true,
-	"POST /api/v2/admin/tenants/:id/enable":  true,
-	"POST /api/v2/admin/tenants/:id/disable": true,
-	"POST /api/v2/admin/tenants/:id/suspend": true,
+	"POST /api/v2/admin/tenants":                          true,
+	"PUT /api/v2/admin/tenants/:id":                       true,
+	"DELETE /api/v2/admin/tenants/:id":                    true,
+	"POST /api/v2/admin/tenants/:id/enable":               true,
+	"PUT /api/v2/admin/tenants/:id/members/:user_id/role": true,
+	"POST /api/v2/admin/tenants/:id/disable":              true,
+	"POST /api/v2/admin/tenants/:id/suspend":              true,
 	// tenant_model_limits.go
 	"PUT /api/v2/admin/tenants/:id/model-limits":    true,
 	"DELETE /api/v2/admin/tenants/:id/model-limits": true,

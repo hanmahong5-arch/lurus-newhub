@@ -63,7 +63,11 @@ type Token struct {
 	// EmployeeRef (migration 045) is the employee this key was issued to; the
 	// default attribution when no trusted X-Lurus-Employee header overrides it.
 	// Unique per tenant among live tokens when non-empty (partial index in 045).
-	EmployeeRef string         `json:"employee_ref" gorm:"type:varchar(64);not null;default:''"`
+	EmployeeRef string `json:"employee_ref" gorm:"type:varchar(64);not null;default:''"`
+	// SourceProduct (migration 049) is the product this key is bound to: the relay
+	// attributes traffic to it when the caller sends no allow-listed X-Lurus-Product.
+	// Tag MUST stay byte-identical to repo.Token.
+	SourceProduct string         `json:"source_product" gorm:"type:varchar(32);not null;default:''"`
 	DeletedAt   gorm.DeletedAt `gorm:"index"`
 }
 

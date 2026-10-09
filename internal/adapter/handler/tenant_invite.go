@@ -24,7 +24,7 @@ import (
 
 // IssueTenantInvite mints a one-time onboarding code for tenantID.
 // Route: POST /api/v2/admin/tenants/:id/invites
-// Body:  { ttl_hours int }  — omitted or <= 0 means the code never expires.
+// Body:  { ttl_hours int }  — omitted means 72h; at most 720 (30 days).
 //
 // Returns 201 with the invite (including its Code — this is the one
 // response the operator reads the code from; it is never listed back out
@@ -41,7 +41,7 @@ func IssueTenantInvite(c *gin.Context) {
 	}
 
 	var req inviteIssueRequest
-	// An empty body is valid (no-expiry invite) - only reject a malformed one.
+	// An empty body is valid (default 72h expiry) - only reject a malformed one.
 	if c.Request.ContentLength > 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid request: " + err.Error()})
@@ -64,6 +64,15 @@ type tenantInviteView struct {
 	ConsumedAt          *time.Time `json:"consumed_at"`
 	CreatedByUserId     int        `json:"created_by_user_id"`
 	CreatedAt           time.Time  `json:"created_at"`
+	// Grant and lifecycle fields (migration 046 / 048). ExpiresAt mirrors
+	// ExpiredTime (0 = never); Used/Revoked/Expired are derived for the console.
+	MemberRole string `json:"member_role"`
+	ProjectId  int64  `json:"project_id"`
+	ExpiresAt  int64  `json:"expires_at"`
+	RevokedAt  int64  `json:"revoked_at"`
+	Used       bool   `json:"used"`
+	Revoked    bool   `json:"revoked"`
+	Expired    bool   `json:"expired"`
 }
 
 func toTenantInviteView(inv repo.TenantInvite) tenantInviteView {
@@ -80,6 +89,13 @@ func toTenantInviteView(inv repo.TenantInvite) tenantInviteView {
 		ConsumedAt:          inv.ConsumedAt,
 		CreatedByUserId:     inv.CreatedByUserId,
 		CreatedAt:           inv.CreatedAt,
+		MemberRole:          inv.MemberRole,
+		ProjectId:           inv.ProjectId,
+		ExpiresAt:           inv.ExpiredTime,
+		RevokedAt:           inv.RevokedAt,
+		Used:                inv.Status == repo.TenantInviteStatusConsumed,
+		Revoked:             inv.Status == repo.TenantInviteStatusRevoked || inv.RevokedAt != 0,
+		Expired:             inv.Status == repo.TenantInviteStatusPending && inv.ExpiredTime != 0 && inv.ExpiredTime < common.GetTimestamp(),
 	}
 }
 

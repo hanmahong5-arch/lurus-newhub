@@ -136,7 +136,9 @@ func CreateTenantFromIDP(orgID string, orgDomain string, orgName string) (*Tenan
 // UpdateTenant updates tenant information
 func UpdateTenant(id string, updates map[string]interface{}) error {
 	updates["updated_at"] = time.Now()
-	return DB.Model(&Tenant{}).Where("id = ?", id).Updates(updates).Error
+	err := DB.Model(&Tenant{}).Where("id = ?", id).Updates(updates).Error
+	InvalidateTenantWalletCache(id)
+	return err
 }
 
 // DisableTenant disables a tenant
@@ -591,15 +593,22 @@ func GetTenantLastActivityTime(tenantID string) (int64, error) {
 }
 
 // TenantWalletAuthoritative reports tenants.wallet_authoritative (migration
-// 046) for tenantID. Fail closed: an empty id, a missing row or any lookup
-// error answers false, so the local balance gate stays in force.
+// 046) for tenantID. It runs on every relay request, so the answer is cached
+// for tenantWalletCacheTTL and dropped on UpdateTenant. A lookup error keeps
+// the last known value; with none ever read it fails closed: an empty id, a
+// missing row or an error answers false, so the local balance gate stays.
 func TenantWalletAuthoritative(tenantID string) bool {
 	if tenantID == "" {
 		return false
 	}
+	if v, fresh, _ := tenantWalletLookup(tenantID); fresh {
+		return v
+	}
 	var flag bool
 	if err := DB.Model(&Tenant{}).Where("id = ?", tenantID).Select("wallet_authoritative").Limit(1).Scan(&flag).Error; err != nil {
-		return false
+		v, _, known := tenantWalletLookup(tenantID)
+		return known && v
 	}
+	tenantWalletStore(tenantID, flag)
 	return flag
 }

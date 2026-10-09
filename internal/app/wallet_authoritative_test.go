@@ -23,6 +23,7 @@ import (
 
 func seedWalletTenant(t *testing.T, db *gorm.DB, id string, walletAuthoritative bool) {
 	t.Helper()
+	repo.ResetTenantWalletCache() // the flag is cached per tenant id; ids repeat across tests
 	row := &repo.Tenant{Id: id, IDPOrgID: "org-" + id, Slug: id, Name: id, Status: 1}
 	if err := db.Create(row).Error; err != nil {
 		t.Fatalf("seed tenant: %v", err)

@@ -170,7 +170,7 @@ var contractLockMountedSpecs = []string{"relay.json", "api-v2.json"}
 // is closed structurally.
 var contractLockOperationFloors = map[string]int{
 	"relay.json":  48,
-	"api-v2.json": 42,
+	"api-v2.json": 58,
 	"api.json":    157,
 }
 
@@ -970,6 +970,25 @@ var contractLockFullyDocumentedGroups = []contractLockDocumentedGroup{
 		minRoutes: 2,
 		why: "money routes. GET /api/v2/:tenant_slug/billing/invoices had been mounted the whole time and appeared in neither api-v2 twin, " +
 			"while POST /billing/topup, which does not exist, did.",
+	},
+	{
+		prefix:    "/api/v2/:tenant_slug/invites",
+		spec:      "api-v2.json",
+		minRoutes: 4,
+		why: "tenant onboarding loop (migration 048): issue / list / revoke / redeem hand out and spend one-time credentials that grant a role, so " +
+			"a route added here without a published contract is an undocumented way to gain tenant privileges.",
+	},
+	{
+		prefix:    "/api/v2/:tenant_slug/audit",
+		spec:      "api-v2.json",
+		minRoutes: 2,
+		why:       "the tenant-facing audit trail and its CSV export: the redaction and tenant-pinning promises only exist on paper if the routes are in the contract.",
+	},
+	{
+		prefix:    "/api/v2/:tenant_slug/members/",
+		spec:      "api-v2.json",
+		minRoutes: 1,
+		why:       "member role assignment (last-admin guard, payer flag is root only) changes who may administer a tenant.",
 	},
 	{
 		prefix:    "/pg/",

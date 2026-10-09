@@ -89,6 +89,28 @@ curl https://hub.lurus.cn/v1/key -H "Authorization: Bearer sk-xxxxxxxxxxxx"
 # 用 sk- key 调用会得到 200 + {"success":false,"message":"...access token 无效"} —— 一个 200 形状的失败,不要在自动化里只看状态码
 ```
 
+## platform 按账号开 key
+
+platform(Lugo)为每个账号、每个产品在 newhub 幂等地开一把 key,替代 newapi_sync。接口走内部 API:`X-API-Key: lurus_ik_…`,需要 `provisioning` scope;非 `*` 的窄权限 key 还需在 `internal_api_key_tenants` 登记目标租户(未登记返回 403)。
+
+| 方法与路径 | 作用 |
+|------------|------|
+| `POST /internal/v1/provisioning/accounts/:account_id/keys` | 创建(幂等) |
+| `POST /internal/v1/provisioning/accounts/:account_id/keys/rotate` | 轮换,旧 key 立即失效 |
+| `DELETE /internal/v1/provisioning/accounts/:account_id/keys?product=` | 吊销 |
+| `GET /internal/v1/provisioning/accounts/:account_id/keys` | 列出该账号各产品的 key 元数据 |
+
+创建请求体:`{"product": "lutu", "name"?, "tenant_slug"?, "quota"?, "models"?, "expires_at"?}`,可带头 `Idempotency-Key`。
+
+- `product` 必须在 newhub 的产品白名单内(与 `X-Lurus-Product` 同一份),否则 400 `UNKNOWN_PRODUCT`。
+- 同一 `(account_id, product)` 只会有一把未删除的 key(PG 部分唯一索引兜底)。重复创建、相同或不同的 `Idempotency-Key`、并发创建,都返回同一把 key 的元数据(HTTP 200,`is_existing=true`);明文 `key` 只在首次创建(201)返回一次,之后只有 `key_masked`,需要新明文请调 rotate。
+- 首次创建时若该账号在 newhub 还没有用户,会按 `tenant_slug`(缺省 `default`)自动建一个并绑定 `lurus_account_id`;已有用户则沿用其租户,`tenant_slug` 与之不符返回 409。租户席位已满返回 409 `TENANT_SEAT_LIMIT`。
+- key 绑定 `identity_account_id`,走平台钱包计费;`quota` 缺省或 0 表示不限(以钱包余额为准),大于 0 则给这把 key 加额度上限;`models` 非空则启用模型白名单。
+- 产品归因:key 记录了所属 product。调用方不带 `X-Lurus-Product` 时,日志的 `source_product` 与钱包扣费的 product_id 都取该 key 绑定的产品;带头时仍可覆盖,但只接受白名单内的值(白名单外的值被忽略并回落到绑定产品,不会变成全局默认)。
+- 吊销后该 key 立即 401,绑定释放,同一 `(account, product)` 可重新创建。创建、轮换、吊销均写审计(`token.created` / `auth.token_rotated` / `token.deleted`)。接口走 provisioning 组的限速。
+
+错误码:`INVALID_ACCOUNT_ID`(400)、`UNKNOWN_PRODUCT`(400)、`VALIDATION_FAILED`(400)、`TENANT_NOT_FOUND`(404)、`KEY_NOT_FOUND`(404,rotate/吊销时没有绑定)、`TENANT_NOT_AUTHORIZED`(403)。
+
 ## 常见问题
 
 - **Q1 登录后看不到我的产品?** Lurus 是 AI 网关不是产品平台。用户登录→控制台建 Token→手动配置到产品后端,目前没有自动取 Token 的回调机制。

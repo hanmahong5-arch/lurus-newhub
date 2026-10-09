@@ -29,6 +29,9 @@ var (
 	ErrInviteExpired         = errors.New("tenant invite has expired")
 	ErrInviteAlreadyConsumed = errors.New("tenant invite already consumed")
 	ErrInviteRevoked         = errors.New("tenant invite has been revoked")
+	// ErrInviteWrongTenant: the code belongs to another tenant than the
+	// redeeming user's own (existing users never change tenant via an invite).
+	ErrInviteWrongTenant = errors.New("tenant invite belongs to another tenant")
 )
 
 // CreateTenantInvite mints a root-issued, one-time onboarding code bound to
@@ -103,18 +106,8 @@ func ConsumeTenantInviteGrant(code string, accountID int64) (*Tenant, InviteGran
 			}
 			return err
 		}
-		switch invite.Status {
-		case TenantInviteStatusConsumed:
-			return ErrInviteAlreadyConsumed
-		case TenantInviteStatusRevoked:
-			return ErrInviteRevoked
-		case TenantInviteStatusPending:
-			// proceed
-		default:
-			return ErrInviteNotFound
-		}
-		if invite.ExpiredTime != 0 && invite.ExpiredTime < common.GetTimestamp() {
-			return ErrInviteExpired
+		if err := inviteUsable(&invite); err != nil {
+			return err
 		}
 		grant = InviteGrant{MemberRole: invite.MemberRole, ProjectID: invite.ProjectId}
 		if err := tx.Where("id = ?", invite.TenantId).First(&tenant).Error; err != nil {
@@ -166,7 +159,7 @@ func ListTenantInvites(tenantID string, limit, offset int) ([]TenantInvite, int6
 func RevokeTenantInvite(id int, tenantID string) error {
 	result := DB.Model(&TenantInvite{}).
 		Where("id = ? AND tenant_id = ? AND status = ?", id, tenantID, TenantInviteStatusPending).
-		Update("status", TenantInviteStatusRevoked)
+		Updates(map[string]any{"status": TenantInviteStatusRevoked, "revoked_at": common.GetTimestamp()})
 	if result.Error != nil {
 		return result.Error
 	}

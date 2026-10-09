@@ -307,11 +307,19 @@ func CreateTokenV2(c *gin.Context) {
 	// PostConsumeQuota's wallet-debit gate never fires for a v2-created
 	// token, no matter how the caller's platform account is linked. No link
 	// leaves the field at zero, same as an unlinked v1 token.
-	identityAccountID := repo.IdentityAccountIDForUser(tenantCtx.UserID)
+	ownerID, identityAccountID := tenantCtx.UserID, repo.IdentityAccountIDForUser(tenantCtx.UserID)
+	if req.EmployeeRef != "" {
+		// An admin-issued (employee_ref) key is booked to the tenant's payer,
+		// exactly like the roster endpoint; 409 payer_not_set without one.
+		var ok bool
+		if ownerID, identityAccountID, ok = resolveKeyOwner(c, tenantCtx); !ok {
+			return
+		}
+	}
 
 	// Create token with tenant context
 	token := repo.Token{
-		UserId:             tenantCtx.UserID,
+		UserId:             ownerID,
 		TenantId:           tenantCtx.TenantID,
 		Name:               req.Name,
 		Key:                key,

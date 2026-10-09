@@ -46,6 +46,9 @@ type TenantInvite struct {
 	// ProjectId, when > 0, is the project the redeemer is added to as a member
 	// in the same transaction (migration 046). 0 = none.
 	ProjectId int64 `json:"project_id" gorm:"type:bigint;not null;default:0"`
+	// RevokedAt is the Unix-seconds time a tenant admin revoked the invite
+	// (migration 048); 0 = never revoked.
+	RevokedAt int64 `json:"revoked_at" gorm:"type:bigint;not null;default:0"`
 }
 
 // TableName overrides the default GORM table name.
