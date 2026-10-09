@@ -23,6 +23,7 @@ import { Button, Card, Typography } from '@douyinfe/semi-ui';
 import { API } from '../../helpers';
 import { setTenantSlug } from '../../helpers/apiMode';
 import { inviteLink } from '../../helpers/inviteLink';
+import { postLoginUrl, readRedirectParam } from '../../helpers/loginRedirect';
 
 /**
  * What this deployment can actually sign someone in with.
@@ -166,9 +167,10 @@ const OidcRedirect = (_props) => {
           if (res.data.data.tenant_slug) {
             setTenantSlug(res.data.data.tenant_slug);
           }
-          window.location.replace(
-            window.location.origin + '/console/v2/dashboard',
-          );
+          // ?redirect= (the new console sends people back through here) wins
+          // over the default landing page; helpers/loginRedirect.js only
+          // accepts same-site relative paths.
+          window.location.replace(postLoginUrl(window.location.origin));
           return;
         }
       } catch (err) {
@@ -207,7 +209,7 @@ const OidcRedirect = (_props) => {
 
       const returnTo = inviteCode
         ? inviteLink(window.location.origin, inviteCode)
-        : `${window.location.origin}/console/v2/dashboard`;
+        : postLoginUrl(window.location.origin);
       const url = `/api/v2/auth/zita-login?return_to=${encodeURIComponent(returnTo)}`;
       timer = setTimeout(() => setShowFallback(true), 3000);
       window.location.href = url;
@@ -245,7 +247,11 @@ const OidcRedirect = (_props) => {
                 theme='solid'
                 onClick={() =>
                   window.location.replace(
-                    window.location.origin + '/bridge-login',
+                    window.location.origin +
+                      '/bridge-login' +
+                      (readRedirectParam()
+                        ? `?redirect=${encodeURIComponent(readRedirectParam())}`
+                        : ''),
                   )
                 }
               >

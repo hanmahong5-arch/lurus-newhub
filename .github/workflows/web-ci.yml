@@ -94,6 +94,37 @@ jobs:
       - name: bundle budget gate
         run: bun scripts/check-bundle-budget.mjs
 
+  next-console:
+    name: New console (web/next) lint + typecheck + vitest + build
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 30
+    # web/next is a separate package (rsbuild + TypeScript, served under
+    # /next/); it has its own lockfile and is not part of web/'s install.
+    defaults:
+      run:
+        working-directory: web/next
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run test
+      # Writes web/dist/next (outDir is ../dist/next). The legacy build job
+      # above empties web/dist, so in the image the order is legacy first.
+      - run: bun run build
+      - name: build output is where the Go server expects it
+        run: test -f ../dist/next/index.html
+      # Feature strings are collected by import.meta.webpackContext, which the
+      # bundler only rewrites when written literally; written any other way it
+      # is undefined in the bundle and every page silently renders in English
+      # while the unit tests stay green (caught on the local stack 2026-10-09).
+      # "创建密钥" is the Chinese of the keys page's "Create key".
+      - name: feature translations are bundled
+        run: grep -rqF '创建密钥' ../dist/next/static/js
+
   security:
     name: bun audit + gitleaks
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}

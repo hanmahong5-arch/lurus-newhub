@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { Button, Card, Input, Typography } from '@douyinfe/semi-ui';
 import { API } from '../../helpers';
 import { setTenantSlug } from '../../helpers/apiMode';
+import { postLoginUrl } from '../../helpers/loginRedirect';
 
 /**
  * Sign-in for a deployment that has no single sign-on.
@@ -91,10 +92,10 @@ const BridgeLogin = () => {
         }
         // Drop the credential from the address bar (and from what a
         // screenshot of this tab would show) before leaving.
+        // Resolved first: replaceState below drops ?redirect= from the URL.
+        const landing = postLoginUrl(window.location.origin);
         window.history.replaceState(null, '', window.location.pathname);
-        window.location.replace(
-          window.location.origin + '/console/v2/dashboard',
-        );
+        window.location.replace(landing);
       } catch (err) {
         setPhase('failed');
         setMessage(

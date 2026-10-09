@@ -1,0 +1,23 @@
+{
+  "Remaining balance": "剩余额度",
+  "Total spent": "累计消费",
+  "Requests": "请求数",
+  "Retry": "重试",
+  "Refresh": "刷新",
+  "Unable to load": "加载失败",
+  "vs previous 7 days": "较前 7 天",
+  "Requests / sec": "每秒请求数",
+  "Error rate": "错误率",
+  "Last 5 minutes": "最近 5 分钟",
+  "Could not load recent requests.": "无法加载最近的请求。",
+  "No requests in the last 5 minutes.": "最近 5 分钟没有请求。",
+  "Spend": "消费",
+  "Usage trend": "用量趋势",
+  "last {{days}} days": "最近 {{days}} 天",
+  "Could not load usage data.": "无法加载用量数据。",
+  "No usage recorded yet.": "暂无用量记录。",
+  "Spend by model": "按模型消费分布",
+  "Cost by model, last 5 minutes": "最近 5 分钟按模型费用",
+  "No spend in the last 5 minutes.": "最近 5 分钟没有消费。",
+  "{{n}} req": "{{n}} 次请求"
+}

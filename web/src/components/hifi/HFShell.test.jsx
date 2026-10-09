@@ -559,6 +559,16 @@ describe('HFShell help escape hatches', () => {
   });
 });
 
+describe('HFShell new console entry', () => {
+  it('top bar links to the new console under /next/', () => {
+    renderShell();
+
+    const link = screen.getByTestId('shell-try-next');
+    expect(link.getAttribute('href')).toBe('/next/dashboard');
+    expect(link.textContent.trim().length).toBeGreaterThan(0);
+  });
+});
+
 /*
  * Cycle 12 L3. Seven rail entries pointed at pages whose every backend call
  * sits under /api/v2/admin (api-v2-router.go mounts middleware.RootJWTAuth on

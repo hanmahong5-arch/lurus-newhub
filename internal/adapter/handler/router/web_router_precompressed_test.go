@@ -12,21 +12,13 @@ import (
 )
 
 // mapServeFS adapts an fs.FS to what static.Serve wants. It mirrors
-// common.EmbedFolder's embedFileSystem, including its one special case: "/"
-// reports as missing so the request reaches NoRoute and is answered with the
-// index bytes SetWebRouter was handed.
+// common.EmbedFolder's embedFileSystem — Exists is the very same
+// common.StaticFileExists, so directories, index.html documents and "/" all
+// report missing and reach NoRoute.
 type mapServeFS struct{ http.FileSystem }
 
 func (m mapServeFS) Exists(_ string, filepath string) bool {
-	if filepath == "/" {
-		return false
-	}
-	file, err := m.Open(filepath)
-	if err != nil {
-		return false
-	}
-	_ = file.Close()
-	return true
+	return common.StaticFileExists(m, filepath)
 }
 
 func (m mapServeFS) Open(name string) (http.File, error) {

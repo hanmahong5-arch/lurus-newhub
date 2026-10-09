@@ -14,9 +14,20 @@ WORKDIR /build
 COPY web/package.json .
 COPY web/bun.lock .
 RUN bun install
+# The new console (web/next, served under /next/) has its own dependency tree.
+# Its manifest and lockfile are copied alone first so this install layer is
+# cached until they change, not on every source edit.
+WORKDIR /build/next
+COPY web/next/package.json web/next/bun.lock ./
+RUN bun install --frozen-lockfile
+WORKDIR /build
 COPY ./web .
 COPY ./VERSION .
 RUN DISABLE_ESLINT_PLUGIN='true' NODE_OPTIONS=--max-old-space-size=4096 VITE_REACT_APP_VERSION=$(cat VERSION) bun run build
+# Order matters: the legacy vite build empties /build/dist, and the new
+# console writes into /build/dist/next (web/next/rsbuild.config.ts), so it
+# must run second. web/embed.go embeds the whole of dist via all:dist.
+RUN cd next && NODE_OPTIONS=--max-old-space-size=4096 bun run build
 
 FROM golang:1.26-alpine AS builder2
 ENV GO111MODULE=on CGO_ENABLED=0

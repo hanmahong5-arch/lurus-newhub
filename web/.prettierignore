@@ -5,3 +5,6 @@ node_modules
 # script and verified byte-for-byte by its --check mode. Reformatting them
 # here would make that drift check fail forever.
 src/styles/lurus-design
+
+# New console (web/next) is its own package with its own formatter/linter.
+next
