@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -14,7 +13,6 @@ import {
 } from '@/components/ui/table'
 import { formatDate } from '@/lib/time'
 
-import { channelDetailQueryOptions, channelHealthQueryOptions } from '../api'
 import { channelTypeName, REASON_LABELS } from '../lib/map'
 import { usePlanKindLabel, useStatusLabel } from '../lib/use-labels'
 import type { ChannelListItem } from '../types'
@@ -28,50 +26,24 @@ function ChannelRow(props: {
   const c = props.channel
   const statusOf = useStatusLabel()
   const planLabel = usePlanKindLabel()
-  // Both calls are cached and shared with the drawer.
-  const detail = useQuery(channelDetailQueryOptions(c.id))
-  const health = useQuery(channelHealthQueryOptions(c.id))
   const st = statusOf(c.status)
 
-  const expiresAt = detail.data?.plan.expiresAt ?? 0
+  // Everything on the row comes from the list payload: no per-row requests.
+  const expiresAt = c.expiresAt
   const expired = expiresAt > 0 && expiresAt <= props.nowSec
 
-  let routable: ReactNode
-  if (health.isPending) {
-    routable = <span className='text-muted-foreground'>...</span>
-  } else if (health.isError) {
-    routable = (
-      <Badge variant='warning' title={health.error.message}>
-        {t('Unknown')}
-      </Badge>
-    )
-  } else if (health.data.routable) {
-    routable = <Badge variant='default'>{t('Routable')}</Badge>
-  } else {
-    routable = (
-      <Badge
-        variant='destructive'
-        title={health.data.reasons
-          .map((r) => t(REASON_LABELS[r] ?? r))
-          .join(', ')}
-      >
-        {t('Not routable')}
-      </Badge>
-    )
-  }
-
-  let plan: ReactNode
-  if (detail.isPending) {
-    plan = '...'
-  } else if (detail.isError) {
-    plan = (
-      <Badge variant='warning' title={detail.error.message}>
-        {t('Unknown')}
-      </Badge>
-    )
-  } else {
-    plan = planLabel(detail.data.plan.planKind)
-  }
+  const routable: ReactNode = c.routable ? (
+    <Badge variant='default'>{t('Routable')}</Badge>
+  ) : (
+    <Badge
+      variant='destructive'
+      title={c.unroutableReasons
+        .map((r) => t(REASON_LABELS[r] ?? r))
+        .join(', ')}
+    >
+      {t('Not routable')}
+    </Badge>
+  )
 
   return (
     <TableRow data-testid={`channel-row-${c.id}`}>
@@ -80,7 +52,9 @@ function ChannelRow(props: {
       <TableCell>
         <Badge variant={st.variant}>{st.label}</Badge>
       </TableCell>
-      <TableCell data-testid={`channel-${c.id}-plan`}>{plan}</TableCell>
+      <TableCell data-testid={`channel-${c.id}-plan`}>
+        {planLabel(c.planKind)}
+      </TableCell>
       <TableCell
         className={expired ? 'text-destructive' : undefined}
         data-testid={`channel-${c.id}-expires`}
@@ -88,9 +62,7 @@ function ChannelRow(props: {
         {expiresAt > 0 ? formatDate(expiresAt) : '--'}
         {expired && ` (${t('expired')})`}
       </TableCell>
-      <TableCell data-testid={`channel-${c.id}-keys`}>
-        {detail.data != null ? detail.data.keyCount : '--'}
-      </TableCell>
+      <TableCell data-testid={`channel-${c.id}-keys`}>{c.keyCount}</TableCell>
       <TableCell>{routable}</TableCell>
       <TableCell className='text-end'>
         <Button

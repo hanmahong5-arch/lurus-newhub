@@ -16,6 +16,6 @@ export function RequireAccess(props: {
 }) {
   const { data: user } = useQuery(currentUserQueryOptions)
   if (!user) return null
-  if (!canAccess(props.requires, userAccess(user))) return <ForbiddenError />
+  if (!canAccess(props.requires, userAccess(user))) return <ForbiddenError embedded />
   return props.children
 }

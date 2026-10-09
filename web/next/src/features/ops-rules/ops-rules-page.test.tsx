@@ -325,6 +325,64 @@ describe('override templates', () => {
     expect(within(records).getByText('channel not found')).toBeInTheDocument()
   })
 
+  it('shows the server-side application history of a template', async () => {
+    const user = userEvent.setup()
+    serve({
+      [RULES_URL]: ruleList(),
+      [TEMPLATES_URL]: [template()],
+      [`${TEMPLATES_URL}/3/applications`]: {
+        applications: [
+          { id: 9, channel_id: 21, template_id: 3, template_version: 2, applied_by: 5, applied_at: 1700000100 },
+          { id: 8, channel_id: 22, template_id: 3, template_version: 1, applied_by: 5, applied_at: 1700000000 },
+        ],
+        total: 2,
+        page: 1,
+        page_size: 50,
+      },
+    })
+    renderPage()
+    await user.click(screen.getByRole('tab', { name: 'Override templates' }))
+    await screen.findByText('tune-a')
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const table = await screen.findByTestId('applications-table')
+    expect(within(table).getByText('#21')).toBeInTheDocument()
+    expect(within(table).getByText('#22')).toBeInTheDocument()
+    expect(within(table).getByText('v2')).toBeInTheDocument()
+    expect(within(table).getByText('v1')).toBeInTheDocument()
+    expect(get).toHaveBeenCalledWith(`${TEMPLATES_URL}/3/applications`, {
+      params: { page: 1, page_size: 50 },
+    })
+  })
+
+  it('a failed history read is an error, not "never applied"', async () => {
+    const user = userEvent.setup()
+    serve({
+      [RULES_URL]: ruleList(),
+      [TEMPLATES_URL]: [template()],
+      [`${TEMPLATES_URL}/3/applications`]: new ApiError('log down', { status: 500 }),
+    })
+    renderPage()
+    await user.click(screen.getByRole('tab', { name: 'Override templates' }))
+    await screen.findByText('tune-a')
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    expect(await screen.findByText('Could not load the application history')).toBeInTheDocument()
+    expect(screen.queryByTestId('applications-empty')).toBeNull()
+  })
+
+  it('an empty history says so', async () => {
+    const user = userEvent.setup()
+    serve({
+      [RULES_URL]: ruleList(),
+      [TEMPLATES_URL]: [template()],
+      [`${TEMPLATES_URL}/3/applications`]: { applications: [], total: 0, page: 1, page_size: 50 },
+    })
+    renderPage()
+    await user.click(screen.getByRole('tab', { name: 'Override templates' }))
+    await screen.findByText('tune-a')
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    expect(await screen.findByTestId('applications-empty')).toBeInTheDocument()
+  })
+
   it('apply with nothing chosen shows an error and sends nothing', async () => {
     const user = userEvent.setup()
     await openTemplates(user)

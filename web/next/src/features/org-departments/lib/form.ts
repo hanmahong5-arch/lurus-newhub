@@ -29,7 +29,7 @@ export type FormError =
   | 'budget-invalid'
   | 'budget-unavailable'
 
-/** Display-currency amount -> internal quota units (rate-aware). */
+/** Display-currency amount -> internal quota units (rate-aware), integer. */
 export function displayToQuota(value: number, config: MoneyConfig): number {
   if (config.displayType === 'TOKENS') return Math.round(value)
   return Math.round((value / config.rate) * config.quotaPerUnit)
@@ -83,7 +83,8 @@ export type BuildResult =
  */
 export function buildWriteBody(
   form: DepartmentFormValues,
-  config: MoneyConfig | null
+  config: MoneyConfig | null,
+  originalQuota?: number
 ): BuildResult {
   const name = form.name.trim()
   if (name === '') return { ok: false, error: 'name' }
@@ -101,7 +102,14 @@ export function buildWriteBody(
     if (!/^\d+(\.\d+)?$/.test(rawBudget)) {
       return { ok: false, error: 'budget-invalid' }
     }
-    quota = displayToQuota(Number.parseFloat(rawBudget), config)
+    // The shown value is rounded to 4 decimals; if the user did not touch
+    // it, resubmit the stored quota verbatim instead of a lossy round trip.
+    quota =
+      originalQuota !== undefined &&
+      originalQuota > 0 &&
+      rawBudget === quotaToDisplayInput(originalQuota, config)
+        ? originalQuota
+        : displayToQuota(Number.parseFloat(rawBudget), config)
   }
   return {
     ok: true,

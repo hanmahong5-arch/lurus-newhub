@@ -38,7 +38,6 @@ import {
 import { DepartmentFormDialog } from './components/department-form-dialog'
 import { MembersDialog } from './components/members-dialog'
 import { budgetRatio, monthStartSec } from './lib/form'
-import { visibleDepartments } from './lib/map'
 import type { Department, DepartmentWriteBody } from './types'
 
 type Dialog =
@@ -120,10 +119,6 @@ export function OrgDepartmentsPage() {
     />
   )
 
-  // A lead's view is derived from the spend report, so its failure is fatal
-  // for them; for an admin it only blanks the "used" column.
-  const leadNeedsSpend = !canManage
-
   let body
   if (me.isPending) {
     body = <LoadingState />
@@ -135,7 +130,7 @@ export function OrgDepartmentsPage() {
         onRetry={() => void me.refetch()}
       />
     )
-  } else if (list.isPending || (leadNeedsSpend && spend.isPending)) {
+  } else if (list.isPending) {
     body = <LoadingState />
   } else if (list.isError) {
     body = (
@@ -145,16 +140,10 @@ export function OrgDepartmentsPage() {
         onRetry={() => void list.refetch()}
       />
     )
-  } else if (leadNeedsSpend && spend.isError) {
-    body = (
-      <ErrorState
-        title={t('Could not load your departments')}
-        description={toApiError(spend.error).message}
-        onRetry={() => void spend.refetch()}
-      />
-    )
   } else {
-    const rows = visibleDepartments(list.data, spend.data, canManage)
+    // The server already limits a lead's list to the departments they belong
+    // to (zero-usage ones included), so no client-side narrowing is needed.
+    const rows = list.data
     if (rows.length === 0) {
       body = canManage ? (
         <EmptyState
@@ -176,7 +165,7 @@ export function OrgDepartmentsPage() {
           icon={Building2}
           title={t('No department to show')}
           description={t(
-            'Departments you lead appear here once they have usage this month.'
+            'You are not a member of any department yet.'
           )}
           bordered
         />
@@ -184,7 +173,7 @@ export function OrgDepartmentsPage() {
     } else {
       body = (
         <div className='grid min-w-0 gap-3' data-testid='departments-body'>
-          {canManage && spend.isError && (
+          {spend.isError && (
             <p role='alert' className='text-destructive text-sm'>
               {t('Could not load this month\'s usage: {{message}}', {
                 message: toApiError(spend.error).message,

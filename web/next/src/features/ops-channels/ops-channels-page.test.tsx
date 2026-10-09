@@ -34,6 +34,12 @@ const listItem = (id: number, over: Record<string, unknown> = {}) => ({
   status: 1,
   group: 'default',
   models: 'model-a',
+  plan_kind: '',
+  expires_at: 0,
+  key_count: 1,
+  enabled_key_count: 1,
+  routable: true,
+  unroutable_reasons: [],
   ...over,
 })
 
@@ -126,20 +132,47 @@ async function openDrawer() {
 }
 
 describe('channel list', () => {
-  it('shows status, plan, key count, expiry and routability per channel', async () => {
+  it('shows status, plan, key count, expiry and routability from the list payload alone', async () => {
     baseHandlers({
-      '/channels/1': detailBody({
-        setting: JSON.stringify({ plan_kind: 'minimax', expires_at: NOW - 86400 }),
-      }),
-      '/channels/1/health': healthBody({ routable: false, reasons: ['balance_low'] }),
+      '/channels': {
+        channels: [
+          listItem(1, {
+            plan_kind: 'minimax',
+            expires_at: NOW - 86400,
+            key_count: 2,
+            enabled_key_count: 1,
+            routable: false,
+            unroutable_reasons: ['balance_low'],
+          }),
+        ],
+        total: 1,
+        page: 1,
+        page_size: 20,
+      },
     })
     renderPage()
     expect(await screen.findByText('pool-1')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByTestId('channel-1-plan')).toHaveTextContent('MiniMax plan'))
+    expect(screen.getByTestId('channel-1-plan')).toHaveTextContent('MiniMax plan')
     expect(screen.getByTestId('channel-1-keys')).toHaveTextContent('2')
     expect(screen.getByTestId('channel-1-expires')).toHaveTextContent('(expired)')
     expect(await screen.findByText('Not routable')).toBeInTheDocument()
     expect(get).toHaveBeenCalledWith('/channels', { params: { page: 1, page_size: 20 } })
+  })
+
+  it('makes no per-row detail or health request (no N+1)', async () => {
+    baseHandlers({
+      '/channels': {
+        channels: [listItem(1), listItem(2), listItem(3)],
+        total: 3,
+        page: 1,
+        page_size: 20,
+      },
+    })
+    renderPage()
+    expect(await screen.findByText('pool-3')).toBeInTheDocument()
+    const paths = get.mock.calls.map((c) => c[0] as string)
+    expect(paths.filter((p) => p !== '/channels' && p.startsWith('/channels/'))).toEqual([])
+    expect(screen.getAllByText('Routable')).toHaveLength(3)
   })
 
   it('shows an error, not an empty state, when the list fails', async () => {
@@ -154,14 +187,6 @@ describe('channel list', () => {
     baseHandlers({ '/channels': { channels: [], total: 0, page: 1, page_size: 20 } })
     renderPage()
     expect(await screen.findByText('No channels yet')).toBeInTheDocument()
-  })
-
-  it('marks one row unknown when its health call fails instead of claiming it routable', async () => {
-    baseHandlers({ '/channels/1/health': new ApiError('upstream down', { status: 500 }) })
-    renderPage()
-    expect(await screen.findByText('pool-1')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0))
-    expect(screen.queryByText('Routable')).not.toBeInTheDocument()
   })
 
   it('hides the import button from non-staff users', async () => {
@@ -188,18 +213,45 @@ describe('channel drawer', () => {
     expect(within(tab).getByTestId('cooldown-countdown')).toHaveTextContent(/^2m \d\ds$/)
   })
 
-  it('draws the plan window bar from the last plan-quota probe', async () => {
+  it('draws the plan window bar from the health window', async () => {
     baseHandlers({
-      '/channels/1': detailBody({
-        other_info: JSON.stringify({
-          plan_quota: { windows: [{ name: '5h', used_pct: 80, reset_at: NOW + 3600 }] },
-        }),
+      '/channels/1/health': healthBody({
+        window: { windows: [{ name: '5h', used_pct: 80, reset_at: NOW + 3600 }] },
       }),
     })
     await openDrawer()
     const bars = await screen.findByTestId('window-bars')
     expect(within(bars).getByText('5-hour window')).toBeInTheDocument()
     expect(within(bars).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '80')
+  })
+
+  it('prefers the health window over the stored plan-quota summary', async () => {
+    baseHandlers({
+      '/channels/1': detailBody({
+        other_info: JSON.stringify({
+          plan_quota: { windows: [{ name: '5h', used_pct: 10, reset_at: NOW + 3600 }] },
+        }),
+      }),
+      '/channels/1/health': healthBody({
+        window: { windows: [{ name: '5h', used_pct: 64, reset_at: NOW + 3600 }] },
+      }),
+    })
+    await openDrawer()
+    const bars = await screen.findByTestId('window-bars')
+    expect(within(bars).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '64')
+  })
+
+  it('falls back to the stored plan-quota summary when health has no window', async () => {
+    baseHandlers({
+      '/channels/1': detailBody({
+        other_info: JSON.stringify({
+          plan_quota: { windows: [{ name: '5h', used_pct: 10, reset_at: NOW + 3600 }] },
+        }),
+      }),
+    })
+    await openDrawer()
+    const bars = await screen.findByTestId('window-bars')
+    expect(within(bars).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '10')
   })
 
   it('shows an error when health cannot be loaded', async () => {

@@ -36,6 +36,7 @@ func TestDataPolicyRoutes_PlatformRoutesRootOnly(t *testing.T) {
 		{http.MethodPut, "/api/v2/admin/channel-templates/1"},
 		{http.MethodDelete, "/api/v2/admin/channel-templates/1"},
 		{http.MethodPost, "/api/v2/admin/channel-templates/1/apply"},
+		{http.MethodGet, "/api/v2/admin/channel-templates/1/applications"},
 	}
 	t.Run("anonymous_401", func(t *testing.T) {
 		engine := systemTasksMountRouter(t, -1)

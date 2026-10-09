@@ -1,4 +1,5 @@
 import type {
+  ApplicationPage,
   ApplyChannelResult,
   ApplyOutcome,
   ChannelOption,
@@ -6,6 +7,7 @@ import type {
   ChannelTemplate,
   ContentRule,
   RuleList,
+  TemplateApplication,
 } from '../types'
 
 function num(value: unknown, fallback = 0): number {
@@ -103,4 +105,27 @@ export function mapChannelPage(raw: unknown): ChannelPage {
       })
     : []
   return { channels, total: num(r.total, channels.length) }
+}
+
+export function mapApplicationPage(raw: unknown): ApplicationPage {
+  const r = record(raw)
+  const applications: TemplateApplication[] = Array.isArray(r.applications)
+    ? r.applications.map((a) => {
+        const x = record(a)
+        return {
+          id: num(x.id),
+          channel_id: num(x.channel_id),
+          template_id: num(x.template_id),
+          template_version: num(x.template_version),
+          applied_by: num(x.applied_by),
+          applied_at: num(x.applied_at),
+        }
+      })
+    : []
+  return {
+    applications,
+    total: num(r.total, applications.length),
+    page: num(r.page, 1),
+    page_size: num(r.page_size, applications.length),
+  }
 }

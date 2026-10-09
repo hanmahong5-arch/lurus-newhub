@@ -289,3 +289,26 @@ func TestFaultSimTaskRoutesAbsentByDefault(t *testing.T) {
 		}
 	}
 }
+
+// Success mode must be reachable on all three wires through the real router.
+func TestFaultSimOKModeRoutedOnAllWires(t *testing.T) {
+	t.Setenv("FAULTSIM_TOKEN", "test-token")
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiV2Router(engine)
+
+	for _, tc := range []struct{ path, want string }{
+		{"/api/v2/faultsim/v1/chat/completions", `"prompt_tokens":1000`},
+		{"/api/v2/faultsim/v1/responses", `"input_tokens":1000`},
+		{"/api/v2/faultsim/v1/messages", `"output_tokens":500`},
+	} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{"model":"ok-chat"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Faultsim-Token", "test-token")
+		engine.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), tc.want) {
+			t.Errorf("%s: status=%d body=%s", tc.path, w.Code, w.Body.String())
+		}
+	}
+}

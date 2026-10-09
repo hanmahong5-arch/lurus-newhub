@@ -202,12 +202,20 @@ describe('content retention', () => {
   it('per-key retention PUTs to the key and reports the effective mode', async () => {
     routes({
       '/data-policy/retention': RETENTION,
-      '/tokens': { items: [{ id: 9, name: 'prod', key: 'sk-ab****yz' }], total: 1 },
+      '/tokens': {
+        items: [{ id: 9, name: 'prod', key: 'sk-ab****yz', owner_name: 'Bob' }],
+        total: 1,
+      },
     })
     put.mockResolvedValue({ token_id: 9, content_retention: 'none', effective: 'none' })
     renderPage()
     await openTab('Content retention')
     const keySelect = await screen.findByLabelText('Key')
+    // another member's key is offered, labelled with its owner
+    expect(within(keySelect).getByRole('option', { name: /prod.*Bob/ })).toBeInTheDocument()
+    expect(get).toHaveBeenCalledWith('/tokens', {
+      params: { scope: 'tenant', p: 1, size: 100 },
+    })
     await userEvent.selectOptions(keySelect, '9')
     const mode = screen.getByLabelText('Retention')
     // looser than the tenant's effective mode is not offered

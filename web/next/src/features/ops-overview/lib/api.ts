@@ -2,26 +2,14 @@ import { queryOptions } from '@tanstack/react-query'
 
 import { api, tenantApi } from '@/lib/api'
 
-import {
-  buildProbe,
-  manualDisabledProbe,
-  STATUS_MANUALLY_DISABLED,
-} from './derive'
+import { probeFromSummary } from './derive'
 import type {
-  ChannelDetail,
-  ChannelHealth,
+  HealthSummaryBody,
   ModelState,
-  ProbeFailure,
   ProbeResult,
   PublicModelStatus,
-  SummaryChannel,
   UsageSummary,
 } from './types'
-
-/** At most this many channels are read one by one (2 requests each). */
-export const PROBE_CAP = 300
-/** Parallel per-channel reads in flight. */
-export const PROBE_CONCURRENCY = 6
 
 export async function fetchUsageSummary(): Promise<UsageSummary> {
   const body = await tenantApi.get<Partial<UsageSummary> | null>(
@@ -46,70 +34,26 @@ export async function fetchPublicModelStatus(): Promise<PublicModelStatus> {
   return {
     models: models.filter(
       (m) =>
-        typeof m?.model === 'string' &&
-        MODEL_STATES.has(m.status as ModelState)
+        typeof m?.model === 'string' && MODEL_STATES.has(m.status as ModelState)
     ),
     updated_at: body?.updated_at ?? 0,
   }
 }
 
-/** Run `fn` over `items` with at most `limit` in flight; keeps input order. */
-export async function mapLimited<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const out = Array.from<R>({ length: items.length })
-  let next = 0
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++
-      out[i] = await fn(items[i])
-    }
-  }
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, worker)
-  )
-  return out
-}
-
 /**
- * No server-side health roll-up exists, so each channel is read
- * (`/channels/:id/health` + `/channels/:id`) with bounded concurrency. A
- * failed channel read is reported, never dropped.
+ * One request: the server rolls up every channel's routable verdict, plan end
+ * and fullest plan window (`GET /channels/health-summary`). A failed read
+ * rejects as a whole; it is never reported as "no problems".
  */
-export async function fetchProbes(
-  channels: SummaryChannel[]
-): Promise<ProbeResult> {
-  const probes: ProbeResult['probes'] = []
-  const failures: ProbeFailure[] = []
-  const live: SummaryChannel[] = []
-  for (const c of channels) {
-    if (c.status === STATUS_MANUALLY_DISABLED) probes.push(manualDisabledProbe(c))
-    else live.push(c)
+export async function fetchProbes(): Promise<ProbeResult> {
+  const body = await tenantApi.get<HealthSummaryBody | null>(
+    '/channels/health-summary'
+  )
+  const rows = Array.isArray(body?.channels) ? body.channels : []
+  return {
+    probes: rows.map(probeFromSummary),
+    truncated: body?.truncated === true,
   }
-  const target = live.slice(0, PROBE_CAP)
-  const results = await mapLimited(target, PROBE_CONCURRENCY, async (c) => {
-    try {
-      const [health, detail] = await Promise.all([
-        tenantApi.get<ChannelHealth>(`/channels/${c.channel_id}/health`),
-        tenantApi.get<ChannelDetail>(`/channels/${c.channel_id}`),
-      ])
-      return buildProbe(c, health, detail)
-    } catch (e) {
-      const failure: ProbeFailure = {
-        channelId: c.channel_id,
-        name: c.name,
-        message: e instanceof Error ? e.message : 'Request failed',
-      }
-      return failure
-    }
-  })
-  for (const r of results) {
-    if ('message' in r) failures.push(r)
-    else probes.push(r)
-  }
-  return { probes, failures, skipped: live.length - target.length }
 }
 
 export const usageSummaryQuery = queryOptions({
@@ -124,10 +68,9 @@ export const modelStatusQuery = queryOptions({
   retry: false,
 })
 
-export const probesQuery = (channels: SummaryChannel[]) =>
-  queryOptions({
-    queryKey: ['ops-overview', 'probes', channels.map((c) => c.channel_id)],
-    queryFn: () => fetchProbes(channels),
-    retry: false,
-    staleTime: 60_000,
-  })
+export const probesQuery = queryOptions({
+  queryKey: ['ops-overview', 'probes'],
+  queryFn: fetchProbes,
+  retry: false,
+  staleTime: 30_000,
+})

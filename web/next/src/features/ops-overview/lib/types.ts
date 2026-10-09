@@ -24,25 +24,25 @@ export interface UsageSummary {
   truncated: boolean
 }
 
-/** GET /api/v2/~/channels/:id/health (handler.channelHealth), the used part. */
-export interface ChannelHealth {
-  channel_id: number
+/** One row of GET /api/v2/~/channels/health-summary. */
+export interface HealthSummaryItem {
+  id: number
+  name: string
   routable: boolean
   reasons: string[]
+  /** Earliest plan or key end, unix seconds; 0 = none declared. */
+  expires_at: number
+  /** Fullest plan window in percent; null when no snapshot is known. */
+  window_max_used_pct: number | null
   cooldown_until?: number
-  /** Plan-window snapshot; null/absent when none is known. */
-  window?: Record<string, unknown> | null
   last_error?: string
 }
 
-/** The part of GET /api/v2/~/channels/:id (repo.Channel) used for expiry. */
-export interface ChannelDetail {
-  id: number
-  /** JSON document string (dto.ChannelSettings); carries expires_at. */
-  setting?: string | null
-  channel_info?: {
-    multi_key_meta?: Record<string, { expires_at?: number } | undefined> | null
-  } | null
+export interface HealthSummaryBody {
+  channels?: HealthSummaryItem[]
+  total?: number
+  /** The server capped the list. */
+  truncated?: boolean
 }
 
 export type ModelState = 'operational' | 'degraded' | 'down'
@@ -66,15 +66,8 @@ export interface ChannelProbe {
   lastError: string
 }
 
-export interface ProbeFailure {
-  channelId: number
-  name: string
-  message: string
-}
-
 export interface ProbeResult {
   probes: ChannelProbe[]
-  failures: ProbeFailure[]
-  /** Channels beyond the probe cap that were not read. */
-  skipped: number
+  /** The server capped the channel list; later channels are not shown. */
+  truncated: boolean
 }

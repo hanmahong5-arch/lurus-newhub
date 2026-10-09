@@ -761,6 +761,50 @@
           },
           {
             "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "description": "Set to tenant (tenant admin only) to list every token of the tenant, adding user_id, owner_name and content_retention per item; also accepts user_id, project_id, status and keyword filters.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tenant"
+              ]
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -3003,6 +3047,140 @@
         }
       }
     },
+    "/api/v2/{tenant_slug}/members": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "List Tenant Members",
+        "description": "Members of the caller's own tenant with role, payer flag and department memberships. Tenant admin only. Filter by role (admin, dept_lead, member) and keyword.",
+        "operationId": "listTenantMembersV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "admin",
+                "dept_lead",
+                "member"
+              ]
+            }
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "user_id": {
+                                "type": "integer"
+                              },
+                              "username": {
+                                "type": "string"
+                              },
+                              "display_name": {
+                                "type": "string"
+                              },
+                              "email": {
+                                "type": "string"
+                              },
+                              "tenant_role": {
+                                "type": "string"
+                              },
+                              "is_payer": {
+                                "type": "boolean"
+                              },
+                              "joined_at": {
+                                "type": "integer",
+                                "format": "int64",
+                                "nullable": true
+                              },
+                              "departments": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "additionalProperties": true
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "page_size": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "role is not admin, dept_lead or member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
     "/api/v2/{tenant_slug}/members/{user_id}/role": {
       "put": {
         "tags": [
@@ -4198,6 +4376,100 @@
         }
       }
     },
+    "/api/v2/{tenant_slug}/channels/health-summary": {
+      "get": {
+        "tags": [
+          "Channels"
+        ],
+        "summary": "Channel Health Summary",
+        "description": "Health roll-up of every channel of the tenant in one call: routable flag, reasons, earliest expiry, highest plan-quota window usage and cooldown. Derived from the same function as the single-channel health view. Platform staff only; capped at 5000 channels (truncated=true when cut).",
+        "operationId": "getChannelHealthSummaryV2",
+        "security": [
+          {
+            "OIDCBearer": [
+              "admin"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "channels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "routable": {
+                                "type": "boolean"
+                              },
+                              "reasons": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "expires_at": {
+                                "type": "integer",
+                                "format": "int64"
+                              },
+                              "window_max_used_pct": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "cooldown_until": {
+                                "type": "integer",
+                                "format": "int64"
+                              },
+                              "last_error": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "truncated": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
     "/api/v2/{tenant_slug}/channels/{id}/health": {
       "get": {
         "tags": [
@@ -4980,6 +5252,122 @@
         }
       }
     },
+    "/api/v2/admin/channel-templates/{id}/applications": {
+      "get": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "List Channel Template Applications",
+        "description": "Append-only log of which channels this template was written into, newest first. Platform staff only.",
+        "operationId": "listChannelTemplateApplicationsV2",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelTemplateId"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "applications": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "format": "int64"
+                              },
+                              "channel_id": {
+                                "type": "integer",
+                                "format": "int64"
+                              },
+                              "template_id": {
+                                "type": "integer",
+                                "format": "int64"
+                              },
+                              "template_version": {
+                                "type": "integer",
+                                "format": "int64"
+                              },
+                              "applied_by": {
+                                "type": "integer",
+                                "format": "int64"
+                              },
+                              "applied_at": {
+                                "type": "integer",
+                                "format": "int64"
+                              }
+                            }
+                          }
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "page_size": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
     "/api/v2/admin/channel-templates/{id}/apply": {
       "post": {
         "tags": [
@@ -5400,7 +5788,29 @@
           },
           "weight": {
             "type": "integer"
+          },
+        "plan_kind": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "key_count": {
+          "type": "integer"
+        },
+        "enabled_key_count": {
+          "type": "integer"
+        },
+        "routable": {
+          "type": "boolean"
+        },
+        "unroutable_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
           }
+        }
         }
       },
       "ChannelCreate": {

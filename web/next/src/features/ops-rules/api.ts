@@ -3,6 +3,7 @@ import { queryOptions } from '@tanstack/react-query'
 import { api, tenantApi } from '@/lib/api'
 
 import {
+  mapApplicationPage,
   mapApplyOutcome,
   mapChannelPage,
   mapRule,
@@ -74,6 +75,22 @@ export function channelsQueryOptions(page: number) {
         await tenantApi.get('/channels', {
           params: { page, page_size: CHANNEL_PAGE_SIZE },
         })
+      ),
+  })
+}
+
+export const APPLICATIONS_PAGE_SIZE = 50
+
+/** Server-side log of where a template was written (newest first). */
+export function applicationsQueryOptions(templateId: number, page: number) {
+  return queryOptions({
+    queryKey: [...templatesQueryKey, 'applications', templateId, page],
+    queryFn: async () =>
+      mapApplicationPage(
+        await api.get(
+          `/api/v2/admin/channel-templates/${templateId}/applications`,
+          { params: { page, page_size: APPLICATIONS_PAGE_SIZE } }
+        )
       ),
   })
 }
