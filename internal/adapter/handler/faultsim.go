@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
-	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/testkit/fakeupstream"
 
 	"github.com/gin-gonic/gin"
 )
@@ -51,38 +50,33 @@ func FaultSimEnabled() bool {
 	return os.Getenv("FAULTSIM_TOKEN") != ""
 }
 
-// Fault modes. The set is deliberately small: each one exists because some
-// guarantee cannot be demonstrated without it.
+// Fault modes. They are internal/testkit/fakeupstream's: this simulator and
+// the fake vendor the local acceptance stack runs are one implementation, so a
+// fault proven locally is the same fault UAT serves. The first five names
+// predate the shared package and are kept so seeded UAT channels keep working:
+//
+//   - mid_stream_abort: a few well-formed SSE frames, then the body ends with
+//     no terminator and no usage frame — the only way to reach the
+//     incomplete-stream path and the failover-suppressed counter.
+//   - slow_headers: hold before the first byte (the relay's idle timeout →
+//     upstream_timeout, 504).
+//   - http_500: the plain fault that drives the circuit breaker toward Open.
+//   - rate_limit_429: the rate-limit classification and Retry-After.
+//   - upstream_insufficient_balance: an unpaid provider account's 402, which
+//     must classify as upstream_insufficient_balance, not upstream_4xx.
+//   - http_401, disconnect_before_first_byte: a rejected channel key, and a
+//     connection closed before any status line.
 const (
-	// FaultModeMidStreamAbort accepts the request, emits a few well-formed SSE
-	// frames, then closes without a terminator. This is the only way to reach
-	// the incomplete-stream path and the failover-suppressed counter.
-	FaultModeMidStreamAbort = "mid_stream_abort"
-	// FaultModeSlowHeaders holds the response open before the first byte,
-	// exercising the relay's own idle timeout (→ upstream_timeout, 504).
-	FaultModeSlowHeaders = "slow_headers"
-	// FaultModeHTTP500 is the plain upstream fault that drives the circuit
-	// breaker toward Open.
-	FaultModeHTTP500 = "http_500"
-	// FaultModeRateLimit429 exercises the rate-limit classification and the
-	// Retry-After path.
-	FaultModeRateLimit429 = "rate_limit_429"
-	// FaultModeInsufficientBalance reproduces an unpaid provider account: a 402
-	// that must classify as upstream_insufficient_balance rather than
-	// upstream_4xx. UAT's real DeepSeek account is already in this state, which
-	// is what made the classification urgent.
-	FaultModeInsufficientBalance = "upstream_insufficient_balance"
+	FaultModeMidStreamAbort      = fakeupstream.FaultMidStreamAbort
+	FaultModeSlowHeaders         = fakeupstream.FaultSlowHeaders
+	FaultModeHTTP500             = fakeupstream.FaultHTTP500
+	FaultModeRateLimit429        = fakeupstream.FaultRateLimit429
+	FaultModeInsufficientBalance = fakeupstream.FaultInsufficientBalance
 )
 
 // FaultSimModes is the supported set, exported so the wiring test can assert
 // every mode is reachable rather than trusting a hand-kept list.
-var FaultSimModes = []string{
-	FaultModeMidStreamAbort,
-	FaultModeSlowHeaders,
-	FaultModeHTTP500,
-	FaultModeRateLimit429,
-	FaultModeInsufficientBalance,
-}
+var FaultSimModes = fakeupstream.FaultModes
 
 func faultSimAuthorized(c *gin.Context) bool {
 	want := os.Getenv("FAULTSIM_TOKEN")
@@ -126,84 +120,16 @@ func FaultSimChatCompletions(c *gin.Context) {
 		mode = q
 	}
 
-	switch mode {
-	case FaultModeHTTP500:
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{"message": "simulated upstream failure", "type": "server_error"},
-		})
-
-	case FaultModeRateLimit429:
-		c.Header("Retry-After", "30")
-		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error": gin.H{"message": "simulated rate limit", "type": "rate_limit_error"},
-		})
-
-	case FaultModeInsufficientBalance:
-		// DeepSeek's real shape for an exhausted account.
-		c.JSON(http.StatusPaymentRequired, gin.H{
-			"error": gin.H{"message": "Insufficient Balance", "type": "insufficient_quota"},
-		})
-
-	case FaultModeSlowHeaders:
-		// Sleep before writing anything, so the caller is still waiting on the
-		// first byte. Bounded, and abandoned early if the caller hangs up —
-		// this must never outlive the request it belongs to.
-		delay := 30 * time.Second
-		if v := c.Query("delay_ms"); v != "" {
-			if ms, err := strconv.Atoi(v); err == nil && ms >= 0 && ms <= 120000 {
-				delay = time.Duration(ms) * time.Millisecond
-			}
-		}
-		select {
-		case <-time.After(delay):
-			c.JSON(http.StatusOK, gin.H{
-				"id":      "faultsim-slow",
-				"object":  "chat.completion",
-				"choices": []gin.H{{"index": 0, "message": gin.H{"role": "assistant", "content": "late"}}},
-			})
-		case <-c.Request.Context().Done():
-		}
-
-	case FaultModeMidStreamAbort:
-		// The whole point of this handler. Emit valid SSE frames, flush them so
-		// they genuinely leave the process, then return WITHOUT the terminator
-		// and without a usage frame — exactly the shape of an upstream that
-		// died mid-answer.
-		helper.SetEventStreamHeaders(c)
-		frames := 3
-		if v := c.Query("frames"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 100 {
-				frames = n
-			}
-		}
-		for i := 0; i < frames; i++ {
-			chunk := gin.H{
-				"id":     "faultsim-abort",
-				"object": "chat.completion.chunk",
-				"model":  FaultModeMidStreamAbort,
-				"choices": []gin.H{{
-					"index": 0,
-					"delta": gin.H{"role": "assistant", "content": fmt.Sprintf("part-%d ", i)},
-				}},
-			}
-			if err := helper.ObjectData(c, chunk); err != nil {
-				return
-			}
-			if c.Request.Context().Err() != nil {
-				return
-			}
-		}
-		// Deliberately no helper.Done(c): no [DONE], no finish_reason. Returning
-		// here ends the response body mid-stream.
-
-	default:
+	if !fakeupstream.IsFaultMode(mode) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
 				"message": fmt.Sprintf("unknown fault mode %q; supported: %v", mode, FaultSimModes),
 				"type":    "faultsim",
 			},
 		})
+		return
 	}
+	fakeupstream.WriteFault(c.Writer, c.Request, fakeupstream.WireOpenAIChat, mode, fakeupstream.FaultParamsFromQuery(c.Request))
 }
 
 // --- Task-vendor fault simulator (cycle-8 L8) ---

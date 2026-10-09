@@ -49,8 +49,11 @@ type projectView struct {
 	// MonthlyBudgetQuota is the enforced monthly cap in quota units, 0 = none
 	// (migration 043; app.enforceProjectBudget).
 	MonthlyBudgetQuota int64 `json:"monthly_budget_quota"`
-	CreatedAt          int64 `json:"created_at"`
-	UpdatedAt          int64 `json:"updated_at"`
+	// ExternalCode is the department code a customer gateway sends in
+	// X-Lurus-Dept (migration 045); "" = none.
+	ExternalCode string `json:"external_code"`
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
 	// Deleted marks a retired (soft-deleted) row, only ever present when the
 	// caller asked for include_deleted. It is what lets the console show an
 	// undo affordance instead of pretending the project never existed.
@@ -63,6 +66,7 @@ func toProjectView(p *entity.Project) projectView {
 		Name:               p.Name,
 		Description:        p.Description,
 		MonthlyBudgetQuota: p.MonthlyBudgetQuota,
+		ExternalCode:       p.ExternalCode,
 		CreatedAt:          p.CreatedAt.Unix(),
 		UpdatedAt:          p.UpdatedAt.Unix(),
 		Deleted:            p.DeletedAt.Valid,
@@ -115,6 +119,12 @@ func respondProjectRepoErr(c *gin.Context, err error, what string) {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
 			"message": "Project not found",
+		})
+	case errors.Is(err, repo.ErrProjectExternalCodeExists):
+		c.JSON(http.StatusConflict, gin.H{
+			"success":    false,
+			"message":    "A project with this external_code already exists",
+			"error_code": "PROJECT_EXTERNAL_CODE_CONFLICT",
 		})
 	case errors.Is(err, repo.ErrProjectNameExists):
 		c.JSON(http.StatusConflict, gin.H{
@@ -277,11 +287,16 @@ func RestoreProjectV2(c *gin.Context) {
 	// missing/!malformed payload must not fail the undo.
 	_ = c.ShouldBindJSON(&req)
 
+	if taken, terr := repo.RetiredProjectExternalCodeTaken(tenantCtx.TenantID, id); terr == nil && taken {
+		respondProjectRepoErr(c, repo.ErrProjectExternalCodeExists, "restore project")
+		return
+	}
 	row, err := repo.RestoreProject(tenantCtx.TenantID, id, req.ReattachTokenIDs)
 	if err != nil {
 		respondProjectRepoErr(c, err, "restore project")
 		return
 	}
+	repo.ResetProjectDeptCache()
 
 	detailBytes, _ := json.Marshal(map[string]interface{}{
 		"name":               row.Name,
@@ -312,11 +327,20 @@ func RestoreProjectV2(c *gin.Context) {
 // member — the token page's project picker needs it and it carries no
 // amounts.
 //
-// The response ALWAYS includes the project_id = 0 "unassigned" bucket, so the
-// rows sum to the tenant's total consume spend for the window.
+// For a tenant admin the response includes the project_id = 0 "unassigned"// bucket, so the rows sum to the tenant's total consume spend for the window. A// dept_lead sees only the rows of their own projects (never the unassigned// bucket), and total_quota sums just those rows.
 func GetProjectSpendV2(c *gin.Context) {
-	tenantCtx, ok := projectAdminCtx(c)
+	tenantCtx, ok := projectTenantCtx(c)
 	if !ok {
+		return
+	}
+	// Tenant admins see everything; a dept_lead sees only their own projects;
+	// anyone else is refused as before.
+	all, leadIDs := allowedProjectIDs(c, tenantCtx)
+	if !all && tenantRoleOf(tenantCtx) != entity.TenantRoleDeptLead {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "Admin role required",
+		})
 		return
 	}
 	start, _ := strconv.ParseInt(c.Query("start"), 10, 64)
@@ -326,6 +350,10 @@ func GetProjectSpendV2(c *gin.Context) {
 	if err != nil {
 		respondProjectRepoErr(c, err, "load project spend")
 		return
+	}
+
+	if !all {
+		rows = filterSpendRowsToProjects(rows, leadIDs)
 	}
 
 	var total int64
@@ -379,6 +407,7 @@ func CreateProjectV2(c *gin.Context) {
 		Name               string `json:"name" binding:"required"`
 		Description        string `json:"description"`
 		MonthlyBudgetQuota *int64 `json:"monthly_budget_quota"`
+		ExternalCode       string `json:"external_code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -388,7 +417,8 @@ func CreateProjectV2(c *gin.Context) {
 		})
 		return
 	}
-	if !validateProjectPayload(c, req.Name, req.Description) || !validateProjectBudget(c, req.MonthlyBudgetQuota) {
+	if !validateProjectPayload(c, req.Name, req.Description) || !validateProjectBudget(c, req.MonthlyBudgetQuota) ||
+		!validateExternalCode(c, tenantCtx.TenantID, req.ExternalCode, 0) {
 		return
 	}
 
@@ -397,6 +427,17 @@ func CreateProjectV2(c *gin.Context) {
 		respondProjectRepoErr(c, err, "create project")
 		return
 	}
+	if code := strings.TrimSpace(req.ExternalCode); code != "" {
+		coded, cerr := repo.SetProjectExternalCode(tenantCtx.TenantID, row.Id, code)
+		if cerr != nil {
+			// Lost a race on the code: do not leave a code-less project behind.
+			_ = repo.HardDeleteProject(tenantCtx.TenantID, row.Id)
+			respondProjectRepoErr(c, cerr, "set project external code")
+			return
+		}
+		row = coded
+	}
+	repo.ResetProjectDeptCache()
 	if req.MonthlyBudgetQuota != nil && *req.MonthlyBudgetQuota > 0 {
 		if row, err = repo.SetProjectMonthlyBudget(tenantCtx.TenantID, row.Id, *req.MonthlyBudgetQuota); err != nil {
 			respondProjectRepoErr(c, err, "set project budget")
@@ -431,6 +472,8 @@ func UpdateProjectV2(c *gin.Context) {
 		Name               string `json:"name" binding:"required"`
 		Description        string `json:"description"`
 		MonthlyBudgetQuota *int64 `json:"monthly_budget_quota"`
+		// ExternalCode: nil = leave alone, "" clears.
+		ExternalCode *string `json:"external_code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -441,6 +484,9 @@ func UpdateProjectV2(c *gin.Context) {
 		return
 	}
 	if !validateProjectPayload(c, req.Name, req.Description) || !validateProjectBudget(c, req.MonthlyBudgetQuota) {
+		return
+	}
+	if req.ExternalCode != nil && !validateExternalCode(c, tenantCtx.TenantID, *req.ExternalCode, id) {
 		return
 	}
 
@@ -455,6 +501,15 @@ func UpdateProjectV2(c *gin.Context) {
 		respondProjectRepoErr(c, err, "update project")
 		return
 	}
+	if req.ExternalCode != nil {
+		if row, err = repo.SetProjectExternalCode(tenantCtx.TenantID, id, *req.ExternalCode); err != nil {
+			respondProjectRepoErr(c, err, "set project external code")
+			return
+		}
+	}
+	// The dept-header cache keys on name AND external_code; drop it so a rename
+	// or re-code attributes correctly now rather than after the TTL.
+	repo.ResetProjectDeptCache()
 	// Omitted budget = leave the cap alone (a client built before 043 must
 	// not clear caps by renaming); present = set it, 0 clears.
 	if req.MonthlyBudgetQuota != nil {
@@ -503,10 +558,24 @@ func DeleteProjectV2(c *gin.Context) {
 		return
 	}
 
+	// Leads of this project may lose their last live project with it; a retired
+	// project 404s on DELETE /members, so revoke their role here (revoked leads
+	// are re-promoted by POST /members if the project is restored).
+	var leadIDs []int64
+	if members, merr := repo.ListProjectMembers(tenantCtx.TenantID, id); merr == nil {
+		for _, m := range members {
+			leadIDs = append(leadIDs, m.UserId)
+		}
+	}
+
 	detached, err := repo.SoftDeleteProject(tenantCtx.TenantID, id)
 	if err != nil {
 		respondProjectRepoErr(c, err, "delete project")
 		return
+	}
+	repo.ResetProjectDeptCache()
+	if _, rerr := repo.RevokeDeptLeadsWithoutProjects(tenantCtx.TenantID, leadIDs); rerr != nil {
+		common.SysError("revoke dept_lead after project delete: " + rerr.Error())
 	}
 
 	detailBytes, _ := json.Marshal(map[string]interface{}{

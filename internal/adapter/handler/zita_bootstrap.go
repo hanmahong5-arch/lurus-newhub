@@ -87,7 +87,7 @@ func ZitaBootstrap(c *gin.Context) {
 		// for an already-bridged user never reaches here, so an invite
 		// query param on that request is simply ignored (existing users'
 		// tenant is never changed by an invite, by construction).
-		tenantID := resolveInviteTenant(c, id.AccountID)
+		tenantID, grant := resolveInviteTenant(c, id.AccountID)
 
 		user, err = autoCreateBridgedUser(id.AccountID, tenantID)
 		var seatErr *seatLimitError
@@ -104,6 +104,7 @@ func ZitaBootstrap(c *gin.Context) {
 			return
 		}
 		autoCreated = true
+		applyInviteGrant(c, user, tenantID, grant)
 		common.SysLog(fmt.Sprintf("zita-bootstrap: auto-created user %s (id=%d, lurus_account_id=%d, tenant_id=%s)", user.Username, user.Id, id.AccountID, tenantID))
 	} else if err != nil {
 		common.SysError(fmt.Sprintf("zita-bootstrap: lookup failed (account_id=%d): %v", id.AccountID, err))
@@ -226,22 +227,52 @@ func resolveTenantSlug(tenantID string) string {
 // pre-invite behavior — and logs why. Never returns an error: this sits on
 // the login critical path and an invite is a nice-to-have, not a
 // precondition for logging in.
-func resolveInviteTenant(c *gin.Context, accountID int64) string {
+func resolveInviteTenant(c *gin.Context, accountID int64) (string, repo.InviteGrant) {
 	code := c.Query("invite")
 	if code == "" {
-		return "default"
+		return "default", repo.InviteGrant{}
 	}
-	tenant, err := repo.ConsumeTenantInvite(code, accountID)
+	tenant, grant, err := repo.ConsumeTenantInviteGrant(code, accountID)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("zita-bootstrap: invite consume failed (account_id=%d): %v — falling back to default tenant", accountID, err))
-		return "default"
+		return "default", repo.InviteGrant{}
 	}
 	governance.RecordAuditEvent(governance.NewAuditEvent(
 		c, governance.ActorSystem, 0,
 		governance.ActionTenantInviteConsumed, governance.ResourceTenant, 0,
 		fmt.Sprintf(`{"tenant_id":%q,"account_id":%d}`, tenant.Id, accountID),
 	))
-	return tenant.Id
+	return tenant.Id, grant
+}
+
+// applyInviteGrant confers the invite's tenant_role / project membership on the
+// freshly created user. It cannot share the consume transaction (the user row
+// does not exist yet) so it is its own transaction (role and membership are
+// still atomic with each other). A failure must not block the login — the code
+// is already spent and the user is in the tenant — so it is surfaced as a
+// system log plus a tenant.invite_grant_failed audit event: operators find the
+// user and project in the event details and re-grant through
+// POST /:slug/projects/:id/members.
+func applyInviteGrant(c *gin.Context, user *repo.User, tenantID string, grant repo.InviteGrant) {
+	if user == nil || (grant.MemberRole == "" && grant.ProjectID == 0) {
+		return
+	}
+	err := repo.ApplyInviteGrant(tenantID, user.Id, grant.MemberRole, grant.ProjectID)
+	if err == nil {
+		return
+	}
+	common.SysError(fmt.Sprintf("zita-bootstrap: invite grant failed (user_id=%d tenant=%s): %v", user.Id, tenantID, err))
+	details, _ := json.Marshal(map[string]any{
+		"tenant_id":   tenantID,
+		"member_role": grant.MemberRole,
+		"project_id":  grant.ProjectID,
+		"error":       err.Error(),
+	})
+	governance.RecordAuditEvent(governance.NewAuditEvent(
+		c, governance.ActorSystem, 0,
+		governance.ActionTenantInviteGrantFailed, governance.ResourceUser, user.Id,
+		string(details),
+	))
 }
 
 // seatLimitError is what autoCreateBridgedUser returns instead of creating a

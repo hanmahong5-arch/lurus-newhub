@@ -397,41 +397,6 @@ func RecordLogWithTenant(userId int, tenantID string, logType int, content strin
 	}
 }
 
-// convertLogToSearchLog converts model.Log to search.Log
-// 将 model.Log 转换为 search.Log
-func convertLogToSearchLog(log *Log) *search.Log {
-	return &search.Log{
-		Id:               log.Id,
-		CreatedAt:        log.CreatedAt,
-		Type:             log.Type,
-		UserId:           log.UserId,
-		Username:         log.Username,
-		TokenId:          log.TokenId,
-		TokenName:        log.TokenName,
-		ModelName:        log.ModelName,
-		Content:          log.Content,
-		Quota:            log.Quota,
-		PromptTokens:     log.PromptTokens,
-		CompletionTokens: log.CompletionTokens,
-		UseTime:          log.UseTime,
-		IsStream:         log.IsStream,
-		ChannelId:        log.ChannelId,
-		ChannelName:      log.ChannelName,
-		Group:            log.Group,
-		Ip:               log.Ip,
-		Other:            log.Other,
-		ChannelType:      log.ChannelType,
-		RelayMode:        log.RelayMode,
-		UpstreamModel:    log.UpstreamModel,
-		TotalLatencyMs:   log.TotalLatencyMs,
-		// Keep in sync with the DB row: a field missing here makes the
-		// corresponding Meilisearch filter silently return nothing rather
-		// than error, so "search logs by project" would look broken with no
-		// clue why.
-		ProjectId: log.ProjectId,
-	}
-}
-
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
 	isStream bool, group string, other map[string]interface{}) {
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, content))
@@ -473,6 +438,11 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		}(),
 		Other:       otherStr,
 		ChannelType: channelType,
+		// Attribution (migrations 029/045) comes from the request context:
+		// the auth middleware resolved it before any channel was tried, so an
+		// error row is attributed exactly like the consume row it replaces.
+		ProjectId:   common.GetContextKeyInt(c, constant.ContextKeyProjectId),
+		EmployeeRef: common.GetContextKeyString(c, constant.ContextKeyEmployeeRef),
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
@@ -552,6 +522,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		// backfilled: whatever is written here is the row's attribution
 		// forever.
 		ProjectId:   params.ProjectId,
+		EmployeeRef: params.EmployeeRef,
 		ChargedCNY4: params.ChargedCNY4,
 		PricedCNY4:  params.PricedCNY4,
 	}
@@ -864,6 +835,7 @@ func GetUserLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []*L
 	if params.ProjectID > 0 {
 		tx = tx.Where("project_id = ?", params.ProjectID)
 	}
+	tx = ApplyLogAttributionFilters(tx, params.ProjectIDs, params.EmployeeRef)
 
 	// Cross-product attribution filter (Workstream 0). Empty = no filter.
 	// Same JSON extraction the tenant-wide spend aggregate uses (savings.go),
@@ -930,6 +902,7 @@ func GetTenantLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []
 	if params.ProjectID > 0 {
 		tx = tx.Where("project_id = ?", params.ProjectID)
 	}
+	tx = ApplyLogAttributionFilters(tx, params.ProjectIDs, params.EmployeeRef)
 
 	// Cross-product attribution filter (Workstream 0). Empty = no filter.
 	if params.SourceProduct != "" {

@@ -414,13 +414,13 @@ func resolveSessionIdentity(c *gin.Context, minRole int) bool {
 	// not only via OIDC JWT.
 	emailVal, _ := c.Get("email")
 	email, _ := emailVal.(string)
-	c.Set("tenant_context", &TenantContext{
-		TenantID: tenantId,
-		UserID:   userId,
-		Email:    email,
-		Username: usernameVal,
-		Roles:    []string{},
-	})
+	// The tenant-scoped role (migration 046) rides along additively and never
+	// feeds the integer role checks above. sessionTenantContext documents the
+	// RoleTenantID == TenantID rule and the fail-closed cache-miss behaviour.
+	// It reuses the userCache resolved above, not a second lookup.
+	c.Set("tenant_context", sessionTenantContext(
+		tenantId, userId, email, usernameVal, userCache, cacheErr,
+	))
 
 	// L7 (auth-security-08/26/29) per-device session registry: registers or
 	// touches this session's row so it shows up in GET .../sessions and can

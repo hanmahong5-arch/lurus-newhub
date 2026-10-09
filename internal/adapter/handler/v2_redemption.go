@@ -130,7 +130,7 @@ func ListRedemptionsV2(c *gin.Context) {
 	}
 
 	// Check admin role
-	if !requireTenantAdmin(c, tenantCtx) {
+	if !isPlatformStaff(c, tenantCtx) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "Admin role required",
@@ -216,7 +216,7 @@ func CreateRedemptionV2(c *gin.Context) {
 	}
 
 	// Check admin role
-	if !requireTenantAdmin(c, tenantCtx) {
+	if !isPlatformStaff(c, tenantCtx) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "Admin role required",
@@ -336,7 +336,7 @@ func DeleteRedemptionV2(c *gin.Context) {
 	}
 
 	// Check admin role
-	if !requireTenantAdmin(c, tenantCtx) {
+	if !isPlatformStaff(c, tenantCtx) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "Admin role required",

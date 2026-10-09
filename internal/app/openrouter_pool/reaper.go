@@ -60,6 +60,10 @@ func AutoReapWithContext(ctx context.Context) {
 	}
 }
 
+// listReaperChannelsFn is the reaper's channel source: every multi-key channel
+// of any type (the 429 cooldown is not OpenRouter-only), tenant-blind.
+var listReaperChannelsFn = repo.ListMultiKeyChannelsForReaper
+
 // ReapOnce performs a single reaper pass. Exposed for testing with an
 // injectable clock; in production AutoReapWithContext drives it.
 //
@@ -73,7 +77,7 @@ func ReapOnce(ctx context.Context, now func() time.Time) (err error) {
 		}
 	}()
 
-	channels, listErr := repo.ListOpenRouterMultiKeyChannelsForReaper()
+	channels, listErr := listReaperChannelsFn()
 	if listErr != nil {
 		err = fmt.Errorf("list channels: %w", listErr)
 		return err
@@ -155,7 +159,7 @@ func reapChannel(channel *repo.Channel, now time.Time) (int, error) {
 		}
 	}
 
-	if err := channel.SaveWithoutKey(); err != nil {
+	if err := repo.SaveChannelPoolState(channel); err != nil {
 		return recovered, fmt.Errorf("save channel: %w", err)
 	}
 	if channelStatusChanged {

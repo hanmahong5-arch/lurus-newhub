@@ -64,7 +64,14 @@ func TestV2AdminGate_SessionAdminWithoutStringRoles(t *testing.T) {
 	t.Run("common user no string roles is rejected", func(t *testing.T) {
 		assertGate(t, ctx.NormalUser, nil, true)
 	})
-	t.Run("common user with jwt admin string role passes gate", func(t *testing.T) {
-		assertGate(t, ctx.NormalUser, []string{"admin"}, false)
+	// Channels and redemption codes are the platform's supply chain, not a
+	// tenant's (enterprise hub plan D5): an OIDC "admin" claim is tenant-scoped
+	// and an IdP may issue it to a customer organisation, so it must not pass.
+	// Only "root" on the JWT path is platform staff.
+	t.Run("common user with jwt admin string role is rejected", func(t *testing.T) {
+		assertGate(t, ctx.NormalUser, []string{"admin"}, true)
+	})
+	t.Run("common user with jwt root string role passes gate", func(t *testing.T) {
+		assertGate(t, ctx.NormalUser, []string{"root"}, false)
 	})
 }

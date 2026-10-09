@@ -599,6 +599,8 @@ func AnonymizeLogsBatch(ctx context.Context, userID int, batchSize int) ([]int, 
 			"ip":         "",
 			"content":    "",
 			"other":      "",
+			// employee_ref is usually the employee's email (X-Lurus-Employee).
+			"employee_ref": "",
 		}).Error
 	if err != nil {
 		return nil, fmt.Errorf("anonymize logs batch update: %w", err)
