@@ -59,6 +59,14 @@
     {
       "name": "Platform Admin",
       "description": "Platform-level administration"
+    },
+    {
+      "name": "Projects",
+      "description": "Cost-attribution projects and their members"
+    },
+    {
+      "name": "Tenant Admin",
+      "description": "Tenant-admin self-service: invites, member roles, audit trail and model allow-list"
     }
   ],
   "paths": {
@@ -1189,7 +1197,7 @@
           "Billing"
         ],
         "summary": "Monthly Statement",
-        "description": "Tenant monthly statement grouped by project, employee or token. The month is a calendar month in the requested time zone. Tenant admins see the whole tenant; department leads see only their own projects (the unassigned project 0 bucket is hidden). Totals are exactly the sum of the rows. Amounts are in 0.0001 CNY.",
+        "description": "Tenant monthly statement grouped by project, employee, token or model. The month is a calendar month in the requested time zone. Tenant admins see the whole tenant; department leads see only their own projects (the unassigned project 0 bucket is hidden). format=csv exports the same statement for the whole tenant. Totals are exactly the sum of the rows. Amounts are in 0.0001 CNY.",
         "operationId": "getBillingStatementV2",
         "security": [
           {
@@ -1229,7 +1237,8 @@
               "enum": [
                 "project",
                 "employee",
-                "token"
+                "token",
+                "model"
               ],
               "default": "project"
             }
@@ -1238,7 +1247,7 @@
             "name": "format",
             "in": "query",
             "required": false,
-            "description": "csv returns a text/csv download",
+            "description": "csv returns a text/csv download of the whole tenant statement (same grouping, month and totals row)",
             "schema": {
               "type": "string",
               "enum": [
@@ -2310,6 +2319,1270 @@
           }
         }
       }
+    },
+    "/api/v2/{tenant_slug}/tokens/batch": {
+      "post": {
+        "tags": [
+          "Tokens"
+        ],
+        "summary": "Batch Create Tokens (roster)",
+        "description": "Issues one key per employee of a roster. Tenant admin only. At most 500 items, all-or-nothing in one transaction. Idempotent per employee_ref: an employee that already has a live key is reported under skipped and not re-issued. The plaintext keys of newly created tokens appear in this response only. Keys are owned by the tenant payer (409 payer_not_set when none is configured) and are never trusted-gateway keys.",
+        "operationId": "batchCreateTokensV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchTokenCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Keys created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/BatchTokenResult"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Every employee already had a key; nothing created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/BatchTokenResult"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid item (error_code TOKEN_BATCH_INVALID) or too many items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "employee_ref conflict, or the tenant has no payer (error_code payer_not_set)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/projects/{id}/members": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "List Project Members",
+        "description": "Lists the members (department leads) of a project. Tenant admin only; a project of another tenant is 404.",
+        "operationId": "listProjectMembersV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ProjectMember"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Add Project Member",
+        "description": "Adds a user to a project; a user with no tenant role becomes dept_lead. Idempotent. Tenant admin only. Not available in the shared default tenant (403 TENANT_ROLE_FORBIDDEN_IN_DEFAULT).",
+        "operationId": "addProjectMemberV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "user_id"
+                ],
+                "properties": {
+                  "user_id": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or user not found in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Remove Project Member",
+        "description": "Removes a user from a project; a dept_lead left with no projects is demoted. user_id is read from the query string, or from a JSON body.",
+        "operationId": "removeProjectMemberV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or user not found in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/invites": {
+      "post": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Issue Tenant Invite",
+        "description": "Mints a one-time onboarding code for the caller's own tenant, optionally granting a role and project membership on redeem. ttl_hours defaults to 72, maximum 720. Tenant admin only. The full code is returned only here.",
+        "operationId": "issueTenantInviteV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Invite created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/TenantInvite"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ttl_hours, role or project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "List Tenant Invites",
+        "description": "Lists the tenant's invites, newest first, as a prefix-only projection (never the full code). Tenant admin only.",
+        "operationId": "listTenantInvitesV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invites",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "invites": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/TenantInviteView"
+                          }
+                        },
+                        "total": {
+                          "type": "integer",
+                          "format": "int64"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "page_size": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/invites/redeem": {
+      "post": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Redeem Tenant Invite",
+        "description": "Applies an invite's role and project grant to the already logged-in caller. Only a code of the caller's own tenant redeems; a foreign or unknown code is indistinguishable (404 INVITE_NOT_FOUND) and a foreign code is not consumed. Expired and revoked codes answer 410, a spent code 409.",
+        "operationId": "redeemTenantInviteV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Redeemed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "tenant_id": {
+                          "type": "string"
+                        },
+                        "member_role": {
+                          "type": "string"
+                        },
+                        "project_id": {
+                          "type": "integer",
+                          "format": "int64"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "code is required (INVITE_CODE_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "INVITE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "INVITE_ALREADY_CONSUMED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "INVITE_EXPIRED or INVITE_REVOKED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/invites/{id}": {
+      "delete": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Revoke Tenant Invite",
+        "description": "Revokes a pending invite of the caller's own tenant. Another tenant's invite id and a spent or already revoked one are both 404. Tenant admin only.",
+        "operationId": "revokeTenantInviteV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "INVITE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/members/{user_id}/role": {
+      "put": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Set Member Role",
+        "description": "Sets a member's tenant role (admin, dept_lead or empty) in the caller's own tenant. Tenant admin only. Refuses to leave the tenant without an admin (409 LAST_TENANT_ADMIN). The payer flag is root-only and ignored here. Not available in the shared default tenant.",
+        "operationId": "setTenantMemberRoleV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRoleSet"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Role set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TENANT_ROLE_INVALID or missing tenant_role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User is not a member of this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "LAST_TENANT_ADMIN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/audit": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "List Tenant Audit Events",
+        "description": "The tenant's own audit trail, newest first. Every query is pinned to the caller's tenant; a tenant_id query parameter is ignored. Details are redacted (channel ids, upstream keys, internal notes). Tenant admin only.",
+        "operationId": "listTenantAuditV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Audit action name; unknown names are 400",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actor_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "start_time",
+            "in": "query",
+            "description": "Unix seconds, inclusive",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "end_time",
+            "in": "query",
+            "description": "Unix seconds",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/TenantAuditEvent"
+                          }
+                        },
+                        "total": {
+                          "type": "integer",
+                          "format": "int64"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "page_size": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/audit/export.csv": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Export Tenant Audit Events (CSV)",
+        "description": "CSV export of the tenant's audit trail, one page per call. When more rows remain the response carries X-Next-Cursor; pass it back as cursor. Same filters, scoping and redaction as the list. Tenant admin only; rate limited.",
+        "operationId": "exportTenantAuditCSVV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Audit action name; unknown names are 400",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actor_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "start_time",
+            "in": "query",
+            "description": "Unix seconds, inclusive",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "end_time",
+            "in": "query",
+            "description": "Unix seconds",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Value of the previous X-Next-Cursor",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV page",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Present when more rows remain",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the next attempt",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests allowed per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "0 on a reject",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Scope": {
+                "description": "Which limiter rejected the request",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Type": {
+                "description": "Limiter kind",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/models/allowlist": {
+      "get": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Get Tenant Model Allow-list",
+        "description": "Shows the platform-granted model ceiling, the tenant's own narrowing selection and the effective list. Tenant admin only.",
+        "operationId": "getTenantModelAllowlistV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Allow-list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/TenantModelAllowlist"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Tenant admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Tenant Admin"
+        ],
+        "summary": "Set Tenant Model Allow-list",
+        "description": "Narrows the models the tenant may use. Every entry must be covered by the platform ceiling when one is configured (403 MODEL_NOT_GRANTED); an empty list is an explicit deny-all; selected_models is required. The change reaches every replica within propagation_seconds. Tenant admin only; audited.",
+        "operationId": "putTenantModelAllowlistV2",
+        "security": [
+          {
+            "OIDCBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantSlug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "selected_models"
+                ],
+                "properties": {
+                  "selected_models": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Model names or trailing-* patterns"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/TenantModelAllowlist"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "selected_models missing or an invalid entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not a tenant admin, or MODEL_NOT_GRANTED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/admin/tenants/{id}/members/{user_id}/role": {
+      "put": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Set Tenant Member Role (root)",
+        "description": "Root bootstrap of a tenant's first admin or payer. The user must belong to the addressed tenant (404 otherwise). Same body and error codes as the tenant route, plus the optional payer flag.",
+        "operationId": "setTenantMemberRoleAdmin",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Tenant id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRoleSet"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Role set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TENANT_ROLE_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "LAST_TENANT_ADMIN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2497,6 +3770,19 @@
           },
           "tenant_slug": {
             "type": "string"
+          },
+          "tenant_role": {
+            "type": "string",
+            "enum": [
+              "",
+              "admin",
+              "dept_lead"
+            ],
+            "description": "The caller's tenant role; empty for plain members and in the shared default tenant"
+          },
+          "is_payer": {
+            "type": "boolean",
+            "description": "True when the caller is the tenant's payer"
           }
         }
       },
@@ -3138,6 +4424,360 @@
           "created_time": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "BatchTokenItem": {
+        "type": "object",
+        "required": [
+          "employee_ref"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Defaults to employee_ref"
+          },
+          "employee_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._@:-]{1,64}$"
+          },
+          "project_id": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0 = no project"
+          },
+          "remain_quota": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unlimited_quota": {
+            "type": "boolean"
+          },
+          "model_limits": {
+            "type": "string",
+            "description": "Comma separated model list; empty = no limit"
+          }
+        }
+      },
+      "BatchTokenCreate": {
+        "type": "object",
+        "required": [
+          "tokens"
+        ],
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/BatchTokenItem"
+            }
+          }
+        }
+      },
+      "BatchTokenResult": {
+        "type": "object",
+        "properties": {
+          "created": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "employee_ref": {
+                  "type": "string"
+                },
+                "project_id": {
+                  "type": "integer"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Plaintext key, returned only in this response"
+                }
+              }
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "description": "Employees that already had a live key; not re-issued",
+            "items": {
+              "type": "object",
+              "properties": {
+                "employee_ref": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "requested": {
+            "type": "integer"
+          }
+        }
+      },
+      "ProjectMember": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "tenant_role": {
+            "type": "string"
+          },
+          "added_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TenantInvite": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "One-time onboarding code; the full value is returned only when the invite is created (list responses carry code_prefix)"
+          },
+          "status": {
+            "type": "integer",
+            "description": "1 pending, 2 consumed, 3 revoked"
+          },
+          "expired_time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds, 0 = never"
+          },
+          "created_by_user_id": {
+            "type": "integer"
+          },
+          "consumed_by_account_id": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "consumed_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "member_role": {
+            "type": "string",
+            "enum": [
+              "",
+              "admin",
+              "dept_lead"
+            ]
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "revoked_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TenantInviteView": {
+        "type": "object",
+        "description": "List projection: the code prefix only, never the full code",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "code_prefix": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "expired_time": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "consumed_by_account_id": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "consumed_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "created_by_user_id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "member_role": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "revoked_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "used": {
+            "type": "boolean"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "expired": {
+            "type": "boolean"
+          }
+        }
+      },
+      "InviteCreate": {
+        "type": "object",
+        "properties": {
+          "ttl_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 720,
+            "default": 72
+          },
+          "member_role": {
+            "type": "string",
+            "enum": [
+              "",
+              "admin",
+              "dept_lead"
+            ]
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "MemberRoleSet": {
+        "type": "object",
+        "required": [
+          "tenant_role"
+        ],
+        "properties": {
+          "tenant_role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "dept_lead",
+              ""
+            ],
+            "description": "Empty string = plain member"
+          },
+          "payer": {
+            "type": "boolean",
+            "description": "Root route only: mark this user as the tenant payer (owner of admin-issued keys). Ignored on the tenant route."
+          }
+        }
+      },
+      "TenantAuditEvent": {
+        "type": "object",
+        "description": "Tenant-safe projection of an audit event: no hash chain, details redacted (channel ids, upstream keys and internal notes are masked)",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "actor_type": {
+            "type": "string"
+          },
+          "actor_id": {
+            "type": "integer"
+          },
+          "action": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "integer"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string"
+          }
+        }
+      },
+      "TenantModelAllowlist": {
+        "type": "object",
+        "properties": {
+          "platform_allowed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ceiling granted by the platform (names or trailing-* patterns)"
+          },
+          "platform_unrestricted": {
+            "type": "boolean",
+            "description": "True when the platform configured no ceiling"
+          },
+          "tenant_selected": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tenant_configured": {
+            "type": "boolean"
+          },
+          "effective": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "propagation_seconds": {
+            "type": "integer",
+            "description": "Present on PUT: upper bound before every replica serves the new list"
           }
         }
       }

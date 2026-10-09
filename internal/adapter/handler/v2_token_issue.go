@@ -144,8 +144,9 @@ func batchInvalid(c *gin.Context, index int, msg string) {
 // Idempotent per employee_ref: an employee that already has a live key in the
 // tenant is reported under "skipped" and not re-issued, so re-uploading a roster
 // is safe. The plaintext keys of the newly created tokens appear in this
-// response only. The keys are owned by the calling admin (the tenant's payer
-// identity), never by the employee, and cannot be trusted-gateway keys.
+// response only. The keys are owned by the tenant's payer (tenants.payer_user_id,
+// migration 048), never by the calling admin or the employee, and cannot be
+// trusted-gateway keys. A tenant without a payer answers 409 payer_not_set.
 func BatchCreateTokensV2(c *gin.Context) {
 	tc, err := middleware.GetTenantContext(c)
 	if err != nil {
@@ -234,7 +235,10 @@ func BatchCreateTokensV2(c *gin.Context) {
 		return
 	}
 
-	identityAccountID := repo.IdentityAccountIDForUser(tc.UserID)
+	ownerID, identityAccountID, ok := resolveKeyOwner(c, tc)
+	if !ok {
+		return
+	}
 	now := common.GetTimestamp()
 	var toCreate []*repo.Token
 	skipped := make([]gin.H, 0)
@@ -249,7 +253,7 @@ func BatchCreateTokensV2(c *gin.Context) {
 			return
 		}
 		toCreate = append(toCreate, &repo.Token{
-			UserId:             tc.UserID,
+			UserId:             ownerID,
 			TenantId:           tc.TenantID,
 			Name:               it.Name,
 			Key:                key,
@@ -316,6 +320,32 @@ func BatchCreateTokensV2(c *gin.Context) {
 			"requested": len(req.Tokens),
 		},
 	})
+}
+
+// resolveKeyOwner returns the user an admin-issued key is booked to: the
+// tenant's payer (a live member of the tenant) and that payer's platform
+// account. With no usable payer it replies 409 payer_not_set and returns
+// ok=false — it never falls back to the calling admin.
+func resolveKeyOwner(c *gin.Context, tc *middleware.TenantContext) (ownerID int, identityAccountID int64, ok bool) {
+	payer, err := repo.ResolveTenantPayer(tc.TenantID)
+	if err != nil {
+		common.SysError("resolve tenant payer: " + err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to resolve the tenant payer"})
+		return 0, 0, false
+	}
+	if payer == nil {
+		c.JSON(http.StatusConflict, gin.H{
+			"success":    false,
+			"message":    "This tenant has no payer set; ask the platform operator to designate one before issuing keys",
+			"error_code": errCodePayerNotSet,
+		})
+		return 0, 0, false
+	}
+	var acct int64
+	if payer.LurusAccountID != nil {
+		acct = *payer.LurusAccountID
+	}
+	return payer.Id, acct, true
 }
 
 func indexOfProject(items []batchTokenItem, pid int) int {

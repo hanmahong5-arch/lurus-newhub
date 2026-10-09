@@ -362,6 +362,8 @@ var requireTenantAdminAllowlist = map[string]bool{
 	"BatchCreateTokensV2":        true, // roster keys owned by the admin in their own tenant; never trusted-gateway keys
 	"checkEnterpriseTokenFields": true, // trusted_identity_headers is a tenant-admin decision about the tenant's own gateway key
 	"requireEmployeeRefAdmin":    true, // employee_ref is the tenant admin's own attribution roster for the tenant's keys
+	"tenantAuditScope":           true, // tenant audit trail: own-tenant rows only, details redacted, no hash chain / channel data
+	"tenantSelectionScope":       true, // tenant admin may only narrow the platform-granted model list
 }
 
 func TestRequireTenantAdminCallSites_Allowlisted(t *testing.T) {

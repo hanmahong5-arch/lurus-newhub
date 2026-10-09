@@ -87,6 +87,13 @@ func newEntEnv(t *testing.T, tenant string) *entEnv {
 		outsider: mk("ent-outsider", "other-tenant", entity.TenantRoleAdmin),
 	}
 
+	// Migration 048: admin-issued keys are booked to the tenant payer. Default
+	// the payer to the admin so the pre-048 scenarios keep their meaning; the
+	// payer tests overwrite it.
+	if err := db.Model(&repo.Tenant{}).Where("id = ?", tenant).Update("payer_user_id", int64(e.admin.Id)).Error; err != nil {
+		t.Fatalf("payer: %v", err)
+	}
+
 	r := gin.New()
 	auth := func(c *gin.Context) {
 		uid, _ := strconv.Atoi(c.GetHeader("X-U"))
@@ -121,6 +128,11 @@ func newEntEnv(t *testing.T, tenant string) *entEnv {
 	g.POST("/projects/:id/members", AddProjectMemberV2)
 	g.DELETE("/projects/:id/members", RemoveProjectMemberV2)
 	g.POST("/invites", IssueMyTenantInviteV2)
+	g.GET("/invites", ListMyTenantInvitesV2)
+	g.POST("/invites/redeem", RedeemMyTenantInviteV2)
+	g.DELETE("/invites/:id", RevokeMyTenantInviteV2)
+	g.PUT("/members/:user_id/role", SetTenantMemberRoleV2)
+	g.GET("/user/me", GetSelfV2)
 	e.r = r
 	return e
 }

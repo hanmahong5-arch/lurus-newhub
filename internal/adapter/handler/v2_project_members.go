@@ -25,6 +25,11 @@ const (
 	maxProjectExternalCodeLen = 64
 
 	errCodeRoleForbiddenInDefault = "TENANT_ROLE_FORBIDDEN_IN_DEFAULT"
+
+	// An invite never lives forever: omitted ttl_hours means 72h, the ceiling is 30 days.
+	defaultInviteTTLHours   = 72
+	maxInviteTTLHours       = 30 * 24
+	inviteErrCodeTTLInvalid = "INVITE_TTL_INVALID"
 )
 
 // validateExternalCode checks a project external_code (empty = none): length,
@@ -229,10 +234,19 @@ func issueInvite(c *gin.Context, tenantID string, actorID int, req inviteIssueRe
 	if !validateInviteGrant(c, tenantID, req.MemberRole, req.ProjectId) {
 		return
 	}
-	var ttl time.Duration
-	if req.TTLHours > 0 {
-		ttl = time.Duration(req.TTLHours) * time.Hour
+	if req.TTLHours < 0 || req.TTLHours > maxInviteTTLHours {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "ttl_hours must be between 1 and " + strconv.Itoa(maxInviteTTLHours) + " (default " + strconv.Itoa(defaultInviteTTLHours) + ")",
+			"error_code": inviteErrCodeTTLInvalid,
+		})
+		return
 	}
+	ttlHours := req.TTLHours
+	if ttlHours == 0 {
+		ttlHours = defaultInviteTTLHours
+	}
+	ttl := time.Duration(ttlHours) * time.Hour
 	invite, err := repo.CreateTenantInviteWithGrant(tenantID, actorID, ttl, req.MemberRole, req.ProjectId)
 	if err != nil {
 		common.SysError("issueInvite: create failed: " + err.Error())

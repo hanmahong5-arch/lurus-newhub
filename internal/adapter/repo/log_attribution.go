@@ -40,7 +40,8 @@ func convertLogToSearchLog(log *Log) *search.Log {
 		// corresponding Meilisearch filter silently return nothing rather
 		// than error, so "search logs by project" would look broken with no
 		// clue why.
-		ProjectId: log.ProjectId,
+		ProjectId:   log.ProjectId,
+		EmployeeRef: log.EmployeeRef,
 	}
 }
 

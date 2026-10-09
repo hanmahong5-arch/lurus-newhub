@@ -34,7 +34,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/channel.go":              2433,
 	"internal/adapter/handler/deployment.go":           810,
 	"internal/adapter/handler/internal_api_ext.go":     1057,
-	"internal/adapter/handler/oauth.go":                997,  // +19 (2026-09-22 hotfix): GetSessionInfo resolves tenant_slug from the user's tenant when the session carries none — the only path by which an already-established console session can learn its own routing slug without a re-login
+	"internal/adapter/handler/oauth.go":                979,  // -18 (2026-10, migration 048): the tenant_slug recovery block moved as-is to session_tenant_slug.go, paying for tenant_role / is_payer in GetSessionInfo; was +19 (2026-09-22 hotfix): GetSessionInfo resolves tenant_slug from the user's tenant when the session carries none — the only path by which an already-established console session can learn its own routing slug without a re-login
 	"internal/adapter/handler/relay.go":                954,  // -25 (cycle 21): fastTokenCountMetaForPricing moved to relay_token_meta.go, paying for the system one dispatch
 	"internal/adapter/middleware/auth.go":              726,  // -106 (cycle 14): PlaygroundAuth moved to auth_playground.go, paying for the wire-language fixes in resolveSessionIdentity/TokenAuth; -75 (cycle 18 L3): the ValidateUserToken error → rejection mapping moved to auth_token_reject.go; -6 (R57): RootAuth moved to platform_root_shadow.go
 	"internal/adapter/middleware/oidc_auth.go":         1214, // +8 (2026-09-23): JWKSManager.refreshInterval — the refresh goroutine raced tests on jwksRefreshInterval
@@ -44,7 +44,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/repo/channel.go":                 1226,
 	"internal/adapter/repo/log.go":                     989, // lowered from 1016 after log_tenant_resolve/attribution moves; was +3 consume-log write-failure counter (2026-09-28), paid for by moving resolveLogTenantID to log_tenant_resolve.go (-19)
 	"internal/adapter/repo/option.go":                  948,
-	"internal/adapter/repo/token.go":                   784, // lowered from 809 after attribution moves; was +15 (cycle 18 L3): ErrTokenExpired/ErrTokenLookupFailed sentinels so TokenAuth can tell revoked/expired/DB-down apart from an unknown key
+	"internal/adapter/repo/token.go":                   786, // +2 (lane A3, migration 049): Token.SourceProduct mirror field + comment (must stay byte-identical to entity); was 784, lowered from 809 after attribution moves; was +15 (cycle 18 L3): ErrTokenExpired/ErrTokenLookupFailed sentinels so TokenAuth can tell revoked/expired/DB-down apart from an unknown key
 	"internal/adapter/repo/user.go":                    1206,
 	"internal/app/convert.go":                          1304,
 	"internal/app/quota.go":                            1253, // -136 (cycle 18 L2): PostConsumeQuota's Phase 5 (the platform wallet leg: settle/park, release, legacy debit, zero-usage release) moved as-is to quota_settle.go; earlier: +3 record the wallet charge on both settlement branches (migration 041); -1 (legacy debit failure arm moved to billing_debit_outbox.go); +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix)

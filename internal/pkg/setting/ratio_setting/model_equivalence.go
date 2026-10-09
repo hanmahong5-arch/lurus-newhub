@@ -51,6 +51,24 @@ func ResolveSourceProduct(header string) string {
 	return DefaultSourceProduct
 }
 
+// IsAllowedSourceProduct reports whether p (case-insensitive) is on the allow-list.
+func IsAllowedSourceProduct(p string) bool {
+	return allowedSourceProducts[strings.ToLower(strings.TrimSpace(p))]
+}
+
+// ResolveSourceProductWithDefault is ResolveSourceProduct with the token-level
+// default (tier 2): an allow-listed header wins; otherwise the key's bound
+// product (if still allow-listed); otherwise DefaultSourceProduct.
+func ResolveSourceProductWithDefault(header, tokenDefault string) string {
+	if h := strings.ToLower(strings.TrimSpace(header)); h != "" && allowedSourceProducts[h] {
+		return h
+	}
+	if t := strings.ToLower(strings.TrimSpace(tokenDefault)); t != "" && allowedSourceProducts[t] {
+		return t
+	}
+	return DefaultSourceProduct
+}
+
 // ── Phase 1: model equivalence (savings analyzer) ───────────────────────────
 
 // ModelEquivalence describes a curated, clearly-heuristic mapping from a model

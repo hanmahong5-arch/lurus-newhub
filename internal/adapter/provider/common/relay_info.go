@@ -564,7 +564,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		// so every GenRelayInfo* entry point carries it — including MJ/Task,
 		// which build RelayInfo directly and never pass through Relay().
 		// Unknown/absent header -> the default product id.
-		SourceProduct: ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader)),
+		SourceProduct: ratio_setting.ResolveSourceProductWithDefault(c.GetHeader(ratio_setting.SourceProductHeader), common.GetContextKeyString(c, constant.ContextKeyTokenSourceProduct)),
 		// L2-REQUEST-IDENTITY: request-scoped identity carried the same way
 		// SourceProduct is — resolved once here so every entry point
 		// (including MJ/Task, which build RelayInfo directly) has it.
