@@ -17,6 +17,14 @@ import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authe
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
 import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenticated/models/index'
 import { Route as AuthenticatedUsageLogsIndexRouteImport } from './routes/_authenticated/usage-logs/index'
+import { Route as AuthenticatedOpsChannelsIndexRouteImport } from './routes/_authenticated/ops/channels/index'
+import { Route as AuthenticatedOpsOverviewIndexRouteImport } from './routes/_authenticated/ops/overview/index'
+import { Route as AuthenticatedOpsRulesIndexRouteImport } from './routes/_authenticated/ops/rules/index'
+import { Route as AuthenticatedOrgBillingIndexRouteImport } from './routes/_authenticated/org/billing/index'
+import { Route as AuthenticatedOrgDepartmentsIndexRouteImport } from './routes/_authenticated/org/departments/index'
+import { Route as AuthenticatedOrgKeysBatchIndexRouteImport } from './routes/_authenticated/org/keys-batch/index'
+import { Route as AuthenticatedOrgMembersIndexRouteImport } from './routes/_authenticated/org/members/index'
+import { Route as AuthenticatedOrgPolicyIndexRouteImport } from './routes/_authenticated/org/policy/index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -60,6 +68,54 @@ const AuthenticatedUsageLogsIndexRoute =
     path: '/usage-logs/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedOpsChannelsIndexRoute =
+  AuthenticatedOpsChannelsIndexRouteImport.update({
+    id: '/ops/channels/',
+    path: '/ops/channels/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedOpsOverviewIndexRoute =
+  AuthenticatedOpsOverviewIndexRouteImport.update({
+    id: '/ops/overview/',
+    path: '/ops/overview/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedOpsRulesIndexRoute =
+  AuthenticatedOpsRulesIndexRouteImport.update({
+    id: '/ops/rules/',
+    path: '/ops/rules/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedOrgBillingIndexRoute =
+  AuthenticatedOrgBillingIndexRouteImport.update({
+    id: '/org/billing/',
+    path: '/org/billing/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedOrgDepartmentsIndexRoute =
+  AuthenticatedOrgDepartmentsIndexRouteImport.update({
+    id: '/org/departments/',
+    path: '/org/departments/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedOrgKeysBatchIndexRoute =
+  AuthenticatedOrgKeysBatchIndexRouteImport.update({
+    id: '/org/keys-batch/',
+    path: '/org/keys-batch/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedOrgMembersIndexRoute =
+  AuthenticatedOrgMembersIndexRouteImport.update({
+    id: '/org/members/',
+    path: '/org/members/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedOrgPolicyIndexRoute =
+  AuthenticatedOrgPolicyIndexRouteImport.update({
+    id: '/org/policy/',
+    path: '/org/policy/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -69,6 +125,14 @@ export interface FileRoutesByFullPath {
   '/keys/': typeof AuthenticatedKeysIndexRoute
   '/models/': typeof AuthenticatedModelsIndexRoute
   '/usage-logs/': typeof AuthenticatedUsageLogsIndexRoute
+  '/ops/channels/': typeof AuthenticatedOpsChannelsIndexRoute
+  '/ops/overview/': typeof AuthenticatedOpsOverviewIndexRoute
+  '/ops/rules/': typeof AuthenticatedOpsRulesIndexRoute
+  '/org/billing/': typeof AuthenticatedOrgBillingIndexRoute
+  '/org/departments/': typeof AuthenticatedOrgDepartmentsIndexRoute
+  '/org/keys-batch/': typeof AuthenticatedOrgKeysBatchIndexRoute
+  '/org/members/': typeof AuthenticatedOrgMembersIndexRoute
+  '/org/policy/': typeof AuthenticatedOrgPolicyIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -78,6 +142,14 @@ export interface FileRoutesByTo {
   '/keys': typeof AuthenticatedKeysIndexRoute
   '/models': typeof AuthenticatedModelsIndexRoute
   '/usage-logs': typeof AuthenticatedUsageLogsIndexRoute
+  '/ops/channels': typeof AuthenticatedOpsChannelsIndexRoute
+  '/ops/overview': typeof AuthenticatedOpsOverviewIndexRoute
+  '/ops/rules': typeof AuthenticatedOpsRulesIndexRoute
+  '/org/billing': typeof AuthenticatedOrgBillingIndexRoute
+  '/org/departments': typeof AuthenticatedOrgDepartmentsIndexRoute
+  '/org/keys-batch': typeof AuthenticatedOrgKeysBatchIndexRoute
+  '/org/members': typeof AuthenticatedOrgMembersIndexRoute
+  '/org/policy': typeof AuthenticatedOrgPolicyIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -89,6 +161,14 @@ export interface FileRoutesById {
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
   '/_authenticated/usage-logs/': typeof AuthenticatedUsageLogsIndexRoute
+  '/_authenticated/ops/channels/': typeof AuthenticatedOpsChannelsIndexRoute
+  '/_authenticated/ops/overview/': typeof AuthenticatedOpsOverviewIndexRoute
+  '/_authenticated/ops/rules/': typeof AuthenticatedOpsRulesIndexRoute
+  '/_authenticated/org/billing/': typeof AuthenticatedOrgBillingIndexRoute
+  '/_authenticated/org/departments/': typeof AuthenticatedOrgDepartmentsIndexRoute
+  '/_authenticated/org/keys-batch/': typeof AuthenticatedOrgKeysBatchIndexRoute
+  '/_authenticated/org/members/': typeof AuthenticatedOrgMembersIndexRoute
+  '/_authenticated/org/policy/': typeof AuthenticatedOrgPolicyIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -100,8 +180,31 @@ export interface FileRouteTypes {
     | '/keys/'
     | '/models/'
     | '/usage-logs/'
+    | '/ops/channels/'
+    | '/ops/overview/'
+    | '/ops/rules/'
+    | '/org/billing/'
+    | '/org/departments/'
+    | '/org/keys-batch/'
+    | '/org/members/'
+    | '/org/policy/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/404' | '/500' | '/dashboard' | '/keys' | '/models' | '/usage-logs'
+  to:
+    | '/'
+    | '/404'
+    | '/500'
+    | '/dashboard'
+    | '/keys'
+    | '/models'
+    | '/usage-logs'
+    | '/ops/channels'
+    | '/ops/overview'
+    | '/ops/rules'
+    | '/org/billing'
+    | '/org/departments'
+    | '/org/keys-batch'
+    | '/org/members'
+    | '/org/policy'
   id:
     | '__root__'
     | '/'
@@ -112,6 +215,14 @@ export interface FileRouteTypes {
     | '/_authenticated/keys/'
     | '/_authenticated/models/'
     | '/_authenticated/usage-logs/'
+    | '/_authenticated/ops/channels/'
+    | '/_authenticated/ops/overview/'
+    | '/_authenticated/ops/rules/'
+    | '/_authenticated/org/billing/'
+    | '/_authenticated/org/departments/'
+    | '/_authenticated/org/keys-batch/'
+    | '/_authenticated/org/members/'
+    | '/_authenticated/org/policy/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -179,6 +290,62 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedUsageLogsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/ops/channels/': {
+      id: '/_authenticated/ops/channels/'
+      path: '/ops/channels'
+      fullPath: '/ops/channels/'
+      preLoaderRoute: typeof AuthenticatedOpsChannelsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/ops/overview/': {
+      id: '/_authenticated/ops/overview/'
+      path: '/ops/overview'
+      fullPath: '/ops/overview/'
+      preLoaderRoute: typeof AuthenticatedOpsOverviewIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/ops/rules/': {
+      id: '/_authenticated/ops/rules/'
+      path: '/ops/rules'
+      fullPath: '/ops/rules/'
+      preLoaderRoute: typeof AuthenticatedOpsRulesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/org/billing/': {
+      id: '/_authenticated/org/billing/'
+      path: '/org/billing'
+      fullPath: '/org/billing/'
+      preLoaderRoute: typeof AuthenticatedOrgBillingIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/org/departments/': {
+      id: '/_authenticated/org/departments/'
+      path: '/org/departments'
+      fullPath: '/org/departments/'
+      preLoaderRoute: typeof AuthenticatedOrgDepartmentsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/org/keys-batch/': {
+      id: '/_authenticated/org/keys-batch/'
+      path: '/org/keys-batch'
+      fullPath: '/org/keys-batch/'
+      preLoaderRoute: typeof AuthenticatedOrgKeysBatchIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/org/members/': {
+      id: '/_authenticated/org/members/'
+      path: '/org/members'
+      fullPath: '/org/members/'
+      preLoaderRoute: typeof AuthenticatedOrgMembersIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/org/policy/': {
+      id: '/_authenticated/org/policy/'
+      path: '/org/policy'
+      fullPath: '/org/policy/'
+      preLoaderRoute: typeof AuthenticatedOrgPolicyIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
   }
 }
 
@@ -187,6 +354,14 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
   AuthenticatedUsageLogsIndexRoute: typeof AuthenticatedUsageLogsIndexRoute
+  AuthenticatedOpsChannelsIndexRoute: typeof AuthenticatedOpsChannelsIndexRoute
+  AuthenticatedOpsOverviewIndexRoute: typeof AuthenticatedOpsOverviewIndexRoute
+  AuthenticatedOpsRulesIndexRoute: typeof AuthenticatedOpsRulesIndexRoute
+  AuthenticatedOrgBillingIndexRoute: typeof AuthenticatedOrgBillingIndexRoute
+  AuthenticatedOrgDepartmentsIndexRoute: typeof AuthenticatedOrgDepartmentsIndexRoute
+  AuthenticatedOrgKeysBatchIndexRoute: typeof AuthenticatedOrgKeysBatchIndexRoute
+  AuthenticatedOrgMembersIndexRoute: typeof AuthenticatedOrgMembersIndexRoute
+  AuthenticatedOrgPolicyIndexRoute: typeof AuthenticatedOrgPolicyIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -194,6 +369,14 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,
   AuthenticatedUsageLogsIndexRoute: AuthenticatedUsageLogsIndexRoute,
+  AuthenticatedOpsChannelsIndexRoute: AuthenticatedOpsChannelsIndexRoute,
+  AuthenticatedOpsOverviewIndexRoute: AuthenticatedOpsOverviewIndexRoute,
+  AuthenticatedOpsRulesIndexRoute: AuthenticatedOpsRulesIndexRoute,
+  AuthenticatedOrgBillingIndexRoute: AuthenticatedOrgBillingIndexRoute,
+  AuthenticatedOrgDepartmentsIndexRoute: AuthenticatedOrgDepartmentsIndexRoute,
+  AuthenticatedOrgKeysBatchIndexRoute: AuthenticatedOrgKeysBatchIndexRoute,
+  AuthenticatedOrgMembersIndexRoute: AuthenticatedOrgMembersIndexRoute,
+  AuthenticatedOrgPolicyIndexRoute: AuthenticatedOrgPolicyIndexRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =

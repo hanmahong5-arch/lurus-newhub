@@ -13,6 +13,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -23,9 +24,9 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { BRAND_NAME, LEGACY_CONSOLE_URL, PRODUCT_NAME } from '@/lib/constants'
-import { currentUserQueryOptions } from '@/lib/user'
+import { currentUserQueryOptions, userAccess } from '@/lib/user'
 
-import { visibleNavItems } from './nav'
+import { visibleNavGroups } from './nav'
 import { PageFooterProvider } from './page-footer'
 import { UserMenu } from './user-menu'
 
@@ -45,7 +46,7 @@ function AppSidebar() {
   const { t } = useTranslation()
   const { data: user } = useQuery(currentUserQueryOptions)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const items = visibleNavItems(user?.role)
+  const groups = visibleNavGroups(userAccess(user))
 
   return (
     <Sidebar collapsible='icon' variant='inset'>
@@ -53,24 +54,27 @@ function AppSidebar() {
         <Brand />
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {items.map((item) => (
-                <SidebarMenuItem key={item.id}>
-                  <SidebarMenuButton
-                    isActive={pathname.startsWith(item.to)}
-                    tooltip={t(item.label)}
-                    render={<Link to={item.to} />}
-                  >
-                    <item.icon />
-                    <span>{t(item.label)}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {groups.map((group) => (
+          <SidebarGroup key={group.id}>
+            <SidebarGroupLabel>{t(group.label)}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {group.items.map((item) => (
+                  <SidebarMenuItem key={item.id}>
+                    <SidebarMenuButton
+                      isActive={pathname.startsWith(item.to)}
+                      tooltip={t(item.label)}
+                      render={<Link to={item.to} />}
+                    >
+                      <item.icon />
+                      <span>{t(item.label)}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenu>
