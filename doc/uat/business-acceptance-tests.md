@@ -10,6 +10,26 @@
 >
 > **这是待执行的测试计划，不是执行报告。** 本文任何一行都不代表"已通过"——PASS/FAIL 由执行者在签字表里填。
 
+## 可执行化索引（2026-10-05 起）
+
+以下用例已有**可执行实现**,每个 PR 由 `.github/workflows/acceptance.yml` 在本地全栈上跑(`bash scripts/acceptance-stack.sh`,说明见 `TESTING.md` 第 2 层):真二进制 + 真迁移 + r6-stage 环境(统一计费开、信用池 enforce),上游与 platform 钱包由 `cmd/fakeupstream` 假冒。金额一律**逐单位精确断言**,对照的是手写的厂商牌价 `web/tests/acceptance/fixtures/pricebook.ts`;每条都带一个必须失败的反向对照。与下文人工步骤的差异:客户是**已绑定 platform 账户**的用户(生产形态),所以额外核对 platform 钱包的人民币扣款(按其 0.0001 元精度入账)与日志 `charged_cny4`。
+
+| 用例 | 实现 | 反向对照 |
+|------|------|----------|
+| TC-M1 | `web/tests/acceptance/tc-m1-multi-format-billing.spec.ts` | 不存在的 key → 401 且零扣款;同一订单号重复充值不二次入账;日志页按别的 token 名过滤为空 |
+| TC-M2 | `web/tests/acceptance/tc-m2-cross-format-rounding.spec.ts`(用量取 1001/3,牌价 151.95 → 四舍五入 152、截断 151) | 多 1 个输出 token 必须变成 153 |
+| TC-M4 | `web/tests/acceptance/tc-m4-quota-exhausted-redeem-retry.spec.ts` | 额度 1 的 token → 402 且零扣款;同码重放 400 且不入账 |
+| TC-C3 | `web/tests/acceptance/tc-c3-redeem-reconciliation.spec.ts` | 少一位的码 → 400;同码重放 400 且不入账 |
+| TC-G7 | `web/tests/acceptance/tc-g7-revoked-token.spec.ts`(禁用 + 删除;兑换码重放由 TC-M4/TC-C3 覆盖) | 禁用/删除后同一请求 401、上游零调用、零扣款 |
+| TC-P1(新增) | `web/tests/acceptance/tc-p1-stored-price-table.spec.ts`:存储的 ModelRatio 表里没有 System One 行(生产形态)时,jev-latest 仍按牌价 $0.042/1M 计费 | 运营方自己写的行优先(改成 2 倍价必须按 2 倍扣) |
+| TC-E1 | `web/tests/acceptance/tc-e1-identity-headers.spec.ts`(可信网关 key 的员工头/部门头 → 日志 employee_ref/project_id 与按部门、员工的账单逐分对齐) | 普通 key 带同样的头 → 归属被忽略 |
+| TC-E2 | `web/tests/acceptance/tc-e2-department-scope.spec.ts`(部门负责人只见本部门的日志、导出、账单与 /logs/stat) | 查别的部门 → 404 且与不存在的部门不可区分;scope=tenant 导出 → 403 |
+| TC-E3 | `web/tests/acceptance/tc-e3-statement-reconciles.spec.ts`(月账单 rows 之和 = totals = fake platform 实扣,逐分) | 见 spec 内 reverseControl 步骤 |
+| TC-E4 | `web/tests/acceptance/tc-e4-admin-boundary.spec.ts`(客户租户管理员全局 role=1,运营方 v1 路由拒绝,tenant 日志无 admin_info) | 运营方同类行带 admin_info,v1 路由放行 |
+| TC-E5 | `web/tests/acceptance/tc-e5-rate-limit-failover.spec.ts`(429 经另一渠道成功、各账本只动一次调用的量) | 无故障时一次调用一次尝试;冷却期内不回落到冷却渠道 |
+
+其余用例仍按下文人工执行,逐步转为可执行(计划阶段 4)。
+
 ## 目标环境（双轨）
 
 | 轨 | Base URL | 身份 | 计费 | 关键差异 |
