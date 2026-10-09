@@ -71,6 +71,8 @@ export default defineConfig({
       // (60 / 54 / 55 / 60, from a 63 / 58 / 59 / 64 measurement on
       // 2026-08-20) had drifted 14 points below what the suite actually
       // covered, so a whole page could have lost its tests unnoticed.
+      // FROZEN since 2026-10-05 (TESTING.md, "Coverage: frozen"): never
+      // lowered, no longer raised; new test effort goes to tests/acceptance.
       thresholds: {
         statements: 71,
         branches: 67,
