@@ -634,6 +634,100 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /api/v2/{tenant_slug}/billing/statement:
+    get:
+      tags: [Billing]
+      summary: Monthly Statement
+      description: |
+        Tenant monthly statement grouped by project, employee or token. The
+        month is a calendar month in the requested time zone. Tenant admins
+        see the whole tenant; department leads see only their own projects
+        (the unassigned project 0 bucket is hidden). Totals are exactly the
+        sum of the rows. Amounts are in 0.0001 CNY.
+      operationId: getBillingStatementV2
+      security:
+        - OIDCBearer: []
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+        - name: month
+          in: query
+          description: 'Calendar month, YYYY-MM (default is the current month in tz)'
+          schema:
+            type: string
+            pattern: '^[0-9]{4}-[0-9]{2}$'
+        - name: tz
+          in: query
+          description: IANA time zone
+          schema:
+            type: string
+            default: Asia/Shanghai
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [project, employee, token]
+            default: project
+        - name: format
+          in: query
+          description: csv returns a text/csv download
+          schema:
+            type: string
+            enum: [csv]
+      responses:
+        '200':
+          description: Statement rows and totals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      month:
+                        type: string
+                      tz:
+                        type: string
+                      group_by:
+                        type: string
+                      start:
+                        type: integer
+                        format: int64
+                      end:
+                        type: integer
+                        format: int64
+                      rows:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/StatementRow'
+                      totals:
+                        $ref: '#/components/schemas/StatementRow'
+            text/csv:
+              schema:
+                type: string
+        '400':
+          description: Invalid month, tz or group_by
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Neither tenant admin nor department lead
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Statement aggregation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/v2/{tenant_slug}/billing/topups:
     get:
       tags: [Billing]
@@ -1702,6 +1796,15 @@ components:
         total:
           type: integer
 
+    StatementRow:
+      type: object
+      properties:
+        key: {type: string}
+        label: {type: string}
+        requests: {type: integer, format: int64}
+        quota: {type: integer, format: int64}
+        charged_cny4: {type: integer, format: int64}
+        priced_cny4: {type: integer, format: int64}
     InvoiceMonth:
       type: object
       description: One calendar month of billable spend.

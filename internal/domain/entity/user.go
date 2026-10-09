@@ -43,7 +43,20 @@ type User struct {
 	// newhub user is first bound to a platform account; uniqueIndex
 	// prevents double-binding.
 	LurusAccountID *int64 `json:"lurus_account_id,omitempty" gorm:"type:bigint;column:lurus_account_id;uniqueIndex"`
+	// TenantRole is the user's role INSIDE their own tenant (migration 046):
+	// "" (plain member), "admin" or "dept_lead". It is deliberately separate
+	// from the integer Role above — a global role >= 10 opens the v1 AdminAuth
+	// routes (channels, users, all logs), which a customer's admin must never
+	// reach. Mirrors repo.User; both tags must move together.
+	TenantRole string `json:"tenant_role" gorm:"type:varchar(16);not null;default:''"`
 }
+
+// Tenant-scoped role values stored in users.tenant_role.
+const (
+	TenantRoleNone     = ""
+	TenantRoleAdmin    = "admin"
+	TenantRoleDeptLead = "dept_lead"
+)
 
 func (user *User) ToBaseUser() *UserBase {
 	return &UserBase{
@@ -54,6 +67,8 @@ func (user *User) ToBaseUser() *UserBase {
 		Username:       user.Username,
 		Setting:        user.Setting,
 		Email:          user.Email,
+		TenantId:       user.TenantId,
+		TenantRole:     user.TenantRole,
 		DailyQuota:     user.DailyQuota,
 		DailyUsed:      user.DailyUsed,
 		LastDailyReset: user.LastDailyReset,
@@ -110,7 +125,9 @@ type UserBase struct {
 	// the DB on every request (not just status). 0 means "not populated" —
 	// caches built before this field existed, or written without a DB hit —
 	// and callers must treat that as unknown rather than as a demotion.
-	Role           int    `json:"role"`
+	Role int `json:"role"`
+	// TenantRole mirrors users.tenant_role (migration 046); "" when unknown.
+	TenantRole     string `json:"tenant_role"`
 	Username       string `json:"username"`
 	Setting        string `json:"setting"`
 	DailyQuota     int    `json:"daily_quota"`

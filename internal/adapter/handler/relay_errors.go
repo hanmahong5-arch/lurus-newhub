@@ -26,7 +26,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	}
 
 	// OpenRouter free-key pool: rate-limited keys get a per-key cooldown rather
-	// than being treated as permanently disabled. No-op for non-OpenRouter or non-429.
+	// than being treated as permanently disabled. Applies to every channel type; no-op for non-429.
 	AsyncGo(func() {
 		openrouter_pool.MaybeMarkCooldown(channelError, err)
 	})

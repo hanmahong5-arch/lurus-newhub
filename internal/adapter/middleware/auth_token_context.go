@@ -49,6 +49,10 @@ func SetupContextForToken(c *gin.Context, token *repo.Token, parts ...string) er
 	// enters the relay path — a log row that misses it is permanently
 	// unattributable, so it must not be conditional on anything.
 	common.SetContextKey(c, constant.ContextKeyProjectId, token.ProjectId)
+	// Enterprise attribution (migration 045): the token's employee, and — for
+	// a trusted gateway key only — the X-Lurus-Employee / X-Lurus-Dept
+	// overrides. Must run after the project line above (it may replace it).
+	applyIdentityAttribution(c, token)
 	// Carry identity account ID from token for platform billing (if not already set by session auth).
 	if token.IdentityAccountID > 0 {
 		if _, exists := c.Get("identity_account_id"); !exists {

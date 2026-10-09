@@ -18,7 +18,9 @@ import (
 // gate as the sibling tenant/credit-pool admin groups in tenant.go /
 // tenant_credit_pool.go — a tenant invite is a platform-wide onboarding
 // credential, not a tenant-self-service resource, so there is no
-// tenant-scoped counterpart.
+// tenant-scoped counterpart for the root-issued codes. Tenant admins mint their
+// own grant-bearing invites through IssueMyTenantInviteV2
+// (POST /api/v2/:tenant_slug/invites).
 
 // IssueTenantInvite mints a one-time onboarding code for tenantID.
 // Route: POST /api/v2/admin/tenants/:id/invites
@@ -38,38 +40,15 @@ func IssueTenantInvite(c *gin.Context) {
 		return
 	}
 
-	var req struct {
-		TTLHours int `json:"ttl_hours"`
-	}
-	// An empty body is valid (no-expiry invite) — only reject a malformed one.
+	var req inviteIssueRequest
+	// An empty body is valid (no-expiry invite) - only reject a malformed one.
 	if c.Request.ContentLength > 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid request: " + err.Error()})
 			return
 		}
 	}
-	var ttl time.Duration
-	if req.TTLHours > 0 {
-		ttl = time.Duration(req.TTLHours) * time.Hour
-	}
-
-	actorID := c.GetInt("id")
-	invite, err := repo.CreateTenantInvite(tenantID, actorID, ttl)
-	if err != nil {
-		common.SysError("IssueTenantInvite: create failed: " + err.Error())
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to create invite"})
-		return
-	}
-
-	// Audit detail carries the invite id and a code PREFIX only — the full
-	// code is a live onboarding credential and the audit log is readable by
-	// every audit-scope holder, so recording it verbatim would leak pending
-	// codes to anyone with audit export.
-	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, actorID,
-		governance.ActionTenantInviteIssued, governance.ResourceTenant, 0,
-		tenantID+":"+strconv.Itoa(invite.Id)+":"+invite.Code[:8]+"…"))
-
-	c.JSON(http.StatusCreated, gin.H{"success": true, "data": invite})
+	issueInvite(c, tenantID, c.GetInt("id"), req)
 }
 
 // tenantInviteView is the admin list projection of a TenantInvite. It

@@ -264,6 +264,17 @@ func Distribute() func(c *gin.Context) {
 					// below instead — see the 404/503 site further down.
 					message := fmt.Sprintf("failed to select an available channel for model %s in group %s: %s", modelRequest.Model, showGroup, err.Error())
 					common.SysLog("distributor: " + message)
+					// Every candidate cooling after upstream 429s is a "back off"
+					// answer, not a model-not-found: own code, and a Retry-After
+					// the client can honour.
+					if errors.Is(err, app.ErrAllChannelsCooling) {
+						secs := app.CoolingRetryAfterSeconds(err)
+						c.Header("Retry-After", strconv.FormatInt(secs, 10))
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable,
+							fmt.Sprintf("all channels for model %s in group %s are rate-limited upstream; retry in ~%ds", modelRequest.Model, showGroup, secs),
+							string(types.ErrorCodeAllChannelsCooling))
+						return
+					}
 					// 如果错误，但是渠道不为空，说明是数据库一致性问题
 					//if channel != nil {
 					//	common.SysError(fmt.Sprintf("渠道不存在：%d", channel.Id))

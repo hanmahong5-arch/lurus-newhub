@@ -137,3 +137,59 @@ func TestMaybeMarkCooldown_ChannelNotFound_NoOp(t *testing.T) {
 	h.Set("Retry-After", "120")
 	MaybeMarkCooldown(ce, &types.NewAPIError{StatusCode: 429, UpstreamHeader: h})
 }
+
+// First attempt: the ChannelError does not yet know the channel is multi-key.
+// The real mode comes from the channel row, so only the used key is parked and
+// the channel itself stays routable.
+func TestMaybeMarkCooldown_FirstAttemptFlagFalse_CoolsOnlyTheKey(t *testing.T) {
+	setupPoolTestDB(t)
+
+	chID := seedMultiKeyChannel(t, 2, common.ChannelStatusEnabled, map[int]int64{})
+	setChannelType(t, chID, constant.ChannelTypeOpenAI)
+	keys := keysOf(t, chID)
+
+	ce := types.ChannelError{
+		ChannelId:   chID,
+		ChannelType: constant.ChannelTypeOpenAI,
+		IsMultiKey:  false,
+		AutoBan:     true,
+		UsingKey:    keys[1],
+	}
+	h := http.Header{}
+	h.Set("Retry-After", "120")
+	MaybeMarkCooldown(ce, &types.NewAPIError{StatusCode: 429, UpstreamHeader: h})
+
+	ch := reloadChannel(t, chID)
+	if _, ok := ch.ChannelInfo.MultiKeyCooldownUntil[1]; !ok {
+		t.Fatalf("key 1 should be cooling, map=%v", ch.ChannelInfo.MultiKeyCooldownUntil)
+	}
+	if _, ok := ch.ChannelInfo.MultiKeyCooldownUntil[0]; ok {
+		t.Error("key 0 must stay healthy")
+	}
+	if ch.Status != common.ChannelStatusEnabled {
+		t.Errorf("channel must stay Enabled, got %d", ch.Status)
+	}
+}
+
+// A non-OpenRouter channel excluded from auto-ban keeps its status even when
+// its last key parks.
+func TestMaybeMarkCooldown_NonOpenRouterAutoBanOff_KeepsChannelEnabled(t *testing.T) {
+	setupPoolTestDB(t)
+
+	chID := seedMultiKeyChannel(t, 1, common.ChannelStatusEnabled, map[int]int64{})
+	setChannelType(t, chID, constant.ChannelTypeOpenAI)
+	keys := keysOf(t, chID)
+
+	ce := types.ChannelError{ChannelId: chID, ChannelType: constant.ChannelTypeOpenAI, AutoBan: false, UsingKey: keys[0]}
+	h := http.Header{}
+	h.Set("Retry-After", "120")
+	MaybeMarkCooldown(ce, &types.NewAPIError{StatusCode: 429, UpstreamHeader: h})
+
+	ch := reloadChannel(t, chID)
+	if _, ok := ch.ChannelInfo.MultiKeyCooldownUntil[0]; !ok {
+		t.Fatalf("last key should still be parked, map=%v", ch.ChannelInfo.MultiKeyCooldownUntil)
+	}
+	if ch.Status != common.ChannelStatusEnabled {
+		t.Errorf("auto-ban-off channel must keep Enabled status, got %d", ch.Status)
+	}
+}
