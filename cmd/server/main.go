@@ -22,6 +22,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app/hub"
 	"github.com/LurusTech/lurus-hub/internal/app/openrouter_pool"
 	openrouter_sync "github.com/LurusTech/lurus-hub/internal/app/openrouter_sync"
+	"github.com/LurusTech/lurus-hub/internal/app/planquota"
 	"github.com/LurusTech/lurus-hub/internal/lifecycle"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/config"
@@ -255,6 +256,16 @@ func run(ctx context.Context, startTime time.Time) error {
 			openrouter_pool.AutoReapWithContext(ctx)
 		})
 	}
+
+	// Background task: plan-account quota probe + expiry scan (leader-gated inside).
+	if common.IsMasterNode {
+		goSupervised(g, ctx, "plan-quota", planquota.RunBackground)
+	}
+
+	// Channel gauges (state, plan windows, expiry, balance) and content-rule
+	// counters for the host Netdata scrape; every replica runs its own.
+	handler.InstallContentMetricsSink()
+	goSupervised(g, ctx, "channel-metrics", handler.RunChannelMetricsLoop)
 
 	// Background task: automatically test channels
 	goSupervised(g, ctx, "auto-test-channels", func(ctx context.Context) {

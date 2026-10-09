@@ -134,7 +134,7 @@ type switchRoute struct {
 // sub-group check below is not tripped by it.
 func switchGroupBlock(t *testing.T, src string) string {
 	t.Helper()
-	lines := strings.Split(src, "\n")
+	lines := strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n") // the router file may carry CRLF
 	start := -1
 	indent := ""
 	for i, line := range lines {

@@ -128,6 +128,9 @@ var erasureModelTypeRegistry = map[string]reflect.Type{
 	"entity.ChatMessage":                reflect.TypeOf(entity.ChatMessage{}),
 	"entity.PlanQuotaGrant":             reflect.TypeOf(entity.PlanQuotaGrant{}),
 	"AccountKeyBinding":                 reflect.TypeOf(AccountKeyBinding{}),
+	"ContentRule":                       reflect.TypeOf(ContentRule{}),
+	"ChannelOverrideTemplate":           reflect.TypeOf(ChannelOverrideTemplate{}),
+	"ChannelTemplateApplication":        reflect.TypeOf(ChannelTemplateApplication{}),
 }
 
 // erasureCoveredModels: the cascade actively disposes of the matched field

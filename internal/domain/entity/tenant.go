@@ -40,9 +40,12 @@ type Tenant struct {
 	// PayerUserId (migration 048) is the tenant member that owns every
 	// admin-issued key (bulk roster issue); 0 = not set.
 	PayerUserId int64 `json:"payer_user_id" gorm:"type:bigint;not null;default:0"`
-	CreatedAt           time.Time      `json:"created_at"`
-	UpdatedAt           time.Time      `json:"updated_at"`
-	DeletedAt           gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+	// LogRetention (migration 050, column content_retention): the tenant's log-retention floor,
+	// '' = inherit the platform default; full|metadata_only|none, only tightens.
+	LogRetention string         `json:"content_retention" gorm:"column:content_retention;type:varchar(16);not null;default:''"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // Tenant status constants

@@ -70,8 +70,8 @@ func bootLikeProduction(t *testing.T) *sql.DB {
 	if err := sqlDB.QueryRow(`SELECT max(version) FROM public.schema_migrations`).Scan(&head); err != nil {
 		t.Fatalf("max version: %v", err)
 	}
-	if head != "049_account_key_bindings" {
-		t.Fatalf("head migration = %q, want 049_account_key_bindings", head)
+	if head != "051_logs_channel_key_idx" {
+		t.Fatalf("head migration = %q, want 051_logs_channel_key_idx", head)
 	}
 	return sqlDB
 }

@@ -288,6 +288,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
+	// migration 050: content rules rewrite the raw body before it is parsed or forwarded.
+	if newAPIError = applyContentRules(c, relayFormat); newAPIError != nil {
+		return
+	}
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
 	if err != nil {
 		// Map "request body too large" to 413 so clients can handle it correctly

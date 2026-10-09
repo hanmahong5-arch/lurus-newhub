@@ -73,6 +73,10 @@ const (
 	ActionChannelEnabled      = "channel.enabled"
 	ActionChannelTagDisabled  = "channel.tag_disabled"
 	ActionChannelTested       = "channel.tested"
+	// Account-pool ops (lane B2): details carry fingerprints and counts, never key material.
+	ActionChannelKeysImported = "channel.keys_imported"
+	ActionChannelKeySettings  = "channel.key_settings_updated"
+	ActionChannelKeyRestored  = "channel.key_restored"
 	// ActionChannelSensitiveWriteRefused is recorded by the gate in
 	// internal/adapter/handler/channel_sensitive_write.go (auth-security-17/18
 	// follow-up) when a non-root admin's channel write touches a sensitive
@@ -398,6 +402,9 @@ var validAuditActions = map[string]struct{}{
 	ActionChannelEnabled:               {},
 	ActionChannelTagDisabled:           {},
 	ActionChannelTested:                {},
+	ActionChannelKeysImported:          {},
+	ActionChannelKeySettings:           {},
+	ActionChannelKeyRestored:           {},
 	ActionChannelSensitiveWriteRefused: {},
 	ActionUserCreated:                  {},
 	ActionUserUpdated:                  {},
@@ -464,6 +471,15 @@ var validAuditActions = map[string]struct{}{
 	ActionResponseRetrieved:            {},
 	ActionResponseDeleted:              {},
 	ActionResponseDenied:               {},
+	ActionContentRetentionSet:          {},
+	ActionContentRuleCreated:           {},
+	ActionContentRuleUpdated:           {},
+	ActionContentRuleDeleted:           {},
+	ActionContentRuleHit:               {},
+	ActionChannelTemplateCreated:       {},
+	ActionChannelTemplateUpdated:       {},
+	ActionChannelTemplateDeleted:       {},
+	ActionChannelTemplateApplied:       {},
 }
 
 // IsValidAuditAction reports whether action is in the canonical taxonomy.

@@ -3940,6 +3940,7 @@
             "enum": [
               "invalid_request",
               "sensitive_words_detected",
+              "content_rejected",
               "count_token_failed",
               "model_price_error",
               "invalid_api_type",

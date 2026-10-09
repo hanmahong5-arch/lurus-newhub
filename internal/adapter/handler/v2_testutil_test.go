@@ -228,6 +228,11 @@ func SetupV2TestRouter(t *testing.T) *V2TestContext {
 		v2.DELETE("/channels/:id", DeleteChannelV2)
 		v2.POST("/channels/:id/test", TestChannelV2)
 		v2.GET("/channels/:id/upstream-models", FetchUpstreamModelsV2)
+		v2.POST("/channels/import", ImportChannelsV2)
+		v2.GET("/channels/:id/health", GetChannelHealthV2)
+		v2.POST("/channels/:id/keys/:idx/test", TestChannelKeyV2)
+		v2.POST("/channels/:id/keys/:idx/restore", RestoreChannelKeyV2)
+		v2.PUT("/channels/:id/keys/:idx/settings", UpdateChannelKeySettingsV2)
 
 		// Project routes (cost attribution, migration 029). Route shapes must
 		// mirror api-v2-router.go: /projects/spend is a STATIC sibling of

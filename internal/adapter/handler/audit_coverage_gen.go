@@ -77,6 +77,14 @@ var AuditExplicitRoutes = map[string]bool{
 	"DELETE /api/v2/admin/users/:id/sessions": true, // L7 — explicit as of this lane
 	// v2_admin_options.go → option.go (one level of delegation)
 	"PUT /api/v2/admin/options": true,
+	// v2_data_policy.go / v2_channel_templates.go (migration 050)
+	"POST /api/v2/admin/content-rules":               true,
+	"PUT /api/v2/admin/content-rules/:id":            true,
+	"DELETE /api/v2/admin/content-rules/:id":         true,
+	"POST /api/v2/admin/channel-templates":           true,
+	"PUT /api/v2/admin/channel-templates/:id":        true,
+	"DELETE /api/v2/admin/channel-templates/:id":     true,
+	"POST /api/v2/admin/channel-templates/:id/apply": true,
 	// switch_preset.go — explicit as of this lane
 	"POST /api/v2/admin/switch/presets": true,
 	// v2_admin_routing.go — L5, explicit as of this lane

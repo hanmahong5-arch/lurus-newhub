@@ -88,6 +88,19 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"GET /api/v2/:tenant_slug/chat/sessions/:id":    true, // TestChatSessionsRealChain_OwnershipFailClosed_SameShape
 		"PATCH /api/v2/:tenant_slug/chat/sessions/:id":  true, // TestChatSessionsRealChain_OwnershipFailClosed_SameShape
 		"DELETE /api/v2/:tenant_slug/chat/sessions/:id": true, // TestChatSessionsRealChain_OwnershipFailClosed_SameShape
+		// relay data control - migration 050 (internal/adapter/handler/v2_data_policy_test.go).
+		// Rules and token retention are confined by (id, scope, tenant_id) in the repo layer.
+		"PUT /api/v2/:tenant_slug/data-policy/rules/:id":            true, // TestContentRuleV2_CrossTenantIs404
+		"DELETE /api/v2/:tenant_slug/data-policy/rules/:id":         true, // TestContentRuleV2_CrossTenantIs404
+		"PUT /api/v2/:tenant_slug/data-policy/tokens/:id/retention": true, // TestTokenRetentionV2_CrossTenantIs404
+		// account-pool ops (internal/adapter/handler/v2_channel_pool_idor_test.go):
+		// loadStaffChannel and import's channel_id both 403 a channel of another tenant.
+		"GET /api/v2/:tenant_slug/channels/:id/health":             true, // TestPoolOps_CrossTenantStaffForbidden
+		"POST /api/v2/:tenant_slug/channels/:id/keys/:idx/test":    true, // TestPoolOps_CrossTenantStaffForbidden
+		"POST /api/v2/:tenant_slug/channels/:id/keys/:idx/restore": true, // TestPoolOps_CrossTenantStaffForbidden
+		"PUT /api/v2/:tenant_slug/channels/:id/keys/:idx/settings": true, // TestPoolOps_CrossTenantStaffForbidden
+		"POST /api/v2/:tenant_slug/channels/import":                true, // TestPoolOps_CrossTenantStaffForbidden (channel_id append)
+		"GET /api/v2/:tenant_slug/channels/:id/usage":              true, // TestChannelUsageV2_Authz (foreign-tenant channel 403, no data leaked)
 	}
 
 	// Not a cross-tenant/cross-account IDOR surface, each with the reason no
@@ -201,6 +214,18 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		// TestAuditRoutes_MountedUnderRootOrGranted here.
 		"POST /api/v2/admin/authz/grants":       "RootJWTAuth-gated: root mints delegated permission grants for any user by design; grants are global (no tenant_id) this cycle",
 		"DELETE /api/v2/admin/authz/grants/:id": "RootJWTAuth-gated: root revokes any delegated permission grant by design, same not-found-shaped 404 for absent/already-revoked ids as RevokeTenantInvite above",
+
+		// Relay data control (migration 050): platform rules and override templates are
+		// global (no tenant_id dimension), written only behind RootJWTAuth.
+		"POST /api/v2/admin/content-rules":               "RootJWTAuth-gated: creates a platform-scope content rule (scope fixed to platform in the handler, never read from the body)",
+		"PUT /api/v2/admin/content-rules/:id":            "RootJWTAuth-gated: repo.GetContentRule confines the id to scope=platform, so a tenant rule id 404s",
+		"DELETE /api/v2/admin/content-rules/:id":         "RootJWTAuth-gated: repo.DeleteContentRule confines the id to scope=platform",
+		"POST /api/v2/admin/channel-templates":           "RootJWTAuth-gated: override templates are platform-wide, not a per-tenant resource",
+		"PUT /api/v2/admin/channel-templates/:id":        "RootJWTAuth-gated: override templates are platform-wide, not a per-tenant resource",
+		"DELETE /api/v2/admin/channel-templates/:id":     "RootJWTAuth-gated: override templates are platform-wide, not a per-tenant resource",
+		"POST /api/v2/admin/channel-templates/:id/apply": "RootJWTAuth-gated: platform staff bulk-apply a template to chosen channels by design (per-channel results, audited)",
+		"POST /api/v2/:tenant_slug/data-policy/rules":    "CreateContentRuleV2 stamps the caller's own tenant_id from tenantCtx; cannot target another tenant",
+		"PUT /api/v2/:tenant_slug/data-policy/retention": "PutContentRetentionV2 writes the caller's own tenant (tenantSelectionScope), no addressable id",
 	}
 
 	isMutation := func(m string) bool {

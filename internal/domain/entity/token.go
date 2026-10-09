@@ -67,8 +67,13 @@ type Token struct {
 	// SourceProduct (migration 049) is the product this key is bound to: the relay
 	// attributes traffic to it when the caller sends no allow-listed X-Lurus-Product.
 	// Tag MUST stay byte-identical to repo.Token.
-	SourceProduct string         `json:"source_product" gorm:"type:varchar(32);not null;default:''"`
-	DeletedAt   gorm.DeletedAt `gorm:"index"`
+	SourceProduct string `json:"source_product" gorm:"type:varchar(32);not null;default:''"`
+	// LogRetention (migration 050, column content_retention): per-key log retention, '' = inherit the tenant's;
+	// full|metadata_only|none and it can only tighten (contentpolicy.Resolve takes the
+	// strictest layer). Written only by the dedicated endpoint, never by token create/update.
+	// Tag MUST stay byte-identical to repo.Token.
+	LogRetention string         `json:"content_retention" gorm:"column:content_retention;type:varchar(16);not null;default:''"`
+	DeletedAt    gorm.DeletedAt `gorm:"index"`
 }
 
 func (token *Token) Clean() {
