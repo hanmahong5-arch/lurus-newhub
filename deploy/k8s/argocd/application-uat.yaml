@@ -13,7 +13,11 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/hanmahong5-arch/lurus-newhub.git
+    # R6-local read-only mirror (git daemon on docker0), pushed from the office
+    # every ~2 min: R6 cannot reach GitHub reliably over any path since the
+    # overseas proxy node ran out (2026-10-09). Same content as GitHub main.
+    # Mirror setup: lurus-platform deploy/r6-host/git-mirror/README.md.
+    repoURL: git://172.30.0.1/lurus-newhub.git
     targetRevision: main
     path: deploy/k8s/r6-uat
   destination:

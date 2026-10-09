@@ -25,6 +25,17 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 # 200  ← unauthenticated; this is exactly the fetch ArgoCD performs
 ```
 
+> **2026-10-09: ArgoCD reads an R6-local mirror, not GitHub.** The overseas
+> proxy node behind R6's GitHub route ran out of traffic, and R6 cannot reach
+> GitHub reliably over any path. Both Applications now use
+> `git://172.30.0.1/lurus-newhub.git`, a read-only git daemon on R6 that the
+> office workstation pushes to every ~2 min (lurus-deploy `local-ci/`
+> git-mirror-push; R6 side in lurus-platform `deploy/r6-host/git-mirror/`).
+> Deploy flow is unchanged (merge main, auto-pin, ArgoCD) plus up to ~2 min of
+> mirror lag. Check: `git ls-remote git://172.30.0.1/lurus-newhub.git refs/heads/main`
+> on R6 equals GitHub main. If the workstation is offline the mirror stays at
+> its last push and ArgoCD keeps serving that revision.
+
 Do **not** create a `repository` Secret for this repoURL. A credential whose
 `url` matches `spec.source.repoURL` but whose auth material is wrong (e.g. an
 `sshPrivateKey` paired with an `https://` URL) turns a sync that works
