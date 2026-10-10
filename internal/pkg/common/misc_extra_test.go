@@ -31,6 +31,21 @@ func TestEmbedFolder(t *testing.T) {
 	}
 }
 
+// Directories and index.html documents must never be answered by the static
+// middleware: http.FileServer turns them into redirects that carry a week of
+// Cache-Control, and for the /next mount the two redirects formed a loop.
+func TestEmbedFolder_DirectoriesAndDocumentsAreNotStaticFiles(t *testing.T) {
+	sfs := EmbedFolder(testEmbedFS, "testdata/embedroot")
+	for _, p := range []string{"/next", "/next/", "/next/index.html", "/index.html"} {
+		if sfs.Exists("/", p) {
+			t.Errorf("%s must report missing so NoRoute serves the document", p)
+		}
+	}
+	if !sfs.Exists("/", "/next/app.js") {
+		t.Error("a regular file under a directory must still be served")
+	}
+}
+
 func TestInitZitaClient_DisabledWhenUnset(t *testing.T) {
 	orig := ZitaClient
 	t.Cleanup(func() { ZitaClient = orig })

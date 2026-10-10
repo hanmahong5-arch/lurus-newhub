@@ -745,6 +745,14 @@ const HFShell = ({ active, crumbs = [], actions, children }) => {
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {actions}
+            {/* Entry to the new console (web/next, served under /next/). */}
+            <a
+              className='btn ghost'
+              href='/next/dashboard'
+              data-testid='shell-try-next'
+            >
+              {t('console.shell.try_next', 'Try the new console')}
+            </a>
             <HfUserMenu user={user} onLogout={handleLogout} />
           </div>
         </div>

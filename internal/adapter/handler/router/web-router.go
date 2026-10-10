@@ -25,6 +25,48 @@ import (
 // so dist-root files like /logo.png are outside the budget too.
 const assetURLPrefix = "/assets/"
 
+// nextMountPrefix is where the new console (web/next, built with rsbuild) is
+// served: its build lands in dist/next, its asset URLs start with /next/, and
+// its client router uses /next as basepath. Keep the three in step
+// (web/next/rsbuild.config.ts, web/next/src/lib/constants.ts).
+const nextMountPrefix = "/next"
+
+// nextAssetURLPrefix is the new console's hashed build output (rsbuild writes
+// js/css/fonts under static/). Like /assets/ it is content-addressed and
+// immutable, and a miss under it must be a 404 rather than the SPA document.
+const nextAssetURLPrefix = nextMountPrefix + "/static/"
+
+// nextIndexFile is the new console's document inside dist.
+const nextIndexFile = "next/index.html"
+
+// isHashedAssetPath reports whether a URL path is one of the two
+// content-addressed build output directories.
+func isHashedAssetPath(urlPath string) bool {
+	return strings.HasPrefix(urlPath, assetURLPrefix) || strings.HasPrefix(urlPath, nextAssetURLPrefix)
+}
+
+// isNextPath reports whether a URL path belongs to the new console's SPA:
+// exactly /next, or anything under /next/. "/nextfoo" is not.
+func isNextPath(urlPath string) bool {
+	return urlPath == nextMountPrefix || strings.HasPrefix(urlPath, nextMountPrefix+"/")
+}
+
+// readNextIndex loads the new console's document from the embedded build.
+// It returns nil when the build has no next/index.html — the Go CI jobs stub
+// web/dist down to a single index.html, and a legacy-only build is a valid
+// deployment — and the caller then serves the legacy document for /next/*
+// instead of failing.
+func readNextIndex(distFS fs.FS) []byte {
+	if distFS == nil {
+		return nil
+	}
+	data, err := fs.ReadFile(distFS, nextIndexFile)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	return data
+}
+
 // staticAssetCacheControl repeats what middleware.Cache() puts on every path
 // other than "/" — one week. hashedAssetTransport answers before that middleware
 // runs (so that the on-the-fly compressor never sees an already-compressed
@@ -209,7 +251,7 @@ func hashedAssetTransport(distFS fs.FS) gin.HandlerFunc {
 			return
 		}
 		urlPath := c.Request.URL.Path
-		if !strings.HasPrefix(urlPath, assetURLPrefix) {
+		if !isHashedAssetPath(urlPath) {
 			return
 		}
 		name := strings.TrimPrefix(urlPath, "/")
@@ -303,8 +345,14 @@ func setWebRoutes(router *gin.Engine, distFS fs.FS, staticFS static.ServeFileSys
 	// as router.Use did).
 	spaDocumentRateLimit := middleware.GlobalWebRateLimit()
 
+	// Read once at mount: the embedded build cannot change under a running
+	// binary. nil = no new-console build in this binary; /next/* then falls
+	// back to the legacy document (see readNextIndex).
+	nextIndexPage := readNextIndex(distFS)
+
 	router.NoRoute(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
+		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") ||
+			strings.HasPrefix(c.Request.URL.Path, nextAssetURLPrefix) {
 			handler.RelayNotFound(c)
 			return
 		}
@@ -322,6 +370,13 @@ func setWebRoutes(router *gin.Engine, distFS fs.FS, staticFS static.ServeFileSys
 		// return (or call c.Next(), which is a no-op from the last handler).
 		spaDocumentRateLimit(c)
 		if c.IsAborted() {
+			return
+		}
+		// The new console owns /next and everything under it that is not a
+		// file; its client router resolves the rest. Everything else is the
+		// legacy console.
+		if nextIndexPage != nil && isNextPath(c.Request.URL.Path) {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", nextIndexPage)
 			return
 		}
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexPage)

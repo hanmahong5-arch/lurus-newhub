@@ -146,7 +146,8 @@
         "docs": "Docs",
         "support": "Support",
         "account_menu": "account",
-        "mode_switch_unavailable": "Switching mode is not available yet"
+        "mode_switch_unavailable": "Switching mode is not available yet",
+        "try_next": "Try the new console"
       },
       "not_available": {
         "label": "n/a"

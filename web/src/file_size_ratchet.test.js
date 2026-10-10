@@ -47,7 +47,7 @@ const CEILINGS = {
   // "switch" went — the server never followed it (403 TENANT_MISMATCH).
   // 887 → 843 (2026-09-22 cycle-15 P4): nav section/item rendering moved to
   // components/hifi/HfNav.jsx with the collapsible admin sections.
-  'components/hifi/HFShell.jsx': 757, // → 757 cycle-19: theme hook → useThemeToggle.js, identity cluster → HfUserMenu.jsx
+  'components/hifi/HFShell.jsx': 765, // → 757 cycle-19: theme hook → useThemeToggle.js, identity cluster → HfUserMenu.jsx; +8 new-console entry link (web/next, prettier-wrapped)
   'components/settings/AuthSettingPage.jsx': 1086,
   'components/settings/SystemSetting.jsx': 1490,
   'components/settings/personal/cards/NotificationSettings.jsx': 930,
