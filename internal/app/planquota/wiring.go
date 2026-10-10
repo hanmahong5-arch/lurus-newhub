@@ -227,7 +227,7 @@ var (
 	markCooldown  = app.MarkChannelCooldown
 )
 
-func rngFloat() float64 { return rand.Float64() }
+func rngFloat() float64 { return rand.Float64() } // #nosec G404 -- probe pacing and pause lottery, not security
 
 // FilterScheduledTest drops the channels a scheduled (non-manual) test must
 // not touch, per planquota test modes. globalMode is the monitor setting.

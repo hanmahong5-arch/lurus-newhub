@@ -231,7 +231,7 @@ func ProbeInterval() time.Duration {
 
 // jittered spreads a period by +-10% so replicas and passes do not align.
 func jittered(d time.Duration) time.Duration {
-	return d + time.Duration((rand.Float64()-0.5)*0.2*float64(d))
+	return d + time.Duration((rand.Float64()-0.5)*0.2*float64(d)) // #nosec G404 -- schedule jitter, not security
 }
 
 // Run is the leader-only background loop: the expiry scan every minute, the
