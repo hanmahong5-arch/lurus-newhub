@@ -64,7 +64,7 @@ func newEntEnv(t *testing.T, tenant string) *entEnv {
 		repo.DB, repo.LOG_DB, common.UsingSQLite, common.RedisEnabled = prevDB, prevLog, prevSQLite, prevRedis
 		repo.ResetProjectDeptCache()
 		if s, _ := db.DB(); s != nil {
-			s.Close()
+			_ = s.Close()
 		}
 	})
 

@@ -38,7 +38,7 @@ var restoreProofNow = time.Now
 
 func restoreProofMAC(channelID, idx int, st keyState, issued int64) string {
 	m := hmac.New(sha256.New, []byte("key-restore-proof:"+common.CryptoSecret))
-	fmt.Fprintf(m, "%d|%d|%d|%d|%d|%d|%s|%d", channelID, idx, st.ChannelStatus, st.KeyStatus, st.DisabledTime, st.CooldownUntil, st.Reason, issued)
+	_, _ = fmt.Fprintf(m, "%d|%d|%d|%d|%d|%d|%s|%d", channelID, idx, st.ChannelStatus, st.KeyStatus, st.DisabledTime, st.CooldownUntil, st.Reason, issued)
 	return hex.EncodeToString(m.Sum(nil))
 }
 

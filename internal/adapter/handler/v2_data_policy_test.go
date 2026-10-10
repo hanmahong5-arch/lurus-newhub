@@ -382,7 +382,7 @@ func TestApplyContentRules_MasksEveryFormatAndPassThroughSeesIt(t *testing.T) {
 			t.Errorf("%s: pass-through would forward the original: %s", format, forwarded)
 		}
 		next := new(bytes.Buffer)
-		next.ReadFrom(c.Request.Body)
+		_, _ = next.ReadFrom(c.Request.Body)
 		if strings.Contains(next.String(), dpPhone) {
 			t.Errorf("%s: a late re-read of Request.Body saw the original", format)
 		}

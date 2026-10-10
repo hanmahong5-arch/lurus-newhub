@@ -142,7 +142,7 @@ BRIDGE_TOKEN="accept-bridge-$(date +%s)-$$"
   # r6-stage values:
   export PORT="$API_PORT" TZ=Asia/Shanghai GIN_MODE=release NODE_TYPE=master
   export SQL_DSN REDIS_CONN_STRING="$REDIS_URL"
-  export SESSION_SECRET="accept-session-$$" SESSION_COOKIE_DOMAIN=""
+  export SESSION_SECRET="accept-session-$$" SESSION_COOKIE_DOMAIN="" # gitleaks:allow - throwaway, derived from the PID of this run
   export ERROR_LOG_ENABLED=true MEILISEARCH_ENABLED=false
   export BILLING_UNIFIED_ENABLED=true CREDIT_POOL_REQUIRED=enforce
   export SYNC_FREQUENCY=60 SQL_MAX_OPEN_CONNS=12 SQL_MAX_IDLE_CONNS=12 RELAY_MAX_CONCURRENT_PER_TENANT=64

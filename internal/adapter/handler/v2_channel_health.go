@@ -90,16 +90,12 @@ func addReason(rs []string, r string) []string {
 	return append(rs, r)
 }
 
-// buildKeyHealth evaluates one key at instant now (Unix seconds).
-func buildKeyHealth(ch *repo.Channel, idx int, now int64) keyHealth {
-	return buildKeyHealthWin(ch, idx, now, ChannelWindowProvider)
-}
-
 // windowFn returns the plan-window description of one key (-1 = channel level).
 type windowFn func(channelID, keyIdx int) map[string]interface{}
 
-// buildKeyHealthWin is buildKeyHealth with an explicit window source, so bulk
-// callers can feed a pre-fetched batch instead of one lookup per key.
+// buildKeyHealthWin evaluates one key at instant now (Unix seconds) with an
+// explicit window source, so bulk callers feed a pre-fetched batch instead of
+// one lookup per key.
 func buildKeyHealthWin(ch *repo.Channel, idx int, now int64, win windowFn) keyHealth {
 	st := snapshotKeyState(ch, idx)
 	kh := keyHealth{
