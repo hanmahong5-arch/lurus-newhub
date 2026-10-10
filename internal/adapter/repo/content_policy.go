@@ -140,6 +140,9 @@ func DeleteContentRule(id int64, scope, tenantID string) error {
 
 const policyCacheTTL = 15 * time.Second
 
+// errContentRulesNoDB: ContentRulesetForTenant was asked before the database existed.
+var errContentRulesNoDB = errors.New("content rules: database not initialised")
+
 type rulesetEntry struct {
 	rs  *contentpolicy.Ruleset
 	exp time.Time
@@ -165,6 +168,15 @@ func ContentRulesetForTenant(tenantID string) (*contentpolicy.Ruleset, error) {
 		if e := v.(rulesetEntry); now.Before(e.exp) {
 			return e.rs, nil
 		}
+	}
+	// The relay entry calls this on every request; it must never panic. No
+	// database (boot not finished, or a hermetic test) is "rules unavailable",
+	// which the caller logs and fails open on, exactly like a query error.
+	if DB == nil {
+		if v, ok := rulesetCache.Load(tenantID); ok {
+			return v.(rulesetEntry).rs, nil
+		}
+		return nil, errContentRulesNoDB
 	}
 	var rows []ContentRule
 	err := DB.Where("enabled = ? AND ((scope = ? AND tenant_id = ?) OR (scope = ? AND tenant_id = ?))",
