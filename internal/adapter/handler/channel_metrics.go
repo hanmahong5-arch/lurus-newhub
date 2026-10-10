@@ -160,13 +160,15 @@ func RefreshChannelMetrics(now time.Time) {
 func RunChannelMetricsLoop(ctx context.Context) {
 	t := time.NewTicker(channelMetricsInterval)
 	defer t.Stop()
-	RefreshChannelMetrics(time.Now())
+	// The snapshot reads inside are 500 ms-bounded cache lookups; ctx only
+	// governs the ticker, which is why it is not threaded into them.
+	RefreshChannelMetrics(time.Now()) //nolint:contextcheck // see above
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			RefreshChannelMetrics(now)
+			RefreshChannelMetrics(now) //nolint:contextcheck // see above
 		}
 	}
 }

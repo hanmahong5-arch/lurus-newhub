@@ -5,6 +5,7 @@ package handler
 // tenant-side invite list / revoke / redeem, and the role fields on user/me.
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -374,7 +375,7 @@ func TestRedeemMyTenantInviteV2_CrossTenantRejectedAndNotConsumed(t *testing.T) 
 func TestConsumeTenantInviteGrant_RevokedAtBlocks(t *testing.T) {
 	e := newEntEnv(t, "inv-h")
 	inv := e.invite(t, e.tenant, func(i *entity.TenantInvite) { i.RevokedAt = 7 })
-	if _, _, err := repo.ConsumeTenantInviteGrant(inv.Code, 1); err != repo.ErrInviteRevoked {
+	if _, _, err := repo.ConsumeTenantInviteGrant(inv.Code, 1); !errors.Is(err, repo.ErrInviteRevoked) {
 		t.Fatalf("err = %v, want ErrInviteRevoked", err)
 	}
 }
