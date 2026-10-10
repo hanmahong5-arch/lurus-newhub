@@ -851,7 +851,7 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	// local ledger is a shadow meter — its write failures are recorded as
 	// meter loss (metrics + drift gap) but never block the platform
 	// settlement, which is the ledger of record.
-	advisory := common.LocalLedgerAdvisory() && relayInfo.PlatformGoverned
+	advisory := relayInfo.PlatformGoverned && (common.LocalLedgerAdvisory() || relayInfo.WalletAuthoritative)
 
 	// Provisioned keys (handler/provisioning.go:110) are TENANT-scoped and are
 	// minted with UserId=0 by design — no user row exists for them, so every

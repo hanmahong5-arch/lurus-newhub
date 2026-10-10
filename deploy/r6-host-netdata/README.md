@@ -31,7 +31,22 @@ a bind source. `scripts/install-netdata-alarms.sh` only manages
 `newhub.conf` — a second alarm file would need its own bind mount added to
 the container definition first (out of scope for this directory).
 
-`health.d/newhub.conf` currently defines 39 alarms:
+`health.d/newhub.conf` currently defines 45 alarms:
+
+- **6 added 2026-10-09 (account-pool operations)**, **in-repo only** until the
+  next `scripts/install-netdata-alarms.sh` run. All are per `channel_id`
+  (never per key) and share `doc/runbook/channel-pool-monitoring.md`:
+  `newhub_channel_error_ratio` (5-minute upstream error ratio; the
+  20-attempt minimum-volume gate is applied in Go because Netdata cannot
+  divide two charts), `newhub_channel_all_keys_down` (state 2),
+  `newhub_models_unroutable` (models with channels but none routable),
+  `newhub_channel_plan_window_high` (plan window > 90%),
+  `newhub_channel_plan_expiring` (< 72h, crit < 24h) and
+  `newhub_content_rejected_surge` (content-rule rejections). The series are
+  `lurus_channel_*` / `lurus_content_*` (own namespace, see
+  `internal/pkg/metrics/channel_ops.go`). `METRICS_DISABLED_LABELS` (e.g.
+  `channel_id`) collapses a high-cardinality label to `_`; the per-channel
+  alarms then degrade to a single worst-channel switch.
 
 - 1 added 2026-09-28, **in-repo only** until the next
   `scripts/install-netdata-alarms.sh` run: `newhub_consume_log_write_failed`

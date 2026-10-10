@@ -29,12 +29,29 @@ var (
 	ErrInviteExpired         = errors.New("tenant invite has expired")
 	ErrInviteAlreadyConsumed = errors.New("tenant invite already consumed")
 	ErrInviteRevoked         = errors.New("tenant invite has been revoked")
+	// ErrInviteWrongTenant: the code belongs to another tenant than the
+	// redeeming user's own (existing users never change tenant via an invite).
+	ErrInviteWrongTenant = errors.New("tenant invite belongs to another tenant")
 )
 
 // CreateTenantInvite mints a root-issued, one-time onboarding code bound to
 // tenantID. ttl <= 0 means no expiry (ExpiredTime stays 0, mirroring
 // Redemption.ExpiredTime's own "0 = never" convention).
 func CreateTenantInvite(tenantID string, createdByUserID int, ttl time.Duration) (*TenantInvite, error) {
+	return CreateTenantInviteWithGrant(tenantID, createdByUserID, ttl, "", 0)
+}
+
+// InviteGrant is the tenant role and project membership an invite confers on
+// whoever redeems it (migration 046). Zero value = a plain onboarding code.
+type InviteGrant struct {
+	MemberRole string
+	ProjectID  int64
+}
+
+// CreateTenantInviteWithGrant is CreateTenantInvite for a code that also grants
+// a tenant_role and/or a project membership on redemption. The caller validates
+// the grant (role value, project in tenant, not the default tenant).
+func CreateTenantInviteWithGrant(tenantID string, createdByUserID int, ttl time.Duration, memberRole string, projectID int64) (*TenantInvite, error) {
 	if tenantID == "" {
 		return nil, errors.New("tenant id required")
 	}
@@ -49,6 +66,8 @@ func CreateTenantInvite(tenantID string, createdByUserID int, ttl time.Duration)
 		ExpiredTime:     expiredTime,
 		CreatedByUserId: createdByUserID,
 		CreatedAt:       time.Now(),
+		MemberRole:      memberRole,
+		ProjectId:       projectID,
 	}
 	if err := DB.Create(invite).Error; err != nil {
 		return nil, fmt.Errorf("create tenant invite: %w", err)
@@ -65,8 +84,17 @@ func CreateTenantInvite(tenantID string, createdByUserID int, ttl time.Duration)
 // every error here as "fall back to the default tenant, still log the user
 // in" — an invite failure must never surface as a 500 or block a login.
 func ConsumeTenantInvite(code string, accountID int64) (*Tenant, error) {
+	tenant, _, err := ConsumeTenantInviteGrant(code, accountID)
+	return tenant, err
+}
+
+// ConsumeTenantInviteGrant is ConsumeTenantInvite that also returns the grant
+// the code carries, for the caller to apply (ApplyInviteGrant) once the user
+// row exists.
+func ConsumeTenantInviteGrant(code string, accountID int64) (*Tenant, InviteGrant, error) {
+	var grant InviteGrant
 	if code == "" {
-		return nil, ErrInviteNotFound
+		return nil, grant, ErrInviteNotFound
 	}
 	var tenant Tenant
 	err := WithoutTenantIsolation(DB).Transaction(func(tx *gorm.DB) error {
@@ -78,19 +106,10 @@ func ConsumeTenantInvite(code string, accountID int64) (*Tenant, error) {
 			}
 			return err
 		}
-		switch invite.Status {
-		case TenantInviteStatusConsumed:
-			return ErrInviteAlreadyConsumed
-		case TenantInviteStatusRevoked:
-			return ErrInviteRevoked
-		case TenantInviteStatusPending:
-			// proceed
-		default:
-			return ErrInviteNotFound
+		if err := inviteUsable(&invite); err != nil {
+			return err
 		}
-		if invite.ExpiredTime != 0 && invite.ExpiredTime < common.GetTimestamp() {
-			return ErrInviteExpired
-		}
+		grant = InviteGrant{MemberRole: invite.MemberRole, ProjectID: invite.ProjectId}
 		if err := tx.Where("id = ?", invite.TenantId).First(&tenant).Error; err != nil {
 			return fmt.Errorf("resolve invited tenant: %w", err)
 		}
@@ -104,9 +123,9 @@ func ConsumeTenantInvite(code string, accountID int64) (*Tenant, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, InviteGrant{}, err
 	}
-	return &tenant, nil
+	return &tenant, grant, nil
 }
 
 // ListTenantInvites returns tenantID's invites newest-first (created_at
@@ -140,7 +159,7 @@ func ListTenantInvites(tenantID string, limit, offset int) ([]TenantInvite, int6
 func RevokeTenantInvite(id int, tenantID string) error {
 	result := DB.Model(&TenantInvite{}).
 		Where("id = ? AND tenant_id = ? AND status = ?", id, tenantID, TenantInviteStatusPending).
-		Update("status", TenantInviteStatusRevoked)
+		Updates(map[string]any{"status": TenantInviteStatusRevoked, "revoked_at": common.GetTimestamp()})
 	if result.Error != nil {
 		return result.Error
 	}

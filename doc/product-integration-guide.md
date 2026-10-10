@@ -89,6 +89,28 @@ curl https://hub.lurus.cn/v1/key -H "Authorization: Bearer sk-xxxxxxxxxxxx"
 # 用 sk- key 调用会得到 200 + {"success":false,"message":"...access token 无效"} —— 一个 200 形状的失败,不要在自动化里只看状态码
 ```
 
+## platform 按账号开 key
+
+platform(Lugo)为每个账号、每个产品在 newhub 幂等地开一把 key,替代 newapi_sync。接口走内部 API:`X-API-Key: lurus_ik_…`,需要 `provisioning` scope;非 `*` 的窄权限 key 还需在 `internal_api_key_tenants` 登记目标租户(未登记返回 403)。
+
+| 方法与路径 | 作用 |
+|------------|------|
+| `POST /internal/v1/provisioning/accounts/:account_id/keys` | 创建(幂等) |
+| `POST /internal/v1/provisioning/accounts/:account_id/keys/rotate` | 轮换,旧 key 立即失效 |
+| `DELETE /internal/v1/provisioning/accounts/:account_id/keys?product=` | 吊销 |
+| `GET /internal/v1/provisioning/accounts/:account_id/keys` | 列出该账号各产品的 key 元数据 |
+
+创建请求体:`{"product": "lutu", "name"?, "tenant_slug"?, "quota"?, "models"?, "expires_at"?}`,可带头 `Idempotency-Key`。
+
+- `product` 必须在 newhub 的产品白名单内(与 `X-Lurus-Product` 同一份),否则 400 `UNKNOWN_PRODUCT`。
+- 同一 `(account_id, product)` 只会有一把未删除的 key(PG 部分唯一索引兜底)。重复创建、相同或不同的 `Idempotency-Key`、并发创建,都返回同一把 key 的元数据(HTTP 200,`is_existing=true`);明文 `key` 只在首次创建(201)返回一次,之后只有 `key_masked`,需要新明文请调 rotate。
+- 首次创建时若该账号在 newhub 还没有用户,会按 `tenant_slug`(缺省 `default`)自动建一个并绑定 `lurus_account_id`;已有用户则沿用其租户,`tenant_slug` 与之不符返回 409。租户席位已满返回 409 `TENANT_SEAT_LIMIT`。
+- key 绑定 `identity_account_id`,走平台钱包计费;`quota` 缺省或 0 表示不限(以钱包余额为准),大于 0 则给这把 key 加额度上限;`models` 非空则启用模型白名单。
+- 产品归因:key 记录了所属 product。调用方不带 `X-Lurus-Product` 时,日志的 `source_product` 与钱包扣费的 product_id 都取该 key 绑定的产品;带头时仍可覆盖,但只接受白名单内的值(白名单外的值被忽略并回落到绑定产品,不会变成全局默认)。
+- 吊销后该 key 立即 401,绑定释放,同一 `(account, product)` 可重新创建。创建、轮换、吊销均写审计(`token.created` / `auth.token_rotated` / `token.deleted`)。接口走 provisioning 组的限速。
+
+错误码:`INVALID_ACCOUNT_ID`(400)、`UNKNOWN_PRODUCT`(400)、`VALIDATION_FAILED`(400)、`TENANT_NOT_FOUND`(404)、`KEY_NOT_FOUND`(404,rotate/吊销时没有绑定)、`TENANT_NOT_AUTHORIZED`(403)。
+
 ## 常见问题
 
 - **Q1 登录后看不到我的产品?** Lurus 是 AI 网关不是产品平台。用户登录→控制台建 Token→手动配置到产品后端,目前没有自动取 Token 的回调机制。
@@ -145,7 +167,7 @@ curl https://hub.lurus.cn/v1/key -H "Authorization: Bearer sk-xxxxxxxxxxxx"
 | 429 | `rate_limit_error` | `rate_limit_error` | `request_rate_limit_exceeded` / `quota_exceeded` / `cost_spike_limit_exceeded` / `business_rate_limit_exceeded` / `concurrency_limit_exceeded` 等 | 限流(见下方 Q4 的另一类 429)。**仅限中转路径**(`/v1/*` 等 relay 路由)网关自身发起的这类 429,`error.message` 都是英文句子,不要拿它做文本匹配——判定读 `code`。其中限流/并发中间件的拒绝(`request_rate_limit_exceeded`/`business_rate_limit_exceeded`/`concurrency_limit_exceeded`)统一是 `<scope> <requests\|tokens\|concurrency> limit exceeded: <n> ...(<code>)` 这一种形状;`quota_exceeded`(entitlement)与 `cost_spike_limit_exceeded`(cost spike)同样是英文,但句式不同、不含 `<n>`。`/api/*` 控制台路由与 `/internal/*` 内部路由上的 ip/key 限流器(`rate-limit.go` 的 keyed 拒绝点)429 只带头,**没有 body**,不要假设那类 429 存在 `error.message` | 稍后重试,读 `Retry-After`/`X-RateLimit-*`(见 §E,并非全部 429 都携带 —— `quota_exceeded` 与 `cost_spike_limit_exceeded` 也带 `X-RateLimit-Scope`/`Type`,见 §E 表) |
 | 500 | `api_error` | `api_error` | `gateway_internal` | 网关自身处理失败(非上游供应商故障) | 重试;持续出现联系运维 |
 | 500 | `upstream_error` | `upstream_error` | 供应商原样透传 | AI 服务商故障 | 重试 / 切模型 |
-| 503 | `api_error` | `overloaded_error` | `channel:all_keys_cooling` / `model_not_found`(无可用渠道时复用此状态码)/ `query_data_error`(网关自身查令牌失败,2026-09-27 起;此前这种情况被包装成 401 `invalid_request`,与"key 无效"不可区分)等 | 模型配置存在但渠道暂时全部不可用/维护中;或网关的数据库暂时不可用,**不是对 key 的判定** | 等待恢复,读 `Retry-After`(令牌查库失败固定给 `5`,并带 `X-Lurus-Token-State: lookup_failed`) |
+| 503 | `api_error` | `overloaded_error` | `channel:all_keys_cooling` / `all_channels_cooling`(该模型的所有渠道都在上游 429 冷却期内,带 `Retry-After`;与 provider 过滤无关) / `model_not_found`(无可用渠道时复用此状态码)/ `query_data_error`(网关自身查令牌失败,2026-09-27 起;此前这种情况被包装成 401 `invalid_request`,与"key 无效"不可区分)等 | 模型配置存在但渠道暂时全部不可用/维护中;或网关的数据库暂时不可用,**不是对 key 的判定** | 等待恢复,读 `Retry-After`(令牌查库失败固定给 `5`,并带 `X-Lurus-Token-State: lookup_failed`) |
 
 完整 `code` 枚举(所有网关自身可能返回的机器码,不含上游供应商透传值)见 `docs/openapi/relay.json` 的 `components.schemas.GatewayError.code.enum`,由 CI 锁与 `internal/pkg/types` 的 `ErrorCode` 常量表逐条互校,新增/改名任一侧都会挂红。
 

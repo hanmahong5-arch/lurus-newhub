@@ -37,6 +37,8 @@ var ErrReservedTenantSlug = errors.New("tenant slug collides with a reserved top
 var ReservedTenantSlugs = map[string]struct{}{
 	// GET /api/v2/oauth/callback, POST /api/v2/oauth/logout
 	"oauth": {},
+	// GET /api/v2/public/model-status (anonymous model availability, account-pool monitoring).
+	"public": {},
 	// GET /api/v2/auth/session-info, /api/v2/auth/zita-login, /api/v2/auth/zita-logout,
 	// POST /api/v2/auth/zita-bootstrap
 	"auth": {},

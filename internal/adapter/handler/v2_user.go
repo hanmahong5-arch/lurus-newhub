@@ -71,6 +71,7 @@ func GetSelfV2(c *gin.Context) {
 	permissions := calculateUserPermissions(user.Role)
 	// Admin remarks are not the user's to see (same rule as GetSelf).
 	user.Remark = ""
+	tenantRole, isPayer := tenantRoleView(user)
 
 	// Build response (exclude sensitive fields)
 	c.JSON(http.StatusOK, gin.H{
@@ -95,6 +96,8 @@ func GetSelfV2(c *gin.Context) {
 			"request_count":   user.RequestCount,
 			"group":           user.Group,
 			"tenant_id":       tenantCtx.TenantID,
+			"tenant_role":     tenantRole,
+			"is_payer":        isPayer,
 			// The real slug even when the request came in as the self-tenant
 			// alias: TenantSlugGuard rewrites the param before this runs. The
 			// console calls this route as /api/v2/~/user/me and shows this.

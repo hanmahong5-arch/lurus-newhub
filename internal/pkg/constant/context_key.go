@@ -29,6 +29,13 @@ const (
 	// copied into RelayInfo.ProjectId, because the settlement path has no
 	// gin.Context. A label, not an authorization claim — never gate on it.
 	ContextKeyProjectId ContextKey = "project_id"
+	// ContextKeyEmployeeRef carries the resolved employee attribution
+	// (migration 045): a validated trusted X-Lurus-Employee header, else the
+	// token's employee_ref, else "". A label, never an authorization claim.
+	ContextKeyEmployeeRef ContextKey = "employee_ref"
+	// ContextKeyTokenSourceProduct carries the product the authenticated token is
+	// bound to (migration 049); the relay default when no allow-listed header.
+	ContextKeyTokenSourceProduct ContextKey = "token_source_product"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"

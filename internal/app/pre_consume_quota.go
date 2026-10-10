@@ -125,6 +125,14 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 	// the user-balance 402 and local write FAILURES stop blocking. Ungoverned
 	// traffic (unlinked users, flag-off windows) keeps the full local gate.
 	advisory := common.LocalLedgerAdvisory() && relayInfo.PlatformGoverned
+	// Per-tenant variant (tenants.wallet_authoritative, migration 046): the
+	// platform wallet is the only balance gate for this tenant, so a governed
+	// request is admitted exactly as under global advisory mode. Ungoverned
+	// requests never qualify — they were not admitted by the wallet.
+	if !advisory && relayInfo.PlatformGoverned && repo.TenantWalletAuthoritative(c.GetString("tenant_id")) {
+		advisory = true
+		relayInfo.WalletAuthoritative = true
+	}
 
 	// Provisioned keys (handler/provisioning.go:110) are tenant-scoped and are
 	// minted with UserId=0 by design — there is no user row, hence no user

@@ -48,6 +48,8 @@ type ErrorCode string
 const (
 	ErrorCodeInvalidRequest         ErrorCode = "invalid_request"
 	ErrorCodeSensitiveWordsDetected ErrorCode = "sensitive_words_detected"
+	// ErrorCodeContentRejected: an enforce-mode content rule refused the request body (migration 050).
+	ErrorCodeContentRejected ErrorCode = "content_rejected"
 
 	// new api error
 	ErrorCodeCountTokenFailed   ErrorCode = "count_token_failed"
@@ -57,6 +59,11 @@ const (
 	ErrorCodeDoRequestFailed    ErrorCode = "do_request_failed"
 	ErrorCodeGetChannelFailed   ErrorCode = "get_channel_failed"
 	ErrorCodeGenRelayInfoFailed ErrorCode = "gen_relay_info_failed"
+	// ErrorCodeAllChannelsCooling: every channel serving the model is inside a
+	// 429 cooldown. Deliberately not "channel:"-prefixed (that prefix means one
+	// channel is condemned and the request fails over) and distinct from the
+	// provider-filter miss so clients can tell "back off" from "no such region".
+	ErrorCodeAllChannelsCooling ErrorCode = "all_channels_cooling"
 
 	// channel error
 	ErrorCodeChannelNoAvailableKey        ErrorCode = "channel:no_available_key"
@@ -687,7 +694,7 @@ func RelayErrorType(err *NewAPIError) string {
 		return "insufficient_quota"
 	// newhub-internal / request-prep / routing / persistence failures: synthetic
 	// 500s (or client-prep 4xx) that must NOT count as upstream provider faults.
-	case ErrorCodeInvalidRequest, ErrorCodeSensitiveWordsDetected,
+	case ErrorCodeInvalidRequest, ErrorCodeSensitiveWordsDetected, ErrorCodeContentRejected,
 		ErrorCodeCountTokenFailed, ErrorCodeModelPriceError, ErrorCodeInvalidApiType,
 		ErrorCodeJsonMarshalFailed, ErrorCodeGenRelayInfoFailed, ErrorCodeGetChannelFailed,
 		ErrorCodeReadRequestBodyFailed, ErrorCodeConvertRequestFailed, ErrorCodeAccessDenied,

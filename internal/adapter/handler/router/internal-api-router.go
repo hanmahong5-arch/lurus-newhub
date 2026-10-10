@@ -172,6 +172,11 @@ func SetInternalApiRouter(router *gin.Engine) {
 		common.InternalApiProvisionRateLimitNum, common.InternalApiProvisionRateLimitDuration, "IKP"))
 	{
 		provisioningGroup.POST("/tenants/:slug/keys", handler.CreateProvisionedKey)
+		// Per-account, per-product keys for platform (migration 049).
+		provisioningGroup.POST("/accounts/:account_id/keys", handler.CreateAccountKey)
+		provisioningGroup.POST("/accounts/:account_id/keys/rotate", handler.RotateAccountKey)
+		provisioningGroup.DELETE("/accounts/:account_id/keys", handler.RevokeAccountKey)
+		provisioningGroup.GET("/accounts/:account_id/keys", handler.ListAccountKeys)
 		provisioningGroup.GET("/tenants/:slug/keys", handler.ListProvisionedKeys)
 		provisioningGroup.DELETE("/tenants/:slug/keys/:key_id", handler.RevokeProvisionedKey)
 		// Distributor batch redemption-code issuance / revoke — idempotent via

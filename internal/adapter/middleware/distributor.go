@@ -118,6 +118,21 @@ func Distribute() func(c *gin.Context) {
 				common.SysLog("tenant model allow-list would deny model " + modelRequest.Model + " for tenant " + tc.TenantID + " (observe mode)")
 			}
 		}
+		// Tenant-admin self-narrowing (tenantpolicy.SelectionConfigKey): always
+		// enforced (it is the tenant's own explicit choice, so the platform's
+		// observe-first rollout mode does not apply) and ANDed with the
+		// platform list above, so it can only shrink access. Read faults fail
+		// open, same as the platform list.
+		if tc, terr := GetTenantContext(c); terr == nil && tc != nil && tc.TenantID != "" && modelRequest != nil && modelRequest.Model != "" {
+			selected, sconfigured, serr := tenantpolicy.LoadSelection(tc.TenantID)
+			if serr != nil {
+				common.SysLog("tenant model selection read failed for tenant " + tc.TenantID + ", failing open: " + serr.Error())
+			} else if sconfigured && !tenantpolicy.ModelAllowed(selected, modelRequest.Model) {
+				metrics.RecordTenantModelDenied(tc.TenantID, "enforced")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "Model "+modelRequest.Model+" is not allowed for this tenant", string(types.ErrorCodeModelBlocked))
+				return
+			}
+		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -264,6 +279,17 @@ func Distribute() func(c *gin.Context) {
 					// below instead — see the 404/503 site further down.
 					message := fmt.Sprintf("failed to select an available channel for model %s in group %s: %s", modelRequest.Model, showGroup, err.Error())
 					common.SysLog("distributor: " + message)
+					// Every candidate cooling after upstream 429s is a "back off"
+					// answer, not a model-not-found: own code, and a Retry-After
+					// the client can honour.
+					if errors.Is(err, app.ErrAllChannelsCooling) {
+						secs := app.CoolingRetryAfterSeconds(err)
+						c.Header("Retry-After", strconv.FormatInt(secs, 10))
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable,
+							fmt.Sprintf("all channels for model %s in group %s are rate-limited upstream; retry in ~%ds", modelRequest.Model, showGroup, secs),
+							string(types.ErrorCodeAllChannelsCooling))
+						return
+					}
 					// 如果错误，但是渠道不为空，说明是数据库一致性问题
 					//if channel != nil {
 					//	common.SysError(fmt.Sprintf("渠道不存在：%d", channel.Id))
@@ -590,13 +616,14 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *repo.Channel, model
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	key, index, newAPIError := channel.GetNextEnabledKey()
+	key, index, newAPIError := app.SelectKeyWithAffinity(c.Request.Context(), channel, common.GetContextKeyString(c, constant.ContextKeySessionAffinity))
 	if newAPIError != nil {
 		return newAPIError
 	}
 	if channel.ChannelInfo.IsMultiKey {
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, true)
 		common.SetContextKey(c, constant.ContextKeyChannelMultiKeyIndex, index)
+		applyKeyProxyOverride(c, channel, index)
 	} else {
 		// 必须设置为 false，否则在重试到单个 key 的时候会导致日志显示错误
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, false)

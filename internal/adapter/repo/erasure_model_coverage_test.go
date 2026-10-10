@@ -118,6 +118,7 @@ var erasureModelTypeRegistry = map[string]reflect.Type{
 	"entity.ModelRateLimit":             reflect.TypeOf(entity.ModelRateLimit{}),
 	"entity.BillingCheckoutOrder":       reflect.TypeOf(entity.BillingCheckoutOrder{}),
 	"entity.Project":                    reflect.TypeOf(entity.Project{}),
+	"entity.ProjectMember":              reflect.TypeOf(entity.ProjectMember{}),
 	"entity.ModelHealth":                reflect.TypeOf(entity.ModelHealth{}),
 	"entity.TenantInvite":               reflect.TypeOf(entity.TenantInvite{}),
 	"entity.UserSession":                reflect.TypeOf(entity.UserSession{}),
@@ -126,6 +127,10 @@ var erasureModelTypeRegistry = map[string]reflect.Type{
 	"entity.ChatSession":                reflect.TypeOf(entity.ChatSession{}),
 	"entity.ChatMessage":                reflect.TypeOf(entity.ChatMessage{}),
 	"entity.PlanQuotaGrant":             reflect.TypeOf(entity.PlanQuotaGrant{}),
+	"AccountKeyBinding":                 reflect.TypeOf(AccountKeyBinding{}),
+	"ContentRule":                       reflect.TypeOf(ContentRule{}),
+	"ChannelOverrideTemplate":           reflect.TypeOf(ChannelOverrideTemplate{}),
+	"ChannelTemplateApplication":        reflect.TypeOf(ChannelTemplateApplication{}),
 }
 
 // erasureCoveredModels: the cascade actively disposes of the matched field

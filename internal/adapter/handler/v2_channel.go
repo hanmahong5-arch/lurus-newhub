@@ -9,6 +9,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
@@ -44,6 +45,7 @@ type channelView struct {
 	ResponseTime int     `json:"response_time"`
 	TestTime     int64   `json:"test_time"`
 	CreatedTime  int64   `json:"created_time"`
+	channelOps
 }
 
 // ListChannelsV2 retrieves channels for the tenant (admin only)
@@ -60,7 +62,7 @@ func ListChannelsV2(c *gin.Context) {
 	}
 
 	// Check admin role
-	if !requireTenantAdmin(c, tenantCtx) {
+	if !isPlatformStaff(c, tenantCtx) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "Admin role required",
@@ -148,6 +150,7 @@ func ListChannelsV2(c *gin.Context) {
 	}
 
 	// Project to the field-whitelisted view (masked/empty key, no secrets).
+	opsByID := channelOpsFor(tenantCtx.TenantID, channels)
 	items := make([]channelView, 0, len(channels))
 	for _, ch := range channels {
 		items = append(items, channelView{
@@ -169,6 +172,7 @@ func ListChannelsV2(c *gin.Context) {
 			ResponseTime: ch.ResponseTime,
 			TestTime:     ch.TestTime,
 			CreatedTime:  ch.CreatedTime,
+			channelOps:   opsOrDefault(opsByID, ch),
 		})
 	}
 
@@ -197,7 +201,7 @@ func GetChannelV2(c *gin.Context) {
 	}
 
 	// Check admin role
-	if !requireTenantAdmin(c, tenantCtx) {
+	if !isPlatformStaff(c, tenantCtx) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "Admin role required",
@@ -269,7 +273,7 @@ func CreateChannelV2(c *gin.Context) {
 	}
 
 	// Check admin role
-	if !requireTenantAdmin(c, tenantCtx) {
+	if !isPlatformStaff(c, tenantCtx) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "Admin role required",
@@ -406,7 +410,7 @@ func UpdateChannelV2(c *gin.Context) {
 	}
 
 	// Check admin role
-	if !requireTenantAdmin(c, tenantCtx) {
+	if !isPlatformStaff(c, tenantCtx) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "Admin role required",
@@ -570,6 +574,9 @@ func UpdateChannelV2(c *gin.Context) {
 
 	// Refresh channel cache
 	AsyncGo(func() { repo.InitChannelCache() })
+	if existingChannel.Status == common.ChannelStatusEnabled && originalChannel.Status != common.ChannelStatusEnabled {
+		app.ClearChannelCooldown(existingChannel.Id)
+	}
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorAdmin, tenantCtx.UserID,
 		governance.ActionChannelUpdated, governance.ResourceChannel, existingChannel.Id, ""))
 
@@ -597,7 +604,7 @@ func DeleteChannelV2(c *gin.Context) {
 	}
 
 	// Check admin role
-	if !requireTenantAdmin(c, tenantCtx) {
+	if !isPlatformStaff(c, tenantCtx) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "Admin role required",

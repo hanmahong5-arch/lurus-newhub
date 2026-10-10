@@ -518,6 +518,8 @@ func migrateDB() error {
 		// Cost-attribution projects (migration 029) — the tenant -> project ->
 		// token dimension. A label, not a permission boundary (entity/project.go)
 		&entity.Project{},
+		// Project membership (migration 046) — the subject a dept_lead scope hangs on
+		&entity.ProjectMember{},
 		// Per-(channel, model) probe results (migration 044) — written by
 		// internal/app/modelprobe, read by the routing cache rebuild
 		&entity.ModelHealth{},
@@ -548,6 +550,16 @@ func migrateDB() error {
 		// cc_* plan quota grant ledger (migration 040) — idempotency rows for
 		// handler.PlanGrantV2; dual-creation like 036/038.
 		&entity.PlanQuotaGrant{},
+		// Per-account, per-product key bindings (migration 049) — dual-creation like
+		// 036/038: the SQL migration and these tags agree on the partial unique
+		// index name ux_account_key_bindings_live, so whichever runs first wins and
+		// the other is a no-op; this entry is the sole creator on a fresh database
+		// that skips the SQL runner and on the hermetic SQLite tier.
+		&AccountKeyBinding{},
+		// Relay data control (migration 050) — dual-creation like 049.
+		&ContentRule{},
+		&ChannelOverrideTemplate{},
+		&ChannelTemplateApplication{},
 	)
 	if err != nil {
 		return err

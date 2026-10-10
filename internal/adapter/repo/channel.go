@@ -165,14 +165,13 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 		// Randomly pick one enabled key
 		selectedIdx := enabledIdx[rand.Intn(len(enabledIdx))] // #nosec G404 — random key selection for load-balancing; math/rand is sufficient.
 		return keys[selectedIdx], selectedIdx, nil
+	case constant.MultiKeyModeWeighted:
+		return pickWeightedKey(channel, keys, enabledIdx)
 	case constant.MultiKeyModePolling:
-		// Use channel-specific lock to ensure thread-safe polling
-
 		channelInfo, err := CacheGetChannelInfo(channel.Id)
 		if err != nil {
 			return "", 0, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
-		//println("before polling index:", channel.ChannelInfo.MultiKeyPollingIndex)
 		defer func() {
 			if common.DebugEnabled {
 				println(fmt.Sprintf("channel %d polling index: %d", channel.Id, channel.ChannelInfo.MultiKeyPollingIndex))

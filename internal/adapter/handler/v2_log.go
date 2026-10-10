@@ -39,6 +39,13 @@ type logView struct {
 	TokenId          int    `json:"token_id"`
 	Group            string `json:"group"`
 	TotalLatencyMs   int    `json:"total_latency_ms"`
+	// What this request took from the customer's platform wallet, in
+	// 0.0001 yuan, as recorded at settlement (logs.charged_cny4); 0 when
+	// nothing was. The console's log detail shows it as "charged". It was
+	// missing from this view until 2026-10-05, so that line never rendered:
+	// the console's own test fed the field in by hand, and the real-chain
+	// acceptance scenario TC-M1 found it absent.
+	ChargedCNY4 int64 `json:"charged_cny4"`
 	// Omitted (not null) when the row carries no payload or the stored JSON is
 	// corrupt — embedding an invalid RawMessage would break marshalling of the
 	// entire response.
@@ -91,6 +98,7 @@ func toLogViews(logs []*repo.Log, includeInternalOther bool) []logView {
 			TokenId:          l.TokenId,
 			Group:            l.Group,
 			TotalLatencyMs:   l.TotalLatencyMs,
+			ChargedCNY4:      l.ChargedCNY4,
 			Other:            rawOther,
 		})
 	}
@@ -137,9 +145,17 @@ func GetLogsV2(c *gin.Context) {
 
 	offset := (page - 1) * pageSize
 
+	// A department lead reads their projects' rows instead of their own; a
+	// project_id outside that set is a 404.
+	scope := resolveLogReadScope(c, tenantCtx)
+	if scope.rejectProject(c, projectID) {
+		return
+	}
+
 	// Build log query params (tenant isolation via the explicit scope arg)
 	params := &repo.LogQueryParams{
-		UserID:        tenantCtx.UserID,
+		UserID:        scope.userID(tenantCtx.UserID),
+		ProjectIDs:    scope.projects(),
 		LogType:       logType,
 		ModelName:     modelName,
 		StartTime:     startTime,
@@ -219,6 +235,10 @@ func GetAllLogsV2(c *gin.Context) {
 	// The vendor's own request/trace id (TierInternal) — admin-only, so it
 	// is bound HERE (the tenant-admin route) and nowhere in GetLogsV2 above.
 	upstreamRequestID := c.Query("upstream_request_id")
+	if !isPlatformStaff(c, tenantCtx) {
+		// Customer tenant admins must not probe vendor ids (TierInternal).
+		upstreamRequestID = ""
+	}
 
 	if page < 1 {
 		page = 1
@@ -261,9 +281,10 @@ func GetAllLogsV2(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			// Full `other` (admin_info incl. route_attempts): this handler is
-			// gated on requireTenantAdmin above.
-			"logs":      toLogViews(logs, true),
+			// Platform staff get the full `other` (admin_info incl. route_attempts);
+			// a tenant admin is a CUSTOMER and gets the user view (TierInternal keys
+			// stripped, channel_name blank) — the route only gates on tenant-admin.
+			"logs":      toLogViews(logs, isPlatformStaff(c, tenantCtx)),
 			"total":     total,
 			"page":      page,
 			"page_size": pageSize,

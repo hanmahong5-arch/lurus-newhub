@@ -46,12 +46,13 @@ import (
 // concerned.
 var AuditExplicitRoutes = map[string]bool{
 	// api-v2-router.go: adminRoute (RootJWTAuth) — tenant.go
-	"POST /api/v2/admin/tenants":             true,
-	"PUT /api/v2/admin/tenants/:id":          true,
-	"DELETE /api/v2/admin/tenants/:id":       true,
-	"POST /api/v2/admin/tenants/:id/enable":  true,
-	"POST /api/v2/admin/tenants/:id/disable": true,
-	"POST /api/v2/admin/tenants/:id/suspend": true,
+	"POST /api/v2/admin/tenants":                          true,
+	"PUT /api/v2/admin/tenants/:id":                       true,
+	"DELETE /api/v2/admin/tenants/:id":                    true,
+	"POST /api/v2/admin/tenants/:id/enable":               true,
+	"PUT /api/v2/admin/tenants/:id/members/:user_id/role": true,
+	"POST /api/v2/admin/tenants/:id/disable":              true,
+	"POST /api/v2/admin/tenants/:id/suspend":              true,
 	// tenant_model_limits.go
 	"PUT /api/v2/admin/tenants/:id/model-limits":    true,
 	"DELETE /api/v2/admin/tenants/:id/model-limits": true,
@@ -76,6 +77,14 @@ var AuditExplicitRoutes = map[string]bool{
 	"DELETE /api/v2/admin/users/:id/sessions": true, // L7 — explicit as of this lane
 	// v2_admin_options.go → option.go (one level of delegation)
 	"PUT /api/v2/admin/options": true,
+	// v2_data_policy.go / v2_channel_templates.go (migration 050)
+	"POST /api/v2/admin/content-rules":               true,
+	"PUT /api/v2/admin/content-rules/:id":            true,
+	"DELETE /api/v2/admin/content-rules/:id":         true,
+	"POST /api/v2/admin/channel-templates":           true,
+	"PUT /api/v2/admin/channel-templates/:id":        true,
+	"DELETE /api/v2/admin/channel-templates/:id":     true,
+	"POST /api/v2/admin/channel-templates/:id/apply": true,
 	// switch_preset.go — explicit as of this lane
 	"POST /api/v2/admin/switch/presets": true,
 	// v2_admin_routing.go — L5, explicit as of this lane

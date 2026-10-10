@@ -7,35 +7,35 @@ import (
 )
 
 type Token struct {
-	Id                 int            `json:"id"`
-	UserId             int            `json:"user_id" gorm:"index;index:idx_tenant_user,priority:2"`
-	TenantId           string         `json:"tenant_id" gorm:"type:varchar(36);index;index:idx_tenant_user,priority:1;default:'default'"` // Tenant isolation
-	Key                string         `json:"key" gorm:"type:char(48);uniqueIndex"`
-	Status             int            `json:"status" gorm:"default:1"`
-	Name               string         `json:"name" gorm:"index"`
-	CreatedTime        int64          `json:"created_time" gorm:"bigint"`
-	AccessedTime       int64          `json:"accessed_time" gorm:"bigint"`
-	ExpiredTime        int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
-	RemainQuota        int            `json:"remain_quota" gorm:"default:0"`
-	UnlimitedQuota     bool           `json:"unlimited_quota"`
-	ModelLimitsEnabled bool           `json:"model_limits_enabled"`
-	ModelLimits        string         `json:"model_limits" gorm:"type:varchar(1024);default:''"`
-	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
-	UsedQuota          int            `json:"used_quota" gorm:"default:0"`
-	Group              string         `json:"group" gorm:"default:''"`
-	CrossGroupRetry    bool           `json:"cross_group_retry"`
+	Id                 int     `json:"id"`
+	UserId             int     `json:"user_id" gorm:"index;index:idx_tenant_user,priority:2"`
+	TenantId           string  `json:"tenant_id" gorm:"type:varchar(36);index;index:idx_tenant_user,priority:1;default:'default'"` // Tenant isolation
+	Key                string  `json:"key" gorm:"type:char(48);uniqueIndex"`
+	Status             int     `json:"status" gorm:"default:1"`
+	Name               string  `json:"name" gorm:"index"`
+	CreatedTime        int64   `json:"created_time" gorm:"bigint"`
+	AccessedTime       int64   `json:"accessed_time" gorm:"bigint"`
+	ExpiredTime        int64   `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
+	RemainQuota        int     `json:"remain_quota" gorm:"default:0"`
+	UnlimitedQuota     bool    `json:"unlimited_quota"`
+	ModelLimitsEnabled bool    `json:"model_limits_enabled"`
+	ModelLimits        string  `json:"model_limits" gorm:"type:varchar(1024);default:''"`
+	AllowIps           *string `json:"allow_ips" gorm:"default:''"`
+	UsedQuota          int     `json:"used_quota" gorm:"default:0"`
+	Group              string  `json:"group" gorm:"default:''"`
+	CrossGroupRetry    bool    `json:"cross_group_retry"`
 	// Scopes is a comma-separated allowlist of relay scopes (see
 	// pkg/types/token_scope.go). Empty = no restriction (backward compat).
 	// Migration 015 introduced the column. ADR Phase E2.
-	Scopes             string         `json:"scopes" gorm:"type:varchar(255);default:''"`
-	IdentityAccountID  int64          `json:"identity_account_id" gorm:"default:0;index:idx_identity_account,where:identity_account_id > 0"` // lurus-platform account ID
+	Scopes            string `json:"scopes" gorm:"type:varchar(255);default:''"`
+	IdentityAccountID int64  `json:"identity_account_id" gorm:"default:0;index:idx_identity_account,where:identity_account_id > 0"` // lurus-platform account ID
 	// CreatorUserID is the users.id of the Reseller who issued this key via the
 	// Provisioning API (POST /internal/v1/provisioning/tenants/:slug/keys).
 	// 0 = legacy / non-provisioned key. See ADR 2026-05-18 §3.3.
-	CreatorUserId int            `json:"creator_user_id" gorm:"default:0;index:idx_tokens_creator_user_id,where:creator_user_id > 0"`
+	CreatorUserId int `json:"creator_user_id" gorm:"default:0;index:idx_tokens_creator_user_id,where:creator_user_id > 0"`
 	// LastUsedAt is updated on relay hit for Provisioning-issued keys. Unix
 	// seconds. 0 = never used. See ADR 2026-05-18 §3.3.
-	LastUsedAt    int64          `json:"last_used_at" gorm:"default:0"`
+	LastUsedAt int64 `json:"last_used_at" gorm:"default:0"`
 	// RateLimitRPM caps this token's relay requests per minute (sliding window,
 	// enforced by middleware.BusinessRateLimit). 0 = unlimited — every row that
 	// predates migration 023 keeps its unthrottled behavior.
@@ -52,8 +52,28 @@ type Token struct {
 	// The tag MUST stay byte-identical to repo.Token.ProjectId: both structs
 	// are AutoMigrated, so a divergence makes the two boots fight over the
 	// column definition.
-	ProjectId          int            `json:"project_id" gorm:"not null;default:0"`
-	DeletedAt          gorm.DeletedAt `gorm:"index"`
+	ProjectId int `json:"project_id" gorm:"not null;default:0"`
+	// TrustedIdentityHeaders (migration 045) marks a key whose caller is a
+	// customer's own gateway: only such a key may name the employee and
+	// department of a request through X-Lurus-Employee / X-Lurus-Dept. For any
+	// other key those headers are ignored (and counted), because the host
+	// nginx forwards every client header verbatim. Settable by a tenant admin
+	// only. Tag MUST stay byte-identical to repo.Token.
+	TrustedIdentityHeaders bool `json:"trusted_identity_headers" gorm:"not null;default:false"`
+	// EmployeeRef (migration 045) is the employee this key was issued to; the
+	// default attribution when no trusted X-Lurus-Employee header overrides it.
+	// Unique per tenant among live tokens when non-empty (partial index in 045).
+	EmployeeRef string `json:"employee_ref" gorm:"type:varchar(64);not null;default:''"`
+	// SourceProduct (migration 049) is the product this key is bound to: the relay
+	// attributes traffic to it when the caller sends no allow-listed X-Lurus-Product.
+	// Tag MUST stay byte-identical to repo.Token.
+	SourceProduct string `json:"source_product" gorm:"type:varchar(32);not null;default:''"`
+	// LogRetention (migration 050, column content_retention): per-key log retention, '' = inherit the tenant's;
+	// full|metadata_only|none and it can only tighten (contentpolicy.Resolve takes the
+	// strictest layer). Written only by the dedicated endpoint, never by token create/update.
+	// Tag MUST stay byte-identical to repo.Token.
+	LogRetention string         `json:"content_retention" gorm:"column:content_retention;type:varchar(16);not null;default:''"`
+	DeletedAt    gorm.DeletedAt `gorm:"index"`
 }
 
 func (token *Token) Clean() {

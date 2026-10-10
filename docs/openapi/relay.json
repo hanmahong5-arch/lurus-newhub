@@ -3940,6 +3940,7 @@
             "enum": [
               "invalid_request",
               "sensitive_words_detected",
+              "content_rejected",
               "count_token_failed",
               "model_price_error",
               "invalid_api_type",
@@ -3947,6 +3948,7 @@
               "do_request_failed",
               "get_channel_failed",
               "gen_relay_info_failed",
+              "all_channels_cooling",
               "channel:no_available_key",
               "channel:all_keys_cooling",
               "channel:param_override_invalid",

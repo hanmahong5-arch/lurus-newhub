@@ -50,6 +50,12 @@ type Log struct {
 	// route for a new index on this table is that directive — still not a
 	// struct tag.
 	ProjectId int `json:"project_id" gorm:"not null;default:0"`
+	// EmployeeRef (migration 045) is the employee the request is attributed
+	// to: the trusted X-Lurus-Employee header, else the token's own
+	// employee_ref. '' = unattributed. A real column (not Other JSON) so the
+	// index in migration 047 can serve it; like ProjectId it can never be
+	// backfilled, and carries NO `index:` tag for the same reason.
+	EmployeeRef string `json:"employee_ref" gorm:"type:varchar(64);not null;default:''"`
 	// ChargedCNY4 is what this request actually took from the customer's
 	// platform wallet, in 0.0001 CNY (the wallet's own numeric(14,4) unit),
 	// recorded at settlement (migration 041). 0 = not wallet-charged: a
@@ -67,6 +73,16 @@ type Log struct {
 	// before the column existed (or zero quota); readers price those at
 	// today's rate and flag the figure as an estimate.
 	PricedCNY4 int64 `json:"priced_cny4" gorm:"type:bigint;not null;default:0"`
+	// ChannelKeyIdx (migration 051) is the index of the upstream key a
+	// multi-key channel used for this request; -1 = single-key channel or a
+	// row written before the column existed. Stamped by the repo log writers
+	// from the request context. NO `index:` tag (see the note above).
+	//
+	// It is a pointer on purpose: GORM treats a zero value as "unset" and
+	// substitutes the column default (-1) for it, which would silently turn
+	// key #0 into "no key". A non-nil pointer to 0 is inserted as 0; nil keeps
+	// the DB default for the writers that never learned about keys.
+	ChannelKeyIdx *int64 `json:"channel_key_idx,omitempty" gorm:"type:bigint;not null;default:-1"`
 }
 
 // INDEXES ON `logs` THAT THIS STRUCT DELIBERATELY DOES NOT DECLARE
@@ -115,6 +131,7 @@ type RecordConsumeLogParams struct {
 	// Filled by governance.EnrichLogParams — the single chokepoint every
 	// RecordConsumeLog call site passes through. 0 = unassigned.
 	ProjectId      int    `json:"project_id"`
+	EmployeeRef    string `json:"employee_ref"` // see Log.EmployeeRef; filled by EnrichLogParams
 	ChargedCNY4    int64  `json:"charged_cny4"` // see Log.ChargedCNY4; filled by EnrichLogParams
 	PricedCNY4     int64  `json:"priced_cny4"`  // see Log.PricedCNY4; filled by EnrichLogParams from Quota
 	LogDetailLevel string `json:"-"`            // Governance: "none" skips logging, "full" adds prompt preview
@@ -138,6 +155,13 @@ type LogQueryParams struct {
 	// first-class row, and overloading 0 to mean both would make every caller
 	// that forgets to set the field silently return only unassigned traffic.
 	ProjectID int
+	// ProjectIDs restricts to `project_id IN (...)` (department lead scope).
+	// nil = no restriction; a NON-nil empty slice matches nothing (fail
+	// closed: a lead with no projects must not fall through to every row).
+	// Combined with ProjectID by AND.
+	ProjectIDs []int
+	// EmployeeRef filters by exact logs.employee_ref. Empty = no filter.
+	EmployeeRef string
 	// SourceProduct filters by the cross-product attribution tag (Workstream
 	// 0) carried in the row's Other JSON. Empty = no filter, matching the
 	// convention of every other string filter on this struct (ModelName,
