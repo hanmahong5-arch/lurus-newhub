@@ -28,12 +28,23 @@ func SetModalityOverridesForTest(m map[string]string) {
 }
 
 // loadModalityOverrides reads every non-empty override. It fails open: on any
-// error (for example a database whose models table predates migration 053) it
-// returns an empty map, because losing an override only falls back to
+// error it returns an empty map, because losing an override only falls back to
 // inference and must never block a channel write or a cache rebuild.
+//
+// The table and column are probed through the migrator BEFORE the read: db is
+// usually the caller's open write transaction (AddAbilities / UpdateAbilities
+// inside BatchSetChannelTag and friends), and on PostgreSQL a statement that
+// errors inside a transaction aborts the whole transaction - every later
+// statement fails with SQLSTATE 25P02 and the channel write is lost. SQLite
+// tolerates the failed statement, so only the PG tier
+// (TestChannelRepo_SetTagsBatch_PG) ever showed this. The probes are
+// information_schema reads that cannot fail that way.
 func loadModalityOverrides(db *gorm.DB) map[string]string {
 	out := map[string]string{}
 	if db == nil {
+		return out
+	}
+	if m := db.Migrator(); !m.HasTable("models") || !m.HasColumn(&Model{}, "modality") {
 		return out
 	}
 	var rows []struct {
