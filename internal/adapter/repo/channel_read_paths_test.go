@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -135,10 +136,10 @@ func TestListChannelTemplateApplications(t *testing.T) {
 
 func TestAuditTenant_RequiresTenant(t *testing.T) {
 	defer setupSQLiteDB(t)()
-	if _, _, err := ListTenantAuditEvents("", "", 0, 0, 0, 0, 10); err != ErrAuditTenantRequired {
+	if _, _, err := ListTenantAuditEvents("", "", 0, 0, 0, 0, 10); !errors.Is(err, ErrAuditTenantRequired) {
 		t.Fatalf("list err = %v", err)
 	}
-	if _, _, err := ExportTenantAuditEvents("", 0, "", 0, 0, 0, 10); err != ErrAuditTenantRequired {
+	if _, _, err := ExportTenantAuditEvents("", 0, "", 0, 0, 0, 10); !errors.Is(err, ErrAuditTenantRequired) {
 		t.Fatalf("export err = %v", err)
 	}
 }
