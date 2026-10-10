@@ -76,9 +76,40 @@ command -v setsid >/dev/null && DETACH=setsid
 
 for cmd in go bun curl; do command -v "$cmd" >/dev/null || die "missing $cmd"; done
 
+# wait_pg waits until the container answers pg_isready AND the host-mapped
+# port accepts a TCP connection (what lurus-api actually dials; under rootless
+# docker the port proxy can lag the server), failing loudly instead of
+# letting a later step report a confusing "connection refused".
+wait_pg() {
+  local name="$1" port="$2"
+  for _ in $(seq 1 90); do
+    if docker exec "$name" pg_isready -U postgres -d newhub >/dev/null 2>&1 \
+       && (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  die "postgres container $name not reachable on 127.0.0.1:${port} after 90s"
+}
+
+# ensure_pg re-checks the disposable Postgres after the builds (minutes on a
+# loaded runner): a container that died meanwhile (OOM, docker restart) is
+# started again on the same port so the DSN stays valid.
+ensure_pg() {
+  [ -n "$PG_CONTAINER" ] || return 0
+  if [ "$(docker inspect -f '{{.State.Running}}' "$PG_CONTAINER" 2>/dev/null)" != "true" ]; then
+    log "postgres container $PG_CONTAINER is gone after the build, starting it again"
+    docker run -d --rm --name "$PG_CONTAINER" --tmpfs /var/lib/postgresql/data \
+      -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=newhub \
+      -p "127.0.0.1:${PG_PORT}:5432" postgres:16-alpine >/dev/null
+  fi
+  wait_pg "$PG_CONTAINER" "$PG_PORT"
+}
+
 # --- 1. PostgreSQL 16 and Redis ---------------------------------------------
 SQL_DSN="${ACCEPT_SQL_DSN:-}"
 PG_CONTAINER=""
+PG_PORT=""
 if [ -z "$SQL_DSN" ]; then
   command -v docker >/dev/null || die "ACCEPT_SQL_DSN unset and no docker to start PostgreSQL"
   pg_port=$(free_port)
@@ -88,10 +119,8 @@ if [ -z "$SQL_DSN" ]; then
     -p "127.0.0.1:${pg_port}:5432" postgres:16-alpine >/dev/null
   CONTAINERS+=("$name")
   PG_CONTAINER="$name"
-  for _ in $(seq 1 60); do
-    docker exec "$name" pg_isready -U postgres -d newhub >/dev/null 2>&1 && break
-    sleep 1
-  done
+  PG_PORT="$pg_port"
+  wait_pg "$name" "$pg_port"
   SQL_DSN="postgres://postgres:postgres@127.0.0.1:${pg_port}/newhub?sslmode=disable"
 fi
 REDIS_URL="${ACCEPT_REDIS_URL:-}"
@@ -122,6 +151,7 @@ log "building lurus-api ($VERSION) and fakeupstream"
 CGO_ENABLED=0 go build -ldflags "-X 'github.com/LurusTech/lurus-hub/internal/pkg/common.Version=${VERSION}'" \
   -o "$WORK/lurus-api" ./cmd/server
 CGO_ENABLED=0 go build -o "$WORK/fakeupstream" ./cmd/fakeupstream
+ensure_pg
 
 # --- 3. Fake vendor + fake platform -----------------------------------------
 FAKE_PORT=$(free_port)
