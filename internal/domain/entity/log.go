@@ -83,6 +83,18 @@ type Log struct {
 	// key #0 into "no key". A non-nil pointer to 0 is inserted as 0; nil keeps
 	// the DB default for the writers that never learned about keys.
 	ChannelKeyIdx *int64 `json:"channel_key_idx,omitempty" gorm:"type:bigint;not null;default:-1"`
+	// Unified retrieval metering (migration 053). Real columns rather than
+	// Other-JSON keys so analytics can GROUP BY them. '' / 0 = row written
+	// before the columns existed (token semantics). NO `index:` tag (see the
+	// note above).
+	//   UsageUnit:          token | search_unit | request
+	//   UsageQuantity:      units actually charged in that unit
+	//   UsageSource:        upstream | estimated | unreported
+	//   RetrievalDocuments: rerank = documents scored, embeddings = inputs embedded
+	UsageUnit          string `json:"usage_unit" gorm:"type:varchar(16);not null;default:''"`
+	UsageQuantity      int64  `json:"usage_quantity" gorm:"type:bigint;not null;default:0"`
+	UsageSource        string `json:"usage_source" gorm:"type:varchar(16);not null;default:''"`
+	RetrievalDocuments int    `json:"retrieval_documents" gorm:"type:integer;not null;default:0"`
 }
 
 // INDEXES ON `logs` THAT THIS STRUCT DELIBERATELY DOES NOT DECLARE
@@ -130,11 +142,16 @@ type RecordConsumeLogParams struct {
 	// ProjectId carries the token's project attribution to the log row.
 	// Filled by governance.EnrichLogParams — the single chokepoint every
 	// RecordConsumeLog call site passes through. 0 = unassigned.
-	ProjectId      int    `json:"project_id"`
-	EmployeeRef    string `json:"employee_ref"` // see Log.EmployeeRef; filled by EnrichLogParams
-	ChargedCNY4    int64  `json:"charged_cny4"` // see Log.ChargedCNY4; filled by EnrichLogParams
-	PricedCNY4     int64  `json:"priced_cny4"`  // see Log.PricedCNY4; filled by EnrichLogParams from Quota
-	LogDetailLevel string `json:"-"`            // Governance: "none" skips the log row AND vetoes body archiving; any other value leaves body archiving to the tenant policy (consent + retention=full), see repo.ShouldArchiveLogBody
+	ProjectId   int    `json:"project_id"`
+	EmployeeRef string `json:"employee_ref"` // see Log.EmployeeRef; filled by EnrichLogParams
+	ChargedCNY4 int64  `json:"charged_cny4"` // see Log.ChargedCNY4; filled by EnrichLogParams
+	PricedCNY4  int64  `json:"priced_cny4"`  // see Log.PricedCNY4; filled by EnrichLogParams from Quota
+	// Unified retrieval metering, see the same-named Log fields (migration 053).
+	UsageUnit          string `json:"usage_unit"`
+	UsageQuantity      int64  `json:"usage_quantity"`
+	UsageSource        string `json:"usage_source"`
+	RetrievalDocuments int    `json:"retrieval_documents"`
+	LogDetailLevel     string `json:"-"` // Governance: "none" skips the log row AND vetoes body archiving; any other value leaves body archiving to the tenant policy (consent + retention=full), see repo.ShouldArchiveLogBody
 }
 
 // LogQueryParams contains parameters for log queries

@@ -471,6 +471,8 @@ func migrateDB() error {
 		&Log{},
 		// Opt-in prompt/response archive (migration 052).
 		&entity.LogBody{},
+		// Decision-model routing policies (migration 054).
+		&entity.RoutingPolicy{},
 		&Midjourney{},
 		&QuotaData{},
 		&Task{},

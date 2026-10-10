@@ -131,6 +131,39 @@ async function openDrawer() {
   await userEvent.click(btn)
 }
 
+describe('channel modality column', () => {
+  it('shows modalities and flags backend-reported mismatches', async () => {
+    baseHandlers({
+      '/channels': {
+        channels: [
+          listItem(1, {
+            model_modalities: { 'model-a': 'chat', 'model-r': 'rerank' },
+            modality_mismatches: [
+              { model: 'model-r', reason: 'adapter_unsupported' },
+            ],
+          }),
+          listItem(2, { model_modalities: {}, modality_mismatches: [] }),
+          listItem(3),
+        ],
+        total: 3,
+        page: 1,
+        page_size: 20,
+      },
+    })
+    renderPage()
+    const cell = await screen.findByTestId('channel-1-modality')
+    expect(within(cell).getByText('Chat model')).toBeInTheDocument()
+    expect(within(cell).getByText('Rerank')).toBeInTheDocument()
+    expect(screen.getByTestId('channel-1-mismatch')).toHaveTextContent(
+      'Mismatch'
+    )
+    // No data (or an older backend) shows a dash and never a mismatch flag.
+    expect(screen.getByTestId('channel-2-modality')).toHaveTextContent('--')
+    expect(screen.getByTestId('channel-3-modality')).toHaveTextContent('--')
+    expect(screen.queryByTestId('channel-2-mismatch')).toBeNull()
+  })
+})
+
 describe('channel list', () => {
   it('shows status, plan, key count, expiry and routability from the list payload alone', async () => {
     baseHandlers({

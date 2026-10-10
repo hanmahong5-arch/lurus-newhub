@@ -59,7 +59,8 @@ const (
 	// POST /v1/systemone and share APITypeSystemOne.
 	ChannelTypeTypeSafe            = 57
 	ChannelTypeSystemOneCompatible = 58
-	ChannelTypeDummy               = 59 // this one is only for count, do not add any channel after this
+	ChannelTypeVoyage              = 59
+	ChannelTypeDummy               = 60 // this one is only for count, do not add any channel after this
 
 )
 
@@ -123,6 +124,7 @@ var ChannelBaseURLs = []string{
 	"https://api.replicate.com",                 //56
 	"https://api.typesafe.ai",                   //57
 	"",                                          //58
+	"https://api.voyageai.com",                  //59
 }
 
 var ChannelTypeNames = map[int]string{
@@ -182,6 +184,7 @@ var ChannelTypeNames = map[int]string{
 
 	ChannelTypeTypeSafe:            "TypeSafe",
 	ChannelTypeSystemOneCompatible: "System One compatible (self-hosted)",
+	ChannelTypeVoyage:              "Voyage",
 }
 
 func GetChannelTypeName(channelType int) string {

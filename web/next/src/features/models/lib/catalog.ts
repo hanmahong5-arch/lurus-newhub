@@ -65,6 +65,12 @@ export interface PricingRow {
   completion_ratio?: number | null;
   cache_ratio?: number | null;
   supported_endpoint_types?: string[] | null;
+  /** chat | embedding | rerank | decision | image | audio; absent = unknown. */
+  modality?: string | null;
+  /** "search_unit" when a search-unit price exists (even 0), else "token". */
+  usage_unit?: string | null;
+  /** Absent/null = not configured; 0 = explicitly free. */
+  search_unit_price?: number | null;
 }
 
 export interface CatalogueRow {
@@ -89,12 +95,49 @@ export interface PerformanceRow {
   enough_samples?: boolean;
 }
 
+export type UsageUnit = 'token' | 'search_unit';
+
+/** Modalities the server can report, in display order. */
+export const MODALITIES = [
+  'chat',
+  'embedding',
+  'rerank',
+  'decision',
+  'image',
+  'audio',
+] as const;
+
+/** English source label for a modality; unknown values pass through. */
+export const modalityLabelKey = (m: string): string => {
+  switch (m) {
+    case 'chat':
+      return 'Chat model';
+    case 'embedding':
+      return 'Embedding';
+    case 'rerank':
+      return 'Rerank';
+    case 'decision':
+      return 'Decision';
+    case 'image':
+      return 'Image model';
+    case 'audio':
+      return 'Audio';
+    default:
+      return m;
+  }
+};
+
 export interface ModelEntry {
   id: string;
   vendor: string;
   description: string;
   tags: string[];
   capabilities: string[];
+  /** "" = unknown. */
+  modality: string;
+  usageUnit: UsageUnit;
+  /** null = not configured (distinct from 0 = free). USD per search unit. */
+  searchUnitPrice: number | null;
   routable: boolean;
   priced: boolean;
   /** 1 = billed per call; anything else = per token. */
@@ -155,6 +198,9 @@ export function buildCatalog({
         description: '',
         tags: [],
         capabilities: [],
+        modality: '',
+        usageUnit: 'token',
+        searchUnitPrice: null,
         routable: false,
         priced: false,
         quotaType: null,
@@ -204,6 +250,10 @@ export function buildCatalog({
         .filter(Boolean);
     }
     addCaps(e, p.supported_endpoint_types);
+    e.modality = typeof p.modality === 'string' ? p.modality : '';
+    e.usageUnit = p.usage_unit === 'search_unit' ? 'search_unit' : 'token';
+    // Absent/null stays null ("not configured"); a literal 0 stays 0 ("free").
+    e.searchUnitPrice = num(p.search_unit_price);
     e.quotaType = p.quota_type ?? 0;
     if (e.quotaType === 1) {
       const price = num(p.model_price);
@@ -255,6 +305,7 @@ export function buildCatalog({
 
 /** A usable price exists: a positive per-call price, or a positive input price. */
 export function hasPrice(e: ModelEntry): boolean {
+  if (e.usageUnit === 'search_unit') return e.searchUnitPrice !== null;
   if (e.quotaType === 1) return (e.perCall ?? 0) > 0;
   return (e.inputPerM ?? 0) > 0;
 }

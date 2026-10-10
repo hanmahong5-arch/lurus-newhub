@@ -565,3 +565,78 @@ curl -X PUT https://hub.lurus.cn/api/v2/acme/channels/12 -H "Authorization: Bear
   pass-through 时整个原始请求体原样透传,此时上游会看到它)。
 
 **目前没有兄弟产品接入 `provider`**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均未在请求体里发送该对象)。
+
+### N. Dify / LangChain / LlamaIndex:把 newhub 当 OpenAI 兼容(chat + embeddings)与 Jina 兼容 rerank 提供方
+
+newhub 对外三个端点与这些框架的内置适配直接对得上,不需要自定义协议:
+
+| 能力 | 端点 | 兼容口径 |
+|---|---|---|
+| 对话 | `POST /v1/chat/completions` | OpenAI |
+| 向量 | `POST /v1/embeddings` | OpenAI(`input`、`dimensions`、`encoding_format`) |
+| 重排序 | `POST /v1/rerank` | Jina / Cohere 风格(`query`、`documents`、`top_n`、`return_documents`) |
+
+通用三要素:`base_url` = `https://hub.lurus.cn/v1`,`api_key` = 网关发的 `sk-` key(普通 Bearer),`model` = 价格目录里的公开模型名(`GET /v1/models` 可列)。下面的 `model-a` / `model-b` / `model-c` 仅为占位,换成租户实际可用的对话 / 向量 / 重排模型。
+
+**Dify**(设置 → 模型供应商 → 添加「OpenAI-API-compatible」,界面字段名以所用版本为准):
+
+```text
+模型类型        LLM / Text Embedding / Rerank(各添加一次)
+模型名称        model-a(对话)、model-b(向量)、model-c(重排)
+API Key         sk-...
+API endpoint URL  https://hub.lurus.cn/v1
+```
+
+Dify 的 rerank 类型会请求 `{endpoint}/rerank`,即 `POST https://hub.lurus.cn/v1/rerank`。知识库「Top K / 召回数」映射到 `top_n`。
+
+**LangChain**(Python):
+
+```python
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.document_compressors import JinaRerank
+
+llm = ChatOpenAI(model="model-a", base_url="https://hub.lurus.cn/v1", api_key="sk-...")
+emb = OpenAIEmbeddings(
+    model="model-b",
+    base_url="https://hub.lurus.cn/v1",
+    api_key="sk-...",
+    check_embedding_ctx_length=False,   # 非 OpenAI 模型必须关,否则客户端会把文本预先切成 token id 数组再发
+)
+rerank = JinaRerank(
+    model="model-c",
+    jina_api_key="sk-...",
+    jina_api_url="https://hub.lurus.cn/v1/rerank",   # 默认指向官方地址,必须显式覆盖
+    top_n=5,
+)
+```
+
+**LlamaIndex**(Python):
+
+```python
+from llama_index.llms.openai_like import OpenAILike
+from llama_index.embeddings.openai_like import OpenAILikeEmbedding
+
+llm = OpenAILike(model="model-a", api_base="https://hub.lurus.cn/v1", api_key="sk-...", is_chat_model=True)
+emb = OpenAILikeEmbedding(model_name="model-b", api_base="https://hub.lurus.cn/v1", api_key="sk-...", embed_batch_size=64)
+```
+
+不要用 `OpenAIEmbedding`:它会按 OpenAI 的模型枚举校验 `model`,自定义模型名直接报错。LlamaIndex 的内置 rerank 后处理器各自把地址写死到对应厂商,是否支持改 URL 取决于版本;可靠做法是直接调 `/v1/rerank`:
+
+```python
+import httpx
+r = httpx.post("https://hub.lurus.cn/v1/rerank",
+               headers={"Authorization": "Bearer sk-..."},
+               json={"model": "model-c", "query": "...", "documents": ["...", "..."], "top_n": 3})
+r.raise_for_status()
+results = r.json()["results"]   # 按 relevance_score 降序;每项 {index, relevance_score[, document]}
+```
+
+**注意事项**
+
+- **embeddings 单次 `input` 至多 2048 条**,超出返回 400 `invalid_request`(网关本地拒绝,不会打到上游)。各框架默认批大小(LangChain 1000、LlamaIndex 10、Dify 10)都在限内;自己调大批量时别越线。条目不能为空串,`dimensions` 取 1–65536。
+- **`encoding_format` 只接受 `float` 或 `base64`**(缺省 `float`),其他值 400。新版 OpenAI SDK 默认用 `base64` 再自行解码,网关支持。
+- **`input_type` / `task` 不是通用字段**:`input_type` 只有 Voyage 渠道能转发,`task` 只有 Jina 渠道能转发。发给其他渠道会得到 400 `unsupported_parameter`,而不是被静默丢弃后照常计费。
+- **rerank 的 `top_n`** 原样转发给上游;不传则返回全部文档的得分。`return_documents` 缺省不回原文。结果必须按 `relevance_score` 降序,上游返回乱序会被判为 502 `invalid_provider_response`。
+- **模型与端点不匹配**:拿对话模型调 `/v1/rerank`(或反之)时,在 `ROUTING_MODALITY_FILTER=enforce` 下返回 501 `provider_capability_not_supported`,`error.details.reasons[]` 说明原因与受影响路由数;默认的 `observe` 只记日志不拦截。
+- **rerank 的 search unit 计价**:管理员给该 rerank 模型配了 `SearchUnitPrice` 后,按 `ceil(文档数/100) × 1` 个检索单位计费,与 token 数无关,所以一次请求塞 100 篇和 1 篇文档价格相同,101 篇则翻倍;没配则回落 token 计价。费用从响应头 `X-Request-Cost` 或日志的 `usage_unit` / `usage_quantity` 查,细则见 `doc/runbook/retrieval-metering.md`。控制台的 Dashboard 可按接口类型 / 计费单位分组看用量。
+- 错误体沿用 OpenAI 信封(`error.message` / `error.code`),各框架按 HTTP 状态码映射异常;完整的错误码枚举见 `docs/openapi/relay.json` 的 `GatewayError`。

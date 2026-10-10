@@ -1,1 +1,16 @@
-{}
+{
+  "Not configured": "Not configured",
+  "Free": "Free",
+  "Per search unit": "Per search unit",
+  "Per token": "Per token",
+  "/search unit": "/ search unit",
+  "Modality": "Modality",
+  "Billing unit": "Billing unit",
+  "Price per search unit": "Price per search unit",
+  "Chat model": "Chat",
+  "Embedding": "Embedding",
+  "Rerank": "Rerank",
+  "Decision": "Decision",
+  "Image model": "Image",
+  "Audio": "Audio"
+}

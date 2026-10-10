@@ -7,6 +7,14 @@ const (
 	ContextKeyPromptTokens    ContextKey = "prompt_tokens"
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"
 
+	// ContextKeyRelayMode is the request's relay mode (provider/constant
+	// RelayMode*) resolved ONCE from the URL path at the distributor entry, for
+	// the modality route filter. It is deliberately NOT the bare "relay_mode"
+	// key: that slot is written later by the mj/video/audio branches and read
+	// by RelayInfo and the error log, and pre-filling it here would change
+	// what those readers see (e.g. the video branch's "only if unset" check).
+	ContextKeyRelayMode ContextKey = "routing_relay_mode"
+
 	ContextKeyOriginalModel    ContextKey = "original_model"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
 

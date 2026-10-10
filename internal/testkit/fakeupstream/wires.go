@@ -2,6 +2,7 @@ package fakeupstream
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -224,6 +225,55 @@ func (s *Server) serveGemini(c *call) {
 // serveSystemOne answers every question with its first option. The product
 // is billed on input tokens only; output_tokens is reported because the
 // hosted API reports it.
+// Keyword -> probability the keyed option receives in a choice question. A
+// test (or a UAT run against the fault simulator's "ok-decision" model) steers
+// the distribution by putting a keyword in an option's criteria text, so the
+// answer is a pure function of the request and never needs a queued fault.
+//
+//	"cheap" -> 0.8   a confident pick (clears the default 0.65 threshold)
+//	"vague" -> 0.4   a weak pick (falls under it)
+//
+// The first matching option in label order wins; the remaining probability is
+// spread evenly over the other options so the distribution always sums to 1.
+var choiceKeywordProbability = []struct {
+	keyword string
+	p       float64
+}{{"cheap", 0.8}, {"vague", 0.4}}
+
+// choiceDistribution returns the chosen label and the full distribution for a
+// criteria object (label -> text). ok is false when no keyword matched, in
+// which case the caller keeps the historical "first label, probability 1".
+func choiceDistribution(crit map[string]any) (choice string, probs map[string]any, ok bool) {
+	labels := make([]string, 0, len(crit))
+	for k := range crit {
+		labels = append(labels, k)
+	}
+	sort.Strings(labels)
+	for _, kw := range choiceKeywordProbability {
+		for _, l := range labels {
+			text, _ := crit[l].(string)
+			if !strings.Contains(strings.ToLower(text), kw.keyword) {
+				continue
+			}
+			probs = make(map[string]any, len(labels))
+			rest := 0.0
+			if len(labels) > 1 {
+				rest = (1 - kw.p) / float64(len(labels)-1)
+			}
+			for _, o := range labels {
+				probs[o] = rest
+			}
+			if len(labels) == 1 {
+				probs[l] = 1.0
+			} else {
+				probs[l] = kw.p
+			}
+			return l, probs, true
+		}
+	}
+	return "", nil, false
+}
+
 func (s *Server) serveSystemOne(c *call) {
 	answers := map[string]any{}
 	questions, _ := c.body["questions"].(map[string]any)
@@ -233,7 +283,12 @@ func (s *Server) serveSystemOne(c *call) {
 		switch qType {
 		case "choice":
 			label := "a"
-			if crit, ok := qm["criteria"].(map[string]any); ok {
+			crit, hasCrit := qm["criteria"].(map[string]any)
+			if hasCrit {
+				if l, probs, ok := choiceDistribution(crit); ok {
+					answers[name] = map[string]any{"type": "choice", "choice": l, "probabilities": probs, "confidence": probs[l]}
+					continue
+				}
 				for k := range crit {
 					label = k
 					break

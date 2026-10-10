@@ -55,6 +55,7 @@ var wantUserVisible = map[string]string{
 	"cache_creation_tokens_1h":     "their 1h-bucket cache write count",
 	"frt":                          "time to first token — the caller's own request timing, TierPublic",
 	"reasoning_effort":             "an option they sent on the request",
+	"routed":                       "decision routing is disclosed to the caller on X-Routed-Model / X-Routing-Reason; the row mirrors those headers",
 	"request_path":                 "the endpoint they called",
 	"is_system_prompt_overwritten": "disclosure that we altered their prompt; hiding it would be the leak",
 	"claude":                       "which wire format their request used",

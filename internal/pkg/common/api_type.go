@@ -75,6 +75,8 @@ func ChannelType2APIType(channelType int) (int, bool) {
 		apiType = constant.APITypeReplicate
 	case constant.ChannelTypeTypeSafe, constant.ChannelTypeSystemOneCompatible:
 		apiType = constant.APITypeSystemOne
+	case constant.ChannelTypeVoyage:
+		apiType = constant.APITypeVoyage
 	}
 	if apiType == -1 {
 		return constant.APITypeOpenAI, false

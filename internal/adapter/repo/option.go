@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	entity "github.com/LurusTech/lurus-hub/internal/domain/entity"
@@ -103,6 +102,7 @@ func InitOptionMap() {
 	common.OptionMap["ModelRequestRateLimitGroup"] = setting.ModelRequestRateLimitGroup2JSONString()
 	common.OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString()
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
+	common.OptionMap["SearchUnitPrice"] = ratio_setting.SearchUnitPrice2JSONString()
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["ContextLengthTiers"] = ratio_setting.ContextLengthTiers2JSONString()
 	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
@@ -464,6 +464,7 @@ var jsonOptionKinds = map[string]optionValueKind{
 	"UserUsableGroups":           optionKindJSON,
 	"CompletionRatio":            optionKindJSON,
 	"ModelPrice":                 optionKindJSON,
+	"SearchUnitPrice":            optionKindJSON,
 	"CacheRatio":                 optionKindJSON,
 	"ContextLengthTiers":         optionKindJSON,
 	"ImageRatio":                 optionKindJSON,
@@ -493,6 +494,7 @@ var jsonOptionProbes = map[string]func(string) error{
 	"UserUsableGroups":           jsonShape[map[string]string],
 	"CompletionRatio":            jsonShape[map[string]float64],
 	"ModelPrice":                 jsonShape[map[string]float64],
+	"SearchUnitPrice":            jsonShape[map[string]float64],
 	"CacheRatio":                 jsonShape[map[string]float64],
 	"ContextLengthTiers": func(value string) error {
 		_, err := ratio_setting.ValidateContextLengthTiersJSONString(value)
@@ -501,79 +503,6 @@ var jsonOptionProbes = map[string]func(string) error{
 	"ImageRatio":           jsonShape[map[string]float64],
 	"AudioRatio":           jsonShape[map[string]float64],
 	"AudioCompletionRatio": jsonShape[map[string]float64],
-}
-
-// optionInt parses an integer option value, and on failure keeps previous,
-// reports the key and returns an error for the caller to propagate. Zeroing a
-// setting because its stored string did not parse is how a blank admin field
-// used to switch a feature off silently; see metrics.OptionParseRejectedTotal.
-func optionInt(key, value string, previous int) (int, error) {
-	parsed, parseErr := strconv.Atoi(value)
-	if parseErr != nil {
-		reportOptionParseFailure(key, optionKindInteger)
-		return previous, optionKindError(key, optionKindInteger)
-	}
-	return parsed, nil
-}
-
-// optionFloat is optionInt for float options (the money-adjacent ones:
-// QuotaPerUnit, Price, USDExchangeRate, ChannelDisableThreshold,
-// ModelFallbackMarkup).
-func optionFloat(key, value string, previous float64) (float64, error) {
-	parsed, parseErr := strconv.ParseFloat(value, 64)
-	if parseErr != nil {
-		reportOptionParseFailure(key, optionKindNumber)
-		return previous, optionKindError(key, optionKindNumber)
-	}
-	return parsed, nil
-}
-
-// reportOptionParseFailure counts one rejected value and logs the key together
-// with the type the value had to be. It is handed a kind, not the parse error,
-// because strconv's and encoding/json's messages quote the input they were
-// given and this dispatch carries the SMTP password and the OAuth client
-// secret.
-func reportOptionParseFailure(key string, kind optionValueKind) {
-	metrics.RecordOptionParseRejected(key)
-	common.SysError(fmt.Sprintf("option %s rejected: value is not a valid %s; the previous value is kept", key, kind))
-}
-
-// reportOptionRangeFailure is reportOptionParseFailure's counterpart for a
-// value that parsed but landed outside positiveRangeOptionKinds' range. It
-// reuses the same rejected-option counter: both are "an admin-submitted
-// value for this key did not reach the table", just for a different reason.
-// internal/pkg/metrics is not owned by this cycle's L2 lane (cycle13 §2), so
-// this does not add a new series.
-func reportOptionRangeFailure(key string) {
-	metrics.RecordOptionParseRejected(key)
-	common.SysError(fmt.Sprintf("option %s rejected: value must be greater than 0 and less than %g; the previous value is kept", key, optionPositiveRangeMax))
-}
-
-// retiredOptionKeys maps a hierarchical key that must no longer be written to
-// the canonical key that replaced it. The two group-ratio entries reached the
-// ratio maps through the config manager's reflect writer, bypassing both
-// ratio_setting's mutexes and CheckGroupRatio's validation; see the comment on
-// ratio_setting.GroupRatioSetting.
-var retiredOptionKeys = map[string]string{
-	"group_ratio_setting.group_ratio":       "GroupRatio",
-	"group_ratio_setting.group_group_ratio": "GroupGroupRatio",
-}
-
-// retiredOptionWarned remembers the retired keys this process has already
-// complained about.
-var retiredOptionWarned sync.Map
-
-// warnRetiredOptionOnce logs a retired key the first time this process meets
-// it and stays silent afterwards. A row an operator has not deleted is read by
-// every replica on every SyncOptions tick, so the alternative is a line per
-// key per tick per replica for as long as the row exists.
-func warnRetiredOptionOnce(key, canonical string) {
-	if _, alreadyWarned := retiredOptionWarned.LoadOrStore(key, struct{}{}); alreadyWarned {
-		return
-	}
-	common.SysLog(fmt.Sprintf(
-		"option %s is retired and is being ignored; %s is the key that applies. Delete the stale row from the options table to silence this.",
-		key, canonical))
 }
 
 func updateOptionMap(key string, value string) (err error) {
@@ -784,6 +713,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateCompletionRatioByJSONString(value)
 	case "ModelPrice":
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
+	case "SearchUnitPrice":
+		err = ratio_setting.UpdateSearchUnitPriceByJSONString(value)
 	case "CacheRatio":
 		err = ratio_setting.UpdateCacheRatioByJSONString(value)
 	case "ContextLengthTiers":

@@ -357,8 +357,8 @@ func TestAdaptor_ConvertRerankRequest_NotSupported(t *testing.T) {
 	a := &Adaptor{}
 	c, _ := prov_cn_batch_xunfeiGinContext("POST", "/v1/rerank")
 	out, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatalf("want ErrNotImplemented, got nil")
 	}
 	if out != nil {
 		t.Errorf("xunfei has no rerank support, expected nil passthrough, got %v", out)

@@ -276,8 +276,8 @@ func TestPerplexity_ConvertRerankRequest_UnsupportedNilNil(t *testing.T) {
 	a := &Adaptor{}
 	c, _ := newProvLt2PerplexityCtx()
 	got, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{Query: "q"})
-	if err != nil || got != nil {
-		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, nil) — perplexity has no rerank support", got, err)
+	if err == nil || got != nil {
+		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, ErrNotImplemented) — perplexity has no rerank support", got, err)
 	}
 }
 

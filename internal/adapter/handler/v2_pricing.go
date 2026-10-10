@@ -89,6 +89,10 @@ func GetPricingV2(c *gin.Context) {
 		ContextTiers           []ratio_setting.ContextTier `json:"context_tiers,omitempty"`
 		EnableGroups           interface{}                 `json:"enable_groups"`
 		SupportedEndpointTypes interface{}                 `json:"supported_endpoint_types"`
+		Modality               string                      `json:"modality,omitempty"`
+		UsageUnit              string                      `json:"usage_unit,omitempty"`
+		// SearchUnitPrice: omitted = not configured, 0 = explicitly free.
+		SearchUnitPrice *float64 `json:"search_unit_price,omitempty"`
 	}
 
 	// Build vendor id→name lookup once.
@@ -114,6 +118,9 @@ func GetPricingV2(c *gin.Context) {
 			Tags:                   p.Tags,
 			EnableGroups:           p.EnableGroup,
 			SupportedEndpointTypes: p.SupportedEndpointTypes,
+			Modality:               p.Modality,
+			UsageUnit:              p.UsageUnit,
+			SearchUnitPrice:        p.SearchUnitPrice,
 		}
 		if cr, ok := cacheRatios[p.ModelName]; ok {
 			item.CacheRatio = &cr

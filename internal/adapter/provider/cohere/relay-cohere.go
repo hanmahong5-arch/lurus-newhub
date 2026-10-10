@@ -240,6 +240,9 @@ func cohereRerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	var rerankResp dto.RerankResponse
 	rerankResp.Results = cohereResp.Results
 	rerankResp.Usage = usage
+	if verr := relaycommon.ValidateRerankResponse(info, &rerankResp); verr != nil {
+		return nil, verr
+	}
 
 	jsonResponse, err := json.Marshal(rerankResp)
 	if err != nil {

@@ -14,8 +14,10 @@ const SubjectLLMUsageRecorded = "llm.usage.recorded"
 const UsageRecordedVersion = 1
 
 // LLMUsageRecordedPayload is the wire shape of llm.usage.recorded (v=1).
-// Deliberately a closed struct of scalars: adding a free-text field here is a
-// contract change, not a convenience.
+// Deliberately a struct of scalars only: adding a free-text field here is a
+// contract change, not a convenience. Optional scalar fields may be appended
+// without bumping v (consumers must ignore unknown fields); the retrieval
+// metering fields below were added that way (migration 053).
 type LLMUsageRecordedPayload struct {
 	V                int    `json:"v"`
 	TenantID         string `json:"tenant_id"`
@@ -30,6 +32,14 @@ type LLMUsageRecordedPayload struct {
 	RequestID        string `json:"request_id"`
 	CreatedAt        int64  `json:"created_at"` // unix seconds, the log row's timestamp
 	HasBody          bool   `json:"has_body"`
+
+	// Optional unified-metering fields (omitted when empty/zero, so events for
+	// rows written before migration 053 are byte-identical to before).
+	RelayMode          string `json:"relay_mode,omitempty"`          // closed set, see RelayModeName
+	UsageUnit          string `json:"usage_unit,omitempty"`          // token | search_unit | request
+	UsageQuantity      int64  `json:"usage_quantity,omitempty"`      // units charged in UsageUnit
+	UsageSource        string `json:"usage_source,omitempty"`        // upstream | estimated | unreported
+	RetrievalDocuments int    `json:"retrieval_documents,omitempty"` // rerank: documents scored; embeddings: inputs embedded
 }
 
 // PublishUsageRecorded emits one llm.usage.recorded event. userID is the

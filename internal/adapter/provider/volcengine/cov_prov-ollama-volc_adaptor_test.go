@@ -267,8 +267,8 @@ func TestProvOllamaVolc_VE_ConvertGeminiRequest_NotImplemented(t *testing.T) {
 func TestProvOllamaVolc_VE_ConvertRerankRequest_ReturnsNilNil(t *testing.T) {
 	a := &Adaptor{}
 	resp, err := a.ConvertRerankRequest(&gin.Context{}, 0, dto.RerankRequest{})
-	if resp != nil || err != nil {
-		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, nil)", resp, err)
+	if resp != nil || err == nil {
+		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, ErrNotImplemented)", resp, err)
 	}
 }
 

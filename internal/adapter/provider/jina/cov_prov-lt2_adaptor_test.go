@@ -222,8 +222,8 @@ func TestJina_DoResponse_Rerank_UsageFromBody(t *testing.T) {
 	if u.TotalTokens != 15 {
 		t.Errorf("TotalTokens = %d, want 15 (billed amount from upstream usage.total_tokens)", u.TotalTokens)
 	}
-	if u.PromptTokens != 15 {
-		t.Errorf("PromptTokens = %d, want 15 (RerankHandler mirrors TotalTokens into PromptTokens for non-Xinference channels)", u.PromptTokens)
+	if u.PromptTokens != 0 {
+		t.Errorf("PromptTokens = %d, want 0 (RerankHandler keeps the upstream's own fields; settlement reads total_tokens)", u.PromptTokens)
 	}
 	if w.Code != 200 {
 		t.Errorf("status = %d, want 200", w.Code)

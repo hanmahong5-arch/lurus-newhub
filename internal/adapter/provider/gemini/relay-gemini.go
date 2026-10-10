@@ -1312,7 +1312,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	for i, embedding := range geminiResponse.Embeddings {
 		openAIResponse.Data = append(openAIResponse.Data, dto.OpenAIEmbeddingResponseItem{
 			Object:    "embedding",
-			Embedding: embedding.Values,
+			Embedding: dto.RawEmbedding(embedding.Values),
 			Index:     i,
 		})
 	}

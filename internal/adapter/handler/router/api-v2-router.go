@@ -114,6 +114,9 @@ func SetApiV2Router(router *gin.Engine) {
 			// Success mode (model "ok" / "ok-*") on the other two wires.
 			apiV2.POST("/faultsim/v1/responses", handler.FaultSimResponses)
 			apiV2.POST("/faultsim/v1/messages", handler.FaultSimMessages)
+			// System One wire: model "ok-decision" answers a routing question
+			// with a fixed probability distribution (decision routing, migration 054).
+			apiV2.POST("/faultsim/v1/systemone", handler.FaultSimSystemOne)
 			// Task-vendor fault simulator (cycle-8 L8): imitates the Suno
 			// wire so a UAT channel (type ChannelTypeSunoAPI, base_url
 			// http://127.0.0.1:3000/api/v2/faultsim, key=FAULTSIM_TOKEN)
@@ -226,6 +229,18 @@ func SetApiV2Router(router *gin.Engine) {
 		{
 			tenantMembers.GET("", handler.ListTenantMembersV2)
 			tenantMembers.PUT("/:user_id/role", handler.SetTenantMemberRoleV2)
+		}
+
+		// Decision-model routing policy (migration 054): tenant-admin read/replace/
+		// remove of one policy per public model (admin gate inside the handlers;
+		// the tenant is always the caller's own).
+		tenantRoutingPolicies := apiV2.Group("/:tenant_slug/routing-policies")
+		tenantRoutingPolicies.Use(middleware.UserAuth())
+		tenantRoutingPolicies.Use(middleware.TenantSlugGuard())
+		{
+			tenantRoutingPolicies.GET("/:model", handler.GetRoutingPolicyV2)
+			tenantRoutingPolicies.PUT("/:model", handler.PutRoutingPolicyV2)
+			tenantRoutingPolicies.DELETE("/:model", handler.DeleteRoutingPolicyV2)
 		}
 
 		// Relay data control (migration 050): tenant-admin log retention and content

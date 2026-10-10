@@ -507,6 +507,11 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		EmployeeRef: params.EmployeeRef,
 		ChargedCNY4: params.ChargedCNY4,
 		PricedCNY4:  params.PricedCNY4,
+		// Unified retrieval metering (migration 053).
+		UsageUnit:          params.UsageUnit,
+		UsageQuantity:      params.UsageQuantity,
+		UsageSource:        params.UsageSource,
+		RetrievalDocuments: params.RetrievalDocuments,
 	}
 	err := LOG_DB.Create(applyContentRetention(withChannelKeyIdx(c, log))).Error
 	if err != nil {
@@ -918,28 +923,6 @@ func GetTenantLogsWithParams(scope TenantScope, params *LogQueryParams) (logs []
 
 	// Apply pagination and fetch results
 	err = tx.Order("created_at DESC").Offset(params.Offset).Limit(params.Limit).Find(&logs).Error
-	return logs, total, err
-}
-
-// GetUserLogsInternal returns paginated logs for a user (internal API, no tenant filter).
-func GetUserLogsInternal(userID, offset, limit int) (logs []*Log, total int64, err error) {
-	tx := LOG_DB.Model(&Log{}).Where("user_id = ?", userID)
-	err = tx.Count(&total).Error
-	if err != nil {
-		return nil, 0, err
-	}
-	err = tx.Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
-	return logs, total, err
-}
-
-// GetTokenLogsInternal returns paginated logs filtered by token ID (internal API).
-func GetTokenLogsInternal(tokenID, offset, limit int) (logs []*Log, total int64, err error) {
-	tx := LOG_DB.Model(&Log{}).Where("token_id = ?", tokenID)
-	err = tx.Count(&total).Error
-	if err != nil {
-		return nil, 0, err
-	}
-	err = tx.Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
 	return logs, total, err
 }
 

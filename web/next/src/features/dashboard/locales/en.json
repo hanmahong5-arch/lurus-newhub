@@ -1,1 +1,13 @@
-{}
+{
+  "Usage breakdown": "Usage breakdown",
+  "Group usage by": "Group usage by",
+  "By model": "By model",
+  "By endpoint kind": "By endpoint kind",
+  "By billing unit": "By billing unit",
+  "By group": "By group",
+  "By API key": "By API key",
+  "By member": "By member",
+  "By product": "By product",
+  "Could not load the usage breakdown.": "Could not load the usage breakdown.",
+  "requests": "requests"
+}

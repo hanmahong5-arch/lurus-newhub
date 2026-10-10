@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	hubnats "github.com/LurusTech/lurus-hub/internal/pkg/nats"
 )
@@ -44,10 +45,50 @@ func TestBuildItem_MetadataOnly(t *testing.T) {
 	_ = json.Unmarshal(raw, &m)
 	allowed := map[string]bool{"v": true, "tenant_id": true, "project_id": true, "token_id": true,
 		"end_user_hash": true, "model": true, "prompt_tokens": true, "completion_tokens": true,
-		"quota": true, "charged_cny4": true, "request_id": true, "created_at": true, "has_body": true}
+		"quota": true, "charged_cny4": true, "request_id": true, "created_at": true, "has_body": true,
+		// optional metering fields (migration 053), omitempty
+		"relay_mode": true, "usage_unit": true, "usage_quantity": true,
+		"usage_source": true, "retrieval_documents": true}
 	for k := range m {
 		if !allowed[k] {
 			t.Errorf("unexpected payload key %q", k)
+		}
+	}
+}
+
+// A row without metering columns (written before migration 053) must produce
+// an event that is byte-identical to the old shape: no new keys at all.
+func TestBuildItem_LegacyRowOmitsMeteringKeys(t *testing.T) {
+	it, _ := buildItem(consumeRow())
+	raw, _ := json.Marshal(it.payload)
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	for _, k := range []string{"relay_mode", "usage_unit", "usage_quantity", "usage_source", "retrieval_documents"} {
+		if _, has := m[k]; has {
+			t.Errorf("legacy row must not emit %q: %s", k, raw)
+		}
+	}
+}
+
+func TestBuildItem_CarriesMetering(t *testing.T) {
+	l := consumeRow()
+	l.RelayMode = relayconstant.RelayModeRerank
+	l.UsageUnit, l.UsageQuantity, l.UsageSource, l.RetrievalDocuments = "search_unit", 2, "estimated", 101
+	it, ok := buildItem(l)
+	if !ok {
+		t.Fatal("row must be eligible")
+	}
+	p := it.payload
+	if p.RelayMode != "rerank" || p.UsageUnit != "search_unit" || p.UsageQuantity != 2 ||
+		p.UsageSource != "estimated" || p.RetrievalDocuments != 101 {
+		t.Fatalf("metering fields not carried: %+v", p)
+	}
+	raw, _ := json.Marshal(p)
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	for _, k := range []string{"relay_mode", "usage_unit", "usage_quantity", "usage_source", "retrieval_documents"} {
+		if _, has := m[k]; !has {
+			t.Errorf("missing %q in %s", k, raw)
 		}
 	}
 }

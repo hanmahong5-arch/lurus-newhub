@@ -26,6 +26,7 @@ import type {
   ImportRow,
   KeyHealth,
   KeyProbeResult,
+  ModalityMismatch,
   PlanSettings,
   PlanWindow,
   UsageKeyRow,
@@ -137,6 +138,46 @@ export function channelTypeName(type: number): string {
 
 // ---- list ------------------------------------------------------------------
 
+function strMapByName(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(rec(value))) {
+    if (typeof v === 'string') out[k] = v
+  }
+  return out
+}
+
+function mapMismatches(value: unknown): ModalityMismatch[] {
+  return arr(value)
+    .map((raw) => {
+      const r = rec(raw)
+      return { model: str(r.model), reason: str(r.reason) }
+    })
+    .filter((m) => m.model !== '')
+}
+
+/**
+ * Distinct modalities on a channel in first-seen model order; unknown ("")
+ * modalities are dropped so a channel with no records shows "--".
+ */
+export const MODALITY_LABELS: Record<string, string> = {
+  chat: 'Chat model',
+  embedding: 'Embedding',
+  rerank: 'Rerank',
+  decision: 'Decision',
+  image: 'Image model',
+  audio: 'Audio',
+}
+
+export function channelModalities(c: {
+  modelModalities: Record<string, string>
+}): string[] {
+  const seen: string[] = []
+  for (const m of Object.values(c.modelModalities)) {
+    if (m !== '' && !seen.includes(m)) seen.push(m)
+  }
+  return seen
+}
+
 export function mapChannelList(data: unknown): ChannelListResult {
   const d = rec(data)
   const items: ChannelListItem[] = arr(d.channels).map((raw) => {
@@ -159,6 +200,8 @@ export function mapChannelList(data: unknown): ChannelListResult {
       enabledKeyCount: num(r.enabled_key_count),
       routable: r.routable === true,
       unroutableReasons: strList(r.unroutable_reasons),
+      modelModalities: strMapByName(r.model_modalities),
+      modalityMismatches: mapMismatches(r.modality_mismatches),
     }
   })
   return { items, total: num(d.total, items.length) }

@@ -97,6 +97,9 @@ func rebuildChannelCache() error {
 		common.SysError("channel cache rebuild: LoadAutoDisabledModelPairs failed, routing as if none were auto-disabled: " + err.Error())
 		autoDisabledPairs = map[int]map[string]bool{}
 	}
+	// Administrator modality overrides ride the same rebuild so the route
+	// filter reads them from memory. Fail-open like the pair map above.
+	newModalityOverrides := loadModalityOverrides(DB)
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
@@ -155,6 +158,8 @@ func rebuildChannelCache() error {
 	// acquiring the pair in the other order here would invert the ordering.
 	// Nothing below holds two of these locks at once.
 	carriedPollingIndex := carryOverPollingIndices()
+
+	modalityOverrides.Store(&newModalityOverrides)
 
 	channelSyncLock.Lock()
 	group2model2channels = newGroup2model2channels
@@ -319,6 +324,16 @@ type ChannelPredicate func(*Channel) bool
 // that the model does not exist rather than that no channel is in their
 // region. app.CacheGetRandomSatisfiedChannel wraps it with the filter text.
 var ErrNoChannelSatisfiesPredicate = errors.New("no channel satisfies provider filter")
+
+// ErrNoChannelSupportsModality is the independent sentinel for "(tenant, group,
+// model) had candidates but every one is the wrong kind of route for this
+// request" (an embeddings call whose only channel is a decision channel). It
+// is deliberately NOT wrapped in ErrNoChannelSatisfiesPredicate: the
+// distributor answers it with 501 provider_capability_not_supported, whereas a
+// provider-filter miss keeps its own wording. The repo itself only reports the
+// generic predicate miss; internal/app maps it onto this sentinel because only
+// app knows which predicate did the rejecting.
+var ErrNoChannelSupportsModality = errors.New("no channel supports the requested modality")
 
 // GetRandomSatisfiedChannelWhere is GetRandomSatisfiedChannelForTenant with an
 // optional predicate (L8: request-side region / zero-data-retention filter).

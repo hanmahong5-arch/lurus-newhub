@@ -1101,8 +1101,8 @@ func TestAdaptor_UnimplementedMethodsReturnErrors(t *testing.T) {
 	if _, err := a.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{}); err == nil {
 		t.Error("ConvertOpenAIResponsesRequest: expected not-implemented error")
 	}
-	if result, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{}); err != nil || result != nil {
-		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, nil): AWS has no native rerank support", result, err)
+	if result, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{}); err == nil || result != nil {
+		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, ErrNotImplemented): AWS has no native rerank support", result, err)
 	}
 }
 

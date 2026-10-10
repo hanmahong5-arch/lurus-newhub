@@ -220,3 +220,35 @@ describe('snippets', () => {
     expect(s).toContain('"model": "emb"');
   });
 });
+
+describe('buildCatalog modality and search-unit price', () => {
+  const row = (over: Record<string, unknown>) =>
+    buildCatalog({
+      pricing: [{ model_name: 'rr', ...over }],
+    })[0];
+
+  it('keeps an unconfigured price (null) apart from an explicit zero', () => {
+    expect(row({ usage_unit: 'search_unit' }).searchUnitPrice).toBeNull();
+    expect(
+      row({ usage_unit: 'search_unit', search_unit_price: null })
+        .searchUnitPrice,
+    ).toBeNull();
+    expect(
+      row({ usage_unit: 'search_unit', search_unit_price: 0 }).searchUnitPrice,
+    ).toBe(0);
+  });
+
+  it('reads modality and defaults to token billing', () => {
+    const e = row({ modality: 'rerank' });
+    expect(e.modality).toBe('rerank');
+    expect(e.usageUnit).toBe('token');
+    expect(row({}).modality).toBe('');
+  });
+
+  it('a search-unit model priced at 0 counts as priced (free), an unset one does not', () => {
+    expect(
+      hasPrice(row({ usage_unit: 'search_unit', search_unit_price: 0 })),
+    ).toBe(true);
+    expect(hasPrice(row({ usage_unit: 'search_unit' }))).toBe(false);
+  });
+});

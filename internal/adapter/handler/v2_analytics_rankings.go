@@ -152,12 +152,15 @@ func getCachedRankingsForProjects(tenantID, by string, hours int, projectIDs []i
 var rankingDimensions = map[string]bool{
 	"model": true, "vendor": true, "group": true,
 	"key": true, "user": true, "product": true,
+	// relay_mode / usage_unit answer "how is retrieval traffic metered":
+	// per endpoint kind (chat, embeddings, rerank, ...) and per billing unit.
+	"relay_mode": true, "usage_unit": true,
 }
 
 func parseRankingsParams(c *gin.Context) (by string, hours int, errMsg string) {
 	by = c.DefaultQuery("by", "model")
 	if !rankingDimensions[by] {
-		return "", 0, "by must be model, vendor, group, key, user or product"
+		return "", 0, "by must be model, vendor, group, key, user, product, relay_mode or usage_unit"
 	}
 	h, atoiErr := strconv.Atoi(c.DefaultQuery("hours", strconv.Itoa(rankingsDefaultHours)))
 	if atoiErr != nil {
@@ -197,7 +200,7 @@ func writeRankingsResponse(c *gin.Context, by string, hours int, entry *rankings
 // per model, per channel-type vendor, or per logs.group, scoped to the
 // caller's own tenant.
 //
-// GET /api/v2/:tenant_slug/analytics/rankings?by=model|vendor|group|key|user|product&hours=1..720
+// GET /api/v2/:tenant_slug/analytics/rankings?by=model|vendor|group|key|user|product|relay_mode|usage_unit&hours=1..720
 //
 // Tenant id comes from the resolved tenant context, never from the query —
 // cross-tenant market share is impossible by construction (mirrors

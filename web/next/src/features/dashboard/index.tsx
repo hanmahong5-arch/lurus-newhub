@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { PageHeader } from '@/components/layout/page-header'
 import { Button } from '@/components/ui/button'
 import { useMoneyConfig, statusQueryOptions } from '@/lib/status'
-import { currentUserQueryOptions } from '@/lib/user'
+import { currentUserQueryOptions, userAccess } from '@/lib/user'
 
 import {
   DistributionPanel,
@@ -31,6 +31,7 @@ import {
   RecentCostPanel,
   TrendPanel,
 } from './components/panels'
+import { RankingsPanel } from './components/rankings-panel'
 import { fetchRealtimeLogs, fetchTrend } from './lib/api'
 import { loadState, type LoadState } from './lib/state'
 
@@ -73,6 +74,9 @@ export function DashboardPage() {
     if (trendEnabled) void trend.refetch()
   }
 
+  const access = userAccess(me.data)
+  const showRankings = access.isTenantAdmin || access.isDeptLead
+
   const showTrend = status.isPending || status.isError || trendEnabled
 
   return (
@@ -97,6 +101,7 @@ export function DashboardPage() {
           data={live.data}
           onRetry={() => void live.refetch()}
         />
+        {showRankings && <RankingsPanel />}
         <div className='grid gap-4 lg:grid-cols-3'>
           {showTrend && (
             <div className='lg:col-span-2'>
