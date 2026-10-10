@@ -44,6 +44,23 @@ func GetUserMappingByLurusUserID(lurusUserID int, tenantID string) (*UserIdentit
 	return &mapping, nil
 }
 
+// GetUserMappingByLurusUserIDAnyTenant returns the first active mapping of a
+// lurus user across all tenants (lowest id, deterministic). For global
+// (non-tenant) callers such as the root-operator shadow check.
+func GetUserMappingByLurusUserIDAnyTenant(lurusUserID int) (*UserIdentityMapping, error) {
+	var mapping UserIdentityMapping
+	err := DB.Where("lurus_user_id = ? AND is_active = ?", lurusUserID, true).
+		Order("id ASC").
+		First(&mapping).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("user mapping not found")
+		}
+		return nil, err
+	}
+	return &mapping, nil
+}
+
 // CreateUserMapping creates a new user identity mapping
 func CreateUserMapping(lurusUserID int, idpSubject string, tenantID string, email string, displayName string, preferredUsername string) (*UserIdentityMapping, error) {
 	// Check if mapping already exists

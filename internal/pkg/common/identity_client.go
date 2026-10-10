@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -71,6 +73,9 @@ type IdentityMapping struct {
 	AvatarURL   string    `json:"avatar_url,omitempty"`
 	Status      int16     `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
+	// IsPlatformAdmin mirrors identity.accounts.is_platform_admin, the
+	// cross-product platform-admin roster owned by lurus-platform.
+	IsPlatformAdmin bool `json:"is_platform_admin"`
 }
 
 // UnmarshalJSON decodes IdentityMapping accepting BOTH the canonical
@@ -131,29 +136,36 @@ func (e Entitlements) GetBool(key string, defaultVal bool) bool {
 	}
 }
 
-// GetAccountByZitadelSub retrieves account info from lurus-platform by OIDC sub.
-// It calls platform's canonical /by-idp-sub/ route (platform serves both
-// /by-idp-sub/ and the deprecated /by-zitadel-sub/ on the same handler).
-// The Go name is kept stable while the underlying route/wire migrates.
-// Returns nil on not-found or network errors (callers degrade gracefully).
-func GetAccountByZitadelSub(ctx context.Context, sub string) (*IdentityMapping, error) {
+// ErrIdentityNotConfigured means no identity service URL is configured.
+var ErrIdentityNotConfigured = errors.New("identity service not configured")
+
+// ErrIdentityUnavailable means the identity service could not give a usable
+// answer (network error, non-200/404 status, undecodable body).
+var ErrIdentityUnavailable = errors.New("identity service unavailable")
+
+// LookupAccountByIDPSubject looks an account up by OIDC subject and, unlike
+// GetAccountByZitadelSub, tells the caller WHY there is no answer:
+//   - (nil, ErrIdentityNotConfigured): URL empty
+//   - (nil, nil): the platform answered 404 (no such account)
+//   - (nil, error wrapping ErrIdentityUnavailable): transport/status/decode failure
+func LookupAccountByIDPSubject(ctx context.Context, sub string) (*IdentityMapping, error) {
 	if IdentityServiceURL == "" {
-		return nil, nil
+		return nil, ErrIdentityNotConfigured
 	}
 	req, err := http.NewRequestWithContext(ctx,
 		http.MethodGet,
-		IdentityServiceURL+"/internal/v1/accounts/by-idp-sub/"+sub,
+		IdentityServiceURL+"/internal/v1/accounts/by-idp-sub/"+url.PathEscape(sub),
 		nil,
 	)
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("identity lookup: build request: %w", ErrIdentityUnavailable)
 	}
 	req.Header.Set("Authorization", "Bearer "+IdentityServiceInternalKey)
 
 	resp, err := identityClient.Do(req)
 	if err != nil {
 		SysLog(fmt.Sprintf("identity GetAccountByZitadelSub: %v", err))
-		return nil, nil
+		return nil, fmt.Errorf("identity lookup: %v: %w", err, ErrIdentityUnavailable)
 	}
 	defer resp.Body.Close()
 
@@ -162,13 +174,26 @@ func GetAccountByZitadelSub(ctx context.Context, sub string) (*IdentityMapping, 
 	}
 	if resp.StatusCode != http.StatusOK {
 		SysLog(fmt.Sprintf("identity GetAccountByZitadelSub: status %d", resp.StatusCode))
-		return nil, nil
+		return nil, fmt.Errorf("identity lookup: status %d: %w", resp.StatusCode, ErrIdentityUnavailable)
 	}
 	var a IdentityMapping
 	if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("identity lookup: decode: %v: %w", err, ErrIdentityUnavailable)
 	}
 	return &a, nil
+}
+
+// GetAccountByZitadelSub retrieves account info from lurus-platform by OIDC sub.
+// It calls platform's canonical /by-idp-sub/ route (platform serves both
+// /by-idp-sub/ and the deprecated /by-zitadel-sub/ on the same handler).
+// The Go name is kept stable while the underlying route/wire migrates.
+// Returns nil on not-found or any error (callers degrade gracefully).
+func GetAccountByZitadelSub(ctx context.Context, sub string) (*IdentityMapping, error) {
+	a, err := LookupAccountByIDPSubject(ctx, sub)
+	if err != nil {
+		return nil, nil
+	}
+	return a, nil
 }
 
 // UpsertAccount creates or updates an account in lurus-platform (called on OIDC login).
