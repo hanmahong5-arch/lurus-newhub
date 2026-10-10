@@ -42,10 +42,15 @@ type Tenant struct {
 	PayerUserId int64 `json:"payer_user_id" gorm:"type:bigint;not null;default:0"`
 	// LogRetention (migration 050, column content_retention): the tenant's log-retention floor,
 	// '' = inherit the platform default; full|metadata_only|none, only tightens.
-	LogRetention string         `json:"content_retention" gorm:"column:content_retention;type:varchar(16);not null;default:''"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+	LogRetention string `json:"content_retention" gorm:"column:content_retention;type:varchar(16);not null;default:''"`
+	// SedimentationConsent (migration 052): the tenant admin's explicit opt-in to
+	// archiving prompt/response bodies (table log_bodies). Default false; with it
+	// off no body is ever written. Necessary, not sufficient: the effective
+	// content retention must also be "full" (see repo.ShouldArchiveLogBody).
+	SedimentationConsent bool           `json:"sedimentation_consent" gorm:"not null;default:false"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
+	DeletedAt            gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // Tenant status constants

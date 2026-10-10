@@ -469,6 +469,8 @@ func migrateDB() error {
 		&Redemption{},
 		&Ability{},
 		&Log{},
+		// Opt-in prompt/response archive (migration 052).
+		&entity.LogBody{},
 		&Midjourney{},
 		&QuotaData{},
 		&Task{},

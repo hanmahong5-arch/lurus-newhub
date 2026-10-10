@@ -134,7 +134,7 @@ type RecordConsumeLogParams struct {
 	EmployeeRef    string `json:"employee_ref"` // see Log.EmployeeRef; filled by EnrichLogParams
 	ChargedCNY4    int64  `json:"charged_cny4"` // see Log.ChargedCNY4; filled by EnrichLogParams
 	PricedCNY4     int64  `json:"priced_cny4"`  // see Log.PricedCNY4; filled by EnrichLogParams from Quota
-	LogDetailLevel string `json:"-"`            // Governance: "none" skips logging, "full" adds prompt preview
+	LogDetailLevel string `json:"-"`            // Governance: "none" skips the log row AND vetoes body archiving; any other value leaves body archiving to the tenant policy (consent + retention=full), see repo.ShouldArchiveLogBody
 }
 
 // LogQueryParams contains parameters for log queries

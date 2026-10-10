@@ -479,3 +479,69 @@ describe('exportAuditCsv', () => {
     expect(httpGet).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('data archiving consent', () => {
+  it('reads off by default and only writes after confirmation', async () => {
+    routes({ '/data-policy/sedimentation': { consent: false } })
+    put.mockResolvedValue({ consent: true })
+    renderPage()
+    await openTab('Data archiving')
+    const sw = await screen.findByRole('switch', {
+      name: 'Archive request and reply text',
+    })
+    expect(sw).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText('Off')).toBeInTheDocument()
+
+    await userEvent.click(sw)
+    // Nothing is sent until the dialog is confirmed.
+    expect(put).not.toHaveBeenCalled()
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Start archiving' })
+    )
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith('/data-policy/sedimentation', {
+        consent: true,
+      })
+    )
+  })
+
+  it('cancelling the confirmation leaves the setting untouched', async () => {
+    routes({ '/data-policy/sedimentation': { consent: true } })
+    renderPage()
+    await openTab('Data archiving')
+    const sw = await screen.findByRole('switch', {
+      name: 'Archive request and reply text',
+    })
+    await userEvent.click(sw)
+    await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('withdrawing consent sends false', async () => {
+    routes({ '/data-policy/sedimentation': { consent: true } })
+    put.mockResolvedValue({ consent: false })
+    renderPage()
+    await openTab('Data archiving')
+    await userEvent.click(
+      await screen.findByRole('switch', { name: 'Archive request and reply text' })
+    )
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Stop archiving' })
+    )
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith('/data-policy/sedimentation', {
+        consent: false,
+      })
+    )
+  })
+
+  it('a failed read shows an error, not an off switch', async () => {
+    routes({ '/data-policy/sedimentation': new ApiError('down', { status: 500 }) })
+    renderPage()
+    await openTab('Data archiving')
+    expect(
+      await screen.findByText('Failed to load the data archiving setting')
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('switch')).toBeNull()
+  })
+})

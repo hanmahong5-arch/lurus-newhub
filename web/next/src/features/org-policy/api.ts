@@ -162,3 +162,26 @@ export async function exportAuditCsv(
   }
   return { csv: joinCsvPages(pages), truncated: true }
 }
+
+/* data sedimentation consent: /api/v2/~/data-policy/sedimentation */
+
+export const sedimentationQueryOptions = queryOptions({
+  queryKey: [...policyKey, 'sedimentation'],
+  queryFn: async () => {
+    const raw = await tenantApi.get<{ consent?: unknown }>(
+      '/data-policy/sedimentation'
+    )
+    // Anything but a literal true reads as "not consented": the flag only
+    // ever loosens what is stored, so a malformed answer must fail closed.
+    return raw?.consent === true
+  },
+  retry: false,
+})
+
+export async function saveSedimentation(consent: boolean) {
+  const raw = await tenantApi.put<{ consent?: unknown }>(
+    '/data-policy/sedimentation',
+    { consent }
+  )
+  return raw?.consent === true
+}

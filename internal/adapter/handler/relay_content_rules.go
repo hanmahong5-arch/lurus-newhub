@@ -29,6 +29,10 @@ func contentFormatFor(f types.RelayFormat) (contentpolicy.Format, bool) {
 		return contentpolicy.FormatGemini, true
 	case types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompact:
 		return contentpolicy.FormatResponses, true
+	case types.RelayFormatSystemOne:
+		// state / instructions / criteria are caller text; without this the
+		// tenant's mask/reject rules never saw /v1/systemone at all.
+		return contentpolicy.FormatSystemOne, true
 	}
 	return "", false
 }

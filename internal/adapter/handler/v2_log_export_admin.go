@@ -51,7 +51,7 @@ var adminLogCSVHeader = []string{
 //
 // GET /api/v2/admin/logs/export?format=csv&tenant_id=&type=&model_name=&start_time=&end_time=&upstream_request_id=&max_rows=
 //
-//	format              string — only "csv" is supported (default csv)
+//	format              string — "csv" (default) or "jsonl"; jsonl adds cursor (id of the last row of the previous page), limit (alias max_rows) and include_body=true
 //	tenant_id           string — optional tenant filter (empty = all tenants)
 //	type                int    — log type filter (0 = all)
 //	model_name          string — exact model name filter
@@ -70,12 +70,12 @@ var adminLogCSVHeader = []string{
 //
 // Root-only (router applies RootJWTAuth + CriticalRateLimit on the route).
 func ExportAdminLogsV2(c *gin.Context) {
-	format := c.DefaultQuery("format", "csv")
-	if format != "csv" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "format must be csv",
-		})
+	format, ok := parseExportFormat(c)
+	if !ok {
+		return
+	}
+	cursor, ok := parseExportCursor(c)
+	if !ok {
 		return
 	}
 
@@ -88,10 +88,7 @@ func ExportAdminLogsV2(c *gin.Context) {
 	// root-only, so it may filter by it; "" = no filter.
 	upstreamRequestID := c.Query("upstream_request_id")
 
-	maxRows, _ := strconv.Atoi(c.DefaultQuery("max_rows", strconv.Itoa(adminExportHardMaxRows)))
-	if maxRows <= 0 || maxRows > adminExportHardMaxRows {
-		maxRows = adminExportHardMaxRows
-	}
+	maxRows := jsonlRowCap(c, adminExportHardMaxRows, adminExportHardMaxRows)
 
 	totalMatched, err := repo.CountAdminExportLogs(tenantID, logType, modelName, startTime, endTime, upstreamRequestID)
 	if err != nil {
@@ -100,6 +97,17 @@ func ExportAdminLogsV2(c *gin.Context) {
 			"success": false,
 			"message": "Failed to query logs",
 		})
+		return
+	}
+
+	if format == exportFormatJSONL {
+		// X-Total-Matched / X-Truncated describe the whole filter, not this page.
+		c.Header("X-Total-Matched", strconv.FormatInt(totalMatched, 10))
+		if totalMatched > int64(maxRows) {
+			c.Header("X-Truncated", "true")
+		}
+		startJSONL(c, fmt.Sprintf("admin-logs-%d.jsonl", time.Now().Unix()))
+		exportAdminLogsJSONL(c, tenantID, logType, modelName, startTime, endTime, upstreamRequestID, maxRows, cursor, c.Query("include_body") == "true")
 		return
 	}
 

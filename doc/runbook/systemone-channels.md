@@ -30,7 +30,7 @@ System One 是「一个 state + 一组类型化问题 → 每题一个概率型�
 2. 网关控制台 → 渠道 → 新建,类型选 **TypeSafe**;base URL 留空用默认;key 填上一步的 key。
 3. 模型填 `jev-latest,jev-preview,jev-1.13.0`,分组按需。`model_mapping` 一般不用填;若要把公开名钉到某个版本,映射成上游版本化 ID。
 4. 价格已有默认,核对模型倍率里三个 `jev-*` 都有;缺倍率的模型请求会在定价阶段报错。
-5. 渠道测试通过后再放量。TypeSafe 限速(文档)100K token/s、40 req/s,且会动态调整;超限返回 429,网关会换渠道或重试。
+5. 渠道测试通过后再放量。TypeSafe 限速(文档)100K token/s、80 req/s(此前写 40 req/s,已按官方文档更正),且会动态调整;超限返回 429,网关会换渠道或重试。上下文窗口 64k token,state 加最长单题须 ≤32k(官方口径,超出由上游拒绝或截断,网关不预检)。官方 SDK 0.6 起 `Score.criteria` 是有序序列;网关 `Criteria` 字段是 `json.RawMessage` 原样透传,不受该变化影响。
 
 ## 3. 起 laya-serve 并加兼容渠道
 
@@ -140,3 +140,25 @@ curl https://hub.lurus.cn/v1/systemone \
 换成自托管只改 `model`(如 `laya-multilingual`);自托管渠道另外接受可选的 `lang`、`min_confidence`、`max_len`、`head_max_len`,发给 TypeSafe 渠道时这四个字段会被丢弃。批量/钩子字段会被网关拒绝。
 
 响应头 `X-Request-Id` 可配合 `GET /v1/generation?id=<值>` 反查费用与用量。
+
+## 7. 内容规则覆盖 systemone
+
+租户/平台的内容规则(mask / reject,`doc/runbook` 里数据管控相关文档)对 `/v1/systemone` 与对话类接口一样生效,在请求解析前改写网关缓存的原始 body,所以托管与自托管两种渠道转发出去的都是处理后的字节。
+
+覆盖的文本(全部按 `user` 角色匹配,`role_scope` 为 `user` 或 `any` 的规则命中):
+
+- `state`:字符串;若调用方传对象/数组,则其中所有字符串值逐个处理(键名与数字不动)。
+- 每题 `instructions` 与 `criteria`:字符串直接处理;数组/对象则递归处理其中的字符串值。
+
+不处理:`type`、`labels`、`option_order`、`model`、`lang` 等其余字段与未知字段,原样转发;JSON 键顺序不变。
+
+行为与其他格式一致:
+
+| 模式 | 结果 |
+|---|---|
+| enforce + mask | 上游收到的 body 里命中片段被替换为占位符(如 `[PHONE]`) |
+| enforce + reject | 返回 400 `content_rejected`,消息只含规则 ID,不含命中文本 |
+| observe | 只计数与审计(`content_rule_hit`),body 不改 |
+| body 非合法 JSON / 形状不符 | 不处理,交给正常解析路径报错;规则库读取失败时放行并记系统日志 |
+
+注意:mask 会改变送入上游的文本,`usage.input_tokens` 按改写后的内容由上游计量;题目 id(`questions` 的键)不扫描,不要把敏感信息放在题目 id 里。

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -170,6 +171,7 @@ func (p *Publisher) Publish(ctx context.Context, subject string, payload any) er
 		return fmt.Errorf("marshal: %w", err)
 	}
 	if cerr := ctx.Err(); cerr != nil {
+		recordPublishFailure(subject)
 		return fmt.Errorf("publish %s: %w", subject, cerr)
 	}
 	done := make(chan error, 1)
@@ -180,10 +182,35 @@ func (p *Publisher) Publish(ctx context.Context, subject string, payload any) er
 	select {
 	case perr := <-done:
 		if perr != nil {
+			recordPublishFailure(subject)
 			return fmt.Errorf("publish %s: %w", subject, perr)
 		}
 		return nil
 	case <-ctx.Done():
+		recordPublishFailure(subject)
 		return fmt.Errorf("publish %s: %w", subject, ctx.Err())
 	}
+}
+
+// subjectGroup collapses a subject into the small enum used as the
+// subject_group label, so adding a subject never grows metric cardinality.
+func subjectGroup(subject string) string {
+	switch {
+	case strings.HasPrefix(subject, "llm.quota."):
+		return "quota"
+	case strings.HasPrefix(subject, "llm.usage."):
+		return "usage"
+	case strings.HasPrefix(subject, "llm.image."):
+		return "image"
+	default:
+		return "other"
+	}
+}
+
+// recordPublishFailure counts a publish that did not complete. Marshal errors
+// are not counted: they are a programming error in the payload, not the
+// pipeline failing. Context expiry is counted (the event may be lost from the
+// caller's view) — see the over-count caveat on Publish.
+func recordPublishFailure(subject string) {
+	metrics.NATSPublishFailedTotal.WithLabelValues(subjectGroup(subject)).Inc()
 }
