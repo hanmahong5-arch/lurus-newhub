@@ -184,3 +184,15 @@ func platformRootShadow(c *gin.Context) {
 		shadowCheckPlatformRoot(context.Background(), userID)
 	}()
 }
+
+// RootAuth admits role >= root exactly as authHelper would, then fires the
+// report-only shadow check. Lives here (not auth.go) so the shadow and the
+// only call site that uses it stay in one file.
+func RootAuth() func(c *gin.Context) {
+	return func(c *gin.Context) {
+		if resolveSessionIdentity(c, common.RoleRootUser) {
+			platformRootShadow(c)
+			c.Next()
+		}
+	}
+}

@@ -36,7 +36,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/internal_api_ext.go":     1057,
 	"internal/adapter/handler/oauth.go":                997,  // +19 (2026-09-22 hotfix): GetSessionInfo resolves tenant_slug from the user's tenant when the session carries none — the only path by which an already-established console session can learn its own routing slug without a re-login
 	"internal/adapter/handler/relay.go":                954,  // -25 (cycle 21): fastTokenCountMetaForPricing moved to relay_token_meta.go, paying for the system one dispatch
-	"internal/adapter/middleware/auth.go":              732,  // -106 (cycle 14): PlaygroundAuth moved to auth_playground.go, paying for the wire-language fixes in resolveSessionIdentity/TokenAuth; -75 (cycle 18 L3): the ValidateUserToken error → rejection mapping moved to auth_token_reject.go
+	"internal/adapter/middleware/auth.go":              726,  // -106 (cycle 14): PlaygroundAuth moved to auth_playground.go, paying for the wire-language fixes in resolveSessionIdentity/TokenAuth; -75 (cycle 18 L3): the ValidateUserToken error → rejection mapping moved to auth_token_reject.go; -6 (R57): RootAuth moved to platform_root_shadow.go
 	"internal/adapter/middleware/oidc_auth.go":         1214, // +8 (2026-09-23): JWKSManager.refreshInterval — the refresh goroutine raced tests on jwksRefreshInterval
 	"internal/adapter/provider/claude/relay-claude.go": 844,  // -53 (cycle 20): stream finalization moved to stream_final.go, paying for the zero-byte failover in ClaudeStreamHandler
 	"internal/adapter/provider/common/relay_info.go":   892,  // -2 (cycle 21): system one dispatch paid with dead comment lines
@@ -48,7 +48,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/repo/user.go":                    1206,
 	"internal/app/convert.go":                          1304,
 	"internal/app/quota.go":                            1253, // -136 (cycle 18 L2): PostConsumeQuota's Phase 5 (the platform wallet leg: settle/park, release, legacy debit, zero-usage release) moved as-is to quota_settle.go; earlier: +3 record the wallet charge on both settlement branches (migration 041); -1 (legacy debit failure arm moved to billing_debit_outbox.go); +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix)
-	"internal/pkg/common/identity_client.go":           809,  // -25 (cycle 14): the usage-report counter + ReportLLMUsage moved to identity_usage_report.go, paying for the checkout/status error honesty
+	"internal/pkg/common/identity_client.go":           785,  // -25 (cycle 14): the usage-report counter + ReportLLMUsage moved to identity_usage_report.go, paying for the checkout/status error honesty; -23 (R57): LookupAccountByIDPSubject + sentinels moved to identity_lookup.go
 	"internal/pkg/dto/openai_request.go":               1020,
 	// NEW ROW, not a raise: metrics.go crossed the 800 threshold in cycle 13
 	// when the observability lane added the counters the fourteen new netdata
