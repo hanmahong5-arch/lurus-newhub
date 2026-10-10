@@ -71,6 +71,9 @@ type IdentityMapping struct {
 	AvatarURL   string    `json:"avatar_url,omitempty"`
 	Status      int16     `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
+	// IsPlatformAdmin mirrors identity.accounts.is_platform_admin, the
+	// cross-product platform-admin roster owned by lurus-platform.
+	IsPlatformAdmin bool `json:"is_platform_admin"`
 }
 
 // UnmarshalJSON decodes IdentityMapping accepting BOTH the canonical
@@ -135,40 +138,13 @@ func (e Entitlements) GetBool(key string, defaultVal bool) bool {
 // It calls platform's canonical /by-idp-sub/ route (platform serves both
 // /by-idp-sub/ and the deprecated /by-zitadel-sub/ on the same handler).
 // The Go name is kept stable while the underlying route/wire migrates.
-// Returns nil on not-found or network errors (callers degrade gracefully).
+// Returns nil on not-found or any error (callers degrade gracefully).
 func GetAccountByZitadelSub(ctx context.Context, sub string) (*IdentityMapping, error) {
-	if IdentityServiceURL == "" {
-		return nil, nil
-	}
-	req, err := http.NewRequestWithContext(ctx,
-		http.MethodGet,
-		IdentityServiceURL+"/internal/v1/accounts/by-idp-sub/"+sub,
-		nil,
-	)
+	a, err := LookupAccountByIDPSubject(ctx, sub)
 	if err != nil {
 		return nil, nil
 	}
-	req.Header.Set("Authorization", "Bearer "+IdentityServiceInternalKey)
-
-	resp, err := identityClient.Do(req)
-	if err != nil {
-		SysLog(fmt.Sprintf("identity GetAccountByZitadelSub: %v", err))
-		return nil, nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		SysLog(fmt.Sprintf("identity GetAccountByZitadelSub: status %d", resp.StatusCode))
-		return nil, nil
-	}
-	var a IdentityMapping
-	if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
-		return nil, nil
-	}
-	return &a, nil
+	return a, nil
 }
 
 // UpsertAccount creates or updates an account in lurus-platform (called on OIDC login).
