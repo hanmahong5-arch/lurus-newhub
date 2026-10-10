@@ -35,13 +35,28 @@ type statementRow struct {
 	PricedCNY4  int64  `json:"priced_cny4"`
 }
 
-// statementGroupExpr maps group_by to the SQL grouping expression. The values
-// are literals chosen here, never caller text.
-var statementGroupExpr = map[string]string{
-	"project":  "CAST(project_id AS TEXT)",
+// statementGroupColumn maps group_by to the logs column it groups by. The
+// values are identifiers chosen here, never caller text; the integer ids are
+// cast to text by statementGroupExpr so every group key has one type.
+var statementGroupColumn = map[string]string{
+	"project":  "project_id",
 	"employee": "employee_ref",
-	"token":    "CAST(token_id AS TEXT)", // gitleaks:allow - a SQL expression keyed by the group name, not a credential
+	"token":    "token_id",
 	"model":    "model_name",
+}
+
+var statementGroupCastText = map[string]bool{"project": true, "token": true}
+
+// statementGroupExpr returns the SQL grouping expression for group_by.
+func statementGroupExpr(groupBy string) (string, bool) {
+	col, ok := statementGroupColumn[groupBy]
+	if !ok {
+		return "", false
+	}
+	if statementGroupCastText[groupBy] {
+		return "CAST(" + col + " AS TEXT)", true
+	}
+	return col, true
 }
 
 // parseStatementMonth resolves month (YYYY-MM, default: the current month in
@@ -89,7 +104,7 @@ func GetBillingStatementV2(c *gin.Context) {
 		return
 	}
 	groupBy := c.DefaultQuery("group_by", "project")
-	groupExpr, ok := statementGroupExpr[groupBy]
+	groupExpr, ok := statementGroupExpr(groupBy)
 	if !ok {
 		badRequest("group_by must be project, employee, token or model")
 		return
