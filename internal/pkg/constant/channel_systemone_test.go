@@ -12,7 +12,7 @@ func TestChannelBaseURLs_AlignedWithChannelTypes(t *testing.T) {
 }
 
 func TestSystemOneChannelTypes(t *testing.T) {
-	if ChannelTypeTypeSafe != 57 || ChannelTypeSystemOneCompatible != 58 || ChannelTypeDummy != 59 {
+	if ChannelTypeTypeSafe != 57 || ChannelTypeSystemOneCompatible != 58 || ChannelTypeDummy != 60 {
 		t.Fatalf("channel ids = %d/%d/%d, want 57/58/59 appended before Dummy",
 			ChannelTypeTypeSafe, ChannelTypeSystemOneCompatible, ChannelTypeDummy)
 	}
@@ -32,7 +32,7 @@ func TestSystemOneChannelTypes(t *testing.T) {
 	if EndpointTypeSystemOne != "systemone" {
 		t.Errorf("EndpointTypeSystemOne = %q", EndpointTypeSystemOne)
 	}
-	if APITypeSystemOne != APITypeDummy-1 {
-		t.Errorf("APITypeSystemOne = %d, want the slot directly before APITypeDummy (%d)", APITypeSystemOne, APITypeDummy)
+	if APITypeSystemOne != APITypeDummy-2 {
+		t.Errorf("APITypeSystemOne = %d, want the slot two before APITypeDummy (Voyage follows) (%d)", APITypeSystemOne, APITypeDummy)
 	}
 }

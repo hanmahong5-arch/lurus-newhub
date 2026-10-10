@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
+	"github.com/LurusTech/lurus-hub/internal/pkg/capability"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
@@ -102,6 +103,43 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 	return make([]constant.EndpointType, 0)
 }
 
+const (
+	UsageUnitToken      = "token"
+	UsageUnitSearchUnit = "search_unit"
+)
+
+// catalogUsage derives the billing unit of a model from the live
+// SearchUnitPrice table. Absent -> token with no price; present (including an
+// explicit 0, which means free) -> search_unit with that price.
+func catalogUsage(model string) (string, *float64) {
+	if price, ok := ratio_setting.GetSearchUnitPrice(model); ok {
+		return UsageUnitSearchUnit, &price
+	}
+	return UsageUnitToken, nil
+}
+
+// pickModality resolves a model's catalogue modality: a valid administrator
+// override wins; otherwise the most common non-empty ability modality, ties
+// broken alphabetically so the answer is stable across rebuilds.
+func pickModality(override string, abilityModalities []string) string {
+	if capability.Valid(override) {
+		return override
+	}
+	counts := map[string]int{}
+	for _, m := range abilityModalities {
+		if m != "" {
+			counts[m]++
+		}
+	}
+	best, bestN := "", 0
+	for m, n := range counts {
+		if n > bestN || (n == bestN && m < best) {
+			best, bestN = m, n
+		}
+	}
+	return best
+}
+
 func updatePricing() {
 	//modelRatios := common.GetModelRatios()
 	enableAbilities, err := GetAllEnableAbilityWithChannels()
@@ -184,12 +222,14 @@ func updatePricing() {
 	}
 
 	modelGroupsMap := make(map[string]*types.Set[string])
+	modelModalities := make(map[string][]string)
 	// ownerGroups is modelGroupsMap split by the owning channel's tenant, so
 	// GetPricingForTenant can rebuild a per-tenant view of both the model
 	// list and each model's enable_groups without re-querying.
 	ownerGroups := make(map[string]map[string]*types.Set[string])
 
 	for _, ability := range enableAbilities {
+		modelModalities[ability.Model] = append(modelModalities[ability.Model], ability.Modality)
 		groups, ok := modelGroupsMap[ability.Model]
 		if !ok {
 			groups = types.NewSet[string]()
@@ -299,8 +339,10 @@ func updatePricing() {
 			SupportedEndpointTypes: modelSupportEndpointTypes[model],
 		}
 
+		override := ""
 		// 补充模型元数据（描述、标签、供应商、状态）
 		if meta, ok := metaMap[model]; ok {
+			override = meta.Modality
 			// 若模型被禁用(status!=1)，则直接跳过，不返回给前端
 			if meta.Status != 1 {
 				continue
@@ -310,6 +352,7 @@ func updatePricing() {
 			pricing.Tags = meta.Tags
 			pricing.VendorID = meta.VendorID
 		}
+		pricing.Modality = pickModality(override, modelModalities[model])
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
 		if findPrice {
 			pricing.ModelPrice = modelPrice
@@ -390,6 +433,7 @@ func GetPricingForTenant(tenantID string) []Pricing {
 			continue
 		}
 		item := p
+		item.UsageUnit, item.SearchUnitPrice = catalogUsage(p.ModelName)
 		item.EnableGroup = groups
 		visible = append(visible, item)
 	}

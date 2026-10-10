@@ -61,6 +61,8 @@ tags:
     description: User profile management
   - name: Channels
     description: LLM provider channel management
+  - name: Routing
+    description: Decision-routing policies
   - name: Tokens
     description: API token management
   - name: ChatSessions
@@ -1365,6 +1367,116 @@ paths:
   # ============================================================
   # Models
   # ============================================================
+
+  /api/v2/{tenant_slug}/routing-policies/{model}:
+    get:
+      tags:
+        - "Routing"
+      summary: "Get Decision Routing Policy"
+      description: "Tenant-admin read of the decision-routing policy for one public model. The tenant is always the caller's own; another tenant's policy is simply not found."
+      operationId: "getRoutingPolicyV2"
+      security:
+        - SessionAuth: []
+      parameters:
+        - "$ref": "#/components/parameters/TenantSlug"
+        - name: "model"
+          in: "path"
+          required: true
+          description: "Public model name (a single path segment; names containing '/' cannot be addressed)."
+          schema:
+            type: "string"
+      responses:
+        '200':
+          description: "Routing policy"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/RoutingPolicyResponse"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          description: "No policy for this model (error_code POLICY_NOT_FOUND)"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+    put:
+      tags:
+        - "Routing"
+      summary: "Create or Replace Decision Routing Policy"
+      description: "Creates or replaces the policy for one public model (tenant admin). Candidates: 1-32, criteria at most 2048 bytes each, instructions at most 4096 bytes, min_confidence within [0, 1] (omitted = 0.65). Every candidate model must be routable by the tenant. The change is audited as routing.policy_set."
+      operationId: "putRoutingPolicyV2"
+      security:
+        - SessionAuth: []
+      parameters:
+        - "$ref": "#/components/parameters/TenantSlug"
+        - name: "model"
+          in: "path"
+          required: true
+          description: "Public model name (a single path segment; names containing '/' cannot be addressed)."
+          schema:
+            type: "string"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/RoutingPolicyRequest"
+      responses:
+        '200':
+          description: "Saved routing policy"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/RoutingPolicyResponse"
+        '400':
+          description: "Validation failure; error_code is one of INVALID_REQUEST, INVALID_MODEL, INVALID_MIN_CONFIDENCE, INSTRUCTIONS_TOO_LONG, INVALID_EVALUATOR, EVALUATOR_REQUIRED, INVALID_CANDIDATES, INVALID_CANDIDATE_ID, DUPLICATE_CANDIDATE, INVALID_CANDIDATE_MODEL, MODEL_NOT_ROUTABLE, INVALID_CRITERIA, CRITERIA_TOO_LONG, INVALID_DEFAULT_CANDIDATE, DEFAULT_CANDIDATE_REQUIRED. The policy is validated as a whole; nothing is written on failure."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+    delete:
+      tags:
+        - "Routing"
+      summary: "Delete Decision Routing Policy"
+      description: "Removes the policy; the public model then routes without a decision step. Audited."
+      operationId: "deleteRoutingPolicyV2"
+      security:
+        - SessionAuth: []
+      parameters:
+        - "$ref": "#/components/parameters/TenantSlug"
+        - name: "model"
+          in: "path"
+          required: true
+          description: "Public model name (a single path segment; names containing '/' cannot be addressed)."
+          schema:
+            type: "string"
+      responses:
+        '200':
+          description: "Deleted"
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  success:
+                    type: "boolean"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          description: "No policy for this model (error_code POLICY_NOT_FOUND)"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
 
   /api/v2/{tenant_slug}/models/performance:
     get:
@@ -3529,6 +3641,92 @@ components:
             $ref: '#/components/schemas/Error'
 
   schemas:
+    RoutingCandidate:
+      type: "object"
+      required:
+        - "id"
+        - "model"
+        - "criteria"
+      properties:
+        id:
+          type: "string"
+          description: "1-64 characters of letters, digits, '_', '.', '-'; unique within the policy; the reserved no-preference id is refused."
+        model:
+          type: "string"
+          description: "A public model this tenant can route (1-128 bytes)."
+        criteria:
+          type: "string"
+          description: "Natural-language criteria for choosing this candidate (required, at most 2048 bytes)."
+    RoutingPolicyRequest:
+      type: "object"
+      required:
+        - "candidates"
+      properties:
+        enabled:
+          type: "boolean"
+        evaluator_model:
+          type: "string"
+          description: "Decision model that scores the candidates (at most 128 bytes). Required to enable a policy."
+        instructions:
+          type: "string"
+          description: "Admin-authored prose for the evaluator (at most 4096 bytes)."
+        min_confidence:
+          type: "number"
+          minimum: 0
+          maximum: 1
+          description: "Omitted means 0.65. Below this confidence the default candidate is used."
+        default_candidate:
+          type: "string"
+          description: "One of the candidate ids; required when the public model is not itself a candidate."
+        candidates:
+          type: "array"
+          minItems: 1
+          maxItems: 32
+          items:
+            "$ref": "#/components/schemas/RoutingCandidate"
+    RoutingPolicyResponse:
+      type: "object"
+      properties:
+        success:
+          type: "boolean"
+        data:
+          type: "object"
+          properties:
+            public_model:
+              type: "string"
+            strategy:
+              type: "string"
+              enum:
+                - "decision"
+            enabled:
+              type: "boolean"
+            evaluator_model:
+              type: "string"
+            instructions:
+              type: "string"
+            min_confidence:
+              type: "number"
+            default_candidate:
+              type: "string"
+            candidates:
+              type: "array"
+              items:
+                "$ref": "#/components/schemas/RoutingCandidate"
+            created_at:
+              type: "integer"
+              format: "int64"
+            updated_at:
+              type: "integer"
+              format: "int64"
+            limits:
+              type: "object"
+              properties:
+                max_candidates:
+                  type: "integer"
+                max_criteria_bytes:
+                  type: "integer"
+                max_instructions_bytes:
+                  type: "integer"
     Error:
       type: object
       properties:

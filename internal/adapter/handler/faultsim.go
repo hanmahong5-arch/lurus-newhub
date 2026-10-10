@@ -220,6 +220,17 @@ func FaultSimResponses(c *gin.Context) {
 	faultSimServe(c, fakeupstream.WireOpenAIResponses, "/v1/responses")
 }
 
+// FaultSimSystemOne serves POST /faultsim/v1/systemone (TypeSafe wire).
+//
+// Success mode (model "ok" / "ok-*", e.g. "ok-decision") answers every choice
+// question with the fixed distribution fakeupstream.serveSystemOne derives
+// from the criteria text, so a UAT channel of type TypeSafe / System One
+// compatible pointed at this process can drive decision routing end to end
+// with no vendor key (see doc/decisions/2026-10-10-decision-model-routing.md).
+func FaultSimSystemOne(c *gin.Context) {
+	faultSimServe(c, fakeupstream.WireSystemOne, "/v1/systemone")
+}
+
 // FaultSimMessages serves POST /faultsim/v1/messages (Anthropic messages).
 func FaultSimMessages(c *gin.Context) {
 	faultSimServe(c, fakeupstream.WireAnthropic, "/v1/messages")

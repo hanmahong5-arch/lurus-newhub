@@ -52,9 +52,11 @@ func (o *OpenAITextResponse) GetOpenAIError() *types.OpenAIError {
 }
 
 type OpenAIEmbeddingResponseItem struct {
-	Object    string    `json:"object"`
-	Index     int       `json:"index"`
-	Embedding []float64 `json:"embedding"`
+	Object string `json:"object"`
+	Index  int    `json:"index"`
+	// Embedding is passed through verbatim: a float array, or a base64 string
+	// when encoding_format=base64 (decoding it as []float64 used to fail).
+	Embedding json.RawMessage `json:"embedding"`
 }
 
 type OpenAIEmbeddingResponse struct {
@@ -510,4 +512,15 @@ func GetOpenAIError(errorField any) *types.OpenAIError {
 			Message: fmt.Sprintf("%v", err),
 		}
 	}
+}
+
+// RawEmbedding encodes a float vector as the verbatim JSON payload of
+// OpenAIEmbeddingResponseItem.Embedding, for adaptors that build the item from
+// a vendor-specific float slice.
+func RawEmbedding(values []float64) json.RawMessage {
+	b, err := json.Marshal(values)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return b
 }

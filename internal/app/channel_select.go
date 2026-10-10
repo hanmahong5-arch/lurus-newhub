@@ -127,7 +127,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 	// Cooling channels are as ineligible for a pinned conversation as for a
 	// fresh draw, so the pin is checked against the same AND.
 	refreshCooldownSnapshot()
-	pred := andChannelPredicates(filterPred, cooldownPredicate(&cooldownProbe{}))
+	pred := andChannelPredicates(modalityPredicate(param.Ctx, param.ModelName, &modalityProbe{}), filterPred, cooldownPredicate(&cooldownProbe{}))
 	used := usedChannelIDs(param.Ctx)
 	affinityKey := common.GetContextKeyString(param.Ctx, constant.ContextKeySessionAffinity)
 	if affinityKey != "" && param.GetRetry() == 0 {
@@ -165,13 +165,14 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 		// gets must name the filter rather than read as "model not found".
 		origRetry := param.GetRetry()
 		var filterMiss bool
+		var modalityErr error
 		var coolingErr error
 		// runGroups walks the auto groups once. strict excludes channels this
 		// request already used with no soft fallback inside a group, so a group
 		// holding only failed channels is a miss and the walk moves on to the
 		// next group, where a fresh channel may exist.
 		runGroups := func(strict bool) {
-			filterMiss, coolingErr = false, nil
+			filterMiss, modalityErr, coolingErr = false, nil, nil
 			for i := startGroupIndex; i < len(autoGroups); i++ {
 				autoGroup := autoGroups[i]
 				// Calculate priorityRetry for current group
@@ -191,6 +192,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 				}
 				if channel == nil {
 					filterMiss = filterMiss || errors.Is(err, repo.ErrNoChannelSatisfiesPredicate)
+					if errors.Is(err, repo.ErrNoChannelSupportsModality) && modalityErr == nil {
+						modalityErr = err
+					}
 					if errors.Is(err, ErrAllChannelsCooling) && (coolingErr == nil || CoolingRetryAfterUnix(err) < CoolingRetryAfterUnix(coolingErr)) {
 						coolingErr = err
 					}
@@ -252,6 +256,11 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*repo.Channel, string, e
 			err = describeProviderFilterMiss(repo.ErrNoChannelSatisfiesPredicate, filter)
 			return nil, selectGroup, err
 		}
+		// Only when no group failed for a provider-filter or cooldown reason:
+		// those answers are more actionable than "wrong kind of route".
+		if channel == nil && modalityErr != nil {
+			return nil, selectGroup, modalityErr
+		}
 	} else {
 		channel, err = selectChannelWhere(param, param.TokenGroup, param.GetRetry(), filterPred, used)
 		if err != nil {
@@ -296,12 +305,15 @@ func selectChannelOnce(param *RetryParam, group string, retry int, filterPred re
 		usedPred = usedChannelPredicate(used)
 		retry = 0
 	}
-	pred := andChannelPredicates(filterPred, usedPred, cooldownPredicate(probe))
+	// Modality first (see modalityPredicate): the cooldown probe must only
+	// count channels that already fit the request.
+	mprobe := &modalityProbe{}
+	pred := andChannelPredicates(modalityPredicate(param.Ctx, param.ModelName, mprobe), filterPred, usedPred, cooldownPredicate(probe))
 	ch, err := repo.GetRandomSatisfiedChannelWhere(param.TenantID, group, param.ModelName, retry, pred)
 	if ch == nil && err == nil {
 		if until, ok := repo.EarliestMultiKeyRecovery(param.TenantID, group, param.ModelName, filterPred); ok {
 			return nil, &AllChannelsCoolingError{RetryAfterUnix: until}
 		}
 	}
-	return ch, classifySelectionMiss(err, probe)
+	return ch, classifyModalityMiss(param.Ctx, classifySelectionMiss(err, probe), mprobe)
 }

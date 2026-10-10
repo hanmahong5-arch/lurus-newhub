@@ -33,6 +33,9 @@ func siliconflowRerankHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		Results: siliconflowResp.Results,
 		Usage:   *usage,
 	}
+	if verr := relaycommon.ValidateRerankResponse(info, rerankResp); verr != nil {
+		return nil, verr
+	}
 
 	jsonResponse, err := json.Marshal(rerankResp)
 	if err != nil {

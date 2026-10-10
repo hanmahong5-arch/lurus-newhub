@@ -43,6 +43,15 @@ export interface ChannelListItem {
   /** Same verdict as GET /channels/:id/health. */
   routable: boolean
   unroutableReasons: string[]
+  /** model -> modality as stored on the channel's abilities ("" = unknown). */
+  modelModalities: Record<string, string>
+  /** Models the backend flags: modality_conflict | adapter_unsupported. */
+  modalityMismatches: ModalityMismatch[]
+}
+
+export interface ModalityMismatch {
+  model: string
+  reason: string
 }
 
 export interface ChannelListResult {

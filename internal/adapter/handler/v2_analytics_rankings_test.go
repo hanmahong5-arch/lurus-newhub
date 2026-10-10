@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/middleware"
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -370,7 +371,7 @@ func TestParseRankingsParams_AcceptsGroup(t *testing.T) {
 // TestParseRankingsParams_AcceptsKeyUserProduct: the cycle-17 "who and
 // what is spending" dimensions are accepted; near-misses are not.
 func TestParseRankingsParams_AcceptsKeyUserProduct(t *testing.T) {
-	for _, dim := range []string{"key", "user", "product"} {
+	for _, dim := range []string{"key", "user", "product", "relay_mode", "usage_unit"} {
 		by, _, errMsg := parseRankingsParams(newRankingsParamsContext("by=" + dim))
 		if errMsg != "" || by != dim {
 			t.Errorf("by=%s: got by=%q errMsg=%q, want accepted", dim, by, errMsg)
@@ -540,5 +541,66 @@ func TestGetRankingsV2_ByGroup_MergesAcrossTenantsThenFiltersByOne(t *testing.T)
 	rowA := rowsA[0].(map[string]interface{})
 	if rowA["name"] != "premium" {
 		t.Errorf("name = %v, want premium (tenant-b's default group must not leak in)", rowA["name"])
+	}
+}
+
+func seedMeteredRankingsLog(t *testing.T, db *gorm.DB, tenantID string, relayMode int, unit string, tokens int, createdAt int64) {
+	t.Helper()
+	l := &entity.Log{
+		UserId: 1, TenantId: tenantID, Type: entity.LogTypeConsume, ModelName: "model-a",
+		RelayMode: relayMode, UsageUnit: unit, PromptTokens: tokens, Quota: tokens, CreatedAt: createdAt,
+	}
+	if err := db.Create(l).Error; err != nil {
+		t.Fatalf("seed metered log: %v", err)
+	}
+}
+
+// by=relay_mode and by=usage_unit group on the real columns (migration 053),
+// give stable labels, keep legacy rows in their own bucket, and stay scoped to
+// the caller's tenant.
+func TestTenantRankingsV2_ByRelayModeAndUsageUnit(t *testing.T) {
+	ctx := setupTenantRankingsRouter(t)
+	defer ctx.cleanup()
+
+	now := time.Now().Unix()
+	seedMeteredRankingsLog(t, ctx.db, ctx.tenantID, relayconstant.RelayModeRerank, "search_unit", 300, now-60)
+	seedMeteredRankingsLog(t, ctx.db, ctx.tenantID, relayconstant.RelayModeEmbeddings, "token", 200, now-60)
+	seedMeteredRankingsLog(t, ctx.db, ctx.tenantID, relayconstant.RelayModeChatCompletions, "", 100, now-60)
+	seedMeteredRankingsLog(t, ctx.db, "other-tenant", relayconstant.RelayModeRerank, "search_unit", 99999, now-60)
+
+	for by, want := range map[string]map[string]float64{
+		"relay_mode": {"rerank": 300, "embeddings": 200, "chat": 100},
+		"usage_unit": {"search_unit": 300, "token": 200, "(unrecorded)": 100},
+	} {
+		w := doGETWithHeaders(ctx.router, "/api/v2/acme/analytics/rankings?by="+by+"&hours=1",
+			map[string]string{"X-Test-Role": "admin"})
+		if w.Code != http.StatusOK {
+			t.Fatalf("by=%s: status %d body=%s", by, w.Code, w.Body.String())
+		}
+		rows := parseJSON(t, w)["data"].(map[string]interface{})["rows"].([]interface{})
+		got := map[string]float64{}
+		for _, r := range rows {
+			m := r.(map[string]interface{})
+			got[m["name"].(string)] = m["total_tokens"].(float64)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("by=%s: rows = %v, want %v", by, got, want)
+		}
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("by=%s: %s = %v, want %v (full: %v)", by, k, got[k], v, got)
+			}
+		}
+	}
+}
+
+func TestAdminRankingsV2_ByRelayModeAccepted(t *testing.T) {
+	ctx := setupAnalyticsRouter(t)
+	defer ctx.cleanup()
+	for _, by := range []string{"relay_mode", "usage_unit"} {
+		w := doGET(ctx.router, "/api/v2/admin/analytics/rankings?by="+by)
+		if w.Code != http.StatusOK {
+			t.Errorf("by=%s: want 200, got %d body=%s", by, w.Code, w.Body.String())
+		}
 	}
 }

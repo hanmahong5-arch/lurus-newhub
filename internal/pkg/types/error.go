@@ -156,6 +156,21 @@ const (
 	ErrorCodeBusinessRateLimitExceeded ErrorCode = "business_rate_limit_exceeded"
 	ErrorCodeConcurrencyLimitExceeded  ErrorCode = "concurrency_limit_exceeded"
 	ErrorCodeAPINotImplemented         ErrorCode = "api_not_implemented"
+	// TokenHub-0.9 parity (_bmad-output/planning-artifacts/cycle22-tokenhub-09-parity-2026-10-10.md).
+	// ErrorCodeProviderCapabilityNotSupported: 501, route selection found no
+	// channel whose modality matches the relay mode (enforce mode only);
+	// error.details carries stage/upstream_attempted/reasons[].
+	ErrorCodeProviderCapabilityNotSupported ErrorCode = "provider_capability_not_supported"
+	// ErrorCodeInvalidProviderUsage: 502, the upstream usage block contradicts
+	// itself (total=0 with prompt>0, negative counts); nothing is billed.
+	ErrorCodeInvalidProviderUsage ErrorCode = "invalid_provider_usage"
+	// ErrorCodeInvalidProviderResponse: 502, the upstream body is well-formed
+	// JSON but violates the endpoint contract (rerank not sorted descending,
+	// decision-model probabilities inconsistent). Not a channel-switch signal.
+	ErrorCodeInvalidProviderResponse ErrorCode = "invalid_provider_response"
+	// ErrorCodeUnsupportedParameter: 400, the request carries a field this
+	// endpoint cannot honour on a non-pass-through path.
+	ErrorCodeUnsupportedParameter ErrorCode = "unsupported_parameter"
 	// ErrorCodeTaskPlatformUnknown is returned by the generic async-task
 	// surface (/v1/tasks/:platform) when :platform names no compiled
 	// provider/task/* adaptor (cycle-8 L8).

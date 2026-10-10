@@ -193,6 +193,24 @@ describe('Rankings page', () => {
     });
   });
 
+  it('offers the endpoint-kind and billing-unit dimensions', async () => {
+    API.get.mockResolvedValue(payload({ by: 'relay_mode' }));
+    render(<HFRankings />);
+    await waitFor(() => screen.getByTestId('rankings-by-relay_mode'));
+    expect(screen.getByTestId('rankings-by-usage_unit')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('rankings-by-relay_mode'));
+    await waitFor(() => {
+      const lastCall = API.get.mock.calls[API.get.mock.calls.length - 1];
+      expect(lastCall[0]).toContain('by=relay_mode');
+    });
+    fireEvent.click(screen.getByTestId('rankings-by-usage_unit'));
+    await waitFor(() => {
+      const lastCall = API.get.mock.calls[API.get.mock.calls.length - 1];
+      expect(lastCall[0]).toContain('by=usage_unit');
+    });
+  });
+
   it('renders the forbidden panel on a 403', async () => {
     API.get.mockRejectedValue({ response: { status: 403 } });
     render(<HFRankings />);

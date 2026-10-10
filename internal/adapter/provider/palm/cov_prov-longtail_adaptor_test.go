@@ -94,8 +94,8 @@ func TestPalm_ConvertRerankRequest_UnsupportedNilNil(t *testing.T) {
 	a := &Adaptor{}
 	c, _ := newProvLongtailPalmCtx()
 	got, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{})
-	if err != nil || got != nil {
-		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, nil): PaLM has no rerank endpoint", got, err)
+	if err == nil || got != nil {
+		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, ErrNotImplemented): PaLM has no rerank endpoint", got, err)
 	}
 }
 

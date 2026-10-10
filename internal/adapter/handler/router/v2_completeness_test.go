@@ -93,6 +93,11 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"PUT /api/v2/:tenant_slug/data-policy/rules/:id":            true, // TestContentRuleV2_CrossTenantIs404
 		"DELETE /api/v2/:tenant_slug/data-policy/rules/:id":         true, // TestContentRuleV2_CrossTenantIs404
 		"PUT /api/v2/:tenant_slug/data-policy/tokens/:id/retention": true, // TestTokenRetentionV2_CrossTenantIs404
+		// decision routing policy - migration 054 (internal/adapter/handler/v2_routing_policy_test.go).
+		// The repo layer confines every read/write by (tenant_id, public_model).
+		"GET /api/v2/:tenant_slug/routing-policies/:model":    true, // TestRoutingPolicyV2_CrossTenantIs404
+		"PUT /api/v2/:tenant_slug/routing-policies/:model":    true, // TestRoutingPolicyV2_CrossTenantIs404
+		"DELETE /api/v2/:tenant_slug/routing-policies/:model": true, // TestRoutingPolicyV2_CrossTenantIs404
 		// account-pool ops (internal/adapter/handler/v2_channel_pool_idor_test.go):
 		// loadStaffChannel and import's channel_id both 403 a channel of another tenant.
 		"GET /api/v2/:tenant_slug/channels/:id/health":             true, // TestPoolOps_CrossTenantStaffForbidden

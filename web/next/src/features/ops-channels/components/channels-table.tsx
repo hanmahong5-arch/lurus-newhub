@@ -13,9 +13,49 @@ import {
 } from '@/components/ui/table'
 import { formatDate } from '@/lib/time'
 
-import { channelTypeName, REASON_LABELS } from '../lib/map'
+import {
+  channelModalities,
+  channelTypeName,
+  MODALITY_LABELS,
+  REASON_LABELS,
+} from '../lib/map'
 import { usePlanKindLabel, useStatusLabel } from '../lib/use-labels'
 import type { ChannelListItem } from '../types'
+
+const MISMATCH_LABELS: Record<string, string> = {
+  modality_conflict:
+    'The same model is registered with a different modality on another channel',
+  adapter_unsupported: 'This channel type cannot serve this modality',
+}
+
+function ModalityCell(props: { channel: ChannelListItem }) {
+  const { t } = useTranslation()
+  const c = props.channel
+  const mods = channelModalities(c)
+  if (mods.length === 0 && c.modalityMismatches.length === 0) return <>--</>
+  return (
+    <span className='flex flex-wrap items-center gap-1'>
+      {mods.map((m) => (
+        <Badge key={m} variant='outline'>
+          {t(MODALITY_LABELS[m] ?? m)}
+        </Badge>
+      ))}
+      {c.modalityMismatches.length > 0 && (
+        <Badge
+          variant='destructive'
+          data-testid={`channel-${c.id}-mismatch`}
+          title={c.modalityMismatches
+            .map(
+              (x) => `${x.model}: ${t(MISMATCH_LABELS[x.reason] ?? x.reason)}`
+            )
+            .join(', ')}
+        >
+          {t('Mismatch')}
+        </Badge>
+      )}
+    </span>
+  )
+}
 
 function ChannelRow(props: {
   channel: ChannelListItem
@@ -51,6 +91,9 @@ function ChannelRow(props: {
       <TableCell>{channelTypeName(c.type)}</TableCell>
       <TableCell>
         <Badge variant={st.variant}>{st.label}</Badge>
+      </TableCell>
+      <TableCell data-testid={`channel-${c.id}-modality`}>
+        <ModalityCell channel={c} />
       </TableCell>
       <TableCell data-testid={`channel-${c.id}-plan`}>
         {planLabel(c.planKind)}
@@ -91,6 +134,7 @@ export function ChannelsTable(props: {
           <TableHead>{t('Name')}</TableHead>
           <TableHead>{t('Type')}</TableHead>
           <TableHead>{t('Status')}</TableHead>
+          <TableHead>{t('Modality')}</TableHead>
           <TableHead>{t('Plan')}</TableHead>
           <TableHead>{t('Expires')}</TableHead>
           <TableHead>{t('Keys')}</TableHead>

@@ -65,6 +65,8 @@ const BY_DIMENSIONS = [
   ['key', 'by API key'],
   ['user', 'by member'],
   ['product', 'by product'],
+  ['relay_mode', 'by endpoint kind'],
+  ['usage_unit', 'by billing unit'],
 ];
 
 // Segmented-control group scaffolding shared by the scope/by/window rows

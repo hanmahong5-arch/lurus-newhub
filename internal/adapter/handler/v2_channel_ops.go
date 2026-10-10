@@ -11,6 +11,7 @@ package handler
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/planquota"
+	"github.com/LurusTech/lurus-hub/internal/pkg/capability"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
@@ -83,6 +85,108 @@ type channelOps struct {
 	EnabledKeyCount   int      `json:"enabled_key_count"`
 	Routable          bool     `json:"routable"`
 	UnroutableReasons []string `json:"unroutable_reasons"`
+	// ModelModalities maps each model on the channel to the modality stored
+	// on its abilities row ("" when none was recorded). Never null.
+	ModelModalities map[string]string `json:"model_modalities"`
+	// ModalityMismatches lists models whose modality disagrees with the same
+	// name on another of the tenant's channels, or that the channel type's
+	// adapter cannot serve. Never null.
+	ModalityMismatches []modalityMismatch `json:"modality_mismatches"`
+}
+
+// Mismatch reasons reported per model.
+const (
+	MismatchConflict           = "modality_conflict"
+	MismatchAdapterUnsupported = "adapter_unsupported"
+)
+
+type modalityMismatch struct {
+	Model  string `json:"model"`
+	Reason string `json:"reason"`
+}
+
+// modalityMismatches is the pure verdict: byModel is this channel's
+// model->modality; tenantWide is model->set of distinct non-empty modalities
+// over all of the tenant's channels. Output order follows model name.
+func modalityMismatches(channelType int, byModel map[string]string, tenantWide map[string]map[string]struct{}) []modalityMismatch {
+	out := []modalityMismatch{}
+	names := make([]string, 0, len(byModel))
+	for m := range byModel {
+		names = append(names, m)
+	}
+	sort.Strings(names)
+	for _, m := range names {
+		mod := byModel[m]
+		if mod == "" {
+			continue
+		}
+		if len(tenantWide[m]) > 1 {
+			out = append(out, modalityMismatch{Model: m, Reason: MismatchConflict})
+			continue
+		}
+		if !capability.AdapterSupports(channelType, capability.Modality(mod)) {
+			out = append(out, modalityMismatch{Model: m, Reason: MismatchAdapterUnsupported})
+		}
+	}
+	return out
+}
+
+// attachChannelModalities fills the modality columns for a page of channels
+// from abilities (two tenant-scoped reads, never per-row).
+func attachChannelModalities(tenantID string, page []*repo.Channel, out map[int]channelOps) {
+	if len(page) == 0 || repo.DB == nil {
+		return
+	}
+	ids := make([]int, len(page))
+	for i, ch := range page {
+		ids[i] = ch.Id
+	}
+	type row struct {
+		ChannelId int
+		Model     string
+		Modality  string
+	}
+	var rows []row
+	if err := repo.DB.Table("abilities").
+		Select("channel_id, model, modality").
+		Where("channel_id IN ?", ids).Scan(&rows).Error; err != nil {
+		common.SysError("channel modality columns: " + err.Error())
+		return
+	}
+	per := map[int]map[string]string{}
+	for _, r := range rows {
+		if per[r.ChannelId] == nil {
+			per[r.ChannelId] = map[string]string{}
+		}
+		// A model repeats once per group; any recorded modality wins over "".
+		if cur := per[r.ChannelId][r.Model]; cur == "" {
+			per[r.ChannelId][r.Model] = r.Modality
+		}
+	}
+	wide := map[string]map[string]struct{}{}
+	var all []row
+	if err := repo.DB.Table("abilities").
+		Select("abilities.channel_id, abilities.model, abilities.modality").
+		Joins("join channels on abilities.channel_id = channels.id").
+		Where("channels.tenant_id = ? AND abilities.modality <> ''", tenantID).
+		Scan(&all).Error; err != nil {
+		common.SysError("channel modality conflicts: " + err.Error())
+	}
+	for _, r := range all {
+		if wide[r.Model] == nil {
+			wide[r.Model] = map[string]struct{}{}
+		}
+		wide[r.Model][r.Modality] = struct{}{}
+	}
+	for _, ch := range page {
+		o := out[ch.Id]
+		o.ModelModalities = per[ch.Id]
+		if o.ModelModalities == nil {
+			o.ModelModalities = map[string]string{}
+		}
+		o.ModalityMismatches = modalityMismatches(ch.Type, o.ModelModalities, wide)
+		out[ch.Id] = o
+	}
 }
 
 func enabledKeyCount(ch *repo.Channel) int {
@@ -102,12 +206,14 @@ func buildChannelOps(ch *repo.Channel, h channelHealth) channelOps {
 		reasons = []string{}
 	}
 	return channelOps{
-		PlanKind:          planquota.NormalizeKind(set.PlanKind),
-		ExpiresAt:         channelEarliestExpiry(ch),
-		KeyCount:          channelKeyCount(ch),
-		EnabledKeyCount:   enabledKeyCount(ch),
-		Routable:          h.Routable,
-		UnroutableReasons: reasons,
+		ModelModalities:    map[string]string{},
+		ModalityMismatches: []modalityMismatch{},
+		PlanKind:           planquota.NormalizeKind(set.PlanKind),
+		ExpiresAt:          channelEarliestExpiry(ch),
+		KeyCount:           channelKeyCount(ch),
+		EnabledKeyCount:    enabledKeyCount(ch),
+		Routable:           h.Routable,
+		UnroutableReasons:  reasons,
 	}
 }
 
@@ -134,6 +240,7 @@ func channelOpsFor(tenantID string, page []*repo.Channel) map[int]channelOps {
 	for _, ch := range full {
 		out[ch.Id] = buildChannelOps(ch, buildChannelHealthWin(ch, now, win))
 	}
+	attachChannelModalities(tenantID, page, out)
 	return out
 }
 
@@ -209,7 +316,7 @@ func opsOrDefault(m map[int]channelOps, ch *repo.Channel) channelOps {
 	if o, ok := m[ch.Id]; ok {
 		return o
 	}
-	return channelOps{UnroutableReasons: []string{}, PlanKind: planquota.NormalizeKind(ch.GetSetting().PlanKind), ExpiresAt: channelEarliestExpiry(ch)}
+	return channelOps{ModelModalities: map[string]string{}, ModalityMismatches: []modalityMismatch{}, UnroutableReasons: []string{}, PlanKind: planquota.NormalizeKind(ch.GetSetting().PlanKind), ExpiresAt: channelEarliestExpiry(ch)}
 }
 
 // ListChannelTemplateApplicationsV2 handles

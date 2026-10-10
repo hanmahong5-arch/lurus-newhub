@@ -240,8 +240,8 @@ func TestDeepseek_ConvertRerankRequest_UnsupportedNilNil(t *testing.T) {
 	a := &Adaptor{}
 	c, _ := newProvLt2DeepseekCtx()
 	got, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{Query: "q"})
-	if err != nil || got != nil {
-		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, nil) — deepseek has no rerank support", got, err)
+	if err == nil || got != nil {
+		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, ErrNotImplemented) — deepseek has no rerank support", got, err)
 	}
 }
 

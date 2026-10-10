@@ -274,3 +274,35 @@ func TestListChannelTemplateApplicationsV2(t *testing.T) {
 		t.Errorf("bad id: %d", w.Code)
 	}
 }
+
+func TestListChannelsV2_ModalityColumns(t *testing.T) {
+	f := setupChannelOps(t)
+	a := f.seed(t, "mod-a", nil)
+	b := f.seed(t, "mod-b", nil)
+	for _, ab := range []entity.Ability{
+		{Group: "default", Model: "model-a", ChannelId: a.Id, Enabled: true, Modality: "chat"},
+		{Group: "default", Model: "model-a", ChannelId: b.Id, Enabled: true, Modality: "rerank"},
+	} {
+		ab := ab
+		if err := f.DB.Create(&ab).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := f.get(f.AdminUser, f.base())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	for _, ch := range gjson.Get(w.Body.String(), "data.channels").Array() {
+		if ch.Get("model_modalities").Type != gjson.JSON || ch.Get("modality_mismatches").Type != gjson.JSON {
+			t.Fatalf("modality columns must be objects/arrays, never null: %s", ch.Raw)
+		}
+		if int(ch.Get("id").Int()) == a.Id {
+			if ch.Get("model_modalities.model-a").String() != "chat" {
+				t.Errorf("channel a modality: %s", ch.Raw)
+			}
+			if ch.Get("modality_mismatches.0.reason").String() != MismatchConflict {
+				t.Errorf("channel a should be flagged as a conflict: %s", ch.Raw)
+			}
+		}
+	}
+}

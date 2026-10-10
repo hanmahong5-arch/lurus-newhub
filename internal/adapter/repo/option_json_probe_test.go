@@ -54,6 +54,7 @@ func TestOptionJSONProbesRejectWrongShape(t *testing.T) {
 		"UserUsableGroups":           {`{"a":1}`, `{"default":"default group"}`},
 		"CompletionRatio":            {`{"a":"x"}`, `{"m":1.2}`},
 		"ModelPrice":                 {`[1]`, `{"m":0.5}`},
+		"SearchUnitPrice":            {`[1]`, `{"m":0.002}`},
 		"CacheRatio":                 {`{"a":"x"}`, `{"m":0.5}`},
 		"ContextLengthTiers":         {`{"a":"x"}`, `{}`},
 		"ImageRatio":                 {`{"a":"x"}`, `{"m":1}`},

@@ -1,9 +1,12 @@
 package repo
 
 import (
+	"fmt"
 	"math"
 	"sort"
+	"strings"
 
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
@@ -269,8 +272,27 @@ func rankingsNameExpr(by string) string {
 		return `COALESCE(NULLIF(username, ''), '(unknown)')`
 	case "product":
 		return `COALESCE(` + jsonOtherTextExpr("source_product") + `, '` + ratio_setting.DefaultSourceProduct + `')`
+	case "relay_mode":
+		return relayModeCaseExpr()
+	case "usage_unit":
+		// '' = rows written before migration 053 (token semantics); they get
+		// their own bucket rather than being silently relabelled "token".
+		return `COALESCE(NULLIF(usage_unit, ''), '(unrecorded)')`
 	}
 	return "model_name"
+}
+
+// relayModeCaseExpr turns logs.relay_mode (an int) into the stable label
+// relayconstant.RelayModeLabel returns, generated from the same table so SQL
+// and Go cannot drift. Integers only ever come from constants, never input.
+func relayModeCaseExpr() string {
+	var b strings.Builder
+	b.WriteString("CASE relay_mode")
+	for _, m := range relayconstant.RelayModeLabelledModes {
+		fmt.Fprintf(&b, " WHEN %d THEN '%s'", m, relayconstant.RelayModeLabel(m))
+	}
+	b.WriteString(" ELSE 'other' END")
+	return b.String()
 }
 
 // getExprUsageTotals is GetModelUsageTotals' sibling for the dimensions
@@ -357,7 +379,7 @@ func GetRankingsForProjects(startTime, endTime int64, tenantID, by string, limit
 	switch by {
 	case "vendor":
 		fetch = getVendorUsageTotals
-	case "group", "key", "user", "product":
+	case "group", "key", "user", "product", "relay_mode", "usage_unit":
 		fetch = getExprUsageTotals(by)
 	}
 

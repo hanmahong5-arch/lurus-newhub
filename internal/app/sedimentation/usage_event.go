@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
@@ -123,8 +124,22 @@ func buildItem(l *repo.Log) (item, bool) {
 			ChargedCNY4:      l.ChargedCNY4,
 			RequestID:        rid,
 			CreatedAt:        l.CreatedAt,
+			// Unified metering (migration 053). A relay_mode of 0 is left out:
+			// "unknown" carries no information for a consumer.
+			RelayMode:          relayModeForEvent(l.RelayMode),
+			UsageUnit:          l.UsageUnit,
+			UsageQuantity:      l.UsageQuantity,
+			UsageSource:        l.UsageSource,
+			RetrievalDocuments: l.RetrievalDocuments,
 		},
 	}, true
+}
+
+func relayModeForEvent(mode int) string {
+	if mode == relayconstant.RelayModeUnknown {
+		return ""
+	}
+	return relayconstant.RelayModeLabel(mode)
 }
 
 // storedConsent reads the flag; any error answers false because consent only

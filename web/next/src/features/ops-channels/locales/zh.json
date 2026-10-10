@@ -163,5 +163,15 @@
   "resets {{time}}": "重置于 {{time}}",
   "{{count}} channels in total": "共 {{count}} 个渠道",
   "{{imported}} imported, {{failed}} test failed, {{skipped}} skipped.": "已导入 {{imported}} 条，测试失败 {{failed}} 条，跳过 {{skipped}} 条。",
-  "{{ready}} ready, {{duplicate}} duplicate, {{invalid}} invalid.": "可导入 {{ready}} 条，重复 {{duplicate}} 条，无效 {{invalid}} 条。"
+  "{{ready}} ready, {{duplicate}} duplicate, {{invalid}} invalid.": "可导入 {{ready}} 条，重复 {{duplicate}} 条，无效 {{invalid}} 条。",
+  "Modality": "模态",
+  "Mismatch": "不匹配",
+  "Chat model": "对话",
+  "Embedding": "向量嵌入",
+  "Rerank": "重排序",
+  "Decision": "决策",
+  "Image model": "图像",
+  "Audio": "音频",
+  "The same model is registered with a different modality on another channel": "同名模型在另一渠道登记的模态不同",
+  "This channel type cannot serve this modality": "该渠道类型无法服务此模态"
 }

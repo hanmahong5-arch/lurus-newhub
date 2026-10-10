@@ -36,7 +36,7 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *common.RelayInfo, r
 
 // ConvertEmbeddingRequest implements provider.Adaptor.
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *common.RelayInfo, request dto.EmbeddingRequest) (any, error) {
-	return nil, errors.New("not implemented")
+	return nil, provider.ErrNotImplemented
 }
 
 // ConvertImageRequest implements provider.Adaptor.
@@ -59,7 +59,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *common.Rel
 
 // ConvertRerankRequest implements provider.Adaptor.
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
-	return nil, errors.New("not implemented")
+	return nil, provider.ErrNotImplemented
 }
 
 // DoRequest implements provider.Adaptor.

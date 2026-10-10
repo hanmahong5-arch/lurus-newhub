@@ -285,8 +285,8 @@ func TestAdaptor_ConvertRerankRequest_AlwaysNil(t *testing.T) {
 	if result != nil {
 		t.Errorf("result = %+v, want nil (Claude does not support rerank)", result)
 	}
-	if err != nil {
-		t.Errorf("err = %v, want nil", err)
+	if err == nil {
+		t.Error("err = nil, want ErrNotImplemented (a nil,nil converter would POST \"null\" upstream)")
 	}
 }
 

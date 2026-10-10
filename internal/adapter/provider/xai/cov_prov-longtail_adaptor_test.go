@@ -263,8 +263,8 @@ func TestXai_UnimplementedSurfaces(t *testing.T) {
 		t.Error("ConvertOpenAIResponsesRequest should error")
 	}
 	got, err := a.ConvertRerankRequest(w.ctx, 0, dto.RerankRequest{})
-	if err != nil || got != nil {
-		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, nil) (current behavior: silently unsupported)", got, err)
+	if err == nil || got != nil {
+		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, ErrNotImplemented) (current behavior: silently unsupported)", got, err)
 	}
 	a.Init(info)
 }

@@ -164,8 +164,8 @@ func TestProvOllamaVolc_Adaptor_UnsupportedConversions(t *testing.T) {
 	if _, err := a.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{}); err == nil {
 		t.Error("ConvertOpenAIResponsesRequest should return an error (not implemented)")
 	}
-	if resp, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{}); resp != nil || err != nil {
-		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, nil)", resp, err)
+	if resp, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{}); resp != nil || err == nil {
+		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, ErrNotImplemented)", resp, err)
 	}
 }
 

@@ -37,10 +37,33 @@ import {
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
 
+// SearchUnitPrice: JSON object { model: USD per search unit }. A blank value
+// means "not configured" (falls back to token pricing) and is allowed so an
+// untouched, absent option never blocks saving the other fields; an explicit
+// 0 means free. Values must be finite non-negative numbers.
+export function verifySearchUnitPrice(value) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return true;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch (e) {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return false;
+  }
+  return Object.values(parsed).every(
+    (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0,
+  );
+}
+
 export default function ModelRatioSettings(props) {
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
     ModelPrice: '',
+    SearchUnitPrice: '',
     ModelRatio: '',
     CacheRatio: '',
     CompletionRatio: '',
@@ -159,6 +182,32 @@ export default function ModelRatioSettings(props) {
                 },
               ]}
               onChange={(value) => setInputs({ ...inputs, ModelPrice: value })}
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('检索单位价格')}
+              extraText={t(
+                '重排序（rerank）模型按 ceil(文档数/100) 个检索单位计价，单位为美元/检索单位。未配置 ≠ 免费：删除该键＝回落到 token 计价，写 0＝免费',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为每个检索单位的美元价格（非负数），例如：{"model-a": 0.002}',
+              )}
+              field={'SearchUnitPrice'}
+              autosize={{ minRows: 4, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifySearchUnitPrice(value),
+                  message: '必须是 JSON 对象，且每个值为非负数',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, SearchUnitPrice: value })
+              }
             />
           </Col>
         </Row>

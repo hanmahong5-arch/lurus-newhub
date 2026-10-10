@@ -88,6 +88,7 @@ var awaitingCensus = map[string]string{
 	"submodel":    "",
 	"systemone":   "billed per INPUT token only, output free: exact quota pinned end-to-end by handler/relay_systemone_test.go (1000 input tokens at ratio 0.021 = 21); the wire has no cache slot, so the cache-invariance matrix has nothing to drive",
 	"tencent":     "",
+	"voyage":      "",
 	"vertex":      "hosts Anthropic + Gemini models; usage shape differs from both natives",
 	"volcengine":  "",
 	"xinference":  "",

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
+	"github.com/LurusTech/lurus-hub/internal/pkg/capability"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/samber/lo"
@@ -287,6 +288,7 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	models_ := strings.Split(channel.Models, ",")
 	groups_ := strings.Split(channel.Group, ",")
 	autoDisabled := autoDisabledModelsForChannel(useDB, channel.Id)
+	overrides := loadModalityOverrides(useDB)
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
@@ -304,6 +306,7 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				Priority:  channel.Priority,
 				Weight:    uint(channel.GetWeight()),
 				Tag:       channel.Tag,
+				Modality:  capability.Infer(overrides[model], channel.Type, model).Stored(),
 			}
 			abilities = append(abilities, ability)
 		}
@@ -355,6 +358,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	models_ := strings.Split(channel.Models, ",")
 	groups_ := strings.Split(channel.Group, ",")
 	autoDisabled := autoDisabledModelsForChannel(tx, channel.Id)
+	overrides := loadModalityOverrides(tx)
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
@@ -372,6 +376,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				Priority:  channel.Priority,
 				Weight:    uint(channel.GetWeight()),
 				Tag:       channel.Tag,
+				Modality:  capability.Infer(overrides[model], channel.Type, model).Stored(),
 			}
 			abilities = append(abilities, ability)
 		}

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
@@ -47,8 +48,37 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 	return groupRatioInfo
 }
 
+// RerankSearchUnits is the number of billable search units of a rerank call:
+// ceil(documents/100) x queries (Cohere convention, queries is always 1 here).
+// Computed from the REQUEST's document count, which the caller controls and
+// the vendor cannot inflate.
+func RerankSearchUnits(info *relaycommon.RelayInfo) int64 {
+	docs := 0
+	if info != nil && info.RerankerInfo != nil {
+		docs = len(info.Documents)
+	}
+	return ratio_setting.SearchUnits(docs, 1)
+}
+
+// SearchUnitPriced reports whether this call is settled per search unit: a
+// rerank call whose model has a search-unit price configured. Anything else
+// stays on the token / per-call paths, and a model with no price at all still
+// hits the "ratio or price not set" error below (unknown is never free).
+func SearchUnitPriced(info *relaycommon.RelayInfo) (float64, bool) {
+	if info == nil || info.RelayMode != relayconstant.RelayModeRerank {
+		return 0, false
+	}
+	return ratio_setting.GetSearchUnitPrice(info.OriginModelName)
+}
+
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
+	if sup, ok := SearchUnitPriced(info); ok {
+		// Pre-consume at the exact search-unit amount through the existing
+		// per-call branch; postConsumeQuota recomputes the same figure.
+		modelPrice = sup * float64(RerankSearchUnits(info))
+		usePrice = true
+	}
 
 	groupRatioInfo := HandleGroupRatio(c, info)
 

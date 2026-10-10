@@ -88,8 +88,8 @@ func GetAndValidateRerankRequest(c *gin.Context) (*dto.RerankRequest, error) {
 	if rerankRequest.Query == "" {
 		return nil, types.NewError(fmt.Errorf("query is empty"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
-	if len(rerankRequest.Documents) == 0 {
-		return nil, types.NewError(fmt.Errorf("documents is empty"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	if apiErr := ValidateRerankFields(rerankRequest); apiErr != nil {
+		return nil, apiErr
 	}
 	return rerankRequest, nil
 }
@@ -104,6 +104,17 @@ func GetAndValidateEmbeddingRequest(c *gin.Context, relayMode int) (*dto.Embeddi
 
 	if embeddingRequest.Input == nil {
 		return nil, fmt.Errorf("input is empty")
+	}
+	// Dimensions is omitempty, so an explicit 0 must be detected from the raw body.
+	dimensionsSet := false
+	if raw, rerr := common.GetRequestBody(c); rerr == nil {
+		var probe map[string]json.RawMessage
+		if json.Unmarshal(raw, &probe) == nil {
+			_, dimensionsSet = probe["dimensions"]
+		}
+	}
+	if apiErr := ValidateEmbeddingFields(embeddingRequest, dimensionsSet, relayMode == relayconstant.RelayModeEmbeddings); apiErr != nil {
+		return nil, apiErr
 	}
 	if relayMode == relayconstant.RelayModeModerations && embeddingRequest.Model == "" {
 		embeddingRequest.Model = "omni-moderation-latest"

@@ -84,6 +84,10 @@ func sessionAffinityRawID(c *gin.Context, m *ModelRequest) string {
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *repo.Channel
+		// Resolve the relay mode once, here, so every selection attempt of
+		// this request (first draw and relay retries) filters by the same
+		// modality requirement.
+		c.Set(string(constant.ContextKeyRelayMode), relayconstant.Path2RelayMode(c.Request.URL.Path))
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
@@ -198,6 +202,16 @@ func Distribute() func(c *gin.Context) {
 				}
 			}
 
+			// Opt-in decision-model routing (cycle 22, migration 054): one
+			// evaluation per request, after the allow-list and token model limit
+			// passed for the requested model and before channel selection sees
+			// the (possibly rewritten) model. No enabled policy = one map miss.
+			if shouldSelectChannel && modelRequest != nil {
+				if tc, terr := GetTenantContext(c); terr == nil && tc != nil {
+					ApplyDecisionRouting(c, modelRequest, tc.TenantID)
+				}
+			}
+
 			if shouldSelectChannel {
 				if modelRequest.Model == "" {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, "Model name not specified, model name cannot be empty", string(types.ErrorCodeInvalidRequest))
@@ -288,6 +302,13 @@ func Distribute() func(c *gin.Context) {
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable,
 							fmt.Sprintf("all channels for model %s in group %s are rate-limited upstream; retry in ~%ds", modelRequest.Model, showGroup, secs),
 							string(types.ErrorCodeAllChannelsCooling))
+						return
+					}
+					// Every candidate route is the wrong kind for this request
+					// (modality filter, enforce mode). Not a missing model and
+					// not an outage: 501, nothing was sent upstream.
+					if errors.Is(err, repo.ErrNoChannelSupportsModality) {
+						abortWithModalityMiss(c, modelRequest.Model, err)
 						return
 					}
 					// 如果错误，但是渠道不为空，说明是数据库一致性问题
@@ -682,4 +703,34 @@ func extractModelNameFromGeminiPath(path string) string {
 
 	// 返回模型名部分
 	return path[startIndex : startIndex+colonIndex]
+}
+
+// abortWithModalityMiss answers 501 provider_capability_not_supported with a
+// structured error.details so a client can tell "this model cannot do that
+// operation here" from "model not found". The reasons carry causes and counts
+// only: never a channel id, name, upstream URL or key.
+func abortWithModalityMiss(c *gin.Context, model string, err error) {
+	reasons := []gin.H{}
+	var miss *app.ModalityMissError
+	if errors.As(err, &miss) {
+		for _, r := range miss.Reasons() {
+			reasons = append(reasons, gin.H{"code": r.Code, "message": r.Message, "route_count": r.RouteCount})
+		}
+	}
+	message := fmt.Sprintf("model %s has no route that supports this operation", model)
+	if miss != nil {
+		message = fmt.Sprintf("model %s has no route that supports %s requests", model, miss.RelayMode)
+	}
+	apiErr := types.NewErrorWithStatusCode(
+		errors.New(common.MessageWithRequestId(message, c.GetString(common.RequestIdKey))),
+		types.ErrorCodeProviderCapabilityNotSupported,
+		http.StatusNotImplemented,
+	)
+	renderRejection(c, apiErr, gin.H{"details": gin.H{
+		"stage":              "route_selection",
+		"upstream_attempted": false,
+		"reasons":            reasons,
+	}})
+	c.Abort()
+	recordMiddlewareErrorLog(c, http.StatusNotImplemented, message, string(types.ErrorCodeProviderCapabilityNotSupported))
 }

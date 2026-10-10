@@ -229,8 +229,8 @@ func TestAdaptor_ConvertRerankRequest_AlwaysNilNil(t *testing.T) {
 	a := &Adaptor{}
 	c, _ := newTestContext()
 	got, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{})
-	if got != nil || err != nil {
-		t.Errorf("got (%v, %v), want (nil, nil) -- Gemini has no native rerank support", got, err)
+	if got != nil || err == nil {
+		t.Errorf("got (%v, %v), want (nil, ErrNotImplemented) -- this vendor has no native rerank support", got, err)
 	}
 }
 

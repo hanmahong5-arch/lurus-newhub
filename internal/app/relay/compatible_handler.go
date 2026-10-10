@@ -9,6 +9,7 @@ import (
 	"time"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/app/governance"
@@ -17,6 +18,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/operation_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
@@ -195,6 +197,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 }
 
 func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent ...string) {
+	usageWasNil := usage == nil
 	if usage == nil {
 		usage = &dto.Usage{
 			PromptTokens:     relayInfo.GetEstimatePromptTokens(),
@@ -205,6 +208,13 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	}
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	promptTokens := usage.PromptTokens
+	// Rerank vendors (Jina) report only total_tokens. The handler keeps the
+	// upstream's fields as sent, so the billable count is taken from total
+	// here, at the one place that needs it, instead of rewriting the usage.
+	if relayInfo.RelayMode == relayconstant.RelayModeRerank && usage.PromptTokens == 0 &&
+		usage.CompletionTokens == 0 && usage.TotalTokens > 0 {
+		promptTokens = usage.TotalTokens
+	}
 	cacheTokens := usage.PromptTokensDetails.CachedTokens
 	imageTokens := usage.PromptTokensDetails.ImageTokens
 	audioTokens := usage.PromptTokensDetails.AudioTokens
@@ -420,13 +430,28 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 		}
 	}
 
+	// Search-unit settlement (rerank with a configured SearchUnitPrice):
+	// quota = price x units x group ratio, independent of token counts. Tool
+	// fees above do not apply to rerank, so the amount replaces the base.
+	usageUnit := "token"
+	searchUnits := int64(0)
+	searchUnitMode := false
+	if sup, ok := helper.SearchUnitPriced(relayInfo); ok {
+		searchUnitMode = true
+		usageUnit = "search_unit"
+		searchUnits = helper.RerankSearchUnits(relayInfo)
+		quotaCalculateDecimal = decimal.NewFromFloat(sup).
+			Mul(decimal.NewFromInt(searchUnits)).Mul(dGroupRatio).Mul(dQuotaPerUnit)
+		extraContent = append(extraContent, fmt.Sprintf("Search unit %d x %v", searchUnits, sup))
+	}
+
 	quota := int(quotaCalculateDecimal.Round(0).IntPart())
 	totalTokens := promptTokens + completionTokens
 
 	//var logContent string
 
 	// record all the consume log even if quota is 0
-	if totalTokens == 0 {
+	if totalTokens == 0 && !searchUnitMode {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
@@ -542,6 +567,27 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	}
+	// Unified metering (migration 053): what was charged, in which unit, and
+	// whether the figure is the vendor's or our estimate.
+	logParams.UsageUnit = usageUnit
+	logParams.UsageQuantity = int64(totalTokens)
+	if searchUnitMode {
+		logParams.UsageQuantity = searchUnits
+	}
+	switch {
+	case usageWasNil:
+		logParams.UsageSource = "estimated"
+	case relayInfo.UsageSource != "":
+		logParams.UsageSource = relayInfo.UsageSource
+	case totalTokens == 0 && !searchUnitMode:
+		logParams.UsageSource = "unreported"
+	default:
+		logParams.UsageSource = "upstream"
+	}
+	logParams.RetrievalDocuments = retrievalDocuments(relayInfo)
+	if relayInfo.RelayMode == relayconstant.RelayModeRerank || relayInfo.RelayMode == relayconstant.RelayModeEmbeddings {
+		metrics.RecordRetrievalUsage(logParams.UsageUnit, logParams.UsageSource)
+	}
 	governance.EnrichLogParams(ctx, relayInfo, &logParams)
 	repo.RecordConsumeLog(ctx, relayInfo.UserId, logParams)
 
@@ -551,4 +597,22 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	if totalTokens > 0 {
 		app.CheckAndPublishUsageMilestone(ctx.Request.Context(), relayInfo.UserId, totalTokens)
 	}
+}
+
+// retrievalDocuments is the number of documents a retrieval call processed:
+// rerank = documents scored, embeddings = inputs embedded, taken from the
+// request (never from the response) so a vendor cannot inflate it. 0 for any
+// other mode.
+func retrievalDocuments(info *relaycommon.RelayInfo) int {
+	switch info.RelayMode {
+	case relayconstant.RelayModeRerank:
+		if info.RerankerInfo != nil {
+			return len(info.Documents)
+		}
+	case relayconstant.RelayModeEmbeddings:
+		if req, ok := info.Request.(*dto.EmbeddingRequest); ok && req != nil {
+			return len(req.ParseInput())
+		}
+	}
+	return 0
 }

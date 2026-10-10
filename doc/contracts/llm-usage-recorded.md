@@ -43,8 +43,15 @@
 | `request_id` | string | 关联键，对应日志 `other.request_id`，用于回拉正文与去重 |
 | `created_at` | int64 | 日志行时间，unix 秒 |
 | `has_body` | bool | 发布时是否已存在未过期的归档正文 |
+| `relay_mode` | string，可省略 | 请求类型：`chat` `completions` `embeddings` `moderations` `images` `audio` `rerank` `systemone` `responses` `realtime` `gemini` `other`；未知（0）则省略。名称只增不改 |
+| `usage_unit` | string，可省略 | 计量单位：`token` / `search_unit` / `request`；迁移 053 之前的旧行省略 |
+| `usage_quantity` | int64，可省略 | 按 `usage_unit` 实际计费的数量（token 数、search unit 数……）；`0` 省略 |
+| `usage_source` | string，可省略 | 用量来源：`upstream`（上游自报）/ `estimated`（网关估算）/ `unreported`（上游未报且无法估算）；旧行省略 |
+| `retrieval_documents` | int，可省略 | rerank = 参与打分的文档数；embeddings = 输入条数（取自请求，不取自响应）；其余为 `0` 省略 |
 
-载荷是**封闭的标量集合**：新增字段（尤其任何自由文本）都是契约变更，须改本文件与 `usage_event_test.go` 里的允许键白名单。
+**v 保持 1。** 载荷是**标量集合**：可以追加**可选标量字段**（`omitempty`，缺省时事件与旧版逐字节一致），**消费者必须忽略未知字段**；任何自由文本字段、字段改名或语义变化仍是破坏性变更，须递增 `v`。每次追加都要改本文件与 `usage_event_test.go` 里的允许键白名单（那是"有意识的契约变更"的闸门）。
+
+search unit 口径（Cohere）：`units = ceil(documents / 100) × queries`，网关内 `queries` 恒为 1。
 
 只对**消费日志**（计费成功的请求）产出事件；错误日志、无 `request_id` 的行不产出。
 

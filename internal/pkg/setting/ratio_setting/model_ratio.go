@@ -99,6 +99,14 @@ var defaultModelRatio = map[string]float64{
 	"gpt-5-mini-2025-08-07":            0.125,
 	"gpt-5-nano":                       0.025,
 	"gpt-5-nano-2025-08-07":            0.025,
+	// GPT-6 Sol / Luna (released 2026-09-22) and GPT-6.1 Sol (2026-09-29), Standard
+	// tier list prices: Sol $2 in / $10 out, Luna $0.10 / $0.50 per 1M tokens.
+	// Without these rows the "gpt-" family fallback (1.25) overcharged Sol by
+	// 25% and Luna by 25x. Completion ratio 5 for the family lives in
+	// getHardcodedCompletionModelRatio; cache read 0.1 / write 1.25 in cache_ratio.go.
+	"gpt-6-sol":   1.0,
+	"gpt-6-luna":  0.05,
+	"gpt-6.1-sol": 1.0,
 	//"gpt-3.5-turbo-0301":           0.75, //deprecated
 	"gpt-3.5-turbo":          0.25,
 	"gpt-3.5-turbo-0613":     0.75,
@@ -621,6 +629,11 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		if strings.HasPrefix(name, "gpt-5") {
 			return 8, true
 		}
+		// gpt-6 family: output is 5x input on every published Sol / Luna rate
+		// ($10/$2, $0.50/$0.10, and the same 5x on Batch, Flex and Fast tiers).
+		if strings.HasPrefix(name, "gpt-6") {
+			return 5, true
+		}
 		// gpt-4.5-preview匹配
 		if strings.HasPrefix(name, "gpt-4.5-preview") {
 			return 2, true
@@ -790,11 +803,6 @@ func ModelRatio2JSONString() string {
 	return string(jsonBytes)
 }
 
-var defaultImageRatio = map[string]float64{
-	"gpt-image-1": 2,
-}
-var imageRatioMap map[string]float64
-var imageRatioMapMutex sync.RWMutex
 var (
 	audioRatioMap      map[string]float64 = nil
 	audioRatioMapMutex                    = sync.RWMutex{}
@@ -803,44 +811,6 @@ var (
 	audioCompletionRatioMap      map[string]float64 = nil
 	audioCompletionRatioMapMutex                    = sync.RWMutex{}
 )
-
-func ImageRatio2JSONString() string {
-	imageRatioMapMutex.RLock()
-	defer imageRatioMapMutex.RUnlock()
-	jsonBytes, err := common.Marshal(imageRatioMap)
-	if err != nil {
-		common.SysError("error marshalling cache ratio: " + err.Error())
-	}
-	return string(jsonBytes)
-}
-
-func UpdateImageRatioByJSONString(jsonStr string) error {
-	// 同 UpdateModelRatioByJSONString：解析失败不得破坏已生效的图片倍率。
-	tmp := make(map[string]float64)
-	if err := common.Unmarshal([]byte(jsonStr), &tmp); err != nil {
-		return err
-	}
-	imageRatioMapMutex.Lock()
-	imageRatioMap = tmp
-	imageRatioMapMutex.Unlock()
-	return nil
-}
-
-// GetImageRatio looks up the raw name first so an operator entry keyed by
-// the exact model name still wins, then FormatMatchingModelName's
-// normalised name so a gizmo or gemini thinking-budget family entry is not
-// silently skipped.
-func GetImageRatio(name string) (float64, bool) {
-	imageRatioMapMutex.RLock()
-	defer imageRatioMapMutex.RUnlock()
-	if ratio, ok := imageRatioMap[name]; ok {
-		return ratio, true
-	}
-	if ratio, ok := imageRatioMap[FormatMatchingModelName(name)]; ok {
-		return ratio, true
-	}
-	return 1, false // Default to 1 if not found
-}
 
 func AudioRatio2JSONString() string {
 	audioRatioMapMutex.RLock()

@@ -15,6 +15,7 @@ import {
   type AuditFilters,
   type Retention,
 } from './lib/policy'
+import { draftFromWire, toRequestBody, type RoutingDraft } from './lib/routing'
 
 export const policyKey = ['org-policy'] as const
 
@@ -184,4 +185,35 @@ export async function saveSedimentation(consent: boolean) {
     { consent }
   )
   return raw?.consent === true
+}
+
+/* decision routing: /api/v2/~/routing-policies/:model */
+
+const routingPath = (model: string) =>
+  `/routing-policies/${encodeURIComponent(model)}`
+
+/** null = this model has no policy yet (404); other failures throw. */
+export function routingPolicyQueryOptions(model: string) {
+  return queryOptions({
+    queryKey: [...policyKey, 'routing', model],
+    queryFn: async () => {
+      try {
+        return draftFromWire(await tenantApi.get(routingPath(model)))
+      } catch (e) {
+        if (toApiError(e).status === 404) return null
+        throw e
+      }
+    },
+    retry: false,
+  })
+}
+
+export async function saveRoutingPolicy(model: string, draft: RoutingDraft) {
+  return draftFromWire(
+    await tenantApi.put(routingPath(model), toRequestBody(draft))
+  )
+}
+
+export async function deleteRoutingPolicy(model: string) {
+  await tenantApi.delete(routingPath(model))
 }

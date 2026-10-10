@@ -19,5 +19,16 @@
   "Spend by model": "按模型消费分布",
   "Cost by model, last 5 minutes": "最近 5 分钟按模型费用",
   "No spend in the last 5 minutes.": "最近 5 分钟没有消费。",
-  "{{n}} req": "{{n}} 次请求"
+  "{{n}} req": "{{n}} 次请求",
+  "Usage breakdown": "用量分布",
+  "Group usage by": "用量分组维度",
+  "By model": "按模型",
+  "By endpoint kind": "按接口类型",
+  "By billing unit": "按计费单位",
+  "By group": "按分组",
+  "By API key": "按 API 密钥",
+  "By member": "按成员",
+  "By product": "按产品",
+  "Could not load the usage breakdown.": "无法加载用量分布。",
+  "requests": "请求"
 }

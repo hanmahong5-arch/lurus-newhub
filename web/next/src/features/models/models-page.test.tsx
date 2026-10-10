@@ -194,4 +194,61 @@ describe('ModelsPage', () => {
     expect(err).toHaveTextContent('Price configuration is unavailable');
     expect(screen.queryByTestId('model-card-model-a')).not.toBeInTheDocument();
   });
+
+  it('renders Not configured vs Free for search-unit prices, plus modality', async () => {
+    serve({
+      ...healthy,
+      '/pricing': {
+        pricing: [
+          {
+            model_name: 'rr-unset',
+            vendor: 'VendorA',
+            modality: 'rerank',
+            usage_unit: 'search_unit',
+          },
+          {
+            model_name: 'rr-free',
+            vendor: 'VendorA',
+            modality: 'rerank',
+            usage_unit: 'search_unit',
+            search_unit_price: 0,
+          },
+          {
+            model_name: 'rr-paid',
+            vendor: 'VendorA',
+            modality: 'rerank',
+            usage_unit: 'search_unit',
+            search_unit_price: 0.002,
+          },
+        ],
+        group_ratio: { default: 1 },
+      },
+    });
+    renderPage();
+    await screen.findByTestId('model-card-rr-unset');
+    expect(
+      within(screen.getByTestId('model-card-rr-unset')).getByText(
+        'Not configured',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('model-card-rr-free')).getByText('Free'),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('model-card-rr-free')).queryByText(
+        'Not configured',
+      ),
+    ).toBeNull();
+    expect(
+      within(screen.getByTestId('model-card-rr-paid')).getByText('$0.002'),
+    ).toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByTestId('models-view-table'));
+    expect(screen.getByTestId('model-modality-rr-free')).toHaveTextContent(
+      'Rerank',
+    );
+    expect(screen.getByTestId('model-unit-rr-free')).toHaveTextContent(
+      'Per search unit',
+    );
+  });
 });

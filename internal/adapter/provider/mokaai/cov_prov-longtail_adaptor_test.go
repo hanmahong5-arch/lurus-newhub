@@ -206,8 +206,8 @@ func TestMoka_ConvertRerankRequest_UnsupportedNilNil(t *testing.T) {
 	a := &Adaptor{}
 	c, _ := newProvLongtailMokaCtx()
 	got, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{})
-	if err != nil || got != nil {
-		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, nil) — mokaai has no rerank support", got, err)
+	if err == nil || got != nil {
+		t.Errorf("ConvertRerankRequest = (%v, %v), want (nil, ErrNotImplemented) — mokaai has no rerank support", got, err)
 	}
 }
 

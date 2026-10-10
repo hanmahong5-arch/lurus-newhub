@@ -231,8 +231,8 @@ func TestAdaptor_ConvertRerankRequest_NotSupported(t *testing.T) {
 	a := &Adaptor{}
 	c, _ := prov_cn_batch_baiduGinContext()
 	out, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{})
-	if err != nil || out != nil {
-		t.Errorf("expected (nil, nil) passthrough for unsupported rerank, got (%v, %v)", out, err)
+	if err == nil || out != nil {
+		t.Errorf("expected (nil, ErrNotImplemented) for unsupported rerank, got (%v, %v)", out, err)
 	}
 }
 
@@ -311,7 +311,7 @@ func TestEmbeddingResponseBaidu2OpenAI(t *testing.T) {
 	if len(out.Data) != 1 || out.Data[0].Index != 0 {
 		t.Fatalf("expected 1 embedding item, got %+v", out.Data)
 	}
-	if out.Data[0].Embedding[0] != 0.1 {
+	if string(out.Data[0].Embedding) != "[0.1,0.2]" {
 		t.Errorf("embedding vector not preserved, got %v", out.Data[0].Embedding)
 	}
 	if out.TotalTokens != 4 {

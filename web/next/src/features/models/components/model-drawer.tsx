@@ -24,8 +24,11 @@ import { curlSnippet, pythonSnippet } from '../lib/snippets';
 import {
   CallableBadge,
   CapabilityLabel,
+  ModalityLabel,
   OutputPriceValue,
   PriceValue,
+  SearchUnitPriceValue,
+  UsageUnitLabel,
 } from './price';
 import { usePriceFormatter } from './price-format';
 import { relayBase } from './relay-base';
@@ -51,12 +54,42 @@ function Stat(props: {
   );
 }
 
+function PriceStats(props: { entry: ModelEntry }) {
+  const { t } = useTranslation();
+  const fmt = usePriceFormatter();
+  const e = props.entry;
+  if (e.usageUnit === 'search_unit') {
+    return (
+      <Stat label={t('Price per search unit')}>
+        <SearchUnitPriceValue value={e.searchUnitPrice} />
+      </Stat>
+    );
+  }
+  if (e.quotaType === 1) {
+    return (
+      <Stat label={t('Price per call')}>
+        <PriceValue value={e.perCall} />
+      </Stat>
+    );
+  }
+  return (
+    <>
+      <Stat label={t('Input /M')} sub={t('per 1M tokens')}>
+        <PriceValue value={e.inputPerM} />
+      </Stat>
+      <Stat label={t('Output /M')} sub={t('per 1M tokens')}>
+        <OutputPriceValue entry={e} />
+      </Stat>
+      <Stat label={t('Cache read /M')}>{fmt(e.cacheReadPerM) ?? '--'}</Stat>
+    </>
+  );
+}
+
 export function ModelDrawer(props: {
   entry: ModelEntry | null;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const fmt = usePriceFormatter();
   const [tab, setTab] = useState<'curl' | 'python'>('curl');
   const e = props.entry;
   const base = relayBase();
@@ -108,23 +141,13 @@ export function ModelDrawer(props: {
                 className='grid grid-cols-2 gap-2.5'
                 data-testid='model-drawer-prices'
               >
-                {e.quotaType === 1 ? (
-                  <Stat label={t('Price per call')}>
-                    <PriceValue value={e.perCall} />
-                  </Stat>
-                ) : (
-                  <>
-                    <Stat label={t('Input /M')} sub={t('per 1M tokens')}>
-                      <PriceValue value={e.inputPerM} />
-                    </Stat>
-                    <Stat label={t('Output /M')} sub={t('per 1M tokens')}>
-                      <OutputPriceValue entry={e} />
-                    </Stat>
-                    <Stat label={t('Cache read /M')}>
-                      {fmt(e.cacheReadPerM) ?? '--'}
-                    </Stat>
-                  </>
-                )}
+                <Stat label={t('Modality')}>
+                  <ModalityLabel modality={e.modality} />
+                </Stat>
+                <Stat label={t('Billing unit')}>
+                  <UsageUnitLabel entry={e} />
+                </Stat>
+                <PriceStats entry={e} />
                 {e.tokens !== null && (
                   <Stat
                     label={t('tokens · 7d')}
@@ -134,7 +157,7 @@ export function ModelDrawer(props: {
                   </Stat>
                 )}
               </div>
-              {hasPrice(e) && (
+              {hasPrice(e) && e.usageUnit !== 'search_unit' && (
                 <p className='text-muted-foreground text-xs'>
                   {t('Prices include your group multiplier.')}
                 </p>

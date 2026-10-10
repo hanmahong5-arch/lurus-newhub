@@ -45,10 +45,8 @@ func routerRelayUpstreamResp(body string) *http.Response {
 }
 
 // Jina-compatible upstream (default / non-Xinference channel path): the
-// handler must copy the response's own TotalTokens into PromptTokens (the
-// business quirk at line 69 of rerank.go — Jina responses don't split
-// prompt vs total, so the settlement layer bills using TotalTokens for
-// both fields) and pass the results through untouched.
+// handler must keep the response's own token fields as sent (Jina reports only
+// total_tokens) and pass the results through untouched.
 func TestRerankHandler_JinaPath_UsageAndResultsPassThrough(t *testing.T) {
 	upstreamBody := `{
 		"results": [
@@ -77,13 +75,16 @@ func TestRerankHandler_JinaPath_UsageAndResultsPassThrough(t *testing.T) {
 	if usage == nil {
 		t.Fatal("expected non-nil usage for successful Jina rerank")
 	}
-	// Business rule: Jina responses only report TotalTokens; the handler
-	// must mirror it into PromptTokens so downstream billing sees a
-	// consistent (non-zero) prompt token count instead of silently
-	// under-billing prompt usage to 0.
-	if usage.TotalTokens != 57 || usage.PromptTokens != 57 {
-		t.Fatalf("expected PromptTokens mirrored from TotalTokens (57/57), got prompt=%d total=%d",
+	// Business rule (cycle 22): token fields keep the upstream's own values.
+	// Jina reports only total_tokens; the handler no longer fabricates a
+	// prompt_tokens by copying it (settlement reads total when it is the only
+	// counter present).
+	if usage.TotalTokens != 57 || usage.PromptTokens != 0 {
+		t.Fatalf("expected upstream values preserved (prompt=0 total=57), got prompt=%d total=%d",
 			usage.PromptTokens, usage.TotalTokens)
+	}
+	if info.UsageSource != "upstream" {
+		t.Fatalf("usage source = %q, want upstream", info.UsageSource)
 	}
 
 	if rec.Code != http.StatusOK {

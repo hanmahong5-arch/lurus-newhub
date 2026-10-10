@@ -68,6 +68,24 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 
 	usage := normalizeUsage(c, top["usage"], info)
 
+	// Contract check before anything is written to the caller. A failure is a
+	// 502 invalid_provider_response that is NOT retried on another channel (a
+	// sibling would serve the same model and the caller would pay twice), but
+	// the upstream already did the work: when it reported a valid usage the
+	// input tokens are still billed, returned alongside the error for the
+	// relay layer to settle. Estimated usage is never billed on this path.
+	var reqForCheck *dto.SystemOneRequest
+	if r, ok := info.Request.(*dto.SystemOneRequest); ok {
+		reqForCheck = r
+	}
+	if verr := validateAnswers(reqForCheck, answers); verr != nil {
+		apiErr := types.NewErrorWithStatusCode(verr, types.ErrorCodeInvalidProviderResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		if hasReportedInputTokens(top["usage"]) {
+			return &dto.Usage{PromptTokens: usage.InputTokens, CompletionTokens: 0, TotalTokens: usage.InputTokens}, apiErr
+		}
+		return nil, apiErr
+	}
+
 	out := dto.SystemOneResponse{Model: responseModel(info, upstreamModel), Answers: answers, Usage: usage}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -102,6 +120,13 @@ func normalizeUsage(c *gin.Context, raw json.RawMessage, info *relaycommon.Relay
 		OutputTokens: nonNegative(up.OutputTokens),
 		Truncated:    up.Truncated,
 	}
+}
+
+// hasReportedInputTokens reports whether the upstream gave a real input token
+// count (as opposed to us falling back to an estimate).
+func hasReportedInputTokens(raw json.RawMessage) bool {
+	var up upstreamUsage
+	return len(raw) != 0 && json.Unmarshal(raw, &up) == nil && up.InputTokens != nil
 }
 
 func nonNegative(v *int) int {

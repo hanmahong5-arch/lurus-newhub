@@ -36,6 +36,11 @@ var defaultCacheRatio = map[string]float64{
 	"gpt-5-mini-2025-08-07":        0.1,
 	"gpt-5-nano":                   0.1,
 	"gpt-5-nano-2025-08-07":        0.1,
+	// GPT-6 Sol / Luna / 6.1 Sol: cached input reads are 10% of the input rate
+	// ($0.20 / $0.01 / $0.20 per 1M against $2 / $0.10 / $2).
+	"gpt-6-sol":   0.1,
+	"gpt-6-luna":  0.1,
+	"gpt-6.1-sol": 0.1,
 	// DeepSeek cache-hit price / input price (2026-09-23): flash 0.006/0.3,
 	// v4-pro 0.044/1.32.
 	"deepseek-chat":                       0.02,
@@ -111,6 +116,9 @@ var defaultCreateCacheRatio = map[string]float64{
 	"gpt-5.6-sol":   1.25,
 	"gpt-5.6-terra": 1.25,
 	"gpt-5.6-luna":  1.25,
+	"gpt-6-sol":     1.25,
+	"gpt-6-luna":    1.25,
+	"gpt-6.1-sol":   1.25,
 }
 
 //var defaultCreateCacheRatio = map[string]float64{}

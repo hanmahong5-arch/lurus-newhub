@@ -63,6 +63,9 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		Results: aliResponse.Output.Results,
 		Usage:   usage,
 	}
+	if verr := relaycommon.ValidateRerankResponse(info, &rerankResponse); verr != nil {
+		return verr, nil
+	}
 
 	jsonResponse, err := json.Marshal(rerankResponse)
 	if err != nil {
