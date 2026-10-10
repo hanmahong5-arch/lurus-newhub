@@ -153,14 +153,24 @@ spec:
               value: "200"
             # Error rows go into the shared logs table (LogTypeError).
             # Retention is the log-retention leader task (cycle-13 L6): the
-            # window comes from LOG_RETENTION_DAYS, which is UNSET here, so
-            # nothing is deleted and the table is NOT bounded today. Setting
+            # window comes from LOG_RETENTION_DAYS (set below since 2026-10-10). Setting
             # a window is an owner decision -- read
             # doc/runbook/log-retention.md first (money rows have their own
             # LOG_RETENTION_MONEY_DAYS window and a 400-day floor, because
             # the invoice endpoints SUM the logs table directly).
             - name: ERROR_LOG_ENABLED
               value: "true"
+            # Retention windows, set 2026-10-10 (owner delegated the decision):
+            # diagnostic rows (unknown/manage/system/error) live 180 days;
+            # money rows (topup/consume/refund) 730 days - the invoice
+            # endpoints SUM the logs table directly, so this keeps two years
+            # of statements reproducible (floor is 400). Archived prompt text
+            # (log_bodies, migration 052) has its own 30-day default and is
+            # off until a tenant consents. Runbook: doc/runbook/log-retention.md.
+            - name: LOG_RETENTION_DAYS
+              value: "180"
+            - name: LOG_RETENTION_MONEY_DAYS
+              value: "730"
             - name: OIDC_ENABLED
               value: "false"
             - name: MEILISEARCH_ENABLED
