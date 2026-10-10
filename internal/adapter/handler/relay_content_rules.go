@@ -56,14 +56,14 @@ func applyContentRules(c *gin.Context, relayFormat types.RelayFormat) *types.New
 	rs, err := repo.ContentRulesetForTenant(c.GetString("tenant_id"))
 	if err != nil {
 		common.SysError("content rules unavailable, request forwarded unfiltered: " + err.Error())
-		return nil
+		return nil //nolint:nilerr // by design: a rules outage must not turn into a relay outage; the forward is logged above
 	}
 	if rs.Len() == 0 {
 		return nil
 	}
 	body, err := common.GetRequestBody(c)
 	if err != nil || len(body) == 0 {
-		return nil // the normal parse path reports the malformed body
+		return nil //nolint:nilerr // the normal parse path reports the malformed body with the right wire error
 	}
 	res := rs.Apply(format, body)
 	contentpolicy.Report(res)

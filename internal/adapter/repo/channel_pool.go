@@ -197,7 +197,7 @@ func ListMultiKeyChannelsForReaper() ([]*Channel, error) {
 
 // multiKeyOnly narrows a channel query to multi-key channels in SQL.
 func multiKeyOnly(q *gorm.DB) *gorm.DB {
-	if DB.Dialector.Name() == "postgres" {
+	if DB.Name() == "postgres" {
 		return q.Where("channel_info::jsonb @> ?::jsonb", `{"is_multi_key":true}`)
 	}
 	return q.Where("json_extract(channel_info, '$.is_multi_key') = 1")

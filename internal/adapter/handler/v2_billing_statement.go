@@ -40,7 +40,7 @@ type statementRow struct {
 var statementGroupExpr = map[string]string{
 	"project":  "CAST(project_id AS TEXT)",
 	"employee": "employee_ref",
-	"token":    "CAST(token_id AS TEXT)",
+	"token":    "CAST(token_id AS TEXT)", // gitleaks:allow - a SQL expression keyed by the group name, not a credential
 	"model":    "model_name",
 }
 

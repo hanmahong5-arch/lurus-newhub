@@ -129,6 +129,7 @@ func TestEarliestMultiKeyRecovery_NoLockOrderInversion(t *testing.T) {
 	writerDone := make(chan struct{})
 	go func() {
 		channelSyncLock.Lock() // what a cache rebuild does while a polling lock is held
+		_ = struct{}{}         // the critical section is intentionally empty: only the acquisition order matters
 		channelSyncLock.Unlock()
 		close(writerDone)
 	}()

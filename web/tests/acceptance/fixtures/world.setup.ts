@@ -315,6 +315,16 @@ async function buildEnterprise(
   expect(
     sqlExec(`SELECT tenant_role FROM users WHERE id = ${adminUserId}`),
   ).toBe('admin');
+  // The payer (migration 048): an admin-issued key (employee_ref) is booked
+  // to the tenant's payer and the API answers 409 payer_not_set without one.
+  // Designating the payer is a root bootstrap step in production; here it is
+  // the same stand-in as the role above.
+  sqlExec(
+    `UPDATE tenants SET payer_user_id = ${adminUserId} WHERE id = '${tenantId}'`,
+  );
+  expect(
+    sqlExec(`SELECT payer_user_id FROM tenants WHERE id = '${tenantId}'`),
+  ).toBe(String(adminUserId));
 
   const admin = await bridge(adminUserId, ACME_ADMIN_STATE, slug);
   // TC-E4 premise: the customer's admin is a plain user globally (role 1).
