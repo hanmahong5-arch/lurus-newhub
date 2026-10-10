@@ -7,10 +7,11 @@ import { AllowlistSection } from './components/allowlist-section'
 import { AuditSection } from './components/audit-section'
 import { RetentionSection } from './components/retention-section'
 import { RulesSection } from './components/rules-section'
+import { SedimentationSection } from './components/sedimentation-section'
 
 /**
  * Data and security (tenant admins only; the route guard enforces it and the
- * handlers re-check). Four independent sections, each loading its own data so
+ * handlers re-check). Five independent sections, each loading its own data so
  * one failing read does not blank the others.
  */
 export function OrgPolicyPage() {
@@ -26,6 +27,7 @@ export function OrgPolicyPage() {
           <TabsTrigger value='models'>{t('Model allow-list')}</TabsTrigger>
           <TabsTrigger value='retention'>{t('Content retention')}</TabsTrigger>
           <TabsTrigger value='rules'>{t('Content rules')}</TabsTrigger>
+          <TabsTrigger value='archive'>{t('Data archiving')}</TabsTrigger>
           <TabsTrigger value='audit'>{t('Audit log')}</TabsTrigger>
         </TabsList>
         <TabsContent value='models'>
@@ -36,6 +38,9 @@ export function OrgPolicyPage() {
         </TabsContent>
         <TabsContent value='rules'>
           <RulesSection />
+        </TabsContent>
+        <TabsContent value='archive'>
+          <SedimentationSection />
         </TabsContent>
         <TabsContent value='audit'>
           <AuditSection />

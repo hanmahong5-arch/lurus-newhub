@@ -241,6 +241,9 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantDataPolicy.POST("/rules", handler.CreateContentRuleV2)
 			tenantDataPolicy.PUT("/rules/:id", handler.UpdateContentRuleV2)
 			tenantDataPolicy.DELETE("/rules/:id", handler.DeleteContentRuleV2)
+			// Opt-in body archive (migration 052): the tenant admin's consent bit.
+			tenantDataPolicy.GET("/sedimentation", handler.GetSedimentationConsentV2)
+			tenantDataPolicy.PUT("/sedimentation", handler.PutSedimentationConsentV2)
 		}
 
 		// ================================================================
@@ -293,6 +296,9 @@ func SetApiV2Router(router *gin.Engine) {
 			// Wave 3 Phase 2 (2026-05-20): CSV export with streaming writer
 			// and a 50k-row hard cap (clamped silently above that).
 			tenantLogs.GET("/export", middleware.CriticalRateLimit(), handler.ExportLogsV2)
+			// Archived prompt/response of one request (migration 052; tenant admin,
+			// own tenant only, 404 for anything else; audited).
+			tenantLogs.GET("/:request_id/body", handler.GetLogBodyV2)
 		}
 
 		// ================================================================
@@ -692,6 +698,7 @@ func SetApiV2Router(router *gin.Engine) {
 			// within the 5-minute in-process cache runs none.
 			adminRoute.GET("/analytics/rankings", middleware.CriticalRateLimit(), handler.GetRankingsV2)
 			adminRoute.GET("/logs/export", middleware.CriticalRateLimit(), handler.ExportAdminLogsV2)
+			adminRoute.GET("/logs/:request_id/body", handler.GetAdminLogBodyV2)
 
 			// L6 (2026-09-12): TOTP adoption stats for the security reviewer,
 			// and the audited admin escape hatch for a lost-device user.

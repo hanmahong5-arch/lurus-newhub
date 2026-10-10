@@ -60,6 +60,8 @@ do).
 | [channel-pool-monitoring](channel-pool-monitoring.md) | netdata `newhub_channel_plan_window_high` — `lurus_channel_plan_window_used_ratio{channel_id,window}` | warning |
 | [channel-pool-monitoring](channel-pool-monitoring.md) | netdata `newhub_channel_plan_expiring` — `lurus_channel_expires_in_seconds{channel_id}` | warning / critical |
 | [channel-pool-monitoring](channel-pool-monitoring.md) | netdata `newhub_content_rejected_surge` — `lurus_content_rejected_total` | warning / critical |
+| [data-pipeline-failures](data-pipeline-failures.md) | netdata `newhub_log_search_sync_failed` — `lurus_log_search_sync_failed_total` | warning / critical |
+| [data-pipeline-failures](data-pipeline-failures.md) | netdata `newhub_nats_publish_failed` — `lurus_nats_publish_failed_total{subject_group}` | warning / critical |
 | [settlement-failed](settlement-failed.md) | netdata `newhub_billing_task_refund_unreversed` — `lurus_billing_task_refund_wallet_unreversed_total` | warning |
 
 | [release-download-gate](release-download-gate.md) | `RELEASE_GATED_PRODUCTS` entitlement gate (mechanism shipped, default OFF) | activation |

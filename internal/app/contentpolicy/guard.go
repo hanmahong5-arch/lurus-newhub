@@ -1,6 +1,8 @@
 package contentpolicy
 
 import (
+	"strings"
+
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -13,6 +15,7 @@ const (
 	FormatResponses  Format = "responses"
 	FormatClaude     Format = "claude"
 	FormatGemini     Format = "gemini"
+	FormatSystemOne  Format = "systemone"
 )
 
 // Hit aggregates one rule's matches over a request.
@@ -164,6 +167,8 @@ func collectSlots(format Format, body []byte) []slot {
 			collectGeminiParts(item.Get("parts"), "contents."+k.String()+".parts", role, add)
 			return true
 		})
+	case FormatSystemOne:
+		collectSystemOne(root, add)
 	}
 	return out
 }
@@ -232,4 +237,61 @@ func normalizeRole(r string) string {
 		// tool / function / unknown roles only match role_scope=any.
 		return "other:" + r
 	}
+}
+
+// collectSystemOne gathers the caller-authored text of a /v1/systemone body:
+// state, and each question's instructions and criteria. All of it is user
+// text (there is no system/assistant side). state, instructions and criteria
+// are polymorphic raw JSON (string, array or object), so every string VALUE
+// below them is a slot; object keys, numbers and the other question fields
+// (type, labels, option_order, unknown extras) are left byte-for-byte. A body
+// of the wrong shape simply yields fewer slots and passes through, matching
+// how the other formats treat what they cannot read.
+func collectSystemOne(root gjson.Result, add func(path, role, text string)) {
+	collectStrings(root.Get("state"), "state", add)
+	q := root.Get("questions")
+	if !q.IsObject() {
+		return
+	}
+	q.ForEach(func(id, question gjson.Result) bool {
+		base := "questions." + escapePathKey(id.String())
+		collectStrings(question.Get("instructions"), base+".instructions", add)
+		collectStrings(question.Get("criteria"), base+".criteria", add)
+		return true
+	})
+}
+
+// collectStrings adds every string value under v (v itself, or recursively
+// the elements / member values of an array / object) as a user-role slot.
+func collectStrings(v gjson.Result, path string, add func(path, role, text string)) {
+	switch {
+	case v.Type == gjson.String:
+		add(path, RoleUser, v.String())
+	case v.IsArray():
+		v.ForEach(func(k, e gjson.Result) bool {
+			collectStrings(e, path+"."+k.String(), add)
+			return true
+		})
+	case v.IsObject():
+		v.ForEach(func(k, e gjson.Result) bool {
+			collectStrings(e, path+"."+escapePathKey(k.String()), add)
+			return true
+		})
+	}
+}
+
+// escapePathKey makes a caller-controlled JSON key safe as one gjson/sjson
+// path component. Question ids and criteria keys are free text; an unescaped
+// '.', '*' or '#' would address a different node and the mask would silently
+// miss (or hit) the wrong one.
+func escapePathKey(k string) string {
+	var b strings.Builder
+	for i := 0; i < len(k); i++ {
+		c := k[i]
+		if c < 0x80 && !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '-') {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }

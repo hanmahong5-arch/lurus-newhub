@@ -131,6 +131,7 @@ var erasureModelTypeRegistry = map[string]reflect.Type{
 	"ContentRule":                       reflect.TypeOf(ContentRule{}),
 	"ChannelOverrideTemplate":           reflect.TypeOf(ChannelOverrideTemplate{}),
 	"ChannelTemplateApplication":        reflect.TypeOf(ChannelTemplateApplication{}),
+	"entity.LogBody":                    reflect.TypeOf(entity.LogBody{}),
 }
 
 // erasureCoveredModels: the cascade actively disposes of the matched field
@@ -154,6 +155,8 @@ var erasureCoveredModels = map[string]string{
 		"(executeErasure's content step, cycle-13 L5) — found via this gate, not listed in the " +
 		"cycle-13 plan's own table enumeration",
 	"entity.UserSession": "repo.HardDeleteUserSessions hard-deletes the user's rows (executeErasure's tokens step)",
+	"entity.LogBody": "repo.HardDeleteLogBodiesBatch hard-deletes the user's archived prompt/response rows in " +
+		"batches (executeErasure's content step, migration 052)",
 	"entity.ChatMessage": "repo.HardDeleteChatMessagesBatch hard-deletes the user's rows in " +
 		"batches, keyed on session ownership OR the message's own user_id " +
 		"(executeErasure's content step, cycle-13 L5)",
