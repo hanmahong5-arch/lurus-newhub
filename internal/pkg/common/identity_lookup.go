@@ -42,9 +42,9 @@ func LookupAccountByIDPSubject(ctx context.Context, sub string) (*IdentityMappin
 	resp, err := identityClient.Do(req)
 	if err != nil {
 		SysLog(fmt.Sprintf("identity GetAccountByZitadelSub: %v", err))
-		return nil, fmt.Errorf("identity lookup: %v: %w", err, ErrIdentityUnavailable)
+		return nil, fmt.Errorf("identity lookup: %w: %w", err, ErrIdentityUnavailable)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
@@ -55,7 +55,7 @@ func LookupAccountByIDPSubject(ctx context.Context, sub string) (*IdentityMappin
 	}
 	var a IdentityMapping
 	if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
-		return nil, fmt.Errorf("identity lookup: decode: %v: %w", err, ErrIdentityUnavailable)
+		return nil, fmt.Errorf("identity lookup: decode: %w: %w", err, ErrIdentityUnavailable)
 	}
 	return &a, nil
 }

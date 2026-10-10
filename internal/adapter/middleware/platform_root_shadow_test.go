@@ -55,7 +55,7 @@ func setupShadowEnv(t *testing.T) *shadowEnv {
 		st := int(e.status.Load())
 		w.WriteHeader(st)
 		if st == 200 {
-			fmt.Fprintf(w, `{"id":1,"is_platform_admin":%v}`, e.admin.Load())
+			_, _ = fmt.Fprintf(w, `{"id":1,"is_platform_admin":%v}`, e.admin.Load())
 		}
 	}))
 	prevURL, prevKey := common.IdentityServiceURL, common.IdentityServiceInternalKey
