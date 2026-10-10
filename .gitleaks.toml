@@ -63,6 +63,13 @@ regexes = [
   # Slug/identifier-shaped values (storage-key names, test fixtures) are not
   # credentials; real infra passwords carry punctuation and still fire.
   '''^[A-Za-z0-9_.-]+$''',
+  # A SQL expression stored under a group name ("token": "CAST(token_id AS
+  # TEXT)") and the acceptance stack's per-run throwaway secret
+  # ("accept-session-$$") are not credentials. Both shapes were later
+  # rewritten, but the web job scans the pushed commit RANGE, so the
+  # commits that first carried them still need to pass.
+  '''^CAST\([a-z_]+ AS [A-Z]+\)$''',
+  '''^accept-session-\$\$$''',
   # Route paths ("/console/token") get caught because the key name contains
   # "token" — a literal `/`-leading value is a URL path, never a secret.
   '''^/''',
