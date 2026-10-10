@@ -63,7 +63,6 @@ func setupShadowEnv(t *testing.T) *shadowEnv {
 	shadowResetCache()
 	t.Setenv("PLATFORM_ROOT_SHADOW", "")
 	t.Cleanup(func() {
-		shadowWG.Wait() // drain background checks before restoring globals
 		e.srv.Close()
 		common.IdentityServiceURL, common.IdentityServiceInternalKey = prevURL, prevKey
 		repo.DB, common.RedisEnabled = prevDB, prevRedis
@@ -154,17 +153,6 @@ func shadowSession(role, id int) map[string]interface{} {
 	return map[string]interface{}{"username": "u", "role": role, "id": id, "status": common.UserStatusEnabled}
 }
 
-func waitHits(e *shadowEnv, want int64) bool {
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if e.hits.Load() >= want {
-			return true
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return false
-}
-
 // Invariance: whatever the platform says, a root session is still admitted
 // with the handler's own 200 body.
 func TestRootAuth_ShadowNeverChangesAdmission(t *testing.T) {
@@ -186,8 +174,8 @@ func TestRootAuth_ShadowNeverChangesAdmission(t *testing.T) {
 			if w.Body.String() != `{"success":true}` {
 				t.Errorf("body altered: %s", w.Body.String())
 			}
-			if !waitHits(e, 1) {
-				t.Fatal("shadow check never reached the fake platform")
+			if h := e.hits.Load(); h != 1 {
+				t.Fatalf("shadow check reached the fake platform %d times, want 1 (synchronous)", h)
 			}
 		})
 	}
@@ -203,7 +191,6 @@ func TestRootAuth_NonRootRejectedAndNoShadowHTTP(t *testing.T) {
 			t.Fatalf("role %d reached root handler", role)
 		}
 	}
-	time.Sleep(200 * time.Millisecond)
 	if h := e.hits.Load(); h != 0 {
 		t.Fatalf("non-root triggered %d shadow HTTP calls", h)
 	}
@@ -217,6 +204,5 @@ func TestPlatformRootShadow_PanicContained(t *testing.T) {
 	defer func() { repo.DB = prev }()
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Set("id", 1)
-	platformRootShadow(c)
-	shadowWG.Wait() // would have crashed the test binary without recover
+	platformRootShadow(c) // would have panicked the test without recover
 }

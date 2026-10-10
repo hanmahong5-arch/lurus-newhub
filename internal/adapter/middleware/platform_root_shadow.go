@@ -7,10 +7,14 @@ package middleware
 // (users.role >= common.RoleRootUser) is the global-operations layer and is
 // semantically the same population. Before tying the two together, this
 // middleware step only RECONCILES them: for every request that RootAuth has
-// already admitted, it asynchronously asks the platform whether the same
-// person is a platform admin and logs the comparison. It never writes a
-// response, never aborts, never touches keys on the gin context, so behaviour
-// is identical with the switch on or off.
+// already admitted, it asks the platform whether the same person is a
+// platform admin and logs the comparison. It never writes a response, never
+// aborts, never touches keys on the gin context, so admission is identical
+// with the switch on or off. The check runs synchronously on the request
+// (bounded: 2s platform timeout, 60s per-user cache, so at most one short
+// stall per root user per minute) rather than in a goroutine: a goroutine
+// would outlive the request and read process globals (repo.DB, the identity
+// URL) while tests or shutdown rewrite them (data race seen under -race).
 //
 // Result values (log line prefix "platform_root_shadow", grep-able):
 //
@@ -66,8 +70,6 @@ var (
 	shadowMu    sync.Mutex
 	shadowCache = map[int]shadowEntry{}
 	shadowGroup singleflight.Group
-	// shadowWG tracks in-flight background checks so tests can drain them.
-	shadowWG sync.WaitGroup
 )
 
 func shadowEnabled() bool {
@@ -154,9 +156,9 @@ func shadowCompute(ctx context.Context, userID int) string {
 	return result
 }
 
-// platformRootShadow fires the check asynchronously for an already-admitted
-// root request. It must stay inert with respect to the request: no response
-// writes, no Abort, no c.Set.
+// platformRootShadow runs the check for an already-admitted root request. It
+// must stay inert with respect to the request: no response writes, no Abort,
+// no c.Set; a panic inside the check is contained and only logged.
 func platformRootShadow(c *gin.Context) {
 	v, ok := c.Get("id")
 	if !ok {
@@ -171,11 +173,8 @@ func platformRootShadow(c *gin.Context) {
 	default:
 		return
 	}
-	shadowWG.Add(1)
-	go func() {
-		defer shadowWG.Done()
-		// A panic in a background goroutine would kill the whole process;
-		// the shadow check must never be able to do that.
+	func() {
+		// The shadow must never be able to turn into a 500 for the root request.
 		defer func() {
 			if r := recover(); r != nil {
 				common.SysLog(fmt.Sprintf("platform_root_shadow result=panic user_id=%d err=%v", userID, r))
