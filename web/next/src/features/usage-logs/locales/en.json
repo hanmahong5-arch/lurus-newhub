@@ -42,5 +42,12 @@
   "Total": "Total",
   "per page": "per page",
   "Previous": "Previous",
-  "Next": "Next"
+  "Next": "Next",
+  "Request and reply text": "Request and reply text",
+  "Loading...": "Loading...",
+  "Not archived for this call.": "Not archived for this call.",
+  "Shortened for storage": "Shortened for storage",
+  "Reply text not recorded": "Reply text not recorded",
+  "Request": "Request",
+  "Reply": "Reply"
 }

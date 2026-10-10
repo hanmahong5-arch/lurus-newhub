@@ -20,6 +20,7 @@ import {
   latencyMs,
   type UsageLog,
 } from '../lib/logs'
+import { LogBodySection } from './log-body-section'
 
 interface LogDetailSheetProps {
   log: UsageLog | null
@@ -153,6 +154,7 @@ export function LogDetailSheet(props: LogDetailSheetProps) {
                   {log.content}
                 </Row>
               )}
+              {requestId !== null && <LogBodySection key={requestId} requestId={requestId} />}
             </div>
           </>
         )}

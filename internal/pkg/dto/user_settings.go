@@ -13,7 +13,7 @@ type UserSetting struct {
 	AcceptUnsetRatioModel bool    `json:"accept_unset_model_ratio_model,omitempty"` // AcceptUnsetRatioModel 是否接受未设置价格的模型
 	RecordIpLog           bool    `json:"record_ip_log,omitempty"`                  // 是否记录请求和错误日志IP
 	SidebarModules        string  `json:"sidebar_modules,omitempty"`                // SidebarModules 左侧边栏模块配置
-	LogDetailLevel        string  `json:"log_detail_level,omitempty"`               // Log detail: "" (default), "none" (skip), "full" (include prompt preview)
+	LogDetailLevel        string  `json:"log_detail_level,omitempty"`               // Log detail: "none" skips the log row and vetoes body archiving; "" and "full" change nothing by themselves - bodies are archived only when the tenant consented and its content retention is full
 }
 
 var (

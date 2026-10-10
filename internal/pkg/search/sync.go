@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/bytedance/gopkg/util/gopool"
 )
 
@@ -91,7 +92,9 @@ func SyncLogAsync(log *Log) {
 	if asyncPool == nil {
 		// If pool not initialized, index synchronously
 		// 如果池未初始化,则同步索引
-		_ = IndexLog(log)
+		if err := IndexLog(log); err != nil {
+			metrics.LogSearchSyncFailedTotal.Inc()
+		}
 		return
 	}
 
@@ -101,6 +104,10 @@ func SyncLogAsync(log *Log) {
 		err := RetryWithBackoff(func() error {
 			return IndexLog(log)
 		})
+		if err != nil {
+			// Counted regardless of Debug: the log line is opt-in, the loss is not.
+			metrics.LogSearchSyncFailedTotal.Inc()
+		}
 		if err != nil && Debug {
 			common.SysLog(fmt.Sprintf("Failed to sync log %d after retries: %v", log.Id, err))
 		}
@@ -117,7 +124,9 @@ func SyncLogsBatchAsync(logs []*Log) {
 	if asyncPool == nil {
 		// If pool not initialized, index synchronously
 		// 如果池未初始化,则同步索引
-		_ = IndexLogsBatch(logs)
+		if err := IndexLogsBatch(logs); err != nil {
+			metrics.LogSearchSyncFailedTotal.Inc()
+		}
 		return
 	}
 
@@ -127,6 +136,9 @@ func SyncLogsBatchAsync(logs []*Log) {
 		err := RetryWithBackoff(func() error {
 			return IndexLogsBatch(logs)
 		})
+		if err != nil {
+			metrics.LogSearchSyncFailedTotal.Inc()
+		}
 		if err != nil && Debug {
 			common.SysLog(fmt.Sprintf("Failed to sync log batch after retries: %v", err))
 		}

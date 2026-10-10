@@ -476,6 +476,8 @@ var validAuditActions = map[string]struct{}{
 	ActionContentRuleUpdated:           {},
 	ActionContentRuleDeleted:           {},
 	ActionContentRuleHit:               {},
+	ActionSedimentationConsentSet:      {},
+	ActionLogBodyRead:                  {},
 	ActionChannelTemplateCreated:       {},
 	ActionChannelTemplateUpdated:       {},
 	ActionChannelTemplateDeleted:       {},

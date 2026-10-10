@@ -95,4 +95,11 @@ const (
 	// app.CacheGetRandomSatisfiedChannel on every attempt, including the
 	// session-affinity lookup. Absent when the request sent no constraint.
 	ContextKeyProviderFilter ContextKey = "provider_filter"
+
+	// ContextKeyResponseText carries the final assistant text of a NON-streaming
+	// response (string), stashed by the provider handler that already parsed it.
+	// Read only by the opt-in body archive (repo.archiveLogBody); absent for
+	// streams and for handlers that do not stash, which the archive records as
+	// response_captured=false.
+	ContextKeyResponseText ContextKey = "response_text"
 )

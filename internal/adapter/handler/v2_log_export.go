@@ -82,7 +82,7 @@ func chargedCNYCell(units4 int64) string {
 	return strconv.FormatFloat(currency.Units4ToCNY(units4), 'f', 4, 64)
 }
 
-// ExportLogsV2 streams the current user's logs as a CSV file.
+// ExportLogsV2 streams the current user's logs as CSV (default) or JSONL.
 // Route: GET /api/v2/:tenant_slug/logs/export
 // Auth:  UserAuth (session) — inherited from the tenantLogs group.
 // Query params (all optional):
@@ -95,6 +95,10 @@ func chargedCNYCell(units4 int64) string {
 //	max_rows    int    — row cap; clamped to 50000 if higher
 //	project_id  int    — cost-centre filter; 404 for a dept_lead outside it
 //	scope       string — "tenant": every member's rows (tenant admin only, else 403)
+//	format      string — "csv" (default) or "jsonl" (id-ordered, resumable)
+//	cursor      int    — jsonl only: id of the last row of the previous page
+//	limit       int    — jsonl only: page size (alias max_rows), same caps
+//	include_body bool  — jsonl only: attach archived bodies (tenant admin only)
 //
 // A department lead exports their projects' rows (all members), not their own.
 func ExportLogsV2(c *gin.Context) {
@@ -175,6 +179,39 @@ func ExportLogsV2(c *gin.Context) {
 	}
 	if maxRows > exportHardMaxRows {
 		maxRows = exportHardMaxRows
+	}
+
+	format, ok := parseExportFormat(c)
+	if !ok {
+		return
+	}
+	if format == exportFormatJSONL {
+		cursor, ok := parseExportCursor(c)
+		if !ok {
+			return
+		}
+		includeBody := c.Query("include_body") == "true"
+		// Prompts are tenant-admin data (same bar as GET .../logs/:request_id/body);
+		// a member or department lead exporting their own rows never gets them.
+		if includeBody && !requireTenantAdmin(c, tenantCtx) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success":    false,
+				"message":    "Tenant admin required",
+				"error_code": "PERMISSION_DENIED",
+			})
+			return
+		}
+		exportTenantLogsJSONL(c, tenantCtx.TenantID, tenantSlug, &repo.LogQueryParams{
+			UserID:     exportUserID,
+			ProjectIDs: scope.projects(),
+			LogType:    logType,
+			ModelName:  modelName,
+			StartTime:  startTime,
+			EndTime:    endTime,
+			TokenName:  tokenName,
+			ProjectID:  projectID,
+		}, jsonlRowCap(c, exportDefaultMaxRows, exportHardMaxRows), cursor, includeBody)
+		return
 	}
 
 	// ── response headers ───────────────────────────────────────────────────────

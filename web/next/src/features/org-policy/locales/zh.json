@@ -135,5 +135,22 @@
   "When the matches are what you expect, edit the rule and switch it to Enforce.": "命中结果符合预期后，编辑规则并切换为“拦截”。",
   "With nothing selected, all requests from your organization will be refused until you select models again.": "未勾选任何模型时，组织的所有请求都会被拒绝，直到你重新选择模型。",
   "You can only be stricter than the platform default. The stricter of the platform, organization and key settings always applies.": "只能比平台默认更严格。平台、组织、密钥三层设置中最严格的一层始终生效。",
-  "You can only narrow the platform grant, never widen it. Changes reach all instances within about 30 seconds.": "只能在平台授予的范围内收窄，不能放宽。变更约 30 秒内传播到所有实例。"
+  "You can only narrow the platform grant, never widen it. Changes reach all instances within about 30 seconds.": "只能在平台授予的范围内收窄，不能放宽。变更约 30 秒内传播到所有实例。",
+  "Data archiving": "数据沉淀",
+  "On": "已开启",
+  "Off": "已关闭",
+  "Failed to load the data archiving setting": "加载数据沉淀设置失败",
+  "Archive request and reply text": "归档请求与回复文本",
+  "Off by default. When on, the text of requests and replies is kept for a limited time so your administrators can review it in usage logs.": "默认关闭。开启后，请求与回复的文本会被限期保存，供管理员在使用日志中查阅。",
+  "Only archived when the organization and key retention is \"Full\".": "仅当组织与密钥的留存级别为“完整”时才会归档。",
+  "Content rules are applied first: only the masked text is archived.": "内容规则先生效：归档的只是脱敏后的文本。",
+  "Archived text is deleted automatically after the retention period (30 days by default).": "归档文本在保留期（默认 30 天）届满后自动删除。",
+  "Never archived for channels that keep no data, or for requests that decline data collection.": "零留存渠道、以及声明拒绝数据收集的请求，一律不归档。",
+  "Turning it off stops archiving right away and deletes the text already kept.": "关闭后立即停止归档，并删除已保存的文本。",
+  "Start archiving request and reply text?": "开始归档请求与回复文本？",
+  "Stop archiving request and reply text?": "停止归档请求与回复文本？",
+  "From now on, masked request and reply text of new calls is stored and readable by administrators until it expires.": "从现在起，新调用中脱敏后的请求与回复文本会被保存，管理员可在到期前查阅。",
+  "New calls will no longer have their text archived. Text already archived stays until it expires.": "新的调用将不再归档文本。已归档的文本保留至到期。",
+  "Start archiving": "开始归档",
+  "Stop archiving": "停止归档"
 }
