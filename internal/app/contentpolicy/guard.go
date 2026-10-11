@@ -288,7 +288,7 @@ func escapePathKey(k string) string {
 	var b strings.Builder
 	for i := 0; i < len(k); i++ {
 		c := k[i]
-		if c < 0x80 && !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '-') {
+		if c < 0x80 && (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && c != '_' && c != '-' {
 			b.WriteByte('\\')
 		}
 		b.WriteByte(c)

@@ -746,7 +746,7 @@ func stashResponseText(c *gin.Context, resp dto.OpenAITextResponse) {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		b.WriteString(choice.Message.StringContent())
+		b.WriteString(choice.StringContent())
 	}
 	common.SetContextKey(c, constant.ContextKeyResponseText, b.String())
 }
