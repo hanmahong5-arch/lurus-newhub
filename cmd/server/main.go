@@ -23,6 +23,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app/openrouter_pool"
 	openrouter_sync "github.com/LurusTech/lurus-hub/internal/app/openrouter_sync"
 	"github.com/LurusTech/lurus-hub/internal/app/planquota"
+	"github.com/LurusTech/lurus-hub/internal/app/sedimentation"
 	"github.com/LurusTech/lurus-hub/internal/lifecycle"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/config"
@@ -336,6 +337,10 @@ func run(ctx context.Context, startTime time.Time) error {
 		// NOTHING until LOG_RETENTION_DAYS / LOG_RETENTION_MONEY_DAYS are set
 		// (both default 0 = off); see doc/runbook/log-retention.md.
 		lifecycle.StartLogRetentionWithContext(ctx)
+		// Opt-in body archive (migration 052): sweeps log_bodies rows past their
+		// own expires_at (LOG_BODY_RETENTION_DAYS, default 30). Leader-gated
+		// internally; a no-op while no tenant has consented.
+		lifecycle.StartLogBodyCleanupWithContext(ctx)
 		// cycle-8 L7 (tasks-plugins-12): response_registry retention sweep —
 		// hard-deletes rows whose RESPONSE_REGISTRY_TTL_DAYS has elapsed.
 		// Leader-gated internally, same pattern as StartSecretRotationWithContext.
@@ -671,6 +676,8 @@ func InitResources(ctx context.Context) error {
 		} else {
 			common.SysLog(fmt.Sprintf("NATS quota publisher initialized, url=%s stream=%s",
 				os.Getenv("NATS_URL"), os.Getenv("LLM_QUOTA_NATS_STREAM")))
+			// llm.usage.recorded (metadata only, tenants that consented to sedimentation).
+			sedimentation.RegisterUsageEvents(ctx)
 		}
 	}
 

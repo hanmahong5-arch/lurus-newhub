@@ -101,6 +101,8 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"PUT /api/v2/:tenant_slug/channels/:id/keys/:idx/settings": true, // TestPoolOps_CrossTenantStaffForbidden
 		"POST /api/v2/:tenant_slug/channels/import":                true, // TestPoolOps_CrossTenantStaffForbidden (channel_id append)
 		"GET /api/v2/:tenant_slug/channels/:id/usage":              true, // TestChannelUsageV2_Authz (foreign-tenant channel 403, no data leaked)
+		// opt-in body archive - migration 052 (internal/adapter/handler/v2_log_body_test.go).
+		"GET /api/v2/:tenant_slug/logs/:request_id/body": true, // TestLogBodyV2_CrossTenantIs404
 	}
 
 	// Not a cross-tenant/cross-account IDOR surface, each with the reason no
@@ -227,6 +229,8 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"GET /api/v2/admin/channel-templates/:id/applications": "RootJWTAuth-gated read of the platform-wide template application log (append-only, no secrets)",
 		"POST /api/v2/:tenant_slug/data-policy/rules":          "CreateContentRuleV2 stamps the caller's own tenant_id from tenantCtx; cannot target another tenant",
 		"PUT /api/v2/:tenant_slug/data-policy/retention":       "PutContentRetentionV2 writes the caller's own tenant (tenantSelectionScope), no addressable id",
+		"PUT /api/v2/:tenant_slug/data-policy/sedimentation":   "PutSedimentationConsentV2 writes the caller's own tenant (tenantSelectionScope), no addressable id",
+		"GET /api/v2/admin/logs/:request_id/body":              "RootJWTAuth-gated platform-staff read of an archived body across tenants by design (audited, 404 on miss)",
 	}
 
 	isMutation := func(m string) bool {

@@ -2337,6 +2337,212 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/v2/{tenant_slug}/data-policy/sedimentation:
+    get:
+      tags: [Tenant Admin]
+      summary: Get Body Archive Consent
+      description: 'Reads the caller''s tenant consent to archive prompt/response bodies (Tenant admin only). Default false. Consent alone archives nothing: the tenant''s effective content retention must also be full.'
+      operationId: getSedimentationConsentV2
+      security:
+        - OIDCBearer: [admin]
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+      responses:
+        '200':
+          description: Consent view
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/SedimentationConsent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      tags: [Tenant Admin]
+      summary: Set Body Archive Consent
+      description: 'Turns body archiving on or off for the caller''s tenant. A body is archived only when every condition holds: consent is on, the effective content retention is full, the serving channel is not zero-retention, the caller did not send provider.data_collection=deny, the user''s log detail level is not none, and the request format is covered by the content rules. Stored request bodies are the post-content-rule (masked) ones, capped at 64KB per field. Audited.'
+      operationId: putSedimentationConsentV2
+      security:
+        - OIDCBearer: [admin]
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SedimentationConsent'
+      responses:
+        '200':
+          description: Updated consent view
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/SedimentationConsent'
+        '400':
+          description: 'INVALID_REQUEST (consent must be a boolean)'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v2/{tenant_slug}/logs/export:
+    get:
+      tags: [Logs]
+      summary: Export Logs
+      description: 'Streams the caller''s logs. format=csv (default) is the spreadsheet export; format=jsonl writes one JSON object per line in ascending id order and is resumable: pass the id of the last line back as cursor. A page shorter than limit is the last one (the X-Next-Cursor trailer carries the same id). include_body=true (jsonl only, Tenant admin only) attaches the archived prompt/response of each row that has one under "body"; each attached body is audited like a direct read.'
+      operationId: exportLogsV2
+      security:
+        - OIDCBearer: []
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+        - {name: format, in: query, schema: {type: string, enum: [csv, jsonl], default: csv}}
+        - {name: cursor, in: query, description: 'jsonl only. Id of the last row of the previous page; 0 or absent starts from the oldest.', schema: {type: integer, minimum: 0}}
+        - {name: limit, in: query, description: 'jsonl only. Page size (alias max_rows). Default 10000, capped at 50000.', schema: {type: integer, default: 10000, maximum: 50000}}
+        - {name: max_rows, in: query, schema: {type: integer, default: 10000, maximum: 50000}}
+        - {name: include_body, in: query, description: 'jsonl only; tenant admin.', schema: {type: boolean, default: false}}
+        - {name: type, in: query, schema: {type: integer}}
+        - {name: model_name, in: query, schema: {type: string}}
+        - {name: token_name, in: query, schema: {type: string}}
+        - {name: start_time, in: query, schema: {type: integer, format: int64}}
+        - {name: end_time, in: query, schema: {type: integer, format: int64}}
+        - {name: project_id, in: query, schema: {type: integer}}
+        - {name: scope, in: query, description: 'tenant = every member''s rows (Tenant admin only)', schema: {type: string, enum: [tenant]}}
+      responses:
+        '200':
+          description: CSV, or newline-delimited JSON (one log row per line, see LogExportRow)
+          content:
+            text/csv:
+              schema: {type: string}
+            application/x-ndjson:
+              schema:
+                $ref: '#/components/schemas/LogExportRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v2/admin/logs/export:
+    get:
+      tags: [Platform Admin]
+      summary: Export Logs (platform)
+      description: 'Platform usage-log export across tenants (Platform Admin only). format=csv (default) or jsonl; jsonl adds cursor/limit paging by id and include_body=true to attach archived bodies (audited). content and the raw other blob are never exported.'
+      operationId: exportAdminLogsV2
+      security:
+        - SessionAuth: []
+      parameters:
+        - {name: format, in: query, schema: {type: string, enum: [csv, jsonl], default: csv}}
+        - {name: cursor, in: query, schema: {type: integer, minimum: 0}}
+        - {name: limit, in: query, description: 'jsonl only (alias max_rows)', schema: {type: integer, maximum: 100000}}
+        - {name: max_rows, in: query, schema: {type: integer, maximum: 100000}}
+        - {name: include_body, in: query, schema: {type: boolean, default: false}}
+        - {name: tenant_id, in: query, schema: {type: string}}
+        - {name: type, in: query, schema: {type: integer}}
+        - {name: model_name, in: query, schema: {type: string}}
+        - {name: start_time, in: query, schema: {type: integer, format: int64}}
+        - {name: end_time, in: query, schema: {type: integer, format: int64}}
+        - {name: upstream_request_id, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: CSV, or newline-delimited JSON (see AdminLogExportRow). X-Total-Matched and X-Truncated describe the whole filter.
+          content:
+            text/csv:
+              schema: {type: string}
+            application/x-ndjson:
+              schema:
+                $ref: '#/components/schemas/AdminLogExportRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v2/{tenant_slug}/logs/{request_id}/body:
+    get:
+      tags: [Logs]
+      summary: Get Archived Log Body
+      description: 'Reads the archived prompt/response of one request of the caller''s own tenant (Tenant admin only). A request id that is unknown, expired, never archived or owned by another tenant answers the same 404 LOG_BODY_NOT_FOUND. Every successful read is audited.'
+      operationId: getLogBodyV2
+      security:
+        - OIDCBearer: [admin]
+      parameters:
+        - $ref: '#/components/parameters/TenantSlug'
+        - name: request_id
+          in: path
+          required: true
+          description: The request id carried in logs.other.request_id
+          schema:
+            type: string
+            maxLength: 64
+      responses:
+        '200':
+          description: Archived body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/LogBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v2/admin/logs/{request_id}/body:
+    get:
+      tags: [Platform Admin]
+      summary: Get Archived Log Body (platform)
+      description: 'Platform-staff read of an archived prompt/response of any tenant by request id (Platform Admin only). Missing and expired answer 404 LOG_BODY_NOT_FOUND. Audited.'
+      operationId: getAdminLogBodyV2
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          description: The request id carried in logs.other.request_id
+          schema:
+            type: string
+            maxLength: 64
+      responses:
+        '200':
+          description: Archived body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/LogBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v2/{tenant_slug}/data-policy/rules:
     get:
       tags: [Tenant Admin]
@@ -4026,6 +4232,106 @@ components:
         propagation_seconds:
           type: integer
           description: 'Present on PUT: upper bound before every replica serves the new list'
+    SedimentationConsent:
+      type: object
+      required: [consent]
+      properties:
+        consent:
+          type: boolean
+          description: Tenant consent to archive prompt/response bodies; default false
+    LogExportRow:
+      type: object
+      description: One line of the tenant JSONL export. Same columns as the CSV plus id, request_id and channel_key_idx.
+      properties:
+        id: {type: integer}
+        created_at: {type: string, format: date-time}
+        log_type: {type: integer}
+        model_name: {type: string}
+        token_name: {type: string}
+        project_id: {type: integer}
+        project_name: {type: string}
+        prompt_tokens: {type: integer}
+        completion_tokens: {type: integer}
+        quota: {type: integer}
+        charged_cny: {type: string, description: 'CNY to 4 decimals; empty when nothing was recorded'}
+        ip: {type: string}
+        content: {type: string}
+        employee_ref: {type: string}
+        token_id: {type: integer}
+        request_id: {type: string}
+        channel_key_idx: {type: integer, nullable: true, description: 'Upstream key index of a multi-key channel; null otherwise'}
+        body:
+          $ref: '#/components/schemas/LogExportBody'
+    AdminLogExportRow:
+      type: object
+      description: One line of the platform JSONL export (content/other are never included).
+      properties:
+        id: {type: integer}
+        created_at: {type: string, format: date-time}
+        tenant_id: {type: string}
+        user_id: {type: integer}
+        username: {type: string}
+        log_type: {type: integer}
+        model_name: {type: string}
+        upstream_model: {type: string}
+        token_name: {type: string}
+        prompt_tokens: {type: integer}
+        completion_tokens: {type: integer}
+        quota: {type: integer}
+        charged_cny: {type: string}
+        use_time: {type: integer}
+        total_latency_ms: {type: integer}
+        is_stream: {type: boolean}
+        channel_id: {type: integer}
+        group: {type: string}
+        ip: {type: string}
+        request_id: {type: string}
+        channel_key_idx: {type: integer, nullable: true}
+        body:
+          $ref: '#/components/schemas/LogExportBody'
+    LogExportBody:
+      type: object
+      description: Archived body attached under include_body=true; absent when the row has none.
+      properties:
+        request_body: {type: string}
+        response_text: {type: string}
+        response_captured: {type: boolean}
+        truncated: {type: boolean}
+    LogBody:
+      type: object
+      properties:
+        request_id:
+          type: string
+        tenant_id:
+          type: string
+        user_id:
+          type: integer
+          format: int64
+        token_id:
+          type: integer
+          format: int64
+        model:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+          description: Unix seconds
+        expires_at:
+          type: integer
+          format: int64
+          description: 'Unix seconds; LOG_BODY_RETENTION_DAYS after creation (default 30). Past this the body reads as absent.'
+        request_body:
+          type: string
+          description: 'Request body after the content rules ran (masked), at most 64KB'
+        response_text:
+          type: string
+          description: 'Final assistant text of a non-streaming response, at most 64KB; empty when response_captured is false'
+        response_captured:
+          type: boolean
+          description: 'false when the relay path did not hand the response text over (streaming, or a provider that does not)'
+        truncated:
+          type: boolean
+          description: true when either text field was cut at 64KB
     ContentRetentionView:
       type: object
       properties:

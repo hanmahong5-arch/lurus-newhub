@@ -90,25 +90,6 @@ func (s TenantScope) apply(tx *gorm.DB) *gorm.DB {
 	return tx.Where("tenant_id = ?", s.tenantID)
 }
 
-// setRequestIdIfAbsent stamps other["request_id"] from the request-scoped id
-// (middleware.RequestId, read via common.RequestIdKey) when the caller
-// hasn't already put one there. Shared by RecordConsumeLog and
-// RecordErrorLog so both the success and error rows carry it (relay.go's
-// error path and utils.go's abort helper build their own `other` maps
-// upstream of here — this is the single place both funnel through).
-func setRequestIdIfAbsent(c *gin.Context, other map[string]interface{}) map[string]interface{} {
-	if other == nil {
-		other = make(map[string]interface{})
-	}
-	if _, exists := other["request_id"]; exists {
-		return other
-	}
-	if reqId := c.GetString(common.RequestIdKey); reqId != "" {
-		other["request_id"] = reqId
-	}
-	return other
-}
-
 func formatUserLogs(logs []*Log) {
 	for i := range logs {
 		logs[i].ChannelName = ""
@@ -451,6 +432,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		// Async sync to Meilisearch
 		// 异步同步到 Meilisearch
 		search.SyncLogAsync(convertLogToSearchLog(log))
+		notifyLogPersisted(log)
 	}
 }
 
@@ -536,6 +518,10 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		// Async sync to Meilisearch
 		// 异步同步到 Meilisearch
 		search.SyncLogAsync(convertLogToSearchLog(log))
+		notifyLogPersisted(log)
+		// Opt-in body archive (migration 052): gated on tenant consent + retention,
+		// async, never affects the row above or billing.
+		archiveLogBody(c, log, bodyRequestID(c, params.Other), params.LogDetailLevel)
 	}
 	if common.DataExportEnabled {
 		AsyncGo(func() {
