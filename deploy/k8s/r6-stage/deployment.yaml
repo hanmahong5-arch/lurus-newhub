@@ -67,8 +67,8 @@ spec:
           # ArgoCD sync / apply -k). Hand-edit only for an emergency pin, and
           # expect the next build to overwrite it.
           # GHCR repository name follows the GitHub repo name (hanmahong5-arch/lurus-newhub).
-          # pin: main-20261011-a23279ed74 run=38158081651
-          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:52fd671dab99f195211683f25a5fb9a42ae493ff5dd52a73135eed48c226fcc3
+          # pin: main-20261011-52037b486 run=38165205556
+          image: ghcr.io/hanmahong5-arch/lurus-newhub@sha256:41789476dcfa69d68be82909f5bc55260cb1b049d78c39cc121ef83ecd6662ea
           imagePullPolicy: IfNotPresent
           # --log-dir= (empty): file-based logging is a no-op here
           # (internal/pkg/logger/logger.go's SetupLogger gates on
