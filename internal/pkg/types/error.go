@@ -647,13 +647,43 @@ func IsSkipRetryError(err *NewAPIError) bool {
 	return err.skipRetry
 }
 
+// IsGatewayOriginated reports whether err is one newhub raised itself —
+// request prep, routing, pricing, persistence, or an endpoint the selected
+// channel's adaptor does not implement — rather than something the upstream
+// answered. These often carry a synthetic 5xx status, so the status alone
+// cannot tell them apart; the error code can. IsUpstreamFailure (breaker,
+// failover metric, "upstream provider X returned" wording) and RelayErrorType
+// (the "internal" metric bucket) both read this one list.
+func IsGatewayOriginated(err *NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	switch err.errorCode {
+	case ErrorCodeInvalidRequest, ErrorCodeSensitiveWordsDetected, ErrorCodeContentRejected,
+		ErrorCodeCountTokenFailed, ErrorCodeModelPriceError, ErrorCodeInvalidApiType,
+		ErrorCodeJsonMarshalFailed, ErrorCodeGenRelayInfoFailed, ErrorCodeGetChannelFailed,
+		ErrorCodeReadRequestBodyFailed, ErrorCodeConvertRequestFailed, ErrorCodeAccessDenied,
+		ErrorCodeBadRequestBody, ErrorCodeQueryDataError, ErrorCodeUpdateDataError,
+		ErrorCodeBillingUnavailable, ErrorCodeAPINotImplemented,
+		ErrorCodeProviderCapabilityNotSupported, ErrorCodeUnsupportedParameter:
+		return true
+	}
+	return false
+}
+
 // IsUpstreamFailure reports whether err is attributable to the upstream
 // provider (or network) rather than the caller. Used by the per-channel
 // circuit breaker so that user-side errors (4xx, client cancellation) do not
 // trip a healthy channel and starve other tenants of capacity.
 //
 // True:  channel:* errors, upstream timeouts (408/504/524), 5xx, unclassified.
-// False: nil, ctx.Canceled, 4xx (other than the upstream-timeout statuses).
+// False: nil, ctx.Canceled, 4xx (other than the upstream-timeout statuses),
+// and any error the gateway raised itself (IsGatewayOriginated) whatever its
+// status — a 500 from converting the request or a 501 for an endpoint the
+// channel's adaptor lacks never reached the upstream, so it is no evidence
+// about the channel. Counting those let any API key open a healthy shared
+// channel's breaker for every tenant: CB_THRESHOLD /v1/rerank calls naming a
+// chat-only model, each answered 501 by the adaptor without an upstream call.
 //
 // Default for unclassified status codes is true (fail-safe — better to cool
 // a possibly-fine channel than to miss a real outage).
@@ -663,6 +693,9 @@ func IsUpstreamFailure(err *NewAPIError) bool {
 	}
 	if IsChannelError(err) {
 		return true
+	}
+	if IsGatewayOriginated(err) {
+		return false
 	}
 	if err.Err != nil && errors.Is(err.Err, context.Canceled) {
 		return false
@@ -707,14 +740,8 @@ func RelayErrorType(err *NewAPIError) string {
 	case ErrorCodeInsufficientUserQuota, ErrorCodePreConsumeTokenQuotaFailed, ErrorCodeTenantQuotaExceeded,
 		ErrorCodeTokenQuotaExhausted:
 		return "insufficient_quota"
-	// newhub-internal / request-prep / routing / persistence failures: synthetic
-	// 500s (or client-prep 4xx) that must NOT count as upstream provider faults.
-	case ErrorCodeInvalidRequest, ErrorCodeSensitiveWordsDetected, ErrorCodeContentRejected,
-		ErrorCodeCountTokenFailed, ErrorCodeModelPriceError, ErrorCodeInvalidApiType,
-		ErrorCodeJsonMarshalFailed, ErrorCodeGenRelayInfoFailed, ErrorCodeGetChannelFailed,
-		ErrorCodeReadRequestBodyFailed, ErrorCodeConvertRequestFailed, ErrorCodeAccessDenied,
-		ErrorCodeBadRequestBody, ErrorCodeQueryDataError, ErrorCodeUpdateDataError,
-		ErrorCodeBillingUnavailable:
+	}
+	if IsGatewayOriginated(err) {
 		return "internal"
 	}
 	// From here the error is attributable to the upstream exchange (response

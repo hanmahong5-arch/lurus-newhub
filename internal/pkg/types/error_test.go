@@ -52,6 +52,16 @@ func TestIsUpstreamFailure(t *testing.T) {
 			err:  &NewAPIError{errorCode: ErrorCodeChannelInvalidKey, StatusCode: 401},
 			want: true,
 		},
+		// Raised by the gateway itself: a 5xx status, but no upstream was
+		// involved, so the channel's breaker must not hear about it.
+		{name: "501 adaptor lacks the endpoint → gateway", err: &NewAPIError{errorCode: ErrorCodeAPINotImplemented, StatusCode: 501}, want: false},
+		{name: "500 request conversion failed → gateway", err: &NewAPIError{errorCode: ErrorCodeConvertRequestFailed, StatusCode: 500}, want: false},
+		{name: "500 model price missing → gateway", err: &NewAPIError{errorCode: ErrorCodeModelPriceError, StatusCode: 500}, want: false},
+		{name: "500 billing unavailable → gateway", err: &NewAPIError{errorCode: ErrorCodeBillingUnavailable, StatusCode: 500}, want: false},
+		{name: "501 no capable route → gateway", err: &NewAPIError{errorCode: ErrorCodeProviderCapabilityNotSupported, StatusCode: 501}, want: false},
+		// What the upstream itself got wrong still counts.
+		{name: "500 transport failure → upstream", err: &NewAPIError{errorCode: ErrorCodeDoRequestFailed, StatusCode: 500}, want: true},
+		{name: "502 contradictory upstream usage → upstream", err: &NewAPIError{errorCode: ErrorCodeInvalidProviderUsage, StatusCode: 502}, want: true},
 	}
 
 	for _, tt := range tests {
@@ -80,6 +90,7 @@ func TestRelayErrorType(t *testing.T) {
 		{"gen relay info failed → internal", &NewAPIError{errorCode: ErrorCodeGenRelayInfoFailed, StatusCode: 500}, "internal"},
 		{"count token failed → internal", &NewAPIError{errorCode: ErrorCodeCountTokenFailed, StatusCode: 500}, "internal"},
 		{"get channel failed → internal", &NewAPIError{errorCode: ErrorCodeGetChannelFailed, StatusCode: 500}, "internal"},
+		{"adaptor lacks the endpoint (501) → internal", &NewAPIError{errorCode: ErrorCodeAPINotImplemented, StatusCode: 501}, "internal"},
 		// Upstream exchange: status-driven sub-classes.
 		{"429 → upstream_rate_limit", &NewAPIError{StatusCode: 429}, "upstream_rate_limit"},
 		{"408 → upstream_timeout", &NewAPIError{StatusCode: 408}, "upstream_timeout"},
