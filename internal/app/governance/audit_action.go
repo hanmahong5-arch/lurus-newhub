@@ -60,6 +60,9 @@ const (
 	ActionTokenDeleted       = "token.deleted"
 	ActionTokenBatchDeleted  = "token.batch_deleted"
 	ActionTokenStatusChanged = "token.status_changed"
+	// ActionTokenBatchCreated: POST /tokens/batch issued keys for an employee
+	// roster. The detail carries employee refs and counts, never key material.
+	ActionTokenBatchCreated = "token.batch_created"
 
 	// Channel CRUD (upstream provider config).
 	ActionChannelCreated      = "channel.created"
@@ -70,6 +73,10 @@ const (
 	ActionChannelEnabled      = "channel.enabled"
 	ActionChannelTagDisabled  = "channel.tag_disabled"
 	ActionChannelTested       = "channel.tested"
+	// Account-pool ops (lane B2): details carry fingerprints and counts, never key material.
+	ActionChannelKeysImported = "channel.keys_imported"
+	ActionChannelKeySettings  = "channel.key_settings_updated"
+	ActionChannelKeyRestored  = "channel.key_restored"
 	// ActionChannelSensitiveWriteRefused is recorded by the gate in
 	// internal/adapter/handler/channel_sensitive_write.go (auth-security-17/18
 	// follow-up) when a non-root admin's channel write touches a sensitive
@@ -111,6 +118,9 @@ const (
 	// separate action rather than a "created" event so the audit trail shows
 	// the mistake AND its correction instead of an unexplained resurrection.
 	ActionProjectRestored = "project.restored"
+	// Department-lead membership (migration 046): who may see a project's data.
+	ActionProjectMemberAdded   = "project.member_added"
+	ActionProjectMemberRemoved = "project.member_removed"
 
 	// System options (global config keys).
 	ActionOptionUpdated = "option.updated"
@@ -149,6 +159,12 @@ const (
 	ActionTenantInviteIssued   = "tenant.invite_issued"
 	ActionTenantInviteConsumed = "tenant.invite_consumed"
 	ActionTenantInviteRevoked  = "tenant.invite_revoked"
+	// ActionTenantInviteGrantFailed: the invite was redeemed but its member_role /
+	// project grant could not be applied; an admin must re-grant by hand.
+	ActionTenantInviteGrantFailed = "tenant.invite_grant_failed"
+	// ActionTenantMemberRoleSet: a member's tenant_role (and/or payer flag) was
+	// changed by root or a tenant admin.
+	ActionTenantMemberRoleSet = "tenant.member_role_set"
 
 	// Internal API key tenant whitelist (internal_api_key_tenants — migration
 	// 013/021 §1). Granting/revoking changes which tenants a narrow-scope
@@ -377,6 +393,7 @@ var validAuditActions = map[string]struct{}{
 	ActionTokenDeleted:                 {},
 	ActionTokenBatchDeleted:            {},
 	ActionTokenStatusChanged:           {},
+	ActionTokenBatchCreated:            {},
 	ActionChannelCreated:               {},
 	ActionChannelUpdated:               {},
 	ActionChannelDeleted:               {},
@@ -385,6 +402,9 @@ var validAuditActions = map[string]struct{}{
 	ActionChannelEnabled:               {},
 	ActionChannelTagDisabled:           {},
 	ActionChannelTested:                {},
+	ActionChannelKeysImported:          {},
+	ActionChannelKeySettings:           {},
+	ActionChannelKeyRestored:           {},
 	ActionChannelSensitiveWriteRefused: {},
 	ActionUserCreated:                  {},
 	ActionUserUpdated:                  {},
@@ -403,6 +423,8 @@ var validAuditActions = map[string]struct{}{
 	ActionProjectUpdated:               {},
 	ActionProjectDeleted:               {},
 	ActionProjectRestored:              {},
+	ActionProjectMemberAdded:           {},
+	ActionProjectMemberRemoved:         {},
 	ActionOptionUpdated:                {},
 	ActionPricingUpdated:               {},
 	ActionModelSyncTriggered:           {},
@@ -415,6 +437,8 @@ var validAuditActions = map[string]struct{}{
 	ActionTenantBrandUpdated:           {},
 	ActionTenantInviteIssued:           {},
 	ActionTenantInviteConsumed:         {},
+	ActionTenantInviteGrantFailed:      {},
+	ActionTenantMemberRoleSet:          {},
 	ActionTenantInviteRevoked:          {},
 	ActionInternalKeyTenantGranted:     {},
 	ActionInternalKeyTenantRevoked:     {},
@@ -447,6 +471,17 @@ var validAuditActions = map[string]struct{}{
 	ActionResponseRetrieved:            {},
 	ActionResponseDeleted:              {},
 	ActionResponseDenied:               {},
+	ActionContentRetentionSet:          {},
+	ActionContentRuleCreated:           {},
+	ActionContentRuleUpdated:           {},
+	ActionContentRuleDeleted:           {},
+	ActionContentRuleHit:               {},
+	ActionSedimentationConsentSet:      {},
+	ActionLogBodyRead:                  {},
+	ActionChannelTemplateCreated:       {},
+	ActionChannelTemplateUpdated:       {},
+	ActionChannelTemplateDeleted:       {},
+	ActionChannelTemplateApplied:       {},
 }
 
 // IsValidAuditAction reports whether action is in the canonical taxonomy.

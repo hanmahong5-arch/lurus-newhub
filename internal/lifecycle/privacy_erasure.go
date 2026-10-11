@@ -114,7 +114,7 @@ func runErasurePass(ctx context.Context) {
 //  3. content              (cycle-13 L5) chat_messages/chat_sessions/midjourneys hard
 //     delete in batches (midjourneys terminal-ised first), open tasks terminal-ised
 //     then scrubbed (properties/data/fail_reason), quota_data username scrubbed
-//     (incl. this replica's write-behind cache), playground_presets hard delete
+//     (incl. this replica's write-behind cache), playground_presets hard delete, log_bodies hard delete in batches
 //
 // A cursor value none of the steps below recognises is an error, not a
 // silent no-op — see the final return.
@@ -141,6 +141,11 @@ func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error 
 		// class as the tokens/TOTP rows above (L7 repair round 3, finding
 		// routing-resilience-limits-13#11).
 		if _, err := repo.HardDeleteUserSessions(ctx, req.UserID); err != nil {
+			return err
+		}
+		// project_members (migration 046) rides along: the dept_lead scope
+		// subject must not outlive the user it names.
+		if _, err := repo.HardDeleteUserProjectMembers(ctx, req.UserID); err != nil {
 			return err
 		}
 		// response_registry rides the same step — same personal-adjacent-data
@@ -234,6 +239,17 @@ func executeErasure(ctx context.Context, req *repo.PrivacyErasureRequest) error 
 		// verbatim the same way Midjourney's does.
 		if _, err := repo.HardDeletePlaygroundPresetsForUser(ctx, req.UserID); err != nil {
 			return err
+		}
+		// Archived prompt/response bodies (migration 052) carry the user's text
+		// verbatim; they are hard-deleted, not pseudonymized.
+		for {
+			ids, err := repo.HardDeleteLogBodiesBatch(ctx, req.UserID, erasureBatchSize)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				break
+			}
 		}
 		if err := repo.AdvanceErasureStep(ctx, req.ID, repo.ErasureStepContentDeleted, 0); err != nil {
 			return err

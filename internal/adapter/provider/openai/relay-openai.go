@@ -326,6 +326,11 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
+	// Hand the completed text to the opt-in body archive (migration 052). Cheap
+	// (already parsed) and inert unless a consenting tenant's request reaches
+	// repo.archiveLogBody; streams never get here, so they archive uncaptured.
+	stashResponseText(c, simpleResponse)
+
 	forceFormat := false
 	if info.ChannelSetting.ForceFormat {
 		forceFormat = true
@@ -730,4 +735,18 @@ func extractMoonshotCachedTokensFromBody(body []byte) (int, bool) {
 	}
 
 	return 0, false
+}
+
+// stashResponseText records the assistant text of a non-streaming response on
+// the request context for the opt-in body archive. Choices are joined by a
+// blank line; reasoning text is deliberately not included.
+func stashResponseText(c *gin.Context, resp dto.OpenAITextResponse) {
+	var b strings.Builder
+	for i, choice := range resp.Choices {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(choice.StringContent())
+	}
+	common.SetContextKey(c, constant.ContextKeyResponseText, b.String())
 }

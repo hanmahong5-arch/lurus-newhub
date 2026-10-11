@@ -34,6 +34,7 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 		&entity.UserIdentityMapping{}, &entity.AuditEvent{},
 		&entity.PrivacyErasureRequest{}, &entity.UserTOTP{}, &entity.UserTOTPBackupCode{},
 		&entity.UserSession{}, &entity.AdminPermissionGrant{}, &entity.ResponseRegistry{},
+		&entity.ProjectMember{},
 		// cycle-13 L5 content-disposition surface: chat/Midjourney/tasks/
 		// quota_data/playground_presets. All five are registered in
 		// repo/main.go's migrateDB() unconditionally (unlike the lazily-
@@ -42,6 +43,7 @@ func openErasureTestDB(t *testing.T) *gorm.DB {
 		// always be present here.
 		&entity.ChatSession{}, &entity.ChatMessage{}, &repo.Midjourney{},
 		&repo.Task{}, &repo.QuotaData{}, &repo.PlaygroundPreset{},
+		&entity.LogBody{}, // migration 052; migrated unconditionally like the rows above
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -125,6 +127,15 @@ func seedErasureFixture(t *testing.T, db *gorm.DB, logCount int) (userID int, re
 		CreatedAt: time.Now().Unix(), LastSeenAt: time.Now().Unix(),
 	}).Error; err != nil {
 		t.Fatalf("seed user session: %v", err)
+	}
+	// A project membership (migration 046) — the dept_lead scope subject must
+	// not survive erasure; another user's row must.
+	for _, uid := range []int64{int64(user.Id), int64(user.Id) + 1000} {
+		if err := db.Create(&entity.ProjectMember{
+			TenantId: "default", ProjectId: 7, UserId: uid, CreatedAt: time.Now().Unix(),
+		}).Error; err != nil {
+			t.Fatalf("seed project member: %v", err)
+		}
 	}
 	// A delegated permission grant (L4) — must not survive erasure either
 	// (cycle-8 L4 repair round, B-F5): security-adjacent access, same class
@@ -286,6 +297,14 @@ func TestExecuteErasure_FullCascade(t *testing.T) {
 	db.Unscoped().Model(&entity.UserSession{}).Where("user_id = ?", userID).Count(&sessionCount)
 	if sessionCount != 0 {
 		t.Errorf("user_sessions rows remaining = %d, want 0", sessionCount)
+	}
+
+	// project_members: the erased user's rows are gone, a bystander's remain.
+	var memberCount, bystanderCount int64
+	db.Model(&entity.ProjectMember{}).Where("user_id = ?", userID).Count(&memberCount)
+	db.Model(&entity.ProjectMember{}).Where("user_id = ?", userID+1000).Count(&bystanderCount)
+	if memberCount != 0 || bystanderCount != 1 {
+		t.Errorf("project_members: erased user rows = %d (want 0), bystander rows = %d (want 1)", memberCount, bystanderCount)
 	}
 
 	// response_registry: hard-deleted too, same step (cycle-8 L7 repair
@@ -450,6 +469,7 @@ func openErasureTestDBNoTOTPTables(t *testing.T) *gorm.DB {
 		// against this DB must still find them.
 		&entity.ChatSession{}, &entity.ChatMessage{}, &repo.Midjourney{},
 		&repo.Task{}, &repo.QuotaData{}, &repo.PlaygroundPreset{},
+		&entity.LogBody{}, // migration 052; migrated unconditionally like the rows above
 	} {
 		if err := db.AutoMigrate(m); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("migrate %T: %v", m, err)
@@ -847,5 +867,38 @@ func TestExecuteErasure_MidjourneyTerminalisedBeforeDelete(t *testing.T) {
 	}
 	if firstUpdate > firstDelete {
 		t.Errorf("midjourneys deleted (statement %d) before being taken out of the poller's selection (statement %d)", firstDelete, firstUpdate)
+	}
+}
+
+// TestExecuteErasure_HardDeletesArchivedBodies: migration 052's log_bodies rows
+// hold the user's prompts and completions verbatim, so the cascade removes them
+// outright (not pseudonymized) and leaves every other user's rows alone.
+func TestExecuteErasure_HardDeletesArchivedBodies(t *testing.T) {
+	db := openErasureTestDB(t)
+	userID, row := seedErasureFixture(t, db, 1)
+
+	// More rows than one erasure batch proves the loop drains, not just one pass.
+	n := erasureBatchSize + 5
+	bodies := make([]entity.LogBody, 0, n+1)
+	for i := 0; i < n; i++ {
+		bodies = append(bodies, entity.LogBody{RequestId: fmt.Sprintf("mine-%d", i), TenantId: "t", UserId: int64(userID), ExpiresAt: 1 << 40, RequestBody: "secret"})
+	}
+	bodies = append(bodies, entity.LogBody{RequestId: "other", TenantId: "t", UserId: int64(userID) + 1000, ExpiresAt: 1 << 40, RequestBody: "keep"})
+	if err := db.CreateInBatches(&bodies, 100).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := executeErasure(context.Background(), row); err != nil {
+		t.Fatalf("executeErasure: %v", err)
+	}
+
+	var mine, others int64
+	db.Model(&entity.LogBody{}).Where("user_id = ?", userID).Count(&mine)
+	db.Model(&entity.LogBody{}).Where("request_id = ?", "other").Count(&others)
+	if mine != 0 {
+		t.Errorf("%d archived bodies of the erased user survived the cascade", mine)
+	}
+	if others != 1 {
+		t.Errorf("another user's archived body was touched (%d left, want 1)", others)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 
 	"github.com/gin-gonic/gin"
@@ -111,6 +112,12 @@ func replay(t *testing.T, f fixture, channelType int, key string) (*exchange, *r
 		// Some captures are deliberately malformed bodies; the replay still
 		// needs a request to send.
 		req = &dto.SystemOneRequest{State: json.RawMessage(`"s"`), Model: "m", Questions: map[string]dto.SystemOneQuestion{"q": {Type: "noul"}}}
+	}
+	// Laya captures are real request/response pairs, so the answers can be
+	// checked against what was asked. The hosted-API fixtures are api.md
+	// examples whose request and response do not correspond.
+	if channelType == constant.ChannelTypeSystemOneCompatible {
+		info.Request = req
 	}
 	info.OriginModelName = req.Model
 	info.UpstreamModelName = req.Model

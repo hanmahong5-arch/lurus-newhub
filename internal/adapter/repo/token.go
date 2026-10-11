@@ -58,8 +58,17 @@ type Token struct {
 	// cost-attribution label, 0 = unassigned (migration 029). Duplicated here
 	// because the token create/update handlers bind and persist through this
 	// independent struct — the tag MUST stay byte-identical to the entity one.
-	ProjectId int            `json:"project_id" gorm:"not null;default:0"`
-	DeletedAt gorm.DeletedAt `gorm:"index"`
+	ProjectId int `json:"project_id" gorm:"not null;default:0"`
+	// TrustedIdentityHeaders / EmployeeRef mirror domain/entity/token.go
+	// (canonical docs live there; migration 045). Tags MUST stay
+	// byte-identical to the entity ones.
+	TrustedIdentityHeaders bool   `json:"trusted_identity_headers" gorm:"not null;default:false"`
+	EmployeeRef            string `json:"employee_ref" gorm:"type:varchar(64);not null;default:''"`
+	// SourceProduct mirrors domain/entity/token.go (migration 049); tag must stay byte-identical.
+	SourceProduct string `json:"source_product" gorm:"type:varchar(32);not null;default:''"`
+	// LogRetention mirrors domain/entity/token.go (migration 050); tag must stay byte-identical.
+	LogRetention string         `json:"content_retention" gorm:"column:content_retention;type:varchar(16);not null;default:''"`
+	DeletedAt    gorm.DeletedAt `gorm:"index"`
 }
 
 func (token *Token) Clean() {
@@ -98,39 +107,6 @@ func (token *Token) GetIpLimits() []string {
 		}
 	}
 	return ipLimits
-}
-
-// GetScopes returns the token's scope allowlist as a slice with whitespace
-// trimmed and empty entries dropped. nil/empty result means no restriction.
-func (token *Token) GetScopes() []string {
-	if token.Scopes == "" {
-		return nil
-	}
-	parts := strings.Split(token.Scopes, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// HasScope reports whether the token is authorized for the given scope.
-// An empty Scopes field is treated as "no restriction" (backward compat
-// with every token issued before migration 015) — HasScope returns true.
-func (token *Token) HasScope(scope string) bool {
-	scopes := token.GetScopes()
-	if len(scopes) == 0 {
-		return true
-	}
-	for _, s := range scopes {
-		if s == scope {
-			return true
-		}
-	}
-	return false
 }
 
 func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
@@ -362,9 +338,12 @@ func (token *Token) Update() (err error) {
 	// attribute spend to the new project until the cache entry expires and
 	// then flip back to the stale DB value: non-deterministic attribution
 	// drift that is close to unreproducible.
+	// Same for "trusted_identity_headers" / "employee_ref": a dropped DB write
+	// with a refreshed cache would split cache and DB on whether a key may name
+	// employees. Callers must pass tenant-admin authorization before setting them.
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
 		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "scopes",
-		"rpm_limit", "tpm_limit", "project_id").Updates(token).Error
+		"rpm_limit", "tpm_limit", "project_id", "trusted_identity_headers", "employee_ref").Updates(token).Error
 	return err
 }
 

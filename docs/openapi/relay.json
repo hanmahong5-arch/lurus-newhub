@@ -2752,6 +2752,28 @@
               "X-RateLimit-Type": { "$ref": "#/components/headers/XRateLimitType" }
             }
           },
+          "400": {
+            "description": "请求体不合法。code=unsupported_parameter 表示请求带了所选渠道无法转发的字段(如 input_type 仅 Voyage 渠道、task 仅 Jina 渠道可转发),为避免静默丢弃字段后仍计费而直接拒绝;单次 input 条数上限 2048。不重试、不切换渠道。",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "501": {
+            "description": "该模型没有任何路由支持此类操作(例如对 chat 渠道发 rerank)。code=provider_capability_not_supported;error.details = {stage:\"route_selection\", upstream_attempted:false, reasons:[{code:\"modality_mismatch\"|\"adapter_unsupported\", message, route_count}]},reasons 只含原因与计数,不含渠道 id/名称/上游地址/密钥。仅当 ROUTING_MODALITY_FILTER=enforce 时返回;observe(默认)只记日志不拦截。",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
           "503": {
             "description": "无可用渠道 / 全部密钥冷却中",
             "content": {
@@ -3146,6 +3168,39 @@
               }
             },
             "headers": {}
+          },
+          "400": {
+            "description": "请求体不合法(缺 query/documents 等)。不重试、不切换渠道。",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "501": {
+            "description": "该模型没有任何路由支持此类操作(例如对 chat 渠道发 rerank)。code=provider_capability_not_supported;error.details = {stage:\"route_selection\", upstream_attempted:false, reasons:[{code:\"modality_mismatch\"|\"adapter_unsupported\", message, route_count}]},reasons 只含原因与计数,不含渠道 id/名称/上游地址/密钥。仅当 ROUTING_MODALITY_FILTER=enforce 时返回;observe(默认)只记日志不拦截。",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "502": {
+            "description": "上游返回的响应体格式合法但内容自相矛盾(如 rerank 结果的排序/索引不一致),code=invalid_provider_response。若上游 usage 自相矛盾则为 code=invalid_provider_usage(同为 502)。",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
           }
         },
         "security": [
@@ -3357,6 +3412,28 @@
               "X-RateLimit-Type": {
                 "$ref": "#/components/headers/XRateLimitType"
               }
+            }
+          },
+          "501": {
+            "description": "该模型没有任何路由支持此类操作(例如对 chat 渠道发 rerank)。code=provider_capability_not_supported;error.details = {stage:\"route_selection\", upstream_attempted:false, reasons:[{code:\"modality_mismatch\"|\"adapter_unsupported\", message, route_count}]},reasons 只含原因与计数,不含渠道 id/名称/上游地址/密钥。仅当 ROUTING_MODALITY_FILTER=enforce 时返回;observe(默认)只记日志不拦截。",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
+            }
+          },
+          "502": {
+            "description": "上游响应未通过校验,code=invalid_provider_response;不重试、不切换渠道。",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GatewayError" }
+              }
+            },
+            "headers": {
+              "X-Request-Id": { "$ref": "#/components/headers/XRequestId" }
             }
           },
           "503": {
@@ -3940,6 +4017,7 @@
             "enum": [
               "invalid_request",
               "sensitive_words_detected",
+              "content_rejected",
               "count_token_failed",
               "model_price_error",
               "invalid_api_type",
@@ -3947,6 +4025,7 @@
               "do_request_failed",
               "get_channel_failed",
               "gen_relay_info_failed",
+              "all_channels_cooling",
               "channel:no_available_key",
               "channel:all_keys_cooling",
               "channel:param_override_invalid",
@@ -3995,6 +4074,10 @@
               "business_rate_limit_exceeded",
               "concurrency_limit_exceeded",
               "api_not_implemented",
+              "provider_capability_not_supported",
+              "invalid_provider_usage",
+              "invalid_provider_response",
+              "unsupported_parameter",
               "task_platform_unknown",
               "responses_compact_unsupported",
               "response_not_found",
@@ -4006,6 +4089,25 @@
           "message": {
             "type": "string",
             "description": "人类可读的错误信息，末尾附 (request id: X-Request-Id 同值) 便于对账。"
+          },
+          "details": {
+            "type": "object",
+            "description": "仅 OpenAI 线、仅部分拒绝携带的结构化补充信息。当前只有 code=provider_capability_not_supported(501)使用:stage 恒为 route_selection,upstream_attempted 恒为 false。",
+            "properties": {
+              "stage": { "type": "string" },
+              "upstream_attempted": { "type": "boolean" },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": { "type": "string", "enum": ["modality_mismatch", "adapter_unsupported"] },
+                    "message": { "type": "string" },
+                    "route_count": { "type": "integer", "description": "因此原因被排除的候选路由数。" }
+                  }
+                }
+              }
+            }
           },
           "metadata": {
             "type": "object",

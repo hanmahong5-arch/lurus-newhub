@@ -48,6 +48,8 @@ type ErrorCode string
 const (
 	ErrorCodeInvalidRequest         ErrorCode = "invalid_request"
 	ErrorCodeSensitiveWordsDetected ErrorCode = "sensitive_words_detected"
+	// ErrorCodeContentRejected: an enforce-mode content rule refused the request body (migration 050).
+	ErrorCodeContentRejected ErrorCode = "content_rejected"
 
 	// new api error
 	ErrorCodeCountTokenFailed   ErrorCode = "count_token_failed"
@@ -57,6 +59,11 @@ const (
 	ErrorCodeDoRequestFailed    ErrorCode = "do_request_failed"
 	ErrorCodeGetChannelFailed   ErrorCode = "get_channel_failed"
 	ErrorCodeGenRelayInfoFailed ErrorCode = "gen_relay_info_failed"
+	// ErrorCodeAllChannelsCooling: every channel serving the model is inside a
+	// 429 cooldown. Deliberately not "channel:"-prefixed (that prefix means one
+	// channel is condemned and the request fails over) and distinct from the
+	// provider-filter miss so clients can tell "back off" from "no such region".
+	ErrorCodeAllChannelsCooling ErrorCode = "all_channels_cooling"
 
 	// channel error
 	ErrorCodeChannelNoAvailableKey        ErrorCode = "channel:no_available_key"
@@ -149,6 +156,21 @@ const (
 	ErrorCodeBusinessRateLimitExceeded ErrorCode = "business_rate_limit_exceeded"
 	ErrorCodeConcurrencyLimitExceeded  ErrorCode = "concurrency_limit_exceeded"
 	ErrorCodeAPINotImplemented         ErrorCode = "api_not_implemented"
+	// TokenHub-0.9 parity (_bmad-output/planning-artifacts/cycle22-tokenhub-09-parity-2026-10-10.md).
+	// ErrorCodeProviderCapabilityNotSupported: 501, route selection found no
+	// channel whose modality matches the relay mode (enforce mode only);
+	// error.details carries stage/upstream_attempted/reasons[].
+	ErrorCodeProviderCapabilityNotSupported ErrorCode = "provider_capability_not_supported"
+	// ErrorCodeInvalidProviderUsage: 502, the upstream usage block contradicts
+	// itself (total=0 with prompt>0, negative counts); nothing is billed.
+	ErrorCodeInvalidProviderUsage ErrorCode = "invalid_provider_usage"
+	// ErrorCodeInvalidProviderResponse: 502, the upstream body is well-formed
+	// JSON but violates the endpoint contract (rerank not sorted descending,
+	// decision-model probabilities inconsistent). Not a channel-switch signal.
+	ErrorCodeInvalidProviderResponse ErrorCode = "invalid_provider_response"
+	// ErrorCodeUnsupportedParameter: 400, the request carries a field this
+	// endpoint cannot honour on a non-pass-through path.
+	ErrorCodeUnsupportedParameter ErrorCode = "unsupported_parameter"
 	// ErrorCodeTaskPlatformUnknown is returned by the generic async-task
 	// surface (/v1/tasks/:platform) when :platform names no compiled
 	// provider/task/* adaptor (cycle-8 L8).
@@ -687,7 +709,7 @@ func RelayErrorType(err *NewAPIError) string {
 		return "insufficient_quota"
 	// newhub-internal / request-prep / routing / persistence failures: synthetic
 	// 500s (or client-prep 4xx) that must NOT count as upstream provider faults.
-	case ErrorCodeInvalidRequest, ErrorCodeSensitiveWordsDetected,
+	case ErrorCodeInvalidRequest, ErrorCodeSensitiveWordsDetected, ErrorCodeContentRejected,
 		ErrorCodeCountTokenFailed, ErrorCodeModelPriceError, ErrorCodeInvalidApiType,
 		ErrorCodeJsonMarshalFailed, ErrorCodeGenRelayInfoFailed, ErrorCodeGetChannelFailed,
 		ErrorCodeReadRequestBodyFailed, ErrorCodeConvertRequestFailed, ErrorCodeAccessDenied,

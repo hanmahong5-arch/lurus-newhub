@@ -5,16 +5,29 @@ import (
 	"io"
 	"net/http"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/xinference"
+	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
-	"github.com/LurusTech/lurus-hub/internal/adapter/provider/xinference"
-	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
-	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
+
+// UsageContradictory is kept as the package-level entry point; the rule lives in dto.
+func UsageContradictory(u dto.Usage) bool { return dto.UsageContradictory(u) }
+
+// usageAbsent: the upstream sent no usage at all (every counter zero).
+func usageAbsent(u dto.Usage) bool {
+	return u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0
+}
+
+func checkRerankOrder(results []dto.RerankResponseResult) error {
+	return dto.CheckRerankOrder(results)
+}
 
 func RerankHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	responseBody, err := io.ReadAll(resp.Body)
@@ -62,6 +75,7 @@ func RerankHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			}
 			jinaRespResults[i] = respResult
 		}
+		// Xinference reports no usage: the figure is our own estimate.
 		jinaResp = dto.RerankResponse{
 			Results: jinaRespResults,
 			Usage: dto.Usage{
@@ -69,12 +83,39 @@ func RerankHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 				TotalTokens:  info.GetEstimatePromptTokens(),
 			},
 		}
+		info.UsageSource = "estimated"
 	} else {
 		err = common.Unmarshal(responseBody, &jinaResp)
 		if err != nil {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
-		jinaResp.Usage.PromptTokens = jinaResp.Usage.TotalTokens
+		// Token fields keep the upstream's own values (Jina reports only
+		// total_tokens): copying total into prompt used to fabricate a figure
+		// the vendor never sent. Settlement reads total_tokens when it is the
+		// only counter present.
+		if UsageContradictory(jinaResp.Usage) {
+			metrics.RecordInvalidProviderUsage("rerank")
+			return nil, types.NewOpenAIError(
+				fmt.Errorf("upstream rerank usage is self-contradictory (prompt=%d completion=%d total=%d)",
+					jinaResp.Usage.PromptTokens, jinaResp.Usage.CompletionTokens, jinaResp.Usage.TotalTokens),
+				types.ErrorCodeInvalidProviderUsage, http.StatusBadGateway)
+		}
+		if usageAbsent(jinaResp.Usage) {
+			est := info.GetEstimatePromptTokens()
+			jinaResp.Usage.PromptTokens = est
+			jinaResp.Usage.TotalTokens = est
+			info.UsageSource = "estimated"
+		} else {
+			info.UsageSource = "upstream"
+		}
+		if info.RerankerInfo == nil || !info.ReturnDocuments {
+			for i := range jinaResp.Results {
+				jinaResp.Results[i].Document = nil
+			}
+		}
+	}
+	if oerr := checkRerankOrder(jinaResp.Results); oerr != nil {
+		return nil, types.NewOpenAIError(oerr, types.ErrorCodeInvalidProviderResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 	}
 
 	c.Writer.Header().Set("Content-Type", "application/json")

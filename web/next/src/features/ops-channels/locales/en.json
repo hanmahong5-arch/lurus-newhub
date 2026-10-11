@@ -1,0 +1,12 @@
+{
+  "Modality": "Modality",
+  "Mismatch": "Mismatch",
+  "Chat model": "Chat",
+  "Embedding": "Embedding",
+  "Rerank": "Rerank",
+  "Decision": "Decision",
+  "Image model": "Image",
+  "Audio": "Audio",
+  "The same model is registered with a different modality on another channel": "The same model is registered with a different modality on another channel",
+  "This channel type cannot serve this modality": "This channel type cannot serve this modality"
+}

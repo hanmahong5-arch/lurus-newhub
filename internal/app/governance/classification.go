@@ -97,6 +97,18 @@ var FieldClassification = map[string]DataTier{
 	// row's own user_id already implies — nothing about pricing or routing.
 	"source": TierPublic,
 
+	// routing_eval / routing are written by the decision-model router
+	// (internal/adapter/middleware/decision_routing.go) on the separate consume
+	// row it books for the evaluator call: routing_eval=true marks that row as
+	// the router's own evaluation, routing names the decision outcome. Both are
+	// facts about the caller's OWN request under the tenant's OWN policy, so
+	// they carry no price, margin or upstream identity.
+	"routing_eval": TierPublic,
+	"routing":      TierPublic,
+	// routed is the main request's own marker: {requested, model, reason},
+	// the same facts as the X-Routed-Model / X-Routing-Reason headers.
+	"routed": TierPublic,
+
 	// Internal — admin only
 	"channel_id":     TierInternal,
 	"channel_name":   TierInternal,

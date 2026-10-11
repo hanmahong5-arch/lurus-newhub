@@ -90,6 +90,16 @@ func SystemOneHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	usage, newAPIError := baseAdaptor.DoResponse(c, httpResp, info)
 	if newAPIError != nil {
+		// A contract-violating answer still cost the upstream its inference:
+		// when the adaptor reports a valid usage next to the error, settle it.
+		// The pre-consume is consumed by that settlement, so clear the local
+		// hold before the caller's failure path would hand it back a second
+		// time. The platform pre-auth id is cleared by the settlement itself
+		// (app.settleOrPark / abandonPreAuth are its only two exits).
+		if billed, _ := usage.(*dto.Usage); billed != nil && billed.TotalTokens > 0 {
+			postConsumeQuota(c, info, billed)
+			info.FinalPreConsumedQuota = 0
+		}
 		app.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
 	}

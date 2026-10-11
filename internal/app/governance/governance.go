@@ -91,6 +91,12 @@ func EnrichLogParams(c *gin.Context, info *relaycommon.RelayInfo, params *entity
 	if params.ProjectId == 0 && c != nil {
 		params.ProjectId = common.GetContextKeyInt(c, constant.ContextKeyProjectId)
 	}
+	// Employee attribution (migration 045), same two-source rule as the
+	// project above: RelayInfo first, context as the fallback. '' = none.
+	params.EmployeeRef = info.EmployeeRef
+	if params.EmployeeRef == "" && c != nil {
+		params.EmployeeRef = common.GetContextKeyString(c, constant.ContextKeyEmployeeRef)
+	}
 	// Record-time price of the quota (migration 042), from params.Quota
 	// alone: RelayInfo only knows a charge when the wallet paid, and the
 	// rows that never touch the wallet (credit pool, local quota) are the

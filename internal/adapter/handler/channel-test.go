@@ -69,16 +69,6 @@ type channelProbeOptions struct {
 // they exist to show the operator what the probe cost on paper.
 const channelProbeLogSource = "channel_test"
 
-// testChannel is the no-actor form of the manual probe, kept for
-// context_tier_channel_test_test.go's direct call. It is probeChannel with
-// RecordConsumeLog on — the one probe path this cycle's plan keeps writing a
-// consume-log row — and no attribution, so its row lands on user 1 the way it
-// always did. The HTTP handler (TestChannel below) uses testChannelForActor
-// instead.
-func testChannel(channel *repo.Channel, testModel string, endpointType string) testResult {
-	return probeChannel(channel, testModel, endpointType, channelProbeOptions{RecordConsumeLog: true})
-}
-
 // testChannelForActor is testChannel with the requesting operator attached, so
 // the consume-log row belongs to them and — through repo.resolveLogTenantID's
 // fallback to the actor's user row — to their tenant.
@@ -657,6 +647,7 @@ func TestChannel(c *gin.Context) {
 		})
 		return
 	}
+	app.ClearChannelCooldown(channel.Id)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -715,7 +706,7 @@ func testAllChannels(notify bool) error {
 			testAllChannelsLock.Unlock()
 		}()
 
-		for _, channel := range channels {
+		for _, channel := range scheduledTestChannels(channels, notify) {
 			autoProbeChannel(channel, disableThreshold)
 			time.Sleep(common.RequestInterval)
 		}

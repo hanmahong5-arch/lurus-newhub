@@ -17,6 +17,21 @@ type ChannelSettings struct {
 	// ever tested for DataCollectionDeny (zero data retention).
 	Region         string `json:"region,omitempty"`
 	DataCollection string `json:"data_collection,omitempty"`
+	// Plan-account fields (internal/app/planquota). PlanKind declares the
+	// channel is a monthly-plan account: zhipu_coding / kimi_coding / minimax;
+	// ""/"none" = ordinary pay-as-you-go key, never probed. PlanThresholdPct
+	// (0 = global default 95) is the used-percent at which a window parks the
+	// channel until its reset. ExpiresAt is the plan end (unix seconds, 0 = never).
+	// TestMode is all / auto_ban_only / none for scheduled channel tests
+	// ("" = auto_ban_only for plan channels, global mode otherwise).
+	PlanKind         string  `json:"plan_kind,omitempty"`
+	PlanThresholdPct float64 `json:"plan_threshold_pct,omitempty"`
+	ExpiresAt        int64   `json:"expires_at,omitempty"`
+	TestMode         string  `json:"test_mode,omitempty"`
+	// PlanMonthlyFeeCNY4 is the monthly fee of the subscription plan this
+	// channel resells, in 0.0001 CNY. 0 = not a plan channel (pay-per-use);
+	// the usage report only computes utilization when it is > 0.
+	PlanMonthlyFeeCNY4 int64 `json:"plan_monthly_fee_cny4,omitempty"`
 	// ForceHTTP1 is never persisted directly — there is no console field or
 	// JSON key for it in this struct's own document. It is derived at relay
 	// time (RelayInfo.InitChannelMeta, provider/common/relay_info.go) from the

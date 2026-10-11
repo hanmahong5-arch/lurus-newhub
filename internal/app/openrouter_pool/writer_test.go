@@ -3,8 +3,11 @@ package openrouter_pool
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 )
@@ -41,19 +44,95 @@ func TestMaybeMarkCooldown_NilApiErr_NoOp(t *testing.T) {
 	MaybeMarkCooldown(baseChannelErr(), nil)
 }
 
-// TestMaybeMarkCooldown_WrongChannelType_NoOp verifies the channel-type guard.
-func TestMaybeMarkCooldown_WrongChannelType_NoOp(t *testing.T) {
-	ce := baseChannelErr()
-	ce.ChannelType = constant.ChannelTypeOpenAI // not OpenRouter
-	MaybeMarkCooldown(ce, base429Err())
+// markSeam swaps the multi-key write for a recorder and returns the call log.
+func markSeam(t *testing.T, ok bool) *[]int {
+	t.Helper()
+	var calls []int
+	prev := markMultiKeyCooldownFn
+	markMultiKeyCooldownFn = func(id int, key string, until int64, reason string) (bool, int64) {
+		calls = append(calls, id)
+		return ok, seamAllParkedUntil
+	}
+	prevKeep := markMultiKeyCooldownKeepFn
+	keepCalls = nil
+	markMultiKeyCooldownKeepFn = func(id int, key string, until int64, reason string) (bool, int64) {
+		keepCalls = append(keepCalls, id)
+		return ok, seamAllParkedUntil
+	}
+	app.ClearChannelCooldowns()
+	t.Cleanup(func() {
+		markMultiKeyCooldownFn = prev
+		markMultiKeyCooldownKeepFn = prevKeep
+		app.ClearChannelCooldowns()
+	})
+	return &calls
 }
 
-// TestMaybeMarkCooldown_NotMultiKey_NoOp verifies that single-key channels
-// are ignored.
-func TestMaybeMarkCooldown_NotMultiKey_NoOp(t *testing.T) {
+func withAutoDisable(t *testing.T) {
+	t.Helper()
+	prev := common.AutomaticDisableChannelEnabled
+	common.AutomaticDisableChannelEnabled = true
+	t.Cleanup(func() { common.AutomaticDisableChannelEnabled = prev })
+}
+
+// TestMaybeMarkCooldown_NonOpenRouterMultiKey_Cools pins the generalisation:
+// a 429 on a multi-key channel of ANY type writes the per-key cooldown.
+func TestMaybeMarkCooldown_NonOpenRouterMultiKey_Cools(t *testing.T) {
+	withAutoDisable(t)
+	for _, typ := range []int{constant.ChannelTypeOpenAI, constant.ChannelTypeAnthropic, constant.ChannelTypeGemini} {
+		calls := markSeam(t, true)
+		ce := baseChannelErr()
+		ce.AutoBan = true
+		ce.ChannelType = typ
+		MaybeMarkCooldown(ce, base429Err())
+		if len(*calls) != 1 || (*calls)[0] != ce.ChannelId {
+			t.Fatalf("type %d: multi-key write calls = %v, want one for channel %d", typ, *calls, ce.ChannelId)
+		}
+	}
+}
+
+// TestMaybeMarkCooldown_BalanceExhausted429_NoCooldown pins that a 429 whose
+// body says the account is out of money goes to the disable path, not cooldown.
+func TestMaybeMarkCooldown_BalanceExhausted429_NoCooldown(t *testing.T) {
+	withAutoDisable(t)
+	calls := markSeam(t, true)
+	ae := types.WithOpenAIError(types.OpenAIError{
+		Message: "You exceeded your current quota", Type: "insufficient_quota", Code: "insufficient_quota",
+	}, 429)
+	ae.UpstreamHeader = base429Err().UpstreamHeader
+
 	ce := baseChannelErr()
+	ce.ChannelType = constant.ChannelTypeOpenAI
+	MaybeMarkCooldown(ce, ae)
+	single := ce
+	single.IsMultiKey = false
+	single.ChannelId = 77
+	MaybeMarkCooldown(single, ae)
+
+	if len(*calls) != 0 {
+		t.Fatalf("balance-exhausted 429 wrote a multi-key cooldown: %v", *calls)
+	}
+	if app.ChannelCoolingUntil(77, 0) != 0 {
+		t.Fatal("balance-exhausted 429 wrote a single-key cooldown")
+	}
+}
+
+// TestMaybeMarkCooldown_SingleKey_WritesChannelCooldown pins that a single-key
+// channel is put on the selection-side cooldown instead of being ignored.
+func TestMaybeMarkCooldown_SingleKey_WritesChannelCooldown(t *testing.T) {
+	withAutoDisable(t)
+	calls := markSeam(t, true)
+	ce := baseChannelErr()
+	ce.ChannelType = constant.ChannelTypeOpenAI
 	ce.IsMultiKey = false
+	ce.ChannelId = 78
 	MaybeMarkCooldown(ce, base429Err())
+	if len(*calls) != 0 {
+		t.Fatalf("single-key channel hit the multi-key write: %v", *calls)
+	}
+	if until := app.ChannelCoolingUntil(78, 0); until <= time.Now().Unix() {
+		t.Fatalf("single-key cooldown deadline = %d, want in the future", until)
+	}
 }
 
 // TestMaybeMarkCooldown_NonRateLimit_NoOp verifies that non-429 status codes
@@ -113,36 +192,6 @@ func TestMaybeMarkCooldown_TableDriven_Guards(t *testing.T) {
 			ae:   nil,
 		},
 		{
-			name: "wrong channel type (Anthropic)",
-			ce: types.ChannelError{
-				ChannelId:   2,
-				ChannelType: constant.ChannelTypeAnthropic,
-				IsMultiKey:  true,
-				UsingKey:    "sk-ant-key",
-			},
-			ae: base429Err(),
-		},
-		{
-			name: "wrong channel type (Gemini)",
-			ce: types.ChannelError{
-				ChannelId:   3,
-				ChannelType: constant.ChannelTypeGemini,
-				IsMultiKey:  true,
-				UsingKey:    "gemini-key",
-			},
-			ae: base429Err(),
-		},
-		{
-			name: "multi-key false",
-			ce: types.ChannelError{
-				ChannelId:   4,
-				ChannelType: constant.ChannelTypeOpenRouter,
-				IsMultiKey:  false,
-				UsingKey:    "sk-or-v1-key",
-			},
-			ae: base429Err(),
-		},
-		{
 			name: "status 503",
 			ce:   baseChannelErr(),
 			ae: &types.NewAPIError{
@@ -175,6 +224,180 @@ func TestMaybeMarkCooldown_TableDriven_Guards(t *testing.T) {
 			// Any guard that wasn't hit would reach repo.MarkMultiKeyCooldown
 			// and panic on nil DB, making the missing guard instantly visible.
 			MaybeMarkCooldown(tc.ce, tc.ae)
+		})
+	}
+}
+
+// keepCalls records the status-preserving key write made by markSeam's seam.
+var keepCalls []int
+
+// Per-key cooldown is the behaviour for multi-key channels whatever auto_ban
+// says. OpenRouter keeps the historical status-flipping write; any other type
+// with auto-ban off uses the status-preserving variant. Neither falls back to
+// a whole-channel cooldown.
+func TestMaybeMarkCooldown_MultiKey_AutoBanVariants_StayPerKey(t *testing.T) {
+	withAutoDisable(t)
+	cases := []struct {
+		name     string
+		typ      int
+		autoBan  bool
+		wantFlip int // calls to the status-flipping write
+		wantKeep int // calls to the status-preserving write
+	}{
+		{"openrouter auto-ban off", constant.ChannelTypeOpenRouter, false, 1, 0},
+		{"openrouter auto-ban on", constant.ChannelTypeOpenRouter, true, 1, 0},
+		{"other auto-ban on", constant.ChannelTypeOpenAI, true, 1, 0},
+		{"other auto-ban off", constant.ChannelTypeOpenAI, false, 0, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := markSeam(t, true)
+			ce := baseChannelErr()
+			ce.ChannelId = 79
+			ce.ChannelType = tc.typ
+			ce.AutoBan = tc.autoBan
+			MaybeMarkCooldown(ce, base429Err())
+			if len(*calls) != tc.wantFlip || len(keepCalls) != tc.wantKeep {
+				t.Fatalf("flip=%d keep=%d, want flip=%d keep=%d", len(*calls), len(keepCalls), tc.wantFlip, tc.wantKeep)
+			}
+			if app.ChannelCoolingUntil(79, 0) != 0 {
+				t.Fatal("multi-key channel was put on a whole-channel cooldown")
+			}
+		})
+	}
+}
+
+// The first attempt of a request carries IsMultiKey=false on the ChannelError;
+// the real key mode must come from the channel lookup, so a multi-key channel
+// cools only the used key and the channel itself stays routable.
+func TestMaybeMarkCooldown_FirstAttemptFlagFalse_UsesRealKeyMode(t *testing.T) {
+	withAutoDisable(t)
+	calls := markSeam(t, true)
+	prev := channelIsMultiKeyFn
+	channelIsMultiKeyFn = func(types.ChannelError) bool { return true }
+	t.Cleanup(func() { channelIsMultiKeyFn = prev })
+
+	ce := baseChannelErr()
+	ce.ChannelId = 80
+	ce.ChannelType = constant.ChannelTypeOpenAI
+	ce.IsMultiKey = false // what the first attempt actually carries
+	ce.AutoBan = true
+	MaybeMarkCooldown(ce, base429Err())
+	if len(*calls) != 1 {
+		t.Fatalf("per-key write calls = %v, want exactly one", *calls)
+	}
+	if app.ChannelCoolingUntil(80, 0) != 0 {
+		t.Fatal("multi-key channel must not be put on a whole-channel cooldown")
+	}
+}
+
+// Out-of-money 429s are never cooldowns, even when the automatic-disable switch
+// is off and ShouldDisableChannel therefore reports false.
+func TestMaybeMarkCooldown_BalanceExhausted_SwitchOff_NoCooldown(t *testing.T) {
+	prev := common.AutomaticDisableChannelEnabled
+	common.AutomaticDisableChannelEnabled = false
+	t.Cleanup(func() { common.AutomaticDisableChannelEnabled = prev })
+	calls := markSeam(t, true)
+	ae := types.WithOpenAIError(types.OpenAIError{
+		Message: "You exceeded your current quota", Type: "insufficient_quota", Code: "insufficient_quota",
+	}, 429)
+	ae.UpstreamHeader = base429Err().UpstreamHeader
+	MaybeMarkCooldown(baseChannelErr(), ae)
+	if len(*calls) != 0 {
+		t.Fatalf("balance-exhausted 429 became a cooldown with the switch off: %v", *calls)
+	}
+}
+
+// seamAllParkedUntil is what markSeam's fake write reports as the channel-level
+// recovery deadline (0 = a key is still serving).
+var seamAllParkedUntil int64
+
+// A 429 that the disable path owns (here an invalid_api_key code, which is not
+// in the balance list) must not become a cooldown of either shape.
+func TestMaybeMarkCooldown_DisableKeywordHit_NoCooldown(t *testing.T) {
+	withAutoDisable(t)
+	calls := markSeam(t, true)
+	for _, ae := range []*types.NewAPIError{
+		types.WithOpenAIError(types.OpenAIError{Message: "Incorrect API key provided", Type: "invalid_request_error", Code: "invalid_api_key"}, 429),
+		types.WithOpenAIError(types.OpenAIError{Message: "Your credit balance is too low", Type: "invalid_request_error", Code: "x"}, 429),
+	} {
+		ae.UpstreamHeader = base429Err().UpstreamHeader
+		if !app.ShouldDisableChannel(constant.ChannelTypeOpenAI, ae) {
+			t.Fatalf("precondition: %q should hit the disable path", ae.Error())
+		}
+		multi := baseChannelErr()
+		multi.ChannelType = constant.ChannelTypeOpenAI
+		MaybeMarkCooldown(multi, ae)
+		single := multi
+		single.IsMultiKey = false
+		single.ChannelId = 81
+		MaybeMarkCooldown(single, ae)
+		if len(*calls) != 0 || app.ChannelCoolingUntil(81, 0) != 0 {
+			t.Fatalf("disable-path 429 %q wrote a cooldown (multi=%v, single=%d)", ae.Error(), *calls, app.ChannelCoolingUntil(81, 0))
+		}
+	}
+}
+
+// Parking the last usable key reports a recovery deadline, which MaybeMarkCooldown
+// records as the channel-level slot selection reads; a write that leaves a key
+// serving records nothing.
+func TestMaybeMarkCooldown_LastKeyParked_WritesChannelSlot(t *testing.T) {
+	withAutoDisable(t)
+	for _, keep := range []bool{false, true} {
+		calls := markSeam(t, true)
+		want := time.Now().Unix() + 90
+		seamAllParkedUntil = want
+		t.Cleanup(func() { seamAllParkedUntil = 0 })
+		ce := baseChannelErr()
+		ce.ChannelId = 82
+		ce.ChannelType = constant.ChannelTypeOpenAI
+		ce.AutoBan = !keep
+		MaybeMarkCooldown(ce, base429Err())
+		if len(*calls)+len(keepCalls) != 1 {
+			t.Fatalf("keep=%v: expected one per-key write", keep)
+		}
+		if got := app.ChannelCoolingUntil(82, 0); got != want {
+			t.Fatalf("keep=%v: channel slot = %d, want %d", keep, got, want)
+		}
+
+		app.ClearChannelCooldowns()
+		seamAllParkedUntil = 0
+		MaybeMarkCooldown(ce, base429Err())
+		if got := app.ChannelCoolingUntil(82, 0); got != 0 {
+			t.Fatalf("keep=%v: channel slot written while a key still serves: %d", keep, got)
+		}
+	}
+}
+
+// The 24h "per day" body heuristic is an OpenRouter free-tier signal. A generic
+// upstream whose 429 text merely mentions "per day" must get the short default,
+// otherwise a single-key channel is cut off for a day with no way to clear it.
+func TestMaybeMarkCooldown_DailyKeywordIsOpenRouterOnly(t *testing.T) {
+	withAutoDisable(t)
+	for _, tc := range []struct {
+		name string
+		typ  int
+		id   int
+		long bool
+	}{
+		{"openai", constant.ChannelTypeOpenAI, 83, false},
+		{"openrouter", constant.ChannelTypeOpenRouter, 84, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			markSeam(t, true)
+			ce := baseChannelErr()
+			ce.ChannelId = tc.id
+			ce.ChannelType = tc.typ
+			ce.IsMultiKey = false
+			ae := &types.NewAPIError{StatusCode: 429, UpstreamBodyHint: `{"error":{"message":"limit of 200 requests per day reached"}}`}
+			MaybeMarkCooldown(ce, ae)
+			got := app.ChannelCoolingUntil(tc.id, 0) - time.Now().Unix()
+			if tc.long && got < int64(23*time.Hour/time.Second) {
+				t.Fatalf("openrouter daily limit cooled for %ds, want ~24h", got)
+			}
+			if !tc.long && (got < 1 || got > 120) {
+				t.Fatalf("generic 429 mentioning 'per day' cooled for %ds, want the short default", got)
+			}
 		})
 	}
 }

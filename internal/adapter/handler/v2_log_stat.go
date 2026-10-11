@@ -95,7 +95,14 @@ func GetLogStatV2(c *gin.Context) {
 		return
 	}
 
-	serveLogStatV2(c, tenantCtx.TenantID, tenantCtx.UserID, "")
+	// A department lead aggregates their projects' rows, not their own; an
+	// out-of-scope project_id is a 404 (same rule as GetLogsV2).
+	scope := resolveLogReadScope(c, tenantCtx)
+	projectID, _ := strconv.Atoi(c.DefaultQuery("project_id", "0"))
+	if scope.rejectProject(c, projectID) {
+		return
+	}
+	serveLogStatV2(c, tenantCtx.TenantID, scope.userID(tenantCtx.UserID), "", scope.projects())
 }
 
 // GetAllLogStatV2 is the tenant-wide sibling of GetLogStatV2 — same aggregates
@@ -123,14 +130,15 @@ func GetAllLogStatV2(c *gin.Context) {
 		return
 	}
 
-	serveLogStatV2(c, tenantCtx.TenantID, 0, c.Query("username"))
+	serveLogStatV2(c, tenantCtx.TenantID, 0, c.Query("username"), nil)
 }
 
 // serveLogStatV2 runs the two aggregate queries and writes the response.
 // userID > 0 scopes to that member's rows; userID == 0 is tenant-wide (callers
 // must admin-gate before passing 0). username is the tenant-wide route's
-// optional member filter.
-func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string) {
+// optional member filter. projectIDs != nil restricts every aggregate to those
+// projects (department lead; an empty non-nil slice matches nothing).
+func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string, projectIDs []int) {
 	logType, _ := strconv.Atoi(c.DefaultQuery("type", "0"))
 	modelName := c.Query("model_name")
 	tokenName := c.Query("token_name")
@@ -165,6 +173,7 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 	// (+ user scoped unless tenant-wide).
 	windowQuery := repo.LOG_DB.Model(&repo.Log{}).
 		Where("tenant_id = ?", tenantID)
+	windowQuery = repo.ApplyLogAttributionFilters(windowQuery, projectIDs, "")
 	if userID > 0 {
 		windowQuery = windowQuery.Where("user_id = ?", userID)
 	}
@@ -222,6 +231,7 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 		Where("tenant_id = ?", tenantID).
 		Where("type = ?", repo.LogTypeConsume).
 		Where("created_at >= ?", since)
+	rateQuery = repo.ApplyLogAttributionFilters(rateQuery, projectIDs, "")
 	if userID > 0 {
 		rateQuery = rateQuery.Where("user_id = ?", userID)
 	}
@@ -265,6 +275,7 @@ func serveLogStatV2(c *gin.Context, tenantID string, userID int, username string
 	// repo.GetSpendByProduct.
 	breakdownQuery := repo.LOG_DB.Model(&repo.Log{}).
 		Where("tenant_id = ?", tenantID)
+	breakdownQuery = repo.ApplyLogAttributionFilters(breakdownQuery, projectIDs, "")
 	if userID > 0 {
 		breakdownQuery = breakdownQuery.Where("user_id = ?", userID)
 	}

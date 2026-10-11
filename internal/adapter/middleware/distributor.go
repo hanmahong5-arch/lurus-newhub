@@ -84,6 +84,10 @@ func sessionAffinityRawID(c *gin.Context, m *ModelRequest) string {
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *repo.Channel
+		// Resolve the relay mode once, here, so every selection attempt of
+		// this request (first draw and relay retries) filters by the same
+		// modality requirement.
+		c.Set(string(constant.ContextKeyRelayMode), relayconstant.Path2RelayMode(c.Request.URL.Path))
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
@@ -116,6 +120,21 @@ func Distribute() func(c *gin.Context) {
 				}
 				metrics.RecordTenantModelDenied(tc.TenantID, "observed")
 				common.SysLog("tenant model allow-list would deny model " + modelRequest.Model + " for tenant " + tc.TenantID + " (observe mode)")
+			}
+		}
+		// Tenant-admin self-narrowing (tenantpolicy.SelectionConfigKey): always
+		// enforced (it is the tenant's own explicit choice, so the platform's
+		// observe-first rollout mode does not apply) and ANDed with the
+		// platform list above, so it can only shrink access. Read faults fail
+		// open, same as the platform list.
+		if tc, terr := GetTenantContext(c); terr == nil && tc != nil && tc.TenantID != "" && modelRequest != nil && modelRequest.Model != "" {
+			selected, sconfigured, serr := tenantpolicy.LoadSelection(tc.TenantID)
+			if serr != nil {
+				common.SysLog("tenant model selection read failed for tenant " + tc.TenantID + ", failing open: " + serr.Error())
+			} else if sconfigured && !tenantpolicy.ModelAllowed(selected, modelRequest.Model) {
+				metrics.RecordTenantModelDenied(tc.TenantID, "enforced")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "Model "+modelRequest.Model+" is not allowed for this tenant", string(types.ErrorCodeModelBlocked))
+				return
 			}
 		}
 		if ok {
@@ -180,6 +199,16 @@ func Distribute() func(c *gin.Context) {
 				if _, ok := tokenModelLimit[matchName]; !ok {
 					abortWithOpenAiMessage(c, http.StatusForbidden, "This token is not authorized to access model "+modelRequest.Model, string(types.ErrorCodeModelBlocked))
 					return
+				}
+			}
+
+			// Opt-in decision-model routing (cycle 22, migration 054): one
+			// evaluation per request, after the allow-list and token model limit
+			// passed for the requested model and before channel selection sees
+			// the (possibly rewritten) model. No enabled policy = one map miss.
+			if shouldSelectChannel && modelRequest != nil {
+				if tc, terr := GetTenantContext(c); terr == nil && tc != nil {
+					ApplyDecisionRouting(c, modelRequest, tc.TenantID)
 				}
 			}
 
@@ -264,6 +293,24 @@ func Distribute() func(c *gin.Context) {
 					// below instead — see the 404/503 site further down.
 					message := fmt.Sprintf("failed to select an available channel for model %s in group %s: %s", modelRequest.Model, showGroup, err.Error())
 					common.SysLog("distributor: " + message)
+					// Every candidate cooling after upstream 429s is a "back off"
+					// answer, not a model-not-found: own code, and a Retry-After
+					// the client can honour.
+					if errors.Is(err, app.ErrAllChannelsCooling) {
+						secs := app.CoolingRetryAfterSeconds(err)
+						c.Header("Retry-After", strconv.FormatInt(secs, 10))
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable,
+							fmt.Sprintf("all channels for model %s in group %s are rate-limited upstream; retry in ~%ds", modelRequest.Model, showGroup, secs),
+							string(types.ErrorCodeAllChannelsCooling))
+						return
+					}
+					// Every candidate route is the wrong kind for this request
+					// (modality filter, enforce mode). Not a missing model and
+					// not an outage: 501, nothing was sent upstream.
+					if errors.Is(err, repo.ErrNoChannelSupportsModality) {
+						abortWithModalityMiss(c, modelRequest.Model, err)
+						return
+					}
 					// 如果错误，但是渠道不为空，说明是数据库一致性问题
 					//if channel != nil {
 					//	common.SysError(fmt.Sprintf("渠道不存在：%d", channel.Id))
@@ -590,13 +637,14 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *repo.Channel, model
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	key, index, newAPIError := channel.GetNextEnabledKey()
+	key, index, newAPIError := app.SelectKeyWithAffinity(c.Request.Context(), channel, common.GetContextKeyString(c, constant.ContextKeySessionAffinity))
 	if newAPIError != nil {
 		return newAPIError
 	}
 	if channel.ChannelInfo.IsMultiKey {
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, true)
 		common.SetContextKey(c, constant.ContextKeyChannelMultiKeyIndex, index)
+		applyKeyProxyOverride(c, channel, index)
 	} else {
 		// 必须设置为 false，否则在重试到单个 key 的时候会导致日志显示错误
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, false)
@@ -655,4 +703,34 @@ func extractModelNameFromGeminiPath(path string) string {
 
 	// 返回模型名部分
 	return path[startIndex : startIndex+colonIndex]
+}
+
+// abortWithModalityMiss answers 501 provider_capability_not_supported with a
+// structured error.details so a client can tell "this model cannot do that
+// operation here" from "model not found". The reasons carry causes and counts
+// only: never a channel id, name, upstream URL or key.
+func abortWithModalityMiss(c *gin.Context, model string, err error) {
+	reasons := []gin.H{}
+	var miss *app.ModalityMissError
+	if errors.As(err, &miss) {
+		for _, r := range miss.Reasons() {
+			reasons = append(reasons, gin.H{"code": r.Code, "message": r.Message, "route_count": r.RouteCount})
+		}
+	}
+	message := fmt.Sprintf("model %s has no route that supports this operation", model)
+	if miss != nil {
+		message = fmt.Sprintf("model %s has no route that supports %s requests", model, miss.RelayMode)
+	}
+	apiErr := types.NewErrorWithStatusCode(
+		errors.New(common.MessageWithRequestId(message, c.GetString(common.RequestIdKey))),
+		types.ErrorCodeProviderCapabilityNotSupported,
+		http.StatusNotImplemented,
+	)
+	renderRejection(c, apiErr, gin.H{"details": gin.H{
+		"stage":              "route_selection",
+		"upstream_attempted": false,
+		"reasons":            reasons,
+	}})
+	c.Abort()
+	recordMiddlewareErrorLog(c, http.StatusNotImplemented, message, string(types.ErrorCodeProviderCapabilityNotSupported))
 }

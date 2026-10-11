@@ -155,6 +155,31 @@ new requests using that key return 401 within one cache-sync cycle
 
 ---
 
+### 3.3 Per-account, per-product keys (migration 049, v0.2.0)
+
+Platform issues one key per (platform account, product) instead of per tenant. Same `/internal/v1/provisioning` group, same auth and `provisioning:write` scope as 3.1; the caller's key must also be allowed for the binding's tenant (otherwise `403 TENANT_NOT_AUTHORIZED`). `product` must be on the relay's source-product allow-list (otherwise `400 UNKNOWN_PRODUCT`). The key's `tokens.source_product` is the product, so usage is attributed to it.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/internal/v1/provisioning/accounts/:account_id/keys` | Create (idempotent per account + product) |
+| POST | `/internal/v1/provisioning/accounts/:account_id/keys/rotate` | Rotate: new plaintext key, previous key invalid |
+| DELETE | `/internal/v1/provisioning/accounts/:account_id/keys?product=` | Revoke the live key and release the binding |
+| GET | `/internal/v1/provisioning/accounts/:account_id/keys` | List the account's live keys (masked) |
+
+**Create** body: `{"product": "...", "name"?: "", "tenant_slug"?: "", "quota"?: 0, "models"?: [], "expires_at"?: 0}`. `quota` 0 = unlimited; `models` empty = no limit; `expires_at` Unix seconds, omitted = never; `tenant_slug` omitted = the shared `default` tenant (an account that already has a user stays in its own tenant; a conflicting slug is `409 TENANT_MISMATCH`). Optional `Idempotency-Key` (or `X-Idempotency-Key`, at most 128 characters) header is recorded on the binding.
+
+- `201` first creation: `data` = `{account_id, product, token_id, tenant_id, created_at, name, status, expires_at, unlimited_quota, remain_quota, used_quota, last_used_at, key_masked, key, is_existing:false, warning}`. The plaintext `key` is returned only here.
+- `200` the account already has a live key for this product: same metadata with `is_existing:true` and no plaintext key (rotate to obtain one). A concurrent create on another replica loses to the partial unique index on `account_key_bindings` and gets the winner's metadata the same way, so exactly one key exists.
+- `409 TENANT_SEAT_LIMIT` the tenant has no free seat for the auto-created user.
+
+**Rotate / Revoke** take the product in the `?product=` query or a JSON body `{"product": "..."}`; no live binding for the pair is `404 KEY_NOT_FOUND`. Rotate answers `200` with the metadata plus the new `key`. Revoke answers `200 {"success": true, "message": "Key revoked"}`.
+
+**List** answers `200` with `data = {items: [...], total}` (metadata only, `key_masked`, never the plaintext); bindings of tenants the caller's key may not access are omitted.
+
+Errors common to all four: `400 INVALID_ACCOUNT_ID`, `400 VALIDATION_FAILED`, `401` (auth), `403`. Every write is audited as a system event naming the account, product and calling key.
+
+---
+
 ## 4. Idempotency
 
 The Provisioning API is **best-effort idempotent by `name` within a tenant**:

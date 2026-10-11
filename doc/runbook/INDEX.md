@@ -54,6 +54,14 @@ do).
 | [db-pool-saturation](db-pool-saturation.md) | netdata `newhub_channel_cache_stale` — `lurus_gateway_channel_cache_sync_failed_total{query}` | warning |
 | [metrics-scrape-stale](metrics-scrape-stale.md) | netdata `newhub_metrics_scrape_stale` — `lurus_gateway_instance_info` (`$now - $last_collected_t`, one alarm per pod chart) | warning / critical |
 | [log-retention](log-retention.md) | netdata `newhub_log_retention_backlog` — `lurus_gateway_log_retention_pending_rows{table}` | warning |
+| [channel-pool-monitoring](channel-pool-monitoring.md) | netdata `newhub_channel_error_ratio` — `lurus_channel_error_ratio_5m{channel_id}` | warning / critical |
+| [channel-pool-monitoring](channel-pool-monitoring.md) | netdata `newhub_channel_all_keys_down` — `lurus_channel_state{channel_id}` | critical |
+| [channel-pool-monitoring](channel-pool-monitoring.md) | netdata `newhub_models_unroutable` — `lurus_channel_models_unroutable` | critical |
+| [channel-pool-monitoring](channel-pool-monitoring.md) | netdata `newhub_channel_plan_window_high` — `lurus_channel_plan_window_used_ratio{channel_id,window}` | warning |
+| [channel-pool-monitoring](channel-pool-monitoring.md) | netdata `newhub_channel_plan_expiring` — `lurus_channel_expires_in_seconds{channel_id}` | warning / critical |
+| [channel-pool-monitoring](channel-pool-monitoring.md) | netdata `newhub_content_rejected_surge` — `lurus_content_rejected_total` | warning / critical |
+| [data-pipeline-failures](data-pipeline-failures.md) | netdata `newhub_log_search_sync_failed` — `lurus_log_search_sync_failed_total` | warning / critical |
+| [data-pipeline-failures](data-pipeline-failures.md) | netdata `newhub_nats_publish_failed` — `lurus_nats_publish_failed_total{subject_group}` | warning / critical |
 | [settlement-failed](settlement-failed.md) | netdata `newhub_billing_task_refund_unreversed` — `lurus_billing_task_refund_wallet_unreversed_total` | warning |
 
 | [release-download-gate](release-download-gate.md) | `RELEASE_GATED_PRODUCTS` entitlement gate (mechanism shipped, default OFF) | activation |
@@ -72,6 +80,7 @@ do).
 | [oidc-enable-activation](oidc-enable-activation.md) | Turning `OIDC_ENABLED` on (Lutu search is dark without it) — blast radius across four auth paths, and the order that keeps `/api/v2/admin/**` reachable |
 | [channel-auto-ban](channel-auto-ban.md) | Investigating why a channel flipped status with no operator action, or tuning `ChannelDisableThreshold`/`AutoTestChannelEnabled` |
 | [systemone-channels](systemone-channels.md) | Adding a TypeSafe (Jev) or self-hosted Jev-compatible (Laya) channel for `/v1/systemone`: model mapping, prices, error mapping, laya-serve sizing |
+| [retrieval-metering](retrieval-metering.md) | Retrieval metering (embeddings / rerank): log fields and units, `SearchUnitPrice` pricing, and debugging rerank charges that do not match the vendor bill, `usage_source=estimated` floods, or 502 `invalid_provider_usage` |
 | [platform-dependency-degraded](platform-dependency-degraded.md) | platform-core is down/slow, or any outbound dependency (Redis, NATS, webhook, bark/gotify, SMTP, provider admin calls) is hanging — what each caller does and the time bound it now has |
 | [graceful-drain](graceful-drain.md) | Tuning `GRACEFUL_SHUTDOWN_TIMEOUT`/`terminationGracePeriodSeconds`, or investigating a `graceful shutdown: budget exceeded` log line, a relay stream cut around a deploy window, or a `newhub_relay_5xx_elevated` WARNING that overlaps a rollout |
 | [privacy-erasure](privacy-erasure.md) | PIPL §47 账号擦除级联:六个步骤各处置了什么、`download_logs` 为什么不在级联里(写入时最小化)、以及 cycle-13 之前完成的请求需要一次性重放(O-erasure-backfill,带 SQL 配方与 4-eyes 要求) |

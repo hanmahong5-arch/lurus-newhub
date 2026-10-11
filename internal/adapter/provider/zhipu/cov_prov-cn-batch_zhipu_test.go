@@ -178,8 +178,8 @@ func TestAdaptor_ConvertRerankRequest_NotSupported(t *testing.T) {
 	a := &Adaptor{}
 	c, _ := prov_cn_batch_zhipuGinContext()
 	out, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{})
-	if out != nil || err != nil {
-		t.Errorf("expected (nil, nil) for unsupported rerank, got (%v, %v)", out, err)
+	if out != nil || err == nil {
+		t.Errorf("expected (nil, ErrNotImplemented) for unsupported rerank, got (%v, %v)", out, err)
 	}
 }
 

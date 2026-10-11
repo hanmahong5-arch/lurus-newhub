@@ -274,7 +274,7 @@ func TestGeminiEmbeddingHandler_Success(t *testing.T) {
 	if out.Data[0].Index != 0 || out.Data[1].Index != 1 {
 		t.Errorf("Data indices = [%d,%d], want [0,1]", out.Data[0].Index, out.Data[1].Index)
 	}
-	if len(out.Data[0].Embedding) != 3 || out.Data[0].Embedding[0] != 0.1 {
+	if string(out.Data[0].Embedding) != "[0.1,0.2,0.3]" {
 		t.Errorf("Data[0].Embedding = %v, want [0.1,0.2,0.3]", out.Data[0].Embedding)
 	}
 }

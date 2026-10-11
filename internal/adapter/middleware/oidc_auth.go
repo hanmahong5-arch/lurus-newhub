@@ -72,14 +72,6 @@ var oidcClaimKeys = claimKeySet{
 	Roles:             envOr("OIDC_CLAIM_ROLES", "roles"),
 }
 
-// envOr returns the env value for key, or fallback when unset/empty.
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
-}
-
 // ReloadOIDCClaimKeys re-reads the OIDC_CLAIM_* environment into the package's
 // claim-key set. InitOIDCAuth calls it: the package-level oidcClaimKeys
 // initializer runs at program init, which is BEFORE main() calls
@@ -242,6 +234,12 @@ type TenantContext struct {
 	Email      string   `json:"email"`       // User email
 	Username   string   `json:"username"`    // Username
 	Roles      []string `json:"roles"`       // User roles in this tenant
+	// TenantRole is users.tenant_role of the authenticated user ("", "admin",
+	// "dept_lead"; migration 046) and RoleTenantID the tenant that row belongs to.
+	// Handlers honour TenantRole only when RoleTenantID == TenantID. Unset on
+	// token-authenticated (relay) contexts.
+	TenantRole   string `json:"tenant_role,omitempty"`
+	RoleTenantID string `json:"role_tenant_id,omitempty"`
 }
 
 // JWK represents a JSON Web Key
@@ -813,12 +811,14 @@ func OIDCAuth() gin.HandlerFunc {
 
 		// Create tenant context
 		tenantCtx := &TenantContext{
-			TenantID:   tenantID,
-			UserID:     lurusUserID,
-			IDPSubject: claims.Subject,
-			Email:      claims.Email,
-			Username:   claims.PreferredUsername,
-			Roles:      roles,
+			TenantID:     tenantID,
+			UserID:       lurusUserID,
+			IDPSubject:   claims.Subject,
+			Email:        claims.Email,
+			Username:     claims.PreferredUsername,
+			Roles:        roles,
+			TenantRole:   lurusUser.TenantRole,
+			RoleTenantID: lurusUser.TenantId,
 		}
 
 		// Inject tenant context into Gin context

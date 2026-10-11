@@ -46,7 +46,7 @@ func embeddingResponseMoka2OpenAI(response *dto.EmbeddingResponse) *dto.OpenAIEm
 		openAIEmbeddingResponse.Data = append(openAIEmbeddingResponse.Data, dto.OpenAIEmbeddingResponseItem{
 			Object:    item.Object,
 			Index:     item.Index,
-			Embedding: item.Embedding,
+			Embedding: dto.RawEmbedding(item.Embedding),
 		})
 	}
 	return &openAIEmbeddingResponse

@@ -30,7 +30,7 @@ System One 是「一个 state + 一组类型化问题 → 每题一个概率型�
 2. 网关控制台 → 渠道 → 新建,类型选 **TypeSafe**;base URL 留空用默认;key 填上一步的 key。
 3. 模型填 `jev-latest,jev-preview,jev-1.13.0`,分组按需。`model_mapping` 一般不用填;若要把公开名钉到某个版本,映射成上游版本化 ID。
 4. 价格已有默认,核对模型倍率里三个 `jev-*` 都有;缺倍率的模型请求会在定价阶段报错。
-5. 渠道测试通过后再放量。TypeSafe 限速(文档)100K token/s、40 req/s,且会动态调整;超限返回 429,网关会换渠道或重试。
+5. 渠道测试通过后再放量。TypeSafe 限速(文档)100K token/s、80 req/s(此前写 40 req/s,已按官方文档更正),且会动态调整;超限返回 429,网关会换渠道或重试。上下文窗口 64k token,state 加最长单题须 ≤32k(官方口径,超出由上游拒绝或截断,网关不预检)。官方 SDK 0.6 起 `Score.criteria` 是有序序列;网关 `Criteria` 字段是 `json.RawMessage` 原样透传,不受该变化影响。
 
 ## 3. 起 laya-serve 并加兼容渠道
 
@@ -108,6 +108,9 @@ laya-serve 对**任何未知 model 名都静默回退到按文字脚本自动路
 | 两者 | 429 / 529 / 503 | 上游过载,可重试 | 换渠道/重试;最终仍是限流时透传 `Retry-After`(含 `retry-after-ms` 换算)。laya 的 503 固定 `Retry-After: 1` |
 | 两者 | 其他 5xx(含 Cloudflare 52x 的 HTML 页) | 上游故障 | 重试,计入熔断失败 |
 | laya | 200 + `usage.truncated=true` | 不是错误 | 原样返回 `truncated: true`,调用方自行判断 |
+| 两者 | 200 但响应自相矛盾(**响应校验失败**) | **上游内容缺陷**,不是渠道配置问题 | 返回 502 `invalid_provider_response`;**不切渠道**(skip-retry,错误码不带 `channel:` 前缀,不会自动封禁渠道;换渠道只会让调用方为同一个坏答案付两次钱);上游 `usage` 有效时**仍按输入 token 计费**(推理已发生),无有效 usage 则不计费;答案正文不透给调用方 |
+
+与上表 401/403 的区别:401/403 是**渠道凭据/地址故障**,换渠道并可能自动封禁;响应校验失败是**这一次答案不可信**,不换渠道、不封禁,但仍计费。校验规则(`provider/systemone/validate.go`):概率和 1±0.01;choice 所选概率 ≥ 最大值−0.01(choice 为 null 表示弃权,合法);score 与 Σ序号×概率 的偏差 ≤ 0.01×(N−1);score 的 legend 必须与请求 criteria 逐级一致;回答的问题 ID / 类型必须与请求一致(请求中有而响应缺失的问题不判错)。`x-typesafe-request-id` 只写入日志的 upstream_request_id 槽位,不透给调用方。
 
 排障顺序:调用方报 503「无可用渠道」→ 先看各 System One 渠道是否被熔断/自动封禁(`channel-breaker-open.md`、`channel-auto-ban.md`)→ 再直连上游验证(laya:`curl -H "Authorization: Bearer $LAYA_API_KEY" -d '{...}' $BASE/v1/systemone`;注意 401 = key 不一致)。
 
@@ -140,3 +143,102 @@ curl https://hub.lurus.cn/v1/systemone \
 换成自托管只改 `model`(如 `laya-multilingual`);自托管渠道另外接受可选的 `lang`、`min_confidence`、`max_len`、`head_max_len`,发给 TypeSafe 渠道时这四个字段会被丢弃。批量/钩子字段会被网关拒绝。
 
 响应头 `X-Request-Id` 可配合 `GET /v1/generation?id=<值>` 反查费用与用量。
+
+## 7. 内容规则覆盖 systemone
+
+租户/平台的内容规则(mask / reject,`doc/runbook` 里数据管控相关文档)对 `/v1/systemone` 与对话类接口一样生效,在请求解析前改写网关缓存的原始 body,所以托管与自托管两种渠道转发出去的都是处理后的字节。
+
+覆盖的文本(全部按 `user` 角色匹配,`role_scope` 为 `user` 或 `any` 的规则命中):
+
+- `state`:字符串;若调用方传对象/数组,则其中所有字符串值逐个处理(键名与数字不动)。
+- 每题 `instructions` 与 `criteria`:字符串直接处理;数组/对象则递归处理其中的字符串值。
+
+不处理:`type`、`labels`、`option_order`、`model`、`lang` 等其余字段与未知字段,原样转发;JSON 键顺序不变。
+
+行为与其他格式一致:
+
+| 模式 | 结果 |
+|---|---|
+| enforce + mask | 上游收到的 body 里命中片段被替换为占位符(如 `[PHONE]`) |
+| enforce + reject | 返回 400 `content_rejected`,消息只含规则 ID,不含命中文本 |
+| observe | 只计数与审计(`content_rule_hit`),body 不改 |
+| body 非合法 JSON / 形状不符 | 不处理,交给正常解析路径报错;规则库读取失败时放行并记系统日志 |
+
+注意:mask 会改变送入上游的文本,`usage.input_tokens` 按改写后的内容由上游计量;题目 id(`questions` 的键)不扫描,不要把敏感信息放在题目 id 里。
+
+## 8. 决策模型路由(按请求内容自动选模型)
+
+租户管理员可以给一个「对外模型名」配一条决策路由策略:请求到来时,网关先让一个评估模型(System One 类型模型,例如 `laya-auto`)读用户的第一句话,在管理员写好的候选里挑一个,再把请求的 `model` 改写成候选对应的真实模型。没有策略的租户行为与今天字节一致(代码入口 `internal/adapter/middleware/decision_routing.go` `ApplyDecisionRouting`,无策略时只做一次内存查表就返回)。
+
+### 8.1 怎么配
+
+`GET|PUT|DELETE /api/v2/{tenant_slug}/routing-policies/{model}`(租户管理员;契约见 `docs/openapi/api-v2.yaml` 的 `RoutingPolicyRequest`)。`PUT` 是整份覆盖,写入前整体校验,任何一项不合法则什么都不写:
+
+| 字段 | 规则 |
+|---|---|
+| `enabled` | 启用必须同时给出 `evaluator_model`(否则 400 `EVALUATOR_REQUIRED`) |
+| `evaluator_model` | 评估模型名,至多 128 字节 |
+| `instructions` | 给评估模型的说明,至多 4096 字节;不写则用内置默认说明 |
+| `min_confidence` | 取值 [0, 1];不写取 0.65 |
+| `default_candidate` | 候选 id 之一;对外模型名本身不在候选里时必填 |
+| `candidates[]` | 1–32 项,每项 `id`(1–64 字符,字母数字与 `_ . -`,不重复)、`model`(租户能路由的公开模型)、`criteria`(必填,至多 2048 字节) |
+
+校验失败返回 400 与 `error_code`(`INVALID_CANDIDATES`、`MODEL_NOT_ROUTABLE`、`CRITERIA_TOO_LONG` 等,全集见 `internal/app/routingdecision/policy.go`)。写入与删除分别记审计 `routing.policy_set` / `routing.policy_deleted`;审计详情只记变更的形状,不记 `instructions` 原文。
+
+```bash
+curl -X PUT https://hub.lurus.cn/api/v2/~/routing-policies/auto-chat \
+  -H "Authorization: Bearer <access token>" -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "evaluator_model": "laya-auto",
+    "min_confidence": 0.7,
+    "default_candidate": "general",
+    "candidates": [
+      {"id": "general", "model": "model-a", "criteria": "Everyday questions and short answers."},
+      {"id": "heavy",   "model": "model-b", "criteria": "Long analysis, code generation, multi-step reasoning."}
+    ]
+  }'
+```
+
+### 8.2 评估模型放哪
+
+评估模型就是一个普通的 System One 渠道上的模型(本文 §2、§3),和被路由的模型一样按租户、权重、冷却选渠道。因此评估模型**可以是自托管的 laya,也可以部署在境外**:只要对应渠道的 base URL 从网关出站可达即可,策略里只写模型名,不关心它在哪。评估调用不经过 relay 处理器,所以单独计费、单独记日志,也不可能递归触发决策路由。评估按评估模型自己的价格结算(仅输入 token);评估模型没有定价时评估记 0 额度但仍写日志行,不会因此拒绝业务请求。
+
+### 8.3 超时、并发与回落
+
+- 超时:`ROUTING_DECISION_TIMEOUT_MS`,默认 1000 毫秒,取值 1–60000,非法值回落默认。调用方挂断会同时取消评估。
+- 并发:进程内同时最多 8 个评估,**不排队**;满了的请求直接走默认路由(原因 `evaluator_unavailable`,审计里 `error_kind=busy`)。
+- 回落原则:路由是锦上添花,任何失败都不让业务请求失败。评估超时、无可用评估渠道、评估模型答了没提供的选项、改写 body 失败、评估代码 panic,全部落到默认候选(`default_candidate`,没有则用对外模型名本身)。
+- 只处理 `/v1/chat/completions` 与 `/v1/responses` 的**首轮纯文本**请求;多轮(`not_first_turn`)、带 tools、带 `previous_response_id`、会话亲和、推理参数、`metadata` 钉渠道或审计字段、无用户文本、非文本内容一律不评估(`ineligible`)。其他路径静默跳过,既无响应头也无指标。发给评估模型的用户文本上限 8192 字节。
+- 改写目标必须是调用方本来就能直接请求的模型:令牌的模型限制、平台允许列表(enforce 模式)、租户自选清单都会对每个候选重新过一遍;过滤后只剩 1 个候选则直接路由、不付评估费(`single_candidate`)。
+
+### 8.4 响应头与原因取值
+
+命中策略的请求会带两个响应头;无策略的请求没有这两个头。
+
+| 头 | 取值 |
+|---|---|
+| `X-Routed-Model` | 最终实际使用的模型名(未改写时等于请求的模型) |
+| `X-Routing-Reason` | `decision:<reason>` |
+
+`<reason>` 的全集(`internal/app/routingdecision/decide.go`,与指标标签一致):
+
+| reason | 含义 |
+|---|---|
+| `applied` | 评估模型选中某候选且置信度 ≥ `min_confidence`,已改写 |
+| `low_confidence` | 选中了但置信度不够,走默认候选 |
+| `no_preference` | 评估模型明确回答「都不合适」,走默认候选 |
+| `evaluator_unavailable` | 评估失败(超时/忙/无渠道/答非所问/改写失败),走默认候选 |
+| `ineligible` | 请求不符合 §8.3 的资格条件,原样转发 |
+| `single_candidate` | 过滤后只剩一个候选,直接路由 |
+
+同样三项事实(请求的模型、最终模型、原因)也写进该请求消费日志的 `other.routed`。
+
+### 8.5 审计与指标
+
+- 审计 `routing.decision`(资源 `routing_policy`):每个**实际调用过评估模型**的请求写一条,详情含 `reason`、`requested_model`、`routed_model`、`candidate_id`、`choice`、`confidence`、`min_confidence`、概率分布、`evaluator_model`、评估输入/输出 token、`latency_ms`、`error_kind`(`busy|no_channel|timeout|invalid_choice|failed`)。**不含用户文本**。`ineligible` 与 `single_candidate` 量大且无评估,不审计,只有响应头与指标。
+- 指标:`lurus_routing_decision_total{reason}`(命中策略的请求数,六个 reason 预注册为 0,可区分「没路由过」与「没接上」);`lurus_routing_decision_latency_seconds`(评估给请求增加的耗时直方图,仅实际调用评估的请求计入)。无策略的请求不计数。
+
+### 8.6 与 §5 响应校验的衔接
+
+评估走的是同一条 System One 通道,§5 的响应校验同样适用:评估模型返回自相矛盾的答案(概率和不为 1 等)会被判为 `invalid_provider_response`,此时路由层不会把错误抛给调用方,而是按 §8.3 落到默认候选(原因 `evaluator_unavailable`)。这类失败在审计里表现为 `error_kind=failed`;要定位是评估模型本身变坏还是渠道配置问题,先看 `routing.decision` 审计与 `lurus_routing_decision_total{reason="evaluator_unavailable"}` 的增速,再按 §5 的排障顺序直连评估渠道验证。

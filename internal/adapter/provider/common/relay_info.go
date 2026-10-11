@@ -1,7 +1,6 @@
 package common
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -89,14 +88,20 @@ const (
 )
 
 type RelayInfo struct {
-	TokenId           int
-	TokenKey          string
-	TokenGroup        string
-	UserId            int
-	UsingGroup        string // 使用的分组，当auto跨分组重试时，会变动
-	UserGroup         string // 用户所在分组
-	TokenUnlimited    bool
-	StartTime         time.Time
+	TokenId        int
+	TokenKey       string
+	TokenGroup     string
+	UserId         int
+	UsingGroup     string // 使用的分组，当auto跨分组重试时，会变动
+	UserGroup      string // 用户所在分组
+	TokenUnlimited bool
+	StartTime      time.Time
+	// UsageSource records where the settled usage figure came from when a
+	// response handler knows it better than the settlement code does:
+	// "upstream" | "estimated" | "unreported". "" = let settlement decide
+	// (nil usage -> estimated, otherwise upstream). Written to
+	// logs.usage_source (migration 053).
+	UsageSource       string
 	FirstResponseTime time.Time
 	isFirstResponse   bool
 	//SendLastReasoningResponse bool
@@ -118,7 +123,12 @@ type RelayInfo struct {
 	// SourceProduct above: the settlement path (PostConsumeQuota ->
 	// EnrichLogParams -> RecordConsumeLog) has no gin.Context to read from.
 	// It is a label, never an authorization input.
-	ProjectId        int
+	ProjectId int
+	// EmployeeRef is the resolved employee attribution (migration 045):
+	// trusted X-Lurus-Employee header, else the token's employee_ref. Carried
+	// here for the same reason as ProjectId. A label, never an authorization
+	// input.
+	EmployeeRef      string
 	WalletChargeCNY4 int64 // wallet charge PostConsumeQuota committed to, 0.0001 CNY (-> entity.Log.ChargedCNY4)
 	// SessionId is the caller-supplied X-Session-Id header, validated
 	// (printable ASCII, <=200 bytes) but never hashed: unlike EndUserHash it
@@ -201,7 +211,7 @@ type RelayInfo struct {
 	// degraded-cache admit). LOCAL_LEDGER_ADVISORY only relaxes the local
 	// quota gate for governed requests; unlinked/legacy traffic keeps the full
 	// local gate so advisory mode can never open a free-ride door.
-	PlatformGoverned bool
+	PlatformGoverned, WalletAuthoritative bool // latter: set by PreConsumeQuota from tenants.wallet_authoritative, reused by PostConsumeQuota
 
 	PriceData types.PriceData
 
@@ -506,55 +516,6 @@ func GenRelayInfoOpenAI(c *gin.Context, request dto.Request) *RelayInfo {
 	return info
 }
 
-// deriveSessionId reads X-Session-Id and bounds what it may contain: bytes
-// must be printable ASCII (0x20-0x7E) and the value at most 200 bytes.
-// Anything outside that comes back "" — the field is descriptive metadata on
-// the log row, not a trust boundary, but it must not carry control
-// characters or an unbounded blob into JSON/log rendering.
-func deriveSessionId(c *gin.Context) string {
-	raw := strings.TrimSpace(c.GetHeader("X-Session-Id"))
-	if raw == "" || len(raw) > 200 {
-		return ""
-	}
-	for i := 0; i < len(raw); i++ {
-		if raw[i] < 0x20 || raw[i] > 0x7E {
-			return ""
-		}
-	}
-	return raw
-}
-
-// deriveEndUserHash extracts the caller's own end-user identifier from the
-// request body — OpenAI's `user` field or Anthropic-wire `metadata.user_id`
-// — and returns a tenant-scoped, non-reversible hash of it. The raw value is
-// never returned or stored anywhere; "" when the request carries no such
-// field.
-func deriveEndUserHash(c *gin.Context, tenantID string, request dto.Request) string {
-	var raw string
-	switch r := request.(type) {
-	case *dto.GeneralOpenAIRequest:
-		raw = r.User
-	case *dto.OpenAIResponsesRequest:
-		raw = r.User
-	case *dto.ClaudeRequest:
-		if len(r.Metadata) > 0 {
-			var meta dto.ClaudeMetadata
-			if err := json.Unmarshal(r.Metadata, &meta); err == nil {
-				raw = meta.UserId
-			}
-		}
-	}
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	hash := common.GenerateHMAC("end_user|" + tenantID + "|" + raw)
-	if len(hash) > 16 {
-		hash = hash[:16]
-	}
-	return hash
-}
-
 func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 	//channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
@@ -603,11 +564,12 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		TokenUnlimited: common.GetContextKeyBool(c, constant.ContextKeyTokenUnlimited),
 		TokenGroup:     tokenGroup,
 		ProjectId:      common.GetContextKeyInt(c, constant.ContextKeyProjectId),
+		EmployeeRef:    common.GetContextKeyString(c, constant.ContextKeyEmployeeRef),
 		// Workstream 0: resolve the cross-product attribution tag here, once,
 		// so every GenRelayInfo* entry point carries it — including MJ/Task,
 		// which build RelayInfo directly and never pass through Relay().
 		// Unknown/absent header -> the default product id.
-		SourceProduct: ratio_setting.ResolveSourceProduct(c.GetHeader(ratio_setting.SourceProductHeader)),
+		SourceProduct: ratio_setting.ResolveSourceProductWithDefault(c.GetHeader(ratio_setting.SourceProductHeader), common.GetContextKeyString(c, constant.ContextKeyTokenSourceProduct)),
 		// L2-REQUEST-IDENTITY: request-scoped identity carried the same way
 		// SourceProduct is — resolved once here so every entry point
 		// (including MJ/Task, which build RelayInfo directly) has it.
@@ -715,92 +677,6 @@ type TaskRelayInfo struct {
 	OriginTaskID string
 
 	ConsumeQuota bool
-}
-
-type TaskSubmitReq struct {
-	Prompt         string                 `json:"prompt"`
-	Model          string                 `json:"model,omitempty"`
-	Mode           string                 `json:"mode,omitempty"`
-	Image          string                 `json:"image,omitempty"`
-	Images         []string               `json:"images,omitempty"`
-	Size           string                 `json:"size,omitempty"`
-	Duration       int                    `json:"duration,omitempty"`
-	Seconds        string                 `json:"seconds,omitempty"`
-	InputReference string                 `json:"input_reference,omitempty"`
-	Metadata       map[string]interface{} `json:"metadata,omitempty"`
-}
-
-func (t *TaskSubmitReq) GetPrompt() string {
-	return t.Prompt
-}
-
-func (t *TaskSubmitReq) HasImage() bool {
-	return len(t.Images) > 0
-}
-
-func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
-	type Alias TaskSubmitReq
-	aux := &struct {
-		Metadata json.RawMessage `json:"metadata,omitempty"`
-		*Alias
-	}{
-		Alias: (*Alias)(t),
-	}
-
-	if err := common.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-
-	if len(aux.Metadata) > 0 {
-		var metadataStr string
-		if err := common.Unmarshal(aux.Metadata, &metadataStr); err == nil && metadataStr != "" {
-			var metadataObj map[string]interface{}
-			if err := common.Unmarshal([]byte(metadataStr), &metadataObj); err == nil {
-				t.Metadata = metadataObj
-				return nil
-			}
-		}
-
-		var metadataObj map[string]interface{}
-		if err := common.Unmarshal(aux.Metadata, &metadataObj); err == nil {
-			t.Metadata = metadataObj
-		}
-	}
-
-	return nil
-}
-func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
-	metadata := t.Metadata
-	if metadata != nil {
-		metadataBytes, err := json.Marshal(metadata)
-		if err != nil {
-			return fmt.Errorf("marshal metadata failed: %w", err)
-		}
-		err = json.Unmarshal(metadataBytes, v)
-		if err != nil {
-			return fmt.Errorf("unmarshal metadata to target failed: %w", err)
-		}
-	}
-	return nil
-}
-
-type TaskInfo struct {
-	Code             int    `json:"code"`
-	TaskID           string `json:"task_id"`
-	Status           string `json:"status"`
-	Reason           string `json:"reason,omitempty"`
-	Url              string `json:"url,omitempty"`
-	RemoteUrl        string `json:"remote_url,omitempty"`
-	Progress         string `json:"progress,omitempty"`
-	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
-	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
-}
-
-func FailTaskInfo(reason string) *TaskInfo {
-	return &TaskInfo{
-		Status: "FAILURE",
-		Reason: reason,
-	}
 }
 
 // RemoveDisabledFields 从请求 JSON 数据中移除渠道设置中禁用的字段

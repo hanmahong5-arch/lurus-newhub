@@ -7,6 +7,14 @@ const (
 	ContextKeyPromptTokens    ContextKey = "prompt_tokens"
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"
 
+	// ContextKeyRelayMode is the request's relay mode (provider/constant
+	// RelayMode*) resolved ONCE from the URL path at the distributor entry, for
+	// the modality route filter. It is deliberately NOT the bare "relay_mode"
+	// key: that slot is written later by the mj/video/audio branches and read
+	// by RelayInfo and the error log, and pre-filling it here would change
+	// what those readers see (e.g. the video branch's "only if unset" check).
+	ContextKeyRelayMode ContextKey = "routing_relay_mode"
+
 	ContextKeyOriginalModel    ContextKey = "original_model"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
 
@@ -29,6 +37,13 @@ const (
 	// copied into RelayInfo.ProjectId, because the settlement path has no
 	// gin.Context. A label, not an authorization claim — never gate on it.
 	ContextKeyProjectId ContextKey = "project_id"
+	// ContextKeyEmployeeRef carries the resolved employee attribution
+	// (migration 045): a validated trusted X-Lurus-Employee header, else the
+	// token's employee_ref, else "". A label, never an authorization claim.
+	ContextKeyEmployeeRef ContextKey = "employee_ref"
+	// ContextKeyTokenSourceProduct carries the product the authenticated token is
+	// bound to (migration 049); the relay default when no allow-listed header.
+	ContextKeyTokenSourceProduct ContextKey = "token_source_product"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"
@@ -88,4 +103,11 @@ const (
 	// app.CacheGetRandomSatisfiedChannel on every attempt, including the
 	// session-affinity lookup. Absent when the request sent no constraint.
 	ContextKeyProviderFilter ContextKey = "provider_filter"
+
+	// ContextKeyResponseText carries the final assistant text of a NON-streaming
+	// response (string), stashed by the provider handler that already parsed it.
+	// Read only by the opt-in body archive (repo.archiveLogBody); absent for
+	// streams and for handlers that do not stash, which the archive records as
+	// response_captured=false.
+	ContextKeyResponseText ContextKey = "response_text"
 )

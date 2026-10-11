@@ -97,6 +97,9 @@ func rebuildChannelCache() error {
 		common.SysError("channel cache rebuild: LoadAutoDisabledModelPairs failed, routing as if none were auto-disabled: " + err.Error())
 		autoDisabledPairs = map[int]map[string]bool{}
 	}
+	// Administrator modality overrides ride the same rebuild so the route
+	// filter reads them from memory. Fail-open like the pair map above.
+	newModalityOverrides := loadModalityOverrides(DB)
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
@@ -155,6 +158,8 @@ func rebuildChannelCache() error {
 	// acquiring the pair in the other order here would invert the ordering.
 	// Nothing below holds two of these locks at once.
 	carriedPollingIndex := carryOverPollingIndices()
+
+	modalityOverrides.Store(&newModalityOverrides)
 
 	channelSyncLock.Lock()
 	group2model2channels = newGroup2model2channels
@@ -319,6 +324,16 @@ type ChannelPredicate func(*Channel) bool
 // that the model does not exist rather than that no channel is in their
 // region. app.CacheGetRandomSatisfiedChannel wraps it with the filter text.
 var ErrNoChannelSatisfiesPredicate = errors.New("no channel satisfies provider filter")
+
+// ErrNoChannelSupportsModality is the independent sentinel for "(tenant, group,
+// model) had candidates but every one is the wrong kind of route for this
+// request" (an embeddings call whose only channel is a decision channel). It
+// is deliberately NOT wrapped in ErrNoChannelSatisfiesPredicate: the
+// distributor answers it with 501 provider_capability_not_supported, whereas a
+// provider-filter miss keeps its own wording. The repo itself only reports the
+// generic predicate miss; internal/app maps it onto this sentinel because only
+// app knows which predicate did the rejecting.
+var ErrNoChannelSupportsModality = errors.New("no channel supports the requested modality")
 
 // GetRandomSatisfiedChannelWhere is GetRandomSatisfiedChannelForTenant with an
 // optional predicate (L8: request-side region / zero-data-retention filter).
@@ -486,13 +501,15 @@ func filterChannelsWhere(ids []int, pred ChannelPredicate) []int {
 // draws inside SQL result order and only loads the winner). Same ability
 // query, same weight+10 draw, but every candidate channel is loaded first so
 // the predicate can reject before the draw rather than after it.
+//
+// Like the memory path, the predicate runs BEFORE priority bucketing: retry
+// indexes the priority tiers that still have an accepted channel, so a fully
+// cooling top tier falls through to the next tier instead of failing the
+// request while healthy lower-tier channels exist.
 func getChannelForTenantWhere(group string, model string, retry int, tenantID string, pred ChannelPredicate) (*Channel, error) {
-	channelQuery, err := getChannelQuery(group, model, retry, tenantID)
-	if err != nil {
-		return nil, err
-	}
+	cond, args := abilityBaseCondition(group, model, tenantID)
 	var abilities []Ability
-	if err := channelQuery.Order("weight DESC").Find(&abilities).Error; err != nil {
+	if err := DB.Where(cond, args...).Order("weight DESC").Find(&abilities).Error; err != nil {
 		return nil, err
 	}
 	if len(abilities) == 0 {
@@ -510,16 +527,41 @@ func getChannelForTenantWhere(group string, model string, retry int, tenantID st
 	for i := range rows {
 		byID[rows[i].Id] = &rows[i]
 	}
-	var candidates []Ability
-	weightSum := 0
+	abilityPriority := func(a Ability) int64 {
+		if a.Priority == nil {
+			return 0
+		}
+		return *a.Priority
+	}
+	var accepted []Ability
+	tiers := map[int64]bool{}
 	for _, a := range abilities {
 		if ch, ok := byID[a.ChannelId]; ok && pred(ch) {
+			accepted = append(accepted, a)
+			tiers[abilityPriority(a)] = true
+		}
+	}
+	if len(accepted) == 0 {
+		return nil, ErrNoChannelSatisfiesPredicate
+	}
+	sortedTiers := make([]int64, 0, len(tiers))
+	for p := range tiers {
+		sortedTiers = append(sortedTiers, p)
+	}
+	sort.Slice(sortedTiers, func(i, j int) bool { return sortedTiers[i] > sortedTiers[j] })
+	if retry < 0 {
+		retry = 0
+	}
+	if retry >= len(sortedTiers) {
+		retry = len(sortedTiers) - 1
+	}
+	var candidates []Ability
+	weightSum := 0
+	for _, a := range accepted {
+		if abilityPriority(a) == sortedTiers[retry] {
 			candidates = append(candidates, a)
 			weightSum += int(a.Weight) + 10
 		}
-	}
-	if len(candidates) == 0 {
-		return nil, ErrNoChannelSatisfiesPredicate
 	}
 	weight := common.GetRandomInt(weightSum)
 	for _, a := range candidates {

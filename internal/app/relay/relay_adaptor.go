@@ -30,6 +30,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/siliconflow"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/submodel"
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/systemone"
+	"github.com/LurusTech/lurus-hub/internal/adapter/provider/voyage"
 	taskali "github.com/LurusTech/lurus-hub/internal/adapter/provider/task/ali"
 	taskdoubao "github.com/LurusTech/lurus-hub/internal/adapter/provider/task/doubao"
 	taskGemini "github.com/LurusTech/lurus-hub/internal/adapter/provider/task/gemini"
@@ -121,6 +122,8 @@ func GetAdaptor(apiType int) provider.Adaptor {
 		return &replicate.Adaptor{}
 	case constant.APITypeSystemOne:
 		return &systemone.Adaptor{}
+	case constant.APITypeVoyage:
+		return &voyage.Adaptor{}
 	}
 	return nil
 }

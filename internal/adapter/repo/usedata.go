@@ -8,6 +8,7 @@ import (
 
 	entity "github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+	"github.com/LurusTech/lurus-hub/internal/pkg/metrics"
 	"gorm.io/gorm"
 )
 
@@ -140,6 +141,7 @@ func writeQuotaDataSnapshot(ctx context.Context, snapshot map[string]*QuotaData)
 		if quotaDataDB.Id > 0 {
 			if err := increaseQuotaData(ctx, quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.Count, quotaData.Quota, quotaData.CreatedAt, quotaData.TokenUsed); err != nil {
 				failed++
+				metrics.QuotaDataWriteFailedTotal.Inc()
 			}
 		} else {
 			// Cross-replica half of the PIPL erasure scrub (cycle-13 L5
@@ -159,6 +161,7 @@ func writeQuotaDataSnapshot(ctx context.Context, snapshot map[string]*QuotaData)
 			}
 			if err := DB.WithContext(ctx).Table("quota_data").Create(row).Error; err != nil {
 				failed++
+				metrics.QuotaDataWriteFailedTotal.Inc()
 				common.SysError(fmt.Sprintf("saveQuotaData create error: %s", err))
 			}
 		}

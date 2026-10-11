@@ -21,9 +21,12 @@ import {
 import {
   CallableBadge,
   CapabilityLabel,
+  ModalityLabel,
   OutputPriceValue,
   PriceLine,
   PriceValue,
+  SearchUnitPriceValue,
+  UsageUnitLabel,
 } from './price';
 import { usePriceFormatter } from './price-format';
 import { VendorIcon } from './vendor-icon';
@@ -130,6 +133,8 @@ export function ModelTable(props: {
           <TableRow>
             <TableHead>{t('Model')}</TableHead>
             <TableHead>{t('Vendor')}</TableHead>
+            <TableHead>{t('Modality')}</TableHead>
+            <TableHead>{t('Billing unit')}</TableHead>
             <TableHead>{t('Input /M')}</TableHead>
             <TableHead>{t('Output /M')}</TableHead>
             <TableHead>{t('Cache read /M')}</TableHead>
@@ -143,7 +148,9 @@ export function ModelTable(props: {
           {props.entries.map((e) => {
             const perCall = e.quotaType === 1;
             let priceCell: ReactNode;
-            if (!perCall) priceCell = <PriceValue value={e.inputPerM} />;
+            if (e.usageUnit === 'search_unit') {
+              priceCell = <SearchUnitPriceValue value={e.searchUnitPrice} />;
+            } else if (!perCall) priceCell = <PriceValue value={e.inputPerM} />;
             else if (hasPrice(e)) {
               priceCell = `${fmt(e.perCall)} ${t('per call')}`;
             } else priceCell = <PriceValue value={e.perCall} />;
@@ -162,6 +169,12 @@ export function ModelTable(props: {
                 </TableCell>
                 <TableCell className='text-muted-foreground'>
                   {e.vendor || '--'}
+                </TableCell>
+                <TableCell data-testid={`model-modality-${e.id}`}>
+                  <ModalityLabel modality={e.modality} />
+                </TableCell>
+                <TableCell data-testid={`model-unit-${e.id}`}>
+                  <UsageUnitLabel entry={e} />
                 </TableCell>
                 <TableCell className='font-mono'>{priceCell}</TableCell>
                 <TableCell className='font-mono'>

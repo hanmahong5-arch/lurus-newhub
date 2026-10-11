@@ -56,6 +56,14 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	if relayInfo.ReasoningEffort != "" {
 		other["reasoning_effort"] = relayInfo.ReasoningEffort
 	}
+	// Decision-model routing (middleware.ApplyDecisionRouting) leaves
+	// {requested, model, reason} under "routing_decision" only when a policy
+	// matched; a direct request has no key and no other.routed.
+	if ctx != nil {
+		if v, ok := ctx.Get("routing_decision"); ok && v != nil {
+			other["routed"] = v
+		}
+	}
 	if relayInfo.IsModelMapped {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = relayInfo.UpstreamModelName

@@ -20,10 +20,14 @@ type EmbeddingOptions struct {
 }
 
 type EmbeddingRequest struct {
-	Model            string   `json:"model"`
-	Input            any      `json:"input"`
-	EncodingFormat   string   `json:"encoding_format,omitempty"`
-	Dimensions       int      `json:"dimensions,omitempty"`
+	Model          string `json:"model"`
+	Input          any    `json:"input"`
+	EncodingFormat string `json:"encoding_format,omitempty"`
+	Dimensions     int    `json:"dimensions,omitempty"`
+	// InputType (query/document hints) and Task are mutually exclusive
+	// retrieval hints; only adaptors that forward them accept them.
+	InputType        string   `json:"input_type,omitempty"`
+	Task             string   `json:"task,omitempty"`
 	User             string   `json:"user,omitempty"`
 	Seed             float64  `json:"seed,omitempty"`
 	Temperature      *float64 `json:"temperature,omitempty"`

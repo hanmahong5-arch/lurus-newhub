@@ -33,4 +33,7 @@ type Model struct {
 	NameRule      int            `json:"name_rule" gorm:"default:0"`
 	MatchedModels []string       `json:"matched_models,omitempty" gorm:"-"`
 	MatchedCount  int            `json:"matched_count,omitempty" gorm:"-"`
+	// Modality is the administrator override of the inferred modality (see
+	// internal/pkg/capability). "" defers to inference (migration 053).
+	Modality string `json:"modality" gorm:"type:varchar(16);not null;default:''"`
 }

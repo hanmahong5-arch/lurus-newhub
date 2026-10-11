@@ -116,6 +116,7 @@ export const CHANNEL_OPTIONS = [
   { value: 35, color: 'green', label: 'MiniMax' },
   { value: 37, color: 'teal', label: 'Dify' },
   { value: 38, color: 'blue', label: 'Jina' },
+  { value: 59, color: 'teal', label: 'Voyage' },
   { value: 40, color: 'purple', label: 'SiliconCloud' },
   { value: 42, color: 'blue', label: 'Mistral AI' },
   { value: 8, color: 'pink', label: '自定义渠道' },

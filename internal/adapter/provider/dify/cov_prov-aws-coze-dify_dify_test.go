@@ -142,8 +142,8 @@ func TestAdaptor_ConvertRerankRequest_AlwaysNilNil(t *testing.T) {
 	a := &Adaptor{}
 	c, _ := prov_aws_coze_dify_dify_newTestContext()
 	got, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{})
-	if got != nil || err != nil {
-		t.Errorf("got (%v, %v), want (nil, nil): Dify has no native rerank support", got, err)
+	if got != nil || err == nil {
+		t.Errorf("got (%v, %v), want (nil, ErrNotImplemented): Dify has no native rerank support", got, err)
 	}
 }
 

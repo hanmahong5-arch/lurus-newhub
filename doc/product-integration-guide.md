@@ -89,6 +89,28 @@ curl https://hub.lurus.cn/v1/key -H "Authorization: Bearer sk-xxxxxxxxxxxx"
 # 用 sk- key 调用会得到 200 + {"success":false,"message":"...access token 无效"} —— 一个 200 形状的失败,不要在自动化里只看状态码
 ```
 
+## platform 按账号开 key
+
+platform(Lugo)为每个账号、每个产品在 newhub 幂等地开一把 key,替代 newapi_sync。接口走内部 API:`X-API-Key: lurus_ik_…`,需要 `provisioning` scope;非 `*` 的窄权限 key 还需在 `internal_api_key_tenants` 登记目标租户(未登记返回 403)。
+
+| 方法与路径 | 作用 |
+|------------|------|
+| `POST /internal/v1/provisioning/accounts/:account_id/keys` | 创建(幂等) |
+| `POST /internal/v1/provisioning/accounts/:account_id/keys/rotate` | 轮换,旧 key 立即失效 |
+| `DELETE /internal/v1/provisioning/accounts/:account_id/keys?product=` | 吊销 |
+| `GET /internal/v1/provisioning/accounts/:account_id/keys` | 列出该账号各产品的 key 元数据 |
+
+创建请求体:`{"product": "lutu", "name"?, "tenant_slug"?, "quota"?, "models"?, "expires_at"?}`,可带头 `Idempotency-Key`。
+
+- `product` 必须在 newhub 的产品白名单内(与 `X-Lurus-Product` 同一份),否则 400 `UNKNOWN_PRODUCT`。
+- 同一 `(account_id, product)` 只会有一把未删除的 key(PG 部分唯一索引兜底)。重复创建、相同或不同的 `Idempotency-Key`、并发创建,都返回同一把 key 的元数据(HTTP 200,`is_existing=true`);明文 `key` 只在首次创建(201)返回一次,之后只有 `key_masked`,需要新明文请调 rotate。
+- 首次创建时若该账号在 newhub 还没有用户,会按 `tenant_slug`(缺省 `default`)自动建一个并绑定 `lurus_account_id`;已有用户则沿用其租户,`tenant_slug` 与之不符返回 409。租户席位已满返回 409 `TENANT_SEAT_LIMIT`。
+- key 绑定 `identity_account_id`,走平台钱包计费;`quota` 缺省或 0 表示不限(以钱包余额为准),大于 0 则给这把 key 加额度上限;`models` 非空则启用模型白名单。
+- 产品归因:key 记录了所属 product。调用方不带 `X-Lurus-Product` 时,日志的 `source_product` 与钱包扣费的 product_id 都取该 key 绑定的产品;带头时仍可覆盖,但只接受白名单内的值(白名单外的值被忽略并回落到绑定产品,不会变成全局默认)。
+- 吊销后该 key 立即 401,绑定释放,同一 `(account, product)` 可重新创建。创建、轮换、吊销均写审计(`token.created` / `auth.token_rotated` / `token.deleted`)。接口走 provisioning 组的限速。
+
+错误码:`INVALID_ACCOUNT_ID`(400)、`UNKNOWN_PRODUCT`(400)、`VALIDATION_FAILED`(400)、`TENANT_NOT_FOUND`(404)、`KEY_NOT_FOUND`(404,rotate/吊销时没有绑定)、`TENANT_NOT_AUTHORIZED`(403)。
+
 ## 常见问题
 
 - **Q1 登录后看不到我的产品?** Lurus 是 AI 网关不是产品平台。用户登录→控制台建 Token→手动配置到产品后端,目前没有自动取 Token 的回调机制。
@@ -145,7 +167,7 @@ curl https://hub.lurus.cn/v1/key -H "Authorization: Bearer sk-xxxxxxxxxxxx"
 | 429 | `rate_limit_error` | `rate_limit_error` | `request_rate_limit_exceeded` / `quota_exceeded` / `cost_spike_limit_exceeded` / `business_rate_limit_exceeded` / `concurrency_limit_exceeded` 等 | 限流(见下方 Q4 的另一类 429)。**仅限中转路径**(`/v1/*` 等 relay 路由)网关自身发起的这类 429,`error.message` 都是英文句子,不要拿它做文本匹配——判定读 `code`。其中限流/并发中间件的拒绝(`request_rate_limit_exceeded`/`business_rate_limit_exceeded`/`concurrency_limit_exceeded`)统一是 `<scope> <requests\|tokens\|concurrency> limit exceeded: <n> ...(<code>)` 这一种形状;`quota_exceeded`(entitlement)与 `cost_spike_limit_exceeded`(cost spike)同样是英文,但句式不同、不含 `<n>`。`/api/*` 控制台路由与 `/internal/*` 内部路由上的 ip/key 限流器(`rate-limit.go` 的 keyed 拒绝点)429 只带头,**没有 body**,不要假设那类 429 存在 `error.message` | 稍后重试,读 `Retry-After`/`X-RateLimit-*`(见 §E,并非全部 429 都携带 —— `quota_exceeded` 与 `cost_spike_limit_exceeded` 也带 `X-RateLimit-Scope`/`Type`,见 §E 表) |
 | 500 | `api_error` | `api_error` | `gateway_internal` | 网关自身处理失败(非上游供应商故障) | 重试;持续出现联系运维 |
 | 500 | `upstream_error` | `upstream_error` | 供应商原样透传 | AI 服务商故障 | 重试 / 切模型 |
-| 503 | `api_error` | `overloaded_error` | `channel:all_keys_cooling` / `model_not_found`(无可用渠道时复用此状态码)/ `query_data_error`(网关自身查令牌失败,2026-09-27 起;此前这种情况被包装成 401 `invalid_request`,与"key 无效"不可区分)等 | 模型配置存在但渠道暂时全部不可用/维护中;或网关的数据库暂时不可用,**不是对 key 的判定** | 等待恢复,读 `Retry-After`(令牌查库失败固定给 `5`,并带 `X-Lurus-Token-State: lookup_failed`) |
+| 503 | `api_error` | `overloaded_error` | `channel:all_keys_cooling` / `all_channels_cooling`(该模型的所有渠道都在上游 429 冷却期内,带 `Retry-After`;与 provider 过滤无关) / `model_not_found`(无可用渠道时复用此状态码)/ `query_data_error`(网关自身查令牌失败,2026-09-27 起;此前这种情况被包装成 401 `invalid_request`,与"key 无效"不可区分)等 | 模型配置存在但渠道暂时全部不可用/维护中;或网关的数据库暂时不可用,**不是对 key 的判定** | 等待恢复,读 `Retry-After`(令牌查库失败固定给 `5`,并带 `X-Lurus-Token-State: lookup_failed`) |
 
 完整 `code` 枚举(所有网关自身可能返回的机器码,不含上游供应商透传值)见 `docs/openapi/relay.json` 的 `components.schemas.GatewayError.code.enum`,由 CI 锁与 `internal/pkg/types` 的 `ErrorCode` 常量表逐条互校,新增/改名任一侧都会挂红。
 
@@ -543,3 +565,78 @@ curl -X PUT https://hub.lurus.cn/api/v2/acme/channels/12 -H "Authorization: Bear
   pass-through 时整个原始请求体原样透传,此时上游会看到它)。
 
 **目前没有兄弟产品接入 `provider`**(`2c-gui-switch`/`2c-app-lutu`/`2l-bs-docs` 均未在请求体里发送该对象)。
+
+### N. Dify / LangChain / LlamaIndex:把 newhub 当 OpenAI 兼容(chat + embeddings)与 Jina 兼容 rerank 提供方
+
+newhub 对外三个端点与这些框架的内置适配直接对得上,不需要自定义协议:
+
+| 能力 | 端点 | 兼容口径 |
+|---|---|---|
+| 对话 | `POST /v1/chat/completions` | OpenAI |
+| 向量 | `POST /v1/embeddings` | OpenAI(`input`、`dimensions`、`encoding_format`) |
+| 重排序 | `POST /v1/rerank` | Jina / Cohere 风格(`query`、`documents`、`top_n`、`return_documents`) |
+
+通用三要素:`base_url` = `https://hub.lurus.cn/v1`,`api_key` = 网关发的 `sk-` key(普通 Bearer),`model` = 价格目录里的公开模型名(`GET /v1/models` 可列)。下面的 `model-a` / `model-b` / `model-c` 仅为占位,换成租户实际可用的对话 / 向量 / 重排模型。
+
+**Dify**(设置 → 模型供应商 → 添加「OpenAI-API-compatible」,界面字段名以所用版本为准):
+
+```text
+模型类型        LLM / Text Embedding / Rerank(各添加一次)
+模型名称        model-a(对话)、model-b(向量)、model-c(重排)
+API Key         sk-...
+API endpoint URL  https://hub.lurus.cn/v1
+```
+
+Dify 的 rerank 类型会请求 `{endpoint}/rerank`,即 `POST https://hub.lurus.cn/v1/rerank`。知识库「Top K / 召回数」映射到 `top_n`。
+
+**LangChain**(Python):
+
+```python
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.document_compressors import JinaRerank
+
+llm = ChatOpenAI(model="model-a", base_url="https://hub.lurus.cn/v1", api_key="sk-...")
+emb = OpenAIEmbeddings(
+    model="model-b",
+    base_url="https://hub.lurus.cn/v1",
+    api_key="sk-...",
+    check_embedding_ctx_length=False,   # 非 OpenAI 模型必须关,否则客户端会把文本预先切成 token id 数组再发
+)
+rerank = JinaRerank(
+    model="model-c",
+    jina_api_key="sk-...",
+    jina_api_url="https://hub.lurus.cn/v1/rerank",   # 默认指向官方地址,必须显式覆盖
+    top_n=5,
+)
+```
+
+**LlamaIndex**(Python):
+
+```python
+from llama_index.llms.openai_like import OpenAILike
+from llama_index.embeddings.openai_like import OpenAILikeEmbedding
+
+llm = OpenAILike(model="model-a", api_base="https://hub.lurus.cn/v1", api_key="sk-...", is_chat_model=True)
+emb = OpenAILikeEmbedding(model_name="model-b", api_base="https://hub.lurus.cn/v1", api_key="sk-...", embed_batch_size=64)
+```
+
+不要用 `OpenAIEmbedding`:它会按 OpenAI 的模型枚举校验 `model`,自定义模型名直接报错。LlamaIndex 的内置 rerank 后处理器各自把地址写死到对应厂商,是否支持改 URL 取决于版本;可靠做法是直接调 `/v1/rerank`:
+
+```python
+import httpx
+r = httpx.post("https://hub.lurus.cn/v1/rerank",
+               headers={"Authorization": "Bearer sk-..."},
+               json={"model": "model-c", "query": "...", "documents": ["...", "..."], "top_n": 3})
+r.raise_for_status()
+results = r.json()["results"]   # 按 relevance_score 降序;每项 {index, relevance_score[, document]}
+```
+
+**注意事项**
+
+- **embeddings 单次 `input` 至多 2048 条**,超出返回 400 `invalid_request`(网关本地拒绝,不会打到上游)。各框架默认批大小(LangChain 1000、LlamaIndex 10、Dify 10)都在限内;自己调大批量时别越线。条目不能为空串,`dimensions` 取 1–65536。
+- **`encoding_format` 只接受 `float` 或 `base64`**(缺省 `float`),其他值 400。新版 OpenAI SDK 默认用 `base64` 再自行解码,网关支持。
+- **`input_type` / `task` 不是通用字段**:`input_type` 只有 Voyage 渠道能转发,`task` 只有 Jina 渠道能转发。发给其他渠道会得到 400 `unsupported_parameter`,而不是被静默丢弃后照常计费。
+- **rerank 的 `top_n`** 原样转发给上游;不传则返回全部文档的得分。`return_documents` 缺省不回原文。结果必须按 `relevance_score` 降序,上游返回乱序会被判为 502 `invalid_provider_response`。
+- **模型与端点不匹配**:拿对话模型调 `/v1/rerank`(或反之)时,在 `ROUTING_MODALITY_FILTER=enforce` 下返回 501 `provider_capability_not_supported`,`error.details.reasons[]` 说明原因与受影响路由数;默认的 `observe` 只记日志不拦截。
+- **rerank 的 search unit 计价**:管理员给该 rerank 模型配了 `SearchUnitPrice` 后,按 `ceil(文档数/100) × 1` 个检索单位计费,与 token 数无关,所以一次请求塞 100 篇和 1 篇文档价格相同,101 篇则翻倍;没配则回落 token 计价。费用从响应头 `X-Request-Cost` 或日志的 `usage_unit` / `usage_quantity` 查,细则见 `doc/runbook/retrieval-metering.md`。控制台的 Dashboard 可按接口类型 / 计费单位分组看用量。
+- 错误体沿用 OpenAI 信封(`error.message` / `error.code`),各框架按 HTTP 状态码映射异常;完整的错误码枚举见 `docs/openapi/relay.json` 的 `GatewayError`。

@@ -8,6 +8,11 @@ type Ability struct {
 	Priority  *int64  `json:"priority" gorm:"bigint;default:0;index"`
 	Weight    uint    `json:"weight" gorm:"default:0;index"`
 	Tag       *string `json:"tag" gorm:"index"`
+	// Modality is the inferred kind of work this (group, model, channel) route
+	// serves: chat | embedding | rerank | decision | image | audio. "" means
+	// unknown and is treated as compatible with every request (migration 053).
+	// Rewritten whenever the channel's abilities are rebuilt.
+	Modality string `json:"modality" gorm:"type:varchar(16);not null;default:''"`
 }
 
 type AbilityWithChannel struct {

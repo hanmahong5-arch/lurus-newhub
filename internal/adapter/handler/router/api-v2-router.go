@@ -111,6 +111,12 @@ func SetApiV2Router(router *gin.Engine) {
 		// not tenant data — it is a stand-in for a provider.
 		if handler.FaultSimEnabled() {
 			apiV2.POST("/faultsim/v1/chat/completions", handler.FaultSimChatCompletions)
+			// Success mode (model "ok" / "ok-*") on the other two wires.
+			apiV2.POST("/faultsim/v1/responses", handler.FaultSimResponses)
+			apiV2.POST("/faultsim/v1/messages", handler.FaultSimMessages)
+			// System One wire: model "ok-decision" answers a routing question
+			// with a fixed probability distribution (decision routing, migration 054).
+			apiV2.POST("/faultsim/v1/systemone", handler.FaultSimSystemOne)
 			// Task-vendor fault simulator (cycle-8 L8): imitates the Suno
 			// wire so a UAT channel (type ChannelTypeSunoAPI, base_url
 			// http://127.0.0.1:3000/api/v2/faultsim, key=FAULTSIM_TOKEN)
@@ -166,6 +172,7 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantTokens.GET("", handler.ListTokensV2)
 			tenantTokens.POST("", handler.CreateTokenV2)
 			tenantTokens.POST("/batch-delete", handler.DeleteTokensV2)
+			tenantTokens.POST("/batch", handler.BatchCreateTokensV2)
 			tenantTokens.PUT("/:id", handler.UpdateTokenV2)
 			tenantTokens.DELETE("/:id", handler.DeleteTokenV2)
 			tenantTokens.POST("/:id/rotate", handler.RotateTokenV2)
@@ -198,6 +205,60 @@ func SetApiV2Router(router *gin.Engine) {
 			// Undo for DELETE. Safe to replay: restoring a live project is a
 			// no-op, and re-attachment skips tokens reassigned since.
 			tenantProjects.POST("/:id/restore", handler.RestoreProjectV2)
+			// Who a dept_lead leads (tenant admin only).
+			tenantProjects.GET("/:id/members", handler.ListProjectMembersV2)
+			tenantProjects.POST("/:id/members", handler.AddProjectMemberV2)
+			tenantProjects.DELETE("/:id/members", handler.RemoveProjectMemberV2)
+		}
+
+		// Tenant-admin issued onboarding invites that can grant a role/project.
+		tenantInvites := apiV2.Group("/:tenant_slug/invites")
+		tenantInvites.Use(middleware.UserAuth())
+		tenantInvites.Use(middleware.TenantSlugGuard())
+		{
+			tenantInvites.POST("", handler.IssueMyTenantInviteV2)
+			tenantInvites.GET("", handler.ListMyTenantInvitesV2)
+			tenantInvites.POST("/redeem", handler.RedeemMyTenantInviteV2)
+			tenantInvites.DELETE("/:id", handler.RevokeMyTenantInviteV2)
+		}
+
+		// Tenant-admin role assignment (own tenant only; keeps >= 1 admin).
+		tenantMembers := apiV2.Group("/:tenant_slug/members")
+		tenantMembers.Use(middleware.UserAuth())
+		tenantMembers.Use(middleware.TenantSlugGuard())
+		{
+			tenantMembers.GET("", handler.ListTenantMembersV2)
+			tenantMembers.PUT("/:user_id/role", handler.SetTenantMemberRoleV2)
+		}
+
+		// Decision-model routing policy (migration 054): tenant-admin read/replace/
+		// remove of one policy per public model (admin gate inside the handlers;
+		// the tenant is always the caller's own).
+		tenantRoutingPolicies := apiV2.Group("/:tenant_slug/routing-policies")
+		tenantRoutingPolicies.Use(middleware.UserAuth())
+		tenantRoutingPolicies.Use(middleware.TenantSlugGuard())
+		{
+			tenantRoutingPolicies.GET("/:model", handler.GetRoutingPolicyV2)
+			tenantRoutingPolicies.PUT("/:model", handler.PutRoutingPolicyV2)
+			tenantRoutingPolicies.DELETE("/:model", handler.DeleteRoutingPolicyV2)
+		}
+
+		// Relay data control (migration 050): tenant-admin log retention and content
+		// rules (admin gate inside the handlers; the tenant is always the caller's own).
+		tenantDataPolicy := apiV2.Group("/:tenant_slug/data-policy")
+		tenantDataPolicy.Use(middleware.UserAuth())
+		tenantDataPolicy.Use(middleware.TenantSlugGuard())
+		{
+			tenantDataPolicy.GET("/retention", handler.GetContentRetentionV2)
+			tenantDataPolicy.PUT("/retention", handler.PutContentRetentionV2)
+			tenantDataPolicy.PUT("/tokens/:id/retention", handler.PutTokenContentRetentionV2)
+			tenantDataPolicy.GET("/rules", handler.ListContentRulesV2)
+			tenantDataPolicy.POST("/rules", handler.CreateContentRuleV2)
+			tenantDataPolicy.PUT("/rules/:id", handler.UpdateContentRuleV2)
+			tenantDataPolicy.DELETE("/rules/:id", handler.DeleteContentRuleV2)
+			// Opt-in body archive (migration 052): the tenant admin's consent bit.
+			tenantDataPolicy.GET("/sedimentation", handler.GetSedimentationConsentV2)
+			tenantDataPolicy.PUT("/sedimentation", handler.PutSedimentationConsentV2)
 		}
 
 		// ================================================================
@@ -220,6 +281,14 @@ func SetApiV2Router(router *gin.Engine) {
 			tenantChannels.DELETE("/:id", handler.DeleteChannelV2)
 			tenantChannels.POST("/:id/test", handler.TestChannelV2)
 			tenantChannels.GET("/:id/upstream-models", handler.FetchUpstreamModelsV2)
+			tenantChannels.POST("/import", handler.ImportChannelsV2)
+			tenantChannels.GET("/:id/health", handler.GetChannelHealthV2)
+			tenantChannels.GET("/health-summary", handler.GetChannelHealthSummaryV2)
+			tenantChannels.POST("/:id/keys/:idx/test", handler.TestChannelKeyV2)
+			tenantChannels.POST("/:id/keys/:idx/restore", handler.RestoreChannelKeyV2)
+			tenantChannels.PUT("/:id/keys/:idx/settings", handler.UpdateChannelKeySettingsV2)
+			tenantChannels.GET("/usage-summary", handler.GetChannelUsageSummaryV2)
+			tenantChannels.GET("/:id/usage", handler.GetChannelUsageV2)
 		}
 
 		// ================================================================
@@ -242,6 +311,9 @@ func SetApiV2Router(router *gin.Engine) {
 			// Wave 3 Phase 2 (2026-05-20): CSV export with streaming writer
 			// and a 50k-row hard cap (clamped silently above that).
 			tenantLogs.GET("/export", middleware.CriticalRateLimit(), handler.ExportLogsV2)
+			// Archived prompt/response of one request (migration 052; tenant admin,
+			// own tenant only, 404 for anything else; audited).
+			tenantLogs.GET("/:request_id/body", handler.GetLogBodyV2)
 		}
 
 		// ================================================================
@@ -328,6 +400,19 @@ func SetApiV2Router(router *gin.Engine) {
 			// Per-model latency / error rate for this tenant (cycle 16):
 			// quality for every member, volume for tenant admins only.
 			tenantModels.GET("/performance", handler.ListModelPerformanceV2)
+			// Tenant-admin self-service narrowing of the platform-granted model list
+			// (admin gate inside the handler).
+			tenantModels.GET("/allowlist", handler.GetTenantModelAllowlistV2)
+			tenantModels.PUT("/allowlist", handler.PutTenantModelAllowlistV2)
+		}
+
+		// Tenant-scoped audit trail (tenant-admin gate inside the handler).
+		tenantAudit := apiV2.Group("/:tenant_slug/audit")
+		tenantAudit.Use(middleware.UserAuth())
+		tenantAudit.Use(middleware.TenantSlugGuard())
+		{
+			tenantAudit.GET("", handler.ListTenantAuditV2)
+			tenantAudit.GET("/export.csv", middleware.CriticalRateLimit(), handler.ExportTenantAuditCSVV2)
 		}
 
 		tenantPricing := apiV2.Group("/:tenant_slug/pricing")
@@ -353,6 +438,10 @@ func SetApiV2Router(router *gin.Engine) {
 		tenantBilling.Use(middleware.TenantSlugGuard())
 		{
 			tenantBilling.GET("/invoices", handler.ListInvoicesV2)
+			// Tenant monthly statement grouped by project / employee / token
+			// (tenant admin: whole tenant; dept_lead: own projects; the gate
+			// lives in the handler). One GROUP BY over a month of logs.
+			tenantBilling.GET("/statement", middleware.CriticalRateLimit(), handler.GetBillingStatementV2)
 			// Lost in 7835280f, which removed the tenant route group whole
 			// while migrating admin auth; GetTopUpsV2 and its unit tests
 			// stayed, and so did the console call. The v2 billing panel has
@@ -424,6 +513,10 @@ func SetApiV2Router(router *gin.Engine) {
 		// Admin-published relay recommendations for Switch clients (public,
 		// options-driven; bare-array contract, see GetRecommendedRelays).
 		apiV2.GET("/relays/recommended", handler.GetRecommendedRelays)
+
+		// Anonymous model availability (operational|degraded|down per model);
+		// channel state only, no channel/account/upstream detail. 30s cached.
+		apiV2.GET("/public/model-status", handler.GetPublicModelStatus)
 
 		// Phase D Track 2.2: tenant-scoped heartbeat — sibling of /:tenant_slug/user/me.
 		// No middleware: UserHeartbeat does inline raw-token (Token.Key) auth,
@@ -505,6 +598,8 @@ func SetApiV2Router(router *gin.Engine) {
 				tenantMgmt.POST("/:id/invites", handler.IssueTenantInvite)
 				tenantMgmt.GET("/:id/invites", handler.ListTenantInvites)
 				tenantMgmt.DELETE("/:id/invites/:invite_id", handler.RevokeTenantInvite)
+				// First admin / payer bootstrap (root only).
+				tenantMgmt.PUT("/:id/members/:user_id/role", handler.SetTenantMemberRoleAdmin)
 			}
 
 			mappingRoute := adminRoute.Group("/mappings")
@@ -542,6 +637,18 @@ func SetApiV2Router(router *gin.Engine) {
 				// per-device session of a user (SESSION_REGISTRY_ENABLED).
 				adminUsers.DELETE("/:id/sessions", handler.RevokeUserSessionsAdminV2)
 			}
+
+			// Platform content rules and channel override templates (migration 050).
+			adminRoute.GET("/content-rules", handler.ListPlatformContentRulesV2)
+			adminRoute.POST("/content-rules", handler.CreatePlatformContentRuleV2)
+			adminRoute.PUT("/content-rules/:id", handler.UpdatePlatformContentRuleV2)
+			adminRoute.DELETE("/content-rules/:id", handler.DeletePlatformContentRuleV2)
+			adminRoute.GET("/channel-templates", handler.ListChannelTemplatesV2)
+			adminRoute.POST("/channel-templates", handler.CreateChannelTemplateV2)
+			adminRoute.PUT("/channel-templates/:id", handler.UpdateChannelTemplateV2)
+			adminRoute.DELETE("/channel-templates/:id", handler.DeleteChannelTemplateV2)
+			adminRoute.POST("/channel-templates/:id/apply", handler.ApplyChannelTemplateV2)
+			adminRoute.GET("/channel-templates/:id/applications", handler.ListChannelTemplateApplicationsV2)
 
 			// System options panels (read + one-key-per-call write). Thin
 			// wrappers over GetOptions/UpdateOption (secret filtering + per-key
@@ -606,6 +713,7 @@ func SetApiV2Router(router *gin.Engine) {
 			// within the 5-minute in-process cache runs none.
 			adminRoute.GET("/analytics/rankings", middleware.CriticalRateLimit(), handler.GetRankingsV2)
 			adminRoute.GET("/logs/export", middleware.CriticalRateLimit(), handler.ExportAdminLogsV2)
+			adminRoute.GET("/logs/:request_id/body", handler.GetAdminLogBodyV2)
 
 			// L6 (2026-09-12): TOTP adoption stats for the security reviewer,
 			// and the audited admin escape hatch for a lost-device user.

@@ -40,6 +40,15 @@ type TenantInvite struct {
 	ConsumedByAccountId *int64     `json:"consumed_by_account_id"`
 	ConsumedAt          *time.Time `json:"consumed_at"`
 	CreatedAt           time.Time  `json:"created_at" gorm:"not null"`
+	// MemberRole is the users.tenant_role granted to whoever redeems the code
+	// ("" / "admin" / "dept_lead"; migration 046).
+	MemberRole string `json:"member_role" gorm:"type:varchar(16);not null;default:''"`
+	// ProjectId, when > 0, is the project the redeemer is added to as a member
+	// in the same transaction (migration 046). 0 = none.
+	ProjectId int64 `json:"project_id" gorm:"type:bigint;not null;default:0"`
+	// RevokedAt is the Unix-seconds time a tenant admin revoked the invite
+	// (migration 048); 0 = never revoked.
+	RevokedAt int64 `json:"revoked_at" gorm:"type:bigint;not null;default:0"`
 }
 
 // TableName overrides the default GORM table name.

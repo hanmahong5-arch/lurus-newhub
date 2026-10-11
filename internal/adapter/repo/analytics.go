@@ -1,9 +1,12 @@
 package repo
 
 import (
+	"fmt"
 	"math"
 	"sort"
+	"strings"
 
+	relayconstant "github.com/LurusTech/lurus-hub/internal/adapter/provider/constant"
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
@@ -152,12 +155,19 @@ type RankingUsageTotal struct {
 // two-window comparison stays at two indexed aggregate queries against
 // logs, not hundreds of unindexed OFFSET scans.
 func GetModelUsageTotals(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
+	return modelUsageTotals(startTime, endTime, tenantID, nil)
+}
+
+// modelUsageTotals is GetModelUsageTotals with an optional project scope
+// (projectIDs != nil restricts to those projects; empty non-nil matches nothing).
+func modelUsageTotals(startTime, endTime int64, tenantID string, projectIDs []int) ([]RankingUsageTotal, error) {
 	base := LOG_DB.Model(&entity.Log{}).
 		Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
 		Where("created_at >= ? AND created_at <= ?", startTime, endTime)
 	if tenantID != "" {
 		base = base.Where("tenant_id = ?", tenantID)
 	}
+	base = ApplyLogAttributionFilters(base, projectIDs, "")
 	var rows []RankingUsageTotal
 	err := base.
 		Select(`model_name AS name,
@@ -185,7 +195,7 @@ type vendorUsageRow struct {
 // getVendorUsageTotals is GetModelUsageTotals' channel_type-keyed sibling.
 // Unexported: GetRankings is its only caller today (GetModelUsageTotals is
 // the one named in the plan as a public seam).
-func getVendorUsageTotals(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
+func getVendorUsageTotals(startTime, endTime int64, tenantID string, projectIDs []int) ([]RankingUsageTotal, error) {
 	base := LOG_DB.Model(&entity.Log{}).
 		Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
 		Where("created_at >= ? AND created_at <= ?", startTime, endTime).
@@ -193,6 +203,7 @@ func getVendorUsageTotals(startTime, endTime int64, tenantID string) ([]RankingU
 	if tenantID != "" {
 		base = base.Where("tenant_id = ?", tenantID)
 	}
+	base = ApplyLogAttributionFilters(base, projectIDs, "")
 	var raw []vendorUsageRow
 	err := base.
 		Select(`channel_type,
@@ -261,22 +272,42 @@ func rankingsNameExpr(by string) string {
 		return `COALESCE(NULLIF(username, ''), '(unknown)')`
 	case "product":
 		return `COALESCE(` + jsonOtherTextExpr("source_product") + `, '` + ratio_setting.DefaultSourceProduct + `')`
+	case "relay_mode":
+		return relayModeCaseExpr()
+	case "usage_unit":
+		// '' = rows written before migration 053 (token semantics); they get
+		// their own bucket rather than being silently relabelled "token".
+		return `COALESCE(NULLIF(usage_unit, ''), '(unrecorded)')`
 	}
 	return "model_name"
+}
+
+// relayModeCaseExpr turns logs.relay_mode (an int) into the stable label
+// relayconstant.RelayModeLabel returns, generated from the same table so SQL
+// and Go cannot drift. Integers only ever come from constants, never input.
+func relayModeCaseExpr() string {
+	var b strings.Builder
+	b.WriteString("CASE relay_mode")
+	for _, m := range relayconstant.RelayModeLabelledModes {
+		fmt.Fprintf(&b, " WHEN %d THEN '%s'", m, relayconstant.RelayModeLabel(m))
+	}
+	b.WriteString(" ELSE 'other' END")
+	return b.String()
 }
 
 // getExprUsageTotals is GetModelUsageTotals' sibling for the dimensions
 // keyed by a SQL expression (rankingsNameExpr). Unexported: GetRankings is
 // its only caller, mirroring getVendorUsageTotals.
-func getExprUsageTotals(by string) func(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
+func getExprUsageTotals(by string) rankingFetch {
 	expr := rankingsNameExpr(by)
-	return func(startTime, endTime int64, tenantID string) ([]RankingUsageTotal, error) {
+	return func(startTime, endTime int64, tenantID string, projectIDs []int) ([]RankingUsageTotal, error) {
 		base := LOG_DB.Model(&entity.Log{}).
 			Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
 			Where("created_at >= ? AND created_at <= ?", startTime, endTime)
 		if tenantID != "" {
 			base = base.Where("tenant_id = ?", tenantID)
 		}
+		base = ApplyLogAttributionFilters(base, projectIDs, "")
 		var rows []RankingUsageTotal
 		err := base.
 			Select(expr + ` AS name,
@@ -326,6 +357,17 @@ const rankingsMaxRows = 20
 // for a caller that wants to show it — the returned rows are capped at
 // `limit` and must not be re-summed to recover it.
 func GetRankings(startTime, endTime int64, tenantID, by string, limit int) (rows []RankingRow, totalTokens, totalQuota int64, err error) {
+	return GetRankingsForProjects(startTime, endTime, tenantID, by, limit, nil)
+}
+
+// rankingFetch is one dimension's windowed aggregate.
+type rankingFetch func(startTime, endTime int64, tenantID string, projectIDs []int) ([]RankingUsageTotal, error)
+
+// GetRankingsForProjects is GetRankings restricted to a project set (a
+// department lead's scope). projectIDs == nil is the unrestricted view; an
+// empty non-nil slice matches nothing, so a lead without a project sees an
+// empty board rather than the whole tenant.
+func GetRankingsForProjects(startTime, endTime int64, tenantID, by string, limit int, projectIDs []int) (rows []RankingRow, totalTokens, totalQuota int64, err error) {
 	if limit <= 0 || limit > rankingsMaxRows {
 		limit = rankingsMaxRows
 	}
@@ -333,19 +375,19 @@ func GetRankings(startTime, endTime int64, tenantID, by string, limit int) (rows
 	prevEnd := startTime - 1
 	prevStart := prevEnd - length
 
-	fetch := GetModelUsageTotals
+	fetch := rankingFetch(modelUsageTotals)
 	switch by {
 	case "vendor":
 		fetch = getVendorUsageTotals
-	case "group", "key", "user", "product":
+	case "group", "key", "user", "product", "relay_mode", "usage_unit":
 		fetch = getExprUsageTotals(by)
 	}
 
-	current, err := fetch(startTime, endTime, tenantID)
+	current, err := fetch(startTime, endTime, tenantID, projectIDs)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	previous, err := fetch(prevStart, prevEnd, tenantID)
+	previous, err := fetch(prevStart, prevEnd, tenantID, projectIDs)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -422,6 +464,12 @@ const rankingSeriesMaxPoints = 720 * rankingsMaxRows
 // One grouped query; for by == "vendor" the channel_type ids are mapped to
 // names afterwards and filtered, as in getVendorUsageTotals.
 func GetRankingSeries(startTime, endTime int64, tenantID, by string, names []string) ([]RankingSeriesPoint, error) {
+	return GetRankingSeriesForProjects(startTime, endTime, tenantID, by, names, nil)
+}
+
+// GetRankingSeriesForProjects is GetRankingSeries restricted to a project set
+// (see GetRankingsForProjects for the nil / empty semantics).
+func GetRankingSeriesForProjects(startTime, endTime int64, tenantID, by string, names []string, projectIDs []int) ([]RankingSeriesPoint, error) {
 	if len(names) == 0 {
 		return []RankingSeriesPoint{}, nil
 	}
@@ -437,6 +485,7 @@ func GetRankingSeries(startTime, endTime int64, tenantID, by string, names []str
 	if tenantID != "" {
 		q = q.Where("tenant_id = ?", tenantID)
 	}
+	q = ApplyLogAttributionFilters(q, projectIDs, "")
 	if by != "vendor" {
 		q = q.Where(nameExpr+" IN ?", names)
 	} else {
