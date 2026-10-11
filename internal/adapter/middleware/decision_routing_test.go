@@ -21,6 +21,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
 	"github.com/LurusTech/lurus-hub/internal/testkit/fakeupstream"
 
@@ -78,6 +79,12 @@ func setupDecision(t *testing.T, delay time.Duration, withChannel bool) *drFixtu
 	db, cleanup := setupCoverDB(t)
 	t.Cleanup(cleanup)
 	app.InitHttpClient()
+	// The evaluator needs a price: routingdecision never runs an unpriced one.
+	prevRatios := ratio_setting.ModelRatio2JSONString()
+	if err := ratio_setting.UpdateModelRatioByJSONString(`{"evaluator-a":0.5}`); err != nil {
+		t.Fatalf("price evaluator: %v", err)
+	}
+	t.Cleanup(func() { _ = ratio_setting.UpdateModelRatioByJSONString(prevRatios) })
 	if err := db.AutoMigrate(&entity.RoutingPolicy{}); err != nil {
 		t.Fatal(err)
 	}

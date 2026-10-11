@@ -19,11 +19,9 @@ import (
 // EvalQuota prices an evaluation at the evaluator model's own price for the
 // caller's group: per-call price when one is configured, otherwise input
 // tokens x model ratio x group ratio (System One bills the input side only,
-// matching how the relay path settles the same model). An unpriced model
-// costs nothing here - the evaluation is a platform-side step the tenant opted
-// into, and refusing the routed request because the evaluator has no price
-// would turn a billing gap into an outage. The row is still written (quota 0),
-// so the gap is visible.
+// matching how the relay path settles the same model). Decide never runs an
+// unpriced evaluator (ErrEvaluatorUnpriced), so the 0 returned for one here
+// only covers a price removed mid-request; an explicit 0 price is free.
 func EvalQuota(model, usingGroup, userGroup string, inputTokens int) int {
 	groupRatio := ratio_setting.GetGroupRatio(usingGroup)
 	if r, ok := ratio_setting.GetGroupGroupRatio(userGroup, usingGroup); ok {
@@ -81,6 +79,14 @@ func settleEval(c *gin.Context, model string, out *EvalOutput, latency time.Dura
 		UseTimeSeconds:   int(latency.Seconds()),
 		Group:            info.UsingGroup,
 		Other:            other,
+		// Unified metering (migration 053), as the relay path writes it: System
+		// One bills the input side, so that is the quantity.
+		UsageUnit:     "token",
+		UsageQuantity: int64(out.InputTokens),
+		UsageSource:   "upstream",
+	}
+	if out.InputTokens <= 0 {
+		params.UsageSource = "unreported"
 	}
 	governance.EnrichLogParams(c, info, &params)
 	repo.RecordConsumeLog(c, info.UserId, params)
