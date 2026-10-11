@@ -19,7 +19,7 @@ func TestOpenaiHandler_StashesResponseTextForBodyArchive(t *testing.T) {
 	}
 	body := `{"id":"c1","model":"model-a","choices":[{"index":0,"message":{"role":"assistant","content":"first"}},{"index":1,"message":{"role":"assistant","content":"second"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
 	resp := fakeHTTPResponse(200, body)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if _, apiErr := OpenaiHandler(w.ctx, info, resp); apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr.Error())
@@ -37,7 +37,7 @@ func TestOpenaiHandler_UpstreamErrorStashesNothing(t *testing.T) {
 		RelayFormat: "openai",
 	}
 	resp := fakeHTTPResponse(401, `{"error":{"message":"bad key","type":"invalid_request_error","code":"invalid_api_key"}}`)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if _, apiErr := OpenaiHandler(w.ctx, info, resp); apiErr == nil {
 		t.Fatal("expected an error")
