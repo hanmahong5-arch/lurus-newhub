@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,6 +38,17 @@ func answer(choice string, p float64) *EvalOutput {
 	return &EvalOutput{Choice: choice, Probabilities: map[string]float64{choice: p, "other": 1 - p}, InputTokens: 120, OutputTokens: 7}
 }
 
+// setRatios replaces the model ratio table for one test (Decide never runs an
+// unpriced evaluator) and restores it afterwards.
+func setRatios(t *testing.T, ratios string) {
+	t.Helper()
+	prev := ratio_setting.ModelRatio2JSONString()
+	if err := ratio_setting.UpdateModelRatioByJSONString(ratios); err != nil {
+		t.Fatalf("set model ratios: %v", err)
+	}
+	t.Cleanup(func() { _ = ratio_setting.UpdateModelRatioByJSONString(prev) })
+}
+
 func twoCandidates() (*entity.RoutingPolicy, []entity.RoutingCandidate) {
 	p := validPolicy()
 	return p, p.Candidates
@@ -44,6 +56,7 @@ func twoCandidates() (*entity.RoutingPolicy, []entity.RoutingCandidate) {
 
 func TestDecide_Outcomes(t *testing.T) {
 	t.Setenv("ROUTING_DECISION_TIMEOUT_MS", "")
+	setRatios(t, `{"evaluator-a":0.5}`)
 	p, cands := twoCandidates()
 
 	t.Run("confident choice is applied", func(t *testing.T) {
@@ -143,6 +156,7 @@ func TestDecide_Outcomes(t *testing.T) {
 
 func TestDecide_ConcurrencyLimit(t *testing.T) {
 	t.Setenv("ROUTING_DECISION_TIMEOUT_MS", "")
+	setRatios(t, `{"evaluator-a":0.5}`)
 	p, cands := twoCandidates()
 	for i := 0; i < MaxConcurrent; i++ {
 		if !tryAcquire() {
@@ -265,5 +279,35 @@ func TestIndex_NoPolicyIsZeroDBAfterFirstLoad(t *testing.T) {
 	}
 	if loads != 1 {
 		t.Fatalf("loads = %d for 1000 lookups with no policies, want 1", loads)
+	}
+}
+
+// An evaluator with no configured price is never called: unknown is not free,
+// and the request still proceeds on its default route.
+func TestDecide_UnpricedEvaluatorIsSkipped(t *testing.T) {
+	t.Setenv("ROUTING_DECISION_TIMEOUT_MS", "")
+	setRatios(t, `{"some-other-model":1}`)
+	p, cands := twoCandidates()
+	ev := &fakeEvaluator{out: answer("strong", 0.9)}
+	out := Decide(nil, ev, p, "smart", "hard question", cands)
+	if out.Reason != ReasonEvaluatorUnavailable || !errors.Is(out.Err, ErrEvaluatorUnpriced) {
+		t.Fatalf("outcome = %+v, want evaluator_unavailable / ErrEvaluatorUnpriced", out)
+	}
+	if out.Target != "model-a" || out.TargetID != "cheap" {
+		t.Fatalf("target = %s/%s, want the default candidate cheap/model-a", out.TargetID, out.Target)
+	}
+	if n := ev.calls.Load(); n != 0 {
+		t.Fatalf("evaluator calls = %d, want 0: an unpriced evaluation would be served for free", n)
+	}
+}
+
+// An explicit price of 0 is a price: the evaluator runs.
+func TestDecide_ExplicitlyFreeEvaluatorRuns(t *testing.T) {
+	t.Setenv("ROUTING_DECISION_TIMEOUT_MS", "")
+	setRatios(t, `{"evaluator-a":0}`)
+	p, cands := twoCandidates()
+	ev := &fakeEvaluator{out: answer("strong", 0.9)}
+	if out := Decide(nil, ev, p, "smart", "hard question", cands); out.Reason != ReasonApplied || ev.calls.Load() != 1 {
+		t.Fatalf("outcome = %+v, calls = %d; want applied after exactly one evaluation", out, ev.calls.Load())
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/domain/entity"
+	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -52,6 +53,23 @@ func Timeout() time.Duration {
 // ErrNoEvaluatorChannel means no channel could serve the evaluator model for
 // this tenant.
 var ErrNoEvaluatorChannel = errors.New("routing: no channel for the evaluator model")
+
+// ErrEvaluatorUnpriced means the evaluator model has no configured price. An
+// unknown price is never free (the relay refuses such a model outright), and
+// refusing the routed request would turn a billing gap into an outage, so the
+// evaluation is skipped and the request takes its default route. An explicit
+// price of 0 is a price: that evaluator runs, free.
+var ErrEvaluatorUnpriced = errors.New("routing: evaluator model has no configured price")
+
+// evaluatorPriced mirrors the relay's own price lookup: a per-call price, or a
+// model ratio the ratio table (or self-use mode) vouches for.
+func evaluatorPriced(model string) bool {
+	if _, ok := ratio_setting.GetModelPrice(model, false); ok {
+		return true
+	}
+	_, ok, _ := ratio_setting.GetModelRatio(model)
+	return ok
+}
 
 // ErrEvaluatorBusy means the process-wide evaluation limit was reached; the
 // request proceeds on its default route instead of waiting.
@@ -131,6 +149,9 @@ func Decide(c *gin.Context, ev Evaluator, p *entity.RoutingPolicy, requested, te
 	}
 	if ev == nil {
 		return Outcome{Reason: ReasonEvaluatorUnavailable, Target: def, TargetID: idOf(cands, def), Err: ErrNoEvaluatorChannel}
+	}
+	if !evaluatorPriced(p.EvaluatorModel) {
+		return Outcome{Reason: ReasonEvaluatorUnavailable, Target: def, TargetID: idOf(cands, def), Err: ErrEvaluatorUnpriced}
 	}
 	if !tryAcquire() {
 		return Outcome{Reason: ReasonEvaluatorUnavailable, Target: def, TargetID: idOf(cands, def), Err: ErrEvaluatorBusy}
