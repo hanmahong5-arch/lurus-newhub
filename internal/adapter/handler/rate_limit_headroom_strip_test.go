@@ -18,16 +18,17 @@ package handler
 // test's own, freshly-migrated, differently-shaped DB, tripping "no such
 // table: abilities"). That cross-test global-state hazard belongs to
 // repo/pricing.go's caching design (out of this lane's file list), not to
-// this fix, so the safer route is a request whose error is 5xx-classified
-// without needing a real channel round trip at all — reachable from a
-// gateway-side pre-channel failure (GenRelayInfo's price-lookup step
-// defaults *types.NewAPIError to 500 when a model has no configured ratio,
-// exactly types.NewError's documented default), exercising the SAME
-// isUpstreamOriginatedError predicate a genuine upstream 5xx/429 would.
+// this fix, so the upstream-classified case is driven through the
+// getChannelFn seam instead (TestRelay_AllKeysCooling_StripsGatewayHeadroomHeaders)
+// plus the isUpstreamOriginatedError predicate table.
 //
-// TestRelay_NonUpstreamError_KeepsGatewayHeadroomHeaders below extends the
-// same seam with a request-too-large (413) failure, which is deliberately
-// NOT upstream-classified, to prove the strip is conditional, not blanket.
+// The two "keeps" tests prove the strip is conditional, not blanket: a
+// request-too-large (413) failure, and a model with no configured price.
+// The latter was once this file's "upstream" example, because a synthetic
+// 500 used to be read as an upstream failure by status alone; it never
+// reached a channel, and since types.IsGatewayOriginated it is classified as
+// the gateway's own error — so it keeps the gateway's headroom snapshot and
+// is not reported as "upstream provider X returned 500".
 
 import (
 	"errors"
@@ -63,15 +64,12 @@ func presetGatewayHeadroomHeaders(c *gin.Context) {
 	c.Writer.Header().Set("X-RateLimit-Type", "rpm")
 }
 
-// TestRelay_UpstreamOriginatedError_StripsGatewayHeadroomHeaders is the
-// item-4 lock: GenRelayInfo's price lookup fails closed with a
-// types.NewError default of 500 (types.IsUpstreamFailure classifies any
-// unclassified 5xx as upstream — error.go's documented "fail-safe" default,
-// the SAME predicate a real provider 5xx or 429 would hit) when the
-// requested model has no configured ratio and no channel was ever attempted
-// — the gateway's own headroom snapshot from an earlier admit check must not
-// survive onto that response.
-func TestRelay_UpstreamOriginatedError_StripsGatewayHeadroomHeaders(t *testing.T) {
+// TestRelay_UnpricedModel_IsGatewaySide: the price lookup fails closed with
+// types.NewError's default 500 when the model has no configured ratio, before
+// any channel is attempted. That is the gateway refusing, not a provider
+// failing: the response must not blame "upstream provider X", and the
+// gateway's own headroom snapshot stays (as for the 413 control below).
+func TestRelay_UnpricedModel_IsGatewaySide(t *testing.T) {
 	prevMB := constant.MaxRequestBodyMB
 	constant.MaxRequestBodyMB = 10
 	t.Cleanup(func() { constant.MaxRequestBodyMB = prevMB })
@@ -87,14 +85,17 @@ func TestRelay_UpstreamOriginatedError_StripsGatewayHeadroomHeaders(t *testing.T
 	Relay(c, types.RelayFormatOpenAI)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (types.NewError's documented default for an unclassified error — see types.IsUpstreamFailure's fail-safe comment); body=%s", w.Code, w.Body.String())
+		t.Fatalf("status = %d, want 500 (types.NewError's default for the price-lookup failure); body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "upstream provider") {
-		t.Fatalf("body does not carry the upstream-attribution message this test relies on being upstream-classified: %s", w.Body.String())
+	if !strings.Contains(w.Body.String(), "model_price_error") {
+		t.Fatalf("body = %s, want the model_price_error code", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "upstream provider") {
+		t.Errorf("an unpriced model was blamed on the upstream, which was never called: %s", w.Body.String())
 	}
 	for _, h := range []string{"X-RateLimit-Scope", "X-RateLimit-Type", "X-RateLimit-Remaining", "X-RateLimit-Limit", "X-RateLimit-Reset"} {
-		if v := w.Header().Get(h); v != "" {
-			t.Errorf("%s = %q, want absent — this is an earlier, unrelated admit-path snapshot, not a fact about this upstream-classified failure", h, v)
+		if v := w.Header().Get(h); v == "" {
+			t.Errorf("%s absent, want the gateway's own admit-path snapshot kept on a gateway-side refusal", h)
 		}
 	}
 }
@@ -213,6 +214,9 @@ func TestIsUpstreamOriginatedError_Predicate(t *testing.T) {
 		{"413_request_too_large", &types.NewAPIError{StatusCode: http.StatusRequestEntityTooLarge}, false},
 		{"400_bad_request", &types.NewAPIError{StatusCode: http.StatusBadRequest}, false},
 		{"503_service_unavailable_via_IsUpstreamFailure", &types.NewAPIError{StatusCode: http.StatusServiceUnavailable}, true},
+		// Gateway-raised errors carry a 5xx status but never reached the upstream.
+		{"500_model_price_error", types.NewError(errors.New("unpriced"), types.ErrorCodeModelPriceError), false},
+		{"501_adaptor_not_implemented", types.NewErrorWithStatusCode(errors.New("no rerank"), types.ErrorCodeAPINotImplemented, http.StatusNotImplemented), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
