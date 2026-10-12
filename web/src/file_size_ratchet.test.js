@@ -52,7 +52,7 @@ const CEILINGS = {
   'components/settings/SystemSetting.jsx': 1490,
   'components/settings/personal/cards/NotificationSettings.jsx': 930,
   'helpers/render.jsx': 2071,
-  'helpers/utils.jsx': 899,
+  'helpers/utils.jsx': 892,
   'pages/Setting/Ratio/UpstreamRatioSync.jsx': 873,
   // pages/v2/Admin/ModelRateLimits/index.jsx left the list (cycle 14, 915 → 757):
   // LimitModal + inputStyle extracted to ModelRateLimits/LimitModal.jsx.
@@ -74,7 +74,7 @@ const CEILINGS = {
   'pages/v2/Playground/index.jsx': 1083,
   // 805 → 804 (cycle-18 L1): the pricing read moved onto useTenantRead; the
   // failed-read badge renders its dash as text (a string count skips plural).
-  'pages/v2/Pricing/index.jsx': 804,
+  'pages/v2/Pricing/index.jsx': 801,
   // 1909 → 1889 (cycle-18 L4): the page's own formatRelativeTime copy gave
   // way to the same-named helper in helpers/formatting.js.
   'pages/v2/Settings/index.jsx': 1889,

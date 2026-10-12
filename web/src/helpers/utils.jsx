@@ -794,37 +794,8 @@ export const calculateModelPrice = ({
   };
 };
 
-// 格式化价格信息（用于卡片视图）
-export const formatPriceInfo = (priceData, t) => {
-  if (priceData.unpriced) {
-    return (
-      <span style={{ color: 'var(--semi-color-text-2)' }}>
-        {t('未配置定价')}
-      </span>
-    );
-  }
-
-  if (priceData.isPerToken) {
-    return (
-      <>
-        <span style={{ color: 'var(--semi-color-text-1)' }}>
-          {t('输入')} {priceData.inputPrice}/{priceData.unitLabel}
-        </span>
-        <span style={{ color: 'var(--semi-color-text-1)' }}>
-          {t('输出')} {priceData.completionPrice}/{priceData.unitLabel}
-        </span>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <span style={{ color: 'var(--semi-color-text-1)' }}>
-        {t('模型价格')} {priceData.price}
-      </span>
-    </>
-  );
-};
+// 格式化价格信息（用于卡片视图）;实现在 priceInfo.jsx(行数棘轮)
+export { formatPriceInfo } from './priceInfo';
 
 // -------------------------------
 // CardPro 分页配置函数
